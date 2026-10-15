@@ -1209,6 +1209,38 @@ int setPetAutocastByName(lua_State* L, bool on) {
 
 }  // namespace
 
+/// The player a name or unit token names, as 0x004fb580 finds one: the name
+/// cache first (names compared without case, 0x006701f0), then a unit.
+static uint64_t playerGuidForNameOrUnit(game::GameHandler* gh, const char* text) {
+    if (!gh || !text || !*text) return 0;
+    std::string want = text;
+    toLowerInPlace(want);
+    for (const auto& [guid, name] : gh->getPlayerNameCache()) {
+        std::string lower = name;
+        toLowerInPlace(lower);
+        if (lower == want) return guid;
+    }
+    return resolveUnitGuid(gh, want);
+}
+
+/// IsIgnored(name) (0x006b6c60) / IsIgnoredOrMuted(name) (0x006b6d80): that
+/// player is on the ignore list (0x006b52e0), or for the second the mute list
+/// too (0x006b5350). 1 or nil. The client also counts the spam-report list
+/// (+0xdaf0) under a mode (DAT_00bceffc == 2) this client has neither of.
+template <uint32_t ContactFlags>
+static int lua_IsIgnoredContact(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint64_t guid = playerGuidForNameOrUnit(gh, lua_tostring(L, 1));
+    bool listed = false;
+    if (guid != 0) {
+        for (const auto& c : gh->getContacts()) {
+            if (c.guid == guid && (c.flags & ContactFlags) != 0) { listed = true; break; }
+        }
+    }
+    if (listed) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 1;
+}
+
 void registerSocialLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"BNGetNumFriends",     lua_BNGetNumFriends},
@@ -3262,6 +3294,8 @@ void registerSocialLuaAPI(lua_State* L) {
                 // not warn about sickness and does not run out. The flag that
                 // decides has been on the wire the whole time, four bytes past
                 // where this client was reading.
+                {"IsIgnored",        lua_IsIgnoredContact<0x2>},
+                {"IsIgnoredOrMuted", lua_IsIgnoredContact<0x2 | 0x4>},
                 {"ResurrectHasSickness", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             lua_pushboolean(L, (gh && gh->resurrectHasSickness()) ? 1 : 0);
@@ -3270,6 +3304,20 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"ResurrectHasTimer", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             lua_pushboolean(L, (gh && gh->resurrectHasTimer()) ? 1 : 0);
+            return 1;
+        }},
+                // ResurrectGetOfferer() (0x00515950): the name cache's name for
+                // the caster SMSG_RESURRECT_REQUEST named (DAT_00c9eab8, set at
+                // 0x006dbd00, let go once answered, 0x006d1d30); nil without
+                // one or a name for it. A spirit healer's offer is not one.
+                {"ResurrectGetOfferer", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const uint64_t caster = gh ? gh->resurrectCasterGuidRef() : 0;
+            if (caster != 0 && gh->resurrectRequestPendingRef() && !gh->resurrectIsSpiritHealerRef()) {
+                const std::string& name = gh->lookupName(caster);
+                if (!name.empty()) { lua_pushstring(L, name.c_str()); return 1; }
+            }
+            lua_pushnil(L);
             return 1;
         }},
                 // StaticPopup_Show calls this on *every* popup, before it does
