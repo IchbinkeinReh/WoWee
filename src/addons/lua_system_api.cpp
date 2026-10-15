@@ -4331,6 +4331,21 @@ static int lua_BindingControl(lua_State* L) {
 static int lua_SitStandOrDescendStart(lua_State* L) {
     return lua_BindingControl<rendering::CameraController::kControlDescend, true>(L);
 }
+// MouselookStart() (0x005fcc10) / MouselookStop() (0x005fc890) hold and
+// release the right button's control, 0x1. MoveAndSteerStart() (0x005fc780)
+// holds both buttons' controls, 0x2 and 0x1, which is a run forward steered by
+// the mouse; MoveAndSteerStop() (0x005fc830) lets go of both. PitchUp/Down
+// Start/Stop hold 0x400 / 0x800 (0x005fc8e0, 0x005fc920, 0x005fc570,
+// 0x005fc5c0).
+using CC = rendering::CameraController;
+constexpr uint32_t kMoveAndSteer = CC::kControlLeftMouse | CC::kControlMouselook;
+// IsMouselooking() (0x005f9dd0): 1 while 0x2000001 is held, else nil.
+static int lua_IsMouselooking(lua_State* L) {
+    auto* cc = luaCamera(L);
+    if (cc && cc->isMouselooking()) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
+    return 1;
+}
 template <int Direction, bool Held>
 static int lua_BindingTurn(lua_State* L) {
     auto* svc = getLuaServices(L);
@@ -5968,6 +5983,15 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"AscendStop",        lua_BindingControl<rendering::CameraController::kControlAscend, false>},
                 {"DescendStop",       lua_BindingControl<rendering::CameraController::kControlDescend, false>},
                 {"SitStandOrDescendStart", lua_SitStandOrDescendStart},
+                {"MouselookStart",    lua_BindingControl<CC::kControlMouselook, true>},
+                {"MouselookStop",     lua_BindingControl<CC::kControlMouselook, false>},
+                {"IsMouselooking",    lua_IsMouselooking},
+                {"MoveAndSteerStart", lua_BindingControl<kMoveAndSteer, true>},
+                {"MoveAndSteerStop",  lua_BindingControl<kMoveAndSteer, false>},
+                {"PitchUpStart",      lua_BindingControl<CC::kControlPitchUp, true>},
+                {"PitchUpStop",       lua_BindingControl<CC::kControlPitchUp, false>},
+                {"PitchDownStart",    lua_BindingControl<CC::kControlPitchDown, true>},
+                {"PitchDownStop",     lua_BindingControl<CC::kControlPitchDown, false>},
                 {"WoweeShowSettings",        lua_WoweeShowSettings},
                 {"WoweeSettingList",         lua_WoweeSettingList},
                 {"WoweeVersion",             lua_WoweeVersion},

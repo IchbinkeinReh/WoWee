@@ -3204,6 +3204,21 @@ void CameraController::update(float deltaTime) {
         camera->setRotation(yaw, pitch);
         facingYaw = yaw;
     }
+    // PitchUpStart / PitchDownStart hold 0x400 / 0x800 (0x005fc8e0,
+    // 0x005fc920). They pitch a swimming or flying mover (0x2200000) that may
+    // turn (0x005fa0d0) and is not mouselooking (0x2000001), at its pitch
+    // rate (CMovement +0xb0, pi a second) (0x005fb0b0 -> 0x005fb1a0). The
+    // mover's pitch follows the camera here, and the client's camera is
+    // brought to the mover's pitch (0x005fa910), so the two pitch together.
+    const int pitchKeys = int(held(kControlPitchUp)) - int(held(kControlPitchDown));
+    if (pitchKeys != 0 && !uiWantsKeyboard && !movementSuppressed && !rightMouseDown &&
+        !moverHeld_ && (swimming || isFlightAirborne())) {
+        const float pitched = float(pitchKeys) * 180.0f * deltaTime;
+        pitch = glm::clamp(pitch + pitched, MIN_PITCH, MAX_PITCH);
+        if (isFlightAirborne())
+            flightPitchDeg_ = glm::clamp(flightPitchDeg_ + pitched, -90.0f, 90.0f);
+        camera->setRotation(yaw, pitch);
+    }
 
     // Tick down gravity suspension timer (used after world entry to prevent
     // falling through WMO floors before collision is loaded)
@@ -3642,7 +3657,23 @@ void CameraController::processMouseButton(const SDL_MouseButtonEvent& event) {
     if (event.button == SDL_BUTTON_RIGHT) {
         rightMouseDown = (event.down) && !uiWantsMouse;
     }
+    updateMouseCapture();
+}
 
+void CameraController::setBindingControl(uint32_t bit, bool held) {
+    if (held) bindingControls_ |= bit; else bindingControls_ &= ~bit;
+    // The mouse's controls are the buttons' own (0x005fa170 / 0x005fa450 on
+    // 0x1 and 0x2), so the binding's stop lets go of a button held as well.
+    if (!(bit & (kControlMouselook | kControlLeftMouse))) return;
+    if (bit & kControlMouselook) rightMouseDown = held;
+    if (bit & kControlLeftMouse) leftMouseDown = held;
+    const bool wasCaptured = mouseButtonDown;
+    updateMouseCapture();
+    // No click to tell from a drag: the view turns from the first motion.
+    if (held && !wasCaptured) rotateArmed_ = true;
+}
+
+void CameraController::updateMouseCapture() {
     bool anyDown = leftMouseDown || rightMouseDown;
     if (anyDown && !mouseButtonDown) {
         // SDL3 captures per window rather than globally. The focused window is the one the player is pointing at, and relative mode means nothing for any other - so that is the one to ask.

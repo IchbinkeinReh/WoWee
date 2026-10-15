@@ -157,13 +157,19 @@ public:
     /// The other movement bindings' held controls, by the client's input
     /// control bits (0x005fa170 sets one, 0x005fa450 clears it): 0x10 forward,
     /// 0x20 back, 0x40 / 0x80 strafe left / right, 0x2000 ascend, 0x4000
-    /// descend. Each holds what its key does here.
-    static constexpr uint32_t kControlForward = 0x10, kControlBackward = 0x20,
+    /// descend, 0x400 / 0x800 pitch up / down. Each holds what its key does
+    /// here. 0x1 and 0x2 are the mouse's own: 0x1 the right button's
+    /// mouselook (MouselookStart, 0x005fcc10) and 0x2 the left button's
+    /// (MoveAndSteerStart sets both, 0x005fc780), so a binding and the button
+    /// hold and release the same thing.
+    static constexpr uint32_t kControlMouselook = 0x1, kControlLeftMouse = 0x2,
+        kControlForward = 0x10, kControlBackward = 0x20,
         kControlStrafeLeft = 0x40, kControlStrafeRight = 0x80,
+        kControlPitchUp = 0x400, kControlPitchDown = 0x800,
         kControlAscend = 0x2000, kControlDescend = 0x4000;
-    void setBindingControl(uint32_t bit, bool held) {
-        if (held) bindingControls_ |= bit; else bindingControls_ &= ~bit;
-    }
+    void setBindingControl(uint32_t bit, bool held);
+    /// IsMouselooking() (0x005f9dd0): input control 0x2000001 held.
+    [[nodiscard]] bool isMouselooking() const { return rightMouseDown; }
     [[nodiscard]] bool isRightMouseHeld() const { return rightMouseDown; }
     [[nodiscard]] bool isSitting() const { return sitting; }
     [[nodiscard]] bool isSwimming() const { return swimming; }
@@ -561,6 +567,8 @@ private:
     bool mouseButtonDown = false;
     bool leftMouseDown = false;
     bool rightMouseDown = false;
+    /// Takes or gives back the cursor as the buttons' controls are held.
+    void updateMouseCapture();
     // Camera rotation only begins once the mouse moves past a small dead-zone while a
     // button is held. This keeps a click (to select an NPC) from nudging the view on
     // tiny hand jitter - which made NPCs appear to shift out from under the cursor.
