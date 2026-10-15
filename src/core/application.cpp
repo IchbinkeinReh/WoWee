@@ -3270,6 +3270,10 @@ void Application::performLogoutToLogin() {
         if (auto* m2 = renderer->getM2Renderer()) {
             m2->clear();
         }
+        // The loops the doodads' and game objects' events started: no update
+        // runs at the character screen to see their owners gone, so they
+        // would play on over it.
+        renderer->stopModelEventSounds();
         // Clear terrain tile tracking + water surfaces so next world entry starts fresh.
         // softReset() rather than a full teardown: it clears the tile data
         // without blocking on worker thread joins.

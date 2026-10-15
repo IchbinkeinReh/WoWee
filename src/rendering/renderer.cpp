@@ -2091,6 +2091,10 @@ void Renderer::resetCombatVisualState() {
     if (spellVisualSystem_) spellVisualSystem_->reset();
 }
 
+void Renderer::stopModelEventSounds() {
+    if (m2EventSounds_) m2EventSounds_->clear();
+}
+
 const std::string& Renderer::getCurrentZoneName() const {
     // The zone text (0x0078f020), once the place is known.
     static const std::string empty;

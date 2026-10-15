@@ -285,6 +285,10 @@ public:
 
     // Combat visual state (compound: resets AnimationController + SpellVisualSystem)
     void resetCombatVisualState();
+    /// The loops the models' events started ($DSL, a looping kit) stop at
+    /// once, as the world goes (0x00409550). Nothing updates them once the
+    /// world is left, so their owners going cannot end them then.
+    void stopModelEventSounds();
 
     // Sub-system accessors (§4.2)
     AnimationController* getAnimationController() const { return animationController_.get(); }
