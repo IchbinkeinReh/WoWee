@@ -5036,6 +5036,8 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         if (!wmoRenderer->initialize(vkCtx, perFrameSetLayout, assetManager))
             LOG_ERROR("WMORenderer initialization failed");
         wmoRenderer->setRtScene(rtScene_.get());
+        setWmoSurfaceDetail(wmoSurfaceDetail_.normalMaps, wmoSurfaceDetail_.strength,
+                            wmoSurfaceDetail_.pom, wmoSurfaceDetail_.pomQuality);
         if (shadowRenderPass != VK_NULL_HANDLE) {
             if (!wmoRenderer->initializeShadow(shadowRenderPass))
                 LOG_WARNING("WMO shadow pipeline initialization failed");
@@ -5308,6 +5310,17 @@ void Renderer::logViewDistanceDiag() {
                 ", tiles loaded to ", getTerrainLoadRadius(),
                 " (", static_cast<int>(getTerrainLoadRadius() *
                                        core::coords::TILE_SIZE), ")");
+}
+
+void Renderer::setWmoSurfaceDetail(bool normalMaps, float strength, bool pom, int pomQuality) {
+    syncWorldRecording();
+    wmoSurfaceDetail_ = {.normalMaps = normalMaps, .strength = strength, .pom = pom,
+                         .pomQuality = pomQuality};
+    if (!wmoRenderer) return;
+    wmoRenderer->setNormalMappingEnabled(normalMaps);
+    wmoRenderer->setNormalMapStrength(strength);
+    wmoRenderer->setPOMEnabled(pom);
+    wmoRenderer->setPOMQuality(pomQuality);
 }
 
 void Renderer::setSharpStars(bool enabled) {

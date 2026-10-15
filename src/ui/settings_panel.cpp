@@ -1356,7 +1356,6 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
     auto* camera = renderer ? renderer->getCamera() : nullptr;
     auto* cameraController = renderer ? renderer->getCameraController() : nullptr;
     auto* post = renderer ? renderer->getPostProcessPipeline() : nullptr;
-    auto* wmo = renderer ? renderer->getWMORenderer() : nullptr;
 
     // The switches the game's own Sound panel used to own. Writing the setting
     // has already written the cvar behind it - see noteClientSettingChanged -
@@ -1510,21 +1509,19 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         }
     } else if (key == "fxaa") {
         if (post) post->setFXAAEnabled(pendingFXAA);
-    } else if (key == "normalmapping") {
-        // Buildings only (see GameScreen's first application of these).
-        if (wmo) wmo->setNormalMappingEnabled(pendingNormalMapping);
-    } else if (key == "normalmapstrength") {
-        if (wmo) wmo->setNormalMapStrength(pendingNormalMapStrength);
-    } else if (key == "parallax") {
-        if (wmo) wmo->setPOMEnabled(pendingPOM);
+    } else if (key == "normalmapping" || key == "normalmapstrength" || key == "parallax" ||
+               key == "parallaxquality") {
+        // Buildings only (see GameScreen's first application of these), and
+        // through the renderer, which hands them to a WMO renderer made later.
+        if (renderer)
+            renderer->setWmoSurfaceDetail(pendingNormalMapping, pendingNormalMapStrength,
+                                          pendingPOM, pendingPOMQuality);
     } else if (key == "sharpstars") {
         if (renderer) renderer->setSharpStars(pendingSharpStars);
     } else if (key == "sunshafts") {
         if (renderer) renderer->setSunShaftsEnabled(pendingSunShafts);
     } else if (key == "screenglow") {
         if (renderer) renderer->setScreenGlowEnabled(pendingScreenGlow);
-    } else if (key == "parallaxquality") {
-        if (wmo) wmo->setPOMQuality(pendingPOMQuality);
     } else if (key == "upscaling") {
         // pendingFSR is the older flag for "FSR 1 is on" and is what the saved
         // settings still carry, so the mode and the flag are set together

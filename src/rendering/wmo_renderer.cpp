@@ -346,6 +346,9 @@ bool WMORenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayou
 
 void WMORenderer::shutdown() {
     core::Logger::getInstance().info("Shutting down WMO renderer...");
+    // Waits for any normal map still being made; they read the asset manager.
+    normalMapJobs_.clear();
+    ++textureCacheEpoch_;
 
     // Without a context there is nothing to free on the GPU and nothing to drain
     // - and nothing to call it on either, which is what this used to try.
@@ -887,70 +890,15 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 memcpy(matBuf.info.pMappedData, &matData, sizeof(matData));
             }
 
-            // Allocate and write descriptor set
+            // Allocate and write descriptor set (writeMaterialSet).
             mb.materialSet = allocateMaterialSet();
-            // Valid, not merely non-null. descriptorInfo() returns the
-            // texture's handles as they are, so one whose upload or view
-            // creation failed writes VK_NULL_HANDLE into a live descriptor and
-            // declares SHADER_READ_ONLY_OPTIMAL over it - undefined behaviour
-            // that reaches an NVIDIA driver as a lost device. See #123.
-            //
             // The set is dropped rather than written when even the fallback is
             // unsampleable, and the render pass already skips a batch with no
             // set: an unlit wall costs a wall, a null view costs the device.
-            const auto pick = [](VkTexture* wanted, VkTexture* fallback) -> VkTexture* {
-                if (wanted && wanted->isValid()) return wanted;
-                return (fallback && fallback->isValid()) ? fallback : nullptr;
-            };
-            VkTexture* texToUse = pick(mb.texture, whiteTexture_.get());
-            VkTexture* nhMap = pick(mb.normalHeightMap, flatNormalTexture_.get());
-            VkTexture* envMap = pick(mb.envTexture, whiteTexture_.get());
-            if ((!texToUse || !nhMap || !envMap) && mb.materialSet) {
+            if (mb.materialSet && !writeMaterialSet(mb.materialSet, mb)) {
                 vkFreeDescriptorSets(vkCtx_->getDevice(), materialDescPool_, 1,
                                      &mb.materialSet);
                 mb.materialSet = VK_NULL_HANDLE;
-            }
-            if (mb.materialSet) {
-                VkDescriptorImageInfo imgInfo = texToUse->descriptorInfo();
-
-                VkDescriptorBufferInfo bufInfo{};
-                bufInfo.buffer = mb.materialUBO;
-                bufInfo.offset = 0;
-                bufInfo.range = sizeof(WMOMaterialUBO);
-
-                VkDescriptorImageInfo nhImgInfo = nhMap->descriptorInfo();
-                VkDescriptorImageInfo envImgInfo = envMap->descriptorInfo();
-
-                VkWriteDescriptorSet writes[4] = {};
-                writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[0].dstSet = mb.materialSet;
-                writes[0].dstBinding = 0;
-                writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[0].descriptorCount = 1;
-                writes[0].pImageInfo = &imgInfo;
-
-                writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[1].dstSet = mb.materialSet;
-                writes[1].dstBinding = 1;
-                writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                writes[1].descriptorCount = 1;
-                writes[1].pBufferInfo = &bufInfo;
-
-                writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[2].dstSet = mb.materialSet;
-                writes[2].dstBinding = 2;
-                writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[2].descriptorCount = 1;
-                writes[2].pImageInfo = &nhImgInfo;
-
-                writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[3].dstSet = mb.materialSet;
-                writes[3].dstBinding = 3;
-                writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[3].descriptorCount = 1;
-                writes[3].pImageInfo = &envImgInfo;
-
-                vkUpdateDescriptorSets(vkCtx_->getDevice(), 4, writes, 0, nullptr);
             }
 
             groupRes.mergedBatches.push_back(std::move(mb));
@@ -1449,6 +1397,8 @@ void WMORenderer::clearInstances() {
 
 void WMORenderer::clearAll() {
     clearInstances();
+    // A normal map still being made is for a texture about to go.
+    ++textureCacheEpoch_;
 
     if (vkCtx_) {
         VkDevice device = vkCtx_->getDevice();
@@ -2371,6 +2321,131 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
 
 // renderGroup removed - draw calls are inlined in render()
 
+void WMORenderer::processNormalMapBackfill() {
+    if (!vkCtx_ || !assetManager) return;
+    using namespace std::chrono_literals;
+
+    // Finished maps: an upload each, two a frame at most.
+    std::unordered_map<VkTexture*, const TextureCacheEntry*> filled;
+    int uploads = 0;
+    for (auto it = normalMapJobs_.begin(); it != normalMapJobs_.end();) {
+        if (uploads >= 2 || it->result.wait_for(0s) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        NormalMapJobResult res = it->result.get();
+        const std::string key = std::move(it->key);
+        const uint64_t epoch = it->epoch;
+        it = normalMapJobs_.erase(it);
+        if (epoch != textureCacheEpoch_) continue;
+        auto ce = textureCache.find(key);
+        if (ce == textureCache.end() || !ce->second.texture || ce->second.normalHeightMap) continue;
+        if (!res.pixels.isValid()) continue;
+        auto tex = std::make_unique<VkTexture>();
+        vkCtx_->beginUploadBatch();
+        const bool uploaded = tex->upload(*vkCtx_, res.pixels.data.data(),
+                                          static_cast<uint32_t>(res.pixels.width),
+                                          static_cast<uint32_t>(res.pixels.height),
+                                          VK_FORMAT_R8G8B8A8_UNORM, true);
+        vkCtx_->endUploadBatch();
+        if (!uploaded) continue;
+        tex->createSampler(vkCtx_->getDevice(), VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+                           VK_SAMPLER_ADDRESS_MODE_REPEAT);
+        ++uploads;
+        auto& entry = ce->second;
+        textureCacheBytes_ += entry.approxBytes;  // the map doubles it, as at load
+        entry.approxBytes *= 2;
+        entry.heightMapVariance = res.variance;
+        entry.normalHeightMap = std::move(tex);
+        filled[entry.texture.get()] = &entry;
+        ++normalMapBackfilled_;
+    }
+    if (normalMapBackfilled_ != 0 && normalMapJobs_.empty() && !normalMapBackfillScan_) {
+        core::Logger::getInstance().warning("WMO normal maps: made ", normalMapBackfilled_,
+                                            " for textures cached without one");
+        normalMapBackfilled_ = 0;
+    }
+
+    // Every batch drawn with those textures takes its map: a new set, as the
+    // old one may still be bound by a frame in flight, and the variance the
+    // parallax reads.
+    if (!filled.empty()) {
+        VkDevice device = vkCtx_->getDevice();
+        VmaAllocator allocator = vkCtx_->getAllocator();
+        std::vector<VkDescriptorSet> retired;
+        // The models still being built as well: a batch made before its
+        // texture's map arrived is in one of them.
+        std::vector<ModelData*> models;
+        for (auto& [modelId, model] : loadedModels) models.push_back(&model);
+        for (auto& [modelId, model] : loadingModels_) models.push_back(&model);
+        for (ModelData* model : models) {
+            for (auto& group : model->groups) {
+                for (auto& mb : group.mergedBatches) {
+                    if (mb.normalHeightMap || !mb.hasTexture) continue;
+                    auto f = filled.find(mb.texture);
+                    if (f == filled.end()) continue;
+                    mb.normalHeightMap = f->second->normalHeightMap.get();
+                    mb.heightMapVariance = f->second->heightMapVariance;
+                    if (mb.materialUBOAlloc) {
+                        VmaAllocationInfo info{};
+                        vmaGetAllocationInfo(allocator, mb.materialUBOAlloc, &info);
+                        if (info.pMappedData)
+                            reinterpret_cast<WMOMaterialUBO*>(info.pMappedData)->heightMapVariance =
+                                mb.heightMapVariance;
+                    }
+                    VkDescriptorSet fresh = allocateMaterialSet();
+                    if (!fresh) continue;
+                    if (!writeMaterialSet(fresh, mb)) {
+                        vkFreeDescriptorSets(device, materialDescPool_, 1, &fresh);
+                        continue;
+                    }
+                    if (mb.materialSet) retired.push_back(mb.materialSet);
+                    mb.materialSet = fresh;
+                }
+            }
+        }
+        if (!retired.empty()) {
+            VkDescriptorPool pool = materialDescPool_;
+            vkCtx_->deferAfterAllFrameFences([device, pool, retired = std::move(retired)]() {
+                vkFreeDescriptorSets(device, pool, static_cast<uint32_t>(retired.size()),
+                                     retired.data());
+            });
+        }
+    }
+
+    // New work, while either setting wants maps. Two at a time on their own
+    // threads: the decode and the Sobel pass are what the render thread
+    // could not afford, and the terrain workers do the same for the textures
+    // they prepare.
+    if (!(normalMappingEnabled_ || pomEnabled_) || !normalMapBackfillScan_) return;
+    constexpr size_t kMaxJobs = 2;
+    if (normalMapJobs_.size() >= kMaxJobs) return;
+    bool more = false;
+    for (auto& [key, entry] : textureCache) {
+        if (entry.normalMapTried || entry.normalHeightMap || !entry.texture) continue;
+        if (normalMapJobs_.size() >= kMaxJobs) { more = true; break; }
+        entry.normalMapTried = true;
+        pipeline::AssetManager* am = assetManager;
+        NormalMapJob job;
+        job.key = key;
+        job.epoch = textureCacheEpoch_;
+        job.result = std::async(std::launch::async, [am, key]() {
+            NormalMapJobResult r;
+            pipeline::BLPImage blp = am->loadTexture(key, true);
+            if (!blp.isValid()) return r;
+            const std::vector<uint8_t> decoded =
+                blp.isBlockCompressed() ? pipeline::BLPLoader::decodeBaseLevel(blp) : blp.data;
+            if (decoded.empty()) return r;
+            r.pixels = generateNormalHeightMapPixels(decoded.data(),
+                                                     static_cast<uint32_t>(blp.width),
+                                                     static_cast<uint32_t>(blp.height), r.variance);
+            return r;
+        });
+        normalMapJobs_.push_back(std::move(job));
+    }
+    normalMapBackfillScan_ = more;
+}
+
 void WMORenderer::destroyGroupGPU(GroupResources& group, bool defer) {
     if (!vkCtx_) return;
     VkDevice device = vkCtx_->getDevice();
@@ -2421,6 +2496,65 @@ void WMORenderer::destroyGroupGPU(GroupResources& group, bool defer) {
             }
         });
     }
+}
+
+// The four material bindings of a batch: its texture, its UBO, its normal and
+// height map (the flat one while it has none) and its second texture.
+//
+// Valid, not merely non-null. descriptorInfo() returns the texture's handles as
+// they are, so one whose upload or view creation failed writes VK_NULL_HANDLE
+// into a live descriptor and declares SHADER_READ_ONLY_OPTIMAL over it -
+// undefined behaviour that reaches an NVIDIA driver as a lost device. See #123.
+bool WMORenderer::writeMaterialSet(VkDescriptorSet set, const GroupResources::MergedBatch& mb) {
+    const auto pick = [](VkTexture* wanted, VkTexture* fallback) -> VkTexture* {
+        if (wanted && wanted->isValid()) return wanted;
+        return (fallback && fallback->isValid()) ? fallback : nullptr;
+    };
+    VkTexture* texToUse = pick(mb.texture, whiteTexture_.get());
+    VkTexture* nhMap = pick(mb.normalHeightMap, flatNormalTexture_.get());
+    VkTexture* envMap = pick(mb.envTexture, whiteTexture_.get());
+    if (!set || !texToUse || !nhMap || !envMap) return false;
+    VkDescriptorImageInfo imgInfo = texToUse->descriptorInfo();
+
+    VkDescriptorBufferInfo bufInfo{};
+    bufInfo.buffer = mb.materialUBO;
+    bufInfo.offset = 0;
+    bufInfo.range = sizeof(WMOMaterialUBO);
+
+    VkDescriptorImageInfo nhImgInfo = nhMap->descriptorInfo();
+    VkDescriptorImageInfo envImgInfo = envMap->descriptorInfo();
+
+    VkWriteDescriptorSet writes[4] = {};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = set;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].descriptorCount = 1;
+    writes[0].pImageInfo = &imgInfo;
+
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = set;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[1].descriptorCount = 1;
+    writes[1].pBufferInfo = &bufInfo;
+
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = set;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].descriptorCount = 1;
+    writes[2].pImageInfo = &nhImgInfo;
+
+    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[3].dstSet = set;
+    writes[3].dstBinding = 3;
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[3].descriptorCount = 1;
+    writes[3].pImageInfo = &envImgInfo;
+
+    vkUpdateDescriptorSets(vkCtx_->getDevice(), 4, writes, 0, nullptr);
+    return true;
 }
 
 VkDescriptorSet WMORenderer::allocateMaterialSet() {
@@ -2926,6 +3060,10 @@ VkTexture* WMORenderer::loadTexture(const std::string& path) {
     e.texture = std::move(texture);
     e.normalHeightMap = std::move(nhMap);
     e.heightMapVariance = nhVariance;
+    // None made here - the setting was off, or streaming deferred it and the
+    // worker had not prepared this one: processNormalMapBackfill makes it.
+    e.normalMapTried = e.normalHeightMap != nullptr;
+    if (!e.normalMapTried) normalMapBackfillScan_ = true;
     e.alphaChannel = blp.alphaDepth != 0;
     textureCacheBytes_ += e.approxBytes;
     if (!resolvedKey.empty()) {

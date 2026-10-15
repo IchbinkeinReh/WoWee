@@ -112,6 +112,9 @@ public:
     /// The saved windowed/fullscreen choice and vsync, applied before the
     /// first frame. Neither reaches the WindowConfig the window is built from.
     void applySavedDisplayMode(core::Window* window);
+    /// The saved surface bumps and depth of buildings, handed to the renderer
+    /// before the first world load builds a single building.
+    void applySavedSurfaceDetail(rendering::Renderer* renderer);
     /// Every saved graphics setting, handed again to a renderer rebuilt after
     /// a lost device. The renderer keeps what it holds itself; what lives in
     /// the parts it rebuilt - the post-process chain, the minimap, the WMO

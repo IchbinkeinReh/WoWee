@@ -301,9 +301,11 @@ public:
     /**
      * Normal mapping / Parallax Occlusion Mapping settings
      */
-    void setNormalMappingEnabled(bool enabled) { normalMappingEnabled_ = enabled; materialSettingsDirty_ = true; }
+    // Turning either on also fills in the textures cached while both were off
+    // (processNormalMapBackfill).
+    void setNormalMappingEnabled(bool enabled) { normalMappingEnabled_ = enabled; materialSettingsDirty_ = true; normalMapBackfillScan_ = true; }
     void setNormalMapStrength(float s) { normalMapStrength_ = s; materialSettingsDirty_ = true; }
-    void setPOMEnabled(bool enabled) { pomEnabled_ = enabled; materialSettingsDirty_ = true; }
+    void setPOMEnabled(bool enabled) { pomEnabled_ = enabled; materialSettingsDirty_ = true; normalMapBackfillScan_ = true; }
     void setPOMQuality(int q) { pomQuality_ = q; materialSettingsDirty_ = true; }
     bool isNormalMappingEnabled() const { return normalMappingEnabled_; }
     float getNormalMapStrength() const { return normalMapStrength_; }
@@ -600,6 +602,20 @@ public:
     }
     static pipeline::BLPImage generateNormalHeightMapPixels(
         const uint8_t* pixels, uint32_t width, uint32_t height, float& outVariance);
+
+    /**
+     * Normal maps for cached textures that went without one, made off the
+     * render thread and bound into the batches already built over them.
+     *
+     * A texture is cached once for the session. One cached while normal
+     * mapping and parallax were both off - every building of the first world
+     * load, which happened before the saved setting was applied - or one
+     * loaded during streaming that the terrain worker had not prepared, kept
+     * the flat map for good, and the batches built over it bound that.
+     *
+     * Called from the frame's update, outside command recording: it uploads.
+     */
+    void processNormalMapBackfill();
 
     // Defer normal/height map generation during streaming to avoid CPU stalls
     void setDeferNormalMaps(bool defer) { deferNormalMaps_ = defer; }
@@ -991,6 +1007,10 @@ private:
      */
     std::unique_ptr<VkTexture> generateNormalHeightMap(const uint8_t* pixels, uint32_t width, uint32_t height, float& outVariance);
 
+    /// Writes a batch's four material bindings into `set`; false when one of
+    /// its textures is not sampleable (the set is then left unwritten).
+    bool writeMaterialSet(VkDescriptorSet set, const GroupResources::MergedBatch& mb);
+
     /**
      * Allocate a material descriptor set from the pool
      */
@@ -1072,8 +1092,23 @@ private:
         bool alphaChannel = false;       // the BLP has alpha bits (0x004b54f0 reads the inverse)
         size_t approxBytes = 0;
         uint64_t lastUse = 0;
+        /// A normal map was made for it, or asked for (processNormalMapBackfill).
+        bool normalMapTried = false;
     };
     std::unordered_map<std::string, TextureCacheEntry> textureCache;
+    struct NormalMapJobResult {
+        pipeline::BLPImage pixels;
+        float variance = 0.0f;
+    };
+    struct NormalMapJob {
+        std::string key;
+        uint64_t epoch = 0;
+        std::future<NormalMapJobResult> result;
+    };
+    std::vector<NormalMapJob> normalMapJobs_;
+    uint64_t textureCacheEpoch_ = 0;     // bumped whenever textureCache is emptied
+    bool normalMapBackfillScan_ = true;  // a cached texture may lack its normal map
+    uint32_t normalMapBackfilled_ = 0;   // made since the last time all were done (logged)
     size_t textureCacheBytes_ = 0;
     uint64_t textureCacheCounter_ = 0;
     size_t textureCacheBudgetBytes_ = 8192ull * 1024 * 1024;  // 8 GB default, overridden at init

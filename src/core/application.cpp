@@ -568,6 +568,10 @@ bool Application::initialize() {
     // nothing has been drawn, so entering fullscreen here costs no visible
     // change of mode.
     uiManager->getGameScreen().applySavedDisplayMode(window.get());
+    // And the buildings' surface bumps: the first world load builds every
+    // building it shows with whatever the WMO renderer holds, and the game
+    // screen's own application of them waits until that load is over.
+    uiManager->getGameScreen().applySavedSurfaceDetail(renderer.get());
 
     // Create subsystems
     authHandler = std::make_unique<auth::AuthHandler>();
@@ -4728,6 +4732,9 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
         if (entitySpawner_) entitySpawner_->update();
         if (auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr) {
             cr->processPendingNormalMaps(4);
+        }
+        if (auto* wr = renderer ? renderer->getWMORenderer() : nullptr) {
+            wr->processNormalMapBackfill();
         }
     });
     // Every unit's channel, whose ChannelKit it holds while the channel

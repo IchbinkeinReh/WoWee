@@ -162,6 +162,13 @@ void GameScreen::reapplySettingsAfterGpuRebuild(rendering::Renderer* renderer) {
     }
 }
 
+void GameScreen::applySavedSurfaceDetail(rendering::Renderer* renderer) {
+    if (!renderer) return;
+    renderer->setWmoSurfaceDetail(settingsPanel_.pendingNormalMapping,
+                                  settingsPanel_.pendingNormalMapStrength,
+                                  settingsPanel_.pendingPOM, settingsPanel_.pendingPOMQuality);
+}
+
 void GameScreen::applySavedDisplayMode(core::Window* window) {
     if (!window) return;
     // Saved on every change and read back by the panel, and applied by nobody
@@ -577,11 +584,8 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     if (!settingsPanel_.normalMapSettingsApplied_) {
         auto* renderer = services_.renderer;
         if (renderer) {
-            if (auto* wr = renderer->getWMORenderer()) {
-                wr->setNormalMappingEnabled(settingsPanel_.pendingNormalMapping);
-                wr->setNormalMapStrength(settingsPanel_.pendingNormalMapStrength);
-                wr->setPOMEnabled(settingsPanel_.pendingPOM);
-                wr->setPOMQuality(settingsPanel_.pendingPOMQuality);
+            if (renderer->getWMORenderer()) {
+                applySavedSurfaceDetail(renderer);
                 // Buildings only. The client has no normal maps; these are
                 // made from the colour texture, which on stone, brick and
                 // planks follows the relief - and on skin and cloth follows
