@@ -60,4 +60,37 @@ int pcallScript(lua_State* L, const char* script, int nargs, int errfunc);
 /// name in scope around the call.
 int lua_WoweeFireOnLoad(lua_State* L);
 
+// ---- Script slots on objects that are not frames ---------------------------
+//
+// An animation and an animation group carry scripts of the client's own kind
+// (0x00497500: OnLoad, OnPlay, OnPause, OnStop, OnFinished, OnUpdate, and
+// OnLoop on a group), each a reference held beside the taint of whoever set it
+// and run through 0x0081a2c0 -> 0x00819ea0 like a frame's: secure to begin
+// with, then under that taint, one script at a time. The animation system here
+// is written in Lua, so these are what it sets, reads and runs them through -
+// kept in the object's __scripts as a frame's are, reached quietly.
+
+/// __WoweeSetScriptSlot(obj, "name", func or nil): SetScript.
+int lua_WoweeSetScriptSlot(lua_State* L);
+/// __WoweeGetScriptSlot(obj, "name"): GetScript.
+int lua_WoweeGetScriptSlot(lua_State* L);
+/// __WoweeHookScriptSlot(obj, "name", func): HookScript, the original first
+/// under its own taint and the hook after under the hooker's.
+int lua_WoweeHookScriptSlot(lua_State* L);
+/// HookScript's body for anything keeping its scripts in __scripts, given
+/// (obj, "name", func) at 1..3: with nothing set it calls `setScript` with
+/// them, as 0x0049edb0 does, and otherwise wraps the two (0x00817050).
+using ScriptSetter = int (*)(lua_State* L);
+int hookScriptWith(lua_State* L, ScriptSetter setScript);
+/// __WoweeRunScriptSlot(obj, "name", ...): run the script if there is one,
+/// with obj as self, as the client's dispatch runs it - so one addon's script
+/// taints neither its caller nor the next object's. An error goes to the
+/// reporter rather than up, as a script's does.
+int lua_WoweeRunScriptSlot(lua_State* L);
+
+/// Where a script slot's error is reported: given the state with the message
+/// on top, which it pops. Unset, the message is dropped.
+using ScriptErrorReporter = void (*)(lua_State* L, const char* script);
+void setScriptErrorReporter(ScriptErrorReporter reporter);
+
 }  // namespace wowee::addons

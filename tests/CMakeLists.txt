@@ -343,6 +343,7 @@ register_test_target(test_lua_handler_globals)
 add_executable(test_lua_taint
     test_lua_taint.cpp
     ${CMAKE_SOURCE_DIR}/src/addons/lua_taint.cpp
+    ${CMAKE_SOURCE_DIR}/src/addons/lua_handler_globals.cpp
 )
 target_include_directories(test_lua_taint PRIVATE ${TEST_INCLUDE_DIRS})
 target_include_directories(test_lua_taint SYSTEM PRIVATE

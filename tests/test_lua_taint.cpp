@@ -18,6 +18,7 @@ extern "C" {
 #include <utility>
 #include <vector>
 
+#include "addons/lua_handler_globals.hpp"
 #include "addons/lua_taint.hpp"
 
 namespace taint = wowee::addons::taint;
@@ -300,6 +301,93 @@ TEST_CASE("The bracket puts everything back", "[taint]") {
     CHECK(after.taint == before.taint);
     CHECK(after.scope == before.scope);
     CHECK(after.objtaint == before.objtaint);
+}
+
+// ---- Script slots: the animation system's scripts ---------------------------
+
+namespace {
+
+void registerSlots(lua_State* L) {
+    lua_register(L, "SetScriptSlot", wowee::addons::lua_WoweeSetScriptSlot);
+    lua_register(L, "GetScriptSlot", wowee::addons::lua_WoweeGetScriptSlot);
+    lua_register(L, "HookScriptSlot", wowee::addons::lua_WoweeHookScriptSlot);
+    lua_register(L, "RunScriptSlot", wowee::addons::lua_WoweeRunScriptSlot);
+}
+
+}  // namespace
+
+TEST_CASE("Animation scripts run one at a time, each under its setter's taint", "[taint]") {
+    // The tick that advances every playing group is the client's C
+    // (0x0081a2c0 per script); here it is Lua, run secure, and an addon's
+    // OnFinished on one group must not taint the Blizzard one after it - nor
+    // the tick itself.
+    Fixture f;
+    registerSlots(f.L);
+    f.run("AddonGroup = {} BlizzGroup = {}\n"
+          "SetScriptSlot(BlizzGroup, 'OnFinished', function(self)\n"
+          "  blizzSelf = (self == BlizzGroup) blizzTaint = Taint() end)", 0);
+    f.run("SetScriptSlot(AddonGroup, 'OnFinished', function() addonTaint = Taint() end)",
+          f.addon);
+    f.run("RunScriptSlot(AddonGroup, 'OnFinished')\n"
+          "RunScriptSlot(BlizzGroup, 'OnFinished')\n"
+          "tickTaint = Taint()", 0);
+    CHECK(f.globalString("addonTaint") == "SomeAddon");
+    CHECK(f.globalString("blizzTaint") == "<nil>");
+    CHECK(f.globalBool("blizzSelf"));
+    CHECK(f.globalString("tickTaint") == "<nil>");
+    CHECK(taint::current() == 0);
+}
+
+TEST_CASE("Calling an addon's script in place is what tainted the tick", "[taint]") {
+    // The shape the animation system had: scripts kept as fields and called
+    // from the secure tick. The addon's closure taints the tick for the rest
+    // of it, Blizzard's script after it included - which is why the scripts
+    // are now run as the client runs them.
+    Fixture f;
+    f.run("Groups = {}", 0);
+    f.run("Groups[1] = { OnFinished = function() end }", f.addon);
+    f.run("Groups[2] = { OnFinished = function() after = Taint() end }", 0);
+    f.run("for i = 1, 2 do local g = Groups[i] g.OnFinished(g) end", 0);
+    CHECK(f.globalString("after") == "SomeAddon");
+}
+
+TEST_CASE("Hooking a secure animation script leaves it secure", "[taint]") {
+    Fixture f;
+    registerSlots(f.L);
+    f.run("Group = {}\n"
+          "SetScriptSlot(Group, 'OnPlay', function() originalTaint = Taint() end)", 0);
+    f.run("HookScriptSlot(Group, 'OnPlay', function() hookTaint = Taint() end)", f.addon);
+    f.run("RunScriptSlot(Group, 'OnPlay') afterTaint = Taint()", 0);
+    CHECK(f.globalString("originalTaint") == "<nil>");
+    CHECK(f.globalString("hookTaint") == "SomeAddon");
+    CHECK(f.globalString("afterTaint") == "<nil>");
+}
+
+TEST_CASE("Reading an animation script back is reading its setter's value", "[taint]") {
+    Fixture f;
+    registerSlots(f.L);
+    f.run("Group = {}", 0);
+    f.run("SetScriptSlot(Group, 'OnStop', function() end)", f.addon);
+    f.run("local fn = GetScriptSlot(Group, 'OnStop') readTaint = Taint()", 0);
+    CHECK(f.globalString("readTaint") == "SomeAddon");
+}
+
+TEST_CASE("A script slot that raises reports and lets the caller go on", "[taint]") {
+    Fixture f;
+    registerSlots(f.L);
+    static int reported = 0;
+    reported = 0;
+    wowee::addons::setScriptErrorReporter([](lua_State* S, const char*) {
+        ++reported;
+        lua_pop(S, 1);
+    });
+    f.run("Group = {}", 0);
+    f.run("SetScriptSlot(Group, 'OnLoop', function() error('boom') end)", f.addon);
+    f.run("RunScriptSlot(Group, 'OnLoop') reached = true afterTaint = Taint()", 0);
+    wowee::addons::setScriptErrorReporter(nullptr);
+    CHECK(reported == 1);
+    CHECK(f.globalBool("reached"));
+    CHECK(f.globalString("afterTaint") == "<nil>");
 }
 
 // ---- The host's own bookkeeping ---------------------------------------------

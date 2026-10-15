@@ -363,42 +363,9 @@ static int lua_Frame_HookScript(lua_State* L) {
         }
         return luaL_error(L, "Usage: %s:HookScript(\"type\", function)", who);
     }
-    lua_settop(L, 3);
-    const int hooker = taint::current();
-    int record = 0;
-    bool set = false;
-    {
-        taint::Quiet quiet;
-        lua_getfield(L, 1, "__scripts");
-        if (lua_istable(L, -1)) {
-            lua_pushvalue(L, 2);
-            lua_rawget(L, -2);
-            set = lua_isfunction(L, -1);
-            record = lua_gettaintof(L, -1);
-            lua_pop(L, 1);
-        }
-        lua_pop(L, 1);
-    }
-    if (!set) {
-        // 0x0049edb0 sets it with the running taint, as SetScript does.
-        lua_pushcfunction(L, lua_Frame_SetScript);
-        lua_insert(L, 1);
-        lua_call(L, 3, 0);
-        return 0;
-    }
-    taint::Quiet quiet;
-    lua_getfield(L, 1, "__scripts");                   // 4
-    lua_pushvalue(L, 2);                               // 5 the name
-    lua_pushvalue(L, 2);
-    lua_rawget(L, 4);                                  // 6 the original
-    lua_settaintof(L, 6, record);
-    lua_pushvalue(L, 3);                               // 7 the hook
-    lua_settaintof(L, 7, hooker);
-    lua_pushcclosure(L, taint::lua_SecureHookWrapper, 2);
-    lua_settaintof(L, -1, record);
-    lua_rawset(L, 4);
-    lua_settop(L, 0);
-    return 0;
+    // 0x0049edb0 sets it with the running taint when nothing is set yet, as
+    // SetScript does.
+    return hookScriptWith(L, lua_Frame_SetScript);
 }
 
 // Frame method: frame:GetScript("handler")
@@ -6482,6 +6449,18 @@ void LuaEngine::registerCoreAPI() {
     lua_pushcfunction(L_, lua_wowee_setAnimOffset);
     lua_setglobal(L_, "__WoweeSetAnimOffset");
 
+    // The script slots the animation system keeps its scripts in, and runs
+    // them through one at a time - see lua_handler_globals.hpp.
+    lua_pushcfunction(L_, lua_WoweeSetScriptSlot);
+    lua_setglobal(L_, "__WoweeSetScriptSlot");
+    lua_pushcfunction(L_, lua_WoweeGetScriptSlot);
+    lua_setglobal(L_, "__WoweeGetScriptSlot");
+    lua_pushcfunction(L_, lua_WoweeHookScriptSlot);
+    lua_setglobal(L_, "__WoweeHookScriptSlot");
+    lua_pushcfunction(L_, lua_WoweeRunScriptSlot);
+    lua_setglobal(L_, "__WoweeRunScriptSlot");
+    setScriptErrorReporter(recordScriptError);
+
     lua_pushcfunction(L_, lua_WoweeFireOnLoad);
     lua_setglobal(L_, "__WoweeFireOnLoad");
 
@@ -7029,8 +7008,14 @@ void LuaEngine::registerCoreAPI() {
         // alertframes.xml puts `self:GetRegionParent():Hide()` there. Only the
         // group's OnFinished was ever called, so an achievement banner faded to
         // nothing and stayed on screen forever.
-        "function animMeta:SetScript(k, f) self[k] = f end\n"
-        "function animMeta:GetScript(k) return self[k] end\n"
+        // Kept and run as the client keeps and runs them - see
+        // lua_WoweeRunScriptSlot - and not as fields called in place, which
+        // ran an addon's script inside whatever called Play or ticked the
+        // animations, and left that caller holding the addon's taint for
+        // every group after it.
+        "animMeta.SetScript = __WoweeSetScriptSlot\n"
+        "animMeta.GetScript = __WoweeGetScriptSlot\n"
+        "animMeta.HookScript = __WoweeHookScriptSlot\n"
         "function animMeta:GetRegionParent() return self.group and self.group.parent end\n"
         "function animMeta:SetOrder(o) self.order = o or 1 end\n"
         "function animMeta:GetOrder() return self.order or 1 end\n"
@@ -7087,8 +7072,6 @@ void LuaEngine::registerCoreAPI() {
         "function animMeta:Finish() if self.group then self.group:Finish() end end\n"
         "function animMeta:GetSmoothing() return self.smoothing end\n"
         "function animMeta:GetOrder() return self.order or 1 end\n"
-        "function animMeta:SetScript(k, f) self[k] = f end\n"
-        "function animMeta:GetScript(k) return self[k] end\n"
 
         "local groupMeta = {}\n"
         "groupMeta.__index = groupMeta\n"
@@ -7104,12 +7087,9 @@ void LuaEngine::registerCoreAPI() {
         "function groupMeta:GetLooping() return self.looping or 'NONE' end\n"
         "function groupMeta:IsPlaying() return self.isPlaying == true end\n"
         "function groupMeta:IsDone() return self.isPlaying ~= true end\n"
-        "function groupMeta:SetScript(k, f) self[k] = f end\n"
-        "function groupMeta:GetScript(k) return self[k] end\n"
-        "function groupMeta:HookScript(k, f)\n"
-        "    local prev = self[k]\n"
-        "    self[k] = function(...) if prev then prev(...) end f(...) end\n"
-        "end\n"
+        "groupMeta.SetScript = __WoweeSetScriptSlot\n"
+        "groupMeta.GetScript = __WoweeGetScriptSlot\n"
+        "groupMeta.HookScript = __WoweeHookScriptSlot\n"
         "function groupMeta:SetParent(p) self.parent = p end\n"
         "function groupMeta:GetParent() return self.parent end\n"
         "function groupMeta:GetDuration()\n"
@@ -7130,7 +7110,7 @@ void LuaEngine::registerCoreAPI() {
         "    self.baseAlpha = self.parent and self.parent:GetAlpha() or 1\n"
         "    for _, a in ipairs(self.animations) do a.elapsed = 0 a.progress = 0 a.finished = nil end\n"
         "    playing[self] = true\n"
-        "    if self.OnPlay then self:OnPlay() end\n"
+        "    __WoweeRunScriptSlot(self, 'OnPlay')\n"
         "end\n"
         "function groupMeta:Stop()\n"
         "    self.isPlaying = false\n"
@@ -7141,12 +7121,12 @@ void LuaEngine::registerCoreAPI() {
         "        if self.baseAlpha then self.parent:SetAlpha(self.baseAlpha) end\n"
         "        __WoweeSetAnimOffset(self.parent, 0, 0)\n"
         "    end\n"
-        "    if self.OnStop then self:OnStop() end\n"
+        "    __WoweeRunScriptSlot(self, 'OnStop')\n"
         "end\n"
         "function groupMeta:Finish()\n"
         "    self.isPlaying = false\n"
         "    playing[self] = nil\n"
-        "    if self.OnFinished then self:OnFinished() end\n"
+        "    __WoweeRunScriptSlot(self, 'OnFinished')\n"
         "end\n"
         "function groupMeta:Pause() self.paused = true end\n"
         "function groupMeta:Resume() self.paused = nil end\n"
@@ -7208,7 +7188,7 @@ void LuaEngine::registerCoreAPI() {
         // hides is the one the group is still animating.
         "                    if done and not a.finished then\n"
         "                        a.finished = true\n"
-        "                        if a.OnFinished then a:OnFinished() end\n"
+        "                        __WoweeRunScriptSlot(a, 'OnFinished')\n"
         "                    end\n"
         "                    if a.kind == 'Alpha' then\n"
         "                        if a.fromAlpha and a.toAlpha then\n"
@@ -7239,7 +7219,7 @@ void LuaEngine::registerCoreAPI() {
         // clocks reset, or the next round finishes instantly.
         "                    if mode == 'BOUNCE' then g.reversed = not g.reversed end\n"
         "                    for _, a in ipairs(g.animations) do a.elapsed = 0 a.finished = nil end\n"
-        "                    if g.OnLoop then g:OnLoop() end\n"
+        "                    __WoweeRunScriptSlot(g, 'OnLoop')\n"
         "                else\n"
         "                    g:Finish()\n"
         "                end\n"

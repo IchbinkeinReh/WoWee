@@ -2,6 +2,7 @@
 #include "addons/lua_taint.hpp"
 
 #include <cstring>
+#include <string>
 
 extern "C" {
 #include <lua.h>
@@ -191,6 +192,127 @@ int lua_WoweeFireOnLoad(lua_State* L) {
     }
     taint::Quiet quiet;
     lua_setglobal(L, "this");             // what was saved, still on the stack
+    return 0;
+}
+
+namespace {
+ScriptErrorReporter gScriptErrorReporter = nullptr;
+}  // namespace
+
+void setScriptErrorReporter(ScriptErrorReporter reporter) {
+    gScriptErrorReporter = reporter;
+}
+
+int lua_WoweeSetScriptSlot(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const char* name = luaL_checkstring(L, 2);
+    lua_settop(L, 3);
+    // Read as SetScript reads it, so an insecure handler taints the setter,
+    // and kept with the setter's taint - which is what it will run under.
+    lua_pushvalue(L, 3);
+    const int setter = taint::current();
+    taint::Quiet quiet;
+    lua_getfield(L, 1, "__scripts");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, 1, "__scripts");
+    }
+    lua_pushvalue(L, -2);
+    lua_settaintof(L, -1, setter);
+    lua_setfield(L, -2, name);
+    lua_pop(L, 2);
+    return 0;
+}
+
+int lua_WoweeGetScriptSlot(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const char* name = luaL_checkstring(L, 2);
+    {
+        taint::Quiet quiet;
+        lua_getfield(L, 1, "__scripts");
+        if (lua_istable(L, -1)) lua_getfield(L, -1, name);
+        else lua_pushnil(L);
+        lua_remove(L, -2);
+    }
+    // The function as it was set, carrying its setter's taint: reading an
+    // insecure handler taints the reader, as the client's GetScript does.
+    const int t = lua_gettaintof(L, -1);
+    if (t != 0) {
+        lua_TaintState& s = *lua_taintstate();
+        if (s.scope != 0 && s.hold == 0) s.taint = t;
+    } else {
+        lua_settaintof(L, -1, taint::current());
+    }
+    return 1;
+}
+
+int hookScriptWith(lua_State* L, ScriptSetter setScript) {
+    lua_settop(L, 3);
+    const int hooker = taint::current();
+    int record = 0;
+    bool set = false;
+    {
+        taint::Quiet quiet;
+        lua_getfield(L, 1, "__scripts");
+        if (lua_istable(L, -1)) {
+            lua_pushvalue(L, 2);
+            lua_rawget(L, -2);
+            set = lua_isfunction(L, -1);
+            record = lua_gettaintof(L, -1);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    if (!set) {
+        lua_pushcfunction(L, setScript);
+        lua_insert(L, 1);
+        lua_call(L, 3, 0);
+        return 0;
+    }
+    taint::Quiet quiet;
+    lua_getfield(L, 1, "__scripts");                   // 4
+    lua_pushvalue(L, 2);                               // 5 the name
+    lua_pushvalue(L, 2);
+    lua_rawget(L, 4);                                  // 6 the original
+    lua_settaintof(L, 6, record);
+    lua_pushvalue(L, 3);                               // 7 the hook
+    lua_settaintof(L, 7, hooker);
+    lua_pushcclosure(L, taint::lua_SecureHookWrapper, 2);
+    lua_settaintof(L, -1, record);
+    lua_rawset(L, 4);
+    lua_settop(L, 0);
+    return 0;
+}
+
+int lua_WoweeHookScriptSlot(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checkstring(L, 2);
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    return hookScriptWith(L, lua_WoweeSetScriptSlot);
+}
+
+int lua_WoweeRunScriptSlot(lua_State* L) {
+    if (!lua_istable(L, 1) || !lua_isstring(L, 2)) return 0;
+    const int n = lua_gettop(L);
+    const std::string name = lua_tostring(L, 2);
+    {
+        // Found and handed over as the client's dispatch does it: nothing
+        // here taints or is tainted, and the arguments keep their own taint.
+        taint::Quiet quiet;
+        lua_getfield(L, 1, "__scripts");
+        if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
+        lua_getfield(L, -1, name.c_str());
+        lua_remove(L, -2);
+        if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return 0; }
+        lua_pushvalue(L, 1);
+        for (int i = 3; i <= n; ++i) lua_pushvalue(L, i);
+    }
+    if (pcallScript(L, name.c_str(), n - 1, 0) != 0) {
+        if (gScriptErrorReporter) gScriptErrorReporter(L, name.c_str());
+        else lua_pop(L, 1);
+    }
     return 0;
 }
 
