@@ -299,6 +299,28 @@ LUA_API void lua_setlevel	(lua_State *from, lua_State *to);
 
 
 /*
+** WoW's taint (wow.exe 12340): what the running code is tainted by
+** (DAT_00d4139c, 0 for secure), how many of the C entries that track it are
+** open (DAT_00d413a0 - outside them reading a tainted value taints nothing),
+** whether the running closure was made by insecure code (DAT_00d413a4), and
+** what new objects are tainted by while the running code is
+** (DAT_00d413ac). A taint is a number the host gives meaning to.
+*/
+typedef struct lua_TaintState {
+  int taint;
+  int scope;
+  int hold;
+  int objtaint;
+} lua_TaintState;
+
+LUA_API lua_TaintState *(lua_taintstate) (void);
+/* A value's own taint, and setting it (0x0084f0d0). */
+LUA_API int   (lua_gettaintof) (lua_State *L, int idx);
+LUA_API void  (lua_settaintof) (lua_State *L, int idx, int taint);
+
+
+
+/*
 ** {======================================================================
 ** Debug API
 ** =======================================================================

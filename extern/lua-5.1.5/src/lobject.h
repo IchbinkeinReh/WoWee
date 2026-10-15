@@ -40,7 +40,13 @@ typedef union GCObject GCObject;
 ** Common Header for all collectable objects (in macro form, to be
 ** included in other objects)
 */
-#define CommonHeader	GCObject *next; lu_byte tt; lu_byte marked
+/*
+** WoW: every object also carries the taint it was created under (wow.exe
+** 12340 keeps it at +4 of the header: 0x00856bc0 for strings, 0x00856dd0
+** for userdata, 0x00855370 for a state). Only a closure's is ever read back:
+** running one an insecure caller made taints the run (luaV_execute, 0x00857ca0).
+*/
+#define CommonHeader	GCObject *next; int taint; lu_byte tt; lu_byte marked
 
 
 /*
@@ -68,7 +74,8 @@ typedef union {
 ** Tagged Values
 */
 
-#define TValuefields	Value value; int tt
+/* WoW: and every value the taint of the code that produced it. */
+#define TValuefields	Value value; int tt; int taint
 
 typedef struct lua_TValue {
   TValuefields;
@@ -113,54 +120,95 @@ typedef struct lua_TValue {
   ((ttype(obj) == (obj)->value.gc->gch.tt) && !isdead(g, (obj)->value.gc)))
 
 
-/* Macros to set values */
-#define setnilvalue(obj) ((obj)->tt=LUA_TNIL)
+/*
+** WoW's taint (wow.exe 12340), the state lua_taintstate() hands out:
+** DAT_00d4139c is what the running code is tainted by, DAT_00d413a0 how many
+** of the C entries that track it are open, DAT_00d413a4 that the running
+** closure is itself insecure, DAT_00d413ac what new objects are tainted by.
+*/
+LUAI_DATA lua_TaintState luai_ts;
+
+/*
+** Reading a tainted value taints the running code, while any entry that
+** tracks it is open and the closure running is not an insecure one already.
+*/
+#define luai_taintread(t) \
+  { int i_r=(t); \
+    if (i_r != 0 && luai_ts.scope != 0 && luai_ts.hold == 0) luai_ts.taint=i_r; }
+
+/* What a new object is tainted by (0x00856bc0, 0x00856dd0, 0x00855370). */
+#define luai_newobjtaint() \
+  ((luai_ts.taint != 0 && luai_ts.objtaint != 0) ? luai_ts.objtaint \
+                                                 : luai_ts.taint)
+
+/* Macros to set values: a value made here carries the running taint. */
+#define setnilvalue(obj) \
+  { TValue *i_o=(obj); i_o->taint=luai_ts.taint; i_o->tt=LUA_TNIL; }
 
 #define setnvalue(obj,x) \
-  { TValue *i_o=(obj); i_o->value.n=(x); i_o->tt=LUA_TNUMBER; }
+  { TValue *i_o=(obj); i_o->value.n=(x); i_o->tt=LUA_TNUMBER; \
+    i_o->taint=luai_ts.taint; }
 
 #define setpvalue(obj,x) \
-  { TValue *i_o=(obj); i_o->value.p=(x); i_o->tt=LUA_TLIGHTUSERDATA; }
+  { TValue *i_o=(obj); i_o->value.p=(x); i_o->tt=LUA_TLIGHTUSERDATA; \
+    i_o->taint=luai_ts.taint; }
 
 #define setbvalue(obj,x) \
-  { TValue *i_o=(obj); i_o->value.b=(x); i_o->tt=LUA_TBOOLEAN; }
+  { TValue *i_o=(obj); i_o->value.b=(x); i_o->tt=LUA_TBOOLEAN; \
+    i_o->taint=luai_ts.taint; }
 
 #define setsvalue(L,obj,x) \
   { TValue *i_o=(obj); \
     i_o->value.gc=cast(GCObject *, (x)); i_o->tt=LUA_TSTRING; \
-    checkliveness(G(L),i_o); }
+    i_o->taint=luai_ts.taint; checkliveness(G(L),i_o); }
 
 #define setuvalue(L,obj,x) \
   { TValue *i_o=(obj); \
     i_o->value.gc=cast(GCObject *, (x)); i_o->tt=LUA_TUSERDATA; \
-    checkliveness(G(L),i_o); }
+    i_o->taint=luai_ts.taint; checkliveness(G(L),i_o); }
 
 #define setthvalue(L,obj,x) \
   { TValue *i_o=(obj); \
     i_o->value.gc=cast(GCObject *, (x)); i_o->tt=LUA_TTHREAD; \
-    checkliveness(G(L),i_o); }
+    i_o->taint=luai_ts.taint; checkliveness(G(L),i_o); }
 
 #define setclvalue(L,obj,x) \
   { TValue *i_o=(obj); \
     i_o->value.gc=cast(GCObject *, (x)); i_o->tt=LUA_TFUNCTION; \
-    checkliveness(G(L),i_o); }
+    i_o->taint=luai_ts.taint; checkliveness(G(L),i_o); }
 
 #define sethvalue(L,obj,x) \
   { TValue *i_o=(obj); \
     i_o->value.gc=cast(GCObject *, (x)); i_o->tt=LUA_TTABLE; \
-    checkliveness(G(L),i_o); }
+    i_o->taint=luai_ts.taint; checkliveness(G(L),i_o); }
 
 #define setptvalue(L,obj,x) \
   { TValue *i_o=(obj); \
     i_o->value.gc=cast(GCObject *, (x)); i_o->tt=LUA_TPROTO; \
-    checkliveness(G(L),i_o); }
+    i_o->taint=luai_ts.taint; checkliveness(G(L),i_o); }
 
 
 
 
+/*
+** A store keeps the value's own taint and taints the running code with it
+** (luaV_settable 0x008573c0, OP_SETUPVAL, lua_replace 0x0084dd70).
+*/
 #define setobj(L,obj1,obj2) \
-  { const TValue *o2=(obj2); TValue *o1=(obj1); \
+  { const TValue *o2=(obj2); TValue *o1=(obj1); int i_t=o2->taint; \
+    o1->value = o2->value; o1->tt=o2->tt; o1->taint=i_t; \
+    luai_taintread(i_t); checkliveness(G(L),o1); }
+
+/*
+** A load onto the stack does the same, except that a secure value takes on
+** the running taint (OP_MOVE, OP_LOADK, OP_GETUPVAL, luaV_gettable
+** 0x00857250, lua_pushvalue 0x0084de50, luaD_poscall 0x00856010).
+*/
+#define setobjload(L,obj1,obj2) \
+  { const TValue *o2=(obj2); TValue *o1=(obj1); int i_t=o2->taint; \
     o1->value = o2->value; o1->tt=o2->tt; \
+    if (i_t == 0) o1->taint=luai_ts.taint; \
+    else { o1->taint=i_t; luai_taintread(i_t); } \
     checkliveness(G(L),o1); }
 
 
@@ -169,9 +217,9 @@ typedef struct lua_TValue {
 */
 
 /* from stack to (same) stack */
-#define setobjs2s	setobj
+#define setobjs2s	setobjload
 /* to stack (not from same stack) */
-#define setobj2s	setobj
+#define setobj2s	setobjload
 #define setsvalue2s	setsvalue
 #define sethvalue2s	sethvalue
 #define setptvalue2s	setptvalue

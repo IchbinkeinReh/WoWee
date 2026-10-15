@@ -385,6 +385,13 @@ void luaV_execute (lua_State *L, int nexeccalls) {
   cl = &clvalue(L->ci->func)->l;
   base = L->base;
   k = cl->p->k;
+  /* WoW: a closure made by insecure code taints whatever runs it, and holds
+     that taint while it runs (0x00857ca0). */
+  luai_ts.hold = 0;
+  if (cl->taint != 0) {
+    if (luai_ts.scope != 0) luai_ts.taint = cl->taint;
+    luai_ts.hold = 1;
+  }
   /* main loop of interpreter */
   for (;;) {
     const Instruction i = *pc++;
@@ -394,6 +401,7 @@ void luaV_execute (lua_State *L, int nexeccalls) {
       traceexec(L, pc);
       if (L->status == LUA_YIELD) {  /* did hook yield? */
         L->savedpc = pc - 1;
+        luai_ts.hold = 0;
         return;
       }
       base = L->base;
@@ -586,6 +594,10 @@ void luaV_execute (lua_State *L, int nexeccalls) {
       case OP_CALL: {
         int b = GETARG_B(i);
         int nresults = GETARG_C(i) - 1;
+        /* WoW: an insecure closure's taint is let go across the call and
+           taken back once a C function returns (0x00857ca0, OP_CALL). */
+        int heldtaint = luai_ts.hold ? luai_ts.taint : 0;
+        luai_ts.hold = 0;
         if (b != 0) L->top = ra+b;  /* else previous instruction set top */
         L->savedpc = pc;
         switch (luaD_precall(L, ra, nresults)) {
@@ -597,6 +609,11 @@ void luaV_execute (lua_State *L, int nexeccalls) {
             /* it was a C function (`precall' called it); adjust results */
             if (nresults >= 0) L->top = L->ci->top;
             base = L->base;
+            if (heldtaint != 0) {
+              if (luai_ts.scope != 0) luai_ts.taint = heldtaint;
+              luai_ts.hold = 1;
+            }
+            else luai_ts.hold = 0;
             continue;
           }
           default: {
@@ -606,6 +623,8 @@ void luaV_execute (lua_State *L, int nexeccalls) {
       }
       case OP_TAILCALL: {
         int b = GETARG_B(i);
+        int heldtaint = luai_ts.hold ? luai_ts.taint : 0;  /* as OP_CALL */
+        luai_ts.hold = 0;
         if (b != 0) L->top = ra+b;  /* else previous instruction set top */
         L->savedpc = pc;
         lua_assert(GETARG_C(i) - 1 == LUA_MULTRET);
@@ -629,6 +648,11 @@ void luaV_execute (lua_State *L, int nexeccalls) {
           }
           case PCRC: {  /* it was a C function (`precall' called it) */
             base = L->base;
+            if (heldtaint != 0) {
+              if (luai_ts.scope != 0) luai_ts.taint = heldtaint;
+              luai_ts.hold = 1;
+            }
+            else luai_ts.hold = 0;
             continue;
           }
           default: {
@@ -638,6 +662,7 @@ void luaV_execute (lua_State *L, int nexeccalls) {
       }
       case OP_RETURN: {
         int b = GETARG_B(i);
+        luai_ts.hold = 0;  /* WoW: 0x00857ca0 */
         if (b != 0) L->top = ra+b-1;
         if (L->openupval) luaF_close(L, base);
         L->savedpc = pc;

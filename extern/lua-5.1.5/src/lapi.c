@@ -638,6 +638,28 @@ LUA_API void lua_getfenv (lua_State *L, int idx) {
 
 
 /*
+** WoW's taint (wow.exe 12340)
+*/
+
+LUA_API lua_TaintState *lua_taintstate (void) {
+  return &luai_ts;
+}
+
+
+LUA_API int lua_gettaintof (lua_State *L, int idx) {
+  return index2adr(L, idx)->taint;
+}
+
+
+/* 0x0084f0d0 */
+LUA_API void lua_settaintof (lua_State *L, int idx, int taint) {
+  TValue *o = index2adr(L, idx);
+  if (o != luaO_nilobject) o->taint = taint;
+}
+
+
+
+/*
 ** set functions (stack -> Lua)
 */
 

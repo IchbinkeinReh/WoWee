@@ -248,8 +248,8 @@ LUA_API int lua_getinfo (lua_State *L, const char *what, lua_Debug *ar) {
   }
   status = auxgetinfo(L, what, ar, f, ci);
   if (strchr(what, 'f')) {
-    if (f == NULL) setnilvalue(L->top);
-    else setclvalue(L, L->top, f);
+    if (f == NULL) { setnilvalue(L->top); }
+    else { setclvalue(L, L->top, f); }
     incr_top(L);
   }
   if (strchr(what, 'L'))

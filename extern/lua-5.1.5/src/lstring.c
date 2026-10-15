@@ -58,6 +58,7 @@ static TString *newlstr (lua_State *L, const char *str, size_t l,
   ts->tsv.hash = h;
   ts->tsv.marked = luaC_white(G(L));
   ts->tsv.tt = LUA_TSTRING;
+  ts->tsv.taint = luai_newobjtaint();
   ts->tsv.reserved = 0;
   memcpy(ts+1, str, l*sizeof(char));
   ((char *)(ts+1))[l] = '\0';  /* ending 0 */
@@ -100,6 +101,7 @@ Udata *luaS_newudata (lua_State *L, size_t s, Table *e) {
   u = cast(Udata *, luaM_malloc(L, s + sizeof(Udata)));
   u->uv.marked = luaC_white(G(L));  /* is not finalized */
   u->uv.tt = LUA_TUSERDATA;
+  u->uv.taint = luai_newobjtaint();
   u->uv.len = s;
   u->uv.metatable = NULL;
   u->uv.env = e;

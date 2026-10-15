@@ -472,6 +472,7 @@ int luaD_pcall (lua_State *L, Pfunc func, void *u,
     L->savedpc = L->ci->savedpc;
     L->allowhook = old_allowhooks;
     restore_stack_limit(L);
+    luai_ts.hold = 0;  /* WoW: 0x00856970 */
   }
   L->errfunc = old_errfunc;
   return status;

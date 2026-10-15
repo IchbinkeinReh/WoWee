@@ -73,8 +73,8 @@
 #define dummynode		(&dummynode_)
 
 static const Node dummynode_ = {
-  {{NULL}, LUA_TNIL},  /* value */
-  {{{NULL}, LUA_TNIL, NULL}}  /* key */
+  {{NULL}, LUA_TNIL, 0},  /* value */
+  {{{NULL}, LUA_TNIL, 0, NULL}}  /* key */
 };
 
 
@@ -285,7 +285,7 @@ static void setnodevector (lua_State *L, Table *t, int size) {
     for (i=0; i<size; i++) {
       Node *n = gnode(t, i);
       gnext(n) = NULL;
-      setnilvalue(gkey(n));
+      setnilvalue(key2tval(n));
       setnilvalue(gval(n));
     }
   }
@@ -299,6 +299,12 @@ static void resize (lua_State *L, Table *t, int nasize, int nhsize) {
   int oldasize = t->sizearray;
   int oldhsize = t->lsizenode;
   Node *nold = t->node;  /* save old hash ... */
+  /* WoW: moving what is already there taints nothing, and the slots it
+     leaves are secure (luaH_resize 0x0085c6f0). */
+  int savedtaint = luai_ts.taint;
+  int savedscope = luai_ts.scope;
+  luai_ts.taint = 0;
+  luai_ts.scope = 0;
   if (nasize > oldasize)  /* array part must grow? */
     setarrayvector(L, t, nasize);
   /* create new hash part with appropriate size */
@@ -321,6 +327,8 @@ static void resize (lua_State *L, Table *t, int nasize, int nhsize) {
   }
   if (nold != dummynode)
     luaM_freearray(L, nold, twoto(oldhsize), Node);  /* free old array */
+  luai_ts.taint = savedtaint;
+  luai_ts.scope = savedscope;
 }
 
 

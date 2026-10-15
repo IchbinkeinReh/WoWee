@@ -29,6 +29,10 @@
 #define tostate(l)   (cast(lua_State *, cast(lu_byte *, l) + LUAI_EXTRASPACE))
 
 
+/* WoW's taint state: one for the process, as wow.exe 12340 keeps it. */
+lua_TaintState luai_ts = {0, 0, 0, 0};
+
+
 /*
 ** Main thread combines a thread state and the global state
 */
@@ -150,6 +154,7 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
   g = &((LG *)L)->g;
   L->next = NULL;
   L->tt = LUA_TTHREAD;
+  L->taint = luai_newobjtaint();
   g->currentwhite = bit2mask(WHITE0BIT, FIXEDBIT);
   L->marked = luaC_white(g);
   set2bits(L->marked, FIXEDBIT, SFIXEDBIT);

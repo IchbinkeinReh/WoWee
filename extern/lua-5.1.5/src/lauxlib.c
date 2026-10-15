@@ -480,11 +480,19 @@ LUALIB_API void luaL_buffinit (lua_State *L, luaL_Buffer *B) {
 
 LUALIB_API int luaL_ref (lua_State *L, int t) {
   int ref;
+  lua_TaintState *ts;
+  int savedtaint, savedscope;
   t = abs_index(L, t);
   if (lua_isnil(L, -1)) {
     lua_pop(L, 1);  /* remove from stack */
     return LUA_REFNIL;  /* `nil' has a unique fixed reference */
   }
+  /* WoW: the free list is bookkeeping, and taints nothing (0x0084f6c0). */
+  ts = lua_taintstate();
+  savedtaint = ts->taint;
+  savedscope = ts->scope;
+  ts->taint = 0;
+  ts->scope = 0;
   lua_rawgeti(L, t, FREELIST_REF);  /* get first free element */
   ref = (int)lua_tointeger(L, -1);  /* ref = t[FREELIST_REF] */
   lua_pop(L, 1);  /* remove it from stack */
@@ -497,17 +505,27 @@ LUALIB_API int luaL_ref (lua_State *L, int t) {
     ref++;  /* create new reference */
   }
   lua_rawseti(L, t, ref);
+  ts->taint = savedtaint;
+  ts->scope = savedscope;
   return ref;
 }
 
 
 LUALIB_API void luaL_unref (lua_State *L, int t, int ref) {
   if (ref >= 0) {
+    /* WoW: 0x0084f7a0, as luaL_ref */
+    lua_TaintState *ts = lua_taintstate();
+    int savedtaint = ts->taint;
+    int savedscope = ts->scope;
+    ts->taint = 0;
+    ts->scope = 0;
     t = abs_index(L, t);
     lua_rawgeti(L, t, FREELIST_REF);
     lua_rawseti(L, t, ref);  /* t[ref] = t[FREELIST_REF] */
     lua_pushinteger(L, ref);
     lua_rawseti(L, t, FREELIST_REF);  /* t[FREELIST_REF] = ref */
+    ts->taint = savedtaint;
+    ts->scope = savedscope;
   }
 }
 
