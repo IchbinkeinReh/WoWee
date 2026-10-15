@@ -20,6 +20,9 @@ public:
     ~LoadingScreen();
 
     /// The map's picture (0x00409ed0) and the bar's textures (0x0040a990).
+    /// From here until shutdown() the world's sound is held, as behind the
+    /// client's loading screen nothing of the world plays (0x0040a920,
+    /// audio/world_sound_hold.hpp).
     bool initialize(pipeline::AssetManager* assets, uint32_t mapId);
     void shutdown();
 
@@ -54,6 +57,8 @@ private:
     std::array<Texture, 2> bar_;  ///< loading_screen::kBar's pieces
 
     float loadProgress = 0.0f;
+    /// This screen holds the world's sound (AudioEngine::beginWorldSoundHold).
+    bool holdsWorldSound_ = false;
 };
 
 } // namespace rendering

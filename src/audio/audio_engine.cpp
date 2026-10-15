@@ -265,6 +265,45 @@ void AudioEngine::setEffectsVolume(float volume) {
     if (effectsGroup_) ma_sound_group_set_volume(effectsGroup_, effectsVolume_);
 }
 
+bool AudioEngine::startOrHold(ma_sound* sound, bool loops, bool& held) {
+    held = false;
+    switch (world_sound_hold::start(isWorldSoundHeld(), loops)) {
+    case world_sound_hold::Start::Now:
+        return ma_sound_start(sound) == MA_SUCCESS;
+    case world_sound_hold::Start::Deferred:
+        held = true;
+        return true;
+    case world_sound_hold::Start::Refused:
+        break;
+    }
+    return false;
+}
+
+void AudioEngine::beginWorldSoundHold() {
+    worldSoundHolds_.begin();
+}
+
+void AudioEngine::endWorldSoundHold() {
+    if (!worldSoundHolds_.end()) return;
+    // The world is shown: what waited starts now, its fade in from here.
+    size_t started = 0;
+    for (auto& active : activeSounds_) {
+        if (!active.held) continue;
+        active.held = false;
+        if (active.culled) continue;  // out of range: cullByDistance starts it
+        ma_sound_start(active.sound);
+        ++started;
+    }
+    for (auto& stream : activeStreams_) {
+        if (!stream.held) continue;
+        stream.held = false;
+        ma_sound_start(stream.sound);
+        ++started;
+    }
+    LOG_INFO("AudioEngine: the world's sound held for the loading screen let go, ", started,
+             " waiting sound(s) started");
+}
+
 std::string AudioEngine::getOutputDeviceName() const {
     if (!initialized_ || !engine_) return {};
     const ma_device* device = ma_engine_get_device(const_cast<ma_engine*>(engine_));
@@ -357,6 +396,8 @@ bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume,
     (void)pitch;
     if (!initialized_ || !engine_ || wavData.empty()) return false;
     if (masterVolume_ <= 0.0f) return false;
+    // Played once: not while the loading screen holds the world's sound.
+    if (world_sound_hold::start(isWorldSoundHeld(), false) == world_sound_hold::Start::Refused) return false;
 
     DecodedWavCacheEntry decoded;
     if (!decodeWavCached(wavData, decoded) || !decoded.pcmData || decoded.frames == 0) {
@@ -421,6 +462,7 @@ uint32_t AudioEngine::playSound2DStoppable(const std::vector<uint8_t>& wavData, 
                                            float fadeInSeconds) {
     if (!initialized_ || !engine_ || wavData.empty()) return 0;
     if (masterVolume_ <= 0.0f) return 0;
+    if (world_sound_hold::start(isWorldSoundHeld(), loop) == world_sound_hold::Start::Refused) return 0;
 
     DecodedWavCacheEntry decoded;
     if (!decodeWavCached(wavData, decoded) || !decoded.pcmData || decoded.frames == 0) return 0;
@@ -452,13 +494,14 @@ uint32_t AudioEngine::playSound2DStoppable(const std::vector<uint8_t>& wavData, 
     if (fadeInSeconds > 0.0f)
         ma_sound_set_fade_in_milliseconds(sound.get(), 0.0f, 1.0f,
                                           static_cast<ma_uint64>(fadeInSeconds * 1000.0f));
-    if (ma_sound_start(sound.get()) != MA_SUCCESS) {
+    bool held = false;
+    if (!startOrHold(sound.get(), loop, held)) {
         return 0;
     }
 
     uint32_t id = nextSoundId_++;
     if (nextSoundId_ == 0) nextSoundId_ = 1;  // Skip 0 (sentinel)
-    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, id});
+    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, id, held});
     return id;
 }
 
@@ -504,6 +547,8 @@ bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::ve
     if (masterVolume_ <= 0.0f) return false;
     // Past its cutoff it is not heard, so not played (audio/sound_distance.hpp).
     if (!sound_distance::heard(position, listenerPosition_, maxDistance)) return false;
+    // Played once: not while the loading screen holds the world's sound.
+    if (world_sound_hold::start(isWorldSoundHeld(), false) == world_sound_hold::Start::Refused) return false;
 
     DecodedWavCacheEntry decoded;
     if (!decodeWavCached(wavData, decoded) || !decoded.pcmData || decoded.frames == 0) {
@@ -568,7 +613,7 @@ bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::ve
     }
 
     // Track for cleanup
-    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, 0u, maxDistance});
+    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, 0u, false, maxDistance});
 
     return true;
 }
@@ -628,12 +673,17 @@ uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, co
                                           static_cast<ma_uint64>(fadeInSeconds * 1000.0f));
     // Out past its cutoff it waits, paused, for the listener to come in.
     const bool culled = !sound_distance::heard(position, listenerPosition_, maxDistance);
-    if (!culled && ma_sound_start(sound.get()) != MA_SUCCESS) return 0;
+    bool held = false;
+    if (culled) {
+        held = world_sound_hold::start(isWorldSoundHeld(), true) == world_sound_hold::Start::Deferred;
+    } else if (!startOrHold(sound.get(), true, held)) {
+        return 0;
+    }
 
     uint32_t id = nextSoundId_++;
     if (nextSoundId_ == 0) nextSoundId_ = 1;  // Skip 0 (sentinel)
     activeSounds_.push_back(
-        {sound.release(), audioBuffer.release(), decoded.pcmData, id, maxDistance, culled});
+        {sound.release(), audioBuffer.release(), decoded.pcmData, id, held, maxDistance, culled});
     return id;
 }
 
@@ -661,8 +711,9 @@ void AudioEngine::stopSoundWithFade(uint32_t id, float seconds) {
     if (id == 0) return;
     for (auto& active : activeSounds_) {
         if (active.id == id) {
-            // One paused out of range is not heard: gone now.
-            if (active.culled) {
+            // One still waiting for the hold's end, or paused out of range,
+            // is not heard: gone now.
+            if (active.held || active.culled) {
                 stopSound(id);
                 return;
             }
@@ -717,7 +768,9 @@ uint32_t AudioEngine::playStream(std::shared_ptr<const std::vector<uint8_t>> dat
     }
     ma_sound_set_volume(stream.sound, volume);
     ma_sound_set_looping(stream.sound, loop ? MA_TRUE : MA_FALSE);
-    if (ma_sound_start(stream.sound) != MA_SUCCESS) {
+    // A stream waits out the hold whether it loops or not: it is the zone's
+    // music, which the world's first step would start.
+    if (!startOrHold(stream.sound, true, stream.held)) {
         releaseStream(stream);
         return 0;
     }
@@ -730,7 +783,7 @@ uint32_t AudioEngine::playStream(std::shared_ptr<const std::vector<uint8_t>> dat
 bool AudioEngine::isStreamPlaying(uint32_t id) const {
     if (id == 0) return false;
     for (const auto& stream : activeStreams_)
-        if (stream.id == id) return ma_sound_is_playing(stream.sound) == MA_TRUE;
+        if (stream.id == id) return stream.held || ma_sound_is_playing(stream.sound) == MA_TRUE;
     return false;
 }
 
@@ -890,7 +943,7 @@ void AudioEngine::update(float deltaTime) {
     // vector::erase does for each removal (and the ref-count atomics in
     // ActiveSound's shared_ptr made that shift noticeably more expensive).
     for (size_t i = 0; i < activeSounds_.size(); ) {
-        if (!activeSounds_[i].culled && !ma_sound_is_playing(activeSounds_[i].sound)) {
+        if (!activeSounds_[i].held && !activeSounds_[i].culled && !ma_sound_is_playing(activeSounds_[i].sound)) {
             ma_sound_uninit(activeSounds_[i].sound);
             std::free(activeSounds_[i].sound);
             ma_audio_buffer* buffer = static_cast<ma_audio_buffer*>(activeSounds_[i].buffer);
@@ -903,7 +956,7 @@ void AudioEngine::update(float deltaTime) {
         }
     }
     for (size_t i = 0; i < activeStreams_.size();) {
-        if (!ma_sound_is_playing(activeStreams_[i].sound)) {
+        if (!activeStreams_[i].held && !ma_sound_is_playing(activeStreams_[i].sound)) {
             releaseStream(activeStreams_[i]);
             activeStreams_[i] = std::move(activeStreams_.back());
             activeStreams_.pop_back();
@@ -915,7 +968,7 @@ void AudioEngine::update(float deltaTime) {
 
 void AudioEngine::cullByDistance() {
     for (auto& active : activeSounds_) {
-        if (!(active.cutoff > 0.0f)) continue;
+        if (active.held || !(active.cutoff > 0.0f)) continue;
         const ma_vec3f p = ma_sound_get_position(active.sound);
         const bool heard = sound_distance::heard(glm::vec3(p.x, p.y, p.z), listenerPosition_, active.cutoff);
         if (heard == !active.culled) continue;

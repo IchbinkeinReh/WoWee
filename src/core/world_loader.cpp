@@ -1303,13 +1303,12 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         renderer_->getVkContext()->waitIdle("world entry flush");
     }
 
-    if (loadingScreenOk) {
-        loadingScreen.shutdown();
-    }
     // The loading screen's end (0x006e7f50 -> 0x00409550): the music and
     // ambience the old world left playing stop at once, and the new zone
-    // starts its own.
+    // starts its own. Before the screen lets the world's sound go, so what
+    // waited for its end starts and the old world's does not.
     if (auto* ac = renderer_->getAudioCoordinator()) ac->leaveWorld();
+    loadingScreen.shutdown();
     // It is the one loading screen: a difficulty change's ends here too.
     app_.difficultyLoadingScreen_.reset();
 

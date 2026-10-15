@@ -748,6 +748,12 @@ wowee_add_test(test_world_leave_sound
     SOURCES test_world_leave_sound.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_world_sound_hold ────────────────────────────────────
+# The world's sound held behind a loading screen.
+wowee_add_test(test_world_sound_hold
+    SOURCES test_world_sound_hold.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_sound_distance ──────────────────────────────────────
 # A 3D sound heard out to its DistanceCutoff and no further.
 wowee_add_test(test_sound_distance

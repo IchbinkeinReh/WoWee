@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include "audio/world_sound_hold.hpp"
 
 // Forward declare miniaudio types to avoid exposing implementation in header
 struct ma_engine;
@@ -139,6 +140,19 @@ public:
     void setEffectsVolume(float volume);
     [[nodiscard]] float getEffectsVolume() const { return effectsVolume_; }
 
+    /// The world's sound held while a loading screen is up. The client does
+    /// not step the world behind its loading screen - its loop only pumps
+    /// the sound system and draws (0x0040a920) - so nothing in the world
+    /// starts a sound until the screen goes. Here the world is stepped
+    /// behind it, so the hold does what not stepping does: a one-shot asked
+    /// for is not played, a looping sound or a stream waits silent and
+    /// starts once the last hold is let go (audio/world_sound_hold.hpp).
+    /// What was playing before the screen came up plays on. Counted, so
+    /// two loading screens at once hold until both are gone.
+    void beginWorldSoundHold();
+    void endWorldSoundHold();
+    [[nodiscard]] bool isWorldSoundHeld() const { return worldSoundHolds_.held(); }
+
     // Update (call once per frame for cleanup/position sync)
     void update(float deltaTime);
 
@@ -169,6 +183,7 @@ private:
         void* buffer;  // ma_audio_buffer* - Keep audio buffer alive
         std::shared_ptr<const std::vector<uint8_t>> pcmDataRef;  // Keep decoded PCM alive
         uint32_t id = 0;  // 0 = anonymous (not stoppable)
+        bool held = false;  // waiting, not started, for the world sound hold to end
         float cutoff = 0.0f;  // a 3D sound's DistanceCutoff: not heard past it (0: none)
         bool culled = false;  // a looping one paused out past its cutoff
     };
@@ -189,6 +204,7 @@ private:
         void* decoder = nullptr;  // ma_decoder*
         std::shared_ptr<const std::vector<uint8_t>> data;
         uint32_t id = 0;
+        bool held = false;  // waiting, not started, for the world sound hold to end
     };
     std::vector<ActiveStream> activeStreams_;
     static void releaseStream(ActiveStream& stream);
@@ -196,6 +212,9 @@ private:
     bool initialized_ = false;
     float masterVolume_ = 1.0f;
     float effectsVolume_ = 1.0f;
+    world_sound_hold::Count worldSoundHolds_;
+    /// Starts a sound just made, or leaves it waiting under the hold.
+    bool startOrHold(ma_sound* sound, bool loops, bool& held);
     /// The Effects channel's group (an ma_sound_group is an ma_sound).
     ma_sound* effectsGroup_ = nullptr;
     ma_sound* groupFor(Channel channel) const;

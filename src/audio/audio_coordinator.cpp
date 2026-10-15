@@ -334,6 +334,11 @@ void AudioCoordinator::updateMusic(const ZoneAudioContext& ctx) {
 
 void AudioCoordinator::updateZoneAudio(const ZoneAudioContext& ctx) {
     cachedAssets_ = ctx.assetManager;
+    // Behind a loading screen the client does not step the world, so its
+    // zone's music and ambience are not asked for (0x004c9910 runs with the
+    // world) and what the last world played goes on until the screen's end
+    // stops it (0x00409550).
+    if (AudioEngine::instance().isWorldSoundHeld()) return;
     musicTime_ = zone_music::timeIndex(screen_effect_audio::isSoundDaytime(ctx.gameTimeHours));
     updateAmbience(ctx);
     updateMusic(ctx);

@@ -1,5 +1,6 @@
 #include "rendering/loading_screen.hpp"
 #include "rendering/loading_screen_layout.hpp"
+#include "audio/audio_engine.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -30,6 +31,10 @@ LoadingScreen::~LoadingScreen() {
 
 bool LoadingScreen::initialize(pipeline::AssetManager* assets, uint32_t mapId) {
     LOG_INFO("Initializing loading screen (Vulkan/ImGui)");
+    if (!holdsWorldSound_) {
+        audio::AudioEngine::instance().beginWorldSoundHold();
+        holdsWorldSound_ = true;
+    }
     namespace ls = loading_screen;
     // 0x00409ed0: the map's LoadingScreens row (Map +0x24), its "Wide"
     // version on a screen wider than 4:3 where it has one, else the row's
@@ -87,6 +92,11 @@ void LoadingScreen::release(Texture& tex) {
 }
 
 void LoadingScreen::shutdown() {
+    // The world is shown: what it asked for while the screen was up starts.
+    if (holdsWorldSound_) {
+        holdsWorldSound_ = false;
+        audio::AudioEngine::instance().endWorldSoundHold();
+    }
     if (!vkCtx) return;
     if (!picture_.image && !bar_[0].image && !bar_[1].image) return;
     vkDeviceWaitIdle(vkCtx->getDevice());
