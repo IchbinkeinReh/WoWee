@@ -3998,12 +3998,33 @@ void SocialHandler::requestBattlefieldList(uint32_t bgTypeId) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_BATTLEFIELD_LIST));
     packet.writeUInt32(bgTypeId);
-    // WotLK added two bytes: where the request came from, and whether the
-    // player wants experience from it. Classic and TBC read the type id alone,
-    // and trailing bytes there would be read as the next packet.
+    // WotLK added two bytes: where the request came from, and the player's
+    // experience switch. Classic and TBC read the type id alone, and trailing
+    // bytes there would be read as the next packet.
+    //
+    // The one asker is RequestBattlegroundInstanceInfo, the PvP panel's, and
+    // 0x0054e5b0 sends 1 for it: "from anywhere". The reply then carries the
+    // 1 back and raises PVPQUEUE_ANYWHERE_SHOW, which only refreshes the
+    // panel (0x0054e390). This sent 0, the battlemaster's own, so the reply
+    // came back with no battlemaster and raised BATTLEFIELDS_SHOW - and
+    // PVPBattlegroundFrame asks on PLAYER_ENTERING_WORLD, so every login
+    // opened the battlemaster's window for the first battleground,
+    // Alterac Valley, with no battlemaster near.
     if (!isPreWotlk()) {
-        packet.writeUInt8(0);  // fromWhere: 0 = the battlemaster list frame
-        packet.writeUInt8(1);  // canGainXP
+        packet.writeUInt8(1);  // fromWhere: the PvP panel
+        // 0x0054e5b0: below PLAYER_FIELD_MAX_LEVEL, the player's
+        // PLAYER_FLAGS bit 25 (experience turned off); at it, 0.
+        uint8_t noXp = 0;
+        const uint16_t unitEnd = fieldIndex(UF::UNIT_END);
+        const uint16_t levelField = fieldIndex(UF::UNIT_FIELD_LEVEL);
+        const uint16_t flagsField = fieldIndex(UF::PLAYER_FLAGS);
+        if (const auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+            self && unitEnd != 0xFFFF && levelField != 0xFFFF && flagsField != 0xFFFF) {
+            constexpr uint16_t kMaxLevelFromUnitEnd = 0x46B;  // PLAYER_FIELD_MAX_LEVEL
+            if (self->getField(levelField) < self->getField(static_cast<uint16_t>(unitEnd + kMaxLevelFromUnitEnd)))
+                noXp = static_cast<uint8_t>((self->getField(flagsField) >> 25) & 1u);
+        }
+        packet.writeUInt8(noXp);
     }
     owner_.getSocket()->send(packet);
 }
