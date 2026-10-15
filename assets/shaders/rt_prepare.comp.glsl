@@ -84,10 +84,19 @@ void main() {
     vec3 n = normalize(cross(dx, dy));
     if (dot(n, p) > 0.0) n = -n;
 
+    // The normal the point lights' N.L takes: the surface's own (its vertex
+    // normal, a normal map's), turned to the side of the geometric face, and
+    // the geometric one where the two disagree by more than 60 degrees.
+    // Turned by the view instead - toward the camera - a normal that leans
+    // across the face flipped as the camera moved, and lit or blacked out
+    // patches of floor with it: the Goldshire inn's interior floors carry
+    // vertex normals tilted far off up near the walls and doors (averaged
+    // with the walls'), and the patches turned with the camera.
     vec3 shading = n;
     if (valid) {
         shading = rtGbufShadingNormal(texelFetch(uSceneGbuf0, sp, 0));
-        if (dot(shading, p) > 0.0) shading = -shading;
+        if (dot(shading, n) < 0.0) shading = -shading;
+        if (dot(shading, n) < 0.5) shading = n;
     }
     imageStore(uPointNormal, px, vec4(rtOctEncode(shading), 0.0, 0.0));
     imageStore(uGbuf, px, vec4(rtOctEncode(n), length(p), float(sub) + (valid ? 4.0 : 0.0)));
