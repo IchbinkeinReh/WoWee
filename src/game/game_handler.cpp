@@ -3561,6 +3561,9 @@ void GameHandler::onLeaveWorld(bool worldport) {
     // The target, the focus and the units remembered (0x00512a30, 0xbd07b8,
     // 0xbd07c0, 0xbd07c8).
     if (combatHandler_) combatHandler_->leaveWorld();
+    // A level grant offered and not yet answered (0xbd08b8, kept by
+    // 0x00513fd0 from SMSG_PROPOSE_LEVEL_GRANT) is forgotten with them.
+    levelGrantMentorGuid_ = 0;
     // PLAYER_LEAVING_WORLD (event 0x100). At logout the interface is taken
     // down with it before this runs (Application::unloadInterface).
     if (worldport) fireAddonEvent("PLAYER_LEAVING_WORLD", {});
