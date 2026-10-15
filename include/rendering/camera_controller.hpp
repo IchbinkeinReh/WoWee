@@ -6,6 +6,7 @@
 #include "core/input.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <array>
 #include <vector>
 #include <functional>
 #include <cmath>
@@ -394,6 +395,15 @@ public:
     /// FlipCameraYaw(degrees) (0x005ff2c0): the camera turned about the
     /// character by that much.
     void flipYaw(float degrees) { yaw += degrees; }
+    /// MoveView{In,Out,Left,Right,Up,Down}Start (0x005ff000): the view
+    /// moves one way - 0 in, 1 out, 2 left, 3 right, 4 up, 5 down - from
+    /// now (camera +0x164), at `speed` times `rate` a second (+0x1ac; the
+    /// rate is cameraDistanceMoveSpeed in yards, cameraYawMoveSpeed or
+    /// cameraPitchMoveSpeed in degrees). One already moving keeps its start.
+    void startViewMove(int direction, float speed, float rate);
+    /// MoveView*Stop (0x005ff0a0 ff.): one moving stops now (+0x17c); the
+    /// next step moves it to here and lets it go (0x00600080).
+    void stopViewMove(int direction);
     /// The camera's distance mode (0x00600590): the distance of the mode left
     /// is kept - the one remembered before a seat's zoom where there is one
     /// (0x005ff320) - and the new mode's (savedModeDistance) zoomed to over
@@ -624,6 +634,19 @@ private:
     float viewYawApplied_ = 0.0f;
     bool viewBlending_ = false;
     bool viewMovedByPlayer_ = false;
+    /// The six view movements (+0x160: two bits each, started and stopped).
+    struct ViewMove {
+        bool started = false;
+        bool stopped = false;
+        uint32_t from = 0;   ///< +0x164: moved up to
+        uint32_t until = 0;  ///< +0x17c: stopped at
+        float speed = 1.0f;  ///< +0x1ac
+        float rate = 0.0f;
+    };
+    std::array<ViewMove, 6> viewMoves_{};
+    /// 0x00600080's walk of them: each moved by the time since it last was,
+    /// to its stop where it has one.
+    void stepViewMoves();
     /// The wheel's limits on the distance, as zoomBy holds it.
     [[nodiscard]] float clampedZoomDistance(float distance) const;
     /// The mouse's turn of the camera (0x006020b0): yaw and pitch in degrees.
@@ -921,6 +944,9 @@ private:
     /// everyone else like one landing over and over.
     float airborneSeconds_ = 0.0f;
     bool wasAscending_ = false;   // Space held while flyingActive_
+    /// The pitch keys' way this frame and last: 1 up, -1 down, 0 none.
+    int nowPitchKeys_ = 0;
+    int wasPitchKeys_ = 0;
     bool wasDescending_ = false;  // X held while flyingActive_
     /// True while the tile under a position has not finished streaming, which
     /// is when there is no floor to find and gravity must wait for one.

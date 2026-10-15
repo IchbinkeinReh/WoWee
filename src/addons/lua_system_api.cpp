@@ -4383,6 +4383,26 @@ static int lua_StepView(lua_State* L) {
     return 0;
 }
 
+// MoveView{In,Out,Left,Right,Up,Down}Start([speed]) and Stop (0x005ff080
+// ff., 0x005ff000): the camera's view moves that way at speed (1 by default)
+// times cameraDistanceMoveSpeed (yards, 8.33) for in and out,
+// cameraYawMoveSpeed (degrees, 180) for left and right, and
+// cameraPitchMoveSpeed (90) for up and down, until stopped.
+template <int Direction>
+static int lua_MoveViewStart(lua_State* L) {
+    const float speed = lua_isnumber(L, 1) ? static_cast<float>(lua_tonumber(L, 1)) : 1.0f;
+    static constexpr const char* kRates[3][2] = {
+        {"cameraDistanceMoveSpeed", "8.33"}, {"cameraYawMoveSpeed", "180"}, {"cameraPitchMoveSpeed", "90"}};
+    const auto& r = kRates[Direction / 2];
+    if (auto* cc = luaCamera(L)) cc->startViewMove(Direction, speed, storedCVarFloat(r[0], r[1]));
+    return 0;
+}
+template <int Direction>
+static int lua_MoveViewStop(lua_State* L) {
+    if (auto* cc = luaCamera(L)) cc->stopViewMove(Direction);
+    return 0;
+}
+
 // FlipCameraYaw(degrees) (0x005ff2c0).
 static int lua_FlipCameraYaw(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: FlipCameraYaw(degrees)");
@@ -6062,6 +6082,18 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"NextView",                 lua_StepView<1>},
                 {"PrevView",                 lua_StepView<-1>},
                 {"FlipCameraYaw",            lua_FlipCameraYaw},
+                {"MoveViewInStart",          lua_MoveViewStart<0>},
+                {"MoveViewInStop",           lua_MoveViewStop<0>},
+                {"MoveViewOutStart",         lua_MoveViewStart<1>},
+                {"MoveViewOutStop",          lua_MoveViewStop<1>},
+                {"MoveViewLeftStart",        lua_MoveViewStart<2>},
+                {"MoveViewLeftStop",         lua_MoveViewStop<2>},
+                {"MoveViewRightStart",       lua_MoveViewStart<3>},
+                {"MoveViewRightStop",        lua_MoveViewStop<3>},
+                {"MoveViewUpStart",          lua_MoveViewStart<4>},
+                {"MoveViewUpStop",           lua_MoveViewStop<4>},
+                {"MoveViewDownStart",        lua_MoveViewStart<5>},
+                {"MoveViewDownStop",         lua_MoveViewStop<5>},
                 {"ToggleAutoRun",            lua_ToggleAutoRun},
                 {"ToggleRun",                lua_ToggleRun},
                 {"JumpOrAscendStart",        lua_JumpOrAscendStart},

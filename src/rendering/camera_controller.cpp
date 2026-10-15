@@ -2920,6 +2920,7 @@ void CameraController::update(float deltaTime) {
         userTargetDistance = timedZoomFrom_ + (timedZoomTo_ - timedZoomFrom_) * t;
         if (t >= 1.0f) timedZoomElapsed_ = -1.0f;
     }
+    stepViewMoves();
     if (!enabled || !camera) {
         return;
     }
@@ -3212,8 +3213,10 @@ void CameraController::update(float deltaTime) {
     // mover's pitch follows the camera here, and the client's camera is
     // brought to the mover's pitch (0x005fa910), so the two pitch together.
     const int pitchKeys = int(held(kControlPitchUp)) - int(held(kControlPitchDown));
-    if (pitchKeys != 0 && !uiWantsKeyboard && !movementSuppressed && !rightMouseDown &&
-        !moverHeld_ && (swimming || isFlightAirborne())) {
+    const bool pitchKeysPitch = pitchKeys != 0 && !uiWantsKeyboard && !movementSuppressed && !rightMouseDown &&
+                                !moverHeld_ && (swimming || isFlightAirborne());
+    nowPitchKeys_ = pitchKeysPitch ? pitchKeys : 0;
+    if (pitchKeysPitch) {
         const float pitched = float(pitchKeys) * 180.0f * deltaTime;
         pitch = glm::clamp(pitch + pitched, MIN_PITCH, MAX_PITCH);
         if (isFlightAirborne())
@@ -3505,6 +3508,15 @@ void CameraController::update(float deltaTime) {
         }
     }
 
+    // The pitch keys' way (0x005fb1a0): MSG_MOVE_START_PITCH_UP or _DOWN
+    // as the mover starts pitching that way, MSG_MOVE_STOP_PITCH as it stops.
+    if (movementCallback && nowPitchKeys_ != wasPitchKeys_) {
+        if (wasPitchKeys_ != 0) movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_STOP_PITCH));
+        if (nowPitchKeys_ > 0) movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_PITCH_UP));
+        if (nowPitchKeys_ < 0) movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_PITCH_DOWN));
+    }
+    wasPitchKeys_ = nowPitchKeys_;
+
     // Swimming state transitions
     if (movementCallback) {
         if (swimming && !wasSwimming) {
@@ -3625,6 +3637,55 @@ void CameraController::processMouseMotion(const SDL_MouseMotionEvent& event) {
     // invertMouse flips to flight-sim style (mouse-down = look up).
     const float invert = invertMouse ? 1.0f : -1.0f;
     lookBy(-event.xrel * mouseSensitivity, event.yrel * mouseSensitivity * invert);
+}
+
+void CameraController::startViewMove(int direction, float speed, float rate) {
+    if (direction < 0 || direction >= 6) return;
+    auto& m = viewMoves_[static_cast<size_t>(direction)];
+    if (!m.started) {
+        m.started = true;
+        m.from = cameraClockMs_;
+    }
+    m.speed = speed;
+    m.rate = rate;
+}
+
+void CameraController::stopViewMove(int direction) {
+    if (direction < 0 || direction >= 6) return;
+    auto& m = viewMoves_[static_cast<size_t>(direction)];
+    if (!m.started) return;
+    m.until = cameraClockMs_;
+    m.stopped = true;
+}
+
+void CameraController::stepViewMoves() {
+    for (int d = 0; d < 6; ++d) {
+        auto& m = viewMoves_[static_cast<size_t>(d)];
+        if (!m.started) continue;
+        int32_t ms = 0;
+        if (!m.stopped) {
+            ms = static_cast<int32_t>(cameraClockMs_ - m.from);
+            if (ms < 0) continue;
+            m.from = cameraClockMs_;
+        } else {
+            ms = std::max(0, static_cast<int32_t>(m.until - m.from));
+            m.started = false;
+            m.stopped = false;
+        }
+        const float amount = static_cast<float>(ms) * m.rate * m.speed * 0.001f;
+        // In and out move where the distance goes, held to the wheel's
+        // limits; left and right turn the yaw; up and down the pitch, up
+        // raising the camera (this client's pitch the other way round).
+        switch (d) {
+            case 0: zoomBy(amount); break;
+            case 1: zoomBy(-amount); break;
+            case 2: lookBy(amount, 0.0f); break;
+            case 3: lookBy(-amount, 0.0f); break;
+            case 4: lookBy(0.0f, -amount); break;
+            case 5: lookBy(0.0f, amount); break;
+            default: break;
+        }
+    }
 }
 
 void CameraController::lookBy(float yawDegrees, float pitchDegrees) {
