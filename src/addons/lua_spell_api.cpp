@@ -966,6 +966,54 @@ static int lua_TargetNearestEnemy(lua_State* L) {
     return 0;
 }
 
+// TargetNearest([reverse]) - the nearest unit of any kind (0x00525a90 ->
+// 0x00524fc0 with no filter); reverse read as the client reads a switch.
+static int lua_TargetNearest(lua_State* L) {
+    if (auto* gh = getGameHandler(L)) gh->targetNearest(luaClientSwitchArg(L, 1, false));
+    return 0;
+}
+
+// InteractUnit(unit[, exactMatch]) (0x00527f00): the unit targeted and then
+// right-clicked (0x005277b0) - 1 when it is there, nil when it is not, and 1
+// with no player at all. "mouseover" is the unit under the pointer
+// (0x00bd07a0).
+static int lua_InteractUnit(lua_State* L) {
+    if (!lua_isstring(L, 1))
+        return luaL_error(L, "Usage: InteractUnit(unitToken[, exactMatch])");
+    auto* gh = getGameHandler(L);
+    if (!gh || !gh->getEntityManager().getEntity(gh->getPlayerGuid())) {
+        lua_pushnumber(L, 1);
+        return 1;
+    }
+    std::string token = lua_tostring(L, 1);
+    toLowerInPlace(token);
+    const uint64_t guid = resolveUnitGuid(gh, token);
+    if (guid == 0 || !gh->getEntityManager().getEntity(guid)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    gh->targetUnit(guid);
+    auto* svc = getLuaServices(L);
+    if (svc && svc->interactWithTarget) svc->interactWithTarget();
+    lua_pushnumber(L, 1);
+    return 1;
+}
+
+// AttackTarget() - the attack binding (0x0051a650): stops a running swing,
+// else starts one at the target.
+static int lua_AttackTarget(lua_State* L) {
+    if (auto* gh = getGameHandler(L)) gh->attackTarget();
+    return 0;
+}
+
+// ToggleSheath() - the sheath binding (0x0051a6b0 -> 0x006e23a0), the same
+// toggle the key makes.
+static int lua_ToggleSheath(lua_State* L) {
+    auto* svc = getLuaServices(L);
+    if (svc && svc->toggleSheath) svc->toggleSheath();
+    return 0;
+}
+
 // TargetNearestFriend([reverse]) - target nearest friendly unit
 static int lua_TargetNearestFriend(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -1298,6 +1346,10 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"TargetLastTarget",  lua_TargetLastTarget},
                 {"TargetNearestEnemy",  lua_TargetNearestEnemy},
                 {"TargetNearestFriend", lua_TargetNearestFriend},
+                {"TargetNearest",       lua_TargetNearest},
+                {"AttackTarget",        lua_AttackTarget},
+                {"InteractUnit",        lua_InteractUnit},
+                {"ToggleSheath",        lua_ToggleSheath},
                 {"GetRaidTargetIndex",  lua_GetRaidTargetIndex},
                 {"SetRaidTarget",       lua_SetRaidTarget},
                 {"IsCurrentSpell", [](lua_State* L) -> int {

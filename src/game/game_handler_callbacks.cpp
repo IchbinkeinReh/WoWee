@@ -1849,6 +1849,19 @@ void GameHandler::targetNearestPartyMember(bool reverse) {
 void GameHandler::targetNearestRaidMember(bool reverse) {
     if (combatHandler_) combatHandler_->targetNearestRaidMember(reverse);
 }
+void GameHandler::targetNearest(bool reverse) {
+    if (combatHandler_) combatHandler_->targetNearest(reverse);
+}
+void GameHandler::attackTarget() {
+    // 0x0072c2b0: a running swing (the player's +0x1858 0x2, or a unit it is
+    // aimed at) is stopped while the player has control (0x00bcfb8c);
+    // otherwise one is started at the target, where there is one.
+    if (isAutoAttacking()) {
+        stopAutoAttack();
+        return;
+    }
+    if (targetGuid != 0) startAutoAttack(targetGuid);
+}
 void GameHandler::targetLastEnemy() {
     if (combatHandler_) combatHandler_->targetLastEnemy();
 }

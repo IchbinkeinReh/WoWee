@@ -2440,65 +2440,72 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                 }
             }
         }
-        if (gameHandler.hasTarget()) {
-            auto target = gameHandler.getTarget();
-            if (target) {
-                if (target->getType() == game::ObjectType::UNIT) {
-                    // Check if unit is dead (health == 0) → loot, otherwise interact/attack
-                    auto unit = std::static_pointer_cast<game::Unit>(target);
-                    if (unit->getHealth() == 0 && unit->getMaxHealth() > 0) {
-                        gameHandler.lootTarget(target->getGuid());
-                    } else {
-                        // Interact with service NPCs; otherwise treat non-interactable living units
-                        // as attackable fallback (covers bad faction-template classification).
-                        auto isSpiritNpc = [&]() -> bool {
-                            constexpr uint32_t NPC_FLAG_SPIRIT_GUIDE = 0x00004000;
-                            constexpr uint32_t NPC_FLAG_SPIRIT_HEALER = 0x00008000;
-                            if (unit->getNpcFlags() & (NPC_FLAG_SPIRIT_GUIDE | NPC_FLAG_SPIRIT_HEALER)) {
-                                return true;
-                            }
-                            std::string name = unit->getName();
-                            std::transform(name.begin(), name.end(), name.begin(),
-                                           [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                            return (name.find("spirit healer") != std::string::npos) ||
-                                   (name.find("spirit guide") != std::string::npos);
-                        };
-                        bool allowSpiritInteract = (gameHandler.isPlayerDead() || gameHandler.isPlayerGhost()) && isSpiritNpc();
-                        bool canInteractNpc = unit->isInteractable() || allowSpiritInteract;
-                        // 0x00731260: spoken to when the player may interact
-                        // with it (0x00729530 - something to talk to, each
-                        // regarding the other as neutral or better, else
-                        // UNIT_FLAG2 0x4000); else attacked when the player
-                        // may attack it (0x00729a70); else only targeted.
-                        const uint16_t flags2Field = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
-                        const uint32_t flags2 = flags2Field != 0xFFFF ? unit->getField(flags2Field) : 0u;
-                        const auto me = gameHandler.getEntityManager().getEntity(gameHandler.getPlayerGuid());
-                        const bool mayInteract =
-                            canInteractNpc && (unit->getUnitFlags() & game::UNIT_FLAG_NOT_SELECTABLE) == 0 &&
-                            ((me && gameHandler.unitReaction(*me, *unit) > 2 &&
-                              gameHandler.unitReaction(*unit, *me) > 2) ||
-                             (flags2 & 0x4000u) != 0);
-                        if (mayInteract) {
-                            gameHandler.interactWithNpc(target->getGuid());
-                        } else if (gameHandler.unitMayAttack(gameHandler.getPlayerGuid(), target->getGuid())) {
-                            gameHandler.startAutoAttack(target->getGuid());
+        interactWithTarget(gameHandler);
+    }
+}
+
+
+void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
+    // What a right-click does to what is targeted, and InteractUnit with it
+    // (0x00527f00 -> 0x005277b0: targeted, then its own right-click).
+    if (gameHandler.hasTarget()) {
+        auto target = gameHandler.getTarget();
+        if (target) {
+            if (target->getType() == game::ObjectType::UNIT) {
+                // Check if unit is dead (health == 0) → loot, otherwise interact/attack
+                auto unit = std::static_pointer_cast<game::Unit>(target);
+                if (unit->getHealth() == 0 && unit->getMaxHealth() > 0) {
+                    gameHandler.lootTarget(target->getGuid());
+                } else {
+                    // Interact with service NPCs; otherwise treat non-interactable living units
+                    // as attackable fallback (covers bad faction-template classification).
+                    auto isSpiritNpc = [&]() -> bool {
+                        constexpr uint32_t NPC_FLAG_SPIRIT_GUIDE = 0x00004000;
+                        constexpr uint32_t NPC_FLAG_SPIRIT_HEALER = 0x00008000;
+                        if (unit->getNpcFlags() & (NPC_FLAG_SPIRIT_GUIDE | NPC_FLAG_SPIRIT_HEALER)) {
+                            return true;
                         }
-                    }
-                } else if (target->getType() == game::ObjectType::GAMEOBJECT) {
-                    // Skip chairs: auto-sit must only happen when the chair is
-                    // under the cursor, never as a side effect of right-click.
-                    auto go = std::static_pointer_cast<game::GameObject>(target);
-                    auto* goInfo = gameHandler.getCachedGameObjectInfo(go->getEntry());
-                    if (!goInfo || goInfo->type != 7) {
-                        gameHandler.interactWithGameObject(target->getGuid());
-                    }
-                } else if (target->getType() == game::ObjectType::PLAYER) {
-                    // 0x00731260 for another player: nothing to talk to, so
-                    // attacked when the player may attack them.
-                    auto other = std::static_pointer_cast<game::Unit>(target);
-                    if (other->getHealth() > 0 && playerMayAttackPlayer(gameHandler, *other)) {
+                        std::string name = unit->getName();
+                        std::transform(name.begin(), name.end(), name.begin(),
+                                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                        return (name.find("spirit healer") != std::string::npos) ||
+                               (name.find("spirit guide") != std::string::npos);
+                    };
+                    bool allowSpiritInteract = (gameHandler.isPlayerDead() || gameHandler.isPlayerGhost()) && isSpiritNpc();
+                    bool canInteractNpc = unit->isInteractable() || allowSpiritInteract;
+                    // 0x00731260: spoken to when the player may interact
+                    // with it (0x00729530 - something to talk to, each
+                    // regarding the other as neutral or better, else
+                    // UNIT_FLAG2 0x4000); else attacked when the player
+                    // may attack it (0x00729a70); else only targeted.
+                    const uint16_t flags2Field = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
+                    const uint32_t flags2 = flags2Field != 0xFFFF ? unit->getField(flags2Field) : 0u;
+                    const auto me = gameHandler.getEntityManager().getEntity(gameHandler.getPlayerGuid());
+                    const bool mayInteract =
+                        canInteractNpc && (unit->getUnitFlags() & game::UNIT_FLAG_NOT_SELECTABLE) == 0 &&
+                        ((me && gameHandler.unitReaction(*me, *unit) > 2 &&
+                          gameHandler.unitReaction(*unit, *me) > 2) ||
+                         (flags2 & 0x4000u) != 0);
+                    if (mayInteract) {
+                        gameHandler.interactWithNpc(target->getGuid());
+                    } else if (gameHandler.unitMayAttack(gameHandler.getPlayerGuid(), target->getGuid())) {
                         gameHandler.startAutoAttack(target->getGuid());
                     }
+                }
+            } else if (target->getType() == game::ObjectType::GAMEOBJECT) {
+                // Skip chairs: auto-sit must only happen when the chair is
+                // under the cursor, never as a side effect of right-click.
+                auto go = std::static_pointer_cast<game::GameObject>(target);
+                auto* goInfo = gameHandler.getCachedGameObjectInfo(go->getEntry());
+                if (!goInfo || goInfo->type != 7) {
+                    gameHandler.interactWithGameObject(target->getGuid());
+                }
+            } else if (target->getType() == game::ObjectType::PLAYER) {
+                // 0x00731260 for another player: nothing to talk to, so
+                // attacked when the player may attack them.
+                auto other = std::static_pointer_cast<game::Unit>(target);
+                if (other->getHealth() > 0 && playerMayAttackPlayer(gameHandler, *other)) {
+                    gameHandler.startAutoAttack(target->getGuid());
                 }
             }
         }

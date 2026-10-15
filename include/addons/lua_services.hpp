@@ -339,6 +339,10 @@ struct LuaServices {
     /// The camera, for the saved views (SetView, SaveView, ResetView,
     /// NextView, PrevView) and FlipCameraYaw; none before there is one.
     std::function<rendering::CameraController*()> getCameraController;
+    /// ToggleSheath: the toggle the key makes (0x0051a6b0 -> 0x006e23a0).
+    std::function<void()> toggleSheath;
+    /// InteractUnit: what right-clicking the target does (0x005277b0).
+    std::function<void()> interactWithTarget;
 };
 
 } // namespace wowee::addons

@@ -130,6 +130,8 @@ public:
     void targetNearestFriendPlayer(bool reverse);
     void targetNearestPartyMember(bool reverse);
     void targetNearestRaidMember(bool reverse);
+    /// The nearest unit, whatever it is (0x00518e40 mode 0 lets all pass).
+    void targetNearest(bool reverse);
 
     /// Back to the last hostile, or the last friendly, target.
     ///

@@ -1888,6 +1888,13 @@ void CombatHandler::targetEnemy(bool reverse) {
     });
 }
 
+void CombatHandler::targetNearest(bool reverse) {
+    cycleTarget(reverse, "", [](uint64_t, Entity& e) {
+        const auto t = e.getType();
+        return t == ObjectType::UNIT || t == ObjectType::PLAYER;
+    });
+}
+
 void CombatHandler::targetFriend(bool reverse) {
     // Dead friends stay targetable - you need to select them to resurrect them.
     cycleTarget(reverse, "No friendly targets in range.", [](uint64_t, Entity& e) {

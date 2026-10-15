@@ -152,6 +152,9 @@ public:
     /// second path would name and place the file differently. Took a
     /// GameHandler it never read.
     void takeScreenshot();
+    /// What right-clicking the target does - spoken to, looted, attacked or
+    /// used - which InteractUnit does to the unit it names (0x005277b0).
+    void interactWithTarget(game::GameHandler& gameHandler);
 
     /// Screen recording, to ~/.wowee/recordings. Each says in the chat what
     /// it did, and where the file is.

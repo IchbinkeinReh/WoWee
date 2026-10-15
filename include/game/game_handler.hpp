@@ -652,6 +652,12 @@ public:
     void targetNearestFriendPlayer(bool reverse = false);
     void targetNearestPartyMember(bool reverse = false);
     void targetNearestRaidMember(bool reverse = false);
+    /// TargetNearest([reverse]) (0x00525a90): the nearest unit of any kind,
+    /// 0x00524fc0 with no filter (0x00518e40 mode 0).
+    void targetNearest(bool reverse = false);
+    /// AttackTarget() (0x0051a650 -> 0x0072c2b0 with no unit): the swing
+    /// stopped where one is running, else started at the target.
+    void attackTarget();
     void targetLastEnemy();
     void targetLastFriend();
 

@@ -1026,6 +1026,12 @@ bool Application::initialize() {
         luaSvc.getCameraController = [r = renderer.get()]() -> rendering::CameraController* {
             return r ? r->getCameraController() : nullptr;
         };
+        luaSvc.interactWithTarget = [uim = uiManager.get(), gh = gameHandler.get()]() {
+            if (uim && gh) uim->getGameScreen().interactWithTarget(*gh);
+        };
+        luaSvc.toggleSheath = [this]() {
+            if (appearanceComposer_) appearanceComposer_->toggleSheath();
+        };
         luaSvc.setBindingTurn = [r = renderer.get()](int direction, bool held) {
             auto* cc = r ? r->getCameraController() : nullptr;
             if (!cc) return;
