@@ -933,19 +933,9 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         completedQuests_.clear();
         LOG_INFO("Queued quest log resync for login (from server quest slots)");
 
-        // Request completed quest IDs when the expansion supports it. Classic-like
-        // opcode tables do not define this packet, and sending 0xFFFF during world
-        // entry can desync the early session handshake.
-        if (socket) {
-            const uint16_t queryCompletedWire = wireOpcode(Opcode::CMSG_QUERY_QUESTS_COMPLETED);
-            if (queryCompletedWire != 0xFFFF) {
-                network::Packet cqcPkt(queryCompletedWire);
-                socket->send(cqcPkt);
-                LOG_INFO("Sent CMSG_QUERY_QUESTS_COMPLETED");
-            } else {
-                LOG_INFO("Skipping CMSG_QUERY_QUESTS_COMPLETED: opcode not mapped for current expansion");
-            }
-        }
+        // Not asked for here: the client sends CMSG_QUERY_QUESTS_COMPLETED
+        // only from QueryQuestsCompleted (0x005b1bb0), the one place 0x500 is
+        // written, so the list stays empty until an addon asks for it.
 
         // Auto-request played time on login so the character Stats tab is
         // populated immediately without requiring /played.

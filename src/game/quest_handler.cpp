@@ -1434,16 +1434,17 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
     };
 
     // ---- Completed quests response (moved from GameHandler) ----
+    // 0x005b5190: the list replaced by the one sent - a count and that many
+    // quest ids - then QUEST_QUERY_COMPLETE (0x296).
     table[Opcode::SMSG_QUERY_QUESTS_COMPLETED_RESPONSE] = [this](network::Packet& packet) {
         if (packet.hasRemaining(4)) {
             uint32_t count = packet.readUInt32();
-            if (count <= 4096) {
-                for (uint32_t i = 0; i < count; ++i) {
-                    if (!packet.hasRemaining(4)) break;
-                    uint32_t questId = packet.readUInt32();
-                    owner_.completedQuestsRef().insert(questId);
-                }
+            if (count <= packet.getRemainingSize() / 4) {
+                auto& completed = owner_.completedQuestsRef();
+                completed.clear();
+                for (uint32_t i = 0; i < count; ++i) completed.insert(packet.readUInt32());
                 LOG_DEBUG("SMSG_QUERY_QUESTS_COMPLETED_RESPONSE: ", count, " completed quests");
+                owner_.fireAddonEvent("QUEST_QUERY_COMPLETE", {});
             }
         }
         packet.skipAll();

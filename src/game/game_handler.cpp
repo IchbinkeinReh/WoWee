@@ -2978,6 +2978,14 @@ void GameHandler::sendHearthAndResurrect() {
     getSocket()->send(packet);
 }
 
+void GameHandler::queryQuestsCompleted() {
+    if (!getSocket()) return;
+    const uint16_t wire = wireOpcode(Opcode::CMSG_QUERY_QUESTS_COMPLETED);
+    if (wire == 0xFFFF) return;
+    network::Packet packet(wire);
+    getSocket()->send(packet);
+}
+
 void GameHandler::acceptLevelGrant() {
     if (levelGrantMentorGuid_ == 0) return;
     if (getSocket()) {

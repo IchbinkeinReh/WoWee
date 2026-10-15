@@ -2878,17 +2878,18 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"GetNumQuestLogEntries",   lua_GetNumQuestLogEntries},
                 // Whether a quest has been finished, ever.
                 //
-                // The client asks the server for this list on entering the
-                // world - CMSG_QUERY_QUESTS_COMPLETED - parses the reply into
-                // completedQuests_ and keeps it there. Nothing could read it:
-                // GetQuestsCompleted, the one name that asks, which every quest
-                // addon uses and which is how a quest giver knows to grey an
-                // offer out, was not bound at all.
+                // QueryQuestsCompleted() asks the server (0x005b1bb0); the
+                // answer replaces the list and says QUEST_QUERY_COMPLETE
+                // (0x005b5190). Nothing else asks, so until then the list is
+                // empty.
                 //
                 // GetQuestsCompleted([table]) - the whole set at once, keyed by
-                // quest id, which is the shape the caller indexes. Fills the
-                // table it is given, as WoW does, so a caller reusing one does
-                // not allocate per call.
+                // quest id (0x005b5290). Fills the table it is given, else a
+                // new one.
+                {"QueryQuestsCompleted", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->queryQuestsCompleted();
+            return 0;
+        }},
                 {"GetQuestsCompleted", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!lua_istable(L, 1)) lua_newtable(L);

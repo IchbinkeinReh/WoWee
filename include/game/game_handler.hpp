@@ -1476,6 +1476,9 @@ public:
 
     // Completed quests (populated from SMSG_QUERY_QUESTS_COMPLETED_RESPONSE)
     const std::unordered_set<uint32_t>& getCompletedQuests() const { return completedQuests_; }
+    /// QueryQuestsCompleted (0x005b1bb0): CMSG_QUERY_QUESTS_COMPLETED, empty
+    /// - the only place the client asks for the list.
+    void queryQuestsCompleted();
 
     // NPC death callback (for animations)
     using NpcDeathCallback = std::function<void(uint64_t guid)>;
