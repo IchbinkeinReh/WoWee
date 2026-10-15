@@ -440,8 +440,10 @@ CalendarEventInvitee* findInvitee(CalendarEventDetail& open, uint64_t guid) {
     return nullptr;
 }
 
-bool isOpen(const CalendarEventDetail& open, uint64_t eventId) {
-    return open.eventId != 0 && open.eventId == eventId;
+/// Whether a packet's event is the open one: the one last sent while its id
+/// stands, or a new one, whose id is 0.
+bool isOpen(const CalendarContext& ctx, uint64_t eventId) {
+    return (ctx.open.eventId != 0 || ctx.newEventOpen) && ctx.open.eventId == eventId;
 }
 
 void say(CalendarContext& ctx, const char* event, std::vector<std::string> args = {}) {
@@ -619,7 +621,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
             inv.status = status;
             say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
         }
-        if (isOpen(open, eventId)) {
+        if (isOpen(ctx, eventId)) {
             CalendarEventInvitee row;
             row.guid = guid;
             row.inviteId = inviteId;
@@ -655,7 +657,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
             inv.status = kNotSignedUp;
             say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
         }
-        if (isOpen(open, eventId)) {
+        if (isOpen(ctx, eventId)) {
             open.invitees.erase(std::remove_if(open.invitees.begin(), open.invitees.end(),
                                                [guid](const CalendarEventInvitee& r) {
                                                    return r.guid == guid;
@@ -689,7 +691,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
             }
             say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
         }
-        if (isOpen(open, eventId)) {
+        if (isOpen(ctx, eventId)) {
             if (CalendarEventInvitee* row = findInvitee(open, guid)) {
                 row->status = status;
                 if (statusTime != 0) row->statusTime = unpackWowPackedTime(statusTime);
@@ -812,7 +814,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
         if (ev && (ev->flags & kGuildEvent) && guildSignupRow(cal, eventId)) {
             // A guild event the player signed up to stays, not signed up.
             inviteFor(cal, eventId).status = kNotSignedUp;
-            if (isOpen(open, eventId) && ctx.player != 0) {
+            if (isOpen(ctx, eventId) && ctx.player != 0) {
                 open.invitees.erase(std::remove_if(open.invitees.begin(), open.invitees.end(),
                                                    [&](const CalendarEventInvitee& r) {
                                                        return r.guid == ctx.player;
@@ -822,7 +824,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
             }
             say(ctx, "CALENDAR_UPDATE_EVENT_LIST");
             dropEvent = false;
-        } else if (isOpen(open, eventId)) {
+        } else if (isOpen(ctx, eventId)) {
             open = CalendarEventDetail{};
             say(ctx, "CALENDAR_CLOSE_EVENT");
         }
@@ -860,7 +862,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
                 say(ctx, "CALENDAR_UPDATE_PENDING_INVITES");
             }
         }
-        if (isOpen(open, eventId) && ctx.player != 0) {
+        if (isOpen(ctx, eventId) && ctx.player != 0) {
             if (CalendarEventInvitee* row = findInvitee(open, ctx.player)) {
                 row->status = status;
                 say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
@@ -876,7 +878,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
         if (packet.readUInt8() == 0) clearsAction = false;
         const uint64_t eventId = packet.readUInt64();
         packet.readUInt32();
-        if (isOpen(open, eventId)) {
+        if (isOpen(ctx, eventId)) {
             open = CalendarEventDetail{};
             say(ctx, "CALENDAR_CLOSE_EVENT");
         }
@@ -927,7 +929,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
         } else if (!cal.received) {
             ctx.askNumPending = true;
         }
-        if (isOpen(open, eventId)) {
+        if (isOpen(ctx, eventId)) {
             packet.setReadPos(rest);
             if (!packet.hasRemaining(4 + 4 + 1 + 4)) return false;
             const uint32_t oFlags = packet.readUInt32();
@@ -963,7 +965,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
         const uint64_t eventId = packet.readUInt64();
         const uint8_t rank = packet.readUInt8();
         if (packet.readUInt8() == 0) clearsAction = false;
-        if (isOpen(open, eventId)) {
+        if (isOpen(ctx, eventId)) {
             if (CalendarEventInvitee* row = findInvitee(open, guid)) {
                 row->rank = rank;
                 say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
@@ -996,7 +998,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
         if (!readTerminatedString(packet, note)) return false;
         if (!packet.hasRemaining(1)) return false;
         if (packet.readUInt8() == 0) clearsAction = false;
-        if (isOpen(open, eventId)) {
+        if (isOpen(ctx, eventId)) {
             if (CalendarEventInvitee* row = findInvitee(open, guid)) {
                 row->note = std::move(note);
                 say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
@@ -1012,7 +1014,7 @@ bool applyCalendarPacket(CalendarPacket which, network::Packet& packet,
         const uint64_t eventId = packet.readUInt64();
         std::string note;
         if (!readTerminatedString(packet, note)) return false;
-        if (isOpen(open, eventId) && ctx.player != 0) {
+        if (isOpen(ctx, eventId) && ctx.player != 0) {
             if (CalendarEventInvitee* row = findInvitee(open, ctx.player)) {
                 row->note = std::move(note);
                 say(ctx, "CALENDAR_UPDATE_INVITE_LIST");
@@ -1040,6 +1042,60 @@ void calendarNameArrived(CalendarEventDetail& open, uint64_t guid,
         awaited.erase(it);
         if (awaited.empty()) sayOnceNamed(open, open.onceNamed, out);
     }
+}
+
+CalendarEventDetail calendarNewEvent(CalendarNewKind kind, uint64_t player, uint8_t level) {
+    CalendarEventDetail ev;
+    ev.creatorGuid = player;
+    ev.maxInvites = 100;
+    ev.dungeonId = -1;
+    ev.flags = kind == CalendarNewKind::Player       ? calendar_flag::kPlayer
+             : kind == CalendarNewKind::Announcement ? calendar_flag::kAnnouncement
+                                                     : calendar_flag::kGuildEvent;
+    if (kind != CalendarNewKind::Announcement && player != 0) {
+        CalendarEventInvitee me;
+        me.guid = player;
+        me.level = level;
+        me.status = calendar_status::kConfirmed;
+        me.rank = 2;
+        me.isGuildMember = kind == CalendarNewKind::GuildEvent;
+        ev.invitees.push_back(std::move(me));
+    }
+    return ev;
+}
+
+void writeCalendarAddEvent(network::Packet& packet, const CalendarEventDraft& draft,
+                           uint32_t flags, const std::vector<CalendarEventInvitee>& invitees) {
+    packet.writeString(draft.title);
+    packet.writeString(draft.description);
+    packet.writeUInt8(draft.type);
+    packet.writeUInt8(draft.repeatOption);
+    packet.writeUInt32(draft.maxInvites);
+    packet.writeUInt32(static_cast<uint32_t>(draft.dungeonId));
+    packet.writeUInt32(packWowPackedTime(draft.eventTime));
+    packet.writeUInt32(packWowPackedTime(draft.eventTime));
+    packet.writeUInt32(flags);
+    if (flags & calendar_flag::kAnnouncement) return;
+    packet.writeUInt32(static_cast<uint32_t>(invitees.size()));
+    for (const auto& inv : invitees) {
+        packet.writePackedGuid(inv.guid);
+        packet.writeUInt8(inv.status);
+        packet.writeUInt8(inv.rank);
+    }
+}
+
+bool calendarDateAddable(const WowDate& date, const WowDate* now) {
+    const int64_t day = dayNumber(date.fullYear(), date.month, date.day);
+    if (day < dayNumber(2004, 11, 24) || day > dayNumber(2031, 1, 1)) return false;
+    if (!now) return true;
+    if (day < dayNumber(now->fullYear(), now->month, now->day)) return false;
+    const int months = (now->month - 1) + 13;
+    const int year = std::min(now->yearSince2000 + months / 12, 31);
+    return day <= dayNumber(2000 + year, months % 12 + 1, 1);
+}
+
+bool calendarTimePassed(const WowDate& when, const WowDate* now) {
+    return now && minuteKey(when) <= minuteKey(*now);
 }
 
 uint64_t calendarOwnInviteId(const CalendarEventDetail& open, uint64_t player) {

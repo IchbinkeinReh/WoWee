@@ -3618,28 +3618,42 @@ bool GameHandler::calendarCanAddEvent() const {
            !calendarAddThrottled(lastCalendarAddMs_, calendarClockMs());
 }
 
-bool GameHandler::openCalendarDraft(bool guildEvent) {
-    if (!isInWorld()) return false;
-    if (guildEvent && !isInGuild()) {
+bool GameHandler::openCalendarNewEvent(CalendarNewKind kind) {
+    if (!isInWorld() || !entityController_->getEntityManager().getEntity(playerGuid)) return false;
+    if (kind != CalendarNewKind::Player && getEntityGuildId(playerGuid) == 0) {
         calendarErrorDialog("ERR_GUILD_PLAYER_NOT_IN_GUILD", "You are not in a guild.");
         return false;
     }
+    // The old open event goes (0x005f2b70, delete) and the new one takes its
+    // place, listing the player unless it is an announcement.
+    calendarEventDetail_ = calendarNewEvent(kind, playerGuid,
+                                            static_cast<uint8_t>(serverPlayerLevel_));
     calendarDraftOpen_ = true;
+    if (kind == CalendarNewKind::Player)
+        fireAddonEvent("CALENDAR_UPDATE_INVITE_LIST", {"1"});
     return true;
+}
+
+std::optional<WowDate> GameHandler::getGameDate() const {
+    if (!gameDateSet_) return std::nullopt;
+    const double elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - gameTimeSetAt_).count();
+    const double minutes = std::max(0.0, elapsed) * static_cast<double>(clampGameTimeSpeed(timeSpeed_));
+    return addMinutes(*gameDateSet_, static_cast<int64_t>(minutes));
 }
 
 // Each request below is one the client sends only while no other is pending,
 // and marks pending once sent (0x005b7e20 and the setters beside it); the
 // server's answer, or its error, clears it (0x005c3fe0, 0x005b9960).
 
-void GameHandler::calendarEventInvite(const std::string& name, uint32_t draftFlags) {
+void GameHandler::calendarEventInvite(const std::string& name) {
     // 0x005bc360: nothing while a request is out or with no event open, and
     // nothing, silently, unless the player may invite to it (0x005f1b30).
     if (!calendarActionAllowed() || !isCalendarEventOpen()) return;
     const bool draft = calendarDraftOpen_;
     const CalendarEventDetail& open = calendarEventDetail_;
     const uint64_t ownInviteId = draft ? 1 : calendarOwnInviteId(open, playerGuid);
-    if (!calendarMayInvite(ownInviteId, draft ? playerGuid : open.creatorGuid, playerGuid)) return;
+    if (!calendarMayInvite(ownInviteId, open.creatorGuid, playerGuid)) return;
     // Within two seconds of the last invitation, the error dialog instead
     // (CALENDAR_ERROR_INVITE_THROTTLED); one sent restarts the wait. The
     // setting at 0x00bd09ac that would lift it is never registered in this
@@ -3652,27 +3666,23 @@ void GameHandler::calendarEventInvite(const std::string& name, uint32_t draftFla
     // 0x005f2070, on the open event: none to a guild announcement, none past
     // a hundred, none to a name already on the list - the name cut to what
     // its 0x30-byte buffer holds, against each invitee whose name is known.
-    // A new event's list is its maker (0x005f2a20).
-    const uint32_t flags = draft ? draftFlags : open.flags;
+    // A new event's list is its maker and whoever has been pre-invited since
+    // (0x005f2a20, 0x005f32b0).
+    const uint32_t flags = open.flags;
     if (flags & calendar_flag::kAnnouncement) {
         calendarErrorDialog("CALENDAR_ERROR_INVITES_DISABLED", "Invites are disabled for this event.");
         return;
     }
-    const size_t onList = draft ? 1 : open.invitees.size();
-    if (onList >= 100) {
+    if (open.invitees.size() >= 100) {
         calendarErrorDialog("CALENDAR_ERROR_INVITES_EXCEEDED",
                             "You cannot invite more than %d players to this event.", {"100"});
         return;
     }
     const std::string who = name.substr(0, 0x2F);
     bool already = false;
-    if (draft) {
-        already = lookupName(playerGuid) == who;
-    } else {
-        for (const auto& inv : open.invitees) {
-            const std::string known = lookupName(inv.guid);
-            if (!known.empty() && known == who) { already = true; break; }
-        }
+    for (const auto& inv : open.invitees) {
+        const std::string known = lookupName(inv.guid);
+        if (!known.empty() && known == who) { already = true; break; }
     }
     if (already) {
         calendarErrorDialog("CALENDAR_ERROR_ALREADY_INVITED_TO_EVENT_S", "%s has already been invited.", {who});
@@ -3746,8 +3756,92 @@ void GameHandler::createCalendarEvent(const CalendarEventDraft& draft) {
                             "The number of events that can be created is limited, please wait to create another event.");
         return;
     }
+    // 0x005b7c00 on the event's date: one that may not be added sends
+    // nothing and says nothing. An unset date passes here (its fields are
+    // -1 and every comparison skips them) and is refused below.
+    const std::optional<WowDate> now = getGameDate();
+    if (draft.hasDate && !calendarDateAddable(draft.eventTime, now ? &*now : nullptr)) return;
     if (!calendarDraftOpen_) return;
-    socialHandler_->createCalendarEvent(draft);
+    // 0x005f1b90's checks, in its order.
+    const CalendarEventDetail& open = calendarEventDetail_;
+    if (draft.title.empty()) {
+        calendarErrorDialog("CALENDAR_ERROR_NEEDS_TITLE", "Enter a title.");
+        return;
+    }
+    if ((open.flags & (calendar_flag::kAnnouncement | calendar_flag::kGuildEvent)) == 0) {
+        // The player's own: a size of none is sent nowhere, silently; past a
+        // hundred is too many.
+        if (draft.maxInvites == 0) return;
+        if (draft.maxInvites > 100) {
+            calendarErrorDialog("CALENDAR_ERROR_INVITES_EXCEEDED",
+                                "You cannot invite more than %d players to this event.", {"100"});
+            return;
+        }
+    } else if (entityController_->getEntityManager().getEntity(playerGuid) &&
+               getEntityGuildId(playerGuid) == 0) {
+        calendarErrorDialog("ERR_GUILD_PLAYER_NOT_IN_GUILD", "You are not in a guild.");
+        return;
+    }
+    if (!draft.hasTime) {
+        calendarErrorDialog("CALENDAR_ERROR_INVALID_TIME", "Enter a valid time.");
+        return;
+    }
+    if (!draft.hasDate) {
+        calendarErrorDialog("CALENDAR_ERROR_INVALID_DATE", "Enter a valid date.");
+        return;
+    }
+    if (calendarTimePassed(draft.eventTime, now ? &*now : nullptr)) {
+        calendarErrorDialog("CALENDAR_ERROR_EVENT_TIME_PASSED", "The time for this event has already passed.");
+        return;
+    }
+    socialHandler_->createCalendarEvent(draft, open.flags, open.invitees);
+    lastCalendarAddMs_ = calendarClockMs();
+    setCalendarActionPending(true);
+}
+
+void GameHandler::calendarCopyEvent(uint64_t eventId) {
+    const CalendarEvent* ev = nullptr;
+    for (const auto& e : calendarData_.events)
+        if (e.eventId == eventId) { ev = &e; break; }
+    if (!ev) return;
+    const CalendarInvite* inv = nullptr;
+    for (const auto& i : calendarData_.invites)
+        if (i.eventId == eventId) { inv = &i; break; }
+    // The row's 0x9c bits 4 (made by the player) and 2 (a moderator's or
+    // owner's invite) for the player's own; the rank's right to make guild
+    // events for the guild's (0x005cbca0).
+    constexpr uint32_t kGuildRightCreateEvent = 0x100000;
+    const bool may = (ev->flags & (calendar_flag::kAnnouncement | calendar_flag::kGuildEvent))
+        ? (getPlayerGuildRankRights() & kGuildRightCreateEvent) != 0
+        : (ev->creatorGuid != 0 && ev->creatorGuid == playerGuid) || (inv && inv->rank != 0);
+    if (!may) {
+        calendarErrorDialog("CALENDAR_ERROR_PERMISSIONS", "You do not have permission to do that.");
+        return;
+    }
+    calendarClipboard_ = {ev->eventId, inv ? inv->inviteId : 0, ev->eventTime};
+}
+
+void GameHandler::calendarPasteEvent(int month, int year, int day, int numDays) {
+    if (calendarActionPending_ || calendarClipboard_.eventId == 0) return;
+    // The add throttle; the setting at 0x00bd09ac that would lift it is never
+    // registered in this build.
+    if (calendarAddThrottled(lastCalendarAddMs_, calendarClockMs())) {
+        calendarErrorDialog("CALENDAR_ERROR_EVENT_THROTTLED",
+                            "The number of events that can be created is limited, please wait to create another event.");
+        return;
+    }
+    if (day < 1 || day > numDays) return;
+    // The copied event's hour on the day given, its weekday worked out again.
+    WowDate when = calendarClipboard_.time;
+    when.day = day;
+    when.month = month;
+    when.yearSince2000 = year - 2000;
+    when = addMinutes(when, 0);
+    const std::optional<WowDate> now = getGameDate();
+    if (!calendarDateAddable(when, now ? &*now : nullptr)) return;
+    if (!socialHandler_ || !isInWorld()) return;
+    socialHandler_->copyCalendarEvent(calendarClipboard_.eventId, calendarClipboard_.inviteId,
+                                      packWowPackedTime(when));
     lastCalendarAddMs_ = calendarClockMs();
     setCalendarActionPending(true);
 }

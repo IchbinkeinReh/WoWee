@@ -817,13 +817,16 @@ public:
     /// CalendarCanAddEvent (0x005b8ba0): no calendar request pending, and the
     /// last event added five seconds gone.
     bool calendarCanAddEvent() const;
-    /// CalendarNewEvent / CalendarNewGuildEvent (0x005bbe50, 0x005bc030): a
-    /// new event becomes the open one (0x00c207ec) - the player's, invited to
-    /// before it exists, keeping invite id 1 (0x005f2a20) - until
-    /// SMSG_CALENDAR_SEND_EVENT opens another. A guild event needs a guild:
-    /// without one the error dialog, ERR_GUILD_PLAYER_NOT_IN_GUILD, and
-    /// nothing opened (false).
-    bool openCalendarDraft(bool guildEvent);
+    /// CalendarNewEvent / CalendarNewGuildAnnouncement / CalendarNewGuildEvent
+    /// (0x005bbe50, 0x005bbf20, 0x005bc030): a new event, made by
+    /// calendarNewEvent (0x005f2a20), takes the open one's place (0x00c207ec)
+    /// - the player's, invited to before it exists, keeping invite id 1 -
+    /// until SMSG_CALENDAR_SEND_EVENT opens another. The guild's two need a
+    /// guild (PLAYER_GUILDID): without one the error dialog,
+    /// ERR_GUILD_PLAYER_NOT_IN_GUILD, and nothing opened (false). The
+    /// player's own says its invite list is new (CALENDAR_UPDATE_INVITE_LIST
+    /// true).
+    bool openCalendarNewEvent(CalendarNewKind kind);
     /// Whether an event is open (0x00c207ec): a new one, or the one last sent
     /// in full while its id stands.
     bool isCalendarEventOpen() const {
@@ -837,14 +840,14 @@ public:
     void requestCalendar(); ///< Send CMSG_CALENDAR_GET_CALENDAR to the server
     /// The calendar the server last sent, empty until it has answered one.
     const CalendarData& getCalendarData() const { return calendarData_; }
-    /// The event the server last sent in full, empty until one is opened.
+    /// The open event: the one the server last sent in full, or a new one
+    /// (id 0) with its invite list.
     const CalendarEventDetail& getCalendarEventDetail() const {
         return calendarEventDetail_;
     }
     /// CalendarEventInvite (0x005bc360 -> 0x005f2070): invite someone to the
-    /// open event. `draftFlags` are the new event's, for when it is the open
-    /// one.
-    void calendarEventInvite(const std::string& name, uint32_t draftFlags);
+    /// open event.
+    void calendarEventInvite(const std::string& name);
     /// Set another invitee's status or moderator rank.
     void setCalendarInviteStatus(uint64_t inviteeGuid, uint64_t eventId,
                                  uint64_t inviteId, uint8_t status);
@@ -861,6 +864,21 @@ public:
     void requestCalendarEvent(uint64_t eventId);
     /// CalendarAddEvent (0x005bbd60): send the new event to the server.
     void createCalendarEvent(const CalendarEventDraft& draft);
+    /// CalendarContextEventCopy (0x005bd340 -> 0x005bc7c0): keep an event on
+    /// the calendar to paste, when the player may - a guild event or
+    /// announcement with the rank's 0x100000 right (0x005cbca0), any other
+    /// as its maker or a moderator - else CALENDAR_ERROR_PERMISSIONS.
+    void calendarCopyEvent(uint64_t eventId);
+    /// CalendarContextEventPaste (0x005bd460 -> 0x005bc870): the copied event
+    /// onto day `day` (from 1) of `month`/`year`, which has `numDays` days,
+    /// at its own hour - nothing pending, something copied, the add throttle
+    /// (CALENDAR_ERROR_EVENT_THROTTLED), a day in the month and a date that
+    /// may be added (0x005b7c00), then CMSG_CALENDAR_COPY_EVENT, restarting
+    /// the add wait.
+    void calendarPasteEvent(int month, int year, int day, int numDays);
+    /// The game clock's date (0x00d37f98), run on from the server's time;
+    /// none before the server has given one.
+    std::optional<WowDate> getGameDate() const;
     /// Answer an invitation. Status is a CalendarInviteStatus.
     void respondToCalendarInvite(uint64_t eventId, uint64_t inviteId,
                                  uint32_t status);
@@ -5536,6 +5554,8 @@ private:
     float gameTime_ = -1.0f;
     /// When gameTime_ was last set, so getGameTime can run the clock on.
     std::chrono::steady_clock::time_point gameTimeSetAt_{};
+    /// The whole date the server last gave with gameTime_, for getGameDate.
+    std::optional<WowDate> gameDateSet_;
     /// Game minutes per real second (default 1/60: a game day per real day).
     float timeSpeed_ = kDefaultGameTimeSpeed;
     void handleLoginSetTimeSpeed(network::Packet& packet);
@@ -5787,9 +5807,15 @@ private:
     /// When the last event was added, on calendarClockMs (0x00c207fc); 0 for
     /// none yet.
     uint32_t lastCalendarAddMs_ = 0;
-    /// Whether the open event (0x00c207ec) is a new one rather than
-    /// calendarEventDetail_.
+    /// Whether the open event (0x00c207ec) is a new one, not yet made.
     bool calendarDraftOpen_ = false;
+    /// The event CalendarContextEventCopy kept (0x00ad0350): its id, the
+    /// invite id it had (+0xb0) and its time (+0x88). Id 0 for none.
+    struct CalendarClipboard {
+        uint64_t eventId = 0;
+        uint64_t inviteId = 0;
+        WowDate time;
+    } calendarClipboard_;
     /// The millisecond clock the invitation throttle is measured on
     /// (0x0086ae20), never 0 so that 0 can mean none sent.
     static uint32_t calendarClockMs();

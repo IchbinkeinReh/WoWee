@@ -703,6 +703,7 @@ void GameHandler::handleLoginSetTimeSpeed(network::Packet& packet) {
     // the sky wants. One meaning for this field, written down here.
     gameTime_ = static_cast<float>(now.hour) + static_cast<float>(now.minute) / 60.0f;
     gameTimeSetAt_ = std::chrono::steady_clock::now();
+    gameDateSet_ = now;
     timeSpeed_ = clampGameTimeSpeed(timeScale);
 
     LOG_INFO("Server time: ", now.hour, ":", now.minute, " (gameTime=", gameTime_,
@@ -4547,6 +4548,7 @@ const std::string& GameHandler::getSkillLineName(uint32_t skillLineId) const {
 void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& packet) {
     CalendarContext ctx{calendarData_, calendarEventDetail_};
     ctx.player = playerGuid;
+    ctx.newEventOpen = calendarDraftOpen_;
     ctx.playerLevel = static_cast<uint8_t>(serverPlayerLevel_);
     ctx.isIgnored = [this](uint64_t guid) { return ignoreListGuids_.count(guid) != 0; };
     ctx.nameKnown = [this](uint64_t guid) {

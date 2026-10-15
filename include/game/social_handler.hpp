@@ -451,8 +451,12 @@ public:
                                         uint32_t minRank);
     /// Ask for one event's detail: CMSG_CALENDAR_GET_EVENT.
     void requestCalendarEvent(uint64_t eventId);
-    /// Create an event: CMSG_CALENDAR_ADD_EVENT.
-    void createCalendarEvent(const CalendarEventDraft& draft);
+    /// Create an event: CMSG_CALENDAR_ADD_EVENT, with its flags and its
+    /// invite list.
+    void createCalendarEvent(const CalendarEventDraft& draft, uint32_t flags,
+                             const std::vector<CalendarEventInvitee>& invitees);
+    /// Paste a copied event onto a date: CMSG_CALENDAR_COPY_EVENT.
+    void copyCalendarEvent(uint64_t eventId, uint64_t inviteId, uint32_t packedTime);
     /// Answer an invitation: CMSG_CALENDAR_EVENT_RSVP with a
     /// CalendarInviteStatus (1 accepted, 2 declined, 8 tentative, 9 removed).
     void respondToCalendarInvite(uint64_t eventId, uint64_t inviteId,

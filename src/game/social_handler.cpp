@@ -5435,11 +5435,8 @@ void SocialHandler::massInviteGuildToCalendarEvent(uint32_t minLevel,
 void SocialHandler::updateCalendarEvent(uint64_t eventId, uint64_t inviteId,
                                         const CalendarEventDraft& draft) {
     if (!owner_.isInWorld()) return;
-    // The same body as adding, with the event and invite ids in front of it
-    // (CalendarHandler.cpp:360). Written out rather than shared with
-    // createCalendarEvent: the two are the same shape today and are two
-    // different opcodes, and folding them together would make the next change
-    // to one silently change the other.
+    // The body of adding up to the flags, with the event and invite ids in
+    // front of it and no invite list after (CalendarHandler.cpp:360).
     network::Packet pkt(wireOpcode(Opcode::CMSG_CALENDAR_UPDATE_EVENT));
     pkt.writeUInt64(eventId);
     pkt.writeUInt64(inviteId);
@@ -5511,28 +5508,29 @@ void SocialHandler::requestCalendarEvent(uint64_t eventId) {
     LOG_INFO("requestCalendarEvent: ", eventId);
 }
 
-void SocialHandler::createCalendarEvent(const CalendarEventDraft& draft) {
+void SocialHandler::createCalendarEvent(const CalendarEventDraft& draft, uint32_t flags,
+                                        const std::vector<CalendarEventInvitee>& invitees) {
     if (!owner_.isInWorld()) return;
-    // title, description, type, repeatable, maxInvites, dungeonId, then two
-    // packed times and the flags - CalendarHandler.cpp:228.
-    //
-    // The second time is unused by the server (it is stored and never read),
-    // but it is read off the wire, so leaving it out shifts the flags into it
-    // and the flags off the end.
+    // As 0x005f1b90 writes it, the new event's invite list and all
+    // (writeCalendarAddEvent). Without the list the server read past the end
+    // of every event but an announcement and made nothing.
     network::Packet pkt(wireOpcode(Opcode::CMSG_CALENDAR_ADD_EVENT));
-    pkt.writeString(draft.title);
-    pkt.writeString(draft.description);
-    pkt.writeUInt8(draft.type);
-    pkt.writeUInt8(draft.repeatOption);
-    pkt.writeUInt32(draft.maxInvites);
-    pkt.writeUInt32(static_cast<uint32_t>(draft.dungeonId));
-    pkt.writeUInt32(packWowPackedTime(draft.eventTime));
-    pkt.writeUInt32(packWowPackedTime(draft.eventTime));
-    pkt.writeUInt32(draft.flags);
+    writeCalendarAddEvent(pkt, draft, flags, invitees);
     owner_.getSocket()->send(pkt);
     LOG_INFO("createCalendarEvent: '", draft.title, "' type ", draft.type,
              " on ", draft.eventTime.day, "/", draft.eventTime.month, "/",
-             draft.eventTime.fullYear());
+             draft.eventTime.fullYear(), ", ", invitees.size(), " invited");
+}
+
+void SocialHandler::copyCalendarEvent(uint64_t eventId, uint64_t inviteId, uint32_t packedTime) {
+    if (!owner_.isInWorld()) return;
+    // CMSG_CALENDAR_COPY_EVENT (0x005bc870): the event, the invite id it was
+    // copied with, and the new date.
+    network::Packet pkt(wireOpcode(Opcode::CMSG_CALENDAR_COPY_EVENT));
+    pkt.writeUInt64(eventId);
+    pkt.writeUInt64(inviteId);
+    pkt.writeUInt32(packedTime);
+    owner_.getSocket()->send(pkt);
 }
 
 void SocialHandler::respondToCalendarInvite(uint64_t eventId, uint64_t inviteId,

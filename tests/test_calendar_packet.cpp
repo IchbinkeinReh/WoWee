@@ -1066,3 +1066,135 @@ TEST_CASE("Who may invite to an opened event", "[calendar]") {
     // A new event keeps invite id 1 (0x005f2a20).
     CHECK(calendarMayInvite(1, 0, me));
 }
+
+TEST_CASE("A new event lists its maker, and an announcement nobody", "[calendar]") {
+    // 0x005f2a20 with 0, 1, 2 (0x005bbe50, 0x005bbf20, 0x005bc030).
+    const CalendarEventDetail mine = calendarNewEvent(CalendarNewKind::Player, kMe, 80);
+    CHECK(mine.eventId == 0u);
+    CHECK(mine.creatorGuid == kMe);
+    CHECK(mine.flags == calendar_flag::kPlayer);
+    CHECK(mine.maxInvites == 100u);
+    CHECK(mine.dungeonId == -1);
+    REQUIRE(mine.invitees.size() == 1);
+    CHECK(mine.invitees[0].guid == kMe);
+    CHECK(mine.invitees[0].level == 80);
+    CHECK(mine.invitees[0].status == calendar_status::kConfirmed);
+    CHECK(mine.invitees[0].rank == 2);
+    CHECK_FALSE(mine.invitees[0].isGuildMember);
+
+    const CalendarEventDetail guild = calendarNewEvent(CalendarNewKind::GuildEvent, kMe, 80);
+    CHECK(guild.flags == calendar_flag::kGuildEvent);
+    REQUIRE(guild.invitees.size() == 1);
+    CHECK(guild.invitees[0].isGuildMember);
+
+    const CalendarEventDetail news = calendarNewEvent(CalendarNewKind::Announcement, kMe, 80);
+    CHECK(news.flags == calendar_flag::kAnnouncement);
+    CHECK(news.invitees.empty());
+}
+
+TEST_CASE("A pre-invite joins the new event's list", "[calendar]") {
+    // The server answers an invitation to an event not yet made with event
+    // id 0, which is the new event's: 0x005bf030 adds it (0x005f32b0).
+    auto preInvite = [] {
+        Packet inv(0x43A);
+        inv.writePackedGuid(0x21);
+        inv.writeUInt64(0); inv.writeUInt64(0);
+        inv.writeUInt8(70); inv.writeUInt8(calendar_status::kInvited);
+        inv.writeUInt8(0); inv.writeUInt8(1);
+        return inv;
+    };
+    CalendarData cal;
+    CalendarEventDetail open = calendarNewEvent(CalendarNewKind::Player, kMe, 80);
+    {
+        Packet p = preInvite();
+        CalendarContext ctx{cal, open, kMe};
+        ctx.newEventOpen = true;
+        REQUIRE(applyCalendarPacket(CalendarPacket::EventInvite, p, ctx));
+        CHECK(names(ctx) == std::vector<std::string>{"CALENDAR_UPDATE_INVITE_LIST",
+                                                     "CALENDAR_ACTION_PENDING"});
+    }
+    REQUIRE(open.invitees.size() == 2);
+    CHECK(open.invitees[1].guid == 0x21u);
+    CHECK(open.invitees[1].level == 70);
+    CHECK(open.invitees[1].rank == 0);
+    // With no new event open, an id of 0 is nobody's.
+    CalendarEventDetail none;
+    Packet p = preInvite();
+    CalendarContext ctx{cal, none, kMe};
+    REQUIRE(applyCalendarPacket(CalendarPacket::EventInvite, p, ctx));
+    CHECK(none.invitees.empty());
+}
+
+TEST_CASE("The dates an event may be added on", "[calendar]") {
+    auto date = [](int y, int m, int d, int h = 0, int mi = 0) {
+        WowDate w;
+        w.yearSince2000 = y - 2000; w.month = m; w.day = d; w.hour = h; w.minute = mi;
+        return w;
+    };
+    // 0x005b7b30: from 24 November 2004 to 1 January 2031, with no clock.
+    CHECK_FALSE(calendarDateAddable(date(2004, 11, 23), nullptr));
+    CHECK(calendarDateAddable(date(2004, 11, 24), nullptr));
+    CHECK(calendarDateAddable(date(2031, 1, 1, 23, 59), nullptr));
+    CHECK_FALSE(calendarDateAddable(date(2031, 1, 2), nullptr));
+    // 0x005b7c00: today at the earliest, whatever the hour, and the first of
+    // the month thirteen on (0x005b7a80) at the latest.
+    const WowDate now = date(2026, 10, 15, 18, 30);
+    CHECK_FALSE(calendarDateAddable(date(2026, 10, 14, 23, 59), &now));
+    CHECK(calendarDateAddable(date(2026, 10, 15, 0, 0), &now));
+    CHECK(calendarDateAddable(date(2027, 11, 1, 23, 59), &now));
+    CHECK_FALSE(calendarDateAddable(date(2027, 11, 2), &now));
+    // From December the month thirteen on is January two years ahead.
+    const WowDate december = date(2026, 12, 31);
+    CHECK(calendarDateAddable(date(2028, 1, 1), &december));
+    CHECK_FALSE(calendarDateAddable(date(2028, 1, 2), &december));
+    // 0x0076ccc0: now, or before, has passed.
+    CHECK(calendarTimePassed(now, &now));
+    CHECK(calendarTimePassed(date(2026, 10, 15, 18, 29), &now));
+    CHECK_FALSE(calendarTimePassed(date(2026, 10, 15, 18, 31), &now));
+    CHECK_FALSE(calendarTimePassed(now, nullptr));
+}
+
+TEST_CASE("CMSG_CALENDAR_ADD_EVENT carries the invite list", "[calendar]") {
+    // 0x005f1b90: the body, then the count and each row's packed guid,
+    // status and rank - none for an announcement.
+    CalendarEventDraft d;
+    d.title = "Raid";
+    d.description = "";
+    d.type = 1;
+    d.repeatOption = 0;
+    d.maxInvites = 25;
+    d.dungeonId = 533;
+    d.eventTime.yearSince2000 = 26; d.eventTime.month = 10; d.eventTime.day = 20;
+    d.eventTime.hour = 20;
+    CalendarEventDetail ev = calendarNewEvent(CalendarNewKind::Player, kMe, 80);
+    CalendarEventInvitee other;
+    other.guid = 0x21;
+    ev.invitees.push_back(other);
+
+    Packet p(0x42D);
+    writeCalendarAddEvent(p, d, ev.flags, ev.invitees);
+    CHECK(p.readString() == "Raid");
+    CHECK(p.readString().empty());
+    CHECK(p.readUInt8() == 1);
+    CHECK(p.readUInt8() == 0);
+    CHECK(p.readUInt32() == 25u);
+    CHECK(p.readUInt32() == 533u);
+    CHECK(p.readUInt32() == packWowPackedTime(d.eventTime));
+    CHECK(p.readUInt32() == packWowPackedTime(d.eventTime));
+    CHECK(p.readUInt32() == calendar_flag::kPlayer);
+    REQUIRE(p.readUInt32() == 2u);
+    CHECK(p.readPackedGuid() == kMe);
+    CHECK(p.readUInt8() == calendar_status::kConfirmed);
+    CHECK(p.readUInt8() == 2);
+    CHECK(p.readPackedGuid() == 0x21u);
+    CHECK(p.readUInt8() == 0);
+    CHECK(p.readUInt8() == 0);
+    CHECK_FALSE(p.hasRemaining(1));
+
+    Packet a(0x42D);
+    writeCalendarAddEvent(a, d, calendar_flag::kAnnouncement, ev.invitees);
+    a.readString(); a.readString(); a.readUInt8(); a.readUInt8();
+    a.readUInt32(); a.readUInt32(); a.readUInt32(); a.readUInt32();
+    CHECK(a.readUInt32() == calendar_flag::kAnnouncement);
+    CHECK_FALSE(a.hasRemaining(1));
+}

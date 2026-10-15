@@ -287,6 +287,10 @@ struct CalendarContext {
     std::function<bool(uint64_t)> nameKnown;
     /// Names the open event waits on, to be asked for (CMSG_NAME_QUERY).
     std::vector<uint64_t> nameQueries;
+    /// Whether `open` is a new event, not yet made (+0x500), whose id is 0:
+    /// an invitation to it comes back with event id 0 and is added to its
+    /// list (0x005bf030 -> 0x005f32b0).
+    bool newEventOpen = false;
 };
 
 /// The signal standing for a look for mail, which a removed invitation that
@@ -337,6 +341,26 @@ inline bool calendarMayInvite(uint64_t ownInviteId, uint64_t creator, uint64_t p
     return ownInviteId != 0 || creator == player;
 }
 
+/// The new event CalendarNewEvent, CalendarNewGuildAnnouncement and
+/// CalendarNewGuildEvent open (0x005f2a20 with 0, 1, 2): the player's, id 0,
+/// flags 0x01, 0x40 or 0x400, a hundred invites at most, no dungeon - and on
+/// its invite list the player, confirmed and its owner (guild-marked for a
+/// guild event), except for an announcement, which lists nobody.
+enum class CalendarNewKind : uint8_t { Player = 0, Announcement = 1, GuildEvent = 2 };
+CalendarEventDetail calendarNewEvent(CalendarNewKind kind, uint64_t player, uint8_t level);
+
+/// 0x005b7c00: whether a new event may be added on `date` (its day; the time
+/// is not looked at). Between 24 November 2004 and 1 January 2031
+/// (0x005b7b30), and, with the game clock's date `now` known (0x00d37f98),
+/// no earlier than today and no later than the first of the month thirteen
+/// on from now's, its year at most 2031 (0x005b7a80). CalendarAddEvent and
+/// CalendarContextEventPaste send nothing, and say nothing, when it is not.
+bool calendarDateAddable(const WowDate& date, const WowDate* now);
+
+/// 0x0076ccc0 against the game clock: whether `when` is now or past, to the
+/// minute. False with the clock not known.
+bool calendarTimePassed(const WowDate& when, const WowDate* now);
+
 /// A date moved on by whole minutes, weekday and all - what 0x0076c3f0 does
 /// to the date it is handed.
 WowDate addMinutes(const WowDate& date, int64_t minutes);
@@ -356,7 +380,19 @@ struct CalendarEventDraft {
     int32_t dungeonId = -1;      ///< -1 for no dungeon, and signed for that reason
     WowDate eventTime;
     uint32_t flags = 0;
+    /// Whether CalendarEventSetDate / CalendarEventSetTime have given the
+    /// date and the time: a new event starts with neither (0x005f2a20 sets
+    /// both to -1, 0x0076c190), and CalendarAddEvent refuses it without them.
+    bool hasDate = false;
+    bool hasTime = false;
 };
+
+/// CMSG_CALENDAR_ADD_EVENT's body as 0x005f1b90 writes it: title,
+/// description, type, repeat, max invites, dungeon, the time twice, the
+/// flags, then - unless it is an announcement - the invite list's count and
+/// each row's packed guid, status and rank.
+void writeCalendarAddEvent(network::Packet& packet, const CalendarEventDraft& draft,
+                           uint32_t flags, const std::vector<CalendarEventInvitee>& invitees);
 
 /// What a row on a given day came from. The interface reads a day's rows
 /// through one index space - `CalendarGetNumDayEvents` counts them and

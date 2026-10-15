@@ -8091,31 +8091,35 @@ void registerSystemLuaAPI(lua_State* L) {
                 // lets the create form be filled in in any order and cancelled
                 // without trace.
                 // The new event becomes the open one (0x005bbe50), which is
-                // what CalendarEventInvite and CalendarAddEvent act on.
+                // what CalendarEventInvite and CalendarAddEvent act on. Its
+                // date and time start unset (0x005f2a20): CalendarAddEvent
+                // refuses it until they are given.
                 {"CalendarNewEvent", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->openCalendarDraft(false);
+            auto* gh = getGameHandler(L);
+            if (!gh || !gh->openCalendarNewEvent(wowee::game::CalendarNewKind::Player)) return 0;
             calendarDraft() = wowee::game::CalendarEventDraft{};
-            // Today, so an event committed without touching the date lands
-            // somewhere real rather than on 1 January 2000.
-            const auto viewed = calendarViewedMonth();
-            const std::time_t now = std::time(nullptr);
-            const std::tm t = core::localTime(now);
-            auto& d = calendarDraft();
-            d.eventTime.month = viewed.first;
-            d.eventTime.yearSince2000 = viewed.second - 2000;
-            d.eventTime.day = t.tm_mday;
-            d.eventTime.hour = 12;
+            calendarDraft().flags = gh->getCalendarEventDetail().flags;
             return 0;
         }},
                 // Only in a guild; otherwise the error dialog and nothing
-                // opened (0x005bc030).
+                // opened (0x005bcd80 -> 0x005bbf20). Flagged 0x40, with no
+                // one on its list and no invitations to it.
+                {"CalendarNewGuildAnnouncement", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh || !gh->openCalendarNewEvent(wowee::game::CalendarNewKind::Announcement)) return 0;
+            calendarDraft() = wowee::game::CalendarEventDraft{};
+            calendarDraft().flags = gh->getCalendarEventDetail().flags;
+            return 0;
+        }},
+                // Only in a guild; otherwise the error dialog and nothing
+                // opened (0x005bc030). CALENDAR_FLAG_GUILD_EVENT, which is
+                // what the server reads to decide the event belongs to the
+                // guild rather than the player.
                 {"CalendarNewGuildEvent", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (!gh || !gh->openCalendarDraft(true)) return 0;
+            if (!gh || !gh->openCalendarNewEvent(wowee::game::CalendarNewKind::GuildEvent)) return 0;
             calendarDraft() = wowee::game::CalendarEventDraft{};
-            // CALENDAR_FLAG_GUILD_EVENT, which is what the server reads to
-            // decide the event belongs to the guild rather than the player.
-            calendarDraft().flags |= 0x0400u;
+            calendarDraft().flags = gh->getCalendarEventDetail().flags;
             return 0;
         }},
                 {"CalendarEventSetTitle", [](lua_State* L) -> int {
@@ -8155,12 +8159,14 @@ void registerSystemLuaAPI(lua_State* L) {
             // date rather than be left at whatever the last one was.
             d.eventTime.weekday = wowee::game::weekdayOf(
                 d.eventTime.month, d.eventTime.day, d.eventTime.fullYear()) - 1;
+            d.hasDate = true;
             return 0;
         }},
                 {"CalendarEventSetTime", [](lua_State* L) -> int {
             auto& d = calendarDraft();
             d.eventTime.hour   = static_cast<int>(luaL_optnumber(L, 1, d.eventTime.hour));
             d.eventTime.minute = static_cast<int>(luaL_optnumber(L, 2, d.eventTime.minute));
+            d.hasTime = true;
             return 0;
         }},
                 // The same boundary as the type. The interface hands over a
@@ -8268,7 +8274,7 @@ void registerSystemLuaAPI(lua_State* L) {
             const char* name = lua_tostring(L, 1);
             auto* gh = getGameHandler(L);
             if (!gh || !name) return 0;
-            gh->calendarEventInvite(name, calendarDraft().flags);
+            gh->calendarEventInvite(name);
             return 0;
         }},
                 // The three bounds go on the wire: this has its own opcode
@@ -8383,6 +8389,47 @@ void registerSystemLuaAPI(lua_State* L) {
             if (entry.kind != wowee::game::CalendarEntryKind::Event) return 0;
             gh->removeCalendarEvent(
                 gh->getCalendarData().events[entry.index].eventId, 0);
+            return 0;
+        }},
+                // CalendarContextEventCopy([monthOffset, day, index]) - keep
+                // an event to paste (0x005bd340): the row named, or with any
+                // of the three missing the one the menu is about (0x00c207e8),
+                // a usage error with neither. Whether the player may is
+                // calendarCopyEvent's.
+                {"CalendarContextEventCopy", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            CalendarContextRow row = calendarContextRow();
+            const bool named = !lua_isnoneornil(L, 1) && !lua_isnoneornil(L, 2) &&
+                               !lua_isnoneornil(L, 3);
+            if (named) {
+                row = {.monthOffset = static_cast<int>(std::lround(lua_tonumber(L, 1))),
+                       .day = static_cast<int>(std::lround(lua_tonumber(L, 2))),
+                       .index = static_cast<int>(std::lround(lua_tonumber(L, 3)))};
+            } else if (row.day < 1 || row.index < 1) {
+                return luaL_error(L, "Usage: Script_CalendarContextEventCopy([-1.0.1], monthDay, index)");
+            }
+            const auto rows = calendarRowsFor(*gh, row.monthOffset, row.day);
+            if (row.index < 1 || static_cast<size_t>(row.index) > rows.size()) return 0;
+            const auto& entry = rows[static_cast<size_t>(row.index) - 1];
+            if (entry.kind != wowee::game::CalendarEntryKind::Event) return 0;
+            gh->calendarCopyEvent(gh->getCalendarData().events[entry.index].eventId);
+            return 0;
+        }},
+                // CalendarContextEventPaste(monthOffset, day) - the copied
+                // event onto that day at its own hour (0x005bd460 ->
+                // 0x005bc870), held five seconds after the last event added
+                // or pasted, as CalendarAddEvent is.
+                {"CalendarContextEventPaste", [](lua_State* L) -> int {
+            if (lua_isnoneornil(L, 1) || lua_isnoneornil(L, 2))
+                return luaL_error(L, "Usage: Script_CalendarContextEventPaste([-1.0.1], monthDay)");
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            const auto viewed = calendarViewedMonth();
+            const auto info = wowee::game::calendarMonthAt(
+                viewed.first, viewed.second, static_cast<int>(std::lround(lua_tonumber(L, 1))));
+            gh->calendarPasteEvent(info.month, info.year,
+                                   static_cast<int>(std::lround(lua_tonumber(L, 2))), info.numDays);
             return 0;
         }},
                 // Signing up to a guild event, which is an RSVP with the
