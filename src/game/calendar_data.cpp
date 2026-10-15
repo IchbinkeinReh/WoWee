@@ -228,6 +228,8 @@ std::vector<CalendarDayEntry> calendarEntriesForDay(const CalendarData& data,
             entry.kind = CalendarEntryKind::Holiday;
             entry.index = h;
             entry.ongoing = wanted > first;
+            entry.sequenceIndex = static_cast<uint32_t>(wanted - first);
+            entry.numSequenceDays = static_cast<uint32_t>(days);
             out.push_back(entry);
             break;  // one row per holiday per day, whichever run covers it
         }
@@ -1075,7 +1077,7 @@ void writeCalendarAddEvent(network::Packet& packet, const CalendarEventDraft& dr
     packet.writeUInt32(draft.maxInvites);
     packet.writeUInt32(static_cast<uint32_t>(draft.dungeonId));
     packet.writeUInt32(packWowPackedTime(draft.eventTime));
-    packet.writeUInt32(packWowPackedTime(draft.eventTime));
+    packet.writeUInt32(calendarLockoutPacked(draft));
     packet.writeUInt32(flags);
     if (flags & calendar_flag::kAnnouncement) return;
     packet.writeUInt32(static_cast<uint32_t>(invitees.size()));
@@ -1084,6 +1086,49 @@ void writeCalendarAddEvent(network::Packet& packet, const CalendarEventDraft& dr
         packet.writeUInt8(inv.status);
         packet.writeUInt8(inv.rank);
     }
+}
+
+uint32_t calendarLockoutPacked(const CalendarEventDraft& draft) {
+    // Minute and hour (6 and 5 bits), weekday, day, month, year (3, 6, 4,
+    // 5): -1 in each unset one.
+    const WowDate& t = draft.lockoutTime;
+    const uint32_t time = draft.hasLockoutTime
+                              ? ((static_cast<uint32_t>(t.hour) & 0x1Fu) << 6) | (static_cast<uint32_t>(t.minute) & 0x3Fu)
+                              : 0x7FFu;
+    const uint32_t date = draft.hasLockoutDate ? packWowPackedTime(t) & 0x1FFFF800u : 0x1FFFF800u;
+    return date | time;
+}
+
+CalendarInviteState calendarInviteState(const CalendarData& data, const CalendarEvent& ev, uint64_t player,
+                                        const WowDate* now) {
+    CalendarInviteState s;
+    s.flags = ev.creatorGuid != 0 && ev.creatorGuid == player ? 4u : 0u;
+    if ((ev.flags & calendar_flag::kAnnouncement) != 0) return s;
+    const CalendarInvite* inv = nullptr;
+    for (const auto& i : data.invites)
+        if (i.eventId == ev.eventId) { inv = &i; break; }
+    if (!inv) {
+        // A guild event without one stands at "not signed up".
+        if ((ev.flags & calendar_flag::kGuildEvent) == 0) {
+            s.kept = false;
+            return s;
+        }
+        s.flags |= 8u;
+        s.status = calendar_status::kNotSignedUp;
+        return s;
+    }
+    s.status = inv->status;
+    if (inv->rank != 0) {
+        s.flags |= 2u;
+        if (inv->rank == 2) s.flags = 6u;
+    }
+    if (inv->isGuildEvent) s.flags |= 8u;
+    // Still to answer: invited, to an event after now (0x0076c7b0) whose
+    // invitations are not locked (0x10).
+    if (inv->status == calendar_status::kInvited && now && minuteKey(ev.eventTime) > minuteKey(*now) &&
+        (ev.flags & calendar_flag::kInvitesLocked) == 0)
+        s.flags |= 1u;
+    return s;
 }
 
 bool calendarDateAddable(const WowDate& date, const WowDate* now) {

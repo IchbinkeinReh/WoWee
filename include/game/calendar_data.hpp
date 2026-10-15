@@ -237,6 +237,22 @@ constexpr uint8_t kNotSignedUp = 7;
 constexpr uint8_t kRemoved     = 9;
 }  // namespace calendar_status
 
+/// What the client keeps of an event against the player's invitations when
+/// the calendar arrives (0x005c2e30): its invite flags (+0x9c) - 1 an
+/// invitation still to answer, 2 a moderator's, 4 the maker's, 6 the
+/// owner's, 8 a guild event's or one without an invitation - and the
+/// invitation's status (+0xa8). An event that is no announcement, has no
+/// invitation and is no guild event is not kept.
+struct CalendarInviteState {
+    bool kept = true;
+    uint32_t flags = 0;
+    uint8_t status = 0;
+};
+/// `now` is the game clock's date (0x00d37f98), none when it is not known:
+/// an invitation is still to answer only for an event after it.
+CalendarInviteState calendarInviteState(const CalendarData& data, const CalendarEvent& ev, uint64_t player,
+                                        const WowDate* now);
+
 /// The calendarType string the interface is handed for an event's flags
 /// (0x005b7fd0).
 const char* calendarTypeForFlags(uint32_t flags);
@@ -415,7 +431,17 @@ struct CalendarEventDraft {
     /// both to -1, 0x0076c190), and CalendarAddEvent refuses it without them.
     bool hasDate = false;
     bool hasTime = false;
+    /// The lockout date and time (+0x4dc, CalendarEventSetLockoutDate /
+    /// Time, 0x005f12e0, 0x005f1340): the second time CMSG_CALENDAR_ADD_EVENT
+    /// carries. Unset, like a new event's (0x005f2a20), each of its fields
+    /// is -1 and packs as all ones (0x0076ca50).
+    WowDate lockoutTime;
+    bool hasLockoutDate = false;
+    bool hasLockoutTime = false;
 };
+
+/// 0x0076ca50 for the lockout: unset parts all ones.
+uint32_t calendarLockoutPacked(const CalendarEventDraft& draft);
 
 /// CMSG_CALENDAR_ADD_EVENT's body as 0x005f1b90 writes it: title,
 /// description, type, repeat, max invites, dungeon, the time twice, the
@@ -444,6 +470,11 @@ struct CalendarDayEntry {
     /// whose sequenceType is "ONGOING" when drawing the day's list, so a
     /// week-long holiday draws its name once rather than seven times.
     bool ongoing = false;
+    /// The day's place in the run of days the record covers (+0xc4, from
+    /// 0) and their number (+0xc8, 0x005c2030): a holiday's run, else the
+    /// one day.
+    uint32_t sequenceIndex = 0;
+    uint32_t numSequenceDays = 1;
 };
 
 /**

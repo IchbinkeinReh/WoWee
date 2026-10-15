@@ -5568,7 +5568,7 @@ void SocialHandler::updateCalendarEvent(uint64_t eventId, uint64_t inviteId,
     pkt.writeUInt32(draft.maxInvites);
     pkt.writeUInt32(static_cast<uint32_t>(draft.dungeonId));
     pkt.writeUInt32(packWowPackedTime(draft.eventTime));
-    pkt.writeUInt32(packWowPackedTime(draft.eventTime));
+    pkt.writeUInt32(calendarLockoutPacked(draft));
     pkt.writeUInt32(draft.flags);
     owner_.getSocket()->send(pkt);
     LOG_INFO("updateCalendarEvent: ", eventId, " '", draft.title, "'");

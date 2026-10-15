@@ -3743,6 +3743,23 @@ bool GameHandler::calendarCanEditOpenEvent() const {
     return calendarMayInvite(ownInviteId, open.creatorGuid, playerGuid);
 }
 
+bool GameHandler::calendarIsModerator() const {
+    if (!isCalendarEventOpen()) return false;
+    const CalendarEventDetail& open = calendarEventDetail_;
+    const uint64_t ownInviteId = calendarDraftOpen_ ? 1 : calendarOwnInviteId(open, playerGuid);
+    return calendarMayInvite(ownInviteId, open.creatorGuid, playerGuid);
+}
+
+bool GameHandler::calendarCanModerate(size_t index) {
+    if (!isCalendarEventOpen()) return false;
+    const CalendarEventDetail& open = calendarEventDetail_;
+    if (index >= open.invitees.size()) return false;
+    if ((open.flags & calendar_flag::kGuildEvent) == 0 || open.invitees[index].isGuildMember) return true;
+    calendarErrorDialog("CALENDAR_ERROR_NO_MODERATOR",
+                        "Invites to sign up events are not allowed to be moderators.");
+    return false;
+}
+
 void GameHandler::calendarSelectInvite(size_t index) {
     if (!isCalendarEventOpen()) return;
     auto& open = calendarEventDetail_;

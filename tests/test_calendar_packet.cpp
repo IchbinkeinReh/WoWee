@@ -1180,7 +1180,8 @@ TEST_CASE("CMSG_CALENDAR_ADD_EVENT carries the invite list", "[calendar]") {
     CHECK(p.readUInt32() == 25u);
     CHECK(p.readUInt32() == 533u);
     CHECK(p.readUInt32() == packWowPackedTime(d.eventTime));
-    CHECK(p.readUInt32() == packWowPackedTime(d.eventTime));
+    // No lockout set: every field of it -1, all ones (0x0076ca50).
+    CHECK(p.readUInt32() == 0x1FFFFFFFu);
     CHECK(p.readUInt32() == calendar_flag::kPlayer);
     REQUIRE(p.readUInt32() == 2u);
     CHECK(p.readPackedGuid() == kMe);
@@ -1197,4 +1198,61 @@ TEST_CASE("CMSG_CALENDAR_ADD_EVENT carries the invite list", "[calendar]") {
     a.readUInt32(); a.readUInt32(); a.readUInt32(); a.readUInt32();
     CHECK(a.readUInt32() == calendar_flag::kAnnouncement);
     CHECK_FALSE(a.hasRemaining(1));
+}
+
+TEST_CASE("The lockout time packs its unset parts as all ones", "[calendar]") {
+    CalendarEventDraft d;
+    CHECK(calendarLockoutPacked(d) == 0x1FFFFFFFu);
+    d.lockoutTime.hour = 23;
+    d.lockoutTime.minute = 59;
+    d.hasLockoutTime = true;
+    CHECK(calendarLockoutPacked(d) == (0x1FFFF800u | (23u << 6) | 59u));
+    d.lockoutTime.yearSince2000 = 10;
+    d.lockoutTime.month = 3;
+    d.lockoutTime.day = 4;
+    d.lockoutTime.weekday = 4;
+    d.hasLockoutDate = true;
+    CHECK(calendarLockoutPacked(d) == packWowPackedTime(d.lockoutTime));
+}
+
+TEST_CASE("An event's invite flags and status as the calendar keeps them", "[calendar]") {
+    constexpr uint64_t kMe = 0x11;
+    CalendarData cal;
+    CalendarEvent ev;
+    ev.eventId = 7;
+    ev.creatorGuid = 0x22;
+    ev.eventTime.yearSince2000 = 10;
+    ev.eventTime.month = 5;
+    ev.eventTime.day = 2;
+    WowDate before = ev.eventTime;
+    before.day = 1;
+    WowDate after = ev.eventTime;
+    after.day = 3;
+
+    // No invitation: dropped, unless a guild event.
+    CHECK_FALSE(calendarInviteState(cal, ev, kMe, &before).kept);
+    ev.flags = calendar_flag::kGuildEvent;
+    auto s = calendarInviteState(cal, ev, kMe, &before);
+    CHECK(s.kept);
+    CHECK(s.flags == 8u);
+    CHECK(s.status == calendar_status::kNotSignedUp);
+
+    ev.flags = 0;
+    CalendarInvite inv;
+    inv.eventId = 7;
+    inv.status = calendar_status::kInvited;
+    cal.invites.push_back(inv);
+    CHECK(calendarInviteState(cal, ev, kMe, &before).flags == 1u);
+    CHECK(calendarInviteState(cal, ev, kMe, &after).flags == 0u);
+    CHECK(calendarInviteState(cal, ev, kMe, nullptr).flags == 0u);
+    cal.invites[0].rank = 1;
+    CHECK(calendarInviteState(cal, ev, kMe, &before).flags == 3u);
+    cal.invites[0].rank = 2;
+    cal.invites[0].status = calendar_status::kAccepted;
+    CHECK(calendarInviteState(cal, ev, kMe, &before).flags == 6u);
+    ev.creatorGuid = kMe;
+    cal.invites[0].rank = 0;
+    s = calendarInviteState(cal, ev, kMe, &before);
+    CHECK(s.flags == 4u);
+    CHECK(s.status == calendar_status::kAccepted);
 }

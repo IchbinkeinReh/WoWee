@@ -9,6 +9,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <utility>
@@ -198,15 +199,6 @@ static const char* calendarTypeName(const wowee::game::CalendarEvent& ev) {
     return "PLAYER";
 }
 
-/// "CREATOR" when this is the player's own event, otherwise nothing. The
-/// interface shows the edit controls on the first of those.
-static const char* calendarModStatus(lua_State* L,
-                                     const wowee::game::CalendarEvent& ev) {
-    auto* gh = getGameHandler(L);
-    return (gh && ev.creatorGuid != 0 && ev.creatorGuid == gh->getPlayerGuid())
-               ? "CREATOR" : "";
-}
-
 /// Answer the invitation on the menu's row, if that row has one.
 ///
 /// The invite id comes from the invite list the calendar arrived with - the
@@ -252,6 +244,74 @@ static bool calendarNamedOrContextEvent(lua_State* L, uint64_t& eventId) {
     if (entry.kind == wowee::game::CalendarEntryKind::Event)
         eventId = gh->getCalendarData().events[entry.index].eventId;
     return true;
+}
+
+/// A day's record as the calendar keeps it (0x005b9260): its row, the
+/// event behind it where it is one, the event's flags (+0x98) and its
+/// invite flags and status (+0x9c, +0xa8).
+struct CalendarRecord {
+    wowee::game::CalendarDayEntry entry;
+    const wowee::game::CalendarEvent* event = nullptr;
+    uint32_t flags = 0;
+    wowee::game::CalendarInviteState invite;
+};
+
+/// The record three numbers name - a row of a day of the viewed month,
+/// counted from its offset - or, without them, the one the menu is about
+/// (0x00c207e8). False with neither, the caller's usage error; `out` empty
+/// where no record answers.
+static bool calendarRecordArg(lua_State* L, std::optional<CalendarRecord>& out) {
+    out.reset();
+    CalendarContextRow row = calendarContextRow();
+    if (lua_isnumber(L, 1) && lua_isnumber(L, 2) && lua_isnumber(L, 3)) {
+        row = {.monthOffset = static_cast<int>(lua_tonumber(L, 1)),
+               .day = static_cast<int>(std::lround(lua_tonumber(L, 2))),
+               .index = static_cast<int>(std::lround(lua_tonumber(L, 3)))};
+    } else if (row.day < 1 || row.index < 1) {
+        return false;
+    }
+    auto* gh = getGameHandler(L);
+    if (!gh) return true;
+    const auto rows = calendarRowsFor(*gh, row.monthOffset, row.day);
+    if (row.index < 1 || static_cast<size_t>(row.index) > rows.size()) return true;
+    CalendarRecord rec;
+    rec.entry = rows[static_cast<size_t>(row.index) - 1];
+    const auto& cal = gh->getCalendarData();
+    namespace cf = wowee::game::calendar_flag;
+    switch (rec.entry.kind) {
+        case wowee::game::CalendarEntryKind::Holiday: rec.flags = cf::kHoliday; break;
+        case wowee::game::CalendarEntryKind::RaidLockout: rec.flags = cf::kRaidLockout; break;
+        case wowee::game::CalendarEntryKind::Event: {
+            rec.event = &cal.events[rec.entry.index];
+            rec.flags = rec.event->flags;
+            const auto now = gh->getGameDate();
+            rec.invite = wowee::game::calendarInviteState(cal, *rec.event, gh->getPlayerGuid(), now ? &*now : nullptr);
+            if (!rec.invite.kept) return true;
+            break;
+        }
+    }
+    out = rec;
+    return true;
+}
+
+/// 0x005b8080: "CREATOR" for invite flags 4, "MODERATOR" for 2.
+static const char* calendarModeratorText(uint32_t inviteFlags) {
+    if ((inviteFlags & 4u) != 0) return "CREATOR";
+    return (inviteFlags & 2u) != 0 ? "MODERATOR" : "";
+}
+
+/// 0x005b80b0's invite type: 2 for a guild event's (flags 0x400) where its
+/// invite flags hold 8, else 1.
+static int calendarInviteType(const CalendarRecord& rec) {
+    return (rec.flags & wowee::game::calendar_flag::kGuildEvent) != 0 && (rec.invite.flags & 8u) != 0 ? 2 : 1;
+}
+
+/// 0x005b8040: a holiday's (flags 8) day of a run of two or more - its
+/// first "START", its last "END", the rest "ONGOING" - else "".
+static const char* calendarSequenceType(uint32_t flags, uint32_t index, uint32_t count) {
+    if ((flags & wowee::game::calendar_flag::kHoliday) == 0 || count < 2) return "";
+    if (index == 0) return "START";
+    return index == count - 1 ? "END" : "ONGOING";
 }
 
 /// A global string of the interface's, or its key where it has none -
@@ -8397,8 +8457,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 lua_pushstring(L, "");             // invitedBy
                 lua_pushnumber(L, lock.difficulty);
                 lua_pushnumber(L, 1);              // inviteType
-                lua_pushnil(L);                    // sequenceIndex
-                lua_pushnil(L);                    // numSequenceDays
+                lua_pushnumber(L, row.sequenceIndex + 1);
+                lua_pushnumber(L, row.numSequenceDays);
                 lua_pushstring(L, "");             // difficultyName
                 return 15;
             }
@@ -8408,23 +8468,33 @@ void registerSystemLuaAPI(lua_State* L) {
                 lua_pushnumber(L, 0);              // hour
                 lua_pushnumber(L, 0);              // minute
                 lua_pushstring(L, "HOLIDAY");
-                // The one distinction the interface acts on: a holiday's name
-                // is drawn on its first day and its later days are skipped.
-                lua_pushstring(L, row.ongoing ? "ONGOING" : "START");
+                // Its day of the run (0x005b8040): the interface draws the
+                // name on its first day and skips the "ONGOING" ones. A
+                // holiday's record carries no invitation: status 0 and type
+                // 1, each from 1 (0x005c1070).
+                lua_pushstring(L, calendarSequenceType(wowee::game::calendar_flag::kHoliday, row.sequenceIndex,
+                                                       row.numSequenceDays));
                 lua_pushnumber(L, 0);              // eventType
                 lua_pushnumber(L, static_cast<double>(holiday.id));  // texture
                 lua_pushstring(L, "");             // modStatus
-                lua_pushnumber(L, 0);              // inviteStatus
+                lua_pushnumber(L, 1);              // inviteStatus
                 lua_pushstring(L, "");             // invitedBy
                 lua_pushnumber(L, 0);              // difficulty
-                lua_pushnumber(L, 0);              // inviteType
-                lua_pushnil(L);                    // sequenceIndex
-                lua_pushnil(L);                    // numSequenceDays
+                lua_pushnumber(L, 1);              // inviteType
+                lua_pushnumber(L, row.sequenceIndex + 1);
+                lua_pushnumber(L, row.numSequenceDays);
                 lua_pushstring(L, "");             // difficultyName
                 return 15;
             }
 
             const auto& ev = cal.events[row.index];
+            // The invite flags and status the calendar keeps for it
+            // (0x005c2e30): moderator text (0x005b8080), status from 1, and
+            // the invite type (0x005b80b0).
+            const auto now = gh->getGameDate();
+            CalendarRecord rec;
+            rec.flags = ev.flags;
+            rec.invite = wowee::game::calendarInviteState(cal, ev, gh->getPlayerGuid(), now ? &*now : nullptr);
             lua_pushstring(L, ev.title.c_str());
             lua_pushnumber(L, ev.eventTime.hour);
             lua_pushnumber(L, ev.eventTime.minute);
@@ -8432,13 +8502,13 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushstring(L, "");                 // sequenceType: single day
             lua_pushnumber(L, static_cast<double>(ev.type) + 1);
             lua_pushnumber(L, 0);                  // texture
-            lua_pushstring(L, calendarModStatus(L, ev));
-            lua_pushnumber(L, calendarInviteStatusFor(cal, ev.eventId) + 1);
+            lua_pushstring(L, calendarModeratorText(rec.invite.flags));
+            lua_pushnumber(L, rec.invite.status + 1);
             lua_pushstring(L, "");                 // invitedBy
             lua_pushnumber(L, 0);                  // difficulty
-            lua_pushnumber(L, 1);                  // inviteType: NORMAL
-            lua_pushnil(L);                        // sequenceIndex
-            lua_pushnil(L);                        // numSequenceDays
+            lua_pushnumber(L, calendarInviteType(rec));
+            lua_pushnumber(L, row.sequenceIndex + 1);
+            lua_pushnumber(L, row.numSequenceDays);
             lua_pushstring(L, "");                 // difficultyName
             return 15;
         }},
@@ -9095,6 +9165,139 @@ void registerSystemLuaAPI(lua_State* L) {
                 // Answering an invitation, which is the one calendar action
                 // that needs nothing staged first. The status values are the
                 // server's CalendarInviteStatus (CalendarMgr.h:73).
+                // The record's invitation (0x005ba700, 0x005ba7f0, 0x005ba910,
+                // 0x005baa20): still to answer (invite flags 1); "CREATOR" or
+                // "MODERATOR"; its status, from 1 (0 for no record); its
+                // type.
+                {"CalendarContextInviteIsPending", [](lua_State* L) -> int {
+            std::optional<CalendarRecord> rec;
+            if (!calendarRecordArg(L, rec))
+                return luaL_error(L, "Usage: CalendarContextInviteIsPending([-1.0.1], monthDay, index)");
+            lua_pushboolean(L, rec && (rec->invite.flags & 1u) != 0 ? 1 : 0);
+            return 1;
+        }},
+                {"CalendarContextInviteModeratorStatus", [](lua_State* L) -> int {
+            std::optional<CalendarRecord> rec;
+            if (!calendarRecordArg(L, rec))
+                return luaL_error(L, "Usage: CalendarContextInviteModeratorStatus([-1.0.1], monthDay, index)");
+            if (rec && (rec->invite.flags & 6u) != 0) lua_pushstring(L, calendarModeratorText(rec->invite.flags));
+            else lua_pushnil(L);
+            return 1;
+        }},
+                {"CalendarContextInviteStatus", [](lua_State* L) -> int {
+            std::optional<CalendarRecord> rec;
+            if (!calendarRecordArg(L, rec))
+                return luaL_error(L, "Usage: CalendarContextInviteStatus([-1.0.1], monthDay, index)");
+            lua_pushnumber(L, rec ? rec->invite.status + 1 : 0);
+            return 1;
+        }},
+                {"CalendarContextInviteType", [](lua_State* L) -> int {
+            std::optional<CalendarRecord> rec;
+            if (!calendarRecordArg(L, rec))
+                return luaL_error(L, "Usage: CalendarContextInviteType([-1.0.1], monthDay, index)");
+            lua_pushnumber(L, rec ? calendarInviteType(*rec) : 0);
+            return 1;
+        }},
+                // CalendarGetDayEventSequenceInfo (0x005b9ca0): the day's
+                // place in the record's run (from 0), the run's length, and
+                // the sequence type; 0, 0, "" for no record.
+                {"CalendarGetDayEventSequenceInfo", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+                return luaL_error(L, "Usage: CalendarGetDayEventSequenceInfo([-1.0.1], monthDay, index)");
+            std::optional<CalendarRecord> rec;
+            calendarRecordArg(L, rec);
+            if (!rec) {
+                lua_pushnumber(L, 0);
+                lua_pushnumber(L, 0);
+                lua_pushstring(L, "");
+                return 3;
+            }
+            lua_pushnumber(L, rec->entry.sequenceIndex);
+            lua_pushnumber(L, rec->entry.numSequenceDays);
+            lua_pushstring(L, calendarSequenceType(rec->flags, rec->entry.sequenceIndex,
+                                                   rec->entry.numSequenceDays));
+            return 3;
+        }},
+                // The open event's moderation (0x005b88b0, 0x005b88e0).
+                {"CalendarEventIsModerator", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushboolean(L, gh && gh->calendarIsModerator() ? 1 : 0);
+            return 1;
+        }},
+                {"CalendarEventCanModerate", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CalendarEventCanModerate(index)");
+            auto* gh = getGameHandler(L);
+            const auto index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            lua_pushboolean(L, gh && index >= 1 && gh->calendarCanModerate(static_cast<size_t>(index) - 1) ? 1 : 0);
+            return 1;
+        }},
+                // CalendarEventSetSize(size) (0x005bb410 -> 0x005f1230): where
+                // the player may edit the open event, the most it may hold -
+                // more than one, and not for an announcement or a guild event
+                // (0x440).
+                {"CalendarEventSetSize", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return 0;
+            auto* gh = getGameHandler(L);
+            const auto size = static_cast<uint32_t>(std::lround(lua_tonumber(L, 1)));
+            if (!gh || !gh->calendarCanEditOpenEvent()) return 0;
+            constexpr uint32_t kNoSize = wowee::game::calendar_flag::kAnnouncement |
+                                         wowee::game::calendar_flag::kGuildEvent;
+            if ((gh->getCalendarEventDetail().flags & kNoSize) == 0 && size > 1) calendarDraft().maxInvites = size;
+            return 0;
+        }},
+                // CalendarEventSetLockoutDate(month, day, year) and
+                // CalendarEventSetLockoutTime(hour, minute) (0x005bb650,
+                // 0x005bb750 -> 0x005f12e0, 0x005f1340): the open event's
+                // second time, where the player may edit it and it is no
+                // announcement or guild event; else, or for a date or time
+                // that is none, CALENDAR_ERROR_INVALID_DATE / _TIME.
+                {"CalendarEventSetLockoutDate", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+                return luaL_error(L, "Usage: CalendarEventSetLockoutDate(month, day, year)");
+            auto* gh = getGameHandler(L);
+            const int month = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            const int day = static_cast<int>(std::lround(lua_tonumber(L, 2)));
+            const int year = static_cast<int>(std::lround(lua_tonumber(L, 3)));
+            constexpr uint32_t kNoLockout = wowee::game::calendar_flag::kAnnouncement |
+                                            wowee::game::calendar_flag::kGuildEvent;
+            const bool editable = gh && gh->calendarCanEditOpenEvent() &&
+                                  (gh->getCalendarEventDetail().flags & kNoLockout) == 0;
+            // 0x0076c480: a day of a month of 2000 to 2031.
+            const bool valid = month >= 1 && month <= 12 && year >= 2000 && year < 2032 && day >= 1 &&
+                               day <= wowee::game::calendarMonthAt(month, year, 0).numDays;
+            if (!editable || !valid) {
+                if (gh) gh->calendarSayError("CALENDAR_ERROR_INVALID_DATE", "Enter a valid date.");
+                return 0;
+            }
+            auto& d = calendarDraft();
+            d.lockoutTime.month = month;
+            d.lockoutTime.day = day;
+            d.lockoutTime.yearSince2000 = year - 2000;
+            d.lockoutTime.weekday = wowee::game::weekdayOf(month, day, year) - 1;
+            d.hasLockoutDate = true;
+            return 0;
+        }},
+                {"CalendarEventSetLockoutTime", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: CalendarEvenSettLockoutTime(hour, minute)");
+            auto* gh = getGameHandler(L);
+            const auto hour = static_cast<uint32_t>(std::lround(lua_tonumber(L, 1)));
+            const auto minute = static_cast<uint32_t>(std::lround(lua_tonumber(L, 2)));
+            constexpr uint32_t kNoLockout = wowee::game::calendar_flag::kAnnouncement |
+                                            wowee::game::calendar_flag::kGuildEvent;
+            const bool editable = gh && gh->calendarCanEditOpenEvent() &&
+                                  (gh->getCalendarEventDetail().flags & kNoLockout) == 0;
+            // 0x0076c3c0: an hour under 24 and a minute under 60.
+            if (!editable || hour >= 24 || minute >= 60) {
+                if (gh) gh->calendarSayError("CALENDAR_ERROR_INVALID_TIME", "Enter a valid time.");
+                return 0;
+            }
+            auto& d = calendarDraft();
+            d.lockoutTime.hour = static_cast<int>(hour);
+            d.lockoutTime.minute = static_cast<int>(minute);
+            d.hasLockoutTime = true;
+            return 0;
+        }},
                 {"CalendarContextInviteAvailable", [](lua_State* L) -> int {
             return calendarRespondToContextInvite(L, 1);   // accepted
         }},
@@ -9339,6 +9542,66 @@ void registerSystemLuaAPI(lua_State* L) {
                 // already has a string for - CALENDAR_ERROR_CREATEDATE_AFTER_MAX
                 // - and the same span back keeps past events reachable, which
                 // is what the previous-month button is for.
+                // CalendarGetMaxDate() (0x005b82a0): the last day there is,
+                // 31 December 2030 - the day before 1 January 2031 - as
+                // weekday, month, day, year.
+                {"CalendarGetMaxDate", [](lua_State* L) -> int {
+            lua_pushnumber(L, wowee::game::weekdayOf(12, 31, 2030));
+            lua_pushnumber(L, 12);
+            lua_pushnumber(L, 31);
+            lua_pushnumber(L, 2030);
+            return 4;
+        }},
+                // CalendarGetMinHistoryDate() (0x005b8350): the game clock's
+                // date (0x00d37f98) fourteen days back - with none, its
+                // unset fields: 0, 0, 0, 1999.
+                {"CalendarGetMinHistoryDate", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const auto now = gh ? gh->getGameDate() : std::nullopt;
+            if (!now) {
+                lua_pushnumber(L, 0);
+                lua_pushnumber(L, 0);
+                lua_pushnumber(L, 0);
+                lua_pushnumber(L, 1999);
+                return 4;
+            }
+            std::tm t{};
+            t.tm_year = now->fullYear() - 1900;
+            t.tm_mon = now->month - 1;
+            t.tm_mday = now->day - 14;
+            t.tm_isdst = -1;
+            const std::time_t back = std::mktime(&t);
+            const std::tm b = core::localTime(back);
+            lua_pushnumber(L, b.tm_wday + 1);
+            lua_pushnumber(L, b.tm_mon + 1);
+            lua_pushnumber(L, b.tm_mday);
+            lua_pushnumber(L, b.tm_year + 1900);
+            return 4;
+        }},
+                // CalendarGetAbsMonth(month[, year]) (0x005b9ac0 ->
+                // 0x005b8f70) → month, year, numDays, firstWeekday: the year
+                // given, else the game year the first call saw (0x00acff90,
+                // 2004 with none), held within five of the game year and to
+                // 2004-2030; the month taken within its year, not carried.
+                {"CalendarGetAbsMonth", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CalendarGetAbsMonth(month[, year])");
+            auto* gh = getGameHandler(L);
+            const auto now = gh ? gh->getGameDate() : std::nullopt;
+            const int gameYear = now ? now->yearSince2000 : -1;
+            static int defaultYear = -1;
+            if (defaultYear < 0) defaultYear = gameYear < 0 ? 4 : gameYear;
+            const int month = static_cast<int>(lua_tonumber(L, 1));
+            int year = lua_isnumber(L, 2) ? static_cast<int>(lua_tonumber(L, 2)) - 2000 : defaultYear;
+            year = std::clamp(year, gameYear - 5, gameYear + 5);
+            year = std::clamp(year, 4, 30);
+            const int month0 = std::abs((month - 1) % 12);
+            const auto info = wowee::game::calendarMonthAt(month0 + 1, year + 2000, 0);
+            lua_pushnumber(L, month0 + 1);
+            lua_pushnumber(L, year + 2000);
+            lua_pushnumber(L, info.numDays);
+            lua_pushnumber(L, info.firstWeekday);
+            return 4;
+        }},
                 {"CalendarGetMinDate", [](lua_State* L) -> int {
             return pushCalendarBoundDate(L, -12);
         }},

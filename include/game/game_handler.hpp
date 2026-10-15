@@ -938,6 +938,18 @@ public:
     bool isCalendarEventOpen() const {
         return calendarDraftOpen_ || calendarEventDetail_.eventId != 0;
     }
+    /// CalendarEventIsModerator (0x005b88b0 -> 0x005f1b30): an event open
+    /// that the player may invite to - one kept with an invite id for them,
+    /// or of their making.
+    bool calendarIsModerator() const;
+    /// CalendarEventCanModerate(index) (0x005b88e0 -> 0x005f16e0): a row of
+    /// the open event's list that may be made a moderator - any, except on
+    /// a guild event one not of the guild, which says
+    /// CALENDAR_ERROR_NO_MODERATOR.
+    bool calendarCanModerate(size_t index);
+    /// The calendar's error dialog (0x005b9960), for a call of the
+    /// interface's that refuses.
+    void calendarSayError(const char* key, const char* enUS) { calendarErrorDialog(key, enUS); }
     /// Set it and say so, CALENDAR_ACTION_PENDING (0x005b7e20).
     void setCalendarActionPending(bool pending);
     /// A player's name has arrived: an open event may have been waiting on
