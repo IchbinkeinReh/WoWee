@@ -4543,6 +4543,11 @@ void SpellHandler::resetAllState() {
     unitAurasCache_.clear();
     unitCastStates_.clear();
     missilesInFlight_.clear();
+    // A spell the cursor held for a place or a unit goes with the character
+    // (0x00809a60): kept, the next one's first click cast it, by the last
+    // character's guid.
+    groundTarget_ = GroundTarget{};
+    unitTarget_ = UnitTarget{};
     resetCastState();
     resetTalentState();
 }
