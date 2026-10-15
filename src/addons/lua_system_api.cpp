@@ -7428,12 +7428,12 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, gh && gh->isConnected() ? 1 : 0);
             return 1;
         }},
+                // GetRealmName() - the realmName cvar (0x00510e00 ->
+                // 0x006b0dc0): the list name of the realm last connected to,
+                // "" before any.
                 {"GetRealmName", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) {
-                const auto* ac = gh->getActiveCharacter();
-                lua_pushstring(L, ac ? "WoWee" : "Unknown");
-            } else lua_pushstring(L, "Unknown");
+            lua_pushstring(L, gh ? gh->getRealmName().c_str() : "");
             return 1;
         }},
                 // ShowHelm(show) and ShowCloak(show) are setters, and these

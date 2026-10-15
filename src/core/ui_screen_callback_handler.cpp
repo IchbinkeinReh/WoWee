@@ -107,6 +107,9 @@ void UIScreenCallbackHandler::setupCallbacks() {
             clientBuild = realmBuild;
             LOG_INFO("Using realm-reported build: ", clientBuild);
         }
+        // The client keeps the realm's list name as realmName on choosing
+        // it; GetRealmName reads it back (0x00510e00 -> 0x006b0dc0).
+        gameHandler_.setRealmName(realmName);
         if (gameHandler_.connect(host, port, sessionKey, accountName, clientBuild, realmId)) {
             LOG_INFO("Connected to world server, transitioning to character selection");
             setState_(AppState::CHARACTER_SELECTION);
