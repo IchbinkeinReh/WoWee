@@ -186,6 +186,18 @@ GameErrorText petNameError(uint32_t reason) {
 
 // ERR_DIFFICULTY_CHANGE_COOLDOWN_S (0x2ca) with the time left worded by
 // 0x0061a9e0: SMSG_CHANGEPLAYER_DIFFICULTY_RESULT 1 and 0x0052d8d0 alike.
+// What a cinematic's end does (0x0051d7c0), StopCinematic's after its fade
+// (0x00524980) as much as a camera's that will not play: CINEMATIC_STOP,
+// CMSG_COMPLETE_CINEMATIC, and out of the cinematic (DAT_00bd07fc).
+void GameHandler::stopCinematic() {
+    fireAddonEvent("CINEMATIC_STOP");
+    if (socket) {
+        network::Packet complete(wireOpcode(Opcode::CMSG_COMPLETE_CINEMATIC));
+        socket->send(complete);
+    }
+    inCinematic_ = false;
+}
+
 void GameHandler::raiseDifficultyCooldownError(uint32_t ms) {
     const auto left = difficulty_change::intDuration(ms);
     const std::string duration = chat_channels::luaFormat(
@@ -1419,10 +1431,17 @@ void GameHandler::registerCoreOpcodes() {
     // SMSG_SERVER_MESSAGE - moved to ChatHandler::registerOpcodes
     // SMSG_CHAT_SERVER_MESSAGE - moved to ChatHandler::registerOpcodes
     // SMSG_AREA_TRIGGER_MESSAGE - moved to ChatHandler::registerOpcodes
+    // The cinematic's id (0x006e2e90 case 0xfa -> 0x00528af0): the client is
+    // in a cinematic and, faded in, fires CINEMATIC_START (0x00527fe0). Only a
+    // camera that plays sends CMSG_NEXT_CINEMATIC_CAMERA (0x00526370); this
+    // client plays none, which is the client's own path for a camera that
+    // will not start - stopped at once (0x00527fe0 -> 0x0051d7c0), so the
+    // server hears the cinematic completed.
     dispatchTable_[Opcode::SMSG_TRIGGER_CINEMATIC] = [this](network::Packet& packet) {
         packet.skipAll();
-        network::Packet ack(wireOpcode(Opcode::CMSG_NEXT_CINEMATIC_CAMERA));
-        socket->send(ack);
+        inCinematic_ = true;
+        fireAddonEvent("CINEMATIC_START");
+        stopCinematic();
     };
 
     // ---- Batch 5: Teleport, taxi, BG, LFG, arena, movement relay, mail, bank, auction, quests ----

@@ -3250,8 +3250,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 // group invite, the summon, the talent wipe and the delete-item
                 // confirmation were all going the same way.
                 //
-                // False because this client plays no cinematics, and there is
-                // no state to read.
+                // 1 while a cinematic runs, else nil (0x00516760).
                 // ---- The death and release popup ----
                 //
                 // StaticPopupDialogs["DEATH"] is raised every time the player
@@ -3362,7 +3361,16 @@ void registerSocialLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"InCinematic", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0); return 1;
+            auto* gh = getGameHandler(L);
+            if (gh && gh->inCinematic()) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
+            return 1;
+        }},
+                // StopCinematic() (0x00524980): whether or not one runs, the
+                // end a cinematic has (0x0051d7c0).
+                {"StopCinematic", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->stopCinematic();
+            return 0;
         }},
                 // The other half of RESURRECT_NO_TIMER's OnCancel:
                 // `UnitIsDead("player") and not UnitIsControlling("player")`.

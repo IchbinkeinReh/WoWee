@@ -296,6 +296,12 @@ public:
      */
     void sendMovement(Opcode opcode);
 
+    /// StopCinematic (0x00524980 -> 0x0051d7c0): CINEMATIC_STOP, and the
+    /// server told the cinematic is complete.
+    void stopCinematic();
+    /// InCinematic (0x00516760, DAT_00bd07fc).
+    [[nodiscard]] bool inCinematic() const { return inCinematic_; }
+
     /// ToggleRun (0x005faae0): flip the mover's walk mode, as the binding does.
     void toggleRun();
     /// The mover walks rather than runs (movement flag WALKING, 0x0098b0e0).
@@ -5767,6 +5773,7 @@ private:
     uint32_t currentMountDisplayId_ = 0;
     uint32_t mountAuraSpellId_ = 0;       // Spell ID of the aura that caused mounting (for CMSG_CANCEL_AURA fallback)
     bool playerDead_ = false;
+    bool inCinematic_ = false;  ///< DAT_00bd07fc, between CINEMATIC_START and _STOP
     bool releasedSpirit_ = false;
     uint32_t corpseMapId_ = 0;
     bool corpsePositionValid_ = false;
