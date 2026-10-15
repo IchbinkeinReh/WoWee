@@ -794,7 +794,13 @@ void SettingsPanel::drawSchemaCategory(const char* category,
                 // Whole-number steps read as whole numbers: a shadow distance of
                 // "300.00" yards or a field of view of "70.00" degrees is noise.
                 const char* format = d.step >= 1.0f ? "%.0f" : "%.2f";
-                if (ImGui::SliderFloat(d.label, &v, d.minValue, d.maxValue, format)) {
+                // A range over three orders of magnitude or more (the light
+                // intensities, 0.001% to 1000%) slides logarithmically, or its
+                // small values could not be reached.
+                const bool logScale = d.minValue > 0.0f && d.maxValue >= 1000.0f * d.minValue;
+                if (logScale) format = "%.3g";
+                if (ImGui::SliderFloat(d.label, &v, d.minValue, d.maxValue, format,
+                                       logScale ? ImGuiSliderFlags_Logarithmic : ImGuiSliderFlags_None)) {
                     changed = setSettingValue(d.key, settingNumberText(v));
                 }
                 break;
@@ -1078,19 +1084,19 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "dbgbakedlight", .asInt = &SettingsPanel::pendingDbgBakedLight},
     {.key = "dbgpointlights", .asInt = &SettingsPanel::pendingDbgPointLights},
     {.key = "dbgbounce", .asInt = &SettingsPanel::pendingDbgBounce},
-    {.key = "dbgmodellightintensity", .asInt = &SettingsPanel::pendingDbgModelLightIntensity},
+    {.key = "dbgmodellightintensity", .asFloat = &SettingsPanel::pendingDbgModelLightIntensity},
     {.key = "dbgmodellightreach", .asInt = &SettingsPanel::pendingDbgModelLightReach},
-    {.key = "dbgfirelightintensity", .asInt = &SettingsPanel::pendingDbgFireLightIntensity},
+    {.key = "dbgfirelightintensity", .asFloat = &SettingsPanel::pendingDbgFireLightIntensity},
     {.key = "dbgfirelightreach", .asInt = &SettingsPanel::pendingDbgFireLightReach},
-    {.key = "dbglamplightintensity", .asInt = &SettingsPanel::pendingDbgLampLightIntensity},
+    {.key = "dbglamplightintensity", .asFloat = &SettingsPanel::pendingDbgLampLightIntensity},
     {.key = "dbglamplightreach", .asInt = &SettingsPanel::pendingDbgLampLightReach},
-    {.key = "dbgbuildinglightintensity", .asInt = &SettingsPanel::pendingDbgBuildingLightIntensity},
+    {.key = "dbgbuildinglightintensity", .asFloat = &SettingsPanel::pendingDbgBuildingLightIntensity},
     {.key = "dbgbuildinglightreach", .asInt = &SettingsPanel::pendingDbgBuildingLightReach},
-    {.key = "dbgunitlightintensity", .asInt = &SettingsPanel::pendingDbgUnitLightIntensity},
+    {.key = "dbgunitlightintensity", .asFloat = &SettingsPanel::pendingDbgUnitLightIntensity},
     {.key = "dbgunitlightreach", .asInt = &SettingsPanel::pendingDbgUnitLightReach},
-    {.key = "dbgemissivelightintensity", .asInt = &SettingsPanel::pendingDbgEmissiveLightIntensity},
+    {.key = "dbgemissivelightintensity", .asFloat = &SettingsPanel::pendingDbgEmissiveLightIntensity},
     {.key = "dbgemissivelightreach", .asInt = &SettingsPanel::pendingDbgEmissiveLightReach},
-    {.key = "dbgparticlelightintensity", .asInt = &SettingsPanel::pendingDbgParticleLightIntensity},
+    {.key = "dbgparticlelightintensity", .asFloat = &SettingsPanel::pendingDbgParticleLightIntensity},
     {.key = "dbgparticlelightreach", .asInt = &SettingsPanel::pendingDbgParticleLightReach},
     {.key = "dbginteriorbase", .asInt = &SettingsPanel::pendingDbgInteriorBase},
     {.key = "dbginteriorfullat", .asInt = &SettingsPanel::pendingDbgInteriorFullAt},
@@ -1301,7 +1307,7 @@ bool isVolumeKey(const std::string& key) {
 void SettingsPanel::applyLightingTune() {
     auto* renderer = services_.renderer;
     if (!renderer) return;
-    auto pct = [](int v) { return static_cast<float>(v) / 100.0f; };
+    auto pct = [](float v) { return v / 100.0f; };
     rendering::Renderer::LightingTune t;
     t.ambient = pct(pendingDbgAmbient);
     t.sun = pct(pendingDbgSun);

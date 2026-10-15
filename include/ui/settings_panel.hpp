@@ -88,19 +88,19 @@ public:
     bool pendingDbgTimeOverride = false;
     float pendingDbgTime = 12.0f;
     /// Per kind of point light (rt_lights::Source), in percent of its own.
-    int pendingDbgModelLightIntensity = 100;
+    float pendingDbgModelLightIntensity = 100.0f;
     int pendingDbgModelLightReach = 100;
-    int pendingDbgFireLightIntensity = 100;
+    float pendingDbgFireLightIntensity = 100.0f;
     int pendingDbgFireLightReach = 100;
-    int pendingDbgLampLightIntensity = 100;
+    float pendingDbgLampLightIntensity = 100.0f;
     int pendingDbgLampLightReach = 100;
-    int pendingDbgBuildingLightIntensity = 100;
+    float pendingDbgBuildingLightIntensity = 100.0f;
     int pendingDbgBuildingLightReach = 100;
-    int pendingDbgUnitLightIntensity = 100;
+    float pendingDbgUnitLightIntensity = 100.0f;
     int pendingDbgUnitLightReach = 100;
-    int pendingDbgEmissiveLightIntensity = 100;
+    float pendingDbgEmissiveLightIntensity = 100.0f;
     int pendingDbgEmissiveLightReach = 100;
-    int pendingDbgParticleLightIntensity = 100;
+    float pendingDbgParticleLightIntensity = 100.0f;
     int pendingDbgParticleLightReach = 100;
     /// Inside, a baked colour where no lamp shines and the lamps' light at
     /// which it is whole (Renderer::LightingTune::interiorBase, interiorFullAt).
