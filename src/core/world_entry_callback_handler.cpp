@@ -163,6 +163,17 @@ void WorldEntryCallbackHandler::setupCallbacks() {
         LOG_INFO("Online world entry: mapId=", mapId, " pos=(", x, ", ", y, ", ", z, ")"
                  " initial=", isInitialEntry);
         renderer_.resetCombatVisualState();
+        // Where the server turned the player: the teleport's orientation,
+        // already in the movement info (handleTeleportAck). The character
+        // and the camera behind it face it; left as they were, a .go xyz or
+        // a summon with a facing kept the old one.
+        const auto faceServerOrientation = [this]() {
+            const float yawDeg =
+                core::coords::canonicalToCharacterYawDeg(gameHandler_.getMovementInfo().orientation);
+            renderer_.setCharacterYaw(yawDeg);
+            if (auto* cc = renderer_.getCameraController()) cc->faceAfterTeleport(yawDeg);
+            renderer_.snapCharacterBodyYaw();
+        };
 
         // Reconnect to the same map: terrain stays loaded but all online entities are stale.
         // Despawn them properly so the server's fresh CREATE_OBJECTs will re-populate the world.
@@ -236,10 +247,12 @@ void WorldEntryCallbackHandler::setupCallbacks() {
                     renderer_.getCameraController()->suspendGravityFor(10.0f);
                     renderer_.getCameraController()->setEntryFloorAnchor(renderPos.z, 10.0f);
                 }
+                faceServerOrientation();
                 if (worldLoader_) worldLoader_->setPendingEntry(mapId, x, y, z);
                 return;
             }
             LOG_INFO("Same-map teleport (map ", mapId, "), skipping full world reload");
+            faceServerOrientation();
             // canonical and renderPos already computed above for distance check
             renderer_.getCharacterPosition() = renderPos;
             if (renderer_.getCameraController()) {

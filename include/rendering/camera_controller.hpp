@@ -326,6 +326,9 @@ public:
     void setExternalFollow(bool enabled) { externalFollow_ = enabled; }
     void setExternalMoving(bool moving) { externalMoving_ = moving; }
     void setFacingYaw(float yaw) { facingYaw = yaw; }  // For taxi/scripted movement
+    /// Face `yawDeg` with the camera behind, as a teleport leaves the player
+    /// (the server's orientation): the character and the view both turn.
+    void faceAfterTeleport(float yawDeg);
     void clearMovementInputs();
     /// A passenger's camera looks at where its unit is drawn on the vehicle
     /// (its matrix is the seat's, 0x0074a7f0) rather than where its own

@@ -4151,5 +4151,12 @@ void CameraController::applyKnockBack(float vcos, float vsin, float hspeed, floa
     }
 }
 
+void CameraController::faceAfterTeleport(float yawDeg) {
+    facingYaw = yawDeg;
+    yaw = yawDeg;
+    // The view is only turned where something turns it; a teleport must.
+    if (camera) camera->setRotation(yaw, pitch);
+}
+
 } // namespace rendering
 } // namespace wowee
