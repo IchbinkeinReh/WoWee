@@ -301,3 +301,32 @@ TEST_CASE("The bracket puts everything back", "[taint]") {
     CHECK(after.scope == before.scope);
     CHECK(after.objtaint == before.objtaint);
 }
+
+// ---- The host's own bookkeeping ---------------------------------------------
+
+TEST_CASE("A list the host keeps taints nobody when it is kept quietly", "[taint]") {
+    // RegisterEvent's listener lists and the OnUpdate list are the client's C
+    // structures, kept here in Lua tables every frame's call reaches. An
+    // addon's frame appended to one, then read back under a scope - the
+    // duplicate check of the next frame to register - tainted that frame's
+    // whole OnLoad. Read quietly, it does not.
+    Fixture f;
+    f.run("Listeners = {}", 0);
+    f.run("AddonFrame = {} Listeners[1] = AddonFrame", f.addon);
+    {
+        taint::Scope secure(0);
+        taint::Quiet quiet;
+        lua_getglobal(f.L, "Listeners");
+        lua_rawgeti(f.L, -1, 1);
+        lua_pop(f.L, 2);
+    }
+    CHECK(taint::current() == 0);
+    {
+        taint::Scope secure(0);
+        lua_getglobal(f.L, "Listeners");
+        lua_rawgeti(f.L, -1, 1);
+        lua_pop(f.L, 2);
+        CHECK(taint::current() == f.addon);   // the read that was the fault
+    }
+    CHECK(taint::current() == 0);
+}

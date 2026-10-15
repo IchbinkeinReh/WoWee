@@ -121,11 +121,17 @@ static int lua_Frame_IsEventRegistered(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     const char* eventName = luaL_optstring(L, 2, nullptr);
     if (!eventName || !*eventName) { lua_pushboolean(L, 0); return 1; }
-    lua_getfield(L, 1, "__events");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_pushboolean(L, 0); return 1; }
-    lua_getfield(L, -1, eventName);
-    const bool on = lua_toboolean(L, -1) != 0;
-    lua_pop(L, 2);
+    bool on = false;
+    {
+        taint::Quiet quiet;   // the registration is the client's, kept in C
+        lua_getfield(L, 1, "__events");
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, eventName);
+            on = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
     lua_pushboolean(L, on ? 1 : 0);
     return 1;
 }
@@ -133,6 +139,14 @@ static int lua_Frame_IsEventRegistered(lua_State* L) {
 static int lua_Frame_RegisterEvent(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);  // self
     const char* eventName = luaL_checkstring(L, 2);
+
+    // Bookkeeping the client keeps in C (the frame's event list), so it is
+    // done without tainting or being tainted. Done under the caller's taint,
+    // the duplicate check below read every frame already listening - and one
+    // addon's frame in the list for BAG_UPDATE tainted every Blizzard frame
+    // registering BAG_UPDATE after it, OnLoad and all: each load-on-demand
+    // Blizzard addon came up tainted by whichever addon had loaded first.
+    taint::Quiet quiet;
 
     // Get frame's registered events table (create if needed)
     lua_getfield(L, 1, "__events");
@@ -199,6 +213,7 @@ static int lua_Frame_RegisterEvent(lua_State* L) {
 static int lua_Frame_UnregisterEvent(lua_State* L);
 static int lua_Frame_UnregisterAllEvents(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
+    taint::Quiet quiet;   // as RegisterEvent
     lua_getfield(L, 1, "__events");
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
     // Collected first: unregistering rewrites this table, and a traversal that
@@ -225,6 +240,7 @@ static int lua_Frame_UnregisterAllEvents(lua_State* L) {
 static int lua_Frame_UnregisterEvent(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     const char* eventName = luaL_checkstring(L, 2);
+    taint::Quiet quiet;   // as RegisterEvent
 
     // Remove from frame's own events
     lua_getfield(L, 1, "__events");
@@ -306,6 +322,11 @@ static int lua_Frame_SetScript(lua_State* L) {
     // end), so a frame that faded five times ran its next OnUpdate five times
     // over and every timer driven by elapsed ran that many times too fast.
     if (strcmp(scriptType, "OnUpdate") == 0) {
+        // The list the frame loop walks, which is the client's own C-side
+        // list: an addon's frame already on it must not taint a Blizzard
+        // frame setting an OnUpdate after it, as the duplicate check reads
+        // every entry.
+        taint::Quiet quiet;
         lua_getglobal(L, "__WoweeOnUpdateFrames");
         if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
         if (lua_isfunction(L, 3)) {
@@ -434,10 +455,41 @@ namespace {
 
 uint32_t widgetIdOf(lua_State* L, int index) {
     if (!lua_istable(L, index)) return 0;
+    // The object's handle, as the client's t[0]: made with the taint set
+    // aside whoever created the frame (0x00819880), so finding the object a
+    // method was called on taints nobody. Written here under the creator's
+    // taint, it made every method secure code called on an addon's frame -
+    // or on any frame created by insecure code from a secure template - taint
+    // the caller: a click on an addon's secure action button ran the button's
+    // own secure OnClick insecure from its first self:GetAttribute.
+    taint::Quiet quiet;
     lua_getfield(L, index, "__wid");
     const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
     lua_pop(L, 1);
     return id;
+}
+
+/// The frame behind a widget id, or nil, as the client pushes an object out of
+/// its registry reference (0x0084e670 on LUA_REGISTRYINDEX, the reference
+/// made with the taint set aside): fresh, taking the caller's taint, whoever
+/// created the frame. The registry here is a table its creator wrote into, so
+/// it is read quietly and the frame stamped as the client's push would be.
+void pushFrameByWid(lua_State* L, uint32_t wid) {
+    const int caller = taint::current();
+    {
+        taint::Quiet quiet;
+        lua_getglobal(L, "__WoweeFramesByWid");
+        if (lua_istable(L, -1)) {
+            lua_pushinteger(L, static_cast<lua_Integer>(wid));
+            lua_rawget(L, -2);
+            lua_remove(L, -2);          // drop the registry, keep the frame
+            if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_pushnil(L); }
+        } else {
+            lua_pop(L, 1);
+            lua_pushnil(L);
+        }
+    }
+    lua_settaintof(L, -1, caller);
 }
 
 wowee::ui::Widget* widgetOf(lua_State* L, int index) {
@@ -722,6 +774,16 @@ static int lua_TemplateApply(lua_State* L) {
     int rc = 0;
     {
         taint::Scope inherit(definer, definer);
+        // The object the template is built into, handed over as 0x004932c0
+        // hands it: fresh, so it carries the definer's taint and not that of
+        // whoever made it. Passed on as it came, an addon's frame tainted
+        // the Blizzard template the moment its body touched `self` - and
+        // every script the template set was then recorded as the addon's, so
+        // a ContainerFrameItemButtonTemplate or SecureActionButtonTemplate on
+        // an addon's frame clicked insecure.
+        for (int i = 2; i <= n + 1; ++i) {
+            if (lua_istable(L, i)) lua_settaintof(L, i, taint::current());
+        }
         rc = lua_pcall(L, n, LUA_MULTRET, 0);
     }
     if (rc != 0) return lua_error(L);   // raised on, as the plain call did
@@ -1398,16 +1460,7 @@ int lua_Region_GetPoint(lua_State* L) {
     if (a.relativeTo == 0) {
         lua_pushnil(L);
     } else {
-        lua_getglobal(L, "__WoweeFramesByWid");
-        if (lua_istable(L, -1)) {
-            lua_pushinteger(L, static_cast<lua_Integer>(a.relativeTo));
-            lua_rawget(L, -2);
-            lua_remove(L, -2);          // drop the registry, keep the frame
-            if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_pushnil(L); }
-        } else {
-            lua_pop(L, 1);
-            lua_pushnil(L);
-        }
+        pushFrameByWid(L, a.relativeTo);
     }
     lua_pushstring(L, a.relativePoint.c_str());
     lua_pushnumber(L, a.x);
@@ -4985,11 +5038,7 @@ int lua_GetMouseFocus(lua_State* L) {
     if (!tree) { lua_pushnil(L); return 1; }
     const uint32_t hovered = tree->hoveredWidget();
     if (hovered == 0) { lua_pushnil(L); return 1; }
-    lua_getglobal(L, "__WoweeFramesByWid");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); lua_pushnil(L); return 1; }
-    lua_pushinteger(L, static_cast<lua_Integer>(hovered));
-    lua_rawget(L, -2);
-    lua_remove(L, -2);          // drop the registry table, keep the frame
+    pushFrameByWid(L, hovered);
     return 1;
 }
 
@@ -5015,6 +5064,9 @@ int lua_Frame_GetChildren(lua_State* L) {
     const auto* w = tree->get(id);
     if (!w) return 0;
 
+    // Reached quietly, each child pushed fresh: see pushFrameByWid.
+    const int caller = taint::current();
+    taint::Quiet quiet;
     lua_getglobal(L, "__WoweeFramesByWid");
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
     const int registry = lua_gettop(L);
@@ -5037,7 +5089,7 @@ int lua_Frame_GetChildren(lua_State* L) {
         lua_pushinteger(L, static_cast<lua_Integer>(childId));
         lua_rawget(L, registry);
         if (lua_istable(L, -1)) {
-            lua_settaintof(L, -1, taint::current());   // fresh, as GetParent
+            lua_settaintof(L, -1, caller);   // fresh, as GetParent
             ++pushed;
         } else {
             // A widget with no Lua table behind it is not a child anyone can
@@ -6159,6 +6211,8 @@ static int lua_CreateFrame(lua_State* L) {
                         int rc = 0;
                         {
                             taint::Scope inherit(definer, definer);
+                            // Fresh, as lua_TemplateApply hands it over.
+                            lua_settaintof(L, -1, taint::current());
                             rc = lua_pcall(L, 1, 0, 0);
                         }
                         if (rc != 0) {

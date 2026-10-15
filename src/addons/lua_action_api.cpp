@@ -1572,6 +1572,9 @@ static bool altHeld()   { return (SDL_GetModState() & SDL_KMOD_ALT)   != 0; }
 /// it at the focus when nothing had asked for that; and both flyout actions are
 /// declared ALT and fell through to a shift default.
 static std::string modifiedClickBinding(lua_State* L, const std::string& action) {
+    // The client's own table, kept in C: asking it taints no click handler,
+    // whoever set the binding last.
+    taint::Quiet quiet;
     lua_getglobal(L, "__WoweeModifiedClick");
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return {}; }
     lua_getfield(L, -1, action.c_str());
@@ -1682,11 +1685,14 @@ static int lua_SetModifiedClick(lua_State* L) {
     if (!action || !*action) return 0;
     std::string act(action);
     for (char& c : act) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    lua_getglobal(L, "__WoweeModifiedClick");
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
-    lua_pushstring(L, binding);
-    lua_setfield(L, -2, act.c_str());
-    lua_pop(L, 1);
+    {
+        taint::Quiet quiet;   // see modifiedClickBinding
+        lua_getglobal(L, "__WoweeModifiedClick");
+        if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
+        lua_pushstring(L, binding);
+        lua_setfield(L, -2, act.c_str());
+        lua_pop(L, 1);
+    }
     // And the store, so it comes back next time. Bindings.xml rewrites the
     // table with its defaults at every load, and SaveBindings writes keys,
     // not clicks: nothing else kept the self-cast, focus-cast and auto-loot
@@ -2571,8 +2577,16 @@ void registerActionLuaAPI(lua_State* L) {
                 lua_pushnumber(L, 1);
                 return 1;
             }
-            lua_getglobal(L, "__WoweeActionBarPage");
-            if (lua_isnil(L, -1)) { lua_pop(L, 1); lua_pushnumber(L, 1); }
+            // The page is the client's number (0x005a7fd0 pushes it fresh),
+            // so whoever turned it last taints no action button reading it.
+            lua_Number page = 1;
+            {
+                taint::Quiet quiet;
+                lua_getglobal(L, "__WoweeActionBarPage");
+                if (lua_isnumber(L, -1)) page = lua_tonumber(L, -1);
+                lua_pop(L, 1);
+            }
+            lua_pushnumber(L, page);
             return 1;
         }},
                 {"ChangeActionBarPage", [](lua_State* L) -> int {
