@@ -4305,11 +4305,30 @@ static int lua_FlipCameraYaw(lua_State* L) {
 }
 
 static int lua_JumpOrAscendStart(lua_State* L) {
+// JumpOrAscendStart() (0x005fbf80): holds ascend (0x2000) until AscendStop,
+// and jumps.
     auto* svc = getLuaServices(L);
     if (svc && svc->pressJump) svc->pressJump();
+    if (svc && svc->setBindingControl)
+        svc->setBindingControl(rendering::CameraController::kControlAscend, true);
     return 0;
 }
 template <int Direction, bool Held>
+// The held movement bindings (0x005fc0a0-0x005fc560): each Start sets its
+// input-control bit and each Stop clears it - MoveForward 0x10, MoveBackward
+// 0x20, StrafeLeft 0x40, StrafeRight 0x80; AscendStop 0x2000, DescendStop
+// 0x4000.
+template <uint32_t Bit, bool Held>
+static int lua_BindingControl(lua_State* L) {
+    auto* svc = getLuaServices(L);
+    if (svc && svc->setBindingControl) svc->setBindingControl(Bit, Held);
+    return 0;
+}
+// SitStandOrDescendStart() (0x0051b1d0): holds descend (0x005fc0f0), and out
+// of flight sits or stands - both what X does here, which this holds.
+static int lua_SitStandOrDescendStart(lua_State* L) {
+    return lua_BindingControl<rendering::CameraController::kControlDescend, true>(L);
+}
 static int lua_BindingTurn(lua_State* L) {
     auto* svc = getLuaServices(L);
     if (svc && svc->setBindingTurn) svc->setBindingTurn(Direction, Held);
@@ -5936,6 +5955,17 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"TurnRightStart",           lua_BindingTurn<1, true>},
                 {"TurnRightStop",            lua_BindingTurn<1, false>},
                 {"WoweeShowSettings",        lua_WoweeShowSettings},
+                {"MoveForwardStart",  lua_BindingControl<rendering::CameraController::kControlForward, true>},
+                {"MoveForwardStop",   lua_BindingControl<rendering::CameraController::kControlForward, false>},
+                {"MoveBackwardStart", lua_BindingControl<rendering::CameraController::kControlBackward, true>},
+                {"MoveBackwardStop",  lua_BindingControl<rendering::CameraController::kControlBackward, false>},
+                {"StrafeLeftStart",   lua_BindingControl<rendering::CameraController::kControlStrafeLeft, true>},
+                {"StrafeLeftStop",    lua_BindingControl<rendering::CameraController::kControlStrafeLeft, false>},
+                {"StrafeRightStart",  lua_BindingControl<rendering::CameraController::kControlStrafeRight, true>},
+                {"StrafeRightStop",   lua_BindingControl<rendering::CameraController::kControlStrafeRight, false>},
+                {"AscendStop",        lua_BindingControl<rendering::CameraController::kControlAscend, false>},
+                {"DescendStop",       lua_BindingControl<rendering::CameraController::kControlDescend, false>},
+                {"SitStandOrDescendStart", lua_SitStandOrDescendStart},
                 {"WoweeSettingList",         lua_WoweeSettingList},
                 {"WoweeVersion",             lua_WoweeVersion},
                 {"WoweeOpenURL",             lua_WoweeOpenURL},

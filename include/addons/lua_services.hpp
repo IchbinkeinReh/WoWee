@@ -334,6 +334,9 @@ struct LuaServices {
     std::function<void(int direction, bool held)> setBindingTurn;
     /// JumpOrAscendStart: a press of the jump key.
     std::function<void()> pressJump;
+    /// MoveForwardStart and the other held movement controls, by the client's
+    /// input-control bit (CameraController::kControl*).
+    std::function<void(uint32_t bit, bool held)> setBindingControl;
     /// CameraZoomIn(yards) and CameraZoomOut(yards), as the wheel's bindings.
     std::function<void(float yards)> cameraZoom;
     /// The camera, for the saved views (SetView, SaveView, ResetView,

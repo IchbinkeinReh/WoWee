@@ -3021,13 +3021,15 @@ void CameraController::update(float deltaTime) {
     // Determine current key states
     // Arrow keys mirror WASD the way the original client maps them:
     // Up/Down move, Left/Right turn (strafe stays on Q/E).
-    bool keyW = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_W) || input.isKeyPressed(SDL_SCANCODE_UP));
-    bool keyS = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_S) || input.isKeyPressed(SDL_SCANCODE_DOWN));
+    // MoveForwardStart() and the rest hold their control the way the key does.
+    const auto held = [this](uint32_t bit) { return (bindingControls_ & bit) != 0; };
+    bool keyW = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_W) || input.isKeyPressed(SDL_SCANCODE_UP) || held(kControlForward));
+    bool keyS = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_S) || input.isKeyPressed(SDL_SCANCODE_DOWN) || held(kControlBackward));
     // TurnLeftStart()/TurnRightStart() hold a turn the way the key does.
     bool keyA = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_A) || input.isKeyPressed(SDL_SCANCODE_LEFT) || bindingTurnLeft_);
     bool keyD = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_D) || input.isKeyPressed(SDL_SCANCODE_RIGHT) || bindingTurnRight_);
-    bool keyQ = !uiWantsKeyboard && !sitting && !movementSuppressed && input.isKeyPressed(SDL_SCANCODE_Q);
-    bool keyE = !uiWantsKeyboard && !sitting && !movementSuppressed && input.isKeyPressed(SDL_SCANCODE_E);
+    bool keyQ = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_Q) || held(kControlStrafeLeft));
+    bool keyE = !uiWantsKeyboard && !sitting && !movementSuppressed && (input.isKeyPressed(SDL_SCANCODE_E) || held(kControlStrafeRight));
     bool shiftDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_LSHIFT) || input.isKeyPressed(SDL_SCANCODE_RSHIFT));
     // Exploration mode's slow modifier only. In the game the client walks by
     // the WALKING movement flag ToggleRun sets (0x00987570), not by a key held.
@@ -3041,7 +3043,8 @@ void CameraController::update(float deltaTime) {
     // space is a one-shot jump, but in water and in the air it is continuous
     // ascent, and an edge gave a single impulse that then bled away - or, in
     // flight, a single frame of climb per press.
-    bool spaceHeld = !uiWantsKeyboard && !sitting && !movementSuppressed && input.isKeyPressed(SDL_SCANCODE_SPACE);
+    bool spaceHeld = !uiWantsKeyboard && !sitting && !movementSuppressed &&
+                     (input.isKeyPressed(SDL_SCANCODE_SPACE) || held(kControlAscend));
 
     // Idle camera: any input resets the timer; timeout triggers a slow orbit pan
     bool anyInput = leftMouseDown || rightMouseDown || keyW || keyS || keyA || keyD || keyQ || keyE || nowJump;
@@ -3311,7 +3314,7 @@ void CameraController::update(float deltaTime) {
     // Toggle sit/crouch with X key (edge-triggered) - only when UI doesn't want keyboard
     // Blocked while mounted
     bool prevSitting = sitting;
-    bool xDown = !uiWantsKeyboard && input.isKeyPressed(SDL_SCANCODE_X);
+    bool xDown = !uiWantsKeyboard && (input.isKeyPressed(SDL_SCANCODE_X) || held(kControlDescend));
     // While swimming, X dives down instead of toggling sit
     if (xDown && !xKeyWasDown && !mounted_ && !swimming) {
         sitting = !sitting;
@@ -3341,7 +3344,10 @@ void CameraController::update(float deltaTime) {
             input.isKeyPressed(SDL_SCANCODE_Q) || input.isKeyPressed(SDL_SCANCODE_E) ||
             input.isKeyPressed(SDL_SCANCODE_UP) || input.isKeyPressed(SDL_SCANCODE_DOWN) ||
             input.isKeyPressed(SDL_SCANCODE_LEFT) || input.isKeyPressed(SDL_SCANCODE_RIGHT) ||
-            input.isKeyPressed(SDL_SCANCODE_SPACE));
+            input.isKeyPressed(SDL_SCANCODE_SPACE) ||
+            held(kControlForward | kControlBackward | kControlStrafeLeft |
+                 kControlStrafeRight | kControlAscend) ||
+            bindingTurnLeft_ || bindingTurnRight_);
         // Not gated on uiWantsKeyboard, which is a different question, and not
         // on the interface wanting the mouse either: both flags are already
         // cleared at the press when it did.

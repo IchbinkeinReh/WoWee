@@ -1024,6 +1024,9 @@ bool Application::initialize() {
         luaSvc.pressJump = [r = renderer.get()]() {
             if (auto* cc = r ? r->getCameraController() : nullptr) cc->pressBindingJump();
         };
+        luaSvc.setBindingControl = [r = renderer.get()](uint32_t bit, bool held) {
+            if (auto* cc = r ? r->getCameraController() : nullptr) cc->setBindingControl(bit, held);
+        };
         luaSvc.cameraZoom = [r = renderer.get()](float yards) {
             if (auto* cc = r ? r->getCameraController() : nullptr) cc->zoomBy(yards);
         };

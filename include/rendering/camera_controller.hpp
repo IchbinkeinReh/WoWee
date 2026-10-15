@@ -154,6 +154,16 @@ public:
     void setBindingTurnLeft(bool held) { bindingTurnLeft_ = held; }
     void setBindingTurnRight(bool held) { bindingTurnRight_ = held; }
     void pressBindingJump() { bindingJump_ = true; }
+    /// The other movement bindings' held controls, by the client's input
+    /// control bits (0x005fa170 sets one, 0x005fa450 clears it): 0x10 forward,
+    /// 0x20 back, 0x40 / 0x80 strafe left / right, 0x2000 ascend, 0x4000
+    /// descend. Each holds what its key does here.
+    static constexpr uint32_t kControlForward = 0x10, kControlBackward = 0x20,
+        kControlStrafeLeft = 0x40, kControlStrafeRight = 0x80,
+        kControlAscend = 0x2000, kControlDescend = 0x4000;
+    void setBindingControl(uint32_t bit, bool held) {
+        if (held) bindingControls_ |= bit; else bindingControls_ &= ~bit;
+    }
     [[nodiscard]] bool isRightMouseHeld() const { return rightMouseDown; }
     [[nodiscard]] bool isSitting() const { return sitting; }
     [[nodiscard]] bool isSwimming() const { return swimming; }
@@ -865,6 +875,7 @@ private:
     bool bindingTurnLeft_ = false;
     bool bindingTurnRight_ = false;
     bool bindingJump_ = false;
+    uint32_t bindingControls_ = 0;
     bool tildeWasDown = false;
 
     // Auto-follow target position (WoW /follow). Non-null when following.
