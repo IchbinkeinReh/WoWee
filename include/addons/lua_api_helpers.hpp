@@ -105,6 +105,16 @@ inline bool luaClientSwitchArg(lua_State* L, int idx, bool fallback) {
     }
 }
 
+/// A Lua number as the client's handlers take one (lua_tonumber, then
+/// 0x0088b9c0, the CRT's _ftol2): truncated toward zero to 64 bits, of which
+/// the low 32 are kept; past the 64-bit range (and NaN) the x87 "indefinite"
+/// value, whose low half is 0.
+inline int32_t luaToClientInt(lua_State* L, int idx) {
+    const double d = lua_tonumber(L, idx);
+    if (!(d > -9223372036854775808.0 && d < 9223372036854775808.0)) return 0;
+    return static_cast<int32_t>(static_cast<uint32_t>(static_cast<uint64_t>(static_cast<int64_t>(d))));
+}
+
 inline int luaReturnNil(lua_State* L)  { lua_pushnil(L); return 1; }
 inline int luaReturnZero(lua_State* L) { lua_pushnumber(L, 0); return 1; }
 inline int luaReturnFalse(lua_State* L){ lua_pushboolean(L, 0); return 1; }

@@ -6632,13 +6632,33 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushstring(L, line);
             return 1;
         }},
-                // The GM survey. Four DBCs describe one, but a survey is
-                // something a game master sends and no opcode here delivers,
-                // so there is never one in progress: nil questions means the
-                // frame counts zero of them and draws empty, which is what an
-                // account with no survey pending should see.
-                {"GMSurveyQuestion",            lua_ReturnNil},
-                {"GMSurveyAnswer",              lua_ReturnNil},
+                // GMSurveyQuestion(index) (0x005ac750): the current survey's
+                // question text, nil outside 1-10 or with none there.
+                {"GMSurveyQuestion", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GMSurveyGetQuestion(index)");
+            auto* gh = getGameHandler(L);
+            const auto text = gh ? gh->gmSurveyQuestion(luaToClientInt(L, 1)) : std::nullopt;
+            if (text) lua_pushstring(L, text->c_str()); else lua_pushnil(L);
+            return 1;
+        }},
+                // GMSurveyAnswer(question, answer) (0x005ac7d0). Its usage
+                // check passes when either argument is a number.
+                {"GMSurveyAnswer", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) && !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: GMSurveyGetAnswer(questionIndex, answerIndex)");
+            auto* gh = getGameHandler(L);
+            const auto text = gh ? gh->gmSurveyAnswer(luaToClientInt(L, 1), luaToClientInt(L, 2))
+                                 : std::nullopt;
+            if (text) lua_pushstring(L, text->c_str()); else lua_pushnil(L);
+            return 1;
+        }},
+                // GMSurveyNumAnswers(question) (0x005ac870).
+                {"GMSurveyNumAnswers", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GMSurveyGetNumAnswers(questionIndex)");
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? gh->gmSurveyNumAnswers(luaToClientInt(L, 1)) : 0);
+            return 1;
+        }},
                 // GMSurveyAnswerSubmit(question, rank, comment) (0x005ac390):
                 // questions 1-10, kept until GMSurveySubmit sends them.
                 {"GMSurveyAnswerSubmit", [](lua_State* L) -> int {

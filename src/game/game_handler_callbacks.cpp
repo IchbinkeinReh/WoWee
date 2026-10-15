@@ -3197,12 +3197,7 @@ void GameHandler::setGmSurveyAnswer(uint32_t question, uint8_t rank, const std::
 // GMSurveyCommentSubmit(comment) (0x005ac480 -> 0x005ac2d0).
 void GameHandler::setGmSurveyComment(const std::string& comment) { gmSurveyComment_ = comment; }
 
-// GMSurveySubmit (0x005ad230 -> 0x005acd50): CMSG_GMSURVEY_SUBMIT. The survey
-// is GMSurveyCurrentSurvey's for the client's locale index (DAT_00c5de9c);
-// each of its ten questions goes as its id, then - while there is one - the
-// rank and comment given it, the first missing id ending the list; then the
-// comment. What was kept is let go after (0x005ac1f0).
-void GameHandler::submitGmSurvey() {
+GameHandler::GmSurvey GameHandler::currentGmSurvey() const {
     // The client's locale index (0x00405dd0, the table at 0x00ad2fe0); enGB
     // reads as enUS.
     static constexpr const char* kLocales[] = {"enUS", "koKR", "frFR", "deDE", "zhCN",
@@ -3213,23 +3208,95 @@ void GameHandler::submitGmSurvey() {
         for (uint32_t i = 0; i < std::size(kLocales); ++i)
             if (profile->locale == kLocales[i]) localeIndex = i;
     }
-    uint32_t surveyId = 0;
-    std::array<uint32_t, 10> questions{};
+    GmSurvey survey;
     if (auto* am = services_.assetManager; am && am->isInitialized()) {
         auto current = am->loadDBCOptional("GMSurveyCurrentSurvey.dbc");
         if (current && current->isLoaded()) {
             const int32_t row = current->findRecordById(localeIndex);
-            if (row >= 0) surveyId = current->getUInt32(static_cast<uint32_t>(row), 1);
+            if (row >= 0) survey.id = current->getUInt32(static_cast<uint32_t>(row), 1);
         }
         auto surveys = am->loadDBCOptional("GMSurveySurveys.dbc");
-        if (surveys && surveys->isLoaded() && surveyId != 0) {
-            const int32_t row = surveys->findRecordById(surveyId);
+        if (surveys && surveys->isLoaded() && survey.id != 0) {
+            const int32_t row = surveys->findRecordById(survey.id);
             if (row >= 0 && surveys->getFieldCount() >= 11) {
-                for (uint32_t i = 0; i < questions.size(); ++i)
-                    questions[i] = surveys->getUInt32(static_cast<uint32_t>(row), 1 + i);
+                survey.present = true;
+                for (uint32_t i = 0; i < survey.questions.size(); ++i)
+                    survey.questions[i] = surveys->getUInt32(static_cast<uint32_t>(row), 1 + i);
             }
         }
     }
+    return survey;
+}
+
+// GMSurveyQuestion(index) (0x005ac750 -> 0x005ac530): the current survey's
+// question at 1-10, looked up in GMSurveyQuestions; its text (+4).
+std::optional<std::string> GameHandler::gmSurveyQuestion(int32_t question) const {
+    if (question < 1 || question > 10) return std::nullopt;
+    const GmSurvey survey = currentGmSurvey();
+    const auto id = static_cast<int32_t>(survey.questions[question - 1]);
+    if (!survey.present || id <= 0) return std::nullopt;
+    auto* am = services_.assetManager;
+    auto questions = am ? am->loadDBCOptional("GMSurveyQuestions.dbc") : nullptr;
+    if (!questions || !questions->isLoaded() || questions->getFieldCount() < 2) return std::nullopt;
+    const int32_t row = questions->findRecordById(static_cast<uint32_t>(id));
+    if (row < 0) return std::nullopt;
+    return questions->getString(static_cast<uint32_t>(row), 1);
+}
+
+// GMSurveyAnswer(question, answer) (0x005ac7d0 -> 0x005ac5b0): the first
+// GMSurveyAnswers row, in file order, of that question (+8) whose sort index
+// (+4) is answer - 1; its text (+0xc).
+std::optional<std::string> GameHandler::gmSurveyAnswer(int32_t question, int32_t answer) const {
+    if (question < 1 || question > 10) return std::nullopt;
+    const GmSurvey survey = currentGmSurvey();
+    const auto id = static_cast<int32_t>(survey.questions[question - 1]);
+    if (!survey.present || id < 1) return std::nullopt;
+    auto* am = services_.assetManager;
+    auto questions = am ? am->loadDBCOptional("GMSurveyQuestions.dbc") : nullptr;
+    if (!questions || !questions->isLoaded() || questions->findRecordById(static_cast<uint32_t>(id)) < 0)
+        return std::nullopt;
+    auto answers = am->loadDBCOptional("GMSurveyAnswers.dbc");
+    if (!answers || !answers->isLoaded() || answers->getFieldCount() < 4) return std::nullopt;
+    for (uint32_t r = 0; r < answers->getRecordCount(); ++r) {
+        if (answers->getInt32(r, 2) == id && answers->getInt32(r, 1) == answer - 1)
+            return answers->getString(r, 3);
+    }
+    return std::nullopt;
+}
+
+// GMSurveyNumAnswers(question) (0x005ac870 -> 0x005ac680). Not what the name
+// says: with a current survey, it takes question - 1 itself as a
+// GMSurveyQuestions id (0x005ac6e2), not the survey's question at that index,
+// and counts the GMSurveyAnswers rows of that question among ids 0 to the
+// row count - 1 (the loop at 0x005ac720). Blizzard_GMSurveyUI never calls it.
+int32_t GameHandler::gmSurveyNumAnswers(int32_t question) const {
+    if (question < 1 || question > 10) return 0;
+    if (!currentGmSurvey().present) return 0;
+    const int32_t id = question - 1;
+    if (id <= 0) return 0;
+    auto* am = services_.assetManager;
+    auto questions = am ? am->loadDBCOptional("GMSurveyQuestions.dbc") : nullptr;
+    if (!questions || !questions->isLoaded() || questions->findRecordById(static_cast<uint32_t>(id)) < 0)
+        return 0;
+    auto answers = am->loadDBCOptional("GMSurveyAnswers.dbc");
+    if (!answers || !answers->isLoaded() || answers->getFieldCount() < 4) return 0;
+    int32_t count = 0;
+    for (uint32_t answerId = 0; answerId < answers->getRecordCount(); ++answerId) {
+        const int32_t row = answers->findRecordById(answerId);
+        if (row >= 0 && answers->getInt32(static_cast<uint32_t>(row), 2) == id) ++count;
+    }
+    return count;
+}
+
+// GMSurveySubmit (0x005ad230 -> 0x005acd50): CMSG_GMSURVEY_SUBMIT. The survey
+// is GMSurveyCurrentSurvey's for the client's locale index (DAT_00c5de9c);
+// each of its ten questions goes as its id, then - while there is one - the
+// rank and comment given it, the first missing id ending the list; then the
+// comment. What was kept is let go after (0x005ac1f0).
+void GameHandler::submitGmSurvey() {
+    const GmSurvey survey = currentGmSurvey();
+    const uint32_t surveyId = survey.id;
+    const auto& questions = survey.questions;
     if (isInWorld()) {
         network::Packet packet(wireOpcode(Opcode::CMSG_GMSURVEY_SUBMIT));
         packet.writeUInt32(surveyId);

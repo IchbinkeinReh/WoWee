@@ -822,6 +822,15 @@ public:
     void setGmSurveyAnswer(uint32_t question, uint8_t rank, const std::string& comment);
     void setGmSurveyComment(const std::string& comment);
     void submitGmSurvey();
+    /// The survey GMSurveyCurrentSurvey names for the client's locale, and
+    /// its ten question ids (0 = none); id 0 when there is no such survey.
+    struct GmSurvey { uint32_t id = 0; bool present = false; std::array<uint32_t, 10> questions{}; };
+    GmSurvey currentGmSurvey() const;
+    /// GMSurveyQuestion / GMSurveyAnswer / GMSurveyNumAnswers (0x005ac530,
+    /// 0x005ac5b0, 0x005ac680); question is 1-10.
+    std::optional<std::string> gmSurveyQuestion(int32_t question) const;
+    std::optional<std::string> gmSurveyAnswer(int32_t question, int32_t answer) const;
+    int32_t gmSurveyNumAnswers(int32_t question) const;
     void updateGmTicket(const std::string& text);
     void deleteGmTicket();
     void requestGmTicket();          ///< Send CMSG_GMTICKET_GETTICKET to query open ticket
