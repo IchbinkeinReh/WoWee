@@ -638,7 +638,20 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     spellFlatMods_.clear();
     spellPctMods_.clear();
     actionBar = {};
+    // The interface's own start (0x0052b550): no combo points, on nobody
+    // (0xbd084d, 0xbd08a8) - the server says them again only when they
+    // change, so the last character's stayed on the next one's frame.
+    comboPoints_ = 0;
+    comboTarget_ = 0;
+    // And the pet's information (0x005d6d90): no pet, its spell list emptied
+    // (0x005d64f0(0)), its bar and its combo points with it. The server
+    // sends SMSG_PET_SPELLS only for a pet there is.
     petGuid_ = 0;
+    petSpellList_.clear();
+    petAutocastSpells_.clear();
+    std::fill(std::begin(petActionSlots_), std::end(petActionSlots_), 0u);
+    petComboPoints_ = 0;
+    petComboTarget_ = 0;
     stableWindowOpen_  = false;
     stableMasterGuid_  = 0;
     stableNumSlots_    = 0;
