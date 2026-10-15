@@ -319,6 +319,14 @@ public:
     void dismissReadyCheck() { pendingReadyCheck_ = false; }
     [[nodiscard]] const std::string& getReadyCheckInitiator() const { return readyCheckInitiator_; }
     [[nodiscard]] const std::vector<ReadyCheckResult>& getReadyCheckResults() const { return readyCheckResults_; }
+    /// GetReadyCheckTimeLeft() (0x00572c80): whole seconds to the ready
+    /// check's deadline (0xbeb61c, 30 s from MSG_RAID_READY_CHECK,
+    /// 0x00574d50), 0 out of a group or with none running.
+    [[nodiscard]] uint32_t readyCheckSecondsLeft() const;
+    /// GetReadyCheckStatus(unit) (0x00574180): "ready", "notready" or
+    /// "waiting" for a member while a check runs and the player may see it -
+    /// the leader of a party, a leader or assistant in a raid - else null.
+    [[nodiscard]] const char* readyCheckStatus(uint64_t guid) const;
 
     // Duel
     void acceptDuel();
@@ -733,6 +741,16 @@ private:
     uint32_t    readyCheckNotReadyCount_ = 0;
     std::string readyCheckInitiator_;
     std::vector<ReadyCheckResult> readyCheckResults_;
+    /// The deadline (0xbeb61c): unset when no check runs. A check every
+    /// member has answered is ended by putting it a moment in the past
+    /// (0x005744f0).
+    std::optional<std::chrono::steady_clock::time_point> readyCheckDeadline_;
+    uint64_t readyCheckInitiatorGuid_ = 0;  ///< 0xbeb620
+    /// Each member's answer: still waiting (party record / raid +800), and
+    /// ready (raid +0x324).
+    struct ReadyCheckAnswer { bool waiting = false; bool ready = false; };
+    std::unordered_map<uint64_t, ReadyCheckAnswer> readyCheckAnswers_;
+    [[nodiscard]] bool readyCheckRunning() const;
 
     // Instance
     std::vector<InstanceLockout> instanceLockouts_;

@@ -4471,6 +4471,14 @@ const std::string& GameHandler::getReadyCheckInitiator() const {
     return empty;
 }
 
+uint32_t GameHandler::getReadyCheckSecondsLeft() const {
+    return socialHandler_ ? socialHandler_->readyCheckSecondsLeft() : 0;
+}
+
+const char* GameHandler::getReadyCheckStatus(uint64_t guid) const {
+    return socialHandler_ ? socialHandler_->readyCheckStatus(guid) : nullptr;
+}
+
 const std::vector<GameHandler::ReadyCheckResult>& GameHandler::getReadyCheckResults() const {
     if (socialHandler_) return socialHandler_->getReadyCheckResults();
     static const std::vector<ReadyCheckResult> empty;

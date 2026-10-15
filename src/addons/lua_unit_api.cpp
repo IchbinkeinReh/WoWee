@@ -2220,10 +2220,27 @@ static int lua_GetThreatStatusColor(lua_State* L) {
     return 3;
 }
 
-// GetReadyCheckStatus(unit) → status string
+// GetReadyCheckStatus(unit) (0x00574180): "ready", "notready" or "waiting"
+// while a check runs, to a party's leader or a raid's leader and assistants;
+// nil otherwise.
 static int lua_GetReadyCheckStatus(lua_State* L) {
-    (void)L;
-    lua_pushnil(L); // No ready check in progress
+    auto* gh = getGameHandler(L);
+    const char* status = nullptr;
+    if (gh) {
+        std::string uid = luaL_optstring(L, 1, "");
+        toLowerInPlace(uid);
+        status = gh->getReadyCheckStatus(resolveUnitGuid(gh, uid));
+    }
+    if (status) lua_pushstring(L, status);
+    else lua_pushnil(L);
+    return 1;
+}
+
+// GetReadyCheckTimeLeft() (0x00572c80): whole seconds to the ready check's
+// deadline, 0 out of a group or with none running.
+static int lua_GetReadyCheckTimeLeft(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    lua_pushnumber(L, gh ? gh->getReadyCheckSecondsLeft() : 0);
     return 1;
 }
 
@@ -3218,6 +3235,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"GetRaidRosterInfo",   lua_GetRaidRosterInfo},
                 {"GetThreatStatusColor", lua_GetThreatStatusColor},
                 {"GetReadyCheckStatus", lua_GetReadyCheckStatus},
+                {"GetReadyCheckTimeLeft", lua_GetReadyCheckTimeLeft},
                 {"RegisterUnitWatch",   lua_RegisterUnitWatch},
                 {"UnregisterUnitWatch", lua_UnregisterUnitWatch},
                 {"UnitIsUnit",          lua_UnitIsUnit},

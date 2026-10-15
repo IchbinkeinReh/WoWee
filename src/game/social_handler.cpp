@@ -585,8 +585,14 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         readyCheckInitiator_.clear();
         readyCheckResults_.clear();
         bool initiatedHere = false;
+        // The deadline, 30 s out, and who started it (0x00574d50). The
+        // initiator stands ready and every other member waits.
+        readyCheckDeadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        readyCheckInitiatorGuid_ = 0;
+        readyCheckAnswers_.clear();
         if (packet.hasRemaining(8)) {
             uint64_t initiatorGuid = packet.readUInt64();
+            readyCheckInitiatorGuid_ = initiatorGuid;
             initiatedHere = initiatorGuid == owner_.getPlayerGuid();
             auto entity = owner_.getEntityManager().getEntity(initiatorGuid);
             if (auto* unit = dynamic_cast<Unit*>(entity.get()))
@@ -599,16 +605,40 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         }
         // READY_CHECK_START, a system line for the one who started it and
         // nobody else (0x00574d50); the others get the popup READY_CHECK opens.
+        for (const auto& member : partyData.members) {
+            if (member.guid == readyCheckInitiatorGuid_) readyCheckAnswers_[member.guid] = {false, true};
+            else readyCheckAnswers_[member.guid] = {true, false};
+        }
+        const uint64_t self = owner_.getPlayerGuid();
+        readyCheckAnswers_[self] = self == readyCheckInitiatorGuid_
+            ? ReadyCheckAnswer{false, true} : ReadyCheckAnswer{true, false};
         if (initiatedHere)
             owner_.addSystemChatMessage(interfaceString("READY_CHECK_START", "Starting ready check..."));
+        // READY_CHECK carries the initiator and the seconds left (0x005747d0).
         if (owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("READY_CHECK", {readyCheckInitiator_});
+            owner_.addonEventCallbackRef()("READY_CHECK", {readyCheckInitiator_,
+                                                           std::to_string(readyCheckSecondsLeft())});
     };
     table[Opcode::MSG_RAID_READY_CHECK_CONFIRM] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(9)) { packet.skipAll(); return; }
         uint64_t respGuid = packet.readUInt64();
         uint8_t  isReady  = packet.readUInt8();
         if (isReady) ++readyCheckReadyCount_; else ++readyCheckNotReadyCount_;
+        // The member's answer, and with no online member left waiting the
+        // check ends at once: its deadline goes a moment into the past
+        // (0x005744f0).
+        if (auto it = readyCheckAnswers_.find(respGuid); it != readyCheckAnswers_.end())
+            it->second = {false, isReady != 0};
+        if (readyCheckRunning()) {
+            bool anyWaiting = false;
+            for (const auto& member : partyData.members) {
+                auto it = readyCheckAnswers_.find(member.guid);
+                if (member.isOnline && it != readyCheckAnswers_.end() && it->second.waiting)
+                    anyWaiting = true;
+            }
+            if (!anyWaiting)
+                readyCheckDeadline_ = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
+        }
         auto nit = owner_.getPlayerNameCache().find(respGuid);
         std::string rname;
         if (nit != owner_.getPlayerNameCache().end()) rname = nit->second;
@@ -649,6 +679,10 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         readyCheckReadyCount_ = 0;
         readyCheckNotReadyCount_ = 0;
         readyCheckResults_.clear();
+        // The deadline and the initiator are forgotten (0x00572560).
+        readyCheckDeadline_.reset();
+        readyCheckInitiatorGuid_ = 0;
+        readyCheckAnswers_.clear();
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("READY_CHECK_FINISHED", {});
     };
     table[Opcode::SMSG_RAID_INSTANCE_INFO] = [this](network::Packet& packet) { handleRaidInstanceInfo(packet); };
@@ -5911,6 +5945,41 @@ void SocialHandler::requestGmTicket() {
     network::Packet pkt(wireOpcode(Opcode::CMSG_GMTICKET_GETTICKET));
     owner_.getSocket()->send(pkt);
     LOG_DEBUG("Sent CMSG_GMTICKET_GETTICKET - querying open ticket status");
+}
+
+bool SocialHandler::readyCheckRunning() const {
+    return readyCheckDeadline_ && std::chrono::steady_clock::now() < *readyCheckDeadline_;
+}
+
+uint32_t SocialHandler::readyCheckSecondsLeft() const {
+    if (!isInGroup() || !readyCheckRunning()) return 0;
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        *readyCheckDeadline_ - std::chrono::steady_clock::now()).count();
+    return static_cast<uint32_t>(ms / 1000);
+}
+
+const char* SocialHandler::readyCheckStatus(uint64_t guid) const {
+    if (guid == 0 || !isInGroup() || !readyCheckRunning()) return nullptr;
+    const uint64_t self = owner_.getPlayerGuid();
+    const bool inRoster = guid == self ||
+        std::any_of(partyData.members.begin(), partyData.members.end(),
+                    [guid](const GroupMember& m) { return m.guid == guid; });
+    if (groupIsRaid(partyData.groupType)) {
+        // A raid's leader or assistants see it (rank > 0), of anyone in the
+        // raid; the initiator is ready.
+        const bool ranked = partyData.leaderGuid == self || (partyData.flags & 0x01);
+        if (!ranked || !inRoster) return nullptr;
+        if (guid == readyCheckInitiatorGuid_) return "ready";
+    } else {
+        // A party's leader alone; one who is not a party member is ready if
+        // they started it.
+        if (partyData.leaderGuid != self) return nullptr;
+        if (guid == self || !inRoster) return guid == readyCheckInitiatorGuid_ ? "ready" : nullptr;
+    }
+    auto it = readyCheckAnswers_.find(guid);
+    if (it == readyCheckAnswers_.end()) return nullptr;
+    if (it->second.waiting) return "waiting";
+    return it->second.ready ? "ready" : "notready";
 }
 
 } // namespace game

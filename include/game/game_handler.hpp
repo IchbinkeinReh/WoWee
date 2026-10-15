@@ -1116,6 +1116,10 @@ public:
     void dismissReadyCheck();
     const std::string& getReadyCheckInitiator() const;
     const std::vector<ReadyCheckResult>& getReadyCheckResults() const;
+    /// GetReadyCheckTimeLeft (0x00572c80) and GetReadyCheckStatus
+    /// (0x00574180); see SocialHandler.
+    uint32_t getReadyCheckSecondsLeft() const;
+    const char* getReadyCheckStatus(uint64_t guid) const;
 
     // Duel
     void forfeitDuel();
