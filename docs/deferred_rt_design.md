@@ -266,7 +266,11 @@ lights.
 Lamps (lampLight) and glows are lit by day and night:
 `daylightScale(windowLevel, day)` gives them all their light at night and
 `kLampDayLevel` / `kGlowDayLevel` (0.5) at noon; windows, lit only at night,
-none by day. Fires keep their full strength by day; they were never gated.
+none by day. That is for outside only, against the sun: lamps and glows of a
+WMO interior (`interiorLit` doodads) keep all their light around the clock, and
+an interior group's windows give no light at all (the room's light is its bake,
+which does not change with the hour). Fires keep their full strength by day;
+they were never gated.
 
 Units and their own light: a unit's traced pieces are rigid and coarser
 than its skin, so a shadow ray from the skin toward a light beside it often

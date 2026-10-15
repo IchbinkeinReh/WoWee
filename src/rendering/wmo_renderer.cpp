@@ -5047,7 +5047,13 @@ void WMORenderer::gatherGlows(ModelData& modelData) {
                                   color, 0, false);
             }
         }
-        for (const auto& patch : windows.finish()) modelData.glows.push_back({patch, true, interior});
+        // An interior group's windows light nothing: the room's light is its
+        // baked colours, which do not change with the hour, and a window lit
+        // at night would brighten the room at dusk. Outside ones light the
+        // street at night.
+        if (!interior) {
+            for (const auto& patch : windows.finish()) modelData.glows.push_back({patch, true, false});
+        }
         for (const auto& patch : glows.finish()) {
             // Where the building carries a light of its own (MOLT) beside the
             // glow, that light is the glow's: a second would light it twice.
@@ -5209,7 +5215,8 @@ void WMORenderer::collectRtLights(const glm::vec3& eye, float range, float night
         }
         const float scale2 = glm::dot(glm::vec3(inst.modelMatrix[0]), glm::vec3(inst.modelMatrix[0]));
         for (const auto& glow : model->second.glows) {
-            const float level = glow.window ? windowLevel : glowLevel;
+            // Inside, no sun to set a glow against: all of it around the clock.
+            const float level = glow.window ? windowLevel : (glow.interior ? 1.0f : glowLevel);
             if (level <= 0.0f) continue;
             const glm::vec3 position = glm::vec3(inst.modelMatrix * glm::vec4(glow.patch.centre, 1.0f));
             if (glm::length(position - eye) - rt_lights::kGlowMaxReach > range) continue;
