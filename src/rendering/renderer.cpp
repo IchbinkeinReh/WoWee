@@ -960,9 +960,21 @@ bool Renderer::initialize(core::Window* win) {
         std::unordered_map<int64_t, GroundTile> tiles;
         std::chrono::steady_clock::time_point gathered{};
     };
+    // Not the client's: ours streams the world in after the camera arrives.
+    // Where the terrain tile has not come yet the ground is not known, and no
+    // drop is made there (HeightCache): the tile brings its buildings and
+    // doodads with it, and a cell kept from before would let the rain through
+    // a roof that came later. For the same reason whatever comes or goes
+    // later - a tile, a building - has its cells asked again (forgetGround).
+    struct GroundChanges {
+        std::vector<glm::vec4> tiles;
+        std::vector<std::pair<glm::vec3, glm::vec3>> buildings;
+    };
     auto tiles = std::make_shared<GroundTiles>();
-    weather->setGroundQuery([this, tiles](float x, float y, float z) {
+    auto changes = std::make_shared<GroundChanges>();
+    weather->setGroundQuery([this, tiles](float x, float y, float z) -> std::optional<float> {
         WOWEE_PROFILE_SCOPE("weather: ground query", Cpu);
+        if (terrainManager && !terrainManager->isTileLoadedAt(x, y)) return std::nullopt;
         float h = -std::numeric_limits<float>::infinity();
         auto take = [&](std::optional<float> v) {
             if (v && *v <= z + 200.0f && *v >= z - 200.0f) h = std::max(h, *v);
@@ -994,7 +1006,30 @@ bool Renderer::initialize(core::Window* win) {
             take(m2Renderer->getFloorHeightAmong(tile.doodads, x, y, askZ));
         }
         return std::isfinite(h) ? h : z - 200.0f;
-    }, [tiles] {
+    }, [this, tiles, changes] {
+        // What came or went: its cells are asked again, and the doodads
+        // gathered for the 32-yard tiles under it are gathered afresh, or a
+        // cell asked again within the second would miss what just came.
+        auto changed = [&](const glm::vec2& lo, const glm::vec2& hi) {
+            weather->forgetGround(glm::vec3(lo, 0.0f), glm::vec3(hi, 0.0f));
+            constexpr float kTile = 32.0f;
+            for (auto it = tiles->tiles.begin(); it != tiles->tiles.end();) {
+                const float tx = static_cast<float>(static_cast<int32_t>(it->first >> 32)) * kTile;
+                const float ty = static_cast<float>(static_cast<int32_t>(static_cast<uint32_t>(it->first))) * kTile;
+                const bool over = tx <= hi.x && tx + kTile >= lo.x && ty <= hi.y && ty + kTile >= lo.y;
+                it = over ? tiles->tiles.erase(it) : std::next(it);
+            }
+        };
+        if (terrainManager) {
+            terrainManager->takeGroundChanges(changes->tiles);
+            for (const glm::vec4& t : changes->tiles) changed({t.x, t.y}, {t.z, t.w});
+        }
+        if (wmoRenderer) {
+            wmoRenderer->takeChangedBounds(changes->buildings);
+            // A yard over: a cell is asked at its centre, a face may reach past it.
+            for (const auto& [lo, hi] : changes->buildings)
+                changed(glm::vec2(lo) - glm::vec2(1.0f), glm::vec2(hi) + glm::vec2(1.0f));
+        }
         const auto now = std::chrono::steady_clock::now();
         if (now - tiles->gathered < std::chrono::seconds(1)) return;
         tiles->tiles.clear();

@@ -1303,6 +1303,7 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
             }
         }
         getTileBounds(coord, tile->minX, tile->minY, tile->maxX, tile->maxY);
+        noteGroundChange(tile->minX, tile->minY, tile->maxX, tile->maxY);
         loadedTiles[coord] = std::move(tile);
         // NOTE: Don't cache pending here - std::move above empties terrain/mesh,
         // so the cached tile would have 0 valid chunks on reuse.  Tiles are
@@ -1706,6 +1707,7 @@ void TerrainManager::unloadTile(int x, int y) {
         waterRenderer->removeTile(x, y);
     }
 
+    noteGroundChange(tile->minX, tile->minY, tile->maxX, tile->maxY);
     loadedTiles.erase(it);
 }
 
@@ -1761,6 +1763,7 @@ void TerrainManager::softReset() {
     }
 
     LOG_INFO("Soft-resetting terrain (clearing tiles + water + cache, workers stay alive)");
+    for (const auto& [tc, t] : loadedTiles) noteGroundChange(t->minX, t->minY, t->maxX, t->maxY);
     loadedTiles.clear();
     failedTiles.clear();
 

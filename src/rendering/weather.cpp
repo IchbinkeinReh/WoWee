@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 namespace wowee {
@@ -275,10 +276,17 @@ void Weather::loadAssets(pipeline::AssetManager* assets) {
 void Weather::setGroundQuery(cw::HeightCache::Query query, std::function<void()> frameStart) {
     groundFrameStart_ = std::move(frameStart);
     // The cache asks in the client's coordinates; the renderer answers in its own.
-    ground_.setQuery([q = std::move(query)](float x, float y, float z) {
+    ground_.setQuery([q = std::move(query)](float x, float y, float z) -> std::optional<float> {
         const glm::vec3 r = toRender({x, y, z});
-        return q ? q(r.x, r.y, r.z) : z - 200.0f;
+        if (!q) return z - 200.0f;
+        return q(r.x, r.y, r.z);
     });
+}
+
+void Weather::forgetGround(const glm::vec3& renderMin, const glm::vec3& renderMax) {
+    ++forgets_;
+    const glm::vec3 a = toCanonical(renderMin), b = toCanonical(renderMax);
+    ground_.forget(glm::vec2(glm::min(a, b)), glm::vec2(glm::max(a, b)));
 }
 
 void Weather::setDensityLevel(int level) {
@@ -508,6 +516,23 @@ void Weather::update(const FrameInput& frame) {
     ctx.riding = frame.riding;
     updateMists(dt, ctx);
     if (!stopping_) spawn(dt, ctx);
+
+    // WOWEE_WEATHER_DIAG=1: every two seconds, the ground under the camera as
+    // cached and how many cached cells near it the world now answers
+    // differently - a stale cell is how the rain gets through a roof.
+    static const bool diag = [] {
+        const char* v = std::getenv("WOWEE_WEATHER_DIAG");
+        return v && *v && *v != '0';
+    }();
+    if (diag && now_ - lastDiag_ >= 2.0) {
+        lastDiag_ = now_;
+        size_t checked = 0;
+        const size_t stale = ground_.countStale(camera, 12.0f, 0.5f, &checked);
+        LOG_WARNING("WEATHER_DIAG cam=(", camera.x, ",", camera.y, ",", camera.z, ") ground=",
+                    ground_.heightAt(camera), " cached=", ground_.cachedCells(), " unknownThisFrame=",
+                    ground_.unknownThisFrame(), " filledThisFrame=", ground_.filledThisFrame(),
+                    " near=", checked, " stale=", stale, " particles=", getParticleCount(), " forgets=", forgets_);
+    }
 }
 
 void Weather::updateMists(float dt, const cw::SpawnContext& ctx) {

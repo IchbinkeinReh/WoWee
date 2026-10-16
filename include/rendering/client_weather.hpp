@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -187,10 +188,24 @@ inline Mat3 leanForWind(const Wind& wind) {
 /// within 200 yards above or below the height it was first asked at - the
 /// terrain, the liquid on it or anything standing there (0x007ade10) - or 200
 /// yards under it with none.
+///
+/// Not the client's: here the world streams in after the camera has arrived,
+/// so a cell may be asked before what stands on it is there. Its ground is
+/// then unknown - not cached, asked again later - and nothing falls through
+/// it: a drop, flake or grain that would start in or cross such a cell is
+/// never made, where taking the terrain alone would let it fall through a
+/// roof that has not arrived yet, and keep doing so for as long as the cell
+/// stayed cached. What arrives or leaves later empties the cells under it
+/// (forget).
 class HeightCache {
 public:
-    /// Highest surface at (x, y) between z + 200 and z - 200, or z - 200.
-    using Query = std::function<float(float x, float y, float z)>;
+    /// Highest surface at (x, y) between z + 200 and z - 200, or z - 200;
+    /// nothing while the world there has not arrived.
+    using Query = std::function<std::optional<float>(float x, float y, float z)>;
+
+    /// heightAt's answer for a cell whose ground is not known yet: above
+    /// everything, so no drop starts there.
+    static constexpr float kUnknown = std::numeric_limits<float>::infinity();
 
     static constexpr int kBlocks = 5;
     static constexpr int kCellsPerBlock = 32;
@@ -217,6 +232,23 @@ public:
 
     void clear() { cells_.clear(); valid_ = false; }
 
+    /// Drops the cells over [lo, hi] (x, y), to be asked again: the world
+    /// there has changed since they were.
+    void forget(const glm::vec2& lo, const glm::vec2& hi) {
+        if (cells_.empty()) return;
+        const int x0 = static_cast<int>(std::floor(lo.x * 0.96f)), x1 = static_cast<int>(std::floor(hi.x * 0.96f));
+        const int y0 = static_cast<int>(std::floor(lo.y * 0.96f)), y1 = static_cast<int>(std::floor(hi.y * 0.96f));
+        if (valid_) {
+            const int ox = (centreX_ - 2) * kCellsPerBlock, oy = (centreY_ - 2) * kCellsPerBlock;
+            if (x1 < ox || y1 < oy || x0 >= ox + kCells || y0 >= oy + kCells) return;
+        }
+        for (auto it = cells_.begin(); it != cells_.end();) {
+            const int cx = cellX(it->first), cy = cellY(it->first);
+            if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) it = cells_.erase(it);
+            else ++it;
+        }
+    }
+
     /// How many cells a frame may ask the world for before the drops wait
     /// (Weather::spawn). Not the client's: its world query is cheap enough
     /// that it never needed one. Here a cell asks the terrain, the liquid,
@@ -230,25 +262,29 @@ public:
     /// doodads costs far more than one on open ground.
     static constexpr double kFillSecondsPerFrame = 0.002;
     /// Called at the start of each frame.
-    void startFrame() { filled_ = 0; fillSeconds_ = 0.0; }
+    void startFrame() { filled_ = 0; fillSeconds_ = 0.0; unknown_ = 0; }
     /// Cells asked of the world since startFrame, and the time they took.
     size_t filledThisFrame() const { return filled_; }
+    /// Cells asked since startFrame whose ground was not known yet.
+    size_t unknownThisFrame() const { return unknown_; }
     double fillSecondsThisFrame() const { return fillSeconds_; }
     bool fillBudgetSpent() const { return filled_ >= kFillsPerFrame || fillSeconds_ >= kFillSecondsPerFrame; }
 
     /// The height of the cell a point is in, asked at the point itself
-    /// (0x00784be0, 0x00783c10); the largest float outside the window.
+    /// (0x00784be0, 0x00783c10); the largest float outside the window, and
+    /// kUnknown where the ground is not known yet.
     float heightAt(const glm::vec3& p) {
         const int cx = static_cast<int>(std::floor(p.x * 0.96f));
         const int cy = static_cast<int>(std::floor(p.y * 0.96f));
         if (!inWindow(cx, cy)) return std::numeric_limits<float>::max();
-        return cell(cx, cy, p);
+        return cell(cx, cy, p).value_or(kUnknown);
     }
 
     /// Walks the cells from `from` to `to` (0x00784c60) and stops at the first
     /// whose surface is above the line there: `hit` is that point on the
-    /// surface. False with no surface crossed (`hit` is `to`) or on leaving
-    /// the window (`hit` is `from`).
+    /// surface. False with no surface crossed (`hit` is `to`), or on leaving
+    /// the window or meeting a cell whose ground is not known (`hit` is
+    /// `from`).
     bool trace(const glm::vec3& from, const glm::vec3& to, glm::vec3& hit) {
         int x = static_cast<int>(std::floor(from.x * 0.96f));
         int y = static_cast<int>(std::floor(from.y * 0.96f));
@@ -265,8 +301,9 @@ public:
             const glm::vec3 p = from + (to - from) * (static_cast<float>(i) * inv);
             const glm::vec3 centre((static_cast<float>(x) + 0.5f) * kCellSize,
                                    (static_cast<float>(y) + 0.5f) * kCellSize, p.z);
-            const float h = cell(x, y, centre);
-            if (h > p.z) { hit = {p.x, p.y, h}; return true; }
+            const std::optional<float> h = cell(x, y, centre);
+            if (!h) { hit = from; return false; }
+            if (*h > p.z) { hit = {p.x, p.y, *h}; return true; }
             const int e2 = 2 * err;
             if (e2 > -dy) { err -= dy; x += sx; }
             if (e2 < dx) { err += dx; y += sy; }
@@ -276,6 +313,24 @@ public:
     }
 
     size_t cachedCells() const { return cells_.size(); }
+
+    /// Diagnostics: of the cached cells within `radius` (x, y) of `p`, how
+    /// many the world now answers differently by more than `tol` (asked at
+    /// p.z), or not at all. Costs a query a cell; not for every frame.
+    size_t countStale(const glm::vec3& p, float radius, float tol, size_t* checked = nullptr) const {
+        size_t stale = 0, seen = 0;
+        if (!query_) return 0;
+        for (const auto& [k, h] : cells_) {
+            const glm::vec3 c((static_cast<float>(cellX(k)) + 0.5f) * kCellSize,
+                              (static_cast<float>(cellY(k)) + 0.5f) * kCellSize, p.z);
+            if (glm::length(glm::vec2(c) - glm::vec2(p)) > radius) continue;
+            ++seen;
+            const std::optional<float> now = query_(c.x, c.y, c.z);
+            if (!now || std::abs(*now - h) > tol) ++stale;
+        }
+        if (checked) *checked = seen;
+        return stale;
+    }
 
 private:
     static int64_t key(int x, int y) {
@@ -290,20 +345,23 @@ private:
         return cx >= ox && cy >= oy && cx < ox + kCells && cy < oy + kCells;
     }
 
-    float cell(int cx, int cy, const glm::vec3& askAt) {
+    std::optional<float> cell(int cx, int cy, const glm::vec3& askAt) {
         const int64_t k = key(cx, cy);
         auto it = cells_.find(k);
         if (it != cells_.end()) return it->second;
         const auto began = std::chrono::steady_clock::now();
-        const float h = query_ ? query_(askAt.x, askAt.y, askAt.z) : askAt.z - 200.0f;
+        const std::optional<float> h = query_ ? query_(askAt.x, askAt.y, askAt.z)
+                                              : std::optional<float>(askAt.z - 200.0f);
         fillSeconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
-        cells_.emplace(k, h);
+        if (!h) { ++unknown_; return std::nullopt; }
+        cells_.emplace(k, *h);
         ++filled_;
         return h;
     }
 
     Query query_;
     size_t filled_ = 0;
+    size_t unknown_ = 0;
     double fillSeconds_ = 0.0;
     std::unordered_map<int64_t, float> cells_;
     int centreX_ = 0, centreY_ = 0;
@@ -525,7 +583,10 @@ inline Mist spawnMist(const Random& rnd, const MistSpec& spec, const SpawnContex
     const float rz = rnd(), ry = rnd(), rx = rnd();
     glm::vec3 pos = turn.apply({(rx - 0.5f) * box.x, (ry - 0.5f) * box.y, (rz - 0.5f) * box.z});
     pos += ctx.camera - m.velocity * 1.5f;
-    const float h = std::max(ground.heightAt(pos), pos.z);
+    const float under = ground.heightAt(pos);
+    // Not the client's: no sheet over ground not known yet (HeightCache).
+    if (under == HeightCache::kUnknown) { m.start = m.end = 0.0f; return m; }
+    const float h = std::max(under, pos.z);
     pos.z = kMistSize * 0.5f + h;
     m.position = pos;
     m.rise = (rnd() - 0.5f) * 3.3333333f;
@@ -542,6 +603,13 @@ inline Mist spawnMist(const Random& rnd, const MistSpec& spec, const SpawnContex
     glm::vec3 at = pos;
     for (int i = 0; i < count; ++i) {
         m.ground[i] = ground.heightAt(at);
+        // The path ends where the ground is not known yet, as at a cliff.
+        if (m.ground[i] == HeightCache::kUnknown) {
+            if (i == 0) { m.start = m.end = 0.0f; return m; }
+            m.end = m.start + (static_cast<float>(i) / static_cast<float>(count)) * life;
+            count = m.steps = i;
+            break;
+        }
         at.x += step.x;
         at.y += step.y;
     }

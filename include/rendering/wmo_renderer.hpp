@@ -567,6 +567,13 @@ public:
     /// it (CharacterRenderer::refreshInteriorLights,
     /// M2Renderer::refreshGameObjectLights).
     [[nodiscard]] uint64_t instanceGeneration() const { return instanceGeneration_; }
+    /// The world bounds of each instance added or removed since the last
+    /// call, moved into `out` (cleared first): what caches the ground under
+    /// the buildings (the weather's heights) asks those places again.
+    void takeChangedBounds(std::vector<std::pair<glm::vec3, glm::vec3>>& out) {
+        out.clear();
+        out.swap(changedBounds_);
+    }
 
     /**
      * Raycast against WMO bounding boxes for camera collision
@@ -1253,6 +1260,15 @@ private:
     const minimap_indoor::AreaRows* areaRows_ = nullptr;
     uint64_t interiorPassGeneration_ = 0;
     uint64_t instanceGeneration_ = 0;
+    /// See takeChangedBounds; held to a bound when nobody takes them.
+    std::vector<std::pair<glm::vec3, glm::vec3>> changedBounds_;
+    void noteChangedBounds(const glm::vec3& lo, const glm::vec3& hi) {
+        if (changedBounds_.size() >= 1024) {
+            changedBounds_.assign(1, {glm::vec3(-1e9f), glm::vec3(1e9f)});
+            return;
+        }
+        changedBounds_.emplace_back(lo, hi);
+    }
 
     // Collision query profiling - atomic because getFloorHeight is dispatched
     // on async threads from camera_controller while the main thread reads these.

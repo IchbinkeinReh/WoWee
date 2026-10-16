@@ -340,6 +340,18 @@ public:
     [[nodiscard]] bool isTileLoadedAt(float glX, float glY) const;
 
     /**
+     * The render-space (minX, minY, maxX, maxY) of each tile that came or went
+     * since the last call, for what caches the ground (the weather's heights):
+     * moved into `out`, which is cleared first. A tile that leaves takes its
+     * terrain, its liquid and its doodads with it; one that arrives brings
+     * them.
+     */
+    void takeGroundChanges(std::vector<glm::vec4>& out) {
+        out.clear();
+        out.swap(groundChanges_);
+    }
+
+    /**
      * The chunk under a world position, plus the offsets within it that
      * getHeightAt samples and isHoleAt reads a quad from. Shared so those two
      * cannot drift: the first copy of this search that was written by hand
@@ -454,6 +466,17 @@ private:
 
     // Loaded tiles (keyed by coordinate)
     std::unordered_map<TileCoord, std::unique_ptr<TerrainTile>, TileCoord::Hash> loadedTiles;
+
+    // Tiles come or gone since takeGroundChanges, render space; held to a
+    // bound when nobody takes them.
+    std::vector<glm::vec4> groundChanges_;
+    void noteGroundChange(float minX, float minY, float maxX, float maxY) {
+        if (groundChanges_.size() >= 256) {
+            groundChanges_.assign(1, glm::vec4(-1e9f, -1e9f, 1e9f, 1e9f));
+            return;
+        }
+        groundChanges_.emplace_back(minX, minY, maxX, maxY);
+    }
 
     // Tiles that failed to load (don't retry)
     std::unordered_map<TileCoord, bool, TileCoord::Hash> failedTiles;

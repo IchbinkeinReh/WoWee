@@ -58,12 +58,17 @@ public:
     void setWeather(uint32_t weatherId, float intensity, bool abrupt);
 
     /// The surface under a point, as the renderer can find it: the highest
-    /// within 200 yards above or below `z`, or `z - 200` (0x007ade10).
+    /// within 200 yards above or below `z`, or `z - 200` (0x007ade10); nothing
+    /// where the world has not arrived yet, and no drop falls there.
     /// Renderer coordinates in and out.
     /// `frameStart`, when given, is called at the start of each update,
     /// before the first query: what the query keeps for one frame - the
-    /// doodads gathered for an area - is let go there.
+    /// doodads gathered for an area - is let go there, and what has come or
+    /// gone since is forgotten (forgetGround).
     void setGroundQuery(client_weather::HeightCache::Query query, std::function<void()> frameStart = {});
+    /// The ground under a renderer-space box has changed: its cells are asked
+    /// again.
+    void forgetGround(const glm::vec3& renderMin, const glm::vec3& renderMax);
 
     void update(const FrameInput& frame);
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
@@ -149,6 +154,8 @@ private:
     uint32_t weatherId_ = 0;
 
     double now_ = 0.0;
+    double lastDiag_ = 0.0;  ///< WOWEE_WEATHER_DIAG
+    size_t forgets_ = 0;     ///< forgetGround calls, for WOWEE_WEATHER_DIAG
     uint64_t frame_ = 0;
     uint32_t viewportWidth_ = 0;
     std::vector<std::unique_ptr<Packet>> packets_;

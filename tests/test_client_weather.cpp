@@ -256,6 +256,118 @@ TEST_CASE("a trace stops at the first surface above it", "[weather]") {
     CHECK(hit == glm::vec3(5.0f, 0.0f, 0.0f));
 }
 
+// Not the client's (its world is there when asked): ours streams in after the
+// camera arrives. A drop over ground not known yet used to take the terrain,
+// or nothing, and keep it cached - and fell through the roof of a house that
+// came a moment later, for as long as the camera stayed.
+TEST_CASE("no drop falls where the ground is not known yet", "[weather]") {
+    bool arrived = false;
+    int asked = 0;
+    cw::HeightCache ground;
+    // A roof at 20 over a floor at 0, once the world is there.
+    ground.setQuery([&](float, float, float) -> std::optional<float> {
+        ++asked;
+        if (!arrived) return std::nullopt;
+        return 20.0f;
+    });
+    ground.recenter({0.0f, 0.0f});
+    cw::SpawnContext ctx;
+    ctx.strength = 1.0f;
+    Sequence rnd{{0.5f}};
+
+    ground.startFrame();
+    const cw::Particle before = cw::spawnRain(std::ref(rnd), ctx, ground, 2.0f);
+    CHECK(before.start == 0.0f);
+    CHECK(before.end == 0.0f);
+    CHECK_FALSE(cw::splashes(before, false));
+    // Nothing kept: the cell is asked again, and counted as unknown.
+    CHECK(ground.cachedCells() == 0);
+    CHECK(ground.unknownThisFrame() >= 1);
+    CHECK(ground.filledThisFrame() == 0);
+    CHECK(ground.heightAt({0.0f, 0.0f, 50.0f}) == cw::HeightCache::kUnknown);
+
+    // Nor riding, nor snow, nor sand, nor a mist sheet.
+    cw::SpawnContext riding = ctx;
+    riding.riding = true;
+    CHECK(cw::spawnRain(std::ref(rnd), riding, ground, 2.0f).end == 0.0f);
+    const cw::Particle flake = cw::spawnSnow(std::ref(rnd), ctx, ground, 2.0f);
+    CHECK(flake.end < flake.start);
+    const cw::Particle grain = cw::spawnSand(std::ref(rnd), ctx, ground, 2.0f);
+    CHECK(grain.end == grain.start);
+    const cw::Mist sheet = cw::spawnMist(std::ref(rnd), cw::mistSpec(cw::Effect::Rain), ctx, ground, 2.0f);
+    CHECK_FALSE(sheet.live());
+
+    // The world arrives: the same drop stops on the roof.
+    arrived = true;
+    const cw::Particle after = cw::spawnRain(std::ref(rnd), ctx, ground, 2.0f);
+    REQUIRE(after.end > after.start);
+    const float landing = after.position.z + after.velocity.z * (after.end - after.start);
+    CHECK(landing == Catch::Approx(20.0f).margin(0.6f));
+    CHECK(ground.cachedCells() > 0);
+}
+
+TEST_CASE("a trace that meets ground not known yet makes no drop", "[weather]") {
+    cw::HeightCache c;
+    // Known up to x = 10, not yet past it.
+    c.setQuery([](float x, float, float z) -> std::optional<float> {
+        if (x >= 10.0f) return std::nullopt;
+        return z - 200.0f;
+    });
+    c.recenter({0.0f, 0.0f});
+    glm::vec3 hit;
+    REQUIRE_FALSE(c.trace({0.0f, 0.0f, 20.0f}, {20.0f, 0.0f, 0.0f}, hit));
+    CHECK(hit == glm::vec3(0.0f, 0.0f, 20.0f));
+
+    // A drop that starts over known ground but drifts over ground not known
+    // yet before it lands is not made either. Ground at -30 for x >= 0; the
+    // drop starts near x = 10.8 and drifts along -x at 9.5 yards a second,
+    // crossing x = 0 at about z = 0, well above the ground.
+    bool known = false;
+    cw::HeightCache g;
+    g.setQuery([&](float x, float, float) -> std::optional<float> {
+        if (x < 0.0f && !known) return std::nullopt;
+        return -30.0f;
+    });
+    g.recenter({0.0f, 0.0f});
+    cw::SpawnContext ctx;
+    ctx.strength = 1.0f;
+    Sequence rnd{{0.5f}};
+    const cw::Particle p = cw::spawnRain(std::ref(rnd), ctx, g, 2.0f);
+    CHECK(p.start == 0.0f);
+    CHECK(p.end == 0.0f);
+    // Once known, the same drop lands.
+    known = true;
+    const cw::Particle q = cw::spawnRain(std::ref(rnd), ctx, g, 2.0f);
+    REQUIRE(q.end > q.start);
+    CHECK(q.position.z + q.velocity.z * (q.end - q.start) == Catch::Approx(-30.0f).margin(0.6f));
+}
+
+TEST_CASE("cells under what came or went are asked again", "[weather]") {
+    float roof = -1000.0f;  // nothing yet
+    int asked = 0;
+    cw::HeightCache c;
+    c.setQuery([&](float, float, float z) -> std::optional<float> {
+        ++asked;
+        return roof > -999.0f ? roof : z - 200.0f;
+    });
+    c.recenter({0.0f, 0.0f});
+    CHECK(c.heightAt({5.0f, 5.0f, 30.0f}) == Catch::Approx(-170.0f));
+    CHECK(c.heightAt({40.0f, 40.0f, 30.0f}) == Catch::Approx(-170.0f));
+    CHECK(asked == 2);
+    // A house comes over (0..10, 0..10).
+    roof = 20.0f;
+    CHECK(c.heightAt({5.0f, 5.0f, 30.0f}) == Catch::Approx(-170.0f));  // still the old one
+    c.forget({0.0f, 0.0f}, {10.0f, 10.0f});
+    CHECK(c.heightAt({5.0f, 5.0f, 30.0f}) == Catch::Approx(20.0f));
+    CHECK(asked == 3);
+    // A cell outside it is kept.
+    CHECK(c.heightAt({40.0f, 40.0f, 30.0f}) == Catch::Approx(-170.0f));
+    CHECK(asked == 3);
+    // Far outside the window: nothing to do.
+    c.forget({5000.0f, 5000.0f}, {5100.0f, 5100.0f});
+    CHECK(c.cachedCells() == 2);
+}
+
 TEST_CASE("the player's velocity is the last 150 ms of moves", "[weather]") {
     cw::VelocityWindow w;
     for (int i = 0; i < 20; ++i) w.add({0.07f, 0.0f, 0.0f}, 10);

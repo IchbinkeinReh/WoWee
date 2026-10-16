@@ -1170,6 +1170,7 @@ uint32_t WMORenderer::createInstance(uint32_t modelId, const glm::vec3& position
     size_t idx = instances.size() - 1;
     instanceIndexById[instance.id] = idx;
     insertBounds(spatialGrid, instance.worldBoundsMin, instance.worldBoundsMax, instance.id);
+    noteChangedBounds(instance.worldBoundsMin, instance.worldBoundsMax);
     ++instanceGeneration_;
     core::Logger::getInstance().debug("Created WMO instance ", instance.id, " (model ", modelId, ")");
     return instance.id;
@@ -1357,6 +1358,7 @@ void WMORenderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
             continue;
         }
         eraseBounds(spatialGrid, inst.worldBoundsMin, inst.worldBoundsMax, inst.id);
+        noteChangedBounds(inst.worldBoundsMin, inst.worldBoundsMax);
         for (const auto& doodad : inst.doodads) {
             doodadIds.push_back(doodad.m2InstanceId);
         }
@@ -1391,6 +1393,7 @@ void WMORenderer::clearInstances() {
             }
         }
     }
+    for (const auto& inst : instances) noteChangedBounds(inst.worldBoundsMin, inst.worldBoundsMax);
     instances.clear();
     spatialGrid.clear();
     instanceIndexById.clear();
