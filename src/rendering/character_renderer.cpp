@@ -4765,7 +4765,7 @@ void CharacterRenderer::clearTextureSlotOverride(uint32_t instanceId, uint16_t t
 
 void CharacterRenderer::refreshInteriorLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
                                               const glm::vec3& zoneAmbient, const glm::vec3& zoneDirect,
-                                              float seconds) {
+                                              float seconds, uint64_t floorGeneration) {
     namespace wl = pipeline::wmo_doodad_light;
     const auto toBytes = [](const glm::vec3& c) {
         return glm::ivec3(glm::round(glm::clamp(c, 0.0f, 1.0f) * 255.0f));
@@ -4794,9 +4794,15 @@ void CharacterRenderer::refreshInteriorLights(const FloorQuery& floorAt, const I
         // over many frames anyway, and in a crowd every walker asking every
         // frame was a few hundred rays through the city.
         const bool itsTurn = ((id + lightRefreshFrame_) & 3u) == 0;
-        if (!instance.interiorQueried || (glm::dot(d, d) >= 0.25f * 0.25f && itsTurn)) {
+        // Asked again, standing still or not, once the buildings have
+        // changed: an NPC that spawned before the building it stands in was
+        // loaded found no floor, kept the zone's light for good - at night a
+        // dark blue figure in a lamplit room - and never moved to ask again.
+        const bool buildingsChanged = instance.floorGeneration != floorGeneration;
+        if (!instance.interiorQueried || ((glm::dot(d, d) >= 0.25f * 0.25f || buildingsChanged) && itsTurn)) {
             instance.interiorQueried = true;
             instance.interiorQueryPos = feet;
+            instance.floorGeneration = floorGeneration;
             instance.floor = floorAt(feet);
         }
         const auto& floorLight = instance.floor.light;

@@ -305,6 +305,25 @@ TEST_CASE("An interior's baked colour applies as the room's light shades it", "[
     }
 }
 
+// character.frag's unit on an interior floor (RT_GB_UNIT_FLOOR): its floor's
+// colour as painted, whatever the lamps' shadows and the room's light at its
+// own pixels; the other lights added.
+TEST_CASE("A unit on an interior floor keeps its floor's colour", "[rt_gbuffer]") {
+    Rng rng;
+    for (int i = 0; i < 400; ++i) {
+        const glm::vec3 baked = rng.v(0.05f, 1.0f);
+        const glm::vec3 m = rng.v(0.2f, 1.5f);
+        const auto colour = [&](const RtLight& r) { return m * (baked + r.pointOwn); };
+        const glm::vec3 c0 = colour(kNeutral);
+        Surface s;
+        s.flags = kValid | kBaked | kInterior | kUnitFloor;
+        s.g = baked * m;
+        s.kp = m;
+        const RtLight r = randomTraced(rng);
+        requireClose(applied(s, c0, r, Strengths{}, glm::vec3(0.0f, 0.0f, 1.0f)), colour(r), c0);
+    }
+}
+
 // A WMO transition batch (wmo.frag, rtSurfaceMix): the outside pass, under
 // the sun's shadow, times alpha, plus the inside pass, the room's baked
 // colour, times one less alpha. Each pass takes its own shade: the sun the

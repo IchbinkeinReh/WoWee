@@ -2885,14 +2885,15 @@ void Renderer::update(float deltaTime) {
                     [&](const glm::vec3& feet) {
                         return objectFloor(feet, feet.z + pipeline::wmo_doodad_light::kUnitFloorAbove, true);
                     },
-                    inPass, zl.ambientColor, zl.diffuseColor, deltaTime);
+                    inPass, zl.ambientColor, zl.diffuseColor, deltaTime, wmoRenderer->instanceGeneration());
             }
             }
             WOWEE_PROFILE_SCOPE("lighting: game objects", Cpu);
             if (m2Renderer) {
                 m2Renderer->refreshGameObjectLights(
                     [&](const glm::vec3& feet, float startZ) { return objectFloor(feet, startZ, false); },
-                    inPass, wmoRenderer->interiorPassGeneration(), zl.ambientColor, zl.diffuseColor, deltaTime);
+                    inPass, wmoRenderer->interiorPassGeneration(), zl.ambientColor, zl.diffuseColor, deltaTime,
+                    wmoRenderer->instanceGeneration());
             }
         }
         if (waterRenderer) {

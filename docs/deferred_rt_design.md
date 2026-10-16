@@ -128,7 +128,7 @@ Two `R16G16B16A16_UNORM` attachments, 128 bits, packed as 16-bit words
 
 `g = G/C0`, `occ = (Y-E)/C0` (the most occlusion can take), `knee = E/Y`,
 `kp = Kp/2`. Flags: valid (an RT surface), sun-shadowed, baked (bakedShade and
-the lights less the building's own), lift-after-min (characters), interior
+the lights less the building's own), lift-after-min (characters), unit on an interior floor, interior
 (baked light of a room: the room's own light shades it, see "Interior light"
 below), transition (below). A cleared
 G-buffer is "not an RT surface": the sky, grass, the debug views 1-4 and
@@ -335,7 +335,7 @@ from its bind pose, and a light left at the bind pose sat beside the glass.
 Inside, the original shows a room's baked vertex colours evenly. With RT on,
 a baked colour of an interior - the WMO's baked passes in the camera's
 interior pass that are not under the sun, its doodads lit by their MODD
-colour, units on its floors (`RT_GB_INTERIOR`) - is scaled by
+colour - is scaled by
 
 ```
 l = clamp(L / fullAt, 0, 1)
@@ -353,6 +353,14 @@ point-light strength). `base` and `fullAt` are Debug Graphics sliders
 (50% and 100% by default). Where the lamps shine fully all of the painted
 colour remains; where none reaches, `base` of it. Weighted by the pixel's
 match weight, so a pixel without a traced result is as painted.
+
+A unit on an interior floor (`RT_GB_UNIT_FLOOR`) takes neither: its colour
+is its floor's, which holds the room's lamps as they reach the floor already.
+Shaded again at its own pixels, an upright body took the shadow of every
+building light in front of its face that the floor turns away (the hearth's
+light a yard under the Goldshire inn's upper floor), and the NPCs upstairs
+drew at half their colour or less. Only the other lights add to it, as for a
+see-through unit (`rtLightBehind`).
 
 The baked lamps' shadow takes their share of the baked colour: `baked /
 (baked + 0.5)` (the rest of the bake taken as half a lamp's worth) times the

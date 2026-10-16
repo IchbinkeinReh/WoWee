@@ -1170,6 +1170,7 @@ uint32_t WMORenderer::createInstance(uint32_t modelId, const glm::vec3& position
     size_t idx = instances.size() - 1;
     instanceIndexById[instance.id] = idx;
     insertBounds(spatialGrid, instance.worldBoundsMin, instance.worldBoundsMax, instance.id);
+    ++instanceGeneration_;
     core::Logger::getInstance().debug("Created WMO instance ", instance.id, " (model ", modelId, ")");
     return instance.id;
 }
@@ -1372,6 +1373,7 @@ void WMORenderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
                    instances.end());
 
     if (instances.size() != oldSize) {
+        ++instanceGeneration_;
         instanceIndexById.clear();
         for (size_t i = 0; i < instances.size(); i++) {
             instanceIndexById[instances[i].id] = i;
@@ -1393,6 +1395,7 @@ void WMORenderer::clearInstances() {
     spatialGrid.clear();
     instanceIndexById.clear();
     precomputedFloorGrid.clear();  // Invalidate floor cache when instances change
+    ++instanceGeneration_;
     core::Logger::getInstance().info("Cleared all WMO instances");
 }
 

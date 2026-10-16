@@ -145,7 +145,7 @@ void M2Renderer::setInstanceInteriorLight(uint32_t instanceId, const glm::vec3& 
 
 void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
                                          uint64_t passGeneration, const glm::vec3& zoneAmbient,
-                                         const glm::vec3& zoneDirect, float seconds) {
+                                         const glm::vec3& zoneDirect, float seconds, uint64_t floorGeneration) {
     namespace wl = pipeline::wmo_doodad_light;
     const auto toBytes = [](const glm::vec3& c) {
         return glm::ivec3(glm::round(glm::clamp(c, 0.0f, 1.0f) * 255.0f));
@@ -174,6 +174,11 @@ void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const Interi
     // world's geometry, and a city has dozens of objects that shift a little
     // every frame.
     int floorBudget = 3;
+    // Once the buildings have changed, every object asks again, a few a
+    // frame: one placed before the building it stands in was loaded found no
+    // floor and kept the zone's light (and the probes' ambient) indoors - the
+    // inn's chairs and chests, which never move to ask again.
+    int changedBudget = 16;
     size_t keep = 0;
     for (size_t k = 0; k < gameObjectInstanceIds_.size(); ++k) {
         const uint32_t id = gameObjectInstanceIds_[k];
@@ -187,10 +192,13 @@ void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const Interi
         inst.interiorPassGeneration = passGeneration;
         inst.interiorPass = inInteriorPass && inInteriorPass(inst.position);
         const glm::vec3 d = inst.position - inst.floorQueryPos;
-        if (!inst.floorQueried || (glm::dot(d, d) >= 0.25f * 0.25f && floorBudget > 0)) {
-            if (inst.floorQueried) --floorBudget;
+        const bool moved = glm::dot(d, d) >= 0.25f * 0.25f;
+        const bool buildingsChanged = inst.floorGeneration != floorGeneration;
+        if (!inst.floorQueried || (moved && floorBudget > 0) || (!moved && buildingsChanged && changedBudget > 0)) {
+            if (inst.floorQueried) --(moved ? floorBudget : changedBudget);
             inst.floorQueried = true;
             inst.floorQueryPos = inst.position;
+            inst.floorGeneration = floorGeneration;
             inst.floor = floorAt(inst.position, wl::gameObjectFloorStart(inst.position.z, inst.worldBoundsMax.z));
         }
         const auto& floorLight = inst.floor.light;

@@ -354,6 +354,7 @@ struct M2Instance {
     uint64_t interiorPassGeneration = 0;
     bool floorQueried = false;
     glm::vec3 floorQueryPos{0.0f};
+    uint64_t floorGeneration = 0;  ///< the buildings' generation it was asked in
     /// An alpha its owner sets on the whole model - the sky's crossfade
     /// between zones. Below one the instance is drawn in the blended pass
     /// alone, every layer of it, since an opaque layer cannot fade otherwise.
@@ -800,10 +801,12 @@ public:
     /// in a group of the camera's interior pass (`inInteriorPass`, which
     /// changes with `passGeneration`) for the camera's fog colour.
     /// `zoneAmbient`, `zoneDirect`: the zone's light now; `seconds` the
-    /// frame's time.
+    /// frame's time. `floorGeneration` changes whenever the buildings do
+    /// (WMORenderer::instanceGeneration); every object is then asked for its
+    /// floor again, a few a frame.
     void refreshGameObjectLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
                                  uint64_t passGeneration, const glm::vec3& zoneAmbient,
-                                 const glm::vec3& zoneDirect, float seconds);
+                                 const glm::vec3& zoneDirect, float seconds, uint64_t floorGeneration = 0);
     void setSkipCollision(uint32_t instanceId, bool skip);
     void clear();
     /** Drop all instances but keep models in GPU memory. Cheap path for the

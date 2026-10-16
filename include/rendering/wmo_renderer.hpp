@@ -555,6 +555,11 @@ public:
     [[nodiscard]] std::optional<IndoorArea> indoorAreaAt(const glm::vec3& pos) const;
     /// Changes whenever the set of those groups does.
     [[nodiscard]] uint64_t interiorPassGeneration() const { return interiorPassGeneration_; }
+    /// Changes whenever a WMO instance is added or removed: what was found
+    /// (or not) on the floors below the world's objects may have changed with
+    /// it (CharacterRenderer::refreshInteriorLights,
+    /// M2Renderer::refreshGameObjectLights).
+    [[nodiscard]] uint64_t instanceGeneration() const { return instanceGeneration_; }
 
     /**
      * Raycast against WMO bounding boxes for camera collision
@@ -1222,6 +1227,7 @@ private:
     glm::vec3 interiorPassUnionMin_{0.0f}, interiorPassUnionMax_{-1.0f};
     const minimap_indoor::AreaRows* areaRows_ = nullptr;
     uint64_t interiorPassGeneration_ = 0;
+    uint64_t instanceGeneration_ = 0;
 
     // Collision query profiling - atomic because getFloorHeight is dispatched
     // on async threads from camera_controller while the main thread reads these.

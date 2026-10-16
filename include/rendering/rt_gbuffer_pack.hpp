@@ -25,6 +25,7 @@ inline constexpr uint32_t kSun = 2u;
 inline constexpr uint32_t kBaked = 4u;
 inline constexpr uint32_t kLiftAfter = 8u;
 inline constexpr uint32_t kInterior = 16u;
+inline constexpr uint32_t kUnitFloor = 32u;
 inline constexpr uint32_t kTransition = 64u;
 
 /// What a surface knows of how its colour depends on the traced terms, in the
@@ -185,7 +186,9 @@ inline Factors apply(const Texel& t, const Traced& r, const Tune& tune, const gl
         rs = sigma / std::max(sigma0, 1e-4f);
     }
     const bool baked = (t.flags & kBaked) != 0;
-    const float shade = (t.flags & kInterior) != 0 ? std::min(r.bakedShade, r.interiorShade) : r.bakedShade;
+    const float shade = (t.flags & kUnitFloor) != 0 ? 1.0f
+                      : (t.flags & kInterior) != 0 ? std::min(r.bakedShade, r.interiorShade)
+                                                    : r.bakedShade;
     const float rIn = baked ? shade : 1.0f;
     const glm::vec3 pointIn = baked ? r.pointOwn : r.point;
     const float ao = tune.mode >= 2 ? 1.0f - r.weight * tune.occlusion * (1.0f - r.ao) : 1.0f;

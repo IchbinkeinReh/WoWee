@@ -475,21 +475,19 @@ void main() {
         const vec3 interiorTravel = vec3(-0.30822, -0.30822, -0.9);
         vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, pc.interiorDirect.w));
         float idiff = max(dot(norm, toLight), 0.0);
-        // The ray tracing, where it has a result, as for the doodads on the
-        // same floor (m2.frag): the floor's colour is the building's baked
-        // light, its lamps in it already, so those only shadow the unit
-        // (rtBakedShade) and the other lights - fires, M2 lights - add theirs
+        // The ray tracing, where it has a result: the floor's colour is the
+        // building's baked light, its lamps in it already as they reach the
+        // floor, so it is taken as painted (RT_GB_UNIT_FLOOR: neither the
+        // lamps' shadows nor the room's light over it, rt_apply.glsli) and
+        // the other lights - fires, M2 lights - add theirs
         // (rtPointLightOwn); the occlusion darkens the ambient. Without a
         // result all of it is as the client has it.
         RtLight rt = kGbuffer ? rtNeutral() : rtLightBehind(FragPos);
         // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct).
         const vec3 ambientLit = rtAmbient(rt, pc.interiorAmbient.rgb);
         const vec3 floorDirect = idiff * pc.interiorDirect.rgb * pc.diffuseColour.rgb * pc.lightFlags.y;
-        // Inside, the room's own light shades it too (rtInteriorShade).
-        light = clamp(ambientLit + floorDirect, 0.0, 1.0)
-                  * (rtBakedLight() * rtInteriorBakedShade(rt))
-              + rtPointLightOwn(rt);
-        rtSurface.flags = RT_GB_VALID | RT_GB_BAKED | RT_GB_INTERIOR;
+        light = clamp(ambientLit + floorDirect, 0.0, 1.0) * rtBakedLight() + rtPointLightOwn(rt);
+        rtSurface.flags = RT_GB_VALID | RT_GB_BAKED | RT_GB_INTERIOR | RT_GB_UNIT_FLOOR;
         rtSurface.g = clamp(ambientLit + floorDirect, 0.0, 1.0) * rtBakedLight();
         rtSurfaceOcclusion(rtSurface, ambientLit, floorDirect, vec3(1.0));
         rtSurface.occY *= rtBakedLight();

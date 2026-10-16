@@ -134,6 +134,14 @@ void main() {
     // shadows, whichever is darker: the lesser, so the one does not darken
     // twice what the other has already (rtInteriorShade).
     float shade = (g.flags & RT_GB_INTERIOR) != 0u ? min(r.bakedShade, r.interiorShade) : r.bakedShade;
+    // A unit on an interior floor is lit by that floor's colour (0x007a0d60),
+    // which holds the room's lamps as they reach the floor already. Shaded
+    // again at its own pixels, an upright body took the shadow of every
+    // building light in front of its face that the floor turns away - the
+    // hearth's a yard under the Goldshire inn's upper floor above all - and
+    // the trainers there drew at half their colour or less. As painted, as a
+    // see-through unit already is (rtLightBehind); the other lights still add.
+    if ((g.flags & RT_GB_UNIT_FLOOR) != 0u) shade = 1.0;
     float rIn = baked ? shade : 1.0;
     vec3 pointIn = baked ? r.pointOwn : r.point;
     // The occlusion over the flat ambient (rtAmbient), from Shadows and

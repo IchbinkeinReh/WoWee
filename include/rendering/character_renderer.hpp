@@ -293,9 +293,13 @@ public:
     /// feet are in the terrain's baked shadow (0x007a1bc0, 0x007a06a0). In a
     /// group of the camera's interior pass it takes the camera's fog colour
     /// (0x007c1730, `inInteriorPass`). `zoneAmbient` and `zoneDirect` are the
-    /// zone's light now, `seconds` the frame's time.
+    /// zone's light now, `seconds` the frame's time. `floorGeneration`
+    /// changes whenever the buildings the floors are found in do
+    /// (WMORenderer::instanceGeneration): every instance is then asked again,
+    /// moving or not, in its turn.
     void refreshInteriorLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
-                               const glm::vec3& zoneAmbient, const glm::vec3& zoneDirect, float seconds);
+                               const glm::vec3& zoneAmbient, const glm::vec3& zoneDirect, float seconds,
+                               uint64_t floorGeneration = 0);
     void removeInstance(uint32_t instanceId);
     bool getAnimationState(uint32_t instanceId, uint32_t& animationId, float& animationTimeMs, float& animationDurationMs) const;
     /// Everything an M2 instance needs to pose its particles as this one is
@@ -591,6 +595,8 @@ private:
         // Where that was last asked, so a unit standing still is not asked again.
         bool interiorQueried = false;
         glm::vec3 interiorQueryPos{0.0f};
+        // The buildings' generation it was asked in (refreshInteriorLights).
+        uint64_t floorGeneration = 0;
         // The ambient as it eases between floors, 0..255 (0x007a1e90), and
         // what the instance is drawn with this frame (CharPushConstants).
         bool lightKnown = false;
