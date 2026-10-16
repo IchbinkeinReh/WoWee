@@ -988,12 +988,30 @@ private:
     /// Seeds from both the camera's group and the character's: at a doorway the
     /// two are in different rooms, and walking from only one while judging every
     /// door against the camera's frustum empties the interior.
+    /// `inside`: the camera stands on an interior floor of this model
+    /// (cameraOnInteriorFloor). Then an exterior group is drawn only where a
+    /// chain of portals from the camera's room shows it, each portal clipping
+    /// the view to its own outline on screen (0x007ac060), and not at all
+    /// otherwise; without it every exterior group is drawn, as before.
     void getVisibleGroupsViaPortals(const ModelData& model,
                                      const glm::vec3& cameraLocalPos,
                                      const glm::vec3& viewerLocalPos,
                                      const Frustum& frustum,
                                      const glm::mat4& modelMatrix,
-                                     std::unordered_set<uint32_t>& outVisibleGroups) const;
+                                     std::unordered_set<uint32_t>& outVisibleGroups,
+                                     bool inside = false, const glm::mat4* viewProj = nullptr) const;
+
+    /// Whether the first face of this model straight below `localPos` (its own
+    /// space) belongs to an interior-only group: the camera is in a room, not
+    /// at a door with an interior's box spilling out past it. The exterior
+    /// shell's box holds the whole building, so its box says nothing.
+    bool cameraOnInteriorFloor(const ModelData& model, const glm::vec3& localPos) const;
+
+    /// A portal's outline on screen, in NDC, clipped to `clip` (x0, y0, x1,
+    /// y1); empty (x0 >= x1) when it does not show through it. The whole of
+    /// `clip` when any corner is behind or at the camera.
+    glm::vec4 portalScreenRect(const ModelData& model, uint16_t portalIndex, const glm::mat4& modelViewProj,
+                               const glm::vec4& clip) const;
 
     /**
      * Test if a portal polygon is visible from a position through a frustum

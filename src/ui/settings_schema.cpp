@@ -278,8 +278,10 @@ constexpr SettingDesc kSchema[] = {
     {"dbgview", "Show instead of the picture", SettingKind::Enum, 0, 9, 1, "Debug Graphics", "View",
      "Replace the picture with one part of the ray traced lighting.\n"
      "The traced views work in every ray tracing mode; the probe views\n"
-     "need Shadows, occlusion and bounce light. Nothing with ray tracing\n"
-     "off. The history length is green where a surface has been traced\n"
+     "need Shadows, occlusion and bounce light; what a building's baked\n"
+     "light colours - its rooms, their furniture, who stands on their\n"
+     "floors - takes no probe light and shows as it is. Nothing with ray\n"
+     "tracing off. The history length is green where a surface has been traced\n"
      "over many frames and red where it starts afresh; the last view is\n"
      "green where a pixel found its own surface in the half-resolution\n"
      "trace and red where it is lit as without the tracing.\n"

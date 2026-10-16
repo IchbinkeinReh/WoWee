@@ -193,6 +193,16 @@ Debug views 5 (sun), 6 (point lights) and 7 (AO) are written here for opaque
 surfaces and in the forward shader for blended ones. 8 and 9 are replaced:
 8 = temporal history length, 9 = upsample match (green own surface, red none).
 
+Views 1-4 (the probes) are drawn by the surface shaders, and only by the
+surfaces that read the probes (`rtGiRatio`): those lit by the zone's light.
+What a building's baked light colours - interior WMO groups, their MODD-lit
+doodads, units and game objects on their floors - takes no probe light and
+shows its own colour there. A flat grey (ratio 1, "open field") on furniture
+indoors meant an object on the outdoor path: game objects (the inn's chairs
+and chests) that had found no floor because they were placed before the
+building loaded, fixed by asking again when buildings load
+(`WMORenderer::instanceGeneration`).
+
 ## Transparent and blended geometry
 
 Stays forward, drawn after the apply pass. It reads the current frame's
