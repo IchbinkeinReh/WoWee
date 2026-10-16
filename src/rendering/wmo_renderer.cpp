@@ -5467,6 +5467,48 @@ void WMORenderer::syncRtScene() {
     }
 }
 
+std::optional<rt_light_storey::Storey> WMORenderer::lightStorey(const glm::vec3& world) const {
+    std::optional<rt_light_storey::Storey> out;
+    std::vector<rt_light_storey::GroupMesh> meshes;
+    for (const auto& inst : instances) {
+        if (inst.hidden) continue;
+        if (glm::any(glm::lessThan(world, inst.worldBoundsMin)) ||
+            glm::any(glm::greaterThan(world, inst.worldBoundsMax))) {
+            continue;
+        }
+        auto model = loadedModels.find(inst.modelId);
+        if (model == loadedModels.end()) continue;
+        meshes.clear();
+        for (const auto& group : model->second.groups) {
+            if (group.collisionVertices.empty()) continue;
+            rt_light_storey::GroupMesh mesh;
+            mesh.vertices = &group.collisionVertices;
+            mesh.indices = &group.collisionIndices;
+            // The box from the vertices (createGroupResources).
+            mesh.hasBounds = true;
+            mesh.boundsMin = group.boundingBoxMin;
+            mesh.boundsMax = group.boundingBoxMax;
+            meshes.push_back(mesh);
+        }
+        const glm::vec3 local = glm::vec3(inst.invModelMatrix * glm::vec4(world, 1.0f));
+        const auto storey = rt_light_storey::storeyAt(local, meshes);
+        if (!storey) continue;
+        const auto worldZ = [&](float z) {
+            return (inst.modelMatrix * glm::vec4(local.x, local.y, z, 1.0f)).z;
+        };
+        rt_light_storey::Storey s{worldZ(storey->floorZ), std::isfinite(storey->ceilingZ)
+                                                              ? worldZ(storey->ceilingZ)
+                                                              : std::numeric_limits<float>::infinity()};
+        if (!out) {
+            out = s;
+        } else {
+            out->floorZ = std::max(out->floorZ, s.floorZ);
+            out->ceilingZ = std::min(out->ceilingZ, s.ceilingZ);
+        }
+    }
+    return out;
+}
+
 void WMORenderer::collectRtLights(const glm::vec3& eye, float range,
                                   std::vector<rt_lights::PointLight>& out) const {
     for (const auto& inst : instances) {

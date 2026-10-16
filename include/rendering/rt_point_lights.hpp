@@ -52,20 +52,33 @@ struct PointLight {
     /// them twice (rt_lighting.glsli, rtPointLightOwn and rtBakedShade).
     bool baked = false;
     Source source = Source::Model;
+    /// A building's light: the storey whose baked colours alone it shades,
+    /// from its floor to its ceiling in world z (rt_light_storey.hpp,
+    /// Renderer gives it after selectLights). Without one, every baked colour.
+    bool hasStorey = false;
+    float storeyFloor = 0.0f;
+    float storeyCeiling = 0.0f;
 };
 
 /// What the shader reads per light (std430): position and end, colour and
-/// start. Must match RtPointLight in rt_trace.comp.glsl. A baked light's end
-/// goes negative; an end is never zero (selectLights drops those).
+/// start, and the storey (floor, ceiling, 1 when it has one). Must match
+/// RtPointLight in rt_trace.comp.glsl. A baked light's end goes negative; an
+/// end is never zero (selectLights drops those). An open ceiling goes up as
+/// a large finite height, which the shader's comparison takes alike.
 struct PointLightGPU {
     glm::vec4 positionEnd;
     glm::vec4 colorStart;
+    glm::vec4 storey;
 };
-static_assert(sizeof(PointLightGPU) == 32, "PointLightGPU is uploaded as std430");
+static_assert(sizeof(PointLightGPU) == 48, "PointLightGPU is uploaded as std430");
+
+inline constexpr float kOpenCeiling = 1e30f;
 
 inline PointLightGPU toGpu(const PointLight& l) {
     return {glm::vec4(l.position, l.baked ? -l.attenuationEnd : l.attenuationEnd),
-            glm::vec4(l.color, l.attenuationStart)};
+            glm::vec4(l.color, l.attenuationStart),
+            l.hasStorey ? glm::vec4(l.storeyFloor, std::min(l.storeyCeiling, kOpenCeiling), 1.0f, 0.0f)
+                        : glm::vec4(0.0f)};
 }
 
 /// How much of a light reaches `distance` yards: all of it within the start,

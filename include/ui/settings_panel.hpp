@@ -76,7 +76,7 @@ public:
     int pendingRtLighting = 0;
     bool pendingRtFullRes = false;  ///< trace every pixel (Ray Tracing)
     /// Settings > Debug Graphics: the view the surfaces show instead
-    /// (0-9, Renderer::setRtDebugView) and the lighting's strengths in
+    /// (0-10, Renderer::setRtDebugView) and the lighting's strengths in
     /// percent (Renderer::LightingTune).
     int pendingDbgView = 0;
     int pendingDbgAmbient = 100;

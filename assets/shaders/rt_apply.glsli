@@ -168,9 +168,13 @@ void main() {
     // the traced occlusion (red: no result of its own), how long the history
     // runs here (green a full one, red one just begun), and how well the
     // pixel found its own surface in the half resolution (green fully, red
-    // not at all).
+    // not at all); 10 a baked colour's two shades: red the building's lamps'
+    // shadows leave (rtBakedShade), green and blue the room's light
+    // (rtInteriorShade) - white as painted, cyan darkened by the lamps'
+    // shadows, red by the room's light, grey by both; dark blue no baked
+    // colour.
     int view = int(pass.tune2.z + 0.5);
-    if (view >= 5 && view <= 9) {
+    if (view >= 5 && view <= 10) {
         vec3 c = vec3(0.0);
         if (view == 5) c = r.weight > 0.0 ? vec3(r.sun) : vec3(1.0, 0.0, 0.0);
         else if (view == 6) c = r.point;
@@ -179,8 +183,12 @@ void main() {
             ivec2 q = clamp(ivec2(uv * pass.extent.xy), ivec2(0), ivec2(pass.extent.xy) - 1);
             float len = clamp(imageLoad(uHist, q).a / 24.0, 0.0, 1.0);
             c = vec3(1.0 - len, len, 0.0);
-        } else {
+        } else if (view == 9) {
             c = vec3(1.0 - r.best, r.best, 0.0);
+        } else {
+            bool asPainted = (g.flags & RT_GB_UNIT_FLOOR) != 0u;
+            float room = (g.flags & RT_GB_INTERIOR) != 0u ? r.interiorShade : 1.0;
+            c = !baked ? vec3(0.1, 0.15, 0.45) : asPainted ? vec3(1.0) : vec3(r.bakedShade, room, room);
         }
         outMul = vec4(0.0);
         outAdd = vec4(c, 0.0);

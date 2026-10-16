@@ -1291,6 +1291,12 @@ wowee_add_test(test_rt_reconstruct
 wowee_add_test(test_rt_gbuffer
     SOURCES test_rt_gbuffer.cpp)
 
+# ── test_rt_light_storey ─────────────────────────────────────
+# Header-only: the storey a building's light shades - from the floor below it
+# to the face above it - and which baked colours it leaves as painted.
+wowee_add_test(test_rt_light_storey
+    SOURCES test_rt_light_storey.cpp)
+
 # ── test_rt_point_lights ─────────────────────────────────────
 # An M2's lights read from a synthetic file and placed by their bone, a
 # building's, the falloff the trace shader shares, and which lights a crowded

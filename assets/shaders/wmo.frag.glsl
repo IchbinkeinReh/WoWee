@@ -329,6 +329,9 @@ RtSurface passSurface(int mode, vec3 c, PassKnee knee, bool shadowedPass, float 
     RtSurface s = rtSurfaceNone();
     s.flags = RT_GB_VALID | (shadowedPass ? RT_GB_SUN : 0u) | (passBaked(mode) ? RT_GB_BAKED : 0u) |
               (passInterior(mode, shadowedPass) ? RT_GB_INTERIOR : 0u);
+    // A room's baked colour: the building's lights of other storeys leave it
+    // as painted (rt_trace).
+    s.storeyBound = passInterior(mode, shadowedPass) ? 1u : 0u;
     float scale = (shadowedPass ? shadowScale : 1.0) * (passBaked(mode) ? rtBakedLight() : 1.0);
     s.g = c * scale;
     rtSurfaceOcclusion(s, knee.y, knee.z, knee.cap);

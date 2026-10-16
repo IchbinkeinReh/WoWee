@@ -366,6 +366,44 @@ TEST_CASE("A transition batch's passes each take their own shade", "[rt_gbuffer]
     }
 }
 
+// A building's baked colour says so (storeyBound) in the bits a transition
+// batch keeps its outside share in. It must come back as written - read as
+// unset, a room upstairs is under the hall's lamps again - and must neither
+// disturb the words' other fields nor a transition's share.
+TEST_CASE("A baked colour's storey bit survives the words", "[rt_gbuffer]") {
+    Rng rng;
+    for (int i = 0; i < 64; ++i) {
+        Surface s;
+        s.flags = kValid | kBaked | kInterior;
+        s.normal = glm::normalize(rng.v(-1.0f, 1.0f) + glm::vec3(0.0f, 0.0f, 0.01f));
+        s.map = rng(0.0f, 1.0f);
+        s.g = rng.v(0.0f, 0.5f);
+        s.kp = rng.v(0.0f, 1.0f);
+        s.storeyBound = static_cast<uint32_t>(i & 1);
+        const glm::vec3 c0(0.5f);
+        const Texel t = unpack(pack(s, c0));
+        CHECK(t.storeyBound == s.storeyBound);
+        CHECK(t.flags == s.flags);
+        CHECK(std::abs(t.map - s.map) <= 0.5f / 255.0f + 1e-5f);
+        Surface u = s;
+        u.storeyBound = 1u - s.storeyBound;
+        const Texel tu = unpack(pack(u, c0));
+        CHECK(tu.g == t.g);
+        CHECK(tu.kp == t.kp);
+        CHECK(tu.knee == t.knee);
+        CHECK(tu.occ == t.occ);
+        CHECK(tu.normal == t.normal);
+    }
+    // A transition batch keeps its share and reads as not bound.
+    Surface s;
+    s.flags = kValid | kTransition | kBaked;
+    s.outside = 0.4f;
+    s.storeyBound = 1;
+    const Texel t = unpack(pack(s, glm::vec3(0.5f)));
+    CHECK(t.storeyBound == 0u);
+    CHECK(std::abs(t.outside - 0.4f) <= 0.5f / 63.0f + 1e-5f);
+}
+
 // rtInteriorShade: half where no lamp reaches (the default), all of it at the
 // light named full and above, linear between; as painted where the pixel
 // found no traced result of its own, and at a base of one.

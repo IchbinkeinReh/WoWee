@@ -12,7 +12,10 @@
 // normal-mapped normal points rays into the surface they start from. The
 // point lights take the shading normal, which goes to rt_trace in the image
 // it writes the point lights' light to (uPointNormal), turned to the side
-// of the geometric face (not toward the camera: see below).
+// of the geometric face (not toward the camera: see below), and beside it
+// whether the surface is a building's baked colour (rtGbufStoreyBound),
+// which the building's lights shade from their own storey only (rt_trace,
+// rt_light_storey.hpp).
 //
 // Built with RT_MSAA when the scene is multisampled; sample 0 stands for the
 // pixel then.
@@ -22,9 +25,11 @@
 #ifdef RT_MSAA
 layout(set = 0, binding = 1) uniform sampler2DMS uSceneDepth;
 layout(set = 0, binding = 13) uniform sampler2DMS uSceneGbuf0;
+layout(set = 0, binding = 14) uniform sampler2DMS uSceneGbuf1;
 #else
 layout(set = 0, binding = 1) uniform sampler2D uSceneDepth;
 layout(set = 0, binding = 13) uniform sampler2D uSceneGbuf0;
+layout(set = 0, binding = 14) uniform sampler2D uSceneGbuf1;
 #endif
 layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D uGbuf;
 layout(set = 0, binding = 11, rgba16f) uniform writeonly image2D uPointNormal;
@@ -96,11 +101,14 @@ void main() {
     // vertex normals tilted far off up near the walls and doors (averaged
     // with the walls'), and the patches turned with the camera.
     vec3 shading = n;
+    uint storeyBound = 0u;
     if (valid) {
-        shading = rtGbufShadingNormal(texelFetch(uSceneGbuf0, sp, 0));
+        vec4 gb0 = texelFetch(uSceneGbuf0, sp, 0);
+        shading = rtGbufShadingNormal(gb0);
         if (dot(shading, n) < 0.0) shading = -shading;
         if (dot(shading, n) < 0.5) shading = n;
+        storeyBound = rtGbufStoreyBound(gb0, texelFetch(uSceneGbuf1, sp, 0));
     }
-    imageStore(uPointNormal, px, vec4(rtOctEncode(shading), 0.0, 0.0));
+    imageStore(uPointNormal, px, vec4(rtOctEncode(shading), float(storeyBound), 0.0));
     imageStore(uGbuf, px, vec4(rtOctEncode(n), length(p), float(sub) + (valid ? 4.0 : 0.0)));
 }

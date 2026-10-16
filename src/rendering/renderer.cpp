@@ -6439,6 +6439,31 @@ void Renderer::recordRtLighting() {
         frustum.extractFromMatrix(in.viewProj);
         rt_lights::selectLights(lightScratch, in.cameraPos, kLightRange, RtLighting::kMaxPointLights,
                                 [&](const glm::vec3& p, float r) { return frustum.intersectsSphere(p, r); });
+        // A building's light shades the baked colours of its own storey only
+        // (rt_light_storey.hpp): found once per place, a quarter yard apart,
+        // and again when the buildings change. WOWEE_RT_LIGHT_STOREY=0: every
+        // storey, as before, to compare.
+        static const bool storeys = core::envFlagEnabled("WOWEE_RT_LIGHT_STOREY", true);
+        if (wmoRenderer && storeys) {
+            static std::unordered_map<uint64_t, std::optional<rt_light_storey::Storey>> storeyCache;
+            static uint64_t storeyGeneration = ~uint64_t{0};
+            if (storeyGeneration != wmoRenderer->instanceGeneration() || storeyCache.size() > 8192) {
+                storeyCache.clear();
+                storeyGeneration = wmoRenderer->instanceGeneration();
+            }
+            for (rt_lights::PointLight& l : lightScratch) {
+                if (!l.baked) continue;
+                const glm::ivec3 q = glm::ivec3(glm::round(l.position * 4.0f));
+                const uint64_t key = (uint64_t(uint32_t(q.x) & 0x1FFFFFu) << 42) |
+                                     (uint64_t(uint32_t(q.y) & 0x1FFFFFu) << 21) | uint64_t(uint32_t(q.z) & 0x1FFFFFu);
+                auto it = storeyCache.find(key);
+                if (it == storeyCache.end()) it = storeyCache.emplace(key, wmoRenderer->lightStorey(l.position)).first;
+                if (!it->second) continue;
+                l.hasStorey = true;
+                l.storeyFloor = it->second->floorZ;
+                l.storeyCeiling = it->second->ceilingZ;
+            }
+        }
         rtLighting_->setPointLights(lightScratch);
         // WOWEE_RT_LIGHT_DIAG=1: every five seconds, the lights kept by kind
         // and the nearest of them, and the doodads near the camera with what

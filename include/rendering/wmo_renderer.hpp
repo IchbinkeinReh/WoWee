@@ -12,6 +12,7 @@
 #include "pipeline/wmo_loader.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 #include "rendering/rt_glow.hpp"
+#include "rendering/rt_light_storey.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -91,6 +92,12 @@ public:
     /// world: lamps, braziers; and what of them glows (ModelData::glows):
     /// glow cards and lava outside. None of it depends on the hour.
     void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
+    /// The storey of a building's light at `world` (rt_light_storey.hpp):
+    /// from the floor straight below it to the face straight above it, in
+    /// world z, in the buildings whose boxes hold it - the highest floor and
+    /// the lowest ceiling where they nest. None outside every building, or
+    /// with no floor below.
+    std::optional<rt_light_storey::Storey> lightStorey(const glm::vec3& world) const;
 
     /**
      * Load WMO model and create GPU resources

@@ -27,6 +27,13 @@
 // uPointOut's alpha (the brightest channel's worth), so those surfaces can
 // take the rest of the light and only the shadows of these
 // (rt_lighting.glsli).
+//
+// Only on their own storey, though (rt_light_storey.hpp): a building's light
+// leaves out a building's baked colour above its ceiling or below its floor
+// altogether - neither its light nor its shadow there. The Goldshire inn's
+// hall lights sit a yard or so under its upper floor; every ray to them from
+// the rooms upstairs meets the floorboards, and the walls there, which face
+// them sideways, went dark with their shadow over colours they never lit.
 
 #include "rt_common.glsli"
 #ifdef RT_HARDWARE
@@ -37,14 +44,16 @@
 
 layout(set = 0, binding = 3) uniform sampler2D uGbufCur;
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D uRaw;
-// In: the normal the surface is lit by (rt_prepare). Out: the point lights'
-// light; a = the baked lights' part.
+// In: the normal the surface is lit by, and in z whether it is a building's
+// baked colour (rt_prepare). Out: the point lights' light; a = the baked
+// lights' part.
 layout(set = 0, binding = 11, rgba16f) uniform image2D uPointOut;
 
 // Must match rt_lights::PointLightGPU.
 struct RtPointLight {
     vec4 positionEnd;  // xyz, w = where its light ends (yards), negative for a baked one
     vec4 colorStart;   // rgb, w = where its falloff starts
+    vec4 storey;       // a baked one's floor and ceiling (world z), z = 1 when it has them
 };
 layout(std430, set = 0, binding = 12) readonly buffer RtPointLights { RtPointLight rtPointLights[]; };
 
@@ -98,6 +107,16 @@ float rtUnitShadowReach(float d, inout uint rng) {
     return reach * mix(RT_UNIT_SHADOW_FADE, 1.0, rtRandom(rng));
 }
 
+// How far outside a light's storey a building's baked colour still takes
+// its shadow: the floor's own boards, the ceiling's (rt_light_storey::kMargin).
+const float RT_STOREY_MARGIN = 0.25;
+
+// Whether a baked light reaches a building's baked colour at height z: only
+// from its own storey (rt_light_storey::shades).
+bool rtOnStorey(vec4 storey, float z) {
+    return storey.z < 0.5 || (z >= storey.x - RT_STOREY_MARGIN && z <= storey.y + RT_STOREY_MARGIN);
+}
+
 layout(local_size_x = 8, local_size_y = 8) in;
 
 void main() {
@@ -112,7 +131,9 @@ void main() {
         return;
     }
     vec3 n = rtGbufNormal(g);
-    vec3 shadingN = rtOctDecode(imageLoad(uPointOut, px).xy);
+    vec4 normalIn = imageLoad(uPointOut, px);
+    vec3 shadingN = rtOctDecode(normalIn.xy);
+    bool storeyBound = normalIn.z > 0.5;
     vec3 p = rtGbufWorld(g, px);
     vec3 origin = p + n * rtSurfaceOffset(dist);
     uint rng = rtSeed(uvec2(px), uint(pass.cameraPos.w));
@@ -171,6 +192,8 @@ void main() {
         float d2 = dot(toLight, toLight);
         float end = abs(light.positionEnd.w);
         if (d2 >= end * end) continue;
+        // A building's light of another storey than this baked colour's.
+        if (storeyBound && light.positionEnd.w < 0.0 && !rtOnStorey(light.storey, p.z)) continue;
         float d = sqrt(d2);
         // Behind the surface itself - below a floor, behind a wall - no
         // light, by its geometric face, whatever its normal map says: a

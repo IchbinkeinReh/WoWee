@@ -39,6 +39,10 @@ struct Surface {
     glm::vec3 occE{0.0f};
     glm::vec3 kp{0.0f};
     float outside = 1.0f;  ///< kTransition: the outside pass's share of g
+    /// Otherwise: 1 for a building's baked colour, which its building's
+    /// lights shade from their own storey only (rt_light_storey.hpp). It
+    /// takes the outside share's bits.
+    uint32_t storeyBound = 0;
 };
 
 /// The same read back from the targets, relative to C0.
@@ -51,6 +55,7 @@ struct Texel {
     glm::vec3 knee{1.0f};
     glm::vec3 kp{0.0f};
     float outside = 1.0f;
+    uint32_t storeyBound = 0;  ///< 0 for a transition batch
 };
 
 /// The eight 16-bit words of the two R16G16B16A16_UNORM targets.
@@ -76,7 +81,7 @@ inline Words pack(const Surface& s, const glm::vec3& c0) {
     const glm::vec3 kp = s.kp * 0.5f;
     const auto byte = [](float v) { return quantise(v, 255.0f); };
     Words w{};
-    const uint32_t f = quantise(s.outside, 63.0f);
+    const uint32_t f = (s.flags & kTransition) != 0 ? quantise(s.outside, 63.0f) : (s.storeyBound != 0 ? 1u : 0u);
     w[0] = static_cast<uint16_t>(quantise(oct.x, 1023.0f) | (quantise(knee.r, 31.0f) << 10) | ((f & 1u) << 15));
     w[1] = static_cast<uint16_t>(quantise(oct.y, 1023.0f) | (quantise(knee.g, 31.0f) << 10) |
                                  (((f >> 1) & 1u) << 15));
@@ -98,8 +103,10 @@ inline Texel unpack(const Words& w) {
                        static_cast<float>((w[7] >> 8) & 31u)) / 31.0f;
     t.map = unbyte(w[2], 0);
     t.flags = (w[2] >> 8) & 127u;
-    t.outside = static_cast<float>(((w[0] >> 15) & 1u) | (((w[1] >> 15) & 1u) << 1) | (((w[2] >> 15) & 1u) << 2) |
-                                   (((w[7] >> 13) & 7u) << 3)) / 63.0f;
+    const uint32_t share = ((w[0] >> 15) & 1u) | (((w[1] >> 15) & 1u) << 1) | (((w[2] >> 15) & 1u) << 2) |
+                           (((w[7] >> 13) & 7u) << 3);
+    t.outside = static_cast<float>(share) / 63.0f;
+    t.storeyBound = (t.flags & kTransition) != 0 ? 0u : share;
     t.g = glm::vec3(unbyte(w[3], 0), unbyte(w[3], 8), unbyte(w[4], 0));
     t.occ = glm::vec3(unbyte(w[4], 8), unbyte(w[5], 0), unbyte(w[5], 8));
     t.kp = glm::vec3(unbyte(w[6], 0), unbyte(w[6], 8), unbyte(w[7], 0)) * 2.0f;

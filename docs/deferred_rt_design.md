@@ -148,6 +148,10 @@ share taking every point light and the inside the others. The outside part
 keeps the outside pass's sun flag, the inside part the inside pass's baked
 and interior flags.
 
+On every other surface the share bits say whether it is a building's baked
+colour (`storeyBound`, see "A building's lights keep to their storey"
+below).
+
 16 bytes per pixel (per sample under MSAA). Position comes from the depth
 buffer, which is already there; nothing is written twice.
 
@@ -391,6 +395,61 @@ blocked part (`rtBakedDarkness`), times the Debug Shadows strength. It took
 `min(baked, 1)` before, so a strong lamp counted as the whole colour until
 the very end of its reach, and the shadow of a wall or post it shone past
 ended in a hard arc there.
+
+### A building's lights keep to their storey
+
+A building's own light - a MOLT light, an interior doodad's lamp or glow
+(`PointLight::baked`) - shades only the baked colours of its own storey
+(`rt_light_storey.hpp`). The Goldshire inn's hall has its hearth and three
+lamps under its ceiling, a yard or so below the floor of the rooms upstairs
+(reach 7-9 yards, 10-14 with `kWorldReachScale`), and lanterns hung from
+that ceiling. The walls upstairs face them sideways, so the trace's "behind
+the face" test does not leave them out as it does the floor; every ray to
+them meets the floorboards, and the walls took their shadow
+(`rtBakedDarkness`) over colours those lights never lit: dark patches on
+every wall of the upper floor (cyan in debug view 10).
+
+A light's storey runs from the floor straight below it - the first face
+turned upward that a line down from it meets; a ceiling's underside faces
+down and is passed through - to the first face of any kind straight above
+it (`storeyAt`), in the building's groups' collision faces
+(`WMORenderer::lightStorey`, the highest floor and the lowest ceiling where
+buildings nest). The renderer gives each baked light of the frame its storey
+after `selectLights`, from a cache keyed by the light's place to a quarter
+yard and cleared when the buildings change (`instanceGeneration`); the GPU
+record carries it (`PointLightGPU::storey`: floor, ceiling, set). A light
+with no building floor below it has none and shades everything as before.
+In the inn: the hearth and the hall's lamps from 0.4 to 5.7-6.6 (model z),
+the rooms' lamps from 7.3 to 15.4, the lamp over the stairs from 5.4 to 15.3.
+
+Rooms side by side on one floor still share their lamps: a corridor upstairs
+with no lamp of its own is painted with the light of the rooms beside it.
+Limiting each light to its own group (room) was tried first and left such a
+corridor with no lamp at all, so the room's light (`rtInteriorShade`) went to
+its base there. The file's own link from lights to groups (MOGP 0x200, MOLR)
+does not say this either: the client only places each group's MOLR lights
+with the instance (0x007b64f0) and lights nothing with them at runtime, and
+the inn lists all nine of its hall's and rooms' lights under its exterior
+shell (group 4) and none under its rooms.
+
+A building's baked colour says so in the G-buffer (`storeyBound`, in the
+share bits of a surface that is no transition batch): an interior group's
+baked pass (`passInterior`) and an interior doodad or a game object on an
+interior floor (m2.frag's interior branch). `rt_prepare` carries it to
+`rt_trace` beside the shading normal (`uPointNormal.z`). There a baked light
+whose storey does not hold the surface's height (within
+`RT_STOREY_MARGIN` = 0.25 yards) is left out at that texel altogether -
+neither its light nor its shadow, so it takes no part in the baked share,
+the visibility sample or the room's light. Units on their floor
+(`RT_GB_UNIT_FLOOR`), transition batches and everything that is no
+building's baked colour are as before, and so are all the other lights
+(fires, lamps outside, M2 lights, glows outside, particles).
+`WOWEE_RT_LIGHT_STOREY=0` turns it off to compare.
+
+Debug view 10 shows a baked colour's two shades: red what the lamps'
+shadows leave (`rtBakedShade`), green and blue the room's light
+(`rtInteriorShade`): white as painted, cyan darkened by the lamps' shadows,
+red by the room's light, grey by both; dark blue no baked colour.
 
 Shadows of point lights are soft by the light's size: the shadow ray aims at
 a point jittered within `clamp(0.04 * reach, 0.15, 0.5)` yards of the light

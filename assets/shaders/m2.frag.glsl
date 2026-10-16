@@ -390,6 +390,8 @@ void main() {
         // (rtInteriorShade).
         light = baked * rtInteriorBakedShade(rt) + rtPointLightOwn(rt);
         rtSurface.flags = RT_GB_VALID | RT_GB_BAKED | RT_GB_INTERIOR;
+        // The building's lights of other storeys leave it as painted (rt_trace).
+        rtSurface.storeyBound = 1u;
         rtSurface.g = baked;
         rtSurface.kp = vec3(1.0);
     } else {

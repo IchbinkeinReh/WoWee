@@ -284,20 +284,23 @@ constexpr SettingDesc kSchema[] = {
     // The lighting's parts, to look at one at a time and to set by hand
     // (Renderer::LightingTune). Every default is the look as it is, with the
     // ray tracing on or off. Two pages, as one does not fit in two columns.
-    {"dbgview", "Show instead of the picture", SettingKind::Enum, 0, 9, 1, "Debug Graphics", "View",
+    {"dbgview", "Show instead of the picture", SettingKind::Enum, 0, 10, 1, "Debug Graphics", "View",
      "Replace the picture with one part of the ray traced lighting.\n"
      "The traced views work in every ray tracing mode; the probe views\n"
      "need Shadows, occlusion and bounce light; what a building's baked\n"
      "light colours - its rooms, their furniture, who stands on their\n"
      "floors - takes no probe light and shows as it is. Nothing with ray\n"
      "tracing off. The history length is green where a surface has been traced\n"
-     "over many frames and red where it starts afresh; the last view is\n"
+     "over many frames and red where it starts afresh; the next view is\n"
      "green where a pixel found its own surface in the\n"
-     "trace and red where it is lit as without the tracing.\n"
+     "trace and red where it is lit as without the tracing. The baked\n"
+     "shade is white where a building's painted colour shows as painted,\n"
+     "cyan where its lamps' shadows darken it, red where its room's light\n"
+     "does, and dark blue where nothing is painted.\n"
      "WOWEE_GI_DEBUG, when set, wins.",
      "Off|Probe light ratio (grey = open field)|Probe irradiance|Ambient with the probes|"
      "Probe cascades|Traced sun visibility|Point lights' light|Traced occlusion|"
-     "Traced history length|How each pixel found its traced surface", 0},
+     "Traced history length|How each pixel found its traced surface|Baked shade", 0},
     {"dbgambient", "Ambient light (%)", SettingKind::Int, 0, 300, 5, "Debug Graphics", "Light",
      "The zone's ambient light, the base every surface starts from\n"
      "before the sun and the lamps. 100 is the zone's own.", "", 100},
