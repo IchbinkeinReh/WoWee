@@ -1251,10 +1251,11 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
                 uint32_t wmoDoodadInstId = m2Renderer->createInstanceWithMatrix(
                     doodad.modelId, doodad.modelMatrix, doodad.worldPosition);
                 if (wmoDoodadInstId) {
-                    // WMO doodads should not add duplicate/over-aggressive wall
-                    // blocking, but structural doodads such as Exodarplatform01
-                    // carry the only authored floor for their walkable ramps.
-                    m2Renderer->setSkipWallCollision(wmoDoodadInstId, true);
+                    // A building's doodad blocks by its collision mesh like any
+                    // other: the client gathers the faces of the doodads in the
+                    // area it moves through (0x007a5330 -> 0x0082ec30), whoever
+                    // placed them. They were left out of the wall test, so the
+                    // Goldshire inn's beds and tables were walked into.
                     // A WMO's doodad is a map doodad too (0x007bef40 registers
                     // 0x007bd5a0).
                     m2Renderer->setInstanceEventOwner(wmoDoodadInstId, m2_event::Owner::Doodad, 0);

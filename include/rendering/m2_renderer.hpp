@@ -399,7 +399,6 @@ struct M2Instance {
     bool cachedIsTransportDoodad = false;
     bool cachedIsValid = false;
     bool skipCollision = false;    // Fully non-collidable visual/effect instance
-    bool skipWallCollision = false; // Keep authored floors, suppress only wall blocking
     float cachedBoundRadius = 0.0f;
     glm::vec3 cachedCullCenter{0.0f};              // transformed visual-bounds center
     float cachedVisualRadius = 0.0f;               // transformed visual-bounds half diagonal
@@ -806,7 +805,6 @@ public:
                                  uint64_t passGeneration, const glm::vec3& zoneAmbient,
                                  const glm::vec3& zoneDirect, float seconds);
     void setSkipCollision(uint32_t instanceId, bool skip);
-    void setSkipWallCollision(uint32_t instanceId, bool skip);
     void clear();
     /** Drop all instances but keep models in GPU memory. Cheap path for the
      *  editor's rebuild loop where the same model is re-instanced repeatedly. */

@@ -510,7 +510,6 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                                 if (!m2Renderer->loadModel(m2Model, doodadModelId)) continue;
                                 uint32_t doodadInstId = m2Renderer->createInstanceWithMatrix(doodadModelId, worldMatrix, worldPos);
                                 if (doodadInstId) {
-                                    m2Renderer->setSkipWallCollision(doodadInstId, true);
                                     // A map doodad's events (0x007bef40 ->
                                     // 0x007bd5a0).
                                     m2Renderer->setInstanceEventOwner(

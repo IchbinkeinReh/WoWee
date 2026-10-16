@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -178,6 +179,44 @@ inline bool holdCylinderOffWallTriangle(const glm::vec3& from, glm::vec3& to,
     to.x += dir.x * push;
     to.y += dir.y * push;
     return true;
+}
+
+/// The top of the step a character's leading edge would land on: the highest
+/// walkable up-facing triangle (from `triList`) under the point `p`, between
+/// `minZ` and `maxZ`, or nothing. Everything is in the mesh's own frame.
+///
+/// The client climbs a face it cannot walk up only when there is ground to
+/// land on beyond it: 0x00761b00 lifts the character by the step height, moves
+/// it forward and sweeps it back down, and keeps the step only if what it lands
+/// on is walkable (0x0075b690). A low face with nothing to stand on behind it -
+/// a sloped rim, a rail with no top - stays a wall.
+inline std::optional<float> stepLandingTop(const glm::vec2& p, float minZ, float maxZ,
+                                           const std::vector<glm::vec3>& verts,
+                                           const std::vector<uint16_t>& indices,
+                                           const std::vector<glm::vec3>& fileNormals,
+                                           const std::vector<uint32_t>& triList,
+                                           float minWalkableNormalZ) {
+    std::optional<float> best;
+    const glm::vec3 origin(p.x, p.y, maxZ + 0.01f);
+    const glm::vec3 down(0.0f, 0.0f, -1.0f);
+    for (uint32_t ti : triList) {
+        if (ti * 3 + 2 >= indices.size()) continue;
+        const glm::vec3& v0 = verts[indices[ti * 3]];
+        const glm::vec3& v1 = verts[indices[ti * 3 + 1]];
+        const glm::vec3& v2 = verts[indices[ti * 3 + 2]];
+        glm::vec3 n = (ti < fileNormals.size() && glm::dot(fileNormals[ti], fileNormals[ti]) > 1e-12f)
+                          ? fileNormals[ti]
+                          : glm::cross(v1 - v0, v2 - v0);
+        const float len = glm::length(n);
+        if (len < 1e-8f) continue;
+        if (n.z / len < minWalkableNormalZ) continue;   // not ground: a wall, an underside
+        const float t = rayTriangleIntersect(origin, down, v0, v1, v2);
+        if (t < 0.0f) continue;
+        const float z = origin.z - t;
+        if (z < minZ || z > maxZ) continue;
+        if (!best || z > *best) best = z;
+    }
+    return best;
 }
 
 /// A collision face's plane normal, in the model's frame: the file's normal

@@ -5,12 +5,22 @@
 
 namespace wowee::rendering::movement {
 
-// The retail client rejects ground steeper than 50 degrees and steps higher
-// than roughly 0.6 yards. Keep these limits shared by terrain, WMO, and M2
-// collision paths so release builds cannot silently diverge by surface type.
+// The retail client rejects ground steeper than 50 degrees (0x0075d1c0 tests
+// the face normal against 0.64278764) and steps up one yard. Keep these limits
+// shared by terrain, WMO, and M2 collision paths so release builds cannot
+// silently diverge by surface type.
+//
+// The step: when the move sweep (0x007620f0) runs into a face too steep to
+// walk, 0x00761b00 sweeps the character up by the step height (0x006e9520),
+// forward, and back down, and climbs only if it lands on walkable ground. The
+// step height is the moving object's +0xd0, set by 0x006e9570 to the object's
+// scale (at least 1) over its display scale - 1.0 for a player at normal size
+// (a creature not moved by the player gets 2.0). It was taken as 0.6 here,
+// from nowhere in the client, so a bed 0.93 high was neither a step nor - as a
+// building's doodad - a wall, and the character walked into it.
 inline constexpr float kMaxWalkableSlopeDegrees = 50.0f;
 inline constexpr float kMinWalkableNormalZ = 0.642787635f; // cos(50 degrees)
-inline constexpr float kMaxStepUp = 0.60f;
+inline constexpr float kMaxStepUp = 1.0f;
 
 inline bool isWalkableNormal(float normalZ) {
     return normalZ >= kMinWalkableNormalZ;

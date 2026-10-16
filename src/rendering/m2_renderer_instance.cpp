@@ -615,15 +615,6 @@ void M2Renderer::setSkipCollision(uint32_t instanceId, bool skip) {
     }
 }
 
-void M2Renderer::setSkipWallCollision(uint32_t instanceId, bool skip) {
-    for (auto& inst : instances) {
-        if (inst.id == instanceId) {
-            inst.skipWallCollision = skip;
-            return;
-        }
-    }
-}
-
 void M2Renderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
     if (instanceIds.empty() || instances.empty()) {
         return;
@@ -1639,7 +1630,7 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
         // how a campfire - elwynncampfire.m2, with no collision triangles -
         // came to stop a character the client walks straight through.
         if (!authoredCollision || model.isInvisibleTrap || model.isSpellEffect) continue;
-        if (instance.skipCollision || instance.skipWallCollision) continue;
+        if (instance.skipCollision) continue;
         if (instance.scale <= 0.001f) continue;
 
         // --- Mesh-based wall collision ---
@@ -1656,9 +1647,38 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
                 tl_m2_collisionTriScratch);
 
             const float localHeight = 2.0f / instance.scale;
-            // A face no higher than a step is stepped onto, not walked into:
-            // the floor query lifts the feet over it.
+            // A face no higher than a step is stepped onto, not walked into -
+            // the floor query lifts the feet onto the top - but only where
+            // there is a top to land on just past the leading edge of the
+            // body, as the client's step (0x00761b00) lands on walkable ground
+            // or does not climb. Without the landing a low face is a wall.
             const float localStepUp = movement::kMaxStepUp / instance.scale;
+            std::optional<bool> stepLands;
+            auto lowFaceIsStep = [&]() -> bool {
+                if (stepLands) return *stepLands;
+                stepLands = false;
+                glm::vec2 dir(localPos.x - localFrom.x, localPos.y - localFrom.y);
+                const float dirLen = glm::length(dir);
+                if (dirLen < 1e-5f) return false;
+                dir /= dirLen;
+                // The client looks as far ahead as max(radius, 1.19 x step)
+                // and needs to get more than a radius onto the top.
+                const float reach = std::max(localRadius, 1.1917536f * localStepUp);
+                static thread_local std::vector<uint32_t> floorTris;
+                for (const float ahead : {localRadius + 0.05f, 0.5f * (localRadius + reach)}) {
+                    const glm::vec2 p = glm::vec2(localPos) + dir * ahead;
+                    model.collision.getFloorTrisInRange(p.x - 0.01f, p.y - 0.01f,
+                                                        p.x + 0.01f, p.y + 0.01f, floorTris);
+                    if (stepLandingTop(p, localPos.z - 0.25f / instance.scale,
+                                       localPos.z + localStepUp, model.collision.vertices,
+                                       model.collision.indices, model.collision.normals,
+                                       floorTris, movement::kMinWalkableNormalZ)) {
+                        stepLands = true;
+                        break;
+                    }
+                }
+                return *stepLands;
+            };
             bool pushed = false;
 
             // Each face holds back what is in front of it and takes away all
@@ -1675,7 +1695,7 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
                     if (ti >= model.collision.triCount) continue;
                     const auto& tb = model.collision.triBounds[ti];
                     if (localPos.z + localHeight < tb.minZ || localPos.z > tb.maxZ) continue;
-                    if (tb.maxZ <= localPos.z + localStepUp) continue;
+                    if (tb.maxZ <= localPos.z + localStepUp && lowFaceIsStep()) continue;
 
                     const auto& verts = model.collision.vertices;
                     const auto& idx   = model.collision.indices;

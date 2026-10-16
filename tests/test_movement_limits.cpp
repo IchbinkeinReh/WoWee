@@ -11,6 +11,11 @@ TEST_CASE("stock hill climbing limits are shared by all surfaces") {
     REQUIRE_FALSE(isWalkableNormal(kMinWalkableNormalZ - 0.001f));
     REQUIRE(isReachableStep(kMaxStepUp));
     REQUIRE_FALSE(isReachableStep(kMaxStepUp + 0.001f));
+    // The client's step for a player at normal size (0x006e9570 sets +0xd0
+    // to scale / display scale; 0x00761b00 climbs by it): one yard, so the
+    // Goldshire inn's 0.93-high bed is stepped onto.
+    REQUIRE(kMaxStepUp == 1.0f);
+    REQUIRE(isReachableStep(0.93f));
 }
 
 // A walkable slope can rise faster than the step-up budget allows for, which is
@@ -37,7 +42,7 @@ TEST_CASE("a walkable slope out-climbs the step-up budget in a long frame") {
     // A slow frame does not. This is the case that put the player inside the
     // hill, so grounding has to recover from penetration rather than assume it
     // cannot happen.
-    CHECK(riseOverFrame(14.0f, 1.0f / 20.0f) > kMaxStepUp);
+    CHECK(riseOverFrame(14.0f, 1.0f / 10.0f) > kMaxStepUp);
 }
 
 // Facing crosses two representations: the renderer holds the character's yaw in

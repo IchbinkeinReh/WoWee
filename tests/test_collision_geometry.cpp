@@ -352,3 +352,30 @@ TEST_CASE("a door rising past the feet is no floor from below", "[collision]") {
     // The underside is in reach and was the floor; it is not one any more.
     CHECK(best == -1e9f);
 }
+
+// The Goldshire inn bed's top: innbed.m2 carries a 0.93-high box whose top is
+// two triangles facing up. A step onto it lands; a sloped rim and empty floor
+// do not.
+TEST_CASE("a step lands only on walkable ground within the step", "[collision]") {
+    using namespace wowee::rendering;
+    const std::vector<glm::vec3> verts = {
+        {-2.33f, -1.49f, 0.93f}, {1.95f, -1.49f, 0.93f}, {1.95f, 1.49f, 0.93f}, {-2.33f, 1.49f, 0.93f},
+        // A rim steeper than 50 degrees beside it.
+        {3.0f, -1.0f, 0.0f}, {3.0f, 1.0f, 0.0f}, {3.4f, 1.0f, 0.9f}, {3.4f, -1.0f, 0.9f},
+    };
+    const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4};
+    const std::vector<glm::vec3> normals;  // the winding's
+    const std::vector<uint32_t> tris = {0, 1, 2, 3};
+    constexpr float kWalkable = 0.642787635f;
+
+    // From the floor, one yard of step reaches the top.
+    auto top = stepLandingTop({0.0f, 0.0f}, -0.25f, 1.0f, verts, indices, normals, tris, kWalkable);
+    REQUIRE(top.has_value());
+    CHECK(*top == Catch::Approx(0.93f));
+    // The 0.6 the client never used does not.
+    CHECK_FALSE(stepLandingTop({0.0f, 0.0f}, -0.25f, 0.6f, verts, indices, normals, tris, kWalkable));
+    // Past the top's edge there is nothing to land on.
+    CHECK_FALSE(stepLandingTop({2.2f, 0.0f}, -0.25f, 1.0f, verts, indices, normals, tris, kWalkable));
+    // The rim is too steep to stand on.
+    CHECK_FALSE(stepLandingTop({3.2f, 0.0f}, -0.25f, 1.0f, verts, indices, normals, tris, kWalkable));
+}
