@@ -79,3 +79,14 @@ TEST_CASE("a yard of name is as many pixels as its height says", "[unit_name_anc
     CHECK(una::pixelsPerYard(1.5f, 1000.0f, 10.0f) == Catch::Approx(75.0f));
     CHECK(una::pixelsPerYard(1.5f, 1000.0f, 20.0f) == Catch::Approx(37.5f));
 }
+
+TEST_CASE("a name up against the camera keeps the size it has a few yards off", "[unit_name_anchor]") {
+    // Past the sizing depth a name is world text, smaller with distance.
+    CHECK(una::nameSizingDepth(12.0f) == 12.0f);
+    // Nearer, it is sized as at that depth: at the 0.2 near clip a fifth of a
+    // yard of text was a whole screen tall.
+    CHECK(una::nameSizingDepth(0.3f) == una::kNameNearestSizingDepth);
+    const float atNearClip = 0.2f * una::pixelsPerYard(1.96f, 1080.0f, una::nameSizingDepth(0.2f));
+    CHECK(atNearClip < 50.0f);
+    CHECK(atNearClip == Catch::Approx(0.2f * una::pixelsPerYard(1.96f, 1080.0f, una::kNameNearestSizingDepth)));
+}

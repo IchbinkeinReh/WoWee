@@ -46,6 +46,17 @@ inline float pixelsPerYard(float proj11, float screenH, float clipW) {
     return (proj11 < 0.0f ? -proj11 : proj11) * 0.5f * screenH / clipW;
 }
 
+/// The nearest view depth a name is sized for. A name is world text, a fifth
+/// of a yard tall, so its size on screen grows as 1/depth; with the near clip
+/// at the client's 0.2 a unit right by the camera - an NPC behind or under it
+/// in a tight room - is still drawn, and its name filled half the screen. Up
+/// close it keeps the size it has at this depth, about 40 pixels on a
+/// 1080-line screen.
+inline constexpr float kNameNearestSizingDepth = 5.0f;
+inline float nameSizingDepth(float clipW) {
+    return clipW > kNameNearestSizingDepth ? clipW : kNameNearestSizingDepth;
+}
+
 /// A point of text laid out on screen, as its offset in that plane through
 /// the anchor: yards right and up of it. The screen's y runs down and the
 /// view's up, so the second is turned over. Added to the anchor in view

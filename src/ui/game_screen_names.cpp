@@ -366,7 +366,10 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         float modelHeight = 0.0f;
         if (glm::vec3 base; app.getRenderPositionForGuid(guid, base)) modelHeight = anchor.z - base.z;
         const float yards = un::textHeight(modelHeight);
-        const float px = yards * std::abs(proj[1][1]) * 0.5f * screenH / clipW;
+        // Sized for no nearer than nameSizingDepth, then laid into the world
+        // at the anchor's true depth, so up close it holds that size on screen.
+        const float sizingW = rendering::unit_name_anchor::nameSizingDepth(clipW);
+        const float px = yards * std::abs(proj[1][1]) * 0.5f * screenH / sizingW;
         if (px < 1.0f) return;
 
         const ImU32 color = toU32(targetCircleColor(gameHandler, unit), 255);
@@ -409,7 +412,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         const uint8_t mark = gameHandler.getEntityRaidMark(guid);
         if (mark < game::GameHandler::kRaidMarkCount) {
             if (VkDescriptorSet tex = getRaidTargetIcon(mark, assets)) {
-                const float iconPx = std::abs(proj[1][1]) * 0.5f * screenH / clipW;
+                const float iconPx = std::abs(proj[1][1]) * 0.5f * screenH / sizingW;
                 const int alpha = un::raidIconAlpha(glm::distance(camPos, anchor));
                 const float top = at->y - size.y - iconPx;
                 drawList->AddImage((ImTextureID)(uintptr_t)tex, ImVec2(at->x - iconPx * 0.5f, top),
