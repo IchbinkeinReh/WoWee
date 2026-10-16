@@ -1,6 +1,7 @@
 #version 460
 // The scene's depth and the opaque surfaces' G-buffer -> the tracer's
-// G-buffer, at trace resolution: per 2x2 block of scene pixels the nearest
+// G-buffer, at trace resolution: per 2x2 block of scene pixels (per pixel
+// when tracing at full resolution) the nearest
 // surface of the tracing's (RT_GB_VALID; any surface where the block has
 // none of those, so the ground under grass is still traced), its normal
 // rebuilt from the depth, its distance from the camera (0 for sky), which
@@ -51,11 +52,13 @@ void main() {
 
     // The nearest surface of the tracing's in this texel's block of scene
     // pixels, else the nearest of any.
+    // At full resolution the block is the pixel itself (rtBlockSize).
     ivec2 base = rtBlockBase(px);
     int sub = 0;
     float d = 0.0;  // reversed depth: 0 is the sky, nearer is larger
     bool valid = false;
-    for (int i = 0; i < 4; ++i) {
+    const int samples = rtBlockSize() == 1 ? 1 : 4;
+    for (int i = 0; i < samples; ++i) {
         ivec2 sp = clamp(base + ivec2(i & 1, i >> 1), ivec2(0), ivec2(pass.sceneExtent.xy) - 1);
         float di = loadDepth(sp);
         if (di <= 0.0) continue;

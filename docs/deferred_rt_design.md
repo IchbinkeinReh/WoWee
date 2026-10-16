@@ -153,6 +153,19 @@ buffer, which is already there; nothing is written twice.
 
 ## Trace inputs and outputs
 
+The trace runs at half resolution by default, or at full resolution
+(Settings > Ray Tracing > "Trace at full resolution", `rt_full_resolution`
+in settings.cfg, `WOWEE_RT_FULLRES=0/1` overrides; `RtLighting::
+setFullResolution`). Every pass after `rt_prepare` works in trace texels of
+whatever size `pass.extent` says - trace, temporal, the a-trous filter (its
+steps are texels, so its footprint on screen halves), the apply pass's 3x3
+match and the blended surfaces' (`textureSize`); `rt_prepare` takes a block
+of `rtBlockSize()` = 1 or 2 pixels a side, the `_ms` and `_hw` variants
+alike. At full resolution every pixel has a texel of its own, so thin
+foliage, poles and edges find their own surface instead of falling back to
+the look without the tracing. Cost: four times the trace's rays and the
+temporal/filter work, and four times the trace images' memory.
+
 `rt_prepare` builds the half-resolution trace G-buffer from the depth and GB0:
 per 2x2 block the nearest sample among the valid RT surfaces (any sample if
 none, so terrain under grass still gets traced), the geometric normal rebuilt
@@ -461,6 +474,7 @@ BVH, the probe GI, the CameraZoom Lua functions.
   within the 3x3 match at half resolution (red in debug views 5 and 7) and so
   shows the non-RT look there. The old path borrowed a neighbour's result for
   those pixels; the new one does not, so leaves can look flatter than before.
+  Tracing at full resolution removes this at four times the trace's cost.
 * Every opaque pipeline gets a G-buffer twin (specialization constant), which
   doubles those pipelines' creation at startup and in the pipeline cache.
 * Transparent units (`rtLightBehind`) get the shadow map at RT strength and the

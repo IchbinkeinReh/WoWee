@@ -4,9 +4,10 @@
 //
 // The opaque surfaces drew their colour C0 with the traced terms neutral and
 // wrote beside it how that colour depends on them (rt_gbuffer.glsli). This
-// finds the traced terms of the pixel's own surface in the half-resolution
-// result and turns them into a factor and an addend, which the blend applies
-// to the colour already there: dst * outMul + outAdd (dual-source blending),
+// finds the traced terms of the pixel's own surface in the traced result
+// (half resolution, or full: RtLighting::setFullResolution) and turns them
+// into a factor and an addend, which the blend applies to the colour already
+// there: dst * outMul + outAdd (dual-source blending),
 // so the colour is never copied. Mirrored for the unit tests by
 // rt_gbuffer_pack.hpp's apply().
 //

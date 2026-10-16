@@ -499,8 +499,12 @@ bool RtLighting::prepare(VkExtent2D sceneExtent, VkSampleCountFlagBits samples) 
         changed = true;
     }
 
-    const VkExtent2D want{std::max(1u, (sceneExtent.width + 1) / 2),
-                          std::max(1u, (sceneExtent.height + 1) / 2)};
+    // One texel per 2x2 block of scene pixels, or one per pixel
+    // (setFullResolution): rt_prepare picks the block's nearest surface, and
+    // every pass after it works in texels of whatever size this is.
+    const VkExtent2D want = fullResolution_
+        ? VkExtent2D{std::max(1u, sceneExtent.width), std::max(1u, sceneExtent.height)}
+        : VkExtent2D{std::max(1u, (sceneExtent.width + 1) / 2), std::max(1u, (sceneExtent.height + 1) / 2)};
     if (want.width == traceExtent_.width && want.height == traceExtent_.height) return changed;
 
     vkDeviceWaitIdle(ctx_->getDevice());

@@ -1938,6 +1938,7 @@ void GameScreen::saveSettings() {
     out << "fog_strength=" << settingsPanel_.pendingFogStrength << "\n";
     out << "light_shafts=" << settingsPanel_.pendingVolumetricFog << "\n";
     out << "ray_traced_lighting=" << settingsPanel_.pendingRtLighting << "\n";
+    out << "rt_full_resolution=" << (settingsPanel_.pendingRtFullRes ? 1 : 0) << "\n";
     // No dbg_view: a debug view is for the session it is picked in. Saved,
     // the "Probe light ratio" view came back at the next start and drew the
     // whole world flat grey and white, which read as a fogged night.
@@ -2246,6 +2247,7 @@ void GameScreen::loadSettings() {
             else if (key == "fog_strength") settingsPanel_.pendingFogStrength = std::clamp(std::stof(val), 0.0f, 2.0f);
             else if (key == "light_shafts") settingsPanel_.pendingVolumetricFog = std::clamp(std::stoi(val), 0, 3);
             else if (key == "ray_traced_lighting") settingsPanel_.pendingRtLighting = std::clamp(std::stoi(val), 0, 3);
+            else if (key == "rt_full_resolution") settingsPanel_.pendingRtFullRes = (std::stoi(val) != 0);
             // dbg_view, saved by older builds, is not read: see the save.
             else if (key == "dbg_time_override") settingsPanel_.pendingDbgTimeOverride = (val == "1");
             else if (key == "dbg_time") settingsPanel_.pendingDbgTime = std::clamp(std::stof(val), 0.0f, 24.0f);

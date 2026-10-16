@@ -345,6 +345,7 @@ bool Renderer::createPerFrameResources() {
         }
         // Off until the settings say otherwise - or WOWEE_RT_LIGHTING does.
         setRtLightingMode(0);
+        setRtFullResolution(false);
     }
 
     // --- Create descriptor set layout for set 0 (per-frame UBO + shadow sampler + fog volume
@@ -6252,6 +6253,16 @@ void Renderer::setRtLightingMode(int mode) {
     }
     if (reason.empty()) rtHeldOffLogged_.clear();
     rtLighting_->setMode(static_cast<RtLighting::Mode>(applied));
+}
+
+void Renderer::setRtFullResolution(bool full) {
+    if (!rtLighting_) return;
+    static const int fullOverride = [] {
+        const char* v = std::getenv("WOWEE_RT_FULLRES");
+        return (v && *v) ? std::atoi(v) : -1;
+    }();
+    if (fullOverride >= 0) full = fullOverride != 0;
+    rtLighting_->setFullResolution(full);
 }
 
 void Renderer::writeRtLightingBindings() {

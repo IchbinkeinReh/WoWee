@@ -74,6 +74,7 @@ public:
     int pendingVolumetricFog = 0;
     /// Ray traced lighting: 0 off, 1 sun, 2 + occlusion, 3 + bounce. See RtLighting.
     int pendingRtLighting = 0;
+    bool pendingRtFullRes = false;  ///< trace every pixel (Ray Tracing)
     /// Settings > Debug Graphics: the view the surfaces show instead
     /// (0-9, Renderer::setRtDebugView) and the lighting's strengths in
     /// percent (Renderer::LightingTune).

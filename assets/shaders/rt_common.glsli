@@ -127,7 +127,13 @@ float rtGbufDist(vec4 g) { return g.z; }
 int rtGbufSub(vec4 g) { return int(g.w + 0.5) & 3; }
 bool rtGbufValid(vec4 g) { return (int(g.w + 0.5) & 4) != 0; }
 
-// The first scene pixel of trace texel px's block, and the block's size.
+// How many scene pixels a trace texel stands for along each axis: 2 at half
+// resolution, 1 when every pixel is traced (RtLighting::setFullResolution).
+int rtBlockSize() {
+    return pass.extent.x * 1.5 > pass.sceneExtent.x ? 1 : 2;
+}
+
+// The first scene pixel of trace texel px's block.
 ivec2 rtBlockBase(ivec2 px) {
     return ivec2(floor(vec2(px) * pass.sceneExtent.xy * pass.extent.zw));
 }

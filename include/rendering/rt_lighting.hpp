@@ -71,6 +71,13 @@ public:
 
     void setMode(Mode mode) { mode_ = mode; }
     [[nodiscard]] Mode mode() const { return mode_; }
+    /// Trace every scene pixel instead of one per 2x2 block (Settings > Ray
+    /// Tracing). About four times the trace's cost, and every pixel finds
+    /// its own surface - thin foliage, poles, edges - instead of falling back
+    /// to the look without the tracing. The images follow on the next
+    /// prepare().
+    void setFullResolution(bool full) { fullResolution_ = full; }
+    [[nodiscard]] bool fullResolution() const { return fullResolution_; }
     [[nodiscard]] bool active() const { return mode_ != Mode::Off && pipelinesOk_; }
     /// Whether a frame can be drawn through the G-buffer pass now: active,
     /// with its images, and the device able to (VkContext::getGbufferRenderPass).
@@ -189,6 +196,7 @@ private:
     VkContext* ctx_ = nullptr;
     RtScene* scene_ = nullptr;
     Mode mode_ = Mode::Off;
+    bool fullResolution_ = false;
     bool pipelinesTried_ = false;
     bool pipelinesOk_ = false;
 

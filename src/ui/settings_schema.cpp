@@ -270,6 +270,15 @@ constexpr SettingDesc kSchema[] = {
      "has it and a slower compute path where it does not.\n"
      "Characters still cast shadows from the shadow map.",
      "Off|Sun shadows|Shadows and occlusion|Shadows, occlusion and bounce light", 0},
+    // Off by default: half resolution is the trace as it has always run. A
+    // switch on the same page, since Graphics and Detail are full.
+    {"rtfullres", "Trace at full resolution", SettingKind::Bool, 0, 0, 0,
+     "Ray Tracing", "",
+     "Trace every pixel instead of one in four. About four times\n"
+     "the tracing's cost. Thin leaves, grass, poles and the edges of\n"
+     "things then get their own traced light and shadow instead of\n"
+     "the look without ray tracing where the half-resolution trace\n"
+     "missed them.", "", 0},
 
     // ------------------------------------------------------- Debug Graphics
     // The lighting's parts, to look at one at a time and to set by hand
@@ -283,7 +292,7 @@ constexpr SettingDesc kSchema[] = {
      "floors - takes no probe light and shows as it is. Nothing with ray\n"
      "tracing off. The history length is green where a surface has been traced\n"
      "over many frames and red where it starts afresh; the last view is\n"
-     "green where a pixel found its own surface in the half-resolution\n"
+     "green where a pixel found its own surface in the\n"
      "trace and red where it is lit as without the tracing.\n"
      "WOWEE_GI_DEBUG, when set, wins.",
      "Off|Probe light ratio (grey = open field)|Probe irradiance|Ambient with the probes|"

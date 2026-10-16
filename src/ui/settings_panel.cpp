@@ -924,7 +924,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
-    "screenglow", "raytracedlighting",
+    "screenglow", "raytracedlighting", "rtfullres",
     // The Debug Graphics settings: each applies all of them.
     "dbgview", "dbgtimeoverride", "dbgtime", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
     "dbgmodellightintensity", "dbgmodellightreach", "dbgfirelightintensity", "dbgfirelightreach", "dbglamplightintensity", "dbglamplightreach", "dbgbuildinglightintensity", "dbgbuildinglightreach", "dbgunitlightintensity", "dbgunitlightreach",
@@ -1088,6 +1088,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "fogstrength",    .asFloat = &SettingsPanel::pendingFogStrength},
     {.key = "lightshafts",    .asInt   = &SettingsPanel::pendingVolumetricFog},
     {.key = "raytracedlighting", .asInt = &SettingsPanel::pendingRtLighting},
+    {.key = "rtfullres", .asBool = &SettingsPanel::pendingRtFullRes},
     {.key = "dbgview", .asInt = &SettingsPanel::pendingDbgView},
     {.key = "dbgtimeoverride", .asBool = &SettingsPanel::pendingDbgTimeOverride},
     {.key = "dbgtime", .asFloat = &SettingsPanel::pendingDbgTime},
@@ -1572,6 +1573,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setVolumetricFogQuality(pendingVolumetricFog);
     } else if (key == "raytracedlighting") {
         if (renderer) renderer->setRtLightingMode(pendingRtLighting);
+    } else if (key == "rtfullres") {
+        if (renderer) renderer->setRtFullResolution(pendingRtFullRes);
     } else if (key == "dbgview" ||
                key == "dbgtimeoverride" ||
                key == "dbgtime" ||

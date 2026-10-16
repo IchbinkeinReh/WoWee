@@ -675,6 +675,9 @@ public:
     /// sample count, in the words the settings show; empty when it can. The
     /// mode asked for is then held at off (setRtLightingMode).
     [[nodiscard]] std::string rtUnavailableReason() const;
+    /// Trace every pixel rather than half the resolution (RtLighting::
+    /// setFullResolution); WOWEE_RT_FULLRES=0/1 holds it whatever this says.
+    void setRtFullResolution(bool full);
     /// The lighting's adjustable strengths (Settings > Debug Graphics). The
     /// defaults are the look as it is. The ray traced ones act only where
     /// the ray tracing has a result; the rest act with it off too.
