@@ -907,7 +907,12 @@ bool Renderer::initialize(core::Window* win) {
         LOG_WARNING("Weather effect initialization failed (non-fatal)");
     // The ground the weather falls to: the highest of the terrain, the liquid
     // on it and anything standing there, within 200 yards above or below
-    // (0x007ade10).
+    // (0x007ade10). The buildings are met by a segment straight down from
+    // 200 yards up (0x007ada80 with the flags 0x220122): the first face it
+    // crosses, a roof as much as a floor - that is what keeps the rain out of
+    // a house. The floor query asked here before looks only a few yards
+    // under its start, so from 200 yards up it met no building at all and
+    // the rain fell through every roof onto the terrain beneath.
     weather->setGroundQuery([this](float x, float y, float z) {
         float h = -std::numeric_limits<float>::infinity();
         auto take = [&](std::optional<float> v) {
@@ -915,8 +920,14 @@ bool Renderer::initialize(core::Window* win) {
         };
         if (terrainManager) take(terrainManager->getHeightAt(x, y));
         if (waterRenderer) take(waterRenderer->getNearestWaterHeightAt(x, y, z, 200.0f));
-        if (wmoRenderer) take(wmoRenderer->getFloorHeight(x, y, z + 200.0f));
-        if (m2Renderer) take(m2Renderer->getFloorHeight(x, y, z + 200.0f));
+        if (wmoRenderer) {
+            const glm::vec3 top(x, y, z + 200.0f), bottom(x, y, z - 200.0f);
+            if (const auto t = wmoRenderer->segmentHit(top, bottom, 0x08))
+                take(top.z + (bottom.z - top.z) * *t);
+        }
+        // The models' collision (0x0081e110): their floor query reaches a few
+        // yards around where it is asked, so ask it just over the ground found.
+        if (m2Renderer && std::isfinite(h)) take(m2Renderer->getFloorHeight(x, y, h + 8.0f));
         return std::isfinite(h) ? h : z - 200.0f;
     });
 

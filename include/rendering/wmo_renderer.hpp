@@ -425,8 +425,11 @@ public:
     bool segmentBlocked(const glm::vec3& from, const glm::vec3& to) const;
     /// How far from `from` to `to` (0..1) the first WMO collision face is,
     /// either side, as the world's intersect asks with 0x120111
-    /// (0x007a3b70 -> 0x007a30d0): every group, no detail face.
-    [[nodiscard]] std::optional<float> segmentHit(const glm::vec3& from, const glm::vec3& to) const;
+    /// (0x007a3b70 -> 0x007a30d0): every group, no detail face. `skipFaces`
+    /// is the MOPY mask 0x007ae140 makes of the trace's flags: 0x04 for
+    /// 0x120111, 0x08 for the weather's 0x220122 (0x007ade10).
+    [[nodiscard]] std::optional<float> segmentHit(const glm::vec3& from, const glm::vec3& to,
+                                                  uint8_t skipFaces = 0x04) const;
 
     /**
      * Check if a position is inside any WMO

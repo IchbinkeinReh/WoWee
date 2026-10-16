@@ -3977,7 +3977,8 @@ bool WMORenderer::segmentBlocked(const glm::vec3& from, const glm::vec3& to) con
     return false;
 }
 
-std::optional<float> WMORenderer::segmentHit(const glm::vec3& from, const glm::vec3& to) const {
+std::optional<float> WMORenderer::segmentHit(const glm::vec3& from, const glm::vec3& to,
+                                             uint8_t skipFaces) const {
     QueryTimer timer(&queryTimeMs, &queryCallCount);
     const glm::vec3 delta = to - from;
     const float dist = glm::length(delta);
@@ -4013,9 +4014,10 @@ std::optional<float> WMORenderer::segmentHit(const glm::vec3& from, const glm::v
             for (uint32_t triStart : tl_triScratch) {
                 if (triStart + 2 >= indices.size()) continue;
                 // 0x007ae140 makes 0x120111's mask 0x84: a detail face (MOPY
-                // 0x04) is not there for it.
+                // 0x04) is not there for it; the weather's 0x220122 makes
+                // 0x88, a collision-only face (0x08).
                 const size_t tri = triStart / 3;
-                if (tri < group.triMopyFlags.size() && (group.triMopyFlags[tri] & 0x04u) != 0) continue;
+                if (tri < group.triMopyFlags.size() && (group.triMopyFlags[tri] & skipFaces) != 0) continue;
                 const float t = rayTriangleIntersect(localFrom, localDir, verts[indices[triStart]],
                                                      verts[indices[triStart + 1]], verts[indices[triStart + 2]]);
                 if (t > 0.0f && t < best * localDist) {
