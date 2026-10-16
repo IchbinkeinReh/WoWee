@@ -548,6 +548,12 @@ private:
     uint32_t shadowMapBaseSize_ = 4096;
     /// setTextureMagnification's mode, handed to the shaders in viewPos.w.
     int textureMagnification_ = 1;
+    /// setLowCostShading; see there.
+#ifdef __ANDROID__
+    bool lowCostShading_ = true;
+#else
+    bool lowCostShading_ = false;
+#endif
     /// A side asked for and not built yet; 0 when nothing is waiting.
     uint32_t pendingShadowMapSize_ = 0;
     /// The largest side the resolution setting goes to. Each doubling is four
@@ -645,6 +651,22 @@ public:
     /// How a magnified texture is filtered: 0 bilinear (the client's),
     /// 1 cubic B-spline. See texture_filter.glsli.
     void setTextureMagnification(int mode) { textureMagnification_ = std::clamp(mode, 0, 1); }
+    /// The cheaper per-pixel paths: magnified textures bilinear whatever the
+    /// close-up filtering setting (the B-spline is four more fetches a layer),
+    /// and the sun's shadow filtered with four taps rather than nine
+    /// (shadow_csm.glsli). The settings panel turns it on with the Low preset;
+    /// on Android it is always on, whatever is asked. High and Ultra on a
+    /// desktop never take it.
+    void setLowCostShading(bool on);
+    /// Starts a pass ablation run (pass_ablation.hpp) as WOWEE_PASS_ABLATION
+    /// does at start-up, for a device with no environment to set: /perf
+    /// ablate. A tiler's timestamps put the whole scene pass on its first
+    /// mark - terrain - so this is what measures a pass there. False while
+    /// one is already running.
+    bool startPassAblation();
+    /// The last finished run's table; empty before one has finished.
+    [[nodiscard]] const std::string& passAblationReport() const { return passAblationReportText_; }
+    [[nodiscard]] bool lowCostShading() const { return lowCostShading_; }
     uint32_t getShadowMapSize() const { return SHADOW_MAP_SIZE; }
     void setViewDistance(float distance);
     float getViewDistance() const { return viewDistance_; }
@@ -966,6 +988,7 @@ private:
     // own timestamps cannot answer that on this platform.
     std::unique_ptr<PassAblation> passAblation_;
     bool passAblationReported_ = false;
+    std::string passAblationReportText_;
     bool worldDrawnLastFrame_ = false;
     std::chrono::steady_clock::time_point lastFrameStart_{};
     float lastDeltaTime_ = 0.0f;           // cached for post-process pipeline

@@ -651,7 +651,8 @@ void Renderer::updatePerFrameUBO() {
     currentFrameData.view = camera->getViewMatrix();
     currentFrameData.projection = camera->getProjectionMatrix();
     // w: the close-up texture filter, 1 + the mode (texture_filter.glsli).
-    currentFrameData.viewPos = glm::vec4(camera->getPosition(), 1.0f + static_cast<float>(textureMagnification_));
+    currentFrameData.viewPos = glm::vec4(camera->getPosition(),
+                                         1.0f + static_cast<float>(lowCostShading_ ? 0 : textureMagnification_));
     currentFrameData.fogParams.z = globalTime;
 
     // Lighting from LightingManager
@@ -719,12 +720,13 @@ void Renderer::updatePerFrameUBO() {
                 currentFrameData.cascadeTexel[c] = glm::vec4(0.0f);
             }
         }
-        // y: unused - the cascades switch with no blend, as the client's do;
+        // y: 1 for the four-tap filter (setLowCostShading), 0 for the nine -
+        // the cascades switch with no blend either way, as the client's do;
         // z: the last one fades out from 90% of its half-width, to 99% of it
         // as the client's does (shadow_csm.glsli).
         // w: one yard of the shared light-space depth range in depth units,
         // so a shader can bias by a distance (character.frag's self-shadow).
-        currentFrameData.cascadeInfo = glm::vec4(static_cast<float>(cascades), 0.0f, 0.9f,
+        currentFrameData.cascadeInfo = glm::vec4(static_cast<float>(cascades), lowCostShading_ ? 1.0f : 0.0f, 0.9f,
                                                  1.0f / shadowDepthRange(shadowDistance_));
         // The outer cascade's, in the same atlas terms, for anything that
         // reads the one matrix rather than the cascades.
@@ -1586,7 +1588,8 @@ void Renderer::beginFrame() {
         worldDrawnLastFrame_ = false;
         if (!passAblation_->running() && !passAblationReported_) {
             passAblationReported_ = true;
-            LOG_WARNING(passAblation_->report());
+            passAblationReportText_ = passAblation_->report();
+            LOG_WARNING(passAblationReportText_);
         }
     }
 
@@ -4101,8 +4104,11 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     // thread records its pass, into its own secondary (see gpuReserveMarks
     // for why the primary cannot). A pass that is skipped leaves its mark
     // unwritten, and readback steps over it.
+    // kMarkSceneBegin is the pass's first: the terrain secondary (the first
+    // executed) writes it before drawing, so "terrain" is the terrain's own
+    // draws and not also the pass's load and clear.
     enum SceneMark : uint32_t {
-        kMarkTerrain, kMarkGrass, kMarkSky, kMarkWmo, kMarkChars,
+        kMarkSceneBegin, kMarkTerrain, kMarkGrass, kMarkSky, kMarkWmo, kMarkChars,
         kMarkM2Opaque, kMarkM2Blended, kMarkM2Particles, kMarkRibbons,
         kMarkBlobShadows, kMarkWater, kMarkWorldEffects, kMarkSelection, kMarkOverlays,
         kSceneMarkCount
@@ -4170,6 +4176,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 auto t0 = std::chrono::steady_clock::now();
                 VkCommandBuffer cmd = beginSecondary(SEC_TERRAIN, deferred);
                 setSecondaryViewportScissor(cmd);
+                sceneMark(cmd, kMarkSceneBegin, "scene pass begin (load / clear)");
                 if (drawTerrain) terrainRenderer->render(cmd, perFrameSet, *camera, deferred);
                 sceneMark(cmd, kMarkTerrain, "terrain");
                 if (drawGrass) grassRenderer_->render(cmd, frameIdx, perFrameSet, deferred);
@@ -4419,6 +4426,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
     } else {
         // ── Fallback: single-threaded inline recording (original path) ──
 
+        sceneMark(currentCmd, kMarkSceneBegin, "scene pass begin (load / clear)");
         if (terrainRenderer && camera && terrainEnabled && !skipTerrain) {
             auto terrainStart = std::chrono::steady_clock::now();
             terrainRenderer->render(currentCmd, perFrameSet, *camera, deferred);
@@ -6536,6 +6544,27 @@ uint32_t Renderer::maxShadowMapSize(int cascades) const {
 void Renderer::setShadowResolutionScale(int step) {
     shadowResolutionStep_ = std::clamp(step, 0, 3);
     requestShadowAtlas();
+}
+
+bool Renderer::startPassAblation() {
+    if (passAblation_ && passAblation_->running()) return false;
+    passAblation_ = std::make_unique<PassAblation>();
+    passAblationReported_ = false;
+    lastFrameStart_ = {};
+    LOG_WARNING("Pass ablation started - ", PassAblation::phaseCount(), " phases over about ",
+                static_cast<int>(passAblation_->expectedRunMs() / 1000.0),
+                "s. Stand still outdoors and do not move the camera.");
+    return true;
+}
+
+void Renderer::setLowCostShading(bool on) {
+#ifdef __ANDROID__
+    // A phone's GPU spends its frame in the terrain's fragment shader even on
+    // Low; nothing turns the cheap paths off there.
+    on = true;
+#endif
+    if (on != lowCostShading_) LOG_INFO("Low-cost shading ", on ? "on" : "off");
+    lowCostShading_ = on;
 }
 
 void Renderer::setShadowCascadeCount(int count) {

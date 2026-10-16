@@ -2061,6 +2061,21 @@ void GameScreen::loadSettings() {
     // would be the better shape and would change what an existing 1.0 means.
     settingsPanel_.pendingActionBarScale =
         SettingsPanel::recommendedPixelScale(currentDisplayHeight, 0.5f, 2.0f);
+#ifdef __ANDROID__
+    // A phone draws the world smaller and FSR 1 scales it up, by default:
+    // native on a 2400x1080 panel is more pixels than its GPU fills at a
+    // playable rate. Set before the file is read, so a saved choice wins.
+    if (ImGui::GetCurrentContext() && ImGui::GetIO().DisplaySize.x > 0.0f) {
+        const ImGuiIO& io = ImGui::GetIO();
+        const int choice = SettingsPanel::recommendedMobileRenderScale(
+            io.DisplaySize.x * io.DisplayFramebufferScale.x, io.DisplaySize.y * io.DisplayFramebufferScale.y);
+        if (choice >= 0) {
+            settingsPanel_.pendingUpscalingMode = 1;
+            settingsPanel_.pendingFSR = true;
+            settingsPanel_.pendingFSRQuality = choice;
+        }
+    }
+#endif
     if (!in.is_open()) return;
 
     bool bagScaleLoaded = false;

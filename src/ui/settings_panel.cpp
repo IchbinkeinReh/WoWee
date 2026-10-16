@@ -962,6 +962,7 @@ void SettingsPanel::applyLoadedSettings() {
     // Everything the config file just filled in, handed to the thing it
     // affects. Same route the sliders and the presets take.
     for (const char* key : kGraphicsApplyKeys) applySettingSideEffects(key);
+    if (services_.renderer) services_.renderer->setLowCostShading(currentGraphicsPreset == GraphicsPreset::LOW);
 }
 
 void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
@@ -1007,6 +1008,10 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
 
     currentGraphicsPreset = preset;
     pendingGraphicsPreset = preset;
+    // Low also takes the cheaper shading paths (bilinear close-ups, a
+    // four-tap shadow filter); every other preset, Custom included, leaves
+    // the picture as the settings above draw it.
+    if (services_.renderer) services_.renderer->setLowCostShading(preset == GraphicsPreset::LOW);
 }
 
 void SettingsPanel::updateGraphicsPresetFromCurrentSettings() {

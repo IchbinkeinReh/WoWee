@@ -124,9 +124,10 @@ bool TerrainRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameL
     VkDevice device = vkCtx->getDevice();
 
     // --- Create material descriptor set layout (set 1) ---
-    // bindings 0-6: combined image samplers (base + 3 layer + 3 alpha)
+    // bindings 0-6: combined image samplers (base + 3 layer, then the packed
+    // alpha maps and baked shadow at 4; 5 and 6 are no longer read)
     // binding 7: uniform buffer (TerrainParams)
-    // binding 8: combined image sampler (the baked shadow, MCSH)
+    // binding 8: combined image sampler (was the baked shadow, now in 4's alpha)
     // binding 9: samplerCube (layer 0 of an env chunk)
     std::vector<VkDescriptorSetLayoutBinding> materialBindings(10);
     for (uint32_t i = 0; i < 7; i++) {
@@ -582,18 +583,24 @@ void TerrainRenderer::bindChunkTextures(TerrainChunkGPU& gpuChunk,
                         " - white fallback");
         }
         gpuChunk.layerTextures[li] = layerTex;
-
-        // A layer with no alpha map covers everything under it.
-        VkTexture* alphaTex = opaqueAlphaTexture.get();
-        if (!layer.alphaData.empty()) {
-            alphaTex = createAlphaTexture(layer.alphaData);
-        }
-        gpuChunk.alphaTextures[li] = alphaTex;
         gpuChunk.layerCount = static_cast<int>(i);
     }
 
-    // The baked shadow (MCSH), in the same 64x64 single-channel form.
-    gpuChunk.shadowTexture = chunk.shadowMap.empty() ? nullptr : createAlphaTexture(chunk.shadowMap);
+    // The three layers' alpha maps and the baked shadow (MCSH), each 64x64
+    // over the chunk and read at the same coordinate, packed into the
+    // channels of one texture: one fetch a pixel where there were four, and
+    // the same values, filtered the same way. A layer with no alpha map
+    // covers everything under it (255), and so does a channel no layer uses
+    // - the shader reads only the layers the chunk has. No MCSH is fully lit.
+    const std::vector<uint8_t>* channels[4] = {nullptr, nullptr, nullptr, nullptr};
+    bool anyChannel = false;
+    for (size_t i = 1; i < chunk.layers.size() && i < 4; ++i) {
+        if (!chunk.layers[i].alphaData.empty()) { channels[i - 1] = &chunk.layers[i].alphaData; anyChannel = true; }
+    }
+    if (!chunk.shadowMap.empty()) { channels[3] = &chunk.shadowMap; anyChannel = true; }
+    gpuChunk.alphaTextures[0] = anyChannel ? createBlendTexture(channels) : nullptr;
+    gpuChunk.alphaTextures[1] = gpuChunk.alphaTextures[2] = nullptr;
+    gpuChunk.shadowTexture = nullptr;
 }
 
 bool TerrainRenderer::createChunkParamsUBO(TerrainChunkGPU& gpuChunk) {
@@ -868,20 +875,21 @@ void TerrainRenderer::uploadPreloadedTextures(
     vkCtx->endUploadBatch();
 }
 
-VkTexture* TerrainRenderer::createAlphaTexture(const std::vector<uint8_t>& alphaData) {
-    if (alphaData.empty()) return opaqueAlphaTexture.get();
-
-    std::vector<uint8_t> expanded;
-    const uint8_t* src = alphaData.data();
-    if (alphaData.size() < 4096) {
-        expanded.assign(4096, 255);
-        std::copy(alphaData.begin(), alphaData.end(), expanded.begin());
-        src = expanded.data();
+VkTexture* TerrainRenderer::createBlendTexture(const std::vector<uint8_t>* const channels[4]) {
+    // RGBA: layer 1, 2 and 3's alpha, then the baked shadow. A short map is
+    // padded with 255, as each single-channel one was.
+    constexpr size_t kTexels = 64 * 64;
+    std::vector<uint8_t> packed(kTexels * 4, 255);
+    for (int c = 0; c < 4; ++c) {
+        if (!channels[c]) continue;
+        const std::vector<uint8_t>& src = *channels[c];
+        const size_t n = std::min(src.size(), kTexels);
+        for (size_t t = 0; t < n; ++t) packed[t * 4 + static_cast<size_t>(c)] = src[t];
     }
 
     auto tex = std::make_unique<VkTexture>();
-    if (!tex->upload(*vkCtx, src, 64, 64, VK_FORMAT_R8_UNORM, false)) {
-        return opaqueAlphaTexture.get();
+    if (!tex->upload(*vkCtx, packed.data(), 64, 64, VK_FORMAT_R8G8B8A8_UNORM, false)) {
+        return nullptr;
     }
     tex->createSampler(vkCtx->getDevice(), VK_FILTER_LINEAR, VK_FILTER_LINEAR,
                         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
@@ -896,12 +904,12 @@ VkTexture* TerrainRenderer::createAlphaTexture(const std::vector<uint8_t>& alpha
     // Not refused when the cache is full, unlike a tileset texture: 4KB is
     // never what filled it, and a chunk without its alpha map draws its top
     // layer over everything below.
-    evictTexturesFor(64 * 64);
+    evictTexturesFor(kTexels * 4);
     static uint64_t alphaCounter = 0;
     std::string key = "__alpha_" + std::to_string(++alphaCounter);
     TextureCacheEntry e;
     e.texture = std::move(tex);
-    e.approxBytes = 64 * 64;
+    e.approxBytes = kTexels * 4;
     e.lastUse = ++textureCacheCounter_;
     textureCacheBytes_ += e.approxBytes;
     textureCache[key] = std::move(e);
@@ -962,10 +970,14 @@ bool TerrainRenderer::writeMaterialDescriptors(VkDescriptorSet set, const Terrai
     imageInfos[0] = pick(chunk.baseTexture, white)->descriptorInfo();
     for (int i = 0; i < 3; i++) {
         imageInfos[1 + i] = pick(chunk.layerTextures[i], white)->descriptorInfo();
-        imageInfos[4 + i] = pick(chunk.alphaTextures[i], opaque)->descriptorInfo();
     }
-    // Binding 8, the baked shadow: fully lit where there is none.
-    imageInfos[7] = pick(chunk.shadowTexture, opaque)->descriptorInfo();
+    // Binding 4, the packed alpha maps and baked shadow (createBlendTexture):
+    // where there is none, the 1x1 white - every layer opaque, fully lit.
+    // Bindings 5, 6 and 8 are no longer read; they keep a valid image.
+    imageInfos[4] = pick(chunk.alphaTextures[0], white)->descriptorInfo();
+    imageInfos[5] = opaque->descriptorInfo();
+    imageInfos[6] = opaque->descriptorInfo();
+    imageInfos[7] = opaque->descriptorInfo();
 
     VkDescriptorBufferInfo bufInfo{};
     bufInfo.buffer = chunk.paramsUBO;
@@ -1424,7 +1436,7 @@ void TerrainRenderer::destroyChunkGPU(TerrainChunkGPU& chunk) {
     VkDescriptorSet materialSet = chunk.materialSet;
 
     // The per-chunk alpha maps are not freed here. They live in the texture
-    // cache like everything else - createAlphaTexture puts them there - and
+    // cache like everything else - createBlendTexture puts them there - and
     // the eviction pass collects them once no chunk points at them. The vector
     // that used to be released here was never filled by anything, so this loop
     // had been freeing nothing for as long as it existed.

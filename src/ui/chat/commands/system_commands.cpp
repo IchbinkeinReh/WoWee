@@ -267,6 +267,34 @@ public:
             if (!core::FrameProfiler::enabled()) prof.setEnabled(true);
             prof.requestDump();
             say("Frame profiler: the next second's table goes to the log.");
+        } else if (arg == "ablate" || arg == "ablation") {
+            // The scene pass's cost by switching each pass off for a few
+            // seconds: what a phone's GPU timestamps cannot say, since a tiler
+            // puts the whole pass on its first mark.
+            auto* renderer = ctx.services.renderer;
+            if (!renderer) {
+                say("Pass ablation: no renderer.");
+            } else if (!renderer->startPassAblation()) {
+                say("Pass ablation: one is already running.");
+            } else {
+                say("Pass ablation: started. Stand still outdoors and leave the camera alone "
+                    "for about a minute and a half; the table goes to the log, and "
+                    "/perf ablate report shows it here.");
+            }
+        } else if (arg == "ablate report" || arg == "ablation report") {
+            auto* renderer = ctx.services.renderer;
+            const std::string report = renderer ? renderer->passAblationReport() : std::string();
+            if (report.empty()) {
+                say("Pass ablation: no finished run yet.");
+            } else {
+                size_t start = 0;
+                while (start < report.size()) {
+                    const size_t end = report.find('\n', start);
+                    say(report.substr(start, end == std::string::npos ? std::string::npos : end - start));
+                    if (end == std::string::npos) break;
+                    start = end + 1;
+                }
+            }
         } else if (arg.rfind("csv", 0) == 0) {
             // The path as typed, not lowercased.
             std::string path = ctx.args;
@@ -289,13 +317,13 @@ public:
                 }
             }
         } else {
-            say("Usage: /profile [on|off|dump|csv [path|off]]");
+            say("Usage: /profile [on|off|dump|csv [path|off]|ablate [report]]");
         }
         return {};
     }
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"profile", "perf"}; }
     [[nodiscard]] std::string helpText() const override {
-        return "Frame time by pass, CPU and GPU (/profile on|off|dump|csv [path|off]; Ctrl+F12)";
+        return "Frame time by pass, CPU and GPU (/profile on|off|dump|csv [path|off]|ablate [report]; Ctrl+F12)";
     }
 };
 

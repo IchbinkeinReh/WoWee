@@ -206,6 +206,24 @@ public:
     static float recommendedPixelScale(float displayHeight, float lo, float hi) {
         return std::clamp(recommendedPixelScale(displayHeight), lo, hi);
     }
+
+    /// The render resolution a phone starts at: the "Render resolution"
+    /// choice (fsrquality: 0 77%, 1 67%, 2 59%) that draws the world at no
+    /// more than kMobileRenderPixels, or -1 for a screen small enough to draw
+    /// at its own size. A phone's panel has two to five million pixels and a
+    /// GPU that fills about a desktop 1080p's worth of them; the terrain's
+    /// fragment shader is what runs out first. Only the default - a saved
+    /// choice wins.
+    static constexpr float kMobileRenderPixels = 1.6e6f;
+    static int recommendedMobileRenderScale(float pixelWidth, float pixelHeight) {
+        const float pixels = pixelWidth * pixelHeight;
+        if (pixels <= kMobileRenderPixels) return -1;
+        constexpr float kScales[] = {0.77f, 0.67f, 0.59f};
+        for (int i = 0; i < 3; ++i) {
+            if (pixels * kScales[i] * kScales[i] <= kMobileRenderPixels) return i;
+        }
+        return 2;
+    }
     bool pendingMinimapRotate = false;
     bool pendingMinimapSquare = false;
     bool pendingMinimapNpcDots = false;

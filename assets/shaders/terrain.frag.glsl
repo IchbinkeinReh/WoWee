@@ -44,13 +44,12 @@ layout(set = 1, binding = 0) uniform sampler2D uBaseTexture;
 layout(set = 1, binding = 1) uniform sampler2D uLayer1Texture;
 layout(set = 1, binding = 2) uniform sampler2D uLayer2Texture;
 layout(set = 1, binding = 3) uniform sampler2D uLayer3Texture;
-layout(set = 1, binding = 4) uniform sampler2D uLayer1Alpha;
-layout(set = 1, binding = 5) uniform sampler2D uLayer2Alpha;
-layout(set = 1, binding = 6) uniform sampler2D uLayer3Alpha;
-
-// The chunk's baked shadow (MCSH), 1 lit and 0 shadowed; 1 everywhere for a
-// chunk without one.
-layout(set = 1, binding = 8) uniform sampler2D uBakedShadow;
+// The chunk's blend maps, packed (TerrainRenderer::createBlendTexture): layer
+// 1, 2 and 3's alpha in rgb, and in a the baked shadow (MCSH), 1 lit and 0
+// shadowed - 1 everywhere for a chunk without one. Each was a texture of its
+// own, at the same size and coordinate; one fetch reads all four. Bindings 5,
+// 6 and 8 held them and are no longer read.
+layout(set = 1, binding = 4) uniform sampler2D uBlendMaps;
 
 // Layer 0 of an env chunk: a cube map sampled at the reflection.
 layout(set = 1, binding = 9) uniform samplerCube uEnvCube;
@@ -76,12 +75,9 @@ layout(location = 4) in vec3 Shading;  // MCCV, 1 neutral
 
 layout(location = 0) out vec4 outColor;
 
-// A layer's alpha, as the client samples it: the 64x64 map stretched over
-// the chunk, nothing more (0x007d06b0). A blur near the chunk's edges was
-// here to hide seams; the client has none.
-float sampleAlpha(sampler2D tex, vec2 uv) {
-    return texture(tex, uv).r;
-}
+// The layers' alpha, as the client samples them: each 64x64 map stretched
+// over the chunk, nothing more (0x007d06b0). A blur near the chunk's edges
+// was here to hide seams; the client has none.
 
 // A scrolling layer's offset (MCLY 0x40), as terrainLayerAnimOffset in
 // pipeline/terrain_mesh.hpp works it out: the direction (flags & 7) times the
@@ -154,9 +150,10 @@ void main() {
     // another by its alpha (lerp after lerp), or on a map with MPHD flag 0x4
     // the weighted variants' base x (1 - saturate(a1 + a2 + a3)) plus each
     // layer by its own alpha (0x0079e5c0 picks the variant by 0x00cf08d0).
-    float a1 = hasLayer1 != 0 ? sampleAlpha(uLayer1Alpha, LayerUV) : 0.0;
-    float a2 = hasLayer2 != 0 ? sampleAlpha(uLayer2Alpha, LayerUV) : 0.0;
-    float a3 = hasLayer3 != 0 ? sampleAlpha(uLayer3Alpha, LayerUV) : 0.0;
+    const vec4 blend = texture(uBlendMaps, LayerUV);
+    float a1 = hasLayer1 != 0 ? blend.r : 0.0;
+    float a2 = hasLayer2 != 0 ? blend.g : 0.0;
+    float a3 = hasLayer3 != 0 ? blend.b : 0.0;
     vec4 w;
     if (weightedLayers != 0) {
         w = vec4(1.0 - clamp(a1 + a2 + a3, 0.0, 1.0), a1, a2, a3);
@@ -225,7 +222,7 @@ void main() {
     // for one sun, trees and buildings included - is a second set of
     // shadows that matches neither the sun overhead nor anything standing
     // there, soft streaks across open ground with no caster in sight.
-    float lit = texture(uBakedShadow, LayerUV).r;
+    float lit = blend.a;
     if (shadowParams.x > 0.5) {
         vec3 ldir = normalize(-lightDir.xyz);
         float nl = dot(norm, ldir);

@@ -50,8 +50,11 @@ struct TerrainChunkGPU {
     // Texture handles (owned by cache, NOT destroyed per-chunk)
     VkTexture* baseTexture = nullptr;
     VkTexture* layerTextures[3] = {nullptr, nullptr, nullptr};
+    /// [0]: the packed blend texture - layer 1-3 alpha in rgb, the baked
+    /// shadow (MCSH, 255 lit) in a; null for none. [1], [2] and shadowTexture
+    /// stay null, kept so the cache's in-use scan reads one shape.
     VkTexture* alphaTextures[3] = {nullptr, nullptr, nullptr};
-    VkTexture* shadowTexture = nullptr;  // MCSH, 255 lit; the opaque 1x1 for none
+    VkTexture* shadowTexture = nullptr;
     int layerCount = 0;
     uint32_t layerFlags[4] = {0, 0, 0, 0};  // MCLY flags: 0x40 scrolls, 0x80 unlit
     bool weightedLayers = false;            // ChunkMesh::weightedLayers
@@ -192,7 +195,9 @@ public:
 private:
     TerrainChunkGPU uploadChunk(const pipeline::ChunkMesh& chunk);
     VkTexture* loadTexture(const std::string& path);
-    VkTexture* createAlphaTexture(const std::vector<uint8_t>& alphaData);
+    /// The chunk's three alpha maps and its baked shadow in one RGBA8 64x64,
+    /// a channel each; a null channel is 255. Null if the upload fails.
+    VkTexture* createBlendTexture(const std::vector<uint8_t>* const channels[4]);
     bool isChunkVisible(const TerrainChunkGPU& chunk, const Frustum& frustum);
     void calculateBoundingSphere(TerrainChunkGPU& chunk, const pipeline::ChunkMesh& meshChunk);
     VkDescriptorSet allocateMaterialSet();

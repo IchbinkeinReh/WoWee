@@ -493,7 +493,8 @@ constexpr SettingDesc kSchema[] = {
     {"texturemagnification", "Close-up filtering", SettingKind::Enum, 0, 1, 1, "Display", "",
      "How a texture looks when you are close enough that its pixels\n"
      "show. Bilinear is the original game's; Smooth rounds the blocky\n"
-     "steps away. Costs a little on close-up surfaces.",
+     "steps away. Costs a little on close-up surfaces. The Low preset\n"
+     "and phones always draw Bilinear.",
      "Bilinear|Smooth", 1},
 
     // ------------------------------------------------------------------ Camera

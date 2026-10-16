@@ -612,7 +612,7 @@ void PerformanceHUD::renderFrameProfile(const Renderer* renderer) {
     if (snap.collapsedGpuPasses >= 2 && snap.gpuAvgMs > 1.0) {
         ImGui::TextColored(kHelpText,
                            "%d passes read ~0. If they really draw something, this driver puts a\n"
-                           "whole render pass on its first mark; WOWEE_PASS_ABLATION=1 measures\n"
+                           "whole render pass on its first mark; /perf ablate measures\n"
                            "the scene pass by switching passes off instead.",
                            snap.collapsedGpuPasses);
     }

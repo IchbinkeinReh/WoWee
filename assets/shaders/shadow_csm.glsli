@@ -12,7 +12,7 @@
 //     mat4 cascadeMatrix[4];  // world -> atlas uv.xy, depth z
 //     vec4 cascadeRect[4];    // the tile: uv min xy, uv max zw
 //     vec4 cascadeTexel[4];   // x one texel in yards, yz one atlas texel in u, v
-//     vec4 cascadeInfo;       // x count (0 = no map), y unused, z fade start
+//     vec4 cascadeInfo;       // x count (0 = no map), y 1 for the cheap filter, z fade start
 //
 // cascadeInfo.x is 0 in the character preview, whose block is zeroed, and
 // before the player has a position; everything then reads as lit.
@@ -27,7 +27,11 @@ float csmTileDistance(int c, vec2 uv) {
 }
 
 // One cascade's 3x3 filter, the taps held to its tile so none reads the
-// neighbouring one. The point is moved along the surface normal by up to one
+// neighbouring one. With cascadeInfo.y set (a phone, or the Low preset:
+// Renderer::setLowCostShading) it is four taps half a texel either side of
+// the point instead of nine a texel apart - each tap is the sampler's own
+// 2x2 compare, so the four still cover the same 3x3 texels, with a little
+// less smoothing across them. The point is moved along the surface normal by up to one
 // and a half of this cascade's texels, in yards, before it is projected.
 float csmSampleCascade(sampler2DShadow smap, int c, vec3 worldPos, vec3 n, float nl,
                        float depthBias) {
@@ -40,6 +44,16 @@ float csmSampleCascade(sampler2DShadow smap, int c, vec3 worldPos, vec3 n, float
     const vec2 lo = cascadeRect[c].xy + 0.5 * texel;
     const vec2 hi = cascadeRect[c].zw - 0.5 * texel;
     const float ref = proj.z - depthBias;
+    if (cascadeInfo.y > 0.5) {
+        float quad = 0.0;
+        for (int x = 0; x < 2; ++x) {
+            for (int y = 0; y < 2; ++y) {
+                const vec2 uv = clamp(proj.xy + (vec2(x, y) - 0.5) * texel, lo, hi);
+                quad += texture(smap, vec3(uv, ref));
+            }
+        }
+        return quad * 0.25;
+    }
     float sum = 0.0;
     for (int x = -1; x <= 1; ++x) {
         for (int y = -1; y <= 1; ++y) {

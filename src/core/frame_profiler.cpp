@@ -351,7 +351,7 @@ std::string FrameProfiler::format(const Snapshot& s) {
     if (s.collapsedGpuPasses >= 2 && s.gpuAvgMs > 1.0) {
         out << "  (" << s.collapsedGpuPasses << " GPU passes read under 20us. A driver that "
                "resolves timestamps per render pass puts a whole pass on its first mark; "
-               "WOWEE_PASS_ABLATION=1 measures the scene pass by switching passes off.)\n";
+               "/perf ablate (or WOWEE_PASS_ABLATION=1) measures the scene pass by switching passes off.)\n";
     }
     std::string text = out.str();
     if (!text.empty() && text.back() == '\n') text.pop_back();
