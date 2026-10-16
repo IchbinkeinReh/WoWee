@@ -654,6 +654,94 @@ glm::vec3 EntitySpawner::gameObjectPlacement(uint64_t guid, float canonicalYaw) 
     return {0.0f, 0.0f, core::coords::canonicalToServerYaw(canonicalYaw)};
 }
 
+// Reads and parses a game object's model and decodes its textures. Touches
+// nothing of the spawner's, so the spawn queue runs it on a worker.
+EntitySpawner::PreparedGameObjectM2 EntitySpawner::prepareGameObjectM2(pipeline::AssetManager& am,
+                                                                       uint32_t displayId,
+                                                                       const std::string& modelPath) {
+    PreparedGameObjectM2 out;
+    out.displayId = displayId;
+    out.modelPath = modelPath;
+    auto m2Data = am.readFile(modelPath);
+    if (m2Data.empty()) {
+        out.error = "Failed to read gameobject M2: ";
+        return out;
+    }
+    auto model = std::make_shared<pipeline::M2Model>(pipeline::M2Loader::load(m2Data));
+    // Collision classification needs the asset path. Embedded M2 names
+    // are often generic and caused herb/grass gameobjects to be treated
+    // as solid props.
+    model->name = modelPath;
+    if (model->vertices.empty()) {
+        out.error = "Failed to parse gameobject M2: ";
+        return out;
+    }
+    std::string skinPath = pipeline::skinPathForM2(modelPath);
+    auto skinData = am.readFile(skinPath);
+    if (!skinData.empty() && model->version >= 264) {
+        pipeline::M2Loader::loadSkin(skinData, *model);
+    } else if (skinData.empty() && model->version >= 264) {
+        out.skinMissing = skinPath;
+    }
+    // Its named textures, as M2Renderer::loadTexture keys them and loads them
+    // (blocks kept: M2 skins are only sampled).
+    for (const auto& tex : model->textures) {
+        if (tex.type != 0 || tex.filename.empty()) continue;
+        std::string key = tex.filename;
+        const size_t nul = key.find('\0');
+        if (nul != std::string::npos) key.resize(nul);
+        std::replace(key.begin(), key.end(), '/', '\\');
+        std::transform(key.begin(), key.end(), key.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (key.empty() || out.predecodedTextures.count(key)) continue;
+        auto blp = am.loadTexture(key, true);
+        if (blp.isValid()) out.predecodedTextures[key] = std::move(blp);
+    }
+    out.model = std::move(model);
+    return out;
+}
+
+// The main thread's half: the GPU upload and the display's cache entry. 0 on
+// failure, with the display marked as one never to try again.
+uint32_t EntitySpawner::uploadGameObjectM2(PreparedGameObjectM2& prepared) {
+    auto* m2Renderer = renderer_ ? renderer_->getM2Renderer() : nullptr;
+    if (!m2Renderer) return 0;
+    if (auto it = gameObjectDisplayIdModelCache_.find(prepared.displayId);
+        it != gameObjectDisplayIdModelCache_.end() && m2Renderer->hasModel(it->second)) {
+        return it->second;
+    }
+    if (!prepared.model) {
+        LOG_WARNING(prepared.error, prepared.modelPath);
+        gameObjectDisplayIdFailedCache_.insert(prepared.displayId);
+        return 0;
+    }
+    if (!prepared.skinMissing.empty()) {
+        LOG_WARNING("GO skin file MISSING for WotLK M2 (no indices/batches): ", prepared.skinMissing);
+    }
+    const pipeline::M2Model& model = *prepared.model;
+    LOG_DEBUG("GO model: ", prepared.modelPath, " v=", model.version,
+             " verts=", model.vertices.size(),
+             " idx=", model.indices.size(),
+             " batches=", model.batches.size(),
+             " bones=", model.bones.size());
+    const uint32_t modelId = nextGameObjectModelId_++;
+    m2Renderer->setPredecodedBLPCache(&prepared.predecodedTextures);
+    const bool loaded = m2Renderer->loadModel(model, modelId);
+    m2Renderer->setPredecodedBLPCache(nullptr);
+    if (!loaded) {
+        LOG_WARNING("Failed to load gameobject model: ", prepared.modelPath);
+        gameObjectDisplayIdFailedCache_.insert(prepared.displayId);
+        return 0;
+    }
+    // Keep game object models resident across the away-and-back cycle.
+    // Leaving town drops every instance of them, and the 60s reaper then
+    // evicted the model - the log showed PostBoxHuman.m2 (the mailbox)
+    // going through exactly that reap/reload churn on every return trip.
+    m2Renderer->setModelPinned(modelId, true);
+    gameObjectDisplayIdModelCache_[prepared.displayId] = modelId;
+    return modelId;
+}
+
 void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_t displayId, float x, float y, float z, float orientation, float scale) {
     if (!renderer_ || !assetManager_) return;
 
@@ -915,53 +1003,9 @@ void EntitySpawner::spawnOnlineGameObject(uint64_t guid, uint32_t entry, uint32_
             }
         }
         if (itCache == gameObjectDisplayIdModelCache_.end()) {
-            modelId = nextGameObjectModelId_++;
-
-            auto m2Data = assetManager_->readFile(modelPath);
-            if (m2Data.empty()) {
-                LOG_WARNING("Failed to read gameobject M2: ", modelPath);
-                gameObjectDisplayIdFailedCache_.insert(displayId);
-                return;
-            }
-
-            pipeline::M2Model model = pipeline::M2Loader::load(m2Data);
-            // Collision classification needs the asset path. Embedded M2 names
-            // are often generic and caused herb/grass gameobjects to be treated
-            // as solid props.
-            model.name = modelPath;
-            if (model.vertices.empty()) {
-                LOG_WARNING("Failed to parse gameobject M2: ", modelPath);
-                gameObjectDisplayIdFailedCache_.insert(displayId);
-                return;
-            }
-
-            std::string skinPath = pipeline::skinPathForM2(modelPath);
-            auto skinData = assetManager_->readFile(skinPath);
-            if (!skinData.empty() && model.version >= 264) {
-                pipeline::M2Loader::loadSkin(skinData, model);
-            } else if (skinData.empty() && model.version >= 264) {
-                LOG_WARNING("GO skin file MISSING for WotLK M2 (no indices/batches): ", skinPath);
-            }
-
-            LOG_DEBUG("GO model: ", modelPath, " v=", model.version,
-                     " verts=", model.vertices.size(),
-                     " idx=", model.indices.size(),
-                     " batches=", model.batches.size(),
-                     " bones=", model.bones.size(),
-                     " skin=", (skinData.empty() ? "MISSING" : "ok"));
-
-            if (!m2Renderer->loadModel(model, modelId)) {
-                LOG_WARNING("Failed to load gameobject model: ", modelPath);
-                gameObjectDisplayIdFailedCache_.insert(displayId);
-                return;
-            }
-
-            // Keep game object models resident across the away-and-back cycle.
-            // Leaving town drops every instance of them, and the 60s reaper then
-            // evicted the model - the log showed PostBoxHuman.m2 (the mailbox)
-            // going through exactly that reap/reload churn on every return trip.
-            m2Renderer->setModelPinned(modelId, true);
-            gameObjectDisplayIdModelCache_[displayId] = modelId;
+            PreparedGameObjectM2 prepared = prepareGameObjectM2(*assetManager_, displayId, modelPath);
+            modelId = uploadGameObjectM2(prepared);
+            if (modelId == 0) return;
         }
 
         uint32_t instanceId = m2Renderer->createInstance(modelId, renderPos, placement, scale);

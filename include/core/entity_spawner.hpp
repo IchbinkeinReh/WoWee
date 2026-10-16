@@ -118,6 +118,11 @@ public:
 
     // Check if any spawn/async work is still pending
     bool hasWorkPending() const;
+    // What is still queued, queue by queue, for the loading screen's log.
+    std::string pendingWorkSummary() const;
+    /// Milliseconds update() has spent in each of its stages since the last
+    /// call, as text, and the counters cleared: the loading screen's profile.
+    std::string takeStageTimes();
 
     // Status queries
     bool isCreatureSpawned(uint64_t guid) const { return creatureInstances_.count(guid) > 0; }
@@ -768,6 +773,9 @@ private:
     /// what has not. True for a display that wears nothing of the kind.
     bool creatureDressPrepared(uint32_t displayId);
     bool dressPrefetchBypass_ = false;
+    // update()'s stages, timed for takeStageTimes.
+    static constexpr int kUpdateStageCount = 8;
+    double updateStageMs_[kUpdateStageCount] = {};
 public:
     /// Behind a loading screen nothing is seen to stutter, and the warmup
     /// waits for the spawn queue to drain: NPCs are dressed on the spot there
@@ -1209,6 +1217,30 @@ private:
     struct AsyncGameObjectLoad {
         std::future<PreparedGameObjectWMO> future;
     };
+
+    // A game object's M2, read, parsed and its textures decoded on a worker
+    // (prepareGameObjectM2), then uploaded on the main thread
+    // (uploadGameObjectM2). The spawn queue did all of it on the main thread,
+    // one model at a time: entering Dalaran with a cold file cache, 287 game
+    // objects queued behind it took over a minute.
+    struct PreparedGameObjectM2 {
+        uint32_t displayId = 0;
+        std::string modelPath;
+        std::shared_ptr<pipeline::M2Model> model;  // null: failed, see error
+        std::unordered_map<std::string, pipeline::BLPImage> predecodedTextures;
+        std::string error;
+        std::string skinMissing;
+    };
+    struct AsyncGameObjectM2Load {
+        uint32_t displayId = 0;
+        std::future<PreparedGameObjectM2> future;
+    };
+    static PreparedGameObjectM2 prepareGameObjectM2(pipeline::AssetManager& am, uint32_t displayId,
+                                                    const std::string& modelPath);
+    uint32_t uploadGameObjectM2(PreparedGameObjectM2& prepared);
+    void processAsyncGameObjectM2Results();
+    std::vector<AsyncGameObjectM2Load> asyncGameObjectM2Loads_;
+    std::unordered_set<uint32_t> asyncGameObjectM2Displays_;
 
     // A parsed WMO whose GPU upload is being spread across frames. Uploading a
     // transport in one go cost ~40ms - its textures are large, and that upload

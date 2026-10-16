@@ -1392,7 +1392,19 @@ void TerrainManager::workerLoop() {
         }
 
         if (hasWork) {
+            const auto prepStart = std::chrono::steady_clock::now();
             auto pending = prepareTile(coord.x, coord.y);
+            const double prepMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - prepStart).count();
+            if (prepMs > 1000.0) {
+                LOG_INFO("Terrain tile [", coord.x, ",", coord.y, "] took ", static_cast<int>(prepMs),
+                         "ms to prepare", pending ? "" : " (failed)",
+                         pending ? (": " + std::to_string(pending->m2Models.size()) + " M2 models, " +
+                                    std::to_string(pending->wmoModels.size()) + " WMOs, " +
+                                    std::to_string(pending->wmoDoodads.size()) + " WMO doodads, " +
+                                    std::to_string(pending->preloadedTextures.size()) + " textures")
+                                 : std::string());
+            }
 
             std::lock_guard<std::mutex> lock(queueMutex);
             --preparingTiles_;
@@ -1580,7 +1592,14 @@ void TerrainManager::processOneReadyTile() {
         if (vkCtx) vkCtx->beginUploadBatch();
 
         auto& ft = finalizingTiles_.front();
+        const auto finStart = std::chrono::steady_clock::now();
         while (!advanceFinalization(ft)) {}
+        const double finMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - finStart).count();
+        if (finMs > 200.0 && ft.pending) {
+            LOG_INFO("Terrain tile [", ft.pending->coord.x, ",", ft.pending->coord.y, "] took ",
+                     static_cast<int>(finMs), "ms to finalize");
+        }
         finalizingTiles_.pop_front();
 
         if (vkCtx) vkCtx->endUploadBatchSync();  // Sync - load screen needs data ready

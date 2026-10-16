@@ -1097,8 +1097,35 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         // warmup calls (e.g. different map loads) and could suppress logging on a
         // later call for a long time after an earlier call ran close to the hard cap.
         float lastGroundNotReadyLogTime = -1000.0f;
+        // Where the warmup's time goes, stage by stage, logged once a second
+        // with what is still queued: the loading screen's own profile.
+        using WarmupClock = std::chrono::steady_clock;
+        enum WarmupStage { kStageNet, kStageWorld, kStageSpawn, kStageMaps, kStageRender, kStageGround,
+                           kStageSleep, kStageCount };
+        static constexpr const char* kStageNames[kStageCount] = {
+            "network", "world", "spawns", "normal maps", "renderer", "ground", "screen + sleep"};
+        double stageMs[kStageCount] = {};
+        auto stageStart = WarmupClock::now();
+        const auto endStage = [&](WarmupStage stage) {
+            const auto t = WarmupClock::now();
+            stageMs[stage] += std::chrono::duration<double, std::milli>(t - stageStart).count();
+            stageStart = t;
+        };
+        float lastWarmupLogTime = 0.0f;
+        int warmupIterations = 0;
+        const auto logWarmup = [&](float elapsed, const char* what) {
+            std::string stages;
+            for (int i = 0; i < kStageCount; ++i) {
+                if (!stages.empty()) stages += ", ";
+                stages += std::string(kStageNames[i]) + " " + std::to_string(static_cast<int>(stageMs[i])) + "ms";
+            }
+            LOG_INFO("Warmup ", what, " ", elapsed, "s, ", warmupIterations, " passes (", stages, "); spawns: ",
+                     entitySpawner_->takeStageTimes(), "; queued: ", entitySpawner_->pendingWorkSummary());
+        };
 
         while (true) {
+            ++warmupIterations;
+            stageStart = WarmupClock::now();
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
                 if (event.type == SDL_EVENT_QUIT) {
@@ -1118,6 +1145,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
 
             // Drain network and process deferred spawn/composite queues while hidden.
             if (gameHandler_) gameHandler_->update(1.0f / 60.0f);
+            endStage(kStageNet);
 
             // If a new world entry was deferred during packet processing,
             // stop warming up this map - we'll load the new one after cleanup.
@@ -1128,6 +1156,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             }
 
             if (world_) world_->update(1.0f / 60.0f);
+            endStage(kStageWorld);
 
             // Process all spawn/equipment/transport queues during warmup -
             // as many passes as fit in 20 ms. One pass is held to a few
@@ -1135,22 +1164,30 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
             // pointless behind a loading screen: in Dalaran, hundreds of
             // players at three a pass and a pass every 38 ms kept the screen
             // up for twelve seconds.
+            //
+            // 50 ms of them a pass, not 20: the rest of a pass - the
+            // renderer's update, the loading screen's frame - cost about as
+            // much again, and with 20 the queues had less than half of the
+            // warmup. Dalaran's 240 NPCs took 15 seconds that way.
             {
                 const auto spawnStart = std::chrono::steady_clock::now();
                 do {
                     entitySpawner_->update();
                 } while (entitySpawner_->hasWorkPending() &&
-                         std::chrono::steady_clock::now() - spawnStart < std::chrono::milliseconds(20));
+                         std::chrono::steady_clock::now() - spawnStart < std::chrono::milliseconds(50));
             }
+            endStage(kStageSpawn);
             if (auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
                 cr->processPendingNormalMaps(4);
             }
             app_.updateQuestMarkers();
+            endStage(kStageMaps);
 
             // Update renderer (terrain streaming, animations)
             if (renderer_) {
                 renderer_->update(1.0f / 60.0f);
             }
+            endStage(kStageRender);
 
             const auto now = std::chrono::high_resolution_clock::now();
             const float elapsed = std::chrono::duration<float>(now - warmupStart).count();
@@ -1258,6 +1295,12 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                 }
             }
 
+            endStage(kStageGround);
+            if (elapsed - lastWarmupLogTime >= 1.0f) {
+                lastWarmupLogTime = elapsed;
+                logWarmup(elapsed, groundReady ? "at (ground ready)" : "at (no ground yet)");
+            }
+
             // Exit when: (min time passed AND queues drained AND ground ready) OR hard cap
             bool readyToExit = (elapsed >= kMinWarmupSeconds && idleIterations >= kIdleThreshold && groundReady);
             // Past the queue cap with the floor there, go; without it, wait
@@ -1270,6 +1313,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                 if (groundReady && renderer_) renderer_->prepareGrassBeforeEntry();
                 LOG_INFO("Warmup done after ", elapsed, "s: ground ", groundReady ? "ready" : "NOT ready",
                          ", queues ", queuesEmpty ? "drained" : "pending");
+                logWarmup(elapsed, "done at");
                 if (capped && !groundReady) {
                     LOG_WARNING("Warmup hit hard cap (", kMaxGroundWaitSeconds, "s), ground NOT ready - may fall through world");
                 } else if (capped) {
@@ -1280,7 +1324,11 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
 
             const float t = std::clamp(elapsed / kMaxWarmupSeconds, 0.0f, 1.0f);
             showProgress("Finalizing world sync...", 0.97f + t * 0.025f);
-            SDL_Delay(16);
+            // Asleep only with nothing to do: with work queued the next pass
+            // is the better use of the time (the network is drained each pass
+            // either way).
+            if (queuesEmpty) SDL_Delay(16);
+            endStage(kStageSleep);
         }
     }
 

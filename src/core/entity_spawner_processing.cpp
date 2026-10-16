@@ -301,6 +301,12 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
     // Budget: max 2ms per frame for creature spawning to prevent stutter.
     // In unlimited mode (load screen), process everything without budget cap.
     static constexpr float kSpawnBudgetMs = 2.0f;
+    // Behind the loading screen (dressPrefetchBypass_) a pass may take
+    // longer and spawn more: the warmup calls this back to back, and each
+    // call also runs every other queue of update() around it.
+    const bool loadingScreen = dressPrefetchBypass_;
+    const float spawnBudgetMs = loadingScreen ? 8.0f : kSpawnBudgetMs;
+    const int maxSpawnsThisCall = loadingScreen ? 16 : MAX_SPAWNS_PER_FRAME;
 
     // First, finalize any async model loads that completed on background threads.
     processAsyncCreatureResults(unlimited);
@@ -322,14 +328,14 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
     int asyncLaunched = 0;
     size_t rotationsLeft = pendingCreatureSpawns_.size();
     while (!pendingCreatureSpawns_.empty() &&
-           (unlimited || processed < MAX_SPAWNS_PER_FRAME) &&
+           (unlimited || processed < maxSpawnsThisCall) &&
            rotationsLeft > 0) {
         // Check time budget every iteration (including first - async results may
         // have already consumed the budget via GPU model uploads).
         if (!unlimited) {
             auto now = std::chrono::steady_clock::now();
             float elapsedMs = std::chrono::duration<float, std::milli>(now - startTime).count();
-            if (elapsedMs >= kSpawnBudgetMs) break;
+            if (elapsedMs >= spawnBudgetMs) break;
         }
 
         PendingCreatureSpawn s = pendingCreatureSpawns_.front();
@@ -363,7 +369,8 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
                 continue;
             }
 
-            const int maxAsync = unlimited ? (MAX_ASYNC_CREATURE_LOADS * 4) : MAX_ASYNC_CREATURE_LOADS;
+            const int maxAsync = (unlimited || loadingScreen) ? (MAX_ASYNC_CREATURE_LOADS * 4)
+                                                              : MAX_ASYNC_CREATURE_LOADS;
             if (static_cast<int>(asyncCreatureLoads_.size()) + asyncLaunched >= maxAsync) {
                 // Too many in-flight - defer to next frame
                 pendingCreatureSpawns_.push_back(s);
@@ -1006,9 +1013,38 @@ void EntitySpawner::processPendingWmoUploads() {
     pendingWmoUploads_.erase(pendingWmoUploads_.begin());
 }
 
+void EntitySpawner::processAsyncGameObjectM2Results() {
+    if (asyncGameObjectM2Loads_.empty()) return;
+    // The GPU half of a prepared model is its upload, a millisecond or two;
+    // at least one a call, then as many as fit in the budget.
+    constexpr float kUploadBudgetMs = 2.0f;
+    const auto start = std::chrono::steady_clock::now();
+    bool uploadedOne = false;
+    for (auto it = asyncGameObjectM2Loads_.begin(); it != asyncGameObjectM2Loads_.end(); ) {
+        if (uploadedOne && std::chrono::duration<float, std::milli>(
+                               std::chrono::steady_clock::now() - start).count() >= kUploadBudgetMs) {
+            break;
+        }
+        if (!it->future.valid() ||
+            it->future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+            ++it;
+            continue;
+        }
+        PreparedGameObjectM2 prepared = it->future.get();
+        asyncGameObjectM2Displays_.erase(it->displayId);
+        it = asyncGameObjectM2Loads_.erase(it);
+        // The spawns that asked for it are still queued; with the model in the
+        // cache they take the synchronous path, which is now only an instance.
+        uploadGameObjectM2(prepared);
+        uploadedOne = true;
+    }
+}
+
 void EntitySpawner::processGameObjectSpawnQueue() {
     // Finalize any completed async WMO loads first
     processAsyncGameObjectResults();
+    // And the M2s prepared on workers.
+    processAsyncGameObjectM2Results();
     // Then advance one in-progress upload, which may finish a spawn.
     processPendingWmoUploads();
 
@@ -1025,6 +1061,12 @@ void EntitySpawner::processGameObjectSpawnQueue() {
     auto startTime = std::chrono::steady_clock::now();
     static constexpr float kBudgetMs = 2.0f;
     static constexpr int kMaxAsyncLoads = 2;
+    // Models prepared at once on workers: more behind the loading screen,
+    // where nothing competes with them.
+    const size_t maxAsyncM2Loads = dressPrefetchBypass_ ? 12 : 4;
+    // A spawn waiting for its model goes to the back of the queue, so the
+    // ones behind it are not held up; each may be passed over once a call.
+    size_t rotationsLeft = pendingGameObjectSpawns_.size();
 
     while (!pendingGameObjectSpawns_.empty()) {
         float elapsedMs = std::chrono::duration<float, std::milli>(
@@ -1132,6 +1174,29 @@ void EntitySpawner::processGameObjectSpawnQueue() {
         // once - a zone with a few ships in view does exactly that.
         if (isWmo && !isCached && !modelPath.empty()) {
             break;  // retry next frame, keeping queue order
+        }
+
+        // An M2 not loaded yet: read, parsed and decoded on a worker, the
+        // spawn waiting at the back of the queue until the model is in.
+        if (!isWmo && !modelPath.empty() && !gameObjectDisplayIdModelCache_.count(s.displayId) &&
+            !gameObjectDisplayIdFailedCache_.count(s.displayId) && assetManager_) {
+            if (!asyncGameObjectM2Displays_.count(s.displayId) &&
+                asyncGameObjectM2Loads_.size() < maxAsyncM2Loads) {
+                AsyncGameObjectM2Load load;
+                load.displayId = s.displayId;
+                load.future = std::async(std::launch::async,
+                    [am = assetManager_, displayId = s.displayId, path = modelPath]() {
+                        return prepareGameObjectM2(*am, displayId, path);
+                    });
+                asyncGameObjectM2Loads_.push_back(std::move(load));
+                asyncGameObjectM2Displays_.insert(s.displayId);
+            }
+            if (rotationsLeft == 0) break;
+            --rotationsLeft;
+            PendingGameObjectSpawn waiting = s;
+            pendingGameObjectSpawns_.pop_front();
+            pendingGameObjectSpawns_.push_back(waiting);
+            continue;
         }
 
         // Cached WMO or M2 - spawn synchronously (cheap)

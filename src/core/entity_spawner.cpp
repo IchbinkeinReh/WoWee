@@ -83,12 +83,24 @@ void EntitySpawner::update() {
     if (!assetPrefetch_ && assetManager_ && assetManager_->isInitialized()) {
         assetPrefetch_ = std::make_unique<AssetPrefetch>(*assetManager_);
     }
+    auto stageStart = std::chrono::steady_clock::now();
+    const auto stage = [&](int index) {
+        const auto t = std::chrono::steady_clock::now();
+        updateStageMs_[index] += std::chrono::duration<double, std::milli>(t - stageStart).count();
+        stageStart = t;
+    };
     if (assetPrefetch_) assetPrefetch_->pump();
+    stage(0);
     processPlayerSpawnQueue();
+    stage(1);
     processCreatureSpawnQueue();
+    stage(2);
     processAsyncNpcCompositeResults();
+    stage(3);
     processDeferredEquipmentQueue();
+    stage(4);
     processGameObjectSpawnQueue();
+    stage(5);
     processPendingTransportRegistrations();
     processPendingTransportDoodads();
     processPendingMount();
@@ -99,6 +111,19 @@ void EntitySpawner::update() {
     syncGroundTargetModel();
     updateGameObjectCustomAnims();
     updateGameObjectDestroyPending();
+    stage(6);
+}
+
+std::string EntitySpawner::takeStageTimes() {
+    static constexpr const char* kNames[kUpdateStageCount] = {
+        "prefetch", "players", "creatures", "npc dress", "equipment", "game objects", "rest", ""};
+    std::string out;
+    for (int i = 0; i < kUpdateStageCount && kNames[i][0]; ++i) {
+        if (!out.empty()) out += ", ";
+        out += std::string(kNames[i]) + " " + std::to_string(static_cast<int>(updateStageMs_[i])) + "ms";
+        updateStageMs_[i] = 0.0;
+    }
+    return out;
 }
 
 void EntitySpawner::syncGroundTargetModel() {
@@ -338,7 +363,26 @@ bool EntitySpawner::hasWorkPending() const {
            !asyncNpcCompositeLoads_.empty() || !pendingPlayerSpawns_.empty() ||
            !asyncPlayerModelLoads_.empty() ||
            !asyncEquipmentLoads_.empty() || !deferredEquipmentQueue_.empty() ||
-           !pendingGameObjectSpawns_.empty() || !asyncGameObjectLoads_.empty();
+           !pendingGameObjectSpawns_.empty() || !asyncGameObjectLoads_.empty() ||
+           !asyncGameObjectM2Loads_.empty();
+}
+
+std::string EntitySpawner::pendingWorkSummary() const {
+    std::string out;
+    out += "creatures " + std::to_string(pendingCreatureSpawns_.size()) +
+           " (+" + std::to_string(asyncCreatureLoads_.size()) + " loading, " +
+           std::to_string(asyncNpcCompositeLoads_.size()) + " dressing)";
+    out += ", players " + std::to_string(pendingPlayerSpawns_.size()) +
+           " (+" + std::to_string(asyncPlayerModelLoads_.size()) + " loading)";
+    out += ", equipment " + std::to_string(deferredEquipmentQueue_.size()) +
+           " (+" + std::to_string(asyncEquipmentLoads_.size()) + " loading)";
+    out += ", game objects " + std::to_string(pendingGameObjectSpawns_.size()) +
+           " (+" + std::to_string(asyncGameObjectLoads_.size() + asyncGameObjectM2Loads_.size()) + " loading, " +
+           std::to_string(pendingWmoUploads_.size()) + " uploading)";
+    out += ", spawned " + std::to_string(creatureInstances_.size()) + " creatures " +
+           std::to_string(playerInstances_.size()) + " players " +
+           std::to_string(gameObjectInstances_.size()) + " objects";
+    return out;
 }
 
 void EntitySpawner::clearMountState() {
@@ -553,6 +597,9 @@ void EntitySpawner::clearAllQueues() {
     asyncEquipmentLoads_.clear();
     asyncNpcCompositeLoads_.clear();
     asyncGameObjectLoads_.clear();
+    // Each future's destructor waits for its worker; nothing of theirs is kept.
+    asyncGameObjectM2Loads_.clear();
+    asyncGameObjectM2Displays_.clear();
 }
 
 void EntitySpawner::despawnAllCreatures() {
