@@ -527,7 +527,16 @@ TEST_CASE("every setting the panel binds is written down and read back", "[setti
     }
     REQUIRE(read.size() >= 60);
 
+    // Kept for the session on purpose: a debug view saved came back at the
+    // next start and was taken for a lighting bug (the "Probe light ratio"
+    // view drawing a night outdoors flat grey).
+    const std::set<std::string> sessionOnly = {"dbgview"};
     for (const auto& [key, field] : bindings) {
+        if (sessionOnly.count(key)) {
+            INFO(key << " is meant to last only for the session, but is saved");
+            CHECK(written.count(field) == 0);
+            continue;
+        }
         INFO(key << " is bound to " << field
                  << ", which nothing writes to the config - it will work for the"
                     " session and be gone at the next login");

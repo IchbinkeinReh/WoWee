@@ -46,6 +46,10 @@ EXPECTED = {
     # Not stored: it is whatever the settings it covers currently amount to,
     # worked out by updateGraphicsPresetFromCurrentSettings on load.
     "graphicspreset": "derived from the settings it covers",
+    # Not stored on purpose: a Debug Graphics view lasts for the session. Saved,
+    # the "Probe light ratio" view came back at the next start and was taken
+    # for a grey, fogged night.
+    "dbgview": "a debug view lasts for the session",
 }
 
 
