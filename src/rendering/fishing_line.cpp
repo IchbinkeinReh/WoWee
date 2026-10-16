@@ -1,4 +1,5 @@
 #include "rendering/fishing_line.hpp"
+#include "rendering/depth_convention.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/character_renderer.hpp"
@@ -35,7 +36,7 @@ void FishingLineRenderer::buildPipeline(VkDevice device, const VkPipelineShaderS
         .setVertexInput({tightVertexBinding(sizeof(glm::vec3))}, {pos})
         .setTopology(VK_PRIMITIVE_TOPOLOGY_LINE_STRIP)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+        .setDepthTest(true, true, depth::kNearerOrEqual)
         .setColorBlendAttachment(PipelineBuilder::blendDisabled())
         .setMultisample(vkCtx_->getMsaaSamples())
         .setLayout(pipelineLayout_)

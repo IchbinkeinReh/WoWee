@@ -778,7 +778,6 @@ private:
     /// and stopping is said once each rather than every frame.
     bool pivotLiftActive_ = false;
     static constexpr float CAM_SPHERE_RADIUS = 0.32f;  // Keep camera farther from geometry to avoid clipping-through surfaces
-    static constexpr float CAM_EPSILON = 0.22f;        // Extra wall offset to avoid near-plane clipping artifacts
     static constexpr float COLLISION_FOCUS_RADIUS_THIRD_PERSON = 20.0f;  // Reduced for performance
     static constexpr float COLLISION_FOCUS_RADIUS_FREE_FLY = 20.0f;
     static constexpr float MIN_PITCH = -88.0f;      // Look almost straight down

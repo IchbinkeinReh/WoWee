@@ -1,4 +1,5 @@
 #include "rendering/weather.hpp"
+#include "rendering/depth_convention.hpp"
 
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
@@ -157,7 +158,7 @@ bool Weather::buildPipelines() {
             .setVertexInput({binding}, attrs)
             .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
             .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-            .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setDepthTest(true, false, depth::kNearerOrEqual)
             .setColorBlendAttachment(mod2x)
             .setMultisample(vkCtx_->getMsaaSamples())
             .setLayout(pipelineLayout_)
@@ -179,7 +180,7 @@ bool Weather::buildPipelines() {
             .setVertexInput({binding}, attrs)
             .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
             .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-            .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setDepthTest(true, false, depth::kNearerOrEqual)
             .setColorBlendAttachment(mod2x)
             .setMultisample(vkCtx_->getMsaaSamples())
             .setLayout(pipelineLayout_)
@@ -204,7 +205,7 @@ bool Weather::buildPipelines() {
             .setVertexInput({binding}, attrs)
             .setTopology(VK_PRIMITIVE_TOPOLOGY_POINT_LIST)
             .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-            .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setDepthTest(true, false, depth::kNearerOrEqual)
             .setColorBlendAttachment(PipelineBuilder::blendAlpha())
             .setMultisample(vkCtx_->getMsaaSamples())
             .setLayout(pipelineLayout_)
@@ -228,7 +229,7 @@ bool Weather::buildPipelines() {
             .setVertexInput({binding}, attrs)
             .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
             .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-            .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setDepthTest(true, false, depth::kNearerOrEqual)
             .setColorBlendAttachment(PipelineBuilder::blendAlpha())
             .setMultisample(vkCtx_->getMsaaSamples())
             .setLayout(pipelineLayout_)

@@ -38,5 +38,6 @@ void main() {
     vec4 clip = projection * vec4(viewPos, 1.0);
     // On the far plane, as the clouds are, so the depth test the sky is now
     // drawn under rejects it wherever the world has already been drawn.
-    gl_Position = vec4(clip.xy, clip.w, clip.w);
+    // Depth is reversed: the far plane is 0.
+    gl_Position = vec4(clip.xy, 0.0, clip.w);
 }

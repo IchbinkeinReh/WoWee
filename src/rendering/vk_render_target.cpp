@@ -1,4 +1,5 @@
 #include "rendering/vk_render_target.hpp"
+#include "rendering/depth_convention.hpp"
 #include "rendering/vk_context.hpp"
 #include "core/logger.hpp"
 
@@ -299,13 +300,13 @@ void VkRenderTarget::beginPass(VkCommandBuffer cmd, const VkClearColorValue& cle
     VkClearValue clearValues[3]{};
     clearValues[0].color = clear;           // MSAA color (or single-sample color)
     clearValues[1].color = clear;           // resolve (only used for MSAA)
-    clearValues[2].depthStencil = {.depth = 1.0f, .stencil = 0}; // depth
+    clearValues[2].depthStencil = {.depth = depth::kFar, .stencil = 0}; // depth
 
     bool useMSAA = msaaSamples_ != VK_SAMPLE_COUNT_1_BIT;
     if (useMSAA) {
         rpBegin.clearValueCount = hasDepth_ ? 3u : 2u;
     } else {
-        clearValues[1].depthStencil = {.depth = 1.0f, .stencil = 0}; // depth is attachment 1 in non-MSAA
+        clearValues[1].depthStencil = {.depth = depth::kFar, .stencil = 0}; // depth is attachment 1 in non-MSAA
         rpBegin.clearValueCount = hasDepth_ ? 2u : 1u;
     }
     rpBegin.pClearValues = clearValues;

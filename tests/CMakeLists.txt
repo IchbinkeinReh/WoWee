@@ -2618,6 +2618,16 @@ wowee_add_test(test_collision_geometry
     SOURCES test_collision_geometry.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_depth_convention ────────────────────────────────────
+# The scene's reversed depth and the camera's near-plane sweep (the client's
+# 0.2 near clip, 0x0077f490; its camera sweep, 0x00605d60).
+wowee_add_test(test_depth_convention
+    SOURCES test_depth_convention.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/camera.cpp)
+if(TARGET Vulkan::Vulkan)
+    target_link_libraries(test_depth_convention PRIVATE Vulkan::Vulkan)
+endif()
+
 # ── test_race_gender_suffix ──────────────────────────────────
 # The two-letter race code per-race models are suffixed with. Written out twice
 # - the helmet resolver and the shoulder attachment - and a wrong suffix reads

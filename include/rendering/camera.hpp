@@ -41,6 +41,10 @@ public:
     [[nodiscard]] const glm::mat4& getViewMatrix() const { return viewMatrix; }
     [[nodiscard]] const glm::mat4& getProjectionMatrix() const { return projectionMatrix; }
     [[nodiscard]] const glm::mat4& getUnjitteredProjectionMatrix() const { return unjitteredProjectionMatrix; }
+    /// The projection with the standard depth mapping (near 0, far 1), jitter
+    /// included: for a caller that rebuilds the near plane itself (the water
+    /// reflection's oblique clip) and reverses the result afterwards.
+    [[nodiscard]] const glm::mat4& getForwardDepthProjectionMatrix() const { return forwardDepthProjectionMatrix; }
     [[nodiscard]] glm::mat4 getViewProjectionMatrix() const { return projectionMatrix * viewMatrix; }
     [[nodiscard]] glm::mat4 getUnjitteredViewProjectionMatrix() const { return unjitteredProjectionMatrix * viewMatrix; }
     [[nodiscard]] float getAspectRatio() const { return aspectRatio; }
@@ -68,12 +72,16 @@ private:
     float pitch = 0.0f;
     float fov = 54.0f;
     float aspectRatio = 16.0f / 9.0f;
-    float nearPlane = 0.5f;
-    float farPlane = 30000.0f;   // Improves depth precision vs extremely large far clip
+    // The client's near clip: 0x0077f490 sets it to 0.2 and ignores the
+    // nearclip cvar. Depth is reversed (depth_convention.hpp), so the far
+    // plane costs no precision; it only has to hold the sky.
+    float nearPlane = 0.2f;
+    float farPlane = 30000.0f;
 
     glm::mat4 viewMatrix = glm::mat4(1.0f);
     glm::mat4 projectionMatrix = glm::mat4(1.0f);
     glm::mat4 unjitteredProjectionMatrix = glm::mat4(1.0f);
+    glm::mat4 forwardDepthProjectionMatrix = glm::mat4(1.0f);
     glm::vec2 jitterOffset = glm::vec2(0.0f);  // NDC jitter (applied to projection)
 };
 

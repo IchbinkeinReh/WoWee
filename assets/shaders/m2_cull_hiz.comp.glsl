@@ -34,7 +34,7 @@ layout(std140, set = 0, binding = 0) uniform CullUniforms {
     uint  hizEnabled;
     uint  hizMipLevels;
     uint  _pad2;
-    vec4  hizParams;           // x = pyramidWidth, y = pyramidHeight, z = nearPlane, w = unused
+    vec4  hizParams;           // x = pyramidWidth, y = pyramidHeight, z = nearPlane, w = farPlane
     mat4  viewProj;            // current frame view-projection
     mat4  prevViewProj;        // PREVIOUS frame's view-projection for HiZ reprojection
 };
@@ -56,9 +56,18 @@ const float SCREEN_EDGE_MARGIN = 0.02;
 // Sphere inflation factor for HiZ screen AABB (50 % larger → very conservative).
 const float HIZ_SPHERE_INFLATE = 1.5;
 
-// Depth bias - push nearest depth closer to camera so only objects
-// significantly behind occluders are culled.
-const float HIZ_DEPTH_BIAS = 0.02;
+// How far behind the farthest occluder an object's nearest point must be to
+// be culled: a fixed margin and a share of the distance, in yards. The test is
+// made on view distances, the depth being reversed (depth_convention.hpp) and
+// so far from linear that a margin in depth would mean nothing.
+const float HIZ_DISTANCE_MARGIN = 0.5;
+const float HIZ_DISTANCE_SHARE = 0.02;
+
+// The view distance of a reversed depth.
+float hizViewDistance(float d) {
+    float n = hizParams.z, f = hizParams.w;
+    return n * f / (d * (f - n) + n);
+}
 
 // Minimum screen-space size (pixels) for HiZ to engage.
 const float HIZ_MIN_SCREEN_PX = 6.0;
@@ -152,25 +161,22 @@ void main() {
                     float mipLevel = ceil(log2(max(screenSize, 1.0))) + 1.0;
                     mipLevel = clamp(mipLevel, 0.0, float(hizMipLevels - 1u));
 
-                    // Sample HiZ at 4 corners - take MAX (farthest occluder)
+                    // Sample HiZ at 4 corners - take the farthest occluder,
+                    // the smallest depth
                     float pz0 = textureLod(hizPyramid, uvMin, mipLevel).r;
                     float pz1 = textureLod(hizPyramid, vec2(uvMax.x, uvMin.y), mipLevel).r;
                     float pz2 = textureLod(hizPyramid, vec2(uvMin.x, uvMax.y), mipLevel).r;
                     float pz3 = textureLod(hizPyramid, uvMax, mipLevel).r;
-                    float pyramidDepth = max(max(pz0, pz1), max(pz2, pz3));
+                    float pyramidDepth = min(min(pz0, pz1), min(pz2, pz3));
 
-                    // Nearest depth: project sphere center's NDC-Z then subtract
-                    // the sphere's depth range.  The depth span uses the Z-row
-                    // length of VP (same Cauchy-Schwarz reasoning as X/Y), giving
-                    // the correct NDC-Z extent regardless of camera orientation.
-                    float rowLenZ = length(vec3(prevViewProj[0][2],
-                                                prevViewProj[1][2],
-                                                prevViewProj[2][2]));
-                    float depthSpan = hizRadius * rowLenZ / clipCenter.w;
-                    float centerDepth = ndc.z;
-                    float nearestDepth = centerDepth - depthSpan - HIZ_DEPTH_BIAS;
+                    // The sphere's nearest point along the view: clip w is the
+                    // view distance of its centre. Nothing drawn there (depth
+                    // 0, the sky) occludes nothing.
+                    float nearestDist = clipCenter.w - hizRadius;
+                    float occluderDist = hizViewDistance(pyramidDepth);
 
-                    if (nearestDepth > pyramidDepth && pyramidDepth < 1.0) {
+                    if (pyramidDepth > 0.0 &&
+                        nearestDist > occluderDist * (1.0 + HIZ_DISTANCE_SHARE) + HIZ_DISTANCE_MARGIN) {
                         visibility[id] = 0u;
                         return;
                     }

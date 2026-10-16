@@ -29,5 +29,6 @@ void main() {
     vAlpha = aUvAlpha.z;
     mat4 rotView = mat4(mat3(view));
     vec4 pos = projection * rotView * vec4(aPos, 1.0);
-    gl_Position = pos.xyww;
+    // On the far plane - depth 0, depth being reversed.
+    gl_Position = vec4(pos.xy, 0.0, pos.w);
 }

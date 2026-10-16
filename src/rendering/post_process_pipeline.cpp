@@ -985,7 +985,8 @@ bool PostProcessPipeline::initFSR2Resources() {
             fsr2_.amdScratchBufferSize = 0;
         } else {
             FfxFsr2ContextDescription ctxDesc{};
-            ctxDesc.flags = FFX_FSR2_ENABLE_AUTO_EXPOSURE | FFX_FSR2_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION;
+            ctxDesc.flags = FFX_FSR2_ENABLE_AUTO_EXPOSURE | FFX_FSR2_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION |
+                            FFX_FSR2_ENABLE_DEPTH_INVERTED;  // depth_convention.hpp
             ctxDesc.maxRenderSize.width = fsr2_.internalWidth;
             ctxDesc.maxRenderSize.height = fsr2_.internalHeight;
             ctxDesc.displaySize.width = swapExtent.width;
@@ -1016,7 +1017,7 @@ bool PostProcessPipeline::initFSR2Resources() {
                     fgInit.displayHeight = swapExtent.height;
                     fgInit.colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
                     fgInit.hdrInput = false;
-                    fgInit.depthInverted = false;
+                    fgInit.depthInverted = true;  // depth_convention.hpp
                     fgInit.enableFrameGeneration = true;
                     fsr2_.amdFsr3FramegenRuntimeReady = fsr2_.amdFsr3Runtime->initialize(fgInit);
                     if (fsr2_.amdFsr3FramegenRuntimeReady) {

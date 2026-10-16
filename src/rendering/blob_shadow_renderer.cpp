@@ -1,4 +1,5 @@
 #include "rendering/blob_shadow_renderer.hpp"
+#include "rendering/depth_convention.hpp"
 
 #include "core/logger.hpp"
 #include "game/ground_target.hpp"
@@ -208,8 +209,8 @@ bool BlobShadowRenderer::createPipeline() {
         .setVertexInput({binding}, {pos})
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
-        .setDepthBias(-1.0f, -1.0f)
+        .setDepthTest(true, false, depth::kNearerOrEqual)
+        .setDepthBias(depth::biasFromStandard(-1.0f), depth::biasFromStandard(-1.0f))
         .setColorBlendAttachment(mod)
         .setMultisample(vkCtx_->getMsaaSamples())
         .setLayout(pipelineLayout_)
@@ -248,8 +249,8 @@ bool BlobShadowRenderer::createSelectionPipeline() {
         .setVertexInput({binding}, {pos})
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
-        .setDepthBias(-1.0f, -1.0f)
+        .setDepthTest(true, false, depth::kNearerOrEqual)
+        .setDepthBias(depth::biasFromStandard(-1.0f), depth::biasFromStandard(-1.0f))
         .setColorBlendAttachment(add)
         .setMultisample(vkCtx_->getMsaaSamples())
         .setLayout(pipelineLayout_)
@@ -288,8 +289,8 @@ bool BlobShadowRenderer::createSpellTargetPipeline() {
         .setVertexInput({binding}, {pos})
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
-        .setDepthBias(-1.0f, -1.0f)
+        .setDepthTest(true, false, depth::kNearerOrEqual)
+        .setDepthBias(depth::biasFromStandard(-1.0f), depth::biasFromStandard(-1.0f))
         .setColorBlendAttachment(alpha)
         .setMultisample(vkCtx_->getMsaaSamples())
         .setLayout(pipelineLayout_)

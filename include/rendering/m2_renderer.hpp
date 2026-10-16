@@ -1217,7 +1217,7 @@ private:
         uint32_t hizEnabled;        // 1 = HiZ occlusion active           (4 bytes)
         uint32_t hizMipLevels;      // mip levels in HiZ pyramid          (4 bytes)
         uint32_t _pad2 = {};        //                                    (4 bytes)
-        glm::vec4 hizParams;        // x=pyramidW, y=pyramidH, z=nearPlane, w=unused (16 bytes)
+        glm::vec4 hizParams;        // x=pyramidW, y=pyramidH, z=nearPlane, w=farPlane (16 bytes)
         glm::mat4 viewProj;         // current frame view-projection                 (64 bytes)
         glm::mat4 prevViewProj;     // previous frame VP for HiZ reprojection        (64 bytes)
     };                              // Total: 272 bytes

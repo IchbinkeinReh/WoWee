@@ -1,4 +1,5 @@
 #include "rendering/swim_effects.hpp"
+#include "rendering/depth_convention.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/water_renderer.hpp"
@@ -48,7 +49,7 @@ void SwimEffects::buildRipplePipeline(
         .setVertexInput({binding}, attrs)
         .setTopology(VK_PRIMITIVE_TOPOLOGY_POINT_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS)
+        .setDepthTest(true, false, depth::kNearer)
         .setColorBlendAttachment(PipelineBuilder::blendAlpha())
         .setMultisample(targetSamples_)
         .setLayout(ripplePipelineLayout)
@@ -70,7 +71,7 @@ void SwimEffects::buildBubblePipeline(
         .setVertexInput({binding}, attrs)
         .setTopology(VK_PRIMITIVE_TOPOLOGY_POINT_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS)
+        .setDepthTest(true, false, depth::kNearer)
         .setColorBlendAttachment(PipelineBuilder::blendAlpha())
         .setMultisample(targetSamples_)
         .setLayout(bubblePipelineLayout)
@@ -92,7 +93,7 @@ void SwimEffects::buildInsectPipeline(
         .setVertexInput({binding}, attrs)
         .setTopology(VK_PRIMITIVE_TOPOLOGY_POINT_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(false, false, VK_COMPARE_OP_LESS)
+        .setDepthTest(false, false, depth::kNearer)
         .setColorBlendAttachment(PipelineBuilder::blendAlpha())
         .setMultisample(targetSamples_)
         .setLayout(insectPipelineLayout)

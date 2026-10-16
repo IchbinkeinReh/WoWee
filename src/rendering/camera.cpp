@@ -1,4 +1,5 @@
 #include "rendering/camera.hpp"
+#include "rendering/depth_convention.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/constants.hpp>
 
@@ -17,15 +18,19 @@ void Camera::updateViewMatrix() {
 }
 
 void Camera::updateProjectionMatrix() {
-    projectionMatrix = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);
+    glm::mat4 forward = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);
     // Vulkan clip-space has Y pointing down; flip the projection's Y axis.
-    projectionMatrix[1][1] *= -1.0f;
+    forward[1][1] *= -1.0f;
+    projectionMatrix = depth::reversed(forward);
     unjitteredProjectionMatrix = projectionMatrix;
+    forwardDepthProjectionMatrix = forward;
 
     // Re-apply jitter if active
     if (jitterOffset.x != 0.0f || jitterOffset.y != 0.0f) {
         projectionMatrix[2][0] += jitterOffset.x;
         projectionMatrix[2][1] += jitterOffset.y;
+        forwardDepthProjectionMatrix[2][0] += jitterOffset.x;
+        forwardDepthProjectionMatrix[2][1] += jitterOffset.y;
     }
 }
 
@@ -62,14 +67,20 @@ void Camera::setJitter(float jx, float jy) {
     // each frame, giving the upscaler different sample positions to reconstruct.
     projectionMatrix[2][0] -= jitterOffset.x;
     projectionMatrix[2][1] -= jitterOffset.y;
+    forwardDepthProjectionMatrix[2][0] -= jitterOffset.x;
+    forwardDepthProjectionMatrix[2][1] -= jitterOffset.y;
     jitterOffset = glm::vec2(jx, jy);
     projectionMatrix[2][0] += jitterOffset.x;
     projectionMatrix[2][1] += jitterOffset.y;
+    forwardDepthProjectionMatrix[2][0] += jitterOffset.x;
+    forwardDepthProjectionMatrix[2][1] += jitterOffset.y;
 }
 
 void Camera::clearJitter() {
     projectionMatrix[2][0] -= jitterOffset.x;
     projectionMatrix[2][1] -= jitterOffset.y;
+    forwardDepthProjectionMatrix[2][0] -= jitterOffset.x;
+    forwardDepthProjectionMatrix[2][1] -= jitterOffset.y;
     jitterOffset = glm::vec2(0.0f);
 }
 
@@ -81,9 +92,9 @@ Ray Camera::screenToWorldRay(float screenX, float screenY, float screenW, float 
 
     glm::mat4 invVP = glm::inverse(projectionMatrix * viewMatrix);
 
-    // Vulkan / GLM_FORCE_DEPTH_ZERO_TO_ONE: NDC z ∈ [0, 1]
-    glm::vec4 nearPt = invVP * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
-    glm::vec4 farPt  = invVP * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+    // Vulkan NDC z in [0, 1], reversed: the near plane is at 1.
+    glm::vec4 nearPt = invVP * glm::vec4(ndcX, ndcY, depth::kNear, 1.0f);
+    glm::vec4 farPt  = invVP * glm::vec4(ndcX, ndcY, depth::kFar, 1.0f);
     nearPt /= nearPt.w;
     farPt  /= farPt.w;
 

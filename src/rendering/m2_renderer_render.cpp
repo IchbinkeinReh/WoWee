@@ -899,7 +899,7 @@ void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, c
                 static_cast<float>(hizSystem_->getPyramidWidth()),
                 static_cast<float>(hizSystem_->getPyramidHeight()),
                 camera.getNearPlane(),
-                0.0f
+                camera.getFarPlane()
             );
             ubo->viewProj = vp;
             // Use previous frame's VP for HiZ reprojection - the HiZ pyramid

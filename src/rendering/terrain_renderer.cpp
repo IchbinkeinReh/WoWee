@@ -1,4 +1,5 @@
 #include "rendering/terrain_vertex.hpp"
+#include "rendering/depth_convention.hpp"
 #include "rendering/shadow_params.hpp"
 #include "rendering/terrain_renderer.hpp"
 #include "rendering/rt_scene.hpp"
@@ -70,7 +71,7 @@ bool TerrainRenderer::buildMainPassPipelines(VkDevice device,
             .setVertexInput({ vertexBinding }, vertexAttribs)
             .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
             .setRasterization(mode, VK_CULL_MODE_NONE)
-            .setDepthTest(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setDepthTest(true, true, depth::kNearerOrEqual)
             .setColorBlendAttachment(PipelineBuilder::blendDisabled())
             .setMultisample(vkCtx->getMsaaSamples())
             .setLayout(pipelineLayout)

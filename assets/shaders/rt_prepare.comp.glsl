@@ -53,20 +53,20 @@ void main() {
     // pixels, else the nearest of any.
     ivec2 base = rtBlockBase(px);
     int sub = 0;
-    float d = 1.0;
+    float d = 0.0;  // reversed depth: 0 is the sky, nearer is larger
     bool valid = false;
     for (int i = 0; i < 4; ++i) {
         ivec2 sp = clamp(base + ivec2(i & 1, i >> 1), ivec2(0), ivec2(pass.sceneExtent.xy) - 1);
         float di = loadDepth(sp);
-        if (di >= 1.0) continue;
+        if (di <= 0.0) continue;
         bool vi = surfaceValid(sp);
-        if ((vi && !valid) || (vi == valid && di < d)) {
+        if ((vi && !valid) || (vi == valid && di > d)) {
             d = di;
             sub = i;
             valid = vi;
         }
     }
-    if (d >= 1.0) {
+    if (d <= 0.0) {
         imageStore(uGbuf, px, vec4(0.0, 0.0, 0.0, 0.0));
         return;
     }

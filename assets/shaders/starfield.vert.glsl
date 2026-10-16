@@ -63,5 +63,6 @@ void main() {
 
     vec4 clip = projection * rotView * vec4(aPos, 1.0);
     // On the far plane, so the world drawn before the sky occludes it.
-    gl_Position = vec4(clip.xy, clip.w, clip.w);
+    // Depth is reversed: the far plane is 0.
+    gl_Position = vec4(clip.xy, 0.0, clip.w);
 }

@@ -15,6 +15,7 @@
  * the original WoW Model Viewer (charcontrol.h, REGION_FAC=2).
  */
 #include <atomic>
+#include "rendering/depth_convention.hpp"
 #include "core/frame_profiler.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/pom_quality.hpp"
@@ -391,7 +392,7 @@ void CharacterRenderer::buildMainPassPipelines(VkDevice device, VkRenderPass mai
             // Counter-clockwise front, as the M2 renderer's: the camera flips
             // Y for Vulkan, which turns the model's outward winding around.
             .setRasterization(VK_POLYGON_MODE_FILL, cullMode, VK_FRONT_FACE_COUNTER_CLOCKWISE)
-            .setDepthTest(depthTest, depthWrite, VK_COMPARE_OP_LESS)
+            .setDepthTest(depthTest, depthWrite, depth::kNearer)
             .setDepthBias(0.0f, 0.0f)
             .setColorBlendAttachment(blendState)
             .setMultisample(samples);
@@ -3986,7 +3987,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
                 // Per-batch depth bias from materialLayer to separate coplanar
                 // armor pieces (chest/legs/gloves) that share identical depth.
-                vkCmdSetDepthBias(cmd, static_cast<float>(batch.materialLayer) * 0.5f, 0.0f, 0.0f);
+                vkCmdSetDepthBias(cmd, depth::biasFromStandard(static_cast<float>(batch.materialLayer) * 0.5f), 0.0f, 0.0f);
 
                 vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.indexStart, 0, 0);
             }

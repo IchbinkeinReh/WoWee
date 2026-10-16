@@ -105,7 +105,7 @@ void main() {
         for (int x = -1; x <= 1; x++) {
             vec2 off = vec2(float(x), float(y)) * texelSize;
             float d = texture(depthBuffer, outUV + off).r;
-            if (d < closestDepth) {
+            if (d > closestDepth) {  // reversed depth: nearer is larger
                 closestDepth = d;
                 closestOffset = off;
             }

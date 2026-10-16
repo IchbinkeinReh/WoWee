@@ -107,7 +107,7 @@ void main() {
     outMul = vec4(1.0);
     float depth = texelFetch(uSceneDepth, pix, s).r;
     vec4 gb0 = texelFetch(uSceneGbuf0, pix, s);
-    if ((rtGbufFlags(gb0) & RT_GB_VALID) == 0u || depth >= 1.0) return;
+    if ((rtGbufFlags(gb0) & RT_GB_VALID) == 0u || depth <= 0.0) return;  // reversed depth: 0 is the sky
     RtGbuf g = rtGbufUnpack(gb0, texelFetch(uSceneGbuf1, pix, s));
 
     vec2 uv = (vec2(pix) + 0.5) * pass.sceneExtent.zw;

@@ -1,4 +1,5 @@
 #include "rendering/mount_dust.hpp"
+#include "rendering/depth_convention.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_shader.hpp"
@@ -44,7 +45,7 @@ void MountDust::buildPipelines(VkDevice device,
         .setVertexInput({binding}, attrs)
         .setTopology(VK_PRIMITIVE_TOPOLOGY_POINT_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS)
+        .setDepthTest(true, false, depth::kNearer)
         .setColorBlendAttachment(PipelineBuilder::blendAlpha())
         .setMultisample(vkCtx->getMsaaSamples())
         .setLayout(pipelineLayout)

@@ -2,7 +2,8 @@
 
 // Hierarchical-Z depth pyramid builder.
 // Builds successive mip levels from the scene depth buffer.
-// Each 2×2 block is reduced to its MAXIMUM depth (farthest/largest value).
+// Each 2×2 block is reduced to its farthest depth - the MINIMUM, depth being
+// reversed (near 1, far 0).
 // This is conservative for occlusion: an object is only culled when its nearest
 // depth exceeds the farthest occluder depth in the pyramid region.
 //
@@ -47,11 +48,12 @@ void main() {
         d11 = texelFetch(srcDepth, srcPos + ivec2(1, 1), mipLevel - 1).r;
     }
 
-    // Conservative maximum (standard depth buffer: 0=near, 1=far).
-    // We store the farthest (largest) depth in each 2×2 block.
-    // An object is occluded only when its nearest depth > the farthest occluder
+    // Conservative farthest (reversed depth buffer: 1=near, 0=far).
+    // We store the farthest (smallest) depth in each 2×2 block.
+    // An object is occluded only when even its nearest point lies behind the farthest occluder
     // depth in the covered screen region - guaranteeing it's behind EVERYTHING.
-    float maxDepth = max(max(d00, d10), max(d01, d11));
+    // (depth_convention.hpp)
+    float farthest = min(min(d00, d10), min(d01, d11));
 
-    imageStore(dstMip, pos, vec4(maxDepth));
+    imageStore(dstMip, pos, vec4(farthest));
 }

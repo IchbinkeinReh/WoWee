@@ -1,4 +1,5 @@
 #include "rendering/camera_controller.hpp"
+#include "rendering/camera_near_sweep.hpp"
 #include "game/vehicle_mover.hpp"
 #include "game/vehicle_camera.hpp"
 
@@ -2197,12 +2198,34 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // it reports changes a little with every step the player takes. Feeding
         // the ground through the same sharp path made the camera jitter along a
         // slope and shove forward at every rise.
+        // The client's sweep (camera_near_sweep.hpp, 0x00605d60): the line
+        // from the pivot, and the near clip's rectangle at 1.75 times its size
+        // swept along it, so no corner of the near plane reaches into a wall.
+        // It was the line alone, kept 0.54 off what it met: a wall the camera
+        // slid along at an angle never crossed the line, came inside the near
+        // plane's corners, and the building's interior showed through it.
         auto wmoLimitAlong = [&](const glm::vec3& dir) -> float {
             if (!wmoRenderer) return currentDistance;
-            float hit = wmoRenderer->raycastBoundingBoxes(pivot, dir, currentDistance);
-            // hit == currentDistance means no hit (returns maxDistance on miss)
-            if (hit >= currentDistance) return currentDistance;
-            return std::max(MIN_DISTANCE, hit - CAM_SPHERE_RADIUS - CAM_EPSILON);
+            // hit == maxDistance means no hit
+            float nearest = wmoRenderer->raycastBoundingBoxes(pivot, dir, currentDistance);
+            glm::vec3 right = glm::cross(dir, glm::vec3(0.0f, 0.0f, 1.0f));
+            const float rightLen = glm::length(right);
+            right = rightLen > 1e-4f ? right / rightLen : glm::vec3(1.0f, 0.0f, 0.0f);
+            const glm::vec3 up = glm::cross(right, dir);
+            for (const glm::vec2& o : camera_sweep::sweepOffsets(
+                     camera->getNearPlane(), camera->getFovDegrees(), camera->getAspectRatio())) {
+                glm::vec3 offset = right * o.x + up * o.y;
+                const float offsetLen = glm::length(offset);
+                if (offsetLen < 1e-4f) continue;
+                // The rectangle starts about the pivot; where a wall stands
+                // closer beside the pivot than its edge, it starts inside it.
+                const float side = wmoRenderer->raycastBoundingBoxes(
+                    pivot, offset / offsetLen, offsetLen);
+                if (side < offsetLen) offset *= std::max(0.0f, side - 0.02f) / offsetLen;
+                nearest = std::min(nearest, wmoRenderer->raycastBoundingBoxes(
+                                                pivot + offset, dir, nearest));
+            }
+            return camera_sweep::sweptDistance(currentDistance, nearest, MIN_DISTANCE);
         };
 
         float rawLimit = wmoLimitAlong(camDir);

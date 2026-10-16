@@ -131,8 +131,9 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
 // ============================================================
 // Linearize depth
 // ============================================================
+// The depth is reversed (depth_convention.hpp): near at 1, far at 0.
 float linearizeDepth(float d, float near, float far) {
-    return near * far / (far - d * (far - near));
+    return near * far / (d * (far - near) + near);
 }
 
 // ============================================================

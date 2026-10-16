@@ -1,4 +1,5 @@
 #include "rendering/grass_renderer.hpp"
+#include "rendering/depth_convention.hpp"
 
 #include <array>
 #include <cstring>
@@ -423,7 +424,7 @@ bool GrassRenderer::buildDrawPipeline() {
             // Two-sided: a blade is a single quad and is seen from both
             // faces as the camera moves around it.
             .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-            .setDepthTest(true, true, VK_COMPARE_OP_LESS)
+            .setDepthTest(true, true, depth::kNearer)
             .setColorBlendAttachment(PipelineBuilder::blendDisabled())
             .setMultisample(vkCtx_->getMsaaSamples())
             .setLayout(pipelineLayout_)

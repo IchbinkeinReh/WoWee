@@ -692,11 +692,12 @@ bool VkContext::selectPhysicalDevice() {
         if (modes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT) {
             depthResolveMode_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
             depthResolveSupported_ = true;
+        } else if (modes & VK_RESOLVE_MODE_MAX_BIT) {
+            // The nearest sample: depth is reversed (depth_convention.hpp).
+            depthResolveMode_ = VK_RESOLVE_MODE_MAX_BIT;
+            depthResolveSupported_ = true;
         } else if (modes & VK_RESOLVE_MODE_MIN_BIT) {
             depthResolveMode_ = VK_RESOLVE_MODE_MIN_BIT;
-            depthResolveSupported_ = true;
-        } else if (modes & VK_RESOLVE_MODE_MAX_BIT) {
-            depthResolveMode_ = VK_RESOLVE_MODE_MAX_BIT;
             depthResolveSupported_ = true;
         } else if (modes & VK_RESOLVE_MODE_AVERAGE_BIT) {
             depthResolveMode_ = VK_RESOLVE_MODE_AVERAGE_BIT;

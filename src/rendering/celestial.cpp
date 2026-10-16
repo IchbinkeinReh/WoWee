@@ -1,4 +1,5 @@
 #include "rendering/celestial.hpp"
+#include "rendering/depth_convention.hpp"
 #include "rendering/day_night.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_shader.hpp"
@@ -51,7 +52,7 @@ VkPipeline Celestial::buildPipeline(VkDevice device,
         // after the world with no depth test at all and added on (0x009ac400
         // sets blend mode 3 and turns the depth test off); the occlusion
         // query fades it instead.
-        .setDepthTest(!glare, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+        .setDepthTest(!glare, false, depth::kNearerOrEqual)
         .setColorBlendAttachment(glare ? PipelineBuilder::blendAdditive()
                                        : PipelineBuilder::blendAlpha())
         .setMultisample(glare && glareTargetPass_ ? glareTargetSamples_ : vkCtx_->getMsaaSamples())

@@ -1,4 +1,5 @@
 #include <atomic>
+#include "rendering/depth_convention.hpp"
 #include "rendering/placement_transform.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/rt_bvh.hpp"
@@ -178,7 +179,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
             // pushed to the far plane, so the test is what lets ground drawn
             // before it occlude it, and a write would put the far plane over
             // everything drawn after.
-            .setDepthTest(depthTest, skyMode_ ? false : depthWrite, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setDepthTest(depthTest, skyMode_ ? false : depthWrite, depth::kNearerOrEqual)
             .setColorBlendAttachment(blendState)
             .setMultisample(vkCtx_->getMsaaSamples());
         // MSAA alpha-to-coverage dithers the shader's sharpened cutout alpha
@@ -314,7 +315,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                 .setVertexInput({pBind}, pAttrs)
                 .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
                 .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-                .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+                .setDepthTest(true, false, depth::kNearerOrEqual)
                 .setColorBlendAttachment(blend)
                 .setMultisample(vkCtx_->getMsaaSamples())
                 .setLayout(particlePipelineLayout_)
@@ -389,7 +390,7 @@ bool M2Renderer::buildMainPassPipelines(VkDescriptorSetLayout perFrameLayout) {
                     .setVertexInput({rBind}, rAttrs)
                     .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
                     .setRasterization(VK_POLYGON_MODE_FILL, cull, VK_FRONT_FACE_COUNTER_CLOCKWISE)
-                    .setDepthTest(depthTest, depthWrite, VK_COMPARE_OP_LESS_OR_EQUAL)
+                    .setDepthTest(depthTest, depthWrite, depth::kNearerOrEqual)
                     .setColorBlendAttachment(blend)
                     .setMultisample(vkCtx_->getMsaaSamples())
                     .setLayout(ribbonPipelineLayout_)

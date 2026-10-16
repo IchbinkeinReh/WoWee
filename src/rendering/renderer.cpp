@@ -1,4 +1,5 @@
 #include "rendering/renderer.hpp"
+#include "rendering/depth_convention.hpp"
 #include "rendering/sun_direction.hpp"
 #include "rendering/wmo_sidn.hpp"
 
@@ -1724,9 +1725,9 @@ void Renderer::beginFrame() {
     // Clear values must match attachment count: 2 (no MSAA), 3 (MSAA), or 4 (MSAA+depth resolve)
     VkClearValue clearValues[4]{};
     clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    clearValues[1].depthStencil = {.depth = 1.0f, .stencil = 0};
+    clearValues[1].depthStencil = {.depth = depth::kFar, .stencil = 0};
     clearValues[2].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    clearValues[3].depthStencil = {.depth = 1.0f, .stencil = 0};
+    clearValues[3].depthStencil = {.depth = depth::kFar, .stencil = 0};
     bool msaaOn = (vkCtx->getMsaaSamples() > VK_SAMPLE_COUNT_1_BIT);
     if (msaaOn) {
         bool depthRes = (vkCtx->getDepthResolveImageView() != VK_NULL_HANDLE);
@@ -5776,8 +5777,10 @@ void Renderer::renderReflectionPass() {
 
     // Compute reflected view and oblique projection
     glm::mat4 reflView = WaterRenderer::computeReflectedView(*camera, waterHeight);
-    glm::mat4 reflProj = WaterRenderer::computeObliqueProjection(
-        camera->getProjectionMatrix(), reflView, waterHeight);
+    // The oblique near plane is built on the standard depth mapping, and the
+    // result reversed like the camera's own projection.
+    glm::mat4 reflProj = depth::reversed(WaterRenderer::computeObliqueProjection(
+        camera->getForwardDepthProjectionMatrix(), reflView, waterHeight));
 
     // Update water renderer's reflection UBO with the reflected viewProj
     waterRenderer->updateReflectionUBO(reflProj * reflView);

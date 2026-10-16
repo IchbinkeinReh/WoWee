@@ -1,4 +1,5 @@
 #include "core/coordinates.hpp"
+#include "rendering/depth_convention.hpp"
 #include "rendering/water_surface_grid.hpp"
 #include "rendering/water_mask.hpp"
 #include "rendering/water_renderer.hpp"
@@ -203,7 +204,7 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
         .setVertexInput({ vertBinding }, vertAttribs)
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)  // depth test yes, write no
+        .setDepthTest(true, false, depth::kNearerOrEqual)  // depth test yes, write no
         .setColorBlendAttachment(PipelineBuilder::blendAlpha())
         .setMultisample(vkCtx->getMsaaSamples())
         .setLayout(pipelineLayout)
@@ -272,7 +273,7 @@ void WaterRenderer::recreatePipelines() {
         .setVertexInput({ vertBinding }, vertAttribs)
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+        .setDepthTest(true, false, depth::kNearerOrEqual)
         .setColorBlendAttachment(PipelineBuilder::blendAlpha())
         .setMultisample(vkCtx->getMsaaSamples())
         .setLayout(pipelineLayout)
@@ -2026,7 +2027,7 @@ bool WaterRenderer::beginReflectionPass(VkCommandBuffer cmd) {
 
     VkClearValue clears[2]{};
     clears[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    clears[1].depthStencil = {.depth = 1.0f, .stencil = 0};
+    clears[1].depthStencil = {.depth = depth::kFar, .stencil = 0};
     rpInfo.clearValueCount = 2;
     rpInfo.pClearValues = clears;
 
@@ -2345,7 +2346,7 @@ bool WaterRenderer::createWater1xPass(VkFormat colorFormat, VkFormat depthFormat
         .setVertexInput({ vertBinding }, vertAttribs)
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+        .setDepthTest(true, false, depth::kNearerOrEqual)
         .setColorBlendAttachment(PipelineBuilder::blendAlpha())
         .setMultisample(VK_SAMPLE_COUNT_1_BIT)
         .setLayout(pipelineLayout)
@@ -2748,7 +2749,7 @@ void WaterRenderer::buildClientPipelines(VkRenderPass pass, VkSampleCountFlagBit
             .setVertexInput({binding}, attribs)
             .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
             .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-            .setDepthTest(true, !isWater, VK_COMPARE_OP_LESS_OR_EQUAL)
+            .setDepthTest(true, !isWater, depth::kNearerOrEqual)
             .setColorBlendAttachment(isWater ? PipelineBuilder::blendAlpha() : PipelineBuilder::blendDisabled())
             .setMultisample(samples)
             .setLayout(clientPipelineLayout_)
@@ -2775,7 +2776,7 @@ void WaterRenderer::buildClientPipelines(VkRenderPass pass, VkSampleCountFlagBit
         .setVertexInput({binding}, attribs)
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, VK_COMPARE_OP_LESS_OR_EQUAL)
+        .setDepthTest(true, false, depth::kNearerOrEqual)
         .setColorBlendAttachment(PipelineBuilder::blendAlpha())
         .setMultisample(samples)
         .setLayout(procPipelineLayout_)
