@@ -458,6 +458,9 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
             continue;
         }
 
+        // A rider waiting for its mount is not in the world yet: nor its name.
+        if (app.isUnitHeldForMount(guid)) continue;
+
         const un::UnitFacts facts = unitFacts(gameHandler, *entityPtr, *unit);
         const bool isTarget = guid == targetGuid;
 

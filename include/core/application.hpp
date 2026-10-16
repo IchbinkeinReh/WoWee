@@ -143,6 +143,9 @@ public:
     std::optional<glm::vec3> getUnitNamePosition(uint64_t guid) const;
     /// Where the circle under a unit goes and its radius (EntitySpawner::selectionCircle).
     std::optional<std::pair<glm::vec3, float>> getSelectionCircle(uint64_t guid) const;
+    /// A rider kept out of the world until its mount is drawn
+    /// (EntitySpawner::isUnitHeldForMount): no name over it either.
+    bool isUnitHeldForMount(uint64_t guid) const;
 
     // Character skin composite state - delegated to AppearanceComposer
     [[nodiscard]] const std::string& getBodySkinPath() const { return appearanceComposer_ ? appearanceComposer_->getBodySkinPath() : emptyString_; }

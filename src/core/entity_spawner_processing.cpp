@@ -2043,12 +2043,16 @@ void EntitySpawner::processPendingRemotePlayerMounts() {
     if (!renderer_->getCharacterRenderer()) return;
 
     // Mount model loading can touch disk and upload GPU resources. Process at
-    // most one transition per frame, consistent with the other spawn queues.
-    for (auto it = pendingRemotePlayerMounts_.begin();
-         it != pendingRemotePlayerMounts_.end(); ++it) {
-        if (!applyRemotePlayerMount(it->first, it->second)) continue;  // initial fields can precede rendering
-        pendingRemotePlayerMounts_.erase(it);
-        return;
+    // most one transition per frame, consistent with the other spawn queues -
+    // a rider kept out of the world for its mount first (rider_mount_wait).
+    for (const bool heldOnly : {true, false}) {
+        for (auto it = pendingRemotePlayerMounts_.begin();
+             it != pendingRemotePlayerMounts_.end(); ++it) {
+            if (heldOnly && !riderMountWaits_.count(it->first)) continue;
+            if (!applyRemotePlayerMount(it->first, it->second)) continue;  // initial fields can precede rendering
+            pendingRemotePlayerMounts_.erase(it);
+            return;
+        }
     }
 }
 
@@ -2071,8 +2075,9 @@ bool EntitySpawner::applyRemotePlayerMount(uint64_t guid, uint32_t displayId) {
 
     auto current = remotePlayerMounts_.find(guid);
     if (current != remotePlayerMounts_.end() && current->second.displayId == displayId) return true;
-    removeRemotePlayerMount(guid);
 
+    // The new mount's model first: the old one stays under the rider until
+    // it is there (rider_mount_wait), and where it cannot be, too.
     uint32_t modelId = 0;
     float riderHeight = 0.0f;
     std::string modelPath;
@@ -2081,6 +2086,7 @@ bool EntitySpawner::applyRemotePlayerMount(uint64_t guid, uint32_t displayId) {
                     std::dec, " displayId=", displayId);
         return true;
     }
+    removeRemotePlayerMount(guid);
     glm::vec3 pos(0.0f);
     cr->getInstancePosition(riderInstance, pos);
     // The unit's size times the mount display's (0x0071c0e0, +0x990 from
@@ -2142,6 +2148,7 @@ void EntitySpawner::despawnCreature(uint64_t guid) {
     creaturePermanentFailureGuids_.erase(guid);
     deadCreatureGuids_.erase(guid);
     pendingRemotePlayerMounts_.erase(guid);
+    riderMountWaits_.erase(guid);
     removeRemotePlayerMount(guid);
 
     auto it = creatureInstances_.find(guid);

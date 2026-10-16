@@ -24,6 +24,7 @@
 #include "pipeline/wmo_loader.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/mount_seat.hpp"
+#include "rendering/rider_mount_wait.hpp"
 #include "rendering/animation/emote_registry.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -105,6 +106,7 @@ void EntitySpawner::update() {
     processPendingTransportDoodads();
     processPendingMount();
     processPendingRemotePlayerMounts();
+    syncRiderMountWaits();
     syncCreatureStealthVisuals();
     refreshCreatureScales();
     syncCreatureParticleTwins();
@@ -249,6 +251,7 @@ void EntitySpawner::shutdown() {
     onlinePlayerAppearance_.clear();
     remotePlayerMounts_.clear();
     pendingRemotePlayerMounts_.clear();
+    riderMountWaits_.clear();
     gameObjectInstances_.clear();
 }
 
@@ -279,6 +282,7 @@ void EntitySpawner::resetAllState() {
     onlinePlayerAppearance_.clear();
     remotePlayerMounts_.clear();
     pendingRemotePlayerMounts_.clear();
+    riderMountWaits_.clear();
     gameObjectInstances_.clear();
 
     // Clear animation state maps
@@ -436,6 +440,77 @@ uint32_t EntitySpawner::riderPose(uint64_t guid, uint32_t riderInstance) const {
 void EntitySpawner::setRemotePlayerMountDisplayId(uint64_t guid, uint32_t displayId) {
     if (guid == 0) return;
     pendingRemotePlayerMounts_[guid] = displayId;
+    holdRiderForMount(guid, displayId);
+}
+
+void EntitySpawner::holdRiderForMount(uint64_t guid, uint32_t displayId) {
+    namespace rmw = rendering::rider_mount_wait;
+    if (displayId == 0 || !renderer_) return;
+    if (gameHandler_ && guid == gameHandler_->getPlayerGuid()) return;  // processPendingMount's
+    auto* cr = renderer_->getCharacterRenderer();
+    if (!cr) return;
+    // Not drawn yet: its spawn asks again once it is.
+    const uint32_t rider = characterInstanceIdForGuid(guid);
+    if (rider == 0) return;
+    if (auto it = riderMountWaits_.find(guid); it != riderMountWaits_.end() && it->second.riderInstance == rider)
+        return;
+    const RemotePlayerMount* mount = getRemotePlayerMount(guid);
+    // Posed is drawn, where it is in sight: a unit seen on foot or on
+    // another mount keeps that until the new mount is under it.
+    const rmw::Input in{.wantedMount = displayId,
+                        .drawnMount = mount ? mount->displayId : 0u,
+                        .revealed = cr->isInstancePosed(rider),
+                        .waitedSeconds = 0.0f};
+    if (rmw::decide(in) != rmw::Decision::Hold) return;
+    riderMountWaits_[guid] = {.riderInstance = rider, .since = std::chrono::steady_clock::now()};
+    cr->setInstanceHeldBack(rider, true);
+    LOG_INFO("Rider held for its mount: guid=0x", std::hex, guid, std::dec, " mountDisplayId=", displayId);
+}
+
+void EntitySpawner::syncRiderMountWaits() {
+    namespace rmw = rendering::rider_mount_wait;
+    if (riderMountWaits_.empty() || !renderer_) return;
+    auto* cr = renderer_->getCharacterRenderer();
+    if (!cr) return;
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = riderMountWaits_.begin(); it != riderMountWaits_.end();) {
+        const uint64_t guid = it->first;
+        const uint32_t rider = characterInstanceIdForGuid(guid);
+        // Gone, or rebuilt (its spawn holds the new instance itself).
+        if (rider == 0 || rider != it->second.riderInstance) {
+            it = riderMountWaits_.erase(it);
+            continue;
+        }
+        uint32_t wanted = 0;
+        if (gameHandler_) {
+            if (auto e = gameHandler_->getEntityManager().getEntity(guid); e && e->isUnit())
+                wanted = static_cast<const game::Unit&>(*e).getMountDisplayId();
+        }
+        const RemotePlayerMount* mount = getRemotePlayerMount(guid);
+        const uint32_t mountInstance = mount ? mount->instanceId : 0u;
+        const float waited = std::chrono::duration<float>(now - it->second.since).count();
+        const rmw::Decision d = rmw::decide({.wantedMount = wanted,
+                                             .drawnMount = mount ? mount->displayId : 0u,
+                                             .revealed = false,
+                                             .waitedSeconds = waited});
+        // Each frame while it waits: what it holds may be new.
+        const bool hold = d == rmw::Decision::Hold;
+        cr->setInstanceHeldBack(rider, hold);
+        if (mountInstance != 0) cr->setInstanceHeldBack(mountInstance, hold);
+        if (hold) {
+            ++it;
+            continue;
+        }
+        if (d == rmw::Decision::ShowTimedOut) {
+            LOG_WARNING("Rider shown without its mount after ", waited, " s: guid=0x", std::hex, guid,
+                        std::dec, " mountDisplayId=", wanted, " drawn=", mount ? mount->displayId : 0u);
+        } else {
+            LOG_INFO("Rider shown: guid=0x", std::hex, guid, std::dec, " mountDisplayId=", wanted,
+                     " drawnMount=", mount ? mount->displayId : 0u, " after ",
+                     static_cast<int>(waited * 1000.0f), " ms");
+        }
+        it = riderMountWaits_.erase(it);
+    }
 }
 
 void EntitySpawner::removeRemotePlayerMount(uint64_t guid) {

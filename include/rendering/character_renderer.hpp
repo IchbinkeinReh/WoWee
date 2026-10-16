@@ -252,6 +252,12 @@ public:
     void setTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot, VkTexture* texture);
     void clearTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot);
     void setInstanceVisible(uint32_t instanceId, bool visible);
+    /// A rider waiting for its mount (rider_mount_wait): not drawn, nor its
+    /// shadows, ray-traced pieces or what it holds, while it still animates.
+    /// Apart from setInstanceVisible, which the camera and vehicles own.
+    void setInstanceHeldBack(uint32_t instanceId, bool heldBack);
+    /// Whether its bones have been computed at least once (posedOnce).
+    bool isInstancePosed(uint32_t instanceId) const;
     /// A passenger hung on its vehicle's model (0x0074a7f0 state 3): drawn
     /// each frame by vehicle_seat::passengerWorld on the parent's attachment,
     /// or on the parent's own matrix where it lacks it (0x00831630), still
@@ -503,6 +509,8 @@ private:
         /// in its bind pose, dressed and stock-still, which is how a crowd
         /// still loading looked.
         bool posedOnce = false;
+        /// setInstanceHeldBack.
+        bool heldBack = false;
         float torsoYawOverrideRad = 0.0f;  ///< SpineLow; setInstanceTorsoYaw
         float headYawOverrideRad = 0.0f;   ///< Head
 

@@ -3304,7 +3304,7 @@ bool modelHasBlendedBatch(const Model& gpuModel) {
 bool CharacterRenderer::isDrawCandidate(const CharacterInstance& instance, const glm::vec3& camPos,
                                         const Frustum& frustum, float renderRadiusSq) const {
     // Skip invisible instances (e.g., player in first-person mode)
-    if (!instance.visible) return false;
+    if (!instance.visible || instance.heldBack) return false;
     // Not before it has been posed once (see posedOnce). An attachment is
     // placed by its parent's bones, not its own animation.
     if (!instance.posedOnce && !instance.hasOverrideModelMatrix) return false;
@@ -4218,7 +4218,7 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
     VkDescriptorSet currentTexSet = VK_NULL_HANDLE;
     for (auto& pair : instances) {
         auto& inst = pair.second;
-        if (!inst.visible) continue;
+        if (!inst.visible || inst.heldBack) continue;
         if (!inst.posedOnce && !inst.hasOverrideModelMatrix) continue;  // as the main pass
 
         // Distance cull against shadow frustum
@@ -4868,6 +4868,22 @@ void CharacterRenderer::setInstanceVisible(uint32_t instanceId, bool visible) {
     }
 }
 
+void CharacterRenderer::setInstanceHeldBack(uint32_t instanceId, bool heldBack) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    it->second.heldBack = heldBack;
+    // What it holds goes with it, as setInstanceVisible.
+    for (const auto& wa : it->second.weaponAttachments) {
+        auto weapIt = instances.find(wa.weaponInstanceId);
+        if (weapIt != instances.end()) weapIt->second.heldBack = heldBack;
+    }
+}
+
+bool CharacterRenderer::isInstancePosed(uint32_t instanceId) const {
+    auto it = instances.find(instanceId);
+    return it != instances.end() && it->second.posedOnce;
+}
+
 void CharacterRenderer::removeInstance(uint32_t instanceId) {
     auto it = instances.find(instanceId);
     if (it == instances.end()) return;
@@ -5246,7 +5262,7 @@ std::optional<blob_shadow::Box> CharacterRenderer::instanceSequenceBounds(uint32
 void CharacterRenderer::collectBlobShadows(std::vector<blob_shadow::Caster>& out) const {
     for (const auto& [id, inst] : instances) {
         (void)id;
-        if (!inst.blobShadow || !inst.visible) continue;
+        if (!inst.blobShadow || !inst.visible || inst.heldBack) continue;
         if (!inst.posedOnce && !inst.hasOverrideModelMatrix) continue;
         blob_shadow::Caster c;
         c.world = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);

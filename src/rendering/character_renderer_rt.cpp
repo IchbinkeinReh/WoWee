@@ -330,7 +330,7 @@ void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
     std::vector<Candidate> bodies, carried;
     std::unordered_map<uint32_t, uint32_t> parentOf;
     for (auto& [id, inst] : instances) {
-        if (!inst.visible || inst.isSceneModel || inst.isEffectModel) continue;
+        if (!inst.visible || inst.heldBack || inst.isSceneModel || inst.isEffectModel) continue;
         if (!inst.posedOnce && !inst.hasOverrideModelMatrix) continue;
         if (inst.opacity * inst.kitAlpha <= 0.01f) continue;
         if (!inst.cachedModel || !inst.cachedModel->vertexBuffer) continue;
@@ -461,7 +461,7 @@ void CharacterRenderer::collectRtLights(const glm::vec3& eye, float range,
                                         std::vector<rt_lights::PointLight>& out) const {
     for (const auto& [id, inst] : instances) {
         if (!inst.cachedModel || inst.cachedModel->data.lights.empty()) continue;
-        if (!inst.visible || inst.isSceneModel) continue;
+        if (!inst.visible || inst.heldBack || inst.isSceneModel) continue;
         if (!inst.posedOnce && !inst.hasOverrideModelMatrix) continue;
         const glm::mat4 modelMat = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
         const glm::vec3 at(modelMat[3]);

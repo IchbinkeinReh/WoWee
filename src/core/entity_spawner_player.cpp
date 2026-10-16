@@ -550,6 +550,7 @@ void EntitySpawner::despawnPlayer(uint64_t guid) {
     unitWeaponsShown_.erase(guid);
     if (!renderer_ || !renderer_->getCharacterRenderer()) return;
     pendingRemotePlayerMounts_.erase(guid);
+    riderMountWaits_.erase(guid);
     removeRemotePlayerMount(guid);
     auto it = playerInstances_.find(guid);
     if (it == playerInstances_.end()) return;

@@ -2971,6 +2971,12 @@ wowee_add_test(test_mount_transition
 wowee_add_test(test_mount_seat
     SOURCES test_mount_seat.cpp)
 
+# ── test_rider_mount_wait ────────────────────────────
+# A rider kept out of the world until its mount is drawn (0x0073d5d0 hangs
+# it on the mount's model; 0x008251b0 -> 0x00743110 waits for both).
+wowee_add_test(test_rider_mount_wait
+    SOURCES test_rider_mount_wait.cpp)
+
 # ── test_loading_screen_layout ───────────────────────
 # The world loading screen's picture and bar (0x0040a270, 0x004090c0).
 wowee_add_test(test_loading_screen_layout

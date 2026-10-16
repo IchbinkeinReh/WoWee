@@ -336,6 +336,9 @@ public:
         float scale = 1.0f;        ///< the mount's size (0x0071c0e0)
     };
     void setRemotePlayerMountDisplayId(uint64_t guid, uint32_t displayId);
+    /// A rider kept out of the world until its mount is drawn under it
+    /// (rider_mount_wait): its model, name, shadow and circle.
+    bool isUnitHeldForMount(uint64_t guid) const { return riderMountWaits_.count(guid) > 0; }
     /// The pose a unit's rider holds on its mount (+0xb7c, 0x0073d5d0):
     /// Mount, or what a mount aura's kit set where the rider's model has it.
     uint32_t riderPose(uint64_t guid, uint32_t riderInstance) const;
@@ -1283,6 +1286,17 @@ private:
     bool loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
                               std::string& modelPath, float& riderHeight);
     void removeRemotePlayerMount(uint64_t guid);
+    /// Riders not yet drawn that wait for their mounts (rider_mount_wait).
+    struct RiderMountWait {
+        uint32_t riderInstance = 0;
+        std::chrono::steady_clock::time_point since;
+    };
+    std::unordered_map<uint64_t, RiderMountWait> riderMountWaits_;
+    /// Holds a rider back where it has not been drawn yet and its mount is
+    /// not under it.
+    void holdRiderForMount(uint64_t guid, uint32_t displayId);
+    /// Each frame: the riders whose mounts have come, or not in time, shown.
+    void syncRiderMountWaits();
 
     // --- Local player GUID exclusion ---
     uint64_t spawnedPlayerGuid_ = 0;

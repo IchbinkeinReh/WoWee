@@ -138,6 +138,7 @@ void EntitySpawner::updateBlobShadows(uint32_t localPlayerInstance) {
 std::optional<EntitySpawner::SelectionCirclePlacement> EntitySpawner::selectionCircle(uint64_t guid) const {
     const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
     if (!characters || !gameHandler_) return std::nullopt;
+    if (isUnitHeldForMount(guid)) return std::nullopt;  // not drawn yet (rider_mount_wait)
     const uint32_t instanceId = characterInstanceIdForGuid(guid);
     glm::mat4 frame;
     if (instanceId == 0 || !characters->getInstanceFrame(instanceId, frame)) return std::nullopt;
