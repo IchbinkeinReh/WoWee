@@ -644,6 +644,29 @@ bool VkContext::selectPhysicalDevice() {
     dualSrcBlendSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::dualSrcBlend);
     independentBlendSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::independentBlend);
     sampleRateShadingSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::sampleRateShading);
+    // The rest of what the ray traced lighting asks of the device, for
+    // rt_capability::evaluate: the deferred passes' blending, the G-buffer
+    // format at each sample count, and its compute passes' limits.
+    {
+        rt_capability::Input& rt = rtCapabilityInput_;
+        rt.dualSrcBlend = dualSrcBlendSupported_;
+        rt.independentBlend = independentBlendSupported_;
+        rt.sampleRateShading = sampleRateShadingSupported_;
+        rt.maxPerStageStorageBuffers = props.limits.maxPerStageDescriptorStorageBuffers;
+        rt.maxPerStageStorageImages = props.limits.maxPerStageDescriptorStorageImages;
+        rt.maxComputeWorkGroupInvocations = props.limits.maxComputeWorkGroupInvocations;
+        VkImageFormatProperties fp{};
+        rt.gbufferSampleCounts =
+            vkGetPhysicalDeviceImageFormatProperties(
+                physicalDevice, kGbufferFormat, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 0, &fp) == VK_SUCCESS
+                ? static_cast<uint32_t>(fp.sampleCounts)
+                : 0u;
+        VkFormatProperties rgba16f{};
+        vkGetPhysicalDeviceFormatProperties(physicalDevice, VK_FORMAT_R16G16B16A16_SFLOAT, &rgba16f);
+        const VkFormatFeatureFlags wanted = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+        rt.storageImageRgba16f = (rgba16f.optimalTilingFeatures & wanted) == wanted;
+    }
     fsr2ComputeFeaturesSupported_ =
         enableIfPresent(&VkPhysicalDeviceFeatures::shaderStorageImageWriteWithoutFormat) &&
         enableIfPresent(&VkPhysicalDeviceFeatures::shaderInt16);
@@ -817,32 +840,41 @@ bool VkContext::createLogicalDevice() {
     VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures{};
     rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
     {
-        const bool forceSoftware = std::getenv("WOWEE_RT_FORCE_SOFTWARE") != nullptr;
-        const bool listed =
-            vkbPhysicalDevice_.is_extension_present(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
-            vkbPhysicalDevice_.is_extension_present(VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
+        rt_capability::Input& rt = rtCapabilityInput_;
+        rt.forceSoftware = std::getenv("WOWEE_RT_FORCE_SOFTWARE") != nullptr;
+        rt.vulkan12 = instanceApiVersion_ >= VK_API_VERSION_1_2;
+        rt.accelerationStructureExt =
+            vkbPhysicalDevice_.is_extension_present(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        rt.rayQueryExt = vkbPhysicalDevice_.is_extension_present(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        rt.deferredHostOpsExt =
             vkbPhysicalDevice_.is_extension_present(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
-        if (listed && !forceSoftware && instanceApiVersion_ >= VK_API_VERSION_1_2) {
+        if (rt.vulkan12) {
+            // The extensions' feature structs only where they are listed: one
+            // the device does not know is not to be chained.
+            const bool listed = rt.accelerationStructureExt && rt.rayQueryExt;
             VkPhysicalDeviceVulkan12Features f12{};
             f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-            asFeatures.pNext = &rayQueryFeatures;
-            f12.pNext = &asFeatures;
+            if (listed) {
+                asFeatures.pNext = &rayQueryFeatures;
+                f12.pNext = &asFeatures;
+            }
             VkPhysicalDeviceFeatures2 f2{};
             f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
             f2.pNext = &f12;
             vkGetPhysicalDeviceFeatures2(physicalDevice, &f2);
-            hardwareRayQuery_ = f12.bufferDeviceAddress && asFeatures.accelerationStructure &&
-                                rayQueryFeatures.rayQuery;
+            rt.bufferDeviceAddress = f12.bufferDeviceAddress;
+            rt.accelerationStructure = listed && asFeatures.accelerationStructure;
+            rt.rayQuery = listed && rayQueryFeatures.rayQuery;
+            asFeatures.pNext = nullptr;
         }
+        hardwareRayQuery_ = rt_capability::hardwareTracerUsable(rt);
         if (hardwareRayQuery_) {
             vkbPhysicalDevice_.enable_extension_if_present(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
             vkbPhysicalDevice_.enable_extension_if_present(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
             vkbPhysicalDevice_.enable_extension_if_present(VK_KHR_RAY_QUERY_EXTENSION_NAME);
         }
-        LOG_INFO("Ray traced lighting: ",
-                 hardwareRayQuery_ ? "hardware ray queries"
-                 : forceSoftware   ? "compute tracer (WOWEE_RT_FORCE_SOFTWARE)"
-                                   : "compute tracer (no hardware ray queries)");
+        // The verdict, with what it rests on, is logged once by the renderer
+        // when the sample count is known (Renderer::createPerFrameResources).
     }
 
     vkb::DeviceBuilder deviceBuilder{vkbPhysicalDevice_};
@@ -2426,18 +2458,10 @@ bool VkContext::createSceneContinueRenderPass() {
 void VkContext::createDeferredScenePasses() {
     gbufferRenderPass_ = VK_NULL_HANDLE;
     sceneResumeMsaaRenderPass_ = VK_NULL_HANDLE;
-    if (!dualSrcBlendSupported_ || !independentBlendSupported_) return;
-    if (msaaSamples_ > VK_SAMPLE_COUNT_1_BIT && !sampleRateShadingSupported_) return;
-
-    VkImageFormatProperties fp{};
-    const VkImageUsageFlags gbufUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    if (vkGetPhysicalDeviceImageFormatProperties(physicalDevice, kGbufferFormat, VK_IMAGE_TYPE_2D,
-                                                 VK_IMAGE_TILING_OPTIMAL, gbufUsage, 0, &fp) != VK_SUCCESS ||
-        (fp.sampleCounts & msaaSamples_) == 0) {
-        LOG_WARNING("Ray traced lighting: the G-buffer format cannot be rendered at ",
-                    static_cast<int>(msaaSamples_), " samples here");
-        return;
-    }
+    // The blending, the per-sample shading under MSAA and the G-buffer format
+    // at this sample count, among the rest (rt_capability::evaluate). The
+    // renderer says why, once; the lighting is held off there too.
+    if (!rtCapability().available) return;
 
     const bool msaa = msaaSamples_ > VK_SAMPLE_COUNT_1_BIT;
     VkAttachmentDescription a[4]{};

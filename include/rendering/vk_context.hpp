@@ -4,6 +4,7 @@
 
 #include "rendering/vk_utils.hpp"
 #include "rendering/surface_lifecycle.hpp"
+#include "rendering/rt_capability.hpp"
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <VkBootstrap.h>
@@ -274,6 +275,14 @@ public:
     /// enabled. False on MoltenVK, which exposes none of them; the ray traced
     /// lighting then uses its compute-shader tracer instead.
     [[nodiscard]] bool hardwareRayQueryEnabled() const { return hardwareRayQuery_; }
+    /// What the device reported for the ray traced lighting, gathered once
+    /// when it was chosen (rt_capability.hpp).
+    [[nodiscard]] const rt_capability::Input& rtCapabilityInput() const { return rtCapabilityInput_; }
+    /// Whether the ray traced lighting can run at the current sample count,
+    /// and what the device lacks if not.
+    [[nodiscard]] rt_capability::Result rtCapability() const {
+        return rt_capability::evaluate(rtCapabilityInput_, static_cast<uint32_t>(msaaSamples_));
+    }
     /// The last completed frame's marks, as (label, milliseconds since the
     /// previous mark). Empty until a frame has come round and been read back.
     [[nodiscard]] const std::vector<std::pair<const char*, double>>&
@@ -594,6 +603,7 @@ private:
     bool deviceFaultSupported_ = false;
     bool checkpointsSupported_ = false;
     bool hardwareRayQuery_ = false;
+    rt_capability::Input rtCapabilityInput_;
 #if defined(VK_EXT_device_fault)
     PFN_vkGetDeviceFaultInfoEXT getDeviceFaultInfo_ = nullptr;
 #endif

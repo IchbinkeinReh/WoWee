@@ -1130,5 +1130,26 @@ bool settingRange(const std::string& key, float& lo, float& hi) {
     return false;
 }
 
+bool settingNeedsRayTracing(const std::string& key) {
+    // Every row on these two pages acts on the traced lights alone.
+    for (const auto& row : kSchema) {
+        if (key != row.key) continue;
+        const std::string category = row.category;
+        if (category == "Ray Tracing" || category == "Debug Lights" || category == "Debug Glow") return true;
+        break;
+    }
+    // The rest of the Debug pages also tune the light without it; these are
+    // the rows whose labels or tooltips say ray traced.
+    static constexpr const char* kTraced[] = {
+        "dbgview",          "dbgpointlights",     "dbgbounce",       "dbginteriorbase",
+        "dbginteriorfullat", "dbgshadowdarkness", "dbgtracedsunshadow", "dbgpointshadow",
+        "dbgbakedlampshadow", "dbgocclusion",
+    };
+    for (const char* k : kTraced) {
+        if (key == k) return true;
+    }
+    return false;
+}
+
 }  // namespace ui
 }  // namespace wowee

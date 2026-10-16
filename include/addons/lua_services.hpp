@@ -68,6 +68,12 @@ struct LuaServices {
     /// The weatherDensity setting, 0 to 3 (0x00784040).
     std::function<void(float)> setWeatherDensity;
 
+    /// Why a client setting cannot be used on this device, or "" when it can:
+    /// the ray tracing rows where the GPU cannot run the ray traced lighting
+    /// (rendering/rt_capability.hpp). WoweeSettingList hands it to the
+    /// options panels as `unavailable`, which grey the row and say why.
+    std::function<std::string(const std::string& key)> settingUnavailable;
+
     /// Ask for the interface to be reloaded, as ReloadUI() does.
     ///
     /// A request rather than the act: reloading shuts the Lua state down and

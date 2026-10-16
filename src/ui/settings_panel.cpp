@@ -753,6 +753,9 @@ void SettingsPanel::drawSchemaCategory(const char* category,
     std::size_t count = 0;
     const auto* schema = clientSettingsSchema(count);
     std::string heading;
+    // Why the ray tracing rows are greyed, where the device cannot run it
+    // (rendering/rt_capability.hpp); empty where it can.
+    const std::string rtReason = services_.renderer ? services_.renderer->rtUnavailableReason() : std::string();
     for (std::size_t i = 0; i < count; ++i) {
         const auto& d = schema[i];
         if (std::string(d.category) != category) continue;
@@ -771,7 +774,10 @@ void SettingsPanel::drawSchemaCategory(const char* category,
         bool changed = false;
         // Greyed rather than hidden, so the panel keeps its shape and a player
         // can see both that the setting exists and what it waits on.
-        const bool enabled =
+        // And greyed where this device cannot run what it acts on, with the
+        // reason in its tooltip.
+        const bool unavailable = !rtReason.empty() && settingNeedsRayTracing(d.key);
+        const bool enabled = !unavailable &&
             settingEnabled(d, [this](const std::string& key) { return settingValue(key); });
         if (!enabled) ImGui::BeginDisabled();
         switch (d.kind) {
@@ -837,7 +843,11 @@ void SettingsPanel::drawSchemaCategory(const char* category,
             if (ImGui::IsItemActive()) windowUiScaleEditing_ = true;
             if (ImGui::IsItemDeactivatedAfterEdit()) windowUiScaleEditing_ = false;
         }
-        if (d.tooltip[0] != '\0' && ImGui::IsItemHovered()) {
+        if (unavailable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            // The reason first: it is why the control will not move.
+            if (d.tooltip[0] != '\0') ImGui::SetTooltip("%s\n\n%s", rtReason.c_str(), d.tooltip);
+            else ImGui::SetTooltip("%s", rtReason.c_str());
+        } else if (d.tooltip[0] != '\0' && ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", d.tooltip);
         }
         if (!enabled) ImGui::EndDisabled();

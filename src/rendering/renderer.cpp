@@ -51,6 +51,7 @@
 #include "rendering/rt_lighting.hpp"
 #include "rendering/rt_point_lights.hpp"
 #include "rendering/rt_scene.hpp"
+#include <cstdio>
 #include "rendering/screen_capture.hpp"
 #include "rendering/loot_sparkles.hpp"
 #include "rendering/minimap.hpp"
@@ -315,6 +316,32 @@ bool Renderer::createPerFrameResources() {
         if (!rtLighting_->initialize(vkCtx, rtScene_.get())) {
             LOG_ERROR("Failed to create the ray traced lighting");
             return false;
+        }
+        // What the device can do for it, said once, with what the verdict
+        // rests on - the line to read in a log from a phone where the
+        // lighting never came on.
+        {
+            const auto& in = vkCtx->rtCapabilityInput();
+            const auto cap = vkCtx->rtCapability();
+            const std::string verdict = "Ray traced lighting: " + rt_capability::describe(cap) + " at " +
+                                        std::to_string(static_cast<int>(vkCtx->getMsaaSamples())) +
+                                        "x MSAA [ray query ext " + (in.rayQueryExt ? "yes" : "no") +
+                                        ", accel struct " + (in.accelerationStructure ? "yes" : "no") +
+                                        ", rayQuery " + (in.rayQuery ? "yes" : "no") +
+                                        ", dualSrcBlend " + (in.dualSrcBlend ? "yes" : "no") +
+                                        ", independentBlend " + (in.independentBlend ? "yes" : "no") +
+                                        ", sampleRateShading " + (in.sampleRateShading ? "yes" : "no") +
+                                        ", G-buffer samples 0x" + [&] {
+                                            char b[16];
+                                            std::snprintf(b, sizeof(b), "%x", in.gbufferSampleCounts);
+                                            return std::string(b);
+                                        }() + ", rgba16f storage " + (in.storageImageRgba16f ? "yes" : "no") +
+                                        ", storage buffers/images per stage " +
+                                        std::to_string(in.maxPerStageStorageBuffers) + "/" +
+                                        std::to_string(in.maxPerStageStorageImages) + "]";
+            // Warning either way: a log sent with a report carries nothing
+            // quieter, and this is the line such a report needs.
+            LOG_WARNING(verdict);
         }
         // Off until the settings say otherwise - or WOWEE_RT_LIGHTING does.
         setRtLightingMode(0);
@@ -1454,6 +1481,11 @@ void Renderer::applyMsaaChange() {
             hizSystem_.reset();
         }
     }
+
+    // The ray traced lighting may run at this sample count and not the last
+    // (per-sample shading, the G-buffer format's sample counts): the mode
+    // asked for, held off or given back.
+    setRtLightingMode(rtRequestedMode_);
 
     // Selection circle + overlay + FSR use lazy init, just destroy them
     if (overlaySystem_) overlaySystem_->recreatePipelines();
@@ -6190,6 +6222,11 @@ VkImageView Renderer::getNeutralRtLightingView() const {
     return rtLighting_ ? rtLighting_->neutralView() : VK_NULL_HANDLE;
 }
 
+std::string Renderer::rtUnavailableReason() const {
+    if (!vkCtx) return {};
+    return rt_capability::settingsReason(vkCtx->rtCapability());
+}
+
 void Renderer::setRtLightingMode(int mode) {
     if (!rtLighting_) return;
     // WOWEE_RT_LIGHTING=<0..3> holds the mode whatever the settings say, so
@@ -6199,7 +6236,21 @@ void Renderer::setRtLightingMode(int mode) {
         return (v && *v) ? std::atoi(v) : -1;
     }();
     if (modeOverride >= 0) mode = modeOverride;
-    rtLighting_->setMode(static_cast<RtLighting::Mode>(std::clamp(mode, 0, 3)));
+    rtRequestedMode_ = std::clamp(mode, 0, 3);
+    // Off where the device cannot run it (rt_capability.hpp), whatever was
+    // asked: its G-buffer pass is never made there, so the mode would trace
+    // into nothing. Asked again when the anti-aliasing changes.
+    int applied = rtRequestedMode_;
+    const std::string reason = rtUnavailableReason();
+    if (!reason.empty() && applied != 0) {
+        if (reason != rtHeldOffLogged_) {
+            LOG_WARNING("Ray traced lighting held off: ", reason);
+            rtHeldOffLogged_ = reason;
+        }
+        applied = 0;
+    }
+    if (reason.empty()) rtHeldOffLogged_.clear();
+    rtLighting_->setMode(static_cast<RtLighting::Mode>(applied));
 }
 
 void Renderer::writeRtLightingBindings() {

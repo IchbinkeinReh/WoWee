@@ -3156,6 +3156,12 @@ wowee_add_test(test_unit_name_anchor
 wowee_add_test(test_client_weather
     SOURCES test_client_weather.cpp)
 
+# ── test_rt_capability ───────────────────────────────────────
+# Whether the device can run the ray traced lighting, and what it lacks when it
+# cannot (rendering/rt_capability.hpp): the tracer, the deferred passes, MSAA.
+wowee_add_test(test_rt_capability
+    SOURCES test_rt_capability.cpp)
+
 # ── test_player_display_flags ────────────────────────────────
 # PLAYER_FLAGS' hide-helm and hide-cloak bits on any player's model.
 wowee_add_test(test_player_display_flags

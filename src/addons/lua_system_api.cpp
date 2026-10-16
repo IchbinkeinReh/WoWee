@@ -5511,6 +5511,7 @@ static int lua_ReloadUI(lua_State* L) {
 static int lua_WoweeSettingList(lua_State* L) {
     std::size_t count = 0;
     const auto* schema = ui::clientSettingsSchema(count);
+    auto* svc = getLuaServices(L);
     lua_newtable(L);
     for (std::size_t i = 0; i < count; ++i) {
         const auto& d = schema[i];
@@ -5532,6 +5533,14 @@ static int lua_WoweeSettingList(lua_State* L) {
         lua_pushnumber(L, d.defaultValue); lua_setfield(L, -2, "default");
         lua_pushstring(L, d.enabledWhen);  lua_setfield(L, -2, "enabledwhen");
         lua_pushstring(L, d.store);        lua_setfield(L, -2, "store");
+        // Why this device cannot use it, where it cannot; absent otherwise.
+        if (svc && svc->settingUnavailable) {
+            const std::string why = svc->settingUnavailable(d.key);
+            if (!why.empty()) {
+                lua_pushstring(L, why.c_str());
+                lua_setfield(L, -2, "unavailable");
+            }
+        }
         lua_rawseti(L, -2, static_cast<int>(i) + 1);
     }
     return 1;

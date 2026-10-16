@@ -98,6 +98,8 @@ end
 -- nothing to a player looking at a slider that will not move. Reported as
 -- "drop downs are greyed out" with no idea which of them were deliberate.
 local function waitingOn(setting)
+    -- What this device lacks for it comes first: no other setting changes that.
+    if setting.unavailable and setting.unavailable ~= "" then return setting.unavailable end
     local test = setting.enabledwhen
     if not test or test == "" then return nil end
     local key, want = test:match("^(.-)!=(.*)$")
@@ -124,6 +126,7 @@ local function waitingOn(setting)
 end
 
 local function isEnabled(setting)
+    if setting.unavailable and setting.unavailable ~= "" then return false end
     local test = setting.enabledwhen
     if not test or test == "" then return true end
     local key, want = test:match("^(.-)!=(.*)$")

@@ -671,6 +671,10 @@ public:
     /// Ray traced lighting: 0 off, 1 sun shadows, 2 + ambient occlusion,
     /// 3 + multi-bounce diffuse from a probe volume. See RtLighting.
     void setRtLightingMode(int mode);
+    /// Why the ray traced lighting cannot run on this device at the current
+    /// sample count, in the words the settings show; empty when it can. The
+    /// mode asked for is then held at off (setRtLightingMode).
+    [[nodiscard]] std::string rtUnavailableReason() const;
     /// The lighting's adjustable strengths (Settings > Debug Graphics). The
     /// defaults are the look as it is. The ray traced ones act only where
     /// the ray tracing has a result; the rest act with it off too.
@@ -1014,6 +1018,11 @@ private:
     // after every renderer that registers geometry with the scene.
     std::unique_ptr<RtScene> rtScene_;
     std::unique_ptr<RtLighting> rtLighting_;
+    /// The mode last asked for, kept while the device holds it off - under
+    /// MSAA, say - so it comes back when the reason goes.
+    int rtRequestedMode_ = 0;
+    /// The reason last logged for holding it off, so it is said once.
+    std::string rtHeldOffLogged_;
     LightingTune lightingTune_{};
     int rtDebugView_ = 0;
     float gameTimeOverride_ = -1.0f;

@@ -821,6 +821,10 @@ bool Application::initialize() {
             if (auto* weather = renderer->getWeather())
                 weather->setDensityLevel(static_cast<int>(std::lround(level)));
         };
+        luaSvc.settingUnavailable = [this](const std::string& key) -> std::string {
+            if (!renderer || !ui::settingNeedsRayTracing(key)) return {};
+            return renderer->rtUnavailableReason();
+        };
         luaSvc.setClientSetting = [uim = uiManager.get()](const std::string& key,
                                                           const std::string& value) {
             if (!uim) return;

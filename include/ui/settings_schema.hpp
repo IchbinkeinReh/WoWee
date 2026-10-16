@@ -189,5 +189,11 @@ const SettingDesc* clientSettingsSchema(std::size_t& count);
 /// arguments untouched.
 bool settingRange(const std::string& key, float& lo, float& hi);
 
+/// Whether a setting does anything only with the ray traced lighting: the
+/// mode itself, and the Debug rows that tune what it traces. Greyed, with the
+/// reason, where the device cannot run it (rendering/rt_capability.hpp) - in
+/// the settings window and the options panels alike.
+bool settingNeedsRayTracing(const std::string& key);
+
 }  // namespace ui
 }  // namespace wowee

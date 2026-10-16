@@ -374,3 +374,34 @@ TEST_CASE("every panel the client offers still has settings on it", "[settings][
     INFO("the schema names " << present.size() << " categories where twenty-seven are expected");
     CHECK(present.size() == 27);
 }
+
+// The rows greyed out where the device cannot run the ray traced lighting
+// (settingNeedsRayTracing, rendering/rt_capability.hpp): the mode, and the
+// Debug rows that act only on what it traces - not the ones that tune the
+// light with it off as well.
+TEST_CASE("The ray tracing rows are the ones that need it", "[settings_schema]") {
+    for (const char* key : {"raytracedlighting", "dbgview", "dbgpointlights", "dbgbounce",
+                            "dbginteriorbase", "dbginteriorfullat", "dbgshadowdarkness",
+                            "dbgtracedsunshadow", "dbgpointshadow", "dbgbakedlampshadow",
+                            "dbgocclusion", "dbgmodellightintensity", "dbgparticlelightreach"}) {
+        INFO(key);
+        float lo = 0, hi = 0;
+        CHECK(settingRange(key, lo, hi));  // still a row
+        CHECK(settingNeedsRayTracing(key));
+    }
+    for (const char* key : {"dbgambient", "dbgsun", "dbgbakedlight", "dbgtimeoverride", "dbgmapsunshadow",
+                            "dbgterrainshadow", "dbgblobshadow", "antialiasing", "upscaling", "nosuchkey"}) {
+        INFO(key);
+        CHECK_FALSE(settingNeedsRayTracing(key));
+    }
+    // Every row on the Ray Tracing, Debug Lights and Debug Glow pages.
+    std::size_t count = 0;
+    const SettingDesc* schema = clientSettingsSchema(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::string category = schema[i].category;
+        if (category == "Ray Tracing" || category == "Debug Lights" || category == "Debug Glow") {
+            INFO(schema[i].key);
+            CHECK(settingNeedsRayTracing(schema[i].key));
+        }
+    }
+}
