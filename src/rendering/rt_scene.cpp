@@ -817,7 +817,7 @@ void RtScene::buildStatic() {
             const glm::mat4 t = glm::transpose(inst.objectToWorld);
             std::memcpy(&ai.transform, &t, sizeof(ai.transform));
             ai.instanceCustomIndex = static_cast<uint32_t>(instanceData_.size() - 1);
-            ai.mask = 0xFF;
+            ai.mask = instanceMask(m.source.flags);
             ai.accelerationStructureReference = m.blasAddress;
             asInstanceData_.push_back(ai);
         }
@@ -868,7 +868,7 @@ void RtScene::buildDynamic() {
             const glm::mat4 t = glm::transpose(inst.objectToWorld);
             std::memcpy(&ai.transform, &t, sizeof(ai.transform));
             ai.instanceCustomIndex = firstRow + static_cast<uint32_t>(dynInstanceData_.size() - 1);
-            ai.mask = 0xFF;
+            ai.mask = instanceMask(m.source.flags);
             // A grouped instance goes through the shader's candidate loop,
             // which is where a ray from inside its group passes it by.
             if (g.group != 0) ai.flags = VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR;

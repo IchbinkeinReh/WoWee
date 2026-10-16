@@ -95,6 +95,26 @@ inline float attenuation(float distance, float start, float end) {
     return t * t * (3.0f - 2.0f * t);
 }
 
+/// What of a point light's light a surface takes for one shadow sample `vis`
+/// at point shadow strength `strength` (Debug Graphics): mix(1, vis, s), so a
+/// shadow lets 1 - s through - as rtGather and rt_apply's findTraced have it,
+/// never below nothing.
+inline float shadowedShare(float vis, float strength) {
+    return std::max(1.0f + strength * (vis - 1.0f), 0.0f);
+}
+
+/// The shadow sample rt_trace writes for a light that the ground or a
+/// building (RtScene::kRayStructure) stops: one that shadowedShare takes to
+/// nothing at that strength, so no light comes through a floor or a wall
+/// however soft the shadows are set - the Goldshire inn's cellar took 30% of
+/// the hearth's flames seven yards above it at 70%. Below 0 as it must be;
+/// the baked lamps' shadow takes it clamped to 0..1, a whole shadow. At
+/// strength 0 there are no point shadows at all. rt_trace.comp.glsl's
+/// rtHardShadowVis must agree.
+inline float hardShadowVisibility(float strength) {
+    return strength > 1e-3f ? (strength - 1.0f) / strength : 0.0f;
+}
+
 /// A rough measure of what a light adds to the view from `eye`, to keep the
 /// ones that matter when there are more than the buffer holds: its strength,
 /// times how much of its reach it shows - full when the eye is inside it,

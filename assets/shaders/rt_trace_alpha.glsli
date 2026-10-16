@@ -26,6 +26,9 @@ bool rtSkipUnits = false;
 // The point lights' shadow rays (rt_trace.comp) keep a unit's shadow to the
 // stretch of floor or wall near it.
 float rtUnitReach = 1e30;
+// Set by rtOccludedByStructure for one ray in the software tracer: only the
+// ground and the buildings stop it (the hardware tracer's ray mask).
+bool rtStructureOnly = false;
 
 // Whether a ray from p passes the instances of `group` by: it starts inside
 // the group's box - on the character the group is, which never shadows or

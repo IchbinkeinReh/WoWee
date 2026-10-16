@@ -19,6 +19,7 @@ struct RtTri { vec4 v0; vec4 v1; vec4 v2; };
 struct RtMesh { uint nodeOffset; uint triOffset; uint pad0; uint pad1; };
 struct RtInstance { vec4 worldToObject[3]; uint mesh; uint flags; uint group; uint pad2; };
 const uint RT_MESH_TERRAIN = 1u;  // RtScene::kMeshTerrain
+const uint RT_MESH_BUILDING = 2u;  // RtScene::kMeshBuilding
 
 layout(std430, set = 1, binding = 0) readonly buffer RtTris { RtTri rtTris[]; };
 layout(std430, set = 1, binding = 1) readonly buffer RtNodes { RtNode rtNodes[]; };
@@ -130,6 +131,7 @@ bool rtTraceScene(vec3 o, vec3 d, inout float tMax, out uint hitTri, out uint hi
         if (node.count > 0u) {
             for (uint i = node.leftOrFirst; i < node.leftOrFirst + node.count; ++i) {
                 RtInstance inst = rtInstances[i];
+                if (rtStructureOnly && (inst.flags & (RT_MESH_TERRAIN | RT_MESH_BUILDING)) == 0u) continue;
                 if (rtInGroup(inst.group, o)) continue;
                 // The object-space direction is left unnormalised so t stays
                 // a world-space distance.
@@ -181,6 +183,16 @@ bool rtOccludedBy(vec3 origin, vec3 dir, float tMax, inout uint rng, out bool un
 bool rtOccluded(vec3 origin, vec3 dir, float tMax, inout uint rng) {
     bool unit;
     return rtOccludedBy(origin, dir, tMax, rng, unit);
+}
+
+// Whether the ground or a building stops the ray: what divides one space
+// from another (RtScene::kRayStructure; the hardware tracer's ray mask).
+bool rtOccludedByStructure(vec3 origin, vec3 dir, float tMax, inout uint rng) {
+    uint tri, inst;
+    rtStructureOnly = true;
+    bool hit = rtTraceScene(origin, dir, tMax, tri, inst, true, rng);
+    rtStructureOnly = false;
+    return hit;
 }
 
 // The nearest hit, its normal turned to face the ray, and whether it is

@@ -16,6 +16,7 @@ struct RtTri { vec4 v0; vec4 v1; vec4 v2; };
 struct RtMesh { uint nodeOffset; uint triOffset; uint pad0; uint pad1; };
 struct RtInstance { vec4 worldToObject[3]; uint mesh; uint flags; uint group; uint pad2; };
 const uint RT_MESH_TERRAIN = 1u;  // RtScene::kMeshTerrain
+const uint RT_MESH_BUILDING = 2u;  // RtScene::kMeshBuilding
 
 layout(std430, set = 1, binding = 0) readonly buffer RtTris { RtTri rtTris[]; };
 layout(std430, set = 1, binding = 2) readonly buffer RtMeshes { RtMesh rtMeshes[]; };
@@ -73,6 +74,22 @@ bool rtOccludedBy(vec3 origin, vec3 dir, float tMax, inout uint rng, out bool un
 bool rtOccluded(vec3 origin, vec3 dir, float tMax, inout uint rng) {
     bool unit;
     return rtOccludedBy(origin, dir, tMax, rng, unit);
+}
+
+// Whether the ground or a building stops the ray: what divides one space
+// from another - only the instances of RtScene::kRayStructure's mask answer.
+const uint RT_RAY_STRUCTURE = 0x02u;  // RtScene::kRayStructure
+bool rtOccludedByStructure(vec3 origin, vec3 dir, float tMax, inout uint rng) {
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, rtTlas, gl_RayFlagsTerminateOnFirstHitEXT, RT_RAY_STRUCTURE,
+                          origin, 0.0, dir, tMax);
+    RT_RESOLVE_CANDIDATES(q, rng);
+    if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT) return true;
+    rayQueryEXT d;
+    rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsTerminateOnFirstHitEXT, RT_RAY_STRUCTURE,
+                          origin, 0.0, dir, tMax);
+    RT_RESOLVE_CANDIDATES(d, rng);
+    return rayQueryGetIntersectionTypeEXT(d, true) != gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
 // The nearest hit, its normal turned to face the ray, and whether it is

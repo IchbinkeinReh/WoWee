@@ -142,9 +142,12 @@ void rtWriteGbuffer(RtSurface s, vec3 c0) {
 // lights' (brightest channel's worth); and the baked lights' that does not.
 void rtGather(ivec2 q, vec4 l, float w, inout vec2 sunAo, inout vec4 point, inout float bakedDark) {
     vec4 p = texelFetch(uRtPointLight, q, 0);
+    // Below 0 where the ground or a building stopped the light (rt_trace's
+    // rtHardShadowVis): no light through it at any shadow strength, and as
+    // a shadow no more than whole.
     float vis = l.b;
-    point += p * (mix(1.0, vis, rtPointShadowStrength()) * w);
-    bakedDark += rtBakedDarkness(p.a, vis) * w;
+    point += p * (max(mix(1.0, vis, rtPointShadowStrength()), 0.0) * w);
+    bakedDark += rtBakedDarkness(p.a, clamp(vis, 0.0, 1.0)) * w;
     sunAo += l.rg * w;
 }
 

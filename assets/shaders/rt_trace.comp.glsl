@@ -117,6 +117,22 @@ bool rtOnStorey(vec4 storey, float z) {
     return storey.z < 0.5 || (z >= storey.x - RT_STOREY_MARGIN && z <= storey.y + RT_STOREY_MARGIN);
 }
 
+// The point shadow sample of a light that the ground or a building stops
+// (rt_lights::hardShadowVisibility). The surfaces take the point lights as
+// their unshadowed light times mix(1, vis, s), s the point shadows' strength
+// (Debug Graphics), so below full strength every shadow lets 1 - s of the
+// light through - a softening meant for the shadow of a table or a post in
+// the room the light is in. Through a floor or a wall it lit what the light
+// cannot reach: the Goldshire inn's cellar, seven yards under the hall, took
+// 30% of the hearth's flames (particle lights, reach 15) on its walls,
+// barrels and stairs, under the floorboards that stopped every ray. A sample
+// of (s - 1) / s makes mix(1, vis, s) zero; clamped to 0..1 (the baked
+// lamps' shadow, rtBakedDarkness) it is the shadow it is. At s = 0 there are
+// no point shadows at all.
+float rtHardShadowVis(float s) {
+    return s > 1e-3 ? (s - 1.0) / s : 0.0;
+}
+
 layout(local_size_x = 8, local_size_y = 8) in;
 
 void main() {
@@ -229,6 +245,12 @@ void main() {
             pointVis = rtOccludedBy(origin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
             rtUnitReach = 1e30;
             unitHit = unitHit || byUnit;
+            // Stopped by the ground or a building - a floor, a wall: the
+            // light is in another space and gives nothing here, whatever the
+            // point shadows' strength (rtHardShadowVis).
+            if (pointVis < 0.5 && pass.tune2.w > 0.5 && rtOccludedByStructure(origin, toLight / d, reach, rng)) {
+                pointVis = rtHardShadowVis(pass.tune2.y);
+            }
         }
     }
 

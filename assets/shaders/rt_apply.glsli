@@ -73,8 +73,9 @@ Traced findTraced(vec2 uv, float expected) {
             best = max(best, match);
             wsum += w;
             vec4 p = imageLoad(uPoint, q);
-            point += p * (mix(1.0, l.b, pointShadow) * w);
-            bakedDark += rtBakedDarkness(p.a, l.b) * w;
+            // l.b below 0: a light the ground or a building stopped (rtGather).
+            point += p * (max(mix(1.0, l.b, pointShadow), 0.0) * w);
+            bakedDark += rtBakedDarkness(p.a, clamp(l.b, 0.0, 1.0)) * w;
             sunAo += l.rg * w;
         }
     }

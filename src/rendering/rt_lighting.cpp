@@ -3,6 +3,7 @@
 #include "rendering/rt_scene.hpp"
 #include "rendering/vk_pipeline.hpp"
 #include "rendering/vk_shader.hpp"
+#include "core/env_flag.hpp"
 #include "core/logger.hpp"
 
 #include <algorithm>
@@ -721,7 +722,13 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
                               1.0f / target.extent.height);
     d.misc = glm::vec4(scene_->hasContent() ? 1.0f : 0.0f, havePrev ? 1.0f : 0.0f, 0.0f, 0.0f);
     d.tune = glm::vec4(in.shadowStrength, in.sunShadow, in.occlusion, in.pointLights);
-    d.tune2 = glm::vec4(in.bakedLampShadow, in.pointShadow, static_cast<float>(in.debugView), 0.0f);
+    // w: a point light the ground or a building stops gives nothing, whatever
+    // the point shadows' strength (rt_trace's rtHardShadowVis).
+    // WOWEE_RT_HARD_STRUCTURE=0: their shadow as soft as any, as before, to
+    // compare.
+    static const bool hardStructure = core::envFlagEnabled("WOWEE_RT_HARD_STRUCTURE", true);
+    d.tune2 = glm::vec4(in.bakedLampShadow, in.pointShadow, static_cast<float>(in.debugView),
+                        hardStructure ? 1.0f : 0.0f);
     d.tune3 = glm::vec4(in.interiorBase, in.interiorFullAt, 0.0f, 0.0f);
     const bool probes = mode_ == Mode::Full && probes_.hasResources();
     if (probes) {

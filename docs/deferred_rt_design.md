@@ -309,6 +309,31 @@ Goldshire inn and took it in grainy orange streaks. (For a time baked lights'
 rays from baked surfaces passed the buildings by; through the floor and the
 walls that let every lamp reach every room, and it was taken out again.)
 
+What the ground or a building stops gives nothing, whatever the point
+shadows' strength (Debug Graphics). The surfaces take the point lights as
+their unshadowed light times `mix(1, vis, s)`, so below full strength every
+shadow lets `1 - s` through: a softening for the shadow of a table, a post,
+a body in the room the light is in. Through a floor it lit what the light
+cannot reach. The Goldshire inn's cellar lies seven yards under the hall, on
+no storey of the hall's baked lights, and nothing in it gives light; but the
+hearth's two firewood piles each carry a particle light (`Source::Particle`,
+not baked, so the storey rule does not hold it; reach 15 yards at the
+player's 150%), their shadow rays all met the hall's floorboards (WMO group
+10), and at the player's 70% the cellar's walls, barrels and stairs took 30%
+of the flames, brown in view 6. So a point shadow ray that something stops
+is asked again of the ground and the buildings alone (`rtOccludedByStructure`:
+the hardware tracer's instances carry `RtScene::kRayStructure` in their mask
+when their mesh is terrain or a WMO, `kMeshBuilding`; the software tracer
+reads the instance's flags), and if they stop it too, its sample is
+`(s - 1) / s` (`rtHardShadowVis`, `rt_lights::hardShadowVisibility`), which
+`mix(1, vis, s)` takes to nothing and the baked lamps' shadow, clamped to
+0..1, to a whole shadow. The filters average it as any sample, so a pixel
+half behind a wall is half lit. A WMO's own pillars and beams therefore cast
+whole point shadows too; doodads and units keep the softened ones. The
+second ray is traced only where the first one was stopped.
+`WOWEE_RT_HARD_STRUCTURE=0` lets the buildings' shadows soften as before, to
+compare.
+
 Units cast point-light shadows near themselves (`rtUnitShadowReach`,
 `rtUnitReach`). A unit's traced body is its own triangles cut into rigid
 pieces, each held by one bone and placed by this frame's bones (the nearest

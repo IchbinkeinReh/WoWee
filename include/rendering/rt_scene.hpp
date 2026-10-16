@@ -84,7 +84,21 @@ public:
         /// Ground: a heightfield whose every face looks up, so a ray that
         /// meets it going upward is coming from underneath (rtClosestEx).
         kMeshTerrain = 1u,
+        /// A building's own faces (a WMO's): its floors, walls and roofs.
+        kMeshBuilding = 2u,
     };
+
+    /// The ray masks of the hardware tracer's instances, by what they are.
+    /// Every instance answers a ray of mask kRayAll; only the ground and the
+    /// buildings - what divides one space from another - answer a ray of
+    /// kRayStructure (rt_trace.comp.glsl: a point light that one of these
+    /// stops gives nothing, whatever the point shadows' strength). The
+    /// software tracer reads the mesh flags instead (rtStructureOnly).
+    static constexpr uint8_t kRayAll = 0xFF;
+    static constexpr uint8_t kRayStructure = 0x02;
+    [[nodiscard]] static constexpr uint8_t instanceMask(uint32_t meshFlags) {
+        return (meshFlags & (kMeshTerrain | kMeshBuilding)) != 0 ? uint8_t(0x01 | kRayStructure) : uint8_t(0x01);
+    }
 
     /// An indexed triangle mesh in object space. `surfaces` holds one packed
     /// surface (packRtSurface) per triangle, or a single one for all of them.

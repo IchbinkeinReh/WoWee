@@ -370,3 +370,26 @@ TEST_CASE("A lamp's light follows the bone that holds its glass", "[rt_point_lig
     const glm::vec3 still = glm::vec3(boneCarried(model, {}, 2) * glm::vec4(0.0f, 0.0f, 3.0f, 1.0f));
     CHECK(still.y == Catch::Approx(0.0f));
 }
+
+TEST_CASE("A light the ground or a building stops gives nothing at any shadow strength", "[rt_point_lights]") {
+    // The Goldshire inn's cellar under the hearth: every ray to its flames
+    // meets the hall's floor, and at 70% shadows it took 30% of them.
+    for (float s : {0.05f, 0.3f, 0.7f, 1.0f}) {
+        const float hard = hardShadowVisibility(s);
+        CHECK(shadowedShare(hard, s) == Catch::Approx(0.0f).margin(1e-6f));
+        // As a shadow sample of the baked lamps (clamped), a whole shadow.
+        CHECK(std::clamp(hard, 0.0f, 1.0f) == 0.0f);
+        // Something in the room - a table - still lets 1 - s through, and an
+        // open line all of it.
+        CHECK(shadowedShare(0.0f, s) == Catch::Approx(1.0f - s));
+        CHECK(shadowedShare(1.0f, s) == Catch::Approx(1.0f));
+    }
+    // A pixel's samples averaged by the filters: half its rays stopped by the
+    // floor, half open, is half the light - not half plus 15%.
+    const float s = 0.7f;
+    const float mean = 0.5f * hardShadowVisibility(s) + 0.5f * 1.0f;
+    CHECK(shadowedShare(mean, s) == Catch::Approx(0.5f));
+    // No point shadows at all: nothing to make whole.
+    CHECK(hardShadowVisibility(0.0f) == 0.0f);
+    CHECK(shadowedShare(hardShadowVisibility(0.0f), 0.0f) == Catch::Approx(1.0f));
+}

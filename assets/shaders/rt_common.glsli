@@ -29,7 +29,8 @@ layout(set = 0, binding = 0) uniform RtPassData {
     vec4 tune;           // x shadow darkness, y traced sun shadow, z occlusion,
                          // w point lights
     vec4 tune2;          // x baked-lamp shadows, y point lights' shadows,
-                         // z the debug view (0 none)
+                         // z the debug view (0 none), w 1: the ground's and
+                         // the buildings' point shadows whole (rt_trace)
     vec4 tune3;          // x inside, what of a baked colour shows where no
                          // point light reaches; y the light where all of it
                          // does (rtInteriorShade)

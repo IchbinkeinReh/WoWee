@@ -5347,6 +5347,9 @@ void WMORenderer::gatherGlows(ModelData& modelData) {
 void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
     if (!rtScene_ || rtModelMeshes_.count(modelId)) return;
     RtScene::MeshSource src;
+    // Its floors and walls divide one space from another: a point light they
+    // stop gives nothing beyond them (RtScene::kRayStructure).
+    src.flags = RtScene::kMeshBuilding;
     for (const auto& group : model.groups) {
         // Distance shells and groups the renderer never draws would cast
         // shadows the player cannot see the source of.
