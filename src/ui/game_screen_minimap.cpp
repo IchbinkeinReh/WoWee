@@ -1962,7 +1962,7 @@ void GameScreen::saveSettings() {
     out << "dbg_emissive_light_reach=" << settingsPanel_.pendingDbgEmissiveLightReach << "\n";
     out << "dbg_particle_light_intensity=" << settingsPanel_.pendingDbgParticleLightIntensity << "\n";
     out << "dbg_particle_light_reach=" << settingsPanel_.pendingDbgParticleLightReach << "\n";
-    out << "dbg_interior_base=" << settingsPanel_.pendingDbgInteriorBase << "\n";
+    out << "dbg_interior_unlit=" << settingsPanel_.pendingDbgInteriorBase << "\n";
     out << "dbg_interior_full_at=" << settingsPanel_.pendingDbgInteriorFullAt << "\n";
     out << "dbg_shadow_darkness=" << settingsPanel_.pendingDbgShadowDarkness << "\n";
     out << "dbg_traced_sun_shadow=" << settingsPanel_.pendingDbgTracedSunShadow << "\n";
@@ -2268,7 +2268,10 @@ void GameScreen::loadSettings() {
             else if (key == "dbg_emissive_light_reach") settingsPanel_.pendingDbgEmissiveLightReach = std::clamp(std::stoi(val), 100, 1000);
             else if (key == "dbg_particle_light_intensity") settingsPanel_.pendingDbgParticleLightIntensity = std::clamp(std::stof(val), 0.001f, 1000.0f);
             else if (key == "dbg_particle_light_reach") settingsPanel_.pendingDbgParticleLightReach = std::clamp(std::stoi(val), 100, 1000);
-            else if (key == "dbg_interior_base") settingsPanel_.pendingDbgInteriorBase = std::clamp(std::stoi(val), 0, 100);
+            // Under a new name so the 50% default applies once: the old
+            // dbg_interior_base, often left at 0, drew every corner of a room
+            // the lamps' traced light missed black.
+            else if (key == "dbg_interior_unlit") settingsPanel_.pendingDbgInteriorBase = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_interior_full_at") settingsPanel_.pendingDbgInteriorFullAt = std::clamp(std::stoi(val), 5, 300);
             else if (key == "dbg_shadow_darkness") settingsPanel_.pendingDbgShadowDarkness = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_traced_sun_shadow") settingsPanel_.pendingDbgTracedSunShadow = std::clamp(std::stoi(val), 0, 100);

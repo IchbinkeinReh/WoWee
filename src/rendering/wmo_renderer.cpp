@@ -1886,6 +1886,8 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
             WMOGroupPush groupPush{};
             groupPush.interiorPass = (passGroups && gi < passGroups->size() && (*passGroups)[gi]) ? 1 : 0;
             groupPush.highlight = instance.highlighted ? 1 : 0;
+            groupPush.interiorGroup =
+                pipeline::wmo_doodad_light::isInteriorGroup(group.groupFlags) ? 1 : 0;
             vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
                                sizeof(WMOInstancePush), sizeof(WMOGroupPush), &groupPush);
 

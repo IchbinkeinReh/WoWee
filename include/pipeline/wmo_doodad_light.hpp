@@ -389,6 +389,13 @@ inline AveragedLight averagedOutsideLight(glm::ivec3 direct, glm::ivec3 ambient)
 /// objects in it 0x8000 (0x00799310, 0x0079a260), which 0x007c1730 does the
 /// same for. `neighbours[g]`: the groups g's portals lead to that the walk
 /// may pass. `cameraGroups`: the groups the camera is in.
+/// A group of a building's inside: neither exterior nor exterior-lit, nor
+/// flagged 0x10000 - the groups an interior pass can take (interiorPassGroups),
+/// whether or not the camera's pass reaches them.
+inline bool isInteriorGroup(uint32_t groupFlags) {
+    return (groupFlags & (kOutsideGroupFlags | 0x10000u)) == 0;
+}
+
 inline std::vector<uint8_t> interiorPassGroups(const std::vector<uint32_t>& groupFlags,
                                                const std::vector<std::vector<uint32_t>>& neighbours,
                                                const std::vector<uint32_t>& cameraGroups) {
@@ -396,7 +403,7 @@ inline std::vector<uint8_t> interiorPassGroups(const std::vector<uint32_t>& grou
     std::vector<uint32_t> open;
     const auto visit = [&](uint32_t g) {
         if (g >= groupFlags.size() || pass[g]) return;
-        if (groupFlags[g] & (kOutsideGroupFlags | 0x10000u)) return;
+        if (!isInteriorGroup(groupFlags[g])) return;
         pass[g] = 1;
         open.push_back(g);
     };

@@ -663,7 +663,12 @@ private:
     struct WMOGroupPush {
         int32_t interiorPass = 0;
         int32_t highlight = 0;  ///< the light's ambient added into c29
-        int32_t pad[2] = {};
+        /// 1 for a group of a building's inside (wmo_doodad_light::
+        /// isInteriorGroup), wherever the camera is: what the traced interior
+        /// shade goes by (rtInteriorShade), so a room looks the same seen
+        /// through its door as from within.
+        int32_t interiorGroup = 0;
+        int32_t pad = 0;
     };
 
     /**

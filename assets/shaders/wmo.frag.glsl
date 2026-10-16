@@ -79,6 +79,7 @@ layout(set = 1, binding = 3) uniform sampler2D uEnvTexture;
 layout(push_constant) uniform GroupPush {
     layout(offset = 64) int interiorPass;
     int highlight;   // the game object highlight: the light's ambient into c29
+    int interiorGroup;  // 1 for a group of the inside, wherever the camera is
 } gp;
 
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
@@ -272,11 +273,13 @@ bool passBaked(int mode) {
     return hasVertexColors != 0 && (mode == 0 || mode == 3 || unifiedPath != 0);
 }
 
-// A baked pass of a group in the camera's interior pass, not under the sun:
-// a room's own painted light, which its lamps' traced light shades too
-// (rtInteriorShade, RT_GB_INTERIOR).
+// A baked pass of a group of a building's inside, not under the sun: a
+// room's own painted light, which its lamps' traced light shades too
+// (rtInteriorShade, RT_GB_INTERIOR). By the group, not by the camera's
+// interior pass: gated by that, the shade came on as the camera crossed the
+// door and a room seen through it from outside looked lit as painted.
 bool passInterior(int mode, bool shadowedPass) {
-    return passBaked(mode) && !shadowedPass && gp.interiorPass != 0;
+    return passBaked(mode) && !shadowedPass && gp.interiorGroup != 0;
 }
 
 vec3 withPointLights(vec3 c, int mode, bool shadowedPass, RtLight rt) {
