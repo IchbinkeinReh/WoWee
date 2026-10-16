@@ -1,6 +1,7 @@
 #include "rendering/world_text_renderer.hpp"
 
 #include "core/logger.hpp"
+#include "rendering/depth_convention.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_pipeline.hpp"
 #include "rendering/vk_shader.hpp"
@@ -88,7 +89,7 @@ void WorldTextRenderer::buildPipeline() {
         .setVertexInput({tightVertexBinding(sizeof(Vertex))}, attributes)
         .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+        .setDepthTest(true, true, depth::kNearerOrEqual)
         .setColorBlendAttachment(PipelineBuilder::blendAlpha())
         .setMultisample(vkCtx_->getMsaaSamples())
         .setLayout(pipelineLayout_)
