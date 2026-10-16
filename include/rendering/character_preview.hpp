@@ -95,6 +95,10 @@ public:
     /// still faces another, and the portrait shows a profile. This sets both
     /// together and zooms to the face.
     void setPortraitFraming();
+    /// How far back from the model's portrait camera to stand, along its own
+    /// line: portrait_camera::kStillHeadroom for a still picture, more for a
+    /// live one. Applied by the next framing.
+    void setPortraitHeadroom(float headroom) { portraitHeadroom_ = headroom; }
 
     /// Draws the character against nothing rather than a lit backdrop, so what
     /// surrounds it is transparent. A portrait is masked by the frame art
@@ -153,6 +157,8 @@ private:
     // Load the race's glue scene (Stormwind for humans, Orgrimmar for orcs, ...) as a backdrop.
     void loadRacialBackdrop(game::Race race);
     void applyPreviewView();
+    /// The model's portrait camera (camera 0), if it has one.
+    void readPortraitCamera(const pipeline::M2Model& model, bool playerModel);
 
     pipeline::AssetManager* assetManager_ = nullptr;
     VkContext* vkCtx_ = nullptr;
@@ -218,7 +224,14 @@ private:
     float defaultFovDegrees_ = 0.0f;
     glm::vec3 portraitCameraPos_{0.0f};
     glm::vec3 portraitCameraTarget_{0.0f};
-    float portraitCameraFovDegrees_ = 0.0f;
+    /// Diagonal, radians; 0 keeps the preview's own.
+    float portraitCameraFov_ = 0.0f;
+    /// The camera belongs to a player model, which the character screens
+    /// frame by its bounds; only a portrait looks through it.
+    bool portraitCameraOnPlayer_ = false;
+    /// setPortraitFraming was the last framing asked for.
+    bool portraitFraming_ = false;
+    float portraitHeadroom_ = 1.35f;
     float modelBoundMinZ_ = 0.0f;
     float modelBoundMaxZ_ = 2.0f;
     /// Where the head is attached, in model Z, or zero if the skeleton does

@@ -5601,6 +5601,11 @@ void Application::render() {
 
             });
             runRenderStage("addonWidgets/portrait", [&] {
+                // A portrait is a still picture, drawn once (0x00619580),
+                // unless the setting asks for live ones.
+                const bool animatedPortraits =
+                    uiManager && uiManager->getGameScreen().getSettingsPanel().animatedPortraits_;
+                unitPortrait_.setAnimated(animatedPortraits);
                 if (portrait) {
                     sizeFor(unitPortrait_, portrait);
                     unitPortrait_.update(*gameHandler, assetManager.get(),
@@ -5686,6 +5691,7 @@ void Application::render() {
 
                     bool built = false;
                     face.portrait->setFraming(ui::UnitPortrait::Framing::Face);
+                    face.portrait->setAnimated(animatedPortraits);
                     // Sized for the circle it is drawn into rather than for the
                     // paperdoll - the shape as much as the scale, since a
                     // portrait frame is square and the old target was not.

@@ -908,6 +908,12 @@ constexpr SettingDesc kSchema[] = {
      "Play a sound as your threat rises to the next level.", "", 0,
      "", "cvar:threatPlaySounds"},
 
+    // The game draws a portrait once, a still picture of the head
+    // (SetPortraitTexture, 0x00619580); this keeps them moving instead.
+    {"animatedportraits", "Animated portraits", SettingKind::Bool, 0, 0, 0, "Unit Frames", "Portraits",
+     "Show the faces on your frame, your target's, your party's and the\n"
+     "rest as live, moving models rather than still pictures.", "", 0},
+
 
     // ------------------------------------------------------------------- Sound
     //

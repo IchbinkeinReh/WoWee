@@ -1843,6 +1843,7 @@ void GameScreen::saveSettings() {
     out << "show_minimap_coordinates=" << (settingsPanel_.pendingShowMinimapCoordinates ? 1 : 0) << "\n";
     out << "show_latency_meter=" << (settingsPanel_.pendingShowLatencyMeter ? 1 : 0) << "\n";
     out << "show_fps=" << (settingsPanel_.pendingShowFps ? 1 : 0) << "\n";
+    out << "animated_portraits=" << (settingsPanel_.pendingAnimatedPortraits ? 1 : 0) << "\n";
     out << "check_for_updates=" << (settingsPanel_.pendingCheckForUpdates ? 1 : 0) << "\n";
     out << "show_dps_meter=" << (settingsPanel_.showDPSMeter_ ? 1 : 0) << "\n";
     {
@@ -2109,6 +2110,9 @@ void GameScreen::loadSettings() {
             } else if (key == "show_latency_meter") {
                 settingsPanel_.showLatencyMeter_ = (std::stoi(val) != 0);
                 settingsPanel_.pendingShowLatencyMeter = settingsPanel_.showLatencyMeter_;
+            } else if (key == "animated_portraits") {
+                settingsPanel_.animatedPortraits_ = (std::stoi(val) != 0);
+                settingsPanel_.pendingAnimatedPortraits = settingsPanel_.animatedPortraits_;
             } else if (key == "show_fps") {
                 settingsPanel_.showFps_ = (std::stoi(val) != 0);
                 settingsPanel_.pendingShowFps = settingsPanel_.showFps_;

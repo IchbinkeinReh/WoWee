@@ -458,6 +458,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
         pendingShowMinimapCoordinates = showMinimapCoordinates_;
         pendingShowLatencyMeter = showLatencyMeter_;
         pendingShowFps = showFps_;
+        pendingAnimatedPortraits = animatedPortraits_;
         if (renderer) {
             if (auto* minimap = renderer->getMinimap()) {
                 minimap->setRotateWithCamera(minimapRotate_);
@@ -910,6 +911,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "grassdistance", "enhancedwater", "specular", "upscaling", "fsrquality",
     "fsrsharpness", "framegen", "brightness", "uiopacity", "minimapsquare",
     "minimapnpcdots", "minimapclock", "minimapcoords", "minimaprotate", "latencymeter", "showfps",
+    "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
     "screenglow", "raytracedlighting",
@@ -1192,6 +1194,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "scrollspeed",   .asFloat = &SettingsPanel::pendingScrollSpeed},
     {.key = "latencymeter",  .asBool  = &SettingsPanel::pendingShowLatencyMeter},
     {.key = "showfps",       .asBool  = &SettingsPanel::pendingShowFps},
+    {.key = "animatedportraits", .asBool = &SettingsPanel::pendingAnimatedPortraits},
     {.key = "checkforupdates",   .asBool  = &SettingsPanel::pendingCheckForUpdates},
     {.key = "micromenu",     .asBool  = &SettingsPanel::pendingShowMicroMenu},
     {.key = "chatboxvisible", .asBool = &SettingsPanel::pendingChatBoxVisible},
@@ -1632,6 +1635,9 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         showLatencyMeter_ = pendingShowLatencyMeter;
     } else if (key == "showfps") {
         showFps_ = pendingShowFps;
+    } else if (key == "animatedportraits") {
+        // Read by the portraits every frame (Application, "addonWidgets/portrait").
+        animatedPortraits_ = pendingAnimatedPortraits;
     } else if (key == "grassenabled" || key == "grassdensity" || key == "grassheight" ||
                key == "grassdistance") {
         // Grass belonged in its own branch all along. These calls were sitting

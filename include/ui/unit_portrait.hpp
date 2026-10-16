@@ -1,17 +1,19 @@
 #pragma once
 
-// A live head-and-shoulders view of a unit, for the interface's portraits.
+// A unit's model rendered small, for the interface's portraits and model views.
 //
 // WoW's portraits are not pictures on disk: they are the character itself,
-// rendered small. The same offscreen pass the character-select screen uses
-// already frames a face when zoomed all the way in, so this is that pass kept
-// running while in the world, at a size a portrait needs.
+// rendered once into a texture through the model's own portrait camera and
+// kept (SetPortraitTexture, 0x00619580) - a still picture of the head. The
+// same offscreen pass the character-select screen uses draws them; a
+// portrait draws it while its model is new and then keeps the image, unless
+// it is asked to be live (setAnimated). The paperdoll and the other model
+// views use the same pass, live and framed on the whole figure.
 //
-// Four units: the player, the target, the pet and the focus. They differ only
-// in whose appearance is loaded - a player from race, appearance bytes and
-// what they are visibly wearing, anything else from the model its display id
-// names. The party frames want the same thing and are left out on cost: each
-// of these is a 640x800 offscreen target and a character pass every frame.
+// The units: the player, the target, the pet, the focus, the party and the
+// NPC a window belongs to. They differ only in whose appearance is loaded - a
+// player from race, appearance bytes and what they are visibly wearing,
+// anything else from the model its display id names.
 
 #include "game/guild_emblem.hpp"
 
@@ -112,6 +114,14 @@ public:
     /// buttons drive.
     void rotate(float yawDelta);
 
+    /// A live, animated view, or the still picture the client's
+    /// SetPortraitTexture draws (0x00619580): rendered once when the model is
+    /// built and kept. The model views - the paperdoll, the dressing room,
+    /// inspect - are live, as the client's model frames are; the unit
+    /// portraits are still unless the "animatedportraits" setting asks.
+    /// Safe to set every frame.
+    void setAnimated(bool animated) { animated_ = animated; }
+
     /// The rendered portrait, or zero until the first composite has run. The
     /// value is a VkDescriptorSet, carried as an integer so this header does
     /// not drag Vulkan into the widget tree.
@@ -120,7 +130,16 @@ public:
     void shutdown(rendering::Renderer* renderer);
 
 private:
+    /// A model is about to be (re)loaded: frame it for a still or a live
+    /// view and draw it again.
+    void beginRebuild();
+    /// Advance and draw a live view; draw a still one only while it is new.
+    void present(float deltaTime);
+
     std::unique_ptr<rendering::CharacterPreview> preview_;
+    bool animated_ = true;
+    bool framedAnimated_ = true;
+    int stillFramesLeft_ = 0;
     bool initialized_ = false;
     Framing framing_ = Framing::Face;
     int targetWidth_ = 640;

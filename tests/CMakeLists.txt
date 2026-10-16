@@ -3125,6 +3125,11 @@ wowee_add_test(test_minimap_tracking
 wowee_add_test(test_minimap_indoor
     SOURCES test_minimap_indoor.cpp)
 
+# ── test_portrait_camera ─────────────────────────────────────
+# A portrait's framing and still drawing (rendering/portrait_camera.hpp).
+wowee_add_test(test_portrait_camera
+    SOURCES test_portrait_camera.cpp)
+
 # ── test_unit_name_anchor ────────────────────────────────────
 # Where names and plates go, their range and dimming (rendering/unit_name_anchor.hpp).
 wowee_add_test(test_unit_name_anchor

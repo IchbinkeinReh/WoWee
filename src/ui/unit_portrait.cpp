@@ -4,6 +4,7 @@
 #include "core/logger.hpp"
 #include "game/game_handler.hpp"
 #include "rendering/character_preview.hpp"
+#include "rendering/portrait_camera.hpp"
 #include "rendering/renderer.hpp"
 
 namespace wowee::ui {
@@ -84,6 +85,7 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
                          (loadedEquipHash_ != equipHash) ||
                          (loadedEmblem_ != pendingEmblem_);
     if (changed) {
+        beginRebuild();
         const uint8_t skin      =  self->appearanceBytes        & 0xFF;
         const uint8_t face      = (self->appearanceBytes >> 8)  & 0xFF;
         const uint8_t hairStyle = (self->appearanceBytes >> 16) & 0xFF;
@@ -120,9 +122,7 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
         loadedEmblem_ = pendingEmblem_;
     }
 
-    preview_->update(deltaTime);
-    preview_->render();
-    preview_->requestComposite();
+    present(deltaTime);
 }
 
 bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
@@ -155,6 +155,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
                          (loadedEmblem_ != pendingEmblem_) ||
                          !loadedCreaturePath_.empty();
     if (changed) {
+        beginRebuild();
         const uint8_t skin      =  appearanceBytes        & 0xFF;
         const uint8_t face      = (appearanceBytes >> 8)  & 0xFF;
         const uint8_t hairStyle = (appearanceBytes >> 16) & 0xFF;
@@ -192,9 +193,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
         loadedEmblem_ = pendingEmblem_;
     }
 
-    preview_->update(deltaTime);
-    preview_->render();
-    preview_->requestComposite();
+    present(deltaTime);
     return preview_->isModelLoaded();
 }
 
@@ -218,6 +217,7 @@ bool UnitPortrait::updateCreature(const std::string& m2Path,
     }
 
     if (loadedCreaturePath_ != m2Path) {
+        beginRebuild();
         // Declared before the model loads, so the racial backdrop is never
         // built in the first place - the same order loadCharacter needs.
         preview_->setTransparentBackground(true, framing_ == Framing::Face);
@@ -239,10 +239,41 @@ bool UnitPortrait::updateCreature(const std::string& m2Path,
         loadedEquipHash_ = 0;
     }
 
-    preview_->update(deltaTime);
+    present(deltaTime);
+    return preview_->isModelLoaded();
+}
+
+void UnitPortrait::beginRebuild() {
+    // The framing applied after the load reads this.
+    preview_->setPortraitHeadroom(animated_ ? rendering::portrait_camera::kAnimatedHeadroom
+                                            : rendering::portrait_camera::kStillHeadroom);
+    framedAnimated_ = animated_;
+    stillFramesLeft_ = rendering::portrait_camera::kStillFrames;
+}
+
+void UnitPortrait::present(float deltaTime) {
+    if (animated_ != framedAnimated_) {
+        // Switched between a still and a live one: framed again, and drawn
+        // again either way.
+        preview_->setPortraitHeadroom(animated_ ? rendering::portrait_camera::kAnimatedHeadroom
+                                                : rendering::portrait_camera::kStillHeadroom);
+        if (framing_ == Framing::Face) preview_->setPortraitFraming();
+        framedAnimated_ = animated_;
+        stillFramesLeft_ = rendering::portrait_camera::kStillFrames;
+    }
+    if (animated_) {
+        preview_->update(deltaTime);
+        preview_->render();
+        preview_->requestComposite();
+        return;
+    }
+    // A still picture (0x00619580): drawn when the model is built, posed at
+    // the start of its stand, then left as it is.
+    if (stillFramesLeft_ <= 0) return;
+    --stillFramesLeft_;
+    preview_->update(0.0f);
     preview_->render();
     preview_->requestComposite();
-    return preview_->isModelLoaded();
 }
 
 uint64_t UnitPortrait::textureId() const {
