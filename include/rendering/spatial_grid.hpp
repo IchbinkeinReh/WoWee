@@ -128,12 +128,26 @@ inline void refileBounds(SpatialGrid& grid,
 ///
 /// `seen` is the caller's scratch set, passed in because both callers hold a
 /// thread_local one: these queries run on the camera's async threads.
+///
+/// A box inside one cell - most of them, the cells being 64 yards and a floor
+/// query a few - is that cell's list as it stands: an id is filed in a cell
+/// once, so there is nothing to tell apart and the set is not touched. In a
+/// town a cell holds a thousand doodads or more, and putting each through the
+/// set made every floor query cost a tenth of a millisecond, which the
+/// weather asks hundreds of when it changes.
+template <typename OnId>
 inline void gatherIds(const SpatialGrid& grid, const glm::vec3& queryMin,
                       const glm::vec3& queryMax, std::unordered_set<uint32_t>& seen,
-                      const std::function<void(uint32_t)>& onId) {
-    seen.clear();
+                      OnId&& onId) {
     const GridCell minCell = toSpatialCell(queryMin);
     const GridCell maxCell = toSpatialCell(queryMax);
+    if (minCell == maxCell) {
+        auto it = grid.find(minCell);
+        if (it == grid.end()) return;
+        for (uint32_t id : it->second) onId(id);
+        return;
+    }
+    seen.clear();
     for (int z = minCell.z; z <= maxCell.z; z++) {
         for (int y = minCell.y; y <= maxCell.y; y++) {
             for (int x = minCell.x; x <= maxCell.x; x++) {

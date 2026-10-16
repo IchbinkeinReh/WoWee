@@ -272,7 +272,8 @@ void Weather::loadAssets(pipeline::AssetManager* assets) {
     if (haveWeather_) setWeather(weatherId_, target_, true);
 }
 
-void Weather::setGroundQuery(cw::HeightCache::Query query) {
+void Weather::setGroundQuery(cw::HeightCache::Query query, std::function<void()> frameStart) {
+    groundFrameStart_ = std::move(frameStart);
     // The cache asks in the client's coordinates; the renderer answers in its own.
     ground_.setQuery([q = std::move(query)](float x, float y, float z) {
         const glm::vec3 r = toRender({x, y, z});
@@ -391,6 +392,9 @@ void Weather::spawn(float dt, const cw::SpawnContext& ctx) {
     auto* out = static_cast<GpuParticle*>(packet->mapped);
     auto* splashes = static_cast<GpuSplash*>(packet->splashMapped);
     for (int i = 0; i < n; ++i) {
+        // The rest wait while the ground under them is still being asked
+        // (HeightCache::kFillsPerFrame); the cache is full a few frames on.
+        if (ground_.fillBudgetSpent()) break;
         const float start = rnd() * dt + from;
         cw::Particle p;
         float gone = 0.0f;
@@ -430,6 +434,8 @@ void Weather::update(const FrameInput& frame) {
     const float dt = std::max(frame.deltaTime, 0.0f);
     now_ += dt;
     ++frame_;
+    ground_.startFrame();
+    if (groundFrameStart_) groundFrameStart_();
     viewportWidth_ = frame.viewportWidth;
 
     // The player's movement, from where it has been (0x0078c500).

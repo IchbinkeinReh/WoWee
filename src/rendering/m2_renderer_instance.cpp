@@ -870,14 +870,15 @@ void M2Renderer::gatherCandidates(const glm::vec3& queryMin, const glm::vec3& qu
                   }
               });
 
-    // Safety fallback to preserve collision correctness if the spatial index
-    // misses candidates (e.g. during streaming churn).
-    if (outIndices.empty() && !instances.empty()) {
-        outIndices.reserve(instances.size());
-        for (size_t i = 0; i < instances.size(); i++) {
-            outIndices.push_back(i);
-        }
-    }
+    // No candidates means nothing stands there. The grid is kept as instances
+    // are made, moved and removed (insertBounds, refileBounds, eraseBounds);
+    // spatialIndexDirty_ only marks the cached model pointers and fast-path
+    // lists for refreshing, not the grid's ids. This used to hand back every
+    // instance for an empty answer - the usual answer on open ground - which
+    // made a floor query in an empty field a scan of the whole loaded world,
+    // a quarter of a millisecond each. A weather change asks hundreds a frame
+    // for the ground its drops land on: over a hundred milliseconds a frame,
+    // for seconds, each time the weather changed.
 }
 
 void M2Renderer::setModelPinned(uint32_t modelId, bool pinned) {
@@ -1382,15 +1383,63 @@ void noteUndersideOnlyFloor(const std::string& modelName, float undersideZ, floa
 
 std::optional<float> M2Renderer::getFloorHeight(float glX, float glY, float glZ, float* outNormalZ) const {
     QueryTimer timer(&queryTimeMs, &queryCallCount);
-    std::optional<float> bestFloor;
-    float bestNormalZ = 1.0f;  // Default to flat
-
     glm::vec3 queryMin(glX - 2.0f, glY - 2.0f, glZ - 6.0f);
     glm::vec3 queryMax(glX + 2.0f, glY + 2.0f, glZ + 8.0f);
     gatherCandidates(queryMin, queryMax, tl_m2_candidateScratch);
+    return floorAmong(tl_m2_candidateScratch, glX, glY, glZ, outNormalZ);
+}
 
+void M2Renderer::gatherFloorCandidates(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                                       std::vector<uint32_t>& outIds) const {
+    // What floorAmong would pass over at every point of the box, left out
+    // here once: the instances not over it, and those with nothing to stand on.
+    outIds.clear();
+    gatherCandidates(boxMin - glm::vec3(2.0f, 2.0f, 6.0f), boxMax + glm::vec3(2.0f, 2.0f, 8.0f),
+                     tl_m2_candidateScratch);
     for (size_t idx : tl_m2_candidateScratch) {
+        const auto& inst = instances[idx];
+        if (inst.worldBoundsMax.x < boxMin.x || inst.worldBoundsMin.x > boxMax.x ||
+            inst.worldBoundsMax.y < boxMin.y || inst.worldBoundsMin.y > boxMax.y) {
+            continue;
+        }
+        if (!inst.cachedModel || inst.scale <= 0.001f || inst.skipCollision) continue;
+        const M2ModelGPU& model = *inst.cachedModel;
+        if (!model.collision.valid() || model.isInvisibleTrap || model.isSpellEffect) continue;
+        outIds.push_back(inst.id);
+    }
+}
+
+std::optional<float> M2Renderer::getFloorHeightAmong(const std::vector<uint32_t>& ids, float glX, float glY,
+                                                     float glZ) const {
+    QueryTimer timer(&queryTimeMs, &queryCallCount);
+    thread_local std::vector<size_t> indices;
+    indices.clear();
+    for (uint32_t id : ids) {
+        auto it = instanceIndexById.find(id);
+        if (it != instanceIndexById.end()) indices.push_back(it->second);
+    }
+    return floorAmong(indices, glX, glY, glZ, nullptr);
+}
+
+std::optional<float> M2Renderer::floorAmong(const std::vector<size_t>& candidates, float glX, float glY, float glZ,
+                                            float* outNormalZ) const {
+    std::optional<float> bestFloor;
+    float bestNormalZ = 1.0f;  // Default to flat
+
+    for (size_t idx : candidates) {
         const auto& instance = instances[idx];
+        // Not under it, not met: both the mesh's faces and the box's top
+        // below lie inside the world bounds (getCollisionQueryBounds takes
+        // in the whole mesh), and the ray here is straight down. Asked
+        // first, before the model is looked at, so the doodads of a 64-yard
+        // grid cell that are nowhere near cost a comparison each rather than
+        // a transform and a gather of their faces.
+        constexpr float kBoundsSlop = 0.01f;
+        if (glX < instance.worldBoundsMin.x - kBoundsSlop || glX > instance.worldBoundsMax.x + kBoundsSlop ||
+            glY < instance.worldBoundsMin.y - kBoundsSlop || glY > instance.worldBoundsMax.y + kBoundsSlop) {
+            continue;
+        }
+
         if (collisionFocus.excludes(instance.worldBoundsMin,
                                     instance.worldBoundsMax)) {
             continue;

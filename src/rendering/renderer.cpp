@@ -914,7 +914,25 @@ bool Renderer::initialize(core::Window* win) {
     // a house. The floor query asked here before looks only a few yards
     // under its start, so from 200 yards up it met no building at all and
     // the rain fell through every roof onto the terrain beneath.
-    weather->setGroundQuery([this](float x, float y, float z) {
+    //
+    // The doodads are asked through what was gathered for the 32-yard tile
+    // the point is in (M2Renderer::gatherFloorCandidates): their own floor
+    // query gathers a 64-yard grid cell for every point, a thousand doodads
+    // or more in a town, and the cells a weather change empties number in
+    // the thousands. Gathered afresh each second, so a doodad that has come
+    // since is missed for no longer than that - and a cell, once asked, is
+    // kept by the weather far longer.
+    struct GroundTile {
+        float zLo = 0.0f, zHi = 0.0f;
+        std::vector<uint32_t> doodads;
+    };
+    struct GroundTiles {
+        std::unordered_map<int64_t, GroundTile> tiles;
+        std::chrono::steady_clock::time_point gathered{};
+    };
+    auto tiles = std::make_shared<GroundTiles>();
+    weather->setGroundQuery([this, tiles](float x, float y, float z) {
+        WOWEE_PROFILE_SCOPE("weather: ground query", Cpu);
         float h = -std::numeric_limits<float>::infinity();
         auto take = [&](std::optional<float> v) {
             if (v && *v <= z + 200.0f && *v >= z - 200.0f) h = std::max(h, *v);
@@ -928,8 +946,29 @@ bool Renderer::initialize(core::Window* win) {
         }
         // The models' collision (0x0081e110): their floor query reaches a few
         // yards around where it is asked, so ask it just over the ground found.
-        if (m2Renderer && std::isfinite(h)) take(m2Renderer->getFloorHeight(x, y, h + 8.0f));
+        if (m2Renderer && std::isfinite(h)) {
+            constexpr float kTile = 32.0f;
+            const int tx = static_cast<int>(std::floor(x / kTile));
+            const int ty = static_cast<int>(std::floor(y / kTile));
+            const int64_t key = (static_cast<int64_t>(tx) << 32) ^ static_cast<int64_t>(static_cast<uint32_t>(ty));
+            const float askZ = h + 8.0f;
+            auto [it, fresh] = tiles->tiles.try_emplace(key);
+            GroundTile& tile = it->second;
+            if (fresh || askZ < tile.zLo || askZ > tile.zHi) {
+                tile.zLo = askZ - 400.0f;
+                tile.zHi = askZ + 400.0f;
+                m2Renderer->gatherFloorCandidates(glm::vec3(tx * kTile, ty * kTile, tile.zLo),
+                                                  glm::vec3((tx + 1) * kTile, (ty + 1) * kTile, tile.zHi),
+                                                  tile.doodads);
+            }
+            take(m2Renderer->getFloorHeightAmong(tile.doodads, x, y, askZ));
+        }
         return std::isfinite(h) ? h : z - 200.0f;
+    }, [tiles] {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - tiles->gathered < std::chrono::seconds(1)) return;
+        tiles->tiles.clear();
+        tiles->gathered = now;
     });
 
     lightning = std::make_unique<Lightning>();

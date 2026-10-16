@@ -10,6 +10,7 @@
 
 #include "rendering/client_weather.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <vector>
 
@@ -189,6 +190,55 @@ TEST_CASE("the ground is asked once a cell and only near the camera", "[weather]
     const size_t before = ground.cachedCells();
     ground.recenter({34.0f, 0.0f});
     CHECK(ground.cachedCells() == before - 1);
+}
+
+TEST_CASE("the cells a frame asks of the world are counted against its budget", "[weather]") {
+    int asked = 0;
+    cw::HeightCache c = flatGround(10.0f, &asked);
+    constexpr float cs = cw::HeightCache::kCellSize;
+    const auto centre = [&](size_t x, size_t y) {
+        return glm::vec3((static_cast<float>(x) + 0.5f) * cs, (static_cast<float>(y) + 0.5f) * cs, 50.0f);
+    };
+    c.startFrame();
+    CHECK(c.filledThisFrame() == 0);
+    for (size_t i = 0; i + 1 < cw::HeightCache::kFillsPerFrame; ++i) c.heightAt(centre(i % 50, i / 50));
+    CHECK(c.filledThisFrame() == cw::HeightCache::kFillsPerFrame - 1);
+    CHECK_FALSE(c.fillBudgetSpent());
+    // A cell already known costs nothing.
+    c.heightAt(centre(0, 0));
+    CHECK_FALSE(c.fillBudgetSpent());
+    c.heightAt(centre(0, 40));
+    CHECK(c.fillBudgetSpent());
+    CHECK(asked == static_cast<int>(cw::HeightCache::kFillsPerFrame));
+    // The next frame starts afresh, its cells still known.
+    c.startFrame();
+    CHECK_FALSE(c.fillBudgetSpent());
+    c.heightAt(centre(0, 0));
+    CHECK(c.filledThisFrame() == 0);
+}
+
+TEST_CASE("slow cells spend the frame's budget by their time", "[weather]") {
+    // A query that takes a millisecond: the budget's two are gone in two or
+    // three cells, long before the count is.
+    cw::HeightCache c;
+    c.setQuery([](float, float, float z) {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
+        while (std::chrono::steady_clock::now() < until) {}
+        return z - 1.0f;
+    });
+    c.recenter({0.0f, 0.0f});
+    c.startFrame();
+    size_t asked = 0;
+    while (!c.fillBudgetSpent() && asked < 100) {
+        c.heightAt({(static_cast<float>(asked) + 0.5f) * cw::HeightCache::kCellSize, 0.5f, 10.0f});
+        ++asked;
+    }
+    CHECK(asked >= 2);
+    CHECK(asked <= 3);
+    CHECK(c.fillSecondsThisFrame() >= cw::HeightCache::kFillSecondsPerFrame);
+    c.startFrame();
+    CHECK_FALSE(c.fillBudgetSpent());
+    CHECK(c.fillSecondsThisFrame() == 0.0);
 }
 
 TEST_CASE("a trace stops at the first surface above it", "[weather]") {

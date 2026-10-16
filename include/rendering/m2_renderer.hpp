@@ -823,6 +823,17 @@ public:
     bool checkCollision(const glm::vec3& from, const glm::vec3& to,
                         glm::vec3& adjustedPos, float playerRadius = 0.5f) const;
     std::optional<float> getFloorHeight(float glX, float glY, float glZ, float* outNormalZ = nullptr) const;
+    /// getFloorHeight for many points in one area, the weather's ground
+    /// cells: the ids of the instances whose collision could hold a floor
+    /// anywhere in the box, gathered once, then each point asked of those
+    /// alone (getFloorHeightAmong). The same answer as getFloorHeight, which
+    /// gathers a 64-yard grid cell's doodads - a thousand or more in a town -
+    /// for every point, as long as nothing has since moved into the box: an
+    /// id removed meanwhile is passed over, one added is not seen.
+    void gatherFloorCandidates(const glm::vec3& boxMin, const glm::vec3& boxMax,
+                               std::vector<uint32_t>& outIds) const;
+    std::optional<float> getFloorHeightAmong(const std::vector<uint32_t>& ids, float glX, float glY,
+                                             float glZ) const;
     /// The triangles a blob shadow is laid on from the doodads in a world
     /// box: their collision meshes' triangles that reach it and face up
     /// (0x007a6630 through 0x007ce960, 0x007e32f0), appended as world-space
@@ -1402,6 +1413,8 @@ private:
 
     void rebuildSpatialIndex();
     void gatherCandidates(const glm::vec3& queryMin, const glm::vec3& queryMax, std::vector<size_t>& outIndices) const;
+    std::optional<float> floorAmong(const std::vector<size_t>& candidates, float glX, float glY, float glZ,
+                                    float* outNormalZ) const;
 
     SpatialGrid spatialGrid;
     std::unordered_map<uint32_t, size_t> instanceIndexById;

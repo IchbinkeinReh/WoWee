@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <random>
 #include <string>
@@ -59,7 +60,10 @@ public:
     /// The surface under a point, as the renderer can find it: the highest
     /// within 200 yards above or below `z`, or `z - 200` (0x007ade10).
     /// Renderer coordinates in and out.
-    void setGroundQuery(client_weather::HeightCache::Query query);
+    /// `frameStart`, when given, is called at the start of each update,
+    /// before the first query: what the query keeps for one frame - the
+    /// doodads gathered for an area - is let go there.
+    void setGroundQuery(client_weather::HeightCache::Query query, std::function<void()> frameStart = {});
 
     void update(const FrameInput& frame);
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
@@ -151,6 +155,7 @@ private:
     std::vector<std::unique_ptr<Packet>> freePackets_;
 
     client_weather::HeightCache ground_;
+    std::function<void()> groundFrameStart_;
     std::vector<client_weather::Mist> mists_;
     float mistAccum_ = 0.0f;
     glm::vec3 cameraRender_{0.0f};

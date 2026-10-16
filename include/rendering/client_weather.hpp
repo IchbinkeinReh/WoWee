@@ -21,6 +21,7 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -216,6 +217,25 @@ public:
 
     void clear() { cells_.clear(); valid_ = false; }
 
+    /// How many cells a frame may ask the world for before the drops wait
+    /// (Weather::spawn). Not the client's: its world query is cheap enough
+    /// that it never needed one. Here a cell asks the terrain, the liquid,
+    /// the buildings and the doodads, and a weather change - which empties
+    /// the cache - asked for thousands in its first frames. A slow frame
+    /// then spawned more drops for its longer step, which asked for more
+    /// cells: seconds of stalls. With this the cache fills over a few frames
+    /// and the drops not made meanwhile are a few in a fade-in.
+    static constexpr size_t kFillsPerFrame = 256;
+    /// And the time they may take: a cell under a roof or among a town's
+    /// doodads costs far more than one on open ground.
+    static constexpr double kFillSecondsPerFrame = 0.002;
+    /// Called at the start of each frame.
+    void startFrame() { filled_ = 0; fillSeconds_ = 0.0; }
+    /// Cells asked of the world since startFrame, and the time they took.
+    size_t filledThisFrame() const { return filled_; }
+    double fillSecondsThisFrame() const { return fillSeconds_; }
+    bool fillBudgetSpent() const { return filled_ >= kFillsPerFrame || fillSeconds_ >= kFillSecondsPerFrame; }
+
     /// The height of the cell a point is in, asked at the point itself
     /// (0x00784be0, 0x00783c10); the largest float outside the window.
     float heightAt(const glm::vec3& p) {
@@ -274,12 +294,17 @@ private:
         const int64_t k = key(cx, cy);
         auto it = cells_.find(k);
         if (it != cells_.end()) return it->second;
+        const auto began = std::chrono::steady_clock::now();
         const float h = query_ ? query_(askAt.x, askAt.y, askAt.z) : askAt.z - 200.0f;
+        fillSeconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
         cells_.emplace(k, h);
+        ++filled_;
         return h;
     }
 
     Query query_;
+    size_t filled_ = 0;
+    double fillSeconds_ = 0.0;
     std::unordered_map<int64_t, float> cells_;
     int centreX_ = 0, centreY_ = 0;
     bool valid_ = false;
