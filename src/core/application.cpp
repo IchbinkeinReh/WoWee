@@ -6628,6 +6628,7 @@ void Application::updateQuestMarkers() {
         game::minimap_tracking::kOther[static_cast<size_t>(tracked)].kind ==
             game::minimap_tracking::Kind::TrivialQuests;
 
+    const rendering::Camera* camera = renderer->getCamera();
     std::vector<rendering::QuestGiverMarkers::Marker> wanted;
     for (const auto& [guid, status] : gameHandler->getNpcQuestStatuses()) {
         const char* model = game::questGiverMarkerModel(status, trivial);
@@ -6641,7 +6642,9 @@ void Application::updateQuestMarkers() {
         }
         const auto frame = entitySpawner_ ? entitySpawner_->questMarkerFrame(guid) : std::nullopt;
         if (!frame) continue;
-        wanted.push_back({guid, model, *frame});
+        // Turned to the camera, whichever way the questgiver faces.
+        wanted.push_back({guid, model,
+                          camera ? rendering::markerFrameFacing(*frame, camera->getPosition()) : *frame});
     }
     markers->update(renderer->getM2Renderer(), assetManager.get(), wanted);
 }

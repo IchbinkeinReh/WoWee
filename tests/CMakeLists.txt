@@ -3130,6 +3130,11 @@ wowee_add_test(test_minimap_indoor
 wowee_add_test(test_portrait_camera
     SOURCES test_portrait_camera.cpp)
 
+# ── test_quest_marker_facing ─────────────────────────────────
+# The questgiver's mark turned to the camera (rendering/quest_giver_markers.hpp).
+wowee_add_test(test_quest_marker_facing
+    SOURCES test_quest_marker_facing.cpp)
+
 # ── test_unit_name_anchor ────────────────────────────────────
 # Where names and plates go, their range and dimming (rendering/unit_name_anchor.hpp).
 wowee_add_test(test_unit_name_anchor
