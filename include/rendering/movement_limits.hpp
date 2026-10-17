@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cmath>
+#include <initializer_list>
+#include <optional>
 #include <glm/glm.hpp>
 
 namespace wowee::rendering::movement {
@@ -186,6 +188,37 @@ inline float floorArbitrationAnchor(bool grounded, float feetZ, float lastGround
 /// ramp a tunnel. Where the player is standing answers it and the gap does not.
 inline bool wmoFloorIsWayIn(float terrainZ, float feetZ, float stepUpBudget) {
     return terrainOutOfReach(terrainZ, feetZ, stepUpBudget);
+}
+
+/// Where a teleport puts the feet: the floor at or just under the position
+/// the server gave, never the ground the player stood on before.
+///
+/// The client takes a teleport's position as it is. MSG_MOVE_TELEPORT_ACK
+/// (0x00732450 -> 0x0072d2d0) queues a move event 0x2c (0x006eca00) whose
+/// handler (0x006ecf80) calls 0x0098ba90: the position, the facing, the fall's
+/// start (+0x4c..+0x54) all become the new one and the fall time is zeroed. No
+/// height of the old ground survives it; the next collision pass looks for the
+/// floor from where the player now is.
+///
+/// Here the old ground did survive (lastGroundZ), and the floor probe reaches
+/// up from it: teleported from the Goldshire inn's hall (55.99) into its
+/// cellar (50.16), the probe started over the hall floor, found it, and put
+/// the player back upstairs. A storey overhead is out of reach of this window,
+/// and so is a heightfield lying over a cellar; only a floor the feet could
+/// step onto from the server's height is taken.
+inline constexpr float kTeleportFloorReachUp = kMaxStepUp + 0.5f;
+/// How far under the server's height a floor is still taken as the landing.
+/// Further down, the server's height is kept and the player falls from it.
+inline constexpr float kTeleportFloorReachDown = 16.0f;
+
+inline std::optional<float> teleportLandingFloor(std::initializer_list<std::optional<float>> floors,
+                                                 float serverZ) {
+    std::optional<float> best;
+    for (const std::optional<float>& h : floors) {
+        if (!h || *h > serverZ + kTeleportFloorReachUp || *h < serverZ - kTeleportFloorReachDown) continue;
+        if (!best || *h > *best) best = h;
+    }
+    return best;
 }
 
 } // namespace wowee::rendering::movement

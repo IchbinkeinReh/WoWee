@@ -263,3 +263,36 @@ TEST_CASE("a flight step that ends in the ground slides along it", "[movement][f
         CHECK(flightStepAgainstGround(holed, from, to, 2.0f) == to);
     }
 }
+
+TEST_CASE("a teleport lands on the floor at or under the server's height") {
+    using wowee::rendering::movement::teleportLandingFloor;
+    using wowee::rendering::movement::kTeleportFloorReachUp;
+    using wowee::rendering::movement::kTeleportFloorReachDown;
+    // The Goldshire inn cellar: .go to z 50.161. Over it are the hall floor
+    // (55.99) and the heightfield (56.45); the cellar floor is at 50.16.
+    SECTION("a storey or heightfield overhead is not the landing") {
+        auto h = teleportLandingFloor({56.45f, 55.99f, std::nullopt}, 50.161f);
+        CHECK_FALSE(h.has_value());
+        h = teleportLandingFloor({56.45f, 50.16f, std::nullopt}, 50.161f);
+        REQUIRE(h.has_value());
+        CHECK(*h == Catch::Approx(50.16f));
+    }
+    SECTION("the floor a little under or over the given height is taken") {
+        auto h = teleportLandingFloor({std::nullopt, 49.8f, std::nullopt}, 50.161f);
+        REQUIRE(h.has_value());
+        CHECK(*h == Catch::Approx(49.8f));
+        h = teleportLandingFloor({51.0f}, 50.161f);
+        REQUIRE(h.has_value());
+        CHECK(*h == Catch::Approx(51.0f));
+        CHECK_FALSE(teleportLandingFloor({50.161f + kTeleportFloorReachUp + 0.01f}, 50.161f));
+    }
+    SECTION("the highest of the floors in reach, so a WMO floor over terrain wins") {
+        auto h = teleportLandingFloor({90.0f, 95.3f, 94.0f}, 95.5f);
+        REQUIRE(h.has_value());
+        CHECK(*h == Catch::Approx(95.3f));
+    }
+    SECTION("nothing within reach below keeps the server's height") {
+        CHECK_FALSE(teleportLandingFloor({100.0f - kTeleportFloorReachDown - 0.5f}, 100.0f));
+        CHECK_FALSE(teleportLandingFloor({std::nullopt, std::nullopt}, 100.0f));
+    }
+}

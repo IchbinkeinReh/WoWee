@@ -3868,12 +3868,23 @@ void CameraController::reset() {
     // position when no WMO floor is found (e.g. WMO not loaded yet in cities).
     // This prevents spawning under WMO cities like Stormwind.
     if (onlineMode) {
-        auto h = evalFloorAt(spawnPos.x, spawnPos.y, spawnPos.z);
-        if (h && std::abs(*h - spawnPos.z) < 16.0f) {
+        // The floor at or just under the server's position, as for any
+        // teleport (movement::teleportLandingFloor). Probing from above the
+        // terrain instead found a storey or heightfield overhead first: in the
+        // Goldshire inn's cellar (50.16) the ground over it (56.45) and the
+        // hall floor (55.99) were both "within 16 yards" and the higher won.
+        const float serverZ = spawnPos.z;
+        const float probeZ = serverZ + movement::kTeleportFloorReachUp;
+        std::optional<float> terrainH, wmoH, m2H;
+        if (terrainManager) terrainH = terrainManager->getHeightAt(spawnPos.x, spawnPos.y);
+        if (wmoRenderer) wmoH = wmoRenderer->getFloorHeight(spawnPos.x, spawnPos.y, probeZ, nullptr, serverZ);
+        if (m2Renderer && !externalFollow_) m2H = m2Renderer->getFloorHeight(spawnPos.x, spawnPos.y, probeZ);
+        if (auto h = movement::teleportLandingFloor({terrainH, wmoH, m2H}, serverZ)) {
             spawnPos.z = *h + 0.05f;
         }
         // else: keep server Z as-is
         lastGroundZ = spawnPos.z - 0.05f;
+        hasCachedFloor_ = false;
 
         camera->setRotation(yaw, pitch);
         glm::vec3 forward3D = camera->getForward();
@@ -4045,7 +4056,13 @@ void CameraController::teleportTo(const glm::vec3& pos) {
     grounded = true;
     swimming = false;
     sitting = false;
+    // The ground the player stood on before is gone with the old position
+    // (0x0098ba90 sets the fall start to the new one): the floor probe now
+    // reaches up from the server's height, not from the old floor
+    // (movement::teleportLandingFloor), and a floor cached at the old place
+    // is not this one.
     lastGroundZ = pos.z;
+    hasCachedFloor_ = false;
     noGroundTimer_ = 0.0f;  // Reset grace period so terrain has time to stream
     autoUnstuckFired_ = false;
     continuousFallTime_ = 0.0f;

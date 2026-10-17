@@ -198,8 +198,8 @@ void WorldEntryCallbackHandler::setupCallbacks() {
             glm::vec3 renderPos = core::coords::canonicalToRender(canonical);
             renderer_.getCharacterPosition() = renderPos;
             if (renderer_.getCameraController()) {
-                auto* ft = renderer_.getCameraController()->getFollowTargetMutable();
-                if (ft) *ft = renderPos;
+                // The old ground goes with the old position (teleportTo).
+                renderer_.getCameraController()->teleportTo(renderPos);
                 renderer_.getCameraController()->clearMovementInputs();
                 renderer_.getCameraController()->suppressMovementFor(1.0f);
                 renderer_.getCameraController()->suspendGravityFor(10.0f);
@@ -240,8 +240,7 @@ void WorldEntryCallbackHandler::setupCallbacks() {
                 // Update position immediately so the player doesn't keep moving at old location
                 renderer_.getCharacterPosition() = renderPos;
                 if (renderer_.getCameraController()) {
-                    auto* ft = renderer_.getCameraController()->getFollowTargetMutable();
-                    if (ft) *ft = renderPos;
+                    renderer_.getCameraController()->teleportTo(renderPos);
                     renderer_.getCameraController()->clearMovementInputs();
                     renderer_.getCameraController()->suppressMovementFor(1.0f);
                     renderer_.getCameraController()->suspendGravityFor(10.0f);
@@ -255,9 +254,15 @@ void WorldEntryCallbackHandler::setupCallbacks() {
             faceServerOrientation();
             // canonical and renderPos already computed above for distance check
             renderer_.getCharacterPosition() = renderPos;
+            // The whole movement state, not just the feet: the client sets the
+            // position, the fall start and fall time from the teleport
+            // (0x006ecf80 -> 0x0098ba90) and keeps nothing of the old ground.
+            // Moving only the follow target left lastGroundZ on the floor the
+            // player came from, and the floor probe, which reaches up from it,
+            // found that floor again: .go into the Goldshire inn's cellar
+            // (50.16) from its hall put the player back on the hall (55.99).
             if (renderer_.getCameraController()) {
-                auto* ft = renderer_.getCameraController()->getFollowTargetMutable();
-                if (ft) *ft = renderPos;
+                renderer_.getCameraController()->teleportTo(renderPos);
             }
             worldEntryMovementGraceTimer_ = 2.0f;
             taxiLandingClampTimer_ = 0.0f;
