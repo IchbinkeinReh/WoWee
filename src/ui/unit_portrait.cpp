@@ -152,6 +152,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
                          (loadedRace_ != race) || (loadedGender_ != gender) ||
                          (loadedEquipHash_ != equipHash) ||
                          (loadedBake_ != pendingBake_) ||
+                         (loadedClass_ != pendingClass_) ||
                          (loadedEmblem_ != pendingEmblem_) ||
                          !loadedCreaturePath_.empty();
     if (changed) {
@@ -162,7 +163,8 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
         const uint8_t hairColor = (appearanceBytes >> 24) & 0xFF;
 
         preview_->setTransparentBackground(true, framing_ == Framing::Face);
-        preview_->setCharacterClass(0);  // not known for another unit here
+        // The class decides a death knight's eye glow (0x004ed900).
+        preview_->setCharacterClass(pendingClass_);
         if (preview_->loadCharacter(static_cast<game::Race>(race),
                                     static_cast<game::Gender>(gender),
                                     skin, face, hairStyle, hairColor,
@@ -190,6 +192,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
         loadedFacialFeatures_ = facialFeatures;
         loadedEquipHash_ = equipHash;
         loadedBake_ = pendingBake_;
+        loadedClass_ = pendingClass_;
         loadedEmblem_ = pendingEmblem_;
     }
 

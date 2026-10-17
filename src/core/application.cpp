@@ -5465,6 +5465,7 @@ void Application::render() {
                                 if (guildId == 0) guildId = self->guildId;
                                 room.model->setGuildEmblem(gameHandler->lookupGuildEmblem(guildId));
                             }
+                            room.model->setUnitClass(static_cast<uint8_t>(self->characterClass));
                             shown = room.model->updatePlayer(
                                 static_cast<uint8_t>(self->race), gender,
                                 self->appearanceBytes, self->facialFeatures, worn,
@@ -5593,6 +5594,7 @@ void Application::render() {
                             inspectModel_.setFraming(ui::UnitPortrait::Framing::FullBody);
                             inspectModel_.setGuildEmblem(
                                 gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(result->guid)));
+                            inspectModel_.setUnitClass(gameHandler->lookupPlayerClass(result->guid));
                             shown = inspectModel_.updatePlayer(
                                 race, gender, appearance, facial, worn,
                                 assetManager.get(), renderer.get(), io.DeltaTime);
@@ -5719,6 +5721,8 @@ void Application::render() {
                         // rather than stripping it.
                         // A real player composites their own skin; no bake.
                         face.portrait->setBakedSkin("");
+                        // Their class: a death knight's eyes glow (0x004ed900).
+                        face.portrait->setUnitClass(gameHandler->lookupPlayerClass(face.guid));
                         // Their guild tabard's design (0x006db510).
                         face.portrait->setGuildEmblem(
                             gameHandler->lookupGuildEmblem(gameHandler->getEntityGuildId(face.guid)));
@@ -5780,6 +5784,7 @@ void Application::render() {
                             face.portrait->setBakedSkin(
                                 entitySpawner_->getHumanoidBakePath(displayId));
                             face.portrait->setGuildEmblem(std::nullopt);
+                            face.portrait->setUnitClass(0);
                             built = face.portrait->updatePlayer(
                                 nRace, nSex, nBytes, nFacial, npcWorn,
                                 assetManager.get(), renderer.get(), io.DeltaTime);

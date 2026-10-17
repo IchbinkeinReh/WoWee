@@ -351,8 +351,18 @@ bool EntityController::extractPlayerAppearance(const FlatFieldMap& fields,
     const uint16_t ufPbytes2 = fieldIndex(UF::PLAYER_BYTES_2);
 
     bool haveBytes0 = readField(ufBytes0, bytes0);
-    bool havePbytes = readField(ufPbytes, pbytes);
-    bool havePbytes2 = readField(ufPbytes2, pbytes2);
+    // A field the table names but the map lacks is zero, not unknown. A
+    // create block carries only the fields that are set - the update mask
+    // skips a zero - over a descriptor the client starts zeroed, so a
+    // character whose skin, face, hair style and hair colour are all 0 never
+    // receives PLAYER_BYTES, and one with no facial hair and no rest state
+    // never receives PLAYER_BYTES_2. Sent to the scan below, each matched the
+    // first field small enough - OBJECT_FIELD_GUID's low word - and a player
+    // with guid 12 was drawn as skin 12: a skin with no face row and no
+    // underwear, so a pink head, and facial hair from the wrong row, so no
+    // eye glow. The scan is for a table that does not know the index at all.
+    bool havePbytes = readField(ufPbytes, pbytes) || ufPbytes != 0xFFFF;
+    bool havePbytes2 = readField(ufPbytes2, pbytes2) || ufPbytes2 != 0xFFFF;
 
     // Heuristic fallback: Turtle can run with unusual build numbers; if the JSON table is missing,
     // try to locate plausible packed fields by scanning.

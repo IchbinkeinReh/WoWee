@@ -91,6 +91,12 @@ public:
     /// of what decides a rebuild, so changing it is enough to apply it.
     void setBakedSkin(const std::string& path) { pendingBake_ = path; }
 
+    /// The class of the unit updatePlayer draws, or 0 where none is known.
+    /// A death knight's eyes glow whatever the face (0x004ed900: component
+    /// +0x20 == 6), so a player's portrait needs it as the world's model does.
+    /// Set before the update that should use it; a change rebuilds.
+    void setUnitClass(uint8_t classId) { pendingClass_ = classId; }
+
     /// The guild's design for a player's guild tabard (0x006db510), or none.
     /// Set before the update that should use it; a change rebuilds.
     void setGuildEmblem(const std::optional<game::GuildEmblem>& emblem) { pendingEmblem_ = emblem; }
@@ -155,6 +161,9 @@ private:
     /// The bake asked for, and the one already on the model.
     std::string pendingBake_;
     std::string loadedBake_;
+    /// The class asked for, and the one the model was built with.
+    uint8_t pendingClass_ = 0;
+    uint8_t loadedClass_ = 0;
     /// The guild design asked for, and the one painted.
     std::optional<game::GuildEmblem> pendingEmblem_;
     std::optional<game::GuildEmblem> loadedEmblem_;
