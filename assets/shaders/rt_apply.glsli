@@ -175,6 +175,24 @@ void main() {
     // shadows, red by the room's light, grey by both; dark blue no baked
     // colour.
     int view = int(pass.tune2.z + 0.5);
+    if (view == 11) {
+        // Where the scene's depth breaks within a pixel: magenta at a
+        // geometric edge (a neighbour another surface, more than 5% nearer
+        // or farther, or the sky), green elsewhere. The mask the flicker
+        // measurement looks at (tools/rt_flicker.py); no lighting.
+        bool edge = false;
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                ivec2 q = clamp(pix + ivec2(x, y), ivec2(0), ivec2(pass.sceneExtent.xy) - 1);
+                float dq = texelFetch(uSceneDepth, q, s).r;
+                float e = dq > 0.0 ? length(rtRelFromDepth((vec2(q) + 0.5) * pass.sceneExtent.zw, dq)) : 1e9;
+                edge = edge || abs(e - expected) > 0.05 * expected;
+            }
+        }
+        outMul = vec4(0.0);
+        outAdd = vec4(edge ? vec3(1.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0), 0.0);
+        return;
+    }
     if (view >= 5 && view <= 10) {
         vec3 c = vec3(0.0);
         if (view == 5) c = r.weight > 0.0 ? vec3(r.sun) : vec3(1.0, 0.0, 0.0);

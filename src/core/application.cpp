@@ -6089,6 +6089,65 @@ void Application::render() {
         }
     }
 
+    // Bursts of consecutive frames, for measuring what changes from one frame
+    // to the next (the traced light's flicker, tools/rt_flicker.py):
+    // WOWEE_BURST_DIR=<folder>, one burst per entry of WOWEE_BURST_VIEWS (the
+    // RT debug view to show, 0 the picture; "0,5,6,7,11" by default), the
+    // first WOWEE_BURST_AT seconds after entering the world (60), then every
+    // WOWEE_BURST_EVERY (12), each WOWEE_BURST_FRAMES frames long (8). The
+    // view is switched three seconds before its burst so the history has
+    // settled. Files: <folder>/<WOWEE_BURST_TAG>_v<view>_<burst>_<frame>.png.
+    if (const char* burstDir = std::getenv("WOWEE_BURST_DIR"); burstDir != nullptr && *burstDir != '\0') {
+        static double burstWorldSince = -1.0;
+        static int burstIndex = 0;
+        static int burstFrame = -1;
+        auto envNumber = [](const char* name, double fallback) {
+            const char* v = std::getenv(name);
+            return (v && *v) ? std::atof(v) : fallback;
+        };
+        std::vector<int> views;
+        {
+            const char* v = std::getenv("WOWEE_BURST_VIEWS");
+            const std::string list = (v && *v) ? v : "0,5,6,7,11";
+            size_t start = 0;
+            while (start <= list.size()) {
+                const size_t comma = list.find(',', start);
+                const std::string item =
+                    list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+                if (!item.empty()) views.push_back(std::atoi(item.c_str()));
+                if (comma == std::string::npos) break;
+                start = comma + 1;
+            }
+        }
+        const bool inWorld = gameHandler && gameHandler->getState() == game::WorldState::IN_WORLD;
+        const double now = core::appTimeSeconds();
+        if (!inWorld) {
+            burstWorldSince = -1.0;
+        } else if (burstWorldSince < 0.0) {
+            burstWorldSince = now;
+        } else if (burstIndex < static_cast<int>(views.size())) {
+            const double at = envNumber("WOWEE_BURST_AT", 60.0) + envNumber("WOWEE_BURST_EVERY", 12.0) * burstIndex;
+            const double since = now - burstWorldSince;
+            if (burstFrame < 0 && since >= at - 3.0) {
+                renderer->setRtDebugView(views[static_cast<size_t>(burstIndex)]);
+            }
+            if (burstFrame < 0 && since >= at) burstFrame = 0;
+            if (burstFrame >= 0) {
+                const char* tag = std::getenv("WOWEE_BURST_TAG");
+                char name[512];
+                std::snprintf(name, sizeof(name), "%s/%s_v%d_%d_%02d.png", burstDir, (tag && *tag) ? tag : "burst",
+                              views[static_cast<size_t>(burstIndex)], burstIndex, burstFrame);
+                renderer->captureScreenshot(name);
+                if (++burstFrame >= static_cast<int>(envNumber("WOWEE_BURST_FRAMES", 8.0))) {
+                    burstFrame = -1;
+                    ++burstIndex;
+                    LOG_WARNING("WOWEE_BURST: burst ", burstIndex, " of ", views.size(), " written");
+                    if (burstIndex >= static_cast<int>(views.size())) renderer->setRtDebugView(0);
+                }
+            }
+        }
+    }
+
     // A recording of the client, from start-up, then done with - the recorder
     // checked end to end without a world to stand in or a key to press:
     // WOWEE_RECORD=<file.mp4>, for WOWEE_RECORD_SECONDS (five by default).
