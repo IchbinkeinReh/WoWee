@@ -1,0 +1,99 @@
+// How a pixel finds its own surface among the traced texels, and how a
+// texel keeps its history, at the edges of what is drawn (included by
+// rt_common.glsli and rt_lighting.glsli; mirrored for the unit tests by
+// rt_upsample.hpp). Pure functions: no bindings.
+//
+// The trace runs at half resolution: one texel per 2x2 block of pixels. At a
+// geometric edge the block holds two surfaces and the texel stands for one of
+// them; the pixels of the other look for theirs among the texels around.
+// What flickered there:
+//
+// * Every texel took its block's nearest surface, so along an edge every
+//   texel was the object in front and the pixels of what lies behind found
+//   none of theirs nearby: lit as without the tracing (no traced shadow, no
+//   occlusion, no point lights), and as the edge moved over the fixed blocks
+//   they switched between that and the traced look. Now the texels take the
+//   nearest and the farthest surface in a fixed checkerboard
+//   (rtTakesFarthest), so both sides of an edge keep texels of their own,
+//   and a pixel that finds none in the 3x3 around it looks one ring farther.
+// * A texel's history was held to the spread of this frame's samples around
+//   it on its own surface. At an edge that is a sample or two, the spread
+//   nothing, and the history was clamped to one frame's single noisy sample:
+//   1 spp of sun, occlusion and a point light picked at random, new every
+//   frame. The fewer samples the clamp has, the wider it now is
+//   (rtClampWindow).
+// * The history was found by a bilinear tap of last frame's texels around
+//   the reprojected point, dropping those of another surface; where none of
+//   the four was this surface - an edge that moved by a pixel - it began
+//   anew. It is now found among the 3x3 texels there, by the pixel each
+//   texel was traced from (rtHistoryWeight), so a still camera finds mostly
+//   the texel's own history and a moving edge the same surface a texel on.
+// * The match was by distance from the camera alone, within 3% + 5 cm. A
+//   floor or a wall seen at a grazing angle changes its distance faster than
+//   that from one texel to the next and found only its own texel, or none.
+//   It is now also by the texel's plane (rtPlaneMatch), and weighed by the
+//   normal (rtNormalWeight) so that across a corner - two faces at the same
+//   distance - each takes its own face's light.
+
+// Which sample of its 2x2 block the texel at `texel` takes: the farthest
+// surface on one colour of a checkerboard fixed to the screen, the nearest on
+// the other. Fixed, so a still picture always traces the same samples.
+bool rtTakesFarthest(ivec2 texel) {
+    return ((texel.x + texel.y) & 1) != 0;
+}
+
+// Whether a sample of reversed depth di (larger is nearer, 0 the sky) and
+// validity vi replaces the one kept so far (depth d, validity valid; found
+// false while none). The tracing's own surfaces first, then by distance.
+bool rtBlockPrefers(bool farthest, bool found, float d, bool valid, float di, bool vi) {
+    if (!found) return true;
+    if (vi != valid) return vi;
+    return farthest ? di < d : di > d;
+}
+
+// How well a texel at distance texelDist from the camera is the surface of
+// a pixel at `expected`: 1 the same distance, falling off past 3% + 5 cm.
+float rtDistanceMatch(float texelDist, float expected) {
+    if (texelDist <= 0.0) return 0.0;
+    float e = (texelDist - expected) / (0.03 * expected + 0.05);
+    return exp(-e * e);
+}
+
+// The same by the texel's plane: how far the pixel's point (pixelRel, both
+// relative to the camera) lies off the plane through the texel's point
+// with its normal; within 1% of the distance + 3 cm. A grazing floor keeps
+// its plane where its distance runs away. Not past a quarter of the
+// distance along it.
+float rtPlaneMatch(vec3 pixelRel, vec3 texelRel, vec3 texelNormal, float expected, float texelDist) {
+    if (texelDist <= 0.0) return 0.0;
+    float off = abs(dot(pixelRel - texelRel, texelNormal));
+    float e = off / (0.01 * expected + 0.03);
+    float along = abs(texelDist - expected) / max(expected, 1e-3);
+    return exp(-e * e) * (1.0 - smoothstep(0.15, 0.3, along));
+}
+
+// How much a texel of normal nt counts for a pixel of normal np, both
+// rebuilt from the depth: fully within some 30 degrees, a twentieth across a
+// corner. Never nothing, as the normals of a thin pole or a leaf's edge are
+// rebuilt from what lies beside them and may be anything.
+float rtNormalWeight(vec3 np, vec3 nt) {
+    return 0.05 + 0.95 * smoothstep(0.5, 0.85, dot(np, nt));
+}
+
+// How far this frame's samples hold a texel's history: around their mean,
+// 1.5 times their spread and 0.2 more, widened where there are few of them
+// (an edge, a pole), where the spread says nothing; at one sample by 0.6.
+vec3 rtClampWindow(vec3 sigma, float count) {
+    return 1.5 * sigma + 0.2 + 0.6 * clamp((4.0 - count) / 3.0, 0.0, 1.0);
+}
+
+// How much last frame's texel, traced from scene pixel `traced`, counts for
+// the history of a point reprojected to scene pixel `reprojected` (blockSize
+// pixels a texel): 1 where they are the same pixel, a quarter at half a
+// texel, nothing at a texel; a thousandth beyond, so that a texel of the same
+// surface anywhere in the 3x3 still carries the history when nothing nearer
+// does.
+float rtHistoryWeight(vec2 traced, vec2 reprojected, float blockSize) {
+    float t = max(1.0 - length(traced - reprojected) / blockSize, 0.0);
+    return t * t + 1e-3;
+}

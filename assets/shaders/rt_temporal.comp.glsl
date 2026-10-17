@@ -59,26 +59,32 @@ void main() {
     if (pass.misc.y > 0.5 && clip.w > 0.0) {
         vec2 puv = clip.xy / clip.w * 0.5 + 0.5;
         if (all(greaterThanEqual(puv, vec2(0.0))) && all(lessThan(puv, vec2(1.0)))) {
-            // Bilinear by hand, dropping the taps that were another surface.
-            vec2 f = puv * pass.extent.xy - 0.5;
-            ivec2 base = ivec2(floor(f));
-            vec2 w = fract(f);
+            // Last frame's texels of this surface among the 3x3 around the
+            // reprojected point, each by how near the pixel it was traced
+            // from lies to it (rtHistoryWeight): a still camera finds mostly
+            // its own texel's history, and where an edge moved a pixel and the
+            // nearest texels are another surface now, one of this surface a
+            // texel on still carries it.
+            vec2 reprojected = puv * pass.sceneExtent.xy;
+            float bs = float(rtBlockSize());
+            ivec2 center = ivec2(floor(reprojected / bs));
             float expected = length(p - pass.prevCameraPos.xyz);
             float wsum = 0.0;
-            for (int i = 0; i < 4; ++i) {
-                ivec2 o = ivec2(i & 1, i >> 1);
-                ivec2 q = clamp(base + o, ivec2(0), ivec2(pass.extent.xy) - 1);
-                vec4 pg = texelFetch(uGbufPrev, q, 0);
-                float pd = rtGbufDist(pg);
-                bool same = pd > 0.0 && abs(pd - expected) < 0.05 * expected + 0.1 &&
-                            dot(rtGbufNormal(pg), n) > 0.8 && rtGbufValid(pg) == valid;
-                float bw = (o.x == 1 ? w.x : 1.0 - w.x) * (o.y == 1 ? w.y : 1.0 - w.y);
-                if (same && bw > 0.0) {
-                    hist += texelFetch(uHistPrev, q, 0) * bw;
-                    wsum += bw;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    ivec2 q = center + ivec2(x, y);
+                    if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, ivec2(pass.extent.xy)))) continue;
+                    vec4 pg = texelFetch(uGbufPrev, q, 0);
+                    float pd = rtGbufDist(pg);
+                    bool same = pd > 0.0 && abs(pd - expected) < 0.05 * expected + 0.1 &&
+                                dot(rtGbufNormal(pg), n) > 0.8 && rtGbufValid(pg) == valid;
+                    if (!same) continue;
+                    float hw = rtHistoryWeight(vec2(rtGbufPixel(pg, q)) + 0.5, reprojected, bs);
+                    hist += texelFetch(uHistPrev, q, 0) * hw;
+                    wsum += hw;
                 }
             }
-            if (wsum > 0.05) {
+            if (wsum > 0.0) {
                 hist /= wsum;
                 len = hist.a;
             }
@@ -86,30 +92,36 @@ void main() {
     }
 
     if (len > 0.0) {
-        // This frame's samples over a 5x5 block (every other texel), on this
-        // surface: their mean and spread. One sample a pixel is noisy - a
-        // half-lit edge is a mix of 0s and 1s - so the window is the mean
-        // plus one and a half standard deviations and a fifth on either side.
+        // This frame's samples over a 5x5 block (every other texel, and the
+        // four next to it), on this surface: their mean and spread. One
+        // sample a pixel is noisy - a half-lit edge is a mix of 0s and 1s -
+        // so the window is the mean plus one and a half standard deviations
+        // and a fifth on either side, and wider where there are few samples
+        // of this surface: at an edge, on a pole, the spread of one or two
+        // says nothing, and the history was held to one frame's noise
+        // (rtClampWindow).
         vec3 m1 = vec3(0.0), m2 = vec3(0.0);
         float count = 0.0;
-        for (int y = -2; y <= 2; y += 2) {
-            for (int x = -2; x <= 2; x += 2) {
-                ivec2 q = clamp(px + ivec2(x, y), ivec2(0), ivec2(pass.extent.xy) - 1);
-                vec4 qg = texelFetch(uGbufCur, q, 0);
-                float qd = rtGbufDist(qg);
-                bool same = (x == 0 && y == 0) ||
-                            (qd > 0.0 && abs(qd - dist) < 0.05 * dist + 0.1 && dot(rtGbufNormal(qg), n) > 0.8 &&
-                             rtGbufValid(qg) == valid);
-                if (!same) continue;
-                vec3 v = texelFetch(uRaw, q, 0).rgb;
-                m1 += v;
-                m2 += v * v;
-                count += 1.0;
-            }
+        const ivec2 taps[13] = ivec2[13](
+            ivec2(0, 0), ivec2(-2, -2), ivec2(0, -2), ivec2(2, -2), ivec2(-2, 0), ivec2(2, 0),
+            ivec2(-2, 2), ivec2(0, 2), ivec2(2, 2), ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
+        for (int i = 0; i < 13; ++i) {
+            ivec2 q = px + taps[i];
+            if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, ivec2(pass.extent.xy)))) continue;
+            vec4 qg = texelFetch(uGbufCur, q, 0);
+            float qd = rtGbufDist(qg);
+            bool same = i == 0 ||
+                        (qd > 0.0 && abs(qd - dist) < 0.05 * dist + 0.1 && dot(rtGbufNormal(qg), n) > 0.8 &&
+                         rtGbufValid(qg) == valid);
+            if (!same) continue;
+            vec3 v = texelFetch(uRaw, q, 0).rgb;
+            m1 += v;
+            m2 += v * v;
+            count += 1.0;
         }
         vec3 mean = m1 / count;
         vec3 sigma = sqrt(max(m2 / count - mean * mean, vec3(0.0)));
-        vec3 window = 1.5 * sigma + 0.2;
+        vec3 window = rtClampWindow(sigma, count);
         vec3 held = clamp(hist.rgb, mean - window, mean + window);
         vec3 moved = abs(held - hist.rgb);
         len *= clamp(1.0 - 3.0 * max(moved.r, max(moved.g, moved.b)), 0.1, 1.0);

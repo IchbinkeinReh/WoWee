@@ -48,6 +48,7 @@
 
 #include "rt_gi.glsli"
 #include "rt_gbuffer.glsli"
+#include "rt_upsample.glsli"
 
 // A pipeline built for the G-buffer pass (PipelineBuilder::setGbufferOutputs).
 layout(constant_id = 0) const bool kGbuffer = false;
@@ -183,28 +184,34 @@ RtLight rtLightAt(vec3 worldPos) {
     vec2 f = uv * vec2(size) - 0.5;
     ivec2 center = ivec2(floor(f + 0.5));
     float expected = length(worldPos - viewPos.xyz);
-    float tolerance = 0.03 * expected + 0.05;
 
     float wsum = 0.0;
     float best = 0.0;
     vec2 sunAo = vec2(0.0);
     vec4 point = vec4(0.0);
     float bakedDark = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            ivec2 q = clamp(center + ivec2(x, y), ivec2(0), size - 1);
-            vec4 l = texelFetch(uRtLight, q, 0);
-            float e = (l.a - expected) / tolerance;
-            float match = l.a > 0.0 ? exp(-e * e) : 0.0;
-            vec2 o = vec2(q) - f;
-            float w = match * exp(-dot(o, o));
-            if (w <= 1e-4) continue;
-            best = max(best, match);
-            wsum += w;
-            rtGather(q, l, w, sunAo, point, bakedDark);
+    // The 3x3 around it, and where none of those is its own, the ring
+    // beyond (rt_upsample.glsli): along an edge the texels take the surface
+    // in front and the one behind in turn, so its own may be two away.
+    for (int ring = 1; ring <= 2; ++ring) {
+        if (ring == 2 && best >= 0.6) break;
+        for (int y = -ring; y <= ring; ++y) {
+            for (int x = -ring; x <= ring; ++x) {
+                if (max(abs(x), abs(y)) != ring && ring == 2) continue;
+                ivec2 q = center + ivec2(x, y);
+                if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+                vec4 l = texelFetch(uRtLight, q, 0);
+                float match = rtDistanceMatch(l.a, expected);
+                vec2 o = vec2(q) - f;
+                float w = match * exp(-dot(o, o));
+                if (w <= 1e-5) continue;
+                best = max(best, match);
+                wsum += w;
+                rtGather(q, l, w, sunAo, point, bakedDark);
+            }
         }
     }
-    if (wsum <= 1e-4) return rtLightDebug(r);
+    if (wsum <= 1e-5) return rtLightDebug(r);
     return rtLightDebug(rtLightFrom(smoothstep(0.1, 0.6, best), wsum, sunAo, point, bakedDark));
 }
 

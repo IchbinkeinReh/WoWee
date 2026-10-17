@@ -172,7 +172,9 @@ temporal/filter work, and four times the trace images' memory.
 
 `rt_prepare` builds the half-resolution trace G-buffer from the depth and GB0:
 per 2x2 block the nearest sample among the valid RT surfaces (any sample if
-none, so terrain under grass still gets traced), the geometric normal rebuilt
+none, so terrain under grass still gets traced) - or the farthest, on every
+other texel in a checkerboard fixed to the screen (`rtTakesFarthest`, see
+"Edges at half resolution" below) - the geometric normal rebuilt
 from depth as today (robust ray origins), the distance, which sub-pixel, and
 whether it was valid. `rt_trace` uses the G-buffer's shading normal for the
 point lights' N.L, turned to the side of the geometric face and replaced by
@@ -184,9 +186,12 @@ zero, and black discs and patches in view 6 turned with the camera. Outputs as t
 (point light unshadowed, baked part), now for the current frame.
 
 `rt_temporal` reprojects each texel's own world position with the previous
-view-projection (camera motion vectors from depth, the standard way), rejects
-by distance and normal against the previous trace G-buffer, then clamps to the
-current neighbourhood's spread. Moving units get no special path: their history
+view-projection (camera motion vectors from depth, the standard way), takes
+the history of last frame's texels of the same surface (distance and normal
+against the previous trace G-buffer) among the 3x3 there, weighed by how near
+the pixel each was traced from lies (`rtHistoryWeight`), then clamps to the
+current neighbourhood's spread, the wider the fewer samples of the surface
+there are (`rtClampWindow`). Moving units get no special path: their history
 is rejected where it does not match and clamped where it does; the unit-hit
 shortening stays. No resets on cuts or rooms are needed: what does not match is
 rejected.
@@ -198,9 +203,12 @@ dual-source blending (`src1 = F`, `src0 = A`), so `C0` is never copied. Per
 pixel (per sample under MSAA, sample-rate shading):
 
 * decode the G-buffer; invalid -> F = 1, A = 0;
-* find the traced texels of this surface in the 3x3 around it by distance and
-  normal (joint bilateral), giving the weight `w` (1 when found, as today's
-  `rt.weight`); no borrowing - a pixel that finds nothing of itself falls back
+* find the traced texels of this surface in the 3x3 around it (joint
+  bilateral, `rt_upsample.glsli`): by distance or by the texel's plane, weighed
+  by the normals (the pixel's rebuilt from the depth as `rt_prepare` rebuilds
+  the texels') and by how far the pixel each texel was traced from lies; the
+  ring beyond where none in the 3x3 is its own. That gives the weight `w` (1
+  when found, as today's `rt.weight`); no borrowing - a pixel that finds nothing of itself falls back
   to the non-RT look exactly as today (`0.7 + 0.3*shadow`, no occlusion, no
   point lights);
 * evaluate the formula above with the Debug Graphics strengths
@@ -209,6 +217,9 @@ pixel (per sample under MSAA, sample-rate shading):
 Debug views 5 (sun), 6 (point lights) and 7 (AO) are written here for opaque
 surfaces and in the forward shader for blended ones. 8 and 9 are replaced:
 8 = temporal history length, 9 = upsample match (green own surface, red none).
+
+View 11 marks where the scene's depth breaks (magenta at a geometric edge,
+green elsewhere), the mask `tools/rt_flicker.py` measures the flicker at.
 
 Views 1-4 (the probes) are drawn by the surface shaders, and only by the
 surfaces that read the probes (`rtGiRatio`): those lit by the zone's light.
@@ -219,6 +230,47 @@ indoors meant an object on the outdoor path: game objects (the inn's chairs
 and chests) that had found no floor because they were placed before the
 building loaded, fixed by asking again when buildings load
 (`WMORenderer::instanceGeneration`).
+
+## Edges at half resolution
+
+At half resolution the traced light flickered along the edges of what is
+drawn - foliage, fences, a building's corners, units against the sky - while
+tracing every pixel mostly did not. Four causes, each fixed in
+`rt_upsample.glsli` (mirrored in `rt_upsample.hpp`, `test_rt_upsample`):
+
+* `rt_prepare` took every block's nearest surface, so along an edge every
+  texel was the object in front, and the pixels of what lies behind found
+  none of theirs in the 3x3: lit as without the tracing. As the edge moved
+  over the fixed blocks they switched between that and the traced look. The
+  texels now take the nearest and the farthest in a fixed checkerboard, and a
+  pixel that finds none of its own in the 3x3 looks one ring farther.
+* `rt_temporal` clamped a texel's history to the spread of this frame's
+  samples of its surface around it. At an edge that is one sample or two, the
+  spread zero, and the history was held to a single frame's 1-spp noise (the
+  sun's penumbra, the occlusion ray, the randomly picked point light): the
+  edge texels showed raw noise every frame. The window now widens as the
+  samples get fewer (0.6 more at one sample), and the moments take the four
+  next texels besides the sparse 5x5.
+* The history came from a bilinear tap of last frame's texels around the
+  reprojected point, dropping those of another surface, and began anew where
+  none of the four was this surface. It now comes from the 3x3 there, by the
+  pixel each texel was traced from: still, a texel finds mostly its own
+  history; an edge that moved a pixel still finds its surface a texel on.
+* The apply pass matched by distance from the camera alone (3% + 5 cm). A
+  floor or wall at a grazing angle changes distance faster than that between
+  texels; it now matches by the texel's plane too (1% + 3 cm off it), and the
+  normals keep each face of a corner to its own light.
+
+The blended surfaces' `rtLightAt` has no trace G-buffer to read (normals,
+traced pixel); it gets the checkerboard and the second ring, by distance.
+
+Extra work per pixel, half resolution: the apply pass reads 4 more depth
+samples (the normal) and, per texel of the 3x3, the trace G-buffer texel and
+one matrix-vector product (the texel's point); the 16 texels of the second
+ring only where the 3x3 found nothing (edges). The temporal pass reads 9
+instead of 4 history candidates (G-buffer + history each) and 13 instead of 9
+neighbours for the clamp, per trace texel. `rtLightAt` reads the ring of 16
+only where its 3x3 found nothing. `rt_prepare` is unchanged in cost.
 
 ## Transparent and blended geometry
 
@@ -556,7 +608,9 @@ BVH, the probe GI, the CameraZoom Lua functions.
   `sampleRateShading`.
 * Foliage and other alpha-tested thin geometry often finds no traced texel
   within the 3x3 match at half resolution (red in debug views 5 and 7) and so
-  shows the non-RT look there. The old path borrowed a neighbour's result for
+  shows the non-RT look there. The checkerboard and the second ring help
+  where the background showed through (see "Edges at half resolution"); a
+  single pixel of a leaf can still be lost on the checkerboard's far texels. The old path borrowed a neighbour's result for
   those pixels; the new one does not, so leaves can look flatter than before.
   Tracing at full resolution removes this at four times the trace's cost.
 * Every opaque pipeline gets a G-buffer twin (specialization constant), which

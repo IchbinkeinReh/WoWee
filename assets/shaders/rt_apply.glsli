@@ -11,10 +11,14 @@
 // so the colour is never copied. Mirrored for the unit tests by
 // rt_gbuffer_pack.hpp's apply().
 //
-// The surface is found by its distance from the camera among the 3x3 traced
-// texels around it, as rt_lighting.glsli's rtLightAt finds a blended one's.
-// Where none is its own - a thin pole the half resolution missed - it is lit
-// as without the tracing, as a surface with no result always was.
+// The surface is found among the 3x3 traced texels around it (joint
+// bilateral, rt_upsample.glsli): by its distance from the camera or the
+// texel's plane, weighed by the normal and by how far the pixel each texel
+// was traced from lies from this one; where none of them is its own, one
+// ring farther. rt_lighting.glsli's rtLightAt finds a blended one's the same
+// way by distance alone. Where none is its own - a thin pole the half
+// resolution missed - it is lit as without the tracing, as a surface with no
+// result always was.
 
 #include "rt_common.glsli"
 
@@ -27,6 +31,9 @@ layout(set = 0, binding = 1) uniform sampler2D uSceneDepth;
 layout(set = 0, binding = 13) uniform sampler2D uSceneGbuf0;
 layout(set = 0, binding = 14) uniform sampler2D uSceneGbuf1;
 #endif
+// The tracer's G-buffer: the normal each texel was traced with, and from
+// which pixel (rt_prepare).
+layout(set = 0, binding = 3) uniform sampler2D uTraceGbuf;
 // The filtered result: sun, occlusion, point lights' visibility, distance.
 layout(set = 0, binding = 9) uniform sampler2D uLight;
 // The point lights unshadowed; a = the baked lights' part.
@@ -49,48 +56,101 @@ struct Traced {
     float best;     // how well the best texel matched (debug view 9)
 };
 
-Traced findTraced(vec2 uv, float expected) {
+// The running sums of the texels found so far.
+struct Found {
+    float wsum;
+    float best;
+    vec2 sunAo;
+    vec4 point;
+    float bakedDark;
+};
+
+// One traced texel q into the sums, by how well it is the surface of the
+// pixel at scene position pixf (pixel units), whose point relative to the
+// camera is rel, at distance expected, with geometric normal np.
+void gatherTexel(ivec2 q, vec2 pixf, vec3 rel, vec3 np, float expected, inout Found acc) {
+    vec4 l = texelFetch(uLight, q, 0);
+    if (l.a <= 0.0) return;
+    vec4 tg = texelFetch(uTraceGbuf, q, 0);
+    vec2 tp = vec2(rtGbufPixel(tg, q)) + 0.5;  // the scene pixel it was traced from
+    vec3 trel = normalize(rtRelFromDepth(tp * pass.sceneExtent.zw, 0.5)) * l.a;
+    vec3 tn = rtGbufNormal(tg);
+    float match = max(rtDistanceMatch(l.a, expected), rtPlaneMatch(rel, trel, tn, expected, l.a));
+    vec2 o = (tp - pixf) / float(rtBlockSize());
+    float w = match * exp(-dot(o, o)) * rtNormalWeight(np, tn);
+    if (w <= 1e-5) return;
+    acc.best = max(acc.best, match);
+    acc.wsum += w;
+    vec4 p = imageLoad(uPoint, q);
+    // l.b below 0: a light the ground or a building stopped (rtGather).
+    acc.point += p * (max(mix(1.0, l.b, pass.tune2.y), 0.0) * w);
+    acc.bakedDark += rtBakedDarkness(p.a, clamp(l.b, 0.0, 1.0)) * w;
+    acc.sunAo += l.rg * w;
+}
+
+Traced findTraced(vec2 pixf, vec3 rel, vec3 np, float expected) {
     Traced r = Traced(0.0, 1.0, 1.0, vec3(0.0), vec3(0.0), 1.0, 1.0, 0.0);
     ivec2 size = ivec2(pass.extent.xy);
-    vec2 f = uv * pass.extent.xy - 0.5;
+    vec2 f = pixf / float(rtBlockSize()) - 0.5;
     ivec2 center = ivec2(floor(f + 0.5));
-    float tolerance = 0.03 * expected + 0.05;
-    float pointShadow = pass.tune2.y;
-    float wsum = 0.0;
-    float best = 0.0;
-    vec2 sunAo = vec2(0.0);
-    vec4 point = vec4(0.0);
-    float bakedDark = 0.0;
+    Found acc = Found(0.0, 0.0, vec2(0.0), vec4(0.0), 0.0);
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
-            ivec2 q = clamp(center + ivec2(x, y), ivec2(0), size - 1);
-            vec4 l = texelFetch(uLight, q, 0);
-            float e = (l.a - expected) / tolerance;
-            float match = l.a > 0.0 ? exp(-e * e) : 0.0;
-            vec2 o = vec2(q) - f;
-            float w = match * exp(-dot(o, o));
-            if (w <= 1e-4) continue;
-            best = max(best, match);
-            wsum += w;
-            vec4 p = imageLoad(uPoint, q);
-            // l.b below 0: a light the ground or a building stopped (rtGather).
-            point += p * (max(mix(1.0, l.b, pointShadow), 0.0) * w);
-            bakedDark += rtBakedDarkness(p.a, clamp(l.b, 0.0, 1.0)) * w;
-            sunAo += l.rg * w;
+            ivec2 q = center + ivec2(x, y);
+            if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+            gatherTexel(q, pixf, rel, np, expected, acc);
         }
     }
-    r.best = best;
-    if (wsum <= 1e-4) return r;
-    r.weight = smoothstep(0.1, 0.6, best);
-    r.sun = sunAo.x / wsum;
-    r.ao = sunAo.y / wsum;
-    r.point = point.rgb / wsum * (r.weight * pass.tune.w);
+    // Nothing of its own close by - one side of an edge whose texels the
+    // other side took, a grazing floor: the ring beyond, whose texels count
+    // for little beside any nearer one.
+    if (acc.best < 0.6) {
+        for (int y = -2; y <= 2; ++y) {
+            for (int x = -2; x <= 2; ++x) {
+                if (abs(x) < 2 && abs(y) < 2) continue;
+                ivec2 q = center + ivec2(x, y);
+                if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+                gatherTexel(q, pixf, rel, np, expected, acc);
+            }
+        }
+    }
+    float wsum = acc.wsum;
+    r.best = acc.best;
+    if (wsum <= 1e-5) return r;
+    r.weight = smoothstep(0.1, 0.6, acc.best);
+    r.sun = acc.sunAo.x / wsum;
+    r.ao = acc.sunAo.y / wsum;
+    r.point = acc.point.rgb / wsum * (r.weight * pass.tune.w);
     // The other lights' part: the whole less the baked lights' share of it.
-    float total = max(point.r, max(point.g, point.b));
-    r.pointOwn = r.point * (total > 1e-4 ? clamp(1.0 - point.a / total, 0.0, 1.0) : 1.0);
-    r.bakedShade = 1.0 - pass.tune2.x * r.weight * bakedDark / wsum;
-    r.interiorShade = rtInteriorShade(point.rgb / wsum, r.weight, pass.tune3.x, pass.tune3.y);
+    float total = max(acc.point.r, max(acc.point.g, acc.point.b));
+    r.pointOwn = r.point * (total > 1e-4 ? clamp(1.0 - acc.point.a / total, 0.0, 1.0) : 1.0);
+    r.bakedShade = 1.0 - pass.tune2.x * r.weight * acc.bakedDark / wsum;
+    r.interiorShade = rtInteriorShade(acc.point.rgb / wsum, r.weight, pass.tune3.x, pass.tune3.y);
     return r;
+}
+
+// The pixel's geometric normal, rebuilt from the depth as rt_prepare
+// rebuilds the texels' (on each axis the neighbour that continues the slope),
+// so the two compare like with like.
+float depthAt(ivec2 p, int s) {
+    p = clamp(p, ivec2(0), ivec2(pass.sceneExtent.xy) - 1);
+    return texelFetch(uSceneDepth, p, s).r;
+}
+
+vec3 relAt(ivec2 p, float depth) {
+    return rtRelFromDepth((vec2(p) + 0.5) * pass.sceneExtent.zw, depth);
+}
+
+vec3 geometricNormal(ivec2 pix, int s, float d, vec3 p) {
+    float dl = depthAt(pix + ivec2(-1, 0), s), dr = depthAt(pix + ivec2(1, 0), s);
+    float dd = depthAt(pix + ivec2(0, -1), s), du = depthAt(pix + ivec2(0, 1), s);
+    vec3 dx = abs(dr - d) < abs(d - dl) ? relAt(pix + ivec2(1, 0), dr) - p : p - relAt(pix + ivec2(-1, 0), dl);
+    vec3 dy = abs(du - d) < abs(d - dd) ? relAt(pix + ivec2(0, 1), du) - p : p - relAt(pix + ivec2(0, -1), dd);
+    vec3 n = cross(dx, dy);
+    // The sky on both sides: no slope to take; facing the camera.
+    if (!(dot(n, n) > 1e-20) || any(isnan(n)) || any(isinf(n))) return -normalize(p);
+    n = normalize(n);
+    return dot(n, p) > 0.0 ? -n : n;
 }
 
 // rtEdgeOnLift (rt_lighting.glsli).
@@ -113,8 +173,9 @@ void main() {
     RtGbuf g = rtGbufUnpack(gb0, texelFetch(uSceneGbuf1, pix, s));
 
     vec2 uv = (vec2(pix) + 0.5) * pass.sceneExtent.zw;
-    float expected = length(rtRelFromDepth(uv, depth));
-    Traced r = findTraced(uv, expected);
+    vec3 rel = rtRelFromDepth(uv, depth);
+    float expected = length(rel);
+    Traced r = findTraced(vec2(pix) + 0.5, rel, geometricNormal(pix, s, depth, rel), expected);
 
     // The sun's shadow scale over the one C0 was drawn with: the shadow
     // variants' (1 - k) + k x the light let through, the lesser of the map's

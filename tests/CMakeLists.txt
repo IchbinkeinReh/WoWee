@@ -1291,6 +1291,12 @@ wowee_add_test(test_rt_reconstruct
 wowee_add_test(test_rt_gbuffer
     SOURCES test_rt_gbuffer.cpp)
 
+# ── test_rt_upsample ─────────────────────────────────────────
+# Header-only: how a pixel finds its own surface among the half-resolution
+# traced texels at an edge, and how a texel keeps its history there.
+wowee_add_test(test_rt_upsample
+    SOURCES test_rt_upsample.cpp)
+
 # ── test_rt_light_storey ─────────────────────────────────────
 # Header-only: the storey a building's light shades - from the floor below it
 # to the face above it - and which baked colours it leaves as painted.

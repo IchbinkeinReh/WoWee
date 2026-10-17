@@ -6,6 +6,7 @@
 // Must match RtPassData in rt_lighting.cpp.
 
 #include "rt_gbuffer.glsli"
+#include "rt_upsample.glsli"
 
 layout(set = 0, binding = 0) uniform RtPassData {
     mat4 invViewProj;    // this frame: NDC -> world
@@ -120,9 +121,9 @@ vec3 rtRelFromDepth(vec2 uv, float depth) {
 // (rebuilt from the depth), distance to the camera in z (0 for sky), and in
 // w which pixel of the 2x2 scene block it was taken from (0-3, x fastest),
 // plus 4 where that pixel is a surface of the tracing's (RT_GB_VALID in the
-// opaque G-buffer). The nearest such surface in the block is kept, so the
-// edge of an object in front of the sky or a far wall is never lost to the
-// half resolution.
+// opaque G-buffer). The nearest such surface in the block is kept, or the
+// farthest on every other texel (rtTakesFarthest), so along an edge both
+// sides have texels of their own; a surface is always taken over the sky.
 vec3 rtGbufNormal(vec4 g) { return rtOctDecode(g.xy); }
 float rtGbufDist(vec4 g) { return g.z; }
 int rtGbufSub(vec4 g) { return int(g.w + 0.5) & 3; }
