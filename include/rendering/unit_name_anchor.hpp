@@ -57,6 +57,27 @@ inline float nameSizingDepth(float clipW) {
     return clipW > kNameNearestSizingDepth ? clipW : kNameNearestSizingDepth;
 }
 
+/// The pixel size a name's glyphs are rasterized at, for a name `px` pixels
+/// tall on screen: the step at or just over it on a ladder of quarter octaves from 4
+/// (4, 5, 6, 7, 8, 10, 11, 13, 16, 19, 23, 27, 32, 38, 45...), the text then
+/// laid out at that size and scaled by px / bake into the world.
+///
+/// A name's size on screen follows its distance continuously, and the
+/// interface's font atlas bakes every whole pixel size it is asked for as
+/// glyphs of their own. Asked for the size itself, a crowd walked through
+/// baked new sizes every few frames, filled the atlas and had it repacked into
+/// a new texture about twice a second - while names already laid out on the
+/// old packing were drawn from the new one. On the ladder the sizes are few
+/// and stay baked; the client's world string batch, too, draws one font
+/// scaled into the world rather than one per distance.
+inline float nameBakeSize(float px) {
+    constexpr float kSmallest = 4.0f;
+    if (!(px > kSmallest)) return kSmallest;
+    const float step = glm::ceil(4.0f * glm::log2(px / kSmallest) - 1e-4f);
+    // Whole pixels, as the atlas bakes them.
+    return glm::round(kSmallest * glm::exp2(step * 0.25f));
+}
+
 /// A point of text laid out on screen, as its offset in that plane through
 /// the anchor: yards right and up of it. The screen's y runs down and the
 /// view's up, so the second is turned over. Added to the anchor in view

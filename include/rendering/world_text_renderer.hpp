@@ -22,7 +22,7 @@
 #include <cstdint>
 #include <vector>
 
-struct ImFontAtlas;
+struct ImTextureData;
 
 namespace wowee::rendering {
 
@@ -47,11 +47,20 @@ public:
     void shutdown();
     void recreatePipelines();
 
-    /// The text there is now, as triangles, and the font atlas whose texture
-    /// it samples. Replaces what was there. The atlas's texture is looked up
-    /// when the text is drawn: the interface replaces it when the atlas grows.
-    void setText(std::vector<Vertex> triangles, const ImFontAtlas* atlas);
-    void clear() { triangles_.clear(); }
+    /// The text there is now, as triangles, and the font texture their
+    /// glyphs were laid out on. Replaces what was there.
+    ///
+    /// The texture, not the atlas: the interface's atlas is repacked into a
+    /// new texture when it fills, every glyph moved, and the triangles hold
+    /// the old packing's coordinates. Drawn from the atlas's texture of the
+    /// moment, they read garbage for the frame. The texture's descriptor is
+    /// read when the text is drawn - one made this frame has none until the
+    /// interface has drawn.
+    void setText(std::vector<Vertex> triangles, ImTextureData* texture);
+    void clear() {
+        triangles_.clear();
+        texture_ = nullptr;
+    }
 
     /// Drawn into the scene's pass, after its geometry, once: the text is
     /// handed over again for every frame it should stand in.
@@ -73,7 +82,8 @@ private:
     void* vertexMapped_[kFrames] = {};
 
     std::vector<Vertex> triangles_;
-    const ImFontAtlas* atlas_ = nullptr;
+    ImTextureData* texture_ = nullptr;
+    int textFrame_ = -1;  ///< the interface frame the text was laid out in
 };
 
 }  // namespace wowee::rendering

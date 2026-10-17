@@ -6,6 +6,9 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <cmath>
+#include <set>
+
 namespace una = wowee::rendering::unit_name_anchor;
 
 TEST_CASE("the name's attachments are PlayerName and PlayerNameMounted", "[unit_name_anchor]") {
@@ -89,4 +92,26 @@ TEST_CASE("a name up against the camera keeps the size it has a few yards off", 
     const float atNearClip = 0.2f * una::pixelsPerYard(1.96f, 1080.0f, una::nameSizingDepth(0.2f));
     CHECK(atNearClip < 50.0f);
     CHECK(atNearClip == Catch::Approx(0.2f * una::pixelsPerYard(1.96f, 1080.0f, una::kNameNearestSizingDepth)));
+}
+
+TEST_CASE("a name's glyphs are baked at few sizes, near the size drawn", "[unit_name_anchor]") {
+    // Every size a name is drawn at, through a crowd at every distance, lands
+    // on a short ladder: the atlas is not filled with a size per pixel.
+    std::set<float> bakes;
+    for (float px = 1.0f; px <= 100.0f; px += 0.05f) {
+        const float bake = una::nameBakeSize(px);
+        bakes.insert(bake);
+        CHECK(bake == std::round(bake));
+        if (px >= 4.0f) {
+            // Scaled down by at most a fifth, up by a few hundredths.
+            CHECK(bake / px <= 1.25f);
+            CHECK(bake / px >= 0.95f);
+        }
+    }
+    CHECK(bakes.size() <= 20);
+    CHECK(una::nameBakeSize(0.5f) == 4.0f);
+    // A step of the ladder is its own bake.
+    CHECK(una::nameBakeSize(16.0f) == 16.0f);
+    CHECK(una::nameBakeSize(32.0f) == 32.0f);
+    CHECK(una::nameBakeSize(16.5f) == 19.0f);
 }

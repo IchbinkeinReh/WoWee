@@ -109,7 +109,7 @@ void WorldTextRenderer::shutdown() {
     destroy(device, textureLayout_);
     vkCtx_ = nullptr;
     triangles_.clear();
-    atlas_ = nullptr;
+    texture_ = nullptr;
 }
 
 void WorldTextRenderer::recreatePipelines() {
@@ -118,16 +118,35 @@ void WorldTextRenderer::recreatePipelines() {
     buildPipeline();
 }
 
-void WorldTextRenderer::setText(std::vector<Vertex> triangles, const ImFontAtlas* atlas) {
+void WorldTextRenderer::setText(std::vector<Vertex> triangles, ImTextureData* texture) {
     triangles_ = std::move(triangles);
-    atlas_ = atlas;
+    texture_ = texture;
+    textFrame_ = ImGui::GetFrameCount();
 }
 
 void WorldTextRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet) {
-    if (triangles_.empty() || !atlas_ || pipeline_ == VK_NULL_HANDLE) return;
+    // Text laid out by the interface frame before this one: the interface
+    // begins its frame before the world is drawn and lays the names out
+    // after, so the scene draws what the last frame laid out. A new frame
+    // frees only textures the backend destroyed in the one before, and the
+    // last frame's names were laid out on a texture still the atlas's then,
+    // so it is alive here - even should the atlas have been repacked since.
+    const bool laidOutLastFrame = texture_ && textFrame_ + 1 == ImGui::GetFrameCount();
     // NOLINTNEXTLINE(performance-no-int-to-ptr) - ImTextureID carries the set.
-    const auto fontTexture = reinterpret_cast<VkDescriptorSet>(atlas_->TexRef.GetTexID());
-    if (fontTexture == VK_NULL_HANDLE) return;
+    const auto fontTexture =
+        laidOutLastFrame ? reinterpret_cast<VkDescriptorSet>(texture_->GetTexID()) : VK_NULL_HANDLE;
+    if (triangles_.empty() || fontTexture == VK_NULL_HANDLE || pipeline_ == VK_NULL_HANDLE) {
+        clear();
+        return;
+    }
+    if (texture_->WantDestroyNextFrame) {
+        // Given up by the atlas: the backend destroys it once it has gone
+        // unused for as many interface frames as there are swapchain images,
+        // two at the least - with the count at one now, at the end of the
+        // next frame, while the frame drawn here may still be in flight.
+        // Held back to start from zero it outlives every frame drawing it.
+        texture_->UnusedFrames = std::min(texture_->UnusedFrames, 2 - static_cast<int>(kFrames));
+    }
     const uint32_t frame = vkCtx_->getCurrentFrame() % kFrames;
     if (!vertexMapped_[frame]) return;
     // Whole triangles only.
@@ -143,7 +162,7 @@ void WorldTextRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet)
     vkCmdDraw(cmd, static_cast<uint32_t>(count), 1, 0, 0);
     // Drawn once: the interface lays the text out again every frame, and a
     // frame it does not - out of the world - leaves none standing.
-    triangles_.clear();
+    clear();
 }
 
 }  // namespace wowee::rendering

@@ -167,11 +167,13 @@ ImU32 toU32(const glm::vec4& c, int alpha) {
                     static_cast<int>(c.b * 255.0f + 0.5f), alpha);
 }
 
-/// Text with the outline UNIT_NAME_FONT is made with (flags 4, 0x007e64d0).
-void outlinedText(ImDrawList* dl, ImFont* font, float size, ImVec2 at, ImU32 color, const char* text) {
+/// Text with the outline UNIT_NAME_FONT is made with (flags 4, 0x007e64d0),
+/// `spread` layout pixels wide - one pixel on screen.
+void outlinedText(ImDrawList* dl, ImFont* font, float size, ImVec2 at, ImU32 color, const char* text,
+                  float spread = 1.0f) {
     const ImU32 shadow = IM_COL32(0, 0, 0, (color >> IM_COL32_A_SHIFT) & 0xFF);
     for (const ImVec2 d : {ImVec2(-1, 0), ImVec2(1, 0), ImVec2(0, -1), ImVec2(0, 1)}) {
-        dl->AddText(font, size, ImVec2(at.x + d.x, at.y + d.y), shadow, text);
+        dl->AddText(font, size, ImVec2(at.x + d.x * spread, at.y + d.y * spread), shadow, text);
     }
     dl->AddText(font, size, at, color, text);
 }
@@ -275,6 +277,21 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     if (worldText && !nameList) nameList = IM_NEW(ImDrawList)(ImGui::GetDrawListSharedData());
     static thread_local std::vector<rendering::WorldTextRenderer::Vertex> nameTriangles;
     nameTriangles.clear();
+    // The names of this frame, laid out once all are known: measuring them
+    // bakes their glyphs, and a bake can repack the atlas into a new texture,
+    // which moves every glyph. Laid out after the last of them was measured,
+    // the triangles all hold the packing of the texture handed on with them.
+    struct NameJob {
+        glm::vec3 anchor;
+        glm::vec2 anchorPx;
+        std::string text;
+        float bake = 0.0f;        // the size the glyphs are rasterized at
+        float bakePerYard = 0.0f; // laid-out pixels to the yard
+        float spread = 1.0f;      // laid-out pixels to the screen's
+        ImU32 color = 0;
+    };
+    static thread_local std::vector<NameJob> nameJobs;
+    nameJobs.clear();
 
     // The name's anchor: the PlayerName attachment, else over the model
     // (0x0071fef0).
@@ -373,36 +390,19 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         if (px < 1.0f) return;
 
         const ImU32 color = toU32(targetCircleColor(gameHandler, unit), 255);
-        const ImVec2 size = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text.c_str());
+        // Rasterized at a step of the ladder and scaled to px: see nameBakeSize.
+        const float bake = rendering::unit_name_anchor::nameBakeSize(px);
+        const ImVec2 bakedSize = font->CalcTextSizeA(bake, FLT_MAX, 0.0f, text.c_str());
+        const ImVec2 size(bakedSize.x * px / bake, bakedSize.y * px / bake);
         if (worldText && nameList) {
-            // One name at a time, so its indices are its own.
-            nameList->_ResetForNewFrame();
-            nameList->PushTexture(font->OwnerAtlas->TexRef);
-            nameList->PushClipRectFullScreen();
-            // Lines centred, the block's bottom on the anchor.
-            float y = at->y - size.y;
-            size_t start = 0;
-            while (start <= text.size()) {
-                const size_t end = text.find('\n', start);
-                const std::string line =
-                    text.substr(start, end == std::string::npos ? std::string::npos : end - start);
-                const ImVec2 ls = font->CalcTextSizeA(px, FLT_MAX, 0.0f, line.c_str());
-                outlinedText(nameList, font, px, ImVec2(at->x - ls.x * 0.5f, y), color, line.c_str());
-                y += ls.y;
-                if (end == std::string::npos) break;
-                start = end + 1;
-            }
             const float perYard = rendering::unit_name_anchor::pixelsPerYard(proj[1][1], screenH, clipW);
-            const glm::vec2 anchorPx(at->x, at->y);
-            for (const ImDrawIdx i : nameList->IdxBuffer) {
-                const ImDrawVert& v = nameList->VtxBuffer[i];
-                nameTriangles.push_back(
-                    {.anchor = anchor,
-                     .offset = rendering::unit_name_anchor::billboardOffset(glm::vec2(v.pos.x, v.pos.y),
-                                                                            anchorPx, perYard),
-                     .uv = glm::vec2(v.uv.x, v.uv.y),
-                     .colour = v.col});
-            }
+            nameJobs.push_back({.anchor = anchor,
+                                .anchorPx = glm::vec2(at->x, at->y),
+                                .text = text,
+                                .bake = bake,
+                                .bakePerYard = perYard * bake / px,
+                                .spread = bake / px,
+                                .color = color});
         }
 
         // The raid icon over the name, a yard square, fading in from the
@@ -509,8 +509,50 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
                              .isTarget = isTarget, .left = left, .bottom = bottom, .depth = clipW});
     }
 
-    // Every name of this frame, to the scene.
-    if (worldText) worldText->setText(std::move(nameTriangles), font->OwnerAtlas);
+    // Every name of this frame, laid out and handed to the scene with the
+    // texture its glyphs were packed in. All were measured above, so their
+    // glyphs are baked and laying them out adds none; should the atlas be
+    // repacked all the same, they are laid out again on the new packing.
+    if (worldText) {
+        const ImFontAtlas* atlas = font->OwnerAtlas;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            const ImTextureData* packedIn = atlas->TexData;
+            nameTriangles.clear();
+            for (const NameJob& job : nameJobs) {
+                // One name at a time, so its indices are its own.
+                nameList->_ResetForNewFrame();
+                nameList->PushTexture(atlas->TexRef);
+                nameList->PushClipRectFullScreen();
+                // Lines centred, the block's bottom on the anchor; in pixels
+                // of the baked size, the outline one pixel on screen.
+                const ImVec2 size = font->CalcTextSizeA(job.bake, FLT_MAX, 0.0f, job.text.c_str());
+                float y = job.anchorPx.y - size.y;
+                size_t start = 0;
+                while (start <= job.text.size()) {
+                    const size_t end = job.text.find('\n', start);
+                    const std::string line =
+                        job.text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                    const ImVec2 ls = font->CalcTextSizeA(job.bake, FLT_MAX, 0.0f, line.c_str());
+                    outlinedText(nameList, font, job.bake, ImVec2(job.anchorPx.x - ls.x * 0.5f, y), job.color,
+                                 line.c_str(), job.spread);
+                    y += ls.y;
+                    if (end == std::string::npos) break;
+                    start = end + 1;
+                }
+                for (const ImDrawIdx i : nameList->IdxBuffer) {
+                    const ImDrawVert& v = nameList->VtxBuffer[i];
+                    nameTriangles.push_back(
+                        {.anchor = job.anchor,
+                         .offset = rendering::unit_name_anchor::billboardOffset(glm::vec2(v.pos.x, v.pos.y),
+                                                                                job.anchorPx, job.bakePerYard),
+                         .uv = glm::vec2(v.uv.x, v.uv.y),
+                         .colour = v.col});
+                }
+            }
+            if (atlas->TexData == packedIn) break;
+        }
+        worldText->setText(std::move(nameTriangles), atlas->TexData);
+    }
 
     // Forget the units whose plates are gone.
     for (auto it = plateHealth.begin(); it != plateHealth.end();) {
