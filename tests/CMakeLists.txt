@@ -3205,3 +3205,9 @@ wowee_add_test(test_m2_particle_motion
 # GetPlayerFacing answers the server orientation, not the canonical yaw.
 wowee_add_test(test_player_facing
     SOURCES test_player_facing.cpp)
+
+# ── test_doodad_model_plan ───────────────────────────────────
+# A tile's WMO doodad models parsed in parallel on the terrain workers: each
+# model once, the first doodad to use it carrying it, results in doodad order.
+wowee_add_test(test_doodad_model_plan
+    SOURCES test_doodad_model_plan.cpp)

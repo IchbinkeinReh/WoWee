@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/coordinates.hpp"
+#include "core/work_batch.hpp"
 #include "pipeline/adt_loader.hpp"
 #include "pipeline/terrain_mesh.hpp"
 #include "pipeline/m2_loader.hpp"
@@ -22,6 +23,7 @@
 #include <deque>
 #include <glm/glm.hpp>
 #include <array>
+#include <functional>
 
 namespace wowee {
 
@@ -436,6 +438,24 @@ private:
     std::shared_ptr<PendingTile> prepareTile(int x, int y);
 
     /**
+     * Reads and parses the M2 models of a tile's WMO doodads, gathered in
+     * order into pending.wmoDoodads with empty models, on this worker and
+     * any idle one (runParallel). Each model is parsed once; the first
+     * doodad to use it carries it, and a doodad whose model is missing or
+     * invalid is dropped, as the serial loop did. `paths` names each model
+     * id. Returns false if the workers are stopping.
+     */
+    bool prepareWmoDoodadModels(PendingTile& pending,
+                                const std::unordered_map<uint32_t, std::string>& paths);
+
+    /**
+     * Runs job(0..count-1) on this thread and on any terrain worker with no
+     * tile to prepare, and returns when all have finished. A job must not
+     * call runParallel itself.
+     */
+    void runParallel(size_t count, std::function<void(size_t)> job);
+
+    /**
      * Advance incremental finalization of a tile (one bounded unit of work).
      * Returns true when the tile is fully finalized (phase == DONE).
      */
@@ -521,6 +541,10 @@ private:
     std::condition_variable queueCV;
     std::deque<TileCoord> loadQueue;              // THREAD-SAFE: protected by queueMutex
     std::queue<std::shared_ptr<PendingTile>> readyQueue; // THREAD-SAFE: protected by queueMutex
+    // Jobs a worker preparing a tile has opened to the others (runParallel).
+    // A worker with no tile to take helps with the front one. Protected by
+    // queueMutex.
+    std::deque<std::shared_ptr<core::WorkBatch>> helpBatches_;
     // Maximum number of prepared-but-not-finalized tiles in readyQueue.
     // Each prepared tile can hold 100–500 MB of decoded textures in RAM.
     // Workers sleep when this limit is reached, letting the main thread

@@ -13,6 +13,7 @@
 #include "rendering/water_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_model_classifier.hpp"
+#include "rendering/doodad_model_plan.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/camera.hpp"
 #include "core/coordinates.hpp"
@@ -33,6 +34,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
+#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <cstdlib>
@@ -323,6 +325,11 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
     }
 
     LOG_DEBUG("Preparing tile [", x, ",", y, "] (CPU work)");
+    using Clock = std::chrono::steady_clock;
+    const auto msSince = [](Clock::time_point t) {
+        return std::chrono::duration<double, std::milli>(Clock::now() - t).count();
+    };
+    const auto tStart = Clock::now();
 
     // Early-exit check - worker should bail fast during shutdown
     if (!workerRunning.load()) return nullptr;
@@ -619,6 +626,7 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
     };
 
     // Pre-load M2 doodads (CPU: read files, parse models)
+    const auto tGroundDone = Clock::now();
     int skippedNameId = 0, skippedFileNotFound = 0, skippedInvalid = 0, skippedSkinNotFound = 0;
     for (const auto& placement : pending->terrain.doodadPlacements) {
         if (!workerRunning.load()) return nullptr;
@@ -667,7 +675,14 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
 
     if (!workerRunning.load()) return nullptr;
 
+    const auto tM2Done = Clock::now();
+
     // Pre-load WMOs (CPU: read files, parse models and groups)
+    // Each WMO doodad's model id -> its path, for prepareWmoDoodadModels.
+    std::unordered_map<uint32_t, std::string> wmoDoodadPaths;
+    // The textures of the WMOs this tile places, each once, in first use.
+    std::vector<std::string> wmoTextureKeys;
+    std::unordered_set<std::string> wmoTextureSeen;
     if (!pending->terrain.wmoPlacements.empty()) {
         for (const auto& placement : pending->terrain.wmoPlacements) {
             if (!workerRunning.load()) return nullptr;
@@ -751,7 +766,6 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                         setsToLoad.push_back(placement.doodadSet);
                     }
                     std::unordered_set<uint32_t> loadedDoodadIndices;
-                    std::unordered_set<uint32_t> wmoPreparedModelIds;  // within-WMO model dedup
                     const std::vector<uint8_t> interiorDoodads =
                         pipeline::wmo_doodad_light::interiorDoodads(wmoModel);
                     for (uint32_t setIdx : setsToLoad) {
@@ -771,49 +785,11 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                         m2Path = pipeline::modelPathToM2(m2Path);
 
                         uint32_t doodadModelId = static_cast<uint32_t>(std::hash<std::string>{}(m2Path));
-
-                        // Skip file I/O if model already uploaded or already prepared within this WMO
-                        bool modelAlreadyUploaded = false;
-                        {
-                            std::lock_guard<std::mutex> lock(uploadedM2IdsMutex_);
-                            modelAlreadyUploaded = uploadedM2Ids_.count(doodadModelId) > 0;
-                        }
-                        // Membership check only - the id is claimed below, after a
-                        // successful prep. Claiming up front meant a model whose first
-                        // occurrence failed (missing/invalid file) poisoned every later
-                        // occurrence into an empty placeholder push, which finalize then
-                        // rejected with "no renderable content".
-                        bool modelAlreadyPreparedInWmo = wmoPreparedModelIds.count(doodadModelId) > 0;
-
-                        pipeline::M2Model m2Model;
-                        if (!modelAlreadyUploaded && !modelAlreadyPreparedInWmo) {
-                            std::vector<uint8_t> m2Data = assetManager->readFile(m2Path);
-                            if (m2Data.empty()) continue;
-
-                            m2Model = pipeline::M2Loader::load(m2Data);
-                            m2Model.name = m2Path;
-                            std::string skinPath = pipeline::skinPathForM2(m2Path);
-                            std::vector<uint8_t> skinData = assetManager->readFile(skinPath);
-                            if (!skinData.empty() && m2Model.version >= 264) {
-                                pipeline::M2Loader::loadSkin(skinData, m2Model);
-                            }
-                            if (!m2Model.isValid()) continue;
-                            wmoPreparedModelIds.insert(doodadModelId);
-
-                            // Pre-decode doodad M2 textures on background thread
-                            for (const auto& tex : m2Model.textures) {
-                                if (tex.filename.empty()) continue;
-                                std::string texKey = tex.filename;
-                                std::replace(texKey.begin(), texKey.end(), '/', '\\');
-                                std::transform(texKey.begin(), texKey.end(), texKey.begin(),
-                                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                                if (pending->preloadedM2Textures.find(texKey) != pending->preloadedM2Textures.end()) continue;
-                                auto blp = assetManager->loadTexture(texKey, true);
-                                if (blp.isValid()) {
-                                    pending->preloadedM2Textures[texKey] = std::move(blp);
-                                }
-                            }
-                        }
+                        // The model is read and parsed after the loop, with
+                        // every other doodad model of the tile, in parallel
+                        // (prepareWmoDoodadModels); the doodad waits here
+                        // with an empty model.
+                        wmoDoodadPaths.emplace(doodadModelId, m2Path);
 
                         // Build doodad's local transform (WoW coordinates)
                         // WMO doodads use quaternion rotation
@@ -832,7 +808,6 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
 
                         PendingTile::WMODoodadReady doodadReady;
                         doodadReady.modelId = doodadModelId;
-                        doodadReady.model = std::move(m2Model);
                         doodadReady.worldPosition = worldPos;
                         doodadReady.modelMatrix = worldMatrix;
                         if (doodadIdx < interiorDoodads.size() && interiorDoodads[doodadIdx]) {
@@ -855,6 +830,9 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                 // entering Dalaran. Should the placing tile go before it is
                 // finalized, another tile's copy makes the model and its
                 // textures load the ordinary way.
+                //
+                // Only named here: they are loaded after the loop, in
+                // parallel, before the tile's doodad models.
                 static const decltype(wmoModel.textures) kNoTextures;
                 for (const auto& texPath : wmoAlreadyPrepared ? kNoTextures : wmoModel.textures) {
                     if (texPath.empty()) continue;
@@ -866,7 +844,6 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                     std::transform(texKey.begin(), texKey.end(), texKey.begin(),
                                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
                     if (texKey.empty()) continue;
-                    if (pending->preloadedWMOTextures.find(texKey) != pending->preloadedWMOTextures.end()) continue;
                     // Try .blp variant
                     std::string blpKey = texKey;
                     if (blpKey.size() >= 4) {
@@ -875,27 +852,7 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                             blpKey = blpKey.substr(0, blpKey.size() - 4) + ".blp";
                         }
                     }
-                    // Blocks for the upload; the normal map decodes a copy
-                    // here on the worker thread and lets it go, which is where
-                    // that cost already was.
-                    auto blp = assetManager->loadTexture(blpKey, true);
-                    if (blp.isValid()) {
-                        float variance = 0.0f;
-                        const std::vector<uint8_t> decoded =
-                            blp.isBlockCompressed()
-                                ? pipeline::BLPLoader::decodeBaseLevel(blp)
-                                : blp.data;
-                        auto normalPixels = decoded.empty()
-                            ? pipeline::BLPImage{}
-                            : WMORenderer::generateNormalHeightMapPixels(
-                                  decoded.data(), static_cast<uint32_t>(blp.width),
-                                  static_cast<uint32_t>(blp.height), variance);
-                        if (normalPixels.isValid()) {
-                            pending->preloadedWMONormalMaps[blpKey] = std::move(normalPixels);
-                            pending->preloadedWMONormalMapVariances[blpKey] = variance;
-                        }
-                        pending->preloadedWMOTextures[blpKey] = std::move(blp);
-                    }
+                    if (wmoTextureSeen.insert(blpKey).second) wmoTextureKeys.push_back(std::move(blpKey));
                 }
 
                 PendingTile::WMOReady ready;
@@ -916,6 +873,53 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
 
     if (!workerRunning.load()) return nullptr;
 
+    const auto tWmoDone = Clock::now();
+
+    // The WMO textures named above, each loaded and given its normal map on
+    // this worker and any idle one. Blocks for the upload; the normal map
+    // decodes a copy here on the worker thread and lets it go, which is
+    // where that cost already was.
+    {
+        struct LoadedTexture {
+            pipeline::BLPImage blp;
+            pipeline::BLPImage normal;
+            float variance = 0.0f;
+        };
+        std::vector<LoadedTexture> loaded(wmoTextureKeys.size());
+        runParallel(wmoTextureKeys.size(), [&](size_t i) {
+            if (!workerRunning.load()) return;
+            auto blp = assetManager->loadTexture(wmoTextureKeys[i], true);
+            if (!blp.isValid()) return;
+            LoadedTexture& out = loaded[i];
+            const std::vector<uint8_t> decoded =
+                blp.isBlockCompressed()
+                    ? pipeline::BLPLoader::decodeBaseLevel(blp)
+                    : blp.data;
+            if (!decoded.empty()) {
+                out.normal = WMORenderer::generateNormalHeightMapPixels(
+                    decoded.data(), static_cast<uint32_t>(blp.width),
+                    static_cast<uint32_t>(blp.height), out.variance);
+            }
+            out.blp = std::move(blp);
+        });
+        if (!workerRunning.load()) return nullptr;
+        for (size_t i = 0; i < wmoTextureKeys.size(); ++i) {
+            LoadedTexture& t = loaded[i];
+            if (!t.blp.isValid()) continue;
+            const std::string& key = wmoTextureKeys[i];
+            if (t.normal.isValid()) {
+                pending->preloadedWMONormalMaps[key] = std::move(t.normal);
+                pending->preloadedWMONormalMapVariances[key] = t.variance;
+            }
+            pending->preloadedWMOTextures[key] = std::move(t.blp);
+        }
+    }
+    const auto tWmoTexturesDone = Clock::now();
+
+    const size_t gatheredWmoDoodads = pending->wmoDoodads.size();
+    if (!prepareWmoDoodadModels(*pending, wmoDoodadPaths)) return nullptr;
+    const auto tDoodadsDone = Clock::now();
+
     // Pre-load terrain texture BLP data on background thread so finalizeTile
     // doesn't block the main thread with file I/O.
     for (const auto& texPath : pending->terrain.textures) {
@@ -926,6 +930,23 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
         pending->preloadedTextures[texPath] = assetManager->loadTexture(texPath, true);
     }
 
+    // Where a slow tile's time went; the worker logs the total.
+    const double totalMs = msSince(tStart);
+    if (totalMs > 1000.0) {
+        const auto between = [](Clock::time_point a, Clock::time_point b) {
+            return static_cast<int>(std::chrono::duration<double, std::milli>(b - a).count());
+        };
+        LOG_INFO("Terrain tile [", x, ",", y, "] prepare: ground ", between(tStart, tGroundDone),
+                 "ms, M2 doodads ", between(tGroundDone, tM2Done),
+                 "ms, WMOs ", between(tM2Done, tWmoDone),
+                 "ms, WMO textures ", between(tWmoDone, tWmoTexturesDone), "ms (",
+                 wmoTextureKeys.size(), "), WMO doodad models ",
+                 between(tWmoTexturesDone, tDoodadsDone), "ms (",
+                 pending->wmoDoodads.size(), " of ", gatheredWmoDoodads, " doodads, ",
+                 wmoDoodadPaths.size(), " models), terrain textures ",
+                 between(tDoodadsDone, Clock::now()), "ms");
+    }
+
     LOG_DEBUG("Prepared tile [", x, ",", y, "]: ",
              pending->m2Models.size(), " M2 models, ",
              pending->m2Placements.size(), " M2 placements, ",
@@ -934,6 +955,119 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
              pending->preloadedTextures.size(), " textures");
 
     return pending;
+}
+
+bool TerrainManager::prepareWmoDoodadModels(
+        PendingTile& pending, const std::unordered_map<uint32_t, std::string>& paths) {
+    namespace plan = doodad_model_plan;
+    auto& doodads = pending.wmoDoodads;
+    if (doodads.empty()) return true;
+
+    std::vector<uint32_t> ids;
+    ids.reserve(doodads.size());
+    for (const auto& d : doodads) ids.push_back(d.modelId);
+
+    // A model an earlier tile uploaded is not read again.
+    std::vector<uint32_t> toParse;
+    {
+        std::lock_guard<std::mutex> lock(uploadedM2IdsMutex_);
+        toParse = plan::modelsToParse(ids, [this](uint32_t id) { return uploadedM2Ids_.count(id) > 0; });
+    }
+
+    struct Parsed {
+        bool ok = false;
+        pipeline::M2Model model;
+        std::vector<std::pair<std::string, pipeline::BLPImage>> textures;
+    };
+    std::vector<Parsed> parsed(toParse.size());
+
+    // A texture two models share is decoded once, by whichever claims it
+    // first; one the tile's ADT doodads already decoded is not decoded again.
+    std::mutex textureMutex;
+    std::unordered_set<std::string> claimedTextures;
+    for (const auto& [key, blp] : pending.preloadedM2Textures) claimedTextures.insert(key);
+
+    runParallel(toParse.size(), [&](size_t i) {
+        if (!workerRunning.load()) return;
+        const std::string& m2Path = paths.at(toParse[i]);
+        std::vector<uint8_t> m2Data = assetManager->readFile(m2Path);
+        if (m2Data.empty()) return;
+
+        pipeline::M2Model m2Model = pipeline::M2Loader::load(m2Data);
+        m2Model.name = m2Path;
+        std::vector<uint8_t> skinData = assetManager->readFile(pipeline::skinPathForM2(m2Path));
+        if (!skinData.empty() && m2Model.version >= 264) {
+            pipeline::M2Loader::loadSkin(skinData, m2Model);
+        }
+        if (!m2Model.isValid()) return;
+
+        // Pre-decode doodad M2 textures on background thread
+        Parsed& out = parsed[i];
+        for (const auto& tex : m2Model.textures) {
+            if (tex.filename.empty()) continue;
+            std::string texKey = tex.filename;
+            std::replace(texKey.begin(), texKey.end(), '/', '\\');
+            std::transform(texKey.begin(), texKey.end(), texKey.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            {
+                std::lock_guard<std::mutex> lock(textureMutex);
+                if (!claimedTextures.insert(texKey).second) continue;
+            }
+            auto blp = assetManager->loadTexture(texKey, true);
+            if (blp.isValid()) out.textures.emplace_back(std::move(texKey), std::move(blp));
+        }
+        out.model = std::move(m2Model);
+        out.ok = true;
+    });
+    if (!workerRunning.load()) return false;
+
+    // Filled in in order: the result is the serial loop's, whichever thread
+    // parsed what.
+    std::unordered_map<uint32_t, bool> outcome;
+    std::unordered_map<uint32_t, size_t> parsedIndex;
+    outcome.reserve(toParse.size());
+    parsedIndex.reserve(toParse.size());
+    for (size_t i = 0; i < toParse.size(); ++i) {
+        outcome.emplace(toParse[i], parsed[i].ok);
+        parsedIndex.emplace(toParse[i], i);
+        for (auto& [key, blp] : parsed[i].textures) {
+            pending.preloadedM2Textures.emplace(std::move(key), std::move(blp));
+        }
+    }
+    const std::vector<plan::Carry> carry = plan::assign(ids, outcome);
+    size_t kept = 0;
+    for (size_t j = 0; j < doodads.size(); ++j) {
+        if (carry[j] == plan::Carry::Drop) continue;
+        if (carry[j] == plan::Carry::Model) {
+            doodads[j].model = std::move(parsed[parsedIndex.at(ids[j])].model);
+        }
+        if (kept != j) doodads[kept] = std::move(doodads[j]);
+        ++kept;
+    }
+    doodads.resize(kept);
+    return true;
+}
+
+void TerrainManager::runParallel(size_t count, std::function<void(size_t)> job) {
+    if (count == 0) return;
+    auto batch = std::make_shared<core::WorkBatch>(count, std::move(job));
+    const bool shared = count > 1 && workerCount > 1;
+    if (shared) {
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            helpBatches_.push_back(batch);
+        }
+        queueCV.notify_all();
+    }
+    batch->runAvailable();
+    if (shared) {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        auto it = std::find(helpBatches_.begin(), helpBatches_.end(), batch);
+        if (it != helpBatches_.end()) helpBatches_.erase(it);
+    }
+    // The jobs reference the caller's locals: none may still be running
+    // when this returns.
+    batch->wait();
 }
 
 void TerrainManager::logMissingAdtOnce(const std::string& adtPath) {
@@ -1340,12 +1474,26 @@ void TerrainManager::workerLoop() {
         {
             std::unique_lock<std::mutex> lock(queueMutex);
             queueCV.wait(lock, [this]() {
-                return !loadQueue.empty() || !workerRunning.load();
+                return !loadQueue.empty() || !helpBatches_.empty() || !workerRunning.load();
             });
 
             if (!workerRunning.load()) {
                 break;
             }
+
+            // Another worker's tile first: it is already under way, and the
+            // world may be waiting on it (Dalaran's tile parses thousands of
+            // doodads). Help with its jobs until none are left to claim.
+            while (!helpBatches_.empty() && helpBatches_.front()->exhausted()) {
+                helpBatches_.pop_front();
+            }
+            if (!helpBatches_.empty()) {
+                std::shared_ptr<core::WorkBatch> help = helpBatches_.front();
+                lock.unlock();
+                help->runAvailable();
+                continue;
+            }
+            if (loadQueue.empty()) continue;
 
             // --- Memory-aware throttling ---
             // Back-pressure: if the ready queue is deep (finalization can't
