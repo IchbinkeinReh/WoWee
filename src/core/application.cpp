@@ -6092,7 +6092,7 @@ void Application::render() {
     // Bursts of consecutive frames, for measuring what changes from one frame
     // to the next (the traced light's flicker, tools/rt_flicker.py):
     // WOWEE_BURST_DIR=<folder>, one burst per entry of WOWEE_BURST_VIEWS (the
-    // RT debug view to show, 0 the picture; "0,5,6,7,11" by default), the
+    // RT debug view to show, 0 the picture, below 0 a pause; "0,5,6,7,11" by default), the
     // first WOWEE_BURST_AT seconds after entering the world (60), then every
     // WOWEE_BURST_EVERY (12), each WOWEE_BURST_FRAMES frames long (8). The
     // view is switched three seconds before its burst so the history has
@@ -6128,10 +6128,15 @@ void Application::render() {
         } else if (burstIndex < static_cast<int>(views.size())) {
             const double at = envNumber("WOWEE_BURST_AT", 60.0) + envNumber("WOWEE_BURST_EVERY", 12.0) * burstIndex;
             const double since = now - burstWorldSince;
-            if (burstFrame < 0 && since >= at - 3.0) {
+            if (burstFrame < 0 && since >= at - 3.0 && views[static_cast<size_t>(burstIndex)] >= 0) {
                 renderer->setRtDebugView(views[static_cast<size_t>(burstIndex)]);
             }
-            if (burstFrame < 0 && since >= at) burstFrame = 0;
+            // A view below 0 is a pause: nothing is captured.
+            if (burstFrame < 0 && since >= at && views[static_cast<size_t>(burstIndex)] < 0) {
+                ++burstIndex;
+            } else if (burstFrame < 0 && since >= at) {
+                burstFrame = 0;
+            }
             if (burstFrame >= 0) {
                 const char* tag = std::getenv("WOWEE_BURST_TAG");
                 char name[512];
