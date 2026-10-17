@@ -6143,7 +6143,8 @@ void Application::render() {
                 std::snprintf(name, sizeof(name), "%s/%s_v%d_%d_%02d.png", burstDir, (tag && *tag) ? tag : "burst",
                               views[static_cast<size_t>(burstIndex)], burstIndex, burstFrame);
                 renderer->captureScreenshot(name);
-                if (++burstFrame >= static_cast<int>(envNumber("WOWEE_BURST_FRAMES", 8.0))) {
+                ++burstFrame;
+                if (burstFrame >= static_cast<int>(envNumber("WOWEE_BURST_FRAMES", 8.0))) {
                     burstFrame = -1;
                     ++burstIndex;
                     LOG_WARNING("WOWEE_BURST: burst ", burstIndex, " of ", views.size(), " written");
