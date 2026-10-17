@@ -294,9 +294,11 @@ bool batchIsHairCard(const pipeline::M2Model& model, const pipeline::M2Batch& ba
 struct CharMaterialUBO {
     float opacity;
     int32_t alphaTest;
-    // Was the black colour key. The client draws a batch by its blend mode
-    // and never keys by colour; the slot stays so the layout matches.
-    int32_t unused0;
+    // The whole unit's alpha - its own, a spell kit's, the camera's - which
+    // the batch's alpha carries with its transparency in `opacity`. A Mod or
+    // Mod2x layer fades by it toward the colour that leaves the scene as it
+    // is (colourBlend). Was the black colour key's slot.
+    float instanceFade;
     int32_t unlit;
     float emissiveBoost;
     float emissiveTintR, emissiveTintG, emissiveTintB;
@@ -309,8 +311,9 @@ struct CharMaterialUBO {
     float normalMapStrength;
     int32_t hairMaterial;
     // How the shader hands its colour to a colour-only blend: 0 normally,
-    // 1 Mod and 2 Mod2x (faded toward their neutral 1.0 and 0.5 by alpha),
-    // 3 NoAlphaAdd (scaled by the batch's opacity, not the texture's alpha).
+    // 1 Mod and 2 Mod2x (faded toward their neutral 1.0 and 0.5 by the
+    // unit's alpha, instanceFade), 3 NoAlphaAdd (scaled by the batch's
+    // opacity, not the texture's alpha).
     int32_t colourBlend;
     // The client's fog for this batch: 0 none, 1 the world's fog, 2 black,
     // 3 white, 4 grey. See the table at the batch's material setup.
@@ -3848,7 +3851,8 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
                 // Create per-batch material UBO
                 CharMaterialUBO matData{};
-                matData.opacity = instance.opacity * instance.kitAlpha * instance.cameraAlpha * batchColorAlpha;
+                matData.instanceFade = instance.opacity * instance.kitAlpha * instance.cameraAlpha;
+                matData.opacity = matData.instanceFade * batchColorAlpha;
                 // 1: the client's alpha-key test. 2: a blended mode, which the
                 // client tests at 1/255 - only what is fully transparent goes.
                 matData.alphaTest = blendNeedsCutout ? 1 : (blendMode >= 2 ? 2 : 0);
@@ -4013,6 +4017,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
             CharMaterialUBO matData{};
             matData.opacity = instance.opacity * instance.kitAlpha * instance.cameraAlpha;
+            matData.instanceFade = matData.opacity;
             matData.alphaTest = 0;
             matData.unlit = 0;
             matData.emissiveBoost = 1.0f;

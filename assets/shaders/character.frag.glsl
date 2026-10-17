@@ -46,7 +46,9 @@ layout(set = 1, binding = 0) uniform sampler2D uTexture;
 layout(set = 1, binding = 1) uniform CharMaterial {
     float opacity;
     int alphaTest;
-    int unused0;       // was the black colour key: the client never keys by colour
+    // The whole unit's alpha (its own, a kit's, the camera's): what a Mod or
+    // Mod2x layer fades by (colourBlendOutput). Was the black colour key.
+    float instanceFade;
     int unlit;
     float emissiveBoost;
     // Keep these as scalar floats to match the C++ UBO packing. A std140 vec3
@@ -63,7 +65,7 @@ layout(set = 1, binding = 1) uniform CharMaterial {
     float normalMapStrength;
     int hairMaterial;
     // 0 normal; 1 Mod and 2 Mod2x, faded toward their neutral 1.0 and 0.5 by
-    // alpha; 3 NoAlphaAdd, scaled by opacity alone. See CharMaterialUBO.
+    // the unit's alpha; 3 NoAlphaAdd, scaled by opacity alone. See CharMaterialUBO.
     int colourBlend;
     // 0 no fog, 1 the world's fog, 2 to black, 3 to white, 4 to grey.
     int fogMode;
@@ -101,9 +103,18 @@ const int kCombinerAlphaOp[8] = int[8](3, 0, 3, 2, 1, 3, 3, 3);
 // constant emissive of 1.0 and 0.5: the texture, or half of it, whatever the
 // alpha - Mod2x then doubles it back, so its net effect is dst * texture.
 // NoAlphaAdd's factors ignore alpha, so its fade is in the colour.
+//
+// The unit's own alpha is another matter. The client fades a unit as one
+// model, what it carries with it (0x00737390 into the model's alpha, an
+// attached model's multiplied by its parent's, 0x0082e140), and the layer
+// fades with it. A multiply has no alpha in its factors, so the fade goes in
+// the colour: toward 1 (Mod) or 0.5 (Mod2x), which leave the scene as it is.
+// Without it a staff's Mod2x reflection layer went on multiplying the room
+// behind at full strength as the body faded around it - the staff's outline
+// in black where the camera closes in.
 vec4 colourBlendOutput(vec3 lit, vec3 tex, float alpha) {
-    if (colourBlend == 1) return vec4(tex, alpha);
-    if (colourBlend == 2) return vec4(tex * 0.5, alpha);
+    if (colourBlend == 1) return vec4(mix(vec3(1.0), tex, instanceFade), alpha);
+    if (colourBlend == 2) return vec4(mix(vec3(0.5), tex * 0.5, instanceFade), alpha);
     if (colourBlend == 3) return vec4(lit * opacity, alpha);
     return vec4(lit, alpha);
 }
