@@ -61,7 +61,7 @@ RtLight randomTraced(Rng& rng) {
     r.point = rng.v(0.0f, 0.6f) * r.weight;
     r.pointOwn = r.point * rng(0.0f, 1.0f);
     r.bakedShade = 1.0f - 0.6f * r.weight * rng(0.0f, 1.0f);
-    r.interiorShade = interiorShade(r.point, r.weight, rng(0.0f, 1.0f), rng(0.05f, 1.0f));
+    r.interiorShade = interiorShade(rng(0.0f, 1.0f), r.weight, rng(0.0f, 1.0f));
     return r;
 }
 
@@ -404,28 +404,63 @@ TEST_CASE("A baked colour's storey bit survives the words", "[rt_gbuffer]") {
     CHECK(std::abs(t.outside - 0.4f) <= 0.5f / 63.0f + 1e-5f);
 }
 
-// rtInteriorShade: half where no lamp reaches (the default), all of it at the
-// light named full and above, linear between; as painted where the pixel
-// found no traced result of its own, and at a base of one.
-TEST_CASE("The room's own light runs from the base to the whole colour", "[rt_gbuffer]") {
-    CHECK(interiorShade(glm::vec3(0.0f), 1.0f, 0.5f, 0.5f) == Catch::Approx(0.5f));
-    // Eased into full: half of fullAt gives three quarters of the light.
-    CHECK(interiorShade(glm::vec3(0.25f, 0.1f, 0.0f), 1.0f, 0.5f, 0.5f) == Catch::Approx(0.875f));
-    CHECK(interiorShade(glm::vec3(0.5f), 1.0f, 0.5f, 0.5f) == Catch::Approx(1.0f));
-    CHECK(interiorShade(glm::vec3(3.0f), 1.0f, 0.5f, 0.5f) == Catch::Approx(1.0f));
-    CHECK(interiorShade(glm::vec3(0.0f), 0.0f, 0.5f, 0.5f) == Catch::Approx(1.0f));
-    CHECK(interiorShade(glm::vec3(0.0f), 0.5f, 0.5f, 0.5f) == Catch::Approx(0.75f));
-    CHECK(interiorShade(glm::vec3(0.0f), 1.0f, 1.0f, 0.5f) == Catch::Approx(1.0f));
-    CHECK(interiorShade(glm::vec3(0.0f), 1.0f, 0.0f, 0.5f) == Catch::Approx(0.0f));
-    // Brighter light never darkens.
-    float last = 0.0f;
-    for (float l = 0.0f; l <= 1.0f; l += 0.05f) {
-        const float v = interiorShade(glm::vec3(l), 1.0f, 0.3f, 0.7f);
-        CHECK(v >= last);
+// rtRoomDarkness / rtInteriorShade: what the building's own lamps' shadows
+// take of the room's light, and the colour that leaves. Undercity's Trade
+// Quarter floor in front of the barber: no lamp of the building reaches it
+// (the bake there comes from lights the trace does not have), and a brazier
+// shines on it; the original shows the floor as painted.
+TEST_CASE("A room is as painted where its lamps' shadows take nothing", "[rt_gbuffer]") {
+    const float fullAt = 1.0f, base = 0.25f;
+    // Nothing reaches: nothing taken, as painted (it was the base).
+    CHECK(roomDarkness(glm::vec4(0.0f), 1.0f, 1.0f, fullAt) == 0.0f);
+    CHECK(interiorShade(roomDarkness(glm::vec4(0.0f), 1.0f, 1.0f, fullAt), 1.0f, base) == 1.0f);
+    // A brazier (none of it the building's) in full view or stopped by the
+    // stone counter: its shadow takes only its own light, never the bake.
+    const glm::vec4 brazier(0.3f, 0.2f, 0.1f, 0.0f);
+    for (float vis : {1.0f, 0.0f, (0.7f - 1.0f) / 0.7f}) {
+        CHECK(roomDarkness(brazier, vis, 0.7f, fullAt) == Catch::Approx(0.0f));
+        CHECK(roomDarkness(brazier, vis, 1.0f, fullAt) == Catch::Approx(0.0f));
+    }
+    // The building's own lamp, seen: nothing taken however faint.
+    const glm::vec4 lamp(0.5f, 0.5f, 0.5f, 0.5f);
+    CHECK(roomDarkness(lamp, 1.0f, 1.0f, fullAt) == Catch::Approx(0.0f));
+    // Fully stopped at full strength: all of its look - half of fullAt looks
+    // three quarters lit - so the colour falls by three quarters of 1 - base.
+    CHECK(roomDarkness(lamp, 0.0f, 1.0f, fullAt) == Catch::Approx(0.75f));
+    CHECK(interiorShade(0.75f, 1.0f, base) == Catch::Approx(1.0f - 0.75f * 0.75f));
+    // A lamp at full strength or more, stopped: the base.
+    CHECK(interiorShade(roomDarkness(glm::vec4(3.0f), 0.0f, 1.0f, fullAt), 1.0f, base) == Catch::Approx(base));
+    // At 70% shadows 30% of the light comes through.
+    CHECK(roomDarkness(lamp, 0.0f, 0.7f, fullAt) ==
+          Catch::Approx(roomLit(0.5f, fullAt) - roomLit(0.15f, fullAt)));
+    // Half lamp, half brazier, the lamp stopped: only the lamp's half goes.
+    const glm::vec4 both(0.8f, 0.8f, 0.8f, 0.4f);
+    CHECK(roomDarkness(both, 0.0f, 1.0f, fullAt) == Catch::Approx(roomLit(0.8f, fullAt) - roomLit(0.4f, fullAt)));
+    // The more the shadows take, the darker, never below the base.
+    float last = 2.0f;
+    for (float vis = 1.0f; vis >= 0.0f; vis -= 0.05f) {
+        const float v = interiorShade(roomDarkness(lamp, vis, 1.0f, fullAt), 1.0f, base);
+        CHECK(v <= last + 1e-6f);
+        CHECK(v >= base - 1e-6f);
         last = v;
     }
-    // Near fullAt the colour changes slowly, not in a step.
-    CHECK(interiorShade(glm::vec3(0.45f), 1.0f, 0.0f, 0.5f) > 0.98f);
+}
+
+// rtInteriorShade: weighed in by how well the pixel found its own traced
+// result, as painted where it found none, and at a base of one.
+TEST_CASE("The room's shade runs from the whole colour to the base", "[rt_gbuffer]") {
+    CHECK(interiorShade(0.0f, 1.0f, 0.5f) == Catch::Approx(1.0f));
+    CHECK(interiorShade(1.0f, 1.0f, 0.5f) == Catch::Approx(0.5f));
+    CHECK(interiorShade(2.0f, 1.0f, 0.5f) == Catch::Approx(0.5f));
+    CHECK(interiorShade(1.0f, 0.0f, 0.5f) == Catch::Approx(1.0f));
+    CHECK(interiorShade(1.0f, 0.5f, 0.5f) == Catch::Approx(0.75f));
+    CHECK(interiorShade(1.0f, 1.0f, 1.0f) == Catch::Approx(1.0f));
+    CHECK(interiorShade(1.0f, 1.0f, 0.0f) == Catch::Approx(0.0f));
+    // Eased: half of fullAt looks three quarters lit, and near fullAt the
+    // look changes slowly, not in a step.
+    CHECK(roomLit(0.25f, 0.5f) == Catch::Approx(0.75f));
+    CHECK(roomLit(0.45f, 0.5f) > 0.98f);
+    CHECK(roomLit(3.0f, 0.5f) == Catch::Approx(1.0f));
 
     // A baked lamp's shadow takes its share of the colour, fading with its
     // light to nothing at the end of its reach, not all of it until there.

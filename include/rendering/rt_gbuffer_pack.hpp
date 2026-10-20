@@ -144,16 +144,35 @@ inline float bakedDarkness(float baked, float vis) {
     return baked / (baked + kBakeRest) * (1.0f - vis);
 }
 
-/// rtInteriorShade: inside, what a baked colour is scaled by - `base` where
-/// no point light reaches, all of it where their shadowed light (its
-/// brightest channel) is `fullAt` or more, linear between, weighed in by the
-/// weight the pixel found its own traced result with.
-inline float interiorShade(const glm::vec3& pointLight, float weight, float base, float fullAt) {
-    const float l = std::max(pointLight.r, std::max(pointLight.g, pointLight.b));
-    float lit = std::clamp(l / std::max(fullAt, 1e-3f), 0.0f, 1.0f);
-    lit = lit * (2.0f - lit);
+/// rtInteriorShade: inside, what a baked colour is scaled by - of what the
+/// building's own lamps' shadows take of the room's light (roomDarkness, 0
+/// to 1), that share of 1 - base, weighed in by the weight the pixel found
+/// its own traced result with. Where nothing is taken, as painted.
+inline float interiorShade(float roomDark, float weight, float base) {
     const float w = std::clamp(weight, 0.0f, 1.0f);
-    return (1.0f - w) + w * (base + (1.0f - base) * lit);
+    return (1.0f - w) + w * (1.0f - (1.0f - base) * std::clamp(roomDark, 0.0f, 1.0f));
+}
+
+/// rtRoomLit: how lit a room's light looks, eased into full at fullAt.
+inline float roomLit(float l, float fullAt) {
+    const float lit = std::clamp(l / std::max(fullAt, 1e-3f), 0.0f, 1.0f);
+    return lit * (2.0f - lit);
+}
+
+/// rtRoomDarkness: what the shadows take of a room's light at one traced
+/// texel - p the unshadowed point light with the baked lights' part
+/// (brightest channel) in a, vis the shadow sample, strength the point
+/// shadows'. Only the building's own lights lose light to their shadows;
+/// every other light (a brazier, a torch) the bake does not hold, so its
+/// shadow never takes the painted colour. Where no light reaches, nothing is
+/// taken (Undercity's Trade Quarter in front of the barber, lit by lights
+/// the trace does not have).
+inline float roomDarkness(const glm::vec4& p, float vis, float strength, float fullAt) {
+    const float total = std::max(p.r, std::max(p.g, p.b));
+    const float baked = std::clamp(p.a, 0.0f, total);
+    const float through = std::max(1.0f + strength * (vis - 1.0f), 0.0f);
+    const float left = total - baked * (1.0f - through);
+    return std::max(roomLit(total, fullAt) - roomLit(left, fullAt), 0.0f);
 }
 
 /// The Debug Graphics strengths the apply pass reads (rtTune.x, lightTune.y,

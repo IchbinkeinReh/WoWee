@@ -439,24 +439,40 @@ from its bind pose, and a light left at the bind pose sat beside the glass.
 Inside, the original shows a room's baked vertex colours evenly. With RT on,
 a baked colour of an interior - the WMO's baked passes in the camera's
 interior pass that are not under the sun, its doodads lit by their MODD
-colour - is scaled by
+colour - is scaled by what the building's own lamps' shadows take of the
+room's light:
 
 ```
-l = clamp(L / fullAt, 0, 1)
-s = base + (1 - base) * l * (2 - l)      (rtInteriorShade)
+lit(x) = l (2 - l),  l = clamp(x / fullAt, 0, 1)
+d = lit(U) - lit(U - B (1 - t))            (rtRoomDarkness, per traced texel)
+s = 1 - (1 - base) d                       (rtInteriorShade)
 ```
 
-The light eases into full (`l (2 - l)`): taken linearly, a strong lamp's
-light crossed `fullAt` near the end of its reach, and the room's colour
-jumped there along an arc.
+`U` is the brightest channel of the unshadowed point light at the texel,
+every light counted; `B` the building's own (baked) lights' part of it;
+`t = max(mix(1, vis, strength), 0)` what the shadow sample lets through.
+`d` is averaged over the texels the pixel finds (rt_upsample), and `s`
+weighted by the pixel's match weight, so a pixel without a traced result is
+as painted. `base` and `fullAt` are Debug Graphics sliders (25% and 100% by
+default): `base` is what a lamp's full shadow leaves. The light eases into
+full (`l (2 - l)`): taken linearly, a strong lamp's light crossed `fullAt`
+near the end of its reach and the colour jumped there along an arc.
 
-where `L` is the brightest channel of the shadowed point light at the
-pixel, every light counted, the building's own baked MOLT lights included,
-each with its traced shadow (the apply pass's `point / wsum` before the
-point-light strength). `base` and `fullAt` are Debug Graphics sliders
-(25% and 100% by default). Where the lamps shine fully all of the painted
-colour remains; where none reaches, `base` of it. Weighted by the pixel's
-match weight, so a pixel without a traced result is as painted.
+Only the building's own lights' shadows take anything. A torch, a brazier,
+a fire is no light the bake holds: its shadow takes back only the light it
+adds (`pointOwn`), never the painted colour. Where no light reaches, or none
+is stopped, the colour is as painted.
+
+It was `s = base + (1 - base) lit(L)` with `L` the shadowed light of every
+light: base where no point light reached. The painters lit the rooms from
+lights the trace does not have, though. Undercity's Trade Quarter has two of
+its building's lights within thirty yards of the barber, both out of reach
+of the floor in front of it; the floor fell to the base wherever the nearest
+lamp (a lantern, a baked doodad light) gave out - a dark field the original
+does not have, its edge the jagged line where that lamp's light ends on the
+floor (its reach, and its storey: WOWEE_RT_LIGHT_STOREY=0 moved the edge),
+broken into blotches by the surface bumps' N.L. Debug view 10
+showed it red. Now a corner away from every lamp is as painted too.
 
 A unit on an interior floor (`RT_GB_UNIT_FLOOR`) takes neither: its colour
 is its floor's, which holds the room's lamps as they reach the floor already.

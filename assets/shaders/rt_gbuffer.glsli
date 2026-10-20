@@ -213,22 +213,51 @@ RtGbuf rtGbufUnpack(vec4 gb0, vec4 gb1) {
 }
 
 // Inside, what a baked colour - an interior's vertex colours, a doodad's MODD
-// colour, a unit's floor colour - is scaled by: base where no point light
-// reaches, all of it where their light (shadowed, every light's, the
-// building's own baked ones included) is fullAt or more, linear between;
-// weighed in by how well the pixel found its own traced result, so where it
-// found none the colour is as painted. The painters lit every room evenly
-// from its lamps, which the original shows the same everywhere; this lets
-// the corners away from them fall dark and the places by them stay as
-// painted. Mirrored in rt_gbuffer_pack.hpp (interiorShade).
-// The light eases into full (lit (2 - lit)): taken linearly, a strong lamp's
-// light crossed fullAt near the end of its reach, and the room's colour
-// jumped there along an arc.
-float rtInteriorShade(vec3 pointLight, float weight, float base, float fullAt) {
-    float l = max(pointLight.r, max(pointLight.g, pointLight.b));
+// colour, a unit's floor colour - is scaled by: of what the building's own
+// lamps' shadows take of the room's light (rtRoomDarkness, 0 to 1), that
+// share of 1 - base; weighed in by how well the pixel found its own traced
+// result, so where it found none the colour is as painted. base is what a
+// lamp's full shadow leaves (Debug Graphics, "unlit").
+//
+// It went by how much light reaches, not by how much the shadows take:
+// base where no point light reached, all of it at fullAt. But the painters
+// lit the rooms from lights the trace does not have - Undercity's Trade
+// Quarter holds two of its building's lights within thirty yards, both out
+// of reach of the floor in front of the barber - and the original shows the
+// bake as it is. There the floor fell to the base wherever the nearest lamp
+// gave out: a dark field in front of the barber whose edge followed where
+// that lamp's light ends on the floor (its reach and its storey; the jagged
+// line) and, with surface bumps, broke up by the bumps' N.L (the blotches). Mirrored in
+// rt_gbuffer_pack.hpp (interiorShade).
+float rtInteriorShade(float roomDark, float weight, float base) {
+    return mix(1.0, 1.0 - (1.0 - base) * clamp(roomDark, 0.0, 1.0), clamp(weight, 0.0, 1.0));
+}
+
+// How lit a room's light l looks: eased into full at fullAt (lit (2 - lit)):
+// taken linearly, a strong lamp's light crossed fullAt near the end of its
+// reach and the colour jumped there along an arc.
+float rtRoomLit(float l, float fullAt) {
     float lit = clamp(l / max(fullAt, 1e-3), 0.0, 1.0);
-    lit = lit * (2.0 - lit);
-    return mix(1.0, base + (1.0 - base) * lit, clamp(weight, 0.0, 1.0));
+    return lit * (2.0 - lit);
+}
+
+// What the shadows take of a room's light at one traced texel, as
+// rtInteriorShade uses it: how lit the light that reaches looks, less how
+// lit what the shadows leave of it looks. p the point lights' unshadowed
+// light with the baked lights' part in a (rt_trace), vis the shadow sample,
+// strength the point shadows' (Debug Graphics). Only the building's own
+// lights - what its painted colours were lit by - lose light to their
+// shadows here; every other light (a torch, a brazier, a fire) the bake does
+// not hold, so its shadow takes back only the light it adds (pointOwn), not
+// the painted colour under it. As the baked lamps' shadow (rtBakedDarkness)
+// does, the one sample stands for every light. Where no light reaches, or
+// none is stopped, nothing is taken: the colour is as painted.
+float rtRoomDarkness(vec4 p, float vis, float strength, float fullAt) {
+    float total = max(p.r, max(p.g, p.b));
+    float baked = clamp(p.a, 0.0, total);
+    float through = max(mix(1.0, vis, strength), 0.0);
+    float left = total - baked * (1.0 - through);
+    return max(rtRoomLit(total, fullAt) - rtRoomLit(left, fullAt), 0.0);
 }
 
 // How much of a baked colour the building's own lamps' shadows take, before
