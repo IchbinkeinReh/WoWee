@@ -1,4 +1,5 @@
 #include "core/application.hpp"
+#include "core/cinematic_player.hpp"
 #include "game/vehicle_camera.hpp"
 #include "game/vehicle_mover.hpp"
 #include "core/frame_pacer.hpp"
@@ -3268,6 +3269,7 @@ void Application::unloadInterface() {
 
 void Application::performLogoutToLogin() {
     LOG_INFO("Logout requested");
+    if (cinematicPlayer_) cinematicPlayer_->abandon();
 
     // The interface leaves the world with the character that was wearing it.
     //
@@ -5062,6 +5064,15 @@ void Application::update(float deltaTime) {
         worldLoader_->processPendingEntry();
     }
 
+    // A cinematic's camera, sounds and fades, ahead of the renderer that
+    // shows its camera (game/cinematic.hpp).
+    if (cinematicPlayer_ && state == AppState::IN_GAME) {
+        cinematicPlayer_->update();
+        if (uiManager) uiManager->setScreenFade(cinematicPlayer_->fadeAlpha());
+    } else if (uiManager) {
+        uiManager->setScreenFade(0.0f);
+    }
+
     // Update renderer (camera, etc.) only when in-game
     updateCheckpoint = "renderer update";
     if (renderer && state == AppState::IN_GAME) {
@@ -6365,6 +6376,13 @@ void Application::setupUICallbacks() {
     transportCallbacks_ = std::make_unique<TransportCallbackHandler>(
         *entitySpawner_, *renderer, *gameHandler);
     transportCallbacks_->setupCallbacks();
+
+    // ── Cinematics: SMSG_TRIGGER_CINEMATIC and StopCinematic ──
+    cinematicPlayer_ = std::make_unique<CinematicPlayer>(*gameHandler, *renderer, *assetManager);
+    gameHandler->setCinematicCallbacks(
+        [this](uint32_t sequenceId) { if (cinematicPlayer_) cinematicPlayer_->start(sequenceId); },
+        [this] { if (cinematicPlayer_) cinematicPlayer_->stop(); });
+    gameHandler->setWorldLoadingProbe([this] { return worldLoader_ && worldLoader_->isLoadingWorld(); });
 }
 
 void Application::spawnPlayerCharacter() {

@@ -24,7 +24,24 @@ public:
     }
     void setRotation(float yaw, float pitch) {
         if (!std::isfinite(yaw) || !std::isfinite(pitch)) return;
-        this->yaw = yaw; this->pitch = pitch; updateViewMatrix();
+        this->yaw = yaw; this->pitch = pitch; lookOverride_ = false; updateViewMatrix();
+    }
+    /// Looks along `forward` with `up` as its up, which may roll - a
+    /// cinematic camera's view (m2_camera_track.hpp) - until setRotation or
+    /// clearLookOverride.
+    void setLookDirection(const glm::vec3& forward, const glm::vec3& up) {
+        const float f = glm::dot(forward, forward);
+        const float u = glm::dot(up, up);
+        if (!std::isfinite(f) || !std::isfinite(u) || f < 1e-12f || u < 1e-12f) return;
+        lookForward_ = forward / std::sqrt(f);
+        lookUp_ = up / std::sqrt(u);
+        lookOverride_ = true;
+        updateViewMatrix();
+    }
+    void clearLookOverride() {
+        if (!lookOverride_) return;
+        lookOverride_ = false;
+        updateViewMatrix();
     }
     void setAspectRatio(float aspect) {
         // glm::perspective with aspect <= 0 produces NaN in the projection.
@@ -70,6 +87,9 @@ private:
     glm::vec3 position = glm::vec3(0.0f);
     float yaw = 0.0f;
     float pitch = 0.0f;
+    bool lookOverride_ = false;
+    glm::vec3 lookForward_{1.0f, 0.0f, 0.0f};
+    glm::vec3 lookUp_{0.0f, 0.0f, 1.0f};
     float fov = 54.0f;
     float aspectRatio = 16.0f / 9.0f;
     // The client's near clip: 0x0077f490 sets it to 0.2 and ignores the

@@ -45,6 +45,7 @@ namespace core {
 // Handler forward declarations
 class NPCInteractionCallbackHandler;
 class AudioCallbackHandler;
+class CinematicPlayer;
 class EntitySpawnCallbackHandler;
 class AnimationCallbackHandler;
 class TransportCallbackHandler;
@@ -393,6 +394,7 @@ private:
     // Callback handlers (extracted from setupUICallbacks)
     std::unique_ptr<NPCInteractionCallbackHandler> npcInteractionCallbacks_;
     std::unique_ptr<AudioCallbackHandler> audioCallbacks_;
+    std::unique_ptr<CinematicPlayer> cinematicPlayer_;  ///< SMSG_TRIGGER_CINEMATIC (game/cinematic.hpp)
     std::unique_ptr<EntitySpawnCallbackHandler> entitySpawnCallbacks_;
     std::unique_ptr<AnimationCallbackHandler> animationCallbacks_;
     std::unique_ptr<TransportCallbackHandler> transportCallbacks_;

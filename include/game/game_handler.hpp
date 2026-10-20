@@ -298,11 +298,31 @@ public:
      */
     void sendMovement(Opcode opcode);
 
-    /// StopCinematic (0x00524980 -> 0x0051d7c0): CINEMATIC_STOP, and the
-    /// server told the cinematic is complete.
+    /// StopCinematic (0x00524980): the cinematic player's stop - the camera's
+    /// sound, black, then the end - or, with none, the end at once.
     void stopCinematic();
     /// InCinematic (0x00516760, DAT_00bd07fc).
     [[nodiscard]] bool inCinematic() const { return inCinematic_; }
+    void setInCinematic(bool in) { inCinematic_ = in; }
+    /// What plays a cinematic (game/cinematic.hpp): its start with the
+    /// sequence SMSG_TRIGGER_CINEMATIC names (0x00528af0), and StopCinematic.
+    using CinematicStartCallback = std::function<void(uint32_t sequenceId)>;
+    using CinematicStopCallback = std::function<void()>;
+    void setCinematicCallbacks(CinematicStartCallback start, CinematicStopCallback stop) {
+        cinematicStartCallback_ = std::move(start);
+        cinematicStopCallback_ = std::move(stop);
+    }
+    /// Whether the world is loading, when a cinematic waits for it (the
+    /// client keeps it in DAT_00c9eaac while its connection's +0x2f54 says
+    /// the world has not entered, 0x006e2e90).
+    void setWorldLoadingProbe(std::function<bool()> probe) { worldLoadingProbe_ = std::move(probe); }
+    /// The world entered: the cinematic that waited for it, now
+    /// (0x006e8190 -> 0x00528af0).
+    void startDeferredCinematic();
+    /// CMSG_NEXT_CINEMATIC_CAMERA, as each camera starts (0x00526370).
+    void sendNextCinematicCamera();
+    /// CMSG_COMPLETE_CINEMATIC, as the cinematic ends (0x0051d7c0).
+    void sendCompleteCinematic();
 
     /// ToggleRun (0x005faae0): flip the mover's walk mode, as the binding does.
     void toggleRun();
@@ -5888,7 +5908,11 @@ private:
     std::array<uint8_t, 10> gmSurveyRanks_{};        ///< DAT_00c1e8c4
     std::array<std::string, 10> gmSurveyComments_{}; ///< DAT_00c1e8d8
     std::string gmSurveyComment_;                    ///< DAT_00c1e900
-    bool inCinematic_ = false;  ///< DAT_00bd07fc, between CINEMATIC_START and _STOP
+    bool inCinematic_ = false;  ///< DAT_00bd07fc, from 0x00528af0 to 0x0051d7c0
+    uint32_t deferredCinematic_ = 0;  ///< DAT_00c9eaac
+    CinematicStartCallback cinematicStartCallback_;
+    CinematicStopCallback cinematicStopCallback_;
+    std::function<bool()> worldLoadingProbe_;
     bool releasedSpirit_ = false;
     uint32_t corpseMapId_ = 0;
     bool corpsePositionValid_ = false;

@@ -3126,6 +3126,13 @@ wowee_add_test(test_minimap_blips
 wowee_add_test(test_unit_model_events
     SOURCES test_unit_model_events.cpp)
 
+# ── test_cinematic ───────────────────────────────────────────
+# A cinematic's camera tracks and its course, fades and all (game/cinematic.hpp,
+# rendering/m2_camera_track.hpp).
+wowee_add_test(test_cinematic
+    SOURCES test_cinematic.cpp
+            ${CMAKE_SOURCE_DIR}/src/game/cinematic.cpp)
+
 # ── test_texture_variants ────────────────────────────────────
 # Interface art for additive drawing and Texture:SetDesaturated.
 wowee_add_test(test_texture_variants

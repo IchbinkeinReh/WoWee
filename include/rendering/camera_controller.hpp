@@ -59,6 +59,10 @@ public:
     /// first finger as a held left button wherever it goes, and without this
     /// the camera spins every time the player walks.
     void setRotationSuppressed(bool suppressed) { rotationSuppressed_ = suppressed; }
+    /// Holds the movement keys while a cinematic plays: CinematicFrame takes
+    /// every key the client is given then (its OnKeyDown), so none moves the
+    /// character.
+    void setCinematicKeysHeld(bool held) { cinematicKeysHeld_ = held; }
 
     /// Turns the view by a drag this controller never saw as a mouse.
     ///
@@ -952,6 +956,7 @@ private:
     [[nodiscard]] bool groundNotStreamedYet(float x, float y) const;
 
     bool rotationSuppressed_ = false;
+    bool cinematicKeysHeld_ = false;
     bool steering_ = false;
     bool moveForwardActive = false;
     bool moveBackwardActive = false;

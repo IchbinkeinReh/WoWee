@@ -186,16 +186,35 @@ GameErrorText petNameError(uint32_t reason) {
 
 // ERR_DIFFICULTY_CHANGE_COOLDOWN_S (0x2ca) with the time left worded by
 // 0x0061a9e0: SMSG_CHANGEPLAYER_DIFFICULTY_RESULT 1 and 0x0052d8d0 alike.
-// What a cinematic's end does (0x0051d7c0), StopCinematic's after its fade
-// (0x00524980) as much as a camera's that will not play: CINEMATIC_STOP,
-// CMSG_COMPLETE_CINEMATIC, and out of the cinematic (DAT_00bd07fc).
+// StopCinematic (0x00524980): the player's stop. With no player the end
+// at once, as a camera that will not start has it (0x0051d7c0):
+// CINEMATIC_STOP, CMSG_COMPLETE_CINEMATIC, and out of the cinematic.
 void GameHandler::stopCinematic() {
-    fireAddonEvent("CINEMATIC_STOP");
-    if (socket) {
-        network::Packet complete(wireOpcode(Opcode::CMSG_COMPLETE_CINEMATIC));
-        socket->send(complete);
+    if (cinematicStopCallback_) {
+        cinematicStopCallback_();
+        return;
     }
+    fireAddonEvent("CINEMATIC_STOP");
+    sendCompleteCinematic();
     inCinematic_ = false;
+}
+
+void GameHandler::sendNextCinematicCamera() {
+    if (!socket) return;
+    network::Packet next(wireOpcode(Opcode::CMSG_NEXT_CINEMATIC_CAMERA));
+    socket->send(next);
+}
+
+void GameHandler::sendCompleteCinematic() {
+    if (!socket) return;
+    network::Packet complete(wireOpcode(Opcode::CMSG_COMPLETE_CINEMATIC));
+    socket->send(complete);
+}
+
+void GameHandler::startDeferredCinematic() {
+    const uint32_t sequence = deferredCinematic_;
+    deferredCinematic_ = 0;
+    if (sequence != 0 && cinematicStartCallback_) cinematicStartCallback_(sequence);
 }
 
 void GameHandler::raiseDifficultyCooldownError(uint32_t ms) {
@@ -1435,14 +1454,25 @@ void GameHandler::registerCoreOpcodes() {
     // SMSG_SERVER_MESSAGE - moved to ChatHandler::registerOpcodes
     // SMSG_CHAT_SERVER_MESSAGE - moved to ChatHandler::registerOpcodes
     // SMSG_AREA_TRIGGER_MESSAGE - moved to ChatHandler::registerOpcodes
-    // The cinematic's id (0x006e2e90 case 0xfa -> 0x00528af0): the client is
-    // in a cinematic and, faded in, fires CINEMATIC_START (0x00527fe0). Only a
-    // camera that plays sends CMSG_NEXT_CINEMATIC_CAMERA (0x00526370); this
-    // client plays none, which is the client's own path for a camera that
-    // will not start - stopped at once (0x00527fe0 -> 0x0051d7c0), so the
-    // server hears the cinematic completed.
+    // The cinematic's sequence (0x006e2e90 case 0xfa): played (0x00528af0,
+    // game/cinematic.hpp), or - the world still loading - kept until it has
+    // entered (DAT_00c9eaac, started from 0x006e8190).
     dispatchTable_[Opcode::SMSG_TRIGGER_CINEMATIC] = [this](network::Packet& packet) {
-        packet.skipAll();
+        if (!packet.hasRemaining(4)) {
+            packet.skipAll();
+            return;
+        }
+        const uint32_t sequence = packet.readUInt32();
+        if (worldLoadingProbe_ && worldLoadingProbe_()) {
+            deferredCinematic_ = sequence;
+            return;
+        }
+        if (cinematicStartCallback_) {
+            cinematicStartCallback_(sequence);
+            return;
+        }
+        // Nothing to play it: in and out of it, as a camera that will not
+        // start (0x00527fe0 -> 0x0051d7c0).
         inCinematic_ = true;
         fireAddonEvent("CINEMATIC_START");
         stopCinematic();

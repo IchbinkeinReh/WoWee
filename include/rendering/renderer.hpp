@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <vector>
 #include <future>
+#include <optional>
 #include <atomic>
 #include <thread>
 #include <cstddef>
@@ -186,6 +187,15 @@ public:
     void renderHUD();
 
     Camera* getCamera() { return camera.get(); }
+    /// A cinematic camera's view (game/cinematic.hpp): put over the camera
+    /// controller's every frame while set, the movement keys held with it;
+    /// none gives the camera back to the controller.
+    struct CinematicView {
+        glm::vec3 position{0.0f};
+        glm::vec3 forward{1.0f, 0.0f, 0.0f};
+        glm::vec3 up{0.0f, 0.0f, 1.0f};
+    };
+    void setCinematicView(const std::optional<CinematicView>& view);
     /// Waits like the renderers' getters below: the doodad worker reads the
     /// camera, and the controller is what moves it.
     CameraController* getCameraController() { syncWorldRecording(); return cameraController.get(); }
@@ -994,6 +1004,7 @@ private:
     bool worldDrawnLastFrame_ = false;
     std::chrono::steady_clock::time_point lastFrameStart_{};
     float lastDeltaTime_ = 0.0f;           // cached for post-process pipeline
+    std::optional<CinematicView> cinematicView_;  ///< setCinematicView
     bool createSecondaryCommandResources();
     void destroySecondaryCommandResources();
     /// gbufferPhase: for the ray traced lighting's G-buffer pass, not the

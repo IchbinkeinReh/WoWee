@@ -1415,6 +1415,9 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         // Subsequent world entries (e.g. teleport, instance entry)
         addonManager_->fireEvent("PLAYER_ENTERING_WORLD");
     }
+    // The cinematic that came while the world loaded (0x006e8190 ->
+    // 0x00528af0).
+    if (gameHandler_) gameHandler_->startDeferredCinematic();
 }
 
 void WorldLoader::startWorldPreload(uint32_t mapId, const std::string& mapName,

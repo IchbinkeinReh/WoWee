@@ -13,8 +13,9 @@ Camera::Camera() {
 
 void Camera::updateViewMatrix() {
     glm::vec3 front = getForward();
-    // Use Z-up for WoW coordinate system
-    viewMatrix = glm::lookAt(position, position + front, glm::vec3(0.0f, 0.0f, 1.0f));
+    // Use Z-up for WoW coordinate system, or the rolled up of a look set
+    // whole.
+    viewMatrix = glm::lookAt(position, position + front, lookOverride_ ? lookUp_ : glm::vec3(0.0f, 0.0f, 1.0f));
 }
 
 void Camera::updateProjectionMatrix() {
@@ -35,6 +36,7 @@ void Camera::updateProjectionMatrix() {
 }
 
 glm::vec3 Camera::getForward() const {
+    if (lookOverride_) return lookForward_;
     // WoW coordinate system: X/Y horizontal, Z vertical
     glm::vec3 front;
     front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
@@ -44,6 +46,11 @@ glm::vec3 Camera::getForward() const {
 }
 
 glm::vec3 Camera::getRight() const {
+    if (lookOverride_) {
+        const glm::vec3 r = glm::cross(lookForward_, lookUp_);
+        const float l = glm::length(r);
+        if (l >= 1e-6f) return r / l;
+    }
     // Use Z-up for WoW coordinate system. If forward is parallel to the up
     // axis (camera staring straight up/down), cross is zero and normalize
     // returns NaN - fall back to world +X so view/proj stay finite.
@@ -54,6 +61,7 @@ glm::vec3 Camera::getRight() const {
 }
 
 glm::vec3 Camera::getUp() const {
+    if (lookOverride_) return lookUp_;
     glm::vec3 c = glm::cross(getRight(), getForward());
     float len = glm::length(c);
     if (len < 1e-6f) return glm::vec3(0.0f, 0.0f, 1.0f);

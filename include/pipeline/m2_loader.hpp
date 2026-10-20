@@ -135,6 +135,20 @@ struct M2Attachment {
 // Camera baked into the model. Scene models (the character-select glue screens,
 // cinematics) carry the framing the artist authored them for; without it, a scene
 // whose geometry sits hundreds of units from its origin cannot be placed sensibly.
+/// A camera's track (M2Track<M2SplineKey<T>>): per sequence, its key times
+/// and, per key, the value, its in-tangent and its out-tangent - each of
+/// `components` floats (3 for a position, 1 for the roll).
+struct M2SplineTrack {
+    uint16_t interpolationType = 0;  // 0=none, 1=linear, 2=bezier, 3=hermite (0x0082b460)
+    int16_t globalSequence = -1;
+    uint32_t components = 3;
+    struct SequenceKeys {
+        std::vector<uint32_t> timestamps;  // ms
+        std::vector<float> keys;           // components * 3 floats a key
+    };
+    std::vector<SequenceKeys> sequences;
+};
+
 struct M2Camera {
     /// 0 is the portrait camera, 1 the character-sheet one, -1 anything else.
     /// Kept because the portrait framing is chosen by it: a model that carries
@@ -146,6 +160,11 @@ struct M2Camera {
     float nearClip = 0.0f;
     glm::vec3 positionBase{0.0f};
     glm::vec3 targetBase{0.0f};  // the point the camera looks at
+    /// What the animation adds to the two bases, and the roll (WotLK
+    /// models only): the cinematic cameras fly by these.
+    M2SplineTrack positionTrack;
+    M2SplineTrack targetTrack;
+    M2SplineTrack rollTrack;
 };
 
 // FBlock: particle lifetime curve (color/alpha/scale over particle life)

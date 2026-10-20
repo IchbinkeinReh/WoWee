@@ -3035,7 +3035,7 @@ void CameraController::update(float deltaTime) {
     // about a chat box FrameXML draws, so on its own it let the character walk
     // away while someone was typing.
     bool uiWantsKeyboard = ImGui::GetIO().WantTextInput ||
-                           ui::interfaceTakingTypedInput();
+                           ui::interfaceTakingTypedInput() || cinematicKeysHeld_;
 
     // Suppress movement input after teleport/portal (keys may still be held)
     if (movementSuppressTimer_ > 0.0f) {
