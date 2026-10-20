@@ -167,6 +167,10 @@ endfunction()
 wowee_add_test(test_sell_count
     SOURCES test_sell_count.cpp)
 
+# /gps: the client's position as a `.go xyz` line. Header-only formatting.
+wowee_add_test(test_client_gps
+    SOURCES test_client_gps.cpp)
+
 # Stock-style hill climbing regression test. Run directly with:
 #   cmake --build build --target test_hill_climbing && ctest --test-dir build -R hill_climbing
 wowee_add_test(test_hill_climbing

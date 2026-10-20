@@ -9,6 +9,8 @@
 #include "core/application.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "ui/chat/chat_utils.hpp"
+#include "ui/chat/client_gps.hpp"
+#include "core/coordinates.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/renderer.hpp"
 #include "core/frame_profiler.hpp"
@@ -243,6 +245,46 @@ public:
     }
 };
 
+// ---------------------------------------------------------------------------
+// /gps - where the client has the player, as `.go xyz X Y Z MAP O` in the
+// server's convention (not the server's own `.gps` answer), to compare the
+// two after a teleport and to go back to a spot.
+// ---------------------------------------------------------------------------
+class GpsCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        const auto say = [&](const std::string& text) {
+            ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(text));
+            LOG_INFO("/gps: ", text);
+        };
+        const uint32_t mapId = ctx.gameHandler.getCurrentMapId();
+        const auto& mi = ctx.gameHandler.getMovementInfo();
+        const glm::vec3 sent = core::coords::canonicalToServer(glm::vec3(mi.x, mi.y, mi.z));
+        const float facing = core::coords::canonicalToServerYaw(mi.orientation);
+        auto* renderer = ctx.services.renderer;
+        // Where the model stands, which is what the screen shows; the
+        // movement the client last told the server below it if they part.
+        glm::vec3 drawn = sent;
+        if (renderer) {
+            drawn = core::coords::canonicalToServer(
+                core::coords::renderToCanonical(renderer->getCharacterPosition()));
+        }
+        say(client_gps::goXyzLine(mapId, drawn.x, drawn.y, drawn.z, facing));
+        if (client_gps::differs(drawn.x, drawn.y, drawn.z, sent.x, sent.y, sent.z)) {
+            say("Sent to the server: " + client_gps::goXyzLine(mapId, sent.x, sent.y, sent.z, facing));
+        }
+        if (const auto* t = renderer ? renderer->getZoneTexts() : nullptr) {
+            const std::string zone = client_gps::zoneLine(t->zone, t->subzone);
+            if (!zone.empty()) say(zone);
+        }
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"gps"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "The client's position as a .go xyz line (server convention)";
+    }
+};
+
 // --- /profile [on|off|dump|csv [path|off]] ---
 class ProfileCommand : public IChatCommand {
 public:
@@ -342,6 +384,7 @@ public:
 void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<ProfileCommand>());
     reg.registerCommand(std::make_unique<ClimbCommand>());
+    reg.registerCommand(std::make_unique<GpsCommand>());
     reg.registerCommand(std::make_unique<RunCommand>());
     reg.registerCommand(std::make_unique<DumpCommand>());
     reg.registerCommand(std::make_unique<ReloadCommand>());
