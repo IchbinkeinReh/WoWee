@@ -840,9 +840,13 @@ private:
     mutable std::future<void> shadowFuture_;
     mutable std::atomic<bool> shadowWorkerInFlight_{false};
     void joinShadowWorker() const;
-    /// Whether this frame's shadow pass draws this slot's map and leaves it
-    /// readable. The volumetric fog samples that map, so it runs by the same
-    /// answer. Valid after computeLightSpaceMatrix for the frame.
+    /// Whether this slot's map is readable once the frame's shadow pass has
+    /// run: drawn this frame, or - with shadows off - cleared once and left in
+    /// the layout its readers expect. The volumetric fog samples that map, so
+    /// it runs by this answer. Valid after computeLightSpaceMatrix.
+    [[nodiscard]] bool shadowMapReadyThisFrame() const;
+    /// Whether this frame's shadow pass draws casters into the map: ready, and
+    /// dynamic shadows switched on.
     [[nodiscard]] bool shadowPassDrawsThisFrame() const;
     glm::mat4 computeLightSpaceMatrix();
 

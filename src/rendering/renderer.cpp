@@ -1,5 +1,6 @@
 #include "rendering/renderer.hpp"
 #include "rendering/depth_convention.hpp"
+#include "rendering/shadow_pass_work.hpp"
 #include "rendering/sun_direction.hpp"
 #include "rendering/wmo_sidn.hpp"
 
@@ -758,7 +759,7 @@ void Renderer::updatePerFrameUBO() {
     // the dispatch and a map that was never drawn. Decided here instead, the
     // screens with no world never record the fog at all.
     volumetricThisFrame_ = volumetricFog_ && volumetricFog_->isOn() &&
-                           volumetricFogDensity_ > 0.0f && shadowPassDrawsThisFrame() &&
+                           volumetricFogDensity_ > 0.0f && shadowMapReadyThisFrame() &&
                            !(passAblation_ && passAblation_->skip(AblationPass::VolumetricFog));
     currentFrameData.volumetricParams = volumetricThisFrame_ ? volumetricFog_->frameParams()
                                                              : glm::vec4(0.0f);
@@ -5950,6 +5951,10 @@ void Renderer::renderReflectionPass() {
 }
 
 bool Renderer::shadowPassDrawsThisFrame() const {
+    return shadowsEnabled && shadowMapReadyThisFrame();
+}
+
+bool Renderer::shadowMapReadyThisFrame() const {
     // One answer for planShadowPass and for the fog, which samples what it
     // draws: two copies of these conditions could disagree, and a fog
     // dispatched on a frame whose map was not drawn reads whatever the slot
@@ -5996,19 +6001,27 @@ void Renderer::planShadowPass() {
     shadowPlan_ = ShadowPlan();
     if (shadowDepthImage[0] == VK_NULL_HANDLE) return;
     if (currentCmd == VK_NULL_HANDLE) return;
-    // Shadows off still runs the whole pass, casters and all: the shaders
-    // stop reading the map (shadowParams.x), and that is the only difference.
-    // Skipping the casters lost the device within a second - something they
-    // record each frame is read later in the frame, and it was not found -
-    // and returning here instead left the image untransitioned while it
-    // stayed bound for sampling. The cost is a shadow pass nobody sees.
-
     // Shadows render every frame - throttling causes visible flicker on player/NPCs
 
     // Before the character has a position, or with the pass switched off for
     // measuring (WOWEE_SKIP_SHADOWS, the ablation), there is nothing to draw.
-    if (!shadowPassDrawsThisFrame()) return;
+    if (!shadowMapReadyThisFrame()) return;
     const uint32_t frame = vkCtx->getCurrentFrame();
+
+    // Shadows off draws nothing (see shadow_pass_work.hpp): a slot that never
+    // left UNDEFINED or was rebuilt gets one empty pass, cleared and
+    // transitioned, and after that the pass is skipped whole, exactly as the
+    // shadow ablation skips it. Skipping only the casters once lost the
+    // device, but that was the inline pass in beginFrame; since the pass is
+    // planned here and recorded into the prologue, skipping it whole is what
+    // the ablation has done on every frame it measures, desktop and phone.
+    // Drawing the casters regardless cost a phone 3 to 13 ms a frame for a
+    // map no shader read.
+    const ShadowPassWork work = shadowPassWork(
+        true, shadowsEnabled,
+        shadowDepthLayout_[frame] == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    if (work == ShadowPassWork::None) return;
+    const bool drawCasters = (work == ShadowPassWork::DrawCasters);
 
     ShadowPlan& plan = shadowPlan_;
     plan.cmd = vkCtx->getFramePrologue();
@@ -6023,13 +6036,19 @@ void Renderer::planShadowPass() {
                   .height = shadowAtlasHeight(shadowCascadeCount_, SHADOW_MAP_SIZE)};
     // Copied, and the renderers' pointers with them: a worker reads nothing of
     // this object's that the main thread can change while it records.
-    plan.cascadeCount = std::min(activeShadowCascades_, kMaxShadowCascades);
-    for (int c = 0; c < plan.cascadeCount; ++c) plan.cascades[c] = shadowCascades_[c];
-    plan.terrain = terrainRenderer.get();
-    plan.wmo = wmoRenderer.get();
-    plan.m2 = m2Renderer.get();
-    plan.characters = characterRenderer.get();
-    plan.marks = vkCtx->gpuReserveMarks(kMaxShadowCascades + 1);
+    if (drawCasters) {
+        plan.cascadeCount = std::min(activeShadowCascades_, kMaxShadowCascades);
+        for (int c = 0; c < plan.cascadeCount; ++c) plan.cascades[c] = shadowCascades_[c];
+        plan.terrain = terrainRenderer.get();
+        plan.wmo = wmoRenderer.get();
+        plan.m2 = m2Renderer.get();
+        plan.characters = characterRenderer.get();
+        plan.marks = vkCtx->gpuReserveMarks(kMaxShadowCascades + 1);
+    } else {
+        // The empty pass: no cascades, no casters, no marks in /perf.
+        plan.cascadeCount = 0;
+        plan.marks = VkContext::kNoGpuMark;
+    }
 
     // How recordShadowPass begins the pass, one way or the other.
     //

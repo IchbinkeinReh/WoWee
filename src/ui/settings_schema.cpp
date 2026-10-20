@@ -132,9 +132,9 @@ constexpr SettingDesc kSchema[] = {
     // three are read together.
     //
     // Off by default: the client's extShadowQuality defaults to 0, "baked
-    // terrain shadows and no dynamic ones" (0x0078e400). Turning them off
-    // used to lose the device; the casters are drawn either way now and only
-    // the lighting stops reading the map (Renderer::planShadowPass).
+    // terrain shadows and no dynamic ones" (0x0078e400). Off skips the
+    // shadow pass whole; the map is only cleared once so it stays in the
+    // layout its readers are bound to (Renderer::planShadowPass).
     {"shadows", "Dynamic shadows", SettingKind::Bool, 0, 0, 0, "Shadows", "Shadows",
      "Shadows cast by the sun from everything in the world, from a\n"
      "shadow map. Off is the original client's default look: the\n"
