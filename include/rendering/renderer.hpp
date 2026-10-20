@@ -852,9 +852,6 @@ private:
     /// the layout its readers expect. The volumetric fog samples that map, so
     /// it runs by this answer. Valid after computeLightSpaceMatrix.
     [[nodiscard]] bool shadowMapReadyThisFrame() const;
-    /// Whether this frame's shadow pass draws casters into the map: ready, and
-    /// dynamic shadows switched on.
-    [[nodiscard]] bool shadowPassDrawsThisFrame() const;
     glm::mat4 computeLightSpaceMatrix();
 
     std::vector<pipeline::CustomZoneInfo> customZones_;

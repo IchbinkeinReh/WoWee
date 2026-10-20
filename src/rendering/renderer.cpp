@@ -5968,10 +5968,6 @@ void Renderer::renderReflectionPass() {
     waterRenderer->endReflectionPass(currentCmd);
 }
 
-bool Renderer::shadowPassDrawsThisFrame() const {
-    return shadowsEnabled && shadowMapReadyThisFrame();
-}
-
 bool Renderer::shadowMapReadyThisFrame() const {
     // One answer for planShadowPass and for the fog, which samples what it
     // draws: two copies of these conditions could disagree, and a fog
