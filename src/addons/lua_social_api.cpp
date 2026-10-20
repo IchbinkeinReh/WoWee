@@ -5,6 +5,8 @@
 #include <cstring>
 #include <iterator>
 #include <vector>
+#include "game/opcode_table.hpp"
+#include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "game/chat_handler.hpp"
@@ -3842,7 +3844,17 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"EnableAllAddOns",          [](lua_State* L) -> int {
                     return setAllAddOnsEnabled(L, true);
                 }},
-                {"SetTaxiBenchmarkMode",     [](lua_State* L) -> int { (void)L; return 0; }},
+                // SetTaxiBenchmarkMode([on]) (0x00517b50):
+                // CMSG_SET_TAXI_BENCHMARK_MODE and the switch, one byte; the
+                // server answers in PLAYER_FLAGS 0x20000.
+                {"SetTaxiBenchmarkMode",     [](lua_State* L) -> int {
+                    auto* gh = getGameHandler(L);
+                    if (!gh || game::wireOpcode(game::Opcode::CMSG_SET_TAXI_BENCHMARK_MODE) == 0xFFFF) return 0;
+                    network::Packet packet(game::wireOpcode(game::Opcode::CMSG_SET_TAXI_BENCHMARK_MODE));
+                    packet.writeUInt8(luaClientSwitchArg(L, 1, true) ? 1 : 0);
+                    gh->sendInterfaceRequest(packet);
+                    return 0;
+                }},
                 // 0x00564b90 asks the taint check (kind 3) before stopping.
                 {"StopMacro",                [](lua_State* L) -> int {
                     taint::allowed(L, 3);

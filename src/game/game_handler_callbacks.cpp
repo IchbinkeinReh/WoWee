@@ -2793,6 +2793,10 @@ void GameHandler::sendCommentatorRequest(network::Packet& packet) {
     if (socket && state == WorldState::IN_WORLD) socket->send(packet);
 }
 
+void GameHandler::sendInterfaceRequest(network::Packet& packet) {
+    if (socket && state == WorldState::IN_WORLD && packet.getOpcode() != 0xFFFF) socket->send(packet);
+}
+
 void GameHandler::sendTutorialClear() {
     if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR) == 0xFFFF) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR));
@@ -3026,8 +3030,8 @@ void GameHandler::requestStabledPetList() {
     if (spellHandler_) spellHandler_->requestStabledPetList();
 }
 
-void GameHandler::stablePet(uint8_t slot) {
-    if (spellHandler_) spellHandler_->stablePet(slot);
+void GameHandler::stablePet() {
+    if (spellHandler_) spellHandler_->stablePet();
 }
 
 void GameHandler::buyStableSlot() {

@@ -432,7 +432,7 @@ public:
 
     // Pet stable commands (called via GameHandler delegation)
     void requestStabledPetList();
-    void stablePet(uint8_t slot);
+    void stablePet();
     void unstablePet(uint32_t petNumber);
 
     // DBC cache loading (called from GameHandler during login)

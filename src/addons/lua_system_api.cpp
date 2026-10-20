@@ -24,6 +24,8 @@
 #include "core/config_paths.hpp"
 #include "ui/settings_schema.hpp"
 #include "imgui.h"
+#include "game/opcode_table.hpp"
+#include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/chat_window_background.hpp"
@@ -4746,6 +4748,170 @@ static int lua_GetLFGRoleUpdate(lua_State* L) {
     return 3;
 }
 
+/// The player's PLAYER_FLAGS, or none without a player.
+static std::optional<uint32_t> playerFlagsOf(game::GameHandler* gh) {
+    const auto player = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+    if (!player) return std::nullopt;
+    const uint16_t i = game::fieldIndex(game::UF::PLAYER_FLAGS);
+    return i != 0xFFFF ? player->getField(i) : 0u;
+}
+
+/// 1 when the player's PLAYER_FLAGS carry the bit, nil otherwise.
+static int pushPlayerFlag(lua_State* L, uint32_t bit) {
+    const auto flags = playerFlagsOf(getGameHandler(L));
+    if (flags && (*flags & bit)) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 1;
+}
+
+// GetAllowLowLevelRaid() (0x0051d5a0): PLAYER_FLAGS 0x10000.
+static int lua_GetAllowLowLevelRaid(lua_State* L) { return pushPlayerFlag(L, 0x10000); }
+
+// GetTaxiBenchmarkMode() (0x0051d100): PLAYER_FLAGS 0x20000.
+static int lua_GetTaxiBenchmarkMode(lua_State* L) { return pushPlayerFlag(L, 0x20000); }
+
+/// A request of one opcode and one byte, the way the client's setters build
+/// them.
+static void sendByteRequest(game::GameHandler* gh, game::Opcode op, uint8_t value) {
+    if (!gh || game::wireOpcode(op) == 0xFFFF) return;
+    network::Packet packet(game::wireOpcode(op));
+    packet.writeUInt8(value);
+    gh->sendInterfaceRequest(packet);
+}
+
+// SetAllowLowLevelRaid([on]) (0x0051d600): with a player, the switch twice -
+// CMSG_SET_ALLOW_LOW_LEVEL_RAID1 and _RAID2, a byte each.
+static int lua_SetAllowLowLevelRaid(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!playerFlagsOf(gh)) return 0;
+    const uint8_t on = luaClientSwitchArg(L, 1, true) ? 1 : 0;
+    sendByteRequest(gh, game::Opcode::CMSG_SET_ALLOW_LOW_LEVEL_RAID1, on);
+    sendByteRequest(gh, game::Opcode::CMSG_SET_ALLOW_LOW_LEVEL_RAID2, on);
+    return 0;
+}
+
+// OpeningCinematic() (0x005166f0): CMSG_OPENING_CINEMATIC, which asks the
+// server for the race's opening cinematic.
+static int lua_OpeningCinematic(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh || game::wireOpcode(game::Opcode::CMSG_OPENING_CINEMATIC) == 0xFFFF) {
+        LOG_WARNING("OpeningCinematic: no CMSG_OPENING_CINEMATIC to send");
+        return 0;
+    }
+    network::Packet packet(game::wireOpcode(game::Opcode::CMSG_OPENING_CINEMATIC));
+    gh->sendInterfaceRequest(packet);
+    return 0;
+}
+
+// OpenTrainer() (0x00595040 -> 0x006d1f20): with a player, CMSG_TRAINER_LIST
+// for the player's own guid - the trainer window asked of oneself, which a
+// server answers only for a character it lets train itself.
+static int lua_OpenTrainer(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!playerFlagsOf(gh) || game::wireOpcode(game::Opcode::CMSG_TRAINER_LIST) == 0xFFFF) {
+        LOG_WARNING("OpenTrainer: no player to ask for, or no CMSG_TRAINER_LIST");
+        return 0;
+    }
+    network::Packet packet(game::wireOpcode(game::Opcode::CMSG_TRAINER_LIST));
+    packet.writeUInt64(gh->getPlayerGuid());
+    gh->sendInterfaceRequest(packet);
+    return 0;
+}
+
+/// A DBC this API reads, loaded, or null.
+static std::shared_ptr<pipeline::DBCFile> loadedDBC(game::GameHandler* gh, const char* name) {
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (!am || !am->isInitialized()) return nullptr;
+    auto file = am->loadDBCOptional(name);
+    return file && file->isLoaded() ? file : nullptr;
+}
+
+/// A localized string column, from whichever locale slot the client's file
+/// fills (sixteen of them, then the flags).
+static std::string localizedDBCString(const pipeline::DBCFile& dbc, uint32_t row, uint32_t first) {
+    const uint32_t fields = dbc.getFieldCount();
+    for (uint32_t i = 0; i < 16 && first + i < fields; ++i) {
+        std::string text = dbc.getString(row, first + i);
+        if (!text.empty()) return text;
+    }
+    return {};
+}
+
+// CanMapChangeDifficulty([mapID]) (0x00517d70): 1 when Map.dbc flags the map,
+// the current one unless another is named, 0x100; nil otherwise.
+static int lua_CanMapChangeDifficulty(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint32_t mapId = lua_isnumber(L, 1) ? static_cast<uint32_t>(luaToClientInt(L, 1))
+                                              : (gh ? gh->getCurrentMapId() : 0);
+    auto maps = loadedDBC(gh, "Map.dbc");
+    const int32_t row = maps && maps->getFieldCount() > 3 ? maps->findRecordById(mapId) : -1;
+    constexpr uint32_t kMapFlagCanChangeDifficulty = 0x100;
+    if (row >= 0 && (maps->getUInt32(static_cast<uint32_t>(row), 3) & kMapFlagCanChangeDifficulty))
+        lua_pushnumber(L, 1);
+    else
+        lua_pushnil(L);
+    return 1;
+}
+
+// GetGMTicketCategories() → id1, name1, id2, name2, ... (0x00516aa0): every
+// row of GMTicketCategory.dbc.
+static int lua_GetGMTicketCategories(lua_State* L) {
+    auto categories = loadedDBC(getGameHandler(L), "GMTicketCategory.dbc");
+    if (!categories || categories->getFieldCount() < 2) return 0;
+    const uint32_t n = categories->getRecordCount();
+    if (!lua_checkstack(L, static_cast<int>(n) * 2 + 1)) return 0;
+    for (uint32_t r = 0; r < n; ++r) {
+        lua_pushnumber(L, categories->getUInt32(r, 0));
+        lua_pushstring(L, localizedDBCString(*categories, r, 1).c_str());
+    }
+    return static_cast<int>(n) * 2;
+}
+
+/// An Achievement.dbc row's flags and points (fields 41 and 39), for an
+/// achievement that is not hidden (flag 2); none otherwise.
+static std::optional<uint32_t> shownAchievementPoints(lua_State* L, uint32_t id) {
+    auto achievements = loadedDBC(getGameHandler(L), "Achievement.dbc");
+    if (!achievements || achievements->getFieldCount() <= 41) return std::nullopt;
+    const int32_t row = achievements->findRecordById(id);
+    if (row < 0) return std::nullopt;
+    constexpr uint32_t kAchievementFlagHidden = 0x2;
+    if (achievements->getUInt32(static_cast<uint32_t>(row), 41) & kAchievementFlagHidden) return std::nullopt;
+    return achievements->getUInt32(static_cast<uint32_t>(row), 39);
+}
+
+// GetAchievementNumRewards(achievementID) (0x005b1970): 1 for one that is
+// shown, nil for a hidden one or none.
+static int lua_GetAchievementNumRewards(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetAchievementNumRewards(achievementID)");
+    if (shownAchievementPoints(L, static_cast<uint32_t>(luaToClientInt(L, 1)))) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
+
+// GetAchievementReward(achievementID, index) (0x005b1a00): its points, which
+// are its one reward; nil for a hidden one or none.
+static int lua_GetAchievementReward(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) {
+        // The client's own words, the other function's name and all (0x00a17638).
+        return luaL_error(L, "Usage: GetAchievementNumRewards(achievementID, rewardIndex)");
+    }
+    if (const auto points = shownAchievementPoints(L, static_cast<uint32_t>(luaToClientInt(L, 1))))
+        lua_pushnumber(L, *points);
+    else
+        lua_pushnil(L);
+    return 1;
+}
+
+// GetNumPetitionItems() (0x005a1f70): how many charters the petition vendor
+// offers, of the ten the client keeps.
+static int lua_GetNumPetitionItems(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    int count = 0;
+    uint32_t itemId = 0, displayId = 0, cost = 0;
+    while (gh && count < 10 && gh->getPetitionCharter(count, itemId, displayId, cost)) ++count;
+    lua_pushnumber(L, count);
+    return 1;
+}
+
 // GetLFGRoleUpdateMember(index) → chosen, level, name, className, leader,
 // tank, healer, damage (0x00554750): a member of the role check, the four
 // roles nil until they have chosen; the name and class nil and "" for one the
@@ -6380,6 +6546,16 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetLFGInfoServer",         lua_GetLFGInfoServer},
                 {"GetLFGRoleUpdate",         lua_GetLFGRoleUpdate},
                 {"GetLFGRoleUpdateMember",   lua_GetLFGRoleUpdateMember},
+                {"GetAllowLowLevelRaid",     lua_GetAllowLowLevelRaid},
+                {"SetAllowLowLevelRaid",     lua_SetAllowLowLevelRaid},
+                {"GetTaxiBenchmarkMode",     lua_GetTaxiBenchmarkMode},
+                {"OpeningCinematic",         lua_OpeningCinematic},
+                {"OpenTrainer",              lua_OpenTrainer},
+                {"CanMapChangeDifficulty",   lua_CanMapChangeDifficulty},
+                {"GetGMTicketCategories",    lua_GetGMTicketCategories},
+                {"GetAchievementNumRewards", lua_GetAchievementNumRewards},
+                {"GetAchievementReward",     lua_GetAchievementReward},
+                {"GetNumPetitionItems",      lua_GetNumPetitionItems},
                 {"IsListedInLFR",            lua_IsListedInLFR},
                 {"IsPartyLFG",               lua_IsPartyLFG},
                 {"GetLFGDeserterExpiration", lua_GetLFGDeserterExpiration},

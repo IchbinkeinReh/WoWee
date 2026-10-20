@@ -1337,6 +1337,10 @@ public:
     /// A commentator's request, as CommentatorFrame.cpp builds it
     /// (CMSG_COMMENTATOR_*): sent in the world.
     void sendCommentatorRequest(network::Packet& packet);
+    /// A request an interface function builds whole, the way the client's
+    /// own Lua functions put theirs on the wire: sent in the world, and only
+    /// when the expansion has the opcode.
+    void sendInterfaceRequest(network::Packet& packet);
     // Returns true once after SMSG_PET_RENAMEABLE; consuming the flag clears it.
     bool consumePetRenameablePending() { bool v = petRenameablePending_; petRenameablePending_ = false; return v; }
     /// The same flag without taking it. The unit menu asks whether a rename is
@@ -1423,7 +1427,7 @@ public:
     uint8_t  getStableSlots() const { return stableNumSlots_; }
     const std::vector<StabledPet>& getStabledPets() const { return stabledPets_; }
     void requestStabledPetList();          // CMSG MSG_LIST_STABLED_PETS
-    void stablePet(uint8_t slot);          // CMSG_STABLE_PET (store active pet in slot)
+    void stablePet();                      // CMSG_STABLE_PET (the active pet into a free slot)
     void unstablePet(uint32_t petNumber);  // CMSG_UNSTABLE_PET (retrieve to active)
     void buyStableSlot();                  // CMSG_BUY_STABLE_SLOT (next slot from the open stable master)
     void abandonPet();                     // CMSG_PET_ABANDON (give a hunter pet up for good)

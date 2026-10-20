@@ -3875,8 +3875,10 @@ public:
 
 class StablePetPacket {
 public:
-    /** CMSG_STABLE_PET: store active pet in the given stable slot (1-based) */
-    static network::Packet build(uint64_t stableMasterGuid, uint8_t slot);
+    /** CMSG_STABLE_PET: put the active pet in the first free stable slot. The
+     *  stable master's guid is all of it (0x005a19c0); the server picks the
+     *  slot. */
+    static network::Packet build(uint64_t stableMasterGuid);
 };
 
 class UnstablePetPacket {
