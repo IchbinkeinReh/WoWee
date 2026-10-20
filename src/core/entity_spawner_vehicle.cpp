@@ -73,6 +73,7 @@ void EntitySpawner::loadVehicleTables() {
     const uint32_t vFadeMax = column(*vehicleLayout, *vehicleDbc, "CameraFadeDistScalarMax");
     const uint32_t vCamPitch = column(*vehicleLayout, *vehicleDbc, "CameraPitchOffset");
     const uint32_t vCamYaw = column(*vehicleLayout, *vehicleDbc, "CameraYawOffset");
+    const uint32_t vLocomotion = column(*vehicleLayout, *vehicleDbc, "UiLocomotionType");
     for (uint32_t row = 0; row < vehicleDbc->getRecordCount(); ++row) {
         game::vehicle::VehicleRecord rec;
         rec.id = u32(*vehicleDbc, row, vId, 0);
@@ -83,6 +84,7 @@ void EntitySpawner::loadVehicleTables() {
         rec.cameraFadeDistScalarMax = f32(*vehicleDbc, row, vFadeMax);
         rec.cameraPitchOffset = f32(*vehicleDbc, row, vCamPitch);
         rec.cameraYawOffset = f32(*vehicleDbc, row, vCamYaw);
+        rec.uiLocomotionType = u32(*vehicleDbc, row, vLocomotion, 0);
         rec.uiIndicatorId = u32(*vehicleDbc, row, column(*vehicleLayout, *vehicleDbc, "VehicleUIIndicatorID"), 0);
         for (uint32_t i = 0; i < game::vehicle::kSeatCount; ++i) {
             rec.seatIds[i] = u32(*vehicleDbc, row, seatColumns[i], 0);

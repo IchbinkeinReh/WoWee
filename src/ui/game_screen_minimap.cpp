@@ -117,12 +117,14 @@ namespace {
         VkDescriptorSet corpseArrow = VK_NULL_HANDLE;
         VkDescriptorSet guideArrow = VK_NULL_HANDLE;
         VkDescriptorSet poiArrow = VK_NULL_HANDLE;
+        /// In minimap_blips::VehicleIcon's order.
+        std::array<VkDescriptorSet, wowee::rendering::minimap_blips::kVehicleIconCount> vehicles{};
     };
 
     const MinimapArt& minimapArt(wowee::pipeline::AssetManager* assets,
                                  wowee::core::Window* window) {
         static MinimapArt art;
-        static bool gaveUp[8] = {};
+        static bool gaveUp[14] = {};
         static uint32_t generationSeen = 0;
         if (wowee::ui::uiTexturesReplaced(generationSeen)) {
             art = {};
@@ -148,6 +150,16 @@ namespace {
         load(5, art.corpseArrow, "Interface\\Minimap\\Rotating-MinimapCorpseArrow.blp");
         load(6, art.guideArrow, "Interface\\Minimap\\Rotating-MinimapGuideArrow.blp");
         load(7, art.poiArrow, "Interface\\Minimap\\Rotating-MinimapArrow.blp");
+        static constexpr const char* kVehicleArt[wowee::rendering::minimap_blips::kVehicleIconCount] = {
+            "Interface\\Minimap\\Vehicle-Ground-Unoccupied.blp",
+            "Interface\\Minimap\\Vehicle-Ground-Occupied.blp",
+            "Interface\\Minimap\\Vehicle-Air-Unoccupied.blp",
+            "Interface\\Minimap\\Vehicle-Air-Occupied.blp",
+            "Interface\\Minimap\\Vehicle-Air-Horde.blp",
+            "Interface\\Minimap\\Vehicle-Air-Alliance.blp",
+        };
+        for (size_t i = 0; i < art.vehicles.size(); ++i)
+            load(8 + static_cast<int>(i), art.vehicles[i], kVehicleArt[i]);
         return art;
     }
 
@@ -1178,6 +1190,79 @@ void GameScreen::renderMinimapPartyDots(const MinimapFrame& frame, game::GameHan
     }
 }
 
+// The vehicles a battlefield lists - those whose Vehicle.dbc row has flag
+// 0x10000000, forty at most, as they come into the world (0x0054aba0) -
+// each turned to its facing, in lists by kind drawn one after another
+// (0x00581e80 gathers, 0x00580720 draws). One is left out while dead
+// (0x00716490), further than 0.8 of the map's reach in three dimensions, or
+// driven by the player: possessed, and its charmer - or, with none, its
+// creator - is the player. The art turns by the facing alone, the map's
+// own turn aside: 0x00580720 turns only the icon's place.
+bool GameScreen::renderMinimapVehicles(const MinimapFrame& frame, const EntityList& units,
+                                       const EntityList& players, game::GameHandler& gameHandler) {
+    namespace mb = minimap_blips;
+    const MinimapArt& art = minimapArt(services_.assetManager, services_.window);
+    const uint64_t selfGuid = gameHandler.getPlayerGuid();
+    const uint16_t flagsIndex = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+    const auto guidField = [](const game::Entity& e, game::UF low) -> uint64_t {
+        const uint16_t idx = game::fieldIndex(low);
+        if (idx == 0xFFFF) return 0;
+        return static_cast<uint64_t>(e.getField(idx)) |
+               (static_cast<uint64_t>(e.getField(static_cast<uint16_t>(idx + 1))) << 32);
+    };
+
+    struct Icon {
+        mb::VehicleIcon kind;
+        float sx, sy, facing;
+    };
+    std::vector<Icon> icons;
+    bool drives = false;
+    size_t listed = 0;
+    const auto consider = [&](const std::shared_ptr<game::Entity>& entity) {
+        const auto* row = gameHandler.vehicleRowOf(entity->getGuid());
+        if (!row || (row->flags & mb::kVehicleFlagMapIcon) == 0) return;
+        if (listed++ >= mb::kMaxListedVehicles) return;
+        const auto& unit = static_cast<const game::Unit&>(*entity);
+        if (unit.getHealth() == 0) return;
+        const glm::vec3 render = core::coords::canonicalToRender(glm::vec3(unit.getX(), unit.getY(), unit.getZ()));
+        if (!mb::withinBlipReach(glm::distance(render, frame.playerRender), frame.view.viewRadius)) return;
+        const bool possessed = flagsIndex != 0xFFFF && (unit.getField(flagsIndex) & mb::kUnitFlagPossessed) != 0;
+        if (possessed) {
+            uint64_t driver = guidField(unit, game::UF::UNIT_FIELD_CHARMEDBY);
+            if (driver == 0) driver = guidField(unit, game::UF::UNIT_FIELD_CREATEDBY);
+            if (driver == selfGuid) {
+                drives = true;
+                return;
+            }
+        }
+        const auto kind = mb::vehicleIcon(row->uiLocomotionType, possessed);
+        if (!kind) return;
+        float sx = 0.0f, sy = 0.0f;
+        if (!frame.projectBlip(render, sx, sy)) return;
+        icons.push_back({*kind, sx, sy, unit.getOrientation()});
+    };
+    for (const auto& entity : units) consider(entity);
+    for (const auto& entity : players) consider(entity);
+
+    std::stable_sort(icons.begin(), icons.end(),
+                     [](const Icon& a, const Icon& b) { return a.kind < b.kind; });
+    const float unitPx = frame.unitPixels();
+    for (const Icon& icon : icons) {
+        const VkDescriptorSet texture = art.vehicles[static_cast<size_t>(icon.kind)];
+        if (!texture) continue;
+        ImVec2 corners[4];
+        const float uv[4][2] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
+        for (int i = 0; i < 4; ++i) {
+            const auto p = mb::rimArrowArtPoint(icon.facing, uv[i][0], uv[i][1], mb::kVehicleIconSize);
+            corners[i] = ImVec2(icon.sx + p[0] * unitPx, icon.sy - p[1] * unitPx);
+        }
+        frame.drawList->AddImageQuad((ImTextureID)(uintptr_t)texture, corners[0], corners[1], corners[2],
+                                     corners[3], ImVec2(0.0f, 0.0f), ImVec2(1.0f, 0.0f),
+                                     ImVec2(1.0f, 1.0f), ImVec2(0.0f, 1.0f));
+    }
+    return drives;
+}
+
 // Flag carriers and the other positions a battleground reports.
 void GameScreen::renderMinimapBattlegroundPositions(const MinimapFrame& frame, game::GameHandler& gameHandler) {
     // BG flag carrier / important player positions (MSG_BATTLEGROUND_PLAYER_POSITIONS)
@@ -1385,7 +1470,7 @@ void GameScreen::renderMinimapPois(const MinimapFrame& frame, game::GameHandler&
 // no size), turned by the player's facing about its middle (0x0057bcc0,
 // SetRotation's 0.5, 0.5). A minimap that turns with the camera keeps it
 // pointing up.
-void GameScreen::renderMinimapPlayerArrow(const MinimapFrame& frame) {
+void GameScreen::renderMinimapPlayerArrow(const MinimapFrame& frame, uint8_t alpha) {
     auto* renderer = services_.renderer;
     auto* minimap = renderer ? renderer->getMinimap() : nullptr;
     if (!minimap) return;
@@ -1410,7 +1495,8 @@ void GameScreen::renderMinimapPlayerArrow(const MinimapFrame& frame) {
                                  corner(-hw, -hh), corner(hw, -hh),
                                  corner(hw, hh), corner(-hw, hh),
                                  ImVec2(0.0f, 0.0f), ImVec2(1.0f, 0.0f),
-                                 ImVec2(1.0f, 1.0f), ImVec2(0.0f, 1.0f));
+                                 ImVec2(1.0f, 1.0f), ImVec2(0.0f, 1.0f),
+                                 IM_COL32(255, 255, 255, alpha));
 }
 
 // The wheel and the ctrl+click, when this client owns the ring.
@@ -1799,11 +1885,15 @@ void GameScreen::renderMinimapMarkers(game::GameHandler& gameHandler) {
     // The group's blips go down before the objects' (0x00581e80 calls
     // 0x0057ff70 first).
     renderMinimapPartyDots(frame, gameHandler);
+    // Then the vehicles (0x00580720), under the objects' blips.
+    const bool drivesListedVehicle = renderMinimapVehicles(frame, minimapUnits, minimapPlayers, gameHandler);
     renderMinimapObjectBlips(frame, minimapUnits, minimapPlayers, minimapGameObjects,
                              statuses, gameHandler);
     renderMinimapBattlegroundPositions(frame, gameHandler);
     renderMinimapPois(frame, gameHandler);
-    renderMinimapPlayerArrow(frame);
+    // Fainter while the player sits in a vehicle it does not drive there.
+    const bool inVehicleSeat = gameHandler.vehicleRoster().passenger(gameHandler.getPlayerGuid()).has_value();
+    renderMinimapPlayerArrow(frame, minimap_blips::playerArrowAlpha(inVehicleSeat, drivesListedVehicle));
     // Blocked by any window in front, and entirely when FrameXML draws the
     // minimap - then the ring is a widget with its own handlers, and running
     // both would ping twice and zoom two steps a notch. Both halves below need

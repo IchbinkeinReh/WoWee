@@ -107,6 +107,7 @@ struct VehicleRecord {
     float cameraFadeDistScalarMax = 0.0f;        ///< +0x40
     float cameraPitchOffset = 0.0f;              ///< +0x44
     float cameraYawOffset = 0.0f;                ///< +0x84
+    uint32_t uiLocomotionType = 0;               ///< +0x88, the minimap's icon (0x00581e80)
     uint32_t uiIndicatorId = 0;                  ///< +0x90
 };
 

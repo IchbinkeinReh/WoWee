@@ -331,12 +331,16 @@ private:
                                   game::GameHandler& gameHandler);
     void renderMinimapPings(const MinimapFrame& frame, game::GameHandler& gameHandler);
     void renderMinimapPartyDots(const MinimapFrame& frame, game::GameHandler& gameHandler);
+    /// The listed vehicles' icons; returns whether one of them is the one the
+    /// player drives, which leaves the player's arrow whole.
+    bool renderMinimapVehicles(const MinimapFrame& frame, const EntityList& units,
+                               const EntityList& players, game::GameHandler& gameHandler);
     void renderMinimapBattlegroundPositions(const MinimapFrame& frame,
                                             game::GameHandler& gameHandler);
     void renderMinimapPois(const MinimapFrame& frame, game::GameHandler& gameHandler);
     /// The gossip point the player has walked to, by when it came: let go.
     uint64_t gossipPoiReachedMs_ = 0;
-    void renderMinimapPlayerArrow(const MinimapFrame& frame);
+    void renderMinimapPlayerArrow(const MinimapFrame& frame, uint8_t alpha);
 
     /// The wheel and the ctrl+click, when this client owns the ring.
     void handleMinimapInput(const MinimapFrame& frame, game::GameHandler& gameHandler,
