@@ -2494,12 +2494,20 @@ public:
     /// ever shows one at a time.
     void sortArenaTeamRosters(const std::string& key);
 
-    const ArenaTeamRoster* getArenaTeamRoster(uint32_t teamId) const {
-        for (const auto& r : arenaTeamRosters_) {
-            if (r.teamId == teamId) return &r;
-        }
-        return nullptr;
-    }
+    /// The roster SMSG_ARENA_TEAM_ROSTER brought, which the social handler
+    /// keeps. GameHandler kept a second list of its own that nothing filled,
+    /// so every roster the server sent was stored where this never looked.
+    const ArenaTeamRoster* getArenaTeamRoster(uint32_t teamId) const;
+
+    /// Whether the arena team rosters list offline members among the online
+    /// ones (0x00acf834, on until SetArenaTeamRosterShowOffline turns it off).
+    /// Off, each roster is kept online first and GetNumArenaTeamMembers
+    /// counts only the online.
+    bool arenaRosterShowOffline() const;
+    void setArenaRosterShowOffline(bool show);
+    /// The arena side the last in-progress battlefield status gave
+    /// (GetBattlefieldArenaFaction, 0x0054a280), 0 before one has come.
+    uint8_t battlefieldArenaFaction() const;
 
     // ---- Loot ----
     void lootTarget(uint64_t guid);
@@ -5321,8 +5329,6 @@ private:
     // Instance / raid lockouts
 
     // Arena team stats (indexed by team slot, updated by SMSG_ARENA_TEAM_STATS)
-    // Arena team rosters (updated by SMSG_ARENA_TEAM_ROSTER)
-    std::vector<ArenaTeamRoster> arenaTeamRosters_;
 
     // BG scoreboard (MSG_PVP_LOG_DATA)
 
@@ -5489,10 +5495,6 @@ private:
     bool petActionsOnBonusBar_ = false;
     uint32_t possessSpellId_ = 0;
     void setPossessSpell(uint32_t spellId);
-    /// The column the arena rosters are sorted by, so clicking it again knows
-    /// to reverse rather than re-sort the same way.
-    std::string arenaSortKey_;
-    bool arenaSortAscending_ = true;
 
     // Taxi / Flight Paths
     std::unordered_map<uint64_t, bool> taxiNpcHasRoutes_;  // guid -> has new/available routes

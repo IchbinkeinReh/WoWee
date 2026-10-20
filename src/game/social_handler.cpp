@@ -3866,6 +3866,9 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     // 0x0054ae40 drops a status for any slot past the second.
     if (!isPreWotlk() && queueSlot > 1) return;
     bgJoinPendingType_ = 0;  // answered
+    // One byte for the whole client, the last in-progress status's
+    // (0x0054ae40 keeps it at 0x00bea54a).
+    if (status.statusId == 3) battlefieldArenaFaction_ = status.arenaFaction;
     const uint8_t arenaType = status.arenaType;
     const uint32_t bgTypeId = status.bgTypeId;
     const uint32_t statusId = status.statusId;
@@ -4981,10 +4984,12 @@ void SocialHandler::handleArenaTeamRoster(network::Packet& packet) {
         // left ate the next member's guid on every roster of more than one.
         if (hasTrailingFloats) {
             if (!packet.hasRemaining(8)) break;
-            packet.readFloat(); packet.readFloat();
+            m.gdfValue1 = packet.readFloat();
+            m.gdfValue2 = packet.readFloat();
         }
         roster.members.push_back(std::move(m));
     }
+    sortArenaRoster(roster);
     bool replaced = false;
     for (auto& r : arenaTeamRosters_) { if (r.teamId == teamId) { r = std::move(roster); replaced = true; break; } }
     if (!replaced) arenaTeamRosters_.push_back(std::move(roster));
@@ -5001,6 +5006,61 @@ void SocialHandler::handleArenaTeamRoster(network::Packet& packet) {
     // would do it too, zero being true in Lua.
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("ARENA_TEAM_ROSTER_UPDATE", {});
+    }
+}
+
+void SocialHandler::sortArenaTeamRosters(const std::string& key) {
+    if (key.empty()) return;
+    // The same column twice reverses. A different one starts again in the
+    // direction that column reads best: a name from A, a number from the top.
+    if (key == arenaSortKey_) {
+        arenaSortAscending_ = !arenaSortAscending_;
+    } else {
+        arenaSortKey_ = key;
+        arenaSortAscending_ = (key == "name" || key == "class");
+    }
+    for (auto& roster : arenaTeamRosters_) sortArenaRoster(roster);
+}
+
+void SocialHandler::sortArenaRoster(ArenaTeamRoster& roster) const {
+    const std::string& key = arenaSortKey_;
+    const bool asc = arenaSortAscending_;
+    const bool onlineFirst = !arenaRosterShowOffline_;
+    auto value = [&key](const ArenaTeamMember& m) -> uint64_t {
+        if (key == "class")        return m.classId;
+        if (key == "played")       return m.weekGames;
+        if (key == "won")          return m.weekWins;
+        if (key == "seasonplayed") return m.seasonGames;
+        if (key == "seasonwon")    return m.seasonWins;
+        if (key == "rating")       return m.personalRating;
+        return 0;
+    };
+    std::stable_sort(roster.members.begin(), roster.members.end(),
+        [&](const ArenaTeamMember& a, const ArenaTeamMember& b) {
+            // 0x005a2bd0: with offline members hidden, whoever is online
+            // comes first whatever the column, so the rows GetNumArenaTeamMembers
+            // counts are the first ones.
+            if (onlineFirst && a.online != b.online) return a.online;
+            if (key.empty()) return false;
+            if (key == "name") {
+                return asc ? (a.name < b.name) : (b.name < a.name);
+            }
+            const uint64_t va = value(a), vb = value(b);
+            if (va == vb) return a.name < b.name;   // steady under ties
+            return asc ? (va < vb) : (vb < va);
+        });
+}
+
+void SocialHandler::setArenaRosterShowOffline(bool show) {
+    if (show == arenaRosterShowOffline_) return;
+    arenaRosterShowOffline_ = show;
+    for (auto& roster : arenaTeamRosters_) {
+        if (roster.members.empty()) continue;
+        sortArenaRoster(roster);
+        // No arguments, as on arrival: pvpframe reads one as "ask again".
+        if (owner_.addonEventCallbackRef()) {
+            owner_.addonEventCallbackRef()("ARENA_TEAM_ROSTER_UPDATE", {});
+        }
     }
 }
 

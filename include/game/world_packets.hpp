@@ -3320,6 +3320,11 @@ struct BattlefieldStatusData {
     uint32_t timeInQueueMs = 0;    ///< status 1
     uint32_t mapId = 0;            ///< status 2 and 3
     uint32_t inviteTimeoutMs = 0;  ///< status 2 - how long the invitation lasts
+    /// Status 3 only, after the field above (0x0054ae40): how long the
+    /// battle has run, and the side of an arena the player is on - the byte
+    /// GetBattlefieldArenaFaction answers (0x00bea54a).
+    uint32_t elapsedMs = 0;
+    uint8_t  arenaFaction = 0;
 };
 
 /**

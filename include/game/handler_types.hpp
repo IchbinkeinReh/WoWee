@@ -488,6 +488,11 @@ struct ArenaTeamMember {
     uint32_t    seasonGames     = 0;
     uint32_t    seasonWins      = 0;
     uint32_t    personalRating  = 0;
+    /// The two floats the roster carries per member when its header byte is
+    /// set (GetArenaTeamGdfInfo, 0x005a3260: the member's +0x5c and +0x60),
+    /// zero when the server sends none.
+    float       gdfValue1       = 0.0f;
+    float       gdfValue2       = 0.0f;
 };
 
 struct ArenaTeamRoster {

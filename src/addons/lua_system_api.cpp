@@ -6364,14 +6364,71 @@ void registerSystemLuaAPI(lua_State* L) {
                 // How many rows that reader has. Unbound, so opening a team's
                 // details called a nil global and raised before the first row
                 // was read - the reader beside it worked the whole time.
+                //
+                // GetNumArenaTeamMembers(team [, showOffline]) (0x005a2930):
+                // with offline members hidden and showOffline not asked for,
+                // only the online - who are the first rows then.
                 {"GetNumArenaTeamMembers", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) {
+                return luaL_error(L, "Usage: GetNumArenaTeamMembers(team [,showOffline])");
+            }
             auto* gh = getGameHandler(L);
             const uint32_t teamId =
                 arenaTeamIdAtIndex(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             const auto* roster = (gh && teamId) ? gh->getArenaTeamRoster(teamId) : nullptr;
-            lua_pushnumber(L, roster
-                ? static_cast<lua_Number>(roster->members.size()) : 0);
+            size_t count = 0;
+            if (roster) {
+                if (!gh->arenaRosterShowOffline() && !luaClientSwitchArg(L, 2, false)) {
+                    for (const auto& m : roster->members) count += m.online ? 1 : 0;
+                } else {
+                    count = roster->members.size();
+                }
+            }
+            lua_pushnumber(L, static_cast<lua_Number>(count));
             return 1;
+        }},
+                // GetBattlefieldArenaFaction() (0x0054a280): 1 when the arena
+                // side byte of the battle under way is set, otherwise nil.
+                {"GetBattlefieldArenaFaction", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (gh && gh->battlefieldArenaFaction() != 0) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
+            return 1;
+        }},
+                // Get/SetArenaTeamRosterShowOffline (0x005a2a00, 0x005a35e0).
+                {"GetArenaTeamRosterShowOffline", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh || gh->arenaRosterShowOffline()) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
+            return 1;
+        }},
+                {"SetArenaTeamRosterShowOffline", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) {
+                gh->setArenaRosterShowOffline(luaClientSwitchArg(L, 1, true));
+            }
+            return 0;
+        }},
+                // GetArenaTeamGdfInfo(team, index) (0x005a3260): the two
+                // floats the roster carried for that member, nil and nil past
+                // the end of it.
+                {"GetArenaTeamGdfInfo", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) {
+                return luaL_error(L, "Usage: GetArenaTeamGdfInfo(team, index)");
+            }
+            auto* gh = getGameHandler(L);
+            const int team = static_cast<int>(lua_tonumber(L, 1));
+            const int member = static_cast<int>(lua_tonumber(L, 2));
+            const uint32_t teamId = (team >= 1 && team <= 3) ? arenaTeamIdAtIndex(gh, team) : 0;
+            const auto* roster = (gh && teamId) ? gh->getArenaTeamRoster(teamId) : nullptr;
+            if (!roster || member < 1 || member > static_cast<int>(roster->members.size())) {
+                lua_pushnil(L);
+                lua_pushnil(L);
+                return 2;
+            }
+            const auto& m = roster->members[static_cast<size_t>(member) - 1];
+            lua_pushnumber(L, m.gdfValue1);
+            lua_pushnumber(L, m.gdfValue2);
+            return 2;
         }},
                 // SortArenaTeamRoster(column) - the details frame's column
                 // headers. Unbound, every one of them raised on click.
