@@ -1,6 +1,7 @@
 #include "addons/toc_parser.hpp"
 #include <fstream>
 #include <algorithm>
+#include <cctype>
 
 namespace wowee::addons {
 
@@ -62,6 +63,39 @@ static std::string canonicalAddonName(const std::string& onDisk) {
     // Anything else keeps the name it has. A third-party addon's folder is
     // already spelled the way its own files expect.
     return onDisk;
+}
+
+std::vector<std::string> TocFile::getRequiredDependencies() const {
+    auto startsWithNoCase = [](const std::string& s, const char* prefix) {
+        for (size_t i = 0; prefix[i]; ++i) {
+            if (i >= s.size() ||
+                std::tolower(static_cast<unsigned char>(s[i])) !=
+                    std::tolower(static_cast<unsigned char>(prefix[i]))) {
+                return false;
+            }
+        }
+        return true;
+    };
+    std::vector<std::string> keys;
+    for (const auto& [key, value] : directives) {
+        (void)value;
+        if (startsWithNoCase(key, "RequiredDep") || startsWithNoCase(key, "Dep")) keys.push_back(key);
+    }
+    std::sort(keys.begin(), keys.end());
+    std::vector<std::string> deps;
+    for (const auto& key : keys) {
+        const std::string& value = directives.at(key);
+        size_t pos = 0;
+        while (pos < value.size()) {
+            const size_t start = value.find_first_not_of(" ,\t", pos);
+            if (start == std::string::npos) break;
+            const size_t end = value.find_first_of(" ,\t", start);
+            deps.push_back(value.substr(start, end == std::string::npos ? std::string::npos : end - start));
+            if (end == std::string::npos) break;
+            pos = end;
+        }
+    }
+    return deps;
 }
 
 static std::vector<std::string> parseVarList(const std::string& val) {

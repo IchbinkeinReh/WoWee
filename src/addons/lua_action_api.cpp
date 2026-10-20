@@ -1718,6 +1718,62 @@ static int lua_GetModifiedClick(lua_State* L) {
 // It wrote nowhere, so the panel accepted a change and the next question about
 // that action answered the old value. The table the emitter fills is the same
 // one read above, so writing to it is the whole of it.
+// GetNumModifiedClickActions() (0x0055dc60) and GetModifiedClickAction(index)
+// (0x0055ea70): the modified clicks Bindings.xml declares, in its order.
+static int lua_GetNumModifiedClickActions(lua_State* L) {
+    double n = 0;
+    {
+        taint::Quiet quiet;   // see modifiedClickBinding
+        lua_getglobal(L, "__WoweeModifiedClickOrder");
+        if (lua_istable(L, -1)) n = static_cast<double>(lua_objlen(L, -1));
+        lua_pop(L, 1);
+    }
+    lua_pushnumber(L, n);
+    return 1;
+}
+
+static int lua_GetModifiedClickAction(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetModifiedClickAction(index)");
+    const int index = luaToClientInt(L, 1);
+    std::string action;
+    {
+        taint::Quiet quiet;
+        lua_getglobal(L, "__WoweeModifiedClickOrder");
+        if (lua_istable(L, -1) && index >= 1) {
+            lua_rawgeti(L, -1, index);
+            if (lua_isstring(L, -1)) action = lua_tostring(L, -1);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    if (action.empty()) lua_pushnil(L); else lua_pushstring(L, action.c_str());
+    return 1;
+}
+
+// GetMouseButtonName(button) (0x00514ba0): a button's number as the name the
+// client gives it - 1 LeftButton, 2 RightButton, 3 MiddleButton, then
+// Button4 to Button31, "UNKNOWN" for any other number (0x005eec20,
+// 0x0096f530); a string is its own name; anything else nil.
+static int lua_GetMouseButtonName(lua_State* L) {
+    if (lua_type(L, 1) == LUA_TNUMBER) {
+        const int n = luaToClientInt(L, 1);
+        std::string name;
+        if (n == 1) name = "LeftButton";
+        else if (n == 2) name = "RightButton";
+        else if (n == 3) name = "MiddleButton";
+        else if (n >= 4 && n <= 31) name = "Button" + std::to_string(n);
+        else name = "UNKNOWN";
+        lua_pushstring(L, name.c_str());
+        return 1;
+    }
+    if (lua_isstring(L, 1)) {
+        lua_pushvalue(L, 1);
+        return 1;
+    }
+    lua_pushnil(L);
+    return 1;
+}
+
 static int lua_SetModifiedClick(lua_State* L) {
     const char* action = luaL_optstring(L, 1, "");
     const char* binding = luaL_optstring(L, 2, "NONE");
@@ -2406,6 +2462,9 @@ void registerActionLuaAPI(lua_State* L) {
                 {"IsModifiedClick",     lua_IsModifiedClick},
                 {"GetModifiedClick",    lua_GetModifiedClick},
                 {"SetModifiedClick",    lua_SetModifiedClick},
+                {"GetNumModifiedClickActions", lua_GetNumModifiedClickActions},
+                {"GetModifiedClickAction", lua_GetModifiedClickAction},
+                {"GetMouseButtonName",  lua_GetMouseButtonName},
                 // Macros. The client has stored their text all along and
                 // persisted it per character; only the interface's way in was
                 // missing, so GetNumMacros answered zero and the panel opened

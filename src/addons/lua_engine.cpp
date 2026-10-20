@@ -12492,6 +12492,14 @@ void LuaEngine::setAddonList(const std::vector<TocFile>& addons) {
         // from the moment the client started.
         lua_pushboolean(L_, addons[i].isLoadOnDemand() ? 1 : 0);
         lua_setfield(L_, -2, "loadOnDemand");
+        // What GetAddOnDependencies answers.
+        lua_newtable(L_);
+        int dep = 0;
+        for (const auto& name : addons[i].getRequiredDependencies()) {
+            lua_pushstring(L_, name.c_str());
+            lua_rawseti(L_, -2, ++dep);
+        }
+        lua_setfield(L_, -2, "dependencies");
         lua_rawseti(L_, -2, static_cast<int>(i + 1));
     }
     lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_addon_info");

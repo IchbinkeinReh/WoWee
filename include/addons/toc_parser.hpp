@@ -16,6 +16,10 @@ struct TocFile {
 
     [[nodiscard]] std::string getTitle() const;
     [[nodiscard]] bool isLoadOnDemand() const;
+    /// The addons this one requires, as the client reads them (0x005f86a0):
+    /// every directive whose name begins "RequiredDep" or "Dep", in any case,
+    /// split at spaces and commas. Directives taken in name order.
+    [[nodiscard]] std::vector<std::string> getRequiredDependencies() const;
     [[nodiscard]] std::vector<std::string> getSavedVariables() const;
     [[nodiscard]] std::vector<std::string> getSavedVariablesPerCharacter() const;
 };

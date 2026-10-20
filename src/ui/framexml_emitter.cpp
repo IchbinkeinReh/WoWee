@@ -1604,12 +1604,17 @@ void emitBindings(Emitter& e, const XmlNode& root) {
     // here and answered ALT there, and the two flyout actions are declared ALT
     // and fell through to a shift default.
     e.line("__WoweeModifiedClick = __WoweeModifiedClick or {}");
+    // And the order they were declared in, which the client's list keeps
+    // (0x0055e870 walks it): GetModifiedClickAction(i) is the i-th.
+    e.line("__WoweeModifiedClickOrder = __WoweeModifiedClickOrder or {}");
     e.line("__WoweeBindingScripts = __WoweeBindingScripts or {}");
     e.line("__WoweeBindingRunOnUp = __WoweeBindingRunOnUp or {}");
     for (const XmlNode& m : root.children) {
         if (m.name != "ModifiedClick") continue;
         const std::string action = m.attrOr("action", "");
         if (action.empty()) continue;
+        e.line("if __WoweeModifiedClick[" + quote(action) + "] == nil then "
+               "__WoweeModifiedClickOrder[#__WoweeModifiedClickOrder+1] = " + quote(action) + " end");
         e.line("__WoweeModifiedClick[" + quote(action) + "] = " +
                quote(m.attrOr("default", "NONE")));
     }

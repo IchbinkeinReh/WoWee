@@ -3234,3 +3234,9 @@ wowee_add_test(test_binding_command
 # GetCVarInfo and GetCVarAbsoluteMin/Max answer from.
 wowee_add_test(test_client_cvar_registry
     SOURCES test_client_cvar_registry.cpp ${CMAKE_SOURCE_DIR}/src/addons/client_cvar_registry.cpp)
+
+# ── test_toc_dependencies ────────────────────────────────────
+# An addon's required dependencies as the client reads its TOC (0x005f86a0),
+# which GetAddOnDependencies answers.
+wowee_add_test(test_toc_dependencies
+    SOURCES test_toc_dependencies.cpp ${CMAKE_SOURCE_DIR}/src/addons/toc_parser.cpp)

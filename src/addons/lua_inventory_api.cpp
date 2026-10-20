@@ -1294,6 +1294,31 @@ static int lua_GetSendMailItem(lua_State* L) {
     return 4;
 }
 
+// GetSendMailItemLink([slot]) (0x0056e3a0): the link of what is attached in
+// that slot of the letter being written, the first when none is named; nothing
+// at all for an empty slot or one past the sixteen the client has.
+static int lua_GetSendMailItemLink(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const int64_t slot = lua_isnumber(L, 1) ? std::llround(lua_tonumber(L, 1)) : 1;
+    if (!gh || slot < 1 || slot > 16) return 0;
+    const auto& attachments = gh->getMailAttachments();
+    if (slot > static_cast<int64_t>(attachments.size())) return 0;
+    const auto& att = attachments[static_cast<size_t>(slot) - 1];
+    if (!att.occupied()) return 0;
+    const auto* info = gh->getItemInfo(att.item.itemId);
+    std::string name = info ? info->name : ("Item #" + std::to_string(att.item.itemId));
+    if (att.item.randomPropertyId != 0) {
+        const std::string suffix = gh->getRandomPropertyName(att.item.randomPropertyId);
+        if (!suffix.empty()) name += " " + suffix;
+    }
+    const auto [permanentId, temporaryId] = gh->getItemEnchantIds(att.itemGuid);
+    (void)temporaryId;
+    const std::string link = game::itemChatLink(att.item.itemId, info ? info->quality : 0, name,
+                                                permanentId, att.item.randomPropertyId);
+    lua_pushstring(L, link.c_str());
+    return 1;
+}
+
 // ReturnInboxItem(index) - send a letter back where it came from, with
 // whatever is still attached to it.
 //
@@ -1364,6 +1389,21 @@ uint32_t copperArg(lua_State* L, int index) {
     return static_cast<uint32_t>(v);
 }
 } // namespace
+
+// ClearSendMail() (0x0056d5c0 -> 0x0056d4d0): the letter being written
+// emptied - its attachments let go, its money and charge cleared - and the
+// compose frame told all three ways.
+static int lua_ClearSendMail(lua_State* L) {
+    s_sendMailMoney = 0;
+    s_sendMailCOD = 0;
+    if (auto* gh = getGameHandler(L)) {
+        gh->clearMailAttachments();
+        gh->fireAddonEvent("SEND_MAIL_MONEY_CHANGED", {});
+        gh->fireAddonEvent("SEND_MAIL_COD_CHANGED", {});
+        gh->fireAddonEvent("MAIL_SEND_SUCCESS", {});
+    }
+    return 0;
+}
 
 static int lua_CloseMail(lua_State* L) {
     s_sendMailMoney = 0;
@@ -4100,6 +4140,8 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetCoinText",          lua_GetCoinText},
                 {"CloseMail",           lua_CloseMail},
                 {"SendMail",            lua_SendMail},
+                {"GetSendMailItemLink", lua_GetSendMailItemLink},
+                {"ClearSendMail",       lua_ClearSendMail},
                 {"SetSendMailMoney",    lua_SetSendMailMoney},
                 {"SetSendMailCOD",      lua_SetSendMailCOD},
                 {"AddSendMailMoney",    lua_AddSendMailMoney},

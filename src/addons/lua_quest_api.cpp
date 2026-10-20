@@ -2281,6 +2281,61 @@ static int lua_AddPreviewTalentPoints(lua_State* L) {
     return 0;
 }
 
+// GetPreviewTalentPointsSpent(tabIndex [, isPet [, groupIndex]]) (0x005c63b0):
+// the client reads its arguments and answers 0, whatever is staged.
+static int lua_GetPreviewTalentPointsSpent(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        return luaL_error(L, "Usage: GetPreviewTalentPointsSpent(tabIndex[, isPet[, groupIndex]])");
+    }
+    lua_pushnumber(L, 0);
+    return 1;
+}
+
+// ResetPreviewTalentPoints(tabIndex [, isPet [, groupIndex]]) (0x005c7130):
+// every point staged in that tree taken back, and when the staged total moved,
+// PREVIEW_TALENT_POINTS_CHANGED with 0, the tree, the group (from one) and by
+// how much. Points are staged for the player's active group alone, so the
+// pet's trees and another group have none to take back.
+static int lua_ResetPreviewTalentPoints(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        return luaL_error(L, "Usage: ResetPreviewTalentPoints(tabIndex[, isPet[, groupIndex]])");
+    }
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const int tab = luaToClientInt(L, 1);
+    const bool pet = luaClientSwitchArg(L, 2, false);
+    const int group = lua_isnumber(L, 3) ? luaToClientInt(L, 3) - 1
+                                         : static_cast<int>(gh->getActiveTalentSpec());
+    if (pet || group != static_cast<int>(gh->getActiveTalentSpec())) {
+        LOG_WARNING("ResetPreviewTalentPoints: nothing is staged for ",
+                    pet ? "the pet" : "another talent group");
+        return 0;
+    }
+    const auto tabs = classTalentTabs(gh, gh->getPlayerClass());
+    if (tab < 1 || tab > static_cast<int>(tabs.size())) {
+        LOG_WARNING("ResetPreviewTalentPoints: no talent tree ", tab);
+        return 0;
+    }
+    const uint32_t tabId = tabs[static_cast<size_t>(tab) - 1]->tabId;
+    int before = 0, after = 0;
+    for (auto it = previewPoints().begin(); it != previewPoints().end();) {
+        before += it->second;
+        const auto* entry = gh->getTalentEntry(it->first);
+        if (entry && entry->tabId == tabId) {
+            it = previewPoints().erase(it);
+        } else {
+            after += it->second;
+            ++it;
+        }
+    }
+    if (after != before) {
+        gh->fireAddonEvent("PREVIEW_TALENT_POINTS_CHANGED",
+                           {"0", std::to_string(tab), std::to_string(group + 1),
+                            std::to_string(after - before)});
+    }
+    return 0;
+}
+
 // GetTalentPrereqs(tab, index) → tier, column, isLearnable, isPreviewLearnable
 //                                 repeated once per prerequisite
 //
@@ -3268,6 +3323,8 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"GetTalentInfo",           lua_GetTalentInfo},
                 {"GetTalentPrereqs",        lua_GetTalentPrereqs},
                 {"AddPreviewTalentPoints",  lua_AddPreviewTalentPoints},
+                {"GetPreviewTalentPointsSpent", lua_GetPreviewTalentPointsSpent},
+                {"ResetPreviewTalentPoints", lua_ResetPreviewTalentPoints},
                 {"GetGroupPreviewTalentPointsSpent", lua_GetGroupPreviewTalentPointsSpent},
                 {"ResetGroupPreviewTalentPoints",    lua_ResetGroupPreviewTalentPoints},
                 {"LearnPreviewTalents",     lua_LearnPreviewTalents},

@@ -2248,6 +2248,60 @@ static int lua_GetAddOnInfo(lua_State* L) {
     return 8;
 }
 
+/// The addon entry an IsAddOnLoadOnDemand or GetAddOnDependencies argument
+/// names, left on the stack, as 0x00511a60 and 0x005179b0 resolve it: an index
+/// out of range raises, a name nothing has answers false. Usage raised for
+/// neither.
+static bool pushAddonEntryForQuery(lua_State* L, const char* usage) {
+    if (lua_type(L, 1) != LUA_TNUMBER && !lua_isstring(L, 1)) {
+        luaL_error(L, "%s", usage);
+        return false;
+    }
+    if (lua_type(L, 1) == LUA_TNUMBER) {
+        lua_getfield(L, LUA_REGISTRYINDEX, "wowee_addon_count");
+        const int count = static_cast<int>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+        const int64_t index = std::llround(lua_tonumber(L, 1));
+        if (index < 1 || index > count) {
+            luaL_error(L, "AddOn index must be in the range of 1 to %d", count);
+            return false;
+        }
+    }
+    const int idx = pushAddonRegistryAndIndex(L, 1);
+    if (idx < 1) return false;
+    lua_rawgeti(L, -1, idx);
+    lua_remove(L, -2);
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
+    return true;
+}
+
+// IsAddOnLoadOnDemand(index or "name") (0x00511a60): 1 for an addon whose
+// TOC says LoadOnDemand, nil otherwise.
+static int lua_IsAddOnLoadOnDemand(lua_State* L) {
+    bool onDemand = false;
+    if (pushAddonEntryForQuery(L, "Usage: IsAddOnLoadOnDemand(index or \"name\")")) {
+        lua_getfield(L, -1, "loadOnDemand");
+        onDemand = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 2);
+    }
+    if (onDemand) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 1;
+}
+
+// GetAddOnDependencies(index or "name") (0x005179b0): the addons it requires,
+// one value each.
+static int lua_GetAddOnDependencies(lua_State* L) {
+    if (!pushAddonEntryForQuery(L, "Usage: GetAddOnDependencies(index or \"name\")")) return 0;
+    lua_getfield(L, -1, "dependencies");
+    lua_remove(L, -2);
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
+    const int n = static_cast<int>(lua_objlen(L, -1));
+    if (!lua_checkstack(L, n + 1)) { lua_pop(L, 1); return 0; }
+    for (int i = 1; i <= n; ++i) lua_rawgeti(L, -i, i);
+    lua_remove(L, -n - 1);
+    return n;
+}
+
 // GetAddOnMetadata(addonNameOrIndex, key) → value
 static int lua_GetAddOnMetadata(lua_State* L) {
     const int idx = pushAddonRegistryAndIndex(L, 1);
@@ -8399,6 +8453,8 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"GetAddOnMetadata",  lua_GetAddOnMetadata},
+                {"IsAddOnLoadOnDemand", lua_IsAddOnLoadOnDemand},
+                {"GetAddOnDependencies", lua_GetAddOnDependencies},
                 {"IsInInstance",         lua_IsInInstance},
                 {"GetInstanceInfo",      lua_GetInstanceInfo},
                 {"GetInstanceDifficulty", lua_GetInstanceDifficulty},
