@@ -13,6 +13,7 @@
 #include "game/packed_time.hpp"
 #include "game/quest_progress.hpp"
 #include "game/quest_objectives.hpp"
+#include "game/trainer_service_list.hpp"
 #include "ui/chat/chat_utils.hpp"
 #include "core/logger.hpp"
 
@@ -2096,42 +2097,11 @@ static int tradeSkillHeaderSetCollapsed(lua_State* L, bool collapsed) {
     return 0;
 }
 
-static int& trainerSelection() {
-    static int selected = 0;
-    return selected;
-}
-/// The three type filters, seeded rather than empty.
-///
-/// A trainer is walked up to to see what can be learned now, and the list that
-/// answers that is the available one: a hundred-row tradeskill trainer opened
-/// on everything is mostly rows the player cannot act on. So available shows
-/// and the two that cannot be acted on do not - which is the panel's filter
-/// doing what it is for, not a fourth control.
-///
-/// Seeded rather than left unset because three readers consult this map and all
-/// three have to agree what an absent entry means: the list, the dropdown's
-/// ticks, and the setter deciding whether a call is a change. With the three
-/// names always present there is no absent entry to disagree about, and an
-/// unknown name still reads as showing.
-///
-/// The player's own changes outlive it - this is where the session's filter
-/// lives, so a tick turned on stays on until the client restarts.
-static std::unordered_map<std::string, bool>& trainerFilters() {
-    static std::unordered_map<std::string, bool> filters{
-        {"available", true},
-        {"unavailable", false},
-        {"used", false},
-    };
-    return filters;
-}
-
 /// What the trainer panel's search box holds, folded to lower case.
 ///
-/// Beside the type filter rather than inside it because it is the same kind of
-/// thing - a rule the panel applies to the list the trainer sent, kept here
-/// because every binding that takes a service index has to agree about which
-/// service index 3 is. 3.3.5's trainer has no search box; this client's has
-/// one, and shownTrainerServices is where the two filters meet.
+/// 3.3.5's trainer has no search box; this client's has one. It hides the
+/// services whose names do not match, beside the client's own filters (see
+/// TrainerServiceList::Lookups::searchHides).
 static std::string& trainerSearch() {
     static std::string search;
     return search;
@@ -2144,58 +2114,195 @@ static std::string foldedForSearch(std::string v) {
     return v;
 }
 
-/// The word the trainer panel colours a service by, and the name of the filter
-/// that hides it.
+/// A service's state: the trainer's, or "used" once the spell is known.
 ///
-/// "used" wins the moment the spell is known rather than only when the packet
-/// said so: the list is a snapshot from when the trainer was opened, and
-/// learning something fires TRAINER_UPDATE without a fresh one arriving.
-static const char* trainerServiceCategory(game::GameHandler* gh,
-                                          const game::TrainerSpell& sp) {
-    if (gh && gh->getSpellHandler() && gh->getSpellHandler()->hasKnownSpell(sp.spellId))
-        return "used";
-    return sp.state == 0 ? "available" : sp.state == 2 ? "used" : "unavailable";
+/// The client keeps the state the list arrived with. This client also promotes
+/// a service to used the moment its spell is learned, because a server that
+/// answers a purchase without sending the list again would otherwise leave the
+/// learned service green and trainable until the window is reopened.
+static uint8_t trainerServiceState(game::GameHandler* gh, const game::TrainerSpell& sp) {
+    if (gh && gh->getSpellHandler() && gh->getSpellHandler()->hasKnownSpell(sp.spellId)) return 2;
+    return sp.state;
 }
 
-/// Whether the filter dropdown is currently letting this category through.
-/// The three the panel names are always in the map; anything else shows.
-static bool trainerCategoryShowing(const char* category) {
-    const auto& filters = trainerFilters();
-    auto it = filters.find(category);
-    return it == filters.end() || it->second;
-}
-
-/// The trainer's list as the panel sees it - the services the filters leave.
-///
-/// The filter was stored and read back and consulted by nothing, so ticking a
-/// box in the dropdown changed the tick and not the list. It has to be applied
-/// here rather than at each reader, because every one of the nine bindings that
-/// takes a service index has to agree about which service index 3 is: filtering
-/// in one of them and not the rest would train a different spell than the row
-/// that was clicked.
-static std::vector<const game::TrainerSpell*> shownTrainerServices(game::GameHandler* gh) {
-    std::vector<const game::TrainerSpell*> shown;
-    if (!gh) return shown;
-    const std::string& search = trainerSearch();
-    for (const auto& sp : gh->getTrainerSpells().spells) {
-        if (!trainerCategoryShowing(trainerServiceCategory(gh, sp))) continue;
-        // The name only when there is something to match, so the common case
-        // costs no lookups at all.
-        if (!search.empty() &&
-            foldedForSearch(gh->getSpellName(sp.spellId)).find(search) ==
-                std::string::npos) {
-            continue;
-        }
-        shown.push_back(&sp);
+/// The service type filter, CVar serviceTypeFilter (0x00bd09e4 +0x30):
+/// one bit per state the list shows. Read through GetCVar, as it is stored.
+static uint32_t trainerTypeMask(lua_State* L) {
+    lua_getglobal(L, "GetCVar");
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        return 3;
     }
-    return shown;
+    lua_pushstring(L, "serviceTypeFilter");
+    lua_call(L, 1, 1);
+    const uint32_t mask = lua_isnumber(L, -1) ? static_cast<uint32_t>(lua_tonumber(L, -1)) : 0u;
+    lua_pop(L, 1);
+    return mask;
 }
 
-/// The nth shown service, counting from one, or null.
-static const game::TrainerSpell* shownTrainerService(game::GameHandler* gh, int index) {
-    const auto shown = shownTrainerServices(gh);
-    if (index < 1 || index > static_cast<int>(shown.size())) return nullptr;
-    return shown[index - 1];
+static void setTrainerTypeMask(lua_State* L, uint32_t mask) {
+    lua_getglobal(L, "SetCVar");
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+    lua_pushstring(L, "serviceTypeFilter");
+    lua_pushstring(L, std::to_string(mask).c_str());
+    lua_call(L, 2, 0);
+}
+
+/// One Spell.dbc column of a spell, for the few the spell cache does not keep.
+static bool trainerSpellColumn(game::GameHandler* gh, uint32_t spellId, const char* name,
+                               uint32_t offset, uint32_t& out) {
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (!am || !am->isInitialized()) return false;
+    const auto* layout = pipeline::getActiveDBCLayout()
+        ? pipeline::getActiveDBCLayout()->getLayout("Spell") : nullptr;
+    const uint32_t base = layout ? layout->field(name) : 0xFFFFFFFFu;
+    auto spells = am->loadDBC("Spell.dbc");
+    if (!spells || !spells->isLoaded() || base == 0xFFFFFFFFu ||
+        base + offset >= spells->getFieldCount())
+        return false;
+    const int32_t row = spells->findRecordById(spellId);
+    if (row < 0) return false;
+    out = spells->getUInt32(static_cast<uint32_t>(row), base + offset);
+    return true;
+}
+
+/// What the trainer list needs from the client (TrainerServiceList::Lookups).
+static game::TrainerServiceList::Lookups trainerLookups(game::GameHandler* gh, bool tradeskill) {
+    game::TrainerServiceList::Lookups lk;
+    const auto entryOf = [gh](uint32_t spellId) -> const game::GameHandler::SpellNameEntry* {
+        const auto it = gh->spellNameCacheRef().find(spellId);
+        return it == gh->spellNameCacheRef().end() ? nullptr : &it->second;
+    };
+    if (tradeskill) {
+        // 0x00596450 for a tradeskill trainer: 3 a passive spell, 1 one that
+        // steps a skill up (SKILL_STEP, 44), 2 any other - and 2 for a spell
+        // with no Spell row.
+        lk.groupOf = [entryOf](const game::TrainerSpell& s) -> uint32_t {
+            const auto* e = entryOf(s.spellId);
+            if (!e) return 2;
+            if ((e->attr & 0x40u) != 0) return 3;
+            for (uint32_t effect : e->effectIds)
+                if (effect == 44) return 1;
+            return 2;
+        };
+    } else {
+        // 0x00594ae0: the skill line of what the spell teaches - the spell of
+        // its first LEARN_SPELL (36) effect not aimed at the pet (target 5),
+        // else the spell itself.
+        lk.groupOf = [gh, entryOf](const game::TrainerSpell& s) -> uint32_t {
+            const auto* e = entryOf(s.spellId);
+            if (!e || gh->getPlayerGuid() == 0) return 0;
+            uint32_t taught = s.spellId;
+            for (int i = 0; i < 3; ++i) {
+                if (e->effectIds[i] == 36 && e->implicitTargetsA[i] != 5) {
+                    taught = e->effectTriggerSpell[i];
+                    break;
+                }
+            }
+            return gh->spellSkillLine(taught);
+        };
+    }
+    lk.lineName = [gh](uint32_t line) { return gh->getSkillLineName(line); };
+    lk.spellText = [entryOf](uint32_t spellId, std::string& name, std::string& rank) {
+        const auto* e = entryOf(spellId);
+        if (!e) return false;
+        name = e->name;
+        rank = e->rank;
+        return true;
+    };
+    if (!trainerSearch().empty()) {
+        lk.searchHides = [gh](const game::TrainerServiceList::Row& r) {
+            return foldedForSearch(gh->getSpellName(static_cast<uint32_t>(r.spellId))).find(trainerSearch()) ==
+                   std::string::npos;
+        };
+    }
+    return lk;
+}
+
+/// The trainer list as the client keeps it, built from the list the trainer
+/// sent (0x00596450) the first time it is asked for after one arrives.
+static game::TrainerServiceList& trainerList(lua_State* L) {
+    static game::TrainerServiceList list;
+    auto* gh = getGameHandler(L);
+    if (!gh) {
+        list.clear();
+        list.serial = 0;
+        return list;
+    }
+    const auto& data = gh->getTrainerSpells();
+    const bool tradeskill = data.trainerType == 2;
+    if (list.serial != data.serial) {
+        list.serial = data.serial;
+        if (data.serial == 0) {
+            list.clear();
+            return list;
+        }
+        std::vector<uint8_t> states;
+        states.reserve(data.spells.size());
+        for (const auto& sp : data.spells) states.push_back(trainerServiceState(gh, sp));
+        list.build(data.spells, states, tradeskill, trainerTypeMask(L), trainerLookups(gh, tradeskill));
+    } else if (data.serial != 0) {
+        list.restate([gh](const game::TrainerServiceList::Row& r) { return trainerServiceState(gh, r.service); },
+                     trainerTypeMask(L), trainerLookups(gh, tradeskill));
+    }
+    return list;
+}
+
+/// Filter the list again and tell the panel (0x00594ba0, then TRAINER_UPDATE).
+static void trainerRefilter(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    auto& list = trainerList(L);
+    list.refilter(trainerTypeMask(L), trainerLookups(gh, list.tradeskill()));
+    if (gh) gh->fireAddonEvent("TRAINER_UPDATE", {});
+}
+
+/// The row a Lua service index names, shown or not (index - 1 below the
+/// count of every row); null past the end.
+static const game::TrainerServiceList::Row* trainerRow(lua_State* L, int index) {
+    if (index < 1) return nullptr;
+    return trainerList(L).row(static_cast<uint32_t>(index - 1));
+}
+
+/// A service's Spell row through the spell cache; null for a header.
+static const game::GameHandler::SpellNameEntry* trainerRowSpell(game::GameHandler* gh,
+                                                                const game::TrainerServiceList::Row* r) {
+    if (!gh || !r || r->header()) return nullptr;
+    const auto it = gh->spellNameCacheRef().find(static_cast<uint32_t>(r->spellId));
+    return it == gh->spellNameCacheRef().end() ? nullptr : &it->second;
+}
+
+/// The item a tradeskill trainer's service makes: effect 0 creating one
+/// (CREATE_ITEM 24, 157 or CREATE_RANDOM_ITEM 59) and its EffectItemType
+/// (0x00595150, 0x00596290). 0 for none.
+static uint32_t trainerServiceItem(lua_State* L, game::GameHandler* gh,
+                                   const game::TrainerServiceList::Row* r) {
+    const auto* e = trainerRowSpell(gh, r);
+    if (!e || !trainerList(L).tradeskill()) return 0;
+    const uint32_t effect = e->effectIds[0];
+    if (effect != 24 && effect != 157 && effect != 59) return 0;
+    uint32_t item = 0;
+    return trainerSpellColumn(gh, static_cast<uint32_t>(r->spellId), "EffectItemType0", 0, item) ? item : 0;
+}
+
+/// Collapse/ExpandTrainerSkillLine (0x00596150, 0x005961f0).
+static int trainerFold(lua_State* L, bool expand) {
+    const char* which = expand ? "Expand" : "Collapse";
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: %sTrainerSkillLine(index)", which);
+    auto& list = trainerList(L);
+    const int index = luaToClientInt(L, 1) - 1;
+    if (index < 0) {
+        list.setExpandedMask(expand ? ~0u : 0u);
+    } else {
+        const int pos = list.headerOfRow(static_cast<uint32_t>(index));
+        if (pos < 0) return luaL_error(L, "Bad skill line in %sTrainerSkillLine", which);
+        const uint32_t bit = 1u << (pos & 31);
+        list.setExpandedMask(expand ? list.expandedMask() | bit : list.expandedMask() & ~bit);
+    }
+    trainerRefilter(L);
+    return 0;
 }
 
 /// (tabIndex, talentIndex) → talent id, or 0.
@@ -4095,227 +4202,291 @@ void registerQuestLuaAPI(lua_State* L) {
         }},
                 // ---- Trainer -------------------------------------------
                 //
-                // The client has parsed the trainer list all along - spell,
-                // cost, required level and skill, and whether it is already
-                // known - and fires TRAINER_SHOW when it arrives. None of it
-                // had a way into the interface, so the panel opened blank at
-                // every trainer in the game.
+                // The list the trainer sent, kept the way the client keeps it
+                // (TrainerServiceList, ClassTrainerFrame.cpp): grouped under a
+                // header row per skill line, the shown rows first. Every index
+                // counts in that order, and reaches past the shown rows to the
+                // hidden ones, as the client's does.
                 {"GetNumTrainerServices", [](lua_State* L) -> int {
-            // What the filters leave, not what the trainer sent.
-            lua_pushnumber(L, static_cast<double>(
-                shownTrainerServices(getGameHandler(L)).size()));
+            // 0x00593d10: the rows that show.
+            lua_pushnumber(L, trainerList(L).visibleCount());
             return 1;
         }},
-                // GetTrainerServiceInfo(i) → name, rank, category, expanded
+                // GetTrainerServiceInfo(index) (0x00595090) → name, rank,
+                // category, expanded. A header is named for its skill line -
+                // a tradeskill trainer's for its kind, by the global strings
+                // TRADESKILL_SERVICE_STEP/LEARN/PASSIVE - has an empty rank and
+                // is "header"; expanded is nil only for a collapsed header.
                 {"GetTrainerServiceInfo", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceInfo(index)");
             auto* gh = getGameHandler(L);
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (!gh) return luaReturnNil(L);
-            const auto* svc = shownTrainerService(gh, i);
-            if (!svc) return luaReturnNil(L);
-            const auto& sp = *svc;
-            std::string name = gh->getSpellName(sp.spellId);
-            if (name.empty()) name = "Spell " + std::to_string(sp.spellId);
-            lua_pushstring(L, name.c_str());
-            // The rank, from the same place the name came from. The trainer
-            // list on the wire carries neither - both are looked up by spell id
-            // - so "this list does not carry it" was true of the packet and
-            // not of the client, which has had getSpellRank all along.
-            //
-            // It is what tells two rows apart. The panel writes it in
-            // parentheses after the name, so a trainer offering Fireball at
-            // three ranks listed Fireball three times, identically. An empty
-            // string still hides the line, which is right for a spell that has
-            // no rank.
-            lua_pushstring(L, gh->getSpellRank(sp.spellId).c_str());   // rank
-            // The three words the panel colours by: green, grey, and already
-            // trained.
-            //
-            // "used" wins the moment the spell is known, not only when the
-            // trainer packet said so. The packet is a snapshot from when the
-            // list was opened; learning a service adds it to the known set and
-            // fires TRAINER_UPDATE, but the cached state stayed at 0. So the
-            // panel redrew the just-learned skill as still available - green,
-            // trainable, its cost still shown - and only a close and reopen,
-            // which fetches a fresh list, corrected it. Asking the known set
-            // makes the live redraw right.
-            lua_pushstring(L, trainerServiceCategory(gh, sp));
-            lua_pushboolean(L, 1);   // expanded: the list here is flat
+            const int index = luaToClientInt(L, 1);
+            const auto* r = trainerRow(L, index);
+            if (!r || !gh) {
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnumber(L, 1);
+                return 4;
+            }
+            if (r->header()) {
+                if (trainerList(L).tradeskill()) {
+                    static const char* const kKinds[] = {"", "TRADESKILL_SERVICE_STEP",
+                                                         "TRADESKILL_SERVICE_LEARN",
+                                                         "TRADESKILL_SERVICE_PASSIVE"};
+                    const char* key = r->line < 4 ? kKinds[r->line] : "";
+                    lua_getglobal(L, key);
+                    if (!lua_isstring(L, -1)) {
+                        lua_pop(L, 1);
+                        lua_pushstring(L, key);
+                    }
+                } else {
+                    const std::string& line = gh->getSkillLineName(r->line);
+                    if (line.empty()) lua_pushnil(L); else lua_pushstring(L, line.c_str());
+                }
+                lua_pushstring(L, "");
+            } else if (const auto* e = trainerRowSpell(gh, r)) {
+                lua_pushstring(L, e->name.c_str());
+                lua_pushstring(L, e->rank.c_str());
+            } else {
+                lua_pushnil(L);
+                lua_pushnil(L);
+            }
+            lua_pushstring(L, game::trainerServiceTypeName(*r));
+            if (trainerList(L).rowCollapsed(static_cast<uint32_t>(index - 1))) lua_pushnil(L);
+            else lua_pushnumber(L, 1);
             return 4;
         }},
-                // Three costs: coin, talent points, and a profession slot.
-                // The trainer reads the third bare - `if ( cpCost2 > 0 )` - so
-                // one value made selecting anything a trainer offers an error.
-                //
-                // The second and third were zero on the reasoning that nothing
-                // in the trainer list says which service is a profession. The
-                // list says exactly that and has all along: profDialog and
-                // profButton are the packet's two point costs, and AzerothCore
-                // fills the second with `primaryProfessionFirstRank ? 1 : 0`
-                // - the one thing it is for. Parsed since the parser was
-                // written, stored, and read by nothing.
-                //
-                // What it buys: learning a first profession rank now raises
-                // CONFIRM_PROFESSION, and the Train button greys when both
-                // slots are already spent. Both come free from the frame once
-                // the number is real, because UnitCharacterPoints already
-                // answers the free-slot count it is compared against.
+                // GetTrainerServiceCost(index) (0x00594480) → money, and the
+                // trainer's two profession-slot costs.
                 {"GetTrainerServiceCost", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const auto* svc = shownTrainerService(gh, i);
-            lua_pushnumber(L, svc ? svc->spellCost  : 0);
-            lua_pushnumber(L, svc ? svc->profDialog : 0);
-            lua_pushnumber(L, svc ? svc->profButton : 0);
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceCost(index)");
+            const auto* r = trainerRow(L, luaToClientInt(L, 1));
+            lua_pushnumber(L, r ? r->service.spellCost : 0);
+            lua_pushnumber(L, r ? r->service.profDialog : 0);
+            lua_pushnumber(L, r ? r->service.profButton : 0);
             return 3;
         }},
                 {"GetTrainerServiceLevelReq", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const auto* svc = shownTrainerService(gh, i);
-            if (!svc) {
-                lua_pushnumber(L, 0);
-                return 1;
-            }
-            lua_pushnumber(L, svc->reqLevel);
+            // 0x00594530.
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceLevelReq(index)");
+            const auto* r = trainerRow(L, luaToClientInt(L, 1));
+            lua_pushnumber(L, r ? r->service.reqLevel : 0);
             return 1;
         }},
-                // GetTrainerServiceSkillReq(i) → skill name, required value
+                // GetTrainerServiceSkillReq(index) (0x00595470) → skill name,
+                // value, met. Met is nil only when the player's skill was
+                // looked for and is missing or too low.
                 {"GetTrainerServiceSkillReq", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceSkillReq(index)");
             auto* gh = getGameHandler(L);
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const auto* svc = shownTrainerService(gh, i);
-            if (!svc) {
-                return luaReturnNil(L);
+            const auto* r = trainerRow(L, luaToClientInt(L, 1));
+            bool met = true;
+            const std::string* name = nullptr;
+            if (gh && r && r->service.reqSkill != 0 && r->service.reqSkillValue != 0) {
+                const std::string& line = gh->getSkillLineName(r->service.reqSkill);
+                if (!line.empty()) {
+                    const auto& skills = gh->getPlayerSkills();
+                    const auto it = skills.find(r->service.reqSkill);
+                    met = it != skills.end() && it->second.effectiveValue() >= r->service.reqSkillValue;
+                    name = &line;
+                }
             }
-            const auto& sp = *svc;
-            if (sp.reqSkill == 0) return luaReturnNil(L);
-            const std::string skill = gh->getSkillLineName(sp.reqSkill);
-            lua_pushstring(L, skill.empty() ? "Skill" : skill.c_str());
-            lua_pushnumber(L, sp.reqSkillValue);
-            // Whether the player already meets it. The trainer window picks
-            // between TRAINER_REQ_SKILL_RANK and its _RED twin on this, so
-            // leaving it nil painted every requirement red - including the
-            // ones already satisfied, next to a spell the player could train.
-            const auto& skills = gh->getPlayerSkills();
-            const auto it = skills.find(sp.reqSkill);
-            const bool met = it != skills.end() &&
-                             it->second.effectiveValue() >= sp.reqSkillValue;
-            lua_pushboolean(L, met ? 1 : 0);
+            if (name) {
+                lua_pushstring(L, name->c_str());
+                lua_pushnumber(L, r->service.reqSkillValue);
+            } else {
+                lua_pushnil(L);
+                lua_pushnumber(L, 0);
+            }
+            if (met) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 3;
         }},
+                // GetTrainerServiceIcon(index) (0x00595150): at a tradeskill
+                // trainer the icon of the item the service makes, else the
+                // spell's.
                 {"GetTrainerServiceIcon", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceIcon(index)");
             auto* gh = getGameHandler(L);
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const auto* svc = shownTrainerService(gh, i);
-            if (!svc) {
-                return luaReturnNil(L);
+            const auto* r = trainerRow(L, luaToClientInt(L, 1));
+            if (!trainerRowSpell(gh, r)) return luaReturnNil(L);
+            if (const uint32_t item = trainerServiceItem(L, gh, r)) {
+                auto* am = gh->services().assetManager;
+                auto items = am && am->isInitialized() ? am->loadDBCOptional("Item.dbc") : nullptr;
+                const int32_t row = items && items->isLoaded() && items->getFieldCount() >= 6
+                                        ? items->findRecordById(item) : -1;
+                if (row >= 0) {
+                    const std::string path = gh->getItemIconPath(items->getUInt32(static_cast<uint32_t>(row), 5));
+                    if (!path.empty()) {
+                        lua_pushstring(L, path.c_str());
+                        return 1;
+                    }
+                }
             }
-            const std::string icon = gh->getSpellIconPath(svc->spellId);
-            lua_pushstring(L, icon.empty()
-                ? "Interface\\Icons\\INV_Misc_QuestionMark" : icon.c_str());
+            const std::string icon = gh->getSpellIconPath(static_cast<uint32_t>(r->spellId));
+            if (icon.empty()) return luaReturnNil(L);
+            lua_pushstring(L, icon.c_str());
             return 1;
         }},
                 {"GetTrainerServiceDescription", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceDescription(index)");
             auto* gh = getGameHandler(L);
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const auto* svc = shownTrainerService(gh, i);
-            if (!svc) {
-                return luaReturnNil(L);
-            }
-            const uint32_t id = svc->spellId;
-            const std::string desc =
-                gh->formatSpellDescription(id, gh->getSpellDescription(id));
+            const auto* r = trainerRow(L, luaToClientInt(L, 1));
+            if (!trainerRowSpell(gh, r)) return luaReturnNil(L);
+            const auto id = static_cast<uint32_t>(r->spellId);
+            const std::string desc = gh->formatSpellDescription(id, gh->getSpellDescription(id));
+            if (desc.empty()) return luaReturnNil(L);
             lua_pushstring(L, desc.c_str());
             return 1;
         }},
+                // GetTrainerServiceSkillLine(index) (0x005952f0): the skill
+                // line the first effect that names one belongs to - a
+                // SKILL_STEP's skill, else the skill line of what the effect
+                // teaches (or of the spell itself).
                 {"GetTrainerServiceSkillLine", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceSkillLine(index)");
             auto* gh = getGameHandler(L);
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const auto* svc = shownTrainerService(gh, i);
-            if (!svc) {
-                return luaReturnNil(L);
+            const auto* r = trainerRow(L, luaToClientInt(L, 1));
+            const auto* e = trainerRowSpell(gh, r);
+            if (!e || gh->getPlayerGuid() == 0) return luaReturnNil(L);
+            for (int i = 0; i < 3; ++i) {
+                const uint32_t effect = e->effectIds[i];
+                if (effect == 0) continue;
+                uint32_t line = 0;
+                if (effect == 44) {
+                    line = e->effectMiscValues[i];
+                } else {
+                    const uint32_t taught = effect == 36 && e->implicitTargetsA[i] != 5
+                        ? e->effectTriggerSpell[i] : static_cast<uint32_t>(r->spellId);
+                    line = gh->spellSkillLine(taught);
+                }
+                const std::string& name = line ? gh->getSkillLineName(line) : std::string();
+                if (!name.empty()) {
+                    lua_pushstring(L, name.c_str());
+                    return 1;
+                }
+                if (effect == 44 && line != 0) continue;
             }
-            const std::string skill = gh->getSkillLineName(svc->reqSkill);
-            lua_pushstring(L, skill.empty() ? "" : skill.c_str());
-            return 1;
+            return luaReturnNil(L);
         }},
-                // The prerequisite chain, which this list carries as up to
-                // three spell ids.
+                // GetTrainerServiceNumAbilityReq(index) (0x005945b0): the
+                // required abilities the trainer named, of three.
                 {"GetTrainerServiceNumAbilityReq", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const auto* svc = shownTrainerService(gh, i);
-            if (!svc) {
-                lua_pushnumber(L, 0);
-                return 1;
-            }
-            const auto& sp = *svc;
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceAbilityReq(index)");
+            const auto* r = trainerRow(L, luaToClientInt(L, 1));
             int n = 0;
-            if (sp.chainNode1) ++n;
-            if (sp.chainNode2) ++n;
-            if (sp.chainNode3) ++n;
+            if (r) {
+                for (uint32_t req : {r->service.chainNode1, r->service.chainNode2, r->service.chainNode3})
+                    if (static_cast<int32_t>(req) > 0) ++n;
+            }
             lua_pushnumber(L, n);
             return 1;
         }},
-                // GetTrainerServiceAbilityReq(i, n) → name, hasIt
+                // GetTrainerServiceAbilityReq(index, n) (0x005955e0) → "name"
+                // or "name (rank)", and whether the player has it or a spell
+                // that supersedes it. Has it unless the spell was found and
+                // neither is known.
                 {"GetTrainerServiceAbilityReq", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: GetTrainerServiceAbilityReq(index)");
             auto* gh = getGameHandler(L);
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const int n = static_cast<int>(luaL_optnumber(L, 2, 1));
-            const auto* svc = shownTrainerService(gh, i);
-            if (!svc) {
-                return luaReturnNil(L);
+            const auto* r = trainerRow(L, luaToClientInt(L, 1));
+            const int n = luaToClientInt(L, 2);
+            std::string text;
+            bool has = true;
+            if (gh && gh->getPlayerGuid() != 0 && r && n >= 1 && n <= 3) {
+                const uint32_t chain[3] = {r->service.chainNode1, r->service.chainNode2, r->service.chainNode3};
+                const uint32_t req = chain[n - 1];
+                const auto it = gh->spellNameCacheRef().find(req);
+                if (it != gh->spellNameCacheRef().end()) {
+                    text = it->second.rank.empty() ? it->second.name
+                                                   : it->second.name + " (" + it->second.rank + ")";
+                    const auto* sh = gh->getSpellHandler();
+                    has = sh && sh->knowsSpellOrSuccessor(req);
+                }
             }
-            const auto& sp = *svc;
-            const uint32_t chain[3] = {sp.chainNode1, sp.chainNode2, sp.chainNode3};
-            if (n < 1 || n > 3 || chain[n - 1] == 0) return luaReturnNil(L);
-            const uint32_t req = chain[n - 1];
-            std::string name = gh->getSpellName(req);
-            if (name.empty()) name = "Ability";
-            lua_pushstring(L, name.c_str());
-            lua_pushboolean(L, gh->getKnownSpells().count(req) ? 1 : 0);
+            if (text.empty()) lua_pushnil(L); else lua_pushstring(L, text.c_str());
+            if (has) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 2;
         }},
-                // GetTrainerServiceStepReq(i) → step, met.
+                // GetTrainerServiceStepReq(index) (0x005957d0) → nil, 1.
                 //
-                // Nil, not zero. The trainer window does `if ( step ) then`
-                // and zero is truthy in Lua, so answering 0 claimed every
-                // service had a step requirement - and with `met` missing it
-                // took the red branch, printing a bogus unmet requirement of
-                // "0" beside every spell on the list.
-                //
-                // No step requirement is tracked here, and saying so is both
-                // true and what removes the line.
+                // It reads a step spell from +0x20 of the service, which the
+                // list handler (0x006d12c0) sets to zero for every service
+                // rather than reading from the packet - so there is never a
+                // step requirement, and it is reported met.
                 {"GetTrainerServiceStepReq", [](lua_State* L) -> int {
-            return luaReturnNil(L);
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceStepReq(index)");
+            lua_pushnil(L);
+            lua_pushnumber(L, 1);
+            return 2;
+        }},
+                // GetTrainerServiceStepIncrease(index) (0x00595c40): for a
+                // service not yet used whose spell steps a skill up, the
+                // INCREASE_POTENTIAL line - the skill's name, and five times
+                // how far the step's value rises over the step spell at +0x20.
+                // That spell is always 0 (see GetTrainerServiceStepReq), so the
+                // rise is the step's whole value.
+                {"GetTrainerServiceStepIncrease", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceStepIncrease(index)");
+            auto* gh = getGameHandler(L);
+            const auto* r = trainerRow(L, luaToClientInt(L, 1));
+            const auto* e = trainerRowSpell(gh, r);
+            if (!e) return luaReturnNil(L);
+            int step = -1;
+            for (int i = 0; i < 3 && step < 0; ++i)
+                if (e->effectIds[i] == 44) step = i;
+            if (step < 0 || r->state == 2) return luaReturnNil(L);
+            // 0x008016c0's maximum: base points and die sides. The value per
+            // level and the player's spell modifiers are left out; a step
+            // spell carries neither.
+            uint32_t dieSides = 0;
+            if (!trainerSpellColumn(gh, static_cast<uint32_t>(r->spellId), "Effect0",
+                                    3 + static_cast<uint32_t>(step), dieSides))
+                return luaReturnNil(L);
+            const int32_t rise = e->effectBasePoints[step] + static_cast<int32_t>(dieSides);
+            const std::string& skill = gh->getSkillLineName(e->effectMiscValues[step]);
+            if (rise == 0 || skill.empty()) return luaReturnNil(L);
+            lua_getglobal(L, "string");
+            lua_getfield(L, -1, "format");
+            lua_remove(L, -2);
+            lua_getglobal(L, "INCREASE_POTENTIAL");
+            if (!lua_isstring(L, -1)) {
+                lua_pop(L, 1);
+                lua_pushstring(L, "INCREASE_POTENTIAL");
+            }
+            lua_pushstring(L, skill.c_str());
+            lua_pushnumber(L, rise * 5);
+            if (lua_pcall(L, 3, 1, 0) != 0) {
+                lua_pop(L, 1);
+                return luaReturnNil(L);
+            }
+            return 1;
         }},
                 // IsTrainerServiceSkillStep(index) (0x00595b60): 1 for a
                 // service whose spell steps a skill up - one of its three
                 // effects is SKILL_STEP (44) - nil for any other.
                 {"IsTrainerServiceSkillStep", [](lua_State* L) -> int {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: IsTrainerServiceSkillStep(index)");
-            auto* gh = getGameHandler(L);
-            const auto* svc = shownTrainerService(gh, luaToClientInt(L, 1));
-            auto* am = gh ? gh->services().assetManager : nullptr;
+            const auto* e = trainerRowSpell(getGameHandler(L), trainerRow(L, luaToClientInt(L, 1)));
             bool step = false;
-            if (svc && am && am->isInitialized()) {
-                const auto* layout = pipeline::getActiveDBCLayout()
-                    ? pipeline::getActiveDBCLayout()->getLayout("Spell") : nullptr;
-                const uint32_t effect0 = layout ? layout->field("Effect0") : 0xFFFFFFFFu;
-                auto spells = am->loadDBC("Spell.dbc");
-                const int32_t row = (spells && spells->isLoaded() && effect0 != 0xFFFFFFFFu &&
-                                     effect0 + 3 <= spells->getFieldCount())
-                                        ? spells->findRecordById(svc->spellId) : -1;
-                constexpr uint32_t kSpellEffectSkillStep = 44;
-                for (uint32_t e = 0; row >= 0 && e < 3 && !step; ++e)
-                    step = spells->getUInt32(static_cast<uint32_t>(row), effect0 + e) == kSpellEffectSkillStep;
-            }
+            for (int i = 0; e && i < 3; ++i) step = step || e->effectIds[i] == 44;
             if (step) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;
         }},
+                // GetTrainerServiceItemLink(index) (0x00596290): the link of
+                // the item a tradeskill trainer's service makes, once the item
+                // is known.
                 {"GetTrainerServiceItemLink", [](lua_State* L) -> int {
-            return luaReturnNil(L);
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceItemLink(index)");
+            auto* gh = getGameHandler(L);
+            const uint32_t item = trainerServiceItem(L, gh, trainerRow(L, luaToClientInt(L, 1)));
+            if (item == 0) return luaReturnNil(L);
+            gh->ensureItemInfo(item);
+            const auto* info = gh->getItemInfo(item);
+            if (!info || !info->valid) return luaReturnNil(L);
+            lua_pushstring(L, game::buildItemLink(item, info->quality, info->name).c_str());
+            return 1;
         }},
                 {"GetTrainerGreetingText", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
@@ -4329,106 +4500,155 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushboolean(L, gh && gh->getTrainerSpells().trainerType == 2);
             return 1;
         }},
+                // BuyTrainerService(index) (0x00595e60): CMSG_TRAINER_BUY_SPELL
+                // for the row's service when it is available (0x00594da0); an
+                // index below one buys every available row that shows
+                // (0x00594e50). A header row is never sent.
                 {"BuyTrainerService", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: BuyTrainerService(index)");
             auto* gh = getGameHandler(L);
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            // Through the filtered list like every other index, and this is
-            // the one where getting it wrong buys a different spell than the
-            // row that was clicked.
-            const auto* svc = shownTrainerService(gh, i);
-            if (svc) gh->trainSpell(svc->spellId);
+            const int index = luaToClientInt(L, 1);
+            auto& list = trainerList(L);
+            const auto buy = [gh](const game::TrainerServiceList::Row* r) {
+                if (gh && r && !r->header() && r->state == 0) gh->trainSpell(static_cast<uint32_t>(r->spellId));
+            };
+            if (index < 1) {
+                for (uint32_t i = 0; i < list.visibleCount(); ++i) buy(list.row(i));
+            } else {
+                buy(list.row(static_cast<uint32_t>(index - 1)));
+            }
             return 0;
         }},
                 {"CloseTrainer", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) gh->closeTrainer();
             return 0;
         }},
-                // Selection and the type filter are the panel's own state; the
-                // client has no opinion about either, so they are kept here
-                // rather than pretended away - the panel reads back what it set.
+                // SelectTrainerService(index) (0x005943a0) remembers the row's
+                // spell; GetTrainerSelectionIndex (0x00594430) finds it again,
+                // wherever the list has since moved it.
                 {"SelectTrainerService", [](lua_State* L) -> int {
-            trainerSelection() = static_cast<int>(luaL_optnumber(L, 1, 0));
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectTrainerService(index)");
+            trainerList(L).select(static_cast<uint32_t>(luaToClientInt(L, 1) - 1));
             return 0;
         }},
                 {"GetTrainerSelectionIndex", [](lua_State* L) -> int {
-            lua_pushnumber(L, trainerSelection());
+            const int row = trainerList(L).selectedRow();
+            if (row < 0) return luaReturnNil(L);
+            lua_pushnumber(L, row + 1);
             return 1;
         }},
+                // SetTrainerServiceTypeFilter("type", on [, exclusive])
+                // (0x00595ec0): the type's bit of serviceTypeFilter set or
+                // cleared, or only it set; "all" sets the three. The list is
+                // filtered again and TRAINER_UPDATE raised.
                 {"SetTrainerServiceTypeFilter", [](lua_State* L) -> int {
-            const char* which = luaL_optstring(L, 1, "");
-            // A number is read as a number. The dropdown clears a category
-            // with SetTrainerServiceTypeFilter(value, 0), and lua_toboolean
-            // answers true for 0 - only nil and false are false in Lua - so
-            // every attempt to hide one set it instead, and no filter on this
-            // panel had ever turned anything off.
-            const bool show = lua_isnumber(L, 2) ? (lua_tonumber(L, 2) != 0)
-                                                 : (lua_toboolean(L, 2) != 0);
-            auto& filters = trainerFilters();
-            const auto it = filters.find(which);
-            // Read back the same way GetTrainerServiceTypeFilter answers, so
-            // "no change" here means the dropdown's tick would not move either.
-            const bool was = (it == filters.end()) || it->second;
-            filters[which] = show;
-            if (was == show) return 0;
-
-            // Changing the filter has to redraw the list, and nothing was
-            // asking it to.
-            //
-            // The filter dropdown's OnClick sets the filter and then resets
-            // the scroll bar to zero, which reaches ClassTrainerFrame_Update
-            // through the scroll frame's OnVerticalScroll - but only when the
-            // value moves. Ticking a category while the list is already at the
-            // top moves nothing, so the rows the tick had just excluded stayed
-            // on screen until something else redrew them, which is the state a
-            // freshly opened trainer is always in.
-            //
-            // Raised as TRAINER_UPDATE rather than by calling the panel:
-            // ClassTrainerFrame_OnLoad registers for it and answers by
-            // reselecting and updating, so this is the redraw path the panel
-            // already has, and it works for whichever interface is drawing.
-            if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("TRAINER_UPDATE", {});
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: SetTrainerServiceTypeFilter(\"type\", on/off [, exclusive])");
+            const char* name = lua_tostring(L, 1);
+            uint32_t mask = 7;
+            // 0x0076e780 is _strnicmp.
+            const bool all = foldedForSearch(name) == "all";
+            if (!all) {
+                const int type = game::trainerServiceType(name);
+                if (type == 6) return luaL_error(L, "Bad service type in SetTrainerServiceTypeFilter");
+                if (!lua_isnumber(L, 2))
+                    return luaL_error(L, "Missing on/off parameter in SetTrainerServiceTypeFilter");
+                const uint32_t bit = 1u << type;
+                mask = trainerTypeMask(L);
+                if (luaToClientInt(L, 2) == 0) mask &= ~bit;
+                else if (lua_isnumber(L, 3) && luaToClientInt(L, 3) != 0) mask = bit;
+                else mask |= bit;
+            }
+            setTrainerTypeMask(L, mask);
+            trainerRefilter(L);
             return 0;
         }},
+                // GetTrainerServiceTypeFilter("type") (0x00593e10) → 1 when the
+                // type shows, else nil.
+                {"GetTrainerServiceTypeFilter", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetTrainerServiceTypeFilter(\"type\")");
+            const int type = game::trainerServiceType(lua_tostring(L, 1));
+            if (type == 6) return luaL_error(L, "Bad service type in GetTrainerServiceTypeFilter");
+            if ((trainerTypeMask(L) & (1u << type)) != 0) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
+            return 1;
+        }},
                 // The search box this client's trainer panel has and 3.3.5's
-                // does not. Named alongside the type filter it works with, and
-                // it redraws the same way - see SetTrainerServiceTypeFilter for
-                // why the panel has to be told rather than left to notice.
+                // does not; it redraws the way the type filter does.
                 {"SetTrainerServiceSearch", [](lua_State* L) -> int {
             std::string text = foldedForSearch(luaL_optstring(L, 1, ""));
             if (text == trainerSearch()) return 0;
             trainerSearch() = text;
-            if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("TRAINER_UPDATE", {});
+            trainerRefilter(L);
             return 0;
         }},
                 {"GetTrainerServiceSearch", [](lua_State* L) -> int {
             lua_pushstring(L, trainerSearch().c_str());
             return 1;
         }},
-                {"GetTrainerServiceTypeFilter", [](lua_State* L) -> int {
-            const char* which = luaL_optstring(L, 1, "");
-            auto it = trainerFilters().find(which);
-            // The three the panel asks about are always set; a name it does
-            // not use reads as showing rather than as hidden.
-            lua_pushboolean(L, it == trainerFilters().end() ? 1 : (it->second ? 1 : 0));
+                // GetTrainerSkillLines() (0x00594650): every header's skill
+                // line name in the list's order - nil for one SkillLine.dbc
+                // has no row for, which is each of a tradeskill trainer's.
+                {"GetTrainerSkillLines", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const auto& headers = trainerList(L).headers();
+            if (!lua_checkstack(L, static_cast<int>(headers.size()))) return 0;
+            for (const auto& h : headers) {
+                const std::string& name = gh ? gh->getSkillLineName(h.line) : std::string();
+                if (name.empty()) lua_pushnil(L); else lua_pushstring(L, name.c_str());
+            }
+            return static_cast<int>(headers.size());
+        }},
+                // GetTrainerSkillLineFilter(index) (0x00593eb0): 1 when the
+                // index'th skill line shows; with an index below one, when
+                // every one does.
+                {"GetTrainerSkillLineFilter", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTrainerSkillLineFilter(index)");
+            const auto& list = trainerList(L);
+            const int index = luaToClientInt(L, 1) - 1;
+            const auto count = static_cast<int>(list.headers().size());
+            bool on = true;
+            if (index < 0) {
+                for (int i = 0; i < count && on; ++i) on = (list.lineFilter() & (1u << (i & 31))) != 0;
+            } else {
+                if (index >= count) return luaL_error(L, "Bad skill line in GetTrainerSkillLineFilter");
+                on = (list.lineFilter() & (1u << (index & 31))) != 0;
+            }
+            if (on) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;
         }},
-                // Inert, and this one really is - unlike the three other
-                // Collapse/Expand pairs, which all turned out to have their
-                // grouping sitting in data the client already held.
-                //
-                // Blizzard's name says the heading is a skill line, and the
-                // only skill line in the packet is ReqSkillLine. Across
-                // AzerothCore's whole npc_trainer table - 880 trainers, 4934
-                // rows - not one trainer has more than a single distinct
-                // non-zero value, and 816 have none at all. So grouping by it
-                // yields one heading over the entire list, or none, which is
-                // strictly worse than the flat list it would replace.
-                //
-                // Checked against the table rather than argued from the packet,
-                // because the packet plainly *could* carry several and the
-                // question is whether any server sends them.
-                {"CollapseTrainerSkillLine", [](lua_State* L) -> int { (void)L; return 0; }},
-                {"ExpandTrainerSkillLine",   [](lua_State* L) -> int { (void)L; return 0; }},
+                // SetTrainerSkillLineFilter(index [, on, exclusive])
+                // (0x00596010): the index'th skill line shown or hidden, or
+                // alone shown; an index below one shows all.
+                {"SetTrainerSkillLineFilter", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetTrainerSkillLineFilter(index [, on\\off, exclusive])");
+            auto& list = trainerList(L);
+            const int index = luaToClientInt(L, 1) - 1;
+            if (index < 0) {
+                list.setLineFilter(~0u);
+            } else {
+                if (index >= static_cast<int>(list.headers().size()))
+                    return luaL_error(L, "Bad skill line in SetTrainerSkillLineFilter");
+                if (!lua_isnumber(L, 2))
+                    return luaL_error(L, "Missing on//off parameter in SetTrainerSkillLineFilter");
+                const uint32_t bit = 1u << (index & 31);
+                if (luaToClientInt(L, 2) == 0) list.setLineFilter(list.lineFilter() & ~bit);
+                else if (lua_isnumber(L, 3) && luaToClientInt(L, 3) != 0) list.setLineFilter(bit);
+                else list.setLineFilter(list.lineFilter() | bit);
+            }
+            trainerRefilter(L);
+            return 0;
+        }},
+                // Collapse/ExpandTrainerSkillLine(index) (0x00596150,
+                // 0x005961f0): the header row's group folded or opened; an
+                // index below one does every group.
+                {"CollapseTrainerSkillLine", [](lua_State* L) -> int {
+            return trainerFold(L, false);
+        }},
+                {"ExpandTrainerSkillLine", [](lua_State* L) -> int {
+            return trainerFold(L, true);
+        }},
                 // GetGlyphLink(socket [, talentGroup]) → hyperlink, or nil
                 {"GetGlyphLink", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);

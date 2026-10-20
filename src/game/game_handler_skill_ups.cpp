@@ -12,6 +12,11 @@ const SkillUps::RaceClassInfo* GameHandler::skillRaceClassInfo(uint32_t skillId)
     return skillUps_.raceClassInfo(skillId, getPlayerRace(), getPlayerClass());
 }
 
+uint32_t GameHandler::spellSkillLine(uint32_t spellId) {
+    skillUps_.load(services_.assetManager);
+    return skillUps_.abilitySkillLine(spellId, getPlayerRace(), getPlayerClass());
+}
+
 uint32_t GameHandler::getSkillPoints() const {
     const auto self = entityController_->getEntityManager().getEntity(playerGuid);
     return self ? self->getField(fieldIndex(UF::PLAYER_CHARACTER_POINTS2)) : 0;

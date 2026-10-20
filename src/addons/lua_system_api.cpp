@@ -1328,6 +1328,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // WatchFrame_GetCurrentMapQuests in AddonManager, which fills it from the
     // log's zone headers rather than from map POIs.
     else if (n == "trackerfilter") lua_pushstring(L, "3");
+    // The trainer's service type filter (0x00bd09e4): available and
+    // unavailable shown, used hidden.
+    else if (n == "servicetypefilter") lua_pushstring(L, "3");
     // Manual, which is WATCHFRAME_SORT_MANUAL. Only ever compared with ==, so
     // nil was survivable here - it is answered for the same reason its
     // neighbour is, and because the sort menu's ticks read it.

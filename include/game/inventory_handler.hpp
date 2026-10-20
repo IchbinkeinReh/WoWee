@@ -843,6 +843,7 @@ private:
     // ---- Trainer state ----
     bool trainerWindowOpen_ = false;
     TrainerListData currentTrainerList_;
+    uint64_t trainerListSerial_ = 0;
     std::vector<TrainerTab> trainerTabs_;
 
     // ---- Equipment set state ----

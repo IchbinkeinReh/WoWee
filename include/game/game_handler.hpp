@@ -1859,6 +1859,9 @@ public:
         bool abandonable = false;
     };
     SkillPurchaseInfo getSkillPurchaseInfo(uint32_t skillId);
+    /// 0x00812410 for the player's race and class: the skill line a spell is
+    /// listed under, 0 for none.
+    uint32_t spellSkillLine(uint32_t spellId);
     /// The player's skill points, PLAYER_CHARACTER_POINTS2 (0x005cd970(1)).
     uint32_t getSkillPoints() const;
     /// GetAdjustedSkillPoints (0x005ce540): the points less those pending.

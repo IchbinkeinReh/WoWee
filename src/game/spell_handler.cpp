@@ -2395,10 +2395,7 @@ cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& pla
     for (int k = 0; k < 3; ++k) {
         const uint32_t learn = e.effectTriggerSpell[k];
         if (e.effectIds[k] != 36 || learn == 0) continue;
-        bool known = knownSpells_.count(learn) != 0;
-        for (uint32_t next = supersededBy(learn), n = 0; !known && next != 0 && n < 32; next = supersededBy(next), ++n)
-            known = knownSpells_.count(next) != 0;
-        c.learnKnown[k] = known;
+        c.learnKnown[k] = knowsSpellOrSuccessor(learn);
     }
     c.hasCharm = entityGuidField(player, UF::UNIT_FIELD_CHARM) != 0;
     c.hasSummon = entityGuidField(player, UF::UNIT_FIELD_SUMMON) != 0;
@@ -2513,6 +2510,13 @@ cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& pla
         c.flyable = fly ? 1 : 0;
     }
     return c;
+}
+
+bool SpellHandler::knowsSpellOrSuccessor(uint32_t spellId) const {
+    bool known = knownSpells_.count(spellId) != 0;
+    for (uint32_t next = supersededBy(spellId), n = 0; !known && next != 0 && n < 32; next = supersededBy(next), ++n)
+        known = knownSpells_.count(next) != 0;
+    return known;
 }
 
 uint32_t SpellHandler::supersededBy(uint32_t spellId) const {

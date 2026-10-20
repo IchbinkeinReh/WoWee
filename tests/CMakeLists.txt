@@ -3257,3 +3257,10 @@ wowee_add_test(test_client_cvar_registry
 # which GetAddOnDependencies answers.
 wowee_add_test(test_toc_dependencies
     SOURCES test_toc_dependencies.cpp ${CMAKE_SOURCE_DIR}/src/addons/toc_parser.cpp)
+
+# ── test_trainer_service_list ────────────────────────────────
+# The trainer window's list as the client keeps it: header rows per skill
+# line, the shown rows first, and the type, skill line and collapse filters
+# (0x00596450, 0x00594ba0).
+wowee_add_test(test_trainer_service_list
+    SOURCES test_trainer_service_list.cpp ${CMAKE_SOURCE_DIR}/src/game/trainer_service_list.cpp)

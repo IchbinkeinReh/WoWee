@@ -2985,6 +2985,7 @@ void InventoryHandler::handleTrainerList(network::Packet& packet) {
     const bool isClassic = isClassicLikeExpansion();
     const uint64_t trainerBefore = trainerWindowOpen_ ? currentTrainerList_.trainerGuid : 0;
     if (!TrainerListParser::parse(packet, currentTrainerList_, isClassic)) return;
+    currentTrainerList_.serial = ++trainerListSerial_;
     trainerWindowOpen_ = true;
     // 0x005940e0: a trainer other than the one open sets the interaction
     // object, unless it is the player itself.
@@ -2993,6 +2994,12 @@ void InventoryHandler::handleTrainerList(network::Packet& packet) {
         owner_.setInteractionObject(currentTrainerList_.trainerGuid, go_interaction::Window::Trainer);
     }
     if (owner_.isGossipWindowOpen()) owner_.closeGossip();   // if 0x00512e60 has not already
+    // What the list is built from, before TRAINER_SHOW: the client builds it
+    // (0x00596450) and raises the event at the end.
+    owner_.loadSpellNameCache();
+    owner_.loadSkillLineDbc();
+    owner_.loadSkillLineAbilityDbc();
+    categorizeTrainerSpells();
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TRAINER_SHOW", {});
 
     // At WARNING, and broken down by the three states the panel filters on,
@@ -3010,11 +3017,6 @@ void InventoryHandler::handleTrainerList(network::Packet& packet) {
     LOG_WARNING("Trainer list: ", currentTrainerList_.spells.size(), " spells - ",
                 available, " available, ", unavailable, " unavailable, ",
                 known, " already known");
-
-    owner_.loadSpellNameCache();
-    owner_.loadSkillLineDbc();
-    owner_.loadSkillLineAbilityDbc();
-    categorizeTrainerSpells();
 }
 
 void InventoryHandler::trainSpell(uint32_t spellId) {

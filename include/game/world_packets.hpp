@@ -3276,6 +3276,9 @@ struct TrainerListData {
     uint32_t trainerType = 0;  // 0=class, 1=mounts, 2=tradeskills, 3=pets
     std::vector<TrainerSpell> spells;
     std::string greeting;
+    /// Not on the wire: which list this is, counted by the receiver, so what
+    /// is built from a list can tell a new one arrived. 0 for none.
+    uint64_t serial = 0;
     [[nodiscard]] bool isValid() const { return true; }
 };
 
