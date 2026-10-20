@@ -2577,8 +2577,10 @@ public:
     }
     bool supportsEquipmentSets() const;
     void useEquipmentSet(uint32_t setId);
+    /// ignoredSlotMask: bit i set leaves equipment slot i out of the set.
     void saveEquipmentSet(const std::string& name, const std::string& iconName = "INV_Misc_QuestionMark",
-                          uint64_t existingGuid = 0, uint32_t setIndex = 0xFFFFFFFF);
+                          uint64_t existingGuid = 0, uint32_t setIndex = 0xFFFFFFFF,
+                          uint32_t ignoredSlotMask = 0);
     void deleteEquipmentSet(uint64_t setGuid);
 
     // NPC Gossip
@@ -2593,6 +2595,9 @@ public:
     // Quest-starting items: right-click triggers quest offer dialog via questgiver protocol
     void offerQuestFromItem(uint64_t itemGuid, uint32_t questId);
     uint64_t getBagItemGuid(int bagIndex, int slotIndex) const;
+    /// The item in a bank slot, and in a bank bag's slot (all 0-based).
+    uint64_t getBankSlotGuid(int slot) const;
+    uint64_t getBankBagItemGuid(int bag, int slot) const;
     bool isGossipWindowOpen() const;
     const GossipMessageData& getCurrentGossip() const;
     const std::string& getNpcText(uint32_t textId) const;

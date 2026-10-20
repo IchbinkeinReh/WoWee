@@ -1383,8 +1383,10 @@ void GameHandler::useEquipmentSet(uint32_t setId) {
 }
 
 void GameHandler::saveEquipmentSet(const std::string& name, const std::string& iconName,
-                                    uint64_t existingGuid, uint32_t setIndex) {
-    if (inventoryHandler_) inventoryHandler_->saveEquipmentSet(name, iconName, existingGuid, setIndex);
+                                    uint64_t existingGuid, uint32_t setIndex,
+                                    uint32_t ignoredSlotMask) {
+    if (inventoryHandler_)
+        inventoryHandler_->saveEquipmentSet(name, iconName, existingGuid, setIndex, ignoredSlotMask);
 }
 
 void GameHandler::deleteEquipmentSet(uint64_t setGuid) {
@@ -4068,6 +4070,14 @@ void GameHandler::closeGossip() {
 
 void GameHandler::offerQuestFromItem(uint64_t itemGuid, uint32_t questId) {
     if (questHandler_) questHandler_->offerQuestFromItem(itemGuid, questId);
+}
+
+uint64_t GameHandler::getBankSlotGuid(int slot) const {
+    return inventoryHandler_ ? inventoryHandler_->getBankSlotGuid(slot) : 0;
+}
+
+uint64_t GameHandler::getBankBagItemGuid(int bag, int slot) const {
+    return inventoryHandler_ ? inventoryHandler_->getBankBagItemGuid(bag, slot) : 0;
 }
 
 uint64_t GameHandler::getBagItemGuid(int bagIndex, int slotIndex) const {

@@ -1,6 +1,7 @@
 // lua_action_api.cpp - Action bar, cursor/pickup, keyboard input, key bindings, and pet actions Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/item_text.hpp"
+#include "game/equip_slot_fit.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -1545,6 +1546,44 @@ static int lua_AutoEquipCursorItem(lua_State* L) {
     return 0;
 }
 
+// EquipCursorItem(slot) (0x0051a3d0): the held item into that equipment slot.
+// Dropped back where it came from when the slot already holds it, or when it
+// came off the paperdoll and does not fit there; otherwise, not fitting, worn
+// wherever it does fit, as AutoEquipCursorItem would (0x006dfc40).
+static int lua_EquipCursorItem(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: EquipCursorItem(slot)");
+    auto* gh = getGameHandler(L);
+    if (!gh || s_cursorType != CursorType::ITEM || s_cursorId == 0) {
+        LOG_WARNING("EquipCursorItem: no item on the cursor to equip");
+        return 0;
+    }
+    const int slot = luaToClientInt(L, 1);
+    if (slot >= 1 && slot <= 19) {
+        const CursorItemSlot held = cursorItemSlot();
+        if (held.equipped && held.slot == slot) {
+            LOG_WARNING("EquipCursorItem: slot ", slot, " already holds it; put back");
+            clearCursorItem(L);
+            return 0;
+        }
+        const auto* info = gh->getItemInfo(s_cursorId);
+        uint8_t srcBag = 0, srcSlot = 0;
+        if (info && game::inventoryTypeFitsSlot(slot, info->inventoryType) &&
+            cursorWireSlot(srcBag, srcSlot)) {
+            if (!taint::allowed(L, 0x16)) return 0;   // SwapItems, 0x006df890
+            gh->swapContainerItems(srcBag, srcSlot, 0xFF, static_cast<uint8_t>(slot - 1));
+            clearCursorItem(L);
+            return 0;
+        }
+        if (held.equipped) {
+            LOG_WARNING("EquipCursorItem: worn item does not fit slot ", slot, "; put back");
+            clearCursorItem(L);
+            return 0;
+        }
+    }
+    LOG_WARNING("EquipCursorItem: slot ", slot, " does not take it; worn where it fits");
+    return lua_AutoEquipCursorItem(L);
+}
+
 // --- Frame System ---
 // Minimal WoW-compatible frame objects with RegisterEvent/SetScript/GetScript.
 // Frames are Lua tables with a metatable that provides methods.
@@ -2363,6 +2402,7 @@ void registerActionLuaAPI(lua_State* L) {
                 {"CursorHasMacro",      lua_CursorHasMacro},
                 {"DeleteCursorItem",    lua_DeleteCursorItem},
                 {"AutoEquipCursorItem", lua_AutoEquipCursorItem},
+                {"EquipCursorItem",     lua_EquipCursorItem},
                 {"IsModifiedClick",     lua_IsModifiedClick},
                 {"GetModifiedClick",    lua_GetModifiedClick},
                 {"SetModifiedClick",    lua_SetModifiedClick},

@@ -6,6 +6,7 @@
 #include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
 #include "game/inventory_slots.hpp"
+#include "game/equip_slot_fit.hpp"
 #include "game/game_utils.hpp"
 #include "game/stationery.hpp"
 #include "game/auction_filters.hpp"
@@ -1524,6 +1525,36 @@ std::set<int>& pendingIgnoredSlots() {
     return slots;
 }
 
+/// A set name as 0x007e1830 takes one (max 32 characters, 128 bytes, one line):
+/// well-formed UTF-8, no line break - "\r", "\n" or an escaped "\\n" or "|n"
+/// - and fewer than 32 characters, the 32nd being where it cuts and refuses.
+bool equipmentSetNameValid(const std::string& name) {
+    size_t chars = 0;
+    for (size_t i = 0; i < name.size();) {
+        const auto c = static_cast<unsigned char>(name[i]);
+        const size_t len = c < 0x80 ? 1 : (c & 0xe0) == 0xc0 ? 2 : (c & 0xf0) == 0xe0 ? 3
+                         : (c & 0xf8) == 0xf0 ? 4 : 0;
+        if (len == 0 || i + len > name.size()) return false;
+        for (size_t k = 1; k < len; ++k) {
+            if ((static_cast<unsigned char>(name[i + k]) & 0xc0) != 0x80) return false;
+        }
+        if (c == '\r' || c == '\n') return false;
+        if ((c == '\\' || c == '|') && i + 1 < name.size() && name[i + 1] == 'n') return false;
+        if (++chars >= 32) return false;
+        i += len;
+    }
+    return true;
+}
+
+/// The marked slots as the save sends them: bit i for equipment slot i + 1.
+uint32_t pendingIgnoredSlotMask() {
+    uint32_t mask = 0;
+    for (int slot : pendingIgnoredSlots()) {
+        if (slot >= 1 && slot <= 19) mask |= 1u << (slot - 1);
+    }
+    return mask;
+}
+
 }  // namespace
 
 static int lua_GetNumEquipmentSets(lua_State* L) {
@@ -1611,8 +1642,93 @@ static int lua_SaveEquipmentSet(lua_State* L) {
     // same set rather than a new one with the same name.
     const auto* existing = equipmentSetByName(gh, name);
     gh->saveEquipmentSet(name, iconName, existing ? existing->setGuid : 0,
-                         existing ? existing->setId : 0xFFFFFFFFu);
+                         existing ? existing->setId : 0xFFFFFFFFu, pendingIgnoredSlotMask());
     return 0;
+}
+
+// RenameEquipmentSet("oldName", "newName") (0x005af910): a name no set has
+// yet, at most 31 characters on one line, given to the set - which is saved
+// again as 0x005ade50 saves one, from what is worn now with the marked slots
+// left out - and EQUIPMENT_SETS_CHANGED raised (0x005af400).
+static int lua_RenameEquipmentSet(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) {
+        return luaL_error(L, "Usage: RenameEquipmentSet(\"oldName\", \"newName\")");
+    }
+    std::string newName = lua_tostring(L, 2);
+    if (!equipmentSetNameValid(newName)) return luaL_error(L, "Invalid string for setName");
+    auto* gh = getGameHandler(L);
+    const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
+    if (!set) return 0;
+    for (const auto& other : gh->getEquipmentSets()) {
+        if (other.name == newName) return 0;
+    }
+    gh->saveEquipmentSet(newName, set->iconName, set->setGuid, set->setId,
+                         pendingIgnoredSlotMask());
+    gh->fireAddonEvent("EQUIPMENT_SETS_CHANGED", {});
+    return 0;
+}
+
+// GetEquipmentSetLocations("setName" [, returnTable]) (0x005ae860): where each
+// of the set's items is now, by slot, packed as the equipment manager unpacks
+// it - worn, in the backpack or a bag, and with the bank open in the bank or a
+// bank bag. 0 for a slot the set leaves empty, 1 for one it ignores, -1 for an
+// item that is nowhere to be found.
+static int lua_GetEquipmentSetLocations(lua_State* L) {
+    if (!lua_isstring(L, 1) || (lua_type(L, 2) > LUA_TNIL && !lua_istable(L, 2))) {
+        return luaL_error(L, "Usage: GetEquipmentSetLocations(\"setName\" [, returnTable])");
+    }
+    auto* gh = getGameHandler(L);
+    const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
+    const auto* guids = (gh && set) ? gh->getEquipmentSetItems(set->setId) : nullptr;
+    if (!guids) return 0;
+    if (lua_istable(L, 2)) lua_pushvalue(L, 2); else lua_newtable(L);
+    const int table = lua_gettop(L);
+    auto put = [&](int slot, double location) {
+        lua_pushnumber(L, slot + 1);
+        lua_pushnumber(L, location);
+        lua_settable(L, table);
+    };
+    std::vector<int> wanted;
+    for (int i = 0; i < kEquipSlots; ++i) {
+        const uint64_t guid = (*guids)[static_cast<size_t>(i)];
+        if (guid <= 1) put(i, static_cast<double>(guid));
+        else wanted.push_back(i);
+    }
+    // The first slot still looking for this guid takes the location.
+    auto offer = [&](uint64_t guid, uint32_t location) {
+        if (guid == 0) return;
+        for (auto it = wanted.begin(); it != wanted.end(); ++it) {
+            if ((*guids)[static_cast<size_t>(*it)] != guid) continue;
+            put(*it, location);
+            wanted.erase(it);
+            return;
+        }
+    };
+    constexpr uint32_t kPlayer = 0x00100000, kBags = 0x00200000, kBank = 0x00400000;
+    for (int i = 0; i < kEquipSlots && !wanted.empty(); ++i)
+        offer(gh->getEquipSlotGuid(i), kPlayer | static_cast<uint32_t>(i + 1));
+    for (int i = 0; i < 16 && !wanted.empty(); ++i)
+        offer(gh->getBackpackItemGuid(i), kPlayer | kBags | static_cast<uint32_t>(i + 1));
+    for (int bag = 0; bag < game::Inventory::NUM_BAG_SLOTS && !wanted.empty(); ++bag) {
+        for (int i = 0; i < 36; ++i) {
+            offer(gh->getBagItemGuid(bag, i), kPlayer | kBags |
+                  (static_cast<uint32_t>(bag + 1) << 8) | static_cast<uint32_t>(i + 1));
+        }
+    }
+    if (gh->isBankOpen()) {
+        for (int i = 0; i < 28 && !wanted.empty(); ++i)
+            offer(gh->getBankSlotGuid(i), kBank | static_cast<uint32_t>(i + 1));
+        // A bank bag counts from one here; the manager adds the four carried
+        // bags when it unpacks it.
+        for (int bag = 0; bag < 7 && !wanted.empty(); ++bag) {
+            for (int i = 0; i < 36; ++i) {
+                offer(gh->getBankBagItemGuid(bag, i), kBank | kBags |
+                      (static_cast<uint32_t>(bag + 1) << 8) | static_cast<uint32_t>(i + 1));
+            }
+        }
+    }
+    for (int slot : wanted) put(slot, -1);
+    return 1;
 }
 
 static int lua_DeleteEquipmentSet(lua_State* L) {
@@ -1649,6 +1765,15 @@ static int lua_EquipmentManagerUnignoreSlotForSave(lua_State* L) {
     pendingIgnoredSlots().erase(static_cast<int>(luaL_optnumber(L, 1, 0)));
     return 0;
 }
+// EquipmentManagerIsSlotIgnoredForSave(slot) (0x005ad7c0).
+static int lua_EquipmentManagerIsSlotIgnoredForSave(lua_State* L) {
+    const int slot = luaToClientInt(L, 1);
+    if (slot < 1 || slot > kEquipSlots) {
+        return luaL_error(L, "Usage: EquipmentSetIsSlotIgnoredForSave(slot)");
+    }
+    lua_pushboolean(L, pendingIgnoredSlots().count(slot) ? 1 : 0);
+    return 1;
+}
 static int lua_EquipmentManagerClearIgnoredSlotsForSave(lua_State* L) {
     (void)L;
     pendingIgnoredSlots().clear();
@@ -1671,38 +1796,10 @@ static int lua_GetInventoryItemsForSlot(lua_State* L) {
     constexpr uint32_t kLocationBags   = 0x00200000;
     constexpr int      kBagBitOffset   = 8;
 
-    // Which inventory types the server sends fit which slot. A flyout that is a
-    // little generous about weapons is better than one that hides a sword,
-    // so a one-handed weapon is offered for either hand.
-    // Named rather than numbered: this client already spells the inventory
-    // types out, and the two agreed when checked against each other.
-    namespace IT = game::InvType;
-    auto fits = [](int slot, uint32_t t) {
-        switch (slot) {
-            case 1:  return t == IT::HEAD;
-            case 2:  return t == IT::NECK;
-            case 3:  return t == IT::SHOULDERS;
-            case 4:  return t == IT::SHIRT;
-            case 5:  return t == IT::CHEST || t == IT::ROBE;
-            case 6:  return t == IT::WAIST;
-            case 7:  return t == IT::LEGS;
-            case 8:  return t == IT::FEET;
-            case 9:  return t == IT::WRISTS;
-            case 10: return t == IT::HANDS;
-            case 11: case 12: return t == IT::FINGER;     // the two rings
-            case 13: case 14: return t == IT::TRINKET;    // the two trinkets
-            case 15: return t == IT::BACK;
-            case 16: return t == IT::ONE_HAND || t == IT::TWO_HAND || t == IT::MAIN_HAND;
-            case 17: return t == IT::ONE_HAND || t == IT::SHIELD ||
-                            t == IT::OFF_HAND || t == IT::HOLDABLE;
-            // Relics go in the ranged slot and have no name here, the list
-            // stopping at guns; twenty-eight is what the server sends for one.
-            case 18: return t == IT::RANGED_BOW || t == IT::THROWN ||
-                            t == IT::RANGED_GUN || t == 28;
-            case 19: return t == IT::TABARD;
-            default: return false;
-        }
-    };
+    // Which inventory types fit which slot. A flyout that is a little generous
+    // about weapons is better than one that hides a sword, so a one-handed
+    // weapon is offered for either hand.
+    auto fits = [](int slot, uint32_t t) { return game::inventoryTypeFitsSlot(slot, t); };
     auto offer = [&](uint32_t location, uint32_t itemId) {
         lua_pushnumber(L, static_cast<double>(location));
         lua_pushnumber(L, static_cast<double>(itemId));
@@ -4027,6 +4124,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"EquipmentManagerIgnoreSlotForSave",   lua_EquipmentManagerIgnoreSlotForSave},
                 {"EquipmentManagerUnignoreSlotForSave", lua_EquipmentManagerUnignoreSlotForSave},
                 {"EquipmentManagerClearIgnoredSlotsForSave", lua_EquipmentManagerClearIgnoredSlotsForSave},
+                {"EquipmentManagerIsSlotIgnoredForSave", lua_EquipmentManagerIsSlotIgnoredForSave},
+                {"RenameEquipmentSet",  lua_RenameEquipmentSet},
+                {"GetEquipmentSetLocations", lua_GetEquipmentSetLocations},
                 {"LootSlotIsCoin",      lua_LootSlotIsCoin},
                 {"LootSlotIsItem",      lua_LootSlotIsItem},
                 {"IsFishingLoot",       lua_IsFishingLoot},
