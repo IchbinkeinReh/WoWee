@@ -225,7 +225,8 @@ bool entersOrSits(SeatState s) {
 
 std::optional<rendering::vehicle_seat::RideAnimation> toRide(const std::optional<game::vehicle::SeatAnimation>& a) {
     if (!a) return std::nullopt;
-    return rendering::vehicle_seat::RideAnimation{.start = a->start, .loop = a->loop};
+    return rendering::vehicle_seat::RideAnimation{
+        .start = a->start, .loop = a->loop, .upperStart = a->upperStart, .upperLoop = a->upperLoop, .seated = a->seated};
 }
 
 }  // namespace

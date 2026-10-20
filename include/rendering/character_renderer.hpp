@@ -116,7 +116,10 @@ public:
     /// lacks the bone or the animation.
     /// `once` plays it through a single time and gives the bone back to the
     /// body at its end (0x00756f80's one-shot, 0x00757280 -> 0x00757420).
-    bool playKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId, bool once = false);
+    /// `then`, with `once`, loops that animation on the bone at the end in
+    /// place of giving it back.
+    bool playKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId, bool once = false,
+                              std::optional<uint32_t> then = std::nullopt);
     /// How far into its own animation a key bone is, in ms; nothing where it
     /// plays none, or another.
     [[nodiscard]] std::optional<float> keyBoneAnimationTime(uint32_t instanceId, int32_t keyBoneId,
@@ -273,8 +276,13 @@ public:
     /// nothing without a seat or its vehicle.
     [[nodiscard]] std::optional<glm::mat4> seatTargetMatrix(uint32_t instanceId) const;
     /// The seat's ride animation holds the passenger's body: its start once,
-    /// then its loop; what else asks the body to play is not played
-    /// (0x007385c0 and 0x00724500 put the seat's first). Nothing releases it.
+    /// then its loop (0x007385c0 and 0x00724500 put the seat's first). What
+    /// else asks the body to play goes to the upper body - from SpineLow,
+    /// else the head - where it is no stand (vehicle_seat::seatedUpperBodyTakes),
+    /// and comes back from there to what the seat's upper ride animation
+    /// has it stand as, or to the body without one (0x007385c0, 0x00737bd0).
+    /// Seated with no ride animation but an upper one, that is what the
+    /// whole unit stands as, and nothing is held. Nothing releases it.
     void setSeatAnimation(uint32_t instanceId, const std::optional<vehicle_seat::RideAnimation>& ride);
     /// The passenger plays what its seat's parent plays and nothing of its
     /// own (the passenger's +0x10 0x800: 0x00748620 copies the vehicle's
@@ -542,6 +550,9 @@ private:
             int sequence = -1;
             float time = 0.0f;
             bool once = false;
+            /// Looped on the bone once a `once` ends (-1: the bone goes back).
+            int thenSequence = -1;
+            uint32_t thenAnimationId = 0;
         };
         std::vector<KeyBoneAnimation> keyBoneAnimations;
         std::vector<int16_t> boneKeyBoneAnimation;
@@ -654,6 +665,17 @@ private:
         std::optional<vehicle_seat::Flight> seatFlight;
         /// setSeatAnimation: the body is the seat's.
         bool seatAnimationHeld = false;
+        /// setSeatAnimation: the key bone the upper body plays from (+0xb84,
+        /// -1 none), what the seat has it stand as there (Flags 0x4), and
+        /// whether a one-shot of its own has ended there yet (+0x10 0x4,
+        /// 0x007484e0), after which it stands as the loop.
+        int32_t seatUpperBone = -1;
+        std::optional<uint32_t> seatUpperStart;
+        std::optional<uint32_t> seatUpperLoop;
+        bool seatUpperStartPlayed = false;
+        /// Seated with no ride animation, the seat's upper one is what the
+        /// whole unit stands as (0x007485b0).
+        bool seatStandsWhole = false;
         /// setMirrorsSeatParent.
         bool mirrorsSeatParent = false;
 
@@ -681,6 +703,13 @@ private:
     /// playAnimation without the seat's say, and handed on to the
     /// passengers that mirror the instance.
     void playAnimationNow(uint32_t instanceId, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim);
+    /// A seated passenger's upper body (setSeatAnimation): back to what the
+    /// seat has it stand as, or to the body; and an animation of its own.
+    void standSeatedUpperBody(uint32_t instanceId);
+    void standSeatedWhole(uint32_t instanceId);
+    void playSeatedUpperBody(uint32_t instanceId, uint32_t animationId, bool loop);
+    /// Its upper body given back to the body, the seat's hold on it gone.
+    void releaseSeatedUpperBody(uint32_t instanceId);
     void startAnimation(CharacterInstance& instance, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim);
     bool playArmAnimationNow(uint32_t instanceId, int arm, uint32_t animationId, uint32_t eventId);
     /// The passengers that mirror an instance.

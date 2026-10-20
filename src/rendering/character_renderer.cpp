@@ -2242,9 +2242,18 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
         core::Logger::getInstance().warning("Cannot play animation: instance ", instanceId, " not found");
         return;
     }
-    // A seated passenger's body is its seat's (0x007385c0, 0x00724500), or
-    // its vehicle's where it mirrors it (0x007385c0 asks 0x007487e0).
-    if (it->second.seatAnimationHeld || it->second.mirrorsSeatParent) return;
+    // A seated passenger's body is its vehicle's where it mirrors it
+    // (0x007385c0 asks 0x007487e0), else its seat's (0x007385c0,
+    // 0x00724500), and what it is asked goes to its upper body.
+    if (it->second.mirrorsSeatParent) return;
+    if (it->second.seatAnimationHeld) {
+        playSeatedUpperBody(instanceId, animationId, loop);
+        return;
+    }
+    if (it->second.seatStandsWhole && vehicle_seat::isStandBehavior(animationId)) {
+        standSeatedWhole(instanceId);
+        return;
+    }
     playAnimationNow(instanceId, animationId, loop, oneShotReturnAnim);
 }
 
@@ -2481,6 +2490,17 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                 const float duration = static_cast<float>(inst.cachedModel->data.sequences[k.sequence].duration);
                 k.time += deltaTime * 1000.0f;
                 if (k.once && k.time >= duration) {
+                    // A one-shot ended on a bone of its own: a seated
+                    // passenger's upper body has passed its start (0x0073bbd0
+                    // -> 0x007484e0).
+                    if (k.keyBoneId == inst.seatUpperBone) inst.seatUpperStartPlayed = true;
+                    if (k.thenSequence >= 0) {
+                        k.sequence = std::exchange(k.thenSequence, -1);
+                        k.animationId = k.thenAnimationId;
+                        k.time = 0.0f;
+                        k.once = false;
+                        continue;
+                    }
                     k.sequence = -1;
                     ended = true;
                 } else if (duration > 0.0f) {
@@ -2561,8 +2581,13 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                     // resume anim (NPC state emote), else the loop the unit
                     // rests in (sitting, sleeping...), else Stand, unless dead
                     if (inst.currentAnimationId != anim::DEATH && !inst.holdsLastFrame) {
+                        // Seated with its seat's upper ride animation as its
+                        // whole stand, it is back in its loop: an ended
+                        // one-shot has passed its start (0x007484e0).
+                        if (inst.seatStandsWhole) inst.seatUpperStartPlayed = true;
                         const uint32_t resumeAnim =
                             inst.oneShotReturnAnim != 0 ? inst.oneShotReturnAnim
+                            : inst.seatStandsWhole && inst.seatUpperLoop ? *inst.seatUpperLoop
                             : inst.restAnimation != 0  ? inst.restAnimation
                                                        : anim::STAND;
                         playAnimationNow(pair.first, resumeAnim, true, 0);
@@ -2856,6 +2881,83 @@ void CharacterRenderer::clearInstanceSeat(uint32_t instanceId) {
     instance.seatAnimationHeld = false;
     instance.mirrorsSeatParent = false;
     instance.hasOverrideModelMatrix = instance.seatFlight.has_value();
+    releaseSeatedUpperBody(instanceId);
+}
+
+void CharacterRenderer::releaseSeatedUpperBody(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    const int32_t bone = std::exchange(instance.seatUpperBone, vehicle_seat::kNoUpperBody);
+    instance.seatUpperStart.reset();
+    instance.seatUpperLoop.reset();
+    instance.seatUpperStartPlayed = false;
+    instance.seatStandsWhole = false;
+    if (bone != vehicle_seat::kNoUpperBody) stopKeyBoneAnimation(instanceId, bone);
+}
+
+void CharacterRenderer::standSeatedWhole(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    const bool start = instance.seatUpperStart && !instance.seatUpperStartPlayed;
+    const uint32_t current = instance.currentAnimationId;
+    if ((instance.seatUpperStart && current == *instance.seatUpperStart) ||
+        (instance.seatUpperLoop && current == *instance.seatUpperLoop))
+        return;
+    if (start) {
+        playAnimationNow(instanceId, *instance.seatUpperStart, false, instance.seatUpperLoop.value_or(0));
+    } else if (instance.seatUpperLoop) {
+        playAnimationNow(instanceId, *instance.seatUpperLoop, true, 0);
+    }
+}
+
+void CharacterRenderer::standSeatedUpperBody(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    const int32_t bone = instance.seatUpperBone;
+    if (bone == vehicle_seat::kNoUpperBody) return;
+    // 0x007485b0: RideUpperAnimStart until a one-shot of its own has ended
+    // there, then RideUpperAnimLoop - kept where it plays already.
+    const auto& anims = instance.keyBoneAnimations;
+    const auto playing =
+        std::find_if(anims.begin(), anims.end(), [&](const auto& k) { return k.keyBoneId == bone; });
+    const bool start = instance.seatUpperStart && !instance.seatUpperStartPlayed;
+    if (start || instance.seatUpperLoop) {
+        if (playing != anims.end() &&
+            ((instance.seatUpperStart && playing->animationId == *instance.seatUpperStart) ||
+             (instance.seatUpperLoop && playing->animationId == *instance.seatUpperLoop)))
+            return;
+        if (start && playKeyBoneAnimation(instanceId, bone, *instance.seatUpperStart, true, instance.seatUpperLoop))
+            return;
+        if (instance.seatUpperLoop && playKeyBoneAnimation(instanceId, bone, *instance.seatUpperLoop)) return;
+    }
+    // None: the upper body follows the body's ride animation.
+    stopKeyBoneAnimation(instanceId, bone);
+}
+
+void CharacterRenderer::playSeatedUpperBody(uint32_t instanceId, uint32_t animationId, bool loop) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    const int32_t bone = instance.seatUpperBone;
+    if (bone == vehicle_seat::kNoUpperBody) return;
+    if (vehicle_seat::isStandBehavior(animationId)) {
+        standSeatedUpperBody(instanceId);
+        return;
+    }
+    if (!vehicle_seat::seatedUpperBodyTakes(animationId)) return;
+    // A loop it plays there already goes on.
+    if (loop) {
+        for (const auto& k : instance.keyBoneAnimations) {
+            if (k.keyBoneId == bone && k.animationId == animationId && !k.once) return;
+        }
+    }
+    // A one-shot ends into what the seat has the upper body stand as - the
+    // loop, its start having been passed by then (0x00737bd0 with Flags 0x4,
+    // 0x007484e0) - or gives it back to the body (0x00832840).
+    playKeyBoneAnimation(instanceId, bone, animationId, !loop, loop ? std::nullopt : instance.seatUpperLoop);
 }
 
 void CharacterRenderer::setSeatAnimation(uint32_t instanceId,
@@ -2863,8 +2965,18 @@ void CharacterRenderer::setSeatAnimation(uint32_t instanceId,
     auto it = instances.find(instanceId);
     if (it == instances.end()) return;
     auto& instance = it->second;
-    if (!ride) {
-        instance.seatAnimationHeld = false;
+    releaseSeatedUpperBody(instanceId);
+    instance.seatAnimationHeld = false;
+    if (!ride) return;
+    if (!ride->start && !ride->loop) {
+        // No ride animation: seated, the whole unit stands as the seat's
+        // upper ride animation (0x00724500 -> 0x007485b0), and plays what
+        // else it is asked as itself.
+        if (!ride->seated) return;
+        instance.seatUpperStart = ride->upperStart;
+        instance.seatUpperLoop = ride->upperLoop;
+        instance.seatStandsWhole = true;
+        standSeatedWhole(instanceId);
         return;
     }
     // 0x00747b20: the start until it has played once (the passenger's +0x10
@@ -2875,6 +2987,13 @@ void CharacterRenderer::setSeatAnimation(uint32_t instanceId,
         startAnimation(instance, *ride->loop, true, 0);
     }
     instance.seatAnimationHeld = ride->loop.has_value();
+    if (!instance.seatAnimationHeld || !ride->seated) return;
+    // The upper body's own (+0xb84, 0x0073e840) and what the seat has it
+    // stand as there.
+    instance.seatUpperBone = vehicle_seat::upperKeyBone(hasKeyBone(instanceId, 4), hasKeyBone(instanceId, 6));
+    instance.seatUpperStart = ride->upperStart;
+    instance.seatUpperLoop = ride->upperLoop;
+    standSeatedUpperBody(instanceId);
 }
 
 void CharacterRenderer::setMirrorsSeatParent(uint32_t instanceId, bool mirrors) {
@@ -2935,6 +3054,7 @@ void CharacterRenderer::placeSeatedInstances() {
             inst.seatAnimationHeld = false;
             inst.mirrorsSeatParent = false;
             inst.hasOverrideModelMatrix = false;
+            releaseSeatedUpperBody(id);
             if (!inst.seatFlight) continue;
         }
         const std::optional<glm::mat4> seat = seatWorld(inst);
@@ -2972,23 +3092,27 @@ std::optional<glm::mat4> CharacterRenderer::seatTargetMatrix(uint32_t instanceId
 
 
 bool CharacterRenderer::playKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId,
-                                             bool once) {
+                                             bool once, std::optional<uint32_t> then) {
     auto it = instances.find(instanceId);
     if (it == instances.end() || keyBoneId < 0 || !hasKeyBone(instanceId, keyBoneId)) return false;
     auto& instance = it->second;
     const auto& model = models[instance.modelId].data;
-    int sequence = -1;
-    for (size_t i = 0; i < model.sequences.size(); i++) {
-        if (model.sequences[i].id == animationId && model.sequences[i].variationIndex == 0) {
-            sequence = static_cast<int>(i);
-            break;
+    const auto sequenceOf = [&model](uint32_t id) {
+        for (size_t i = 0; i < model.sequences.size(); i++) {
+            if (model.sequences[i].id == id && model.sequences[i].variationIndex == 0) return static_cast<int>(i);
         }
-    }
+        return -1;
+    };
+    const int sequence = sequenceOf(animationId);
     if (sequence < 0) return false;
     auto& anims = instance.keyBoneAnimations;
     auto a = std::find_if(anims.begin(), anims.end(), [&](const auto& k) { return k.keyBoneId == keyBoneId; });
     if (a == anims.end()) a = anims.insert(anims.end(), CharacterInstance::KeyBoneAnimation{});
     *a = CharacterInstance::KeyBoneAnimation{keyBoneId, animationId, sequence, 0.0f, once};
+    if (once && then) {
+        a->thenSequence = sequenceOf(*then);
+        a->thenAnimationId = *then;
+    }
     assignKeyBoneAnimations(model, anims, instance.boneKeyBoneAnimation);
     return true;
 }

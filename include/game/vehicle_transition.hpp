@@ -240,9 +240,17 @@ struct Arc {
 /// 0x1, EnterAnimStart until it has played (+0x10 0x2), then EnterAnimLoop;
 /// seated, with 0x2, the ride animations; exiting, with the exit animations'
 /// flag, ExitAnimStart and ExitAnimLoop. Nothing where it has none.
+/// Seated with Flags 0x4 as well, the upper body's: RideUpperAnimStart until
+/// it has played (+0x10 0x4), then RideUpperAnimLoop (0x007485b0, 0x00747bd0,
+/// 0x007484e0) - what the unit stands as, which 0x007385c0 puts on its upper
+/// body while the ride animation holds the rest, or - with no ride
+/// animation - on the whole unit.
 struct SeatAnimation {
     std::optional<uint32_t> start;
     std::optional<uint32_t> loop;
+    std::optional<uint32_t> upperStart;
+    std::optional<uint32_t> upperLoop;
+    bool seated = false;  ///< state 3, where the unit's own go to its upper body (0x004f6250)
 };
 [[nodiscard]] inline std::optional<SeatAnimation> seatAnimation(SeatState state, const SeatRecord& seat,
                                                                 bool voluntary) {
@@ -255,9 +263,10 @@ struct SeatAnimation {
             loop = seat.enterAnimLoop;
             break;
         case SeatState::Seated:
-            if ((seat.flags & kSeatFlagHasRideAnim) == 0) return std::nullopt;
-            start = seat.rideAnimStart;
-            loop = seat.rideAnimLoop;
+            if ((seat.flags & kSeatFlagHasRideAnim) != 0) {
+                start = seat.rideAnimStart;
+                loop = seat.rideAnimLoop;
+            }
             break;
         case SeatState::ExitDelay:
         case SeatState::Exiting:
@@ -271,7 +280,16 @@ struct SeatAnimation {
     SeatAnimation out;
     if (start >= 0 && start != kNoAnimation) out.start = static_cast<uint32_t>(start);
     if (loop >= 0 && loop != kNoAnimation) out.loop = static_cast<uint32_t>(loop);
-    if (!out.start && !out.loop) return std::nullopt;
+    out.seated = state == SeatState::Seated;
+    if (out.seated && (seat.flags & kSeatFlagHasUpperRideAnim) != 0) {
+        if (seat.rideUpperAnimStart >= 0 && seat.rideUpperAnimStart != kNoAnimation)
+            out.upperStart = static_cast<uint32_t>(seat.rideUpperAnimStart);
+        if (seat.rideUpperAnimLoop >= 0 && seat.rideUpperAnimLoop != kNoAnimation)
+            out.upperLoop = static_cast<uint32_t>(seat.rideUpperAnimLoop);
+    }
+    // Seated with no ride animation but an upper one, that is what the
+    // whole unit stands as (0x007385c0 splits nothing without a ride).
+    if (!out.start && !out.loop && !out.upperStart && !out.upperLoop) return std::nullopt;
     return out;
 }
 

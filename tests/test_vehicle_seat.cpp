@@ -158,3 +158,28 @@ TEST_CASE("an asked seat change lasts until the seat state changes or 2 s pass",
     roster.setSeatState(kPlayer, 5);
     CHECK_FALSE(roster.seatChangeAsked(kPlayer, 5001));
 }
+
+TEST_CASE("a seated passenger's upper body is SpineLow, else the head (0x0073e840)", "[vehicle]") {
+    CHECK(vs::upperKeyBone(true, true) == 4);
+    CHECK(vs::upperKeyBone(true, false) == 4);
+    CHECK(vs::upperKeyBone(false, true) == 6);
+    CHECK(vs::upperKeyBone(false, false) == vs::kNoUpperBody);
+}
+
+TEST_CASE("what a seated passenger is asked goes to its upper body unless it stands (0x007385c0)",
+          "[vehicle]") {
+    // BehaviorID 0: Stand and FlyStand give the upper body back.
+    CHECK(vs::isStandBehavior(0));
+    CHECK(vs::isStandBehavior(229));
+    CHECK_FALSE(vs::seatedUpperBodyTakes(0));
+    CHECK_FALSE(vs::seatedUpperBodyTakes(229));
+    // Casts, attacks and emotes take it.
+    CHECK(vs::seatedUpperBodyTakes(53));   // SpellCastDirected
+    CHECK(vs::seatedUpperBodyTakes(17));   // Attack1H
+    CHECK(vs::seatedUpperBodyTakes(67));   // EmoteWave
+    CHECK(vs::seatedUpperBodyTakes(124));  // ChannelCastDirected
+    // Movement a seated unit is never asked, and death, do not.
+    CHECK_FALSE(vs::seatedUpperBodyTakes(5));   // Run
+    CHECK_FALSE(vs::seatedUpperBodyTakes(42));  // Swim
+    CHECK_FALSE(vs::seatedUpperBodyTakes(1));   // Death
+}
