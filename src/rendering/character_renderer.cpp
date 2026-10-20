@@ -23,6 +23,8 @@
 #include "rendering/normal_map.hpp"
 #include "rendering/m2_track_sampler.hpp"
 #include "rendering/m2_texture_combiner.hpp"
+#include "rendering/m2_event_sounds.hpp"
+#include "rendering/unit_model_events.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "core/thread_pool.hpp"
 #include "rendering/vk_context.hpp"
@@ -2367,6 +2369,9 @@ void CharacterRenderer::startAnimation(CharacterInstance& instance, uint32_t ani
                 m2_track::locomotionPhaseTime(previousTime, from.duration, to.duration);
         }
     }
+    // The new sequence's events from where it starts in it.
+    instance.eventsRestart = true;
+    instance.eventsFrom = instance.animationTime > 0.0f ? instance.animationTime : -1.0f;
 }
 
 void CharacterRenderer::setLocomotionSpeed(uint32_t instanceId, float yardsPerSecond) {
@@ -2505,6 +2510,16 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                 inst.currentAnimationId = inst.cachedModel->data.sequences[0].id;
             }
             const auto& seq = inst.cachedModel->data.sequences[inst.currentSequenceIndex];
+            // The events the animation passes on its way (0x00830fb0): once
+            // each, from where the last update left off - or from where a
+            // sequence just started - to where this one gets, and on into
+            // the next pass where it goes round.
+            const float eventsFrom = inst.eventsRestart ? inst.eventsFrom : inst.animationTime;
+            inst.eventsRestart = false;
+            const auto stepEvents = [&](int sequence, float from, float to) {
+                stepInstanceEvents(pair.first, inst, sequence, from, to);
+            };
+            const int eventsSequence = inst.currentSequenceIndex;
             // A movement sequence plays at the unit's speed over its own
             // movingSpeed, so the feet keep to the ground (FUN_007385c0 sets
             // the rate, FUN_0082f0f0 runs time at it). Recomputed each frame
@@ -2513,7 +2528,10 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
             inst.playbackRate = m2_track::locomotionPlaybackRate(
                 seq.id, seq.movingSpeed, inst.scale, inst.locomotionSpeed);
             inst.animationTime += deltaTime * 1000.0f * inst.playbackRate;
-            if (seq.duration > 0 && inst.animationTime >= static_cast<float>(seq.duration)) {
+            if (!(seq.duration > 0 && inst.animationTime >= static_cast<float>(seq.duration))) {
+                stepEvents(eventsSequence, eventsFrom, inst.animationTime);
+            } else {
+                stepEvents(eventsSequence, eventsFrom, static_cast<float>(seq.duration));
                 const auto& seqs = inst.cachedModel->data.sequences;
                 const int primary = inst.primarySequenceIndex;
                 const bool hasVariations = inst.animationLoop && primary >= 0 &&
@@ -2536,6 +2554,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                     }
                     const float newDur = static_cast<float>(seqs[inst.currentSequenceIndex].duration);
                     inst.animationTime = newDur > 0.0f ? std::fmod(std::max(0.0f, carry), newDur) : 0.0f;
+                    stepEvents(inst.currentSequenceIndex, -1.0f, inst.animationTime);
                 } else if (inst.animationLoop) {
                     // Subtract duration instead of fmod to preserve float precision
                     // fmod() loses precision with large animationTime values
@@ -2544,6 +2563,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                     while (inst.animationTime >= static_cast<float>(seq.duration)) {
                         inst.animationTime -= static_cast<float>(seq.duration);
                     }
+                    stepEvents(eventsSequence, -1.0f, inst.animationTime);
                 } else {
                     // One-shot animation finished: return to the caller-specified
                     // resume anim (NPC state emote), else the loop the unit
@@ -2627,6 +2647,27 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
 
     // Passengers on their vehicles' seats, then what they hold.
     placeSeatedInstances();
+
+    // This update's events, where they are now the bones are posed: on the
+    // event's bone, then in the world (0x004c21b0 with the bone's matrix and
+    // the model's). Held for whoever plays them, and dropped if nobody does.
+    if (firedEvents_.size() > 4096) firedEvents_.clear();
+    for (const SteppedEvent& stepped : steppedEvents_) {
+        const auto it = instances.find(stepped.instanceId);
+        if (it == instances.end() || !it->second.cachedModel) continue;
+        const CharacterInstance& inst = it->second;
+        const auto& events = inst.cachedModel->data.events;
+        if (stepped.eventIndex >= events.size()) continue;
+        const auto& event = events[stepped.eventIndex];
+        glm::mat4 bone(1.0f);
+        if (event.bone < inst.boneMatrices.size()) bone = inst.boneMatrices[event.bone];
+        const glm::mat4 modelMat = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
+        firedEvents_.push_back({.instanceId = stepped.instanceId,
+                                .id = event.id,
+                                .data = event.data,
+                                .position = glm::vec3(modelMat * bone * glm::vec4(event.position, 1.0f))});
+    }
+    steppedEvents_.clear();
 
     // Update weapon attachment transforms (after all bone matrices are computed)
     for (auto& pair : instances) {
@@ -2859,6 +2900,7 @@ void CharacterRenderer::setMirrorsSeatParent(uint32_t instanceId, bool mirrors) 
     // passenger does too.
     startAnimation(instance, vehicle.currentAnimationId, vehicle.animationLoop, vehicle.oneShotReturnAnim);
     instance.animationTime = vehicle.animationTime;
+    instance.eventsFrom = instance.animationTime;
     for (int arm = 0; arm < 2; ++arm) {
         instance.armSequenceIndex[arm] = -1;
         if (vehicle.armSequenceIndex[arm] < 0) continue;
@@ -4656,6 +4698,8 @@ bool CharacterRenderer::setInstanceAnimationFrozen(uint32_t instanceId, bool fro
         const auto duration =
             static_cast<float>(inst.cachedModel->data.sequences[inst.currentSequenceIndex].duration);
         inst.animationTime = std::min(*atMs, duration);
+        inst.eventsRestart = true;
+        inst.eventsFrom = inst.animationTime;
     }
     return was;
 }
@@ -4941,6 +4985,29 @@ bool CharacterRenderer::getAnimationState(uint32_t instanceId, uint32_t& animati
     animationTimeMs = instance.animationTime;
     animationDurationMs = static_cast<float>(sequences[instance.currentSequenceIndex].duration);
     return true;
+}
+
+void CharacterRenderer::stepInstanceEvents(uint32_t instanceId, const CharacterInstance& inst, int sequence,
+                                           float from, float to) {
+    // A unit's model: not a login scene's, nor an effect hung on a unit.
+    if (!inst.cachedModel || inst.isSceneModel || inst.isEffectModel) return;
+    const auto& model = inst.cachedModel->data;
+    if (model.events.empty() || sequence < 0 || static_cast<size_t>(sequence) >= model.sequences.size()) return;
+    for (uint32_t e = 0; e < model.events.size(); ++e) {
+        const auto& event = model.events[e];
+        // Only what a unit's callback plays; an event on a global sequence
+        // keeps its own clock, which this does not step.
+        if (unit_event::classify(event.id).kind == unit_event::Kind::None || event.globalSequence >= 0) continue;
+        if (static_cast<size_t>(sequence) >= event.times.size()) continue;
+        m2_event::forEachCrossed(event.times[static_cast<size_t>(sequence)], from, to, 0.0f,
+                                 [&](uint32_t) { steppedEvents_.push_back({instanceId, e}); });
+    }
+}
+
+std::vector<CharacterRenderer::FiredEvent> CharacterRenderer::takeFiredEvents() {
+    std::vector<FiredEvent> out;
+    out.swap(firedEvents_);
+    return out;
 }
 
 const std::vector<uint32_t>* CharacterRenderer::getFootstepEventTimes(uint32_t instanceId) const {

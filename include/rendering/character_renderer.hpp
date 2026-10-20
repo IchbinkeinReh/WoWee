@@ -316,6 +316,16 @@ public:
     /// Footfall ($FSD) event times in ms for the sequence the instance is
     /// currently playing; nullptr if the model has none for that sequence.
     [[nodiscard]] const std::vector<uint32_t>* getFootstepEventTimes(uint32_t instanceId) const;
+    /// A model event a unit's callback plays (unit_event::classify), as the
+    /// animation passed it: its id, its data and where it is in the world.
+    struct FiredEvent {
+        uint32_t instanceId = 0;
+        uint32_t id = 0;
+        uint32_t data = 0;
+        glm::vec3 position{0.0f};
+    };
+    /// The events update() found since the last call, handed over once.
+    [[nodiscard]] std::vector<FiredEvent> takeFiredEvents();
     [[nodiscard]] bool hasAnimation(uint32_t instanceId, uint32_t animationId) const;
     bool getAnimationSequences(uint32_t instanceId, std::vector<pipeline::M2Sequence>& out) const;
     bool getInstanceModelName(uint32_t instanceId, std::string& modelName) const;
@@ -536,6 +546,12 @@ private:
         std::vector<KeyBoneAnimation> keyBoneAnimations;
         std::vector<int16_t> boneKeyBoneAnimation;
         float animationTime = 0.0f;
+        /// With eventsRestart, where the next update looks for events
+        /// from, once: below zero for a sequence just started, so its first
+        /// frame's fire, or where it started in it. Else from where the
+        /// last update left off.
+        bool eventsRestart = true;
+        float eventsFrom = -1.0f;
         bool animationFrozen = false;  ///< setInstanceAnimationFrozen: the sequence held
         float locomotionSpeed = 0.0f;  // yards a second the unit moves at; see setLocomotionSpeed
         float playbackRate = 1.0f;     // the rate animationTime last advanced at
@@ -892,6 +908,17 @@ private:
     uint32_t numAnimThreads_ = 1;
     std::vector<std::future<void>> animFutures_;
     std::vector<std::reference_wrapper<CharacterInstance>> toUpdate_;  // reused across frames
+    /// This update's events, by instance and the event's index in its model
+    /// (0x00830fb0), placed once the bones are posed into firedEvents_.
+    struct SteppedEvent {
+        uint32_t instanceId = 0;
+        uint32_t eventIndex = 0;
+    };
+    std::vector<SteppedEvent> steppedEvents_;
+    std::vector<FiredEvent> firedEvents_;
+    /// The unit events of `sequence` the instance passed from `from` to `to`.
+    void stepInstanceEvents(uint32_t instanceId, const CharacterInstance& inst, int sequence, float from,
+                            float to);
 
     // Shadow pipeline resources
     VkPipeline shadowPipeline_ = VK_NULL_HANDLE;

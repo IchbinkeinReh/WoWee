@@ -285,6 +285,8 @@ public:
     // Spell visual effects (SMSG_PLAY_SPELL_VISUAL / SMSG_PLAY_SPELL_IMPACT)
     // Delegates to SpellVisualSystem (owned by Renderer)
     SpellVisualSystem* getSpellVisualSystem() const { syncWorldRecording(); return spellVisualSystem_.get(); }
+    /// What plays the models' sound events; made the first time it is asked for.
+    M2EventSounds& getM2EventSounds();
 
     // Combat visual state (compound: resets AnimationController + SpellVisualSystem)
     void resetCombatVisualState();

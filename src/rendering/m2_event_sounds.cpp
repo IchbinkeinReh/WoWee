@@ -82,6 +82,20 @@ uint32_t M2EventSounds::displaySound(uint32_t displayId, uint32_t slot, pipeline
     return it != displaySounds_.end() && slot < it->second.size() ? it->second[slot] : 0u;
 }
 
+void M2EventSounds::playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale,
+                             pipeline::AssetManager* assets) {
+    const Kit* k = kit(soundId, assets);
+    if (!k) return;
+    const float maxDistance = k->cutoff > 0.0f ? k->cutoff : 100.0f;
+    const float minDistance = k->minDistance > 0.0f ? std::min(k->minDistance, maxDistance) : 1.0f;
+    const std::vector<uint8_t>* file = pickFile(*k);
+    auto& audio = audio::AudioEngine::instance();
+    // An SFX play, as every one 0x004c5990 sets up (type 0).
+    constexpr auto kSfx = audio::Channel::Effects;
+    if (!at) audio.playSound2D(*file, k->volume * volumeScale, 1.0f, kSfx);
+    else audio.playSound3D(*file, *at, k->volume * volumeScale, 1.0f, maxDistance, minDistance, kSfx);
+}
+
 void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const ShakeCamera& shakeCamera) {
     auto& audio = audio::AudioEngine::instance();
     for (const M2Renderer::FiredEvent& fired : m2.takeFiredEvents()) {

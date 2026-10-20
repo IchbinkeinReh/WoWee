@@ -4667,9 +4667,11 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         }
     }
 
-    // Which units have a blob shadow under them this frame, and how big.
+    // Which units have a blob shadow under them this frame, and how big;
+    // and what their models' events play.
     if (entitySpawner_ && renderer) {
         entitySpawner_->updateBlobShadows(renderer->getCharacterInstanceId());
+        entitySpawner_->playUnitModelEvents(renderer->getCharacterInstanceId());
     }
 }
 

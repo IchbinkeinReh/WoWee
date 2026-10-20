@@ -207,6 +207,11 @@ public:
     void update(M2Renderer& m2, pipeline::AssetManager* assets, const ShakeCamera& shakeCamera = {});
     /// Stop every loop, as the world goes.
     void clear();
+    /// A SoundEntries kit once, owned by nothing (0x004c6a40 with no sound
+    /// object): where `at` is, or with none where the listener is; at its
+    /// VolumeFloat times `volumeScale`. A unit's model events play this way
+    /// (unit_model_events.hpp).
+    void playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale, pipeline::AssetManager* assets);
 
 private:
     struct Kit {

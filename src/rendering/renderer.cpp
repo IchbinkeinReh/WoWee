@@ -2684,6 +2684,11 @@ float Renderer::sampleSunOcclusion(const glm::vec3& sunDir, std::string* why) co
     return 0.0f;
 }
 
+M2EventSounds& Renderer::getM2EventSounds() {
+    if (!m2EventSounds_) m2EventSounds_ = std::make_unique<M2EventSounds>();
+    return *m2EventSounds_;
+}
+
 void Renderer::update(float deltaTime) {
     ZoneScopedN("Renderer::update");
     globalTime += deltaTime;
@@ -3202,8 +3207,7 @@ void Renderer::update(float deltaTime) {
     // and the camera shakes they start, by SpellEffectCameraShakes as a
     // spell kit's (0x0070c050 -> 0x00606410).
     if (m2Renderer) {
-        if (!m2EventSounds_) m2EventSounds_ = std::make_unique<M2EventSounds>();
-        m2EventSounds_->update(*m2Renderer, cachedAssetManager, [this](uint32_t shakesId, const glm::vec3& at) {
+        getM2EventSounds().update(*m2Renderer, cachedAssetManager, [this](uint32_t shakesId, const glm::vec3& at) {
             if (spellVisualSystem_) spellVisualSystem_->playCameraShakes(shakesId, at);
         });
     }
