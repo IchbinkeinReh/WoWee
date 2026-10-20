@@ -3432,6 +3432,16 @@ public:
         auto it = achievementFlagsCache_.find(id);
         return (it != achievementFlagsCache_.end()) ? it->second : 0u;
     }
+    /// Achievement.dbc's Faction (field 1): -1 either side, 0 Horde, 1 Alliance.
+    int32_t getAchievementFaction(uint32_t id) const {
+        auto it = achievementFactionCache_.find(id);
+        return it != achievementFactionCache_.end() ? it->second : -1;
+    }
+    /// Achievement.dbc's UI order (field 40, +0x20 of the client's record).
+    uint32_t getAchievementUiOrder(uint32_t id) const {
+        auto it = achievementUiOrderCache_.find(id);
+        return it != achievementUiOrderCache_.end() ? it->second : 0u;
+    }
     uint32_t getAchievementIconId(uint32_t id) const {
         auto it = achievementIconCache_.find(id);
         return (it != achievementIconCache_.end()) ? it->second : 0u;
@@ -5673,6 +5683,8 @@ private:
     std::unordered_map<uint32_t, uint32_t>    achievementPointsCache_;
     std::unordered_map<uint32_t, uint32_t>    achievementIconCache_;  // achievementId → SpellIcon.dbc ID
     std::unordered_map<uint32_t, uint32_t>    achievementFlagsCache_; // achievementId → Achievement.dbc Flags
+    std::unordered_map<uint32_t, int32_t>     achievementFactionCache_;  // only rows not open to both sides
+    std::unordered_map<uint32_t, uint32_t>    achievementUiOrderCache_;
     int selectedGuildRank_ = 1;
     PendingGuildRank pendingGuildRank_;
     std::vector<CurrencyType> currencyTypes_;

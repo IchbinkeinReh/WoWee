@@ -2305,6 +2305,26 @@ static int trainerFold(lua_State* L, bool expand) {
     return 0;
 }
 
+/// The comparison unit's side as 0x006d6e90 gives it - 0 Horde, 1 Alliance,
+/// -1 neither - or 2 when the unit is not in view, which skips the test.
+static int comparisonFaction(game::GameHandler* gh) {
+    const auto e = gh->getEntityManager().getEntity(gh->getAchievementComparisonGuid());
+    if (!e) return 2;
+    const uint32_t race = e->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) & 0xFFu;
+    switch (race) {
+        case 2: case 5: case 6: case 8: case 10: return 0;
+        case 1: case 3: case 4: case 7: case 11: return 1;
+        default: return -1;
+    }
+}
+
+/// An achievement rather than a statistic: its category is outside the
+/// Statistics tree (0x005b0d50).
+static bool isAchievementNotStatistic(game::GameHandler* gh, uint32_t id) {
+    const auto* info = gh->getAchievementCategoryInfo(gh->getAchievementCategory(id));
+    return info && !info->isStatistic;
+}
+
 /// (tabIndex, talentIndex) → talent id, or 0.
 ///
 /// The same ordering GetTalentInfo reports by - tabs in orderIndex, talents by
@@ -5067,6 +5087,72 @@ void registerQuestLuaAPI(lua_State* L) {
             }
             lua_pushnumber(L, total);
             return 1;
+        }},
+                // GetNumComparisonCompletedAchievements() (0x005b3dc0) →
+                // total, completed: the achievements - not statistics, not
+                // flagged 0x2, of the compared unit's side - outside Feats of
+                // Strength (81), a hidden one (0x800) counted only when the
+                // compared player has it.
+                {"GetNumComparisonCompletedAchievements", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            uint32_t total = 0, done = 0;
+            if (gh) {
+                gh->ensureAchievementNamesLoaded();
+                gh->ensureAchievementCategoriesLoaded();
+                const auto* set = gh->getInspectedPlayerAchievements(gh->getAchievementComparisonGuid());
+                const int side = comparisonFaction(gh);
+                for (const auto& [id, name] : gh->achievementNameCacheRef()) {
+                    (void)name;
+                    if (!isAchievementNotStatistic(gh, id)) continue;
+                    const uint32_t flags = gh->getAchievementFlags(id);
+                    if ((flags & 0x2u) != 0) continue;
+                    const int32_t faction = gh->getAchievementFaction(id);
+                    if (side != 2 && faction != -1 && faction != side) continue;
+                    if (gh->getAchievementCategory(id) == 81) continue;
+                    const bool earned = set && set->count(id) != 0;
+                    if (!earned && (flags & 0x800u) != 0) continue;
+                    ++total;
+                    if (earned) ++done;
+                }
+            }
+            lua_pushnumber(L, total);
+            lua_pushnumber(L, done);
+            return 2;
+        }},
+                // GetLatestCompletedComparisonAchievements() (0x005b1cf0) →
+                // up to five of the compared player's achievements, newest
+                // first - the order 0x005b2ab0 keeps them in: by date, then by
+                // UI order, highest first.
+                {"GetLatestCompletedComparisonAchievements", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const auto* set = gh ? gh->getInspectedPlayerAchievements(gh->getAchievementComparisonGuid()) : nullptr;
+            if (!set) return 0;
+            gh->ensureAchievementNamesLoaded();
+            gh->ensureAchievementCategoriesLoaded();
+            // PackedTime: minute, hour, weekday, day, month, year from the low
+            // bits up; chronological without the weekday.
+            const auto when = [](uint32_t packed) {
+                return ((packed >> 24) & 0x1Fu) << 21 | ((packed >> 20) & 0xFu) << 17 |
+                       ((packed >> 14) & 0x3Fu) << 11 | ((packed >> 6) & 0x1Fu) << 6 | (packed & 0x3Fu);
+            };
+            std::vector<std::pair<uint32_t, uint32_t>> earned(set->begin(), set->end());
+            std::sort(earned.begin(), earned.end(), [&](const auto& a, const auto& b) {
+                const uint32_t wa = when(a.second), wb = when(b.second);
+                if (wa != wb) return wa > wb;
+                const uint32_t oa = gh->getAchievementUiOrder(a.first), ob = gh->getAchievementUiOrder(b.first);
+                if (oa != ob) return oa > ob;
+                return a.first < b.first;
+            });
+            if (!lua_checkstack(L, 5)) return 0;
+            int n = 0;
+            for (const auto& [id, date] : earned) {
+                (void)date;
+                if (n == 5) break;
+                if (!isAchievementNotStatistic(gh, id)) continue;
+                lua_pushnumber(L, id);
+                ++n;
+            }
+            return n;
         }},
                 {"GetTotalAchievementPoints", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);

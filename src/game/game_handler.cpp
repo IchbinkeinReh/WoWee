@@ -2169,6 +2169,13 @@ void GameHandler::loadAchievementNameCache() {
             uint32_t flags = dbc->getUInt32(i, 41);
             if (flags != 0) achievementFlagsCache_[id] = flags;
         }
+        // Faction (1) and UI order (40), which the comparison tab counts and
+        // orders by (0x005b3dc0, 0x005b2ab0).
+        if (const auto faction = static_cast<int32_t>(dbc->getUInt32(i, 1)); faction != -1)
+            achievementFactionCache_[id] = faction;
+        if (fieldCount > 40) {
+            if (const uint32_t order = dbc->getUInt32(i, 40)) achievementUiOrderCache_[id] = order;
+        }
     }
     LOG_INFO("Achievement: loaded ", achievementNameCache_.size(), " names from Achievement.dbc");
 }

@@ -8475,6 +8475,17 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"IsInInstance",         lua_IsInInstance},
                 {"GetInstanceInfo",      lua_GetInstanceInfo},
                 {"GetInstanceDifficulty", lua_GetInstanceDifficulty},
+                // CanShowResetInstances() (0x0051a880 -> 0x005194e0): nil, in
+                // every state this build can reach. Read off the code rather
+                // than the name: with the reset flag set (0xbd0890) and the
+                // current map a party or raid instance, it first requires the
+                // map's MapDifficulty row for the difficulty to have a reset
+                // time (+0x10) and then, for the previous instance, that the
+                // same row - of the *current* map, still in esi - has none; out
+                // of an instance it fails the second test of the current map's
+                // type outright. The two cannot both hold, so the button it
+                // guards never shows.
+                {"CanShowResetInstances", lua_ReturnNil},
                 {"strsplit",          lua_strsplit},
                 {"strtrim",           lua_strtrim},
                 {"strlenutf8",        lua_strlenutf8},
