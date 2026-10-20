@@ -9013,13 +9013,6 @@ void LuaEngine::registerCoreAPI() {
         "    frame.offset = math.floor(value / (itemHeight or 1) + 0.5)\n"
         "    if updateFunction then updateFunction() end\n"
         "end\n"
-        // SecureCmdOptionParse - parses conditional macros like [target=focus]
-        "function SecureCmdOptionParse(options)\n"
-        "    if not options then return nil end\n"
-        "    -- Simple: return the unconditional fallback (text after last semicolon or the whole string)\n"
-        "    local result = options:match(';%s*(.-)$') or options:match('^%[.*%]%s*(.-)$') or options\n"
-        "    return result\n"
-        "end\n"
         // ChatFrame message group stubs
         "function ChatFrame_AddMessageGroup(frame, group) end\n"
         "function ChatFrame_RemoveMessageGroup(frame, group) end\n"
@@ -12203,6 +12196,20 @@ void LuaEngine::dispatchOnUpdate(float elapsed) {
 
     drainPendingTextChanged();
     advanceWheelGlide(elapsed);
+
+    // The macros on the bars that can change their answer, worked out again
+    // as the client does every frame (0x00566660); a slot whose macro now
+    // shows something else is told to redraw.
+    lua_getglobal(L_, "__WoweeUpdateShownMacros");
+    if (lua_isfunction(L_, -1)) {
+        taint::Scope secure(0);
+        if (lua_pcall(L_, 0, 0, 0) != 0) {
+            LOG_WARNING("macro update error: ", luaL_optstring(L_, -1, "?"));
+            lua_pop(L_, 1);
+        }
+    } else {
+        lua_pop(L_, 1);
+    }
 
     // Animations first, so a frame's own OnUpdate sees this frame's values
     // rather than the previous one's.

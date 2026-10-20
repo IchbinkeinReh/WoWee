@@ -23,9 +23,10 @@
 #include "game/macro_eval.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "game/game_utils.hpp"
-#include "ui/chat/macro_evaluator.hpp"
+#include "game/macro_options.hpp"
+#include "game/interface_text.hpp"
+#include "game/vehicle.hpp"
 #include "ui/chat/game_state_adapter.hpp"
-#include "ui/chat/input_modifier_adapter.hpp"
 #include "imgui.h"
 #include <optional>
 #include <SDL3/SDL_keyboard.h>
@@ -331,35 +332,168 @@ static uint32_t macroSpellInBook(game::GameHandler* gh, const std::vector<uint32
     return best;
 }
 
-/// The game state the conditional parser reads, with indoors answered the way
-/// IsIndoors answers it here - through the services rather than reaching for
-/// the application's renderer.
 namespace {
-class MacroGameState : public ui::GameStateAdapter {
+/// Call a global with string arguments, leaving `results` values on the
+/// stack; false (and nothing left) when it is not a function or it raised.
+bool callGlobal(lua_State* L, const char* name, std::initializer_list<const char*> args, int results) {
+    lua_getglobal(L, name);
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        return false;
+    }
+    for (const char* a : args) lua_pushstring(L, a);
+    if (lua_pcall(L, static_cast<int>(args.size()), results, 0) != 0) {
+        lua_pop(L, 1);
+        return false;
+    }
+    return true;
+}
+bool globalTruth(lua_State* L, const char* name, std::initializer_list<const char*> args = {}) {
+    if (!callGlobal(L, name, args, 1)) return false;
+    const bool v = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    return v;
+}
+int globalNumber(lua_State* L, const char* name) {
+    if (!callGlobal(L, name, {}, 1)) return 0;
+    const int v = lua_isnumber(L, -1) ? static_cast<int>(lua_tonumber(L, -1)) : 0;
+    lua_pop(L, 1);
+    return v;
+}
+std::string globalString(lua_State* L, const char* name, std::initializer_list<const char*> args = {}) {
+    if (!callGlobal(L, name, args, 1)) return {};
+    std::string v = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
+    return v;
+}
+
+/// What the macro conditions read (game::macro_options::State), from this
+/// client: the unit queries the chat panel's conditions already answer as the
+/// client does (GameStateAdapter), and the rest through the interface's own
+/// calls where the interface already answers the same question.
+class LuaMacroOptionState : public game::macro_options::State {
 public:
-    MacroGameState(game::GameHandler& gh, std::function<bool()> indoors)
-        : ui::GameStateAdapter(gh, nullptr), indoors_(std::move(indoors)) {}
-    [[nodiscard]] bool isIndoors() const override { return indoors_ && indoors_(); }
+    LuaMacroOptionState(lua_State* L, game::GameHandler& gh) : L_(L), gh_(gh), units_(gh, nullptr) {}
+
+    uint64_t unitGuid(const std::string& unit) override {
+        return unit.empty() ? gh_.getTargetGuid() : resolveUnitOrName(&gh_, unit);
+    }
+    bool inCombat() override {
+        const auto flagged = [this](uint64_t guid) {
+            const auto e = guid ? gh_.getEntityManager().getEntity(guid) : nullptr;
+            return e && (e->getField(game::fieldIndex(game::UF::UNIT_FIELD_FLAGS)) & 0x80000u) != 0;
+        };
+        return flagged(gh_.getPlayerGuid()) || flagged(gh_.getPetGuid());
+    }
+    bool exists(uint64_t unit) override { return units_.entityExists(unit); }
+    bool canAssist(uint64_t unit) override { return units_.entityMayAssist(unit); }
+    bool canAttack(uint64_t unit) override { return units_.entityMayAttack(unit); }
+    bool inPartyAsMember(uint64_t unit) override {
+        if (!gh_.isInGroup()) return false;
+        const auto& pd = gh_.getPartyData();
+        const bool raid = game::groupIsRaid(pd.groupType);
+        for (const auto& m : pd.members)
+            if (m.guid == unit && (!raid || m.subGroup == pd.subGroup)) return true;
+        return false;
+    }
+    bool inRaidAsMember(uint64_t unit) override {
+        if (!inRaid()) return false;
+        if (unit == gh_.getPlayerGuid()) return true;
+        for (const auto& m : gh_.getPartyData().members)
+            if (m.guid == unit) return true;
+        return false;
+    }
+    bool dead(uint64_t unit) override { return units_.entityIsDead(unit); }
+    bool flyable(uint64_t unit) override {
+        (void)unit;
+        return globalTruth(L_, "IsFlyableArea");
+    }
+    bool outdoors() override { return globalTruth(L_, "IsOutdoors"); }
+    bool hasPlayer() override { return gh_.getEntityManager().getEntity(gh_.getPlayerGuid()) != nullptr; }
+    // The player's movement flags: SWIMMING 0x200000 and FLYING 0x2000000;
+    // mounted is a mount display with WATER_WALK (0x10000000) clear.
+    bool swimming() override { return (gh_.getMovementInfo().flags & 0x200000u) != 0; }
+    bool flying() override { return (gh_.getMovementInfo().flags & 0x2000000u) != 0; }
+    bool mounted() override { return gh_.isMounted() && (gh_.getMovementInfo().flags & 0x10000000u) == 0; }
+    bool stealthed() override { return units_.isStealthed(); }
+    bool inParty() override { return gh_.isInGroup(); }
+    bool inRaid() override { return gh_.isInGroup() && game::groupIsRaid(gh_.getPartyData().groupType); }
+    int shapeshiftForm() override { return globalNumber(L_, "GetShapeshiftForm"); }
+    bool pet(std::string& name, std::string& family) override {
+        if (!globalTruth(L_, "UnitExists", {"pet"})) return false;
+        name = globalString(L_, "UnitName", {"pet"});
+        family = globalString(L_, "UnitCreatureFamily", {"pet"});
+        return true;
+    }
+    bool modifier(const std::string& name) override {
+        if (name.empty()) return globalTruth(L_, "IsModifierKeyDown");
+        static const std::pair<const char*, const char*> kKeys[] = {
+            {"shift", "IsShiftKeyDown"}, {"ctrl", "IsControlKeyDown"}, {"alt", "IsAltKeyDown"},
+            {"lshift", "IsLeftShiftKeyDown"}, {"rshift", "IsRightShiftKeyDown"},
+            {"lctrl", "IsLeftControlKeyDown"}, {"rctrl", "IsRightControlKeyDown"},
+            {"lalt", "IsLeftAltKeyDown"}, {"ralt", "IsRightAltKeyDown"},
+        };
+        std::string lower = name;
+        toLowerInPlace(lower);
+        for (const auto& [key, fn] : kKeys)
+            if (lower == key) return globalTruth(L_, fn);
+        return globalTruth(L_, "IsModifiedClick", {name.c_str()});
+    }
+    std::string clickButton() override { return currentClickButton(); }
+    std::string macroButton() override {
+        return runningMacro().running && runningMacro().hasButton ? runningMacro().button : std::string();
+    }
+    std::string mouseButtonName(int number) override {
+        lua_getglobal(L_, "GetMouseButtonName");
+        if (!lua_isfunction(L_, -1)) {
+            lua_pop(L_, 1);
+            return {};
+        }
+        lua_pushnumber(L_, number);
+        if (lua_pcall(L_, 1, 1, 0) != 0) {
+            lua_pop(L_, 1);
+            return {};
+        }
+        std::string v = lua_isstring(L_, -1) ? lua_tostring(L_, -1) : "";
+        lua_pop(L_, 1);
+        return v;
+    }
+    int actionBarPage() override { return globalNumber(L_, "GetActionBarPage"); }
+    int bonusBarOffset() override { return globalNumber(L_, "GetBonusBarOffset"); }
+    bool equipped(const std::string& type) override { return globalTruth(L_, "IsEquippedItemType", {type.c_str()}); }
+    bool channeling(std::string& spellName) override {
+        spellName = globalString(L_, "UnitChannelInfo", {"player"});
+        return !spellName.empty();
+    }
+    int activeSpec() override { return globalNumber(L_, "GetActiveTalentGroup"); }
+    bool vehicleUi(uint64_t unit) override {
+        const auto* seat = gh_.vehicleRoster().seatOf(unit);
+        return seat && (seat->flags & game::vehicle::kSeatFlagHasVehicleUI) != 0;
+    }
+    bool playerVehicleUi() override { return vehicleUi(gh_.getPlayerGuid()); }
+    std::string cursorType() override { return globalString(L_, "GetCursorInfo"); }
+    void unknownOption(const std::string& name) override {
+        gh_.addUIError(game::interfaceFormat("ERR_UNKNOWN_MACRO_OPTION_S", "Unknown macro option: %s", {name}));
+    }
 
 private:
-    std::function<bool()> indoors_;
+    lua_State* L_;
+    game::GameHandler& gh_;
+    ui::GameStateAdapter units_;
 };
 }  // namespace
 
 /// What macro evaluation needs from this client.
 static game::macro_eval::Hooks macroHooks(lua_State* L, game::GameHandler* gh) {
     game::macro_eval::Hooks h;
-    // The conditional parser. This client's (MacroEvaluator) rather than the
-    // client's own 0x005f0df0, which is not reproduced yet.
-    auto* svc = getLuaServices(L);
-    std::function<bool()> indoors = svc ? svc->isPlayerIndoors : std::function<bool()>();
-    h.options = [gh, indoors](const std::string& text, std::string& result, uint64_t& target) {
-        MacroGameState state(*gh, indoors);
-        ui::InputModifierAdapter keys;
-        uint64_t over = static_cast<uint64_t>(-1);
-        result = ui::MacroEvaluator(state, keys).evaluate(text, over);
-        target = over == static_cast<uint64_t>(-1) ? 0 : over;
-        return !result.empty();
+    // The conditional parser (0x005f0df0); the applying clause's unit, when
+    // it names one (0x0060abf0 with no fallback to the target).
+    h.options = [L, gh](const std::string& text, std::string& result, uint64_t& target) {
+        LuaMacroOptionState state(L, *gh);
+        std::string unit;
+        if (!game::macro_options::parse(text, state, result, unit)) return false;
+        target = unit.empty() ? 0 : state.unitGuid(unit);
+        return true;
     };
     // QueryCastSequence, the interface's own (ChatFrame.lua), as 0x00564900
     // calls it: its item, else its spell.
@@ -444,6 +578,34 @@ static const MacroShown* macroShown(lua_State* L, game::GameHandler* gh, uint32_
     return &m;
 }
 
+/// 0x00566660, every frame (it is called from the game UI's idle, 0x0052b1c0):
+/// each macro on the bars whose answer can change is worked out again, and
+/// the bar slots of one whose answer moved redraw (0x005aa920).
+static int lua_WoweeUpdateShownMacros(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const auto& bar = gh->getActionBar();
+    std::vector<uint32_t> done;
+    for (size_t i = 0; i < bar.size(); ++i) {
+        if (bar[i].type != game::ActionBarSlot::MACRO) continue;
+        const uint32_t id = bar[i].id;
+        if (std::find(done.begin(), done.end(), id) != done.end()) continue;
+        done.push_back(id);
+        const auto it = macrosShown().find(id);
+        if (it == macrosShown().end() || !it->second.parsed.dynamic) continue;
+        const game::macro_eval::Result before = it->second.result;
+        const MacroShown* m = macroShown(L, gh, id);
+        if (!m || (m->result.spell == before.spell && m->result.item == before.item &&
+                   m->result.target == before.target))
+            continue;
+        for (size_t j = i; j < bar.size(); ++j) {
+            if (bar[j].type == game::ActionBarSlot::MACRO && bar[j].id == id)
+                gh->fireAddonEvent("ACTIONBAR_SLOT_CHANGED", {std::to_string(j + 1)});
+        }
+    }
+    return 0;
+}
+
 /// The macro a Lua argument names (0x00566df0): its index, or its name without
 /// case (0x00566330). 0 for none.
 static uint32_t macroArg(lua_State* L, game::GameHandler* gh, int idx) {
@@ -490,9 +652,10 @@ static std::string macroTexture(lua_State* L, game::GameHandler* gh, uint32_t id
         }
     }
     if (!icon.empty() && icon.find('\\') == std::string::npos) icon = "Interface\\Icons\\" + icon;
-    std::string lower = icon;
-    toLowerInPlace(lower);
-    if (!icon.empty() && lower != "interface\\icons\\inv_misc_questionmark") return icon;
+    // Compared as the client compares it (0x0076e760): the name exactly.
+    const size_t slash = icon.find_last_of('\\');
+    const std::string name = slash == std::string::npos ? icon : icon.substr(slash + 1);
+    if (!icon.empty() && name != "INV_Misc_QuestionMark") return icon;
     const MacroShown* m = macroShown(L, gh, id);
     if (m && m->result.item != 0) {
         const auto* info = gh->getItemInfo(m->result.item);
@@ -2769,6 +2932,7 @@ void registerActionLuaAPI(lua_State* L) {
                 }},
                 {"GetActionTexture",    lua_GetActionTexture},
                 {"GetActionAutocast",   lua_GetActionAutocast},
+                {"__WoweeUpdateShownMacros", lua_WoweeUpdateShownMacros},
                 {"IsCurrentAction",     lua_IsCurrentAction},
                 {"IsUsableAction",      lua_IsUsableAction},
                 {"IsActionInRange",     lua_IsActionInRange},
@@ -2838,6 +3002,23 @@ void registerActionLuaAPI(lua_State* L) {
             }
             lua_pushnumber(L, global);
             lua_pushnumber(L, perChar);
+            return 2;
+        }},
+                // SecureCmdOptionParse("options") (0x00564ae0) → the text of
+                // the first clause whose conditions hold and the unit its
+                // passing group names (nil for none); nothing when no clause
+                // applies. The macro conditions as the client evaluates them
+                // (game::macro_options, 0x005f0df0).
+                {"SecureCmdOptionParse", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SecureCmdOptionParse(\"options\")");
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            const std::string options = lua_tostring(L, 1);
+            LuaMacroOptionState state(L, *gh);
+            std::string result, unit;
+            if (!game::macro_options::parse(options, state, result, unit)) return 0;
+            lua_pushstring(L, result.c_str());
+            if (unit.empty()) lua_pushnil(L); else lua_pushstring(L, unit.c_str());
             return 2;
         }},
                 // GetMacroBody(index or name) (0x00566f40) → the text.

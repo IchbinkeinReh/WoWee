@@ -3604,17 +3604,6 @@ void registerSocialLuaAPI(lua_State* L) {
                 // nothing, which is the honest outcome for a feature that is
                 // not there; a missing name takes the chat frame down with it.
 
-                // The conditional parser every secure slash command runs its
-                // argument through: "/cast [mod:shift] A; B". With no
-                // conditional support the whole argument is the action and
-                // there is no target clause, which is what an unconditional
-                // command means anyway.
-                {"SecureCmdOptionParse", [](lua_State* L) -> int {
-            const char* msg = luaL_optstring(L, 1, "");
-            lua_pushstring(L, msg ? msg : "");
-            lua_pushnil(L);
-            return 2;
-        }},
                 {"GuildInfo", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) gh->requestGuildInfo();
             return 0;

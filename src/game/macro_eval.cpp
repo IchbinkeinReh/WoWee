@@ -2,7 +2,6 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <cctype>
 
 namespace wowee::game::macro_eval {
 
@@ -29,15 +28,10 @@ Range cut(const std::string& s, size_t begin, size_t end, char sep, size_t* next
 
 bool isDigit(char c) { return c >= '0' && c <= '9'; }
 
-bool startsCaseless(const std::string& s, size_t at, const char* what) {
+/// strncmp (0x0076e760): "#show" and "tooltip" with their case.
+bool startsWith(const std::string& s, size_t at, const char* what) {
     const size_t n = std::strlen(what);
-    if (s.size() < at + n) return false;
-    for (size_t i = 0; i < n; ++i) {
-        const auto a = static_cast<unsigned char>(s[at + i]);
-        const auto b = static_cast<unsigned char>(what[i]);
-        if (std::tolower(a) != std::tolower(b)) return false;
-    }
-    return true;
+    return s.size() >= at + n && s.compare(at, n, what) == 0;
 }
 
 }  // namespace
@@ -57,9 +51,9 @@ Parsed parse(const std::string& body, const std::function<int(const std::string&
         int kind = 0;
         if (body[word.begin] != '/') {
             // "#show", and "#showtooltip" besides setting the tooltip flag.
-            if (body[word.begin] != '#' || wordLen <= 4 || !startsCaseless(body, word.begin, "#show"))
+            if (body[word.begin] != '#' || wordLen <= 4 || !startsWith(body, word.begin, "#show"))
                 continue;
-            if (wordLen > 11 && startsCaseless(body, word.begin + 5, "tooltip")) out.showTooltip = true;
+            if (wordLen > 11 && startsWith(body, word.begin + 5, "tooltip")) out.showTooltip = true;
             kind = kShow;
         } else {
             kind = slashKind ? slashKind(body.substr(word.begin, wordLen)) : 0;

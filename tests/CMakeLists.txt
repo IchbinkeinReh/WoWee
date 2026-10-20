@@ -3271,3 +3271,9 @@ wowee_add_test(test_trainer_service_list
 # (0x005650c0).
 wowee_add_test(test_macro_eval
     SOURCES test_macro_eval.cpp ${CMAKE_SOURCE_DIR}/src/game/macro_eval.cpp)
+
+# ── test_macro_options ───────────────────────────────────────
+# The macro conditional language as the client parses it: clauses, groups,
+# units, "no", arguments and the condition table (0x005f0df0, 0x005ef5c0).
+wowee_add_test(test_macro_options
+    SOURCES test_macro_options.cpp ${CMAKE_SOURCE_DIR}/src/game/macro_options.cpp)
