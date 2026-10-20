@@ -3264,3 +3264,10 @@ wowee_add_test(test_toc_dependencies
 # (0x00596450, 0x00594ba0).
 wowee_add_test(test_trainer_service_list
     SOURCES test_trainer_service_list.cpp ${CMAKE_SOURCE_DIR}/src/game/trainer_service_list.cpp)
+
+# ── test_macro_eval ──────────────────────────────────────────
+# What a macro shows, read out of its text as the client reads it: the
+# commands kept (0x00565c40) and what the first applying one names
+# (0x005650c0).
+wowee_add_test(test_macro_eval
+    SOURCES test_macro_eval.cpp ${CMAKE_SOURCE_DIR}/src/game/macro_eval.cpp)

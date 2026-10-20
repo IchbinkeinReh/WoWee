@@ -20,6 +20,12 @@
 #include <fstream>
 #include <map>
 #include "game/pet_action.hpp"
+#include "game/macro_eval.hpp"
+#include "game/shapeshift_forms.hpp"
+#include "game/game_utils.hpp"
+#include "ui/chat/macro_evaluator.hpp"
+#include "ui/chat/game_state_adapter.hpp"
+#include "ui/chat/input_modifier_adapter.hpp"
 #include "imgui.h"
 #include <optional>
 #include <SDL3/SDL_keyboard.h>
@@ -253,6 +259,303 @@ static int lua_HasAction(lua_State* L) {
     return 1;
 }
 
+// ---- What a macro shows (UIMacros.cpp) ---------------------------------
+//
+// The spell or item a macro's icon, tooltip and cooldown follow, read out of
+// its text the way the client reads it (game::macro_eval): once when the text
+// changes (0x00565c40), and again for a macro whose answer can change - a
+// conditional, a slot number, a /castsequence - or whose answer named nothing
+// yet. The client re-evaluates those on the events that can change them
+// (0x00566660, 0x00566160); here they are worked out when asked.
+namespace {
+struct MacroShown {
+    std::string body;
+    game::macro_eval::Parsed parsed;
+    game::macro_eval::Result result;
+    bool read = false;
+};
+std::unordered_map<uint32_t, MacroShown>& macrosShown() {
+    static std::unordered_map<uint32_t, MacroShown> shown;
+    return shown;
+}
+}  // namespace
+
+/// A casting slash command's kind (the table at 0x00ace300): the command's
+/// global strings SLASH_CAST1, SLASH_CAST2 ... compared exactly.
+static int macroSlashKind(lua_State* L, const std::string& word) {
+    static const std::pair<const char*, int> kCommands[] = {
+        {"SLASH_CAST", game::macro_eval::kCast},
+        {"SLASH_CASTRANDOM", game::macro_eval::kRandom},
+        {"SLASH_CASTSEQUENCE", game::macro_eval::kSequence},
+        {"SLASH_USE", game::macro_eval::kCast},
+        {"SLASH_USERANDOM", game::macro_eval::kRandom},
+        {"SLASH_EQUIP", game::macro_eval::kEquip},
+        {"SLASH_EQUIP_TO_SLOT", game::macro_eval::kEquipSlot},
+    };
+    for (const auto& [name, kind] : kCommands) {
+        for (int i = 1; i < 10; ++i) {
+            const std::string key = std::string(name) + std::to_string(i);
+            lua_getglobal(L, key.c_str());
+            const char* text = lua_isstring(L, -1) ? lua_tostring(L, -1) : nullptr;
+            const bool match = text && *text && word == text;
+            const bool end = !text || !*text;
+            lua_pop(L, 1);
+            if (end) break;
+            if (match) return kind;
+        }
+    }
+    return 0;
+}
+
+/// A spell in a spellbook by its exact name and, when given, rank (0x0053f5e0):
+/// with no rank the highest the book has.
+static uint32_t macroSpellInBook(game::GameHandler* gh, const std::vector<uint32_t>& book,
+                                 const std::string& name, const std::string& rank) {
+    uint32_t best = 0;
+    int bestRank = -1;
+    for (uint32_t id : book) {
+        if (gh->getSpellName(id) != name) continue;
+        const std::string& r = gh->getSpellRank(id);
+        if (!rank.empty()) {
+            if (r == rank) return id;
+            continue;
+        }
+        int n = 0;
+        const size_t digits = r.find_first_of("0123456789");
+        if (digits != std::string::npos) n = std::atoi(r.c_str() + digits);
+        if (n > bestRank) {
+            bestRank = n;
+            best = id;
+        }
+    }
+    return best;
+}
+
+/// The game state the conditional parser reads, with indoors answered the way
+/// IsIndoors answers it here - through the services rather than reaching for
+/// the application's renderer.
+namespace {
+class MacroGameState : public ui::GameStateAdapter {
+public:
+    MacroGameState(game::GameHandler& gh, std::function<bool()> indoors)
+        : ui::GameStateAdapter(gh, nullptr), indoors_(std::move(indoors)) {}
+    [[nodiscard]] bool isIndoors() const override { return indoors_ && indoors_(); }
+
+private:
+    std::function<bool()> indoors_;
+};
+}  // namespace
+
+/// What macro evaluation needs from this client.
+static game::macro_eval::Hooks macroHooks(lua_State* L, game::GameHandler* gh) {
+    game::macro_eval::Hooks h;
+    // The conditional parser. This client's (MacroEvaluator) rather than the
+    // client's own 0x005f0df0, which is not reproduced yet.
+    auto* svc = getLuaServices(L);
+    std::function<bool()> indoors = svc ? svc->isPlayerIndoors : std::function<bool()>();
+    h.options = [gh, indoors](const std::string& text, std::string& result, uint64_t& target) {
+        MacroGameState state(*gh, indoors);
+        ui::InputModifierAdapter keys;
+        uint64_t over = static_cast<uint64_t>(-1);
+        result = ui::MacroEvaluator(state, keys).evaluate(text, over);
+        target = over == static_cast<uint64_t>(-1) ? 0 : over;
+        return !result.empty();
+    };
+    // QueryCastSequence, the interface's own (ChatFrame.lua), as 0x00564900
+    // calls it: its item, else its spell.
+    h.castSequence = [L](const std::string& sequence) {
+        std::string entry;
+        lua_getglobal(L, "QueryCastSequence");
+        if (!lua_isfunction(L, -1)) {
+            lua_pop(L, 1);
+            return entry;
+        }
+        lua_pushstring(L, sequence.c_str());
+        if (lua_pcall(L, 1, 2, 0) != 0) {
+            lua_pop(L, 1);
+            return entry;
+        }
+        if (lua_isstring(L, -2)) entry = lua_tostring(L, -2);
+        else if (lua_isstring(L, -1)) entry = lua_tostring(L, -1);
+        lua_pop(L, 2);
+        return entry;
+    };
+    // 0x00709de0: an item link's id, or an item known by its exact name.
+    h.itemByName = [gh](const std::string& name) -> uint32_t {
+        const size_t at = name.find("item:");
+        if (at != std::string::npos) return static_cast<uint32_t>(std::strtoul(name.c_str() + at + 5, nullptr, 10));
+        for (const auto& [id, info] : gh->getItemInfoCache())
+            if (info.valid && info.name == name) return id;
+        return 0;
+    };
+    // 0x00540200: "!" dropped; the whole text as a name, else the name before
+    // "(" with the rank inside it.
+    h.spellByName = [gh](const std::string& text, bool& pet) -> uint32_t {
+        std::string name = !text.empty() && text[0] == '!' ? text.substr(1) : text;
+        if (name.empty()) return 0;
+        std::vector<uint32_t> book(gh->getKnownSpells().begin(), gh->getKnownSpells().end());
+        const auto& petBook = gh->getPetSpells();
+        const auto lookup = [&](const std::string& n, const std::string& r) -> uint32_t {
+            pet = false;
+            if (const uint32_t id = macroSpellInBook(gh, book, n, r)) return id;
+            pet = true;
+            return macroSpellInBook(gh, petBook, n, r);
+        };
+        if (const uint32_t id = lookup(name, "")) return id;
+        const size_t open = name.find('(');
+        if (open == std::string::npos) return 0;
+        std::string rank = name.substr(open + 1);
+        const size_t close = rank.find(')');
+        if (close != std::string::npos) rank.resize(close);
+        return lookup(name.substr(0, open), rank);
+    };
+    h.itemInSlot = [gh](int bag, int slot) -> uint32_t {
+        const auto& inv = gh->getInventory();
+        const game::ItemSlot* s = nullptr;
+        if (bag < 0) {
+            s = slot < game::Inventory::NUM_EQUIP_SLOTS ? inventorySlotItem(inv, slot + 1)
+                                                       : containerItemSlot(inv, 0, slot - game::Inventory::NUM_EQUIP_SLOTS + 1);
+        } else {
+            s = containerItemSlot(inv, bag + 1, slot + 1);
+        }
+        return s ? s->item.itemId : 0;
+    };
+    return h;
+}
+
+/// The macro's state, read again when its text changed and worked out again
+/// when its answer can have changed.
+static const MacroShown* macroShown(lua_State* L, game::GameHandler* gh, uint32_t id) {
+    if (!gh || id == 0) return nullptr;
+    const std::string& body = gh->getMacroText(id);
+    if (body.empty()) {
+        macrosShown().erase(id);
+        return nullptr;
+    }
+    MacroShown& m = macrosShown()[id];
+    if (!m.read || m.body != body) {
+        m.body = body;
+        m.read = true;
+        m.parsed = game::macro_eval::parse(body, [L](const std::string& w) { return macroSlashKind(L, w); });
+        m.result = game::macro_eval::evaluate(m.parsed, macroHooks(L, gh));
+    } else if (m.parsed.dynamic || m.result.spell < 0) {
+        m.result = game::macro_eval::evaluate(m.parsed, macroHooks(L, gh));
+    }
+    return &m;
+}
+
+/// The macro a Lua argument names (0x00566df0): its index, or its name without
+/// case (0x00566330). 0 for none.
+static uint32_t macroArg(lua_State* L, game::GameHandler* gh, int idx) {
+    if (!gh) return 0;
+    if (lua_isnumber(L, idx)) {
+        const int index = luaToClientInt(L, idx);
+        return index >= 1 && index <= 0x48 && !gh->getMacroText(static_cast<uint32_t>(index)).empty()
+                   ? static_cast<uint32_t>(index) : 0;
+    }
+    if (!lua_isstring(L, idx)) return 0;
+    std::string want = lua_tostring(L, idx);
+    if (want.empty()) return 0;
+    toLowerInPlace(want);
+    for (uint32_t id : gh->getMacroIds()) {
+        std::string name = gh->getMacroName(id);
+        toLowerInPlace(name);
+        if (name == want && !gh->getMacroText(id).empty()) return id;
+    }
+    return 0;
+}
+
+/// A macro's texture (0x00566ac0): the icon it was given - unless that is the
+/// question mark, which asks for the icon of what the macro shows: its item's,
+/// else its spell's (the active icon while the spell's form is in effect), else
+/// the question mark after all.
+static std::string macroTexture(lua_State* L, game::GameHandler* gh, uint32_t id) {
+    static const char* const kQuestionMark = "Interface\\Icons\\INV_Misc_QuestionMark";
+    std::string icon = gh->getMacroIcon(id);
+    if (!icon.empty() && std::all_of(icon.begin(), icon.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; })) {
+        // The macro frame hands CreateMacro an index into the icon list.
+        lua_getglobal(L, "GetMacroIconInfo");
+        if (lua_isfunction(L, -1)) {
+            lua_pushnumber(L, std::atoi(icon.c_str()));
+            if (lua_pcall(L, 1, 1, 0) == 0) {
+                icon = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+                lua_pop(L, 1);
+            } else {
+                lua_pop(L, 1);
+                icon.clear();
+            }
+        } else {
+            lua_pop(L, 1);
+            icon.clear();
+        }
+    }
+    if (!icon.empty() && icon.find('\\') == std::string::npos) icon = "Interface\\Icons\\" + icon;
+    std::string lower = icon;
+    toLowerInPlace(lower);
+    if (!icon.empty() && lower != "interface\\icons\\inv_misc_questionmark") return icon;
+    const MacroShown* m = macroShown(L, gh, id);
+    if (m && m->result.item != 0) {
+        const auto* info = gh->getItemInfo(m->result.item);
+        const std::string path = info ? gh->getItemIconPath(info->displayInfoId) : std::string();
+        if (!path.empty()) return path;
+    } else if (m && m->result.spell > 0) {
+        const auto spell = static_cast<uint32_t>(m->result.spell);
+        const auto it = gh->spellNameCacheRef().find(spell);
+        if (it != gh->spellNameCacheRef().end() && it->second.activeIconId != 0 && !m->result.petSpell) {
+            for (const auto& form : game::knownShapeshiftForms(gh->getPlayerClass(), gh->getKnownSpells())) {
+                if (form.spellId == spell && gh->formSpellInEffect(spell)) {
+                    const std::string active = gh->getIconPath(it->second.activeIconId);
+                    if (!active.empty()) return active;
+                    break;
+                }
+            }
+        }
+        const std::string path = gh->getSpellIconPath(spell);
+        if (!path.empty()) return path;
+    }
+    return kQuestionMark;
+}
+
+/// SetMacroSpell / SetMacroItem (0x00567320, 0x005670d0).
+static int setMacroShown(lua_State* L, bool item) {
+    if (!lua_isstring(L, 1) && !lua_isnumber(L, 1))
+        return luaL_error(L, item ? "Usage: SetMacroItem(index or name, item [, target])"
+                                  : "Usage: SetMacroSpell(index or name, spell [, target])");
+    auto* gh = getGameHandler(L);
+    const uint32_t id = macroArg(L, gh, 1);
+    MacroShown* m = id ? const_cast<MacroShown*>(macroShown(L, gh, id)) : nullptr;
+    if (!m) return 0;
+    const char* text = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+    const auto hooks = macroHooks(L, gh);
+    game::macro_eval::Result r;
+    if (item) {
+        r.item = hooks.itemByName(text);
+        r.spell = r.item != 0 ? 0 : -1;
+    } else {
+        bool pet = false;
+        const uint32_t spell = hooks.spellByName(text, pet);
+        r.spell = spell != 0 ? static_cast<int32_t>(spell) : -1;
+        r.petSpell = spell != 0 && pet;
+    }
+    if (const char* unit = lua_isstring(L, 3) ? lua_tostring(L, 3) : nullptr; unit && *unit) {
+        std::string u(unit);
+        toLowerInPlace(u);
+        r.target = resolveUnitGuid(gh, u);
+    }
+    m->result = r;
+    // No longer following its conditions (+0x574 cleared).
+    m->parsed.dynamic = false;
+    // 0x005aa920: every bar slot holding the macro redrawn.
+    const auto& bar = gh->getActionBar();
+    for (size_t i = 0; i < bar.size(); ++i) {
+        if (bar[i].type == game::ActionBarSlot::MACRO && bar[i].id == id)
+            gh->fireAddonEvent("ACTIONBAR_SLOT_CHANGED", {std::to_string(i + 1)});
+    }
+    if (item ? r.item != 0 : r.spell > 0) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
+
 // GetActionTexture(slot) → texturePath or nil
 static int lua_GetActionTexture(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -277,6 +580,12 @@ static int lua_GetActionTexture(lua_State* L) {
         return 1;
     }
     const auto& action = bar[slot];
+    if (action.type == game::ActionBarSlot::MACRO) {
+        // The macro's texture (0x005a97f0 -> 0x00566ac0).
+        if (gh->getMacroText(action.id).empty()) return luaReturnNil(L);
+        lua_pushstring(L, macroTexture(L, gh, action.id).c_str());
+        return 1;
+    }
     if (action.type == game::ActionBarSlot::EQUIPMENT_SET) {
         // The set's icon, empty for one no longer there (0x005a97f0 ->
         // 0x005ae6b0).
@@ -507,6 +816,15 @@ static int lua_GetActionCooldown(lua_State* L) {
     const auto& action = bar[slot];
     if (action.type == game::ActionBarSlot::SPELL) return pushHistoryCooldown(L, gh->playerSpellCooldown(action.id));
     if (action.type == game::ActionBarSlot::ITEM) return pushHistoryCooldown(L, gh->itemCooldown(action.id));
+    if (action.type == game::ActionBarSlot::MACRO) {
+        // What the macro shows (0x005a8c30 -> 0x005a89f0): its item's
+        // cooldown, else its spell's.
+        if (const MacroShown* m = macroShown(L, gh, action.id)) {
+            if (m->result.item != 0) return pushHistoryCooldown(L, gh->itemCooldown(m->result.item));
+            if (m->result.spell > 0 && !m->result.petSpell)
+                return pushHistoryCooldown(L, gh->playerSpellCooldown(static_cast<uint32_t>(m->result.spell)));
+        }
+    }
     lua_pushnumber(L, 0);
     lua_pushnumber(L, 0);
     lua_pushnumber(L, 1);
@@ -2485,17 +2803,76 @@ void registerActionLuaAPI(lua_State* L) {
             lua_pushnumber(L, perChar);
             return 2;
         }},
-                // GetMacroInfo(id) → name, icon, body
+                // GetMacroBody(index or name) (0x00566f40) → the text.
+                {"GetMacroBody",        [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const uint32_t id = macroArg(L, gh, 1);
+            if (id == 0) return 0;
+            lua_pushstring(L, gh->getMacroText(id).c_str());
+            return 1;
+        }},
+                // GetMacroIndexByName(name) (0x005666a0) → the index of the
+                // macro of that name without case, 0 for none.
+                {"GetMacroIndexByName", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetMacroIndexByName(name)");
+            lua_pushnumber(L, macroArg(L, getGameHandler(L), 1));
+            return 1;
+        }},
+                // GetMacroSpell(index or name) (0x00567450) → the name and
+                // rank of the spell the macro shows, or nil, nil.
+                {"GetMacroSpell",       [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const MacroShown* m = macroShown(L, gh, macroArg(L, gh, 1));
+            if (!m) return 0;
+            const auto it = m->result.spell > 0
+                ? gh->spellNameCacheRef().find(static_cast<uint32_t>(m->result.spell))
+                : gh->spellNameCacheRef().end();
+            if (it == gh->spellNameCacheRef().end()) {
+                lua_pushnil(L);
+                lua_pushnil(L);
+                return 2;
+            }
+            lua_pushstring(L, it->second.name.c_str());
+            lua_pushstring(L, it->second.rank.c_str());
+            return 2;
+        }},
+                // GetMacroItem(index or name) (0x00567200) → the name and link
+                // of the item the macro shows, once the item is known.
+                {"GetMacroItem",        [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const MacroShown* m = macroShown(L, gh, macroArg(L, gh, 1));
+            if (!m || m->result.item == 0) return 0;
+            const auto* info = gh->getItemInfo(m->result.item);
+            if (!info || !info->valid) {
+                gh->ensureItemInfo(m->result.item);
+                return 0;
+            }
+            lua_pushstring(L, info->name.c_str());
+            lua_pushstring(L, game::buildItemLink(m->result.item, info->quality, info->name).c_str());
+            return 2;
+        }},
+                // SetMacroSpell(index or name, spell [, unit]) (0x00567320) and
+                // SetMacroItem(index or name, item [, unit]) (0x005670d0): what
+                // the macro shows, set rather than read from its text, and kept
+                // until its text is read again - the macro stops following its
+                // conditions. 1 when it names something, else nil.
+                {"SetMacroSpell",       [](lua_State* L) -> int {
+            return setMacroShown(L, false);
+        }},
+                {"SetMacroItem",        [](lua_State* L) -> int {
+            return setMacroShown(L, true);
+        }},
+                // GetMacroInfo(index or name) (0x00566eb0) → name, icon, body;
+                // nothing for no macro.
                 {"GetMacroInfo",        [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const uint32_t id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh || id == 0 || gh->getMacroText(id).empty()) {
-                return luaReturnNil(L);
-            }
+            const uint32_t id = macroArg(L, gh, 1);
+            if (id == 0) return 0;
             std::string name = gh->getMacroName(id);
             if (name.empty()) name = "Macro";
-            std::string icon = gh->getMacroIcon(id);
-            if (icon.empty()) icon = "Interface\\Icons\\INV_Misc_QuestionMark";
+            // The texture as 0x00566ac0 gives it: the question mark shows
+            // what the macro casts.
+            const std::string icon = macroTexture(L, gh, id);
             lua_pushstring(L, name.c_str());
             lua_pushstring(L, icon.c_str());
             lua_pushstring(L, gh->getMacroText(id).c_str());

@@ -9229,9 +9229,6 @@ void LuaEngine::registerCoreAPI() {
         //
         // Binding functions
         "function GetCurrentBindingSet() return 1 end\n"
-        // Macro functions
-        "function GetMacroBody(id) return nil end\n"
-        "function GetMacroIndexByName(name) return 0 end\n"
         // Stance bar
         // Pet action bar
         "NUM_PET_ACTION_SLOTS = 10\n"
