@@ -3102,10 +3102,12 @@ void GameHandler::registerRemainingOpcodes() {
         fireAddonEvent("INSPECT_ACHIEVEMENT_READY", {});
     };
     // The client only lets go of the player's wait for a seat change it
-    // asked for (0x00800510 -> 0x00747900, passenger +0x10 &= ~0x8); the
-    // vehicle the player is - its own rec id - is untouched.
-    dispatchTable_[Opcode::SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA] = [](network::Packet& packet) {
+    // asked for (0x00800510 -> 0x00747900, passenger +0x10 &= ~0x8), which
+    // held its mover; the vehicle the player is - its own rec id - is
+    // untouched. The packet has no body the client reads.
+    dispatchTable_[Opcode::SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA] = [this](network::Packet& packet) {
         packet.skipAll();
+        vehicleRoster_.cancelSeatChangeAsked(playerGuid);
     };
     // uint32 type (0=normal, 1=heavy, 2=tired/restricted) + uint32 minutes played
     dispatchTable_[Opcode::SMSG_PLAY_TIME_WARNING] = [this](network::Packet& packet) {
