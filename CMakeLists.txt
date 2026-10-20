@@ -1097,6 +1097,7 @@ set(WOWEE_SOURCES
     src/addons/lua_absent_api.cpp
     src/addons/lua_item_query_api.cpp
     src/addons/lua_commentator_api.cpp
+    src/addons/client_cvar_registry.cpp
     src/addons/lua_social_api.cpp
     src/addons/lua_system_api.cpp
     src/addons/lua_action_api.cpp

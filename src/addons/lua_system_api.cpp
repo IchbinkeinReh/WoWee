@@ -12,6 +12,7 @@
 #include <optional>
 #include <ranges>
 #include <set>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include "game/chat_handler.hpp"
@@ -26,6 +27,7 @@
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/chat_window_background.hpp"
+#include "addons/client_cvar_registry.hpp"
 #include "ui/display_modes.hpp"
 #include "ui/fullscreen_scale.hpp"
 #include "ui/widget_tree.hpp"
@@ -920,7 +922,28 @@ static const char* cameraViewCVarDefault(const std::string& lowerName) {
     return nullptr;
 }
 
+/// The CVars RegisterCVar made, by lower-case name, with the default each was
+/// registered with ("0" when none was given, 0x0050fea0).
+static std::unordered_map<std::string, std::string>& scriptRegisteredCVars() {
+    static std::unordered_map<std::string, std::string> registered;
+    return registered;
+}
+
+/// Client CVars RegisterCVar was called on again. Registering an existing CVar
+/// rewrites its storage bits with the ones given (0x00767fc0 keeps all but
+/// 0x30 and ors the new ones in), and RegisterCVar gives none - so such a CVar
+/// is no longer kept on the server.
+static std::unordered_set<std::string>& reregisteredClientCVars() {
+    static std::unordered_set<std::string> names;
+    return names;
+}
+
 static void pushCvarDefault(lua_State* L, const std::string& n) {
+    // A CVar an addon registered has the default it was registered with.
+    if (auto it = scriptRegisteredCVars().find(n); it != scriptRegisteredCVars().end()) {
+        lua_pushstring(L, it->second.c_str());
+        return;
+    }
     // The camera's views, and which one it is on and how it moves to another
     // (0x005fd910: cameraView "2", cameraViewBlendStyle "1").
     if (const char* view = cameraViewCVarDefault(n)) { lua_pushstring(L, view); return; }
@@ -1659,6 +1682,91 @@ static int lua_GetCVarBool(lua_State* L) {
     lua_pop(L, 1);
     lua_pushboolean(L, on);
     return 1;
+}
+
+/// The registration flags of the CVar by that lower-case name (0x00767460 and
+/// the CVar's +0x1c), or none when no CVar has that name.
+///
+/// Registered are the client's own, the ones RegisterCVar made, and the ones
+/// in the saved file or set since - the client registers every name it reads
+/// from Config.wtf (0x007681f0), with no flags.
+static std::optional<uint32_t> registeredCVarFlags(const std::string& lower) {
+    if (auto flags = clientCVarFlags(lower)) {
+        if (reregisteredClientCVars().count(lower)) {
+            return *flags & ~(kCVarStoredWithAccount | kCVarStoredWithCharacter);
+        }
+        return flags;
+    }
+    if (scriptRegisteredCVars().count(lower) || cvarStore().count(lower)) return 0u;
+    return std::nullopt;
+}
+
+// RegisterCVar("cvar" [, default]) (0x0050ff30 -> 0x0050fea0): a CVar of the
+// addon's own, with no flags, defaulting to the value given or to "0". One
+// that exists keeps its value and default and loses its server storage.
+static int lua_RegisterCVar(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: RegisterCVar(\"cvar\" [, default])");
+    std::string n = lua_tostring(L, 1);
+    if (n.empty()) return 0;
+    toLowerInPlace(n);
+    if (clientCVarFlags(n)) {
+        reregisteredClientCVars().insert(n);
+        return 0;
+    }
+    if (scriptRegisteredCVars().count(n)) return 0;
+    scriptRegisteredCVars()[n] = lua_isstring(L, 2) ? lua_tostring(L, 2) : "0";
+    return 0;
+}
+
+// GetCVarInfo("cvar") → value, defaultValue, storedWithAccount, storedWithCharacter
+// (0x0050ff50): the two flags 1 or nil; all four nil for a CVar that is not
+// there, a hidden one included.
+static int lua_GetCVarInfo(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetCVarInfo(\"cvar\")");
+    std::string n = lua_tostring(L, 1);
+    toLowerInPlace(n);
+    const auto flags = registeredCVarFlags(n);
+    if (!flags || (*flags & kCVarHidden)) {
+        for (int i = 0; i < 4; ++i) lua_pushnil(L);
+        return 4;
+    }
+    lua_pushvalue(L, 1);
+    lua_GetCVar(L);
+    lua_remove(L, -2);
+    lua_pushvalue(L, 1);
+    lua_GetCVarDefault(L);
+    lua_remove(L, -2);
+    if (*flags & kCVarStoredWithAccount) lua_pushnumber(L, 1); else lua_pushnil(L);
+    if (*flags & kCVarStoredWithCharacter) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 4;
+}
+
+/// GetCVarAbsoluteMin and GetCVarAbsoluteMax (0x00514f60, 0x00515010): only
+/// extShadowQuality has bounds, the lowest level and the highest the renderer
+/// takes; every other CVar answers nil, and a name that is no CVar raises.
+static int cvarAbsoluteBound(lua_State* L, bool max, const char* usage) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "%s", usage);
+    std::string n = lua_tostring(L, 1);
+    toLowerInPlace(n);
+    const auto flags = registeredCVarFlags(n);
+    if (!flags || (*flags & kCVarHidden)) {
+        return luaL_error(L, "Couldn't find CVar named '%s'", lua_tostring(L, 1));
+    }
+    if (n != "extshadowquality") {
+        lua_pushnil(L);
+        return 1;
+    }
+    // The client's device answers 5 (0x00873f50); this renderer's levels stop
+    // at 4 (Renderer::initialize clamps the stored level to 0-4), and a level
+    // above that would be one nothing draws.
+    lua_pushnumber(L, max ? 4 : 0);
+    return 1;
+}
+static int lua_GetCVarAbsoluteMin(lua_State* L) {
+    return cvarAbsoluteBound(L, false, "Usage: GetCVarAbsoluteMin(\"cvar\")");
+}
+static int lua_GetCVarAbsoluteMax(lua_State* L) {
+    return cvarAbsoluteBound(L, true, "Usage: GetCVarAbsoluteMax(\"cvar\")");
 }
 
 /// What CVAR_UPDATE carries as its first argument: the CVar's *label*, not its
@@ -6437,6 +6545,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"RunScript",                lua_RunScript},
                 {"IsMouseButtonDown",        lua_IsMouseButtonDown},
                 {"GetCVarDefault",           lua_GetCVarDefault},
+                {"GetCVarInfo",              lua_GetCVarInfo},
+                {"GetCVarAbsoluteMin",       lua_GetCVarAbsoluteMin},
+                {"GetCVarAbsoluteMax",       lua_GetCVarAbsoluteMax},
+                {"RegisterCVar",             lua_RegisterCVar},
                 {"IsAddOnLoaded",            lua_IsAddOnLoaded},
                 {"LoadAddOn",                lua_LoadAddOn},
                 {"UIParentLoadAddOn",        lua_LoadAddOn},

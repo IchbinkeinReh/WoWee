@@ -3228,3 +3228,9 @@ wowee_add_test(test_doodad_model_plan
 # out itself (0x00563150), as SetBindingSpell and its siblings write them.
 wowee_add_test(test_binding_command
     SOURCES test_binding_command.cpp)
+
+# ── test_client_cvar_registry ────────────────────────────────
+# The client's own CVars and their registration flags (0x00767fc0), which
+# GetCVarInfo and GetCVarAbsoluteMin/Max answer from.
+wowee_add_test(test_client_cvar_registry
+    SOURCES test_client_cvar_registry.cpp ${CMAKE_SOURCE_DIR}/src/addons/client_cvar_registry.cpp)
