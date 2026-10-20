@@ -899,6 +899,7 @@ constexpr const char* kGraphicsPresetKeys[] = {
     "grassenabled", "grassdensity", "grassheight", "grassdistance",
     "lensflare", "sharpstars", "sunshafts", "lightshafts", "fogskyblend",
     "enhancedwater", "specular",
+    "environmentdetail", "groundclutterdistance", "particledensity", "weatherdetail",
 };
 
 /// Every graphics setting that has to reach something when it is loaded.
@@ -963,6 +964,7 @@ void SettingsPanel::applyLoadedSettings() {
     // affects. Same route the sliders and the presets take.
     for (const char* key : kGraphicsApplyKeys) applySettingSideEffects(key);
     if (services_.renderer) services_.renderer->setLowCostShading(currentGraphicsPreset == GraphicsPreset::LOW);
+    publishGraphicsPresetLabel();
 }
 
 void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
@@ -992,6 +994,10 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
         pendingFogSkyBlend       = p.fogSkyBlend;
         pendingEnhancedWater     = p.enhancedWater;
         pendingSpecular          = p.specular;
+        pendingEnvironmentDetail     = p.environmentDetail;
+        pendingGroundClutterDistance = p.groundClutterDistance;
+        pendingParticleDensity       = p.particleDensity;
+        pendingWeatherDetail         = p.weatherDetail;
         // Each one goes to the thing it affects through the one function that
         // knows where that is, rather than through a second copy of the same
         // renderer calls written out here.
@@ -1012,9 +1018,15 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
     // four-tap shadow filter); every other preset, Custom included, leaves
     // the picture as the settings above draw it.
     if (services_.renderer) services_.renderer->setLowCostShading(preset == GraphicsPreset::LOW);
+    publishGraphicsPresetLabel();
 }
 
 void SettingsPanel::updateGraphicsPresetFromCurrentSettings() {
+    pendingGraphicsPreset = matchingGraphicsPreset();
+    publishGraphicsPresetLabel();
+}
+
+SettingsPanel::GraphicsPreset SettingsPanel::matchingGraphicsPreset() const {
     // A preset is the current one when the settings are what it sets. The
     // floats are compared with a little room because they arrive off sliders.
     //
@@ -1042,17 +1054,36 @@ void SettingsPanel::updateGraphicsPresetFromCurrentSettings() {
             std::abs(pendingFogSkyBlend - p.fogSkyBlend) <= 0.025f &&
             pendingEnhancedWater == p.enhancedWater &&
             pendingSpecular == p.specular &&
+            std::abs(pendingEnvironmentDetail - p.environmentDetail) <= 5 &&
+            std::abs(pendingGroundClutterDistance - p.groundClutterDistance) <= 10 &&
+            std::abs(pendingParticleDensity - p.particleDensity) <= 5 &&
+            pendingWeatherDetail == p.weatherDetail &&
             // As with shadows: a preset that grows no grass says nothing about
             // how dense, how tall or how far it would have been.
             (!p.grass || (std::abs(pendingGrassDensity - p.grassDensity) <= 5 &&
                           std::abs(pendingGrassHeight - p.grassHeight) <= 5 &&
                           std::abs(pendingGrassDistance - p.grassDistance) <= 10));
-        if (matches) {
-            pendingGraphicsPreset = static_cast<GraphicsPreset>(i + 1);
-            return;
-        }
+        if (matches) return static_cast<GraphicsPreset>(i + 1);
     }
-    pendingGraphicsPreset = GraphicsPreset::CUSTOM;
+    return GraphicsPreset::CUSTOM;
+}
+
+void SettingsPanel::publishGraphicsPresetLabel() {
+    // For /perf: the preset last chosen, and whether the settings are still
+    // it. "Custom (from Low)" is Low with something changed since - the shape
+    // a saved file or a hand-set switch leaves behind.
+    if (!services_.renderer) return;
+    static constexpr const char* kNames[] = {"Custom", "Low", "Medium", "High", "Ultra"};
+    const auto name = [](GraphicsPreset p) {
+        const int i = static_cast<int>(p);
+        return (i >= 0 && i < static_cast<int>(std::size(kNames))) ? kNames[i] : "?";
+    };
+    const GraphicsPreset now = matchingGraphicsPreset();
+    std::string label = name(now);
+    if (now != currentGraphicsPreset && currentGraphicsPreset != GraphicsPreset::CUSTOM) {
+        label += std::string(" (from ") + name(currentGraphicsPreset) + ")";
+    }
+    services_.renderer->setGraphicsPresetLabel(std::move(label));
 }
 
 std::string SettingsPanel::getSettingsPath() {
@@ -1769,6 +1800,9 @@ bool SettingsPanel::setSettingValue(const std::string& key, const std::string& v
     }
     const FieldBinding* b = findFieldBinding(key);
     if (!b) return false;
+    // Every control that sets these comes through here; loading the file does
+    // not. Neither has a CVar, so the start-up replay does not either.
+    if (key == "upscaling" || key == "fsrquality") upscalingChosen_ = true;
     if (b->asBool) {
         this->*(b->asBool) = on;
     } else if (b->asInt) {

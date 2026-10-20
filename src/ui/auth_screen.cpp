@@ -1,4 +1,5 @@
 #include "ui/auth_screen.hpp"
+#include "addons/lua_api_registrations.hpp"
 #include <future>
 #include <chrono>
 #include "rendering/pom_quality.hpp"
@@ -1805,7 +1806,11 @@ void AuthScreen::saveLoginGraphicsState() {
     cfg["normal_mapping"]        = loginGfx_.normalMapping  ? "1" : "0";
     cfg["pom"]                   = loginGfx_.pom            ? "1" : "0";
     cfg["pom_quality"]           = std::to_string(loginGfx_.pomQuality);
-    cfg["upscaling_mode"]        = std::to_string(loginGfx_.upscalingMode);
+    // Not upscaling_mode: this sheet has no control for it, and writing the
+    // field back put a 0 into every file that did not have one yet - which
+    // is a phone's on its first run, overriding the reduced render resolution
+    // the game picks for it (GameScreen::loadSettings). The file's own value,
+    // if any, is kept by the map.
     cfg["enhanced_water"]        = loginGfx_.enhancedWater   ? "1" : "0";
     cfg["specular"]              = loginGfx_.specular        ? "1" : "0";
     // Written before the enhanced water had a switch, for a refraction that
@@ -1820,11 +1825,43 @@ void AuthScreen::saveLoginGraphicsState() {
     cfg["vsync"]                 = loginGfx_.vsync           ? "1" : "0";
     cfg["fullscreen"]            = loginGfx_.fullscreen      ? "1" : "0";
 
+    // A preset picked here sets the columns this sheet has no control for as
+    // well - the doodad distance, clutter radius, particles and weather - or
+    // Low would leave them at whatever they were. Only when one was picked:
+    // a preset merely shown here may stand over values changed in game since.
+    const int presetIndex = loginGfx_.preset - 1;
+    const bool presetColumns =
+        loginPresetPicked_ && presetIndex >= 0 && presetIndex < kGraphicsPresetCount;
+    if (presetColumns) {
+        const GraphicsPresetValues& p = kGraphicsPresets[presetIndex];
+        cfg["environment_detail"]      = std::to_string(p.environmentDetail);
+        cfg["ground_clutter_distance"] = std::to_string(p.groundClutterDistance);
+        cfg["particle_density"]        = std::to_string(p.particleDensity);
+        cfg["weather_detail"]          = std::to_string(p.weatherDetail);
+    }
+
     // Write everything back.
-    std::ofstream out(SettingsPanel::getSettingsPath());
-    if (!out.is_open()) return;
-    for (const auto& [k, v] : cfg)
-        out << k << "=" << v << "\n";
+    {
+        std::ofstream out(SettingsPanel::getSettingsPath());
+        if (!out.is_open()) return;
+        for (const auto& [k, v] : cfg)
+            out << k << "=" << v << "\n";
+    }
+
+    // And the CVar store, as the game's own panel does (setSettingValue,
+    // applyGraphicsPreset). farclip, groundEffectDensity and the Effects
+    // panel's cvars are applied over settings.cfg at start-up, so a view
+    // distance or clutter chosen here was undone in game by the cvars the
+    // last session left - Low's 177 yards came back as 1277.
+    addons::noteClientSettingChanged("viewdistance", cfg["view_distance"]);
+    addons::noteClientSettingChanged("groundclutter", cfg["ground_clutter_density"]);
+    if (presetColumns) {
+        addons::noteClientSettingChanged("environmentdetail", cfg["environment_detail"]);
+        addons::noteClientSettingChanged("groundclutterdistance", cfg["ground_clutter_distance"]);
+        addons::noteClientSettingChanged("particledensity", cfg["particle_density"]);
+        addons::noteClientSettingChanged("weatherdetail", cfg["weather_detail"]);
+    }
+    loginPresetPicked_ = false;
 }
 
 void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
@@ -1900,6 +1937,7 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
             // Custom is not a set of values, it is the absence of one; picking
             // it leaves everything where the player put it.
             if (preset != 0) applyPresetToState(loginGfx_, preset);
+            loginPresetPicked_ = (preset != 0);
         }
         col.gap(px(20));
     }
@@ -1993,6 +2031,7 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
                        "Reset to Medium")) {
             applyPresetToState(loginGfx_, 2);
             loginGfx_.preset = 2;
+            loginPresetPicked_ = true;
         }
         const float applyW = px(130);
         const float cancelW = px(110);

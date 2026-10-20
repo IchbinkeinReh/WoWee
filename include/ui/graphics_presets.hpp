@@ -79,16 +79,29 @@ struct GraphicsPresetValues {
     /// copies its +0x2c into the detected defaults, written out by
     /// 0x0078e1a0), so no fixed preset here turns it on.
     bool  specular;
+    /// The rest of the client's own quality levels (FrameXML
+    /// GraphicsQualityLevels.lua, the Effects panel's rows), in this
+    /// client's units: the doodad distance (EnvironmentDetail 0.5-1.5, as a
+    /// percentage), the clutter radius in yards (ClutterRadius), the particle
+    /// density (0.1-1.0, as a percentage) and the weather level
+    /// (WeatherIntensity 0-3). Low left all four where they were, so the
+    /// doodads it is meant to cut kept their full distance.
+    int   environmentDetail;     ///< percent
+    int   groundClutterDistance; ///< yards
+    int   particleDensity;       ///< percent
+    int   weatherDetail;         ///< 0..3
 };
 
-// Note the shadows column: every preset leaves them on.
+// Note the shadows column: Low turns them off, as the client's own Low does
+// (its ShadowQuality 0: baked terrain shadows only), and the rest leave them
+// on.
 //
-// Low used to turn them off, which the client no longer honours - the control
-// for it is off the settings panel and setShadowsEnabled holds them on, because
-// turning them off loses the device. A preset that sets a value nothing acts on
-// is a preset that lies about what it did, and it wrote shadows=0 to the config
-// on the way past. Low leans on its short shadow distance instead, which is
-// where the cost actually is.
+// Every row once left them on, because shadows off still drew the whole
+// shadow pass and only stopped the shaders reading it - a preset asking for
+// off saved nothing. Off now skips the pass (Renderer::planShadowPass), which
+// on a phone is several milliseconds a frame.
+// The last four columns are the client's levels 1, 3, 4 and 5 (Low, Good,
+// High, Ultra), the same rows the view distances below come from.
 // And the FXAA column: off on every row. Ultra used to turn it on over 8x
 // MSAA, where there is nothing left for it to find and its sub-pixel filter
 // only softened the resolve. It stays in the panel for anyone who wants it,
@@ -97,10 +110,10 @@ struct GraphicsPresetValues {
 // (FrameXML GraphicsQualityLevels.lua): Low 177, Good 727, High 1057 and Ultra
 // 1277 - its Fair, 507, has no row here.
 constexpr GraphicsPresetValues kGraphicsPresets[] = {
-    /* Low    */ { .viewDistance = 177.0f, .shadows = true,  .shadowDistance = 100.0f, .antiAliasing = 0, .fxaa = false, .normalMapping = false, .normalMapStrength = 0.6f, .parallax = false, .parallaxQuality = 0,  .groundClutter = 25,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false},
-    /* Medium */ { .viewDistance = 727.0f, .shadows = true,  .shadowDistance = 200.0f, .antiAliasing = 1, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.6f, .parallax = true,  .parallaxQuality = 0,  .groundClutter = 60,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false},
-    /* High   */ {.viewDistance = 1057.0f, .shadows = true,  .shadowDistance = 350.0f, .antiAliasing = 2, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.8f, .parallax = true,  .parallaxQuality = 1, .groundClutter = 100, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false},
-    /* Ultra  */ {.viewDistance = 1277.0f, .shadows = true,  .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = false, .normalMapping = true,  .normalMapStrength = 1.2f, .parallax = true,  .parallaxQuality = 2, .groundClutter = 150, .grass = true,  .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false},
+    /* Low    */ { .viewDistance = 177.0f, .shadows = false, .shadowDistance = 100.0f, .antiAliasing = 0, .fxaa = false, .normalMapping = false, .normalMapStrength = 0.6f, .parallax = false, .parallaxQuality = 0,  .groundClutter = 25,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 50,  .groundClutterDistance = 70,  .particleDensity = 10,  .weatherDetail = 0},
+    /* Medium */ { .viewDistance = 727.0f, .shadows = true,  .shadowDistance = 200.0f, .antiAliasing = 1, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.6f, .parallax = true,  .parallaxQuality = 0,  .groundClutter = 60,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 100, .groundClutterDistance = 120, .particleDensity = 60,  .weatherDetail = 2},
+    /* High   */ {.viewDistance = 1057.0f, .shadows = true,  .shadowDistance = 350.0f, .antiAliasing = 2, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.8f, .parallax = true,  .parallaxQuality = 1, .groundClutter = 100, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 125, .groundClutterDistance = 130, .particleDensity = 80,  .weatherDetail = 3},
+    /* Ultra  */ {.viewDistance = 1277.0f, .shadows = true,  .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = false, .normalMapping = true,  .normalMapStrength = 1.2f, .parallax = true,  .parallaxQuality = 2, .groundClutter = 150, .grass = true,  .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 150, .groundClutterDistance = 140, .particleDensity = 100, .weatherDetail = 3},
 };
 
 /// The number of presets, not counting Custom - which is not a set of values

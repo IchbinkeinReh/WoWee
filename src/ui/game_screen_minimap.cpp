@@ -1991,6 +1991,7 @@ void GameScreen::saveSettings() {
     out << "upscaling_mode=" << settingsPanel_.pendingUpscalingMode << "\n";
     out << "fsr=" << (settingsPanel_.pendingFSR ? 1 : 0) << "\n";
     out << "fsr_quality=" << settingsPanel_.pendingFSRQuality << "\n";
+    out << "upscaling_chosen=" << (settingsPanel_.upscalingChosen_ ? 1 : 0) << "\n";
     out << "fsr_sharpness=" << settingsPanel_.pendingFSRSharpness << "\n";
     out << "fsr2_jitter_sign=" << settingsPanel_.pendingFSR2JitterSign << "\n";
     out << "fsr2_mv_scale_x=" << settingsPanel_.pendingFSR2MotionVecScaleX << "\n";
@@ -2061,11 +2062,19 @@ void GameScreen::loadSettings() {
     // would be the better shape and would change what an existing 1.0 means.
     settingsPanel_.pendingActionBarScale =
         SettingsPanel::recommendedPixelScale(currentDisplayHeight, 0.5f, 2.0f);
-#ifdef __ANDROID__
     // A phone draws the world smaller and FSR 1 scales it up, by default:
     // native on a 2400x1080 panel is more pixels than its GPU fills at a
-    // playable rate. Set before the file is read, so a saved choice wins.
-    if (ImGui::GetCurrentContext() && ImGui::GetIO().DisplaySize.x > 0.0f) {
+    // playable rate. Applied after the file is read, unless the player has
+    // chosen an upscaling mode or render resolution themselves
+    // (upscaling_chosen). A saved upscaling_mode alone is not a choice: the
+    // login screen's sheet wrote 0 into files that had none, and any save
+    // made before the screen size was known - this runs from the constructor,
+    // where ImGui has no display size yet - wrote the 0 it started with. Either
+    // put a phone at native resolution for good.
+    const auto applyMobileRenderScale = [this]() {
+#ifdef __ANDROID__
+        if (settingsPanel_.upscalingChosen_) return;
+        if (!ImGui::GetCurrentContext() || ImGui::GetIO().DisplaySize.x <= 0.0f) return;
         const ImGuiIO& io = ImGui::GetIO();
         const int choice = SettingsPanel::recommendedMobileRenderScale(
             io.DisplaySize.x * io.DisplayFramebufferScale.x, io.DisplaySize.y * io.DisplayFramebufferScale.y);
@@ -2074,9 +2083,14 @@ void GameScreen::loadSettings() {
             settingsPanel_.pendingFSR = true;
             settingsPanel_.pendingFSRQuality = choice;
         }
-    }
+#else
+        (void)this;
 #endif
-    if (!in.is_open()) return;
+    };
+    if (!in.is_open()) {
+        applyMobileRenderScale();
+        return;
+    }
 
     bool bagScaleLoaded = false;
     bool windowScaleLoaded = false;
@@ -2329,6 +2343,7 @@ void GameScreen::loadSettings() {
                 if (settingsPanel_.pendingUpscalingMode == 0 && settingsPanel_.pendingFSR) settingsPanel_.pendingUpscalingMode = 1;
             }
             else if (key == "fsr_quality") settingsPanel_.pendingFSRQuality = std::clamp(std::stoi(val), 0, 3);
+            else if (key == "upscaling_chosen") settingsPanel_.upscalingChosen_ = (std::stoi(val) != 0);
             else if (key == "fsr_sharpness") settingsPanel_.pendingFSRSharpness = std::clamp(std::stof(val), 0.0f, 2.0f);
             else if (key == "fsr2_jitter_sign") settingsPanel_.pendingFSR2JitterSign = std::clamp(std::stof(val), -2.0f, 2.0f);
             else if (key == "fsr2_mv_scale_x") settingsPanel_.pendingFSR2MotionVecScaleX = std::clamp(std::stof(val), -2.0f, 2.0f);
@@ -2364,6 +2379,7 @@ void GameScreen::loadSettings() {
             else if (key == "chat_bubbles_party") chatPanel_.chatPartyBubbles = (std::stoi(val) != 0);
         } catch (...) {}
     }
+    applyMobileRenderScale();
 
     if (!bagScaleLoaded || !windowScaleLoaded || !actionBarScaleLoaded) {
         // The height the file turned out to hold, now that it has been read -

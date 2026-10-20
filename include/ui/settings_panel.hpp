@@ -303,6 +303,11 @@ public:
     bool pendingFSR = false;
     int pendingUpscalingMode = 0;       // 0=Off, 1=FSR1, 2=FSR3
     int pendingFSRQuality = 3;          // 0=UltraQuality, 1=Quality, 2=Balanced, 3=Native(100%)
+    /// The player set the upscaling mode or render resolution themselves
+    /// (setSettingValue). Until then a phone takes the reduced resolution
+    /// GameScreen::loadSettings picks for its screen, whatever an earlier
+    /// save wrote into upscaling_mode.
+    bool upscalingChosen_ = false;
     float pendingFSRSharpness = 1.6f;
     float pendingFSR2JitterSign = 0.38f;
     float pendingFSR2MotionVecScaleX = 1.0f;
@@ -444,6 +449,10 @@ private:
     void renderSettingsAboutTab();
     void applyGraphicsPreset(GraphicsPreset preset);
     void updateGraphicsPresetFromCurrentSettings();
+    /// The preset whose values the settings are now, or Custom.
+    [[nodiscard]] GraphicsPreset matchingGraphicsPreset() const;
+    /// Hands the renderer the preset's name for /perf (qualitySummary).
+    void publishGraphicsPresetLabel();
 };
 
 } // namespace ui

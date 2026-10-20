@@ -682,7 +682,16 @@ static std::string cvarStorePath() {
 /// box is ticked, the box writes equipmentManager, and the paperdoll reads that
 /// on VARIABLES_LOADED - so it came back off on every login, and so did every
 /// other option the player had set.
+/// Whether loadStoredCVars has run in this process. A write before it - the
+/// login screen's graphics sheet, a preset chosen before the interface is up -
+/// would otherwise save a store holding only that one value over the file.
+static bool& cvarStoreLoaded() {
+    static bool loaded = false;
+    return loaded;
+}
+
 static void loadStoredCVars() {
+    cvarStoreLoaded() = true;
     cvarFileSnapshot().valid = false;
     std::ifstream in(cvarStorePath());
     if (!in.is_open()) return;
@@ -1965,6 +1974,7 @@ std::string storedCVarValue(const std::string& key, const std::string& fallback)
 }
 
 void setStoredCVar(const std::string& key, const std::string& value) {
+    if (!cvarStoreLoaded()) loadStoredCVars();
     std::string k = key;
     toLowerInPlace(k);
     const auto existing = cvarStore().find(k);
@@ -1977,6 +1987,7 @@ void noteClientSettingChanged(const std::string& settingKey, const std::string& 
     if (g_applyingCVarToSetting) return;
     for (const auto& binding : kClientCVars) {
         if (settingKey != binding.setting) continue;
+        if (!cvarStoreLoaded()) loadStoredCVars();
         // Back into the CVar's own units, the same conversion GetCVar makes.
         const std::string text =
             binding.scale != 1.0

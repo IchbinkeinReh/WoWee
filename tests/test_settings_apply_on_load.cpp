@@ -271,8 +271,8 @@ TEST_CASE("field of view is applied where the camera exists", "[settings]") {
 // preset values, and they had drifted in four of ten columns: High was 350
 // yards of shadow with 4x MSAA and no FXAA in game, and 250 yards with 2x and
 // FXAA on at the login screen. Medium disagreed about clutter and
-// multisampling, and Low still turned shadows off there after the client
-// stopped honouring that at all.
+// multisampling, and Low still turned shadows off there while the client
+// drew the shadow pass whatever the setting said.
 
 TEST_CASE("the presets are written once", "[settings]") {
     const std::string login = wowee::test::slurp("src/ui/auth_screen.cpp");
@@ -294,12 +294,52 @@ TEST_CASE("the presets are written once", "[settings]") {
     }
 }
 
-TEST_CASE("no preset asks for shadows to be off", "[settings]") {
-    // setShadowsEnabled holds them on, so a preset that asks is a preset that
-    // writes shadows=0 to the config and has nothing act on it.
-    for (int i = 0; i < wowee::ui::kGraphicsPresetCount; ++i) {
+TEST_CASE("Low turns dynamic shadows off and the rest leave them on", "[settings]") {
+    // The client's own Low quality level has ShadowQuality 0 and every level
+    // from Good up has dynamic shadows. Off skips the shadow pass now, so the
+    // column means what it says.
+    REQUIRE(wowee::ui::kGraphicsPresetCount == 4);
+    CHECK_FALSE(wowee::ui::kGraphicsPresets[0].shadows);
+    for (int i = 1; i < wowee::ui::kGraphicsPresetCount; ++i) {
         INFO("preset index " << i << " turns shadows off");
         CHECK(wowee::ui::kGraphicsPresets[i].shadows);
+    }
+}
+
+TEST_CASE("the presets carry the client's own detail levels", "[settings]") {
+    // GraphicsQualityLevels.lua levels 1, 3, 4 and 5 - the rows the view
+    // distances already come from: EnvironmentDetail, ClutterRadius,
+    // ParticleDensity and WeatherIntensity, in this client's units.
+    struct Row { int environment, clutterRadius, particles, weather; };
+    constexpr Row kClient[] = {{50, 70, 10, 0}, {100, 120, 60, 2}, {125, 130, 80, 3}, {150, 140, 100, 3}};
+    REQUIRE(wowee::ui::kGraphicsPresetCount == 4);
+    for (int i = 0; i < wowee::ui::kGraphicsPresetCount; ++i) {
+        const auto& p = wowee::ui::kGraphicsPresets[i];
+        INFO("preset index " << i);
+        CHECK(p.environmentDetail == kClient[i].environment);
+        CHECK(p.groundClutterDistance == kClient[i].clutterRadius);
+        CHECK(p.particleDensity == kClient[i].particles);
+        CHECK(p.weatherDetail == kClient[i].weather);
+    }
+}
+
+TEST_CASE("a preset applies the detail levels it carries", "[settings]") {
+    // A column in the table that the panel does not assign is how Low came to
+    // leave the doodad distance at 100%.
+    const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
+    const size_t at = panel.find("void SettingsPanel::applyGraphicsPreset");
+    REQUIRE(at != std::string::npos);
+    const std::string body = panel.substr(at, panel.find("\n}\n", at) - at);
+    for (const char* column : {"p.environmentDetail", "p.groundClutterDistance",
+                               "p.particleDensity", "p.weatherDetail", "p.shadows"}) {
+        INFO(column << " is not applied by applyGraphicsPreset");
+        CHECK(body.find(column) != std::string::npos);
+    }
+    const auto presetKeys = namesIn(panel, "PresetKeys");
+    for (const char* key : {"environmentdetail", "groundclutterdistance", "particledensity",
+                            "weatherdetail"}) {
+        INFO(key << " is not pushed out by a preset");
+        CHECK(presetKeys.count(key) == 1);
     }
 }
 

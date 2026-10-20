@@ -286,6 +286,9 @@ private:
     };
     LoginGraphicsState loginGfx_;
     bool loginGfxLoaded_ = false;
+    /// A preset was picked on the sheet (or Reset pressed) since it opened, so
+    /// Apply also writes that preset's columns the sheet has no control for.
+    bool loginPresetPicked_ = false;
 
     /// Draws the card and everything on it. Answers the rect it took, so the
     /// caller can hand the pointer over the whole sheet rather than only over
