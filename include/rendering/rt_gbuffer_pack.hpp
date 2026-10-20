@@ -159,7 +159,7 @@ inline float interiorShade(const glm::vec3& pointLight, float weight, float base
 /// The Debug Graphics strengths the apply pass reads (rtTune.x, lightTune.y,
 /// lightTune.w) and the mode (occlusion from 2 on).
 struct Tune {
-    float shadowStrength = 0.6f;
+    float shadowStrength = 0.65f;
     float sunShadow = 1.0f;
     float occlusion = 1.0f;
     int mode = 2;

@@ -454,7 +454,7 @@ where `L` is the brightest channel of the shadowed point light at the
 pixel, every light counted, the building's own baked MOLT lights included,
 each with its traced shadow (the apply pass's `point / wsum` before the
 point-light strength). `base` and `fullAt` are Debug Graphics sliders
-(50% and 100% by default). Where the lamps shine fully all of the painted
+(25% and 100% by default). Where the lamps shine fully all of the painted
 colour remains; where none reaches, `base` of it. Weighted by the pixel's
 match weight, so a pixel without a traced result is as painted.
 

@@ -282,8 +282,10 @@ constexpr SettingDesc kSchema[] = {
 
     // ------------------------------------------------------- Debug Graphics
     // The lighting's parts, to look at one at a time and to set by hand
-    // (Renderer::LightingTune). Every default is the look as it is, with the
-    // ray tracing on or off. Two pages, as one does not fit in two columns.
+    // (Renderer::LightingTune). 100 is each part as it comes; the defaults
+    // are the user's tuned look (some lamps and fires stronger and farther
+    // reaching, building lights and glow weaker, darker interiors and
+    // shadows). Two pages, as one does not fit in two columns.
     {"dbgview", "Show instead of the picture", SettingKind::Enum, 0, 10, 1, "Debug Graphics", "View",
      "Replace the picture with one part of the ray traced lighting.\n"
      "The traced views work in every ray tracing mode; the probe views\n"
@@ -320,7 +322,7 @@ constexpr SettingDesc kSchema[] = {
     {"dbginteriorbase", "Inside, unlit by lamps (%)", SettingKind::Int, 0, 100, 5, "Debug Graphics", "Interiors, ray traced",
      "How much of a room's painted light shows where no lamp's light\n"
      "reaches: walls, floors, the things and people in it. Where the\n"
-     "lamps shine fully all of it shows. 100 is as painted.", "", 50},
+     "lamps shine fully all of it shows. 100 is as painted.", "", 25},
     {"dbginteriorfullat", "Inside, lamp light for full colour (%)", SettingKind::Int, 5, 300, 5, "Debug Graphics", "",
      "How bright the lamps' traced light must be for a room's painted\n"
      "light to show in full. Lower lights more of the room.", "", 100},
@@ -333,56 +335,56 @@ constexpr SettingDesc kSchema[] = {
     {"dbgmodellightintensity", "Model lights: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Lights", "Intensity and reach",
      "The lights model files carry: braziers, crystals, spell\n"
      "effects on objects.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 100},
     {"dbgmodellightreach", "Model lights: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
      "How far its light reaches: where the falloff starts and ends.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 150},
     {"dbgfirelightintensity", "Fires: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Lights", "",
      "Fires, braziers and torches whose files carry no light: a\n"
      "warm flickering light added at their flame.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 105},
     {"dbgfirelightreach", "Fires: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
      "How far its light reaches: where the falloff starts and ends.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 150},
     {"dbglamplightintensity", "Lamps and lanterns: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Lights", "",
      "Street lamps, lanterns and sconces whose files carry no\n"
      "light, lit at every hour.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 105},
     {"dbglamplightreach", "Lamps and lanterns: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
      "How far its light reaches: where the falloff starts and ends.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 150},
     {"dbgbuildinglightintensity", "Building lights: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Lights", "",
      "A building's own lamps (WMO lights). Its walls and floors\n"
      "hold their light already; the rest takes it from the tracing.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 55},
     {"dbgbuildinglightreach", "Building lights: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
      "How far its light reaches: where the falloff starts and ends.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 100},
     {"dbgunitlightintensity", "Unit lights: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Lights", "",
      "The lights of spell effects and models on characters and\n"
      "creatures.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 100},
     {"dbgunitlightreach", "Unit lights: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
      "How far its light reaches: where the falloff starts and ends.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 100},
     {"dbgemissivelightintensity", "Glowing surfaces: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Glow", "What glows",
      "What glows of models and buildings: lamp glass, glow cards,\n"
      "lava, crystals, glowing batches.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 30},
     {"dbgemissivelightreach", "Glowing surfaces: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Glow", "",
      "How far its light reaches: where the falloff starts and ends.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 100},
     {"dbgparticlelightintensity", "Particles: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Glow", "",
      "Particle effects that glow - spells, flames, candles - one\n"
      "light per emitter at the middle of its particles.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 100},
     {"dbgparticlelightreach", "Particles: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Glow", "",
      "How far its light reaches: where the falloff starts and ends.\n"
-     "Ray traced. 100 is as it is now.", "", 100},
+     "Ray traced. 100 is its own.", "", 100},
 
     {"dbgshadowdarkness", "Shadow darkness, ray traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Ray traced",
      "How much of the light a shadow takes where the ray tracing has a\n"
-     "result. Without it the client's own 30% applies.", "", 60},
+     "result. Without it the client's own 30% applies.", "", 65},
     {"dbgtracedsunshadow", "Sun shadows, traced (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
      "How much of the traced sun shadows shows. Units near you cast\n"
      "theirs through the shadow map instead.", "", 100},
@@ -390,7 +392,7 @@ constexpr SettingDesc kSchema[] = {
      "How much of the shadows the torches and lamps cast shows.", "", 100},
     {"dbgbakedlampshadow", "Lamp shadows on painted light (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
      "How much of an interior's painted light a lamp's shadow takes\n"
-     "where that lamp alone lights it.", "", 60},
+     "where that lamp alone lights it.", "", 100},
     {"dbgocclusion", "Ambient occlusion (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
      "How much of the traced darkening in corners and crevices shows.", "", 100},
     {"dbgmapsunshadow", "Sun shadows, shadow map (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "Always",

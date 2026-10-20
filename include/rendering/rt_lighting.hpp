@@ -133,11 +133,11 @@ public:
         /// (rtTune, lightTune), for the apply pass: the shadow darkness, the
         /// traced sun shadow, the occlusion, the point lights, the baked
         /// lamps' shadows, the point lights' shadows; and the debug view.
-        float shadowStrength = 0.6f;
+        float shadowStrength = 0.65f;
         float sunShadow = 1.0f;
         float occlusion = 1.0f;
         float pointLights = 1.0f;
-        float bakedLampShadow = 0.6f;
+        float bakedLampShadow = 1.0f;
         float pointShadow = 1.0f;
         int debugView = 0;
         /// Inside: what of a baked colour shows where no point light reaches,

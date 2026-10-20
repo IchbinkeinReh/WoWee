@@ -708,7 +708,8 @@ public:
     /// setFullResolution); WOWEE_RT_FULLRES=0/1 holds it whatever this says.
     void setRtFullResolution(bool full);
     /// The lighting's adjustable strengths (Settings > Debug Graphics). The
-    /// defaults are the look as it is. The ray traced ones act only where
+    /// defaults match the settings' (settings_schema.cpp), in fractions of
+    /// their percent; 1 is each part as it comes. The ray traced ones act only where
     /// the ray tracing has a result; the rest act with it off too.
     struct LightingTune {
         // Light.
@@ -719,21 +720,21 @@ public:
         float bounce = 1.0f;            ///< ray traced: the probes' bounced light (Full mode)
         /// Ray traced, per kind of point light (rt_lights::Source): its
         /// colour, and its falloff window's start and end.
-        float sourceIntensity[7] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-        float sourceReach[7] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+        float sourceIntensity[7] = {1.0f, 1.05f, 1.05f, 0.55f, 1.0f, 0.3f, 1.0f};
+        float sourceReach[7] = {1.5f, 1.5f, 1.5f, 1.0f, 1.0f, 1.0f, 1.0f};
         /// Ray traced, inside: a baked colour (an interior's vertex colours, a
         /// doodad's MODD colour, a unit's floor colour) shows at
         /// interiorBase + (1 - interiorBase) x lit, lit the point lights'
         /// shadowed light there over interiorFullAt, at most 1
         /// (rt_gbuffer.glsli rtInteriorShade). 1 leaves the bake as painted.
-        float interiorBase = 0.5f;
+        float interiorBase = 0.25f;
         float interiorFullAt = 1.0f;
         // Shadows.
-        float shadowStrength = 0.6f;    ///< ray traced: how much of the light a shadow takes
+        float shadowStrength = 0.65f;   ///< ray traced: how much of the light a shadow takes
         float tracedSunShadow = 1.0f;   ///< ray traced: how much of the traced sun shadows shows
         float mapSunShadow = 1.0f;      ///< the shadow map's sun shadows (with or without ray tracing)
         float pointShadow = 1.0f;       ///< ray traced: the point lights' shadows
-        float bakedLampShadow = 0.6f;   ///< ray traced: how much of a baked colour a lamp's shadow takes
+        float bakedLampShadow = 1.0f;   ///< ray traced: how much of a baked colour a lamp's shadow takes
         float occlusion = 1.0f;         ///< ray traced: ambient occlusion
         float bakedTerrainShadow = 1.0f;  ///< the terrain's baked shadow map, times its zone opacity
         float blobShadow = 1.0f;        ///< the round shadows under units (shadows off, ray tracing off)

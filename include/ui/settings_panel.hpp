@@ -90,28 +90,28 @@ public:
     float pendingDbgTime = 12.0f;
     /// Per kind of point light (rt_lights::Source), in percent of its own.
     float pendingDbgModelLightIntensity = 100.0f;
-    int pendingDbgModelLightReach = 100;
-    float pendingDbgFireLightIntensity = 100.0f;
-    int pendingDbgFireLightReach = 100;
-    float pendingDbgLampLightIntensity = 100.0f;
-    int pendingDbgLampLightReach = 100;
-    float pendingDbgBuildingLightIntensity = 100.0f;
+    int pendingDbgModelLightReach = 150;
+    float pendingDbgFireLightIntensity = 105.0f;
+    int pendingDbgFireLightReach = 150;
+    float pendingDbgLampLightIntensity = 105.0f;
+    int pendingDbgLampLightReach = 150;
+    float pendingDbgBuildingLightIntensity = 55.0f;
     int pendingDbgBuildingLightReach = 100;
     float pendingDbgUnitLightIntensity = 100.0f;
     int pendingDbgUnitLightReach = 100;
-    float pendingDbgEmissiveLightIntensity = 100.0f;
+    float pendingDbgEmissiveLightIntensity = 30.0f;
     int pendingDbgEmissiveLightReach = 100;
     float pendingDbgParticleLightIntensity = 100.0f;
     int pendingDbgParticleLightReach = 100;
     /// Inside, a baked colour where no lamp shines and the lamps' light at
     /// which it is whole (Renderer::LightingTune::interiorBase, interiorFullAt).
-    int pendingDbgInteriorBase = 50;
+    int pendingDbgInteriorBase = 25;
     int pendingDbgInteriorFullAt = 100;
-    int pendingDbgShadowDarkness = 60;
+    int pendingDbgShadowDarkness = 65;
     int pendingDbgTracedSunShadow = 100;
     int pendingDbgMapSunShadow = 100;
     int pendingDbgPointShadow = 100;
-    int pendingDbgBakedLampShadow = 60;
+    int pendingDbgBakedLampShadow = 100;
     int pendingDbgOcclusion = 100;
     int pendingDbgTerrainShadow = 100;
     int pendingDbgBlobShadow = 100;
