@@ -291,6 +291,15 @@ TEST_CASE("a teleport lands on the floor at or under the server's height") {
         REQUIRE(h.has_value());
         CHECK(*h == Catch::Approx(95.3f));
     }
+    // Darnassus: .tele to z 1341.4 on the temple terrace (1341.39), the
+    // terrain 12.5 yards under it (1328.87). Before the terrace is loaded the
+    // terrain is all there is, and it is no landing.
+    SECTION("the ground far under a building not loaded yet is not the landing") {
+        CHECK_FALSE(teleportLandingFloor({1328.87f, std::nullopt, std::nullopt}, 1341.4f));
+        auto h = teleportLandingFloor({1328.87f, 1341.39f, std::nullopt}, 1341.4f);
+        REQUIRE(h.has_value());
+        CHECK(*h == Catch::Approx(1341.39f));
+    }
     SECTION("nothing within reach below keeps the server's height") {
         CHECK_FALSE(teleportLandingFloor({100.0f - kTeleportFloorReachDown - 0.5f}, 100.0f));
         CHECK_FALSE(teleportLandingFloor({std::nullopt, std::nullopt}, 100.0f));

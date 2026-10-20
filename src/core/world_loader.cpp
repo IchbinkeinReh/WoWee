@@ -16,6 +16,7 @@
 #include "rendering/vk_context.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
+#include "rendering/movement_limits.hpp"
 #include "rendering/terrain_manager.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
@@ -1252,8 +1253,13 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                 // Terrain far below a WMO city doesn't count as ground.
                 if (!groundReady) {
                     if (auto* tm = renderer_->getTerrainManager()) {
+                        // Not far under the feet: that is the ground under a
+                        // building still streaming in (Darnassus' terrain
+                        // 12.5 yards under the temple terrace), which the
+                        // player would then stand on.
                         auto tH = tm->getHeightAt(rx, ry);
-                        if (tH.has_value() && std::abs(*tH - rz) < 15.0f) {
+                        if (tH.has_value() && *tH < rz + 15.0f &&
+                            *tH >= rz - rendering::movement::kTeleportFloorReachDown) {
                             groundReady = true;
                         }
                     }

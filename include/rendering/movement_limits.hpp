@@ -209,7 +209,12 @@ inline bool wmoFloorIsWayIn(float terrainZ, float feetZ, float stepUpBudget) {
 inline constexpr float kTeleportFloorReachUp = kMaxStepUp + 0.5f;
 /// How far under the server's height a floor is still taken as the landing.
 /// Further down, the server's height is kept and the player falls from it.
-inline constexpr float kTeleportFloorReachDown = 16.0f;
+///
+/// The server's height is its own floor there (its vmaps), so a floor far
+/// under it is one the server does not stand the player on: 16 yards took
+/// Darnassus' terrain (1328.87) under the temple terrace (1341.39) while
+/// the terrace was not loaded yet, and the player stood 12.5 yards down.
+inline constexpr float kTeleportFloorReachDown = 2.0f;
 
 inline std::optional<float> teleportLandingFloor(std::initializer_list<std::optional<float>> floors,
                                                  float serverZ) {

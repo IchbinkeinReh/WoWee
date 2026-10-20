@@ -3875,6 +3875,12 @@ void CameraController::reset() {
         // hall floor (55.99) were both "within 16 yards" and the higher won.
         const float serverZ = spawnPos.z;
         const float probeZ = serverZ + movement::kTeleportFloorReachUp;
+        // Asked where the player will stand, not where the collision focus
+        // was left: after a map change it still sat on the old map's
+        // position, every building here was outside it, and Darnassus'
+        // terrace was not found under the feet.
+        if (wmoRenderer) wmoRenderer->setCollisionFocus(spawnPos, 120.0f);
+        if (m2Renderer) m2Renderer->setCollisionFocus(spawnPos, 120.0f);
         std::optional<float> terrainH, wmoH, m2H;
         if (terrainManager) terrainH = terrainManager->getHeightAt(spawnPos.x, spawnPos.y);
         if (wmoRenderer) wmoH = wmoRenderer->getFloorHeight(spawnPos.x, spawnPos.y, probeZ, nullptr, serverZ);
