@@ -33,8 +33,10 @@ TEST_CASE("unit events by their ids", "[unit_model_events]") {
     CHECK(ue::classify(0x474d5324u).index == ue::kColumnSubmerge);  // $SMG
     CHECK(ue::classify(0x444d5324u).index == ue::kColumnSubmerged);  // $SMD
 
-    // Footfalls and the sheath events go elsewhere.
-    CHECK(ue::classify(ue::fourCC("$FSD")).kind == ue::Kind::None);
+    // A footfall (0x00732650: 0x44534624 -> 0x00747240); the sheath events
+    // go elsewhere.
+    CHECK(ue::classify(0x44534624u).kind == ue::Kind::Footstep);
+    CHECK(ue::classify(ue::fourCC("$FSD")).index == ue::kColumnFootstep);
     CHECK(ue::classify(ue::fourCC("$SHL")).kind == ue::Kind::None);
 }
 
@@ -70,4 +72,59 @@ TEST_CASE("the Stand sound at most every ten seconds", "[unit_model_events]") {
     // Across the clock's wrap.
     CHECK_FALSE(ue::standSoundDue(5000, 0xFFFFF000u));
     CHECK(ue::standSoundDue(6000, 0xFFFFF000u));
+}
+
+TEST_CASE("footfall sounds by footstep id and terrain type", "[unit_model_events]") {
+    // TerrainType rows as the 3.3.5a table has them: Dirt 0 -> 1,
+    // Metallic 1 -> 2, Stone 2 -> 3, None 10 -> 0.
+    ue::FootstepTerrainSounds t;
+    CHECK(t.empty());
+    t.addTerrainType(0, 1);
+    t.addTerrainType(1, 2);
+    t.addTerrainType(2, 3);
+    t.addTerrainType(10, 0);
+    // FootstepTerrainLookup: footstep 8 on sound 1 (dirt) and 3 (stone).
+    t.addLookup(8, 1, 650, 1055);
+    t.addLookup(8, 3, 653, 1057);
+    t.addLookup(8, -1, 999, 999);  // left out (0x004cf990)
+    CHECK_FALSE(t.empty());
+
+    CHECK(t.find(8, 2, false) == 653);
+    CHECK(t.find(8, 2, true) == 1057);  // the splash in water
+    CHECK(t.find(8, 0, false) == 650);
+    CHECK(t.find(8, 1, false) == 0);    // no row for metallic
+    CHECK(t.find(8, 42, false) == 0);   // no such terrain type
+    CHECK(t.find(9, 2, false) == 0);    // no such footstep id
+
+    // 0x004cf170: none for the ground, then terrain type 0's.
+    CHECK(t.sound(8, 2, false) == 653);
+    CHECK(t.sound(8, 1, false) == 650);
+    CHECK(t.sound(8, -1, false) == 650);
+    CHECK(t.sound(8, -1, true) == 1055);
+    CHECK(t.sound(9, 2, false) == 0);
+}
+
+TEST_CASE("the ground a unit stands on", "[unit_model_events]") {
+    // A building's floor over the terrain: the floor's material's type.
+    CHECK(ue::groundTerrainType(5.0f, 4, 2.0f, 0) == 4);
+    CHECK(ue::groundTerrainType(5.0f, -1, std::nullopt, std::nullopt) == -1);
+    // The terrain above a floor (a cellar below ground) - the terrain was
+    // not met first only if it is above the probe, which the caller drops.
+    CHECK(ue::groundTerrainType(1.0f, 4, 2.0f, 7) == 7);
+    CHECK(ue::groundTerrainType(std::nullopt, -1, 2.0f, 7) == 7);
+    // A hole, or a layer with no effect row: none.
+    CHECK(ue::groundTerrainType(std::nullopt, -1, 2.0f, std::nullopt) == -1);
+}
+
+TEST_CASE("a footfall in water, and a hovering unit", "[unit_model_events]") {
+    CHECK(ue::footInWater(10.0f, 9.5f, 0));
+    CHECK(ue::footInWater(10.0f, 10.005f, 0));    // within 0.01 over it
+    CHECK_FALSE(ue::footInWater(10.0f, 10.02f, 0));
+    CHECK_FALSE(ue::footInWater(std::nullopt, 9.5f, 0));
+    CHECK_FALSE(ue::footInWater(10.0f, 9.5f, ue::kMoveFlagSwimming));
+
+    // UNIT_FIELD_BYTES_1's third byte, flag 0x2 (0x00747240 reads +0x112).
+    CHECK(ue::hovers(0x00020000u));
+    CHECK_FALSE(ue::hovers(0x00010000u));
+    CHECK_FALSE(ue::hovers(0x00000002u));
 }

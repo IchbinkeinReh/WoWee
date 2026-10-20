@@ -3122,7 +3122,7 @@ wowee_add_test(test_minimap_blips
     SOURCES test_minimap_blips.cpp)
 
 # ── test_unit_model_events ───────────────────────────────────
-# What a unit's model events play: fidgets, wings, births (rendering/unit_model_events.hpp).
+# What a unit's model events play: fidgets, wings, births, footfalls (rendering/unit_model_events.hpp).
 wowee_add_test(test_unit_model_events
     SOURCES test_unit_model_events.cpp)
 

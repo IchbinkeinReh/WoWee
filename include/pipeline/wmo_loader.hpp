@@ -31,6 +31,8 @@ struct WMOMaterial {
     uint32_t color2;
     uint32_t texture3;
     uint32_t color3;
+    /// MOMT +0x20: the TerrainType a unit standing on it walks on (0x007b39b0).
+    uint32_t groundType = 0;
     float runtime[4];           // Runtime data
 };
 
@@ -209,6 +211,7 @@ struct WMOGroup {
     std::vector<uint16_t> indices;
     std::vector<WMOBatch> batches;
     std::vector<uint8_t> triFlags;  // Per-triangle MOPY flags (0x04 = detail/no-collide)
+    std::vector<uint8_t> triMaterials;  // Per-triangle MOPY material id (0xFF: collision only)
 
     // Portals
     std::vector<WMOPortal> portals;

@@ -21,8 +21,16 @@
 // slots read it through 0x0071a3f0, which takes the row's
 // CreatureSoundDataIDPet in its place while the unit has a
 // UNIT_FIELD_PETNUMBER.
+//
+// And $FSD, a footfall (0x00747240 -> 0x004cf170): the row's footstep id
+// (CreatureSoundData +0x24) and the ground the unit stands on pick a
+// FootstepTerrainLookup sound - its splash where the foot is in water - see
+// FootstepTerrainSounds.
 
 #include <cstdint>
+#include <optional>
+#include <unordered_map>
+#include <vector>
 
 namespace wowee::rendering::unit_event {
 
@@ -42,6 +50,8 @@ enum class Kind : uint8_t {
     Slot,
     /// A CreatureSoundData column of the display's own row, at the event.
     AtEvent,
+    /// A footfall, by the ground under the unit (0x00747240).
+    Footstep,
 };
 
 struct Action {
@@ -56,6 +66,7 @@ constexpr uint32_t kSlotWingFlap = 7;   ///< $WNG
 constexpr uint32_t kSlotWingGlide = 10; ///< $WGG
 
 /// CreatureSoundData columns (3.3.5a, 38 of them).
+constexpr uint32_t kColumnFootstep = 9;  ///< +0x24, FootstepTerrainLookup's CreatureFootstepID
 constexpr uint32_t kColumnFidget0 = 14;
 constexpr uint32_t kColumnBirth = 33;
 constexpr uint32_t kColumnSpellCastDirected = 34;
@@ -77,6 +88,7 @@ constexpr Action classify(uint32_t eventId) {
     if (eventId == fourCC("$SCD")) return {Kind::AtEvent, kColumnSpellCastDirected};
     if (eventId == fourCC("$SMG")) return {Kind::AtEvent, kColumnSubmerge};
     if (eventId == fourCC("$SMD")) return {Kind::AtEvent, kColumnSubmerged};
+    if (eventId == fourCC("$FSD")) return {Kind::Footstep, kColumnFootstep};
     return {};
 }
 
@@ -127,5 +139,74 @@ constexpr float kListenerAtCharacterVolume = 0.65f;
 
 /// The fidgets: two yards over the unit (0x007462e0).
 constexpr float kFidgetHeight = 2.0f;
+
+/// The footfall sounds by creature footstep id and ground (0x004cf990
+/// builds them from FootstepTerrainLookup, 0x004cf100 reads them).
+class FootstepTerrainSounds {
+public:
+    /// A TerrainType row: its id and its SoundID (TerrainTypeSounds), +0x10.
+    void addTerrainType(int32_t terrainType, uint32_t soundIndex) { terrainSounds_[terrainType] = soundIndex; }
+    /// A FootstepTerrainLookup row: CreatureFootstepID, TerrainSoundID,
+    /// SoundID, SoundIDSplash. One whose TerrainSoundID is below zero is
+    /// left out (0x004cf990).
+    void addLookup(uint32_t creatureFootstepId, int32_t terrainSoundIndex, uint32_t sound, uint32_t splash) {
+        if (terrainSoundIndex < 0) return;
+        bySound_[key(creatureFootstepId, static_cast<uint32_t>(terrainSoundIndex))] = {sound, splash};
+    }
+    [[nodiscard]] bool empty() const { return bySound_.empty(); }
+
+    /// 0x004cf100: the terrain type's TerrainType row, its sound index, and
+    /// the footstep id's sound for it - the splash where `inWater`. 0 for
+    /// none.
+    [[nodiscard]] uint32_t find(uint32_t creatureFootstepId, int32_t terrainType, bool inWater) const {
+        const auto t = terrainSounds_.find(terrainType);
+        if (t == terrainSounds_.end()) return 0;
+        const auto it = bySound_.find(key(creatureFootstepId, t->second));
+        if (it == bySound_.end()) return 0;
+        return inWater ? it->second.splash : it->second.sound;
+    }
+    /// 0x004cf170: the ground's, else - for none, or no terrain type at all
+    /// (-1) - terrain type 0's (Dirt).
+    [[nodiscard]] uint32_t sound(uint32_t creatureFootstepId, int32_t terrainType, bool inWater) const {
+        const uint32_t s = find(creatureFootstepId, terrainType, inWater);
+        return s != 0 ? s : find(creatureFootstepId, 0, inWater);
+    }
+
+private:
+    struct Sounds {
+        uint32_t sound = 0;
+        uint32_t splash = 0;
+    };
+    static uint64_t key(uint32_t creature, uint32_t terrainSound) {
+        return (static_cast<uint64_t>(creature) << 32) | terrainSound;
+    }
+    std::unordered_map<int32_t, uint32_t> terrainSounds_;
+    std::unordered_map<uint64_t, Sounds> bySound_;
+};
+
+/// The terrain type a unit stands on, as its collision has it (0x007c2440):
+/// a building's floor's material's ground type where the probe down from
+/// the unit meets the building first (0x007b39b0), else the terrain's
+/// (0x007a0530: GroundEffectTexture TerrainType of the quad's layer), else
+/// none (-1).
+inline int32_t groundTerrainType(std::optional<float> buildingFloor, int32_t buildingGroundType,
+                                 std::optional<float> terrainFloor, std::optional<int32_t> terrainGroundType) {
+    if (buildingFloor && (!terrainFloor || *buildingFloor >= *terrainFloor)) return buildingGroundType;
+    if (terrainGroundType) return *terrainGroundType;
+    return -1;
+}
+
+/// Whether a footfall splashes (0x0071a030): liquid where the unit is, the
+/// foot below its surface (by less than 0.01 above it, too), and the unit
+/// not swimming (MOVEMENTFLAG_SWIMMING, 0x00200000).
+constexpr uint32_t kMoveFlagSwimming = 0x00200000u;
+inline bool footInWater(std::optional<float> liquidLevel, float footZ, uint32_t moveFlags) {
+    return liquidLevel && footZ < *liquidLevel + 0.01f && (moveFlags & kMoveFlagSwimming) == 0;
+}
+
+/// UNIT_FIELD_BYTES_1's third byte's hover flag: a hovering unit's
+/// footfalls are silent (0x00747240).
+constexpr uint32_t kBytes1HoverFlag = 0x02u;
+constexpr bool hovers(uint32_t bytes1) { return ((bytes1 >> 16) & kBytes1HoverFlag) != 0; }
 
 }  // namespace wowee::rendering::unit_event

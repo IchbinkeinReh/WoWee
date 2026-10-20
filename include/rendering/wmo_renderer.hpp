@@ -393,10 +393,13 @@ public:
     /// to a triangle.
     void gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec3& boxMax,
                                 std::vector<glm::vec3>& out) const;
+    /// With `outGroundType`, the TerrainType id of the floor found (its
+    /// triangle's MOMT ground type, 0x007b39b0), or -1.
     std::optional<float> getFloorHeight(float glX, float glY, float glZ,
                                         float* outNormalZ = nullptr,
                                         float referenceZ =
-                                            std::numeric_limits<float>::quiet_NaN()) const;
+                                            std::numeric_limits<float>::quiet_NaN(),
+                                        int32_t* outGroundType = nullptr) const;
 
     /** Query floor collision from one moving WMO instance. */
     std::optional<float> getInstanceFloorHeight(uint32_t instanceId,
@@ -778,6 +781,9 @@ private:
 
         // Per-collision-triangle MOPY flags (indexed by collision tri index, i.e. triStart/3)
         std::vector<uint8_t> triMopyFlags;
+        /// And their MOPY material ids, for the ground a unit stands on
+        /// (ModelData::materialGroundTypes, 0x007b39b0).
+        std::vector<uint8_t> triMaterials;
         /// An interior group's vertex colours (MOCV, rgba 0..255) as the
         /// client keeps them once loaded (wmo_doodad_light::loadedVertexColor),
         /// one per collision vertex, for the light a unit standing on it
@@ -865,6 +871,8 @@ private:
 
         // Material flags (materialId -> flags; 0x01 = unlit)
         std::vector<uint32_t> materialFlags;
+        /// MOMT's ground type (materialId -> TerrainType id, +0x20).
+        std::vector<uint32_t> materialGroundTypes;
 
         // MOMT's shader (materialId -> the effect table's index, 0x007afee0)
         std::vector<uint32_t> materialShaders;

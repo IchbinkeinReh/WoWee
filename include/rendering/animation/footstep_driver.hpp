@@ -16,7 +16,9 @@ class Renderer;
 // FootstepDriver - extracted from AnimationController
 //
 // Owns animation-driven footstep event detection, surface resolution,
-// and player/mount footstep tracking state.
+// and player/mount footstep tracking state: the prints and splashes a step
+// leaves. Its sound is the model's $FSD event, as every unit's is
+// (EntitySpawner::playUnitModelEvents, 0x00747240).
 // ============================================================================
 class FootstepDriver {
 public:
@@ -39,8 +41,8 @@ public:
     audio::FootstepSurface resolveFootstepSurface(Renderer* renderer) const;
 
 private:
-    /// Water-step side effects shared by on-foot and mounted steps
-    /// (splash sound layer + visual foot splash).
+    /// Water-step side effects shared by on-foot and mounted steps: the
+    /// visual foot splash.
     void playWaterStepExtras(Renderer* renderer) const;
 
     // Player footstep event tracking (animation-driven)

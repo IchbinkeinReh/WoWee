@@ -4995,11 +4995,14 @@ void CharacterRenderer::stepInstanceEvents(uint32_t instanceId, const CharacterI
     if (model.events.empty() || sequence < 0 || static_cast<size_t>(sequence) >= model.sequences.size()) return;
     for (uint32_t e = 0; e < model.events.size(); ++e) {
         const auto& event = model.events[e];
-        // Only what a unit's callback plays; an event on a global sequence
-        // keeps its own clock, which this does not step.
-        if (unit_event::classify(event.id).kind == unit_event::Kind::None || event.globalSequence >= 0) continue;
-        if (static_cast<size_t>(sequence) >= event.times.size()) continue;
-        m2_event::forEachCrossed(event.times[static_cast<size_t>(sequence)], from, to, 0.0f,
+        // Only what a unit's callback plays. An event on a global sequence
+        // reads the first sequence's times, on the playing sequence's clock
+        // as any other (0x00830fb0: its track index is 0 where the track has
+        // a global sequence).
+        if (unit_event::classify(event.id).kind == unit_event::Kind::None) continue;
+        const size_t timeline = event.globalSequence >= 0 ? 0u : static_cast<size_t>(sequence);
+        if (timeline >= event.times.size()) continue;
+        m2_event::forEachCrossed(event.times[timeline], from, to, 0.0f,
                                  [&](uint32_t) { steppedEvents_.push_back({instanceId, e}); });
     }
 }

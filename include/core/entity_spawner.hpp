@@ -29,7 +29,7 @@
 namespace wowee {
 
 // Forward declarations
-namespace rendering { class Renderer; }
+namespace rendering { class Renderer; namespace unit_event { class FootstepTerrainSounds; } }
 namespace pipeline { class AssetManager; class DBCFile; struct M2Model; struct WMOModel; }
 namespace audio { enum class VoiceType; }
 namespace game { class GameHandler; class Entity; struct CorpseLook; }
@@ -1284,6 +1284,9 @@ private:
     /// (0x00ca12d4), in steady-clock ms; and the draws the slots' chances take.
     uint32_t lastStandSoundMs_ = 0;
     uint32_t unitEventRandom_ = 0x2545F491u;
+    /// FootstepTerrainLookup by creature footstep id and terrain type, built
+    /// once its tables are read (0x004cf990).
+    std::shared_ptr<const rendering::unit_event::FootstepTerrainSounds> footstepSounds_;
     uint32_t mountModelId_ = 0;
     uint32_t mountDisplayId_ = 0;  ///< the display mountInstanceId_ draws
     uint32_t pendingMountDisplayId_ = 0;

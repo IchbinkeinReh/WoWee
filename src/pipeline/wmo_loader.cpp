@@ -47,7 +47,7 @@ struct MomtEntryDisk {
     uint32_t frameSidnColor;    // not read
     uint32_t texture2;          // MOTX offset
     uint32_t diffColor;
-    uint32_t groundType;        // not read
+    uint32_t groundType;        // TerrainType id (0x007b39b0)
     uint32_t texture3;          // MOTX offset
     uint32_t color2;
     uint32_t flags2;            // not read
@@ -271,6 +271,7 @@ WMOModel WMOLoader::load(const std::vector<uint8_t>& wmoData) {
                     mat.color2 = entry.diffColor;
                     mat.texture3 = entry.texture3;
                     mat.color3 = entry.color2;
+                    mat.groundType = entry.groundType;
 
                     model.materials.push_back(mat);
                 }
@@ -642,9 +643,10 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                     // flag 0x04 = detail/decorative geometry (no collision)
                     uint32_t triCount = subChunkSize / 2;
                     group.triFlags.resize(triCount);
+                    group.triMaterials.resize(triCount);
                     for (uint32_t i = 0; i < triCount; i++) {
                         group.triFlags[i] = read<uint8_t>(groupData, mogpOffset);
-                        read<uint8_t>(groupData, mogpOffset); // materialId (skip)
+                        group.triMaterials[i] = read<uint8_t>(groupData, mogpOffset);
                     }
                 }
                 else if (subChunkId == MONR) { // Normals
