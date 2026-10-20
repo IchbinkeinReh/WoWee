@@ -223,6 +223,72 @@ inline std::string& currentClickButton() {
     return button;
 }
 
+/// The macro being run right now, as 0x00564db0 keeps it: the macro in
+/// 0x00beaf4c, the button it was run with in 0x00beaf48, and in 0x00beaf44 a
+/// set of flags each of which one call per run may spend (all set as the
+/// outermost macro starts; TargetDirectionEnemy spends 0x20).
+///
+/// RunMacroText runs a macro that is no saved one, so its index is zero and
+/// GetRunningMacro answers nil inside it (0x00564c10 asks the macro's +0x18).
+struct RunningMacro {
+    bool running = false;
+    int index = 0;
+    bool hasButton = false;
+    std::string button;
+    uint32_t onceFlags = 0;
+};
+inline RunningMacro& runningMacro() {
+    static RunningMacro macro;
+    return macro;
+}
+
+/// One macro run (0x00564db0): what was running before comes back after, the
+/// once-per-run flags excepted - the client never restores those.
+class RunningMacroScope {
+public:
+    RunningMacroScope(int index, const char* button) : saved_(runningMacro()) {
+        RunningMacro& m = runningMacro();
+        if (!m.running) m.onceFlags = 0xffffffffu;
+        m.running = true;
+        m.index = index;
+        m.hasButton = button != nullptr;
+        m.button = button ? button : "";
+    }
+    ~RunningMacroScope() {
+        RunningMacro& m = runningMacro();
+        m.running = saved_.running;
+        m.index = saved_.index;
+        m.hasButton = saved_.hasButton;
+        m.button = saved_.button;
+    }
+    RunningMacroScope(const RunningMacroScope&) = delete;
+    RunningMacroScope& operator=(const RunningMacroScope&) = delete;
+
+private:
+    RunningMacro saved_;
+};
+
+/// The button a CLICK binding presses, for as long as the press lasts
+/// (0x00563150 sets 0x00beaf48 around it): GetRunningMacroButton answers it.
+class RunningButtonScope {
+public:
+    explicit RunningButtonScope(const std::string& button)
+        : hadButton_(runningMacro().hasButton), saved_(runningMacro().button) {
+        runningMacro().hasButton = true;
+        runningMacro().button = button;
+    }
+    ~RunningButtonScope() {
+        runningMacro().hasButton = hadButton_;
+        runningMacro().button = saved_;
+    }
+    RunningButtonScope(const RunningButtonScope&) = delete;
+    RunningButtonScope& operator=(const RunningButtonScope&) = delete;
+
+private:
+    bool hadButton_;
+    std::string saved_;
+};
+
 inline CursorItemSlot& cursorItemSlot() {
     static CursorItemSlot held;
     return held;

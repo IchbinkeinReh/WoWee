@@ -27,6 +27,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "addons/toc_parser.hpp"
 #include "addons/button_label_lua.hpp"
+#include "addons/binding_command.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "core/window.hpp"
 #include <imgui.h>
@@ -10300,17 +10301,140 @@ std::string LuaEngine::bindingCommandForKey(const std::string& key) {
 bool LuaEngine::dispatchBindingKey(int sdlKeycode, bool shift, bool ctrl,
                                    bool alt, bool down, bool repeat) {
     if (!L_) return false;
+    // A release reaches only the commands carried out here, which act on it
+    // (0x00563150); a binding script runs on the press.
+    if (!down) {
+        auto held = heldDirectBindings_.find(sdlKeycode);
+        if (held == heldDirectBindings_.end()) return false;
+        const std::string command = held->second;
+        heldDirectBindings_.erase(held);
+        return runBindingScript(command, false);
+    }
     const std::string command = bindingCommandFor(sdlKeycode, shift, ctrl, alt);
     if (command.empty()) return false;
     // Left alone if the client performs it. Not "already handled, so skip the
     // work" - running it as well would undo it.
     if (clientActsOnBinding(command)) return false;
     if (repeat) return true;
+    if (parseDirectBinding(command).kind != DirectBinding::Kind::None) {
+        heldDirectBindings_[sdlKeycode] = command;
+    }
     return runBindingScript(command, down);
 }
 
+namespace {
+
+/// The unit a SPELL or ITEM binding lands on (0x00563150): the player with the
+/// SELFCAST modifier held, the focus with FOCUSCAST, otherwise whatever the
+/// cast would pick by itself. Pushes one value.
+void pushBindingCastUnit(lua_State* L) {
+    for (const char* which : {"SELFCAST", "FOCUSCAST"}) {
+        lua_getglobal(L, "IsModifiedClick");
+        if (!lua_isfunction(L, -1)) { lua_pop(L, 1); break; }
+        lua_pushstring(L, which);
+        if (lua_pcall(L, 1, 1, 0) != 0) { lua_pop(L, 1); break; }
+        const bool held = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        if (held) {
+            lua_pushstring(L, std::strcmp(which, "SELFCAST") == 0 ? "player" : "focus");
+            return;
+        }
+    }
+    lua_pushnil(L);
+}
+
+/// Call a global with the arguments already pushed above it, logging a raise.
+void callBindingGlobal(lua_State* L, const char* name, int nargs) {
+    lua_getglobal(L, name);
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 1 + nargs); return; }
+    lua_insert(L, -(nargs + 1));
+    if (lua_pcall(L, nargs, 0, 0) != 0) {
+        LOG_WARNING("Binding ", name, " failed: ", luaL_optstring(L, -1, "?"));
+        lua_pop(L, 1);
+    }
+}
+
+/// Whether the button takes this edge of a click: registered for it, for
+/// either edge of any button, or - registered for nothing - the release of the
+/// left button, which is what a button takes until it says otherwise.
+bool buttonTakesEdge(lua_State* L, int frame, const std::string& mouse, bool down) {
+    lua_getfield(L, frame, "__clicks");
+    bool takes;
+    if (lua_istable(L, -1)) {
+        const std::string edge = down ? "Down" : "Up";
+        lua_getfield(L, -1, (mouse + edge).c_str());
+        lua_getfield(L, -2, ("Any" + edge).c_str());
+        takes = lua_toboolean(L, -1) != 0 || lua_toboolean(L, -2) != 0;
+        lua_pop(L, 2);
+    } else {
+        takes = !down && mouse == "LeftButton";
+    }
+    lua_pop(L, 1);
+    return takes;
+}
+
+/// SPELL, ITEM, MACRO and CLICK (0x00563150): carried out here, not by a
+/// script. The first three act as the key comes up, as the client's do - a
+/// spell bound this way is cast on the release, like an action button's key.
+/// CLICK presses the named button with the key and lets go with it, the button
+/// answering whichever edge it registered for.
+void runDirectBinding(lua_State* L, const DirectBinding& binding, bool down) {
+    switch (binding.kind) {
+    case DirectBinding::Kind::Spell:
+    case DirectBinding::Kind::Item:
+        if (down) return;
+        lua_pushstring(L, binding.name.c_str());
+        pushBindingCastUnit(L);
+        callBindingGlobal(L, binding.kind == DirectBinding::Kind::Spell ? "CastSpellByName"
+                                                                         : "UseItemByName", 2);
+        return;
+    case DirectBinding::Kind::Macro:
+        if (down) return;
+        if (binding.macroByIndex) lua_pushnumber(L, std::atoi(binding.name.c_str()));
+        else lua_pushstring(L, binding.name.c_str());
+        lua_pushstring(L, "LeftButton");
+        callBindingGlobal(L, "RunMacro", 2);
+        return;
+    case DirectBinding::Kind::Click: {
+        if (!binding.clickable || binding.name.empty()) return;
+        lua_getglobal(L, binding.name.c_str());
+        if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
+        const int frame = lua_gettop(L);
+        if (buttonTakesEdge(L, frame, binding.mouseButton, down)) {
+            lua_getfield(L, frame, "Click");
+            if (lua_isfunction(L, -1)) {
+                RunningButtonScope button(binding.mouseButton);
+                lua_pushvalue(L, frame);
+                lua_pushstring(L, binding.mouseButton.c_str());
+                lua_pushboolean(L, down ? 1 : 0);
+                if (lua_pcall(L, 3, 0, 0) != 0) {
+                    LOG_WARNING("Binding CLICK ", binding.name, " failed: ",
+                                luaL_optstring(L, -1, "?"));
+                    lua_pop(L, 1);
+                }
+            } else {
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        return;
+    }
+    case DirectBinding::Kind::None:
+        return;
+    }
+}
+
+}  // namespace
+
 bool LuaEngine::runBindingScript(const std::string& command, bool down) {
     if (!L_) return false;
+    if (const DirectBinding direct = parseDirectBinding(command);
+        direct.kind != DirectBinding::Kind::None) {
+        taint::HardwareEvent hardware;
+        taint::Scope binding(0);
+        runDirectBinding(L_, direct, down);
+        return true;
+    }
     // A key binding is a hardware event for whatever it runs (0x00563150 sets
     // it around the binding and clears it after), and the binding runs secure
     // (0x0055f860 hands 0x00819ea0 a taint of 0) - only an addon's own
@@ -10375,6 +10499,13 @@ LuaEngine::PadKeyOutcome LuaEngine::dispatchPadKey(const char* padKey) {
     // script doing nothing is right; falling back to the default scheme would
     // be the button doing what the player bound it away from.
     (void)runBindingScript(command, true);
+    // A pad button is pressed and let go in one go here. The commands the
+    // dispatch carries out itself act as the key comes up - a spell bound
+    // with SetBindingSpell is cast on the release - so they are given the
+    // release as well, or a pad button bound to one would do nothing.
+    if (parseDirectBinding(command).kind != DirectBinding::Kind::None) {
+        (void)runBindingScript(command, false);
+    }
     outcome.taken = true;
     return outcome;
 }

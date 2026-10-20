@@ -5415,7 +5415,11 @@ static int lua_RunMacroText(lua_State* L) {
     // 0x00566400 -> 0x00564db0, which asks the taint check (kind 3): a
     // macro is never run by insecure code.
     if (!taint::allowed(L, 3)) return 0;
-    if (svc && svc->runMacroText && body && *body) svc->runMacroText(body);
+    if (svc && svc->runMacroText && body && *body) {
+        // A macro of its own, no saved one, with the button it was given.
+        RunningMacroScope running(0, lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr);
+        svc->runMacroText(body);
+    }
     return 0;
 }
 
@@ -5435,9 +5439,33 @@ static int lua_RunMacro(lua_State* L) {
         }
     }
     if (macroId == 0) return 0;
-    const std::string& body = gh->getMacroText(macroId);
-    if (!body.empty()) svc->runMacroText(body);
+    const std::string body = gh->getMacroText(macroId);
+    if (!body.empty()) {
+        // 0x00566e80 hands 0x00564db0 the second argument as the button the
+        // macro runs with, for GetRunningMacroButton.
+        RunningMacroScope running(static_cast<int>(macroId),
+                                  lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr);
+        svc->runMacroText(body);
+    }
     return 0;
+}
+
+// GetRunningMacro() → index of the saved macro running now, or nil
+// (0x00564c10). Nil inside RunMacroText, whose macro is no saved one.
+static int lua_GetRunningMacro(lua_State* L) {
+    const RunningMacro& m = runningMacro();
+    if (m.running && m.index > 0) lua_pushnumber(L, m.index);
+    else lua_pushnil(L);
+    return 1;
+}
+
+// GetRunningMacroButton() → the button the running macro, or the CLICK binding
+// being pressed, was run with (0x00564c70 answers 0x00beaf48), or nil.
+static int lua_GetRunningMacroButton(lua_State* L) {
+    const RunningMacro& m = runningMacro();
+    if (m.hasButton) lua_pushstring(L, m.button.c_str());
+    else lua_pushnil(L);
+    return 1;
 }
 
 // TriggerTutorial(id) - show one of the interface's tutorial pop-outs.
@@ -6372,6 +6400,8 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, ok ? 1 : 0);
             return 1; }},
                 {"RunMacro",                 lua_RunMacro},
+                {"GetRunningMacro",          lua_GetRunningMacro},
+                {"GetRunningMacroButton",    lua_GetRunningMacroButton},
                 {"TriggerTutorial",          lua_TriggerTutorial},
                 {"Quit",                     lua_Quit},
                 {"ForceQuit",                lua_ForceQuit},

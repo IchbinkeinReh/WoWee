@@ -2111,13 +2111,23 @@ static int lua_GetBinding(lua_State* L) {
 
 // SetBinding(key, command) → true. A nil command clears whatever holds the key,
 // which is how the UI unbinds.
+static bool bindKey(lua_State* L, const std::string& key, const char* command);
+
 static int lua_SetBinding(lua_State* L) {
-    seedBindingDefaults();
     const std::string key = luaL_checkstring(L, 1);
     const char* command = lua_isnoneornil(L, 2) ? nullptr : luaL_checkstring(L, 2);
+    if (!bindKey(L, key, command)) return 0;
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+/// The key to the command, or to nothing (0x00562ed0). False when the taint
+/// check refuses, which is the only refusal this client's bindings have.
+static bool bindKey(lua_State* L, const std::string& key, const char* command) {
+    seedBindingDefaults();
     // 0x00563520 -> 0x00562ed0, which asks the taint check (kind 0xd: not
     // insecure code in combat lockdown).
-    if (!taint::allowed(L, 0xd)) return 0;
+    if (!taint::allowed(L, 0xd)) return false;
 
     // A key belongs to one command at a time, so it leaves the one that had it
     // before it joins another - otherwise both claim it and which one answers
@@ -2142,7 +2152,43 @@ static int lua_SetBinding(lua_State* L) {
     // redraws the little key printed in the corner. Without it a rebind takes
     // effect while every button goes on showing the old key.
     if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("UPDATE_BINDINGS", {});
-    lua_pushboolean(L, 1);
+    return true;
+}
+
+/// SetBindingSpell, SetBindingItem and SetBindingMacro (0x005635e0,
+/// 0x00563700, 0x00563820): the key to "SPELL name", "ITEM name" or
+/// "MACRO name" - the commands the binding dispatch casts, uses or runs
+/// itself (0x00563150) - and 1, or nil when the binding was refused. The
+/// optional mode is the binding set; this client keeps one.
+static int setBindingWithPrefix(lua_State* L, const char* prefix, const char* usage) {
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) return luaL_error(L, "%s", usage);
+    const std::string command = std::string(prefix) + lua_tostring(L, 2);
+    if (bindKey(L, lua_tostring(L, 1), command.c_str())) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
+static int lua_SetBindingSpell(lua_State* L) {
+    return setBindingWithPrefix(L, "SPELL ", "Usage: SetBindingSpell(\"KEY\", \"spellname\"[, mode])");
+}
+static int lua_SetBindingItem(lua_State* L) {
+    return setBindingWithPrefix(L, "ITEM ", "Usage: SetBindingItem(\"KEY\", \"itemname\"[, mode])");
+}
+static int lua_SetBindingMacro(lua_State* L) {
+    return setBindingWithPrefix(L, "MACRO ",
+                                "Usage: SetBindingMacro(\"KEY\", \"macroname\"|macroid[, mode])");
+}
+
+/// SetBindingClick(key, buttonName [, mouseButton [, mode]]) (0x00563940):
+/// the key to "CLICK buttonName:mouseButton", LeftButton when none is named,
+/// so pressing the key clicks that button.
+static int lua_SetBindingClick(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) {
+        return luaL_error(L, "Usage: SetBindingClick(\"KEY\", \"buttonName\"[, \"mouseButton\"][, mode])");
+    }
+    const char* mouse = lua_isstring(L, 3) ? lua_tostring(L, 3) : "LeftButton";
+    const std::string command = std::string("CLICK ") + lua_tostring(L, 2) + ":" + mouse;
+    if (bindKey(L, lua_tostring(L, 1), command.c_str())) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
     return 1;
 }
 
@@ -2487,6 +2533,10 @@ void registerActionLuaAPI(lua_State* L) {
                 {"GetNumBindings",      lua_GetNumBindings},
                 {"GetBinding",          lua_GetBinding},
                 {"SetBinding",          lua_SetBinding},
+                {"SetBindingSpell",     lua_SetBindingSpell},
+                {"SetBindingItem",      lua_SetBindingItem},
+                {"SetBindingMacro",     lua_SetBindingMacro},
+                {"SetBindingClick",     lua_SetBindingClick},
                 // GetBindingByKey(key) - the binding a key runs, or nil.
                 //
                 // Reached from GetBindingFromClick, which StaticPopup_OnKeyDown

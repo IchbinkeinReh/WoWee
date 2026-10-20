@@ -3222,3 +3222,9 @@ wowee_add_test(test_player_facing
 # model once, the first doodad to use it carrying it, results in doodad order.
 wowee_add_test(test_doodad_model_plan
     SOURCES test_doodad_model_plan.cpp)
+
+# ── test_binding_command ─────────────────────────────────────
+# The SPELL, ITEM, MACRO and CLICK binding commands the key dispatch carries
+# out itself (0x00563150), as SetBindingSpell and its siblings write them.
+wowee_add_test(test_binding_command
+    SOURCES test_binding_command.cpp)
