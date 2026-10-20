@@ -855,6 +855,7 @@ public:
     void declineBfMgrInvite();
     void respondBfMgrQueueInvite(uint32_t battleId, bool accept);
     void requestBfMgrExit(uint32_t battleId);
+    void requestBfMgrQueue(uint32_t battleId);
 
     // WotLK Calendar
     /// CalendarGetNumPendingInvites (0x005bec70): invitations from anyone
@@ -2472,6 +2473,7 @@ public:
     using LfgRoleCheckDungeon = game::LfgRoleCheckDungeon;
     const std::vector<LfgRoleCheckDungeon>& getLfgRoleCheckDungeons() const;
     uint8_t getLfgRoleCheckMembers() const;
+    const std::vector<LfgRoleCheckMember>& getLfgRoleCheckMemberList() const;
     bool isLfgBootInProgress() const;
     bool hasLfgBootVoted() const;
     bool getLfgBootMyVote() const;

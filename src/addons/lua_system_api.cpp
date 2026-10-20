@@ -4746,6 +4746,37 @@ static int lua_GetLFGRoleUpdate(lua_State* L) {
     return 3;
 }
 
+// GetLFGRoleUpdateMember(index) → chosen, level, name, className, leader,
+// tank, healer, damage (0x00554750): a member of the role check, the four
+// roles nil until they have chosen; the name and class nil and "" for one the
+// name cache does not know yet.
+static int lua_GetLFGRoleUpdateMember(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGRoleUpdateMember(index)");
+    auto* gh = getGameHandler(L);
+    const int index = static_cast<int>(std::llround(lua_tonumber(L, 1)));
+    if (!gh) return 0;
+    const auto& members = gh->getLfgRoleCheckMemberList();
+    if (index < 1 || index > static_cast<int>(members.size())) return 0;
+    const auto& m = members[static_cast<size_t>(index) - 1];
+    lua_pushboolean(L, m.chosen ? 1 : 0);
+    lua_pushnumber(L, m.level);
+    const std::string& name = gh->lookupName(m.guid);
+    if (name.empty()) {
+        lua_pushnil(L);
+        lua_pushnil(L);
+    } else {
+        lua_pushstring(L, name.c_str());
+        const uint8_t classId = gh->lookupPlayerClass(m.guid);
+        lua_pushstring(L, luaClassToken(classId) ? kLuaClasses[classId] : "");
+    }
+    if (m.chosen) {
+        for (uint32_t bit : {1u, 2u, 4u, 8u}) lua_pushboolean(L, (m.roles & bit) ? 1 : 0);
+    } else {
+        for (int i = 0; i < 4; ++i) lua_pushnil(L);
+    }
+    return 8;
+}
+
 static int lua_IsListedInLFR(lua_State* L) {
     auto* gh = getGameHandler(L);
     lua_pushboolean(L, gh && gh->getLfgState() == game::LfgState::RaidBrowser ? 1 : 0);
@@ -6348,6 +6379,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetLFGProposal",           lua_GetLFGProposal},
                 {"GetLFGInfoServer",         lua_GetLFGInfoServer},
                 {"GetLFGRoleUpdate",         lua_GetLFGRoleUpdate},
+                {"GetLFGRoleUpdateMember",   lua_GetLFGRoleUpdateMember},
                 {"IsListedInLFR",            lua_IsListedInLFR},
                 {"IsPartyLFG",               lua_IsPartyLFG},
                 {"GetLFGDeserterExpiration", lua_GetLFGDeserterExpiration},

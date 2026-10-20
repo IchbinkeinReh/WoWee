@@ -3690,6 +3690,10 @@ void GameHandler::respondBfMgrQueueInvite(uint32_t battleId, bool accept) {
     if (socialHandler_) socialHandler_->respondBfMgrQueueInvite(battleId, accept);
 }
 
+void GameHandler::requestBfMgrQueue(uint32_t battleId) {
+    if (socialHandler_) socialHandler_->requestBfMgrQueue(battleId);
+}
+
 void GameHandler::requestBfMgrExit(uint32_t battleId) {
     if (socialHandler_) socialHandler_->requestBfMgrExit(battleId);
 }
@@ -4740,6 +4744,11 @@ const std::vector<GameHandler::LfgRoleCheckDungeon>&
 GameHandler::getLfgRoleCheckDungeons() const {
     static const std::vector<LfgRoleCheckDungeon> empty;
     return socialHandler_ ? socialHandler_->getLfgRoleCheckDungeons() : empty;
+}
+
+const std::vector<LfgRoleCheckMember>& GameHandler::getLfgRoleCheckMemberList() const {
+    static const std::vector<LfgRoleCheckMember> kNone;
+    return socialHandler_ ? socialHandler_->getLfgRoleCheckMemberList() : kNone;
 }
 
 uint8_t GameHandler::getLfgRoleCheckMembers() const {

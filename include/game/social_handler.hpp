@@ -566,6 +566,11 @@ public:
         return lfgRoleCheckDungeons_;
     }
     [[nodiscard]] uint8_t getLfgRoleCheckMembers() const { return lfgRoleCheckMembers_; }
+    [[nodiscard]] const std::vector<LfgRoleCheckMember>& getLfgRoleCheckMemberList() const {
+        return lfgRoleCheckMemberList_;
+    }
+    /// CMSG_BATTLEFIELD_MGR_QUEUE_REQUEST for a battlefield (0x0054d590).
+    void requestBfMgrQueue(uint32_t battleId);
     [[nodiscard]] bool isLfgBootInProgress() const { return lfgBootInProgress_; }
     [[nodiscard]] bool hasLfgBootVoted()     const { return lfgBootDidVote_; }
     [[nodiscard]] bool getLfgBootMyVote()    const { return lfgBootMyVote_; }
@@ -854,6 +859,7 @@ private:
     /// SMSG_LFG_ROLE_CHECK_UPDATE, which used to stop at the count.
     std::vector<LfgRoleCheckDungeon> lfgRoleCheckDungeons_;
     uint8_t lfgRoleCheckMembers_ = 0;
+    std::vector<LfgRoleCheckMember> lfgRoleCheckMemberList_;
     bool lfgBootInProgress_ = false;
     bool lfgBootDidVote_    = false;
     bool lfgBootMyVote_     = false;

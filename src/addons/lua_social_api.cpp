@@ -2320,6 +2320,13 @@ void registerSocialLuaAPI(lua_State* L) {
                                         lua_toboolean(L, 2) != 0);
             return 0;
         }},
+                // BattlefieldMgrQueueRequest(battleId) (0x0054e1a0 ->
+                // 0x0054d590): CMSG_BATTLEFIELD_MGR_QUEUE_REQUEST with it.
+                {"BattlefieldMgrQueueRequest", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (gh) gh->requestBfMgrQueue(static_cast<uint32_t>(luaToClientInt(L, 1)));
+            return 0;
+        }},
                 {"BattlefieldMgrExitRequest", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;

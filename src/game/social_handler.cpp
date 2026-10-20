@@ -4460,6 +4460,7 @@ void SocialHandler::leaveLfgGroup() {
         lfgState_ = LfgState::None;
         lfgRoleCheckDungeons_.clear();
         lfgRoleCheckMembers_ = 0;
+        lfgRoleCheckMemberList_.clear();
         owner_.fireAddonEvent("LFG_ROLE_CHECK_HIDE");
     }
     if (lfgProposalValid_) {
@@ -4508,12 +4509,16 @@ void SocialHandler::handleLfgRoleCheckUpdate(network::Packet& packet) {
     // choice already made. The first member stands in when the player is
     // not listed, as there.
     bool selfChosen = false;
+    lfgRoleCheckMemberList_.clear();
     for (uint8_t i = 0; i < lfgRoleCheckMembers_ && packet.hasRemaining(14); ++i) {
-        const uint64_t guid = packet.readUInt64();
-        const bool chosen = packet.readUInt8() != 0;
-        packet.readUInt32();  // roles
-        packet.readUInt8();   // level
-        if (i == 0 || guid == owner_.getPlayerGuid()) selfChosen = chosen;
+        LfgRoleCheckMember m;
+        m.guid = packet.readUInt64();
+        m.chosen = packet.readUInt8() != 0;
+        m.roles = packet.readUInt32();
+        m.level = packet.readUInt8();
+        if (i == 0 || m.guid == owner_.getPlayerGuid()) selfChosen = m.chosen;
+        // Kept for GetLFGRoleUpdateMember (0x00554750, the list at 0x00beaa68).
+        lfgRoleCheckMemberList_.push_back(m);
     }
 
     if (roleCheckState == 1) lfgState_ = LfgState::Queued;
@@ -5252,6 +5257,7 @@ void SocialHandler::resetForWorldEntry() {
     lfgBootVotes_ = lfgBootTotal_ = lfgBootTimeLeft_ = lfgBootNeeded_ = 0;
     lfgRoleCheckDungeons_.clear();
     lfgRoleCheckMembers_ = 0;
+    lfgRoleCheckMemberList_.clear();
     lfgBootInProgress_ = lfgBootDidVote_ = lfgBootMyVote_ = false;
     lfgBootTargetName_.clear();
     lfgBootReason_.clear();
@@ -5568,6 +5574,11 @@ void SocialHandler::respondBfMgrQueueInvite(uint32_t battleId, bool accept) {
     owner_.bfMgrInvitePendingRef() = false;
     LOG_INFO("respondBfMgrQueueInvite: battle ", battleId,
              accept ? " accepted" : " declined");
+}
+
+void SocialHandler::requestBfMgrQueue(uint32_t battleId) {
+    sendBfMgrResponse(Opcode::CMSG_BATTLEFIELD_MGR_QUEUE_REQUEST, battleId, false, false);
+    LOG_INFO("requestBfMgrQueue: battle ", battleId);
 }
 
 void SocialHandler::requestBfMgrExit(uint32_t battleId) {
