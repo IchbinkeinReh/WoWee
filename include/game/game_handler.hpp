@@ -856,6 +856,7 @@ public:
     void respondBfMgrQueueInvite(uint32_t battleId, bool accept);
     void requestBfMgrExit(uint32_t battleId);
     void requestBfMgrQueue(uint32_t battleId);
+    void silenceGroupMember(const std::string& name, bool silence);
 
     // WotLK Calendar
     /// CalendarGetNumPendingInvites (0x005bec70): invitations from anyone

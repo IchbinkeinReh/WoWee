@@ -569,6 +569,10 @@ public:
     [[nodiscard]] const std::vector<LfgRoleCheckMember>& getLfgRoleCheckMemberList() const {
         return lfgRoleCheckMemberList_;
     }
+    /// SilenceMember / UnSilenceMember (0x0052d9c0, 0x0052daf0): a group
+    /// member's voice, on CMSG_PARTY_SILENCE or _UNSILENCE, for the party's
+    /// leader or a raid's leader or assistant.
+    void silenceGroupMember(const std::string& name, bool silence);
     /// CMSG_BATTLEFIELD_MGR_QUEUE_REQUEST for a battlefield (0x0054d590).
     void requestBfMgrQueue(uint32_t battleId);
     [[nodiscard]] bool isLfgBootInProgress() const { return lfgBootInProgress_; }

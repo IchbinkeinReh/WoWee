@@ -53,6 +53,24 @@ public:
     /// Ask the server for a channel's members; the answer arrives as
     /// SMSG_CHANNEL_LIST and fires CHANNEL_ROSTER_UPDATE.
     void requestChannelList(const std::string& channelName);
+    /// What a channel argument names (0x004fe160): a number, the joined
+    /// channel with that number - none when no channel has it; anything else,
+    /// itself. Empty for an empty argument.
+    [[nodiscard]] std::string resolveChannelArg(const std::string& channel) const;
+    /// CMSG_SET_CHANNEL_WATCH and CMSG_CLEAR_CHANNEL_WATCH (0x004ffc30,
+    /// 0x004ffc50).
+    void setChannelWatch(const std::string& channel);
+    void clearChannelWatch();
+    /// ChannelSilenceAll / ChannelUnSilenceAll (0x00501250, 0x00501400): the
+    /// channel and the member, on CMSG_CHANNEL_SILENCE_ALL or _UNSILENCE_ALL -
+    /// for a chat channel. The group's own voice channels, "Party", "Raid" and
+    /// "Battleground", are silenced on the client's voice chat instead, which
+    /// this client does not have.
+    void channelSilenceAll(const std::string& channel, const std::string& member, bool silence);
+    /// EnumerateServerChannels (0x004ff200): the shortcut of every
+    /// ChatChannels.dbc row this zone offers - a city-only one only in a zone
+    /// whose AreaTable row is flagged 0x8.
+    [[nodiscard]] std::vector<std::string> serverChannelNames() const;
     [[nodiscard]] std::string getChannelByIndex(int index) const;
     [[nodiscard]] int getChannelIndex(const std::string& channelName) const;
     /// The joined channels' names in number order, for the channel panel.

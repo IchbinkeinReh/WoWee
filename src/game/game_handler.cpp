@@ -3690,6 +3690,10 @@ void GameHandler::respondBfMgrQueueInvite(uint32_t battleId, bool accept) {
     if (socialHandler_) socialHandler_->respondBfMgrQueueInvite(battleId, accept);
 }
 
+void GameHandler::silenceGroupMember(const std::string& name, bool silence) {
+    if (socialHandler_) socialHandler_->silenceGroupMember(name, silence);
+}
+
 void GameHandler::requestBfMgrQueue(uint32_t battleId) {
     if (socialHandler_) socialHandler_->requestBfMgrQueue(battleId);
 }

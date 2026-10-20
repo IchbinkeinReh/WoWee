@@ -1333,6 +1333,66 @@ void ChatHandler::requestChannelList(const std::string& channelName) {
     LOG_INFO("Requesting member list for channel: ", channelName);
 }
 
+std::string ChatHandler::resolveChannelArg(const std::string& channel) const {
+    if (channel.empty()) return {};
+    // 0x0076f0d0 reads the number off the front, so "2" and "2nd" are both 2.
+    const int number = std::atoi(channel.c_str());
+    if (number == 0) return channel;
+    const auto* s = channelSlots_.joinedByNumber(number);
+    return s ? s->name : std::string();
+}
+
+void ChatHandler::setChannelWatch(const std::string& channel) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const std::string name = resolveChannelArg(channel);
+    if (name.empty()) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_SET_CHANNEL_WATCH));
+    packet.writeString(name);
+    owner_.getSocket()->send(packet);
+}
+
+void ChatHandler::clearChannelWatch() {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_CLEAR_CHANNEL_WATCH));
+    owner_.getSocket()->send(packet);
+}
+
+void ChatHandler::channelSilenceAll(const std::string& channel, const std::string& member,
+                                    bool silence) {
+    const std::string name = resolveChannelArg(channel);
+    if (name.empty()) return;
+    auto isNamed = [&](const char* group) {
+        return name.size() == std::strlen(group) &&
+               std::equal(group, group + std::strlen(group), name.begin(),
+                          [](char a, char b) {
+                              return std::tolower(static_cast<unsigned char>(a)) ==
+                                     std::tolower(static_cast<unsigned char>(b));
+                          });
+    };
+    if (isNamed("Party") || isNamed("Raid") || isNamed("Battleground")) return;
+    // 0x004fe330 refuses a member name longer than 48.
+    if (member.size() > 48) return;
+    owner_.channelModeration(silence ? Opcode::CMSG_CHANNEL_SILENCE_ALL
+                                     : Opcode::CMSG_CHANNEL_UNSILENCE_ALL,
+                             name, member, true);
+}
+
+std::vector<std::string> ChatHandler::serverChannelNames() const {
+    std::vector<std::string> names;
+    auto* renderer = core::Application::getInstance().getRenderer();
+    const auto* texts = renderer ? renderer->getZoneTexts() : nullptr;
+    if (!texts || texts->zoneId == 0) return names;
+    // AreaTable's flags, tested with 0x8 here (0x004ff277) rather than the
+    // 0x100 the joining code tests.
+    constexpr uint32_t kAreaFlagServerChannelCity = 0x8;
+    const bool city = (owner_.getAreaFlags(texts->zoneId) & kAreaFlagServerChannelCity) != 0;
+    for (const auto& r : channelRows()) {
+        if ((r.flags & chat_channels::kFlagCityOnly) && !city) continue;
+        names.push_back(r.shortcut.empty() ? r.name : r.shortcut);
+    }
+    return names;
+}
+
 void ChatHandler::leaveChannel(const std::string& channelName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // A number names the joined channel with that number (0x004fe160); one

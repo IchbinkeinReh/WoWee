@@ -5576,6 +5576,44 @@ void SocialHandler::respondBfMgrQueueInvite(uint32_t battleId, bool accept) {
              accept ? " accepted" : " declined");
 }
 
+void SocialHandler::silenceGroupMember(const std::string& name, bool silence) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (!owner_.isInGroup() || name.empty()) return;
+    const auto& party = owner_.getPartyData();
+    auto same = [](const std::string& a, const std::string& b) {
+        return a.size() == b.size() &&
+               std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+                   return std::tolower(static_cast<unsigned char>(x)) ==
+                          std::tolower(static_cast<unsigned char>(y));
+               });
+    };
+    uint64_t target = 0;
+    for (const auto& m : party.members) {
+        if (same(m.name, name)) { target = m.guid; break; }
+    }
+    if (target == 0) {
+        gameError(owner_, ErrTo::Chat, "ERR_TARGET_NOT_IN_GROUP_S", "%s is not in your party.", {name});
+        return;
+    }
+    // The party's leader; in a raid its leader or an assistant (0x00572740).
+    const uint64_t self = owner_.getPlayerGuid();
+    bool allowed = party.leaderGuid == self;
+    if (!allowed && party.groupType == 1) {
+        constexpr uint8_t kAssistant = 0x01;
+        for (const auto& m : party.members) {
+            if (m.guid == self) { allowed = (m.flags & kAssistant) != 0; break; }
+        }
+    }
+    if (!allowed) return;
+    // The byte after the guid: whether the map is a battleground or an arena
+    // (0x00572f50, Map.dbc InstanceType 3 or 4).
+    const int instanceType = owner_.currentMapInstanceType();
+    network::Packet pkt(wireOpcode(silence ? Opcode::CMSG_PARTY_SILENCE : Opcode::CMSG_PARTY_UNSILENCE));
+    pkt.writeUInt64(target);
+    pkt.writeUInt8((instanceType == 3 || instanceType == 4) ? 1 : 0);
+    owner_.getSocket()->send(pkt);
+}
+
 void SocialHandler::requestBfMgrQueue(uint32_t battleId) {
     sendBfMgrResponse(Opcode::CMSG_BATTLEFIELD_MGR_QUEUE_REQUEST, battleId, false, false);
     LOG_INFO("requestBfMgrQueue: battle ", battleId);
