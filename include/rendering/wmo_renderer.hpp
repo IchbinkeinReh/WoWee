@@ -356,6 +356,8 @@ public:
      * Get number of groups culled by distance last frame
      */
     uint32_t getDistanceCulledGroups() const { return lastDistanceCulledGroups; }
+    /// Groups the last render() left out as wholly outside its frustum.
+    uint32_t getFrustumCulledGroups() const { return lastFrustumCulledGroups; }
 
     /**
      * Enable/disable GPU occlusion query culling (stubbed in Vulkan)
@@ -1214,12 +1216,16 @@ private:
     /// WOWEE_WMO_CULL=1 puts portal and distance culling back, for measuring
     /// what it costs or for chasing this again.
     bool cullingEnabled_ = false;
+    /// The per-group view-frustum test, independent of the switch above and
+    /// on by default (see render()). WOWEE_WMO_FRUSTUM_CULL=0 turns it off.
+    bool frustumCullGroups_ = true;
     float maxGroupDistance = 500.0f;
     float maxGroupDistanceSq = 250000.0f;  // maxGroupDistance^2
     float viewDistance_ = 1200.0f;
     uint32_t lastDrawCalls = 0;
     mutable uint32_t lastPortalCulledGroups = 0;
     mutable uint32_t lastDistanceCulledGroups = 0;
+    mutable uint32_t lastFrustumCulledGroups = 0;
 
     // Optional query-space culling for collision/raycast hot paths.
     CollisionFocus collisionFocus;
@@ -1238,6 +1244,7 @@ private:
         std::vector<uint32_t> visibleGroups;  // group indices that passed culling
         uint32_t portalCulled = 0;
         uint32_t distanceCulled = 0;
+        uint32_t frustumCulled = 0;
     };
     std::vector<size_t> visibleInstances_;      // reused per frame
     std::vector<InstanceDrawList> drawLists_;    // reused per frame

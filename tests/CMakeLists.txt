@@ -3117,6 +3117,12 @@ wowee_add_test(test_shadow_pass_work
 wowee_add_test(test_quality_summary
     SOURCES test_quality_summary.cpp)
 
+# ── test_light_space_cull ────────────────────────────────────
+# Whether a box can reach a shadow cascade's tile
+# (rendering/light_space_cull.hpp).
+wowee_add_test(test_light_space_cull
+    SOURCES test_light_space_cull.cpp)
+
 # ── test_selection_circle ────────────────────────────────────
 # The circle under the target (rendering/selection_circle.hpp).
 wowee_add_test(test_selection_circle

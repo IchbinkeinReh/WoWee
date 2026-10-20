@@ -1,5 +1,6 @@
 #include "core/frame_profiler.hpp"
 #include "rendering/depth_convention.hpp"
+#include "rendering/light_space_cull.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "rendering/pom_quality.hpp"
@@ -225,6 +226,11 @@ bool WMORenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayou
     if (const char* v = std::getenv("WOWEE_WMO_CULL"); v && *v && *v != '0') {
         cullingEnabled_ = true;
         core::Logger::getInstance().info("WMO culling enabled by WOWEE_WMO_CULL");
+    }
+    // The frustum test is on unless asked off, for comparing against.
+    if (const char* v = std::getenv("WOWEE_WMO_FRUSTUM_CULL"); v && *v == '0') {
+        frustumCullGroups_ = false;
+        core::Logger::getInstance().info("WMO group frustum culling off by WOWEE_WMO_FRUSTUM_CULL=0");
     }
 
     VkDevice device = vkCtx_->getDevice();
@@ -1686,6 +1692,7 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
 
     lastPortalCulledGroups = 0;
     lastDistanceCulledGroups = 0;
+    lastFrustumCulledGroups = 0;
 
     // ── Phase 1: Visibility culling ──────────────────────────
     // Was loadedModels.count(modelId) per instance - but cullInstance below
@@ -1719,6 +1726,7 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
         result.visibleGroups.clear();
         result.portalCulled = 0;
         result.distanceCulled = 0;
+        result.frustumCulled = 0;
         result.instanceIndex = instIdx;
 
         if (instIdx >= instances.size()) return;
@@ -1836,6 +1844,24 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
                 const bool exterior = !(f & 0x2000u) || (f & 0x8u);
                 if (exterior && portalVisibleGroupSet_.find(static_cast<uint32_t>(gi)) == portalVisibleGroupSet_.end()) {
                     result.portalCulled++;
+                    continue;
+                }
+            }
+
+            // Off screen: a group whose box is wholly outside the camera's
+            // frustum draws no pixel. On by default where portal and distance
+            // culling are not (cullingEnabled_), because it is the one test
+            // with nothing to get wrong: the box is the group's own vertices'
+            // (createGroupResources), padded half a yard, and the frustum is
+            // the one this pass draws with - the reflection pass's camera for
+            // the reflection. Every group of every loaded building used to be
+            // recorded and drawn, behind the camera included, which a phone
+            // paid for at 12 to 24 ms a frame with few buildings in view.
+            // WOWEE_WMO_FRUSTUM_CULL=0 turns it off.
+            if (frustumCullGroups_ && gi < instance.worldGroupBounds.size()) {
+                const auto& [gMin, gMax] = instance.worldGroupBounds[gi];
+                if (!frustum.intersectsAABB(gMin, gMax)) {
+                    result.frustumCulled++;
                     continue;
                 }
             }
@@ -1979,6 +2005,7 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
 
         lastPortalCulledGroups += dl.portalCulled;
         lastDistanceCulledGroups += dl.distanceCulled;
+        lastFrustumCulledGroups += dl.frustumCulled;
     }
 }
 
@@ -2123,6 +2150,13 @@ void WMORenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& lightSpaceM
                 glm::vec3 gClosest = glm::clamp(shadowCenter, gMin, gMax);
                 glm::vec3 gDiff = gClosest - shadowCenter;
                 if (glm::dot(gDiff, gDiff) > wmoCullRadiusSq) continue;
+                // And on the cascade's tile at all (light_space_cull.hpp):
+                // the distance above has a 180-yard floor, so without this
+                // the near cascade drew every building group within 180
+                // yards, all but the closest off its few dozen yards of tile.
+                // By the group's own box, which is its vertices'; the model's
+                // root box is the file's and not trusted for this.
+                if (!boxInLightTile(lightSpaceMatrix, gMin, gMax)) continue;
             }
 
             VkDeviceSize offset = 0;
