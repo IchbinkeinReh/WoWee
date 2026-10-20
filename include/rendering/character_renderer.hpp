@@ -7,6 +7,7 @@
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
 #include "rendering/vehicle_seat.hpp"
+#include "rendering/animation/animation_data.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 #include <vulkan/vulkan.h>
@@ -90,8 +91,17 @@ public:
     // oneShotReturnAnim: animation to resume (looping) when a non-looping
     // animation finishes; 0 = Stand. Lets NPC one-shot emotes return to their
     // persistent work/state loop instead of idling.
+    //
+    // What a unit is asked is first made the animation of its tier the model
+    // has (0x007176f0, see setAnimationTier); whatever plays, the model plays
+    // it from its own sequence or the one along AnimationData's Fallbacks
+    // that stands in for it (0x00826350).
     void playAnimation(uint32_t instanceId, uint32_t animationId, bool loop = true,
                        uint32_t oneShotReturnAnim = 0);
+    /// The unit's animation tier (UNIT_FIELD_BYTES_1 byte 3, +0xb80: 0 the
+    /// ground, 3 flying...), which 0x007176f0 picks the animations it is
+    /// asked for by.
+    void setAnimationTier(uint32_t instanceId, uint8_t tier);
     /// The loop a unit rests in - its stand state's (sitting, sleeping,
     /// kneeling...) or 0 for Stand. A one-shot played with no return anim
     /// goes back to it, so a seated unit that is hit stays seated.
@@ -553,10 +563,20 @@ private:
             /// Looped on the bone once a `once` ends (-1: the bone goes back).
             int thenSequence = -1;
             uint32_t thenAnimationId = 0;
+            /// How the sequence plays (0x00826350): backwards or held where
+            /// it stands in for an animation the model lacks.
+            anim::PlayMode mode = anim::PlayMode::Forward;
+            anim::PlayMode thenMode = anim::PlayMode::Forward;
         };
         std::vector<KeyBoneAnimation> keyBoneAnimations;
         std::vector<int16_t> boneKeyBoneAnimation;
         float animationTime = 0.0f;
+        /// How the body's sequence plays (0x00826350): forward, or - for an
+        /// animation the model lacks, played as one along its Fallbacks -
+        /// backwards, or held on its first or last frame.
+        anim::PlayMode playMode = anim::PlayMode::Forward;
+        /// UNIT_FIELD_BYTES_1 byte 3 (+0xb80); see setAnimationTier.
+        uint8_t animationTier = 0;
         /// With eventsRestart, where the next update looks for events
         /// from, once: below zero for a sequence just started, so its first
         /// frame's fire, or where it started in it. Else from where the

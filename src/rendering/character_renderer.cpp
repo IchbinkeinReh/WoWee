@@ -2230,6 +2230,70 @@ uint32_t CharacterRenderer::createInstance(uint32_t modelId, const glm::vec3& po
     return id;
 }
 
+namespace {
+// The index of an animation's sequence - its variation 0, the head of its
+// variations, else the first of that id - or -1 where the model has none.
+int animationSequenceIndex(const pipeline::M2Model& model, uint32_t animationId) {
+    int firstMatch = -1;
+    for (size_t i = 0; i < model.sequences.size(); i++) {
+        if (model.sequences[i].id != animationId) continue;
+        if (model.sequences[i].variationIndex == 0) return static_cast<int>(i);
+        if (firstMatch < 0) firstMatch = static_cast<int>(i);
+    }
+    return firstMatch;
+}
+
+bool modelHasAnimation(const pipeline::M2Model& model, uint32_t animationId) {
+    return std::any_of(model.sequences.begin(), model.sequences.end(),
+                       [animationId](const auto& seq) { return seq.id == animationId; });
+}
+
+// 0x00826350: the model's sequence for an animation, or the one along
+// AnimationData's Fallbacks that stands in for it and how that one plays.
+anim::ModelAnimation shownAnimation(const pipeline::M2Model& model, uint32_t animationId) {
+    const auto has = [&model](uint32_t id) { return modelHasAnimation(model, id); };
+    return anim::modelAnimation(anim::animationData(), animationId, has,
+                                model.sequences.empty() ? 0u : model.sequences[0].id);
+}
+
+// 0x007176f0: what a unit of the instance's tier is put in for an
+// animation it is asked.
+uint32_t tierAnimationFor(const pipeline::M2Model& model, uint32_t animationId, uint8_t tier) {
+    const auto has = [&model](uint32_t id) { return modelHasAnimation(model, id); };
+    return anim::unitAnimation(anim::animationData(), animationId, tier, has);
+}
+
+// The time a sequence is sampled at: backwards from its end where it plays
+// that way (0x00826b00 negates the speed and starts it at its length).
+float sampledTime(const pipeline::M2Model& model, int sequence, float time, anim::PlayMode mode) {
+    if (mode != anim::PlayMode::Reversed || sequence < 0 ||
+        static_cast<size_t>(sequence) >= model.sequences.size()) {
+        return time;
+    }
+    return std::max(0.0f, static_cast<float>(model.sequences[static_cast<size_t>(sequence)].duration) - time);
+}
+
+// Held on its first or last frame: its time does not run (0x00826b00's
+// speed 0) and it never ends.
+bool heldMode(anim::PlayMode mode) {
+    return mode == anim::PlayMode::HoldStart || mode == anim::PlayMode::HoldEnd;
+}
+
+// Where a sequence starts: its end for one held there.
+float startTime(const pipeline::M2Model& model, int sequence, anim::PlayMode mode) {
+    if (mode != anim::PlayMode::HoldEnd || sequence < 0 ||
+        static_cast<size_t>(sequence) >= model.sequences.size()) {
+        return 0.0f;
+    }
+    return static_cast<float>(model.sequences[static_cast<size_t>(sequence)].duration);
+}
+}  // namespace
+
+void CharacterRenderer::setAnimationTier(uint32_t instanceId, uint8_t tier) {
+    auto it = instances.find(instanceId);
+    if (it != instances.end()) it->second.animationTier = tier;
+}
+
 void CharacterRenderer::setRestAnimation(uint32_t instanceId, uint32_t restAnim) {
     auto it = instances.find(instanceId);
     if (it != instances.end()) it->second.restAnimation = restAnim;
@@ -2242,6 +2306,8 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
         core::Logger::getInstance().warning("Cannot play animation: instance ", instanceId, " not found");
         return;
     }
+    // The animation of its tier the model has (0x007385c0 -> 0x007176f0).
+    animationId = tierAnimationFor(models[it->second.modelId].data, animationId, it->second.animationTier);
     // A seated passenger's body is its vehicle's where it mirrors it
     // (0x007385c0 asks 0x007487e0), else its seat's (0x007385c0,
     // 0x00724500), and what it is asked goes to its upper body.
@@ -2292,32 +2358,29 @@ void CharacterRenderer::startAnimation(CharacterInstance& instance, uint32_t ani
 
     // What is playing now, for the blend out of it below.
     const int previousSequence = instance.currentSequenceIndex;
-    const float previousTime = instance.animationTime;
+    const float previousTime = sampledTime(model, previousSequence, instance.animationTime, instance.playMode);
     const bool previousLoops = instance.animationLoop;
     const bool previousFinished = !previousLoops && previousSequence >= 0 &&
         static_cast<size_t>(previousSequence) < model.sequences.size() &&
-        previousTime >= static_cast<float>(model.sequences[previousSequence].duration);
+        instance.animationTime >= static_cast<float>(model.sequences[previousSequence].duration);
 
-    // Find animation sequence index by ID
+    // The animation keeps the id it was asked by (the model's +0x90,
+    // 0x008267e0 reads it back); the sequence is the model's own for it, or
+    // the one AnimationData's Fallbacks reach, played as they say
+    // (0x00832ab0 -> 0x00826350).
+    const anim::ModelAnimation shown = shownAnimation(model, animationId);
     instance.currentAnimationId = animationId;
-    instance.currentSequenceIndex = -1;
+    instance.currentSequenceIndex = animationSequenceIndex(model, shown.id);
     instance.primarySequenceIndex = -1;
+    instance.playMode = shown.mode;
     instance.animationTime = 0.0f;
     instance.animationLoop = loop;
-
-    // Prefer variationIndex==0 (primary animation); fall back to first match
-    int firstMatch = -1;
-    for (size_t i = 0; i < model.sequences.size(); i++) {
-        if (model.sequences[i].id == animationId) {
-            if (firstMatch < 0) firstMatch = static_cast<int>(i);
-            if (model.sequences[i].variationIndex == 0) {
-                instance.currentSequenceIndex = static_cast<int>(i);
-                break;
-            }
+    if (instance.currentSequenceIndex >= 0 && shown.id != animationId) {
+        static std::unordered_map<uint32_t, std::unordered_set<uint32_t>> loggedStandIns;
+        if (loggedStandIns[instance.modelId].insert(animationId).second) {
+            LOG_DEBUG("Animation ", animationId, " not in model ", instance.modelId, ": playing ", shown.id,
+                      " (mode ", static_cast<int>(shown.mode), ")");
         }
-    }
-    if (instance.currentSequenceIndex < 0 && firstMatch >= 0) {
-        instance.currentSequenceIndex = firstMatch;
     }
     if (instance.currentSequenceIndex >= 0) {
         // Roll the variation as the client does on every play (FUN_00832bxx ->
@@ -2326,6 +2389,8 @@ void CharacterRenderer::startAnimation(CharacterInstance& instance, uint32_t ani
         instance.currentSequenceIndex =
             m2_track::pickSequenceVariation(model.sequences, instance.primarySequenceIndex,
                                             static_cast<uint32_t>(std::rand()) & 0x7FFFu);
+        // One held on its last frame starts there (0x00826b00).
+        instance.animationTime = startTime(model, instance.currentSequenceIndex, shown.mode);
     }
 
     if (instance.currentSequenceIndex < 0) {
@@ -2361,6 +2426,7 @@ void CharacterRenderer::startAnimation(CharacterInstance& instance, uint32_t ani
     // movingSpeed, the unit is moving, and the old sequence has a movingSpeed
     // and a length.
     if (instance.locomotionSpeed > 0.0f && instance.currentSequenceIndex >= 0 &&
+        instance.playMode == anim::PlayMode::Forward &&
         previousSequence >= 0 && static_cast<size_t>(previousSequence) < model.sequences.size()) {
         const auto& from = model.sequences[static_cast<size_t>(previousSequence)];
         const auto& to = model.sequences[static_cast<size_t>(instance.currentSequenceIndex)];
@@ -2487,6 +2553,8 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
             for (auto& k : inst.keyBoneAnimations) {
                 if (k.sequence < 0 || static_cast<size_t>(k.sequence) >= inst.cachedModel->data.sequences.size())
                     continue;
+                // Held where it stands in, it neither runs nor ends.
+                if (heldMode(k.mode)) continue;
                 const float duration = static_cast<float>(inst.cachedModel->data.sequences[k.sequence].duration);
                 k.time += deltaTime * 1000.0f;
                 if (k.once && k.time >= duration) {
@@ -2497,7 +2565,8 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                     if (k.thenSequence >= 0) {
                         k.sequence = std::exchange(k.thenSequence, -1);
                         k.animationId = k.thenAnimationId;
-                        k.time = 0.0f;
+                        k.mode = k.thenMode;
+                        k.time = startTime(inst.cachedModel->data, k.sequence, k.mode);
                         k.once = false;
                         continue;
                     }
@@ -2539,9 +2608,13 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
             // FUN_00827000 does when the client changes a playing rate.
             inst.playbackRate = m2_track::locomotionPlaybackRate(
                 seq.id, seq.movingSpeed, inst.scale, inst.locomotionSpeed);
-            inst.animationTime += deltaTime * 1000.0f * inst.playbackRate;
-            if (!(seq.duration > 0 && inst.animationTime >= static_cast<float>(seq.duration))) {
-                stepEvents(eventsSequence, eventsFrom, inst.animationTime);
+            // One held where it stands in neither runs nor ends (0x00826b00's
+            // speed 0).
+            const bool held = heldMode(inst.playMode);
+            if (!held) inst.animationTime += deltaTime * 1000.0f * inst.playbackRate;
+            const bool ended = !held && seq.duration > 0 && inst.animationTime >= static_cast<float>(seq.duration);
+            if (!ended) {
+                if (!held) stepEvents(eventsSequence, eventsFrom, inst.animationTime);
             } else {
                 stepEvents(eventsSequence, eventsFrom, static_cast<float>(seq.duration));
                 const auto& seqs = inst.cachedModel->data.sequences;
@@ -2590,7 +2663,11 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                             : inst.seatStandsWhole && inst.seatUpperLoop ? *inst.seatUpperLoop
                             : inst.restAnimation != 0  ? inst.restAnimation
                                                        : anim::STAND;
-                        playAnimationNow(pair.first, resumeAnim, true, 0);
+                        // Asked again as any other is (0x0073b510 ->
+                        // 0x007385c0 -> 0x007176f0).
+                        playAnimationNow(pair.first,
+                                         tierAnimationFor(inst.cachedModel->data, resumeAnim, inst.animationTier),
+                                         true, 0);
                     } else {
                         // Stay on last frame of death, or a mount
                         // transition's arrived rider's (0x0073bbd0)
@@ -2968,13 +3045,27 @@ void CharacterRenderer::setSeatAnimation(uint32_t instanceId,
     releaseSeatedUpperBody(instanceId);
     instance.seatAnimationHeld = false;
     if (!ride) return;
+    // What the seat has it stand as is asked of it as anything is
+    // (0x00724500 -> 0x007485b0, then 0x007385c0 -> 0x007176f0): the
+    // animation of its tier the model has. One that comes out a stand
+    // (BehaviorID 0) is none - 0x007385c0 gives a standing upper body the
+    // body's.
+    const auto& model = models[instance.modelId].data;
+    const auto asked = [&](std::optional<uint32_t> a) -> std::optional<uint32_t> {
+        if (!a) return std::nullopt;
+        const uint32_t id = tierAnimationFor(model, *a, instance.animationTier);
+        const auto has = [&model](uint32_t x) { return modelHasAnimation(model, x); };
+        if (anim::animationData().behavior(id) == 0 || !anim::modelPlays(anim::animationData(), id, has))
+            return std::nullopt;
+        return id;
+    };
     if (!ride->start && !ride->loop) {
         // No ride animation: seated, the whole unit stands as the seat's
         // upper ride animation (0x00724500 -> 0x007485b0), and plays what
         // else it is asked as itself.
         if (!ride->seated) return;
-        instance.seatUpperStart = ride->upperStart;
-        instance.seatUpperLoop = ride->upperLoop;
+        instance.seatUpperStart = asked(ride->upperStart);
+        instance.seatUpperLoop = asked(ride->upperLoop);
         instance.seatStandsWhole = true;
         standSeatedWhole(instanceId);
         return;
@@ -2991,8 +3082,8 @@ void CharacterRenderer::setSeatAnimation(uint32_t instanceId,
     // The upper body's own (+0xb84, 0x0073e840) and what the seat has it
     // stand as there.
     instance.seatUpperBone = vehicle_seat::upperKeyBone(hasKeyBone(instanceId, 4), hasKeyBone(instanceId, 6));
-    instance.seatUpperStart = ride->upperStart;
-    instance.seatUpperLoop = ride->upperLoop;
+    instance.seatUpperStart = asked(ride->upperStart);
+    instance.seatUpperLoop = asked(ride->upperLoop);
     standSeatedUpperBody(instanceId);
 }
 
@@ -3097,20 +3188,21 @@ bool CharacterRenderer::playKeyBoneAnimation(uint32_t instanceId, int32_t keyBon
     if (it == instances.end() || keyBoneId < 0 || !hasKeyBone(instanceId, keyBoneId)) return false;
     auto& instance = it->second;
     const auto& model = models[instance.modelId].data;
+    // The bone's sequence for it, or the stand-in along its Fallbacks
+    // (0x00832ab0 -> 0x00826350, for a bone as for the body).
     const auto sequenceOf = [&model](uint32_t id) {
-        for (size_t i = 0; i < model.sequences.size(); i++) {
-            if (model.sequences[i].id == id && model.sequences[i].variationIndex == 0) return static_cast<int>(i);
-        }
-        return -1;
+        const anim::ModelAnimation shown = shownAnimation(model, id);
+        return std::pair{animationSequenceIndex(model, shown.id), shown.mode};
     };
-    const int sequence = sequenceOf(animationId);
+    const auto [sequence, mode] = sequenceOf(animationId);
     if (sequence < 0) return false;
     auto& anims = instance.keyBoneAnimations;
     auto a = std::find_if(anims.begin(), anims.end(), [&](const auto& k) { return k.keyBoneId == keyBoneId; });
     if (a == anims.end()) a = anims.insert(anims.end(), CharacterInstance::KeyBoneAnimation{});
-    *a = CharacterInstance::KeyBoneAnimation{keyBoneId, animationId, sequence, 0.0f, once};
+    *a = CharacterInstance::KeyBoneAnimation{keyBoneId, animationId, sequence, startTime(model, sequence, mode), once};
+    a->mode = mode;
     if (once && then) {
-        a->thenSequence = sequenceOf(*then);
+        std::tie(a->thenSequence, a->thenMode) = sequenceOf(*then);
         a->thenAnimationId = *then;
     }
     assignKeyBoneAnimations(model, anims, instance.boneKeyBoneAnimation);
@@ -3225,15 +3317,17 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
 
     // The pose the body is blending out of, the same for every bone: the
     // client sets the state on the root and the rest inherit it (FUN_0082f0f0).
+    const float bodyTime =
+        sampledTime(model, instance.currentSequenceIndex, instance.animationTime, instance.playMode);
     const m2_track::BlendSample bodyBlend = m2_track::currentBlend(
         instance.sequenceBlend, instance.globalSequenceTime, model.sequences,
-        instance.currentSequenceIndex, instance.animationTime);
+        instance.currentSequenceIndex, bodyTime);
 
     for (size_t i = 0; i < numBones; i++) {
         const auto& bone = model.bones[i];
 
         int sequence = instance.currentSequenceIndex;
-        float time = instance.animationTime;
+        float time = bodyTime;
         m2_track::BlendSample blend = bodyBlend;
         const int arm = armsOwnSequences ? instance.boneArm[i] : -1;
         const int keyAnim = instance.boneKeyBoneAnimation.size() == numBones ? instance.boneKeyBoneAnimation[i] : -1;
@@ -3245,8 +3339,9 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
         } else if (keyAnim >= 0 && static_cast<size_t>(keyAnim) < instance.keyBoneAnimations.size() &&
                    instance.keyBoneAnimations[keyAnim].sequence >= 0) {
             blend = {};
-            sequence = instance.keyBoneAnimations[keyAnim].sequence;
-            time = instance.keyBoneAnimations[keyAnim].time;
+            const auto& k = instance.keyBoneAnimations[keyAnim];
+            sequence = k.sequence;
+            time = sampledTime(model, k.sequence, k.time, k.mode);
         }
 
         // Local transform includes pivot bracket: T(pivot)*T*R*S*T(-pivot)

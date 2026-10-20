@@ -1006,6 +1006,7 @@ set(WOWEE_SOURCES
     src/rendering/overlay_system.cpp
     src/rendering/animation_controller.cpp
     src/rendering/animation/animation_ids.cpp
+    src/rendering/animation/animation_data.cpp
     src/rendering/animation/emote_registry.cpp
     src/rendering/animation/footstep_driver.cpp
     src/rendering/animation/sfx_state_driver.cpp

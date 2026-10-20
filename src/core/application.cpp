@@ -231,6 +231,13 @@ uint32_t unitBodyFlags(const game::Entity& entity, bool moving, bool swimming, b
     return flags;
 }
 
+// UNIT_FIELD_BYTES_1 byte 3: the unit's animation tier (+0xb80, kept by
+// 0x007167c0), which 0x007176f0 picks the animations it is asked by.
+uint8_t unitAnimationTier(const game::Entity& entity) {
+    const uint16_t index = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1);
+    return index == 0xFFFF ? 0 : static_cast<uint8_t>(entity.getField(index) >> 24);
+}
+
 // The height a moving unit is drawn at over the floor found under it. On the
 // ground it is set on the floor. Falling, the client moves it by gravity and
 // stops it only where it meets the ground (FUN_007618b0 moving it through
@@ -4185,6 +4192,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             playerPos = glm::vec3(movement.x, movement.y, movement.z);
             playerRenderPos = core::coords::canonicalToRender(playerPos);
             havePlayerPos = true;
+            if (auto self = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid()))
+                charRenderer->setAnimationTier(renderer->getCharacterInstanceId(), unitAnimationTier(*self));
         }
         const float syncRadiusSq = 320.0f * 320.0f;
         auto& _creatureInstances = entitySpawner_->getCreatureInstances();
@@ -4325,6 +4334,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // as the client's GetCurrentSpeed gives it for a unit on one.
                 charRenderer->setLocomotionSpeed(
                     instanceId, isMovingNow ? entity->getMoveSpeed() : 0.0f);
+                charRenderer->setAnimationTier(instanceId, unitAnimationTier(*entity));
                 if (creatureMount)
                     charRenderer->setLocomotionSpeed(creatureMount->instanceId,
                                                      isMovingNow ? entity->getMoveSpeed() : 0.0f);
@@ -4569,6 +4579,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // plays to - see the creature loop above.
                 const float locomotionSpeed = isMovingNow ? entity->getMoveSpeed() : 0.0f;
                 charRenderer->setLocomotionSpeed(instanceId, locomotionSpeed);
+                charRenderer->setAnimationTier(instanceId, unitAnimationTier(*entity));
                 if (remoteMount) {
                     charRenderer->setLocomotionSpeed(remoteMount->instanceId, locomotionSpeed);
                 }

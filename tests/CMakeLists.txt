@@ -1367,6 +1367,12 @@ target_link_libraries(test_animation_ids PRIVATE catch2_main)
 add_test(NAME animation_ids COMMAND test_animation_ids)
 register_test_target(test_animation_ids)
 
+# ── test_animation_data ──────────────────────────────────────
+# AnimationData's fallbacks: what a model plays for an animation it lacks
+# (0x00826350) and what a unit of a tier is put in (0x007176f0).
+wowee_add_test(test_animation_data
+    SOURCES test_animation_data.cpp)
+
 # ── test_locomotion_fsm ──────────────────────────────────────
 add_executable(test_locomotion_fsm
     test_locomotion_fsm.cpp

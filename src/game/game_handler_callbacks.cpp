@@ -53,6 +53,7 @@
 #include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
 #include "rendering/animation/animation_ids.hpp"
+#include "rendering/animation/animation_data.hpp"
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
 #include <cmath>
@@ -4359,6 +4360,9 @@ void GameHandler::preloadDBCCaches() const {
     if (auto* am = services_.assetManager) {
         auto animDbc = am->loadDBC("AnimationData.dbc");
         rendering::anim::validateAgainstDBC(animDbc);
+        // The rows the renderer walks for what a model lacks (0x00826350,
+        // 0x007176f0).
+        if (animDbc) rendering::anim::setAnimationData(rendering::anim::loadAnimationData(*animDbc));
     }
 
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
