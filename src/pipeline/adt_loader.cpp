@@ -102,7 +102,7 @@ struct MclqDisk {
     float minHeight;
     float maxHeight;
     uint8_t vertices[9 * 9][8];  // MclqWaterVertexDisk or MclqMagmaVertexDisk
-    uint8_t tiles[8 * 8];        // low nibble the liquid, 0x0F none; 0x80 hidden
+    uint8_t tiles[8 * 8];        // low nibble the liquid, 0x0F none; 0x40 fishable, 0x80 deep
 };
 static_assert(sizeof(MclqDisk) == 720,
               "MclqDisk is read straight from the file: 720 bytes, no padding");
@@ -676,9 +676,12 @@ void ADTLoader::parseMCLQ(std::span<const uint8_t> data, int chunkIndex,
     for (int i = 0; i < 64; i++) {
         uint8_t tileFlag = mclq.tiles[i];
         // The low nibble stores the liquid type; 0x0F is the MCLQ sentinel
-        // for a tile with no liquid.  Some files also mark dry tiles with
-        // the legacy 0x80 hidden bit.
-        bool hidden = (tileFlag & 0x0F) == 0x0F || (tileFlag & 0x80) != 0;
+        // for a tile with no liquid, and the only one the client skips
+        // (0x0079c1a0, 0x007c8360). 0x80 is not "hidden": it marks deep
+        // water, the tiles 0x007c8bf0 counts for fatigue - which is most of
+        // the open sea. Dropping them cut the ocean off a few hundred yards
+        // out, off Sunstrider Isle and every other TBC-era coast.
+        bool hidden = (tileFlag & 0x0F) == 0x0F;
         tileMask[i] = hidden ? 0 : 1;
         if (!hidden) anyVisible = true;
     }

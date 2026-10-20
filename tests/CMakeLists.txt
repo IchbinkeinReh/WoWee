@@ -2780,6 +2780,15 @@ wowee_add_test(test_adt_truncation
             ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
             ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp)
 
+# ── test_adt_mclq ────────────────────────────────────────────
+# Which MCLQ liquid tiles the loader keeps: every one but the 0x0F nibble's.
+# The deep-water bit 0x80 once read as "hidden" and cut the open sea off.
+wowee_add_test(test_adt_mclq
+    SOURCES test_adt_mclq.cpp
+            ${TEST_COMMON_SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/pipeline/adt_loader.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/frame_profiler.cpp)
+
 # ── test_blp_truncation ──────────────────────────────────────
 # What the BLP loader does with a texture that lies about its own sizes. The
 # decompressors derived how much source to read from width and height and
