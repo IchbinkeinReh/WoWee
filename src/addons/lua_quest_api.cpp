@@ -2,6 +2,9 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "core/local_time.hpp"
 #include "game/item_text.hpp"
+#include "pipeline/dbc_layout.hpp"
+#include "pipeline/dbc_loader.hpp"
+#include "pipeline/asset_manager.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
@@ -2278,6 +2281,61 @@ static int lua_AddPreviewTalentPoints(lua_State* L) {
     return 0;
 }
 
+// GetPreviewTalentPointsSpent(tabIndex [, isPet [, groupIndex]]) (0x005c63b0):
+// the client reads its arguments and answers 0, whatever is staged.
+static int lua_GetPreviewTalentPointsSpent(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        return luaL_error(L, "Usage: GetPreviewTalentPointsSpent(tabIndex[, isPet[, groupIndex]])");
+    }
+    lua_pushnumber(L, 0);
+    return 1;
+}
+
+// ResetPreviewTalentPoints(tabIndex [, isPet [, groupIndex]]) (0x005c7130):
+// every point staged in that tree taken back, and when the staged total moved,
+// PREVIEW_TALENT_POINTS_CHANGED with 0, the tree, the group (from one) and by
+// how much. Points are staged for the player's active group alone, so the
+// pet's trees and another group have none to take back.
+static int lua_ResetPreviewTalentPoints(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        return luaL_error(L, "Usage: ResetPreviewTalentPoints(tabIndex[, isPet[, groupIndex]])");
+    }
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const int tab = luaToClientInt(L, 1);
+    const bool pet = luaClientSwitchArg(L, 2, false);
+    const int group = lua_isnumber(L, 3) ? luaToClientInt(L, 3) - 1
+                                         : static_cast<int>(gh->getActiveTalentSpec());
+    if (pet || group != static_cast<int>(gh->getActiveTalentSpec())) {
+        LOG_WARNING("ResetPreviewTalentPoints: nothing is staged for ",
+                    pet ? "the pet" : "another talent group");
+        return 0;
+    }
+    const auto tabs = classTalentTabs(gh, gh->getPlayerClass());
+    if (tab < 1 || tab > static_cast<int>(tabs.size())) {
+        LOG_WARNING("ResetPreviewTalentPoints: no talent tree ", tab);
+        return 0;
+    }
+    const uint32_t tabId = tabs[static_cast<size_t>(tab) - 1]->tabId;
+    int before = 0, after = 0;
+    for (auto it = previewPoints().begin(); it != previewPoints().end();) {
+        before += it->second;
+        const auto* entry = gh->getTalentEntry(it->first);
+        if (entry && entry->tabId == tabId) {
+            it = previewPoints().erase(it);
+        } else {
+            after += it->second;
+            ++it;
+        }
+    }
+    if (after != before) {
+        gh->fireAddonEvent("PREVIEW_TALENT_POINTS_CHANGED",
+                           {"0", std::to_string(tab), std::to_string(group + 1),
+                            std::to_string(after - before)});
+    }
+    return 0;
+}
+
 // GetTalentPrereqs(tab, index) → tier, column, isLearnable, isPreviewLearnable
 //                                 repeated once per prerequisite
 //
@@ -3182,6 +3240,25 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"GetNumStableSlots",      lua_GetNumStableSlots},
                 {"GetSelectedStablePet",   lua_GetSelectedStablePet},
                 {"ClickStablePet",         lua_ClickStablePet},
+                // StablePet() (0x005a19c0): the pet that is out into the
+                // stable master's first free slot.
+                {"StablePet", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->stablePet();
+            return 0;
+        }},
+                // UnstablePet(index) (0x005a1ac0): the index-th pet of the
+                // stable list out, while no pet is - CMSG_UNSTABLE_PET with
+                // the stable master and that pet's number.
+                {"UnstablePet", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: UnstablePet(index)");
+            auto* gh = getGameHandler(L);
+            if (!gh || gh->getPetGuid() != 0) return 0;
+            const auto& pets = gh->getStabledPets();
+            const int64_t index = std::llround(lua_tonumber(L, 1)) - 1;
+            if (index < 0 || index >= static_cast<int64_t>(pets.size())) return 0;
+            gh->unstablePet(pets[static_cast<size_t>(index)].petNumber);
+            return 0;
+        }},
                 {"GetPetIcon",             lua_GetPetIcon},
                 {"GetPetTalentTree",       lua_GetPetTalentTree},
                 {"GetPetFoodTypes",        lua_GetPetFoodTypes},
@@ -3246,6 +3323,8 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"GetTalentInfo",           lua_GetTalentInfo},
                 {"GetTalentPrereqs",        lua_GetTalentPrereqs},
                 {"AddPreviewTalentPoints",  lua_AddPreviewTalentPoints},
+                {"GetPreviewTalentPointsSpent", lua_GetPreviewTalentPointsSpent},
+                {"ResetPreviewTalentPoints", lua_ResetPreviewTalentPoints},
                 {"GetGroupPreviewTalentPointsSpent", lua_GetGroupPreviewTalentPointsSpent},
                 {"ResetGroupPreviewTalentPoints",    lua_ResetGroupPreviewTalentPoints},
                 {"LearnPreviewTalents",     lua_LearnPreviewTalents},
@@ -4210,6 +4289,30 @@ void registerQuestLuaAPI(lua_State* L) {
                 // true and what removes the line.
                 {"GetTrainerServiceStepReq", [](lua_State* L) -> int {
             return luaReturnNil(L);
+        }},
+                // IsTrainerServiceSkillStep(index) (0x00595b60): 1 for a
+                // service whose spell steps a skill up - one of its three
+                // effects is SKILL_STEP (44) - nil for any other.
+                {"IsTrainerServiceSkillStep", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: IsTrainerServiceSkillStep(index)");
+            auto* gh = getGameHandler(L);
+            const auto* svc = shownTrainerService(gh, luaToClientInt(L, 1));
+            auto* am = gh ? gh->services().assetManager : nullptr;
+            bool step = false;
+            if (svc && am && am->isInitialized()) {
+                const auto* layout = pipeline::getActiveDBCLayout()
+                    ? pipeline::getActiveDBCLayout()->getLayout("Spell") : nullptr;
+                const uint32_t effect0 = layout ? layout->field("Effect0") : 0xFFFFFFFFu;
+                auto spells = am->loadDBC("Spell.dbc");
+                const int32_t row = (spells && spells->isLoaded() && effect0 != 0xFFFFFFFFu &&
+                                     effect0 + 3 <= spells->getFieldCount())
+                                        ? spells->findRecordById(svc->spellId) : -1;
+                constexpr uint32_t kSpellEffectSkillStep = 44;
+                for (uint32_t e = 0; row >= 0 && e < 3 && !step; ++e)
+                    step = spells->getUInt32(static_cast<uint32_t>(row), effect0 + e) == kSpellEffectSkillStep;
+            }
+            if (step) lua_pushnumber(L, 1); else lua_pushnil(L);
+            return 1;
         }},
                 {"GetTrainerServiceItemLink", [](lua_State* L) -> int {
             return luaReturnNil(L);

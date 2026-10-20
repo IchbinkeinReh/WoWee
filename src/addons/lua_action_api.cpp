@@ -1,6 +1,7 @@
 // lua_action_api.cpp - Action bar, cursor/pickup, keyboard input, key bindings, and pet actions Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/item_text.hpp"
+#include "game/equip_slot_fit.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -1545,6 +1546,44 @@ static int lua_AutoEquipCursorItem(lua_State* L) {
     return 0;
 }
 
+// EquipCursorItem(slot) (0x0051a3d0): the held item into that equipment slot.
+// Dropped back where it came from when the slot already holds it, or when it
+// came off the paperdoll and does not fit there; otherwise, not fitting, worn
+// wherever it does fit, as AutoEquipCursorItem would (0x006dfc40).
+static int lua_EquipCursorItem(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: EquipCursorItem(slot)");
+    auto* gh = getGameHandler(L);
+    if (!gh || s_cursorType != CursorType::ITEM || s_cursorId == 0) {
+        LOG_WARNING("EquipCursorItem: no item on the cursor to equip");
+        return 0;
+    }
+    const int slot = luaToClientInt(L, 1);
+    if (slot >= 1 && slot <= 19) {
+        const CursorItemSlot held = cursorItemSlot();
+        if (held.equipped && held.slot == slot) {
+            LOG_WARNING("EquipCursorItem: slot ", slot, " already holds it; put back");
+            clearCursorItem(L);
+            return 0;
+        }
+        const auto* info = gh->getItemInfo(s_cursorId);
+        uint8_t srcBag = 0, srcSlot = 0;
+        if (info && game::inventoryTypeFitsSlot(slot, info->inventoryType) &&
+            cursorWireSlot(srcBag, srcSlot)) {
+            if (!taint::allowed(L, 0x16)) return 0;   // SwapItems, 0x006df890
+            gh->swapContainerItems(srcBag, srcSlot, 0xFF, static_cast<uint8_t>(slot - 1));
+            clearCursorItem(L);
+            return 0;
+        }
+        if (held.equipped) {
+            LOG_WARNING("EquipCursorItem: worn item does not fit slot ", slot, "; put back");
+            clearCursorItem(L);
+            return 0;
+        }
+    }
+    LOG_WARNING("EquipCursorItem: slot ", slot, " does not take it; worn where it fits");
+    return lua_AutoEquipCursorItem(L);
+}
+
 // --- Frame System ---
 // Minimal WoW-compatible frame objects with RegisterEvent/SetScript/GetScript.
 // Frames are Lua tables with a metatable that provides methods.
@@ -1679,6 +1718,62 @@ static int lua_GetModifiedClick(lua_State* L) {
 // It wrote nowhere, so the panel accepted a change and the next question about
 // that action answered the old value. The table the emitter fills is the same
 // one read above, so writing to it is the whole of it.
+// GetNumModifiedClickActions() (0x0055dc60) and GetModifiedClickAction(index)
+// (0x0055ea70): the modified clicks Bindings.xml declares, in its order.
+static int lua_GetNumModifiedClickActions(lua_State* L) {
+    double n = 0;
+    {
+        taint::Quiet quiet;   // see modifiedClickBinding
+        lua_getglobal(L, "__WoweeModifiedClickOrder");
+        if (lua_istable(L, -1)) n = static_cast<double>(lua_objlen(L, -1));
+        lua_pop(L, 1);
+    }
+    lua_pushnumber(L, n);
+    return 1;
+}
+
+static int lua_GetModifiedClickAction(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetModifiedClickAction(index)");
+    const int index = luaToClientInt(L, 1);
+    std::string action;
+    {
+        taint::Quiet quiet;
+        lua_getglobal(L, "__WoweeModifiedClickOrder");
+        if (lua_istable(L, -1) && index >= 1) {
+            lua_rawgeti(L, -1, index);
+            if (lua_isstring(L, -1)) action = lua_tostring(L, -1);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    if (action.empty()) lua_pushnil(L); else lua_pushstring(L, action.c_str());
+    return 1;
+}
+
+// GetMouseButtonName(button) (0x00514ba0): a button's number as the name the
+// client gives it - 1 LeftButton, 2 RightButton, 3 MiddleButton, then
+// Button4 to Button31, "UNKNOWN" for any other number (0x005eec20,
+// 0x0096f530); a string is its own name; anything else nil.
+static int lua_GetMouseButtonName(lua_State* L) {
+    if (lua_type(L, 1) == LUA_TNUMBER) {
+        const int n = luaToClientInt(L, 1);
+        std::string name;
+        if (n == 1) name = "LeftButton";
+        else if (n == 2) name = "RightButton";
+        else if (n == 3) name = "MiddleButton";
+        else if (n >= 4 && n <= 31) name = "Button" + std::to_string(n);
+        else name = "UNKNOWN";
+        lua_pushstring(L, name.c_str());
+        return 1;
+    }
+    if (lua_isstring(L, 1)) {
+        lua_pushvalue(L, 1);
+        return 1;
+    }
+    lua_pushnil(L);
+    return 1;
+}
+
 static int lua_SetModifiedClick(lua_State* L) {
     const char* action = luaL_optstring(L, 1, "");
     const char* binding = luaL_optstring(L, 2, "NONE");
@@ -2111,13 +2206,23 @@ static int lua_GetBinding(lua_State* L) {
 
 // SetBinding(key, command) → true. A nil command clears whatever holds the key,
 // which is how the UI unbinds.
+static bool bindKey(lua_State* L, const std::string& key, const char* command);
+
 static int lua_SetBinding(lua_State* L) {
-    seedBindingDefaults();
     const std::string key = luaL_checkstring(L, 1);
     const char* command = lua_isnoneornil(L, 2) ? nullptr : luaL_checkstring(L, 2);
+    if (!bindKey(L, key, command)) return 0;
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+/// The key to the command, or to nothing (0x00562ed0). False when the taint
+/// check refuses, which is the only refusal this client's bindings have.
+static bool bindKey(lua_State* L, const std::string& key, const char* command) {
+    seedBindingDefaults();
     // 0x00563520 -> 0x00562ed0, which asks the taint check (kind 0xd: not
     // insecure code in combat lockdown).
-    if (!taint::allowed(L, 0xd)) return 0;
+    if (!taint::allowed(L, 0xd)) return false;
 
     // A key belongs to one command at a time, so it leaves the one that had it
     // before it joins another - otherwise both claim it and which one answers
@@ -2142,7 +2247,43 @@ static int lua_SetBinding(lua_State* L) {
     // redraws the little key printed in the corner. Without it a rebind takes
     // effect while every button goes on showing the old key.
     if (auto* gh = getGameHandler(L)) gh->fireAddonEvent("UPDATE_BINDINGS", {});
-    lua_pushboolean(L, 1);
+    return true;
+}
+
+/// SetBindingSpell, SetBindingItem and SetBindingMacro (0x005635e0,
+/// 0x00563700, 0x00563820): the key to "SPELL name", "ITEM name" or
+/// "MACRO name" - the commands the binding dispatch casts, uses or runs
+/// itself (0x00563150) - and 1, or nil when the binding was refused. The
+/// optional mode is the binding set; this client keeps one.
+static int setBindingWithPrefix(lua_State* L, const char* prefix, const char* usage) {
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) return luaL_error(L, "%s", usage);
+    const std::string command = std::string(prefix) + lua_tostring(L, 2);
+    if (bindKey(L, lua_tostring(L, 1), command.c_str())) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
+static int lua_SetBindingSpell(lua_State* L) {
+    return setBindingWithPrefix(L, "SPELL ", "Usage: SetBindingSpell(\"KEY\", \"spellname\"[, mode])");
+}
+static int lua_SetBindingItem(lua_State* L) {
+    return setBindingWithPrefix(L, "ITEM ", "Usage: SetBindingItem(\"KEY\", \"itemname\"[, mode])");
+}
+static int lua_SetBindingMacro(lua_State* L) {
+    return setBindingWithPrefix(L, "MACRO ",
+                                "Usage: SetBindingMacro(\"KEY\", \"macroname\"|macroid[, mode])");
+}
+
+/// SetBindingClick(key, buttonName [, mouseButton [, mode]]) (0x00563940):
+/// the key to "CLICK buttonName:mouseButton", LeftButton when none is named,
+/// so pressing the key clicks that button.
+static int lua_SetBindingClick(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) {
+        return luaL_error(L, "Usage: SetBindingClick(\"KEY\", \"buttonName\"[, \"mouseButton\"][, mode])");
+    }
+    const char* mouse = lua_isstring(L, 3) ? lua_tostring(L, 3) : "LeftButton";
+    const std::string command = std::string("CLICK ") + lua_tostring(L, 2) + ":" + mouse;
+    if (bindKey(L, lua_tostring(L, 1), command.c_str())) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
     return 1;
 }
 
@@ -2317,9 +2458,13 @@ void registerActionLuaAPI(lua_State* L) {
                 {"CursorHasMacro",      lua_CursorHasMacro},
                 {"DeleteCursorItem",    lua_DeleteCursorItem},
                 {"AutoEquipCursorItem", lua_AutoEquipCursorItem},
+                {"EquipCursorItem",     lua_EquipCursorItem},
                 {"IsModifiedClick",     lua_IsModifiedClick},
                 {"GetModifiedClick",    lua_GetModifiedClick},
                 {"SetModifiedClick",    lua_SetModifiedClick},
+                {"GetNumModifiedClickActions", lua_GetNumModifiedClickActions},
+                {"GetModifiedClickAction", lua_GetModifiedClickAction},
+                {"GetMouseButtonName",  lua_GetMouseButtonName},
                 // Macros. The client has stored their text all along and
                 // persisted it per character; only the interface's way in was
                 // missing, so GetNumMacros answered zero and the panel opened
@@ -2487,6 +2632,10 @@ void registerActionLuaAPI(lua_State* L) {
                 {"GetNumBindings",      lua_GetNumBindings},
                 {"GetBinding",          lua_GetBinding},
                 {"SetBinding",          lua_SetBinding},
+                {"SetBindingSpell",     lua_SetBindingSpell},
+                {"SetBindingItem",      lua_SetBindingItem},
+                {"SetBindingMacro",     lua_SetBindingMacro},
+                {"SetBindingClick",     lua_SetBindingClick},
                 // GetBindingByKey(key) - the binding a key runs, or nil.
                 //
                 // Reached from GetBindingFromClick, which StaticPopup_OnKeyDown

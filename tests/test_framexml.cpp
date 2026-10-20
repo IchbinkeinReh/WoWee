@@ -361,6 +361,21 @@ TEST_CASE("runOnUp is carried, because a release means something to some",
     REQUIRE_FALSE(has(r.lua, "__WoweeBindingRunOnUp[\"SCREENSHOT\"]"));
 }
 
+TEST_CASE("Modified clicks keep the order Bindings.xml declares them in",
+          "[framexml][emit][bindings]") {
+    // GetModifiedClickAction(i) is the i-th of them (0x0055e870 walks the
+    // client's list in order), so the emitter keeps a list beside the map.
+    XmlNode root = parseOrFail(
+        "<Bindings><ModifiedClick action=\"SELFCAST\" default=\"ALT\"/>"
+        "<ModifiedClick action=\"FOCUSCAST\" default=\"NONE\"/></Bindings>");
+    const EmitResult r = emitFrameXml(root);
+    const size_t self = r.lua.find("__WoweeModifiedClickOrder[#__WoweeModifiedClickOrder+1] = \"SELFCAST\"");
+    const size_t focus = r.lua.find("__WoweeModifiedClickOrder[#__WoweeModifiedClickOrder+1] = \"FOCUSCAST\"");
+    REQUIRE(self != std::string::npos);
+    REQUIRE(focus != std::string::npos);
+    REQUIRE(self < focus);
+}
+
 TEST_CASE("A bindings file is not reported as the wrong kind of document",
           "[framexml][emit][bindings]") {
     // <Bindings> is a root in its own right. Warning about it would say the

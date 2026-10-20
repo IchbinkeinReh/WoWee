@@ -27,6 +27,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "addons/toc_parser.hpp"
 #include "addons/button_label_lua.hpp"
+#include "addons/binding_command.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "core/window.hpp"
 #include <imgui.h>
@@ -5009,6 +5010,134 @@ int lua_GetMouseFocus(lua_State* L) {
     return 1;
 }
 
+/// The next frame after `after` in the order frames were made, or 0 (the
+/// client's frame list, 0x0081b9c0 walking CGGameUI +0xcd4). Only frames:
+/// textures and font strings are regions, which no frame list holds.
+static uint32_t nextFrameWid(lua_State* L, wowee::ui::WidgetTree& tree, uint32_t after) {
+    taint::Quiet quiet;
+    lua_getglobal(L, "__WoweeFramesByWid");
+    const bool haveRegistry = lua_istable(L, -1);
+    uint32_t found = 0;
+    for (uint32_t id = after + 1; haveRegistry && id < tree.size(); ++id) {
+        const auto* w = tree.get(id);
+        if (!w || w->kind != wowee::ui::WidgetKind::Frame) continue;
+        lua_pushinteger(L, static_cast<lua_Integer>(id));
+        lua_rawget(L, -2);
+        const bool hasTable = lua_istable(L, -1);
+        lua_pop(L, 1);
+        if (hasTable) { found = id; break; }
+    }
+    lua_pop(L, 1);
+    return found;
+}
+
+/// EnumerateFrames([frame]) (0x0081b9c0): the first frame, or the one made
+/// after the frame given; nil past the last.
+static int lua_EnumerateFrames(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    uint32_t after = 0;
+    if (lua_type(L, 1) == LUA_TTABLE) {
+        after = widgetIdOf(L, 1);
+        if (after == 0) {
+            return luaL_error(L, "EnumerateFrames: Couldn't find 'this' in current object");
+        }
+        const auto* w = tree ? tree->get(after) : nullptr;
+        if (!w || w->kind != wowee::ui::WidgetKind::Frame) {
+            return luaL_error(L, "EnumerateFrames: Wrong current object type, expected frame");
+        }
+    }
+    const uint32_t next = tree ? nextFrameWid(L, *tree, after) : 0;
+    if (next == 0) { lua_pushnil(L); return 1; }
+    pushFrameByWid(L, next);
+    return 1;
+}
+
+/// GetNumFrames() (0x0081bab0): how many frames there are.
+static int lua_GetNumFrames(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    double count = 0;
+    for (uint32_t id = tree ? nextFrameWid(L, *tree, 0) : 0; id != 0;
+         id = nextFrameWid(L, *tree, id)) {
+        ++count;
+    }
+    lua_pushnumber(L, count);
+    return 1;
+}
+
+/// GetFramesRegisteredForEvent("event") (0x0081be70): every frame listening
+/// for it, in the order they registered.
+static int lua_GetFramesRegisteredForEvent(lua_State* L) {
+    if (!lua_isstring(L, 1)) {
+        return luaL_error(L, "Usage: GetFramesRegisteredForEvent(\"event\")");
+    }
+    const int caller = taint::current();
+    int pushed = 0;
+    {
+        taint::Quiet quiet;
+        lua_getglobal(L, "__WoweeFrameEvents");
+        if (lua_istable(L, -1)) lua_getfield(L, -1, lua_tostring(L, 1));
+        else lua_pushnil(L);
+        const int list = lua_gettop(L);
+        if (lua_istable(L, list)) {
+            const int n = static_cast<int>(lua_objlen(L, list));
+            if (!lua_checkstack(L, n + 2)) {
+                lua_pop(L, 2);
+                return luaL_error(L, "GetFramesRegisteredForEvent(%s): Stack overflow",
+                                  lua_tostring(L, 1));
+            }
+            for (int i = 1; i <= n; ++i) lua_rawgeti(L, list, i);
+            pushed = n;
+        }
+        lua_remove(L, list);
+        lua_remove(L, list - 1);
+    }
+    // Pushed fresh, as the client pushes each out of its reference.
+    for (int i = 1; i <= pushed; ++i) lua_settaintof(L, -i, caller);
+    return pushed;
+}
+
+/// GetCurrentKeyBoardFocus() (0x0081b820): the edit box taking keystrokes, or
+/// nil.
+static int lua_GetCurrentKeyBoardFocus(lua_State* L) {
+    LuaEngine* engine = engineFrom(L);
+    const uint32_t wid = engine ? engine->editFocus() : 0;
+    if (wid == 0) { lua_pushnil(L); return 1; }
+    pushFrameByWid(L, wid);
+    return 1;
+}
+
+/// CreateFont("name") (0x0081b7b0): the font object of that name, made when
+/// there is none - an object with the methods every font object answers,
+/// under its name as a global.
+static int lua_CreateFont(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: CreateFont(\"name\")");
+    const std::string name = lua_tostring(L, 1);
+    lua_getglobal(L, "__WoweeFontMT");
+    const int mt = lua_gettop(L);
+    if (!name.empty()) {
+        lua_getglobal(L, name.c_str());
+        if (lua_istable(L, -1) && lua_getmetatable(L, -1)) {
+            const bool isFont = lua_rawequal(L, -1, mt) != 0;
+            lua_pop(L, 1);
+            if (isFont) { lua_remove(L, mt); return 1; }
+        }
+        lua_pop(L, 1);
+    }
+    lua_newtable(L);
+    lua_pushnumber(L, 1);
+    lua_setfield(L, -2, "a");
+    if (lua_istable(L, mt)) {
+        lua_pushvalue(L, mt);
+        lua_setmetatable(L, -2);
+    }
+    if (!name.empty()) {
+        lua_pushvalue(L, -1);
+        lua_setglobal(L, name.c_str());
+    }
+    lua_remove(L, mt);
+    return 1;
+}
+
 /// frame:GetChildren() - every child frame, as a list of return values.
 ///
 /// The count is the payload here, not any one value: FrameXML spreads it
@@ -6466,6 +6595,16 @@ void LuaEngine::registerCoreAPI() {
 
     lua_pushcfunction(L_, lua_GetMouseFocus);
     lua_setglobal(L_, "GetMouseFocus");
+    lua_pushcfunction(L_, lua_EnumerateFrames);
+    lua_setglobal(L_, "EnumerateFrames");
+    lua_pushcfunction(L_, lua_GetNumFrames);
+    lua_setglobal(L_, "GetNumFrames");
+    lua_pushcfunction(L_, lua_GetFramesRegisteredForEvent);
+    lua_setglobal(L_, "GetFramesRegisteredForEvent");
+    lua_pushcfunction(L_, lua_GetCurrentKeyBoardFocus);
+    lua_setglobal(L_, "GetCurrentKeyBoardFocus");
+    lua_pushcfunction(L_, lua_CreateFont);
+    lua_setglobal(L_, "CreateFont");
 
 
     lua_pushcfunction(L_, [](lua_State* L) -> int {
@@ -10300,17 +10439,140 @@ std::string LuaEngine::bindingCommandForKey(const std::string& key) {
 bool LuaEngine::dispatchBindingKey(int sdlKeycode, bool shift, bool ctrl,
                                    bool alt, bool down, bool repeat) {
     if (!L_) return false;
+    // A release reaches only the commands carried out here, which act on it
+    // (0x00563150); a binding script runs on the press.
+    if (!down) {
+        auto held = heldDirectBindings_.find(sdlKeycode);
+        if (held == heldDirectBindings_.end()) return false;
+        const std::string command = held->second;
+        heldDirectBindings_.erase(held);
+        return runBindingScript(command, false);
+    }
     const std::string command = bindingCommandFor(sdlKeycode, shift, ctrl, alt);
     if (command.empty()) return false;
     // Left alone if the client performs it. Not "already handled, so skip the
     // work" - running it as well would undo it.
     if (clientActsOnBinding(command)) return false;
     if (repeat) return true;
+    if (parseDirectBinding(command).kind != DirectBinding::Kind::None) {
+        heldDirectBindings_[sdlKeycode] = command;
+    }
     return runBindingScript(command, down);
 }
 
+namespace {
+
+/// The unit a SPELL or ITEM binding lands on (0x00563150): the player with the
+/// SELFCAST modifier held, the focus with FOCUSCAST, otherwise whatever the
+/// cast would pick by itself. Pushes one value.
+void pushBindingCastUnit(lua_State* L) {
+    for (const char* which : {"SELFCAST", "FOCUSCAST"}) {
+        lua_getglobal(L, "IsModifiedClick");
+        if (!lua_isfunction(L, -1)) { lua_pop(L, 1); break; }
+        lua_pushstring(L, which);
+        if (lua_pcall(L, 1, 1, 0) != 0) { lua_pop(L, 1); break; }
+        const bool held = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        if (held) {
+            lua_pushstring(L, std::strcmp(which, "SELFCAST") == 0 ? "player" : "focus");
+            return;
+        }
+    }
+    lua_pushnil(L);
+}
+
+/// Call a global with the arguments already pushed above it, logging a raise.
+void callBindingGlobal(lua_State* L, const char* name, int nargs) {
+    lua_getglobal(L, name);
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 1 + nargs); return; }
+    lua_insert(L, -(nargs + 1));
+    if (lua_pcall(L, nargs, 0, 0) != 0) {
+        LOG_WARNING("Binding ", name, " failed: ", luaL_optstring(L, -1, "?"));
+        lua_pop(L, 1);
+    }
+}
+
+/// Whether the button takes this edge of a click: registered for it, for
+/// either edge of any button, or - registered for nothing - the release of the
+/// left button, which is what a button takes until it says otherwise.
+bool buttonTakesEdge(lua_State* L, int frame, const std::string& mouse, bool down) {
+    lua_getfield(L, frame, "__clicks");
+    bool takes;
+    if (lua_istable(L, -1)) {
+        const std::string edge = down ? "Down" : "Up";
+        lua_getfield(L, -1, (mouse + edge).c_str());
+        lua_getfield(L, -2, ("Any" + edge).c_str());
+        takes = lua_toboolean(L, -1) != 0 || lua_toboolean(L, -2) != 0;
+        lua_pop(L, 2);
+    } else {
+        takes = !down && mouse == "LeftButton";
+    }
+    lua_pop(L, 1);
+    return takes;
+}
+
+/// SPELL, ITEM, MACRO and CLICK (0x00563150): carried out here, not by a
+/// script. The first three act as the key comes up, as the client's do - a
+/// spell bound this way is cast on the release, like an action button's key.
+/// CLICK presses the named button with the key and lets go with it, the button
+/// answering whichever edge it registered for.
+void runDirectBinding(lua_State* L, const DirectBinding& binding, bool down) {
+    switch (binding.kind) {
+    case DirectBinding::Kind::Spell:
+    case DirectBinding::Kind::Item:
+        if (down) return;
+        lua_pushstring(L, binding.name.c_str());
+        pushBindingCastUnit(L);
+        callBindingGlobal(L, binding.kind == DirectBinding::Kind::Spell ? "CastSpellByName"
+                                                                         : "UseItemByName", 2);
+        return;
+    case DirectBinding::Kind::Macro:
+        if (down) return;
+        if (binding.macroByIndex) lua_pushnumber(L, std::atoi(binding.name.c_str()));
+        else lua_pushstring(L, binding.name.c_str());
+        lua_pushstring(L, "LeftButton");
+        callBindingGlobal(L, "RunMacro", 2);
+        return;
+    case DirectBinding::Kind::Click: {
+        if (!binding.clickable || binding.name.empty()) return;
+        lua_getglobal(L, binding.name.c_str());
+        if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
+        const int frame = lua_gettop(L);
+        if (buttonTakesEdge(L, frame, binding.mouseButton, down)) {
+            lua_getfield(L, frame, "Click");
+            if (lua_isfunction(L, -1)) {
+                RunningButtonScope button(binding.mouseButton);
+                lua_pushvalue(L, frame);
+                lua_pushstring(L, binding.mouseButton.c_str());
+                lua_pushboolean(L, down ? 1 : 0);
+                if (lua_pcall(L, 3, 0, 0) != 0) {
+                    LOG_WARNING("Binding CLICK ", binding.name, " failed: ",
+                                luaL_optstring(L, -1, "?"));
+                    lua_pop(L, 1);
+                }
+            } else {
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        return;
+    }
+    case DirectBinding::Kind::None:
+        return;
+    }
+}
+
+}  // namespace
+
 bool LuaEngine::runBindingScript(const std::string& command, bool down) {
     if (!L_) return false;
+    if (const DirectBinding direct = parseDirectBinding(command);
+        direct.kind != DirectBinding::Kind::None) {
+        taint::HardwareEvent hardware;
+        taint::Scope binding(0);
+        runDirectBinding(L_, direct, down);
+        return true;
+    }
     // A key binding is a hardware event for whatever it runs (0x00563150 sets
     // it around the binding and clears it after), and the binding runs secure
     // (0x0055f860 hands 0x00819ea0 a taint of 0) - only an addon's own
@@ -10375,6 +10637,13 @@ LuaEngine::PadKeyOutcome LuaEngine::dispatchPadKey(const char* padKey) {
     // script doing nothing is right; falling back to the default scheme would
     // be the button doing what the player bound it away from.
     (void)runBindingScript(command, true);
+    // A pad button is pressed and let go in one go here. The commands the
+    // dispatch carries out itself act as the key comes up - a spell bound
+    // with SetBindingSpell is cast on the release - so they are given the
+    // release as well, or a pad button bound to one would do nothing.
+    if (parseDirectBinding(command).kind != DirectBinding::Kind::None) {
+        (void)runBindingScript(command, false);
+    }
     outcome.taken = true;
     return outcome;
 }
@@ -12223,6 +12492,14 @@ void LuaEngine::setAddonList(const std::vector<TocFile>& addons) {
         // from the moment the client started.
         lua_pushboolean(L_, addons[i].isLoadOnDemand() ? 1 : 0);
         lua_setfield(L_, -2, "loadOnDemand");
+        // What GetAddOnDependencies answers.
+        lua_newtable(L_);
+        int dep = 0;
+        for (const auto& name : addons[i].getRequiredDependencies()) {
+            lua_pushstring(L_, name.c_str());
+            lua_rawseti(L_, -2, ++dep);
+        }
+        lua_setfield(L_, -2, "dependencies");
         lua_rawseti(L_, -2, static_cast<int>(i + 1));
     }
     lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_addon_info");

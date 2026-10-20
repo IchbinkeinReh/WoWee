@@ -566,6 +566,15 @@ public:
         return lfgRoleCheckDungeons_;
     }
     [[nodiscard]] uint8_t getLfgRoleCheckMembers() const { return lfgRoleCheckMembers_; }
+    [[nodiscard]] const std::vector<LfgRoleCheckMember>& getLfgRoleCheckMemberList() const {
+        return lfgRoleCheckMemberList_;
+    }
+    /// SilenceMember / UnSilenceMember (0x0052d9c0, 0x0052daf0): a group
+    /// member's voice, on CMSG_PARTY_SILENCE or _UNSILENCE, for the party's
+    /// leader or a raid's leader or assistant.
+    void silenceGroupMember(const std::string& name, bool silence);
+    /// CMSG_BATTLEFIELD_MGR_QUEUE_REQUEST for a battlefield (0x0054d590).
+    void requestBfMgrQueue(uint32_t battleId);
     [[nodiscard]] bool isLfgBootInProgress() const { return lfgBootInProgress_; }
     [[nodiscard]] bool hasLfgBootVoted()     const { return lfgBootDidVote_; }
     [[nodiscard]] bool getLfgBootMyVote()    const { return lfgBootMyVote_; }
@@ -578,6 +587,17 @@ public:
             if (r.teamId == teamId) return &r;
         return nullptr;
     }
+    /// Sort every roster by a column of the team details frame; the same
+    /// column again reverses it. Online members stay first while offline ones
+    /// are hidden (0x005a2bd0).
+    void sortArenaTeamRosters(const std::string& key);
+    [[nodiscard]] bool arenaRosterShowOffline() const { return arenaRosterShowOffline_; }
+    /// The arena side byte of the last in-progress SMSG_BATTLEFIELD_STATUS.
+    [[nodiscard]] uint8_t battlefieldArenaFaction() const { return battlefieldArenaFaction_; }
+    /// SetArenaTeamRosterShowOffline (0x005a2e10): on a change every roster is
+    /// sorted again and ARENA_TEAM_ROSTER_UPDATE raised for each that has
+    /// members.
+    void setArenaRosterShowOffline(bool show);
 
 private:
     // ---- Packet handlers ----
@@ -771,6 +791,17 @@ private:
     // Arena
     std::vector<ArenaTeamStats>  arenaTeamStats_;
     std::vector<ArenaTeamRoster> arenaTeamRosters_;
+    /// The column the arena rosters are sorted by, so clicking it again knows
+    /// to reverse rather than re-sort the same way.
+    std::string arenaSortKey_;
+    bool arenaSortAscending_ = true;
+    /// 0x00acf834, which the client starts at 1.
+    bool arenaRosterShowOffline_ = true;
+    /// 0x00bea54a.
+    uint8_t battlefieldArenaFaction_ = 0;
+    /// Sort one roster the way the rosters stand: online first while offline
+    /// members are hidden, then by the column last chosen.
+    void sortArenaRoster(ArenaTeamRoster& roster) const;
 
     // Battleground
     std::array<BgQueueSlot, 3> bgQueues_{};
@@ -832,6 +863,7 @@ private:
     /// SMSG_LFG_ROLE_CHECK_UPDATE, which used to stop at the count.
     std::vector<LfgRoleCheckDungeon> lfgRoleCheckDungeons_;
     uint8_t lfgRoleCheckMembers_ = 0;
+    std::vector<LfgRoleCheckMember> lfgRoleCheckMemberList_;
     bool lfgBootInProgress_ = false;
     bool lfgBootDidVote_    = false;
     bool lfgBootMyVote_     = false;

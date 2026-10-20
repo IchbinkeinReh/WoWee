@@ -322,6 +322,12 @@ public:
     /// own character.
     void updateBlobShadows(uint32_t localPlayerInstance);
 
+    /// The sounds this frame's model events play through the units they
+    /// belong to (unit_model_events.hpp): the unit's own model's, and its
+    /// mount's (0x0073d5d0 hands the mount the unit's callback).
+    /// `localPlayerInstance` is the renderer's own character.
+    void playUnitModelEvents(uint32_t localPlayerInstance);
+
     // Mount
     void setMountDisplayId(uint32_t displayId) { pendingMountDisplayId_ = displayId; }
     uint32_t getMountInstanceId() const { return mountInstanceId_; }
@@ -1274,6 +1280,10 @@ private:
 
     // --- Mount ---
     uint32_t mountInstanceId_ = 0;
+    /// When a unit's $FDX last played its Stand sound, of all units
+    /// (0x00ca12d4), in steady-clock ms; and the draws the slots' chances take.
+    uint32_t lastStandSoundMs_ = 0;
+    uint32_t unitEventRandom_ = 0x2545F491u;
     uint32_t mountModelId_ = 0;
     uint32_t mountDisplayId_ = 0;  ///< the display mountInstanceId_ draws
     uint32_t pendingMountDisplayId_ = 0;

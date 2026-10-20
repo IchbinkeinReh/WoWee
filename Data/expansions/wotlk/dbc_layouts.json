@@ -640,6 +640,7 @@
     "SeatID5": 11,
     "SeatID6": 12,
     "SeatID7": 13,
+    "UiLocomotionType": 34,
     "VehicleUIIndicatorID": 36
   },
   "VehicleSeat": {

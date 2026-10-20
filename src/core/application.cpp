@@ -1963,6 +1963,16 @@ void Application::run() {
                     }
                 }
             }
+            // The release of a key that went down on a SPELL, ITEM, MACRO or
+            // CLICK binding, which acts as the key comes up (0x00563150). The
+            // press is what recorded it, so a release nothing pressed is
+            // passed by.
+            if (event.type == SDL_EVENT_KEY_UP && addonManager_ && addonsLoaded_) {
+                if (auto* engine = addonManager_->getLuaEngine()) {
+                    (void)engine->dispatchBindingKey(event.key.key, false, false, false,
+                                                     false, false);
+                }
+            }
             if (event.type == SDL_EVENT_KEY_DOWN) {
                 // An addon's edit box takes the keystroke before anything
                 // else looks at it. Otherwise typing into one would also
@@ -4667,9 +4677,11 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         }
     }
 
-    // Which units have a blob shadow under them this frame, and how big.
+    // Which units have a blob shadow under them this frame, and how big;
+    // and what their models' events play.
     if (entitySpawner_ && renderer) {
         entitySpawner_->updateBlobShadows(renderer->getCharacterInstanceId());
+        entitySpawner_->playUnitModelEvents(renderer->getCharacterInstanceId());
     }
 }
 

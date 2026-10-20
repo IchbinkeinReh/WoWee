@@ -3963,6 +3963,7 @@ void InventoryHandler::openAuctionHouse(uint64_t guid) {
 void InventoryHandler::closeAuctionHouse() {
     auctionOpen_ = false;
     auctioneerGuid_ = 0;
+    auctionHouseId_ = 0;   // 0x0059f150
     // The three lists go with the window (0x0059f150 frees 0xc0f448,
     // 0xc0f458 and 0xc0f468): a house opened again, or the next character's,
     // starts with none until the server answers a query.
@@ -4071,6 +4072,7 @@ void InventoryHandler::handleAuctionHello(network::Packet& packet) {
     AuctionHelloData data;
     if (!AuctionHelloParser::parse(packet, data)) return;
     openAuctionHouse(data.auctioneerGuid);
+    auctionHouseId_ = data.auctionHouseId;
     if (owner_.isGossipWindowOpen()) owner_.closeGossip();   // if 0x00512e60 has not already
 }
 
@@ -4682,7 +4684,8 @@ void InventoryHandler::useEquipmentSet(uint32_t setId) {
 }
 
 void InventoryHandler::saveEquipmentSet(const std::string& name, const std::string& iconName,
-                                         uint64_t existingGuid, uint32_t setIndex) {
+                                         uint64_t existingGuid, uint32_t setIndex,
+                                         uint32_t ignoredSlotMask) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     uint16_t wire = wireOpcode(Opcode::CMSG_EQUIPMENT_SET_SAVE);
     if (wire == 0xFFFF) return;   // as useEquipmentSet: nothing to say
@@ -4705,9 +4708,24 @@ void InventoryHandler::saveEquipmentSet(const std::string& name, const std::stri
     pkt.writeString(name);
     pkt.writeString(iconName);
     for (int i = 0; i < 19; ++i) {
-        pkt.writePackedGuid(owner_.getEquipSlotGuid(i));
+        // A slot the player chose to leave out goes as the guid 1, which is
+        // what the set list sends back for it (0x005ade50 writes 1 for every
+        // slot marked in 0x00c1e908).
+        pkt.writePackedGuid((ignoredSlotMask & (1u << i)) ? 1u : owner_.getEquipSlotGuid(i));
     }
     owner_.getSocket()->send(pkt);
+}
+
+uint64_t InventoryHandler::getBankBagItemGuid(int bag, int slot) const {
+    if (bag < 0 || bag >= effectiveBankBagSlots_ || slot < 0) return 0;
+    const uint64_t bagGuid = bankBagSlotGuids_[static_cast<size_t>(bag)];
+    if (bagGuid == 0) return 0;
+    auto it = owner_.containerContentsRef().find(bagGuid);
+    if (it == owner_.containerContentsRef().end() ||
+        slot >= static_cast<int>(it->second.numSlots)) {
+        return 0;
+    }
+    return it->second.slotGuids[static_cast<size_t>(slot)];
 }
 
 void InventoryHandler::deleteEquipmentSet(uint64_t setGuid) {

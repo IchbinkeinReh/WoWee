@@ -12,6 +12,7 @@
 #include <optional>
 #include <ranges>
 #include <set>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include "game/chat_handler.hpp"
@@ -23,9 +24,12 @@
 #include "core/config_paths.hpp"
 #include "ui/settings_schema.hpp"
 #include "imgui.h"
+#include "game/opcode_table.hpp"
+#include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/chat_window_background.hpp"
+#include "addons/client_cvar_registry.hpp"
 #include "ui/display_modes.hpp"
 #include "ui/fullscreen_scale.hpp"
 #include "ui/widget_tree.hpp"
@@ -929,7 +933,28 @@ static const char* cameraViewCVarDefault(const std::string& lowerName) {
     return nullptr;
 }
 
+/// The CVars RegisterCVar made, by lower-case name, with the default each was
+/// registered with ("0" when none was given, 0x0050fea0).
+static std::unordered_map<std::string, std::string>& scriptRegisteredCVars() {
+    static std::unordered_map<std::string, std::string> registered;
+    return registered;
+}
+
+/// Client CVars RegisterCVar was called on again. Registering an existing CVar
+/// rewrites its storage bits with the ones given (0x00767fc0 keeps all but
+/// 0x30 and ors the new ones in), and RegisterCVar gives none - so such a CVar
+/// is no longer kept on the server.
+static std::unordered_set<std::string>& reregisteredClientCVars() {
+    static std::unordered_set<std::string> names;
+    return names;
+}
+
 static void pushCvarDefault(lua_State* L, const std::string& n) {
+    // A CVar an addon registered has the default it was registered with.
+    if (auto it = scriptRegisteredCVars().find(n); it != scriptRegisteredCVars().end()) {
+        lua_pushstring(L, it->second.c_str());
+        return;
+    }
     // The camera's views, and which one it is on and how it moves to another
     // (0x005fd910: cameraView "2", cameraViewBlendStyle "1").
     if (const char* view = cameraViewCVarDefault(n)) { lua_pushstring(L, view); return; }
@@ -1670,6 +1695,91 @@ static int lua_GetCVarBool(lua_State* L) {
     return 1;
 }
 
+/// The registration flags of the CVar by that lower-case name (0x00767460 and
+/// the CVar's +0x1c), or none when no CVar has that name.
+///
+/// Registered are the client's own, the ones RegisterCVar made, and the ones
+/// in the saved file or set since - the client registers every name it reads
+/// from Config.wtf (0x007681f0), with no flags.
+static std::optional<uint32_t> registeredCVarFlags(const std::string& lower) {
+    if (auto flags = clientCVarFlags(lower)) {
+        if (reregisteredClientCVars().count(lower)) {
+            return *flags & ~(kCVarStoredWithAccount | kCVarStoredWithCharacter);
+        }
+        return flags;
+    }
+    if (scriptRegisteredCVars().count(lower) || cvarStore().count(lower)) return 0u;
+    return std::nullopt;
+}
+
+// RegisterCVar("cvar" [, default]) (0x0050ff30 -> 0x0050fea0): a CVar of the
+// addon's own, with no flags, defaulting to the value given or to "0". One
+// that exists keeps its value and default and loses its server storage.
+static int lua_RegisterCVar(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: RegisterCVar(\"cvar\" [, default])");
+    std::string n = lua_tostring(L, 1);
+    if (n.empty()) return 0;
+    toLowerInPlace(n);
+    if (clientCVarFlags(n)) {
+        reregisteredClientCVars().insert(n);
+        return 0;
+    }
+    if (scriptRegisteredCVars().count(n)) return 0;
+    scriptRegisteredCVars()[n] = lua_isstring(L, 2) ? lua_tostring(L, 2) : "0";
+    return 0;
+}
+
+// GetCVarInfo("cvar") → value, defaultValue, storedWithAccount, storedWithCharacter
+// (0x0050ff50): the two flags 1 or nil; all four nil for a CVar that is not
+// there, a hidden one included.
+static int lua_GetCVarInfo(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: GetCVarInfo(\"cvar\")");
+    std::string n = lua_tostring(L, 1);
+    toLowerInPlace(n);
+    const auto flags = registeredCVarFlags(n);
+    if (!flags || (*flags & kCVarHidden)) {
+        for (int i = 0; i < 4; ++i) lua_pushnil(L);
+        return 4;
+    }
+    lua_pushvalue(L, 1);
+    lua_GetCVar(L);
+    lua_remove(L, -2);
+    lua_pushvalue(L, 1);
+    lua_GetCVarDefault(L);
+    lua_remove(L, -2);
+    if (*flags & kCVarStoredWithAccount) lua_pushnumber(L, 1); else lua_pushnil(L);
+    if (*flags & kCVarStoredWithCharacter) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 4;
+}
+
+/// GetCVarAbsoluteMin and GetCVarAbsoluteMax (0x00514f60, 0x00515010): only
+/// extShadowQuality has bounds, the lowest level and the highest the renderer
+/// takes; every other CVar answers nil, and a name that is no CVar raises.
+static int cvarAbsoluteBound(lua_State* L, bool max, const char* usage) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "%s", usage);
+    std::string n = lua_tostring(L, 1);
+    toLowerInPlace(n);
+    const auto flags = registeredCVarFlags(n);
+    if (!flags || (*flags & kCVarHidden)) {
+        return luaL_error(L, "Couldn't find CVar named '%s'", lua_tostring(L, 1));
+    }
+    if (n != "extshadowquality") {
+        lua_pushnil(L);
+        return 1;
+    }
+    // The client's device answers 5 (0x00873f50); this renderer's levels stop
+    // at 4 (Renderer::initialize clamps the stored level to 0-4), and a level
+    // above that would be one nothing draws.
+    lua_pushnumber(L, max ? 4 : 0);
+    return 1;
+}
+static int lua_GetCVarAbsoluteMin(lua_State* L) {
+    return cvarAbsoluteBound(L, false, "Usage: GetCVarAbsoluteMin(\"cvar\")");
+}
+static int lua_GetCVarAbsoluteMax(lua_State* L) {
+    return cvarAbsoluteBound(L, true, "Usage: GetCVarAbsoluteMax(\"cvar\")");
+}
+
 /// What CVAR_UPDATE carries as its first argument: the CVar's *label*, not its
 /// name. The two are different spellings of the same setting, and FrameXML uses
 /// both within two lines of each other -
@@ -2147,6 +2257,60 @@ static int lua_GetAddOnInfo(lua_State* L) {
     lua_pushstring(L, "INSECURE");  // 7: security
     lua_pushnil(L);                 // 8: newVersion
     return 8;
+}
+
+/// The addon entry an IsAddOnLoadOnDemand or GetAddOnDependencies argument
+/// names, left on the stack, as 0x00511a60 and 0x005179b0 resolve it: an index
+/// out of range raises, a name nothing has answers false. Usage raised for
+/// neither.
+static bool pushAddonEntryForQuery(lua_State* L, const char* usage) {
+    if (lua_type(L, 1) != LUA_TNUMBER && !lua_isstring(L, 1)) {
+        luaL_error(L, "%s", usage);
+        return false;
+    }
+    if (lua_type(L, 1) == LUA_TNUMBER) {
+        lua_getfield(L, LUA_REGISTRYINDEX, "wowee_addon_count");
+        const int count = static_cast<int>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+        const int64_t index = std::llround(lua_tonumber(L, 1));
+        if (index < 1 || index > count) {
+            luaL_error(L, "AddOn index must be in the range of 1 to %d", count);
+            return false;
+        }
+    }
+    const int idx = pushAddonRegistryAndIndex(L, 1);
+    if (idx < 1) return false;
+    lua_rawgeti(L, -1, idx);
+    lua_remove(L, -2);
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
+    return true;
+}
+
+// IsAddOnLoadOnDemand(index or "name") (0x00511a60): 1 for an addon whose
+// TOC says LoadOnDemand, nil otherwise.
+static int lua_IsAddOnLoadOnDemand(lua_State* L) {
+    bool onDemand = false;
+    if (pushAddonEntryForQuery(L, "Usage: IsAddOnLoadOnDemand(index or \"name\")")) {
+        lua_getfield(L, -1, "loadOnDemand");
+        onDemand = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 2);
+    }
+    if (onDemand) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 1;
+}
+
+// GetAddOnDependencies(index or "name") (0x005179b0): the addons it requires,
+// one value each.
+static int lua_GetAddOnDependencies(lua_State* L) {
+    if (!pushAddonEntryForQuery(L, "Usage: GetAddOnDependencies(index or \"name\")")) return 0;
+    lua_getfield(L, -1, "dependencies");
+    lua_remove(L, -2);
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
+    const int n = static_cast<int>(lua_objlen(L, -1));
+    if (!lua_checkstack(L, n + 1)) { lua_pop(L, 1); return 0; }
+    for (int i = 1; i <= n; ++i) lua_rawgeti(L, -i, i);
+    lua_remove(L, -n - 1);
+    return n;
 }
 
 // GetAddOnMetadata(addonNameOrIndex, key) → value
@@ -4649,6 +4813,201 @@ static int lua_GetLFGRoleUpdate(lua_State* L) {
     return 3;
 }
 
+/// The player's PLAYER_FLAGS, or none without a player.
+static std::optional<uint32_t> playerFlagsOf(game::GameHandler* gh) {
+    const auto player = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+    if (!player) return std::nullopt;
+    const uint16_t i = game::fieldIndex(game::UF::PLAYER_FLAGS);
+    return i != 0xFFFF ? player->getField(i) : 0u;
+}
+
+/// 1 when the player's PLAYER_FLAGS carry the bit, nil otherwise.
+static int pushPlayerFlag(lua_State* L, uint32_t bit) {
+    const auto flags = playerFlagsOf(getGameHandler(L));
+    if (flags && (*flags & bit)) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 1;
+}
+
+// GetAllowLowLevelRaid() (0x0051d5a0): PLAYER_FLAGS 0x10000.
+static int lua_GetAllowLowLevelRaid(lua_State* L) { return pushPlayerFlag(L, 0x10000); }
+
+// GetTaxiBenchmarkMode() (0x0051d100): PLAYER_FLAGS 0x20000.
+static int lua_GetTaxiBenchmarkMode(lua_State* L) { return pushPlayerFlag(L, 0x20000); }
+
+/// A request of one opcode and one byte, the way the client's setters build
+/// them.
+static void sendByteRequest(game::GameHandler* gh, game::Opcode op, uint8_t value) {
+    if (!gh || game::wireOpcode(op) == 0xFFFF) return;
+    network::Packet packet(game::wireOpcode(op));
+    packet.writeUInt8(value);
+    gh->sendInterfaceRequest(packet);
+}
+
+// SetAllowLowLevelRaid([on]) (0x0051d600): with a player, the switch twice -
+// CMSG_SET_ALLOW_LOW_LEVEL_RAID1 and _RAID2, a byte each.
+static int lua_SetAllowLowLevelRaid(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!playerFlagsOf(gh)) return 0;
+    const uint8_t on = luaClientSwitchArg(L, 1, true) ? 1 : 0;
+    sendByteRequest(gh, game::Opcode::CMSG_SET_ALLOW_LOW_LEVEL_RAID1, on);
+    sendByteRequest(gh, game::Opcode::CMSG_SET_ALLOW_LOW_LEVEL_RAID2, on);
+    return 0;
+}
+
+// OpeningCinematic() (0x005166f0): CMSG_OPENING_CINEMATIC, which asks the
+// server for the race's opening cinematic.
+static int lua_OpeningCinematic(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh || game::wireOpcode(game::Opcode::CMSG_OPENING_CINEMATIC) == 0xFFFF) {
+        LOG_WARNING("OpeningCinematic: no CMSG_OPENING_CINEMATIC to send");
+        return 0;
+    }
+    network::Packet packet(game::wireOpcode(game::Opcode::CMSG_OPENING_CINEMATIC));
+    gh->sendInterfaceRequest(packet);
+    return 0;
+}
+
+// OpenTrainer() (0x00595040 -> 0x006d1f20): with a player, CMSG_TRAINER_LIST
+// for the player's own guid - the trainer window asked of oneself, which a
+// server answers only for a character it lets train itself.
+static int lua_OpenTrainer(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!playerFlagsOf(gh) || game::wireOpcode(game::Opcode::CMSG_TRAINER_LIST) == 0xFFFF) {
+        LOG_WARNING("OpenTrainer: no player to ask for, or no CMSG_TRAINER_LIST");
+        return 0;
+    }
+    network::Packet packet(game::wireOpcode(game::Opcode::CMSG_TRAINER_LIST));
+    packet.writeUInt64(gh->getPlayerGuid());
+    gh->sendInterfaceRequest(packet);
+    return 0;
+}
+
+/// A DBC this API reads, loaded, or null.
+static std::shared_ptr<pipeline::DBCFile> loadedDBC(game::GameHandler* gh, const char* name) {
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (!am || !am->isInitialized()) return nullptr;
+    auto file = am->loadDBCOptional(name);
+    return file && file->isLoaded() ? file : nullptr;
+}
+
+/// A localized string column, from whichever locale slot the client's file
+/// fills (sixteen of them, then the flags).
+static std::string localizedDBCString(const pipeline::DBCFile& dbc, uint32_t row, uint32_t first) {
+    const uint32_t fields = dbc.getFieldCount();
+    for (uint32_t i = 0; i < 16 && first + i < fields; ++i) {
+        std::string text = dbc.getString(row, first + i);
+        if (!text.empty()) return text;
+    }
+    return {};
+}
+
+// CanMapChangeDifficulty([mapID]) (0x00517d70): 1 when Map.dbc flags the map,
+// the current one unless another is named, 0x100; nil otherwise.
+static int lua_CanMapChangeDifficulty(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint32_t mapId = lua_isnumber(L, 1) ? static_cast<uint32_t>(luaToClientInt(L, 1))
+                                              : (gh ? gh->getCurrentMapId() : 0);
+    auto maps = loadedDBC(gh, "Map.dbc");
+    const int32_t row = maps && maps->getFieldCount() > 3 ? maps->findRecordById(mapId) : -1;
+    constexpr uint32_t kMapFlagCanChangeDifficulty = 0x100;
+    if (row >= 0 && (maps->getUInt32(static_cast<uint32_t>(row), 3) & kMapFlagCanChangeDifficulty))
+        lua_pushnumber(L, 1);
+    else
+        lua_pushnil(L);
+    return 1;
+}
+
+// GetGMTicketCategories() → id1, name1, id2, name2, ... (0x00516aa0): every
+// row of GMTicketCategory.dbc.
+static int lua_GetGMTicketCategories(lua_State* L) {
+    auto categories = loadedDBC(getGameHandler(L), "GMTicketCategory.dbc");
+    if (!categories || categories->getFieldCount() < 2) return 0;
+    const uint32_t n = categories->getRecordCount();
+    if (!lua_checkstack(L, static_cast<int>(n) * 2 + 1)) return 0;
+    for (uint32_t r = 0; r < n; ++r) {
+        lua_pushnumber(L, categories->getUInt32(r, 0));
+        lua_pushstring(L, localizedDBCString(*categories, r, 1).c_str());
+    }
+    return static_cast<int>(n) * 2;
+}
+
+/// An Achievement.dbc row's flags and points (fields 41 and 39), for an
+/// achievement that is not hidden (flag 2); none otherwise.
+static std::optional<uint32_t> shownAchievementPoints(lua_State* L, uint32_t id) {
+    auto achievements = loadedDBC(getGameHandler(L), "Achievement.dbc");
+    if (!achievements || achievements->getFieldCount() <= 41) return std::nullopt;
+    const int32_t row = achievements->findRecordById(id);
+    if (row < 0) return std::nullopt;
+    constexpr uint32_t kAchievementFlagHidden = 0x2;
+    if (achievements->getUInt32(static_cast<uint32_t>(row), 41) & kAchievementFlagHidden) return std::nullopt;
+    return achievements->getUInt32(static_cast<uint32_t>(row), 39);
+}
+
+// GetAchievementNumRewards(achievementID) (0x005b1970): 1 for one that is
+// shown, nil for a hidden one or none.
+static int lua_GetAchievementNumRewards(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetAchievementNumRewards(achievementID)");
+    if (shownAchievementPoints(L, static_cast<uint32_t>(luaToClientInt(L, 1)))) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
+
+// GetAchievementReward(achievementID, index) (0x005b1a00): its points, which
+// are its one reward; nil for a hidden one or none.
+static int lua_GetAchievementReward(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) {
+        // The client's own words, the other function's name and all (0x00a17638).
+        return luaL_error(L, "Usage: GetAchievementNumRewards(achievementID, rewardIndex)");
+    }
+    if (const auto points = shownAchievementPoints(L, static_cast<uint32_t>(luaToClientInt(L, 1))))
+        lua_pushnumber(L, *points);
+    else
+        lua_pushnil(L);
+    return 1;
+}
+
+// GetNumPetitionItems() (0x005a1f70): how many charters the petition vendor
+// offers, of the ten the client keeps.
+static int lua_GetNumPetitionItems(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    int count = 0;
+    uint32_t itemId = 0, displayId = 0, cost = 0;
+    while (gh && count < 10 && gh->getPetitionCharter(count, itemId, displayId, cost)) ++count;
+    lua_pushnumber(L, count);
+    return 1;
+}
+
+// GetLFGRoleUpdateMember(index) → chosen, level, name, className, leader,
+// tank, healer, damage (0x00554750): a member of the role check, the four
+// roles nil until they have chosen; the name and class nil and "" for one the
+// name cache does not know yet.
+static int lua_GetLFGRoleUpdateMember(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetLFGRoleUpdateMember(index)");
+    auto* gh = getGameHandler(L);
+    const int index = static_cast<int>(std::llround(lua_tonumber(L, 1)));
+    if (!gh) return 0;
+    const auto& members = gh->getLfgRoleCheckMemberList();
+    if (index < 1 || index > static_cast<int>(members.size())) return 0;
+    const auto& m = members[static_cast<size_t>(index) - 1];
+    lua_pushboolean(L, m.chosen ? 1 : 0);
+    lua_pushnumber(L, m.level);
+    const std::string& name = gh->lookupName(m.guid);
+    if (name.empty()) {
+        lua_pushnil(L);
+        lua_pushnil(L);
+    } else {
+        lua_pushstring(L, name.c_str());
+        const uint8_t classId = gh->lookupPlayerClass(m.guid);
+        lua_pushstring(L, luaClassToken(classId) ? kLuaClasses[classId] : "");
+    }
+    if (m.chosen) {
+        for (uint32_t bit : {1u, 2u, 4u, 8u}) lua_pushboolean(L, (m.roles & bit) ? 1 : 0);
+    } else {
+        for (int i = 0; i < 4; ++i) lua_pushnil(L);
+    }
+    return 8;
+}
+
 static int lua_IsListedInLFR(lua_State* L) {
     auto* gh = getGameHandler(L);
     lua_pushboolean(L, gh && gh->getLfgState() == game::LfgState::RaidBrowser ? 1 : 0);
@@ -5426,7 +5785,11 @@ static int lua_RunMacroText(lua_State* L) {
     // 0x00566400 -> 0x00564db0, which asks the taint check (kind 3): a
     // macro is never run by insecure code.
     if (!taint::allowed(L, 3)) return 0;
-    if (svc && svc->runMacroText && body && *body) svc->runMacroText(body);
+    if (svc && svc->runMacroText && body && *body) {
+        // A macro of its own, no saved one, with the button it was given.
+        RunningMacroScope running(0, lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr);
+        svc->runMacroText(body);
+    }
     return 0;
 }
 
@@ -5446,9 +5809,33 @@ static int lua_RunMacro(lua_State* L) {
         }
     }
     if (macroId == 0) return 0;
-    const std::string& body = gh->getMacroText(macroId);
-    if (!body.empty()) svc->runMacroText(body);
+    const std::string body = gh->getMacroText(macroId);
+    if (!body.empty()) {
+        // 0x00566e80 hands 0x00564db0 the second argument as the button the
+        // macro runs with, for GetRunningMacroButton.
+        RunningMacroScope running(static_cast<int>(macroId),
+                                  lua_isstring(L, 2) ? lua_tostring(L, 2) : nullptr);
+        svc->runMacroText(body);
+    }
     return 0;
+}
+
+// GetRunningMacro() → index of the saved macro running now, or nil
+// (0x00564c10). Nil inside RunMacroText, whose macro is no saved one.
+static int lua_GetRunningMacro(lua_State* L) {
+    const RunningMacro& m = runningMacro();
+    if (m.running && m.index > 0) lua_pushnumber(L, m.index);
+    else lua_pushnil(L);
+    return 1;
+}
+
+// GetRunningMacroButton() → the button the running macro, or the CLICK binding
+// being pressed, was run with (0x00564c70 answers 0x00beaf48), or nil.
+static int lua_GetRunningMacroButton(lua_State* L) {
+    const RunningMacro& m = runningMacro();
+    if (m.hasButton) lua_pushstring(L, m.button.c_str());
+    else lua_pushnil(L);
+    return 1;
 }
 
 // TriggerTutorial(id) - show one of the interface's tutorial pop-outs.
@@ -6223,6 +6610,17 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetLFGProposal",           lua_GetLFGProposal},
                 {"GetLFGInfoServer",         lua_GetLFGInfoServer},
                 {"GetLFGRoleUpdate",         lua_GetLFGRoleUpdate},
+                {"GetLFGRoleUpdateMember",   lua_GetLFGRoleUpdateMember},
+                {"GetAllowLowLevelRaid",     lua_GetAllowLowLevelRaid},
+                {"SetAllowLowLevelRaid",     lua_SetAllowLowLevelRaid},
+                {"GetTaxiBenchmarkMode",     lua_GetTaxiBenchmarkMode},
+                {"OpeningCinematic",         lua_OpeningCinematic},
+                {"OpenTrainer",              lua_OpenTrainer},
+                {"CanMapChangeDifficulty",   lua_CanMapChangeDifficulty},
+                {"GetGMTicketCategories",    lua_GetGMTicketCategories},
+                {"GetAchievementNumRewards", lua_GetAchievementNumRewards},
+                {"GetAchievementReward",     lua_GetAchievementReward},
+                {"GetNumPetitionItems",      lua_GetNumPetitionItems},
                 {"IsListedInLFR",            lua_IsListedInLFR},
                 {"IsPartyLFG",               lua_IsPartyLFG},
                 {"GetLFGDeserterExpiration", lua_GetLFGDeserterExpiration},
@@ -6239,14 +6637,71 @@ void registerSystemLuaAPI(lua_State* L) {
                 // How many rows that reader has. Unbound, so opening a team's
                 // details called a nil global and raised before the first row
                 // was read - the reader beside it worked the whole time.
+                //
+                // GetNumArenaTeamMembers(team [, showOffline]) (0x005a2930):
+                // with offline members hidden and showOffline not asked for,
+                // only the online - who are the first rows then.
                 {"GetNumArenaTeamMembers", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) {
+                return luaL_error(L, "Usage: GetNumArenaTeamMembers(team [,showOffline])");
+            }
             auto* gh = getGameHandler(L);
             const uint32_t teamId =
                 arenaTeamIdAtIndex(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
             const auto* roster = (gh && teamId) ? gh->getArenaTeamRoster(teamId) : nullptr;
-            lua_pushnumber(L, roster
-                ? static_cast<lua_Number>(roster->members.size()) : 0);
+            size_t count = 0;
+            if (roster) {
+                if (!gh->arenaRosterShowOffline() && !luaClientSwitchArg(L, 2, false)) {
+                    for (const auto& m : roster->members) count += m.online ? 1 : 0;
+                } else {
+                    count = roster->members.size();
+                }
+            }
+            lua_pushnumber(L, static_cast<lua_Number>(count));
             return 1;
+        }},
+                // GetBattlefieldArenaFaction() (0x0054a280): 1 when the arena
+                // side byte of the battle under way is set, otherwise nil.
+                {"GetBattlefieldArenaFaction", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (gh && gh->battlefieldArenaFaction() != 0) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
+            return 1;
+        }},
+                // Get/SetArenaTeamRosterShowOffline (0x005a2a00, 0x005a35e0).
+                {"GetArenaTeamRosterShowOffline", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh || gh->arenaRosterShowOffline()) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
+            return 1;
+        }},
+                {"SetArenaTeamRosterShowOffline", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) {
+                gh->setArenaRosterShowOffline(luaClientSwitchArg(L, 1, true));
+            }
+            return 0;
+        }},
+                // GetArenaTeamGdfInfo(team, index) (0x005a3260): the two
+                // floats the roster carried for that member, nil and nil past
+                // the end of it.
+                {"GetArenaTeamGdfInfo", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) {
+                return luaL_error(L, "Usage: GetArenaTeamGdfInfo(team, index)");
+            }
+            auto* gh = getGameHandler(L);
+            const int team = static_cast<int>(lua_tonumber(L, 1));
+            const int member = static_cast<int>(lua_tonumber(L, 2));
+            const uint32_t teamId = (team >= 1 && team <= 3) ? arenaTeamIdAtIndex(gh, team) : 0;
+            const auto* roster = (gh && teamId) ? gh->getArenaTeamRoster(teamId) : nullptr;
+            if (!roster || member < 1 || member > static_cast<int>(roster->members.size())) {
+                lua_pushnil(L);
+                lua_pushnil(L);
+                return 2;
+            }
+            const auto& m = roster->members[static_cast<size_t>(member) - 1];
+            lua_pushnumber(L, m.gdfValue1);
+            lua_pushnumber(L, m.gdfValue2);
+            return 2;
         }},
                 // SortArenaTeamRoster(column) - the details frame's column
                 // headers. Unbound, every one of them raised on click.
@@ -6383,6 +6838,8 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, ok ? 1 : 0);
             return 1; }},
                 {"RunMacro",                 lua_RunMacro},
+                {"GetRunningMacro",          lua_GetRunningMacro},
+                {"GetRunningMacroButton",    lua_GetRunningMacroButton},
                 {"TriggerTutorial",          lua_TriggerTutorial},
                 {"Quit",                     lua_Quit},
                 {"ForceQuit",                lua_ForceQuit},
@@ -6418,6 +6875,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"RunScript",                lua_RunScript},
                 {"IsMouseButtonDown",        lua_IsMouseButtonDown},
                 {"GetCVarDefault",           lua_GetCVarDefault},
+                {"GetCVarInfo",              lua_GetCVarInfo},
+                {"GetCVarAbsoluteMin",       lua_GetCVarAbsoluteMin},
+                {"GetCVarAbsoluteMax",       lua_GetCVarAbsoluteMax},
+                {"RegisterCVar",             lua_RegisterCVar},
                 {"IsAddOnLoaded",            lua_IsAddOnLoaded},
                 {"LoadAddOn",                lua_LoadAddOn},
                 {"UIParentLoadAddOn",        lua_LoadAddOn},
@@ -8003,6 +8464,8 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"GetAddOnMetadata",  lua_GetAddOnMetadata},
+                {"IsAddOnLoadOnDemand", lua_IsAddOnLoadOnDemand},
+                {"GetAddOnDependencies", lua_GetAddOnDependencies},
                 {"IsInInstance",         lua_IsInInstance},
                 {"GetInstanceInfo",      lua_GetInstanceInfo},
                 {"GetInstanceDifficulty", lua_GetInstanceDifficulty},

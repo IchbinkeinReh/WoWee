@@ -6,6 +6,7 @@
 #include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
 #include "game/inventory_slots.hpp"
+#include "game/equip_slot_fit.hpp"
 #include "game/game_utils.hpp"
 #include "game/stationery.hpp"
 #include "game/auction_filters.hpp"
@@ -1293,6 +1294,31 @@ static int lua_GetSendMailItem(lua_State* L) {
     return 4;
 }
 
+// GetSendMailItemLink([slot]) (0x0056e3a0): the link of what is attached in
+// that slot of the letter being written, the first when none is named; nothing
+// at all for an empty slot or one past the sixteen the client has.
+static int lua_GetSendMailItemLink(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const int64_t slot = lua_isnumber(L, 1) ? std::llround(lua_tonumber(L, 1)) : 1;
+    if (!gh || slot < 1 || slot > 16) return 0;
+    const auto& attachments = gh->getMailAttachments();
+    if (slot > static_cast<int64_t>(attachments.size())) return 0;
+    const auto& att = attachments[static_cast<size_t>(slot) - 1];
+    if (!att.occupied()) return 0;
+    const auto* info = gh->getItemInfo(att.item.itemId);
+    std::string name = info ? info->name : ("Item #" + std::to_string(att.item.itemId));
+    if (att.item.randomPropertyId != 0) {
+        const std::string suffix = gh->getRandomPropertyName(att.item.randomPropertyId);
+        if (!suffix.empty()) name += " " + suffix;
+    }
+    const auto [permanentId, temporaryId] = gh->getItemEnchantIds(att.itemGuid);
+    (void)temporaryId;
+    const std::string link = game::itemChatLink(att.item.itemId, info ? info->quality : 0, name,
+                                                permanentId, att.item.randomPropertyId);
+    lua_pushstring(L, link.c_str());
+    return 1;
+}
+
 // ReturnInboxItem(index) - send a letter back where it came from, with
 // whatever is still attached to it.
 //
@@ -1363,6 +1389,21 @@ uint32_t copperArg(lua_State* L, int index) {
     return static_cast<uint32_t>(v);
 }
 } // namespace
+
+// ClearSendMail() (0x0056d5c0 -> 0x0056d4d0): the letter being written
+// emptied - its attachments let go, its money and charge cleared - and the
+// compose frame told all three ways.
+static int lua_ClearSendMail(lua_State* L) {
+    s_sendMailMoney = 0;
+    s_sendMailCOD = 0;
+    if (auto* gh = getGameHandler(L)) {
+        gh->clearMailAttachments();
+        gh->fireAddonEvent("SEND_MAIL_MONEY_CHANGED", {});
+        gh->fireAddonEvent("SEND_MAIL_COD_CHANGED", {});
+        gh->fireAddonEvent("MAIL_SEND_SUCCESS", {});
+    }
+    return 0;
+}
 
 static int lua_CloseMail(lua_State* L) {
     s_sendMailMoney = 0;
@@ -1524,6 +1565,36 @@ std::set<int>& pendingIgnoredSlots() {
     return slots;
 }
 
+/// A set name as 0x007e1830 takes one (max 32 characters, 128 bytes, one line):
+/// well-formed UTF-8, no line break - "\r", "\n" or an escaped "\\n" or "|n"
+/// - and fewer than 32 characters, the 32nd being where it cuts and refuses.
+bool equipmentSetNameValid(const std::string& name) {
+    size_t chars = 0;
+    for (size_t i = 0; i < name.size();) {
+        const auto c = static_cast<unsigned char>(name[i]);
+        const size_t len = c < 0x80 ? 1 : (c & 0xe0) == 0xc0 ? 2 : (c & 0xf0) == 0xe0 ? 3
+                         : (c & 0xf8) == 0xf0 ? 4 : 0;
+        if (len == 0 || i + len > name.size()) return false;
+        for (size_t k = 1; k < len; ++k) {
+            if ((static_cast<unsigned char>(name[i + k]) & 0xc0) != 0x80) return false;
+        }
+        if (c == '\r' || c == '\n') return false;
+        if ((c == '\\' || c == '|') && i + 1 < name.size() && name[i + 1] == 'n') return false;
+        if (++chars >= 32) return false;
+        i += len;
+    }
+    return true;
+}
+
+/// The marked slots as the save sends them: bit i for equipment slot i + 1.
+uint32_t pendingIgnoredSlotMask() {
+    uint32_t mask = 0;
+    for (int slot : pendingIgnoredSlots()) {
+        if (slot >= 1 && slot <= 19) mask |= 1u << (slot - 1);
+    }
+    return mask;
+}
+
 }  // namespace
 
 static int lua_GetNumEquipmentSets(lua_State* L) {
@@ -1611,8 +1682,93 @@ static int lua_SaveEquipmentSet(lua_State* L) {
     // same set rather than a new one with the same name.
     const auto* existing = equipmentSetByName(gh, name);
     gh->saveEquipmentSet(name, iconName, existing ? existing->setGuid : 0,
-                         existing ? existing->setId : 0xFFFFFFFFu);
+                         existing ? existing->setId : 0xFFFFFFFFu, pendingIgnoredSlotMask());
     return 0;
+}
+
+// RenameEquipmentSet("oldName", "newName") (0x005af910): a name no set has
+// yet, at most 31 characters on one line, given to the set - which is saved
+// again as 0x005ade50 saves one, from what is worn now with the marked slots
+// left out - and EQUIPMENT_SETS_CHANGED raised (0x005af400).
+static int lua_RenameEquipmentSet(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) {
+        return luaL_error(L, "Usage: RenameEquipmentSet(\"oldName\", \"newName\")");
+    }
+    std::string newName = lua_tostring(L, 2);
+    if (!equipmentSetNameValid(newName)) return luaL_error(L, "Invalid string for setName");
+    auto* gh = getGameHandler(L);
+    const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
+    if (!set) return 0;
+    for (const auto& other : gh->getEquipmentSets()) {
+        if (other.name == newName) return 0;
+    }
+    gh->saveEquipmentSet(newName, set->iconName, set->setGuid, set->setId,
+                         pendingIgnoredSlotMask());
+    gh->fireAddonEvent("EQUIPMENT_SETS_CHANGED", {});
+    return 0;
+}
+
+// GetEquipmentSetLocations("setName" [, returnTable]) (0x005ae860): where each
+// of the set's items is now, by slot, packed as the equipment manager unpacks
+// it - worn, in the backpack or a bag, and with the bank open in the bank or a
+// bank bag. 0 for a slot the set leaves empty, 1 for one it ignores, -1 for an
+// item that is nowhere to be found.
+static int lua_GetEquipmentSetLocations(lua_State* L) {
+    if (!lua_isstring(L, 1) || (lua_type(L, 2) > LUA_TNIL && !lua_istable(L, 2))) {
+        return luaL_error(L, "Usage: GetEquipmentSetLocations(\"setName\" [, returnTable])");
+    }
+    auto* gh = getGameHandler(L);
+    const auto* set = equipmentSetByName(gh, lua_tostring(L, 1));
+    const auto* guids = (gh && set) ? gh->getEquipmentSetItems(set->setId) : nullptr;
+    if (!guids) return 0;
+    if (lua_istable(L, 2)) lua_pushvalue(L, 2); else lua_newtable(L);
+    const int table = lua_gettop(L);
+    auto put = [&](int slot, double location) {
+        lua_pushnumber(L, slot + 1);
+        lua_pushnumber(L, location);
+        lua_settable(L, table);
+    };
+    std::vector<int> wanted;
+    for (int i = 0; i < kEquipSlots; ++i) {
+        const uint64_t guid = (*guids)[static_cast<size_t>(i)];
+        if (guid <= 1) put(i, static_cast<double>(guid));
+        else wanted.push_back(i);
+    }
+    // The first slot still looking for this guid takes the location.
+    auto offer = [&](uint64_t guid, uint32_t location) {
+        if (guid == 0) return;
+        for (auto it = wanted.begin(); it != wanted.end(); ++it) {
+            if ((*guids)[static_cast<size_t>(*it)] != guid) continue;
+            put(*it, location);
+            wanted.erase(it);
+            return;
+        }
+    };
+    constexpr uint32_t kPlayer = 0x00100000, kBags = 0x00200000, kBank = 0x00400000;
+    for (int i = 0; i < kEquipSlots && !wanted.empty(); ++i)
+        offer(gh->getEquipSlotGuid(i), kPlayer | static_cast<uint32_t>(i + 1));
+    for (int i = 0; i < 16 && !wanted.empty(); ++i)
+        offer(gh->getBackpackItemGuid(i), kPlayer | kBags | static_cast<uint32_t>(i + 1));
+    for (int bag = 0; bag < game::Inventory::NUM_BAG_SLOTS && !wanted.empty(); ++bag) {
+        for (int i = 0; i < 36; ++i) {
+            offer(gh->getBagItemGuid(bag, i), kPlayer | kBags |
+                  (static_cast<uint32_t>(bag + 1) << 8) | static_cast<uint32_t>(i + 1));
+        }
+    }
+    if (gh->isBankOpen()) {
+        for (int i = 0; i < 28 && !wanted.empty(); ++i)
+            offer(gh->getBankSlotGuid(i), kBank | static_cast<uint32_t>(i + 1));
+        // A bank bag counts from one here; the manager adds the four carried
+        // bags when it unpacks it.
+        for (int bag = 0; bag < 7 && !wanted.empty(); ++bag) {
+            for (int i = 0; i < 36; ++i) {
+                offer(gh->getBankBagItemGuid(bag, i), kBank | kBags |
+                      (static_cast<uint32_t>(bag + 1) << 8) | static_cast<uint32_t>(i + 1));
+            }
+        }
+    }
+    for (int slot : wanted) put(slot, -1);
+    return 1;
 }
 
 static int lua_DeleteEquipmentSet(lua_State* L) {
@@ -1649,6 +1805,15 @@ static int lua_EquipmentManagerUnignoreSlotForSave(lua_State* L) {
     pendingIgnoredSlots().erase(static_cast<int>(luaL_optnumber(L, 1, 0)));
     return 0;
 }
+// EquipmentManagerIsSlotIgnoredForSave(slot) (0x005ad7c0).
+static int lua_EquipmentManagerIsSlotIgnoredForSave(lua_State* L) {
+    const int slot = luaToClientInt(L, 1);
+    if (slot < 1 || slot > kEquipSlots) {
+        return luaL_error(L, "Usage: EquipmentSetIsSlotIgnoredForSave(slot)");
+    }
+    lua_pushboolean(L, pendingIgnoredSlots().count(slot) ? 1 : 0);
+    return 1;
+}
 static int lua_EquipmentManagerClearIgnoredSlotsForSave(lua_State* L) {
     (void)L;
     pendingIgnoredSlots().clear();
@@ -1671,38 +1836,10 @@ static int lua_GetInventoryItemsForSlot(lua_State* L) {
     constexpr uint32_t kLocationBags   = 0x00200000;
     constexpr int      kBagBitOffset   = 8;
 
-    // Which inventory types the server sends fit which slot. A flyout that is a
-    // little generous about weapons is better than one that hides a sword,
-    // so a one-handed weapon is offered for either hand.
-    // Named rather than numbered: this client already spells the inventory
-    // types out, and the two agreed when checked against each other.
-    namespace IT = game::InvType;
-    auto fits = [](int slot, uint32_t t) {
-        switch (slot) {
-            case 1:  return t == IT::HEAD;
-            case 2:  return t == IT::NECK;
-            case 3:  return t == IT::SHOULDERS;
-            case 4:  return t == IT::SHIRT;
-            case 5:  return t == IT::CHEST || t == IT::ROBE;
-            case 6:  return t == IT::WAIST;
-            case 7:  return t == IT::LEGS;
-            case 8:  return t == IT::FEET;
-            case 9:  return t == IT::WRISTS;
-            case 10: return t == IT::HANDS;
-            case 11: case 12: return t == IT::FINGER;     // the two rings
-            case 13: case 14: return t == IT::TRINKET;    // the two trinkets
-            case 15: return t == IT::BACK;
-            case 16: return t == IT::ONE_HAND || t == IT::TWO_HAND || t == IT::MAIN_HAND;
-            case 17: return t == IT::ONE_HAND || t == IT::SHIELD ||
-                            t == IT::OFF_HAND || t == IT::HOLDABLE;
-            // Relics go in the ranged slot and have no name here, the list
-            // stopping at guns; twenty-eight is what the server sends for one.
-            case 18: return t == IT::RANGED_BOW || t == IT::THROWN ||
-                            t == IT::RANGED_GUN || t == 28;
-            case 19: return t == IT::TABARD;
-            default: return false;
-        }
-    };
+    // Which inventory types fit which slot. A flyout that is a little generous
+    // about weapons is better than one that hides a sword, so a one-handed
+    // weapon is offered for either hand.
+    auto fits = [](int slot, uint32_t t) { return game::inventoryTypeFitsSlot(slot, t); };
     auto offer = [&](uint32_t location, uint32_t itemId) {
         lua_pushnumber(L, static_cast<double>(location));
         lua_pushnumber(L, static_cast<double>(itemId));
@@ -2194,6 +2331,41 @@ bool auctionLess(game::GameHandler* gh, const std::string& column,
     // A column this does not know orders nothing, which is a valid ordering:
     // every row is equivalent, so a stable sort leaves the list alone.
     return false;
+}
+
+/// Re-sort a list by its keys, least significant first, each pass stable.
+void applyAuctionSort(game::GameHandler* gh, const std::string& which) {
+    auto* list = auctionListForSort(gh, which);
+    if (!list) return;
+    for (const auto& key : auctionSortState()[which]) {
+        std::stable_sort(list->auctions.begin(), list->auctions.end(),
+                         [&](const game::AuctionEntry& a, const game::AuctionEntry& b) {
+            return key.reverse ? auctionLess(gh, key.column, b, a)
+                               : auctionLess(gh, key.column, a, b);
+        });
+    }
+}
+
+/// The auction list a SortAuctionItems or IsAuctionSortReversed type names -
+/// "owner", "bidder" or "list", in any case - or empty for any other.
+std::string auctionSortList(const char* type) {
+    std::string t = type ? type : "";
+    toLowerInPlace(t);
+    return (t == "owner" || t == "bidder" || t == "list") ? t : std::string();
+}
+
+/// A sort column as 0x0059a850 accepts it, folded to lower case, or empty.
+std::string auctionSortColumn(const char* sort) {
+    static constexpr const char* kColumns[] = {
+        "quality", "level", "duration", "status", "bid", "name",
+        "minbidbuyout", "seller", "buyoutthenbid", "quantity", "buyout",
+    };
+    std::string s = sort ? sort : "";
+    toLowerInPlace(s);
+    for (const char* c : kColumns) {
+        if (s == c) return s;
+    }
+    return {};
 }
 
 }  // namespace
@@ -3968,6 +4140,8 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetCoinText",          lua_GetCoinText},
                 {"CloseMail",           lua_CloseMail},
                 {"SendMail",            lua_SendMail},
+                {"GetSendMailItemLink", lua_GetSendMailItemLink},
+                {"ClearSendMail",       lua_ClearSendMail},
                 {"SetSendMailMoney",    lua_SetSendMailMoney},
                 {"SetSendMailCOD",      lua_SetSendMailCOD},
                 {"AddSendMailMoney",    lua_AddSendMailMoney},
@@ -3992,6 +4166,9 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"EquipmentManagerIgnoreSlotForSave",   lua_EquipmentManagerIgnoreSlotForSave},
                 {"EquipmentManagerUnignoreSlotForSave", lua_EquipmentManagerUnignoreSlotForSave},
                 {"EquipmentManagerClearIgnoredSlotsForSave", lua_EquipmentManagerClearIgnoredSlotsForSave},
+                {"EquipmentManagerIsSlotIgnoredForSave", lua_EquipmentManagerIsSlotIgnoredForSave},
+                {"RenameEquipmentSet",  lua_RenameEquipmentSet},
+                {"GetEquipmentSetLocations", lua_GetEquipmentSetLocations},
                 {"LootSlotIsCoin",      lua_LootSlotIsCoin},
                 {"LootSlotIsItem",      lua_LootSlotIsItem},
                 {"IsFishingLoot",       lua_IsFishingLoot},
@@ -4788,19 +4965,74 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // Applied least significant first, each pass stable, which is
                 // how a multi-column sort is built out of single-column ones.
                 {"SortAuctionApplySort", [](lua_State* L) -> int {
+            applyAuctionSort(getGameHandler(L), luaL_optstring(L, 1, "list"));
+            return 0;
+        }},
+                // SortAuctionItems(type, sort) (0x0059dd00): the column
+                // becomes the list's primary key (0x0059a5e0 moves it to the
+                // front of at most twelve), reversed when it already was the
+                // primary and not reversed; the list is sorted again and its
+                // update event raised (0x0059cf90, 0x0059cff0, 0x0059d050).
+                {"SortAuctionItems", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) {
+                return luaL_error(L, "Usage: SortAuctionItems(\"type\", \"sort\")");
+            }
+            const std::string column = auctionSortColumn(lua_tostring(L, 2));
+            const std::string which = auctionSortList(lua_tostring(L, 1));
+            if (column.empty() || which.empty()) return 0;
+            auto& keys = auctionSortState()[which];
+            const bool reverse = !keys.empty() && keys.back().column == column &&
+                                 !keys.back().reverse;
+            std::erase_if(keys, [&](const AuctionSortKey& k) { return k.column == column; });
+            keys.push_back({column, reverse});
+            constexpr size_t kMaxSortKeys = 12;
+            if (keys.size() > kMaxSortKeys) keys.erase(keys.begin());
             auto* gh = getGameHandler(L);
-            const std::string which = luaL_optstring(L, 1, "list");
-            auto* list = auctionListForSort(gh, which);
-            if (!list) return 0;
-            for (const auto& key : auctionSortState()[which]) {
-                std::stable_sort(list->auctions.begin(), list->auctions.end(),
-                                 [&](const game::AuctionEntry& a,
-                                     const game::AuctionEntry& b) {
-                    return key.reverse ? auctionLess(gh, key.column, b, a)
-                                       : auctionLess(gh, key.column, a, b);
-                });
+            applyAuctionSort(gh, which);
+            if (gh) {
+                gh->fireAddonEvent(which == "owner"    ? "AUCTION_OWNED_LIST_UPDATE"
+                                   : which == "bidder" ? "AUCTION_BIDDER_LIST_UPDATE"
+                                                       : "AUCTION_ITEM_LIST_UPDATE", {});
             }
             return 0;
+        }},
+                // GetAuctionHouseDepositRate() (0x0059bc90): the open house's
+                // deposit rate, its AuctionHouse.dbc row's third column - 5 at
+                // a faction house, 25 at a neutral one - or 0 with none open.
+                {"GetAuctionHouseDepositRate", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            auto* am = gh ? gh->services().assetManager : nullptr;
+            double rate = 0;
+            if (am && am->isInitialized() && gh->getAuctionHouseId() != 0) {
+                auto houses = am->loadDBCOptional("AuctionHouse.dbc");
+                const int32_t row = houses && houses->isLoaded() && houses->getFieldCount() > 2
+                                        ? houses->findRecordById(gh->getAuctionHouseId()) : -1;
+                if (row >= 0) rate = houses->getInt32(static_cast<uint32_t>(row), 2);
+            }
+            lua_pushnumber(L, rate);
+            return 1;
+        }},
+                // IsAuctionSortReversed(type, sort) → reversed, sorted
+                // (0x0059ab90): 1 or nil for the direction, and 1, while the
+                // column is one the list sorts by; nil and nil otherwise.
+                {"IsAuctionSortReversed", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) {
+                return luaL_error(L, "Usage: IsAuctionSortReversed(\"type\", \"sort\")");
+            }
+            const std::string column = auctionSortColumn(lua_tostring(L, 2));
+            if (column.empty()) return 0;
+            const std::string which = auctionSortList(lua_tostring(L, 1));
+            if (!which.empty()) {
+                for (const auto& key : auctionSortState()[which]) {
+                    if (key.column != column) continue;
+                    if (key.reverse) lua_pushnumber(L, 1); else lua_pushnil(L);
+                    lua_pushnumber(L, 1);
+                    return 2;
+                }
+            }
+            lua_pushnil(L);
+            lua_pushnil(L);
+            return 2;
         }},
                 // The browse tab's filter column, which was empty: it is built
                 // from whatever GetAuctionItemClasses returns -

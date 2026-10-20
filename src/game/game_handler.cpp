@@ -3690,6 +3690,14 @@ void GameHandler::respondBfMgrQueueInvite(uint32_t battleId, bool accept) {
     if (socialHandler_) socialHandler_->respondBfMgrQueueInvite(battleId, accept);
 }
 
+void GameHandler::silenceGroupMember(const std::string& name, bool silence) {
+    if (socialHandler_) socialHandler_->silenceGroupMember(name, silence);
+}
+
+void GameHandler::requestBfMgrQueue(uint32_t battleId) {
+    if (socialHandler_) socialHandler_->requestBfMgrQueue(battleId);
+}
+
 void GameHandler::requestBfMgrExit(uint32_t battleId) {
     if (socialHandler_) socialHandler_->requestBfMgrExit(battleId);
 }
@@ -4384,38 +4392,23 @@ void GameHandler::clearPetitionDialog() {
 }
 
 void GameHandler::sortArenaTeamRosters(const std::string& key) {
-    if (key.empty()) return;
-    // The same column twice reverses. A different one starts again in the
-    // direction that column reads best: a name from A, a number from the top.
-    if (key == arenaSortKey_) {
-        arenaSortAscending_ = !arenaSortAscending_;
-    } else {
-        arenaSortKey_ = key;
-        arenaSortAscending_ = (key == "name" || key == "class");
-    }
-    const bool asc = arenaSortAscending_;
+    if (socialHandler_) socialHandler_->sortArenaTeamRosters(key);
+}
 
-    auto value = [&key](const ArenaTeamMember& m) -> uint64_t {
-        if (key == "class")        return m.classId;
-        if (key == "played")       return m.weekGames;
-        if (key == "won")          return m.weekWins;
-        if (key == "seasonplayed") return m.seasonGames;
-        if (key == "seasonwon")    return m.seasonWins;
-        if (key == "rating")       return m.personalRating;
-        return 0;
-    };
+const ArenaTeamRoster* GameHandler::getArenaTeamRoster(uint32_t teamId) const {
+    return socialHandler_ ? socialHandler_->getArenaTeamRoster(teamId) : nullptr;
+}
 
-    for (auto& roster : arenaTeamRosters_) {
-        std::stable_sort(roster.members.begin(), roster.members.end(),
-            [&](const ArenaTeamMember& a, const ArenaTeamMember& b) {
-                if (key == "name") {
-                    return asc ? (a.name < b.name) : (b.name < a.name);
-                }
-                const uint64_t va = value(a), vb = value(b);
-                if (va == vb) return a.name < b.name;   // steady under ties
-                return asc ? (va < vb) : (vb < va);
-            });
-    }
+bool GameHandler::arenaRosterShowOffline() const {
+    return !socialHandler_ || socialHandler_->arenaRosterShowOffline();
+}
+
+uint8_t GameHandler::battlefieldArenaFaction() const {
+    return socialHandler_ ? socialHandler_->battlefieldArenaFaction() : 0;
+}
+
+void GameHandler::setArenaRosterShowOffline(bool show) {
+    if (socialHandler_) socialHandler_->setArenaRosterShowOffline(show);
 }
 
 void GameHandler::requestItemRefundInfo(uint64_t itemGuid) {
@@ -4755,6 +4748,11 @@ const std::vector<GameHandler::LfgRoleCheckDungeon>&
 GameHandler::getLfgRoleCheckDungeons() const {
     static const std::vector<LfgRoleCheckDungeon> empty;
     return socialHandler_ ? socialHandler_->getLfgRoleCheckDungeons() : empty;
+}
+
+const std::vector<LfgRoleCheckMember>& GameHandler::getLfgRoleCheckMemberList() const {
+    static const std::vector<LfgRoleCheckMember> kNone;
+    return socialHandler_ ? socialHandler_->getLfgRoleCheckMemberList() : kNone;
 }
 
 uint8_t GameHandler::getLfgRoleCheckMembers() const {

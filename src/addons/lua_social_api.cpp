@@ -5,6 +5,8 @@
 #include <cstring>
 #include <iterator>
 #include <vector>
+#include "game/opcode_table.hpp"
+#include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "game/chat_handler.hpp"
@@ -454,6 +456,26 @@ uint32_t arenaTeamIdAtIndex(game::GameHandler* gh, int index) {
     const auto& teams = gh->getArenaTeamStats();
     if (index > static_cast<int>(teams.size())) return 0;
     return teams[static_cast<size_t>(index) - 1].teamId;
+}
+
+/// The raid member the roster has selected, by guid (0x00beb610).
+static uint64_t& raidRosterSelection() {
+    static uint64_t guid = 0;
+    return guid;
+}
+
+/// ChannelSilenceAll and its pair: a channel that names nothing is left
+/// alone without a word (0x004fe160 answers null); one that does is sent with
+/// the member, both strings or the usage error (0x004fe330).
+static int channelSilenceAll(lua_State* L, bool silence, const char* fn) {
+    auto* gh = getGameHandler(L);
+    auto* chat = gh ? gh->getChatHandler() : nullptr;
+    if (!chat || !lua_isstring(L, 1) || chat->resolveChannelArg(lua_tostring(L, 1)).empty()) {
+        return 0;
+    }
+    if (!lua_isstring(L, 2)) return luaL_error(L, "Usage: %s(\"channel\", \"name\")", fn);
+    chat->channelSilenceAll(lua_tostring(L, 1), lua_tostring(L, 2), silence);
+    return 0;
 }
 
 // IsInGuild() → boolean
@@ -2258,16 +2280,83 @@ void registerSocialLuaAPI(lua_State* L) {
                                  members[static_cast<size_t>(b) - 1].name);
             return 0;
         }},
-                // Which row the raid roster has highlighted. Purely local -
-                // the raid UI reads it back through its own frames, and
-                // nothing is sent for it.
-                {"SetRaidRosterSelection", [](lua_State* L) -> int { (void)L; return 0; }},
+                // Which raid member the roster has highlighted, kept by guid
+                // (0x00beb610) so it follows the member as the roster moves.
+                // SetRaidRosterSelection(index) (0x00572bc0) takes the
+                // index-th raid member, or nobody past the end;
+                // GetRaidRosterSelection() (0x00572c50) answers where that
+                // member is now, from one, or 0. Nothing is sent for either.
+                {"SetRaidRosterSelection", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetRaidRosterSelection(index)");
+            auto* gh = getGameHandler(L);
+            const int64_t index = std::llround(lua_tonumber(L, 1)) - 1;
+            const auto* raid = gh && gh->getPartyData().groupType == 1 ? &gh->getPartyData().members : nullptr;
+            raidRosterSelection() = (raid && index >= 0 && index < static_cast<int64_t>(raid->size()))
+                                        ? (*raid)[static_cast<size_t>(index)].guid : 0;
+            return 0;
+        }},
+                {"GetRaidRosterSelection", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            int index = 0;
+            if (gh && raidRosterSelection() != 0 && gh->getPartyData().groupType == 1) {
+                const auto& raid = gh->getPartyData().members;
+                for (size_t i = 0; i < raid.size(); ++i) {
+                    if (raid[i].guid == raidRosterSelection()) { index = static_cast<int>(i) + 1; break; }
+                }
+            }
+            lua_pushnumber(L, index);
+            return 1;
+        }},
                 // Voice chat again: there is none, so nobody is muted or
                 // silenced and asking to mute them does nothing.
                 {"IsMuted",             luaReturnFalse},
                 {"UnitIsSilenced",      luaReturnFalse},
                 {"AddOrDelMute",        [](lua_State* L) -> int { (void)L; return 0; }},
                 {"ChannelSilenceVoice", [](lua_State* L) -> int { (void)L; return 0; }},
+                // ChannelSilenceAll / ChannelUnSilenceAll("channel", "name")
+                // (0x00501250, 0x00501400) - see ChatHandler::channelSilenceAll.
+                {"ChannelSilenceAll", [](lua_State* L) -> int {
+            return channelSilenceAll(L, true, "ChannelSilenceAll");
+        }},
+                {"ChannelUnSilenceAll", [](lua_State* L) -> int {
+            return channelSilenceAll(L, false, "ChannelUnSilenceAll");
+        }},
+                // SetChannelWatch("channel") / ClearChannelWatch() (0x004ffc30,
+                // 0x004ffc50).
+                {"SetChannelWatch", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: SetChannelWatch(\"channel\")");
+            auto* gh = getGameHandler(L);
+            if (auto* chat = gh ? gh->getChatHandler() : nullptr) chat->setChannelWatch(lua_tostring(L, 1));
+            return 0;
+        }},
+                {"ClearChannelWatch", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (auto* chat = gh ? gh->getChatHandler() : nullptr) chat->clearChannelWatch();
+            return 0;
+        }},
+                // EnumerateServerChannels() → the zone's server channels by
+                // name (0x004ff200).
+                {"EnumerateServerChannels", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            auto* chat = gh ? gh->getChatHandler() : nullptr;
+            if (!chat) return 0;
+            const auto names = chat->serverChannelNames();
+            if (!lua_checkstack(L, static_cast<int>(names.size()) + 1)) return 0;
+            for (const auto& n : names) lua_pushstring(L, n.c_str());
+            return static_cast<int>(names.size());
+        }},
+                // SilenceMember / UnSilenceMember("name") (0x0052d9c0,
+                // 0x0052daf0) - see SocialHandler::silenceGroupMember.
+                {"SilenceMember", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L); gh && lua_isstring(L, 1))
+                gh->silenceGroupMember(lua_tostring(L, 1), true);
+            return 0;
+        }},
+                {"UnSilenceMember", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L); gh && lua_isstring(L, 1))
+                gh->silenceGroupMember(lua_tostring(L, 1), false);
+            return 0;
+        }},
                 {"ChannelUnSilenceVoice", [](lua_State* L) -> int { (void)L; return 0; }},
                 // Vehicles are not modelled in the raid frames.
                 {"UnitTargetsVehicleInRaidUI", luaReturnFalse},
@@ -2318,6 +2407,13 @@ void registerSocialLuaAPI(lua_State* L) {
             const auto battleId = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
             gh->respondBfMgrQueueInvite(battleId ? battleId : gh->getBfMgrBattleId(),
                                         lua_toboolean(L, 2) != 0);
+            return 0;
+        }},
+                // BattlefieldMgrQueueRequest(battleId) (0x0054e1a0 ->
+                // 0x0054d590): CMSG_BATTLEFIELD_MGR_QUEUE_REQUEST with it.
+                {"BattlefieldMgrQueueRequest", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (gh) gh->requestBfMgrQueue(static_cast<uint32_t>(luaToClientInt(L, 1)));
             return 0;
         }},
                 {"BattlefieldMgrExitRequest", [](lua_State* L) -> int {
@@ -3748,7 +3844,17 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"EnableAllAddOns",          [](lua_State* L) -> int {
                     return setAllAddOnsEnabled(L, true);
                 }},
-                {"SetTaxiBenchmarkMode",     [](lua_State* L) -> int { (void)L; return 0; }},
+                // SetTaxiBenchmarkMode([on]) (0x00517b50):
+                // CMSG_SET_TAXI_BENCHMARK_MODE and the switch, one byte; the
+                // server answers in PLAYER_FLAGS 0x20000.
+                {"SetTaxiBenchmarkMode",     [](lua_State* L) -> int {
+                    auto* gh = getGameHandler(L);
+                    if (!gh || game::wireOpcode(game::Opcode::CMSG_SET_TAXI_BENCHMARK_MODE) == 0xFFFF) return 0;
+                    network::Packet packet(game::wireOpcode(game::Opcode::CMSG_SET_TAXI_BENCHMARK_MODE));
+                    packet.writeUInt8(luaClientSwitchArg(L, 1, true) ? 1 : 0);
+                    gh->sendInterfaceRequest(packet);
+                    return 0;
+                }},
                 // 0x00564b90 asks the taint check (kind 3) before stopping.
                 {"StopMacro",                [](lua_State* L) -> int {
                     taint::allowed(L, 3);

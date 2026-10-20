@@ -236,3 +236,19 @@ TEST_CASE("MSG_PVP_LOG_DATA: an arena's ratings come before both names", "[battl
     CHECK(data.players[0].damageDone == 81234u);
     CHECK(data.players[0].healingDone == 4021u);
 }
+
+TEST_CASE("an arena under way says which side the player is on",
+          "[battleground][packet]") {
+    // Status 3: map, the eight unused bytes, the time left, the time run, and
+    // the arena side byte 0x0054ae40 keeps at 0x00bea54a.
+    auto bytes = serverStatusBytes(0, 2, 6, 80, 80, 7, true, 3,
+                                   {559, 0, 0, 120000, 45000});
+    bytes.push_back(1);
+    auto p = packetOf(bytes);
+    BattlefieldStatusData d;
+    REQUIRE(BattlefieldStatusPacket::parse(p, d));
+    CHECK(d.statusId == 3u);
+    CHECK(d.mapId == 559u);
+    CHECK(d.elapsedMs == 45000u);
+    CHECK(d.arenaFaction == 1);
+}

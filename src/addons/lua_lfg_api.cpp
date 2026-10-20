@@ -35,6 +35,7 @@
 #include "game/interface_text.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -327,6 +328,24 @@ void registerLfgLuaAPI(lua_State* L) {
     {"SetLFGHeaderCollapsed", [](lua_State* L) -> int {
         const int id = static_cast<int>(luaL_optinteger(L, 1, 0));
         if (id != 0) collapsedHeaders()[id] = lua_toboolean(L, 2) != 0;
+        return 0;
+    }},
+    // ClearLFGDungeon(type, id) (0x00559500 -> 0x005593a0): one dungeon taken
+    // out of what is picked - a type the client knows (under 7) and an id
+    // LFGDungeons.dbc has.
+    {"ClearLFGDungeon", [](lua_State* L) -> int {
+        if (!lua_isnumber(L, 1) && !lua_isnumber(L, 2)) {
+            return luaL_error(L, "Usage: ClearLFGDungeon(type, id)");
+        }
+        const int64_t type = std::llround(lua_tonumber(L, 1));
+        const int64_t id = std::llround(lua_tonumber(L, 2));
+        auto* gh = getGameHandler(L);
+        if (!gh || type < 0 || type >= 7) return 0;
+        for (const auto& d : gh->getLfgDungeons()) {
+            if (static_cast<int64_t>(d.id) != id) continue;
+            enabledDungeons().erase(static_cast<int>(id));
+            break;
+        }
         return 0;
     }},
     {"ClearAllLFGDungeons", [](lua_State* L) -> int {

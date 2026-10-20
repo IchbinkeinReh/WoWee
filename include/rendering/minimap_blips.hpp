@@ -5,7 +5,9 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <algorithm>
 #include <vector>
 
@@ -327,13 +329,17 @@ inline std::array<std::array<float, 2>, 4> rimArrowUVs(float bearing) {
 /// sampler treats the outside. The coordinates are a linear map M of the
 /// corner's offset over the half size, and M times M is half the identity, so
 /// the way back is 2M.
-inline std::array<float, 2> rimArrowArtPoint(float bearing, float u, float v) {
+///
+/// `size` is the quad's side: the rim arrow's, or a vehicle's (0x00580720
+/// turns its art the same way).
+inline std::array<float, 2> rimArrowArtPoint(float bearing, float u, float v,
+                                             float size = kRimArrowSize) {
     const float a = bearing - 2.3561945f;
     const float c = std::cos(a);
     const float s = std::sin(a);
     const float du = u - 0.5f;
     const float dv = v - 0.5f;
-    const float h = kRimArrowSize * 0.5f;
+    const float h = size * 0.5f;
     return {(-(c + s) * du + (c - s) * dv) * h,
             ((c - s) * du + (c + s) * dv) * h};
 }
@@ -342,6 +348,56 @@ inline std::array<float, 2> rimArrowArtPoint(float bearing, float u, float v) {
 /// y up: kRimArrowDistance along the bearing (0x00580ae0).
 inline std::array<float, 2> rimArrowOffset(float bearing) {
     return {-std::sin(bearing) * kRimArrowDistance, std::cos(bearing) * kRimArrowDistance};
+}
+
+/// A vehicle's icon: 0.0375 of the screen, 48 units across - three blips
+/// (0x0057dca0's second quad, 0x00bf7ff8).
+constexpr float kVehicleIconSize = 0.0375f * (5.0f / 3.0f) * 768.0f;
+
+/// Vehicle.dbc Flags 0x10000000: the vehicle is listed for the battlefield
+/// maps and the minimap while it is in the world (0x0054aba0 on its
+/// creation, 0x00549740 as it goes), forty at most.
+constexpr uint32_t kVehicleFlagMapIcon = 0x10000000;
+constexpr size_t kMaxListedVehicles = 40;
+
+/// UNIT_FLAG_POSSESSED (UNIT_FIELD_FLAGS 0x01000000, the descriptor's +0xd7
+/// bit 0): someone drives the vehicle.
+constexpr uint32_t kUnitFlagPossessed = 0x01000000;
+
+/// The minimap's vehicle icons, in the order 0x005832f0 loads them and
+/// 0x00580720 draws their lists (the fifth, a second Ground-Unoccupied, is
+/// never filled).
+enum class VehicleIcon : uint8_t {
+    GroundUnoccupied,  ///< Interface\Minimap\Vehicle-Ground-Unoccupied
+    GroundOccupied,    ///< Vehicle-Ground-Occupied
+    AirUnoccupied,     ///< Vehicle-Air-Unoccupied
+    AirOccupied,       ///< Vehicle-Air-Occupied
+    AirHorde,          ///< Vehicle-Air-Horde
+    AirAlliance,       ///< Vehicle-Air-Alliance
+};
+constexpr size_t kVehicleIconCount = 6;
+
+/// Which icon a listed vehicle gets (0x00581e80, the jump table at
+/// 0x005831ac): by Vehicle.dbc UiLocomotionType (+0x88) - 0 on the ground
+/// and 1 in the air, each occupied while someone drives it; 3 the Horde's
+/// and 4 the Alliance's aircraft whoever drives; 2 and anything else none.
+constexpr std::optional<VehicleIcon> vehicleIcon(uint32_t uiLocomotionType, bool possessed) {
+    switch (uiLocomotionType) {
+    case 0: return possessed ? VehicleIcon::GroundOccupied : VehicleIcon::GroundUnoccupied;
+    case 1: return possessed ? VehicleIcon::AirOccupied : VehicleIcon::AirUnoccupied;
+    case 3: return VehicleIcon::AirHorde;
+    case 4: return VehicleIcon::AirAlliance;
+    default: return std::nullopt;
+    }
+}
+
+/// The player's arrow while the player sits in a vehicle: drawn at alpha
+/// 0xaa, unless the player drives a listed vehicle in the map's reach,
+/// which then gets no icon and leaves the arrow whole (0x00581e80 ->
+/// 0x00487a10 on the arrow's texture).
+constexpr uint8_t kPassengerArrowAlpha = 0xaa;
+constexpr uint8_t playerArrowAlpha(bool inVehicleSeat, bool drivesListedVehicle) {
+    return inVehicleSeat && !drivesListedVehicle ? kPassengerArrowAlpha : 0xff;
 }
 
 }  // namespace wowee::rendering::minimap_blips

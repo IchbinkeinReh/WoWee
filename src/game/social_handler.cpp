@@ -3866,6 +3866,9 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     // 0x0054ae40 drops a status for any slot past the second.
     if (!isPreWotlk() && queueSlot > 1) return;
     bgJoinPendingType_ = 0;  // answered
+    // One byte for the whole client, the last in-progress status's
+    // (0x0054ae40 keeps it at 0x00bea54a).
+    if (status.statusId == 3) battlefieldArenaFaction_ = status.arenaFaction;
     const uint8_t arenaType = status.arenaType;
     const uint32_t bgTypeId = status.bgTypeId;
     const uint32_t statusId = status.statusId;
@@ -4457,6 +4460,7 @@ void SocialHandler::leaveLfgGroup() {
         lfgState_ = LfgState::None;
         lfgRoleCheckDungeons_.clear();
         lfgRoleCheckMembers_ = 0;
+        lfgRoleCheckMemberList_.clear();
         owner_.fireAddonEvent("LFG_ROLE_CHECK_HIDE");
     }
     if (lfgProposalValid_) {
@@ -4505,12 +4509,16 @@ void SocialHandler::handleLfgRoleCheckUpdate(network::Packet& packet) {
     // choice already made. The first member stands in when the player is
     // not listed, as there.
     bool selfChosen = false;
+    lfgRoleCheckMemberList_.clear();
     for (uint8_t i = 0; i < lfgRoleCheckMembers_ && packet.hasRemaining(14); ++i) {
-        const uint64_t guid = packet.readUInt64();
-        const bool chosen = packet.readUInt8() != 0;
-        packet.readUInt32();  // roles
-        packet.readUInt8();   // level
-        if (i == 0 || guid == owner_.getPlayerGuid()) selfChosen = chosen;
+        LfgRoleCheckMember m;
+        m.guid = packet.readUInt64();
+        m.chosen = packet.readUInt8() != 0;
+        m.roles = packet.readUInt32();
+        m.level = packet.readUInt8();
+        if (i == 0 || m.guid == owner_.getPlayerGuid()) selfChosen = m.chosen;
+        // Kept for GetLFGRoleUpdateMember (0x00554750, the list at 0x00beaa68).
+        lfgRoleCheckMemberList_.push_back(m);
     }
 
     if (roleCheckState == 1) lfgState_ = LfgState::Queued;
@@ -4981,10 +4989,12 @@ void SocialHandler::handleArenaTeamRoster(network::Packet& packet) {
         // left ate the next member's guid on every roster of more than one.
         if (hasTrailingFloats) {
             if (!packet.hasRemaining(8)) break;
-            packet.readFloat(); packet.readFloat();
+            m.gdfValue1 = packet.readFloat();
+            m.gdfValue2 = packet.readFloat();
         }
         roster.members.push_back(std::move(m));
     }
+    sortArenaRoster(roster);
     bool replaced = false;
     for (auto& r : arenaTeamRosters_) { if (r.teamId == teamId) { r = std::move(roster); replaced = true; break; } }
     if (!replaced) arenaTeamRosters_.push_back(std::move(roster));
@@ -5001,6 +5011,61 @@ void SocialHandler::handleArenaTeamRoster(network::Packet& packet) {
     // would do it too, zero being true in Lua.
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("ARENA_TEAM_ROSTER_UPDATE", {});
+    }
+}
+
+void SocialHandler::sortArenaTeamRosters(const std::string& key) {
+    if (key.empty()) return;
+    // The same column twice reverses. A different one starts again in the
+    // direction that column reads best: a name from A, a number from the top.
+    if (key == arenaSortKey_) {
+        arenaSortAscending_ = !arenaSortAscending_;
+    } else {
+        arenaSortKey_ = key;
+        arenaSortAscending_ = (key == "name" || key == "class");
+    }
+    for (auto& roster : arenaTeamRosters_) sortArenaRoster(roster);
+}
+
+void SocialHandler::sortArenaRoster(ArenaTeamRoster& roster) const {
+    const std::string& key = arenaSortKey_;
+    const bool asc = arenaSortAscending_;
+    const bool onlineFirst = !arenaRosterShowOffline_;
+    auto value = [&key](const ArenaTeamMember& m) -> uint64_t {
+        if (key == "class")        return m.classId;
+        if (key == "played")       return m.weekGames;
+        if (key == "won")          return m.weekWins;
+        if (key == "seasonplayed") return m.seasonGames;
+        if (key == "seasonwon")    return m.seasonWins;
+        if (key == "rating")       return m.personalRating;
+        return 0;
+    };
+    std::stable_sort(roster.members.begin(), roster.members.end(),
+        [&](const ArenaTeamMember& a, const ArenaTeamMember& b) {
+            // 0x005a2bd0: with offline members hidden, whoever is online
+            // comes first whatever the column, so the rows GetNumArenaTeamMembers
+            // counts are the first ones.
+            if (onlineFirst && a.online != b.online) return a.online;
+            if (key.empty()) return false;
+            if (key == "name") {
+                return asc ? (a.name < b.name) : (b.name < a.name);
+            }
+            const uint64_t va = value(a), vb = value(b);
+            if (va == vb) return a.name < b.name;   // steady under ties
+            return asc ? (va < vb) : (vb < va);
+        });
+}
+
+void SocialHandler::setArenaRosterShowOffline(bool show) {
+    if (show == arenaRosterShowOffline_) return;
+    arenaRosterShowOffline_ = show;
+    for (auto& roster : arenaTeamRosters_) {
+        if (roster.members.empty()) continue;
+        sortArenaRoster(roster);
+        // No arguments, as on arrival: pvpframe reads one as "ask again".
+        if (owner_.addonEventCallbackRef()) {
+            owner_.addonEventCallbackRef()("ARENA_TEAM_ROSTER_UPDATE", {});
+        }
     }
 }
 
@@ -5192,6 +5257,7 @@ void SocialHandler::resetForWorldEntry() {
     lfgBootVotes_ = lfgBootTotal_ = lfgBootTimeLeft_ = lfgBootNeeded_ = 0;
     lfgRoleCheckDungeons_.clear();
     lfgRoleCheckMembers_ = 0;
+    lfgRoleCheckMemberList_.clear();
     lfgBootInProgress_ = lfgBootDidVote_ = lfgBootMyVote_ = false;
     lfgBootTargetName_.clear();
     lfgBootReason_.clear();
@@ -5508,6 +5574,49 @@ void SocialHandler::respondBfMgrQueueInvite(uint32_t battleId, bool accept) {
     owner_.bfMgrInvitePendingRef() = false;
     LOG_INFO("respondBfMgrQueueInvite: battle ", battleId,
              accept ? " accepted" : " declined");
+}
+
+void SocialHandler::silenceGroupMember(const std::string& name, bool silence) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (!owner_.isInGroup() || name.empty()) return;
+    const auto& party = owner_.getPartyData();
+    auto same = [](const std::string& a, const std::string& b) {
+        return a.size() == b.size() &&
+               std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+                   return std::tolower(static_cast<unsigned char>(x)) ==
+                          std::tolower(static_cast<unsigned char>(y));
+               });
+    };
+    uint64_t target = 0;
+    for (const auto& m : party.members) {
+        if (same(m.name, name)) { target = m.guid; break; }
+    }
+    if (target == 0) {
+        gameError(owner_, ErrTo::Chat, "ERR_TARGET_NOT_IN_GROUP_S", "%s is not in your party.", {name});
+        return;
+    }
+    // The party's leader; in a raid its leader or an assistant (0x00572740).
+    const uint64_t self = owner_.getPlayerGuid();
+    bool allowed = party.leaderGuid == self;
+    if (!allowed && party.groupType == 1) {
+        constexpr uint8_t kAssistant = 0x01;
+        for (const auto& m : party.members) {
+            if (m.guid == self) { allowed = (m.flags & kAssistant) != 0; break; }
+        }
+    }
+    if (!allowed) return;
+    // The byte after the guid: whether the map is a battleground or an arena
+    // (0x00572f50, Map.dbc InstanceType 3 or 4).
+    const int instanceType = owner_.currentMapInstanceType();
+    network::Packet pkt(wireOpcode(silence ? Opcode::CMSG_PARTY_SILENCE : Opcode::CMSG_PARTY_UNSILENCE));
+    pkt.writeUInt64(target);
+    pkt.writeUInt8((instanceType == 3 || instanceType == 4) ? 1 : 0);
+    owner_.getSocket()->send(pkt);
+}
+
+void SocialHandler::requestBfMgrQueue(uint32_t battleId) {
+    sendBfMgrResponse(Opcode::CMSG_BATTLEFIELD_MGR_QUEUE_REQUEST, battleId, false, false);
+    LOG_INFO("requestBfMgrQueue: battle ", battleId);
 }
 
 void SocialHandler::requestBfMgrExit(uint32_t battleId) {

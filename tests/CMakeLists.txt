@@ -3131,6 +3131,11 @@ wowee_add_test(test_minimap_zoom
 wowee_add_test(test_minimap_blips
     SOURCES test_minimap_blips.cpp)
 
+# ── test_unit_model_events ───────────────────────────────────
+# What a unit's model events play: fidgets, wings, births (rendering/unit_model_events.hpp).
+wowee_add_test(test_unit_model_events
+    SOURCES test_unit_model_events.cpp)
+
 # ── test_texture_variants ────────────────────────────────────
 # Interface art for additive drawing and Texture:SetDesaturated.
 wowee_add_test(test_texture_variants
@@ -3227,3 +3232,21 @@ wowee_add_test(test_player_facing
 # model once, the first doodad to use it carrying it, results in doodad order.
 wowee_add_test(test_doodad_model_plan
     SOURCES test_doodad_model_plan.cpp)
+
+# ── test_binding_command ─────────────────────────────────────
+# The SPELL, ITEM, MACRO and CLICK binding commands the key dispatch carries
+# out itself (0x00563150), as SetBindingSpell and its siblings write them.
+wowee_add_test(test_binding_command
+    SOURCES test_binding_command.cpp)
+
+# ── test_client_cvar_registry ────────────────────────────────
+# The client's own CVars and their registration flags (0x00767fc0), which
+# GetCVarInfo and GetCVarAbsoluteMin/Max answer from.
+wowee_add_test(test_client_cvar_registry
+    SOURCES test_client_cvar_registry.cpp ${CMAKE_SOURCE_DIR}/src/addons/client_cvar_registry.cpp)
+
+# ── test_toc_dependencies ────────────────────────────────────
+# An addon's required dependencies as the client reads its TOC (0x005f86a0),
+# which GetAddOnDependencies answers.
+wowee_add_test(test_toc_dependencies
+    SOURCES test_toc_dependencies.cpp ${CMAKE_SOURCE_DIR}/src/addons/toc_parser.cpp)

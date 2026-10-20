@@ -235,6 +235,8 @@ public:
     /// through a parent before the frame that would have noticed ran.
     [[nodiscard]] bool editBoxHasFocus() const;
     void setEditFocus(uint32_t wid);
+    /// The edit box taking keystrokes, or zero (GetCurrentKeyBoardFocus).
+    [[nodiscard]] uint32_t editFocus() const { return focusedWid_; }
 
     // SavedVariables: load globals from file, save globals to file
     bool loadSavedVariables(const std::string& path);
@@ -402,6 +404,11 @@ private:
     /// The edit box taking keystrokes, or zero. One at a time, which is
     /// what focus means.
     uint32_t focusedWid_ = 0;
+    /// Keys held down on a SPELL, ITEM, MACRO or CLICK binding, by key code,
+    /// with the command they were pressed on. The release is that binding's
+    /// whatever the modifiers are by then, as 0x004f6b70 keeps the modifiers a
+    /// key went down with for its release.
+    std::unordered_map<int, std::string> heldDirectBindings_;
     /// Per button, because a press and its release belong together: sliding off
     /// a button between them is how a player changes their mind, and holding
     /// one button while clicking another must not confuse the first.

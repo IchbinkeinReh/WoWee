@@ -855,6 +855,8 @@ public:
     void declineBfMgrInvite();
     void respondBfMgrQueueInvite(uint32_t battleId, bool accept);
     void requestBfMgrExit(uint32_t battleId);
+    void requestBfMgrQueue(uint32_t battleId);
+    void silenceGroupMember(const std::string& name, bool silence);
 
     // WotLK Calendar
     /// CalendarGetNumPendingInvites (0x005bec70): invitations from anyone
@@ -1335,6 +1337,10 @@ public:
     /// A commentator's request, as CommentatorFrame.cpp builds it
     /// (CMSG_COMMENTATOR_*): sent in the world.
     void sendCommentatorRequest(network::Packet& packet);
+    /// A request an interface function builds whole, the way the client's
+    /// own Lua functions put theirs on the wire: sent in the world, and only
+    /// when the expansion has the opcode.
+    void sendInterfaceRequest(network::Packet& packet);
     // Returns true once after SMSG_PET_RENAMEABLE; consuming the flag clears it.
     bool consumePetRenameablePending() { bool v = petRenameablePending_; petRenameablePending_ = false; return v; }
     /// The same flag without taking it. The unit menu asks whether a rename is
@@ -1421,7 +1427,7 @@ public:
     uint8_t  getStableSlots() const { return stableNumSlots_; }
     const std::vector<StabledPet>& getStabledPets() const { return stabledPets_; }
     void requestStabledPetList();          // CMSG MSG_LIST_STABLED_PETS
-    void stablePet(uint8_t slot);          // CMSG_STABLE_PET (store active pet in slot)
+    void stablePet();                      // CMSG_STABLE_PET (the active pet into a free slot)
     void unstablePet(uint32_t petNumber);  // CMSG_UNSTABLE_PET (retrieve to active)
     void buyStableSlot();                  // CMSG_BUY_STABLE_SLOT (next slot from the open stable master)
     void abandonPet();                     // CMSG_PET_ABANDON (give a hunter pet up for good)
@@ -2472,6 +2478,7 @@ public:
     using LfgRoleCheckDungeon = game::LfgRoleCheckDungeon;
     const std::vector<LfgRoleCheckDungeon>& getLfgRoleCheckDungeons() const;
     uint8_t getLfgRoleCheckMembers() const;
+    const std::vector<LfgRoleCheckMember>& getLfgRoleCheckMemberList() const;
     bool isLfgBootInProgress() const;
     bool hasLfgBootVoted() const;
     bool getLfgBootMyVote() const;
@@ -2494,12 +2501,20 @@ public:
     /// ever shows one at a time.
     void sortArenaTeamRosters(const std::string& key);
 
-    const ArenaTeamRoster* getArenaTeamRoster(uint32_t teamId) const {
-        for (const auto& r : arenaTeamRosters_) {
-            if (r.teamId == teamId) return &r;
-        }
-        return nullptr;
-    }
+    /// The roster SMSG_ARENA_TEAM_ROSTER brought, which the social handler
+    /// keeps. GameHandler kept a second list of its own that nothing filled,
+    /// so every roster the server sent was stored where this never looked.
+    const ArenaTeamRoster* getArenaTeamRoster(uint32_t teamId) const;
+
+    /// Whether the arena team rosters list offline members among the online
+    /// ones (0x00acf834, on until SetArenaTeamRosterShowOffline turns it off).
+    /// Off, each roster is kept online first and GetNumArenaTeamMembers
+    /// counts only the online.
+    bool arenaRosterShowOffline() const;
+    void setArenaRosterShowOffline(bool show);
+    /// The arena side the last in-progress battlefield status gave
+    /// (GetBattlefieldArenaFaction, 0x0054a280), 0 before one has come.
+    uint8_t battlefieldArenaFaction() const;
 
     // ---- Loot ----
     void lootTarget(uint64_t guid);
@@ -2569,8 +2584,10 @@ public:
     }
     bool supportsEquipmentSets() const;
     void useEquipmentSet(uint32_t setId);
+    /// ignoredSlotMask: bit i set leaves equipment slot i out of the set.
     void saveEquipmentSet(const std::string& name, const std::string& iconName = "INV_Misc_QuestionMark",
-                          uint64_t existingGuid = 0, uint32_t setIndex = 0xFFFFFFFF);
+                          uint64_t existingGuid = 0, uint32_t setIndex = 0xFFFFFFFF,
+                          uint32_t ignoredSlotMask = 0);
     void deleteEquipmentSet(uint64_t setGuid);
 
     // NPC Gossip
@@ -2585,6 +2602,9 @@ public:
     // Quest-starting items: right-click triggers quest offer dialog via questgiver protocol
     void offerQuestFromItem(uint64_t itemGuid, uint32_t questId);
     uint64_t getBagItemGuid(int bagIndex, int slotIndex) const;
+    /// The item in a bank slot, and in a bank bag's slot (all 0-based).
+    uint64_t getBankSlotGuid(int slot) const;
+    uint64_t getBankBagItemGuid(int bag, int slot) const;
     bool isGossipWindowOpen() const;
     const GossipMessageData& getCurrentGossip() const;
     const std::string& getNpcText(uint32_t textId) const;
@@ -3871,6 +3891,8 @@ public:
     void auctionListOwnerItems(uint32_t offset = 0);
     void auctionListBidderItems(uint32_t offset = 0);
     bool isAuctionHouseOpen() const;
+    /// The open auction house's AuctionHouse.dbc row (0x00c0f3f0), 0 when none.
+    uint32_t getAuctionHouseId() const;
     uint64_t getAuctioneerGuid() const;
     const AuctionListResult& getAuctionBrowseResults() const;
     const AuctionListResult& getAuctionOwnerResults() const;
@@ -5321,8 +5343,6 @@ private:
     // Instance / raid lockouts
 
     // Arena team stats (indexed by team slot, updated by SMSG_ARENA_TEAM_STATS)
-    // Arena team rosters (updated by SMSG_ARENA_TEAM_ROSTER)
-    std::vector<ArenaTeamRoster> arenaTeamRosters_;
 
     // BG scoreboard (MSG_PVP_LOG_DATA)
 
@@ -5489,10 +5509,6 @@ private:
     bool petActionsOnBonusBar_ = false;
     uint32_t possessSpellId_ = 0;
     void setPossessSpell(uint32_t spellId);
-    /// The column the arena rosters are sorted by, so clicking it again knows
-    /// to reverse rather than re-sort the same way.
-    std::string arenaSortKey_;
-    bool arenaSortAscending_ = true;
 
     // Taxi / Flight Paths
     std::unordered_map<uint64_t, bool> taxiNpcHasRoutes_;  // guid -> has new/available routes

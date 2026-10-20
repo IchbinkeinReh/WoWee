@@ -3320,6 +3320,11 @@ struct BattlefieldStatusData {
     uint32_t timeInQueueMs = 0;    ///< status 1
     uint32_t mapId = 0;            ///< status 2 and 3
     uint32_t inviteTimeoutMs = 0;  ///< status 2 - how long the invitation lasts
+    /// Status 3 only, after the field above (0x0054ae40): how long the
+    /// battle has run, and the side of an arena the player is on - the byte
+    /// GetBattlefieldArenaFaction answers (0x00bea54a).
+    uint32_t elapsedMs = 0;
+    uint8_t  arenaFaction = 0;
 };
 
 /**
@@ -3742,6 +3747,8 @@ struct AuctionCommandResult {
 
 struct AuctionHelloData {
     uint64_t auctioneerGuid = 0;
+    /// The house's row in AuctionHouse.dbc (0x0059f000 keeps it at 0x00c0f3f0).
+    uint32_t auctionHouseId = 0;
     uint8_t enabled = 1;
 };
 
@@ -3868,8 +3875,10 @@ public:
 
 class StablePetPacket {
 public:
-    /** CMSG_STABLE_PET: store active pet in the given stable slot (1-based) */
-    static network::Packet build(uint64_t stableMasterGuid, uint8_t slot);
+    /** CMSG_STABLE_PET: put the active pet in the first free stable slot. The
+     *  stable master's guid is all of it (0x005a19c0); the server picks the
+     *  slot. */
+    static network::Packet build(uint64_t stableMasterGuid);
 };
 
 class UnstablePetPacket {

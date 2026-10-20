@@ -7225,15 +7225,15 @@ void SpellHandler::requestStabledPetList() {
     LOG_INFO("Sent MSG_LIST_STABLED_PETS to npc=0x", std::hex, owner_.stableMasterGuidRef(), std::dec);
 }
 
-void SpellHandler::stablePet(uint8_t slot) {
+void SpellHandler::stablePet() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || owner_.stableMasterGuidRef() == 0) return;
     if (owner_.petGuidRef() == 0) {
         // Silent, as StablePet (0x005a19c0) is without a pet. This was English.
         return;
     }
-    auto pkt = StablePetPacket::build(owner_.stableMasterGuidRef(), slot);
+    auto pkt = StablePetPacket::build(owner_.stableMasterGuidRef());
     owner_.getSocket()->send(pkt);
-    LOG_INFO("Sent CMSG_STABLE_PET: slot=", static_cast<int>(slot));
+    LOG_INFO("Sent CMSG_STABLE_PET");
 }
 
 // The stable master sells a fourth, fifth and sixth slot; the panel's buy

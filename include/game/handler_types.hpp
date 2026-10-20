@@ -303,6 +303,16 @@ struct LfgRoleCheckDungeon {
     uint8_t typeId = 0;
 };
 
+/// One member of an LFG role check, as SMSG_LFG_ROLE_CHECK_UPDATE lists them:
+/// whether they have chosen yet, the roles chosen (1 leader, 2 tank, 4
+/// healer, 8 damage) and their level.
+struct LfgRoleCheckMember {
+    uint64_t guid = 0;
+    bool chosen = false;
+    uint32_t roles = 0;
+    uint8_t level = 0;
+};
+
 // ---- Ready check ----
 
 struct ReadyCheckResult {
@@ -488,6 +498,11 @@ struct ArenaTeamMember {
     uint32_t    seasonGames     = 0;
     uint32_t    seasonWins      = 0;
     uint32_t    personalRating  = 0;
+    /// The two floats the roster carries per member when its header byte is
+    /// set (GetArenaTeamGdfInfo, 0x005a3260: the member's +0x5c and +0x60),
+    /// zero when the server sends none.
+    float       gdfValue1       = 0.0f;
+    float       gdfValue2       = 0.0f;
 };
 
 struct ArenaTeamRoster {

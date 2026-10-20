@@ -105,6 +105,33 @@ TEST_CASE("rim arrow art lands where the corners' coordinates put it", "[minimap
     }
 }
 
+TEST_CASE("a vehicle's icon by its locomotion and driver", "[minimap_blips]") {
+    using V = mb::VehicleIcon;
+    CHECK(mb::vehicleIcon(0, false) == V::GroundUnoccupied);
+    CHECK(mb::vehicleIcon(0, true) == V::GroundOccupied);
+    CHECK(mb::vehicleIcon(1, false) == V::AirUnoccupied);
+    CHECK(mb::vehicleIcon(1, true) == V::AirOccupied);
+    // The factions' aircraft whoever drives them.
+    CHECK(mb::vehicleIcon(3, false) == V::AirHorde);
+    CHECK(mb::vehicleIcon(3, true) == V::AirHorde);
+    CHECK(mb::vehicleIcon(4, true) == V::AirAlliance);
+    CHECK_FALSE(mb::vehicleIcon(2, false).has_value());
+    CHECK_FALSE(mb::vehicleIcon(5, true).has_value());
+    // Three blips across, art turned inside it as a rim arrow's.
+    CHECK(mb::kVehicleIconSize == Catch::Approx(48.0f));
+    const auto uv = mb::rimArrowUVs(0.9f);
+    const auto p = mb::rimArrowArtPoint(0.9f, uv[3][0], uv[3][1], mb::kVehicleIconSize);
+    CHECK(p[0] == Catch::Approx(24.0f).margin(1e-3));
+    CHECK(p[1] == Catch::Approx(24.0f).margin(1e-3));
+}
+
+TEST_CASE("the player's arrow fades in a vehicle it does not drive", "[minimap_blips]") {
+    CHECK(mb::playerArrowAlpha(false, false) == 0xff);
+    CHECK(mb::playerArrowAlpha(true, false) == 0xaa);
+    CHECK(mb::playerArrowAlpha(true, true) == 0xff);
+    CHECK(mb::playerArrowAlpha(false, true) == 0xff);
+}
+
 TEST_CASE("tracked creatures by reaction", "[minimap_blips]") {
     CHECK(mb::trackedCreatureIcon(0) == 5);
     CHECK(mb::trackedCreatureIcon(1) == 5);
