@@ -1611,11 +1611,13 @@ void ChatHandler::updateLoginChannelJoin() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // Not on a flight path: 0x005204c0 and the flag update both skip the
     // join while the taxi flag is up, and the flag dropping is what runs it.
-    if (owner_.isOnTaxiFlight()) return;
-    // Not before the zone has a name: every zone channel is named after it,
-    // and 0x00508090 waits for the text.
+    // Not while a cinematic plays or waits for the world: its end runs it
+    // (0x0051d7c0). Not before the zone has a name: every zone channel is
+    // named after it, and 0x00508090 waits for the text.
     const chat_channels::Place place = currentChannelPlace();
-    if (place.zone.empty()) return;
+    if (!chat_channels::loginJoinMayRun(owner_.isOnTaxiFlight(), owner_.inCinematic(), owner_.cinematicWaiting(),
+                                        !place.zone.empty()))
+        return;
     const auto& rows = channelRows();
     if (rows.empty()) {
         if (channelRowsLoaded_) {

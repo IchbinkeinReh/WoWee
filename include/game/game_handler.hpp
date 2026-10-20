@@ -304,6 +304,8 @@ public:
     /// InCinematic (0x00516760, DAT_00bd07fc).
     [[nodiscard]] bool inCinematic() const { return inCinematic_; }
     void setInCinematic(bool in) { inCinematic_ = in; }
+    /// A cinematic waits for the world to load (DAT_00c9eaac, 0x006cf290).
+    [[nodiscard]] bool cinematicWaiting() const { return deferredCinematic_ != 0; }
     /// What plays a cinematic (game/cinematic.hpp): its start with the
     /// sequence SMSG_TRIGGER_CINEMATIC names (0x00528af0), and StopCinematic.
     using CinematicStartCallback = std::function<void(uint32_t sequenceId)>;

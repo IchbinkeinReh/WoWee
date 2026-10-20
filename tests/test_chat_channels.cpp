@@ -228,3 +228,14 @@ TEST_CASE("rows read with empty names cannot fill the slots", "[chat_channels]")
     CHECK_FALSE(slots.reserve("Allgemein - Anderswo", 1));
     CHECK(slots.all().size() == 1u);
 }
+
+TEST_CASE("the login channel join waits out a flight path and a cinematic", "[chat_channels]") {
+    // 0x005204c0 / 0x00728f70 hold it back on a flight path and while a
+    // cinematic plays or waits for the world; the cinematic's end runs it
+    // (0x0051d7c0) once off a flight path; 0x00508090 wants the zone's text.
+    CHECK(cc::loginJoinMayRun(false, false, false, true));
+    CHECK_FALSE(cc::loginJoinMayRun(true, false, false, true));
+    CHECK_FALSE(cc::loginJoinMayRun(false, true, false, true));
+    CHECK_FALSE(cc::loginJoinMayRun(false, false, true, true));
+    CHECK_FALSE(cc::loginJoinMayRun(false, false, false, false));
+}

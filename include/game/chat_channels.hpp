@@ -128,6 +128,16 @@ inline uint32_t initialMask(const std::vector<Row>& rows) {
     return mask;
 }
 
+/// Whether the login join of the zone channels (0x00508090) may run now.
+/// Its callers all hold it back while the player is on a flight path (the
+/// taxi flag, UNIT_FLAGS 0x100000) and while a cinematic plays (DAT_00bd07fc;
+/// 0x005204c0 and 0x00728f70) or waits for the world to load (DAT_00c9eaac,
+/// 0x006cf290); the cinematic's end runs it, off a flight path (0x0051d7c0).
+/// The join itself waits for the zone's text.
+inline bool loginJoinMayRun(bool onTaxi, bool inCinematic, bool cinematicWaiting, bool zoneKnown) {
+    return !onTaxi && !inCinematic && !cinematicWaiting && zoneKnown;
+}
+
 /// Where the player is, as 0x00507a80 reads it: the real zone's text
 /// (0x00bd0780, what GetRealZoneText answers), whether the zone is a city
 /// (its AreaTable row carries kAreaFlagCity) and the name of the capitals'
