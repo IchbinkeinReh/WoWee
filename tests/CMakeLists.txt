@@ -3112,6 +3112,11 @@ wowee_add_test(test_blob_shadow
 wowee_add_test(test_shadow_pass_work
     SOURCES test_shadow_pass_work.cpp)
 
+# ── test_quality_summary ─────────────────────────────────────
+# The settings line /perf shows (rendering/quality_summary.hpp).
+wowee_add_test(test_quality_summary
+    SOURCES test_quality_summary.cpp)
+
 # ── test_selection_circle ────────────────────────────────────
 # The circle under the target (rendering/selection_circle.hpp).
 wowee_add_test(test_selection_circle

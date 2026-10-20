@@ -585,6 +585,14 @@ void PerformanceHUD::renderFrameProfile(const Renderer* renderer) {
 
     ImGui::Text("%.1f fps   frame %.2f ms avg, %.2f ms worst   (over %.1f s)",
                 snap.fps, snap.frameAvgMs, snap.frameMaxMs, snap.windowSeconds);
+    // What the run is measuring: the preset, the resolution the world is
+    // drawn at and the upscaler, as the renderer has them rather than as the
+    // settings panel was asked.
+    if (renderer) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 560.0f);
+        ImGui::TextColored(kHelpText, "%s", renderer->qualitySummary().c_str());
+        ImGui::PopTextWrapPos();
+    }
     ImVec4 verdictColor = ImVec4(0.5f, 1.0f, 0.5f, 1.0f);
     if (std::strstr(snap.verdict, "GPU-bound") != nullptr) {
         verdictColor = ImVec4(1.0f, 0.45f, 0.35f, 1.0f);

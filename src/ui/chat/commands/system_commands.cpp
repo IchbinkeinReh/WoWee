@@ -12,6 +12,7 @@
 #include "rendering/camera_controller.hpp"
 #include "rendering/renderer.hpp"
 #include "core/frame_profiler.hpp"
+#include "core/logger.hpp"
 #include <algorithm>
 #include <cctype>
 
@@ -254,6 +255,15 @@ public:
         const auto say = [&](const std::string& text) {
             ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(text));
         };
+        // The settings the numbers are measured under, in the chat and the log
+        // alongside the table (the overlay shows the same line).
+        const auto saySettings = [&]() {
+            if (auto* renderer = ctx.services.renderer) {
+                const std::string line = "Settings: " + renderer->qualitySummary();
+                say(line);
+                LOG_WARNING(line);
+            }
+        };
 
         if (arg.empty() || arg == "on" || arg == "off") {
             const bool want = arg.empty() ? !core::FrameProfiler::enabled() : arg == "on";
@@ -261,12 +271,14 @@ public:
             say(want ? "Frame profiler: on. The table fills in after a second; /profile dump "
                        "writes it to the log."
                      : "Frame profiler: off.");
+            if (want) saySettings();
         } else if (arg == "dump") {
             // A dump of nothing is no use, so asking for one starts it, and
             // the table lands in the log once a second has been measured.
             if (!core::FrameProfiler::enabled()) prof.setEnabled(true);
             prof.requestDump();
             say("Frame profiler: the next second's table goes to the log.");
+            saySettings();
         } else if (arg == "ablate" || arg == "ablation") {
             // The scene pass's cost by switching each pass off for a few
             // seconds: what a phone's GPU timestamps cannot say, since a tiler

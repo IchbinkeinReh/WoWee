@@ -1,6 +1,7 @@
 #include "rendering/renderer.hpp"
 #include "rendering/depth_convention.hpp"
 #include "rendering/shadow_pass_work.hpp"
+#include "rendering/quality_summary.hpp"
 #include "rendering/sun_direction.hpp"
 #include "rendering/wmo_sidn.hpp"
 
@@ -1624,8 +1625,25 @@ void Renderer::beginFrame() {
         worldDrawnLastFrame_ = false;
         if (!passAblation_->running() && !passAblationReported_) {
             passAblationReported_ = true;
-            passAblationReportText_ = passAblation_->report();
+            // Headed by the settings it ran under, so a table sent from a phone
+            // says what it measured.
+            passAblationReportText_ = "Settings: " + qualitySummary() + "\n" + passAblation_->report();
             LOG_WARNING(passAblationReportText_);
+        }
+    }
+
+    // The settings in force, said whenever they change (looked at every two
+    // seconds): a warnings-only log from a phone then says what the run was
+    // measured under without anyone typing /perf.
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastQualitySummaryCheck_ > std::chrono::seconds(2)) {
+            lastQualitySummaryCheck_ = now;
+            std::string summary = qualitySummary();
+            if (summary != lastQualitySummary_) {
+                LOG_WARNING("Settings in force: ", summary);
+                lastQualitySummary_ = std::move(summary);
+            }
         }
     }
 
@@ -6644,6 +6662,31 @@ void Renderer::setLowCostShading(bool on) {
 #endif
     if (on != lowCostShading_) LOG_INFO("Low-cost shading ", on ? "on" : "off");
     lowCostShading_ = on;
+}
+
+std::string Renderer::qualitySummary() const {
+    QualitySummary s;
+    s.preset = graphicsPresetLabel_;
+    if (vkCtx) {
+        const VkExtent2D out = vkCtx->getSwapchainExtent();
+        const VkExtent2D scene = sceneRenderExtent();
+        s.outputWidth = out.width;
+        s.outputHeight = out.height;
+        s.sceneWidth = scene.width;
+        s.sceneHeight = scene.height;
+        s.msaaSamples = static_cast<int>(vkCtx->getMsaaSamples());
+    }
+    if (postProcessPipeline_) {
+        s.upscaler = postProcessPipeline_->isFSR2Enabled() ? 2
+                   : postProcessPipeline_->isFSREnabled() ? 1 : 0;
+        s.fxaa = postProcessPipeline_->isFXAAEnabled();
+    }
+    s.shadows = shadowsEnabled;
+    s.shadowCascades = shadowCascadeCount_;
+    s.shadowDistance = shadowDistance_;
+    s.viewDistance = viewDistance_;
+    s.lowCostShading = lowCostShading_;
+    return formatQualitySummary(s);
 }
 
 void Renderer::setShadowCascadeCount(int count) {

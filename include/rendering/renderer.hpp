@@ -667,6 +667,13 @@ public:
     /// The last finished run's table; empty before one has finished.
     [[nodiscard]] const std::string& passAblationReport() const { return passAblationReportText_; }
     [[nodiscard]] bool lowCostShading() const { return lowCostShading_; }
+    /// The graphics preset as the settings panel names it, for qualitySummary.
+    void setGraphicsPresetLabel(std::string label) { graphicsPresetLabel_ = std::move(label); }
+    /// The settings in force, as one line (quality_summary.hpp): the preset,
+    /// the resolution the world is drawn at against the screen's, the
+    /// upscaler, MSAA, FXAA, shadows, view distance and low-cost shading.
+    /// /perf shows it over its table, and the ablation report starts with it.
+    [[nodiscard]] std::string qualitySummary() const;
     uint32_t getShadowMapSize() const { return SHADOW_MAP_SIZE; }
     void setViewDistance(float distance);
     float getViewDistance() const { return viewDistance_; }
@@ -993,6 +1000,10 @@ private:
     std::unique_ptr<PassAblation> passAblation_;
     bool passAblationReported_ = false;
     std::string passAblationReportText_;
+    std::string graphicsPresetLabel_;
+    /// The last summary logged and when it was last looked at (beginFrame).
+    std::string lastQualitySummary_;
+    std::chrono::steady_clock::time_point lastQualitySummaryCheck_{};
     bool worldDrawnLastFrame_ = false;
     std::chrono::steady_clock::time_point lastFrameStart_{};
     float lastDeltaTime_ = 0.0f;           // cached for post-process pipeline
