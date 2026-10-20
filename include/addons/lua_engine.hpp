@@ -235,6 +235,8 @@ public:
     /// through a parent before the frame that would have noticed ran.
     [[nodiscard]] bool editBoxHasFocus() const;
     void setEditFocus(uint32_t wid);
+    /// The edit box taking keystrokes, or zero (GetCurrentKeyBoardFocus).
+    [[nodiscard]] uint32_t editFocus() const { return focusedWid_; }
 
     // SavedVariables: load globals from file, save globals to file
     bool loadSavedVariables(const std::string& path);

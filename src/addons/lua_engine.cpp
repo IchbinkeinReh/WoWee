@@ -5010,6 +5010,134 @@ int lua_GetMouseFocus(lua_State* L) {
     return 1;
 }
 
+/// The next frame after `after` in the order frames were made, or 0 (the
+/// client's frame list, 0x0081b9c0 walking CGGameUI +0xcd4). Only frames:
+/// textures and font strings are regions, which no frame list holds.
+static uint32_t nextFrameWid(lua_State* L, wowee::ui::WidgetTree& tree, uint32_t after) {
+    taint::Quiet quiet;
+    lua_getglobal(L, "__WoweeFramesByWid");
+    const bool haveRegistry = lua_istable(L, -1);
+    uint32_t found = 0;
+    for (uint32_t id = after + 1; haveRegistry && id < tree.size(); ++id) {
+        const auto* w = tree.get(id);
+        if (!w || w->kind != wowee::ui::WidgetKind::Frame) continue;
+        lua_pushinteger(L, static_cast<lua_Integer>(id));
+        lua_rawget(L, -2);
+        const bool hasTable = lua_istable(L, -1);
+        lua_pop(L, 1);
+        if (hasTable) { found = id; break; }
+    }
+    lua_pop(L, 1);
+    return found;
+}
+
+/// EnumerateFrames([frame]) (0x0081b9c0): the first frame, or the one made
+/// after the frame given; nil past the last.
+static int lua_EnumerateFrames(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    uint32_t after = 0;
+    if (lua_type(L, 1) == LUA_TTABLE) {
+        after = widgetIdOf(L, 1);
+        if (after == 0) {
+            return luaL_error(L, "EnumerateFrames: Couldn't find 'this' in current object");
+        }
+        const auto* w = tree ? tree->get(after) : nullptr;
+        if (!w || w->kind != wowee::ui::WidgetKind::Frame) {
+            return luaL_error(L, "EnumerateFrames: Wrong current object type, expected frame");
+        }
+    }
+    const uint32_t next = tree ? nextFrameWid(L, *tree, after) : 0;
+    if (next == 0) { lua_pushnil(L); return 1; }
+    pushFrameByWid(L, next);
+    return 1;
+}
+
+/// GetNumFrames() (0x0081bab0): how many frames there are.
+static int lua_GetNumFrames(lua_State* L) {
+    auto* tree = wowee::addons::getWidgetTree(L);
+    double count = 0;
+    for (uint32_t id = tree ? nextFrameWid(L, *tree, 0) : 0; id != 0;
+         id = nextFrameWid(L, *tree, id)) {
+        ++count;
+    }
+    lua_pushnumber(L, count);
+    return 1;
+}
+
+/// GetFramesRegisteredForEvent("event") (0x0081be70): every frame listening
+/// for it, in the order they registered.
+static int lua_GetFramesRegisteredForEvent(lua_State* L) {
+    if (!lua_isstring(L, 1)) {
+        return luaL_error(L, "Usage: GetFramesRegisteredForEvent(\"event\")");
+    }
+    const int caller = taint::current();
+    int pushed = 0;
+    {
+        taint::Quiet quiet;
+        lua_getglobal(L, "__WoweeFrameEvents");
+        if (lua_istable(L, -1)) lua_getfield(L, -1, lua_tostring(L, 1));
+        else lua_pushnil(L);
+        const int list = lua_gettop(L);
+        if (lua_istable(L, list)) {
+            const int n = static_cast<int>(lua_objlen(L, list));
+            if (!lua_checkstack(L, n + 2)) {
+                lua_pop(L, 2);
+                return luaL_error(L, "GetFramesRegisteredForEvent(%s): Stack overflow",
+                                  lua_tostring(L, 1));
+            }
+            for (int i = 1; i <= n; ++i) lua_rawgeti(L, list, i);
+            pushed = n;
+        }
+        lua_remove(L, list);
+        lua_remove(L, list - 1);
+    }
+    // Pushed fresh, as the client pushes each out of its reference.
+    for (int i = 1; i <= pushed; ++i) lua_settaintof(L, -i, caller);
+    return pushed;
+}
+
+/// GetCurrentKeyBoardFocus() (0x0081b820): the edit box taking keystrokes, or
+/// nil.
+static int lua_GetCurrentKeyBoardFocus(lua_State* L) {
+    LuaEngine* engine = engineFrom(L);
+    const uint32_t wid = engine ? engine->editFocus() : 0;
+    if (wid == 0) { lua_pushnil(L); return 1; }
+    pushFrameByWid(L, wid);
+    return 1;
+}
+
+/// CreateFont("name") (0x0081b7b0): the font object of that name, made when
+/// there is none - an object with the methods every font object answers,
+/// under its name as a global.
+static int lua_CreateFont(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: CreateFont(\"name\")");
+    const std::string name = lua_tostring(L, 1);
+    lua_getglobal(L, "__WoweeFontMT");
+    const int mt = lua_gettop(L);
+    if (!name.empty()) {
+        lua_getglobal(L, name.c_str());
+        if (lua_istable(L, -1) && lua_getmetatable(L, -1)) {
+            const bool isFont = lua_rawequal(L, -1, mt) != 0;
+            lua_pop(L, 1);
+            if (isFont) { lua_remove(L, mt); return 1; }
+        }
+        lua_pop(L, 1);
+    }
+    lua_newtable(L);
+    lua_pushnumber(L, 1);
+    lua_setfield(L, -2, "a");
+    if (lua_istable(L, mt)) {
+        lua_pushvalue(L, mt);
+        lua_setmetatable(L, -2);
+    }
+    if (!name.empty()) {
+        lua_pushvalue(L, -1);
+        lua_setglobal(L, name.c_str());
+    }
+    lua_remove(L, mt);
+    return 1;
+}
+
 /// frame:GetChildren() - every child frame, as a list of return values.
 ///
 /// The count is the payload here, not any one value: FrameXML spreads it
@@ -6467,6 +6595,16 @@ void LuaEngine::registerCoreAPI() {
 
     lua_pushcfunction(L_, lua_GetMouseFocus);
     lua_setglobal(L_, "GetMouseFocus");
+    lua_pushcfunction(L_, lua_EnumerateFrames);
+    lua_setglobal(L_, "EnumerateFrames");
+    lua_pushcfunction(L_, lua_GetNumFrames);
+    lua_setglobal(L_, "GetNumFrames");
+    lua_pushcfunction(L_, lua_GetFramesRegisteredForEvent);
+    lua_setglobal(L_, "GetFramesRegisteredForEvent");
+    lua_pushcfunction(L_, lua_GetCurrentKeyBoardFocus);
+    lua_setglobal(L_, "GetCurrentKeyBoardFocus");
+    lua_pushcfunction(L_, lua_CreateFont);
+    lua_setglobal(L_, "CreateFont");
 
 
     lua_pushcfunction(L_, [](lua_State* L) -> int {
