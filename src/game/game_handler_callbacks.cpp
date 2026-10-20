@@ -649,6 +649,7 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     petGuid_ = 0;
     petSpellList_.clear();
     petAutocastSpells_.clear();
+    petAutocastableSpells_.clear();
     std::fill(std::begin(petActionSlots_), std::end(petActionSlots_), 0u);
     petComboPoints_ = 0;
     petComboTarget_ = 0;

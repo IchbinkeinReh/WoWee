@@ -1410,6 +1410,11 @@ public:
     bool isPetSpellAutocast(uint32_t spellId) const {
         return petAutocastSpells_.count(spellId) != 0;
     }
+    /// A pet spell that can be cast automatically: its entry's top bit
+    /// (0x80 of the state byte) in SMSG_PET_SPELLS' spell list (0x00c23538).
+    bool isPetSpellAutocastable(uint32_t spellId) const {
+        return petAutocastableSpells_.count(spellId) != 0;
+    }
     // Send CMSG_PET_ACTION to issue a pet command
     void sendPetAction(uint32_t action, uint64_t targetGuid = 0);
     /// The pet bar's slot used (0x005d4210) at a unit, or none for the
@@ -4406,6 +4411,7 @@ public:
     // ── Pet & Stable ─────────────────────────────────────────────────
     auto& petActionSlotsRef() { return petActionSlots_; }
     auto& petAutocastSpellsRef() { return petAutocastSpells_; }
+    auto& petAutocastableSpellsRef() { return petAutocastableSpells_; }
     auto& petCommandRef() { return petCommand_; }
     auto& petGuidRef() { return petGuid_; }
     auto& petReactRef() { return petReact_; }
@@ -5328,6 +5334,7 @@ private:
     bool     petRenameablePending_ = false;  // set by SMSG_PET_RENAMEABLE, consumed by UI
     std::vector<uint32_t> petSpellList_; // known pet spells
     std::unordered_set<uint32_t> petAutocastSpells_;  // spells with autocast on
+    std::unordered_set<uint32_t> petAutocastableSpells_;  // spells autocast can be turned on for
     std::array<int32_t, 5> petStats_{};
     int32_t petAttackPower_ = 0;
     float petMinDamage_ = 0.0f;

@@ -4587,6 +4587,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
         owner_.petComboPointsRef() = 0;
         owner_.petSpellListRef().clear();
         owner_.petAutocastSpellsRef().clear();
+        owner_.petAutocastableSpellsRef().clear();
         memset(owner_.petActionSlotsRef(), 0, sizeof(owner_.petActionSlotsRef()));
         LOG_INFO("SMSG_PET_SPELLS: pet cleared");
         owner_.fireAddonEvent("UNIT_PET", {"player"});
@@ -4609,6 +4610,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
         owner_.petComboPointsRef() = 0;
         owner_.petSpellListRef().clear();
         owner_.petAutocastSpellsRef().clear();
+        owner_.petAutocastableSpellsRef().clear();
         memset(owner_.petActionSlotsRef(), 0, sizeof(owner_.petActionSlotsRef()));
         LOG_INFO("SMSG_PET_SPELLS: pet cleared (guid=0)");
         owner_.fireAddonEvent("UNIT_PET", {"player"});
@@ -4655,6 +4657,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
         uint8_t spellCount = packet.readUInt8();
         owner_.petSpellListRef().clear();
         owner_.petAutocastSpellsRef().clear();
+        owner_.petAutocastableSpellsRef().clear();
         for (uint8_t i = 0; i < spellCount; ++i) {
             // One uint32, not six bytes: MAKE_UNIT_ACTION_BUTTON puts the spell
             // in the low twenty-four bits and the state in the top byte, the
@@ -4673,6 +4676,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
             if (state & 0x40) {
                 owner_.petAutocastSpellsRef().insert(spellId);
             }
+            if (state & 0x80) owner_.petAutocastableSpellsRef().insert(spellId);
         }
 
         // The cooldowns: spell, category (uint16), the time left of its

@@ -556,6 +556,42 @@ static int setMacroShown(lua_State* L, bool item) {
     return 1;
 }
 
+// GetActionAutocast(slot) (0x005a9290) → autoCastAllowed, autoCastEnabled:
+// for a slot whose spell the pet casts - the pet's own on the bonus bar, or
+// a macro showing a pet spell (0x005a8c30) - the two top bits of the pet's
+// spell list entry for it (0x005d3410); nil, nil for any other.
+static int lua_GetActionAutocast(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetActionAutocast(slot)");
+    auto* gh = getGameHandler(L);
+    const int slot = luaToClientInt(L, 1) - 1;
+    uint32_t petSpell = 0;
+    if (gh) {
+        if (const auto ref = petActionRef(gh, slot)) {
+            // A spell the charmer casts (AttributesEx6 0x40000) is not the
+            // pet's.
+            const uint32_t spell = petSlotSpell(ref->packed);
+            const auto it = gh->spellNameCacheRef().find(spell);
+            if (spell != 0 && (it == gh->spellNameCacheRef().end() || (it->second.attrEx6 & 0x40000u) == 0))
+                petSpell = spell;
+        } else if (slot >= 0 && slot < static_cast<int>(gh->getActionBar().size())) {
+            const auto& action = gh->getActionBar()[static_cast<size_t>(slot)];
+            if (action.type == game::ActionBarSlot::MACRO) {
+                const MacroShown* m = macroShown(L, gh, action.id);
+                if (m && m->result.item == 0 && m->result.spell > 0 && m->result.petSpell)
+                    petSpell = static_cast<uint32_t>(m->result.spell);
+            }
+        }
+    }
+    bool known = false;
+    if (petSpell != 0) {
+        const auto& book = gh->getPetSpells();
+        known = std::find(book.begin(), book.end(), petSpell) != book.end();
+    }
+    if (known && gh->isPetSpellAutocastable(petSpell)) lua_pushnumber(L, 1); else lua_pushnil(L);
+    if (known && gh->isPetSpellAutocast(petSpell)) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 2;
+}
+
 // GetActionTexture(slot) → texturePath or nil
 static int lua_GetActionTexture(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -2732,6 +2768,7 @@ void registerActionLuaAPI(lua_State* L) {
                     return 1;
                 }},
                 {"GetActionTexture",    lua_GetActionTexture},
+                {"GetActionAutocast",   lua_GetActionAutocast},
                 {"IsCurrentAction",     lua_IsCurrentAction},
                 {"IsUsableAction",      lua_IsUsableAction},
                 {"IsActionInRange",     lua_IsActionInRange},

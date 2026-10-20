@@ -1470,6 +1470,7 @@ void CombatHandler::handlePetBroken(network::Packet& packet) {
     owner_.petGuidRef() = 0;
     owner_.petSpellListRef().clear();
     owner_.petAutocastSpellsRef().clear();
+    owner_.petAutocastableSpellsRef().clear();
     memset(owner_.petActionSlotsRef(), 0, sizeof(owner_.petActionSlotsRef()));
     // ERR_PET_BROKEN on screen, which is all 0x005d3120 does. This was
     // "Your pet has died." in English, in chat.
@@ -1513,6 +1514,7 @@ void CombatHandler::handlePetUnlearnedSpell(network::Packet& packet) {
             std::remove(owner_.petSpellListRef().begin(), owner_.petSpellListRef().end(), spellId),
             owner_.petSpellListRef().end());
         owner_.petAutocastSpellsRef().erase(spellId);
+        owner_.petAutocastableSpellsRef().erase(spellId);
         // ERR_PET_SPELL_UNLEARNED_S in chat (0x005d4c30), which was missing.
         if (owner_.getSpellAttributes(spellId) && !owner_.getSpellName(spellId).empty()) {
             owner_.addSystemChatMessage(interfaceFormat("ERR_PET_SPELL_UNLEARNED_S",
