@@ -883,7 +883,6 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
         struct LoadedTexture {
             pipeline::BLPImage blp;
             pipeline::BLPImage normal;
-            float variance = 0.0f;
         };
         std::vector<LoadedTexture> loaded(wmoTextureKeys.size());
         runParallel(wmoTextureKeys.size(), [&](size_t i) {
@@ -896,9 +895,9 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                     ? pipeline::BLPLoader::decodeBaseLevel(blp)
                     : blp.data;
             if (!decoded.empty()) {
-                out.normal = WMORenderer::generateNormalHeightMapPixels(
+                out.normal = WMORenderer::generateNormalMapPixels(
                     decoded.data(), static_cast<uint32_t>(blp.width),
-                    static_cast<uint32_t>(blp.height), out.variance);
+                    static_cast<uint32_t>(blp.height));
             }
             out.blp = std::move(blp);
         });
@@ -909,7 +908,6 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
             const std::string& key = wmoTextureKeys[i];
             if (t.normal.isValid()) {
                 pending->preloadedWMONormalMaps[key] = std::move(t.normal);
-                pending->preloadedWMONormalMapVariances[key] = t.variance;
             }
             pending->preloadedWMOTextures[key] = std::move(t.blp);
         }
@@ -1251,12 +1249,10 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
         if (wmoRenderer && assetManager) {
             if (!wmoRenderer->initialize(nullptr, VK_NULL_HANDLE, assetManager))
                 LOG_WARNING("WMORenderer terrain re-init failed");
-            // Diffuse decode and normal/height generation were completed by the
+            // Diffuse decode and normal map generation were completed by the
             // terrain worker. The main thread only uploads those prepared pixels.
             wmoRenderer->setPredecodedBLPCache(&pending->preloadedWMOTextures);
-            wmoRenderer->setPredecodedNormalMapCache(
-                &pending->preloadedWMONormalMaps,
-                &pending->preloadedWMONormalMapVariances);
+            wmoRenderer->setPredecodedNormalMapCache(&pending->preloadedWMONormalMaps);
             wmoRenderer->setDeferNormalMaps(true);
 
             // One model per step, and a large model spread across several
@@ -1280,7 +1276,7 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
             }
             wmoRenderer->setDeferNormalMaps(false);
             wmoRenderer->setPredecodedBLPCache(nullptr);
-            wmoRenderer->setPredecodedNormalMapCache(nullptr, nullptr);
+            wmoRenderer->setPredecodedNormalMapCache(nullptr);
             if (ft.wmoModelIndex < pending->wmoModels.size()) return false;
         }
         ft.phase = FinalizationPhase::WMO_INSTANCES;

@@ -176,7 +176,6 @@ Graphics Preset: LOW
 - Shadow distance: 100 yards
 - MSAA: OFF
 - Normal Mapping: Disabled
-- Surface depth (parallax): Disabled
 - Ground clutter: 25%
 ```
 

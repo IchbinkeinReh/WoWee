@@ -24,10 +24,10 @@ namespace ui {
 /// or in the middle changes what every saved file means, and a player who chose
 /// Ultra comes back on High. Add at the end, or migrate the stored value.
 ///
-/// The same is true of the antiAliasing and parallaxQuality columns below: each
-/// is an index into a dropdown whose order is also persisted, so a row here can
-/// be wrong in two directions at once if either list is reordered. See the note
-/// on SettingDesc::choices.
+/// The same is true of the antiAliasing column below: it is an index into a
+/// dropdown whose order is also persisted, so a row here can be wrong in two
+/// directions at once if either list is reordered. See the note on
+/// SettingDesc::choices.
 ///
 /// One row per preset, where there used to be a block per preset - the same
 /// ten settings assigned and then pushed at the renderer four times over. The
@@ -37,9 +37,9 @@ namespace ui {
 ///     field said 100 and the shadows stayed at whatever the last preset left.
 ///   * Only Ultra had an opinion about FXAA. Going from Ultra to Low turned
 ///     everything else down and left FXAA running.
-///   * Low left the normal map strength and parallax quality at whatever they
-///     were, which does not matter while both are off and does the moment one
-///     is switched back on by hand.
+///   * Low left the normal map strength at whatever it was, which does not
+///     matter while normal mapping is off and does the moment it is switched
+///     back on by hand.
 ///
 /// Reading them as a table is also what lets a preset be recognised again
 /// afterwards without writing the numbers out a second time.
@@ -51,8 +51,6 @@ struct GraphicsPresetValues {
     bool  fxaa;
     bool  normalMapping;
     float normalMapStrength;
-    bool  parallax;
-    int   parallaxQuality;
     int   groundClutter;     ///< percent
     /// Ground cover from the terrain's own ground-effect data. Stated on every
     /// row rather than only the one that wants it: a preset that leaves a field
@@ -110,10 +108,10 @@ struct GraphicsPresetValues {
 // (FrameXML GraphicsQualityLevels.lua): Low 177, Good 727, High 1057 and Ultra
 // 1277 - its Fair, 507, has no row here.
 constexpr GraphicsPresetValues kGraphicsPresets[] = {
-    /* Low    */ { .viewDistance = 177.0f, .shadows = false, .shadowDistance = 100.0f, .antiAliasing = 0, .fxaa = false, .normalMapping = false, .normalMapStrength = 0.6f, .parallax = false, .parallaxQuality = 0,  .groundClutter = 25,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 50,  .groundClutterDistance = 70,  .particleDensity = 10,  .weatherDetail = 0},
-    /* Medium */ { .viewDistance = 727.0f, .shadows = true,  .shadowDistance = 200.0f, .antiAliasing = 1, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.6f, .parallax = true,  .parallaxQuality = 0,  .groundClutter = 60,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 100, .groundClutterDistance = 120, .particleDensity = 60,  .weatherDetail = 2},
-    /* High   */ {.viewDistance = 1057.0f, .shadows = true,  .shadowDistance = 350.0f, .antiAliasing = 2, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.8f, .parallax = true,  .parallaxQuality = 1, .groundClutter = 100, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 125, .groundClutterDistance = 130, .particleDensity = 80,  .weatherDetail = 3},
-    /* Ultra  */ {.viewDistance = 1277.0f, .shadows = true,  .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = false, .normalMapping = true,  .normalMapStrength = 1.2f, .parallax = true,  .parallaxQuality = 2, .groundClutter = 150, .grass = true,  .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 150, .groundClutterDistance = 140, .particleDensity = 100, .weatherDetail = 3},
+    /* Low    */ { .viewDistance = 177.0f, .shadows = false, .shadowDistance = 100.0f, .antiAliasing = 0, .fxaa = false, .normalMapping = false, .normalMapStrength = 0.6f, .groundClutter = 25,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 50,  .groundClutterDistance = 70,  .particleDensity = 10,  .weatherDetail = 0},
+    /* Medium */ { .viewDistance = 727.0f, .shadows = true,  .shadowDistance = 200.0f, .antiAliasing = 1, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.6f, .groundClutter = 60,  .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 100, .groundClutterDistance = 120, .particleDensity = 60,  .weatherDetail = 2},
+    /* High   */ {.viewDistance = 1057.0f, .shadows = true,  .shadowDistance = 350.0f, .antiAliasing = 2, .fxaa = false, .normalMapping = true,  .normalMapStrength = 0.8f, .groundClutter = 100, .grass = false, .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 125, .groundClutterDistance = 130, .particleDensity = 80,  .weatherDetail = 3},
+    /* Ultra  */ {.viewDistance = 1277.0f, .shadows = true,  .shadowDistance = 500.0f, .antiAliasing = 3, .fxaa = false, .normalMapping = true,  .normalMapStrength = 1.2f, .groundClutter = 150, .grass = true,  .grassDensity = 70, .grassHeight = 50, .grassDistance = 215, .lensFlare = 0.0f, .sharpStars = false, .sunShafts = false, .lightShafts = 0, .fogSkyBlend = 0.0f, .enhancedWater = false, .specular = false, .environmentDetail = 150, .groundClutterDistance = 140, .particleDensity = 100, .weatherDetail = 3},
 };
 
 /// The number of presets, not counting Custom - which is not a set of values

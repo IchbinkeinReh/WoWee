@@ -616,8 +616,6 @@ private:
     struct WmoSurfaceDetail {
         bool normalMaps = false;
         float strength = 0.8f;
-        bool pom = false;
-        int pomQuality = 1;
     } wmoSurfaceDetail_;
     float diagTerrainFurthest_ = -1.0f;
     float diagM2Furthest_ = -1.0f;
@@ -688,11 +686,11 @@ public:
     void logViewDistanceDiag();
     void setSharpStars(bool enabled);
     bool areSharpStars() const { return sharpStars_; }
-    /// The buildings' surface bumps and depth (normal maps and parallax).
+    /// The buildings' surface bumps (normal maps).
     /// Kept here and handed to the WMO renderer whenever one is made, so the
     /// first world load builds its buildings with the saved setting: the game
     /// screen that used to apply it does not run until that load is over.
-    void setWmoSurfaceDetail(bool normalMaps, float strength, bool pom, int pomQuality);
+    void setWmoSurfaceDetail(bool normalMaps, float strength);
     /// Fog lit by the sun through the shadow map and by nearby torches: 0 is
     /// off, 1-3 the volume's resolution. Applied at the start of the next
     /// frame. See VolumetricFog.

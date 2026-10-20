@@ -7,8 +7,8 @@
 //
 // What is pinned here is the arithmetic, against values worked out by hand
 // rather than recorded from the implementation: a flat texture has no
-// gradient, a step has one pointing across it, the alpha carries the blurred
-// height, and the sampling wraps at the edges rather than clamping.
+// gradient, a step has one pointing across it, the alpha is opaque, and the
+// sampling wraps at the edges rather than clamping.
 #include <catch_amalgamated.hpp>
 
 #include <cmath>
@@ -16,7 +16,7 @@
 
 #include "rendering/normal_map.hpp"
 
-using wowee::rendering::generateNormalHeightMap;
+using wowee::rendering::generateNormalMap;
 
 namespace {
 
@@ -40,11 +40,9 @@ TEST_CASE("a flat texture has no gradient anywhere", "[normalmap]") {
     // truncates. Worth pinning, because a rounding change here would shift
     // every flat surface in the game by one step.
     const std::vector<uint8_t> src = grey(std::vector<uint8_t>(16, 128));
-    float variance = -1.0f;
-    const auto out = generateNormalHeightMap(src.data(), 4, 4, 5.0f, variance);
+    const auto out = generateNormalMap(src.data(), 4, 4, 5.0f);
 
     REQUIRE(out.size() == 4 * 4 * 4);
-    CHECK(variance == Catch::Approx(0.0f).margin(1e-6));
     for (int i = 0; i < 16; ++i) {
         INFO("pixel " << i);
         CHECK(out[i * 4 + 0] == 127);   // nx = 0
@@ -53,16 +51,17 @@ TEST_CASE("a flat texture has no gradient anywhere", "[normalmap]") {
     }
 }
 
-TEST_CASE("the alpha channel carries the blurred height", "[normalmap]") {
-    // Flat at 128, so the box blur answers the same 128 everywhere, and the
-    // luminance of a grey is that grey: 0.299+0.587+0.114 sums to 1.
-    const std::vector<uint8_t> src = grey(std::vector<uint8_t>(16, 128));
-    float variance = 0.0f;
-    const auto out = generateNormalHeightMap(src.data(), 4, 4, 2.0f, variance);
+TEST_CASE("the alpha channel is opaque", "[normalmap]") {
+    // Nothing reads a height from it: the alpha is 255 whatever the texture.
+    std::vector<uint8_t> lum(16, 128);
+    lum[5] = 0;
+    lum[10] = 255;
+    const std::vector<uint8_t> src = grey(lum);
+    const auto out = generateNormalMap(src.data(), 4, 4, 2.0f);
 
     for (int i = 0; i < 16; ++i) {
         INFO("pixel " << i);
-        CHECK(out[i * 4 + 3] == 128);
+        CHECK(out[i * 4 + 3] == 255);
     }
 }
 
@@ -75,10 +74,8 @@ TEST_CASE("a vertical edge tilts the normal across it", "[normalmap]") {
         lum[y * 4 + 3] = 255;
     }
     const std::vector<uint8_t> src = grey(lum);
-    float variance = 0.0f;
-    const auto out = generateNormalHeightMap(src.data(), 4, 4, 5.0f, variance);
+    const auto out = generateNormalMap(src.data(), 4, 4, 5.0f);
 
-    CHECK(variance > 0.0f);
     // Column 1 sits left of the step, so height rises to its right and the
     // normal leans the other way.
     const int at = 0 * 4 + 1;
@@ -96,12 +93,8 @@ TEST_CASE("strength scales the tilt without changing its direction", "[normalmap
         lum[y * 4 + 3] = 112;
     }
     const std::vector<uint8_t> src = grey(lum);
-    float v2 = 0.0f, v5 = 0.0f;
-    const auto weak = generateNormalHeightMap(src.data(), 4, 4, 2.0f, v2);
-    const auto strong = generateNormalHeightMap(src.data(), 4, 4, 5.0f, v5);
-
-    // The height is the same either way, so the variance is too.
-    CHECK(v2 == Catch::Approx(v5));
+    const auto weak = generateNormalMap(src.data(), 4, 4, 2.0f);
+    const auto strong = generateNormalMap(src.data(), 4, 4, 5.0f);
 
     const int at = 0 * 4 + 1;
     const int weakX = static_cast<int>(weak[at * 4 + 0]) - 127;
@@ -121,19 +114,16 @@ TEST_CASE("sampling wraps rather than clamping at the edges", "[normalmap]") {
     std::vector<uint8_t> lum(16, 0);
     for (int y = 0; y < 4; ++y) lum[y * 4 + 0] = 255;
     const std::vector<uint8_t> src = grey(lum);
-    float variance = 0.0f;
-    const auto out = generateNormalHeightMap(src.data(), 4, 4, 5.0f, variance);
+    const auto out = generateNormalMap(src.data(), 4, 4, 5.0f);
 
     const int lastColumn = 0 * 4 + 3;
     CHECK(out[lastColumn * 4 + 0] != 127);
 }
 
 TEST_CASE("nothing to read answers nothing", "[normalmap]") {
-    float variance = 1.0f;
-    CHECK(generateNormalHeightMap(nullptr, 4, 4, 5.0f, variance).empty());
-    CHECK(variance == Catch::Approx(0.0f));
+    CHECK(generateNormalMap(nullptr, 4, 4, 5.0f).empty());
 
     const std::vector<uint8_t> src = grey(std::vector<uint8_t>(16, 128));
-    CHECK(generateNormalHeightMap(src.data(), 0, 4, 5.0f, variance).empty());
-    CHECK(generateNormalHeightMap(src.data(), 4, 0, 5.0f, variance).empty());
+    CHECK(generateNormalMap(src.data(), 0, 4, 5.0f).empty());
+    CHECK(generateNormalMap(src.data(), 4, 0, 5.0f).empty());
 }

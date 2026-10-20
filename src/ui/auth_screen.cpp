@@ -2,7 +2,6 @@
 #include "addons/lua_api_registrations.hpp"
 #include <future>
 #include <chrono>
-#include "rendering/pom_quality.hpp"
 #include "ui/graphics_presets.hpp"
 #include "ui/settings_panel.hpp"
 #include "ui/data_folder_picker.hpp"
@@ -1691,8 +1690,6 @@ void AuthScreen::applyPresetToState(LoginGraphicsState& s, int preset) {
     s.antiAliasing   = p.antiAliasing;
     s.fxaa           = p.fxaa;
     s.normalMapping  = p.normalMapping;
-    s.pom            = p.parallax;
-    s.pomQuality     = p.parallaxQuality;
     s.groundClutter  = p.groundClutter;
     s.grass          = p.grass;
     s.grassDensity   = p.grassDensity;
@@ -1729,7 +1726,7 @@ void AuthScreen::loadLoginGraphicsState() {
         // Clamped to the same ranges GameScreen::loadSettings uses.
         //
         // Four of these had no clamp at all until 2026-08-15 - the preset
-        // index, the parallax quality, the upscaling mode and the brightness -
+        // index, the parallax quality (since removed), the upscaling mode and the brightness -
         // so a value the file held outside its range was kept here, shown
         // against a control that could not represent it, and written back on
         // Apply. The shadow distance had one, but it started at 50 where the
@@ -1760,8 +1757,6 @@ void AuthScreen::loadLoginGraphicsState() {
         else if (key == "antialiasing")     loginGfx_.antiAliasing   = clampI(std::stoi(val), 0, 3);
         else if (key == "fxaa")             loginGfx_.fxaa           = (val == "1");
         else if (key == "normal_mapping")   loginGfx_.normalMapping  = (val == "1");
-        else if (key == "pom")              loginGfx_.pom            = (val == "1");
-        else if (key == "pom_quality")      loginGfx_.pomQuality     = clampI(std::stoi(val), 0, rendering::kPomQualityCount - 1);
         else if (key == "upscaling_mode")   loginGfx_.upscalingMode  = clampI(std::stoi(val), 0, 2);
         else if (key == "enhanced_water")   loginGfx_.enhancedWater  = (val == "1");
         else if (key == "specular")         loginGfx_.specular       = (val == "1");
@@ -1804,8 +1799,9 @@ void AuthScreen::saveLoginGraphicsState() {
     cfg["antialiasing"]          = std::to_string(loginGfx_.antiAliasing);
     cfg["fxaa"]                  = loginGfx_.fxaa           ? "1" : "0";
     cfg["normal_mapping"]        = loginGfx_.normalMapping  ? "1" : "0";
-    cfg["pom"]                   = loginGfx_.pom            ? "1" : "0";
-    cfg["pom_quality"]           = std::to_string(loginGfx_.pomQuality);
+    // Surface depth (parallax) is gone: what an older build saved for it goes too.
+    cfg.erase("pom");
+    cfg.erase("pom_quality");
     // Not upscaling_mode: this sheet has no control for it, and writing the
     // field back put a 0 into every file that did not have one yet - which
     // is a phone's on its first run, overriding the reduced render resolution
@@ -1956,7 +1952,6 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
         toggle("gfx.shadows", "Shadows", &loginGfx_.shadows);
         toggle("gfx.fxaa", "FXAA", &loginGfx_.fxaa);
         toggle("gfx.normals", "Normal mapping", &loginGfx_.normalMapping);
-        toggle("gfx.pom", "Parallax occlusion", &loginGfx_.pom);
         toggle("gfx.water", "Enhanced water", &loginGfx_.enhancedWater);
         toggle("gfx.specular", "Specular", &loginGfx_.specular);
         toggle("gfx.vsync", "V-Sync", &loginGfx_.vsync);
@@ -1981,20 +1976,6 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
             int aa = std::clamp(loginGfx_.antiAliasing, 0, 3);
             if (ui_.dropdown("gfx.aa", ra, rb, names[static_cast<size_t>(aa)], names, &aa))
                 loginGfx_.antiAliasing = aa;
-            right.gap(px(8));
-        }
-        {
-            const auto [ra, rb] = labelled("Parallax quality");
-            // The names and the count both come from the one scale, so this
-            // cannot go back to offering two entries of a three-entry setting
-            // and writing the wrong index for the ones it did offer.
-            std::vector<std::string> names;
-            for (int i = 0; i < rendering::kPomQualityCount; ++i)
-                names.emplace_back(rendering::kPomQualityLabels[i]);
-            int quality = std::clamp(loginGfx_.pomQuality, 0, rendering::kPomQualityCount - 1);
-            if (ui_.dropdown("gfx.pomq", ra, rb, names[static_cast<size_t>(quality)], names,
-                             &quality))
-                loginGfx_.pomQuality = quality;
             right.gap(px(8));
         }
         {

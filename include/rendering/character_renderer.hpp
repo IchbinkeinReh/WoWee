@@ -805,7 +805,6 @@ private:
     struct TextureCacheEntry {
         std::unique_ptr<VkTexture> texture;
         std::unique_ptr<VkTexture> normalHeightMap;
-        float heightMapVariance = 0.0f;
         size_t approxBytes = 0;
         uint64_t lastUse = 0;
         bool hasAlpha = false;
@@ -815,7 +814,6 @@ private:
     std::unordered_map<std::string, TextureCacheEntry> textureCache;
     struct NormalMapInfo {
         VkTexture* normalMap = nullptr;
-        float heightMapVariance = 0.0f;
     };
     std::unordered_map<VkTexture*, NormalMapInfo> normalMapByTexPtr_;
     struct TextureProperties {
@@ -857,15 +855,14 @@ private:
     uint32_t nextInstanceId = 1;
 
     // Normal map generation (same algorithm as WMO renderer)
-    std::unique_ptr<VkTexture> generateNormalHeightMap(
-        const uint8_t* pixels, uint32_t width, uint32_t height, float& outVariance);
+    std::unique_ptr<VkTexture> generateNormalMap(
+        const uint8_t* pixels, uint32_t width, uint32_t height);
 
     // Background normal map generation - CPU work on thread pool, GPU upload on main thread
     struct NormalMapResult {
         std::string cacheKey;
         std::vector<uint8_t> pixels;  // RGBA normal map output
         uint32_t width, height;
-        float variance;
     };
     // Completed results ready for GPU upload (populated by background threads)
     std::mutex normalMapResultsMutex_;
@@ -875,17 +872,15 @@ private:
 
     // Pure CPU normal map generation (thread-safe, no GPU access)
 
-    static NormalMapResult generateNormalHeightMapCPU(
+    static NormalMapResult generateNormalMapCPU(
         std::string cacheKey, std::vector<uint8_t> pixels, uint32_t width, uint32_t height);
 public:
     void processPendingNormalMaps(int budget = 4);
 private:
 
-    // Normal mapping / POM settings
+    // Normal mapping settings
     bool normalMappingEnabled_ = false;  // the client has no normal maps
     float normalMapStrength_ = 0.8f;
-    bool pomEnabled_ = false;  // nor parallax
-    int pomQuality_ = 1;  // 0=Low(16), 1=Medium(32), 2=High(64)
 
     // Maximum bones supported
     static constexpr int MAX_BONES = 240;

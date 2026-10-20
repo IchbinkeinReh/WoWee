@@ -6,10 +6,9 @@
 WHY
 
 GLSL has no linker here. Every shader is compiled on its own, so a function
-two of them need is written into both, and nothing connects the copies. Six
-bodies are duplicated across the seventy-eight shaders in this tree:
+two of them need is written into both, and nothing connects the copies. These
+bodies are among those duplicated across the shaders in this tree:
 
-    parallaxOcclusionMap    29 lines, in character.frag and wmo.frag
     sampleShadowPCF          8 lines, in four of them
     safeNormalize            6 lines, computeLodFactor 5, fallbackTangent 3
 

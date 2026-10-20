@@ -398,8 +398,7 @@ end
 -- at least as much as the one below.
 local presets = 0
 do
-  local watched = {"viewdistance", "shadowdistance", "antialiasing", "parallaxquality",
-                   "groundclutter"}
+  local watched = {"viewdistance", "shadowdistance", "antialiasing", "groundclutter"}
   local previous
   for index = 1, 4 do
     WoweeSetSetting("graphicspreset", tostring(index))

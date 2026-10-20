@@ -58,10 +58,8 @@ layout(set = 1, binding = 1) uniform CharMaterial {
     float emissiveTintB;
     float specularIntensity;
     int enableNormalMap;
-    int enablePOM;
-    float pomScale;
-    int pomMaxSamples;
-    float heightMapVariance;
+    // 1: the character preview's main model, drawn with its texture alone.
+    int previewSimpleTexture;
     float normalMapStrength;
     int hairMaterial;
     // 0 normal; 1 Mod and 2 Mod2x, faded toward their neutral 1.0 and 0.5 by
@@ -124,7 +122,7 @@ vec4 colourBlendOutput(vec3 lit, vec3 tex, float alpha) {
 // so the texture's alpha against 224/255.
 const float ALPHA_KEY_REF = 0.8784314;
 
-layout(set = 1, binding = 2) uniform sampler2D uNormalHeightMap;
+layout(set = 1, binding = 2) uniform sampler2D uNormalMap;
 
 vec3 combineRgb(int op, vec3 cur, float curA, vec3 tex, float diffA) {
     if (op == 0) return tex * cur;
@@ -203,8 +201,6 @@ vec2 TexCoord2;
 
 layout(location = 0) out vec4 outColor;
 
-const int PREVIEW_SIMPLE_TEXTURE_MODE = -31336;
-
 // LOD factor from screen-space UV derivatives
 float computeLodFactor() {
     vec2 dx = dFdx(TexCoord);
@@ -273,53 +269,6 @@ vec4 samplePreviewTexture(sampler2D tex, vec2 uv) {
     return vec4(0.0);
 }
 
-// Parallax Occlusion Mapping with angle-adaptive sampling
-vec2 parallaxOcclusionMap(vec2 uv, vec3 viewDirTS, float lodFactor) {
-    float VdotN = abs(viewDirTS.z);
-
-    if (VdotN < 0.15) return uv;
-
-    float angleFactor = clamp(VdotN, 0.15, 1.0);
-    int maxS = pomMaxSamples;
-    int minS = max(maxS / 4, 4);
-    int numSamples = int(mix(float(minS), float(maxS), angleFactor));
-    numSamples = int(mix(float(minS), float(numSamples), 1.0 - lodFactor));
-
-    float layerDepth = 1.0 / float(numSamples);
-    float currentLayerDepth = 0.0;
-
-    vec2 P = viewDirTS.xy / max(VdotN, 0.15) * pomScale;
-    float maxOffset = pomScale * 3.0;
-    P = clamp(P, vec2(-maxOffset), vec2(maxOffset));
-    vec2 deltaUV = P / float(numSamples);
-
-    // The mip level is chosen once, from the undisplaced UV, and used for
-    // every sample in the march. Inside the loop the UV differs from one
-    // pixel to the next by how many steps each has taken, so the implicit
-    // derivatives were noise and the level chosen from them was too - which
-    // showed as sparkle on relief at distance and cost a gradient fetch
-    // per sample on top.
-    float lod = textureQueryLod(uNormalHeightMap, uv).x;
-    vec2 currentUV = uv;
-    float currentDepthMapValue = 1.0 - textureLod(uNormalHeightMap, currentUV, lod).a;
-
-    for (int i = 0; i < 64; i++) {
-        if (i >= numSamples || currentLayerDepth >= currentDepthMapValue) break;
-        currentUV -= deltaUV;
-        currentDepthMapValue = 1.0 - textureLod(uNormalHeightMap, currentUV, lod).a;
-        currentLayerDepth += layerDepth;
-    }
-
-    vec2 prevUV = currentUV + deltaUV;
-    float afterDepth = currentDepthMapValue - currentLayerDepth;
-    float beforeDepth = (1.0 - textureLod(uNormalHeightMap, prevUV, lod).a) - currentLayerDepth + layerDepth;
-    float weight = afterDepth / (afterDepth - beforeDepth + 0.0001);
-    vec2 result = mix(currentUV, prevUV, weight);
-
-    float fadeFactor = smoothstep(0.15, 0.35, VdotN);
-    return mix(uv, result, fadeFactor);
-}
-
 // The air between the camera and this point, out of the fog volume: rgb is
 // the light it scatters toward the camera, a how much of the point shows
 // through it. See VolumetricFog.
@@ -373,7 +322,7 @@ void main() {
     TexCoord2 = src1 == 2 ? inEnvCoord
               : src1 == 3 ? inTexCoord
               : vec2(uv2M00 * set1.x + uv2M01 * set1.y + uv2Tx, uv2M10 * set1.x + uv2M11 * set1.y + uv2Ty);
-    if (enablePOM == PREVIEW_SIMPLE_TEXTURE_MODE) {
+    if (previewSimpleTexture != 0) {
         vec4 texColor = samplePreviewTexture(uTexture, TexCoord);
         if (isMagentaKeyColor(texColor)) {
             discard;
@@ -392,9 +341,7 @@ void main() {
     }
 
     float lodFactor = computeLodFactor();
-    // Gradients of the authored UV, taken here where every pixel of the quad
-    // still agrees on them. Parallax moves the UV by a different amount per
-    // pixel, and a mip level chosen from the moved UV flickers.
+    // Gradients of the UV, taken here before anything is discarded.
     vec2 uvDx = dFdx(TexCoord);
     vec2 uvDy = dFdy(TexCoord);
 
@@ -403,33 +350,20 @@ void main() {
     // two-sided batch is showing.
     vec3 vertexNormal = safeNormalize(Normal, vec3(0.0, 0.0, 1.0));
 
-    vec2 finalUV = TexCoord;
-
-    bool usePOM = enablePOM != 0 &&
-                  alphaTest != 1 &&
-                  heightMapVariance > 0.001 &&
-                  lodFactor < 0.99;
     bool useNormalMap = enableNormalMap != 0 &&
                         unlit == 0 &&
                         lodFactor < 0.99 &&
                         normalMapStrength > 0.001;
     mat3 TBN;
-    if (usePOM || useNormalMap) {
+    if (useNormalMap) {
         vec3 T = safeNormalize(Tangent, fallbackTangent(vertexNormal));
         T = safeNormalize(T - dot(T, vertexNormal) * vertexNormal, fallbackTangent(vertexNormal));
         vec3 B = safeNormalize(Bitangent, safeNormalize(cross(vertexNormal, T), vec3(0.0, 1.0, 0.0)));
         TBN = mat3(T, B, vertexNormal);
     }
 
-    if (usePOM) {
-        mat3 TBN_inv = transpose(TBN);
-        vec3 viewDirWorld = normalize(viewPos.xyz - FragPos);
-        vec3 viewDirTS = TBN_inv * viewDirWorld;
-        finalUV = parallaxOcclusionMap(TexCoord, viewDirTS, lodFactor);
-    }
-
     const int filterMode = textureFilterMode(viewPos.w);
-    const vec4 tex0 = textureFilteredGrad(uTexture, finalUV, uvDx, uvDy, filterMode);
+    const vec4 tex0 = textureFilteredGrad(uTexture, TexCoord, uvDx, uvDy, filterMode);
     const vec4 tex1 = ((combiners >> 8) & 3) > 1 ? textureFiltered(uTexture2, TexCoord2, filterMode) : vec4(1.0);
     // The stages' alpha over the batch's (opacity), and the same divided back
     // out: what the alpha reference, 224/255 of the batch's alpha, is
@@ -460,7 +394,7 @@ void main() {
     // Compute normal (with normal mapping if enabled)
     vec3 norm = vertexNormal;
     if (useNormalMap) {
-        vec3 mapNormal = textureGrad(uNormalHeightMap, finalUV, uvDx, uvDy).rgb * 2.0 - 1.0;
+        vec3 mapNormal = textureGrad(uNormalMap, TexCoord, uvDx, uvDy).rgb * 2.0 - 1.0;
         mapNormal.xy *= normalMapStrength;
         mapNormal = safeNormalize(mapNormal, vec3(0.0, 0.0, 1.0));
         vec3 worldNormal = safeNormalize(TBN * mapNormal, vertexNormal);

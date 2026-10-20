@@ -295,11 +295,9 @@ public:
     float pendingNormalMapStrength = 0.8f;  // 0.0-2.0
     float pendingLensFlare = 0.0f;          // 0.0-2.0; off: the client has its glare instead
     int pendingFrameCap = 0;                // index into the frame-limit choices
-    bool pendingPOM = false;            // off by default: not in the client
     bool pendingSharpStars = false;
     bool pendingSunShafts = false;      // screen-space rays from the sun (opt-in)
     bool pendingScreenGlow = true;      // the client's ffxGlow, on by default
-    int pendingPOMQuality = 1;          // 0=Low(16), 1=Medium(32), 2=High(64)
     bool pendingFSR = false;
     int pendingUpscalingMode = 0;       // 0=Off, 1=FSR1, 2=FSR3
     int pendingFSRQuality = 3;          // 0=UltraQuality, 1=Quality, 2=Balanced, 3=Native(100%)
@@ -352,7 +350,7 @@ public:
     bool lensFlareApplied_ = false;        // True once the saved flare strength reached the sky
     bool frameCapApplied_ = false;         // True once the saved frame limit reached the window
     bool enhancedWaterApplied_ = false;
-    bool normalMapSettingsApplied_ = false;  // True once saved normal map/POM settings applied
+    bool normalMapSettingsApplied_ = false;  // True once saved normal map settings applied
 
     // ---- Mute state: mute bypasses master volume without touching slider values ----
     bool soundMuted_ = false;

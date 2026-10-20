@@ -18,7 +18,6 @@
 #include "rendering/depth_convention.hpp"
 #include "core/frame_profiler.hpp"
 #include "rendering/character_renderer.hpp"
-#include "rendering/pom_quality.hpp"
 #include "rendering/shadow_params.hpp"
 #include "rendering/normal_map.hpp"
 #include "rendering/m2_track_sampler.hpp"
@@ -186,7 +185,6 @@ static constexpr uint32_t MAX_BONE_SETS = 8192;
 // Texture compositing sizes (NPC skin upscale)
 static constexpr int kBaseTexSize    = 256;  // NPC baked texture default
 static constexpr int kUpscaleTexSize = 512;  // Target size for region compositing
-static constexpr int32_t kPreviewSimpleTextureMode = -31336;
 
 // WOWEE_SCENE_DIAG=1 - dump what each glue-scene backdrop batch is handed at draw
 // time. The scene renders through the character path, so when it comes out wrong
@@ -304,10 +302,8 @@ struct CharMaterialUBO {
     float emissiveTintR, emissiveTintG, emissiveTintB;
     float specularIntensity;
     int32_t enableNormalMap;
-    int32_t enablePOM;
-    float pomScale;
-    int32_t pomMaxSamples;
-    float heightMapVariance;
+    // 1: the character preview's main model, drawn with its texture alone.
+    int32_t previewSimpleTexture;
     float normalMapStrength;
     int32_t hairMaterial;
     // How the shader hands its colour to a colour-only blend: 0 normally,
@@ -533,7 +529,7 @@ bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFram
     // --- Descriptor set layouts ---
 
     // Material set layout (set 1): binding 0 = sampler2D, binding 1 = CharMaterial UBO,
-    // binding 2 = normal/height map, binding 3 = the second stage's texture
+    // binding 2 = normal map, binding 3 = the second stage's texture
     {
         VkDescriptorSetLayoutBinding bindings[4] = {};
         bindings[0].binding = 0;
@@ -579,7 +575,7 @@ bool CharacterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFram
     // pools so we can reset safely each frame slot without exhausting descriptors.
     for (auto& materialDescPool : materialDescPools_) {
         VkDescriptorPoolSize sizes[] = {
-            {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_MATERIAL_SETS * 3},  // diffuse, normal/height, second stage
+            {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_MATERIAL_SETS * 3},  // diffuse, normal, second stage
             {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = MAX_MATERIAL_SETS},
         };
         VkDescriptorPoolCreateInfo ci{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -924,15 +920,14 @@ void CharacterRenderer::destroyInstanceBones(CharacterInstance& inst, bool defer
     releaseInstanceBones(*vkCtx_, boneDescPool_, boneDescPoolGeneration_, inst, defer);
 }
 
-std::unique_ptr<VkTexture> CharacterRenderer::generateNormalHeightMap(
-        const uint8_t* pixels, uint32_t width, uint32_t height, float& outVariance) {
+std::unique_ptr<VkTexture> CharacterRenderer::generateNormalMap(
+        const uint8_t* pixels, uint32_t width, uint32_t height) {
     if (!vkCtx_ || width == 0 || height == 0) return nullptr;
 
     // Use the CPU-only static method, then upload to GPU
     std::vector<uint8_t> dummy(static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
     std::memcpy(dummy.data(), pixels, dummy.size());
-    auto result = generateNormalHeightMapCPU("", std::move(dummy), width, height);
-    outVariance = result.variance;
+    auto result = generateNormalMapCPU("", std::move(dummy), width, height);
 
     auto tex = std::make_unique<VkTexture>();
     if (!tex->upload(*vkCtx_, result.pixels.data(), width, height, VK_FORMAT_R8G8B8A8_UNORM, true)) {
@@ -943,17 +938,16 @@ std::unique_ptr<VkTexture> CharacterRenderer::generateNormalHeightMap(
     return tex;
 }
 
-CharacterRenderer::NormalMapResult CharacterRenderer::generateNormalHeightMapCPU(
+CharacterRenderer::NormalMapResult CharacterRenderer::generateNormalMapCPU(
         std::string cacheKey, std::vector<uint8_t> srcPixels, uint32_t width, uint32_t height) {
     NormalMapResult result;
     result.cacheKey = std::move(cacheKey);
     result.width = width;
     result.height = height;
-    result.variance = 0.0f;
     // Five, where the WMO renderer asks for two: this is skin and cloth seen
     // close up, and it wants the gradient exaggerated.
-    result.pixels = rendering::generateNormalHeightMap(
-        srcPixels.data(), width, height, /*strength=*/5.0f, result.variance);
+    result.pixels = rendering::generateNormalMap(
+        srcPixels.data(), width, height, /*strength=*/5.0f);
     return result;
 }
 
@@ -1105,13 +1099,11 @@ void CharacterRenderer::processPendingNormalMaps(int budget) {
             tex->createSampler(vkCtx_->getDevice(), VK_FILTER_LINEAR,
                                (wrap & 0x1) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
                                (wrap & 0x2) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
-            it->second.heightMapVariance = result.variance;
             it->second.approxBytes += approxTextureBytesWithMips(result.width, result.height);
             textureCacheBytes_ += approxTextureBytesWithMips(result.width, result.height);
             it->second.normalHeightMap = std::move(tex);
             if (it->second.texture) {
-                normalMapByTexPtr_[it->second.texture.get()] = {
-                    .normalMap = it->second.normalHeightMap.get(), .heightMapVariance = it->second.heightMapVariance};
+                normalMapByTexPtr_[it->second.texture.get()] = {.normalMap = it->second.normalHeightMap.get()};
             }
         }
         vkCtx_->endUploadBatch();
@@ -3833,19 +3825,15 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                     currentPipeline = desiredPipeline;
                 }
 
-                // Resolve normal/height map for this texture
+                // Resolve the normal map for this texture
                 VkTexture* normalMap = flatNormalTexture_.get();
-                float batchHeightVariance = 0.0f;
                 if (texPtr && texPtr != whiteTexture_.get()) {
                     auto nmIt = normalMapByTexPtr_.find(texPtr);
                     if (nmIt != normalMapByTexPtr_.end()) {
                         normalMap = nmIt->second.normalMap;
-                        batchHeightVariance = nmIt->second.heightMapVariance;
                     }
                 }
 
-                // POM quality → sample count
-                const int pomSamples = pomSamplesFor(pomQuality_);
                 const bool useAdvancedMaterials = !previewMainModel;
                 const bool usePreviewSimpleShader = previewMainModel;
 
@@ -3863,14 +3851,6 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 matData.emissiveTintB = 1.0f;
                 matData.specularIntensity = 0.5f;
                 matData.enableNormalMap = (useAdvancedMaterials && normalMappingEnabled_) ? 1 : 0;
-                // Character textures are layered/mirrored atlases, not coherent
-                // height fields. Parallax offsets cross face seams and reveal
-                // underlying armor through tabards, so keep POM out of the
-                // character path even when it is enabled for the world.
-                matData.enablePOM = 0;
-                matData.pomScale = 0.06f;
-                matData.pomMaxSamples = pomSamples;
-                matData.heightMapVariance = useAdvancedMaterials ? batchHeightVariance : 0.0f;
                 matData.normalMapStrength = normalMapStrength_;
                 matData.hairMaterial = hairMaterial ? 1 : 0;
                 // Texture animation, which this renderer did not do at all.
@@ -3920,18 +3900,14 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                                 : (blendMode < 7 ? kFogByBlend[blendMode] : 0);
 
                 // The base humanoid mesh samples a mirrored character atlas,
-                // with the face sitting directly beside a UV seam. Parallax
-                // displacement moves each mirrored half in opposite screen
-                // directions, producing crossed eyes and a center-squashed
-                // mouth at oblique angles. Keep normal lighting, but never
-                // displace UVs on group 0 body/head surfaces - nor on the
+                // with the face sitting directly beside a UV seam, which a
+                // normal map derived from it does not survive. Group 0
+                // body/head surfaces keep the vertex normal - and so does the
                 // no-cloak panel, which is a patch of the same torso.
                 if (batchGroup == 0 || batch.submeshId == core::kGeosetNoCape) {
                     normalMap = flatNormalTexture_.get();
                     matData.specularIntensity = 0.20f;
                     matData.enableNormalMap = 0;
-                    matData.enablePOM = 0;
-                    matData.heightMapVariance = 0.0f;
                 }
 
                 // Tabards are a thin cloth layer over the torso. Reusing the
@@ -3943,13 +3919,10 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                     normalMap = flatNormalTexture_.get();
                     matData.specularIntensity = 0.08f;
                     matData.enableNormalMap = 0;
-                    matData.enablePOM = 0;
-                    matData.heightMapVariance = 0.0f;
                 }
                 if (usePreviewSimpleShader) {
                     matData.enableNormalMap = 0;
-                    matData.enablePOM = kPreviewSimpleTextureMode;
-                    matData.heightMapVariance = 0.0f;
+                    matData.previewSimpleTexture = 1;
                 }
 
                 // WOWEE_SCENE_DIAG=1 dumps what each backdrop batch is actually told to
@@ -3969,7 +3942,7 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                         " blend=", blendMode, " matFlags=0x", std::hex, materialFlags, std::dec,
                         " alphaTest=", matData.alphaTest,
                         " unlit=", matData.unlit,
-                        " simplePath=", (matData.enablePOM == kPreviewSimpleTextureMode ? 1 : 0),
+                        " simplePath=", matData.previewSimpleTexture,
                         " whiteFallback=", (texPtr == whiteTexture_.get() ? 1 : 0),
                         " tex=", texName);
                 }
@@ -4002,9 +3975,6 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             VkTexture* texPtr = !gpuModel.textureIds.empty() ? gpuModel.textureIds[0] : whiteTexture_.get();
             if (!texPtr || !texPtr->isValid()) texPtr = whiteTexture_.get();
 
-            // POM quality → sample count
-            const int pomSamples2 = pomSamplesFor(pomQuality_);
-
             // Whole-model fallback inherits whatever pipeline was bound last;
             // pick it explicitly so instance fades blend here too.
             VkPipeline fallbackPipeline = (instance.opacity * instance.kitAlpha * instance.cameraAlpha < 0.999f)
@@ -4030,16 +4000,12 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             const bool useAdvancedMaterials = !previewMainModel;
             const bool usePreviewSimpleShader = previewMainModel;
             matData.enableNormalMap = (useAdvancedMaterials && normalMappingEnabled_) ? 1 : 0;
-            matData.enablePOM = (useAdvancedMaterials && pomEnabled_) ? 1 : 0;
-            matData.pomScale = 0.06f;
-            matData.pomMaxSamples = pomSamples2;
-            matData.heightMapVariance = 0.0f;
             matData.normalMapStrength = normalMapStrength_;
             matData.hairMaterial = 0;
             matData.fogMode = 1;   // the world's fog, as this path always had
             if (usePreviewSimpleShader) {
                 matData.enableNormalMap = 0;
-                matData.enablePOM = kPreviewSimpleTextureMode;
+                matData.previewSimpleTexture = 1;
             }
 
             // Sub-allocate material UBO from ring buffer

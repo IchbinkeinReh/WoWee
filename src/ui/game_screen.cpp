@@ -165,8 +165,7 @@ void GameScreen::reapplySettingsAfterGpuRebuild(rendering::Renderer* renderer) {
 void GameScreen::applySavedSurfaceDetail(rendering::Renderer* renderer) {
     if (!renderer) return;
     renderer->setWmoSurfaceDetail(settingsPanel_.pendingNormalMapping,
-                                  settingsPanel_.pendingNormalMapStrength,
-                                  settingsPanel_.pendingPOM, settingsPanel_.pendingPOMQuality);
+                                  settingsPanel_.pendingNormalMapStrength);
 }
 
 void GameScreen::applySavedDisplayMode(core::Window* window) {
@@ -580,7 +579,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         }
     }
 
-    // Apply saved normal mapping / POM settings once when WMO renderer is available
+    // Apply saved normal mapping settings once when WMO renderer is available
     if (!settingsPanel_.normalMapSettingsApplied_) {
         auto* renderer = services_.renderer;
         if (renderer) {

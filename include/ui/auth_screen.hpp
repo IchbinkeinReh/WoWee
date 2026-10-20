@@ -233,7 +233,7 @@ private:
     /// fields on purpose.
     ///
     /// It mirrors eighteen of them, and that mirroring caused four bugs: a
-    /// parallax dropdown offering two entries of a three-entry scale, a preset
+    /// dropdown offering two entries of a three-entry scale, a preset
     /// table that had drifted from the panel's in four of ten columns, four
     /// keys with no clamp and a fifth clamped to a different floor, and a set
     /// of defaults that disagreed with the schema's. Every one of them is fixed
@@ -266,8 +266,6 @@ private:
         int  antiAliasing    = 1;   // 0=Off 1=2x 2=4x 3=8x
         bool fxaa            = false;
         bool normalMapping   = true;
-        bool pom             = true;
-        int  pomQuality      = 1;   // 0=Low 1=Medium 2=High
         int  upscalingMode   = 0;   // 0=Off 1=FSR1 2=FSR3
         /// This client's procedural water; off is the client's own liquid.
         bool enhancedWater   = false;

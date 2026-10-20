@@ -154,10 +154,9 @@ struct PendingTile {
 
     // Pre-decoded WMO textures (decoded on background thread)
     std::unordered_map<std::string, pipeline::BLPImage> preloadedWMOTextures;
-    // CPU-generated normal/height pixels for those WMO textures. Keeping this
+    // CPU-generated normal map pixels for those WMO textures. Keeping this
     // work on terrain workers avoids multi-second main-thread backfill stalls.
     std::unordered_map<std::string, pipeline::BLPImage> preloadedWMONormalMaps;
-    std::unordered_map<std::string, float> preloadedWMONormalMapVariances;
 };
 
 /**

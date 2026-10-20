@@ -370,7 +370,6 @@ TEST_CASE("the presets climb", "[settings]") {
         CHECK(hi.viewDistance >= lo.viewDistance);
         CHECK(hi.shadowDistance >= lo.shadowDistance);
         CHECK(hi.antiAliasing >= lo.antiAliasing);
-        CHECK(hi.parallaxQuality >= lo.parallaxQuality);
         CHECK(hi.groundClutter >= lo.groundClutter);
     }
 }
@@ -432,9 +431,9 @@ TEST_CASE("the two loaders clamp the same keys the same way", "[settings]") {
     }
     INFO("the two loaders were found to share almost no keys, which means the"
          " parse stopped matching rather than that they agree");
-    // graphics_preset and pom_quality are not counted here: their bounds are
-    // kGraphicsPresetCount and kPomQualityCount, which is the stronger form of
-    // agreeing - they read the same constant rather than the same number.
+    // graphics_preset is not counted here: its bound is kGraphicsPresetCount,
+    // which is the stronger form of agreeing - both read the same constant
+    // rather than the same number.
     CHECK(shared >= 8);
 }
 
@@ -486,7 +485,6 @@ TEST_CASE("the login screen starts where the schema says", "[settings]") {
         {"shadowdistance", "shadowDistance"},
         {"fogskyblend", "fogSkyBlend"},
         {"fogstrength", "fogStrength"},
-        {"parallaxquality", "pomQuality"},
         {"upscaling", "upscalingMode"},
     };
 

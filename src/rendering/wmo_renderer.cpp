@@ -3,7 +3,6 @@
 #include "rendering/light_space_cull.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/blob_shadow.hpp"
-#include "rendering/pom_quality.hpp"
 #include "rendering/placement_transform.hpp"
 #include "rendering/spatial_grid.hpp"
 #include "rendering/wmo_vertex.hpp"
@@ -238,7 +237,7 @@ bool WMORenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayou
     // --- Create material descriptor set layout (set 1) ---
     // binding 0: sampler2D (diffuse texture)
     // binding 1: uniform buffer (WMOMaterial)
-    // binding 2: sampler2D (normal+height map)
+    // binding 2: sampler2D (normal map)
     // binding 3: sampler2D (MOMT texture_2, MapObjEnv's reflection)
     std::vector<VkDescriptorSetLayoutBinding> materialBindings(4);
     materialBindings[0] = {};
@@ -270,7 +269,7 @@ bool WMORenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayou
 
     // --- Create descriptor pool ---
     VkDescriptorPoolSize poolSizes[] = {
-        { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_MATERIAL_SETS * 3 },  // diffuse, normal/height, env
+        { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_MATERIAL_SETS * 3 },  // diffuse, normal, env
         { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = MAX_MATERIAL_SETS },
     };
 
@@ -830,12 +829,11 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                 mb.unfogged = (materialFlags & 0x02) != 0;
                 mb.averaged = averaged;
                 mb.isTransparent = (blendMode >= 2);
-                // Look up normal/height map from texture cache
+                // Look up the normal map from texture cache
                 if (hasTexture && tex != whiteTexture_.get()) {
                     for (const auto& [cacheKey, cacheEntry] : textureCache) {
                         if (cacheEntry.texture.get() == tex) {
                             mb.normalHeightMap = cacheEntry.normalHeightMap.get();
-                            mb.heightMapVariance = cacheEntry.heightMapVariance;
                             break;
                         }
                     }
@@ -881,10 +879,6 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
                                     : (modelData.mohdFlags & 0x8u) ? 1 : 2;
             matData.specularIntensity = 0.5f;
             matData.enableNormalMap = normalMappingEnabled_ ? 1 : 0;
-            matData.enablePOM = pomEnabled_ ? 1 : 0;
-            matData.pomScale = 0.012f;
-            matData.pomMaxSamples = pomSamplesFor(pomQuality_);
-            matData.heightMapVariance = mb.heightMapVariance;
             matData.normalMapStrength = normalMapStrength_;
             matData.wmoAmbientR = modelData.wmoAmbientColor.r;
             matData.wmoAmbientG = modelData.wmoAmbientColor.g;
@@ -1653,7 +1647,6 @@ void WMORenderer::prepareRender() {
     // Update material UBOs if settings changed (mapped memory writes - main thread only)
     if (materialSettingsDirty_) {
         materialSettingsDirty_ = false;
-        int maxSamples = pomSamplesFor(pomQuality_);
         for (auto& [modelId, model] : loadedModels) {
             for (auto& group : model.groups) {
                 for (auto& mb : group.mergedBatches) {
@@ -1663,10 +1656,6 @@ void WMORenderer::prepareRender() {
                     if (allocInfo.pMappedData) {
                         auto* ubo = reinterpret_cast<WMOMaterialUBO*>(allocInfo.pMappedData);
                         ubo->enableNormalMap = normalMappingEnabled_ ? 1 : 0;
-                        ubo->enablePOM = pomEnabled_ ? 1 : 0;
-                        ubo->pomScale = 0.012f;
-                        ubo->pomMaxSamples = maxSamples;
-                        ubo->heightMapVariance = mb.heightMapVariance;
                         ubo->normalMapStrength = normalMapStrength_;
                     }
                 }
@@ -2434,7 +2423,6 @@ void WMORenderer::processNormalMapBackfill() {
         auto& entry = ce->second;
         textureCacheBytes_ += entry.approxBytes;  // the map doubles it, as at load
         entry.approxBytes *= 2;
-        entry.heightMapVariance = res.variance;
         entry.normalHeightMap = std::move(tex);
         filled[entry.texture.get()] = &entry;
         ++normalMapBackfilled_;
@@ -2446,11 +2434,9 @@ void WMORenderer::processNormalMapBackfill() {
     }
 
     // Every batch drawn with those textures takes its map: a new set, as the
-    // old one may still be bound by a frame in flight, and the variance the
-    // parallax reads.
+    // old one may still be bound by a frame in flight.
     if (!filled.empty()) {
         VkDevice device = vkCtx_->getDevice();
-        VmaAllocator allocator = vkCtx_->getAllocator();
         std::vector<VkDescriptorSet> retired;
         // The models still being built as well: a batch made before its
         // texture's map arrived is in one of them.
@@ -2464,14 +2450,6 @@ void WMORenderer::processNormalMapBackfill() {
                     auto f = filled.find(mb.texture);
                     if (f == filled.end()) continue;
                     mb.normalHeightMap = f->second->normalHeightMap.get();
-                    mb.heightMapVariance = f->second->heightMapVariance;
-                    if (mb.materialUBOAlloc) {
-                        VmaAllocationInfo info{};
-                        vmaGetAllocationInfo(allocator, mb.materialUBOAlloc, &info);
-                        if (info.pMappedData)
-                            reinterpret_cast<WMOMaterialUBO*>(info.pMappedData)->heightMapVariance =
-                                mb.heightMapVariance;
-                    }
                     VkDescriptorSet fresh = allocateMaterialSet();
                     if (!fresh) continue;
                     if (!writeMaterialSet(fresh, mb)) {
@@ -2492,11 +2470,11 @@ void WMORenderer::processNormalMapBackfill() {
         }
     }
 
-    // New work, while either setting wants maps. Two at a time on their own
+    // New work, while the setting wants maps. Two at a time on their own
     // threads: the decode and the Sobel pass are what the render thread
     // could not afford, and the terrain workers do the same for the textures
     // they prepare.
-    if (!(normalMappingEnabled_ || pomEnabled_) || !normalMapBackfillScan_) return;
+    if (!normalMappingEnabled_ || !normalMapBackfillScan_) return;
     constexpr size_t kMaxJobs = 2;
     if (normalMapJobs_.size() >= kMaxJobs) return;
     bool more = false;
@@ -2515,9 +2493,9 @@ void WMORenderer::processNormalMapBackfill() {
             const std::vector<uint8_t> decoded =
                 blp.isBlockCompressed() ? pipeline::BLPLoader::decodeBaseLevel(blp) : blp.data;
             if (decoded.empty()) return r;
-            r.pixels = generateNormalHeightMapPixels(decoded.data(),
-                                                     static_cast<uint32_t>(blp.width),
-                                                     static_cast<uint32_t>(blp.height), r.variance);
+            r.pixels = generateNormalMapPixels(decoded.data(),
+                                               static_cast<uint32_t>(blp.width),
+                                               static_cast<uint32_t>(blp.height));
             return r;
         });
         normalMapJobs_.push_back(std::move(job));
@@ -2944,13 +2922,13 @@ void WMORenderer::WMOInstance::updateModelMatrix() {
     invModelMatrix = glm::inverse(modelMatrix);
 }
 
-pipeline::BLPImage WMORenderer::generateNormalHeightMapPixels(
-        const uint8_t* pixels, uint32_t width, uint32_t height, float& outVariance) {
+pipeline::BLPImage WMORenderer::generateNormalMapPixels(
+        const uint8_t* pixels, uint32_t width, uint32_t height) {
     pipeline::BLPImage result;
     // Two, where the character renderer asks for five: stone and wood at the
     // distance a wall is seen from, which a stronger gradient only roughens.
-    std::vector<uint8_t> output = rendering::generateNormalHeightMap(
-        pixels, width, height, /*strength=*/2.0f, outVariance);
+    std::vector<uint8_t> output = rendering::generateNormalMap(
+        pixels, width, height, /*strength=*/2.0f);
     if (output.empty()) return result;
     result.width = static_cast<int>(width);
     result.height = static_cast<int>(height);
@@ -2959,10 +2937,10 @@ pipeline::BLPImage WMORenderer::generateNormalHeightMapPixels(
     return result;
 }
 
-std::unique_ptr<VkTexture> WMORenderer::generateNormalHeightMap(
-        const uint8_t* pixels, uint32_t width, uint32_t height, float& outVariance) {
+std::unique_ptr<VkTexture> WMORenderer::generateNormalMap(
+        const uint8_t* pixels, uint32_t width, uint32_t height) {
     if (!vkCtx_) return nullptr;
-    auto normalPixels = generateNormalHeightMapPixels(pixels, width, height, outVariance);
+    auto normalPixels = generateNormalMapPixels(pixels, width, height);
     if (!normalPixels.isValid()) return nullptr;
 
     // Upload the CPU-generated pixels to the GPU with mipmaps.
@@ -3134,12 +3112,11 @@ VkTexture* WMORenderer::loadTexture(const std::string& path) {
     texture->createSampler(vkCtx_->getDevice(), VK_FILTER_LINEAR, VK_FILTER_LINEAR,
                             VK_SAMPLER_ADDRESS_MODE_REPEAT);
 
-    // Prefer normal/height pixels generated by terrain workers. This preserves
-    // advanced materials without running the Sobel/blur pass on the render
+    // Prefer normal map pixels generated by terrain workers. This preserves
+    // advanced materials without running the Sobel pass on the render
     // thread. Non-streamed loads retain the synchronous fallback.
-    float nhVariance = 0.0f;
     std::unique_ptr<VkTexture> nhMap;
-    if (normalMappingEnabled_ || pomEnabled_) {
+    if (normalMappingEnabled_) {
         if (predecodedNormalMapCache_ && !resolvedKey.empty()) {
             auto normalIt = predecodedNormalMapCache_->find(resolvedKey);
             if (normalIt != predecodedNormalMapCache_->end()) {
@@ -3153,13 +3130,6 @@ VkTexture* WMORenderer::loadTexture(const std::string& path) {
                     uploaded->createSampler(vkCtx_->getDevice(), VK_FILTER_LINEAR, VK_FILTER_LINEAR,
                                             VK_SAMPLER_ADDRESS_MODE_REPEAT);
                     nhMap = std::move(uploaded);
-                    if (predecodedNormalMapVariances_) {
-                        auto varianceIt = predecodedNormalMapVariances_->find(resolvedKey);
-                        if (varianceIt != predecodedNormalMapVariances_->end()) {
-                            nhVariance = varianceIt->second;
-                            predecodedNormalMapVariances_->erase(varianceIt);
-                        }
-                    }
                 }
                 predecodedNormalMapCache_->erase(normalIt);
             }
@@ -3172,8 +3142,7 @@ VkTexture* WMORenderer::loadTexture(const std::string& path) {
                 blp.isBlockCompressed() ? pipeline::BLPLoader::decodeBaseLevel(blp)
                                         : blp.data;
             if (!decoded.empty()) {
-                nhMap = generateNormalHeightMap(decoded.data(), blp.width, blp.height,
-                                                nhVariance);
+                nhMap = generateNormalMap(decoded.data(), blp.width, blp.height);
             }
         }
         if (nhMap) {
@@ -3188,7 +3157,6 @@ VkTexture* WMORenderer::loadTexture(const std::string& path) {
     e.lastUse = ++textureCacheCounter_;
     e.texture = std::move(texture);
     e.normalHeightMap = std::move(nhMap);
-    e.heightMapVariance = nhVariance;
     // None made here - the setting was off, or streaming deferred it and the
     // worker had not prepared this one: processNormalMapBackfill makes it.
     e.normalMapTried = e.normalHeightMap != nullptr;

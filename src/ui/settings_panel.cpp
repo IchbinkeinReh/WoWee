@@ -894,7 +894,7 @@ namespace {
 /// The settings a preset has an opinion about, in the order it sets them.
 constexpr const char* kGraphicsPresetKeys[] = {
     "viewdistance", "shadows", "shadowdistance", "antialiasing", "fxaa",
-    "normalmapping", "normalmapstrength", "parallax", "parallaxquality",
+    "normalmapping", "normalmapstrength",
     "groundclutter",
     "grassenabled", "grassdensity", "grassheight", "grassdistance",
     "lensflare", "sharpstars", "sunshafts", "lightshafts", "fogskyblend",
@@ -917,7 +917,7 @@ static_assert(cameraDistanceFactor(50) - rendering::CameraController::kMaxDistan
 constexpr const char* kGraphicsApplyKeys[] = {
     "viewdistance", "shadows", "shadowdistance", "shadowresolution", "shadowcascades",
     "antialiasing", "fxaa",
-    "normalmapping", "normalmapstrength", "parallax", "parallaxquality",
+    "normalmapping", "normalmapstrength",
     "groundclutter", "grassenabled", "grassdensity", "grassheight",
     "grassdistance", "enhancedwater", "specular", "upscaling", "fsrquality",
     "fsrsharpness", "framegen", "brightness", "uiopacity", "minimapsquare",
@@ -980,8 +980,6 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
         pendingFXAA              = p.fxaa;
         pendingNormalMapping     = p.normalMapping;
         pendingNormalMapStrength = p.normalMapStrength;
-        pendingPOM               = p.parallax;
-        pendingPOMQuality        = p.parallaxQuality;
         pendingGroundClutterDensity = p.groundClutter;
         pendingGrassEnabled      = p.grass;
         pendingGrassDensity      = p.grassDensity;
@@ -1044,7 +1042,6 @@ SettingsPanel::GraphicsPreset SettingsPanel::matchingGraphicsPreset() const {
             pendingAntiAliasing == p.antiAliasing &&
             pendingFXAA == p.fxaa &&
             pendingNormalMapping == p.normalMapping &&
-            pendingPOM == p.parallax &&
             std::abs(pendingGroundClutterDensity - p.groundClutter) <= 10 &&
             pendingGrassEnabled == p.grass &&
             std::abs(pendingLensFlare - p.lensFlare) <= 0.05f &&
@@ -1204,11 +1201,9 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "normalmapstrength", .asFloat = &SettingsPanel::pendingNormalMapStrength},
     {.key = "lensflare",         .asFloat = &SettingsPanel::pendingLensFlare},
     {.key = "framecap",          .asInt   = &SettingsPanel::pendingFrameCap},
-    {.key = "parallax",          .asBool  = &SettingsPanel::pendingPOM},
     {.key = "sharpstars",        .asBool  = &SettingsPanel::pendingSharpStars},
     {.key = "sunshafts",         .asBool  = &SettingsPanel::pendingSunShafts},
     {.key = "screenglow",        .asBool  = &SettingsPanel::pendingScreenGlow},
-    {.key = "parallaxquality",   .asInt   = &SettingsPanel::pendingPOMQuality},
 
     // --- Upscaling ---
     {.key = "upscaling",     .asInt   = &SettingsPanel::pendingUpscalingMode},
@@ -1565,13 +1560,11 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         }
     } else if (key == "fxaa") {
         if (post) post->setFXAAEnabled(pendingFXAA);
-    } else if (key == "normalmapping" || key == "normalmapstrength" || key == "parallax" ||
-               key == "parallaxquality") {
+    } else if (key == "normalmapping" || key == "normalmapstrength") {
         // Buildings only (see GameScreen's first application of these), and
         // through the renderer, which hands them to a WMO renderer made later.
         if (renderer)
-            renderer->setWmoSurfaceDetail(pendingNormalMapping, pendingNormalMapStrength,
-                                          pendingPOM, pendingPOMQuality);
+            renderer->setWmoSurfaceDetail(pendingNormalMapping, pendingNormalMapStrength);
     } else if (key == "sharpstars") {
         if (renderer) renderer->setSharpStars(pendingSharpStars);
     } else if (key == "sunshafts") {
