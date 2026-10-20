@@ -10,7 +10,6 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/mount_sound_manager.hpp"
-#include "audio/movement_sound_manager.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -183,9 +182,6 @@ audio::FootstepSurface FootstepDriver::resolveFootstepSurface(Renderer* renderer
 }
 
 void FootstepDriver::playWaterStepExtras(Renderer* renderer) const {
-    if (renderer->getAudioCoordinator()->getMovementSoundManager()) {
-        renderer->getAudioCoordinator()->getMovementSoundManager()->playWaterFootstep(audio::MovementSoundManager::CharacterSize::MEDIUM);
-    }
     auto* swimEffects = renderer->getSwimEffects();
     auto* waterRenderer = renderer->getWaterRenderer();
     if (swimEffects && waterRenderer) {
@@ -249,22 +245,6 @@ void FootstepDriver::update(float deltaTime, Renderer* renderer,
                     ? mountSounds->getCurrentMountFamily()
                     : audio::MountFamily::UNKNOWN;
 
-                // Bank: hooves for horse-like mounts, heavy thuds for kodos,
-                // softened character steps for padded paws and everything else.
-                audio::FootstepBank bank = audio::FootstepBank::CHARACTER;
-                switch (family) {
-                    case audio::MountFamily::HORSE:
-                    case audio::MountFamily::UNDEAD_HORSE:
-                    case audio::MountFamily::RAM:
-                        bank = audio::FootstepBank::HORSE;
-                        break;
-                    case audio::MountFamily::KODO:
-                        bank = audio::FootstepBank::HEAVY;
-                        break;
-                    default:
-                        break;
-                }
-
                 // Beat timing: prefer the model's authored $FSD footfall
                 // keyframes (exact hoof-strike sync). Models without them fall
                 // back to a synthetic gait: quadrupeds gallop - four beats
@@ -291,8 +271,10 @@ void FootstepDriver::update(float deltaTime, Renderer* renderer,
                 }
 
                 if (beat) {
+                    // The sound is the mount model's $FSD, through its rider
+                    // (EntitySpawner::playUnitModelEvents, 0x00747240); this
+                    // leaves the print and the splash.
                     const auto surface = resolveFootstepSurface(renderer);
-                    footstepManager->playMountFootstep(surface, bank);
                     if (surface == audio::FootstepSurface::WATER) {
                         playWaterStepExtras(renderer);
                     } else {
@@ -314,8 +296,10 @@ void FootstepDriver::update(float deltaTime, Renderer* renderer,
         if (characterRenderer->getAnimationState(characterInstanceId, animId, animTimeMs, animDurationMs) &&
             shouldTriggerFootstepEvent(animId, animTimeMs, animDurationMs,
                                        characterRenderer->getFootstepEventTimes(characterInstanceId))) {
+            // The sound is the model's $FSD (EntitySpawner::
+            // playUnitModelEvents, 0x00747240); this leaves the print and
+            // the splash.
             auto surface = resolveFootstepSurface(renderer);
-            footstepManager->playFootstep(surface, cameraController->isSprinting());
             if (surface == audio::FootstepSurface::WATER) {
                 playWaterStepExtras(renderer);
             } else {

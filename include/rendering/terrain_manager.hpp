@@ -390,6 +390,12 @@ public:
      */
     [[nodiscard]] std::optional<std::string> getDominantTextureAt(float glX, float glY) const;
 
+    /// The GroundEffectTexture id of the ground at a point, as the client
+    /// reads a unit's terrain type (0x007a0530): the chunk's quad there, none
+    /// in a hole, its layer by the chunk's 2-bit layer map, that layer's
+    /// effect id. Empty where there is no chunk, a hole, or no such layer.
+    [[nodiscard]] std::optional<uint32_t> getGroundEffectIdAt(float glX, float glY) const;
+
     /**
      * Get statistics
      */

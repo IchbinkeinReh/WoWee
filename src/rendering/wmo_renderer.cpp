@@ -586,6 +586,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(
         modelData.materialTextureIndices.push_back(texIndex);
         modelData.materialBlendModes.push_back(mat.blendMode);
         modelData.materialFlags.push_back(mat.flags);
+        modelData.materialGroundTypes.push_back(mat.groundType);
         // 0x007d7710, making the material's textures: shaders 3, 5 and 6
         // (Env, EnvMetal, Composite) with no texture_2 name are rewritten to
         // 4, Opaque - unified or not. A non-unified group's table has no
@@ -2305,8 +2306,10 @@ bool WMORenderer::createGroupResources(const pipeline::WMOGroup& group, GroupRes
         resources.collisionIndices = group.indices;
         size_t numTris = group.indices.size() / 3;
         resources.triMopyFlags.resize(numTris, 0);
+        resources.triMaterials.resize(numTris, 0xFF);
         for (size_t t = 0; t < numTris; t++) {
             resources.triMopyFlags[t] = (t < group.triFlags.size()) ? group.triFlags[t] : 0;
+            if (t < group.triMaterials.size()) resources.triMaterials[t] = group.triMaterials[t];
         }
     } else {
         resources.collisionIndices = group.indices;
@@ -3553,7 +3556,8 @@ void WMORenderer::gatherBlobShadowGround(const glm::vec3& boxMin, const glm::vec
     }
 }
 
-std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ, float* outNormalZ, float referenceZ) const {
+std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ, float* outNormalZ, float referenceZ,
+                                                 int32_t* outGroundType) const {
     const bool byReference = std::isfinite(referenceZ);
     // Per-frame cache disabled: camera and player query the same (x,y) at
     // different Z within a single frame. The allowAbove filter depends on glZ,
@@ -3562,6 +3566,7 @@ std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ
     QueryTimer timer(&queryTimeMs, &queryCallCount);
     std::optional<float> bestFloor;
     float bestNormalZ = 1.0f;
+    int32_t bestGroundType = -1;
     bool bestFromLowPlatform = false;
     // For the "no floor where there plainly is one" report at the end.
     bool overlappedInXY = false;
@@ -3645,6 +3650,13 @@ std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ
                     if (better) {
                         bestFloor = hitWorld.z;
                         bestFromLowPlatform = model.isLowPlatform;
+                        // The triangle's material's ground type (0x007b39b0).
+                        bestGroundType = -1;
+                        const size_t tri = triStart / 3;
+                        if (tri < group.triMaterials.size() &&
+                            group.triMaterials[tri] < model.materialGroundTypes.size()) {
+                            bestGroundType = static_cast<int32_t>(model.materialGroundTypes[group.triMaterials[tri]]);
+                        }
 
                         // Use precomputed normal, ensure upward, transform to world
                         glm::vec3 localNormal = group.triNormals[triStart / 3];
@@ -3823,6 +3835,7 @@ std::optional<float> WMORenderer::getFloorHeight(float glX, float glY, float glZ
         *outNormalZ = bestNormalZ;
     }
 
+    if (outGroundType) *outGroundType = bestFloor ? bestGroundType : -1;
     return bestFloor;
 }
 

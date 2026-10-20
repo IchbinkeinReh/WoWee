@@ -2751,6 +2751,11 @@ void Renderer::update(float deltaTime) {
         auto cameraStart = std::chrono::steady_clock::now();
         WOWEE_PROFILE_SCOPE("camera + movement", Cpu);
         cameraController->update(deltaTime);
+        // A cinematic's camera over the controller's (game/cinematic.hpp).
+        if (cinematicView_ && camera) {
+            camera->setPosition(cinematicView_->position);
+            camera->setLookDirection(cinematicView_->forward, cinematicView_->up);
+        }
         auto cameraEnd = std::chrono::steady_clock::now();
         lastCameraUpdateMs = std::chrono::duration<double, std::milli>(cameraEnd - cameraStart).count();
         if (lastCameraUpdateMs > 50.0) {
@@ -5525,6 +5530,18 @@ int Renderer::getTerrainLoadRadius() const {
     constexpr float kAdtTileSize = core::coords::TILE_SIZE;
     return glm::clamp(static_cast<int>(std::ceil(farClip_ / kAdtTileSize)) + 1, 2, 6);
 }
+void Renderer::setCinematicView(const std::optional<CinematicView>& view) {
+    cinematicView_ = view;
+    if (cameraController) cameraController->setCinematicKeysHeld(view.has_value());
+    if (!camera) return;
+    if (view) {
+        camera->setPosition(view->position);
+        camera->setLookDirection(view->forward, view->up);
+    } else {
+        camera->clearLookOverride();
+    }
+}
+
 void Renderer::renderHUD() {
     if (currentCmd == VK_NULL_HANDLE) return;
     if (performanceHUD && camera) {

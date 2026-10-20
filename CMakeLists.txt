@@ -625,6 +625,7 @@ set(WOWEE_SOURCES
     src/core/world_loader.cpp
     src/core/npc_interaction_callback_handler.cpp
     src/core/audio_callback_handler.cpp
+    src/core/cinematic_player.cpp
     src/core/entity_spawn_callback_handler.cpp
     src/core/animation_callback_handler.cpp
     src/core/transport_callback_handler.cpp
@@ -667,6 +668,7 @@ set(WOWEE_SOURCES
     src/game/expansion_profile.cpp
     src/game/opcode_table.cpp
     src/game/update_field_table.cpp
+    src/game/cinematic.cpp
     src/game/game_handler.cpp
     src/game/game_handler_packets.cpp
     src/game/game_handler_callbacks.cpp

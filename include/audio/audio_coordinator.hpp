@@ -80,6 +80,10 @@ public:
     /// (0x004c85f0). The place they were for is forgotten too, so the next
     /// world fills the slots afresh.
     void leaveWorld();
+    /// 0x004c93b0 alone: the music channel's tracks at once, SMSG_PLAY_MUSIC's
+    /// slot emptied, the script's music over half a second, the silence
+    /// between tracks over - as a cinematic's sounds start.
+    void stopMusicChannel();
     /// Entering the world from the character screen (0x00405540 ->
     /// 0x004c9330): every intro may play again at once.
     void forgetIntroMusic();

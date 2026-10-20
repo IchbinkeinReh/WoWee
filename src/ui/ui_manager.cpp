@@ -563,6 +563,11 @@ void UIManager::finishImGuiFrame() {
         textInputUp_ = wantsText;
     }
 
+    if (screenFade_ > 0.0f) {
+        const ImVec2 size = ImGui::GetIO().DisplaySize;
+        const auto a = static_cast<int>(std::clamp(screenFade_, 0.0f, 1.0f) * 255.0f + 0.5f);
+        ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), size, IM_COL32(0, 0, 0, a));
+    }
     drawGloveCursor();
     ImGui::Render();
 }

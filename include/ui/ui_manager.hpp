@@ -102,6 +102,9 @@ public:
     /// draw FrameXML's panels between the two - they belong over the world
     /// overlays that render() puts in the same draw list.
     void finishImGuiFrame();
+    /// The black a cinematic fades the screen to, 0..1 (0x005ed120's layer,
+    /// over the world and the interface), drawn as the frame finishes.
+    void setScreenFade(float alpha) { screenFade_ = alpha; }
 
     /// Where the pointer's art comes from. The client draws its own glove
     /// (Interface\Cursor\Point.blp) for the pointer everywhere, and the
@@ -137,6 +140,7 @@ private:
     /// Whether this asked SDL for text input, so it is started and stopped
     /// once per change rather than every frame.
     bool textInputUp_ = false;
+    float screenFade_ = 0.0f;
     pipeline::AssetManager* cursorAssets_ = nullptr;
     VkDescriptorSet gloveCursor_ = VK_NULL_HANDLE;
     bool gloveCursorFailed_ = false;

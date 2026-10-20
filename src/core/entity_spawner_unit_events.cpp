@@ -12,8 +12,16 @@
 #include "rendering/m2_event_sounds.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/unit_model_events.hpp"
+#include "rendering/terrain_manager.hpp"
+#include "rendering/water_renderer.hpp"
+#include "rendering/wmo_renderer.hpp"
+#include "audio/audio_coordinator.hpp"
+#include "audio/audio_engine.hpp"
+#include "audio/footstep_manager.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <limits>
 
 namespace wowee::core {
 
@@ -34,6 +42,28 @@ uint32_t nextRandom(uint32_t& state) {
     state ^= state >> 17;
     state ^= state << 5;
     return state;
+}
+
+/// GroundEffectTexture's TerrainType (+0x28), which 0x007a0530 reads.
+constexpr uint32_t kGroundEffectTerrainTypeColumn = 10;
+
+/// The footfall sounds from TerrainType and FootstepTerrainLookup
+/// (0x004cf990); null when either is missing.
+std::shared_ptr<const ue::FootstepTerrainSounds> loadFootstepSounds(pipeline::AssetManager& assets) {
+    auto terrainTypes = assets.loadDBCOptional("TerrainType.dbc");
+    auto lookup = assets.loadDBCOptional("FootstepTerrainLookup.dbc");
+    if (!terrainTypes || !lookup || terrainTypes->getFieldCount() < 5 || lookup->getFieldCount() < 5) return nullptr;
+    auto table = std::make_shared<ue::FootstepTerrainSounds>();
+    for (uint32_t i = 0; i < terrainTypes->getRecordCount(); ++i) {
+        // ID, TerrainDesc, FootstepSprayRun, FootstepSprayWalk, SoundID.
+        table->addTerrainType(static_cast<int32_t>(terrainTypes->getUInt32(i, 0)), terrainTypes->getUInt32(i, 4));
+    }
+    for (uint32_t i = 0; i < lookup->getRecordCount(); ++i) {
+        // ID, CreatureFootstepID, TerrainSoundID, SoundID, SoundIDSplash.
+        table->addLookup(lookup->getUInt32(i, 1), static_cast<int32_t>(lookup->getUInt32(i, 2)),
+                         lookup->getUInt32(i, 3), lookup->getUInt32(i, 4));
+    }
+    return table;
 }
 
 }  // namespace
@@ -86,6 +116,51 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
         return row;
     };
 
+    // The unit the client moves - the player, or the vehicle it drives
+    // (DAT_00ca1238): its creature sounds, as the player's own, are heard
+    // at the listener (0x00747310).
+    const uint64_t mover = gameHandler_->activeMover();
+    const bool listenerAtCharacter = addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0";
+
+    // The ground a unit stands on (0x007c2440 from z + 0.1 down): a
+    // building's floor material's, else the terrain's quad's, else none.
+    const auto groundTerrainType = [&](const glm::vec3& at) -> int32_t {
+        const float probeZ = at.z + 0.1f;
+        std::optional<float> buildingFloor;
+        int32_t buildingType = -1;
+        if (auto* wmo = renderer_->getWMORenderer()) {
+            buildingFloor = wmo->getFloorHeight(at.x, at.y, probeZ, nullptr,
+                                                std::numeric_limits<float>::quiet_NaN(), &buildingType);
+        }
+        std::optional<float> terrainFloor;
+        std::optional<int32_t> terrainType;
+        if (auto* terrain = renderer_->getTerrainManager()) {
+            terrainFloor = terrain->getHeightAt(at.x, at.y);
+            if (terrainFloor && *terrainFloor > probeZ) terrainFloor.reset();
+            if (terrainFloor) {
+                if (const auto effect = terrain->getGroundEffectIdAt(at.x, at.y)) {
+                    auto effects = assetManager_->loadDBCOptional("GroundEffectTexture.dbc");
+                    const int32_t row = effects && effects->getFieldCount() > kGroundEffectTerrainTypeColumn
+                                            ? effects->findRecordById(*effect)
+                                            : -1;
+                    if (row >= 0) {
+                        terrainType = static_cast<int32_t>(
+                            effects->getUInt32(static_cast<uint32_t>(row), kGroundEffectTerrainTypeColumn));
+                    }
+                }
+            }
+        }
+        return ue::groundTerrainType(buildingFloor, buildingType, terrainFloor, terrainType);
+    };
+    // The footstep slider over the Sound Effects volume the play is heard at.
+    const auto footstepVolume = [&]() -> float {
+        audio::AudioCoordinator* ac = renderer_->getAudioCoordinator();
+        audio::FootstepManager* steps = ac ? ac->getFootstepManager() : nullptr;
+        const float effects = audio::AudioEngine::instance().getEffectsVolume();
+        if (!steps || !(effects > 0.0f)) return 1.0f;
+        return std::clamp(steps->getVolumeScale() / effects, 0.0f, 1.0f);
+    };
+
     rendering::M2EventSounds& player = renderer_->getM2EventSounds();
     const auto nowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                  std::chrono::steady_clock::now().time_since_epoch())
@@ -125,9 +200,10 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
             const uint32_t sound =
                 sounds->getUInt32(static_cast<uint32_t>(row), ue::slotColumn(action.index));
             if (sound == 0) break;
-            // The active player's own, with the listener at the character,
-            // where the listener is and fainter (0x00747310).
-            if (activePlayer && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
+            // The active player's own, and the vehicle it drives, with the
+            // listener at the character: where the listener is and fainter
+            // (0x00747310).
+            if ((activePlayer || guid == mover) && listenerAtCharacter) {
                 player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_);
             } else {
                 player.playOnce(sound, &unitPosition, 1.0f, assetManager_);
@@ -139,6 +215,38 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
             if (row < 0) break;
             const uint32_t sound = sounds->getUInt32(static_cast<uint32_t>(row), action.index);
             if (sound != 0) player.playOnce(sound, &event.position, 1.0f, assetManager_);
+            break;
+        }
+        case ue::Kind::Footstep: {
+            // 0x00747240: not a hovering unit's; with FootstepSounds on.
+            if (addons::storedCVarValue("FootstepSounds", "1") == "0") break;
+            const uint16_t bytes1 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1);
+            if (bytes1 != 0xFFFF && ue::hovers(unit.getField(bytes1))) break;
+            const int32_t row = soundRow(unit, true);
+            if (row < 0) break;
+            const uint32_t footstepId = sounds->getUInt32(static_cast<uint32_t>(row), ue::kColumnFootstep);
+            if (footstepId == 0) break;
+            if (!footstepSounds_) footstepSounds_ = loadFootstepSounds(*assetManager_);
+            if (!footstepSounds_) break;
+            // The foot in water, where the unit is and not swimming
+            // (0x0071a030).
+            const bool activePlayer = guid == self;
+            const uint32_t moveFlags =
+                activePlayer ? gameHandler_->getMovementInfo().flags : unit.getReportedMoveFlags();
+            std::optional<float> liquid;
+            if (auto* water = renderer_->getWaterRenderer()) liquid = water->getWaterHeightAt(unitPosition.x, unitPosition.y);
+            const bool inWater = ue::footInWater(liquid, event.position.z, moveFlags);
+            const uint32_t sound = footstepSounds_->sound(footstepId, groundTerrainType(unitPosition), inWater);
+            if (sound == 0) break;
+            // 0x004cf170: the active player's own, a player's, with the
+            // listener at the character - where the listener is, at 0.65;
+            // every other where the foot is.
+            const float volume = footstepVolume();
+            if (activePlayer && entity->getType() == game::ObjectType::PLAYER && listenerAtCharacter) {
+                player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume * volume, assetManager_);
+            } else {
+                player.playOnce(sound, &event.position, volume, assetManager_);
+            }
             break;
         }
         case ue::Kind::None:

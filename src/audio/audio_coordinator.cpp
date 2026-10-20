@@ -80,9 +80,7 @@ void AudioCoordinator::leaveWorld() {
     // 0xb4ac90) - SMSG_PLAY_MUSIC's among them, its slot (3) emptied - the
     // script's PlayMusic over half a second (0xb4ac3c), and the silence
     // between tracks over.
-    if (musicManager_) musicManager_->stopZoneMusic(true);
-    stopScriptMusic();
-    silenceUntil_ = 0;
+    stopMusicChannel();
     // 0x004c85f0: the ambience's channels (0xb4ac50).
     if (ambientSoundManager_) ambientSoundManager_->stopAll();
     // The slots the next world fills again, from its place (0x0078e960
@@ -93,6 +91,12 @@ void AudioCoordinator::leaveWorld() {
     screenEffectAmbienceId_ = 0;
     screenEffectZoneMusicId_ = 0;
     LOG_INFO("World unloaded: music and ambience stopped");
+}
+
+void AudioCoordinator::stopMusicChannel() {
+    if (musicManager_) musicManager_->stopZoneMusic(true);
+    stopScriptMusic();
+    silenceUntil_ = 0;
 }
 
 void AudioCoordinator::forgetIntroMusic() {

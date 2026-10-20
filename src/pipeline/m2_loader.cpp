@@ -598,11 +598,11 @@ struct M2CameraDisk {
     float fov;
     float farClip;
     float nearClip;
-    M2TrackDisk positionTrack;            // not read
+    M2TrackDisk positionTrack;
     float positionBase[3];
-    M2TrackDisk targetTrack;              // not read
+    M2TrackDisk targetTrack;
     float targetBase[3];
-    M2TrackDisk rollTrack;                // not read
+    M2TrackDisk rollTrack;
 };
 
 // M2 camera (on-disk, vanilla - 124 bytes; tracks are 28 bytes)
@@ -883,6 +883,46 @@ enum class TrackType { VEC3, QUAT_COMPRESSED, FLOAT, FIXED16, BYTE_BOOL,
 // When clear, data lives in an external .anim file and the M2 offsets are
 // .anim-relative - reading them from the M2 produces garbage.
 constexpr uint32_t kM2SeqFlagEmbeddedData = 0x20;
+
+/// Sequence `index` of a WotLK camera track of spline keys: the sub-array
+/// headers from the M2, the times and keys from `source` (the M2 itself, or
+/// the sequence's .anim file). Each key is `components` floats of value, then
+/// in- and out-tangent. False where they do not fit.
+bool readSplineSequence(const std::vector<uint8_t>& m2, const std::vector<uint8_t>& source, const M2TrackDisk& disk,
+                        uint32_t index, uint32_t components, M2SplineTrack::SequenceKeys& out) {
+    const uint32_t tsHeader = disk.ofsTimestamps + index * kM2ArrayDiskSize;
+    const uint32_t keyHeader = disk.ofsKeys + index * kM2ArrayDiskSize;
+    if (static_cast<size_t>(tsHeader) + kM2ArrayDiskSize > m2.size() ||
+        static_cast<size_t>(keyHeader) + kM2ArrayDiskSize > m2.size()) {
+        return false;
+    }
+    const M2ArrayDisk times = readValue<M2ArrayDisk>(m2, tsHeader);
+    const M2ArrayDisk keys = readValue<M2ArrayDisk>(m2, keyHeader);
+    if (times.count == 0 || times.count != keys.count || times.count > 65536) return false;
+    auto stamps = readArray<uint32_t>(source, times.offset, times.count);
+    auto values = readArray<float>(source, keys.offset, keys.count * components * 3);
+    if (stamps.size() != times.count || values.size() != static_cast<size_t>(keys.count) * components * 3) return false;
+    out.timestamps = std::move(stamps);
+    out.keys = std::move(values);
+    return true;
+}
+
+/// A WotLK camera track (M2Track<M2SplineKey<T>>); a sequence whose data is
+/// in an .anim file (no flag 0x20) is left empty for loadAnimFile.
+void readSplineTrack(const std::vector<uint8_t>& m2, const M2TrackDisk& disk, uint32_t components,
+                     const std::vector<uint32_t>& sequenceFlags, M2SplineTrack& out) {
+    out.interpolationType = disk.interpolationType;
+    out.globalSequence = disk.globalSequence;
+    out.components = components;
+    out.sequences.clear();
+    const uint32_t count = std::min(disk.nTimestamps, disk.nKeys);
+    if (count == 0 || count > 4096) return;
+    out.sequences.resize(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        if (i < sequenceFlags.size() && !(sequenceFlags[i] & kM2SeqFlagEmbeddedData)) continue;
+        readSplineSequence(m2, m2, disk, i, components, out.sequences[i]);
+    }
+}
 
 // Parse an M2 animation track from the binary data.
 // The track uses an "array of arrays" layout: nTimestamps pairs of {count, offset}.
@@ -1806,8 +1846,8 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         model.attachmentLookup = readArray<uint16_t>(m2Data, header.ofsAttachmentLookup, header.nAttachmentLookup);
     }
 
-    // Cameras - only the static base position/target are used; scene models keep
-    // their framing here, and animated camera tracks are not needed for a backdrop.
+    // Cameras - the static base position/target frame a scene model; the
+    // animated tracks (WotLK) are what a cinematic camera flies by.
     if (header.nCameras > 0 && header.ofsCameras > 0) {
         const uint32_t cameraCount = capCount(header.nCameras, kMaxM2Cameras, "nCameras");
         model.cameras.reserve(cameraCount);
@@ -1832,8 +1872,16 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
                 pushCamera(dc.type, dc.fov, dc.farClip, dc.nearClip, dc.positionBase, dc.targetBase);
         } else {
             auto disk = readArray<M2CameraDisk>(m2Data, header.ofsCameras, cameraCount);
-            for (const auto& dc : disk)
+            std::vector<uint32_t> seqFlags;
+            seqFlags.reserve(model.sequences.size());
+            for (const auto& seq : model.sequences) seqFlags.push_back(seq.flags);
+            for (const auto& dc : disk) {
                 pushCamera(dc.type, dc.fov, dc.farClip, dc.nearClip, dc.positionBase, dc.targetBase);
+                M2Camera& cam = model.cameras.back();
+                readSplineTrack(m2Data, dc.positionTrack, 3, seqFlags, cam.positionTrack);
+                readSplineTrack(m2Data, dc.targetTrack, 3, seqFlags, cam.targetTrack);
+                readSplineTrack(m2Data, dc.rollTrack, 1, seqFlags, cam.rollTrack);
+            }
         }
         core::Logger::getInstance().debug("  Cameras: ", model.cameras.size());
     }
@@ -2413,8 +2461,31 @@ void M2Loader::loadAnimFile(const std::vector<uint8_t>& m2Data,
     M2Header header;
     std::memcpy(&header, m2Data.data(), sizeof(M2Header));
 
-    if (header.nBones == 0 || header.ofsBones == 0) return;
     if (sequenceIndex >= model.sequences.size()) return;
+
+    // The cameras' tracks for this sequence, where the M2 left them empty.
+    if (header.version >= 264 && header.nCameras > 0 && header.ofsCameras > 0) {
+        for (uint32_t c = 0; c < header.nCameras && c < model.cameras.size(); ++c) {
+            const size_t at = static_cast<size_t>(header.ofsCameras) + c * sizeof(M2CameraDisk);
+            if (at + sizeof(M2CameraDisk) > m2Data.size()) break;
+            const M2CameraDisk dc = readValue<M2CameraDisk>(m2Data, static_cast<uint32_t>(at));
+            M2Camera& cam = model.cameras[c];
+            const std::pair<const M2TrackDisk*, M2SplineTrack*> tracks[] = {
+                {&dc.positionTrack, &cam.positionTrack},
+                {&dc.targetTrack, &cam.targetTrack},
+                {&dc.rollTrack, &cam.rollTrack},
+            };
+            for (const auto& [disk, track] : tracks) {
+                if (sequenceIndex >= track->sequences.size()) continue;
+                auto& keys = track->sequences[sequenceIndex];
+                if (keys.timestamps.empty()) {
+                    readSplineSequence(m2Data, animData, *disk, sequenceIndex, track->components, keys);
+                }
+            }
+        }
+    }
+
+    if (header.nBones == 0 || header.ofsBones == 0) return;
 
     int patchedTracks = 0;
 

@@ -2520,6 +2520,19 @@ std::optional<std::string> TerrainManager::getDominantTextureAt(float glX, float
     return tile->terrain.textures[texId];
 }
 
+std::optional<uint32_t> TerrainManager::getGroundEffectIdAt(float glX, float glY) const {
+    float fracX = 0.0f, fracY = 0.0f;
+    const pipeline::MapChunk* chunk = findChunkAt(glX, glY, fracX, fracY);
+    if (!chunk) return std::nullopt;
+    // The quad, as the doodads and the holes read it (fracY its row).
+    const int qy = glm::clamp(static_cast<int>(std::floor(fracY)), 0, 7);
+    const int qx = glm::clamp(static_cast<int>(std::floor(fracX)), 0, 7);
+    if (chunk->isHole(qy, qx)) return std::nullopt;
+    const uint32_t layer = chunk->effectLayerFor(qy, qx);
+    if (layer >= chunk->layers.size()) return std::nullopt;
+    return chunk->layers[layer].effectId;
+}
+
 void TerrainManager::streamTiles() {
     auto shouldSkipMissingAdt = [this](const TileCoord& coord) -> bool {
         if (!assetManager) return false;
