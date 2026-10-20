@@ -3747,6 +3747,8 @@ struct AuctionCommandResult {
 
 struct AuctionHelloData {
     uint64_t auctioneerGuid = 0;
+    /// The house's row in AuctionHouse.dbc (0x0059f000 keeps it at 0x00c0f3f0).
+    uint32_t auctionHouseId = 0;
     uint8_t enabled = 1;
 };
 

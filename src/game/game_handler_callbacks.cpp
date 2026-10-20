@@ -1617,6 +1617,9 @@ void GameHandler::setGuildBankActiveTab(uint8_t tab) {
 }
 
 // Auction House
+uint32_t GameHandler::getAuctionHouseId() const {
+    return inventoryHandler_ ? inventoryHandler_->getAuctionHouseId() : 0;
+}
 bool GameHandler::isAuctionHouseOpen() const {
     return inventoryHandler_ ? inventoryHandler_->isAuctionHouseOpen() : auctionOpen_;
 }

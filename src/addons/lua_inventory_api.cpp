@@ -2196,6 +2196,41 @@ bool auctionLess(game::GameHandler* gh, const std::string& column,
     return false;
 }
 
+/// Re-sort a list by its keys, least significant first, each pass stable.
+void applyAuctionSort(game::GameHandler* gh, const std::string& which) {
+    auto* list = auctionListForSort(gh, which);
+    if (!list) return;
+    for (const auto& key : auctionSortState()[which]) {
+        std::stable_sort(list->auctions.begin(), list->auctions.end(),
+                         [&](const game::AuctionEntry& a, const game::AuctionEntry& b) {
+            return key.reverse ? auctionLess(gh, key.column, b, a)
+                               : auctionLess(gh, key.column, a, b);
+        });
+    }
+}
+
+/// The auction list a SortAuctionItems or IsAuctionSortReversed type names -
+/// "owner", "bidder" or "list", in any case - or empty for any other.
+std::string auctionSortList(const char* type) {
+    std::string t = type ? type : "";
+    toLowerInPlace(t);
+    return (t == "owner" || t == "bidder" || t == "list") ? t : std::string();
+}
+
+/// A sort column as 0x0059a850 accepts it, folded to lower case, or empty.
+std::string auctionSortColumn(const char* sort) {
+    static constexpr const char* kColumns[] = {
+        "quality", "level", "duration", "status", "bid", "name",
+        "minbidbuyout", "seller", "buyoutthenbid", "quantity", "buyout",
+    };
+    std::string s = sort ? sort : "";
+    toLowerInPlace(s);
+    for (const char* c : kColumns) {
+        if (s == c) return s;
+    }
+    return {};
+}
+
 }  // namespace
 
 // _GetItemTooltipData(itemId) → table with armor, bind, stats, damage, description
@@ -4788,19 +4823,74 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // Applied least significant first, each pass stable, which is
                 // how a multi-column sort is built out of single-column ones.
                 {"SortAuctionApplySort", [](lua_State* L) -> int {
+            applyAuctionSort(getGameHandler(L), luaL_optstring(L, 1, "list"));
+            return 0;
+        }},
+                // SortAuctionItems(type, sort) (0x0059dd00): the column
+                // becomes the list's primary key (0x0059a5e0 moves it to the
+                // front of at most twelve), reversed when it already was the
+                // primary and not reversed; the list is sorted again and its
+                // update event raised (0x0059cf90, 0x0059cff0, 0x0059d050).
+                {"SortAuctionItems", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) {
+                return luaL_error(L, "Usage: SortAuctionItems(\"type\", \"sort\")");
+            }
+            const std::string column = auctionSortColumn(lua_tostring(L, 2));
+            const std::string which = auctionSortList(lua_tostring(L, 1));
+            if (column.empty() || which.empty()) return 0;
+            auto& keys = auctionSortState()[which];
+            const bool reverse = !keys.empty() && keys.back().column == column &&
+                                 !keys.back().reverse;
+            std::erase_if(keys, [&](const AuctionSortKey& k) { return k.column == column; });
+            keys.push_back({column, reverse});
+            constexpr size_t kMaxSortKeys = 12;
+            if (keys.size() > kMaxSortKeys) keys.erase(keys.begin());
             auto* gh = getGameHandler(L);
-            const std::string which = luaL_optstring(L, 1, "list");
-            auto* list = auctionListForSort(gh, which);
-            if (!list) return 0;
-            for (const auto& key : auctionSortState()[which]) {
-                std::stable_sort(list->auctions.begin(), list->auctions.end(),
-                                 [&](const game::AuctionEntry& a,
-                                     const game::AuctionEntry& b) {
-                    return key.reverse ? auctionLess(gh, key.column, b, a)
-                                       : auctionLess(gh, key.column, a, b);
-                });
+            applyAuctionSort(gh, which);
+            if (gh) {
+                gh->fireAddonEvent(which == "owner"    ? "AUCTION_OWNED_LIST_UPDATE"
+                                   : which == "bidder" ? "AUCTION_BIDDER_LIST_UPDATE"
+                                                       : "AUCTION_ITEM_LIST_UPDATE", {});
             }
             return 0;
+        }},
+                // GetAuctionHouseDepositRate() (0x0059bc90): the open house's
+                // deposit rate, its AuctionHouse.dbc row's third column - 5 at
+                // a faction house, 25 at a neutral one - or 0 with none open.
+                {"GetAuctionHouseDepositRate", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            auto* am = gh ? gh->services().assetManager : nullptr;
+            double rate = 0;
+            if (am && am->isInitialized() && gh->getAuctionHouseId() != 0) {
+                auto houses = am->loadDBCOptional("AuctionHouse.dbc");
+                const int32_t row = houses && houses->isLoaded() && houses->getFieldCount() > 2
+                                        ? houses->findRecordById(gh->getAuctionHouseId()) : -1;
+                if (row >= 0) rate = houses->getInt32(static_cast<uint32_t>(row), 2);
+            }
+            lua_pushnumber(L, rate);
+            return 1;
+        }},
+                // IsAuctionSortReversed(type, sort) → reversed, sorted
+                // (0x0059ab90): 1 or nil for the direction, and 1, while the
+                // column is one the list sorts by; nil and nil otherwise.
+                {"IsAuctionSortReversed", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isstring(L, 2)) {
+                return luaL_error(L, "Usage: IsAuctionSortReversed(\"type\", \"sort\")");
+            }
+            const std::string column = auctionSortColumn(lua_tostring(L, 2));
+            if (column.empty()) return 0;
+            const std::string which = auctionSortList(lua_tostring(L, 1));
+            if (!which.empty()) {
+                for (const auto& key : auctionSortState()[which]) {
+                    if (key.column != column) continue;
+                    if (key.reverse) lua_pushnumber(L, 1); else lua_pushnil(L);
+                    lua_pushnumber(L, 1);
+                    return 2;
+                }
+            }
+            lua_pushnil(L);
+            lua_pushnil(L);
+            return 2;
         }},
                 // The browse tab's filter column, which was empty: it is built
                 // from whatever GetAuctionItemClasses returns -

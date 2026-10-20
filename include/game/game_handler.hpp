@@ -3879,6 +3879,8 @@ public:
     void auctionListOwnerItems(uint32_t offset = 0);
     void auctionListBidderItems(uint32_t offset = 0);
     bool isAuctionHouseOpen() const;
+    /// The open auction house's AuctionHouse.dbc row (0x00c0f3f0), 0 when none.
+    uint32_t getAuctionHouseId() const;
     uint64_t getAuctioneerGuid() const;
     const AuctionListResult& getAuctionBrowseResults() const;
     const AuctionListResult& getAuctionOwnerResults() const;

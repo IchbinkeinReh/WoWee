@@ -3963,6 +3963,7 @@ void InventoryHandler::openAuctionHouse(uint64_t guid) {
 void InventoryHandler::closeAuctionHouse() {
     auctionOpen_ = false;
     auctioneerGuid_ = 0;
+    auctionHouseId_ = 0;   // 0x0059f150
     // The three lists go with the window (0x0059f150 frees 0xc0f448,
     // 0xc0f458 and 0xc0f468): a house opened again, or the next character's,
     // starts with none until the server answers a query.
@@ -4071,6 +4072,7 @@ void InventoryHandler::handleAuctionHello(network::Packet& packet) {
     AuctionHelloData data;
     if (!AuctionHelloParser::parse(packet, data)) return;
     openAuctionHouse(data.auctioneerGuid);
+    auctionHouseId_ = data.auctionHouseId;
     if (owner_.isGossipWindowOpen()) owner_.closeGossip();   // if 0x00512e60 has not already
 }
 

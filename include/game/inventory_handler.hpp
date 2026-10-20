@@ -510,6 +510,8 @@ public:
     void auctionListBidderItems(uint32_t offset = 0);
     bool isAuctionHouseOpen() const { return auctionOpen_; }
     uint64_t getAuctioneerGuid() const { return auctioneerGuid_; }
+    /// The open house's AuctionHouse.dbc row, 0 with none open.
+    uint32_t getAuctionHouseId() const { return auctionHouseId_; }
     const AuctionListResult& getAuctionBrowseResults() const { return auctionBrowseResults_; }
     const AuctionListResult& getAuctionOwnerResults() const { return auctionOwnerResults_; }
     const AuctionListResult& getAuctionBidderResults() const { return auctionBidderResults_; }
@@ -805,6 +807,7 @@ private:
     // ---- Auction House state ----
     bool auctionOpen_ = false;
     uint64_t auctioneerGuid_ = 0;
+    uint32_t auctionHouseId_ = 0;
     AuctionListResult auctionBrowseResults_;
     AuctionListResult auctionOwnerResults_;
     AuctionListResult auctionBidderResults_;
