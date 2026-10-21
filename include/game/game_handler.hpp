@@ -49,6 +49,7 @@
 #include <map>
 #include <optional>
 #include "game/guild_emblem.hpp"
+#include "game/server_notices.hpp"
 #include <algorithm>
 #include <chrono>
 #include <future>
@@ -4600,6 +4601,9 @@ public:
     /// mattered: "Not ready", "Not enough rage" and "You can't do that right
     /// now" arrive once per rejected keypress.
     void raiseUiError(const std::string& message);
+    /// A row of the client's game error table, worded with its arguments and
+    /// put on the line the row names (0x005216f0).
+    void sayGameError(const server_notice::GameError& error, const std::vector<std::string>& args = {});
     void raiseDifficultyCooldownError(uint32_t ms);
     void sendPing();
     void setTransportAttachment(uint64_t childGuid, ObjectType type,

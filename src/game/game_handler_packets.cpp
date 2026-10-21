@@ -2039,6 +2039,54 @@ void GameHandler::registerCoreOpcodes() {
 // as five batches of whatever was left over, and the honest description of that
 // is 'the rest'.
 void GameHandler::registerRemainingOpcodes() {
+    // The opcodes that are a game error and nothing more (server_notices.hpp
+    // names each handler and row).
+    for (const auto& [op, error] : std::initializer_list<std::pair<LogicalOpcode, const server_notice::GameError*>>{
+             {Opcode::SMSG_COMSAT_RECONNECT_TRY, &server_notice::kComsatReconnectAttempt},
+             {Opcode::SMSG_COMSAT_DISCONNECT, &server_notice::kComsatDisconnect},
+             {Opcode::SMSG_COMSAT_CONNECT_FAIL, &server_notice::kComsatConnectFail},
+             {Opcode::SMSG_VOICESESSION_FULL, &server_notice::kVoiceSessionFull},
+             {Opcode::SMSG_BATTLEGROUND_INFO_THROTTLED, &server_notice::kBattlegroundInfoThrottled},
+             {Opcode::SMSG_INVALID_PROMOTION_CODE, &server_notice::kInvalidPromotionCode},
+         }) {
+        dispatchTable_[op] = [this, error](network::Packet& packet) {
+            packet.skipAll();
+            sayGameError(*error);
+        };
+    }
+    // 0x006e2e90 case 0x4c8: a uint32, and the error only where it is not zero.
+    dispatchTable_[Opcode::SMSG_ARENA_TEAM_CHANGE_FAILED_QUEUED] = [this](network::Packet& packet) {
+        if (packet.hasRemaining(4) && packet.readUInt32() != 0)
+            sayGameError(server_notice::kArenaTeamChangeFailedQueued);
+    };
+    // The quest the player shared, as each one it went to answered (0x006e2e90
+    // case 0x276): guid and a result byte, worded with that player's name -
+    // and only when the name is already known, as 0x0067d770 without a
+    // callback has it.
+    dispatchTable_[Opcode::MSG_QUEST_PUSH_RESULT] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(9)) return;
+        const uint64_t guid = packet.readUInt64();
+        const uint8_t result = packet.readUInt8();
+        const auto* error = server_notice::questPushResult(result);
+        if (!error) return;
+        const auto& names = getPlayerNameCache();
+        if (auto it = names.find(guid); it != names.end() && !it->second.empty())
+            sayGameError(*error, {it->second});
+    };
+    // A group leader took the player's voice away or gave it back (0x005725c0).
+    dispatchTable_[Opcode::MSG_NOTIFY_PARTY_SQUELCH] = [this](network::Packet& packet) {
+        if (packet.hasRemaining(4)) sayGameError(server_notice::partySquelch(packet.readUInt32()));
+    };
+    // The leader's echo of the same, naming whom (0x00572610) - a name known
+    // or nothing, as above.
+    dispatchTable_[Opcode::SMSG_ECHO_PARTY_SQUELCH] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(12)) return;
+        const uint64_t guid = packet.readUInt64();
+        const uint32_t silenced = packet.readUInt32();
+        const auto& names = getPlayerNameCache();
+        if (auto it = names.find(guid); it != names.end() && !it->second.empty())
+            sayGameError(server_notice::partySquelchEcho(silenced), {it->second});
+    };
     // -----------------------------------------------------------------------
     // Batch 8-12: Remaining opcodes (inspects, quests, auctions, spells,
     //             calendars, battlefields, voice, misc consume-only)
@@ -3576,8 +3624,32 @@ void GameHandler::registerRemainingOpcodes() {
             LOG_DEBUG("SMSG_GMRESPONSE_STATUS_UPDATE: survey=", survey);
         }
     };
-    // GM ticket status (new/updated); no ticket UI yet
-    registerSkipHandler(Opcode::SMSG_GM_TICKET_STATUS_UPDATE);
+    // 0x005ad240 case 0x328: a uint32 through the jump table at 0x005ad5ec.
+    // 1 and 4 ask for the ticket again and say nothing; 2 lets it go
+    // (0xc1e8d0 = 0) with UPDATE_TICKET, and 3 the same with GMSURVEY_DISPLAY
+    // in its place.
+    dispatchTable_[Opcode::SMSG_GM_TICKET_STATUS_UPDATE] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(4)) return;
+        using server_notice::TicketStatusAction;
+        const TicketStatusAction action = server_notice::ticketStatusAction(packet.readUInt32());
+        switch (action) {
+            case TicketStatusAction::Refresh:
+                requestGmTicket();
+                break;
+            case TicketStatusAction::Closed:
+            case TicketStatusAction::ClosedSurvey:
+                gmTicketActive_ = false;
+                gmTicketText_.clear();
+                fireAddonEvent(action == TicketStatusAction::ClosedSurvey ? "GMSURVEY_DISPLAY" : "UPDATE_TICKET", {});
+                break;
+            case TicketStatusAction::None:
+                break;
+        }
+    };
+    // ERR_GMRESPONSE_DB_ERROR and nothing else (0x005ad240 case 0x4ee).
+    dispatchTable_[Opcode::SMSG_GMRESPONSE_DB_ERROR] = [this](network::Packet& /*packet*/) {
+        sayGameError(server_notice::kGmResponseDbError);
+    };
     // Broadcast of another player's collision height change - cosmetic only.
     registerSkipHandler(Opcode::MSG_MOVE_SET_COLLISION_HGT);
     // Client uses this outbound; treat inbound variant as no-op for robustness.
@@ -3703,7 +3775,6 @@ void GameHandler::registerRemainingOpcodes() {
         Opcode::SMSG_UPDATE_ACCOUNT_DATA_COMPLETE,
         Opcode::SMSG_UPDATE_INSTANCE_OWNERSHIP,
         Opcode::SMSG_UPDATE_LAST_INSTANCE,
-        Opcode::SMSG_VOICESESSION_FULL,
         Opcode::SMSG_VOICE_CHAT_STATUS,
         Opcode::SMSG_VOICE_PARENTAL_CONTROLS,
         Opcode::SMSG_VOICE_SESSION_ADJUST_PRIORITY,

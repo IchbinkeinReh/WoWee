@@ -1033,6 +1033,16 @@ void GameHandler::raiseUiError(const std::string& message) {
     addUIError(message);
 }
 
+void GameHandler::sayGameError(const server_notice::GameError& error, const std::vector<std::string>& args) {
+    const std::string text = interfaceFormat(error.key, error.enUS, args);
+    if (text.empty()) return;
+    switch (error.line) {
+        case server_notice::Line::Chat:  addSystemChatMessage(text); break;
+        case server_notice::Line::Info:  addUIInfoMessage(text); break;
+        case server_notice::Line::Error: addUIError(text); break;
+    }
+}
+
 // ============================================================
 // Taxi / Flight Path Handlers
 // ============================================================

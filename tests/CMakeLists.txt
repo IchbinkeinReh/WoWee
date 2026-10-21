@@ -760,6 +760,13 @@ wowee_add_test(test_difficulty_change
     SOURCES test_difficulty_change.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_server_notices ──────────────────────────────────────
+# The game errors MSG_QUEST_PUSH_RESULT, the voice and GM ticket notices and
+# SMSG_READ_ITEM_FAILED come down to, row by row of the client's table.
+wowee_add_test(test_server_notices
+    SOURCES test_server_notices.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_world_leave_sound ───────────────────────────────────
 # The teleports that unload the world's sound.
 wowee_add_test(test_world_leave_sound
