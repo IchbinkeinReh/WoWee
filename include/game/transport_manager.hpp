@@ -259,7 +259,9 @@ public:
     /// point, or 0 where it is no transport's - the owner of the face a step
     /// stands on, which the client hands to 0x006ec7b0 (0x007620f0). The
     /// highest deck within a step of the feet, M2 car or WMO hull.
-    [[nodiscard]] uint64_t groundTransportUnder(const glm::vec3& canonicalPosition) const;
+    /// The deck's height there goes to deckZ when one is found.
+    [[nodiscard]] uint64_t groundTransportUnder(const glm::vec3& canonicalPosition,
+                                                float* deckZ = nullptr) const;
     /// Whether a transport still holds a passenger at a point though the
     /// ground under it is the world's (vtable +0xf0, 0x0070b360 ->
     /// 0x0077ffb0): an M2 one while the point is inside its model's
@@ -343,6 +345,11 @@ public:
                                 const glm::vec3& canonicalPosition,
                                 float maxFloorDelta = 1.25f) const;
     [[nodiscard]] std::optional<float> getTransportDeckFloorHeight(
+        uint64_t transportGuid,
+        const glm::vec3& canonicalPosition) const;
+    /// An M2 car's own floor under a point, as it stands now: the highest
+    /// face of its collision a step above the point or lower, in world Z.
+    [[nodiscard]] std::optional<float> m2DeckFloorHeight(
         uint64_t transportGuid,
         const glm::vec3& canonicalPosition) const;
 

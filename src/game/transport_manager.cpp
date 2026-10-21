@@ -574,7 +574,8 @@ bool TransportManager::isTransportCollisionReady(uint64_t transportGuid) const {
     return wmoRenderer_->instanceHasCollisionGeometry(it->second.wmoInstanceId);
 }
 
-uint64_t TransportManager::groundTransportUnder(const glm::vec3& canonicalPosition) const {
+uint64_t TransportManager::groundTransportUnder(const glm::vec3& canonicalPosition,
+                                                float* deckZ) const {
     const glm::vec3 render = core::coords::canonicalToRender(canonicalPosition);
     uint64_t owner = 0;
     float ownerDeck = -std::numeric_limits<float>::infinity();
@@ -606,7 +607,21 @@ uint64_t TransportManager::groundTransportUnder(const glm::vec3& canonicalPositi
             owner = guid;
         }
     }
+    if (owner != 0 && deckZ) *deckZ = ownerDeck;
     return owner;
+}
+
+std::optional<float> TransportManager::m2DeckFloorHeight(
+    uint64_t transportGuid, const glm::vec3& canonicalPosition) const {
+    const auto it = transports_.find(transportGuid);
+    if (it == transports_.end() || !it->second.isM2 || it->second.wmoInstanceId == 0 ||
+        !m2Renderer_) {
+        return std::nullopt;
+    }
+    const glm::vec3 render = core::coords::canonicalToRender(canonicalPosition);
+    return m2Renderer_->getInstanceFloorHeight(
+        it->second.wmoInstanceId, render.x, render.y,
+        render.z + rendering::movement::kMaxStepUp);
 }
 
 bool TransportManager::stillHoldsPassenger(uint64_t transportGuid,

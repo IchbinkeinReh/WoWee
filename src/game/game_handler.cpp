@@ -1651,7 +1651,8 @@ void GameHandler::updateM2TransportBoarding(const glm::vec3& playerCanonical) {
     auto* tm = getTransportManager();
     if (!tm) return;
 
-    const uint64_t owner = tm->groundTransportUnder(playerCanonical);
+    float ownerDeckZ = 0.0f;
+    const uint64_t owner = tm->groundTransportUnder(playerCanonical, &ownerDeckZ);
     // A fall changes nothing until it lands on something an object owns
     // (0x007612b0), so a jump on the deck keeps the transport.
     if (owner == 0 && movementInfo.hasFlag(MovementFlags::FALLING)) return;
@@ -1683,9 +1684,16 @@ void GameHandler::updateM2TransportBoarding(const glm::vec3& playerCanonical) {
         clearPlayerTransport();
         return;
     }
-    // The offset through the inverse of its matrix (0x004f47b0 -> 0x004c2300).
+    // The offset through the inverse of its matrix (0x004f47b0 -> 0x004c2300),
+    // of the feet on the floor that made it the ground: a lift running down
+    // meets them with its floor a step above them, and an offset taken from
+    // the feet left the rider under the floor for the whole ride.
+    glm::vec3 standing = playerCanonical;
+    if (const auto* riding = tm->getTransport(next); riding && riding->isM2 && next == owner) {
+        standing.z = std::max(standing.z, ownerDeckZ);
+    }
     const glm::vec3 offset =
-        tm->worldToTransportLocal(next, playerCanonical).value_or(glm::vec3(0.0f));
+        tm->worldToTransportLocal(next, standing).value_or(glm::vec3(0.0f));
     setPlayerOnTransport(next, offset);
     LOG_DEBUG("Transport boarding: guid=0x", std::hex, next, std::dec,
               " local=(", offset.x, ",", offset.y, ",", offset.z, ")");

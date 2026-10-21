@@ -23,6 +23,7 @@
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/animation/jump_landing.hpp"
 #include "rendering/animation_controller.hpp"
+#include "rendering/movement_limits.hpp"
 #include <bit>
 #include <unordered_set>
 #include <cmath>
@@ -4029,13 +4030,33 @@ void Application::applyServerMovementState(float deltaTime) {
                 // the tram with nothing to land on - reported live as falling through
                 // the tram/tunnel and dying. Keep Z fully locked for the tram; only
                 // lifts get the airborne exception.
-                if (!isDeeprunTram && renderer->getCameraController() &&
-                    !renderer->getCameraController()->isGrounded()) {
-                    // While airborne (jump/fall), let vertical offset track normal
-                    // physics instead of staying pinned to the boarding-time value.
-                    // Without this, floor clamping can hold world-Z static unless the
-                    // player is jumping, which makes lifts appear to not move vertically.
-                    riderCanonical.z = tentativeCanonical.z;
+                auto* liftCamera = renderer->getCameraController();
+                if (!isDeeprunTram && liftCamera) {
+                    // A lift's rider moves in the car's frame, as the client
+                    // moves a passenger (its place on the transport is what
+                    // it steps and falls by): the car carries it, and only
+                    // its own rise or fall this frame - the camera's, from
+                    // where it was put last frame - is added. Taking the
+                    // camera's world height instead read the car's own
+                    // travel as a fall or a climb: a lift running down at
+                    // 27 yd/s left its rider floating above the floor, one
+                    // running up left it below, where the floor underfoot is
+                    // the world's and the ride ended.
+                    if (hasM2RideLock_ && !liftCamera->isGrounded()) {
+                        riderCanonical.z += tentativeCanonical.z - lastM2RideLockedCanonical_.z;
+                    }
+                    // And it stands on the car's floor: onto it from a step
+                    // above or below, unless a jump is still rising.
+                    if (!liftCamera->isJumping()) {
+                        if (const auto deck = transports->m2DeckFloorHeight(rideGuid, riderCanonical)) {
+                            const float above = riderCanonical.z - *deck;
+                            if (above <= rendering::movement::kMaxStepUp &&
+                                (liftCamera->isGrounded() || above <= 0.0f)) {
+                                riderCanonical.z = *deck;
+                                liftCamera->suppressVerticalPhysics();
+                            }
+                        }
+                    }
                 }
                 glm::vec3 localOffset =
                     transports->worldToTransportLocal(rideGuid, riderCanonical).value_or(glm::vec3(0.0f));
