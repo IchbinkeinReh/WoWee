@@ -4345,6 +4345,11 @@ bool MovementHandler::onMoveSpline(uint64_t guid) {
     return false;
 }
 
+std::optional<uint32_t> MovementHandler::moveSplineFlags(uint64_t guid) {
+    if (!onMoveSpline(guid)) return std::nullopt;
+    return moveSplines_[guid].flags;
+}
+
 uint64_t MovementHandler::playerFarsight() const {
     const uint16_t index = fieldIndex(UF::PLAYER_FARSIGHT);
     auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());

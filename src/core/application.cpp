@@ -241,12 +241,26 @@ uint8_t unitAnimationTier(const game::Entity& entity) {
     return index == 0xFFFF ? 0 : static_cast<uint8_t>(entity.getField(index) >> 24);
 }
 
+// What a unit's move spline says of it (+0xbc): flying (0x2000,
+// 0x004f5290), falling (0x200) or arcing (0x800; 0x006e9a70, 0x006e9aa0) -
+// in the air to 0x00723350 where it falls - and hovering as 0x0071c6c0 has
+// it: on a flying spline, else MOVEMENTFLAG_HOVER, else (not on a falling
+// one) gravity off (0x400).
+void unitSplineState(rendering::upper_body::Unit& u, game::GameHandler& gh, uint64_t guid, uint32_t moveFlags) {
+    const uint32_t spline = gh.moveSplineFlags(guid).value_or(0u);
+    u.splineFlying = (spline & 0x2000u) != 0;
+    u.splineFalling = (spline & 0xa00u) != 0;
+    if ((spline & 0x200u) != 0) u.leaping = true;
+    const bool fallingSpline = (spline & 0x200u) != 0;
+    u.hovering = u.splineFlying || (moveFlags & 0x40000000u) != 0 || (!fallingSpline && (moveFlags & 0x400u) != 0);
+}
+
 // What 0x007385c0 reads of another unit for its upper body: its movement
 // flags as FUN_0073dab0 reads them, falling, turning on the spot, its stand
 // state, its mount, its cast or channel (+0xa38 0x400 is a cast with a cast
 // time), its melee target, its ranged weapon out, whether its model moves
 // only as a whole (CreatureModelData Flags 0x8), and the pose it rides in.
-rendering::upper_body::Unit unitAnimationState(const game::GameHandler& gh, const EntitySpawner& spawner,
+rendering::upper_body::Unit unitAnimationState(game::GameHandler& gh, EntitySpawner& spawner,
                                                uint64_t guid, const game::Unit& unit, uint32_t moveFlags,
                                                bool turning, std::optional<uint32_t> riderPose) {
     namespace ub = rendering::upper_body;
@@ -274,12 +288,31 @@ rendering::upper_body::Unit unitAnimationState(const game::GameHandler& gh, cons
     if (const uint16_t b1 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1); b1 != 0xFFFF)
         u.stealthed = ((unit.getField(b1) >> 16) & 0x2u) != 0;
     u.walkSpeed = unit.getMovementSpeeds().walk;
-    u.hovering = (unit.getReportedMoveFlags() & 0x40000400u) != 0;
+    unitSplineState(u, gh, guid, unit.getReportedMoveFlags());
     u.meleeReady = spawner.unitMeleeReady(guid);
+    u.rangedSubClass = spawner.unitRangedSubClass(guid);
     if (const uint32_t emote = unit.getNpcEmoteState(); emote != 0) {
         if (const uint32_t anim = rendering::AnimationController::getEmoteAnimByEmotesId(emote); anim != 0)
             u.emoteStateAnim = anim;
     }
+    // UNIT_FIELD_FLAGS: may loot (0x10000000 clear, 0x007222a0), loots
+    // (0x400, 0x0071b6b0), in combat (0x800, 0x0071afb0).
+    if (const uint16_t f = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS); f != 0xFFFF) {
+        const uint32_t flags = unit.getField(f);
+        u.canLoot = (flags & 0x10000000u) == 0;
+        u.looting = (flags & 0x400u) != 0;
+        u.inCombat = (flags & 0x800u) != 0;
+    }
+    u.inCombat = u.inCombat || u.autoAttacking;
+    // A vehicle that casts as a whole (VehicleFlags 0x10000, 0x00756f40).
+    u.vehicleCastOnly = (spawner.vehicleFlags(guid) & 0x10000u) != 0;
+    // +0xa38 0x200: it began a repeating spell (AttributesEx2 0x20,
+    // 0x007fa2e0); nothing clears another unit's.
+    auto& body = spawner.getUnitBodies()[guid];
+    if (const auto* cast = gh.getUnitCastState(guid);
+        cast && cast->casting && (gh.getSpellAttributesEx2(cast->spellId) & 0x20u) != 0)
+        body.autoRepeat = true;
+    u.autoRepeat = body.autoRepeat;
     return u;
 }
 
@@ -298,6 +331,10 @@ void unitKitAnimationState(rendering::upper_body::Unit& u, rendering::SpellVisua
     if (const auto kit = svs->unitKitAnimation(guid)) {
         u.kitAnim = kit->anim;
         u.kitAnimTiered = kit->tiered;
+    }
+    if (const auto death = svs->unitDeathKit(guid)) {
+        u.deathKitAnim = death->anim;
+        u.deathKitFlags = death->kitFlags;
     }
 }
 
@@ -334,7 +371,7 @@ void playRiderMountAnimation(rendering::CharacterRenderer& cr, rendering::SpellV
 
 // Another unit's animation tier and what 0x007385c0 reads of it, onto its
 // instance, from what the sync has worked out of how it moves.
-void syncUnitAnimation(rendering::CharacterRenderer& cr, const game::GameHandler& gh, EntitySpawner& spawner,
+void syncUnitAnimation(rendering::CharacterRenderer& cr, game::GameHandler& gh, EntitySpawner& spawner,
                        rendering::SpellVisualSystem* svs, uint64_t guid, uint32_t instanceId, const game::Unit& unit,
                        bool moving, bool swimming, bool flying, bool riding) {
     cr.setAnimationTier(instanceId, unitAnimationTier(unit));
@@ -4372,7 +4409,21 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
     if (const uint16_t b1 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1); b1 != 0xFFFF)
         u.stealthed = ((self.getField(b1) >> 16) & 0x2u) != 0;
     u.walkSpeed = gameHandler->getServerWalkSpeed();
-    u.hovering = (u.moveFlags & 0x40000400u) != 0;
+    unitSplineState(u, *gameHandler, gameHandler->getPlayerGuid(), u.moveFlags);
+    // Looting (0x007222a0, 0x0071b6b0 read the loot target for the active
+    // player), in combat (0x0071afb0), an auto-repeating shot (+0xa38 0x200).
+    u.looting = u.canLoot = gameHandler->isLootWindowOpen();
+    if (const uint16_t f = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS); f != 0xFFFF)
+        u.inCombat = (self.getField(f) & 0x800u) != 0;
+    u.inCombat = u.inCombat || u.autoAttacking;
+    u.autoRepeat = gameHandler->isAutoRepeating();
+    // Its emote state (0x007171c0) - not one whose Emotes row has Flags
+    // 0x2000, for the active player.
+    if (const uint32_t emote = self.getNpcEmoteState(); emote != 0 &&
+        (rendering::AnimationController::getEmoteFlagsByEmotesId(emote) & 0x2000u) == 0) {
+        if (const uint32_t anim = rendering::AnimationController::getEmoteAnimByEmotesId(emote); anim != 0)
+            u.emoteStateAnim = anim;
+    }
     {
         namespace ba = rendering::base_animation;
         const auto& inventory = gameHandler->getInventory();
@@ -4386,6 +4437,9 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
         const auto mainHand = hand(game::EquipSlot::MAIN_HAND);
         const auto offHand = hand(game::EquipSlot::OFF_HAND);
         u.meleeReady = ba::meleeReady(mainHand ? &*mainHand : nullptr, offHand ? &*offHand : nullptr);
+        // The ranged weapon's subclass, for its ready (0x00714f90).
+        if (const auto ranged = hand(game::EquipSlot::RANGED); ranged && ranged->itemClass == 2)
+            u.rangedSubClass = ranged->subClass;
     }
     unitKitAnimationState(u, renderer ? renderer->getSpellVisualSystem() : nullptr, gameHandler->getPlayerGuid(),
                           gameHandler->isCasting() && !u.channeling ? gameHandler->getCurrentCastSpellId() : 0u,

@@ -1127,4 +1127,10 @@ void EntitySpawner::updateVehiclePassengers() {
     }
 }
 
+uint32_t EntitySpawner::vehicleFlags(uint64_t guid) const {
+    if (!gameHandler_) return 0;
+    const auto* vehicle = vehicleTables_.vehicle(gameHandler_->vehicleRoster().vehicleId(guid));
+    return vehicle ? vehicle->flags : 0u;
+}
+
 }  // namespace wowee::core

@@ -195,6 +195,14 @@ public:
         bool tiered = true;
     };
     [[nodiscard]] std::optional<KitAnimation> unitKitAnimation(uint64_t unitGuid) const;
+    /// 0x00724060's walk of the unit's kits (+0xa8): the newest whose AnimID
+    /// is a death (0x0071dde0) - a unit with one is dead to the client and
+    /// plays it - and its Flags.
+    struct DeathKit {
+        uint32_t anim = 0;
+        uint32_t kitFlags = 0;
+    };
+    [[nodiscard]] std::optional<DeathKit> unitDeathKit(uint64_t unitGuid) const;
     /// 0x007224d0: the loop a cast holds a unit in - the cast spell's
     /// PrecastKit's AnimID, else the channel's ChannelKit's - with the kit's
     /// Flags (+0x94).

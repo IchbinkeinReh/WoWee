@@ -1,4 +1,5 @@
 #include "rendering/spell_visual_system.hpp"
+#include "rendering/animation/upper_body.hpp"
 #include <cctype>
 #include <future>
 #include "rendering/dynamic_object_visual.hpp"
@@ -1389,6 +1390,23 @@ std::optional<SpellVisualSystem::KitAnimation> SpellVisualSystem::unitKitAnimati
         if (kitIt == kits_.end() || kitIt->second.animId <= 0) continue;
         if (kitSpellResolver_ && kitSpellResolver_(a->spellId).mounts) continue;
         return KitAnimation{static_cast<uint32_t>(kitIt->second.animId), (kitIt->second.flags & 0xcu) == 0};
+    }
+    return std::nullopt;
+}
+
+std::optional<SpellVisualSystem::DeathKit> SpellVisualSystem::unitDeathKit(uint64_t unitGuid) const {
+    auto it = unitAuraKits_.find(unitGuid);
+    if (it == unitAuraKits_.end()) return std::nullopt;
+    const auto& data = anim::animationData();
+    const auto& auras = it->second.auras;
+    for (auto a = auras.rbegin(); a != auras.rend(); ++a) {
+        if (!a->playing || a->awaitingMissile || a->awaitingChain) continue;
+        auto kitIt = kits_.find(a->kitId);
+        if (kitIt == kits_.end() || kitIt->second.animId < 0) continue;
+        const auto anim = static_cast<uint32_t>(kitIt->second.animId);
+        // 0x0071dde0: dying, dead, drowning, the death's start and end.
+        if (upper_body::isDeath(data.empty() ? anim : data.behavior(anim)))
+            return DeathKit{anim, kitIt->second.flags};
     }
     return std::nullopt;
 }

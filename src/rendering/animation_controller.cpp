@@ -135,6 +135,12 @@ uint32_t AnimationController::getEmoteAnimByEmotesId(uint32_t emoteId) {
     return registry.animByEmotesId(emoteId);
 }
 
+uint32_t AnimationController::getEmoteFlagsByEmotesId(uint32_t emoteId) {
+    auto& registry = EmoteRegistry::instance();
+    registry.loadFromDbc();
+    return registry.flagsByEmotesId(emoteId);
+}
+
 bool AnimationController::isStateEmoteById(uint32_t emoteId) {
     auto& registry = EmoteRegistry::instance();
     registry.loadFromDbc();

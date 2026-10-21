@@ -1765,7 +1765,9 @@ void GameHandler::registerCoreOpcodes() {
         // The server saying a repeating spell has stopped. Nothing in this
         // client's own interface reads it, which is why it did nothing - but
         // the action button flashes for as long as one is running and stops on
-        // exactly this.
+        // exactly this. Its ranged ready ends with it (0x00807560 clears
+        // +0xa38 0x200).
+        autoRepeating_ = false;
         fireAddonEvent("STOP_AUTOREPEAT_SPELL", {});
     };
 

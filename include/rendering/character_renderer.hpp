@@ -123,6 +123,10 @@ public:
     /// 0x00724500, base_animation::pick); nothing where that leaves what
     /// plays. For an instance given its unit (setUnitAnimationState).
     void playBaseAnimation(uint32_t instanceId);
+    /// The unit's stand state changed (0x0073f060): from under, Birth or
+    /// Emerge; going under, Submerge; else the base animation, which sits it
+    /// down, lies it down or gets it up from the state it was in.
+    void standStateChanged(uint32_t instanceId, uint8_t standState);
     /// The wound a unit shows for a blow it takes (0x00736640,
     /// upper_body::wound), as the unit is put in it (0x007176f0) - nothing
     /// where it shows none or the model has no sequence of it.
@@ -640,6 +644,9 @@ private:
         /// +0xfa4: a PlayImpact kit's animation, which holds the cast loop
         /// off until it ends (0x007224d0, 0x0073bbd0); -1 for none.
         int32_t kitAnimationHeld = -1;
+        /// +0x9f8: the stand state its animation was last given for; -1
+        /// until it has its unit.
+        int16_t standStateSeen = -1;
         /// +0xb88: a swing asked while one played, waiting for it to end
         /// (0x007385c0); -1 for none.
         int32_t queuedAttack = -1;

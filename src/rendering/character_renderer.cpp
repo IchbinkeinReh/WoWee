@@ -2359,6 +2359,8 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
 void CharacterRenderer::setUnitAnimationState(uint32_t instanceId, const upper_body::Unit& unit) {
     auto it = instances.find(instanceId);
     if (it == instances.end()) return;
+    // The stand state its animation is for starts as the one it has.
+    if (it->second.standStateSeen < 0) it->second.standStateSeen = unit.standState;
     // A state kit that animates the unit coming or going asks its base
     // animation again (0x0073b140 type 2 and 0x0073c1d0 -> 0x0073ac30),
     // which the kit's animation then takes over (0x0071e400).
@@ -2547,6 +2549,7 @@ base_animation::Pick CharacterRenderer::pickBaseAnimation(CharacterInstance& ins
     }
     upper_body::Unit unit = instance.unit;
     unit.speed = instance.locomotionSpeed;
+    if (instance.standStateSeen >= 0) unit.standStateSeen = static_cast<uint8_t>(instance.standStateSeen);
     // 0x007224d0: no cast loop while a PlayImpact kit's animation plays
     // (+0xfa4); the PrecastKit's StartAnimID until it has ended (+0xa38
     // 0x10000), its AnimID after.
@@ -2567,10 +2570,32 @@ base_animation::Pick CharacterRenderer::pickBaseAnimation(CharacterInstance& ins
 void CharacterRenderer::playBaseAnimation(uint32_t instanceId) {
     auto it = instances.find(instanceId);
     if (it == instances.end() || !it->second.unitAnimation) return;
-    // 0x0073ac30: what 0x00724500 answers is asked as any animation is.
+    // 0x0073ac30: what 0x00724500 answers is asked as any animation is,
+    // and the stand state is the one it was given for (+0x9f8).
     const base_animation::Pick p =
         pickBaseAnimation(it->second, base_animation::Ask{.queuedAttack = it->second.queuedAttack});
-    if (p.anim != base_animation::kKeep) playAnimation(instanceId, p.anim, p.loop);
+    it->second.standStateSeen = it->second.unit.standState;
+    if (p.anim != base_animation::kKeep) playAskedAnimation(instanceId, p.anim, p.loop, p.flags);
+}
+
+void CharacterRenderer::standStateChanged(uint32_t instanceId, uint8_t standState) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || !it->second.unitAnimation) return;
+    auto& instance = it->second;
+    instance.unit.standState = standState;
+    // 0x0073f060: nothing where it is the state it was given for.
+    if (instance.standStateSeen == static_cast<int16_t>(standState)) return;
+    const int16_t seen = instance.standStateSeen;
+    if (standState == 0 && seen == 9) {
+        // Up from under: Birth where the model has it, else Emerge.
+        playAnimation(instanceId, hasAnimation(instanceId, 127) ? 127u : 224u, false);
+    } else if (standState == 9) {
+        playAnimation(instanceId, 201, false);  // Submerge
+    } else if (standState != 7) {
+        // The rest from the base animation, which knows the state it was in.
+        playBaseAnimation(instanceId);
+    }
+    instances[instanceId].standStateSeen = standState;
 }
 
 std::optional<upper_body::Wound> CharacterRenderer::woundFor(uint32_t instanceId, bool critical) {
@@ -3016,10 +3041,16 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                             // it: the base animation (0x0073ac30(0x10) ->
                             // 0x00724500), asked of the body alone. Where
                             // that leaves what plays, it stays as it ended.
-                            const base_animation::Pick p = pickBaseAnimation(
-                                inst, base_animation::Ask{.free = base_animation::kBodyFree,
-                                                          .flags = 0x10,
-                                                          .queuedAttack = inst.queuedAttack});
+                            // What the ended one asks of its own first: a
+                            // stand state's loop or getting up, a hold.
+                            const auto own = base_animation::afterOneShot(anim::animationData(), inst.unit,
+                                                                          inst.currentAnimationId);
+                            const base_animation::Pick p =
+                                own ? *own
+                                    : pickBaseAnimation(inst, base_animation::Ask{.free = base_animation::kBodyFree,
+                                                                                  .flags = 0x10,
+                                                                                  .queuedAttack = inst.queuedAttack});
+                            if (!own) inst.standStateSeen = inst.unit.standState;
                             if (p.anim == base_animation::kKeep) {
                                 inst.animationTime = static_cast<float>(seq.duration);
                             } else {

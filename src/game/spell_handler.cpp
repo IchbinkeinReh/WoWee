@@ -1635,6 +1635,9 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // button flashes for as long as they do. The stop half comes from the
     // server on SMSG_CANCEL_AUTO_REPEAT; this is the start.
     constexpr uint32_t kAutoShot = 75, kShoot = 5019;
+    // A spell with AttributesEx2 0x20 repeats: +0xa38 0x200 while it does
+    // (0x007fa2e0), which the ranged readies read (0x00714f90).
+    if ((owner_.getSpellAttributesEx2(spellId) & 0x20u) != 0) owner_.setAutoRepeating(true);
     if ((spellId == kAutoShot || spellId == kShoot) && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("START_AUTOREPEAT_SPELL", {});
     }

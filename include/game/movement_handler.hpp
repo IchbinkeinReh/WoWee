@@ -70,6 +70,8 @@ public:
     [[nodiscard]] uint64_t activeMover() const;
     /// Whether a unit's move spline from its monster move still runs (+0xbc).
     [[nodiscard]] bool onMoveSpline(uint64_t guid);
+    /// The flags of a unit's move spline while it still runs.
+    [[nodiscard]] std::optional<uint32_t> moveSplineFlags(uint64_t guid);
     /// 0x00717c50 at world entry: the player again, and no other unit
     /// controlled.
     void resetActiveMover();

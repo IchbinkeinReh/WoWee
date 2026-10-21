@@ -44,6 +44,8 @@ public:
     /// Get the animation ID for an Emotes.dbc emote ID, as used by SMSG_EMOTE
     /// and UNIT_NPC_EMOTESTATE.
     [[nodiscard]] uint32_t animByEmotesId(uint32_t emoteId) const;
+    /// Emotes.dbc EmoteFlags (+0xc) of a row; 0 without one.
+    [[nodiscard]] uint32_t flagsByEmotesId(uint32_t emoteId) const;
 
     /// True if the Emotes.dbc entry is a persistent state emote (EmoteSpecProc
     /// != 0, e.g. STATE_WORK_NOSHEATHE) rather than a one-shot (ONESHOT_WAVE).
@@ -80,6 +82,7 @@ private:
     std::unordered_map<std::string, EmoteInfo> emoteTable_;
     std::unordered_map<uint32_t, const EmoteInfo*> emoteByDbcId_;
     std::unordered_map<uint32_t, uint32_t> animByEmotesId_;
+    std::unordered_map<uint32_t, uint32_t> flagsByEmotesId_;
     std::unordered_set<uint32_t> stateEmoteIds_;
 };
 
