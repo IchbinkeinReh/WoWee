@@ -203,6 +203,9 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
     // ---- Attack/combat delegates ----
     table[Opcode::SMSG_ATTACKSTART] = [this](network::Packet& packet) { handleAttackStart(packet); };
     table[Opcode::SMSG_ATTACKSTOP] = [this](network::Packet& packet) { handleAttackStop(packet); };
+    // The same packet under another opcode: 0x00756800 compares for 0x261 and
+    // jumps into its SMSG_ATTACKSTOP case, so the two read and do alike.
+    table[Opcode::SMSG_COMBAT_EVENT_FAILED] = [this](network::Packet& packet) { handleAttackStop(packet); };
     table[Opcode::SMSG_ATTACKSWING_NOTINRANGE] = [this](network::Packet& /*packet*/) {
         autoAttackOutOfRange_ = true;
         // ERR_BADATTACKPOS, at most every four seconds: 0x00756800 notes the

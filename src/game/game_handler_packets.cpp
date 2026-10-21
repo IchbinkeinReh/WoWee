@@ -880,7 +880,9 @@ void GameHandler::registerCoreOpcodes() {
     dispatchTable_[Opcode::SMSG_CLEAR_FAR_SIGHT_IMMEDIATE] = [](network::Packet& /*packet*/) {
         LOG_DEBUG("SMSG_CLEAR_FAR_SIGHT_IMMEDIATE");
     };
-    registerSkipHandler(Opcode::SMSG_COMBAT_EVENT_FAILED);
+    // Read as a movement packet and dropped: 0x00740d30's case 0xd9 returns
+    // before anything is done with it.
+    registerSkipHandler(Opcode::MSG_MOVE_TOGGLE_COLLISION_CHEAT);
     dispatchTable_[Opcode::SMSG_FORCE_ANIM] = [this](network::Packet& packet) {
         if (packet.hasRemaining(1)) {
             uint64_t animGuid = packet.readPackedGuid();

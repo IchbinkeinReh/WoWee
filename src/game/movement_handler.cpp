@@ -127,7 +127,8 @@ MoveOpcodeKind moveOpcodeKind(uint16_t wireOp) {
                             Opcode::MSG_MOVE_START_STRAFE_RIGHT, Opcode::MSG_MOVE_STOP_STRAFE,
                             Opcode::MSG_MOVE_START_TURN_LEFT, Opcode::MSG_MOVE_START_TURN_RIGHT,
                             Opcode::MSG_MOVE_STOP_TURN, Opcode::MSG_MOVE_START_SWIM,
-                            Opcode::MSG_MOVE_STOP_SWIM, Opcode::MSG_MOVE_START_ASCEND,
+                            Opcode::MSG_MOVE_STOP_SWIM, Opcode::MSG_MOVE_START_SWIM_CHEAT,
+                            Opcode::MSG_MOVE_STOP_SWIM_CHEAT, Opcode::MSG_MOVE_START_ASCEND,
                             Opcode::MSG_MOVE_STOP_ASCEND, Opcode::MSG_MOVE_START_DESCEND,
                             Opcode::MSG_MOVE_ROOT, Opcode::MSG_MOVE_UPDATE_CAN_FLY}) {
         if (wireOp == wireOpcode(op)) return MoveOpcodeKind::Locomotion;
@@ -349,7 +350,15 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
                      // others under the same opcode, and the client plays
                      // the take-off and the landing on it (FUN_0073ed10,
                      // case 0x346).
-                     Opcode::CMSG_MOVE_SET_FLY }) {
+                     Opcode::CMSG_MOVE_SET_FLY,
+                     // Another player knocked back: the mover's movement info
+                     // and then the knock's direction and speeds, which
+                     // 0x007187f0 launches the unit with. The fall block of
+                     // the movement info carries the same launch.
+                     Opcode::MSG_MOVE_KNOCK_BACK,
+                     // 0x00740d30 sends these into the same cases as
+                     // MSG_MOVE_START_SWIM and MSG_MOVE_STOP_SWIM.
+                     Opcode::MSG_MOVE_START_SWIM_CHEAT, Opcode::MSG_MOVE_STOP_SWIM_CHEAT }) {
         table[op] = [this](network::Packet& packet) {
             if (owner_.getState() == WorldState::IN_WORLD) handleOtherPlayerMovement(packet);
         };
@@ -359,7 +368,8 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
     for (auto op : { Opcode::MSG_MOVE_SET_RUN_SPEED, Opcode::MSG_MOVE_SET_RUN_BACK_SPEED,
                      Opcode::MSG_MOVE_SET_WALK_SPEED, Opcode::MSG_MOVE_SET_SWIM_SPEED,
                      Opcode::MSG_MOVE_SET_SWIM_BACK_SPEED, Opcode::MSG_MOVE_SET_FLIGHT_SPEED,
-                     Opcode::MSG_MOVE_SET_FLIGHT_BACK_SPEED, Opcode::MSG_MOVE_SET_TURN_RATE }) {
+                     Opcode::MSG_MOVE_SET_FLIGHT_BACK_SPEED, Opcode::MSG_MOVE_SET_TURN_RATE,
+                     Opcode::MSG_MOVE_SET_PITCH_RATE }) {
         table[op] = [this](network::Packet& packet) {
             if (owner_.getState() == WorldState::IN_WORLD) handleMoveSetSpeed(packet);
         };
@@ -403,8 +413,8 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_SPLINE_SET_SWIM_BACK_SPEED]    = makeSplineSpeedHandler(&MovementHandler::serverSwimBackSpeed_, &MovementSpeeds::swimBack);
     table[Opcode::SMSG_SPLINE_SET_WALK_SPEED]          = makeSplineSpeedHandler(&MovementHandler::serverWalkSpeed_, &MovementSpeeds::walk);
     table[Opcode::SMSG_SPLINE_SET_TURN_RATE]           = makeSplineSpeedHandler(&MovementHandler::serverTurnRate_, &MovementSpeeds::turnRate);
-    // Pitch rate not stored locally - consume packet to keep stream aligned.
-    table[Opcode::SMSG_SPLINE_SET_PITCH_RATE] = [](network::Packet& packet) { packet.skipAll(); };
+    // The pitch rate the same way: 0x00741bc0 handles it with the others.
+    table[Opcode::SMSG_SPLINE_SET_PITCH_RATE]          = makeSplineSpeedHandler(&MovementHandler::serverPitchRate_, &MovementSpeeds::pitchRate);
 
     // ---- Player movement flag changes (server-pushed) ----
     table[Opcode::SMSG_MOVE_GRAVITY_DISABLE] = [this](network::Packet& packet) {
@@ -1408,6 +1418,7 @@ void MovementHandler::handleMoveSetSpeed(network::Packet& packet) {
         else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_FLIGHT_SPEED))      speeds.flight     = speed;
         else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_FLIGHT_BACK_SPEED)) speeds.flightBack = speed;
         else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_TURN_RATE))         speeds.turnRate   = speed;
+        else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_PITCH_RATE))        speeds.pitchRate  = speed;
         return;
     }
     if      (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_RUN_SPEED))        serverRunSpeed_      = speed;
@@ -1418,6 +1429,7 @@ void MovementHandler::handleMoveSetSpeed(network::Packet& packet) {
     else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_FLIGHT_SPEED))     serverFlightSpeed_   = speed;
     else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_FLIGHT_BACK_SPEED))serverFlightBackSpeed_= speed;
     else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_TURN_RATE))        serverTurnRate_      = speed;
+    else if (wireOp == wireOpcode(Opcode::MSG_MOVE_SET_PITCH_RATE))       serverPitchRate_     = speed;
 }
 
 void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
@@ -1541,6 +1553,7 @@ void MovementHandler::handleOtherPlayerMovement(network::Packet& packet) {
         (wireOp == wireOpcode(Opcode::MSG_MOVE_STOP_STRAFE)) ||
         (wireOp == wireOpcode(Opcode::MSG_MOVE_STOP_TURN)) ||
         (wireOp == wireOpcode(Opcode::MSG_MOVE_STOP_SWIM)) ||
+        (wireOp == wireOpcode(Opcode::MSG_MOVE_STOP_SWIM_CHEAT)) ||
         (wireOp == wireOpcode(Opcode::MSG_MOVE_FALL_LAND));
 
     const float entityDuration = isStopOpcode ? 0.0f : (durationMs / 1000.0f);
