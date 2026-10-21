@@ -2460,6 +2460,16 @@ public:
     // roles bitmask: 0x02=tank, 0x04=healer, 0x08=dps; pass LFGDungeonEntry ID
     void lfgJoin(const std::vector<uint32_t>& dungeonIds, uint8_t roles);
     void lfgLeave();
+    /// The local join record and what changes it - see SocialHandler.
+    const LfgLocalJoin* getLfgLocalJoin() const;
+    const std::vector<uint32_t>* getLfgQueuedSlots() const;
+    void lfgAddSlot(uint32_t slot);
+    void lfgRemoveSlot(uint32_t slot);
+    void lfgClearSlots();
+    void lfgJoinLocal(uint8_t roles);
+    int lfgCompleteRoleCheck(bool accept);
+    void lfgLeaveLocal();
+    void lfgSetComment(const std::string& comment);
     /// Ask the server to re-send which dungeons are locked and what they pay.
     /// The ready popup asks for both as it opens.
     void requestLfgPlayerLockInfo();

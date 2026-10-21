@@ -21,6 +21,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -4816,6 +4817,106 @@ void SocialHandler::lfgJoin(const std::vector<uint32_t>& dungeonIds, uint8_t rol
     owner_.getSocket()->send(LfgJoinPacket::build(dungeonIds, roles));
 }
 
+namespace {
+
+/// The client's send throttle (0x005572d0, 0x005539a0): two go out freely,
+/// then one more each time the window has passed since the last reset.
+bool lfgThrottlePasses(int& sends, double& windowStart, double windowSeconds) {
+    ++sends;
+    if (sends <= 2) return true;
+    const double now = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch()).count()) / 1000.0;
+    if (now - windowStart < windowSeconds) return false;
+    windowStart = now;
+    sends = 0;
+    return true;
+}
+
+}  // namespace
+
+void SocialHandler::lfgAddSlot(uint32_t slot, int partyMembers) {
+    auto& join = lfgLocalJoin_;
+    const uint32_t type = slot >> 24;
+    const auto typeOf = [](uint32_t s) { return s >> 24; };
+    bool keep = false;
+    if (type == 1 || type == 5) {
+        keep = std::all_of(join.slots.begin(), join.slots.end(),
+                           [&](uint32_t s) { return typeOf(s) == 1 || typeOf(s) == 5; });
+    } else if (type == 2 && partyMembers == 0) {
+        keep = std::all_of(join.slots.begin(), join.slots.end(),
+                           [&](uint32_t s) { return typeOf(s) == 2; });
+    }
+    if (!keep) lfgClearSlots();
+    if (std::find(join.slots.begin(), join.slots.end(), slot) != join.slots.end()) return;
+    join.slots.push_back(slot);
+    join.dirty = true;
+}
+
+void SocialHandler::lfgRemoveSlot(uint32_t slot) {
+    auto& slots = lfgLocalJoin_.slots;
+    auto it = std::find(slots.begin(), slots.end(), slot);
+    if (it == slots.end()) return;
+    slots.erase(it);
+    lfgLocalJoin_.dirty = true;
+}
+
+void SocialHandler::lfgClearSlots() {
+    lfgLocalJoin_.slots.clear();
+    lfgLocalJoin_.dirty = true;
+}
+
+void SocialHandler::lfgJoinLocal(uint8_t roles) {
+    if (lfgLocalJoin_.slots.empty()) {
+        gameError(owner_, ErrTo::Error, "ERR_LFG_NO_SLOTS_SELECTED", "You did not select any valid slots.");
+        return;
+    }
+    if ((roles & 0xfeu) == 0) {
+        gameError(owner_, ErrTo::Error, "ERR_LFG_NO_ROLES_SELECTED", "You must select at least one role.");
+        return;
+    }
+    if (lfgLocalJoin_.joined && !lfgLocalJoin_.dirty) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (wireOpcode(Opcode::CMSG_LFG_JOIN) == 0xFFFF) return;
+    if (!lfgThrottlePasses(lfgJoinSends_, lfgJoinWindowStart_, 10.0)) return;
+    owner_.getSocket()->send(LfgJoinPacket::build(lfgLocalJoin_.slots, roles, lfgLocalJoin_.comment));
+    lfgLocalJoin_.joined = true;
+    lfgLocalJoin_.dirty = false;
+}
+
+void SocialHandler::lfgLeaveLocal() {
+    const LfgUpdateBody& body = isInGroup() ? lfgPartyUpdate_ : lfgPlayerUpdate_;
+    if (!lfgLocalJoin_.joined && !body.extraInfo) return;
+    lfgLocalJoin_.joined = false;
+    lfgLocalJoin_.dirty = false;
+    if (!owner_.getSocket()) return;
+    const uint16_t wire = wireOpcode(Opcode::CMSG_LFG_LEAVE);
+    if (wire == 0xFFFF) return;
+    // The opcode alone: 0x00553ab0 writes nothing after it.
+    owner_.getSocket()->send(network::Packet(wire));
+}
+
+void SocialHandler::lfgSetComment(const std::string& comment) {
+    // At most sixty-three characters, counted as UTF-8 (0x007e1830 with 64).
+    std::string kept;
+    int chars = 0;
+    for (const char c : comment) {
+        if ((static_cast<unsigned char>(c) & 0xc0u) != 0x80u && ++chars == 64) break;
+        kept.push_back(c);
+    }
+    lfgLocalJoin_.comment = std::move(kept);
+    if (!lfgLocalJoin_.joined) {
+        lfgLocalJoin_.dirty = true;
+        return;
+    }
+    if (!owner_.getSocket()) return;
+    const uint16_t wire = wireOpcode(Opcode::CMSG_SET_LFG_COMMENT);
+    if (wire == 0xFFFF) return;
+    if (!lfgThrottlePasses(lfgCommentSends_, lfgCommentWindowStart_, 2.0)) return;
+    network::Packet pkt(wire);
+    pkt.writeString(lfgLocalJoin_.comment);
+    owner_.getSocket()->send(pkt);
+}
+
 void SocialHandler::lfgLeave() {
     if (!owner_.getSocket()) return;
     lfgState_ = LfgState::None;
@@ -4834,15 +4935,33 @@ void SocialHandler::lfgSetRoles(uint8_t roles) {
     // firing it left whichever frame was clicked correct and the other two
     // showing what they were last drawn with, which is the shape that reads as
     // "it only takes after a relog".
+    //
+    // Nothing is sent: SetLFGRoles (0x00553d60) only keeps them. The role
+    // check's answer is CompleteLFGRoleCheck's.
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("LFG_ROLE_UPDATE", {});
     }
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    const uint32_t wire = wireOpcode(Opcode::CMSG_LFG_SET_ROLES);
-    if (wire == 0xFFFF) return;
-    network::Packet pkt(static_cast<uint16_t>(wire));
-    pkt.writeUInt8(roles);
-    owner_.getSocket()->send(pkt);
+}
+
+int SocialHandler::lfgCompleteRoleCheck(bool accept) {
+    if (!lfgThrottlePasses(lfgRoleSends_, lfgRoleWindowStart_, 10.0)) return -1;
+    uint8_t roles = 0;
+    if (accept) {
+        roles = lfgOfferedRoles_;
+        if ((roles & 0x0eu) == 0) {
+            gameError(owner_, ErrTo::Error, "ERR_LFG_NO_ROLES_SELECTED", "You must select at least one role.");
+            return 0;
+        }
+    }
+    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
+        const uint32_t wire = wireOpcode(Opcode::CMSG_LFG_SET_ROLES);
+        if (wire != 0xFFFF) {
+            network::Packet pkt(static_cast<uint16_t>(wire));
+            pkt.writeUInt8(roles);
+            owner_.getSocket()->send(pkt);
+        }
+    }
+    return 1;
 }
 
 void SocialHandler::lfgAcceptProposal(uint32_t proposalId, bool accept) {

@@ -59,6 +59,17 @@ struct LfgUpdateBody {
     [[nodiscard]] bool sameAs(const LfgUpdateBody& o) const;
 };
 
+/// The client's local join record (0x00acd880..0x00acd99c): the dungeon
+/// slots JoinLFG sends - each the dungeon id with its LFGDungeons type in the
+/// top byte - the comment, whether a join went out, and whether any of it
+/// changed since.
+struct LfgLocalJoin {
+    bool joined = false;           ///< +0x00
+    bool dirty = false;            ///< +0x03
+    std::vector<uint32_t> slots;   ///< +0x14 list, +0x18 count
+    std::string comment;           ///< +0x1c
+};
+
 /// Read either update. False when it is cut short.
 bool parseLfgUpdate(network::Packet& packet, bool party, uint8_t& updateType,
                     LfgUpdateBody& body);

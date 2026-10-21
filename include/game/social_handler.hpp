@@ -540,6 +540,37 @@ public:
     void lfgJoin(const std::vector<uint32_t>& dungeonIds, uint8_t roles);
     void lfgLeave();
     void lfgSetRoles(uint8_t roles);
+    /// CompleteLFGRoleCheck (0x00553e20): the role check answered with the
+    /// roles kept (none when declined) - refused without a tank, healer or
+    /// damage role. -1 when the three-a-ten-seconds throttle holds it.
+    int lfgCompleteRoleCheck(bool accept);
+
+    /// The client's local join record (0x00acd880..0x00acd99c): the dungeon
+    /// slots JoinLFG sends - each the dungeon id with its LFGDungeons type in
+    /// the top byte - the comment, whether a join went out and whether any of
+    /// it changed since. GetLFGInfoLocal reads it.
+    [[nodiscard]] const LfgLocalJoin& getLfgLocalJoin() const { return lfgLocalJoin_; }
+    /// SetLFGDungeon's slot (0x00559b70): random and specific dungeons (types
+    /// 1 and 5) keep each other, raids (2) keep raids while ungrouped, and
+    /// anything else replaces what was there.
+    void lfgAddSlot(uint32_t slot, int partyMembers);
+    void lfgRemoveSlot(uint32_t slot);   ///< 0x005593a0
+    void lfgClearSlots();                ///< 0x00559340
+    /// JoinLFG (0x00557660): refused with ERR_LFG_NO_SLOTS_SELECTED or
+    /// ERR_LFG_NO_ROLES_SELECTED, else CMSG_LFG_JOIN with the record
+    /// (0x005572d0) when nothing has gone out yet or it changed - three a
+    /// ten seconds.
+    void lfgJoinLocal(uint8_t roles);
+    /// LeaveLFG (0x00553ab0): CMSG_LFG_LEAVE while joined or queued.
+    void lfgLeaveLocal();
+    /// SetLFGComment (0x005539a0): the comment kept, and sent at once
+    /// (CMSG_SET_LFG_COMMENT, three a two seconds) while joined.
+    void lfgSetComment(const std::string& comment);
+    /// The dungeons the server says are queued, the party's in a group
+    /// (0x00acdac0) and the player's otherwise (0x00acd9a0).
+    [[nodiscard]] const std::vector<uint32_t>& getLfgQueuedSlots(bool inGroup) const {
+        return inGroup ? lfgPartyUpdate_.dungeons : lfgPlayerUpdate_.dungeons;
+    }
     void lfgAcceptProposal(uint32_t proposalId, bool accept);
     void lfgSetBootVote(bool vote);
     void lfgTeleport(bool toLfgDungeon = true);
@@ -833,6 +864,15 @@ private:
     bool lfgPartyLocksReceived_ = false;
     bool lfgPlayerLocksReceived_ = false;
     uint8_t  lfgOfferedRoles_ = 0;
+    LfgLocalJoin lfgLocalJoin_;
+    /// The two throttles: joins (0x00acdd6c, ten seconds) and comments
+    /// (0x00acdd50, two).
+    int lfgJoinSends_ = 0;
+    double lfgJoinWindowStart_ = 0.0;
+    int lfgCommentSends_ = 0;
+    double lfgCommentWindowStart_ = 0.0;
+    int lfgRoleSends_ = 0;
+    double lfgRoleWindowStart_ = 0.0;
     // The queue's own numbers, which never arrived while the length check was
     // longer than the packet.
     int32_t  lfgWaitTank_ = -1;
