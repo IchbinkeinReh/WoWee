@@ -15,8 +15,10 @@
 #include "rendering/renderer.hpp"
 #include "core/frame_profiler.hpp"
 #include "core/logger.hpp"
+#include "game/transport_manager.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 
 namespace wowee { namespace ui {
 
@@ -272,6 +274,25 @@ public:
         say(client_gps::goXyzLine(mapId, drawn.x, drawn.y, drawn.z, facing));
         if (client_gps::differs(drawn.x, drawn.y, drawn.z, sent.x, sent.y, sent.z)) {
             say("Sent to the server: " + client_gps::goXyzLine(mapId, sent.x, sent.y, sent.z, facing));
+        }
+        // On a transport: which, where the client has it, and the offset on
+        // it that goes to the server with the position.
+        if (ctx.gameHandler.isOnTransport()) {
+            const uint64_t tguid = ctx.gameHandler.getPlayerTransportGuid();
+            const glm::vec3 off = ctx.gameHandler.getPlayerTransportOffset();
+            std::string line = "On transport " + std::to_string(tguid & 0xFFFFFFu);
+            if (auto* tm = ctx.gameHandler.getTransportManager()) {
+                if (const auto* tr = tm->getTransport(tguid)) {
+                    const glm::vec3 at = core::coords::canonicalToServer(tr->position);
+                    char buf[160];
+                    std::snprintf(buf, sizeof(buf), " (entry %u) at %.3f %.3f %.3f",
+                                  tr->entry, at.x, at.y, at.z);
+                    line += buf;
+                }
+            }
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), ", offset %.3f %.3f %.3f", off.x, off.y, off.z);
+            say(line + buf);
         }
         if (const auto* t = renderer ? renderer->getZoneTexts() : nullptr) {
             const std::string zone = client_gps::zoneLine(t->zone, t->subzone);
