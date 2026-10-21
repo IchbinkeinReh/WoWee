@@ -48,6 +48,16 @@ struct ActiveTransport {
 
     // Time-based animation (deterministic, no drift)
     uint32_t localClockMs;         // Local path time in milliseconds
+    // The part of a millisecond the frames have run that localClockMs has
+    // not taken yet. Dropped, a 16.7 ms frame counted 16 and the clock ran
+    // some 4% slow - a lift a few seconds behind the server's within minutes.
+    double localClockRemainderMs = 0.0;
+    // A lift's path time as the client keeps it (0x007139e0): the clock's ms
+    // plus the offset taken when its create block gave the server's path
+    // time. Read off a real clock every frame, it cannot fall behind through
+    // capped frame times or loading hitches the way a summed delta does.
+    bool hasPathClockAnchor = false;
+    int64_t pathClockAnchorMs = 0;
     bool hasServerClock;            // Whether we've synced with server time
     int32_t serverClockOffsetMs;   // Offset: serverClock - localNow
     bool useClientAnimation;        // Use client-side path animation
@@ -161,6 +171,12 @@ class TransportManager {
 public:
     TransportManager();
     ~TransportManager();
+
+    // A monotonic millisecond clock, for a path time kept as an offset from it.
+    static int64_t nowSteadyMs() {
+        return static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
 
     // Absolute wall-clock ms. Used to seed a client-animated transport's starting phase
     // so it's deterministic across clients/restarts instead of depending on when this
@@ -427,8 +443,8 @@ private:
     /// server puts the route phase. See applyServerRouteClock.
     struct PendingRouteClock { float phase; uint32_t periodMs; };
     std::unordered_map<uint64_t, PendingRouteClock> pendingRouteClocks_;
-    /// noteServerPathTime's samples: the path time, and elapsedTime_ on arrival.
-    struct ServerPathTime { uint32_t pathTimeMs; double receivedAt; };
+    /// noteServerPathTime's samples: the path time, and nowSteadyMs() on arrival.
+    struct ServerPathTime { uint32_t pathTimeMs; int64_t receivedSteadyMs; };
     std::unordered_map<uint64_t, ServerPathTime> serverPathTimes_;
     std::unordered_map<uint64_t, glm::quat> parentRotations_;
     uint64_t riderTransportGuid_ = 0;

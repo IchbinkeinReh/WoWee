@@ -55,9 +55,24 @@ bool TransportClockSync::computePathTime(
         return true;
     }
 
+    if (transport.useClientAnimation && transport.hasPathClockAnchor &&
+        !transport.clientAnimationReverse) {
+        // A lift on the server's path time: the clock plus its offset, modulo
+        // the path (0x00710640).
+        const int64_t mod = static_cast<int64_t>(durationMs);
+        int64_t t = (TransportManager::nowSteadyMs() + transport.pathClockAnchorMs) % mod;
+        if (t < 0) t += mod;
+        transport.localClockMs = static_cast<uint32_t>(t);
+        outPathTimeMs = transport.localClockMs;
+        return true;
+    }
+
     if (transport.useClientAnimation) {
-        // Pure local clock (no server sync yet, client-driven)
-        uint32_t dtMs = static_cast<uint32_t>(deltaTime * 1000.0f);
+        // Pure local clock (no server sync yet, client-driven), counting
+        // whole milliseconds and carrying the rest to the next frame.
+        transport.localClockRemainderMs += std::max(0.0, static_cast<double>(deltaTime) * 1000.0);
+        uint32_t dtMs = static_cast<uint32_t>(transport.localClockRemainderMs);
+        transport.localClockRemainderMs -= dtMs;
         if (!transport.clientAnimationReverse) {
             transport.localClockMs += dtMs;
         } else {

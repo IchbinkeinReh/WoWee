@@ -486,7 +486,7 @@ bool TransportManager::isPointOnTransportDeck(uint64_t transportGuid,
 }
 
 void TransportManager::noteServerPathTime(uint64_t transportGuid, uint32_t pathTimeMs) {
-    serverPathTimes_[transportGuid] = {pathTimeMs, elapsedTime_};
+    serverPathTimes_[transportGuid] = {pathTimeMs, nowSteadyMs()};
     if (auto* transport = getTransport(transportGuid)) seedFromServerPathTime(*transport);
 }
 
@@ -504,9 +504,12 @@ void TransportManager::seedFromServerPathTime(ActiveTransport& transport) {
     // Seeded from the wall clock, the lift ran at an arbitrary offset from
     // the server's, so the doors - which the server opens on its own
     // timeline - shut just as the car arrived.
-    const double sinceMs = std::max(0.0, (elapsedTime_ - it->second.receivedAt) * 1000.0);
-    const uint64_t now = static_cast<uint64_t>(it->second.pathTimeMs) + static_cast<uint64_t>(sinceMs);
-    transport.localClockMs = static_cast<uint32_t>(now % durationMs);
+    transport.pathClockAnchorMs =
+        static_cast<int64_t>(it->second.pathTimeMs) - it->second.receivedSteadyMs;
+    transport.hasPathClockAnchor = true;
+    const int64_t now = nowSteadyMs() + transport.pathClockAnchorMs;
+    transport.localClockMs = static_cast<uint32_t>(
+        ((now % durationMs) + durationMs) % durationMs);
     LOG_INFO("Transport 0x", std::hex, transport.guid, std::dec, " at the server's path time ",
              transport.localClockMs, "ms of ", durationMs, "ms");
 }

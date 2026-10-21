@@ -780,3 +780,37 @@ TEST_CASE("A borrowed route seeds no phase on the path it borrowed",
     CHECK_FALSE(t.useClientAnimation);
     CHECK(t.localClockMs == 1234u);
 }
+
+TEST_CASE("ClockSync: the client clock keeps the part of a millisecond a frame leaves",
+          "[transport_clock_sync]") {
+    TransportClockSync sync;
+    auto path = makeCirclePath();
+    auto t = makeTransport();
+    t.useClientAnimation = true;
+    uint32_t pathTimeMs = 0;
+    // Sixty frames of a sixtieth of a second are a second, not 960 ms.
+    for (int i = 0; i < 60; ++i) {
+        REQUIRE(sync.computePathTime(t, path.spline, 1.0, 1.0f / 60.0f, pathTimeMs));
+    }
+    CHECK(t.localClockMs >= 999u);
+    CHECK(t.localClockMs <= 1000u);
+}
+
+TEST_CASE("ClockSync: a lift on the server's path time is the clock plus its offset",
+          "[transport_clock_sync]") {
+    TransportClockSync sync;
+    auto path = makeCirclePath();  // 4000 ms
+    auto t = makeTransport();
+    t.useClientAnimation = true;
+    t.hasPathClockAnchor = true;
+    t.pathClockAnchorMs = 1234 - TransportManager::nowSteadyMs();
+    uint32_t pathTimeMs = 0;
+    // However long the frame was said to be: the time is read off the clock.
+    REQUIRE(sync.computePathTime(t, path.spline, 1.0, 0.1f, pathTimeMs));
+    CHECK(pathTimeMs >= 1234u);
+    CHECK(pathTimeMs < 1234u + 200u);
+    // And it wraps at the path's end.
+    t.pathClockAnchorMs = 8000 + 3990 - TransportManager::nowSteadyMs();
+    REQUIRE(sync.computePathTime(t, path.spline, 1.0, 0.0f, pathTimeMs));
+    CHECK((pathTimeMs >= 3990u || pathTimeMs < 200u));
+}
