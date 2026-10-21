@@ -1181,7 +1181,7 @@ private:
     // Normal mapping settings
     bool normalMappingEnabled_ = false;  // off by default: the client has none
     bool deferNormalMaps_ = false;       // skip normal map gen during streaming
-    float normalMapStrength_ = 0.8f;     // 0.0 = flat, 1.0 = full, 2.0 = exaggerated
+    float normalMapStrength_ = 0.3f;     // 0.0 = flat, 1.0 = full, 2.0 = exaggerated
     bool materialSettingsDirty_ = false; // rebuild UBOs when settings change
 
     // Rendering state

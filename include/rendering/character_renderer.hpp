@@ -1045,7 +1045,7 @@ private:
 
     // Normal mapping settings
     bool normalMappingEnabled_ = false;  // the client has no normal maps
-    float normalMapStrength_ = 0.8f;
+    float normalMapStrength_ = 0.3f;
 
     // Maximum bones supported
     static constexpr int MAX_BONES = 240;

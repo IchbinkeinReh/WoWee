@@ -292,7 +292,7 @@ public:
     /// sides the whole exchange to find that out.
     bool pendingCheckForUpdates = true;
     bool pendingNormalMapping = false;  // off by default: not in the client
-    float pendingNormalMapStrength = 0.8f;  // 0.0-2.0
+    float pendingNormalMapStrength = 0.3f;  // 0.0-2.0
     float pendingLensFlare = 0.0f;          // 0.0-2.0; off: the client has its glare instead
     int pendingFrameCap = 0;                // index into the frame-limit choices
     bool pendingSharpStars = false;

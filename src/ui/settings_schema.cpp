@@ -192,7 +192,7 @@ constexpr SettingDesc kSchema[] = {
      "than flat paint. Not in the original client.", "", 0},
     {"normalmapstrength", "Bump strength", SettingKind::Float, 0, 2, 0.1f, "Detail", "",
      "How pronounced those surface bumps look. 1 is as the textures\n"
-     "were made; higher exaggerates them.", "", 0.8f, "normalmapping"},
+     "were made; higher exaggerates them.", "", 0.3f, "normalmapping"},
 
     {"particledensity", "Particle density", SettingKind::Int, 10, 100, 5, "Detail", "Effects",
      "How many particles a spell, fire or waterfall throws, as a\n"
