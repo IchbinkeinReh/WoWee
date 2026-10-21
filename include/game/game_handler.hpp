@@ -2449,6 +2449,9 @@ public:
     const std::string& getSummonerName() const { return summonerName_; }
     float getSummonTimeoutSec() const { return summonTimeoutSec_; }
     void acceptSummon();
+    /// A player gone from the world here: a group member's stats are asked
+    /// for (SocialHandler::playerLeftSight).
+    void playerLeftSight(uint64_t guid);
     void declineSummon();
     void tickSummonTimeout(float dt) {
         if (!pendingSummonRequest_) return;

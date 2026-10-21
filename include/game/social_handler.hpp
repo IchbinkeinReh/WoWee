@@ -396,6 +396,14 @@ public:
     // server-authoritative so every member sees the same icons.
     void setRaidMarkLocally(uint64_t guid, uint8_t icon);
     void requestRaidInfo();
+    /// CMSG_REQUEST_PARTY_MEMBER_STATS for a group member whose player the
+    /// client does not have, so its frame is filled from
+    /// SMSG_PARTY_MEMBER_STATS_FULL (0x0052c760, 0x0052d410, 0x00573070,
+    /// 0x00574f10): its guid, u64.
+    void requestPartyMemberStats(uint64_t guid);
+    /// A player leaving the world here: a member of the group is asked about
+    /// (0x0052c760 and 0x00573070 from the player object's going).
+    void playerLeftSight(uint64_t guid);
     void setSavedInstanceExtend(uint32_t mapId, uint32_t difficulty, bool extend);
     /// The roles last offered to the dungeon finder. lfgSetRoles used to send
     /// them and keep nothing, so the panel reading its own checkboxes back, and

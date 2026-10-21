@@ -1879,6 +1879,10 @@ void GameHandler::handleSummonRequest(network::Packet& packet) {
     if (socialHandler_) socialHandler_->handleSummonRequest(packet);
 }
 
+void GameHandler::playerLeftSight(uint64_t guid) {
+    if (socialHandler_) socialHandler_->playerLeftSight(guid);
+}
+
 void GameHandler::acceptSummon() {
     if (socialHandler_) socialHandler_->acceptSummon();
 }
