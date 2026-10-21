@@ -2507,6 +2507,40 @@ void CharacterRenderer::playBaseAnimation(uint32_t instanceId) {
     if (p.anim != base_animation::kKeep) playAnimation(instanceId, p.anim, p.loop);
 }
 
+std::optional<upper_body::Wound> CharacterRenderer::woundFor(uint32_t instanceId, bool critical) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || !it->second.unitAnimation) return std::nullopt;
+    auto& instance = it->second;
+    const auto& model = models[instance.modelId].data;
+    const int32_t bone = upperBodyBone(instance);
+    const int32_t body = instance.currentSequenceIndex >= 0 ? static_cast<int32_t>(instance.currentAnimationId) : -1;
+    int32_t shown = body;
+    for (const auto& k : instance.keyBoneAnimations) {
+        if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning) shown = static_cast<int32_t>(k.animationId);
+    }
+    auto w = upper_body::wound(anim::animationData(), instance.unit, critical, shown, body);
+    if (!w) return std::nullopt;
+    w->anim = tierAnimationFor(model, w->anim, instance.animationTier);
+    // Played only where the model has it (0x00825ee0), on the key bone
+    // where it has one.
+    if (std::none_of(model.sequences.begin(), model.sequences.end(),
+                     [&w](const pipeline::M2Sequence& seq) { return seq.id == w->anim; })) {
+        return std::nullopt;
+    }
+    if (bone < 0) w->upper = false;
+    return w;
+}
+
+void CharacterRenderer::playWound(uint32_t instanceId, const upper_body::Wound& wound) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    if (wound.upper) {
+        startKeyBoneAnimation(it->second, upperBodyBone(it->second), wound.anim, true, std::nullopt, 0.0f, false);
+    } else {
+        playAnimationNow(instanceId, wound.anim, false, 0, false);
+    }
+}
+
 void CharacterRenderer::endUpperBodyOneShot(CharacterInstance& instance) {
     const auto& model = models[instance.modelId].data;
     const auto& data = anim::animationData();

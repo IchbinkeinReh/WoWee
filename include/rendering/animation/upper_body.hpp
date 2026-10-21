@@ -177,6 +177,23 @@ struct Decision {
 /// the upper body's, else the body's - plays.
 [[nodiscard]] bool splits(const anim::AnimationDataTable& data, const Unit& unit, uint32_t asked, int32_t current);
 
+/// What 0x00736640 plays for a blow taken: StandWound, CombatWound with a
+/// melee target, CombatCritical for a critical - on the upper body, or on
+/// the whole body (`upper` false).
+struct Wound {
+    uint32_t anim = 8;
+    bool upper = true;
+};
+
+/// 0x00736640: the wound for a blow a unit takes, `shown` and `body` what
+/// plays (0x00717260, 0x008267e0(-1)); nothing for a dead unit, or one
+/// knocked down (0x00722180). The whole body takes it standing still out
+/// of a fight - not riding, moving, falling, swimming, flying, hovering,
+/// sitting or getting up from the ground - or where the body stands or is
+/// ready.
+[[nodiscard]] std::optional<Wound> wound(const anim::AnimationDataTable& data, const Unit& unit, bool critical,
+                                         int32_t shown, int32_t body);
+
 /// 0x007385c0: where `asked` (0x007176f0's already) goes, and what each
 /// slot plays after it.
 [[nodiscard]] Decision decide(const anim::AnimationDataTable& data, const Unit& unit, const Slot& asked,

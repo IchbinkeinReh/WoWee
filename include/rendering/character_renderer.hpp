@@ -122,6 +122,13 @@ public:
     /// 0x00724500, base_animation::pick); nothing where that leaves what
     /// plays. For an instance given its unit (setUnitAnimationState).
     void playBaseAnimation(uint32_t instanceId);
+    /// The wound a unit shows for a blow it takes (0x00736640,
+    /// upper_body::wound), as the unit is put in it (0x007176f0) - nothing
+    /// where it shows none or the model has no sequence of it.
+    [[nodiscard]] std::optional<upper_body::Wound> woundFor(uint32_t instanceId, bool critical);
+    /// Plays it, once, unblended, on the upper body's key bone or the whole
+    /// body (0x00735820), past what 0x007385c0 decides.
+    void playWound(uint32_t instanceId, const upper_body::Wound& wound);
     /// The loop a unit rests in - its stand state's (sitting, sleeping,
     /// kneeling...) or 0 for Stand. A one-shot played with no return anim
     /// goes back to it, so a seated unit that is hit stays seated.

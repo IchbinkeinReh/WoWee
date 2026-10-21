@@ -326,3 +326,43 @@ TEST_CASE("a swing asked over a swing waits, the one playing hastened (+0xb88)",
     d = ub::decide(data, standing, asked(kSpellCast, false), slots(kAttack1H, 0.0f, false));
     CHECK_FALSE(d.queue);
 }
+
+TEST_CASE("the wound for a blow taken (0x00736640)", "[upper_body]") {
+    const auto data = table();
+    ub::Unit standing;
+    // Standing still out of a fight: StandWound on the whole body.
+    auto w = ub::wound(data, standing, false, kEmoteTalk, kEmoteTalk);
+    REQUIRE(w);
+    CHECK(w->anim == 8u);
+    CHECK_FALSE(w->upper);
+    // Running: on the upper body.
+    w = ub::wound(data, running(), false, kRun, kRun);
+    REQUIRE(w);
+    CHECK(w->upper);
+    // In a fight CombatWound, a critical CombatCritical - on the upper body
+    // unless the body stands or is ready.
+    ub::Unit fighting;
+    fighting.autoAttacking = true;
+    w = ub::wound(data, fighting, false, kAttack1H, kAttack1H);
+    REQUIRE(w);
+    CHECK(w->anim == 9u);
+    CHECK(w->upper);
+    w = ub::wound(data, fighting, true, kReady1H, kReady1H);
+    REQUIRE(w);
+    CHECK(w->anim == 10u);
+    CHECK_FALSE(w->upper);
+    w = ub::wound(data, standing, true, kStand, kStand);
+    REQUIRE(w);
+    CHECK_FALSE(w->upper);
+    // Sitting, on the upper body.
+    ub::Unit sitting;
+    sitting.standState = 1;
+    w = ub::wound(data, sitting, false, 97, 97);
+    REQUIRE(w);
+    CHECK(w->upper);
+    // None dead or knocked down.
+    ub::Unit dead;
+    dead.alive = false;
+    CHECK_FALSE(ub::wound(data, dead, false, kStand, kStand));
+    CHECK_FALSE(ub::wound(data, standing, false, 121, 121));
+}

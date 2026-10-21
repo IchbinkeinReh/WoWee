@@ -91,6 +91,27 @@ bool splits(const anim::AnimationDataTable& data, const Unit& unit, uint32_t ask
     return split;
 }
 
+std::optional<Wound> wound(const anim::AnimationDataTable& data, const Unit& unit, bool critical, int32_t shown,
+                          int32_t body) {
+    // Dead (0x0071f560), or knocked down (0x00722180).
+    if (!unit.alive || unit.feignDeath || unit.standState == 7) return std::nullopt;
+    if (shown == 121) return std::nullopt;
+    Wound w;
+    w.anim = critical ? 10u : unit.autoAttacking ? 9u : 8u;
+    // Moving, falling, ascending, descending, swimming or flying.
+    constexpr uint32_t kMoveWounds = 0x02e0100f;
+    // 0x00716190: sitting on the ground or in a chair.
+    const bool seated = unit.standState == 1 || (unit.standState >= 4 && unit.standState <= 6);
+    if (!critical && !unit.autoAttacking && !unit.riding && (unit.moveFlags & kMoveWounds) == 0 && !unit.hovering &&
+        !seated && behaviorOf(data, shown) != 98 /* SitGroundUp */) {
+        w.upper = false;
+    } else if (isReady(behaviorOf(data, body)) || body == 0) {
+        // The body standing or ready takes it whole.
+        w.upper = false;
+    }
+    return w;
+}
+
 Decision decide(const anim::AnimationDataTable& data, const Unit& unit, const Slot& asked, const Slots& now,
                 Pass pass) {
     Decision d;
