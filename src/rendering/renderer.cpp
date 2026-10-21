@@ -1749,6 +1749,12 @@ void Renderer::beginFrame() {
     collectRecordedFrame();
     }
 
+    // The same fence finished the sun's occlusion query this slot asked two
+    // frames ago (Celestial::renderSunQuery); update() eases toward it.
+    if (skySystem && skySystem->getCelestial()) {
+        sunQueryVisibility_ = skySystem->getCelestial()->readSunVisibility(vkCtx->getCurrentFrame());
+    }
+
     // FSR2 jitter pattern (§4.3 - delegates to PostProcessPipeline)
     if (postProcessPipeline_ && camera) postProcessPipeline_->applyJitter(camera.get());
 
@@ -1874,6 +1880,11 @@ void Renderer::beginFrame() {
     VkSubpassContents subpassMode = parallelRecordingEnabled_
         ? VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS
         : VK_SUBPASS_CONTENTS_INLINE;
+    // The sun's occlusion query is asked in the scene pass; its reset has
+    // to come before, outside any pass.
+    if (skySystem && skySystem->getCelestial()) {
+        skySystem->getCelestial()->resetSunQuery(currentCmd, vkCtx->getCurrentFrame());
+    }
     // With the ray traced lighting the frame begins in its G-buffer pass,
     // over the same colour and depth, cleared alike, and the G-buffer cleared
     // to no surface. leaveGbufferPhase resumes the scene pass above, which
@@ -2724,7 +2735,16 @@ void Renderer::update(float deltaTime) {
         // occlusion, the factor the glare is most often put out by.
         static const bool glareDiag = std::getenv("WOWEE_GLARE_DIAG") != nullptr;
         std::string why;
-        const float sunTarget = lp ? sampleSunOcclusion(lp->sunDir, glareDiag ? &why : nullptr) : 1.0f;
+        float sunTarget = lp ? sampleSunOcclusion(lp->sunDir, glareDiag ? &why : nullptr) : 1.0f;
+        // And what the world drew over the sun's disc, as the client asks it
+        // (0x009abe00): trees and their leaves, roofs, anything opaque or
+        // cut out - none of which the line above sees but the terrain and
+        // the buildings' boxes. Only while the query had the sun on screen.
+        if (sunQueryVisibility_ >= 0.0f) {
+            const float hidden = 1.0f - glm::clamp(sunQueryVisibility_, 0.0f, 1.0f);
+            if (glareDiag && hidden > sunTarget) why += "; the world over the sun's disc, " + std::to_string(hidden);
+            sunTarget = std::max(sunTarget, hidden);
+        }
         sunOcclusion_ += (sunTarget - sunOcclusion_) * rate;
         if (glareDiag && (glareDiagTimer_ -= deltaTime) <= 0.0f) {
             glareDiagTimer_ = 3.0f;
@@ -4444,6 +4464,10 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             if (footprintRenderer && camera) footprintRenderer->render(cmd, perFrameSet, *camera);
             sceneMark(cmd, kMarkWorldEffects, "weather, dust, footprints");
 
+            // The sun's occlusion query on the same finished world, in this
+            // pass whichever the glare is drawn in: only it has the depth.
+            if (skySystem && skySystem->getCelestial() && camera && !skipSky)
+                skySystem->getCelestial()->renderSunQuery(cmd, perFrameSet, frameIdx);
             // The sun's and the White Lady's glare, over the whole world with
             // no depth test, last before the overlays (0x007f0870 runs after
             // the world, 0x009ac400 turns the depth test off) - after the
@@ -4790,7 +4814,10 @@ void Renderer::finishRenderWorld() {
     // Underwater overlay and minimap - in the fallback path these run inline;
     // in the parallel path they were already recorded into SEC_POST above.
     if (!pw.parallel) {
-        // The glare, over the finished world (0x007f0870, 0x009ac400).
+        // The sun's occlusion query, then the glare, over the finished world
+        // (0x009abe00, 0x007f0870, 0x009ac400).
+        if (skySystem && skySystem->getCelestial() && camera && !skipSky)
+            skySystem->getCelestial()->renderSunQuery(currentCmd, perFrameSet, frameIdx);
         if (skySystem && camera && !skipSky && !glareDrawsWithWater_) skySystem->renderGlare(currentCmd, perFrameSet);
         renderUnderwaterOverlay(currentCmd);
         renderPostSceneOverlays(currentCmd);
@@ -7181,7 +7208,9 @@ void Renderer::recordSunShafts() {
             // - so with the sun behind a house its sunlit roof, wall and the
             // leaves beside it streamed light across the house and the ground
             // in its shadow, and a sun just past the screen's edge poured a
-            // shaft down that edge from whatever lit wall stood there.
+            // shaft down that edge from whatever lit wall stood there. The
+            // occlusion includes the sun's occlusion query, so a sun behind a
+            // tree's crown puts them out as a roof does.
             strength *= 1.0f - glm::clamp(sunOcclusion_, 0.0f, 1.0f);
 
             // The sun's own colour, kept in hue and not in brightness, and

@@ -398,6 +398,9 @@ private:
     /// Sampled once a frame in update() and eased, because the raw answer is a
     /// yes or a no and a hill edge crossing it would snap the flare on and off.
     float sunOcclusion_ = 0.0f;
+    /// How much of the sun's disc the world left in view, by the occlusion
+    /// query (Celestial::readSunVisibility); negative when it said nothing.
+    float sunQueryVisibility_ = -1.0f;
     /// The same toward the White Lady, for her glare.
     float moonOcclusion_ = 0.0f;
 
