@@ -3160,6 +3160,13 @@ struct QuestQueryRewardsData {
     uint32_t arenaPoints = 0;
     /// CharTitles.dbc id of a title the quest awards (few quests do). WotLK only.
     uint32_t rewardTitleId = 0;
+    /// The quest's Flags word, the PlayersSlain count and the two reputation
+    /// objectives' factions (the cache's +0x50, +0x2098, +0x1c and +0x24),
+    /// which the quest POI list reads (0x005e2950, 0x005e10b0). WotLK only.
+    uint32_t questFlags = 0;
+    uint32_t playersSlain = 0;
+    uint32_t repObjectiveFaction = 0;
+    uint32_t repObjectiveFaction2 = 0;
     /// Up to five reputation rewards: the faction id, the QuestFactionReward.dbc
     /// value index, and a direct override (hundredths). The reputation shown is
     /// override/100 when set, else the dbc column at |valueId|. WotLK only.

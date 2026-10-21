@@ -1014,6 +1014,21 @@ bool Application::initialize() {
             auto* wmap = r ? r->getWorldMap() : nullptr;
             return wmap ? wmap->mapUVForCanonical(x, y, z, u, v) : false;
         };
+        luaSvc.getMapPoiFrame = [r = renderer.get()]() -> addons::LuaServices::MapPoiFrame {
+            addons::LuaServices::MapPoiFrame out;
+            auto* wmap = r ? r->getWorldMap() : nullptr;
+            if (!wmap) return out;
+            const auto frame = wmap->currentPoiFrame();
+            out.valid = frame.valid;
+            out.zoneLevel = frame.zoneLevel;
+            out.dungeon = frame.dungeon;
+            out.worldMapAreaId = frame.worldMapAreaId;
+            out.mapId = frame.mapId;
+            out.dungeonFloor = frame.dungeonFloor;
+            out.locLeft = frame.locLeft;
+            out.locRight = frame.locRight;
+            return out;
+        };
         luaSvc.zoomMapOut = [r = renderer.get()]() {
             if (auto* wmap = r ? r->getWorldMap() : nullptr) wmap->zoomOutOneLevel();
         };

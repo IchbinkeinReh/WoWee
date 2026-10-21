@@ -1596,6 +1596,13 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
         }
     }
     if (sourceItemField) {
+        // Flags is the word after the start item, PlayersSlain the one after
+        // the title, and the two reputation objectives' factions are fields
+        // 5 and 7 of the same count (AzerothCore's Quest::BuildQuestData).
+        out.questFlags = fieldAt(sourceItemField + 1);
+        out.playersSlain = fieldAt(sourceItemField + 3);
+        out.repObjectiveFaction = fieldAt(5);
+        out.repObjectiveFaction2 = fieldAt(7);
         const uint32_t srcItem = fieldAt(sourceItemField);
         // Same plausibility gate the rewards use: a layout mismatch lands in a
         // float or a string and reads as an enormous item id.

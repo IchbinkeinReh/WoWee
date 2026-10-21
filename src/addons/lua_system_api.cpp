@@ -1313,24 +1313,19 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // tracker worked until the login event that is supposed to configure it,
     // then went down on its next update, every session.
     //
-    // Three: achievements and completed quests, and *not* quests from other
-    // zones - which is what a stock 3.3.5 client has, with "Quests in other
-    // zones" unticked in the tracker's own filter menu. Seven ticked it, so
-    // the tracker listed every watched quest in the log whatever continent it
-    // was on.
-    //
-    // Zero would not raise but is worse than it looks: the two tests at
-    // watchframe.lua:813 skip a quest that is complete and a quest outside the
-    // current map, so an empty mask hides most of the log.
-    //
-    // Clearing the remote-zones bit only filters if CURRENT_MAP_QUESTS is
-    // filled, which is why it was left set - see the override of
-    // WatchFrame_GetCurrentMapQuests in AddonManager, which fills it from the
-    // log's zone headers rather than from map POIs.
-    else if (n == "trackerfilter") lua_pushstring(L, "3");
+    // Seven, the default the client registers it with (0x00510000 area,
+    // "trackerFilter" -> 0x00a01c0c "7"): achievements, completed quests and
+    // quests from other zones. With the last bit clear watchframe.lua keeps
+    // only the quests CURRENT_MAP_QUESTS holds, which WatchFrame_GetCurrentMapQuests
+    // builds from QuestMapUpdateAllQuests and QuestPOIGetQuestIDByVisibleIndex -
+    // the client's POI icon list, not the log's zone headers.
+    else if (n == "trackerfilter") lua_pushstring(L, "7");
     // The trainer's service type filter (0x00bd09e4): available and
     // unavailable shown, used hidden.
     else if (n == "servicetypefilter") lua_pushstring(L, "3");
+    // Quest POI marks of completed quests fanned out by this much
+    // (0x005e71a0: "POIShiftComplete", 0x009f3548 "0.6").
+    else if (n == "poishiftcomplete") lua_pushstring(L, "0.6");
     // Manual, which is WATCHFRAME_SORT_MANUAL. Only ever compared with ==, so
     // nil was survivable here - it is answered for the same reason its
     // neighbour is, and because the sort menu's ticks read it.

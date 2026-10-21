@@ -142,6 +142,22 @@ public:
     bool mapUVForCanonical(float wowX, float wowY, float wowZ,
                            float& u, float& v) const;
 
+    /// The row the quest POI icon list lays its marks out on (0x005e2eb0):
+    /// the shown WorldMapArea row - its id, map and left/right edges - or,
+    /// for a map with floors, the DungeonMap floor. Not valid at world or
+    /// cosmic level, where the client has no such row.
+    struct PoiFrame {
+        bool valid = false;
+        bool zoneLevel = false;     ///< a zone or a floor rather than a continent
+        bool dungeon = false;
+        uint32_t worldMapAreaId = 0;
+        uint32_t mapId = 0;
+        uint32_t dungeonFloor = 0;
+        float locLeft = 0.0f;
+        float locRight = 0.0f;
+    };
+    [[nodiscard]] PoiFrame currentPoiFrame() const;
+
     /// Step out one level: zone to continent, continent to world.
     void zoomOutOneLevel();
 

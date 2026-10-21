@@ -13,11 +13,14 @@
 #include "game/packed_time.hpp"
 #include "game/quest_progress.hpp"
 #include "game/quest_objectives.hpp"
+#include "game/quest_poi_icons.hpp"
 #include "game/trainer_service_list.hpp"
 #include "ui/chat/chat_utils.hpp"
 #include "core/logger.hpp"
 
 #include <cmath>
+#include <cstdlib>
+#include <memory>
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -808,163 +811,255 @@ static int lua_GetQuestLogLeaderBoard(lua_State* L);
 
 // ── Quest points of interest ───────────────────────────────────────────────
 //
-// The map's quest markers. The server sends these as SMSG_QUEST_POI and this
-// client already keeps them - it draws its own markers from the same list - so
-// FrameXML's world map can read the real thing rather than an empty one.
-//
-// WoW numbers them by "visible index", which is a position in the list of
-// quests that have a POI on the map now, not a quest log index. The two differ
-// as soon as one quest in the log has no marker.
+// The client's POI icon list (0x00c23b00, game/quest_poi_icons): the areas
+// SMSG_QUEST_POI_QUERY_RESPONSE sent for up to 25 quests, the one area of each
+// the map marks, and where that mark goes once the marks are pushed apart.
+// QuestMapUpdateAllQuests counts the quests with an area on the shown map,
+// QuestPOIUpdateIcons places the marks, and the rest read the list.
 
-/// The quest ids that have a marker, completed ones first, each appearing once.
-/// Built on demand: the list is short and changes whenever the server sends a
-/// new one.
-///
-/// The order is not decoration. WorldMapFrame numbers its POI buttons from
-/// this list: a completed quest at visible index i takes button i of the
-/// completed set, and an incomplete one takes button `i - completedSoFar` of
-/// the numeric set. Both are only contiguous from 1 if every completed quest
-/// comes first, which is how the real client orders them - and where it does
-/// not, QuestPOI_HideButtons walks from 1 to the highest button made and
-/// indexes a name nothing created:
-///
-///     QuestPOI.lua:200: attempt to index local 'poiButton' (a nil value)
-///
-/// which fired on every map update, took the rest of the update with it, and
-/// left the map with no quest list and no objectives on it.
-static std::vector<uint32_t> questsWithPois(game::GameHandler* gh) {
-    std::vector<uint32_t> out;
-    if (!gh) return out;
-    for (const auto& poi : gh->getGossipPois()) {
-        // -2 is an ordinary gossip marker rather than a quest one.
-        if (poi.questObjectiveIndex == -2 || poi.data == 0) continue;
-        if (std::find(out.begin(), out.end(), poi.data) == out.end()) out.push_back(poi.data);
+/// The CVar questPOI, which turns the whole system off (0x00bd0a3c).
+static bool questPoiEnabled(lua_State* L) {
+    lua_getglobal(L, "GetCVar");
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        return true;
     }
-    const auto isComplete = [gh](uint32_t questId) {
-        for (const auto& quest : gh->getQuestLog()) {
-            if (quest.questId == questId) return quest.complete;
-        }
-        return false;
-    };
-    // Stable, so the server's order still decides within each group.
-    std::stable_partition(out.begin(), out.end(), isComplete);
-    return out;
+    lua_pushstring(L, "questPOI");
+    lua_call(L, 1, 1);
+    const char* v = lua_tostring(L, -1);
+    const bool on = !v || std::atof(v) != 0.0;
+    lua_pop(L, 1);
+    return on;
 }
 
-/// QuestMapUpdateAllQuests() → how many quests have a marker on the map.
+/// POIShiftComplete (0x00c23afc +0x2c).
+static float questPoiShiftComplete(lua_State* L) {
+    lua_getglobal(L, "GetCVar");
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        return 0.6f;
+    }
+    lua_pushstring(L, "POIShiftComplete");
+    lua_call(L, 1, 1);
+    const char* v = lua_tostring(L, -1);
+    const float shift = v ? static_cast<float>(std::atof(v)) : 0.6f;
+    lua_pop(L, 1);
+    return shift;
+}
+
+static game::QuestPoiIconList* questPoiList(game::GameHandler* gh) {
+    auto* quests = gh ? gh->getQuestHandler() : nullptr;
+    return quests ? &quests->questPoiIcons() : nullptr;
+}
+
+/// The shown map, as the list lays its marks out on it.
+static game::QuestPoiMapView questPoiMapView(lua_State* L) {
+    game::QuestPoiMapView view;
+    auto* svc = getLuaServices(L);
+    if (!svc || !svc->getMapPoiFrame || !svc->mapUVForWorldPos) return view;
+    const auto frame = svc->getMapPoiFrame();
+    if (!frame.valid) return view;
+    view.valid = true;
+    view.zoneOrFloor = frame.zoneLevel;
+    view.dungeon = frame.dungeon;
+    view.worldMapAreaId = frame.worldMapAreaId;
+    view.mapId = frame.mapId;
+    view.dungeonFloor = frame.dungeonFloor;
+    view.locLeft = frame.locLeft;
+    view.locRight = frame.locRight;
+    // POI points are server coordinates; the map projects canonical ones,
+    // which are the same two axes the other way round.
+    view.project = [svc](float x, float y, float& u, float& v) {
+        return svc->mapUVForWorldPos(y, x, 0.0f, u, v);
+    };
+    return view;
+}
+
+/// A quest as the list asks about it: where it is in the log, whether it is
+/// done, and which of its objectives are still open.
 ///
-/// Both a verb and a question in the real client: it refreshes the POI set and
-/// answers how many there are. There is nothing to refresh here - the list is
-/// whatever the server last sent - so this is the answer alone.
-///
-/// It was not bound at all, and WatchFrame_GetCurrentMapQuests reads it
-/// straight into `for i = 1, numQuests`. A nil limit there is not an empty
-/// loop but an error, so the tracker's map-quest table was never built and the
-/// handler around it died on the way. The count it needs was already sitting
-/// in the same list QuestPOIGetQuestIDByVisibleIndex indexes.
+/// 0x005e2950's mask: 0xffffffff once complete; otherwise a bit per kill (0-3)
+/// and item (4-9) objective not yet met, per source item (10-13) the player
+/// holds none of, and 0x10000 for an exploration or event quest not yet done.
+/// 0x005e0ea0 evaluates "complete" itself from the counts; this reads the
+/// log's complete bit, which the server sets from the same counts.
+static game::QuestPoiQuestState questPoiState(game::GameHandler* gh,
+                                              const std::vector<QuestRow>& rows,
+                                              int32_t questId) {
+    game::QuestPoiQuestState st;
+    if (!gh || questId <= 0) return st;
+    const game::GameHandler::QuestLogEntry* q = nullptr;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (rows[i].quest && rows[i].quest->questId == static_cast<uint32_t>(questId)) {
+            q = rows[i].quest;
+            st.logIndex = static_cast<int>(i) + 1;
+            break;
+        }
+    }
+    if (!q) {
+        // In the log under a collapsed header: still the quest's state, but
+        // with no row to name.
+        for (const auto& entry : gh->getQuestLog()) {
+            if (entry.questId == static_cast<uint32_t>(questId)) { q = &entry; break; }
+        }
+        if (!q) return st;
+    }
+    if (q->failed) return st;
+
+    bool anyKill = false, anyItem = false, onlyStartItem = true;
+    for (const auto& kill : q->killObjectives) anyKill = anyKill || kill.npcOrGoId != 0;
+    for (const auto& item : q->itemObjectives) {
+        if (item.itemId == 0) continue;
+        anyItem = true;
+        if (item.itemId != q->sourceItemId || item.required > 1) onlyStartItem = false;
+    }
+    const bool special = (q->questFlags & 6u) != 0;
+    const bool noRep = q->repObjectiveFaction == 0 && q->repObjectiveFaction2 == 0;
+    // 0x005e10b0: nothing to do but hand it in.
+    st.noObjectives = !anyKill && onlyStartItem && q->playersSlain == 0 && !special && noRep &&
+                      q->rewardMoney >= 0;
+    // 0x005e0ea0(index, 1): a quest with no requirement at all is never
+    // "complete" here, however the log has it.
+    const bool nothingRequired = !special && noRep && q->rewardMoney == 0 && !anyKill &&
+                                 !anyItem && q->playersSlain == 0;
+    st.complete = q->complete && !nothingRequired;
+
+    if (q->complete) {
+        st.objectiveMask = 0xffffffffu;
+        return st;
+    }
+    uint32_t mask = 0;
+    for (size_t i = 0; i < q->killObjectives.size(); ++i) {
+        const auto& kill = q->killObjectives[i];
+        if (kill.npcOrGoId == 0) continue;
+        uint32_t have = 0;
+        const uint32_t key = static_cast<uint32_t>(std::abs(kill.npcOrGoId));
+        if (auto it = q->killCounts.find(key); it != q->killCounts.end()) have = it->second.first;
+        if (have < kill.required) mask |= 1u << i;
+    }
+    for (size_t i = 0; i < q->itemObjectives.size(); ++i) {
+        const auto& item = q->itemObjectives[i];
+        if (item.itemId == 0) continue;
+        uint32_t have = 0;
+        if (auto it = q->itemCounts.find(item.itemId); it != q->itemCounts.end()) have = it->second;
+        if (have < item.required) mask |= 1u << (i + 4);
+    }
+    for (size_t i = 0; i < q->objectiveSourceItems.size(); ++i) {
+        const uint32_t source = q->objectiveSourceItems[i];
+        if (source == 0 || source == q->sourceItemId) continue;
+        if (gh->countItemInBags(source) == 0) mask |= 1u << (i + 10);
+    }
+    if (special) mask |= 0x10000u;
+    st.objectiveMask = mask;
+    return st;
+}
+
+static game::QuestPoiIconList::QuestState questPoiStateFn(game::GameHandler* gh) {
+    auto rows = std::make_shared<std::vector<QuestRow>>(questRows(gh));
+    return [gh, rows](int32_t questId) { return questPoiState(gh, *rows, questId); };
+}
+
+/// QuestMapUpdateAllQuests() (0x005e63d0) → how many quests have an area on
+/// the map shown. Zero at a continent: only a zone or a dungeon floor counts.
 static int lua_QuestMapUpdateAllQuests(lua_State* L) {
-    lua_pushnumber(L, static_cast<lua_Number>(questsWithPois(getGameHandler(L)).size()));
+    auto* gh = getGameHandler(L);
+    auto* list = questPoiList(gh);
+    int count = 0;
+    if (list && questPoiEnabled(L)) {
+        const auto view = questPoiMapView(L);
+        if (view.valid && view.zoneOrFloor) count = list->updateVisible(view, questPoiStateFn(gh));
+    }
+    lua_pushnumber(L, count);
     return 1;
 }
 
-/// QuestPOIGetQuestIDByVisibleIndex(i) → questId, questLogIndex.
-///
-/// Both, because the world map uses the second to reach everything else about
-/// the quest: `if ( questLogIndex and questLogIndex > 0 )` gates the whole
-/// block that builds the map's quest list, and with only one value returned
-/// that gate never opened - so the list was always empty, quietly, with no
-/// error to say why.
-static int lua_QuestPOIGetQuestIDByVisibleIndex(lua_State* L) {
+/// QuestPOIUpdateIcons() (0x005e5740 -> 0x005e2eb0): every mark placed.
+static int lua_QuestPOIUpdateIcons(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_checknumber(L, 1));
-    const auto ids = questsWithPois(gh);
-    if (index < 1 || index > static_cast<int>(ids.size())) {
-        lua_pushnumber(L, 0);
-        lua_pushnumber(L, 0);
-        return 2;
+    auto* list = questPoiList(gh);
+    if (!list || !questPoiEnabled(L)) return 0;
+    const auto view = questPoiMapView(L);
+    // The player's position in server coordinates, the axes the points use.
+    const auto& mi = gh->getMovementInfo();
+    list->updateIcons(view, questPoiStateFn(gh), mi.y, mi.x, questPoiShiftComplete(L));
+    return 0;
+}
+
+/// QuestPOIGetQuestIDByVisibleIndex(i) (0x005e5750) → questId, questLogIndex.
+/// Completed quests and those with nothing to do first, then the watched ones
+/// in progress, then the rest; nothing past the end.
+static int lua_QuestPOIGetQuestIDByVisibleIndex(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        return luaL_error(L, "Usage: Script_QuestPOIGetQuestIDByVisibleIndex(index)");
     }
-    const uint32_t questId = ids[static_cast<size_t>(index - 1)];
-    lua_pushnumber(L, questId);
-    // Where that quest sits in the log, counted as Lua counts. A marker can
-    // outlive the log entry - the server sends POIs separately - so a quest
-    // that is no longer held answers zero rather than a stale position.
-    int logIndex = 0;
-    if (gh) {
-        const auto rows = questRows(gh);
-        for (size_t i = 0; i < rows.size(); ++i) {
-            if (rows[i].quest && rows[i].quest->questId == questId) {
-                logIndex = static_cast<int>(i) + 1;
-                break;
-            }
+    auto* gh = getGameHandler(L);
+    auto* list = questPoiList(gh);
+    if (!list) return 0;
+    const int index = static_cast<int>(lua_tonumber(L, 1));
+    const auto rows = questRows(gh);
+    // The watch list in its own order, which is the log's here.
+    std::vector<int32_t> watched;
+    for (const auto& row : rows) {
+        if (row.quest && gh->isQuestTracked(row.quest->questId)) {
+            watched.push_back(static_cast<int32_t>(row.quest->questId));
         }
     }
-    lua_pushnumber(L, logIndex);
+    const int32_t questId = list->questIdByVisibleIndex(index - 1, questPoiStateFn(gh), watched);
+    if (questId < 0) return 0;
+    lua_pushnumber(L, questId);
+    lua_pushnumber(L, questPoiState(gh, rows, questId).logIndex);
     return 2;
 }
 
-/// QuestPOIGetIconInfo(questId) → completed, x, y, objectiveIndex.
-///
-/// Where the map marks a quest: on the work while there is work to do, and on
-/// the hand-in once there is not. This reported the hand-in either way - it
-/// took the marker with objective index -1 whenever there was one - so every
-/// quest in the log was marked at whichever NPC it is returned to, and a zone
-/// full of objectives had all its numbers piled on the town it is quested from.
-///
-/// The position is a fraction across the map now showing, not a place in the
-/// world: worldmapframe.lua multiplies what it gets by WorldMapDetailFrame's
-/// width. World coordinates there are tens of thousands of pixels off the
-/// parchment, which is the same fault GetPlayerMapPosition had. A quest whose
-/// marker is on another map answers no position at all, and the caller's
-/// `if ( posX and posY )` leaves its button where it was.
+/// QuestPOIGetQuestIDByIndex(index) (0x005dfa80) → the quest id in that slot
+/// of the list, zero for an empty one; nothing outside the 25.
+static int lua_QuestPOIGetQuestIDByIndex(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: QuestPOIGetQuestIDByIndex(index)");
+    auto* list = questPoiList(getGameHandler(L));
+    if (!list) return 0;
+    const int32_t questId = list->questIdAtSlot(static_cast<int>(lua_tonumber(L, 1)) - 1);
+    if (questId < 0) return 0;
+    lua_pushnumber(L, questId);
+    return 1;
+}
+
+/// QuestPOIGetIconInfo(questId) (0x005e0590) → completed, x, y, objectiveIndex:
+/// where QuestPOIUpdateIcons put the quest's mark, 0..1 across the map shown.
+/// Nothing for a quest with no mark there.
 static int lua_QuestPOIGetIconInfo(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    auto* svc = getLuaServices(L);
-    const uint32_t questId = static_cast<uint32_t>(luaL_checknumber(L, 1));
-    if (!gh || questId == 0) { return luaReturnNil(L); }
-
-    bool complete = false;
-    for (const auto& q : gh->getQuestLog()) {
-        if (q.questId == questId) { complete = q.complete; break; }
-    }
-
-    // The kind that suits the quest's state, and whatever there is when the
-    // server sent only the other kind.
-    const game::GossipPoi* best = nullptr;
-    for (const auto& poi : gh->getGossipPois()) {
-        if (poi.data != questId || poi.questObjectiveIndex == -2) continue;
-        const bool endpoint = (poi.questObjectiveIndex == -1);
-        if (endpoint == complete) { best = &poi; break; }
-        if (!best) best = &poi;
-    }
-    if (!best) { return luaReturnNil(L); }
-
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: QuestPOIGetIconInfo(questID)");
+    auto* list = questPoiList(getGameHandler(L));
+    if (!list) return 0;
+    const auto* icon = list->iconFor(static_cast<int32_t>(lua_tonumber(L, 1)));
+    if (!icon) return 0;
+    const auto view = questPoiMapView(L);
+    if (!view.valid || icon->mapId != view.mapId) return 0;
     float u = 0.0f, v = 0.0f;
-    const bool onThisMap = svc && svc->mapUVForWorldPos &&
-                           svc->mapUVForWorldPos(best->x, best->y, 0.0f, u, v);
-
-    lua_pushboolean(L, complete);
-    if (!onThisMap) {
-        lua_pushnil(L);
-        lua_pushnil(L);
-        lua_pushnil(L);
-        return 4;
-    }
+    if (!view.project(static_cast<float>(icon->x), static_cast<float>(icon->y), u, v)) return 0;
+    if (std::fabs(u * v) < 0.001f) return 0;
+    lua_pushboolean(L, icon->objectiveMask == 0xffffffffu);
     lua_pushnumber(L, u);
     lua_pushnumber(L, v);
-    // The fourth value the API names: which objective this marker belongs to.
-    // The client has carried it all along as questObjectiveIndex, where -1
-    // means the quest itself rather than one of its lines - which is nil here,
-    // because that is what "not an objective" is in Lua and a zero would be a
-    // real objective number.
-    if (best->questObjectiveIndex < 0) lua_pushnil(L);
-    else lua_pushnumber(L, best->questObjectiveIndex + 1);
+    lua_pushinteger(L, icon->objectiveIndex);
     return 4;
 }
 
-/// The markers arrive with the server's own updates, so there is nothing to
-/// refresh on demand - but the map asks before drawing and expects the call to
-/// exist.
-static int lua_QuestPOIUpdateIcons(lua_State* L) { (void)L; return 0; }
+/// SetPOIIconOverlapDistance(d) (0x005dfb00) and SetPOIIconOverlapPushDistance(d)
+/// (0x005dfb40, kept only when not below the overlap distance).
+static int lua_SetPOIIconOverlapDistance(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetPOIIconOverlapDistance(index)");
+    if (auto* list = questPoiList(getGameHandler(L))) {
+        list->setOverlapDistance(static_cast<float>(lua_tonumber(L, 1)));
+    }
+    return 0;
+}
+static int lua_SetPOIIconOverlapPushDistance(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetPOIIconOverlapPushDistance(index)");
+    if (auto* list = questPoiList(getGameHandler(L))) {
+        list->setOverlapPushDistance(static_cast<float>(lua_tonumber(L, 1)));
+    }
+    return 0;
+}
 
 /// GetQuestPOILeaderBoard(objectiveIndex, questId) → the objective's text and
 /// counts, the same as the quest log's version - except that this one is given
@@ -3357,6 +3452,9 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"QuestPOIGetQuestIDByVisibleIndex", lua_QuestPOIGetQuestIDByVisibleIndex},
                 {"QuestPOIGetIconInfo",     lua_QuestPOIGetIconInfo},
                 {"QuestPOIUpdateIcons",     lua_QuestPOIUpdateIcons},
+                {"QuestPOIGetQuestIDByIndex", lua_QuestPOIGetQuestIDByIndex},
+                {"SetPOIIconOverlapDistance", lua_SetPOIIconOverlapDistance},
+                {"SetPOIIconOverlapPushDistance", lua_SetPOIIconOverlapPushDistance},
                 {"GetQuestPOILeaderBoard",  lua_GetQuestPOILeaderBoard},
                 {"ExpandQuestHeader",       lua_ExpandQuestHeader},
                 {"CollapseQuestHeader",     lua_CollapseQuestHeader},

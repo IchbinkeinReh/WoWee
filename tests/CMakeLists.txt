@@ -3289,3 +3289,11 @@ wowee_add_test(test_macro_eval
 # units, "no", arguments and the condition table (0x005f0df0, 0x005ef5c0).
 wowee_add_test(test_macro_options
     SOURCES test_macro_options.cpp ${CMAKE_SOURCE_DIR}/src/game/macro_options.cpp)
+
+# ── test_quest_poi_icons ─────────────────────────────────────
+# The client's 25-entry quest POI icon list: slots from the query response
+# (0x005e7370/0x005e7020), the visible count (0x005e5a50), the marks pushed
+# apart (0x005e2eb0) and the visible order (0x005e3840).
+wowee_add_test(test_quest_poi_icons
+    SOURCES test_quest_poi_icons.cpp ${CMAKE_SOURCE_DIR}/src/game/quest_poi_icons.cpp)
+

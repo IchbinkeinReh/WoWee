@@ -194,6 +194,21 @@ struct LuaServices {
     /// across the image. False when it is off this map. GetPlayerMapPosition
     /// answers in this space - FrameXML multiplies it by the map frame's width.
     std::function<bool(float, float, float, float&, float&)> mapUVForWorldPos;
+    /// The shown map's row as the quest POI icon list needs it: whether there
+    /// is one, whether it is a zone or floor rather than a continent, whether
+    /// it is a dungeon floor, its WorldMapArea id, map, floor and left and
+    /// right edges.
+    struct MapPoiFrame {
+        bool valid = false;
+        bool zoneLevel = false;
+        bool dungeon = false;
+        uint32_t worldMapAreaId = 0;
+        uint32_t mapId = 0;
+        uint32_t dungeonFloor = 0;
+        float locLeft = 0.0f;
+        float locRight = 0.0f;
+    };
+    std::function<MapPoiFrame()> getMapPoiFrame;
     std::function<uint32_t()> getMapWorldAreaId;
     std::function<void(uint32_t)> setMapWorldAreaId;
 
