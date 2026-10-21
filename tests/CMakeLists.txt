@@ -167,6 +167,12 @@ endfunction()
 wowee_add_test(test_sell_count
     SOURCES test_sell_count.cpp)
 
+# The combat log as UnitCombatLog_C.cpp keeps it: the unit flags
+# (0x0074dcb0), each subevent's arguments (0x0074e290), the store's order,
+# retention and walk, and CombatLogAddFilter's matching. No game state.
+wowee_add_test(test_combat_log
+    SOURCES test_combat_log.cpp ${CMAKE_SOURCE_DIR}/src/game/combat_log.cpp)
+
 # Stock-style hill climbing regression test. Run directly with:
 #   cmake --build build --target test_hill_climbing && ctest --test-dir build -R hill_climbing
 wowee_add_test(test_hill_climbing

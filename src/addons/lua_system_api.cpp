@@ -340,26 +340,14 @@ static double calendarInviteStatusFor(const wowee::game::CalendarData& cal,
     return 0;
 }
 
+/// CombatLog_Object_IsA(unitFlags, mask) (0x0074d600): 1 when the flags
+/// have one of the mask's special bits, or something of it in each of the
+/// four categories - nil otherwise, not false.
 static int lua_CombatLog_Object_IsA(lua_State* L) {
-    const auto flags = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-    const auto mask  = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
-
-    static constexpr uint32_t kCategories[] = {
-        0x0000000Fu,  // affiliation: mine / party / raid / outsider
-        0x000000F0u,  // reaction: friendly / neutral / hostile
-        0x00000300u,  // control: player / npc
-        0x0000FC00u,  // type: player / npc / pet / guardian / object
-    };
-    for (const uint32_t cat : kCategories) {
-        const uint32_t wanted = mask & cat;
-        if (wanted == 0) continue;            // unconstrained
-        if ((flags & wanted) == 0) { lua_pushboolean(L, 0); return 1; }
-    }
-    // The special bits are non-exclusive, so every one asked for must be present.
-    const uint32_t special = mask & 0xFFFF0000u;
-    if (special != 0 && (flags & special) != special) { lua_pushboolean(L, 0); return 1; }
-
-    lua_pushboolean(L, 1);
+    const auto flags = static_cast<uint32_t>(std::llround(lua_tonumber(L, 1)));
+    const auto mask = static_cast<uint32_t>(std::llround(lua_tonumber(L, 2)));
+    if (!wowee::game::combat_log::maskComplete(flags & mask)) return luaReturnNil(L);
+    lua_pushnumber(L, 1);
     return 1;
 }
 
@@ -5554,24 +5542,108 @@ static int lua_CreateMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
 static int lua_PositionMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
 static int lua_ShowMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
 
-// ---- The stored combat log (Blizzard_CombatLog's refilter) ----
+// ---- The stored combat log (UnitCombatLog_C.cpp) ----
 //
-// The client keeps no history of combat events - they are handled as they
-// arrive - so there is nothing to walk back through and the log rebuilds itself
-// from new events only.
-//
-// CombatLogGetCurrentEntry answers nil rather than zero, and that distinction
-// is the whole of it. Blizzard_CombatLog_RefilterUpdate loops
-// `while (valid and total < COMBATLOG_LIMIT_PER_FRAME)`, and a zero is true in
-// Lua - it would add a line per iteration from an entry that does not exist,
-// stop only on the per-frame cap, and be re-armed by the OnUpdate that
-// scheduled it, every frame, for as long as the log was open.
-static int lua_CombatLogGetNumEntries(lua_State* L) { lua_pushnumber(L, 0); return 1; }
-static int lua_CombatLogGetCurrentEntry(lua_State* L) { (void)L; return luaReturnNil(L); }
-static int lua_CombatLogAdvanceEntry(lua_State* L) { (void)L; return luaReturnNil(L); }
-static int lua_CombatLogSetCurrentEntry(lua_State* L) { (void)L; return 0; }
-static int lua_CombatLogAddFilter(lua_State* L) { (void)L; return 0; }
-static int lua_CombatLogResetFilter(lua_State* L) { (void)L; return 0; }
+// The entries the client keeps for combatLogRetentionTime, walked by the
+// interface when it refilters: Blizzard_CombatLog_RefilterUpdate starts at
+// the newest (CombatLogSetCurrentEntry(0)) and steps back through it with
+// CombatLogAdvanceEntry(-1) while that answers 1.
+
+static wowee::game::combat_log::Log* combatLogOf(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    return gh ? &gh->combatLogFeed().log() : nullptr;
+}
+
+/// 1 when there is a current entry, nil when there is none.
+static int pushHasCurrent(lua_State* L, bool has) {
+    if (!has) return luaReturnNil(L);
+    lua_pushnumber(L, 1);
+    return 1;
+}
+
+/// CombatLogGetNumEntries([ignoreFilter]) (0x0074fa70).
+static int lua_CombatLogGetNumEntries(lua_State* L) {
+    auto* log = combatLogOf(L);
+    lua_pushnumber(L, log ? log->numEntries(lua_toboolean(L, 1) != 0) : 0);
+    return 1;
+}
+
+/// CombatLogGetCurrentEntry() (0x0074f2b0): the entry's arguments, as
+/// COMBAT_LOG_EVENT has them, or nothing at all.
+static int lua_CombatLogGetCurrentEntry(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto* entry = gh ? gh->combatLogFeed().log().current() : nullptr;
+    if (!entry) return 0;
+    const auto args = gh->combatLogFeed().argsOf(*entry);
+    luaL_checkstack(L, static_cast<int>(args.size()), "CombatLogGetCurrentEntry");
+    for (const auto& arg : args) {
+        using Kind = wowee::game::combat_log::Arg::Kind;
+        if (arg.kind == Kind::Number) lua_pushnumber(L, arg.number);
+        else if (arg.kind == Kind::String) lua_pushlstring(L, arg.text.data(), arg.text.size());
+        else lua_pushnil(L);
+    }
+    return static_cast<int>(args.size());
+}
+
+/// CombatLogSetCurrentEntry(index [,ignoreFilter]) (0x0074fae0): the
+/// index-th from the oldest, or for 0 and below from the newest back.
+static int lua_CombatLogSetCurrentEntry(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CombatLogSetCurrentEntry(index [,ignoreFilter])");
+    auto* log = combatLogOf(L);
+    return pushHasCurrent(L, log && log->setCurrent(static_cast<int>(lua_tonumber(L, 1)), lua_toboolean(L, 2) != 0));
+}
+
+/// CombatLogAdvanceEntry(count [,ignoreFilter]) (0x0074fc20): on toward the
+/// newest, or back for a negative count; off either end is no entry.
+static int lua_CombatLogAdvanceEntry(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CombatLogAdvanceEntry(count [,ignoreFilter])");
+    auto* log = combatLogOf(L);
+    return pushHasCurrent(L, log && log->advance(static_cast<int>(lua_tonumber(L, 1)), lua_toboolean(L, 2) != 0));
+}
+
+/// CombatLogAddFilter(events, srcMaskOrGuid, dstMaskOrGuid [,spell])
+/// (0x0074ff70): events a list of names (nil is all); each side a mask,
+/// which has to say something of every category, or a guid; the spell an id
+/// or a name.
+static int lua_CombatLogAddFilter(lua_State* L) {
+    namespace cl = wowee::game::combat_log;
+    cl::Filter filter;
+    const char* events = lua_tostring(L, 1);
+    filter.setEvents(events ? std::optional<std::string>(events) : std::nullopt);
+    const auto side = [L](int idx, uint64_t& guid, uint32_t& mask, const char* which) {
+        if (lua_type(L, idx) == LUA_TNUMBER) {
+            mask = static_cast<uint32_t>(std::llround(lua_tonumber(L, idx)));
+            if (!cl::maskComplete(mask)) {
+                luaL_error(L, "CombatLogAddFilter(): incomplete filter for %s", which);
+                return false;
+            }
+        } else if (lua_type(L, idx) == LUA_TSTRING) {
+            guid = cl::parseGuid(lua_tostring(L, idx));
+            mask = 0;
+        } else {
+            mask = 0xFFFFFFFFu;
+        }
+        return true;
+    };
+    if (!side(2, filter.srcGuid, filter.srcMask, "srcMask")) return 0;
+    if (!side(3, filter.dstGuid, filter.dstMask, "dstMask")) return 0;
+    if (lua_type(L, 4) == LUA_TNUMBER) filter.spellId = static_cast<uint32_t>(std::llround(lua_tonumber(L, 4)));
+    else if (lua_type(L, 4) == LUA_TSTRING) filter.spellName = lua_tostring(L, 4);
+    if (auto* log = combatLogOf(L)) log->addFilter(std::move(filter));
+    return 0;
+}
+
+/// CombatLogResetFilter() (0x0074fa60).
+static int lua_CombatLogResetFilter(lua_State* L) {
+    if (auto* log = combatLogOf(L)) log->resetFilters();
+    return 0;
+}
+
+/// CombatLogClearEntries() (0x00751120).
+static int lua_CombatLogClearEntries(lua_State* L) {
+    if (auto* log = combatLogOf(L)) log->clearEntries();
+    return 0;
+}
 
 // CombatTextSetActiveUnit(unit) - which unit the floating combat text follows.
 // It tells the client where to aim the events it already sends; the events do
@@ -6856,8 +6928,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"CombatLogAdvanceEntry",          lua_CombatLogAdvanceEntry},
                 // How long combat log entries are kept: the CVar
                 // combatLogRetentionTime, 300 seconds by default (0x0074d9e0,
-                // 0x0074d5b0 sets it). No entries are kept here, so clearing
-                // them walks an empty list (0x00751120).
+                // 0x0074d5b0 sets it).
                 {"CombatLogGetRetentionTime", [](lua_State* L) -> int {
             lua_pushnumber(L, std::atoi(storedCVarValue("combatlogretentiontime", "300").c_str()));
             return 1;
@@ -6872,7 +6943,7 @@ void registerSystemLuaAPI(lua_State* L) {
             }
             return 0;
         }},
-                {"CombatLogClearEntries",          [](lua_State*) -> int { return 0; }},
+                {"CombatLogClearEntries",          lua_CombatLogClearEntries},
                 {"CombatLogSetCurrentEntry",       lua_CombatLogSetCurrentEntry},
                 {"CombatLogAddFilter",             lua_CombatLogAddFilter},
                 {"CombatLogResetFilter",           lua_CombatLogResetFilter},

@@ -454,6 +454,9 @@ public:
     /// this sends a number of its own making and uses it to match the reply to
     /// the pet it asked about, which is what the field would have been for.
     void requestPetName(uint64_t petGuid);
+    /// 0x007ff180 != 0: whether the spell takes time to cast for this unit -
+    /// also what the combat log asks of a cast (the unit's +0x148).
+    bool hasCastTime(uint32_t spellId, const Entity& player) const;
 
     /// Give a hunter's pet up for good. The interface asks first - this is the
     /// other side of the ABANDON_PET dialog, whose accept called an unbound
@@ -509,6 +512,9 @@ private:
     void handleExtraAuraInfo(network::Packet& packet, bool isInit);
     void handleSpellDispelLog(network::Packet& packet);
     void handleSpellStealLog(network::Packet& packet);
+    void handleSpellBreakLog(network::Packet& packet);
+    void logAuraChanges(uint64_t unit, const std::vector<AuraSlot>& before,
+                        const std::vector<std::pair<uint8_t, AuraSlot>>& updates, uint64_t nowMs);
     void handleSpellChanceProcLog(network::Packet& packet);
     void handleSpellInstaKillLog(network::Packet& packet);
     void handleSpellLogExecute(network::Packet& packet);
@@ -552,6 +558,7 @@ private:
     void stopRestorationPresentation();
 
     // --- handleSpellLogExecute, per effect logged (extracted to reduce nesting) ---
+    void logExecuteEntry(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId);
     void logEffectPowerDrain(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId,
                              bool isPlayerCaster);
     void logEffectCreateItem(const SpellLogExecuteEntry& entry, uint32_t spellId, bool isPlayerCaster);
@@ -655,8 +662,6 @@ private:
     cast_check::Caster casterState(uint32_t spellId, const Entity& player);
     /// 0x008012f0: the spell's power cost to the player.
     int32_t powerCost(uint32_t spellId, const Entity& player, int depth) const;
-    /// 0x007ff180 != 0: whether the spell takes time to cast.
-    bool hasCastTime(uint32_t spellId, const Entity& player) const;
     /// SMSG_SPELL_START / SMSG_SPELL_GO's cast flag 0x800: the caster's power.
     void castPowerSaid(uint64_t casterUnit, uint32_t spellId, uint32_t power, bool go);
     /// 0x007283a0: an aura of the player's of the type, on, for the spell.

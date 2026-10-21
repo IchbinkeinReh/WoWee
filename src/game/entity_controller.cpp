@@ -1139,6 +1139,9 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         if (key == ufi.health) {
             unit->setHealth(val);
             result.healthChanged = true;
+            // A unit dying in front of the client is a combat log entry
+            // (0x007489c0 -> 0x007561e0), once, as its health runs out.
+            if (val == 0 && oldHealth != 0) owner_.combatLogFeed().unitDied(block.guid);
             if (val == 0) {
                 if (owner_.getCombatHandler() && block.guid == owner_.getCombatHandler()->getAutoAttackTargetGuid()) {
                     owner_.stopAutoAttack();
@@ -3288,6 +3291,8 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
     }
 
     pendingNameQueries.erase(data.guid);
+    // Combat log entries waiting for it, found or not (0x0074fe90).
+    owner_.combatLogFeed().playerNameAnswered(data.guid, data.name, data.realmName, data.isValid());
 
     LOG_INFO("Name query response: guid=0x", std::hex, data.guid, std::dec,
              " found=", static_cast<int>(data.found), " name='", data.name, "'",
@@ -3389,6 +3394,7 @@ void EntityController::handleCreatureQueryResponse(network::Packet& packet) {
 
     if (data.isValid()) {
         creatureInfoCache[data.entry] = data;
+        owner_.combatLogFeed().creatureAnswered(data.entry, data.name, true);
         // Update all unit entities with this entry
         for (auto& [guid, entity] : entityManager.getEntities()) {
             if (entity->getType() == ObjectType::UNIT) {
@@ -3430,6 +3436,8 @@ void EntityController::handleCreatureQueryResponse(network::Packet& packet) {
             questObjectiveNames(owner_.getQuestLog(), data.entry, false)) {
             owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
         }
+    } else {
+        owner_.combatLogFeed().creatureAnswered(data.entry, data.name, false);
     }
 }
 
@@ -3444,6 +3452,7 @@ void EntityController::handleGameObjectQueryResponse(network::Packet& packet) {
     if (!ok) return;
 
     pendingGameObjectQueries_.erase(data.entry);
+    owner_.combatLogFeed().gameObjectAnswered(data.entry, data.name, data.isValid());
 
     if (data.isValid()) {
         gameObjectInfoCache_[data.entry] = data;

@@ -269,6 +269,9 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         uint32_t dmg         = packet.readUInt32();
         uint32_t envAbs      = packet.readUInt32();
         uint32_t envRes      = packet.readUInt32();
+        // 0x00755270 -> 0x00751150: the combat log has it for anyone.
+        owner_.combatLogFeed().environmental(victimGuid, envType, static_cast<int32_t>(dmg),
+                                             static_cast<int32_t>(envAbs), static_cast<int32_t>(envRes));
         if (victimGuid == owner_.getPlayerGuid()) {
             // Environmental damage: pass envType via powerType field for display differentiation
             if (dmg > 0)
@@ -616,48 +619,11 @@ void CombatHandler::addCombatText(CombatTextEntry::Type type, int32_t amount, ui
                           : (isPlayerSource ? owner_.getTargetGuid() : owner_.getPlayerGuid());
     log.sourceName = owner_.lookupName(effectiveSrc);
     log.targetName = (effectiveDst != 0) ? owner_.lookupName(effectiveDst) : std::string{};
-    // Held for the addon event below. log is moved into combatLog_ here, which
-    // leaves both name strings empty, so reading them afterwards sent every
-    // COMBAT_LOG_EVENT_UNFILTERED to Lua with a blank source and target.
-    const std::string sourceName = log.sourceName;
-    const std::string targetName = log.targetName;
     if (combatLog_.size() >= MAX_COMBAT_LOG)
         combatLog_.pop_front();
     combatLog_.push_back(std::move(log));
-
-    // Fire COMBAT_LOG_EVENT_UNFILTERED for Lua addons
-    // Args: subevent, sourceGUID, sourceName, 0 (sourceFlags), destGUID, destName, 0 (destFlags), spellId, spellName, amount
-    //
-    // Not for experience or honour: neither is a combat log entry in the
-    // original (they are CHAT_MSG_COMBAT_XP_GAIN / _HONOR_GAIN lines), and the
-    // table below gave both the slot of PARTY_KILL - so every kill's
-    // experience told the combat log a second, invented kill.
-    if (owner_.addonEventCallbackRef() &&
-        type != CombatTextEntry::XP_GAIN && type != CombatTextEntry::HONOR_GAIN) {
-        static const char* kSubevents[] = {
-            "SWING_DAMAGE", "SPELL_DAMAGE", "SPELL_HEAL", "SWING_MISSED", "SWING_MISSED",
-            "SWING_MISSED", "SWING_MISSED", "SWING_MISSED", "SPELL_DAMAGE", "SPELL_HEAL",
-            "SPELL_PERIODIC_DAMAGE", "SPELL_PERIODIC_HEAL", "ENVIRONMENTAL_DAMAGE",
-            "SPELL_ENERGIZE", "SPELL_DRAIN", "PARTY_KILL", "SPELL_MISSED", "SPELL_ABSORBED",
-            "SPELL_MISSED", "SPELL_MISSED", "SPELL_MISSED", "SPELL_AURA_APPLIED",
-            "SPELL_DISPEL", "SPELL_STOLEN", "SPELL_INTERRUPT", "SPELL_INSTAKILL",
-            "PARTY_KILL", "SWING_DAMAGE", "SWING_DAMAGE"
-        };
-        const char* subevent = (type < sizeof(kSubevents)/sizeof(kSubevents[0]))
-            ? kSubevents[type] : "UNKNOWN";
-        char srcBuf[32], dstBuf[32];
-        snprintf(srcBuf, sizeof(srcBuf), "0x%016llX", (unsigned long long)effectiveSrc);
-        snprintf(dstBuf, sizeof(dstBuf), "0x%016llX", (unsigned long long)effectiveDst);
-        std::string spellName = (spellId != 0) ? owner_.getSpellName(spellId) : std::string{};
-        std::string timestamp = std::to_string(static_cast<double>(std::time(nullptr)));
-        owner_.addonEventCallbackRef()("COMBAT_LOG_EVENT_UNFILTERED", {
-            timestamp, subevent,
-            srcBuf, sourceName, "0",
-            dstBuf, targetName, "0",
-            std::to_string(spellId), spellName,
-            std::to_string(amount)
-        });
-    }
+    // The interface's combat log is not this one: it is filled by the log
+    // packets themselves (CombatLogFeed), whether or not a line is drawn here.
 }
 
 bool CombatHandler::shouldLogSpellstealAura(uint64_t casterGuid, uint64_t victimGuid, uint32_t spellId) {
@@ -802,6 +768,8 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     // 0x007512b0, first of all: the rage a swing gave goes on the attacker's
     // predicted rage (0x00722cf0), whoever the attacker is.
     if ((data.hitInfo & 0x800000u) != 0) owner_.addPredictedPower(data.attackerGuid, 1, data.rageGained);
+    // Then the combat log, whoever fought.
+    owner_.combatLogFeed().swing(data);
 
     bool isPlayerAttacker = (data.attackerGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
@@ -931,6 +899,23 @@ void CombatHandler::handleSpellDamageLog(network::Packet& packet) {
     SpellDamageLogData data;
     if (!owner_.getPacketParsers()->parseSpellDamageLog(packet, data)) return;
 
+    // 0x006d3840: split damage is logged as such; otherwise the caster is
+    // the source, or the target itself under hit flag 0x10.
+    if (isActiveExpansion("wotlk")) {
+        auto& feed = owner_.combatLogFeed();
+        if ((data.hitFlags & 0x8u) != 0) {
+            feed.damageSplit(data.attackerGuid, data.targetGuid, data.spellId, static_cast<int32_t>(data.damage),
+                             static_cast<int32_t>(data.overkill), data.schoolMask, static_cast<int32_t>(data.absorbed),
+                             static_cast<int32_t>(data.resisted), static_cast<int32_t>(data.blocked), data.hitFlags);
+        } else {
+            const uint64_t src = (data.hitFlags & 0x10u) != 0 ? data.targetGuid : data.attackerGuid;
+            feed.spellDamage(src, data.targetGuid, data.spellId, static_cast<int32_t>(data.damage),
+                             static_cast<int32_t>(data.overkill), data.schoolMask, static_cast<int32_t>(data.absorbed),
+                             static_cast<int32_t>(data.resisted), static_cast<int32_t>(data.blocked), data.hitFlags,
+                             data.periodicLog != 0);
+        }
+    }
+
     bool isPlayerSource = (data.attackerGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
     if (!isPlayerSource && !isPlayerTarget) return;  // Not our combat
@@ -952,6 +937,13 @@ void CombatHandler::handleSpellDamageLog(network::Packet& packet) {
 void CombatHandler::handleSpellHealLog(network::Packet& packet) {
     SpellHealLogData data;
     if (!owner_.getPacketParsers()->parseSpellHealLog(packet, data)) return;
+    // 0x006d3c30 -> 0x00751f70, periodic by the spell's AttributesEx3.
+    if (isActiveExpansion("wotlk")) {
+        owner_.combatLogFeed().spellHeal(data.casterGuid, data.targetGuid, data.spellId,
+                                         static_cast<int32_t>(data.heal), static_cast<int32_t>(data.overheal),
+                                         static_cast<int32_t>(data.absorbed), data.isCrit,
+                                         owner_.combatLogFeed().periodicByAttribute(data.spellId));
+    }
 
     bool isPlayerSource = (data.casterGuid == owner_.getPlayerGuid());
     bool isPlayerTarget = (data.targetGuid == owner_.getPlayerGuid());
@@ -1203,6 +1195,7 @@ void CombatHandler::handleProcResist(network::Packet& packet) {
     if (isActiveExpansion("wotlk")) {
         SpellLogGuidsData d;
         if (SpellLogGuidsParser::parse(packet, d, true)) {
+            owner_.combatLogFeed().procResist(d.casterGuid, d.victimGuid, d.spellId);
             if (d.victimGuid == owner_.getPlayerGuid())
                 addCombatText(CombatTextEntry::RESIST, 0, d.spellId, false, 0, d.casterGuid, d.victimGuid);
             else if (d.casterGuid == owner_.getPlayerGuid())
@@ -1243,6 +1236,9 @@ void CombatHandler::handleSpellDamageShield(network::Packet& packet) {
             packet.skipAll();
             return;
         }
+        // 0x00752c90: the first guid deals it, the second takes it.
+        owner_.combatLogFeed().damageShield(d.victimGuid, d.casterGuid, d.spellId, static_cast<int32_t>(d.damage),
+                                            static_cast<int32_t>(d.overkill), d.schoolMask);
         if (d.casterGuid == owner_.getPlayerGuid())
             addCombatText(CombatTextEntry::SPELL_DAMAGE, static_cast<int32_t>(d.damage), d.spellId, true, 0, d.casterGuid, d.victimGuid);
         else if (d.victimGuid == owner_.getPlayerGuid())
@@ -1291,8 +1287,13 @@ void CombatHandler::handleSpellOrDamageImmune(network::Packet& packet) {
     // WotLK:          as TBC (0x006ce3d0).
     if (isActiveExpansion("wotlk")) {
         SpellLogGuidsData d;
-        if (SpellLogGuidsParser::parse(packet, d, true) &&
-            (d.casterGuid == owner_.getPlayerGuid() || d.victimGuid == owner_.getPlayerGuid()))
+        const bool parsed = SpellLogGuidsParser::parse(packet, d, true);
+        // 0x006ce3d0: an IMMUNE miss - a periodic one under the byte, a
+        // damage shield's otherwise.
+        if (parsed)
+            owner_.combatLogFeed().spellMissed(d.casterGuid, d.victimGuid, d.spellId, combat_log::miss::kImmune,
+                                               d.debug == 0, d.debug != 0);
+        if (parsed && (d.casterGuid == owner_.getPlayerGuid() || d.victimGuid == owner_.getPlayerGuid()))
             addCombatText(CombatTextEntry::IMMUNE, 0, d.spellId, d.casterGuid == owner_.getPlayerGuid(), 0,
                           d.casterGuid, d.victimGuid);
         packet.skipAll();

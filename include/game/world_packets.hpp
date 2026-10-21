@@ -10,6 +10,7 @@
 #include "game/flat_field_map.hpp"
 #include "game/handler_types.hpp"
 #include <array>
+#include <functional>
 #include <optional>
 #include <vector>
 #include <cstdint>
@@ -2240,6 +2241,9 @@ struct AttackerStateUpdateData {
     /// 1 hit, 2 dodge, 3 parry, 4 interrupt, 5 blocks, 6 evades, 7 immune,
     /// 8 deflects (0x007512b0's cases).
     uint32_t victimState = 0;
+    /// The melee spell the swing is (+0x5c): the combat log keeps only a
+    /// hit of one (0x00754fd0).
+    uint32_t meleeSpellId = 0;
     int32_t overkill = -1;
     uint32_t blocked = 0;
     /// HITINFO_RAGE_GAIN (0x800000): the attacker's rage, in tenths, that
@@ -2316,6 +2320,7 @@ struct DispelFailedData {
     uint64_t casterGuid = 0;
     uint64_t victimGuid = 0;
     uint32_t spellId = 0;
+    std::vector<uint32_t> failedSpells;
 };
 
 class DispelFailedParser {
@@ -2364,6 +2369,33 @@ public:
     static bool parse(network::Packet& packet, SpellLogExecuteData& data, bool fullGuids);
 };
 
+/// SMSG_SEND_ALL_COMBAT_LOG (0x006d4110): a count, the server's time, and
+/// that many log packets, each its time, its opcode and its body inline. The
+/// bodies have no length, so each is measured by reading it as its own
+/// handler does.
+struct CombatLogReplay {
+    /// The opcodes it replays, by what their bodies are.
+    enum class Kind : uint8_t { None, SpellLogMiss, HealLog, EnergizeLog, Execute, PeriodicAuraLog, NonMeleeDamage, DispelLog };
+    struct Entry {
+        uint32_t opcode = 0;   ///< as sent
+        uint32_t delayMs = 0;  ///< the server's time less the entry's
+        std::vector<uint8_t> body;
+    };
+    std::vector<Entry> entries;
+};
+
+class SendAllCombatLogParser {
+public:
+    /// `kind` names what an opcode is; `spellKnown` and `unitKnown` are the
+    /// two questions the execute and periodic handlers ask before reading on,
+    /// which end the whole packet when answered no (they set its read
+    /// position to its end).
+    static void parse(network::Packet& packet, CombatLogReplay& out,
+                      const std::function<CombatLogReplay::Kind(uint32_t)>& kind,
+                      const std::function<bool(uint32_t)>& spellKnown,
+                      const std::function<bool(uint64_t)>& unitKnown);
+};
+
 /** SMSG_SPELLNONMELEEDAMAGELOG data (simplified) */
 struct SpellDamageLogData {
     uint64_t targetGuid = 0;
@@ -2374,6 +2406,12 @@ struct SpellDamageLogData {
     uint8_t schoolMask = 0;
     uint32_t absorbed = 0;
     uint32_t resisted = 0;
+    /// The byte after the resist, which the combat log takes for a periodic
+    /// tick (0x006d3840 hands it to 0x00751c40), the blocked amount and the
+    /// hit flags: 2 critical, 8 split damage, 0x10 the target its own source.
+    uint8_t periodicLog = 0;
+    uint32_t blocked = 0;
+    uint32_t hitFlags = 0;
     bool isCrit = false;
 
     [[nodiscard]] bool isValid() const { return spellId != 0; }
@@ -2567,7 +2605,9 @@ bool readSpellCastTargets(network::Packet& packet, SpellCastTargetsData& out);
 /** SMSG_SPELL_GO data (simplified) */
 struct SpellGoMissEntry {
     uint64_t targetGuid = 0;
-    uint8_t  missType   = 0;  // 0=MISS 1=DODGE 2=PARRY 3=BLOCK 4=EVADE 5=IMMUNE 6=DEFLECT 7=ABSORB 8=RESIST 11=REFLECT
+    uint8_t  missType   = 0;  // SpellMissInfo: 1 miss, 2 resist, 3 dodge, ... 10 absorb, 11 reflect
+    /// REFLECT's byte: how the spell fared against its caster on the way back.
+    uint8_t  reflectResult = 0;
 };
 
 /// SMSG_SPELL_GO target flag 0x80000: a further place the cast goes to, in

@@ -575,6 +575,8 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     // with error 9, and an empty vault window was already on screen.
     if (socialHandler_) socialHandler_->clearGuildMembership();
     if (socialHandler_) socialHandler_->resetForWorldEntry();
+    // A new combat log, timed from now (0x007538a0).
+    if (combatLogFeed_) combatLogFeed_->enterWorld();
 
     LOG_INFO("========================================");
     LOG_INFO("   ENTERING WORLD");

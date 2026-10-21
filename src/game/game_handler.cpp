@@ -104,6 +104,7 @@ GameHandler::GameHandler(GameServices& services)
     socialHandler_    = std::make_unique<SocialHandler>(*this);
     questHandler_     = std::make_unique<QuestHandler>(*this);
     wardenHandler_    = std::make_unique<WardenHandler>(*this);
+    combatLogFeed_    = std::make_unique<CombatLogFeed>(*this);
 
     // Default action bar layout
     actionBar[0].type = ActionBarSlot::SPELL;
@@ -552,6 +553,8 @@ for (const auto& [guid, entity] : entityController_->getEntityManager().getEntit
 
 void GameHandler::updateTimers(float deltaTime) {
     if (spellHandler_) spellHandler_->updateTimers(deltaTime);
+    // Misses whose missile has landed (0x00700e20).
+    if (combatLogFeed_) combatLogFeed_->update();
 
     // Periodically clear stale pending item queries so they can be retried.
     // Without this, a lost/malformed response leaves the entry stuck forever.

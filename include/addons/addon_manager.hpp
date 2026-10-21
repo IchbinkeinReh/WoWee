@@ -43,6 +43,9 @@ public:
 
 
     void fireEvent(const std::string& event, const std::vector<std::string>& args = {});
+    /// A combat log entry announced: COMBAT_LOG_EVENT when a filter took it,
+    /// then COMBAT_LOG_EVENT_UNFILTERED (0x0074f910).
+    void fireCombatLogEvent(const std::vector<game::combat_log::Arg>& args, bool filtered);
     void update(float deltaTime);
     void shutdown();
     /// Every stored CVar acted on again, as loadAllAddons does once the

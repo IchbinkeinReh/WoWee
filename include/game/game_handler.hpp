@@ -23,6 +23,7 @@
 #include "game/group_defines.hpp"
 #include "game/handler_types.hpp"
 #include "game/combat_handler.hpp"
+#include "game/combat_log_feed.hpp"
 #include "game/spell_handler.hpp"
 #include "game/quest_handler.hpp"
 #include "game/movement_handler.hpp"
@@ -450,6 +451,14 @@ public:
     // Generic addon event callback: fires named events with string args
     using AddonEventCallback = std::function<void(const std::string&, const std::vector<std::string>&)>;
     void setAddonEventCallback(AddonEventCallback cb) { addonEventCallback_ = std::move(cb); }
+
+    /// One combat log entry announced (0x0074f910): its arguments, and
+    /// whether a filter took it - COMBAT_LOG_EVENT then, and
+    /// COMBAT_LOG_EVENT_UNFILTERED always.
+    using CombatLogEventCallback = std::function<void(const std::vector<combat_log::Arg>&, bool filtered)>;
+    void setCombatLogEventCallback(CombatLogEventCallback cb) { combatLogEventCallback_ = std::move(cb); }
+    /// The combat log and what fills it.
+    CombatLogFeed& combatLogFeed() { return *combatLogFeed_; }
 
     /// Run a line of the interface's own Lua.
     ///
@@ -4513,6 +4522,7 @@ public:
     // ── UI & Event Callbacks ─────────────────────────────────────────
     auto& achievementEarnedCallbackRef() { return achievementEarnedCallback_; }
     auto& addonEventCallbackRef() { return addonEventCallback_; }
+    auto& combatLogEventCallbackRef() { return combatLogEventCallback_; }
     auto& appearanceChangedCallbackRef() { return appearanceChangedCallback_; }
     auto& playerModelRebuildCallbackRef() { return playerModelRebuildCallback_; }
     auto& autoFollowCallbackRef() { return autoFollowCallback_; }
@@ -4720,6 +4730,9 @@ public:
         /// (0x0080cce0).
         uint32_t attrEx5 = 0;
         uint32_t attrEx6 = 0;
+        /// Spell.dbc StackAmount (+0xc4): an aura that stacks, whose doses
+        /// the combat log reports (0x00752860).
+        uint32_t stackAmount = 0;
         /// Spell.dbc ActiveIconID (+0x218): a spell shown as in effect,
         /// which its button turns off (0x00802cb0).
         uint32_t activeIconId = 0;
@@ -5101,6 +5114,7 @@ private:
     std::unique_ptr<SocialHandler>    socialHandler_;
     std::unique_ptr<QuestHandler>     questHandler_;
     std::unique_ptr<WardenHandler>    wardenHandler_;
+    std::unique_ptr<CombatLogFeed>    combatLogFeed_;
 
     // Opcode dispatch table - built once in registerOpcodeHandlers(), called by handlePacket()
     using PacketHandler = std::function<void(network::Packet&)>;
@@ -5151,6 +5165,7 @@ private:
     // Chat (state lives in ChatHandler; callbacks remain here for cross-domain access)
     ChatBubbleCallback chatBubbleCallback_;
     AddonEventCallback addonEventCallback_;
+    CombatLogEventCallback combatLogEventCallback_;
     InterfaceCommand   interfaceCommand_;
     InterfaceQuery     interfaceQuery_;
     SpellIconPathResolver spellIconPathResolver_;

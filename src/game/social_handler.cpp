@@ -714,20 +714,10 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         if (!packet.hasRemaining(16)) return;
         uint64_t killerGuid = packet.readUInt64();
         uint64_t victimGuid = packet.readUInt64();
-        // A combat log entry and nothing in chat (0x00750c90): the original
-        // files it as PARTY_KILL (subevent 0x2b) for the combat log to word -
-        // "X tötet Y" is the combat log's line, not a system message. This
-        // printed an English "X killed Y." into the chat window instead.
-        if (owner_.addonEventCallbackRef()) {
-            char src[32], dst[32];
-            std::snprintf(src, sizeof(src), "0x%016llX", static_cast<unsigned long long>(killerGuid));
-            std::snprintf(dst, sizeof(dst), "0x%016llX", static_cast<unsigned long long>(victimGuid));
-            owner_.addonEventCallbackRef()("COMBAT_LOG_EVENT_UNFILTERED", {
-                std::to_string(static_cast<double>(std::time(nullptr))), "PARTY_KILL",
-                src, owner_.lookupName(killerGuid), "0",
-                dst, owner_.lookupName(victimGuid), "0"
-            });
-        }
+        // A combat log entry and nothing in chat (0x00750c90): PARTY_KILL
+        // for the combat log to word - "X tötet Y" is its line, not a system
+        // message.
+        owner_.combatLogFeed().partyKill(killerGuid, victimGuid);
     };
 
     // ---- Guild ----
