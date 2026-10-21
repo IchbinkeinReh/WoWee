@@ -100,6 +100,10 @@ public:
     /// The guild's design for a player's guild tabard (0x006db510), or none.
     /// Set before the update that should use it; a change rebuilds.
     void setGuildEmblem(const std::optional<game::GuildEmblem>& emblem) { pendingEmblem_ = emblem; }
+    /// Whether the player drawn has the tabard designer open (0x006d2900):
+    /// a tabard shown and the design painted whether one is worn or not.
+    /// Set before the update that should use it; a change rebuilds.
+    void setTabardDesigner(bool on) { pendingDesigner_ = on; }
 
     /// Set before the first update, since framing is applied when the model
     /// loads and the model loads once.
@@ -167,6 +171,9 @@ private:
     /// The guild design asked for, and the one painted.
     std::optional<game::GuildEmblem> pendingEmblem_;
     std::optional<game::GuildEmblem> loadedEmblem_;
+    /// The designer asked for, and the one the model was built with.
+    bool pendingDesigner_ = false;
+    bool loadedDesigner_ = false;
 
     uint64_t loadedGuid_ = 0;
     /// Race and gender as well, because another player is identified by these

@@ -5671,6 +5671,7 @@ void Application::render() {
                             // The guild tabard's design (0x006db510), or the
                             // designer's while it is open (0x004ec1c0).
                             room.model->setGuildEmblem(gameHandler->getPlayerTabardEmblem());
+                            room.model->setTabardDesigner(gameHandler->getTabardVendorGuid() != 0);
                             room.model->setUnitClass(static_cast<uint8_t>(self->characterClass));
                             shown = room.model->updatePlayer(
                                 static_cast<uint8_t>(self->race), gender,

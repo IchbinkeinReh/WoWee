@@ -10,7 +10,8 @@ std::vector<std::pair<int, std::string>> characterComponentLayers(pipeline::Asse
                                                                   const pipeline::DBCFile& itemDisplayInfo,
                                                                   const std::vector<ComponentItem>& items,
                                                                   bool female,
-                                                                  const std::optional<game::GuildEmblem>& emblem) {
+                                                                  const std::optional<game::GuildEmblem>& emblem,
+                                                                  bool tabardDesigner) {
     const auto* layouts = pipeline::getActiveDBCLayout();
     const auto* layout = layouts ? layouts->getLayout("ItemDisplayInfo") : nullptr;
     uint32_t regionFields[8];
@@ -39,6 +40,10 @@ std::vector<std::pair<int, std::string>> characterComponentLayers(pipeline::Asse
             (itemDisplayInfo.getUInt32(r, flagsField) & kItemDisplayFlagGuildTabard) != 0) {
             for (auto& t : guildTabardTextures(*emblem)) textures.push_back(std::move(t));
         }
+    }
+    // The designer's: set last, so it takes those layers from any tabard.
+    if (tabardDesigner && emblem) {
+        for (auto& t : guildTabardTextures(*emblem)) textures.push_back(std::move(t));
     }
     return componentRegionLayers(textures);
 }

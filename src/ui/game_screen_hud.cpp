@@ -109,6 +109,7 @@ void GameScreen::updateCharacterGeosets(game::Inventory& inventory) {
     look.worn.gloves = worn(game::EquipSlot::HANDS);
     look.worn.cape = gh->isCloakVisible() ? worn(game::EquipSlot::BACK) : 0;
     look.worn.tabard = worn(game::EquipSlot::TABARD);
+    look.tabardDesigner = gh->getTabardVendorGuid() != 0;
     charRenderer->setActiveGeosets(instanceId, appearanceComposer_->playerGeosets(look, instanceId));
 }
 
@@ -145,6 +146,7 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
     }
     bool isFemale = false;
     std::optional<game::GuildEmblem> emblem;
+    bool tabardDesigner = false;
     if (auto* gh = app.getGameHandler()) {
         if (auto* ch = gh->getActiveCharacter()) {
             isFemale = (ch->gender == game::Gender::FEMALE) ||
@@ -153,9 +155,10 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
         playerTabardGuildId_ = gh->getPlayerGuildId();
         emblem = gh->getPlayerTabardEmblem();
         playerTabardEmblem_ = emblem;
+        tabardDesigner = gh->getTabardVendorGuid() != 0;
     }
-    const std::vector<std::pair<int, std::string>> regionLayers =
-        core::characterComponentLayers(*assetManager, *displayInfoDbc, componentItems, isFemale, emblem);
+    const std::vector<std::pair<int, std::string>> regionLayers = core::characterComponentLayers(
+        *assetManager, *displayInfoDbc, componentItems, isFemale, emblem, tabardDesigner);
 
     // Re-composite: base skin + underwear + equipment regions
     // Clear composite cache first to prevent stale textures from being reused

@@ -77,6 +77,10 @@ public:
     /// The guild's tabard design a guild tabard is painted with (0x004e3cd0),
     /// or none; set before dressing.
     void setGuildEmblem(const std::optional<game::GuildEmblem>& emblem) { guildEmblem_ = emblem; }
+    /// The player's component with the tabard designer open (flags 0x44,
+    /// 0x006d2900): the tabard's geosets and the design whatever is worn.
+    /// Set before loading the character.
+    void setTabardDesigner(bool on) { tabardDesigner_ = on; }
     /// The character-create model (0x004e0fd0 with none selected): the
     /// race, class and sex's CharStartOutfit row. After loadCharacter.
     bool applyStartOutfit();
@@ -263,6 +267,7 @@ private:
     bool appearanceGeosetsLoaded_ = false;
     core::AppearanceGeosetTables appearanceTables_;
     std::optional<game::GuildEmblem> guildEmblem_;
+    bool tabardDesigner_ = false;
 };
 
 } // namespace rendering

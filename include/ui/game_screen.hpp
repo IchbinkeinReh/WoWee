@@ -257,6 +257,9 @@ private:
     /// its design once known (0x006d2840, 0x006e1b40) paints it again.
     uint32_t playerTabardGuildId_ = 0;
     std::optional<game::GuildEmblem> playerTabardEmblem_;
+    /// Whether the body was last dressed with the tabard designer open
+    /// (component flags 0x44, 0x006d2900; cleared by 0x004ec510).
+    bool playerTabardDesigner_ = false;
 
 
     void renderMinimapMarkers(game::GameHandler& gameHandler);
