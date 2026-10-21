@@ -896,7 +896,7 @@ void GameHandler::registerCoreOpcodes() {
     for (auto op : {
         Opcode::SMSG_FLIGHT_SPLINE_SYNC,
         Opcode::SMSG_FORCE_SEND_QUEUED_PACKETS, Opcode::SMSG_FORCE_SET_VEHICLE_REC_ID,
-        Opcode::SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE, Opcode::SMSG_DAMAGE_CALC_LOG,
+        Opcode::SMSG_DAMAGE_CALC_LOG,
         Opcode::SMSG_DYNAMIC_DROP_ROLL_RESULT,
     }) { registerSkipHandler(op); }
 
@@ -938,6 +938,7 @@ void GameHandler::registerCoreOpcodes() {
         corpseX_ = movementInfo.y;
         corpseY_ = movementInfo.x;
         corpseZ_ = movementInfo.z;
+        corpseTransportLow_ = 0;
         corpseMapId_ = currentMapId_;
         corpsePositionValid_ = true;
         if (ghostStateCallback_) ghostStateCallback_(false);
@@ -1013,6 +1014,11 @@ void GameHandler::registerCoreOpcodes() {
         const float cy = packet.readFloat();
         const float cz = packet.readFloat();
         const uint32_t corpseMapId = packet.readUInt32();
+        // The transport it lies on, by its low guid (0x00523db0), its place
+        // in that transport's frame.
+        corpseTransportLow_ = packet.hasRemaining(4) ? packet.readUInt32() : 0;
+        corpseTransportFrame_.reset();
+        corpseMapQueryAllowedAt_ = 0;
 
         corpseX_ = cx;
         corpseY_ = cy;
@@ -3884,6 +3890,7 @@ void GameHandler::registerOpcodeHandlers() {
     registerCoreOpcodes();
     registerRemainingOpcodes();
     registerTabardOpcodes();
+    registerCorpseOpcodes();
     registerDomainOpcodes();
 }
 

@@ -685,6 +685,8 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     releasedSpirit_ = false;
     corpseGuid_ = 0;
     corpsePositionValid_ = false;
+    corpseTransportLow_ = 0;
+    corpseTransportFrame_.reset();
     corpseReclaimAvailableMs_ = 0;
     targetGuid = 0;
     focusGuid = 0;

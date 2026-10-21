@@ -2387,19 +2387,27 @@ public:
         if (!corpsePositionValid_ || currentMapId_ != corpseMapId_) return -1.0f;
         // movementInfo is canonical (x=north=server_y, y=west=server_x);
         // corpse coords are raw server (x=west, y=north) - swap to compare.
-        float dx = movementInfo.x - corpseY_;
-        float dy = movementInfo.y - corpseX_;
-        float dz = movementInfo.z - corpseZ_;
+        const glm::vec3 corpse = corpseServerPos();
+        float dx = movementInfo.x - corpse.y;
+        float dy = movementInfo.y - corpse.x;
+        float dz = movementInfo.z - corpse.z;
         return std::sqrt(dx*dx + dy*dy + dz*dz);
     }
     /** Corpse position in canonical WoW coords (X=north, Y=west).
      *  Returns false if no corpse data or on a different map. */
     bool getCorpseCanonicalPos(float& outX, float& outY) const {
         if (!corpsePositionValid_ || currentMapId_ != corpseMapId_) return false;
-        outX = corpseY_;  // server Y = canonical X (north)
-        outY = corpseX_;  // server X = canonical Y (west)
+        const glm::vec3 corpse = corpseServerPos();
+        outX = corpse.y;  // server Y = canonical X (north)
+        outY = corpse.x;  // server X = canonical Y (west)
         return true;
     }
+    /// The corpse where it lies in the world, server coordinates (0x0051f430):
+    /// the place as kept, or for a corpse on a transport that place in the
+    /// transport's frame - the transport's own where it is in sight, else
+    /// the one SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE gave, asked for at most
+    /// every thirty seconds.
+    [[nodiscard]] glm::vec3 corpseServerPos() const;
     /** Send CMSG_RECLAIM_CORPSE; noop if not a ghost or not near corpse. */
     void reclaimCorpse();
     void releaseSpirit();
@@ -4514,6 +4522,7 @@ public:
     auto& corpseXRef() { return corpseX_; }
     auto& corpseYRef() { return corpseY_; }
     auto& corpseZRef() { return corpseZ_; }
+    auto& corpseTransportLowRef() { return corpseTransportLow_; }
     auto& hasHomeBindRef() { return hasHomeBind_; }
     auto& homeBindMapIdRef() { return homeBindMapId_; }
     auto& homeBindPosRef() { return homeBindPos_; }
@@ -5001,6 +5010,8 @@ private:
     void registerRemainingOpcodes();
     /// MSG_TABARDVENDOR_ACTIVATE and MSG_SAVE_GUILD_EMBLEM (game_handler_tabard.cpp).
     void registerTabardOpcodes();
+    /// SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE (game_handler_corpse.cpp).
+    void registerCorpseOpcodes();
     /// 0x00598e60.
     void openTabardVendor(uint64_t vendor);
     /// 0x006d9230.
@@ -6097,6 +6108,18 @@ private:
     uint32_t corpseMapId_ = 0;
     bool corpsePositionValid_ = false;
     float corpseX_ = 0.0f, corpseY_ = 0.0f, corpseZ_ = 0.0f;
+    /// The transport the corpse lies on, its low guid (0xbd0830), 0 for the
+    /// world - MSG_CORPSE_QUERY's last word.
+    uint32_t corpseTransportLow_ = 0;
+    /// The transport's place and facing as SMSG_CORPSE_MAP_POSITION_QUERY_
+    /// RESPONSE gave them (0x00512bd0 -> 0xac8aa0), and when the question may
+    /// be asked again (0xbd0824).
+    struct CorpseTransportFrame {
+        glm::vec3 position{0.0f};
+        float facing = 0.0f;
+    };
+    std::optional<CorpseTransportFrame> corpseTransportFrame_;
+    mutable int64_t corpseMapQueryAllowedAt_ = 0;
     uint64_t corpseGuid_ = 0;
     // Absolute time (ms since epoch) when PvP corpse-reclaim delay expires.
     // 0 means no active delay (reclaim allowed immediately upon proximity).

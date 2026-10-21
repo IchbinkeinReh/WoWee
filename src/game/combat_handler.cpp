@@ -2169,9 +2169,10 @@ bool CombatHandler::canReclaimCorpse() const {
     if (!owner_.releasedSpiritRef() || owner_.corpseGuidRef() == 0 ||
         !owner_.corpsePositionValidRef()) return false;
     if (owner_.currentMapIdRef() != owner_.corpseMapIdRef()) return false;
-    float dx = owner_.movementInfoRef().x - owner_.corpseYRef();
-    float dy = owner_.movementInfoRef().y - owner_.corpseXRef();
-    float dz = owner_.movementInfoRef().z - owner_.corpseZRef();
+    const glm::vec3 corpse = owner_.corpseServerPos();
+    float dx = owner_.movementInfoRef().x - corpse.y;
+    float dy = owner_.movementInfoRef().y - corpse.x;
+    float dz = owner_.movementInfoRef().z - corpse.z;
     return (dx*dx + dy*dy + dz*dz) <= (40.0f * 40.0f);
 }
 

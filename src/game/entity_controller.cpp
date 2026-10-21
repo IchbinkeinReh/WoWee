@@ -1116,6 +1116,7 @@ void EntityController::markPlayerDead(const char* source) {
     owner_.corpseXRef()     = owner_.movementInfoRef().y;
     owner_.corpseYRef()     = owner_.movementInfoRef().x;
     owner_.corpseZRef()     = owner_.movementInfoRef().z;
+    owner_.corpseTransportLowRef() = 0;
     owner_.corpseMapIdRef() = owner_.currentMapIdRef();
     owner_.corpsePositionValidRef() = true;
     LOG_INFO("Player died (", source, "). Corpse cached at server=(",
@@ -2588,6 +2589,7 @@ void EntityController::onCreateCorpse(const UpdateBlock& block, const std::share
                 owner_.corpseXRef()     = block.x;
                 owner_.corpseYRef()     = block.y;
                 owner_.corpseZRef()     = block.z;
+                owner_.corpseTransportLowRef() = 0;
                 owner_.corpseMapIdRef() = owner_.currentMapIdRef();
                 owner_.corpsePositionValidRef() = true;
             }
