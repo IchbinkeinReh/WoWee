@@ -35,8 +35,10 @@ void TransportAnimator::evaluateAndApply(
 {
     const auto& spline = pathEntry.spline;
 
-    // Evaluate position from time via CatmullRomSpline (path is local offsets, add base position)
-    glm::vec3 pathOffset = spline.evaluatePosition(pathTimeMs);
+    // The path's offset at this time (local offsets, added to the base
+    // position): straight between TransportAnimation keys, as the client
+    // runs them, or along the spline for a taxi route.
+    glm::vec3 pathOffset = pathEntry.positionAt(pathTimeMs);
 
     // Catmull-Rom splines aren't constrained to the convex hull of their control
     // points. TransportAnimation.dbc uses sparse keyframes near each Deeprun Tram

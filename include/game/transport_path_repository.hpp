@@ -72,6 +72,28 @@ struct PathEntry {
     bool zOnly = false;       // Elevator/bobbing - no meaningful XY travel
     bool fromDBC = false;     // Loaded from TransportAnimation.dbc
     bool worldCoords = false; // TaxiPathNode absolute world positions (not local offsets)
+    /// TransportAnimation.dbc keys, which the client runs straight from one
+    /// to the next (0x0070daa0 lerps the two nodes either side of the time),
+    /// over a period that ends at the last key (0x00710640 takes the time
+    /// modulo the last node's TimeIndex).
+    bool linear = false;
+
+    /// Where the path has the transport at a time in [0, duration].
+    [[nodiscard]] glm::vec3 positionAt(uint32_t timeMs) const {
+        if (!linear) return spline.evaluatePosition(timeMs);
+        const auto& keys = spline.keys();
+        if (keys.empty()) return glm::vec3(0.0f);
+        if (keys.size() == 1 || timeMs <= keys.front().timeMs) return keys.front().position;
+        if (timeMs >= keys.back().timeMs) return keys.back().position;
+        size_t i = 1;
+        while (i + 1 < keys.size() && keys[i].timeMs <= timeMs) ++i;
+        const auto& a = keys[i - 1];
+        const auto& b = keys[i];
+        const uint32_t span = b.timeMs - a.timeMs;
+        if (span == 0) return b.position;
+        const float t = static_cast<float>(timeMs - a.timeMs) / static_cast<float>(span);
+        return a.position * (1.0f - t) + b.position * t;
+    }
 
     /// Spans of the route's cycle during which the hull is on this slice's map.
     ///

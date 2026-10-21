@@ -549,3 +549,27 @@ TEST_CASE("the hull's speed is solved from the period the server publishes",
     CHECK(game::TransportPathRepository::taxiRouteSpeedFor(route, 0u) == 0.0f);
     CHECK(game::TransportPathRepository::taxiRouteSpeedFor(route, 119000u) == 0.0f);
 }
+
+TEST_CASE("a TransportAnimation path runs straight between its keys over the last key's time",
+          "[transport_path_repo]") {
+    // The Undercity lift 20652: up at 167 ms, at the top from 3667 to 8500 ms,
+    // down again by 11833 ms, and the cycle is the last key's 16667 ms.
+    std::vector<math::SplineKey> keys = {
+        {0,     glm::vec3(0.0f, 0.0f, 0.0f)},
+        {167,   glm::vec3(0.0f, 0.0f, 0.0f)},
+        {3667,  glm::vec3(0.0f, 0.0f, 96.5f)},
+        {8500,  glm::vec3(0.0f, 0.0f, 96.5f)},
+        {11833, glm::vec3(0.0f, 0.0f, 0.0f)},
+        {16667, glm::vec3(0.0f, 0.0f, 0.0f)},
+    };
+    game::PathEntry entry(math::CatmullRomSpline(std::move(keys), false), 20652, true, true, false);
+    entry.linear = true;
+    REQUIRE(entry.spline.durationMs() == 16667u);
+    // Halfway up is half the height, with no overshoot at the stops.
+    CHECK(entry.positionAt(1917).z == Catch::Approx(48.25f).margin(0.01f));
+    CHECK(entry.positionAt(3667).z == Catch::Approx(96.5f));
+    CHECK(entry.positionAt(6000).z == Catch::Approx(96.5f));
+    CHECK(entry.positionAt(100).z == Catch::Approx(0.0f));
+    CHECK(entry.positionAt(16000).z == Catch::Approx(0.0f));
+    CHECK(entry.positionAt(16667).z == Catch::Approx(0.0f));
+}

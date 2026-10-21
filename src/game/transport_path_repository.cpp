@@ -410,30 +410,14 @@ bool TransportPathRepository::loadTransportAnimationDBC(pipeline::AssetManager* 
             keys.push_back({.timeMs = tMs - t0, .position = canonical});  // Normalize: subtract first timeIndex
         }
 
-        // Get base duration from last normalized timeIndex
-        uint32_t lastTimeMs = sortedWaypoints.back().first - t0;
         animationSpans_[transportEntry] = {t0, sortedWaypoints.back().first};
 
-        // Calculate wrap duration (last → first segment)
-        // Use average segment duration as wrap duration
-        uint32_t totalDelta = 0;
-        int segmentCount = 0;
-        for (size_t i = 1; i < sortedWaypoints.size(); i++) {
-            uint32_t delta = sortedWaypoints[i].first - sortedWaypoints[i-1].first;
-            if (delta > 0) {
-                totalDelta += delta;
-                segmentCount++;
-            }
-        }
-        uint32_t wrapMs = (segmentCount > 0) ? (totalDelta / segmentCount) : 1000;
-
-        // Add duplicate first point at end with wrap duration
-        // This makes the wrap segment (last → first) have proper duration
-        const glm::vec3 fp = tramNormalize(sortedWaypoints.front().second);
-        glm::vec3 firstCanonical = transportAnimationOffsetToCanonical(transportEntry, fp);
-        keys.push_back({.timeMs = lastTimeMs + wrapMs, .position = firstCanonical});
-
-        // Build the spline (time-closed=false because we added explicit wrap point)
+        // No wrap segment: the client runs the keys modulo the last one's
+        // TimeIndex (0x00710640), and every path in the data ends where it
+        // starts. A made-up last-to-first segment of the average key spacing
+        // lengthened the period - the Undercity lifts' 16667 ms to 20000 ms -
+        // so a lift drifted off the server's timeline, the one its doors open
+        // on, by a fifth of a cycle every cycle.
         math::CatmullRomSpline spline(std::move(keys), false);
 
         // Detect Z-only paths (elevator/bobbing animation, not real XY travel)
@@ -458,10 +442,10 @@ bool TransportPathRepository::loadTransportAnimationDBC(pipeline::AssetManager* 
         glm::vec3 firstOffset = sk[0].position;
         size_t midIdx = sk.size() / 2;
         glm::vec3 midOffset = sk[midIdx].position;
-        glm::vec3 lastOffset = sk[sk.size() - 2].position;  // -2 to skip wrap duplicate
+        glm::vec3 lastOffset = sk.back().position;
         uint32_t durationMs = spline.durationMs();
-        LOG_INFO("  Transport ", transportEntry, ": ", sk.size() - 1, " waypoints + wrap, ",
-                 durationMs, "ms duration (wrap=", wrapMs, "ms, t0_normalized=", sk[0].timeMs, "ms)",
+        LOG_INFO("  Transport ", transportEntry, ": ", sk.size(), " keys, ",
+                 durationMs, "ms period (t0_normalized=", sk[0].timeMs, "ms)",
                  " rangeXY=(", rangeX, ",", rangeY, ") rangeZ=", rangeZ, " ",
                  (isZOnly ? "[Z-ONLY]" : "[XY-PATH]"),
                  " firstOffset=(", firstOffset.x, ", ", firstOffset.y, ", ", firstOffset.z, ")",
@@ -469,7 +453,9 @@ bool TransportPathRepository::loadTransportAnimationDBC(pipeline::AssetManager* 
                  " lastOffset=(", lastOffset.x, ", ", lastOffset.y, ", ", lastOffset.z, ")");
 
         // Store path
-        paths_.emplace(transportEntry, PathEntry(std::move(spline), transportEntry, isZOnly, true, false));
+        PathEntry entry(std::move(spline), transportEntry, isZOnly, true, false);
+        entry.linear = true;
+        paths_.emplace(transportEntry, std::move(entry));
         pathsLoaded++;
     }
 
