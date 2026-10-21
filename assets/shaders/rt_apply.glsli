@@ -63,7 +63,6 @@ struct Found {
     vec2 sunAo;
     vec4 point;
     float bakedDark;
-    float roomDark;  // what the room's shade takes (rtRoomDarkness)
 };
 
 // One traced texel q into the sums, by how well it is the surface of the
@@ -86,7 +85,6 @@ void gatherTexel(ivec2 q, vec2 pixf, vec3 rel, vec3 np, float expected, inout Fo
     // l.b below 0: a light the ground or a building stopped (rtGather).
     acc.point += p * (max(mix(1.0, l.b, pass.tune2.y), 0.0) * w);
     acc.bakedDark += rtBakedDarkness(p.a, clamp(l.b, 0.0, 1.0)) * w;
-    acc.roomDark += rtRoomDarkness(p, l.b, pass.tune2.y, pass.tune3.y) * w;
     acc.sunAo += l.rg * w;
 }
 
@@ -95,7 +93,7 @@ Traced findTraced(vec2 pixf, vec3 rel, vec3 np, float expected) {
     ivec2 size = ivec2(pass.extent.xy);
     vec2 f = pixf / float(rtBlockSize()) - 0.5;
     ivec2 center = ivec2(floor(f + 0.5));
-    Found acc = Found(0.0, 0.0, vec2(0.0), vec4(0.0), 0.0, 0.0);
+    Found acc = Found(0.0, 0.0, vec2(0.0), vec4(0.0), 0.0);
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             ivec2 q = center + ivec2(x, y);
@@ -127,7 +125,7 @@ Traced findTraced(vec2 pixf, vec3 rel, vec3 np, float expected) {
     float total = max(acc.point.r, max(acc.point.g, acc.point.b));
     r.pointOwn = r.point * (total > 1e-4 ? clamp(1.0 - acc.point.a / total, 0.0, 1.0) : 1.0);
     r.bakedShade = 1.0 - pass.tune2.x * r.weight * acc.bakedDark / wsum;
-    r.interiorShade = rtInteriorShade(acc.roomDark / wsum, r.weight, pass.tune3.x);
+    r.interiorShade = rtInteriorShade(acc.point.rgb / wsum, r.weight, pass.tune3.x, pass.tune3.y);
     return r;
 }
 

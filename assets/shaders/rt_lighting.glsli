@@ -141,8 +141,7 @@ void rtWriteGbuffer(RtSurface s, vec3 c0) {
 // One texel of the result into the running sums, by weight w: the sun and
 // the occlusion; the point lights' light that arrives, and of it the baked
 // lights' (brightest channel's worth); and the baked lights' that does not.
-void rtGather(ivec2 q, vec4 l, float w, inout vec2 sunAo, inout vec4 point, inout float bakedDark,
-              inout float roomDark) {
+void rtGather(ivec2 q, vec4 l, float w, inout vec2 sunAo, inout vec4 point, inout float bakedDark) {
     vec4 p = texelFetch(uRtPointLight, q, 0);
     // Below 0 where the ground or a building stopped the light (rt_trace's
     // rtHardShadowVis): no light through it at any shadow strength, and as
@@ -150,19 +149,18 @@ void rtGather(ivec2 q, vec4 l, float w, inout vec2 sunAo, inout vec4 point, inou
     float vis = l.b;
     point += p * (max(mix(1.0, vis, rtPointShadowStrength()), 0.0) * w);
     bakedDark += rtBakedDarkness(p.a, clamp(vis, 0.0, 1.0)) * w;
-    roomDark += rtRoomDarkness(p, vis, rtPointShadowStrength(), rtInteriorFullAt()) * w;
     sunAo += l.rg * w;
 }
 
 // The terms from the sums over wsum, weighed in by weight.
-RtLight rtLightFrom(float weight, float wsum, vec2 sunAo, vec4 point, float bakedDark, float roomDark) {
+RtLight rtLightFrom(float weight, float wsum, vec2 sunAo, vec4 point, float bakedDark) {
     RtLight r = RtLight(weight, sunAo.x / wsum, sunAo.y / wsum, vec3(0.0), vec3(0.0), 1.0, 1.0);
     r.point = point.rgb / wsum * (weight * rtPointStrength());
     // The other lights' part: the whole less the baked lights' share of it.
     float total = max(point.r, max(point.g, point.b));
     r.pointOwn = r.point * (total > 1e-4 ? clamp(1.0 - point.a / total, 0.0, 1.0) : 1.0);
     r.bakedShade = 1.0 - rtBakedShadowStrength() * weight * bakedDark / wsum;
-    r.interiorShade = rtInteriorShade(roomDark / wsum, weight, rtInteriorBase());
+    r.interiorShade = rtInteriorShade(point.rgb / wsum, weight, rtInteriorBase(), rtInteriorFullAt());
     return r;
 }
 
@@ -192,7 +190,6 @@ RtLight rtLightAt(vec3 worldPos) {
     vec2 sunAo = vec2(0.0);
     vec4 point = vec4(0.0);
     float bakedDark = 0.0;
-    float roomDark = 0.0;
     // The 3x3 around it, and where none of those is its own, the ring
     // beyond (rt_upsample.glsli): along an edge the texels take the surface
     // in front and the one behind in turn, so its own may be two away.
@@ -210,12 +207,12 @@ RtLight rtLightAt(vec3 worldPos) {
                 if (w <= 1e-5) continue;
                 best = max(best, match);
                 wsum += w;
-                rtGather(q, l, w, sunAo, point, bakedDark, roomDark);
+                rtGather(q, l, w, sunAo, point, bakedDark);
             }
         }
     }
     if (wsum <= 1e-5) return rtLightDebug(r);
-    return rtLightDebug(rtLightFrom(smoothstep(0.1, 0.6, best), wsum, sunAo, point, bakedDark, roomDark));
+    return rtLightDebug(rtLightFrom(smoothstep(0.1, 0.6, best), wsum, sunAo, point, bakedDark));
 }
 
 // A unit drawn see-through finds nothing of itself in the result: it is not
@@ -239,20 +236,19 @@ RtLight rtLightBehind(vec3 worldPos) {
     vec2 sunAo = vec2(0.0);
     vec4 point = vec4(0.0);
     float bakedDark = 0.0;
-    float roomDark = 0.0;
     float wsum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             ivec2 q = clamp(center + ivec2(x, y), ivec2(0), size - 1);
             vec4 l = texelFetch(uRtLight, q, 0);
             if (l.a <= 0.0) continue;
-            rtGather(q, l, 1.0, sunAo, point, bakedDark, roomDark);
+            rtGather(q, l, 1.0, sunAo, point, bakedDark);
             wsum += 1.0;
         }
     }
     r.weight = 1.0;
     if (wsum > 0.0) {
-        RtLight behind = rtLightFrom(1.0, wsum, sunAo, point, bakedDark, roomDark);
+        RtLight behind = rtLightFrom(1.0, wsum, sunAo, point, bakedDark);
         r.point = behind.point;
         r.pointOwn = behind.pointOwn;
     }
