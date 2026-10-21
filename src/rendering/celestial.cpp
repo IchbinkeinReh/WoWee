@@ -96,43 +96,55 @@ void Celestial::buildSunQueryPipelines(VkDevice device,
 
 void Celestial::resetSunQuery(VkCommandBuffer cmd, uint32_t frame) {
     if (sunQueryPool_ == VK_NULL_HANDLE || frame >= kQuerySlots || cmd == VK_NULL_HANDLE) return;
-    vkCmdResetQueryPool(cmd, sunQueryPool_, frame * 2, 2);
+    vkCmdResetQueryPool(cmd, sunQueryPool_, frame * kQueriesPerSlot, kQueriesPerSlot);
     sunQueryReset_[frame] = true;
-    sunQueryIssued_[frame] = false;
+    for (bool& issued : sunQueryIssued_[frame]) issued = false;
 }
 
 void Celestial::renderSunQuery(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, uint32_t frame) {
-    if (frame >= kQuerySlots || !sunQueryReset_[frame] || sunQueryIssued_[frame]) return;
-    if (!renderingEnabled_ || !sunQueryWanted_ || sunQueryPool_ == VK_NULL_HANDLE ||
-        sunQueryTestedPipeline_ == VK_NULL_HANDLE || sunQueryAllPipeline_ == VK_NULL_HANDLE ||
-        texSets_[TEX_SUN] == VK_NULL_HANDLE || sunQuerySize_ <= 0.0f) {
+    if (frame >= kQuerySlots || !sunQueryReset_[frame]) return;
+    if (!renderingEnabled_ || sunQueryPool_ == VK_NULL_HANDLE ||
+        sunQueryTestedPipeline_ == VK_NULL_HANDLE || sunQueryAllPipeline_ == VK_NULL_HANDLE) {
         return;
     }
     const VkQueryControlFlags control = sunQueryPrecise_ ? VK_QUERY_CONTROL_PRECISE_BIT : 0;
     const glm::vec4 white(1.0f);
-    bindQuad(cmd, sunQueryTestedPipeline_, perFrameSet);
-    vkCmdBeginQuery(cmd, sunQueryPool_, frame * 2, control);
-    drawSprite(cmd, TEX_SUN, sunQueryDir_, sunQuerySize_, white, true);
-    vkCmdEndQuery(cmd, sunQueryPool_, frame * 2);
-    bindQuad(cmd, sunQueryAllPipeline_, perFrameSet);
-    vkCmdBeginQuery(cmd, sunQueryPool_, frame * 2 + 1, control);
-    drawSprite(cmd, TEX_SUN, sunQueryDir_, sunQuerySize_, white, true);
-    vkCmdEndQuery(cmd, sunQueryPool_, frame * 2 + 1);
-    sunQueryIssued_[frame] = true;
+    static constexpr Tex kBodyTex[kQueryBodies] = {TEX_SUN, TEX_MOON};
+    for (uint32_t b = 0; b < kQueryBodies; ++b) {
+        const QueryBody& body = queryBody_[b];
+        if (sunQueryIssued_[frame][b] || !body.wanted || body.size <= 0.0f ||
+            texSets_[kBodyTex[b]] == VK_NULL_HANDLE) {
+            continue;
+        }
+        const uint32_t q = frame * kQueriesPerSlot + b * 2;
+        bindQuad(cmd, sunQueryTestedPipeline_, perFrameSet);
+        vkCmdBeginQuery(cmd, sunQueryPool_, q, control);
+        drawSprite(cmd, kBodyTex[b], body.dir, body.size, white, true);
+        vkCmdEndQuery(cmd, sunQueryPool_, q);
+        bindQuad(cmd, sunQueryAllPipeline_, perFrameSet);
+        vkCmdBeginQuery(cmd, sunQueryPool_, q + 1, control);
+        drawSprite(cmd, kBodyTex[b], body.dir, body.size, white, true);
+        vkCmdEndQuery(cmd, sunQueryPool_, q + 1);
+        sunQueryIssued_[frame][b] = true;
+    }
 }
 
-float Celestial::readSunVisibility(uint32_t frame) {
-    if (frame >= kQuerySlots || !sunQueryIssued_[frame] || sunQueryPool_ == VK_NULL_HANDLE || !vkCtx_) {
-        return -1.0f;
+Celestial::BodyVisibility Celestial::readVisibility(uint32_t frame) {
+    BodyVisibility out;
+    if (frame >= kQuerySlots || sunQueryPool_ == VK_NULL_HANDLE || !vkCtx_) return out;
+    float* into[kQueryBodies] = {&out.sun, &out.moon};
+    for (uint32_t b = 0; b < kQueryBodies; ++b) {
+        if (!sunQueryIssued_[frame][b]) continue;
+        sunQueryIssued_[frame][b] = false;
+        // Two results, each followed by its availability; never waited for.
+        uint64_t r[4] = {};
+        const VkResult got = vkGetQueryPoolResults(
+            vkCtx_->getDevice(), sunQueryPool_, frame * kQueriesPerSlot + b * 2, 2, sizeof(r), r,
+            2 * sizeof(uint64_t), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+        if ((got != VK_SUCCESS && got != VK_NOT_READY) || r[1] == 0 || r[3] == 0) continue;
+        *into[b] = daynight::sunQueryVisibility(r[0], r[2], sunQueryPrecise_);
     }
-    sunQueryIssued_[frame] = false;
-    // Two results, each followed by its availability; never waited for.
-    uint64_t r[4] = {};
-    const VkResult got = vkGetQueryPoolResults(
-        vkCtx_->getDevice(), sunQueryPool_, frame * 2, 2, sizeof(r), r, 2 * sizeof(uint64_t),
-        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
-    if ((got != VK_SUCCESS && got != VK_NOT_READY) || r[1] == 0 || r[3] == 0) return -1.0f;
-    return daynight::sunQueryVisibility(r[0], r[2], sunQueryPrecise_);
+    return out;
 }
 
 bool Celestial::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout) {
@@ -174,12 +186,12 @@ bool Celestial::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout)
     }
     buildSunQueryPipelines(device, shaders.vertStage, shaders.fragStage);
 
-    // Two occlusion queries per frame in flight (resetSunQuery).
+    // Two occlusion queries per body and frame in flight (resetSunQuery).
     sunQueryPrecise_ = vkCtx_->isOcclusionQueryPreciseSupported();
     VkQueryPoolCreateInfo queryInfo{};
     queryInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
     queryInfo.queryType = VK_QUERY_TYPE_OCCLUSION;
-    queryInfo.queryCount = kQuerySlots * 2;
+    queryInfo.queryCount = kQuerySlots * kQueriesPerSlot;
     if (vkCreateQueryPool(device, &queryInfo, nullptr, &sunQueryPool_) != VK_SUCCESS) {
         sunQueryPool_ = VK_NULL_HANDLE;
         LOG_WARNING("Celestial: no sun occlusion query pool");
@@ -364,10 +376,10 @@ void Celestial::updateGlare(const Frame& frame) {
     using namespace daynight;
     const float t = frame.dayFraction;
 
-    // The sun the occlusion query asks about: the body render() draws.
-    sunQueryDir_ = frame.sunDir;
-    sunQuerySize_ = sampleCurve(kSunSize, t);
-    sunQueryWanted_ = frame.sunDir.z > 0.0f;
+    // The sun and the White Lady the occlusion queries ask about: the bodies
+    // render() draws.
+    queryBody_[0] = {frame.sunDir, sampleCurve(kSunSize, t), frame.sunDir.z > 0.0f};
+    queryBody_[1] = {frame.moonDir, sampleCurve(kMoonSize, t) * kWhiteLadyScale, frame.moonDir.z > 0.0f};
 
     // The glare (0x007ef6e0, for the sun and then the White Lady from
     // 0x007f0870): what it should show is the hour's curve, times whether

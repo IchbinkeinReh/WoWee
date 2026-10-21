@@ -1754,7 +1754,9 @@ void Renderer::beginFrame() {
     // The same fence finished the sun's occlusion query this slot asked two
     // frames ago (Celestial::renderSunQuery); update() eases toward it.
     if (skySystem && skySystem->getCelestial()) {
-        sunQueryVisibility_ = skySystem->getCelestial()->readSunVisibility(vkCtx->getCurrentFrame());
+        const Celestial::BodyVisibility seen = skySystem->getCelestial()->readVisibility(vkCtx->getCurrentFrame());
+        sunQueryVisibility_ = seen.sun;
+        moonQueryVisibility_ = seen.moon;
     }
 
     // FSR2 jitter pattern (§4.3 - delegates to PostProcessPipeline)
@@ -2774,8 +2776,8 @@ void Renderer::update(float deltaTime) {
         if (sunQueryVisibility_ >= 0.0f) {
             const float hidden = 1.0f - glm::clamp(sunQueryVisibility_, 0.0f, 1.0f);
             if (glareDiag && hidden > sunTarget) why += "; the world over the sun's disc, " + std::to_string(hidden);
-            sunTarget = std::max(sunTarget, hidden);
         }
+        sunTarget = daynight::bodyOcclusion(sunTarget, sunQueryVisibility_);
         sunOcclusion_ += (sunTarget - sunOcclusion_) * rate;
         if (glareDiag && (glareDiagTimer_ -= deltaTime) <= 0.0f) {
             glareDiagTimer_ = 3.0f;
@@ -2788,7 +2790,10 @@ void Renderer::update(float deltaTime) {
                      lightingManager ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers())
                                      : 0.0f);
         }
-        const float moonTarget = lp ? sampleSunOcclusion(lp->moonDir) : 1.0f;
+        // The White Lady the same: the line and her own query, so a tree in
+        // front of her puts out her glare as it does the sun's.
+        const float moonTarget =
+            daynight::bodyOcclusion(lp ? sampleSunOcclusion(lp->moonDir) : 1.0f, moonQueryVisibility_);
         moonOcclusion_ += (moonTarget - moonOcclusion_) * rate;
     }
 
@@ -6964,6 +6969,7 @@ void Renderer::renderVolumetricFog() {
 
     VolumetricFog::FrameInputs in;
     in.sunTravel = sunTravelDirection();
+    in.sunSeen = 1.0f - glm::clamp(sunOcclusion_, 0.0f, 1.0f);
     in.view = currentFrameData.view;
     in.projection = currentFrameData.projection;
     in.cameraPos = glm::vec3(currentFrameData.viewPos);

@@ -81,6 +81,13 @@ public:
         /// Brightness of the sunlit air. Most of it goes forward, so this is
         /// mostly what the air toward the sun does.
         float sunScatter = 0.4f;
+        /// How much of the sun can be seen from the eye, 0 to 1 (1 - the
+        /// renderer's eased sun occlusion: the terrain and building line and
+        /// the sun's occlusion query). The forward lobe - the glow round the
+        /// sun and the shafts toward it - goes with it, so a sun behind a
+        /// tree or a roof leaves no glow standing in the mist; the air still
+        /// takes its sunlight evenly.
+        float sunSeen = 1.0f;
         /// Brightness of the air the sun does not reach, lit by the zone's fog
         /// colour. Half, so a shaft stands against the shade beside it rather
         /// than against a haze nearly as bright.

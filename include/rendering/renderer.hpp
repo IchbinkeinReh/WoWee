@@ -399,10 +399,11 @@ private:
     /// yes or a no and a hill edge crossing it would snap the flare on and off.
     float sunOcclusion_ = 0.0f;
     /// How much of the sun's disc the world left in view, by the occlusion
-    /// query (Celestial::readSunVisibility); negative when it said nothing.
+    /// query (Celestial::readVisibility); negative when it said nothing.
     float sunQueryVisibility_ = -1.0f;
     /// The same toward the White Lady, for her glare.
     float moonOcclusion_ = 0.0f;
+    float moonQueryVisibility_ = -1.0f;
 
     /// The line toward `dir`, asked of the terrain, the buildings and where
     /// the camera is. The client asks a hardware occlusion query (0x009abe00).

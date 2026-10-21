@@ -91,16 +91,24 @@ public:
     /// hide it as they hide the sun on screen - which the CPU line toward the
     /// sun (terrain and building boxes) cannot see.
     ///
-    /// Outside any render pass, before the scene's: clears this slot's two
+    /// The White Lady is asked the same way, her own disc on the far plane:
+    /// her glare is drawn with no depth test as the sun's is, and a tree in
+    /// front of her left its circle standing in the leaves.
+    ///
+    /// Outside any render pass, before the scene's: clears this slot's
     /// queries for renderSunQuery.
     void resetSunQuery(VkCommandBuffer cmd, uint32_t frame);
     /// In the scene pass once the world's depth is down (with the glare,
     /// 0x009ac400), into a buffer that inherits it. Draws nothing visible.
     void renderSunQuery(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, uint32_t frame);
-    /// How much of the sun's disc was in view when this slot was last
-    /// recorded, 0 to 1. Once its fence has been waited on. Negative when it
-    /// says nothing: not asked, not finished, or the sun off the screen.
-    [[nodiscard]] float readSunVisibility(uint32_t frame);
+    /// How much of each disc was in view when this slot was last recorded, 0
+    /// to 1. Once its fence has been waited on. Negative when it says
+    /// nothing: not asked, not finished, or the body off the screen.
+    struct BodyVisibility {
+        float sun = -1.0f;
+        float moon = -1.0f;
+    };
+    [[nodiscard]] BodyVisibility readVisibility(uint32_t frame);
 
     void update(float deltaTime) { deltaTime_ = deltaTime; }
 
@@ -159,20 +167,26 @@ private:
     bool glareReady_ = false;
     float sunGlareDim_ = 0.0f;
 
-    // The sun's occlusion query (0x009abe00). Per frame slot: query 2f counts
-    // the sun disc's samples the world leaves in view, 2f + 1 all of them.
+    // The occlusion queries (0x009abe00). Per frame slot f and body b (0 the
+    // sun, 1 the White Lady): query 4f + 2b counts the disc's samples the
+    // world leaves in view, 4f + 2b + 1 all of them.
     static constexpr uint32_t kQuerySlots = 2;  // MAX_FRAMES_IN_FLIGHT
+    static constexpr uint32_t kQueryBodies = 2;
+    static constexpr uint32_t kQueriesPerSlot = kQueryBodies * 2;
     VkPipeline   sunQueryTestedPipeline_ = VK_NULL_HANDLE;  // far plane, depth tested
     VkPipeline   sunQueryAllPipeline_    = VK_NULL_HANDLE;  // no depth test
     VkQueryPool  sunQueryPool_ = VK_NULL_HANDLE;
     bool         sunQueryPrecise_ = false;
     bool         sunQueryReset_[kQuerySlots] = {};
-    bool         sunQueryIssued_[kQuerySlots] = {};
-    // What the query draws: the sun as render() would this frame, kept by
+    bool         sunQueryIssued_[kQuerySlots][kQueryBodies] = {};
+    // What each query draws: the body as render() would this frame, kept by
     // updateGlare on the main thread for the worker that records the query.
-    glm::vec3    sunQueryDir_{0.0f, 0.0f, 1.0f};
-    float        sunQuerySize_ = 0.0f;
-    bool         sunQueryWanted_ = false;
+    struct QueryBody {
+        glm::vec3 dir{0.0f, 0.0f, 1.0f};
+        float size = 0.0f;
+        bool wanted = false;
+    };
+    QueryBody    queryBody_[kQueryBodies];
     void buildSunQueryPipelines(VkDevice device,
                                 const VkPipelineShaderStageCreateInfo& vertStage,
                                 const VkPipelineShaderStageCreateInfo& fragStage);

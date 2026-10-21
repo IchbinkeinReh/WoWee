@@ -463,7 +463,7 @@ void VolumetricFog::record(VkCommandBuffer cmd, uint32_t frame, VkDescriptorSet 
                          glm::clamp(in.layerFloor, 0.0f, 1.0f));
     // No local lights: the client has none to glow in the air, its WMO
     // light being baked into the vertex colours.
-    p.lighting = glm::vec4(in.sunScatter, 0.0f, in.ambientScatter, 0.0f);
+    p.lighting = glm::vec4(in.sunScatter, std::clamp(in.sunSeen, 0.0f, 1.0f), in.ambientScatter, 0.0f);
     // A slow breeze, a yard a second, so the mist drifts rather than sits.
     const float t = in.time;
     p.drift = glm::vec4(t * 0.9f, t * 0.45f, t * 0.12f, glm::clamp(in.noiseAmount, 0.0f, 1.0f));

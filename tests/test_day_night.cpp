@@ -404,3 +404,21 @@ TEST_CASE("the sun's occlusion query is the share of its disc left in view", "[d
     REQUIRE(dn::sunQueryVisibility(1, 400, false) == Catch::Approx(1.0f));
     REQUIRE(dn::sunQueryVisibility(0, 400, false) == Catch::Approx(0.0f));
 }
+
+// The sun and the White Lady: hidden by the line toward them or by what
+// their occlusion query left of the disc, whichever hides more; a query that
+// said nothing leaves the line alone.
+TEST_CASE("A sky body is as hidden as the line or its query says, the more of the two", "[day_night]") {
+    using wowee::rendering::daynight::bodyOcclusion;
+    CHECK(bodyOcclusion(0.0f, -1.0f) == Catch::Approx(0.0f));
+    CHECK(bodyOcclusion(1.0f, -1.0f) == Catch::Approx(1.0f));
+    // A tree's crown over the moon the line cannot see: the query hides it.
+    CHECK(bodyOcclusion(0.0f, 0.0f) == Catch::Approx(1.0f));
+    CHECK(bodyOcclusion(0.0f, 0.25f) == Catch::Approx(0.75f));
+    // A hill the line sees, the disc still drawn in view: the line's.
+    CHECK(bodyOcclusion(1.0f, 1.0f) == Catch::Approx(1.0f));
+    CHECK(bodyOcclusion(0.0f, 1.0f) == Catch::Approx(0.0f));
+    // Out of range in, in range out.
+    CHECK(bodyOcclusion(-0.5f, 2.0f) == Catch::Approx(0.0f));
+    CHECK(bodyOcclusion(1.5f, -1.0f) == Catch::Approx(1.0f));
+}

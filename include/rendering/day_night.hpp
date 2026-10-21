@@ -584,4 +584,15 @@ inline float sunQueryVisibility(uint64_t visible, uint64_t all, bool precise) {
     return v < 1.0f ? v : 1.0f;
 }
 
+/// How hidden a sky body is, 0 in view to 1 hidden: the line toward it
+/// (terrain and building boxes, `line`) or what its occlusion query left of
+/// its disc (`queryVisibility`, negative when the query said nothing),
+/// whichever hides more. The sun's and the White Lady's alike.
+inline float bodyOcclusion(float line, float queryVisibility) {
+    const float l = line < 0.0f ? 0.0f : (line > 1.0f ? 1.0f : line);
+    if (queryVisibility < 0.0f) return l;
+    const float v = queryVisibility > 1.0f ? 1.0f : queryVisibility;
+    return l > 1.0f - v ? l : 1.0f - v;
+}
+
 }  // namespace wowee::rendering::daynight
