@@ -1764,6 +1764,15 @@ void Renderer::beginFrame() {
     rtDeferredThisFrame_ = false;
     gbufferPhaseOpen_ = false;
     gbufferFramebuffer_ = VK_NULL_HANDLE;
+    if (rtLighting_) {
+        // Its framebuffers and depth view are found by the scene's handles,
+        // which a rebuild of the targets can give out again for new images:
+        // FXAA switched off and on under MSAA handed back both views at their
+        // old values, and the framebuffer made over the destroyed targets was
+        // found by them. Told of every rebuild, it makes them again instead.
+        const uint64_t ppGen = postProcessPipeline_ ? postProcessPipeline_->targetsGeneration() : 0;
+        rtLighting_->setSceneTargetsGeneration((vkCtx->swapchainGeneration() << 32) ^ ppGen);
+    }
     if (rtLighting_ && rtLighting_->ready() && camera) {
         VkImageView colour = VK_NULL_HANDLE;
         VkImageView depth = VK_NULL_HANDLE;

@@ -771,6 +771,9 @@ bool PostProcessPipeline::initFSRResources() {
 
 void PostProcessPipeline::destroyFSRResources() {
     if (!vkCtx_) return;
+    // Whatever was made over these targets is stale from here, whatever
+    // handles the next ones are given (targetsGeneration).
+    ++targetsGeneration_;
 
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator alloc = vkCtx_->getAllocator();
@@ -1319,6 +1322,9 @@ bool PostProcessPipeline::initFSR2Resources() {
 
 void PostProcessPipeline::destroyFSR2Resources() {
     if (!vkCtx_) return;
+    // Whatever was made over these targets is stale from here, whatever
+    // handles the next ones are given (targetsGeneration).
+    ++targetsGeneration_;
 
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator alloc = vkCtx_->getAllocator();
@@ -1866,6 +1872,9 @@ bool PostProcessPipeline::initFXAAResources() {
 
 void PostProcessPipeline::destroyFXAAResources() {
     if (!vkCtx_) return;
+    // Whatever was made over these targets is stale from here, whatever
+    // handles the next ones are given (targetsGeneration).
+    ++targetsGeneration_;
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator alloc = vkCtx_->getAllocator();
     vkDeviceWaitIdle(device);

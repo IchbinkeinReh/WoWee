@@ -91,6 +91,13 @@ public:
     /// resolve has no such image. Everywhere else the two run together.
     [[nodiscard]] bool isFsr2BlockingMsaa() const;
 
+    /// Counts every time a scene target of this pipeline (the FXAA, FSR or
+    /// temporal upscaler's colour and depth) is destroyed. What another
+    /// system made over those targets - a framebuffer, a view - is stale once
+    /// this has moved, even when the new targets' handles have the old values
+    /// (generation_keyed_cache.hpp).
+    [[nodiscard]] uint64_t targetsGeneration() const { return targetsGeneration_; }
+
     // --- Public API (delegated from Renderer) ---
 
     // FXAA
@@ -140,6 +147,7 @@ public:
 
 private:
     VkContext* vkCtx_ = nullptr;
+    uint64_t targetsGeneration_ = 0;
 
     // Per-frame state set during executePostProcessing
     VkCommandBuffer currentCmd_ = VK_NULL_HANDLE;

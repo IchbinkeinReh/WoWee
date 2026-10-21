@@ -286,8 +286,7 @@ bool RtLighting::createApplyPipeline() {
     if (applyRenderPass_) vkDestroyRenderPass(dev, applyRenderPass_, nullptr);
     apply_ = VK_NULL_HANDLE;
     applyRenderPass_ = VK_NULL_HANDLE;
-    for (auto& [view, fb] : applyFramebuffers_) vkDestroyFramebuffer(dev, fb, nullptr);
-    applyFramebuffers_.clear();
+    for (VkFramebuffer fb : applyFramebuffers_.takeAll()) vkDestroyFramebuffer(dev, fb, nullptr);
 
     const VkSampleCountFlagBits samples = ctx_->getMsaaSamples();
     const bool msaa = samples > VK_SAMPLE_COUNT_1_BIT;
@@ -426,10 +425,8 @@ bool RtLighting::createGbuffer(VkExtent2D extent, VkSampleCountFlagBits samples)
 
 void RtLighting::destroyGbuffer() {
     VkDevice dev = ctx_->getDevice();
-    for (auto& [views, fb] : gbufferFramebuffers_) vkDestroyFramebuffer(dev, fb, nullptr);
-    gbufferFramebuffers_.clear();
-    for (auto& [view, fb] : applyFramebuffers_) vkDestroyFramebuffer(dev, fb, nullptr);
-    applyFramebuffers_.clear();
+    for (VkFramebuffer fb : gbufferFramebuffers_.takeAll()) vkDestroyFramebuffer(dev, fb, nullptr);
+    for (VkFramebuffer fb : applyFramebuffers_.takeAll()) vkDestroyFramebuffer(dev, fb, nullptr);
     destroyImage(dev, ctx_->getAllocator(), gbuf0_);
     destroyImage(dev, ctx_->getAllocator(), gbuf1_);
     gbufExtent_ = {};
@@ -544,21 +541,39 @@ VkImageView RtLighting::giViewForSlot(uint32_t) const {
     return probes_.hasResources() ? probes_.atlasView() : neutral_.imageView;
 }
 
+void RtLighting::releaseFramebuffersLater(std::vector<VkFramebuffer> framebuffers) {
+    if (framebuffers.empty()) return;
+    VkDevice dev = ctx_->getDevice();
+    ctx_->deferAfterAllFrameFences([dev, fbs = std::move(framebuffers)]() {
+        for (VkFramebuffer fb : fbs) vkDestroyFramebuffer(dev, fb, nullptr);
+    });
+}
+
+void RtLighting::setSceneTargetsGeneration(uint64_t generation) {
+    // A new generation: the scene's targets were destroyed or made again, and
+    // the new views and images may have the old ones' handles. Nothing made
+    // for the old ones is found again; it goes once no frame can use it.
+    if (generation == gbufferFramebuffers_.generation()) return;
+    releaseFramebuffersLater(gbufferFramebuffers_.advance(generation));
+    releaseFramebuffersLater(applyFramebuffers_.advance(generation));
+    if (depthView_) {
+        VkDevice dev = ctx_->getDevice();
+        VkImageView old = depthView_;
+        ctx_->deferAfterAllFrameFences([dev, old]() { vkDestroyImageView(dev, old, nullptr); });
+        depthView_ = VK_NULL_HANDLE;
+        // The slots' sets bind it; they are written again with the next one.
+        ++viewsGeneration_;
+    }
+    depthImage_ = VK_NULL_HANDLE;
+}
+
 VkFramebuffer RtLighting::gbufferFramebuffer(VkImageView colour, VkImageView depth) {
     if (!gbuf0_.image || colour == VK_NULL_HANDLE || depth == VK_NULL_HANDLE) return VK_NULL_HANDLE;
     const auto key = std::make_pair(colour, depth);
-    auto it = gbufferFramebuffers_.find(key);
-    if (it != gbufferFramebuffers_.end()) return it->second;
-    // The scene's views change with every rebuild of its targets; what was
-    // made for the old ones is let go once no frame can still use it.
-    if (gbufferFramebuffers_.size() >= 8) {
-        VkDevice dev = ctx_->getDevice();
-        for (auto& [views, fb] : gbufferFramebuffers_) {
-            VkFramebuffer old = fb;
-            ctx_->deferAfterAllFrameFences([dev, old]() { vkDestroyFramebuffer(dev, old, nullptr); });
-        }
-        gbufferFramebuffers_.clear();
-    }
+    if (const VkFramebuffer* fb = gbufferFramebuffers_.find(key)) return *fb;
+    // The 1x scene alternates between the swapchain's images, so more than
+    // one is current at a time; a bound on the count all the same.
+    if (gbufferFramebuffers_.size() >= 8) releaseFramebuffersLater(gbufferFramebuffers_.takeAll());
     const VkImageView views[4] = {colour, depth, gbuf0_.imageView, gbuf1_.imageView};
     VkFramebufferCreateInfo fi{};
     fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -570,21 +585,13 @@ VkFramebuffer RtLighting::gbufferFramebuffer(VkImageView colour, VkImageView dep
     fi.layers = 1;
     VkFramebuffer fb = VK_NULL_HANDLE;
     if (vkCreateFramebuffer(ctx_->getDevice(), &fi, nullptr, &fb) != VK_SUCCESS) return VK_NULL_HANDLE;
-    gbufferFramebuffers_[key] = fb;
+    gbufferFramebuffers_.insert(key, fb);
     return fb;
 }
 
 VkFramebuffer RtLighting::applyFramebuffer(VkImageView colour) {
-    auto it = applyFramebuffers_.find(colour);
-    if (it != applyFramebuffers_.end()) return it->second;
-    if (applyFramebuffers_.size() >= 8) {
-        VkDevice dev = ctx_->getDevice();
-        for (auto& [view, fb] : applyFramebuffers_) {
-            VkFramebuffer old = fb;
-            ctx_->deferAfterAllFrameFences([dev, old]() { vkDestroyFramebuffer(dev, old, nullptr); });
-        }
-        applyFramebuffers_.clear();
-    }
+    if (const VkFramebuffer* fb = applyFramebuffers_.find(colour)) return *fb;
+    if (applyFramebuffers_.size() >= 8) releaseFramebuffersLater(applyFramebuffers_.takeAll());
     VkFramebufferCreateInfo fi{};
     fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     fi.renderPass = applyRenderPass_;
@@ -595,11 +602,13 @@ VkFramebuffer RtLighting::applyFramebuffer(VkImageView colour) {
     fi.layers = 1;
     VkFramebuffer fb = VK_NULL_HANDLE;
     if (vkCreateFramebuffer(ctx_->getDevice(), &fi, nullptr, &fb) != VK_SUCCESS) return VK_NULL_HANDLE;
-    applyFramebuffers_[colour] = fb;
+    applyFramebuffers_.insert(colour, fb);
     return fb;
 }
 
 VkImageView RtLighting::depthViewFor(VkImage image) {
+    // Valid only within one generation of the scene's targets: a new depth
+    // image can have the old one's handle (setSceneTargetsGeneration).
     if (image == depthImage_ && depthView_) return depthView_;
     VkDevice dev = ctx_->getDevice();
     if (depthView_) {

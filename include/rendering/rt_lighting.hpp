@@ -9,6 +9,7 @@
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
+#include "rendering/generation_keyed_cache.hpp"
 #include "rendering/rt_gi_probes.hpp"
 #include "rendering/rt_point_lights.hpp"
 #include "rendering/vk_context.hpp"
@@ -113,6 +114,16 @@ public:
     [[nodiscard]] VkExtent2D traceExtent() const { return traceExtent_; }
     [[nodiscard]] const RtGiProbes& probes() const { return probes_; }
 
+    /// The generation of the scene's colour and depth targets, which changes
+    /// whenever any of them is destroyed or made again (a swapchain rebuild,
+    /// an anti-aliasing change, FXAA or an upscaler switched on or off).
+    /// Everything made over the old targets - the G-buffer and apply
+    /// framebuffers, the view of the depth - is let go then, and nothing is
+    /// found by the new targets' handles that was made for the old ones
+    /// (generation_keyed_cache.hpp). Call each frame before
+    /// gbufferFramebuffer().
+    void setSceneTargetsGeneration(uint64_t generation);
+
     /// The G-buffer pass's framebuffer over the scene's own colour (its MSAA
     /// image under MSAA) and depth views; made on first use.
     VkFramebuffer gbufferFramebuffer(VkImageView colour, VkImageView depth);
@@ -211,8 +222,13 @@ private:
     AllocatedImage gbuf0_{}, gbuf1_{};
     VkExtent2D gbufExtent_{};
     VkSampleCountFlagBits gbufSamples_ = VK_SAMPLE_COUNT_1_BIT;
-    std::map<std::pair<VkImageView, VkImageView>, VkFramebuffer> gbufferFramebuffers_;
-    std::map<VkImageView, VkFramebuffer> applyFramebuffers_;
+    // Keyed by the scene's view handles, which a rebuild can hand out again
+    // for new images: emptied whenever the scene's targets change
+    // (setSceneTargetsGeneration).
+    GenerationKeyedCache<std::pair<VkImageView, VkImageView>, VkFramebuffer> gbufferFramebuffers_;
+    GenerationKeyedCache<VkImageView, VkFramebuffer> applyFramebuffers_;
+    /// Destroys the framebuffers once no frame in flight can use them.
+    void releaseFramebuffersLater(std::vector<VkFramebuffer> framebuffers);
     VkRenderPass applyRenderPass_ = VK_NULL_HANDLE;
     VkPipeline apply_ = VK_NULL_HANDLE;
     VkSampleCountFlagBits applySamples_ = VK_SAMPLE_COUNT_1_BIT;
