@@ -100,6 +100,14 @@ struct Unit {
     uint32_t meleeReady = 25;
     /// 0x007171c0: the AnimID of its UNIT_NPC_EMOTESTATE's Emotes row.
     std::optional<uint32_t> emoteStateAnim;
+    /// 0x007224d0: the loop its cast or channel holds it in (the kit's
+    /// AnimID) and the kit's Flags (0x00724330).
+    std::optional<uint32_t> castLoopAnim;
+    uint32_t castLoopKitFlags = 0;
+    /// 0x0071e400: the AnimID of the newest state kit on it that animates
+    /// it, and whether it is put in it by its tier.
+    std::optional<uint32_t> kitAnim;
+    bool kitAnimTiered = true;
 };
 
 /// What a slot plays, from where (0x008266b0's state): -1 for an upper body
@@ -202,6 +210,11 @@ void applyHover(const Unit& unit, const Slots& now, Decision& d, const ModelPlay
     hover(d.body, d.bodyAction, d.bodyBlend, now.body.anim);
     hover(d.upper, d.upperAction, d.upperBlend, now.upper.anim);
 }
+
+/// 0x0071e400 on what 0x007385c0 decided: the body and, where it has one of
+/// its own, the upper body play the kit's animation `kit` (as the unit is
+/// put in it), unblended - what already plays it goes on.
+void applyKitAnimation(const Slots& now, Decision& d, uint32_t kit);
 
 /// What 0x00736640 plays for a blow taken: StandWound, CombatWound with a
 /// melee target, CombatCritical for a critical - on the upper body, or on

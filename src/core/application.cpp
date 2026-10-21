@@ -282,17 +282,40 @@ rendering::upper_body::Unit unitAnimationState(const game::GameHandler& gh, cons
     return u;
 }
 
+// What 0x00724330 and 0x0071e400 read of a unit's spells: the loop its cast
+// or channel holds it in (0x007224d0), and the state kit animating it.
+void unitKitAnimationState(rendering::upper_body::Unit& u, rendering::SpellVisualSystem* svs, uint64_t guid,
+                           uint32_t castSpellId, uint32_t channelSpellId) {
+    if (!svs) return;
+    if (const auto loop = svs->castLoop(castSpellId, channelSpellId)) {
+        u.castLoopAnim = loop->anim;
+        u.castLoopKitFlags = loop->kitFlags;
+    }
+    if (const auto kit = svs->unitKitAnimation(guid)) {
+        u.kitAnim = kit->anim;
+        u.kitAnimTiered = kit->tiered;
+    }
+}
+
+uint32_t unitChannelSpell(const game::Entity& entity) {
+    const uint16_t index = game::fieldIndex(game::UF::UNIT_CHANNEL_SPELL);
+    return index == 0xFFFF ? 0 : entity.getField(index);
+}
+
 // Another unit's animation tier and what 0x007385c0 reads of it, onto its
 // instance, from what the sync has worked out of how it moves.
 void syncUnitAnimation(rendering::CharacterRenderer& cr, const game::GameHandler& gh, EntitySpawner& spawner,
-                       uint64_t guid, uint32_t instanceId, const game::Unit& unit, bool moving, bool swimming,
-                       bool flying, bool riding) {
+                       rendering::SpellVisualSystem* svs, uint64_t guid, uint32_t instanceId, const game::Unit& unit,
+                       bool moving, bool swimming, bool flying, bool riding) {
     cr.setAnimationTier(instanceId, unitAnimationTier(unit));
     const auto& body = spawner.getUnitBodies()[guid];
     auto state = unitAnimationState(gh, spawner, guid, unit, unitBodyFlags(unit, moving, swimming, flying),
                                     body.turning,
                                     riding ? std::optional(spawner.riderPose(guid, instanceId)) : std::nullopt);
     state.turningLeft = body.turningLeft;
+    const auto* cast = gh.getUnitCastState(guid);
+    unitKitAnimationState(state, svs, guid, cast && cast->casting && !cast->isChannel ? cast->spellId : 0u,
+                          unitChannelSpell(unit));
     cr.setUnitAnimationState(instanceId, state);
 }
 
@@ -4296,6 +4319,8 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
         const auto offHand = hand(game::EquipSlot::OFF_HAND);
         u.meleeReady = ba::meleeReady(mainHand ? &*mainHand : nullptr, offHand ? &*offHand : nullptr);
     }
+    unitKitAnimationState(u, renderer ? renderer->getSpellVisualSystem() : nullptr, gameHandler->getPlayerGuid(),
+                          u.castTimed ? gameHandler->getCurrentCastSpellId() : 0u, unitChannelSpell(self));
     // The pose it rides in, as the animation controller puts it in it.
     if (u.riding && renderer && renderer->getCharacterRenderer()) {
         if (auto* svs = renderer->getSpellVisualSystem()) {
@@ -4474,7 +4499,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // as the client's GetCurrentSpeed gives it for a unit on one.
                 charRenderer->setLocomotionSpeed(
                     instanceId, isMovingNow ? entity->getMoveSpeed() : 0.0f);
-                syncUnitAnimation(*charRenderer, *gameHandler, *entitySpawner_, guid, instanceId, *unitPtr,
+                syncUnitAnimation(*charRenderer, *gameHandler, *entitySpawner_, renderer->getSpellVisualSystem(), guid,
+                                  instanceId, *unitPtr,
                                   isMovingNow, _creatureSwimmingState.count(guid) > 0, _creatureFlyingState.count(guid) > 0,
                                   creatureMount != nullptr);
                 if (creatureMount)
@@ -4703,7 +4729,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // plays to - see the creature loop above.
                 const float locomotionSpeed = isMovingNow ? entity->getMoveSpeed() : 0.0f;
                 charRenderer->setLocomotionSpeed(instanceId, locomotionSpeed);
-                syncUnitAnimation(*charRenderer, *gameHandler, *entitySpawner_, guid, instanceId, *unitPtr,
+                syncUnitAnimation(*charRenderer, *gameHandler, *entitySpawner_, renderer->getSpellVisualSystem(), guid,
+                                  instanceId, *unitPtr,
                                   isMovingNow, _pCreatureSwimmingState.count(guid) > 0, _pCreatureFlyingState.count(guid) > 0,
                                   remoteMount != nullptr);
                 if (remoteMount) {

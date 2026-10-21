@@ -2359,8 +2359,14 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
 void CharacterRenderer::setUnitAnimationState(uint32_t instanceId, const upper_body::Unit& unit) {
     auto it = instances.find(instanceId);
     if (it == instances.end()) return;
+    // A state kit that animates the unit coming or going asks its base
+    // animation again (0x0073b140 type 2 and 0x0073c1d0 -> 0x0073ac30),
+    // which the kit's animation then takes over (0x0071e400).
+    const bool kitChanged = it->second.unitAnimation && (it->second.unit.kitAnim != unit.kitAnim ||
+                                                          it->second.unit.kitAnimTiered != unit.kitAnimTiered);
     it->second.unitAnimation = true;
     it->second.unit = unit;
+    if (kitChanged) playBaseAnimation(instanceId);
 }
 
 int32_t CharacterRenderer::upperBodyBone(CharacterInstance& instance) {
@@ -2423,6 +2429,14 @@ void CharacterRenderer::playUnitAnimation(uint32_t instanceId, uint32_t animatio
     // Hovering on the ground, the stand and its like are the hover
     // (0x0071df30).
     upper_body::applyHover(unit, now, d, [&model](uint32_t id) { return shownAnimation(model, id).id; });
+    // A state kit animating the unit has the body and an upper body of its
+    // own play its animation, unblended, whatever was asked but a death
+    // (0x0071e400).
+    if (unit.kitAnim && !unit.riding && !upper_body::isDeath(anim::animationData().behavior(animationId))) {
+        const uint32_t kit =
+            unit.kitAnimTiered ? tierAnimationFor(model, *unit.kitAnim, instance.animationTier) : *unit.kitAnim;
+        upper_body::applyKitAnimation(now, d, kit);
+    }
 
     // The upper body first, as 0x007385c0 plays them. Without a key bone of
     // its own, what goes there is not played (0x00737ef0).
@@ -2558,10 +2572,19 @@ void CharacterRenderer::endUpperBodyOneShot(CharacterInstance& instance) {
     // 0x007176f0) goes on the upper body where it is one of the upper
     // body's, may differ from what the body plays (0x00723e30), and is not
     // that; else the bone set follows the body again (0x00832840).
+    // A state kit animating the unit takes the upper body (0x0071e400).
+    if (instance.unit.kitAnim) {
+        const uint32_t kit = instance.unit.kitAnimTiered
+                                 ? tierAnimationFor(model, *instance.unit.kitAnim, instance.animationTier)
+                                 : *instance.unit.kitAnim;
+        startKeyBoneAnimation(instance, bone, kit, false, std::nullopt, 0.0f, true);
+        return;
+    }
     const base_animation::Pick p =
         pickBaseAnimation(instance, base_animation::Ask{.queuedAttack = instance.queuedAttack});
-    const uint32_t shown =
-        p.anim == base_animation::kKeep ? p.anim : tierAnimationFor(model, p.anim, instance.animationTier);
+    const uint32_t shown = p.anim == base_animation::kKeep || (p.flags & 0x6) != 0
+                               ? p.anim
+                               : tierAnimationFor(model, p.anim, instance.animationTier);
     const int32_t body = instance.currentSequenceIndex >= 0 ? static_cast<int32_t>(instance.currentAnimationId) : -1;
     if (!upper_body::isUpperBody(data.behavior(shown)) || !upper_body::splits(data, instance.unit, shown, body) ||
         static_cast<int32_t>(shown) == body) {
@@ -2946,9 +2969,12 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                             if (p.anim == base_animation::kKeep) {
                                 inst.animationTime = static_cast<float>(seq.duration);
                             } else {
-                                playUnitAnimation(
-                                    pair.first, tierAnimationFor(inst.cachedModel->data, p.anim, inst.animationTier),
-                                    p.loop, 0, upper_body::Pass::BodyEnded);
+                                // Kit Flags 0x4 and 0x8 leave the tier be.
+                                const uint32_t shown =
+                                    (p.flags & 0x6) != 0
+                                        ? p.anim
+                                        : tierAnimationFor(inst.cachedModel->data, p.anim, inst.animationTier);
+                                playUnitAnimation(pair.first, shown, p.loop, 0, upper_body::Pass::BodyEnded);
                             }
                         } else {
                             const uint32_t resumeAnim =

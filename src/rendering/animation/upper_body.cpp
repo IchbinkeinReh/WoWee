@@ -91,6 +91,22 @@ bool splits(const anim::AnimationDataTable& data, const Unit& unit, uint32_t ask
     return split;
 }
 
+void applyKitAnimation(const Slots& now, Decision& d, uint32_t kit) {
+    const auto take = [kit](Slot& slot, Action& action, bool& blend, const Slot& playing) {
+        const bool same = playing.anim == static_cast<int32_t>(kit);
+        slot = Slot{static_cast<int32_t>(kit), same ? playing.timeMs : 0.0f, true};
+        blend = false;
+        action = same ? Action::Keep : Action::Play;
+    };
+    take(d.body, d.bodyAction, d.bodyBlend, now.body);
+    d.bodyFromUpper = false;
+    d.toMount = false;
+    if (now.upper.anim >= 0) {
+        take(d.upper, d.upperAction, d.upperBlend, now.upper);
+        d.upperFromBody = false;
+    }
+}
+
 bool hoverReplaces(uint32_t modelPlays) { return modelPlays == 0 || modelPlays == 8 || modelPlays == 25; }
 
 std::optional<Wound> wound(const anim::AnimationDataTable& data, const Unit& unit, bool critical, int32_t shown,

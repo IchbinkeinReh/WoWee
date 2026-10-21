@@ -87,6 +87,22 @@ Pick pick(const anim::AnimationDataTable& data, const ub::Unit& unit, const Play
         if (unit.speed > unit.walkSpeed + unit.walkSpeed) return loop(kRun);
         return loop(kWalk);
     }
+    // 0x00724330: casting (+0xa38 0x400) or channelling, not riding, with
+    // a kit loop (0x007224d0) - kept where the upper body has it, and
+    // where the body has it only asked again from a body's end with the
+    // kit's Flags 0x40.
+    if ((unit.castTimed || unit.channeling) && (ask.free & (kUpperFree | kBodyFree)) != 0 && !unit.riding &&
+        unit.castLoopAnim) {
+        const uint32_t k = unit.castLoopKitFlags;
+        const uint32_t flags = ((k & 0x4) ? 0x2u : 0u) | ((k & 0x8) ? 0x4u : 0u) | ((k & 0x10) ? 0x8u : 0u) |
+                               ((k & 0x100) ? 0x20u : 0u);
+        const auto anim = static_cast<int32_t>(*unit.castLoopAnim);
+        if (anim == playing.shown && playing.shown == playing.body &&
+            ((ask.flags & 0x10) == 0 || (k & 0x40) == 0)) {
+            return Pick{kKeep, true, flags};
+        }
+        return Pick{*unit.castLoopAnim, true, flags};
+    }
     // 0x0071e0d0: a melee target - the swing that waited, else the swim
     // idle, else the ready for its weapons.
     if ((ask.free & (kUpperFree | kBodyFree)) != 0 && unit.autoAttacking) {

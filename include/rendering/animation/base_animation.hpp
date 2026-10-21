@@ -52,6 +52,10 @@ struct Pick {
     /// Played once: the swing that waited, the death's start, a sit-down
     /// still going.
     bool loop = true;
+    /// What the cast loop's kit Flags add to the flags 0x007385c0 is asked
+    /// with (0x00714ce0): 0x4 -> 0x2, 0x8 -> 0x4 (neither puts the unit in
+    /// it by its tier), 0x10 -> 0x8, 0x100 -> 0x20.
+    uint32_t flags = 0;
 };
 
 /// What 0x00714dd0 reads of an item in a hand (vtable +300): its class and

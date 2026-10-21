@@ -415,3 +415,22 @@ TEST_CASE("a vehicle's upper body its seats animate is theirs (0x00756cd0)", "[u
     d = ub::decide(data, still, asked(kDeath, false), slots(kStand, 0.0f, true, 160, 0.0f, true));
     CHECK(d.upperAction == ub::Action::Keep);
 }
+
+TEST_CASE("a state kit animating the unit takes what is asked (0x0071e400)", "[upper_body]") {
+    const auto data = table();
+    constexpr uint32_t kStun = 14;
+    // Running with a swing above: both the body and the upper body take
+    // the kit's animation, unblended.
+    auto d = ub::decide(data, running(), asked(kRun, true), slots(kRun, 0.0f, true, kAttack1H, 100.0f));
+    ub::applyKitAnimation(slots(kRun, 0.0f, true, kAttack1H, 100.0f), d, kStun);
+    CHECK(d.body.anim == static_cast<int32_t>(kStun));
+    CHECK(d.bodyAction == ub::Action::Play);
+    CHECK_FALSE(d.bodyBlend);
+    CHECK(d.upper.anim == static_cast<int32_t>(kStun));
+    CHECK(d.upperAction == ub::Action::Play);
+    // Without an upper body of its own, only the body; what plays it goes on.
+    d = ub::decide(data, ub::Unit{}, asked(kStand, true), slots(kStun));
+    ub::applyKitAnimation(slots(kStun), d, kStun);
+    CHECK(d.bodyAction == ub::Action::Keep);
+    CHECK(d.upperAction == ub::Action::Keep);
+}

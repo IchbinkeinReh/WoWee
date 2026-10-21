@@ -191,3 +191,36 @@ TEST_CASE("the stand state's loop, the emote state, the stand", "[base_animation
     settled.seatedRide = true;
     CHECK(pick(settled).anim == ba::kKeep);
 }
+
+TEST_CASE("casting: the kit's loop (0x00724330)", "[base_animation]") {
+    constexpr uint32_t kReadySpellDirected = 51, kChannelCastDirected = 124;
+    ub::Unit u;
+    u.castTimed = true;
+    u.castLoopAnim = kReadySpellDirected;
+    u.castLoopKitFlags = 0x8;
+    auto p = pick(u);
+    CHECK(p.anim == kReadySpellDirected);
+    // Kit Flags 0x8: not put in it by the tier.
+    CHECK(p.flags == 0x4u);
+    // Already the body's: left as it is - but asked again from the body's
+    // end with kit Flags 0x40.
+    const ba::Playing body{static_cast<int32_t>(kReadySpellDirected), static_cast<int32_t>(kReadySpellDirected)};
+    CHECK(pick(u, body).anim == ba::kKeep);
+    CHECK(pick(u, body, {.free = ba::kBodyFree, .flags = 0x10}).anim == ba::kKeep);
+    u.castLoopKitFlags = 0x40;
+    CHECK(pick(u, body, {.free = ba::kBodyFree, .flags = 0x10}).anim == kReadySpellDirected);
+    // On the upper body: kept there.
+    CHECK(pick(u, {static_cast<int32_t>(kReadySpellDirected), 0}).anim == kReadySpellDirected);
+    // A channel's loop, before a melee target.
+    ub::Unit channel;
+    channel.channeling = true;
+    channel.autoAttacking = true;
+    channel.castLoopAnim = kChannelCastDirected;
+    CHECK(pick(channel).anim == kChannelCastDirected);
+    // Not riding, nor with no cast going.
+    channel.riding = true;
+    CHECK(pick(channel).anim != kChannelCastDirected);
+    ub::Unit idle;
+    idle.castLoopAnim = kReadySpellDirected;
+    CHECK(pick(idle).anim == kStand);
+}

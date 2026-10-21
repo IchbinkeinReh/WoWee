@@ -618,7 +618,9 @@ void AnimationCallbackHandler::setupCallbacks() {
                 // A cast loop its upper body took up on the move goes with
                 // the cast.
                 cr->releaseUpperBodyLoop(instanceId);
-                if (isChannel) cr->playAnimation(instanceId, rendering::anim::STAND, true);
+                // A channel's end asks the base animation again (0x0073eb50
+                // -> 0x0073ac30).
+                if (isChannel) cr->playBaseAnimation(instanceId);
             }
         }
     });
