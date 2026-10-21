@@ -2429,6 +2429,38 @@ static std::string zoneNameFromId(lua_State* L) {
     return zoneId != 0 ? gh->getWhoAreaName(zoneId) : std::string();
 }
 
+bool flyableHere(lua_State* L, uint64_t unit) {
+    auto* gh = getGameHandler(L);
+    auto* svc = getLuaServices(L);
+    if (!gh || !svc || !svc->getZoneTexts) return false;
+    const auto t = svc->getZoneTexts();
+    if (!t.known) return false;
+    // The subzone's row where it has one, the zone's otherwise.
+    const uint32_t area = (t.subzoneId != 0 && !gh->getAreaName(t.subzoneId).empty())
+        ? t.subzoneId : t.zoneId;
+    const uint32_t flags = gh->getAreaFlags(area);
+    if ((flags & 0x400u) == 0 || (flags & 0x20000000u) != 0) return false;
+    if (unit == 0) return true;
+    const auto e = gh->getEntityManager().getEntity(unit);
+    constexpr uint32_t kNorthrend = 571;
+    constexpr uint32_t kColdWeatherFlying = 54197;
+    if (e && e->getType() == game::ObjectType::PLAYER && gh->getCurrentMapId() == kNorthrend &&
+        !(gh->getSpellHandler() && gh->getSpellHandler()->hasKnownSpell(kColdWeatherFlying))) {
+        return false;
+    }
+    return true;
+}
+
+/// IsFlyableArea() (0x00612260) → 1 where the player may fly, else nil.
+static int lua_IsFlyableArea(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint64_t player = gh && gh->getEntityManager().getEntity(gh->getPlayerGuid())
+        ? gh->getPlayerGuid() : 0;
+    if (flyableHere(L, player)) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
+
 static LuaServices::ZoneTexts zoneTexts(lua_State* L) {
     if (auto* svc = getLuaServices(L)) {
         if (svc->getZoneTexts) return svc->getZoneTexts();
@@ -7665,7 +7697,7 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, stackable);
             return 1;
         }},
-                {"IsFlyableArea",            lua_ReturnFalse},
+                {"IsFlyableArea",            lua_IsFlyableArea},
                 // The renderer knows whether the camera is inside a WMO, and
                 // the macro conditionals [indoors] / [outdoors] have read it
                 // all along. These two answered a flat false and a flat true.

@@ -229,6 +229,9 @@ struct LuaServices {
     /// instance with no ground - and the callers fall back to the zone id.
     struct ZoneTexts {
         bool known = false;
+        /// The zone and subzone ids the texts are for (0x00bd080c, 0x00bd0810).
+        uint32_t zoneId = 0;
+        uint32_t subzoneId = 0;
         std::string zone;
         std::string realZone;
         std::string subzone;

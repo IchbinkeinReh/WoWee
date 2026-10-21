@@ -1073,6 +1073,8 @@ bool Application::initialize() {
             addons::LuaServices::ZoneTexts out;
             if (const auto* t = r ? r->getZoneTexts() : nullptr) {
                 out.known = true;
+                out.zoneId = t->zoneId;
+                out.subzoneId = t->subzoneId;
                 out.zone = t->zone;
                 out.realZone = t->realZone;
                 out.subzone = t->subzone;

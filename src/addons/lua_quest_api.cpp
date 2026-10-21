@@ -15,6 +15,7 @@
 #include "game/quest_objectives.hpp"
 #include "game/quest_poi_icons.hpp"
 #include "game/glyph_socket.hpp"
+#include "game/spell_mods.hpp"
 #include "game/trainer_service_list.hpp"
 #include "ui/chat/chat_utils.hpp"
 #include "core/logger.hpp"
@@ -2210,17 +2211,6 @@ static std::string foldedForSearch(std::string v) {
     return v;
 }
 
-/// A service's state: the trainer's, or "used" once the spell is known.
-///
-/// The client keeps the state the list arrived with. This client also promotes
-/// a service to used the moment its spell is learned, because a server that
-/// answers a purchase without sending the list again would otherwise leave the
-/// learned service green and trainable until the window is reopened.
-static uint8_t trainerServiceState(game::GameHandler* gh, const game::TrainerSpell& sp) {
-    if (gh && gh->getSpellHandler() && gh->getSpellHandler()->hasKnownSpell(sp.spellId)) return 2;
-    return sp.state;
-}
-
 /// The service type filter, CVar serviceTypeFilter (0x00bd09e4 +0x30):
 /// one bit per state the list shows. Read through GetCVar, as it is stored.
 static uint32_t trainerTypeMask(lua_State* L) {
@@ -2263,6 +2253,104 @@ static bool trainerSpellColumn(game::GameHandler* gh, uint32_t spellId, const ch
     if (row < 0) return false;
     out = spells->getUInt32(static_cast<uint32_t>(row), base + offset);
     return true;
+}
+
+/// A service's state worked out by the client (0x00596b00), which it does
+/// again whenever the player's spells, skills, level or money change. The
+/// state the list arrived with stands until then, and for a service whose
+/// spell has no Spell row.
+///
+/// Used (2) when everything the spell teaches is known: each SKILL_STEP (44)
+/// at or past its step, each LEARN_SPELL (36) not aimed at the pet known (or
+/// a later rank), or the spell itself for a spell with neither. Otherwise
+/// unavailable (1) when the required skill is short of its value, a required
+/// spell is unknown, or the player is under the required level; else
+/// available (0).
+static uint8_t clientServiceState(game::GameHandler* gh, const game::TrainerSpell& sp,
+                                  uint8_t current) {
+    if (!gh) return current;
+    const auto& cache = gh->spellNameCacheRef();
+    const auto it = cache.find(sp.spellId);
+    if (it == cache.end()) return current;
+    const auto& e = it->second;
+    const auto* spells = gh->getSpellHandler();
+    const auto knows = [spells](uint32_t id) { return spells && spells->knowsSpellOrSuccessor(id); };
+    const auto& skills = gh->getPlayerSkills();
+
+    uint8_t state = 0;
+    int needed = 0, known = 0;
+    bool learnSeen = false;
+    for (int i = 0; i < 3; ++i) {
+        const uint32_t effect = e.effectIds[i];
+        if (effect == 0) continue;
+        if (effect == 44) {
+            ++needed;
+            // 0x008016c0's upper value: base points and die sides.
+            uint32_t dieSides = 1;
+            trainerSpellColumn(gh, sp.spellId, "Effect0", 3 + static_cast<uint32_t>(i), dieSides);
+            const int32_t step = e.effectBasePoints[i] + static_cast<int32_t>(dieSides);
+            if (auto sk = skills.find(e.effectMiscValues[i]); sk != skills.end() &&
+                                                             static_cast<int32_t>(sk->second.step) >= step) {
+                ++known;
+            }
+            continue;
+        }
+        uint32_t taught = sp.spellId;
+        if (effect == 36 && e.implicitTargetsA[i] != 5) {
+            learnSeen = true;
+            taught = e.effectTriggerSpell[i];
+        } else if (learnSeen) {
+            continue;
+        }
+        ++needed;
+        if (knows(taught)) ++known;
+        if (taught == sp.spellId) break;
+    }
+    if (needed > 0 && known == needed) return 2;
+
+    if (sp.reqSkill != 0) {
+        if (auto sk = skills.find(sp.reqSkill); sk != skills.end()) {
+            const uint32_t value = sk->second.value == 0
+                ? 0u : static_cast<uint32_t>(sk->second.value) + sk->second.bonusPerm;
+            if (value < sp.reqSkillValue) state = 1;
+        }
+    }
+    if (state == 0) {
+        bool haveRequired = true;
+        for (const uint32_t req : {sp.chainNode1, sp.chainNode2, sp.chainNode3}) {
+            if (req != 0 && !knows(req)) { haveRequired = false; break; }
+        }
+        if (spells && spells->hasKnownSpell(sp.spellId)) {
+            state = 2;
+        } else if (!haveRequired) {
+            state = 1;
+        } else if (sp.reqLevel > 1 && gh->getPlayerLevel() < sp.reqLevel) {
+            state = 1;
+        }
+    }
+    return state;
+}
+
+/// What 0x00596b00 is run again on: the player's spells, skills, level and
+/// money. A change in any of them since the list last looked is the cue.
+static uint64_t trainerStateCue(game::GameHandler* gh) {
+    if (!gh) return 0;
+    uint64_t h = 1469598103934665603ull;
+    const auto mix = [&h](uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+    mix(gh->getMoneyCopper());
+    mix(gh->getPlayerLevel());
+    uint64_t spellSum = 0;
+    for (const uint32_t id : gh->getKnownSpells()) spellSum += id * 2654435761ull;
+    mix(gh->getKnownSpells().size());
+    mix(spellSum);
+    uint64_t skillSum = 0;
+    for (const auto& [id, sk] : gh->getPlayerSkills()) {
+        skillSum += (static_cast<uint64_t>(id) << 32) ^
+                    (static_cast<uint64_t>(sk.value) << 16) ^ sk.step ^
+                    (static_cast<uint64_t>(sk.bonusPerm) << 40);
+    }
+    mix(skillSum);
+    return h;
 }
 
 /// What the trainer list needs from the client (TrainerServiceList::Lookups).
@@ -2322,6 +2410,7 @@ static game::TrainerServiceList::Lookups trainerLookups(game::GameHandler* gh, b
 /// sent (0x00596450) the first time it is asked for after one arrives.
 static game::TrainerServiceList& trainerList(lua_State* L) {
     static game::TrainerServiceList list;
+    static uint64_t lastCue = 0;
     auto* gh = getGameHandler(L);
     if (!gh) {
         list.clear();
@@ -2336,13 +2425,21 @@ static game::TrainerServiceList& trainerList(lua_State* L) {
             list.clear();
             return list;
         }
+        // As the trainer sent them (0x00596450).
         std::vector<uint8_t> states;
         states.reserve(data.spells.size());
-        for (const auto& sp : data.spells) states.push_back(trainerServiceState(gh, sp));
+        for (const auto& sp : data.spells) states.push_back(sp.state);
         list.build(data.spells, states, tradeskill, trainerTypeMask(L), trainerLookups(gh, tradeskill));
+        lastCue = trainerStateCue(gh);
     } else if (data.serial != 0) {
-        list.restate([gh](const game::TrainerServiceList::Row& r) { return trainerServiceState(gh, r.service); },
-                     trainerTypeMask(L), trainerLookups(gh, tradeskill));
+        // Worked out again only once something it reads has changed.
+        if (const uint64_t cue = trainerStateCue(gh); cue != lastCue) {
+            lastCue = cue;
+            list.restate([gh](const game::TrainerServiceList::Row& r) {
+                             return clientServiceState(gh, r.service, r.state);
+                         },
+                         trainerTypeMask(L), trainerLookups(gh, tradeskill));
+        }
     }
     return list;
 }
@@ -4558,14 +4655,27 @@ void registerQuestLuaAPI(lua_State* L) {
             for (int i = 0; i < 3 && step < 0; ++i)
                 if (e->effectIds[i] == 44) step = i;
             if (step < 0 || r->state == 2) return luaReturnNil(L);
-            // 0x008016c0's maximum: base points and die sides. The value per
-            // level and the player's spell modifiers are left out; a step
-            // spell carries neither.
+            // 0x008016c0's maximum (0x007ff770): base points and die sides,
+            // then the player's modifiers for every effect (op 8) and for
+            // this one (3, 12, 23), each (value + flat) x pct. The value per
+            // level is not added: every SKILL_STEP effect in 3.3.5's
+            // Spell.dbc has none (and no SpellFamilyName, so no modifier
+            // reaches one either).
             uint32_t dieSides = 0;
             if (!trainerSpellColumn(gh, static_cast<uint32_t>(r->spellId), "Effect0",
                                     3 + static_cast<uint32_t>(step), dieSides))
                 return luaReturnNil(L);
-            const int32_t rise = e->effectBasePoints[step] + static_cast<int32_t>(dieSides);
+            float value = static_cast<float>(e->effectBasePoints[step] + static_cast<int32_t>(dieSides));
+            if (const auto* sh = gh->getSpellHandler()) {
+                static constexpr uint8_t kEffectOp[3] = {3, 12, 23};
+                const auto spellId = static_cast<uint32_t>(r->spellId);
+                value = game::spell_mods::apply(value, sh->spellModifiers(spellId, 8));
+                value = game::spell_mods::apply(value, sh->spellModifiers(spellId, kEffectOp[step]));
+            }
+            // 0x008016c0's rounding of a positive value: (round(2v - 0.5)) / 2.
+            const int32_t rise = value > 0.0f
+                ? static_cast<int32_t>(std::nearbyint(value + value - 0.5f)) >> 1
+                : static_cast<int32_t>(std::nearbyint(value + value + 0.5f)) >> 1;
             const std::string& skill = gh->getSkillLineName(e->effectMiscValues[step]);
             if (rise == 0 || skill.empty()) return luaReturnNil(L);
             lua_getglobal(L, "string");

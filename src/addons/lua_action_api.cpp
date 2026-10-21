@@ -405,9 +405,11 @@ public:
         return false;
     }
     bool dead(uint64_t unit) override { return units_.entityIsDead(unit); }
+    /// 0x005eee70: 0x007261b0 for the clause's unit where there is one,
+    /// the area alone where there is not.
     bool flyable(uint64_t unit) override {
-        (void)unit;
-        return globalTruth(L_, "IsFlyableArea");
+        const bool present = unit != 0 && gh_.getEntityManager().getEntity(unit) != nullptr;
+        return flyableHere(L_, present ? unit : 0);
     }
     bool outdoors() override { return globalTruth(L_, "IsOutdoors"); }
     bool hasPlayer() override { return gh_.getEntityManager().getEntity(gh_.getPlayerGuid()) != nullptr; }
