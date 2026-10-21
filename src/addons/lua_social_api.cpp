@@ -1,5 +1,6 @@
 // lua_social_api.cpp - Chat, guild, friends, ignore, gossip, party management, and emotes Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include "addons/unit_or_name.hpp"
 #include "game/gossip_quest_status.hpp"
 #include <algorithm>
 #include <cmath>
@@ -866,6 +867,16 @@ int& selectedFaction() {
     return selected;
 }
 
+}  // namespace
+
+namespace {
+/// A unit token's unit's name, else the argument as given.
+std::string unitOrNameArg(lua_State* /*L*/, game::GameHandler* gh, const char* arg) {
+    return unitOrName(arg ? arg : "", [gh](const std::string& token) -> std::string {
+        const uint64_t guid = resolveUnitGuid(gh, token);
+        return guid != 0 ? gh->lookupName(guid) : std::string();
+    });
+}
 }  // namespace
 
 // --- Gossip quest lists ---
@@ -3115,16 +3126,18 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->closeGossip();
             return 0;
         }},
+                // InviteUnit(unit or name), UninviteUnit(unit or name): a
+                // unit token invites that unit by its name (unit_or_name.hpp).
                 {"InviteUnit", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->inviteToGroup(luaL_checkstring(L, 1));
+            if (gh) gh->inviteToGroup(unitOrNameArg(L, gh, luaL_checkstring(L, 1)));
             return 0;
         }},
                 {"UninviteUnit", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             // 0x0051a7a0: insecure code only inside a hardware event.
             if (gh && !taint::allowedInHardwareEvent(L)) return 0;
-            if (gh) gh->uninvitePlayer(luaL_checkstring(L, 1));
+            if (gh) gh->uninvitePlayer(unitOrNameArg(L, gh, luaL_checkstring(L, 1)));
             return 0;
         }},
                 {"LeaveParty", [](lua_State* L) -> int {

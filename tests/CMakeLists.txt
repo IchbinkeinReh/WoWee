@@ -3207,6 +3207,11 @@ wowee_add_test(test_shadow_pass_work
 wowee_add_test(test_mirror_image
     SOURCES test_mirror_image.cpp)
 
+# ── test_unit_or_name ────────────────────────────────────────
+# InviteUnit/UninviteUnit's unit token or name (addons/unit_or_name.hpp).
+wowee_add_test(test_unit_or_name
+    SOURCES test_unit_or_name.cpp)
+
 # ── test_gossip_quest_status ─────────────────────────────────
 # Which taken quests the gossip and greeting lists show as ready to hand in
 # (game/gossip_quest_status.hpp).
