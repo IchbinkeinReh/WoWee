@@ -371,6 +371,23 @@ wowee_test_link_glm(test_lua_handler_globals)
 add_test(NAME lua_handler_globals COMMAND test_lua_handler_globals)
 register_test_target(test_lua_handler_globals)
 
+# ── test_missile_motion ─────────────────────────────────────
+# SpellMissileMotion.dbc's scripts as the client runs them (0x007587d0,
+# 0x00700350, 0x00700550, 0x006feb20): the chunk, the call, and what the
+# outputs do to the drawn place, the model and the speed. A Lua state of
+# its own.
+add_executable(test_missile_motion
+    test_missile_motion.cpp
+    ${CMAKE_SOURCE_DIR}/src/rendering/missile_motion.cpp
+)
+target_include_directories(test_missile_motion PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_missile_motion SYSTEM PRIVATE
+    ${TEST_SYSTEM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/extern/lua-5.1.5/src)
+target_link_libraries(test_missile_motion PRIVATE catch2_main lua51)
+wowee_test_link_glm(test_missile_motion)
+add_test(NAME missile_motion COMMAND test_missile_motion)
+register_test_target(test_missile_motion)
+
 # ── test_lua_taint ──────────────────────────────────────────
 # The client's add-on protection: the taint the patched Lua core carries on
 # every value, the bracket around every call into Lua, and 0x005191c0's rules

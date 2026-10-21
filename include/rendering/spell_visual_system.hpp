@@ -12,6 +12,7 @@
 #include <memory>
 #include <glm/glm.hpp>
 
+#include "rendering/missile_motion.hpp"
 #include "rendering/spell_missile.hpp"
 #include "rendering/spell_kit.hpp"
 #include "rendering/spell_chain.hpp"
@@ -103,6 +104,7 @@ public:
         glm::vec3 castOffset{0.0f};          ///< in the source attachment's frame
         glm::vec3 impactOffset{0.0f};        ///< in the destination attachment's frame
         uint32_t soundId = 0;                ///< SpellVisual MissileSound (SoundEntries), 0 = none
+        uint32_t motionId = 0;               ///< SpellVisual MissileMotion (+0x54), 0 = none
     };
 
     /// The visual's missile, or null when it flies none (no MissileModel, or
@@ -866,7 +868,29 @@ private:
         bool adjusted = false;
         spell_missile::MissileArc arc;
         glm::vec3 arcStart{0.0f};
+        // Its SpellMissileMotion script (+0x17c; 0 for none, or once it has
+        // raised), which copy of how many it is (+0x110, +0x114), where it
+        // was let go (+0x38), how far that was from the target (+0x184), its
+        // three randoms (+0x188), how far along it is (+0xf8, flag 0x1000)
+        // and its speed before the script (+0x28).
+        uint32_t motionId = 0;
+        bool hasMotion = false;
+        int32_t missileIndex = 0;
+        int32_t missileCount = 1;
+        glm::vec3 firePos{0.0f};
+        float startDistance = 0.0f;
+        std::array<float, 3> rands{};
+        float progress = 0.0f;
+        float baseSpeed = 0.0f;
+        // Flag 0x800, a motion's or an ADJUST_MISSILE's: it faces the way it
+        // is drawn moving, from where it was last drawn (+0x5c).
+        bool facesDrawnMotion = false;
+        glm::vec3 lastDrawn{0.0f};
     };
+    /// One frame of a missile's motion script (0x00700350, 0x00700550,
+    /// 0x006feb20): where it is drawn and how its model is turned, its speed
+    /// changed; the drawn place is its own where it has no script.
+    glm::vec3 runMissileMotion(ActiveMissile& missile, const glm::vec3& target, glm::mat4& turn);
 
     void loadSpellVisualDbc();
     /// The M2Renderer model id for an effect model; 0 when it is not ready.
@@ -904,6 +928,19 @@ private:
     const spell_missile::SpellMissileRow* spellMissileRow(uint32_t id);
     std::unordered_map<uint32_t, spell_missile::SpellMissileRow> spellMissileRows_;
     bool spellMissileDbcLoaded_ = false;
+    /// SpellMissileMotion.dbc: a row's script and how many missiles fly.
+    struct MissileMotionRow {
+        std::string script;
+        int32_t missileCount = 0;
+    };
+    const MissileMotionRow* missileMotionRow(uint32_t id);
+    std::unordered_map<uint32_t, MissileMotionRow> missileMotionRows_;
+    bool missileMotionDbcLoaded_ = false;
+    /// The scripts compiled so far, and those that would not compile.
+    std::unique_ptr<missile_motion::Scripts> missileScripts_;
+    std::unordered_set<uint32_t> failedMotionScripts_;
+    /// The randoms a missile is launched with (0x007022d0, 0x00464580).
+    std::mt19937 missileRng_{std::random_device{}()};
 
     M2Renderer* m2Renderer_ = nullptr;
     Renderer* renderer_ = nullptr;
