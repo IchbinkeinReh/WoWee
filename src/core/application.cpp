@@ -1101,6 +1101,9 @@ bool Application::initialize() {
         luaSvc.getCameraController = [r = renderer.get()]() -> rendering::CameraController* {
             return r ? r->getCameraController() : nullptr;
         };
+        luaSvc.getCamera = [r = renderer.get()]() -> const rendering::Camera* {
+            return r ? r->getCamera() : nullptr;
+        };
         luaSvc.interactWithTarget = [uim = uiManager.get(), gh = gameHandler.get()]() {
             if (uim && gh) uim->getGameScreen().interactWithTarget(*gh);
         };

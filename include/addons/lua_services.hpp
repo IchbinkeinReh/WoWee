@@ -10,7 +10,7 @@
 namespace wowee::core  { class Window; }
 namespace wowee::audio { class AudioCoordinator; }
 namespace wowee::game  { class ExpansionRegistry; }
-namespace wowee::rendering { class CameraController; }
+namespace wowee::rendering { class CameraController; class Camera; }
 
 namespace wowee::addons {
 
@@ -363,6 +363,9 @@ struct LuaServices {
     /// The camera, for the saved views (SetView, SaveView, ResetView,
     /// NextView, PrevView) and FlipCameraYaw; none before there is one.
     std::function<rendering::CameraController*()> getCameraController;
+    /// The camera the world is drawn through, for what is asked of the screen
+    /// (TargetDirection*: 0x004f6d20 projects through it).
+    std::function<const rendering::Camera*()> getCamera;
     /// ToggleSheath: the toggle the key makes (0x0051a6b0 -> 0x006e23a0).
     std::function<void()> toggleSheath;
     /// InteractUnit: what right-clicking the target does (0x005277b0).

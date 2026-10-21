@@ -3309,3 +3309,8 @@ wowee_add_test(test_glyph_socket
 wowee_add_test(test_latest_criteria
     SOURCES test_latest_criteria.cpp)
 
+# ── test_target_direction ────────────────────────────────────
+# TargetDirectionEnemy/Friend's choice (0x005252d0, 0x00518f40, 0x004f6d20).
+# Header-only.
+wowee_add_test(test_target_direction
+    SOURCES test_target_direction.cpp)
