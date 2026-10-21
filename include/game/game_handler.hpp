@@ -740,6 +740,8 @@ public:
 
     // Server info commands
     void queryServerTime(bool announce = false);
+    /// CMSG_ZONEUPDATE: the zone the player has come into, u32 (0x0078ee30).
+    void sendZoneUpdate(uint32_t zoneId);
     /// Seconds until the daily quest reset, or 0 if the server has not said.
     uint32_t getSecondsUntilDailyReset() const;
     void requestPlayedTime();

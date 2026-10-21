@@ -1941,6 +1941,14 @@ const GameHandler::InspectResult* GameHandler::getInspectResult() const {
     return socialHandler_ ? socialHandler_->getInspectResult() : nullptr;
 }
 
+void GameHandler::sendZoneUpdate(uint32_t zoneId) {
+    if (zoneId == 0 || state != WorldState::IN_WORLD || !socket) return;
+    if (wireOpcode(Opcode::CMSG_ZONEUPDATE) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_ZONEUPDATE));
+    packet.writeUInt32(zoneId);
+    socket->send(packet);
+}
+
 void GameHandler::queryServerTime(bool announce) {
     if (socialHandler_) socialHandler_->queryServerTime(announce);
 }
