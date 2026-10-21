@@ -765,6 +765,18 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::MSG_GUILD_BANK_LOG_QUERY] = [this](network::Packet& packet) { handleGuildBankLog(packet); };
     table[Opcode::SMSG_PETITION_QUERY_RESPONSE] = [this](network::Packet& packet) { handlePetitionQueryResponse(packet); };
     table[Opcode::SMSG_PETITION_SHOW_SIGNATURES] = [this](network::Packet& packet) { handlePetitionShowSignatures(packet); };
+    // The charter's new name, as the server took it (0x006dd270): the item's
+    // guid and the name. The client finds the charter the item holds in its
+    // petition cache, writes the name over it and raises PETITION_SHOW; here
+    // the charter is the one this client knows, petitionInfo_.
+    table[Opcode::MSG_PETITION_RENAME] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(9)) return;
+        const uint64_t itemGuid = packet.readUInt64();
+        std::string name = packet.readString();
+        if (name.empty() || itemGuid == 0 || petitionInfo_.petitionGuid != itemGuid) return;
+        petitionInfo_.guildName = std::move(name);
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PETITION_SHOW", {});
+    };
     table[Opcode::SMSG_PETITION_SIGN_RESULTS] = [this](network::Packet& packet) { handlePetitionSignResults(packet); };
 
     // ---- Battlefield / BG ----
