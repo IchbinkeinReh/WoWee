@@ -2522,7 +2522,11 @@ void Renderer::updatePlayerArea() {
     // Out of the world the texts go back to nothing, as leaving it clears the
     // client's (0x00529160, from 0x00406510) - so the first area after
     // entering again is a new area, as it is on a new map.
-    if (!gh || !gh->isInWorld()) { zoneTextsKnown_ = false; return; }
+    if (!gh || !gh->isInWorld()) {
+        zoneTextsKnown_ = false;
+        zoneUpdateZone_ = zoneUpdateArea_ = 0xFFFFFFFFu;
+        return;
+    }
     if (!terrainManager || !zoneManager) return;
     if (gh->getCurrentMapId() != zoneTextsMapId_) {
         zoneTextsMapId_ = gh->getCurrentMapId();
@@ -2654,6 +2658,22 @@ void Renderer::updatePlayerArea() {
             n.building = root->name;
             if (n.building.empty()) n.building = gh->getAreaName(root->areaId != 0 ? root->areaId : groundArea);
             names = std::move(n);
+        }
+    }
+    // The server told the zone (0x0078eeb0 -> 0x0078ee30, CMSG_ZONEUPDATE
+    // with its id, u32): outside a building's names, whenever the zone or the
+    // subzone is not the pair last told. A building's names (0x0078ec70) keep
+    // the subzone, or the zone where there is none, as the last zone told,
+    // so stepping out into a subzone tells it again.
+    if (const auto parent = zoneManager->areaParent(area)) {
+        const uint32_t zone = *parent != 0 ? *parent : area;
+        const uint32_t sub = *parent != 0 ? area : 0;
+        if (names) {
+            zoneUpdateZone_ = sub != 0 ? sub : zone;
+        } else if (zone != zoneUpdateZone_ || sub != zoneUpdateArea_) {
+            zoneUpdateZone_ = zone;
+            zoneUpdateArea_ = sub;
+            gh->sendZoneUpdate(zone);
         }
     }
     const auto next = za::texts(area, lookup, names);

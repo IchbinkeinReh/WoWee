@@ -177,6 +177,10 @@ public:
     /// their on-use spell never passes through castSpell().
     void noteGroundCastSpell(uint32_t spellId) { lastGroundCastSpellId_ = spellId; }
     void cancelCast();
+    /// 0x005faa40: the channel spell on the player (UNIT_CHANNEL_SPELL), where
+    /// its ChannelInterruptFlags has 0x8 (movement), cancelled with
+    /// CMSG_CANCEL_CHANNELLING and the spell's id, u32.
+    void cancelChannelOnMove();
     void cancelAura(uint32_t spellId);
 
     // Known spells
@@ -292,6 +296,9 @@ public:
         return (it != learnedTalents_[activeTalentSpec_].end()) ? it->second : 0;
     }
     void learnTalent(uint32_t talentId, uint32_t requestedRank);
+    /// The previewed talents learned in one request, each at the rank it is
+    /// to have (counted from one), in the order the trees list them.
+    void learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
     void switchTalentSpec(uint8_t newSpec);
 
     // Talent DBC access

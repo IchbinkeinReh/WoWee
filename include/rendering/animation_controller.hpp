@@ -73,6 +73,8 @@ public:
     static std::string getSelfEmoteTextByDbcId(uint32_t dbcId,
                                                const std::string* targetName = nullptr);
     static uint32_t getEmoteAnimByEmotesId(uint32_t emoteId);
+    /// Emotes.dbc EmoteFlags of a row.
+    static uint32_t getEmoteFlagsByEmotesId(uint32_t emoteId);
     /// True if the Emotes.dbc entry is a persistent STATE_ emote (loops until
     /// cleared) rather than a one-shot.
     static bool isStateEmoteById(uint32_t emoteId);

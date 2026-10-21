@@ -107,6 +107,16 @@ void applyKitAnimation(const Slots& now, Decision& d, uint32_t kit) {
     }
 }
 
+void applyRiderKitAnimation(const anim::AnimationDataTable& data, const Slots& now, Decision& d, uint32_t kit) {
+    const uint32_t b = data.behavior(kit);
+    if (isMountAnimation(b) || !isUpperBody(b)) return;
+    const bool same = now.upper.anim == static_cast<int32_t>(kit);
+    d.upper = Slot{static_cast<int32_t>(kit), same ? now.upper.timeMs : 0.0f, true};
+    d.upperBlend = false;
+    d.upperAction = same ? Action::Keep : Action::Play;
+    d.upperFromBody = false;
+}
+
 bool hoverReplaces(uint32_t modelPlays) { return modelPlays == 0 || modelPlays == 8 || modelPlays == 25; }
 
 std::optional<Wound> wound(const anim::AnimationDataTable& data, const Unit& unit, bool critical, int32_t shown,

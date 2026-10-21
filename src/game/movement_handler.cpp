@@ -364,6 +364,25 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
         };
     }
 
+    // Another unit's collision height (0x00741b00 -> 0x007406a0 case 0x518):
+    // its movement as any move message carries it, then the height, which
+    // the client keeps for that unit's own collision (0x006ee810) - nothing
+    // this client draws or moves others by - so the movement is what lands.
+    table[Opcode::MSG_MOVE_SET_COLLISION_HGT] = [this](network::Packet& packet) {
+        if (owner_.getState() == WorldState::IN_WORLD) handleOtherPlayerMovement(packet);
+    };
+    // Another unit's movement clock moved on (0x0071cab0 -> 0x006e9280): the
+    // packed guid and the milliseconds it skipped, added to what its
+    // timestamps are measured from, so the next move's time since the last
+    // one leaves the skip out.
+    table[Opcode::MSG_MOVE_TIME_SKIPPED] = [this](network::Packet& packet) {
+        if (owner_.getState() != WorldState::IN_WORLD) return;
+        const uint64_t guid = isPreWotlk() ? packet.readUInt64() : packet.readPackedGuid();
+        if (!packet.hasRemaining(4)) return;
+        const uint32_t skipped = packet.readUInt32();
+        if (auto it = otherPlayerMoveTimeMs_.find(guid); it != otherPlayerMoveTimeMs_.end()) it->second += skipped;
+    };
+
     // MSG_MOVE_SET_*_SPEED relay
     for (auto op : { Opcode::MSG_MOVE_SET_RUN_SPEED, Opcode::MSG_MOVE_SET_RUN_BACK_SPEED,
                      Opcode::MSG_MOVE_SET_WALK_SPEED, Opcode::MSG_MOVE_SET_SWIM_SPEED,
@@ -648,6 +667,15 @@ void MovementHandler::sendMovement(Opcode opcode) {
         if (isPositionalMove) {
             owner_.cancelCast();
         }
+    }
+    // A move key, autorun, both mouse buttons or a jump (0x005fbe10,
+    // 0x005fbf10, 0x005fc0f0 -> 0x005faa40) ends the player's own channel
+    // when its spell's ChannelInterruptFlags has 0x8: CMSG_CANCEL_CHANNELLING.
+    if (moverIsPlayer && owner_.getSpellHandler() &&
+        (opcode == Opcode::MSG_MOVE_START_FORWARD || opcode == Opcode::MSG_MOVE_START_BACKWARD ||
+         opcode == Opcode::MSG_MOVE_START_STRAFE_LEFT || opcode == Opcode::MSG_MOVE_START_STRAFE_RIGHT ||
+         opcode == Opcode::MSG_MOVE_JUMP)) {
+        owner_.getSpellHandler()->cancelChannelOnMove();
     }
 
     // The pitch's packets go out only for a unit that can pitch: swimming,
@@ -4324,6 +4352,11 @@ bool MovementHandler::onMoveSpline(uint64_t guid) {
     if (vehicle::moveSplineRunning(it->second, nextMovementTimestampMs())) return true;
     moveSplines_.erase(it);
     return false;
+}
+
+std::optional<uint32_t> MovementHandler::moveSplineFlags(uint64_t guid) {
+    if (!onMoveSpline(guid)) return std::nullopt;
+    return moveSplines_[guid].flags;
 }
 
 uint64_t MovementHandler::playerFarsight() const {

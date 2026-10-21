@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/character_renderer.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/animation_controller.hpp"
 #include "rendering/animation/animation_ids.hpp"
@@ -327,10 +328,12 @@ void AnimationCallbackHandler::setupCallbacks() {
         }
     });
 
-    // Other units' stand state (UNIT_FIELD_BYTES_1 byte 0): sit down / lie
-    // down / kneel through the transition into the loop, stand up through the
-    // transition out. A unit not yet drawn takes its pose at spawn.
-    gameHandler_.setUnitStandStateCallback([this](uint64_t guid, uint8_t oldState, uint8_t newState) {
+    // Other units' stand state (UNIT_FIELD_BYTES_1 byte 0), as the client
+    // takes its change (0x0073f460 -> 0x0073f060): the base animation, from
+    // the state its animation was given for, sits it down, lies it down,
+    // kneels it or gets it up, and the transition's end asks its loop
+    // (0x0073b510). A unit not yet drawn takes its pose at spawn.
+    gameHandler_.setUnitStandStateCallback([this](uint64_t guid, uint8_t /*oldState*/, uint8_t newState) {
         auto* cr = renderer_.getCharacterRenderer();
         if (!cr) return;
         uint32_t instanceId = entitySpawner_.getCreatureInstanceId(guid);
@@ -339,38 +342,13 @@ void AnimationCallbackHandler::setupCallbacks() {
         uint32_t curAnim = 0; float curT = 0.0f, curDur = 0.0f;
         if (cr->getAnimationState(instanceId, curAnim, curT, curDur) &&
             curAnim == rendering::anim::DEATH) return;
-        const auto from = rendering::anim::standStateAnims(oldState);
-        const auto to = rendering::anim::standStateAnims(newState);
-        uint32_t loopAnim = to.loop;
-        if (newState == 0) {
-            // Standing up resumes a retained NPC work loop, as the sync loop does.
-            auto& activeEmotes = entitySpawner_.getCreatureActiveEmotes();
-            auto it = activeEmotes.find(guid);
-            if (it != activeEmotes.end() && cr->hasAnimation(instanceId, it->second))
-                loopAnim = it->second;
-        }
-        if (!cr->hasAnimation(instanceId, loopAnim)) loopAnim = rendering::anim::STAND;
-        cr->setRestAnimation(instanceId, newState == 0 ? 0 : loopAnim);
-        const uint32_t transition = newState == 0 ? from.up : to.down;
-        if (transition != 0 && cr->hasAnimation(instanceId, transition)) {
-            cr->playAnimation(instanceId, transition, /*loop=*/false, loopAnim);
-        } else {
-            cr->playAnimation(instanceId, loopAnim, /*loop=*/true);
-        }
+        cr->standStateChanged(instanceId, newState);
     });
 
-    // Spell cast animation callback - play cast animation on caster (player or NPC/other player)
-    // WoW-accurate 3-phase spell animation sequence:
-    //   SPELL_PRECAST (31)              - one-shot wind-up
-    //   READY_SPELL_DIRECTED/OMNI (51/52) - looping hold while cast bar fills
-    //   SPELL_CAST_DIRECTED/OMNI/AREA (53/54/33) - one-shot release at completion
-    // Channels use CHANNEL_CAST_DIRECTED/OMNI (124/125).
-    // castType comes from the spell packet's targetGuid:
-    //   DIRECTED - spell targets a specific unit  (Frostbolt, Heal)
-    //   OMNI     - self-cast / no explicit target (Arcane Explosion, buffs)
-    //   AREA     - ground-targeted AoE           (Blizzard, Rain of Fire)
+    // A cast's start and end: what its caster plays is its spell's kits'
+    // (0x0073b140) - for the player through its animation controller.
     gameHandler_.setSpellCastAnimCallback([this](uint64_t guid, bool start, bool isChannel,
-                                                  game::SpellCastType castType) {
+                                                  game::SpellCastType /*castType*/) {
         auto* cr = renderer_.getCharacterRenderer();
         if (!cr) return;
 
@@ -388,11 +366,28 @@ void AnimationCallbackHandler::setupCallbacks() {
         if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(guid);
         if (instanceId == 0) return;
 
-        const bool isDirected = (castType == game::SpellCastType::DIRECTED);
-        const bool isArea     = (castType == game::SpellCastType::AREA);
+        auto* svs = renderer_.getSpellVisualSystem();
+        if (!isLocalPlayer) {
+            // Another unit: its spell's kits animate it as they are played
+            // on it - the PrecastKit's StartAnimID or AnimID at the cast's
+            // start, the CastKit's as it goes (0x0073b140), the cast loop
+            // between (0x00724330) and a channel's ChannelKit over all
+            // (0x0071e400). The end of a cast whose PrecastKit animates it
+            // asks the base animation again (0x007fec00), as does a
+            // channel's (0x0073eb50).
+            if (start) {
+                const auto* cast = gameHandler_.getUnitCastState(guid);
+                castSpells_[guid] = cast ? cast->spellId : 0u;
+                return;
+            }
+            const uint32_t spell = castSpells_.count(guid) ? castSpells_[guid] : 0u;
+            castSpells_.erase(guid);
+            if (isChannel || (svs && svs->castAnimations(spell).animates())) cr->playBaseAnimation(instanceId);
+            return;
+        }
 
         if (start) {
-            uint32_t currentSpell = isLocalPlayer ? gameHandler_.getCurrentCastSpellId() : 0;
+            uint32_t currentSpell = gameHandler_.getCurrentCastSpellId();
             bool isFishing = isChannel && game::spellclass::isFishingCast(currentSpell);
 
             // Helper: pick first animation the model supports from a list
@@ -407,7 +402,7 @@ void AnimationCallbackHandler::setupCallbacks() {
             bool isGathering = false;
             game::spellclass::RestChannelKind restChannel =
                 game::spellclass::RestChannelKind::NONE;
-            if (isLocalPlayer && currentSpell != 0) {
+            if (currentSpell != 0) {
                 gameHandler_.loadSpellNameCache();
                 auto it = gameHandler_.spellNameCacheRef().find(currentSpell);
                 isBandage = (it != gameHandler_.spellNameCacheRef().end() &&
@@ -505,122 +500,42 @@ void AnimationCallbackHandler::setupCallbacks() {
                 // Fishing is a one-shot pole cast followed by the channel idle.
                 // The pole is the main hand, drawn by the channel at the bobber
                 // (0x0073a520).
-                if (isLocalPlayer) {
-                    auto* ac = renderer_.getAnimationController();
-                    if (ac) {
-                        uint32_t castAnim = cr->hasAnimation(instanceId, rendering::anim::FISHING_CAST)
-                            ? rendering::anim::FISHING_CAST : 0;
-                        ac->startSpellCast(castAnim, rendering::anim::FISHING_LOOP, true, 0);
-                    }
-                } else {
-                    cr->playAnimation(instanceId, rendering::anim::FISHING_LOOP, true);
+                if (auto* ac = renderer_.getAnimationController()) {
+                    uint32_t castAnim = cr->hasAnimation(instanceId, rendering::anim::FISHING_CAST)
+                        ? rendering::anim::FISHING_CAST : 0;
+                    ac->startSpellCast(castAnim, rendering::anim::FISHING_LOOP, true, 0);
                 }
             } else {
-            // Precast wind-up (one-shot, non-channels only)
-            uint32_t precastAnim = 0;
-            if (!isChannel) {
-                precastAnim = pickFirst({rendering::anim::SPELL_PRECAST});
-            }
-
-            // Cast hold (looping while cast bar fills / channel active)
+            // The spell's kits, as 0x0073b140 plays them: the PrecastKit's
+            // StartAnimID once, then its AnimID while the cast runs - a
+            // channel's ChannelKit's over everything (0x0071e400) - and the
+            // CastKit's AnimID as it goes. A spell whose kits have none
+            // animates nothing.
+            const auto kits = svs ? svs->castAnimations(currentSpell)
+                                  : rendering::SpellVisualSystem::CastAnimations{};
+            const bool castTime = gameHandler_.getCastTimeTotal() > 0.0f;
+            const uint32_t precastAnim = !isChannel && kits.precastStart >= 0
+                                             ? static_cast<uint32_t>(kits.precastStart) : 0u;
             uint32_t castAnim = 0;
             if (isChannel) {
-                // Channel hold: prefer DIRECTED/OMNI based on spell target classification
-                if (isDirected) {
-                    castAnim = pickFirst({
-                        rendering::anim::CHANNEL_CAST_DIRECTED,
-                        rendering::anim::CHANNEL_CAST_OMNI,
-                        rendering::anim::READY_SPELL_DIRECTED,
-                        rendering::anim::SPELL
-                    });
-                } else {
-                    // OMNI or AREA channels (Blizzard channel, Tranquility, etc.)
-                    castAnim = pickFirst({
-                        rendering::anim::CHANNEL_CAST_OMNI,
-                        rendering::anim::CHANNEL_CAST_DIRECTED,
-                        rendering::anim::READY_SPELL_OMNI,
-                        rendering::anim::SPELL
-                    });
-                }
-            } else {
-                // Regular cast hold: READY_SPELL_DIRECTED/OMNI while cast bar fills
-                if (isDirected) {
-                    castAnim = pickFirst({
-                        rendering::anim::READY_SPELL_DIRECTED,
-                        rendering::anim::READY_SPELL_OMNI,
-                        rendering::anim::SPELL_CAST_DIRECTED,
-                        rendering::anim::SPELL_CAST,
-                        rendering::anim::SPELL
-                    });
-                } else {
-                    // OMNI (self-buff) or AREA (AoE targeting)
-                    castAnim = pickFirst({
-                        rendering::anim::READY_SPELL_OMNI,
-                        rendering::anim::READY_SPELL_DIRECTED,
-                        rendering::anim::SPELL_CAST_OMNI,
-                        rendering::anim::SPELL_CAST,
-                        rendering::anim::SPELL
-                    });
-                }
+                if (const auto loop = svs ? svs->castLoop(0, currentSpell) : std::nullopt) castAnim = loop->anim;
+            } else if (kits.precastAnim > 0 && castTime) {
+                castAnim = static_cast<uint32_t>(kits.precastAnim);
             }
-            // TBC models may omit the legacy SPELL (2) sequence; idle is a
-            // quieter fallback than asking the renderer to play a missing anim.
-            if (castAnim == 0) castAnim = rendering::anim::STAND;
-
-            // Finalization release (one-shot after cast completes)
-            // Animation chosen by spell target type: AREA → SPELL_CAST_AREA,
-            // DIRECTED → SPELL_CAST_DIRECTED, OMNI → SPELL_CAST_OMNI
-            uint32_t finalizeAnim = 0;
-            if (isLocalPlayer && !isChannel) {
-                if (isArea) {
-                    // Ground-targeted AoE: SPELL_CAST_AREA → SPELL_CAST_OMNI
-                    finalizeAnim = pickFirst({
-                        rendering::anim::SPELL_CAST_AREA,
-                        rendering::anim::SPELL_CAST_OMNI,
-                        rendering::anim::SPELL_CAST,
-                        rendering::anim::SPELL
-                    });
-                } else if (isDirected) {
-                    // Single-target: SPELL_CAST_DIRECTED → SPELL_CAST_OMNI
-                    finalizeAnim = pickFirst({
-                        rendering::anim::SPELL_CAST_DIRECTED,
-                        rendering::anim::SPELL_CAST_OMNI,
-                        rendering::anim::SPELL_CAST,
-                        rendering::anim::SPELL
-                    });
-                } else {
-                    // OMNI (self-buff, Arcane Explosion): SPELL_CAST_OMNI → SPELL_CAST_AREA
-                    finalizeAnim = pickFirst({
-                        rendering::anim::SPELL_CAST_OMNI,
-                        rendering::anim::SPELL_CAST_AREA,
-                        rendering::anim::SPELL_CAST,
-                        rendering::anim::SPELL
-                    });
-                }
-            }
-
-            if (isLocalPlayer) {
-                auto* ac = renderer_.getAnimationController();
-                if (ac) ac->startSpellCast(precastAnim, castAnim, true, finalizeAnim);
-            } else {
-                cr->playAnimation(instanceId, castAnim, true);
+            const uint32_t finalizeAnim = !isChannel && kits.castAnim >= 0 ? static_cast<uint32_t>(kits.castAnim) : 0u;
+            if (precastAnim != 0 || castAnim != 0 || finalizeAnim != 0) {
+                // The animation controller needs a hold between: the start
+                // where there is no loop, else the release.
+                const uint32_t hold = castAnim != 0 ? castAnim : precastAnim != 0 ? precastAnim : finalizeAnim;
+                if (auto* ac = renderer_.getAnimationController())
+                    ac->startSpellCast(precastAnim, hold, castAnim != 0, finalizeAnim);
             }
             } // end !isFishing
         } else {
             // Cast/channel ended - plays finalization anim completely then returns to idle
-            if (isLocalPlayer) {
-                auto* ac = renderer_.getAnimationController();
-                if (ac) {
-                    ac->setSeatedLoopAnimation(0);
-                    ac->stopSpellCast();
-                }
-            } else {
-                // A cast loop its upper body took up on the move goes with
-                // the cast.
-                cr->releaseUpperBodyLoop(instanceId);
-                // A channel's end asks the base animation again (0x0073eb50
-                // -> 0x0073ac30).
-                if (isChannel) cr->playBaseAnimation(instanceId);
+            if (auto* ac = renderer_.getAnimationController()) {
+                ac->setSeatedLoopAnimation(0);
+                ac->stopSpellCast();
             }
         }
     });

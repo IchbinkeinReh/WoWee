@@ -741,6 +741,8 @@ public:
 
     // Server info commands
     void queryServerTime(bool announce = false);
+    /// CMSG_ZONEUPDATE: the zone the player has come into, u32 (0x0078ee30).
+    void sendZoneUpdate(uint32_t zoneId);
     /// Seconds until the daily quest reset, or 0 if the server has not said.
     uint32_t getSecondsUntilDailyReset() const;
     void requestPlayedTime();
@@ -1402,6 +1404,9 @@ public:
     /// ClearTutorials (0x00530820 -> 0x00530510): CMSG_TUTORIAL_CLEAR, the
     /// server's word for every tutorial seen.
     void sendTutorialClear();
+    /// CMSG_SET_ACTIONBAR_TOGGLES: the multi-bars shown, bits 0 to 3, u8
+    /// (0x005a8290).
+    void sendActionBarToggles(uint8_t mask);
     /// A commentator's request, as CommentatorFrame.cpp builds it
     /// (CMSG_COMMENTATOR_*): sent in the world.
     void sendCommentatorRequest(network::Packet& packet);
@@ -1613,6 +1618,7 @@ public:
         return spellHandler_ ? spellHandler_->getTalentRank(talentId) : 0;
     }
     void learnTalent(uint32_t talentId, uint32_t requestedRank);
+    void learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
     void switchTalentSpec(uint8_t newSpec);
 
     // Talent DBC access
@@ -2456,6 +2462,9 @@ public:
     const std::string& getSummonerName() const { return summonerName_; }
     float getSummonTimeoutSec() const { return summonTimeoutSec_; }
     void acceptSummon();
+    /// A player gone from the world here: a group member's stats are asked
+    /// for (SocialHandler::playerLeftSight).
+    void playerLeftSight(uint64_t guid);
     void declineSummon();
     void tickSummonTimeout(float dt) {
         if (!pendingSummonRequest_) return;
@@ -3818,6 +3827,15 @@ public:
     /// Whether a server move spline carries the unit (+0xbc): SMSG_MONSTER_MOVE
     /// moves any unit so, the player among them (0x0073c8e0).
     bool onMoveSpline(uint64_t guid);
+    /// The flags of a unit's running move spline (MoveSplineFlags).
+    std::optional<uint32_t> moveSplineFlags(uint64_t guid);
+    /// A spell's AttributesEx2.
+    [[nodiscard]] uint32_t getSpellAttributesEx2(uint32_t spellId) const;
+    /// An auto-repeating ranged spell of the player's going (+0xa38 0x200):
+    /// set by a cast of one with AttributesEx2 0x20 (0x007fa2e0), cleared
+    /// by SMSG_CANCEL_AUTO_REPEAT (0x00807560).
+    [[nodiscard]] bool isAutoRepeating() const { return autoRepeating_; }
+    void setAutoRepeating(bool on) { autoRepeating_ = on; }
     /// VEHICLE_ANGLE_UPDATE for the mover's row (0x005fa910).
     void fireVehicleAngleUpdate(float pitch);
     /// VehicleAimUp/DownStart/Stop (0x005fc8e0 -> 0x005fa170, 0x005fb1a0).
@@ -5008,6 +5026,7 @@ public:
     }
 
 private:
+    bool autoRepeating_ = false;
     // Dead: autoTargetAttacker moved to CombatHandler
 
     /**

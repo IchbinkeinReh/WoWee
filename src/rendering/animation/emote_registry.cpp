@@ -196,6 +196,7 @@ void EmoteRegistry::loadFromDbc() {
 
     std::unordered_map<uint32_t, uint32_t> emoteIdToAnim;
     animByEmotesId_.clear();
+    flagsByEmotesId_.clear();
     stateEmoteIds_.clear();
     if (auto emotesDbc = assetManager->loadDBC("Emotes.dbc"); emotesDbc && emotesDbc->isLoaded()) {
         emoteIdToAnim.reserve(emotesDbc->getRecordCount());
@@ -204,12 +205,17 @@ void EmoteRegistry::loadFromDbc() {
         // anim. Column 4 in every expansion's Emotes.dbc.
         uint32_t specField = emL ? (*emL)["EmoteSpecProc"] : 4;
         if (specField == 0xFFFFFFFF) specField = 4;
+        // EmoteFlags, column 3.
+        uint32_t flagsField = emL ? (*emL)["EmoteFlags"] : 3;
+        if (flagsField == 0xFFFFFFFF) flagsField = 3;
         for (uint32_t r = 0; r < emotesDbc->getRecordCount(); ++r) {
             uint32_t emoteId = emotesDbc->getUInt32(r, emL ? (*emL)["ID"] : 0);
             uint32_t animId = emotesDbc->getUInt32(r, emL ? (*emL)["AnimID"] : 2);
             if (emotesDbc->getUInt32(r, specField) != 0) {
                 stateEmoteIds_.insert(emoteId);
             }
+            if (const uint32_t flags = emotesDbc->getUInt32(r, flagsField); flags != 0)
+                flagsByEmotesId_[emoteId] = flags;
             if (animId != 0) {
                 emoteIdToAnim[emoteId] = animId;
                 animByEmotesId_[emoteId] = animId;
@@ -350,6 +356,11 @@ std::optional<EmoteRegistry::EmoteResult> EmoteRegistry::findEmote(const std::st
     if (info.animId == 0) return std::nullopt;
     return EmoteResult{.animId = info.animId, .loop = info.loop};
 }
+uint32_t EmoteRegistry::flagsByEmotesId(uint32_t emoteId) const {
+    auto it = flagsByEmotesId_.find(emoteId);
+    return it != flagsByEmotesId_.end() ? it->second : 0u;
+}
+
 uint32_t EmoteRegistry::animByEmotesId(uint32_t emoteId) const {
     auto it = animByEmotesId_.find(emoteId);
     return it != animByEmotesId_.end() ? it->second : 0;

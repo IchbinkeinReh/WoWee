@@ -10,7 +10,6 @@
 
 #include "rendering/client_weather.hpp"
 
-#include <chrono>
 #include <cmath>
 #include <vector>
 
@@ -25,8 +24,13 @@ struct Sequence {
     float operator()() { return values[next++ % values.size()]; }
 };
 
+// A clock that stands still: the fill budget's time is spent only where a
+// test says so, however loaded the machine running it is.
+double frozenClock() { return 0.0; }
+
 cw::HeightCache flatGround(float height, int* asked = nullptr) {
     cw::HeightCache c;
+    c.setClock(frozenClock);
     c.setQuery([height, asked](float, float, float) {
         if (asked) ++*asked;
         return height;
@@ -218,12 +222,13 @@ TEST_CASE("the cells a frame asks of the world are counted against its budget", 
 }
 
 TEST_CASE("slow cells spend the frame's budget by their time", "[weather]") {
-    // A query that takes a millisecond: the budget's two are gone in two or
-    // three cells, long before the count is.
+    // A query that takes a millisecond on the cache's clock: the budget's two
+    // are gone in two cells, long before the count is.
+    double clock = 0.0;
     cw::HeightCache c;
-    c.setQuery([](float, float, float z) {
-        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
-        while (std::chrono::steady_clock::now() < until) {}
+    c.setClock([&clock] { return clock; });
+    c.setQuery([&clock](float, float, float z) {
+        clock += 0.001;
         return z - 1.0f;
     });
     c.recenter({0.0f, 0.0f});
@@ -233,8 +238,7 @@ TEST_CASE("slow cells spend the frame's budget by their time", "[weather]") {
         c.heightAt({(static_cast<float>(asked) + 0.5f) * cw::HeightCache::kCellSize, 0.5f, 10.0f});
         ++asked;
     }
-    CHECK(asked >= 2);
-    CHECK(asked <= 3);
+    CHECK(asked == 2);
     CHECK(c.fillSecondsThisFrame() >= cw::HeightCache::kFillSecondsPerFrame);
     c.startFrame();
     CHECK_FALSE(c.fillBudgetSpent());
@@ -243,6 +247,7 @@ TEST_CASE("slow cells spend the frame's budget by their time", "[weather]") {
 
 TEST_CASE("a trace stops at the first surface above it", "[weather]") {
     cw::HeightCache c;
+    c.setClock(frozenClock);
     // A wall from x = 10 on.
     c.setQuery([](float x, float, float z) { return x >= 10.0f ? 50.0f : z - 200.0f; });
     c.recenter({0.0f, 0.0f});
@@ -264,6 +269,7 @@ TEST_CASE("no drop falls where the ground is not known yet", "[weather]") {
     bool arrived = false;
     int asked = 0;
     cw::HeightCache ground;
+    ground.setClock(frozenClock);
     // A roof at 20 over a floor at 0, once the world is there.
     ground.setQuery([&](float, float, float) -> std::optional<float> {
         ++asked;
@@ -308,6 +314,7 @@ TEST_CASE("no drop falls where the ground is not known yet", "[weather]") {
 
 TEST_CASE("a trace that meets ground not known yet makes no drop", "[weather]") {
     cw::HeightCache c;
+    c.setClock(frozenClock);
     // Known up to x = 10, not yet past it.
     c.setQuery([](float x, float, float z) -> std::optional<float> {
         if (x >= 10.0f) return std::nullopt;
@@ -324,6 +331,7 @@ TEST_CASE("a trace that meets ground not known yet makes no drop", "[weather]") 
     // crossing x = 0 at about z = 0, well above the ground.
     bool known = false;
     cw::HeightCache g;
+    g.setClock(frozenClock);
     g.setQuery([&](float x, float, float) -> std::optional<float> {
         if (x < 0.0f && !known) return std::nullopt;
         return -30.0f;
@@ -346,6 +354,7 @@ TEST_CASE("cells under what came or went are asked again", "[weather]") {
     float roof = -1000.0f;  // nothing yet
     int asked = 0;
     cw::HeightCache c;
+    c.setClock(frozenClock);
     c.setQuery([&](float, float, float z) -> std::optional<float> {
         ++asked;
         return roof > -999.0f ? roof : z - 200.0f;

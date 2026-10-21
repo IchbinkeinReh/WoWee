@@ -1235,6 +1235,7 @@ void EntitySpawner::updateUnitWeapons() {
         --budget;
         // What its hands hold for its combat ready (0x00714dd0).
         uint32_t meleeReady = 25;
+        std::optional<uint32_t> rangedSubClass;
         std::array<UnitWeaponItem, 3> items{};
         std::array<uint32_t, 3> displays{};
         if (resolveUnitWeaponItems(*slots, items, displays)) {
@@ -1242,6 +1243,7 @@ void EntitySpawner::updateUnitWeapons() {
             const rendering::base_animation::HandItem offHand{items[1].itemClass, items[1].subClass};
             meleeReady = rendering::base_animation::meleeReady(entries[0] != 0 ? &mainHand : nullptr,
                                                                entries[1] != 0 ? &offHand : nullptr);
+            if (entries[2] != 0 && items[2].itemClass == 2) rangedSubClass = items[2].subClass;
         }
         shown = {.instanceId = instanceId,
                  .modelId = modelId,
@@ -1251,7 +1253,8 @@ void EntitySpawner::updateUnitWeapons() {
                  .unitFlags = unitFlags,
                  .unitFlags2 = unitFlags2,
                  .offHandFollowsAnimation = followsAnim,
-                 .meleeReady = meleeReady};
+                 .meleeReady = meleeReady,
+                 .rangedSubClass = rangedSubClass};
     };
     for (const auto& [guid, instanceId] : creatureInstances_) visit(guid, instanceId, false);
     for (const auto& [guid, instanceId] : playerInstances_) {

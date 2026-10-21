@@ -2359,6 +2359,8 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
 void CharacterRenderer::setUnitAnimationState(uint32_t instanceId, const upper_body::Unit& unit) {
     auto it = instances.find(instanceId);
     if (it == instances.end()) return;
+    // The stand state its animation is for starts as the one it has.
+    if (it->second.standStateSeen < 0) it->second.standStateSeen = unit.standState;
     // A state kit that animates the unit coming or going asks its base
     // animation again (0x0073b140 type 2 and 0x0073c1d0 -> 0x0073ac30),
     // which the kit's animation then takes over (0x0071e400).
@@ -2432,10 +2434,17 @@ void CharacterRenderer::playUnitAnimation(uint32_t instanceId, uint32_t animatio
     // A state kit animating the unit has the body and an upper body of its
     // own play its animation, unblended, whatever was asked but a death
     // (0x0071e400).
-    if (unit.kitAnim && !unit.riding && !upper_body::isDeath(anim::animationData().behavior(animationId))) {
+    if (unit.kitAnim && !upper_body::isDeath(anim::animationData().behavior(animationId))) {
         const uint32_t kit =
             unit.kitAnimTiered ? tierAnimationFor(model, *unit.kitAnim, instance.animationTier) : *unit.kitAnim;
-        upper_body::applyKitAnimation(now, d, kit);
+        if (!unit.riding) {
+            upper_body::applyKitAnimation(now, d, kit);
+        } else {
+            // A rider: its mount plays it (the unit's sync), and its upper
+            // body where it is an upper-body animation and not the mount's;
+            // the body holds the rider's pose.
+            upper_body::applyRiderKitAnimation(anim::animationData(), now, d, kit);
+        }
     }
 
     // The upper body first, as 0x007385c0 plays them. Without a key bone of
@@ -2480,17 +2489,45 @@ void CharacterRenderer::playUnitAnimation(uint32_t instanceId, uint32_t animatio
     }
 }
 
-void CharacterRenderer::releaseUpperBodyLoop(uint32_t instanceId) {
+void CharacterRenderer::playKitAnimation(uint32_t instanceId, const kit_animation::KitPlay& kit) {
     auto it = instances.find(instanceId);
-    if (it == instances.end() || it->second.seatAnimationHeld) return;
+    if (it == instances.end() || !it->second.unitAnimation) return;
     auto& instance = it->second;
     const int32_t bone = upperBodyBone(instance);
+    int32_t shown = instance.currentSequenceIndex >= 0 ? static_cast<int32_t>(instance.currentAnimationId) : -1;
     for (const auto& k : instance.keyBoneAnimations) {
-        if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning && !k.once) {
-            returnKeyBone(instance, bone);
-            return;
-        }
+        if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning) shown = static_cast<int32_t>(k.animationId);
     }
+    const kit_animation::Action a = kit_animation::onKitPlayed(anim::animationData(), kit, shown);
+    if (a.clearsStart) instance.precastStart = -1;
+    switch (a.kind) {
+        case kit_animation::Action::Kind::None:
+            return;
+        case kit_animation::Action::Kind::Wound:
+            if (const auto w = woundFor(instanceId, a.critical)) playWound(instanceId, *w);
+            return;
+        case kit_animation::Action::Kind::Start:
+            playAskedAnimation(instanceId, a.anim, false, a.askFlags);
+            instances[instanceId].precastStart = static_cast<int32_t>(a.anim);
+            return;
+        case kit_animation::Action::Kind::Play:
+            playAskedAnimation(instanceId, a.anim, !a.once, a.askFlags);
+            if (a.holdsCastLoop) instances[instanceId].kitAnimationHeld = static_cast<int32_t>(a.anim);
+            return;
+    }
+}
+
+void CharacterRenderer::playAskedAnimation(uint32_t instanceId, uint32_t animationId, bool loop, uint32_t askFlags) {
+    // Asked with kit Flags 0x4 or 0x8 (0x2 or 0x4), it is played as it is,
+    // not as the unit's tier has it (0x007385c0 skips 0x007176f0).
+    if ((askFlags & 0x6u) == 0) {
+        playAnimation(instanceId, animationId, loop);
+        return;
+    }
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    if (it->second.mirrorsSeatParent || it->second.seatAnimationHeld) return;
+    playUnitAnimation(instanceId, animationId, loop, 0, upper_body::Pass::Asked);
 }
 
 bool CharacterRenderer::bodyEndsInto(uint32_t instanceId, uint32_t animationId) const {
@@ -2512,6 +2549,15 @@ base_animation::Pick CharacterRenderer::pickBaseAnimation(CharacterInstance& ins
     }
     upper_body::Unit unit = instance.unit;
     unit.speed = instance.locomotionSpeed;
+    if (instance.standStateSeen >= 0) unit.standStateSeen = static_cast<uint8_t>(instance.standStateSeen);
+    // 0x007224d0: no cast loop while a PlayImpact kit's animation plays
+    // (+0xfa4); the PrecastKit's StartAnimID until it has ended (+0xa38
+    // 0x10000), its AnimID after.
+    if (instance.kitAnimationHeld >= 0) {
+        unit.castLoopAnim.reset();
+    } else if (instance.precastStart >= 0 && unit.castTimed) {
+        unit.castLoopAnim = static_cast<uint32_t>(instance.precastStart);
+    }
     const auto has = [&model](uint32_t id) {
         return std::any_of(model.sequences.begin(), model.sequences.end(),
                            [id](const pipeline::M2Sequence& seq) { return seq.id == id; });
@@ -2524,10 +2570,32 @@ base_animation::Pick CharacterRenderer::pickBaseAnimation(CharacterInstance& ins
 void CharacterRenderer::playBaseAnimation(uint32_t instanceId) {
     auto it = instances.find(instanceId);
     if (it == instances.end() || !it->second.unitAnimation) return;
-    // 0x0073ac30: what 0x00724500 answers is asked as any animation is.
+    // 0x0073ac30: what 0x00724500 answers is asked as any animation is,
+    // and the stand state is the one it was given for (+0x9f8).
     const base_animation::Pick p =
         pickBaseAnimation(it->second, base_animation::Ask{.queuedAttack = it->second.queuedAttack});
-    if (p.anim != base_animation::kKeep) playAnimation(instanceId, p.anim, p.loop);
+    it->second.standStateSeen = it->second.unit.standState;
+    if (p.anim != base_animation::kKeep) playAskedAnimation(instanceId, p.anim, p.loop, p.flags);
+}
+
+void CharacterRenderer::standStateChanged(uint32_t instanceId, uint8_t standState) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || !it->second.unitAnimation) return;
+    auto& instance = it->second;
+    instance.unit.standState = standState;
+    // 0x0073f060: nothing where it is the state it was given for.
+    if (instance.standStateSeen == static_cast<int16_t>(standState)) return;
+    const int16_t seen = instance.standStateSeen;
+    if (standState == 0 && seen == 9) {
+        // Up from under: Birth where the model has it, else Emerge.
+        playAnimation(instanceId, hasAnimation(instanceId, 127) ? 127u : 224u, false);
+    } else if (standState == 9) {
+        playAnimation(instanceId, 201, false);  // Submerge
+    } else if (standState != 7) {
+        // The rest from the base animation, which knows the state it was in.
+        playBaseAnimation(instanceId);
+    }
+    instances[instanceId].standStateSeen = standState;
 }
 
 std::optional<upper_body::Wound> CharacterRenderer::woundFor(uint32_t instanceId, bool critical) {
@@ -2862,6 +2930,10 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                         continue;
                     }
                     k.time = duration;
+                    // 0x0073bbd0: the precast's start, or a PlayImpact
+                    // kit's animation, is over.
+                    if (static_cast<int32_t>(k.animationId) == inst.precastStart) inst.precastStart = -1;
+                    if (static_cast<int32_t>(k.animationId) == inst.kitAnimationHeld) inst.kitAnimationHeld = -1;
                     if (unitUpperBone >= 0 && k.keyBoneId == unitUpperBone && !k.vehicle) {
                         upperEnded = true;
                         continue;
@@ -2959,15 +3031,26 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                         if (inst.seatStandsWhole) inst.seatUpperStartPlayed = true;
                         const bool unitDriven = inst.unitAnimation && !inst.seatAnimationHeld &&
                                                 !inst.seatStandsWhole && !inst.mirrorsSeatParent;
+                        // 0x0073bbd0: the precast's start, or a PlayImpact
+                        // kit's animation, is over.
+                        if (static_cast<int32_t>(inst.currentAnimationId) == inst.precastStart) inst.precastStart = -1;
+                        if (static_cast<int32_t>(inst.currentAnimationId) == inst.kitAnimationHeld)
+                            inst.kitAnimationHeld = -1;
                         if (unitDriven && inst.oneShotReturnAnim == 0) {
                             // 0x0073b510 with nothing of its own to follow
                             // it: the base animation (0x0073ac30(0x10) ->
                             // 0x00724500), asked of the body alone. Where
                             // that leaves what plays, it stays as it ended.
-                            const base_animation::Pick p = pickBaseAnimation(
-                                inst, base_animation::Ask{.free = base_animation::kBodyFree,
-                                                          .flags = 0x10,
-                                                          .queuedAttack = inst.queuedAttack});
+                            // What the ended one asks of its own first: a
+                            // stand state's loop or getting up, a hold.
+                            const auto own = base_animation::afterOneShot(anim::animationData(), inst.unit,
+                                                                          inst.currentAnimationId);
+                            const base_animation::Pick p =
+                                own ? *own
+                                    : pickBaseAnimation(inst, base_animation::Ask{.free = base_animation::kBodyFree,
+                                                                                  .flags = 0x10,
+                                                                                  .queuedAttack = inst.queuedAttack});
+                            if (!own) inst.standStateSeen = inst.unit.standState;
                             if (p.anim == base_animation::kKeep) {
                                 inst.animationTime = static_cast<float>(seq.duration);
                             } else {
@@ -5557,8 +5640,15 @@ void CharacterRenderer::stepInstanceEvents(uint32_t instanceId, const CharacterI
         if (unit_event::classify(event.id).kind == unit_event::Kind::None) continue;
         const size_t timeline = event.globalSequence >= 0 ? 0u : static_cast<size_t>(sequence);
         if (timeline >= event.times.size()) continue;
-        m2_event::forEachCrossed(event.times[timeline], from, to, 0.0f,
-                                 [&](uint32_t) { steppedEvents_.push_back({instanceId, e}); });
+        const auto fire = [&](uint32_t) { steppedEvents_.push_back({instanceId, e}); };
+        // A sequence standing in reversed passes them from its end
+        // (0x00830fb0 at the negative rate 0x00826350 gives it).
+        if (inst.playMode == anim::PlayMode::Reversed && sequence == inst.currentSequenceIndex) {
+            m2_event::forEachCrossedReversed(event.times[timeline], model.sequences[sequence].duration, from, to, 0.0f,
+                                             fire);
+        } else {
+            m2_event::forEachCrossed(event.times[timeline], from, to, 0.0f, fire);
+        }
     }
 }
 

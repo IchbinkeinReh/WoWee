@@ -1168,6 +1168,11 @@ private:
     game::zone_area::Texts zoneTexts_;
     bool zoneTextsKnown_ = false;
     uint32_t zoneTextsMapId_ = 0xFFFFFFFFu;
+    /// The zone and subzone CMSG_ZONEUPDATE last went for (0x00adf318,
+    /// 0x00adf31c), none until the first; out of the world they go back to
+    /// none (0x0078e960).
+    uint32_t zoneUpdateZone_ = 0xFFFFFFFFu;
+    uint32_t zoneUpdateArea_ = 0xFFFFFFFFu;
     void updatePlayerArea();
 
     // GPU-driven grass: compute cull with atomic compaction feeding an

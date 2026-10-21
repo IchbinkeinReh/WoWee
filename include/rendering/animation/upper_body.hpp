@@ -49,8 +49,9 @@ struct Unit {
     uint8_t standState = 0;
     /// UNIT_FIELD_MOUNTDISPLAYID (+0xfc) set.
     bool mounted = false;
-    /// +0xa38 0x400 with no UNIT_CHANNEL_SPELL: casting a spell with a cast
-    /// time (0x007fa2e0 sets it where SpellCastTimes has one).
+    /// +0xa38 0x400: casting a spell whose PrecastKit has a StartAnimID or
+    /// AnimID above 0 (0x007fa2e0 -> 0x00715af0; cleared as the cast ends,
+    /// 0x0072ed80). Without the kits, any cast with a cast time.
     bool castTimed = false;
     /// UNIT_CHANNEL_SPELL (+0x40).
     bool channeling = false;
@@ -108,6 +109,33 @@ struct Unit {
     /// it, and whether it is put in it by its tier.
     std::optional<uint32_t> kitAnim;
     bool kitAnimTiered = true;
+    /// +0x9f8: the stand state the unit's animation was last given for
+    /// (0x0073ac30, 0x0073f060) - the one it stands up, sits down or lies
+    /// down from. The renderer keeps it.
+    uint8_t standStateSeen = 0;
+    /// 0x007222a0 and 0x0071b6b0: whether it may loot, and loots - for
+    /// another unit UNIT_FIELD_FLAGS 0x10000000 clear and 0x400 set.
+    bool canLoot = false;
+    bool looting = false;
+    /// +0xa38 0x200: an auto-repeating ranged spell going (Auto Shot,
+    /// Shoot; 0x007fa2e0 for AttributesEx2 0x20), and the ranged weapon's
+    /// subclass (vtable +300 slot 2), for the ranged readies (0x00714f90).
+    bool autoRepeat = false;
+    std::optional<uint32_t> rangedSubClass;
+    /// Its spline flies (0x004f5290: spline Flags 0x2000), or falls (0x200)
+    /// or arcs (0x800; 0x006e9a70, 0x006e9aa0).
+    bool splineFlying = false;
+    bool splineFalling = false;
+    /// 0x00724060: the AnimID of a kit on it whose animation is a death,
+    /// and the kit's Flags - such a unit is dead to it (0x0071f560).
+    std::optional<uint32_t> deathKitAnim;
+    uint32_t deathKitFlags = 0;
+    /// 0x00756f40: a vehicle whose VehicleFlags have 0x10000 - while it
+    /// casts, only its cast loop is picked for it.
+    bool vehicleCastOnly = false;
+    /// 0x0071afb0: in combat (UNIT_FIELD_FLAGS 0x800) or with a melee
+    /// target - a dance then ends (0x0073b510).
+    bool inCombat = false;
 };
 
 /// What a slot plays, from where (0x008266b0's state): -1 for an upper body
@@ -215,6 +243,10 @@ void applyHover(const Unit& unit, const Slots& now, Decision& d, const ModelPlay
 /// its own, the upper body play the kit's animation `kit` (as the unit is
 /// put in it), unblended - what already plays it goes on.
 void applyKitAnimation(const Slots& now, Decision& d, uint32_t kit);
+/// The same for a rider (+0x98c): the kit's animation goes to its upper
+/// body where it is one of the upper body's and not one its mount plays
+/// (0x0071d6b0, 0x0071d800); the body is left in the rider's pose.
+void applyRiderKitAnimation(const anim::AnimationDataTable& data, const Slots& now, Decision& d, uint32_t kit);
 
 /// What 0x00736640 plays for a blow taken: StandWound, CombatWound with a
 /// melee target, CombatCritical for a critical - on the upper body, or on

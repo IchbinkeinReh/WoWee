@@ -88,6 +88,8 @@ constexpr uint32_t ITEM_SUBCLASS_BANDAGE = 7;
 /// Class 12 is the quest item. It is never equipment, whatever its INVTYPE
 /// says - and some of them do carry one.
 constexpr uint32_t ITEM_CLASS_QUEST      = 12;
+/// Class 6, arrows and bullets: put in as the ammunition rather than worn.
+constexpr uint32_t ITEM_CLASS_PROJECTILE = 6;
 
 // ---------------------------------------------------------------------------
 // Class IDs

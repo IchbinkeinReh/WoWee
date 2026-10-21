@@ -1,4 +1,5 @@
 #include "rendering/spell_visual_system.hpp"
+#include "rendering/animation/upper_body.hpp"
 #include <cctype>
 #include <future>
 #include "rendering/dynamic_object_visual.hpp"
@@ -156,6 +157,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
         const uint32_t kitFlagsField = kitColumn("Flags", 37);
         const uint32_t kitShakeField = kitColumn("ShakeID", 16);
         const uint32_t kitAnimField = kitColumn("AnimID", 2);
+        const uint32_t kitStartAnimField = kitColumn("StartAnimID", 1);
         // SoundID (+0x3c), which 0x00745230 plays with the kit.
         const uint32_t kitSoundField = kitColumn("SoundID", 15);
         // LeftWeaponEffect and RightWeaponEffect (+0x24, +0x28), which
@@ -227,6 +229,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                 kit.soundId = static_cast<uint32_t>(std::max(kitDbc->getInt32(i, kitSoundField), 0));
             if (kitFlagsField != 0xFFFFFFFFu) kit.flags = kitDbc->getUInt32(i, kitFlagsField);
             if (kitAnimField != 0xFFFFFFFFu) kit.animId = kitDbc->getInt32(i, kitAnimField);
+            if (kitStartAnimField != 0xFFFFFFFFu) kit.startAnimId = kitDbc->getInt32(i, kitStartAnimField);
             if (kitShakeField != 0xFFFFFFFFu)
                 kit.shakeId = static_cast<uint32_t>(std::max(kitDbc->getInt32(i, kitShakeField), 0));
             bool hasProc = false;
@@ -239,7 +242,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                 hasProc = hasProc || kit.charProc[k] <= 0x11u;
             }
             if (!kit.models.empty() || !kit.weaponEffects.empty() || kit.soundId != 0 || kit.flags != 0 ||
-                kit.shakeId != 0 || hasProc || kit.animId > 0)
+                kit.shakeId != 0 || hasProc || kit.animId > 0 || kit.startAnimId >= 0)
                 kits_[kitId] = std::move(kit);
         }
     }
@@ -699,8 +702,20 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
                                 .deadlineMs = colourClockMs_ + spell_kit::kWaitingKitMs});
         return {};
     }
-    // 0x0073b140: the unit's own part - the weapon effects of a precast or
-    // cast kit (0x0073a6c0), the kit's colour and its camera shake.
+    // 0x0073b140: the unit's own part - the kit's animation, the weapon
+    // effects of a precast or cast kit (0x0073a6c0), the kit's colour and
+    // its camera shake.
+    if (renderInstanceId != 0 && type != spell_kit::KitType::State && kitAnimationSink_ &&
+        (kit.startAnimId >= 0 || kit.animId >= 0)) {
+        KitAnimationPlay play{.renderInstanceId = renderInstanceId,
+                              .type = static_cast<uint32_t>(type),
+                              .startAnim = kit.startAnimId,
+                              .anim = kit.animId,
+                              .kitFlags = kit.flags,
+                              .castTime = kitSpellResolver_ && spellId && kitSpellResolver_(spellId).castTimeMs > 0};
+        if (spellId != 0) play.castKitAnim = castAnimations(spellId).castAnim;
+        kitAnimationSink_(play);
+    }
     if (type == spell_kit::KitType::Precast || type == spell_kit::KitType::Cast)
         playKitWeaponEffects(kit.weaponEffects, renderInstanceId, type == spell_kit::KitType::Precast, castTimeMs);
     playKitColourFade(kitId, renderInstanceId, spellId);
@@ -1379,6 +1394,23 @@ std::optional<SpellVisualSystem::KitAnimation> SpellVisualSystem::unitKitAnimati
     return std::nullopt;
 }
 
+std::optional<SpellVisualSystem::DeathKit> SpellVisualSystem::unitDeathKit(uint64_t unitGuid) const {
+    auto it = unitAuraKits_.find(unitGuid);
+    if (it == unitAuraKits_.end()) return std::nullopt;
+    const auto& data = anim::animationData();
+    const auto& auras = it->second.auras;
+    for (auto a = auras.rbegin(); a != auras.rend(); ++a) {
+        if (!a->playing || a->awaitingMissile || a->awaitingChain) continue;
+        auto kitIt = kits_.find(a->kitId);
+        if (kitIt == kits_.end() || kitIt->second.animId < 0) continue;
+        const auto anim = static_cast<uint32_t>(kitIt->second.animId);
+        // 0x0071dde0: dying, dead, drowning, the death's start and end.
+        if (upper_body::isDeath(data.empty() ? anim : data.behavior(anim)))
+            return DeathKit{anim, kitIt->second.flags};
+    }
+    return std::nullopt;
+}
+
 std::optional<SpellVisualSystem::CastLoop> SpellVisualSystem::castLoop(uint32_t castSpellId, uint32_t channelSpellId) {
     if (castSpellId == 0 && channelSpellId == 0) return std::nullopt;
     if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
@@ -1394,6 +1426,21 @@ std::optional<SpellVisualSystem::CastLoop> SpellVisualSystem::castLoop(uint32_t 
     auto kitIt = kitId ? kits_.find(kitId) : kits_.end();
     if (kitIt == kits_.end() || kitIt->second.animId <= 0) return std::nullopt;
     return CastLoop{static_cast<uint32_t>(kitIt->second.animId), kitIt->second.flags};
+}
+
+SpellVisualSystem::CastAnimations SpellVisualSystem::castAnimations(uint32_t spellId) {
+    CastAnimations out;
+    if (spellId == 0) return out;
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    auto it = visualKits_.find(spellVisualResolver_ ? spellVisualResolver_(spellId) : 0u);
+    if (it == visualKits_.end()) return out;
+    if (auto kit = kits_.find(it->second.precast); kit != kits_.end()) {
+        out.precastStart = kit->second.startAnimId;
+        out.precastAnim = kit->second.animId;
+        out.precastFlags = kit->second.flags;
+    }
+    if (auto kit = kits_.find(it->second.cast); kit != kits_.end()) out.castAnim = kit->second.animId;
+    return out;
 }
 
 uint32_t SpellVisualSystem::riderPose(uint64_t unitGuid) const {

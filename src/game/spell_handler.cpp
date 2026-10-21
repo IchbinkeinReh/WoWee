@@ -1635,6 +1635,9 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // button flashes for as long as they do. The stop half comes from the
     // server on SMSG_CANCEL_AUTO_REPEAT; this is the start.
     constexpr uint32_t kAutoShot = 75, kShoot = 5019;
+    // A spell with AttributesEx2 0x20 repeats: +0xa38 0x200 while it does
+    // (0x007fa2e0), which the ranged readies read (0x00714f90).
+    if ((owner_.getSpellAttributesEx2(spellId) & 0x20u) != 0) owner_.setAutoRepeating(true);
     if ((spellId == kAutoShot || spellId == kShoot) && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("START_AUTOREPEAT_SPELL", {});
     }
@@ -2830,6 +2833,20 @@ void SpellHandler::castAtLocation(uint32_t spellId, const ground_target::Place& 
         owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT", {"player", "", std::to_string(spellId)});
 }
 
+void SpellHandler::cancelChannelOnMove() {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const auto player = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(owner_.getPlayerGuid()));
+    const uint16_t ch = fieldIndex(UF::UNIT_CHANNEL_SPELL);
+    const uint32_t spell = player && ch != 0xFFFF ? player->getField(ch) : 0u;
+    if (spell == 0) return;
+    const auto it = owner_.spellNameCacheRef().find(spell);
+    if (it == owner_.spellNameCacheRef().end() || (it->second.channelInterruptFlags & 0x8u) == 0) return;
+    if (wireOpcode(Opcode::CMSG_CANCEL_CHANNELLING) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_CANCEL_CHANNELLING));
+    packet.writeUInt32(spell);
+    owner_.getSocket()->send(packet);
+}
+
 void SpellHandler::cancelCast() {
     if (restorationActive_) {
         const uint32_t auraSpell = restorationSpellId_;
@@ -2925,6 +2942,11 @@ void SpellHandler::learnTalent(uint32_t talentId, uint32_t requestedRank) {
 
     auto packet = LearnTalentPacket::build(talentId, requestedRank);
     owner_.getSocket()->send(packet);
+}
+
+void SpellHandler::learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks) {
+    if (talentRanks.empty() || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    owner_.getSocket()->send(LearnPreviewTalentsPacket::build(talentRanks));
 }
 
 void SpellHandler::openCraftingWindow(uint32_t skillLine) {

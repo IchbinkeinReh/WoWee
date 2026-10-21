@@ -434,3 +434,21 @@ TEST_CASE("a state kit animating the unit takes what is asked (0x0071e400)", "[u
     CHECK(d.bodyAction == ub::Action::Keep);
     CHECK(d.upperAction == ub::Action::Keep);
 }
+
+TEST_CASE("a rider's state kit animation goes to its upper body (0x0071e400)", "[upper_body]") {
+    const auto data = table();
+    ub::Unit rider;
+    rider.riding = true;
+    // An upper-body animation the mount does not play: on the upper body,
+    // the body left in its pose.
+    auto d = ub::decide(data, rider, asked(kStand, true), slots(kMount));
+    const auto bodyBefore = d.body;
+    ub::applyRiderKitAnimation(data, slots(kMount), d, kChannelCast);
+    CHECK(d.upper.anim == static_cast<int32_t>(kChannelCast));
+    CHECK(d.upperAction == ub::Action::Play);
+    CHECK(d.body.anim == bodyBefore.anim);
+    // One the mount plays is the mount's alone.
+    d = ub::decide(data, rider, asked(kStand, true), slots(kMount));
+    ub::applyRiderKitAnimation(data, slots(kMount), d, kRun);
+    CHECK(d.upper.anim == -1);
+}

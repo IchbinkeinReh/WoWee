@@ -241,12 +241,26 @@ uint8_t unitAnimationTier(const game::Entity& entity) {
     return index == 0xFFFF ? 0 : static_cast<uint8_t>(entity.getField(index) >> 24);
 }
 
+// What a unit's move spline says of it (+0xbc): flying (0x2000,
+// 0x004f5290), falling (0x200) or arcing (0x800; 0x006e9a70, 0x006e9aa0) -
+// in the air to 0x00723350 where it falls - and hovering as 0x0071c6c0 has
+// it: on a flying spline, else MOVEMENTFLAG_HOVER, else (not on a falling
+// one) gravity off (0x400).
+void unitSplineState(rendering::upper_body::Unit& u, game::GameHandler& gh, uint64_t guid, uint32_t moveFlags) {
+    const uint32_t spline = gh.moveSplineFlags(guid).value_or(0u);
+    u.splineFlying = (spline & 0x2000u) != 0;
+    u.splineFalling = (spline & 0xa00u) != 0;
+    if ((spline & 0x200u) != 0) u.leaping = true;
+    const bool fallingSpline = (spline & 0x200u) != 0;
+    u.hovering = u.splineFlying || (moveFlags & 0x40000000u) != 0 || (!fallingSpline && (moveFlags & 0x400u) != 0);
+}
+
 // What 0x007385c0 reads of another unit for its upper body: its movement
 // flags as FUN_0073dab0 reads them, falling, turning on the spot, its stand
 // state, its mount, its cast or channel (+0xa38 0x400 is a cast with a cast
 // time), its melee target, its ranged weapon out, whether its model moves
 // only as a whole (CreatureModelData Flags 0x8), and the pose it rides in.
-rendering::upper_body::Unit unitAnimationState(const game::GameHandler& gh, const EntitySpawner& spawner,
+rendering::upper_body::Unit unitAnimationState(game::GameHandler& gh, EntitySpawner& spawner,
                                                uint64_t guid, const game::Unit& unit, uint32_t moveFlags,
                                                bool turning, std::optional<uint32_t> riderPose) {
     namespace ub = rendering::upper_body;
@@ -274,12 +288,31 @@ rendering::upper_body::Unit unitAnimationState(const game::GameHandler& gh, cons
     if (const uint16_t b1 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1); b1 != 0xFFFF)
         u.stealthed = ((unit.getField(b1) >> 16) & 0x2u) != 0;
     u.walkSpeed = unit.getMovementSpeeds().walk;
-    u.hovering = (unit.getReportedMoveFlags() & 0x40000400u) != 0;
+    unitSplineState(u, gh, guid, unit.getReportedMoveFlags());
     u.meleeReady = spawner.unitMeleeReady(guid);
+    u.rangedSubClass = spawner.unitRangedSubClass(guid);
     if (const uint32_t emote = unit.getNpcEmoteState(); emote != 0) {
         if (const uint32_t anim = rendering::AnimationController::getEmoteAnimByEmotesId(emote); anim != 0)
             u.emoteStateAnim = anim;
     }
+    // UNIT_FIELD_FLAGS: may loot (0x10000000 clear, 0x007222a0), loots
+    // (0x400, 0x0071b6b0), in combat (0x800, 0x0071afb0).
+    if (const uint16_t f = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS); f != 0xFFFF) {
+        const uint32_t flags = unit.getField(f);
+        u.canLoot = (flags & 0x10000000u) == 0;
+        u.looting = (flags & 0x400u) != 0;
+        u.inCombat = (flags & 0x800u) != 0;
+    }
+    u.inCombat = u.inCombat || u.autoAttacking;
+    // A vehicle that casts as a whole (VehicleFlags 0x10000, 0x00756f40).
+    u.vehicleCastOnly = (spawner.vehicleFlags(guid) & 0x10000u) != 0;
+    // +0xa38 0x200: it began a repeating spell (AttributesEx2 0x20,
+    // 0x007fa2e0); nothing clears another unit's.
+    auto& body = spawner.getUnitBodies()[guid];
+    if (const auto* cast = gh.getUnitCastState(guid);
+        cast && cast->casting && (gh.getSpellAttributesEx2(cast->spellId) & 0x20u) != 0)
+        body.autoRepeat = true;
+    u.autoRepeat = body.autoRepeat;
     return u;
 }
 
@@ -288,6 +321,9 @@ rendering::upper_body::Unit unitAnimationState(const game::GameHandler& gh, cons
 void unitKitAnimationState(rendering::upper_body::Unit& u, rendering::SpellVisualSystem* svs, uint64_t guid,
                            uint32_t castSpellId, uint32_t channelSpellId) {
     if (!svs) return;
+    // +0xa38 0x400: casting a spell whose PrecastKit animates the unit
+    // (0x007fa2e0 -> 0x00715af0).
+    u.castTimed = castSpellId != 0 && svs->castAnimations(castSpellId).animates();
     if (const auto loop = svs->castLoop(castSpellId, channelSpellId)) {
         u.castLoopAnim = loop->anim;
         u.castLoopKitFlags = loop->kitFlags;
@@ -296,6 +332,10 @@ void unitKitAnimationState(rendering::upper_body::Unit& u, rendering::SpellVisua
         u.kitAnim = kit->anim;
         u.kitAnimTiered = kit->tiered;
     }
+    if (const auto death = svs->unitDeathKit(guid)) {
+        u.deathKitAnim = death->anim;
+        u.deathKitFlags = death->kitFlags;
+    }
 }
 
 uint32_t unitChannelSpell(const game::Entity& entity) {
@@ -303,9 +343,35 @@ uint32_t unitChannelSpell(const game::Entity& entity) {
     return index == 0xFFFF ? 0 : entity.getField(index);
 }
 
+// The locomotion a rider's mount plays, Run or Stand where its model lacks
+// the one its movement asks.
+uint32_t mountLocomotionFor(const rendering::CharacterRenderer& cr, uint32_t mountInstance, bool moving, bool flying,
+                            bool walking) {
+    const uint32_t anim = rendering::anim::mountLocomotion(moving, flying, walking);
+    if (cr.hasAnimation(mountInstance, anim)) return anim;
+    return moving ? rendering::anim::RUN : rendering::anim::STAND;
+}
+
+// A rider's mount model (+0x98c) plays what 0x007385c0 hands it: the
+// locomotion asked, unless a state kit animates the unit - then the kit's
+// animation, put in it by the mount's tier (0x0071e400's mount slot).
+// Played on a change of either.
+void playRiderMountAnimation(rendering::CharacterRenderer& cr, rendering::SpellVisualSystem* svs,
+                             EntitySpawner::UnitBody& body, uint64_t guid, uint32_t mountInstance,
+                             uint32_t locomotion, bool locomotionAsked) {
+    std::optional<uint32_t> kit;
+    if (svs) {
+        if (const auto k = svs->unitKitAnimation(guid)) kit = k->anim;
+    }
+    const bool kitChanged = kit != body.mountKitAnimation;
+    body.mountKitAnimation = kit;
+    if (!kitChanged && !locomotionAsked) return;
+    cr.playAnimation(mountInstance, kit ? *kit : locomotion, true);
+}
+
 // Another unit's animation tier and what 0x007385c0 reads of it, onto its
 // instance, from what the sync has worked out of how it moves.
-void syncUnitAnimation(rendering::CharacterRenderer& cr, const game::GameHandler& gh, EntitySpawner& spawner,
+void syncUnitAnimation(rendering::CharacterRenderer& cr, game::GameHandler& gh, EntitySpawner& spawner,
                        rendering::SpellVisualSystem* svs, uint64_t guid, uint32_t instanceId, const game::Unit& unit,
                        bool moving, bool swimming, bool flying, bool riding) {
     cr.setAnimationTier(instanceId, unitAnimationTier(unit));
@@ -2964,6 +3030,19 @@ void Application::connectWorldHooks() {
                 info.mounts = gameHandler->spellAppliesMountedAura(spellId);
                 return info;
             });
+            // A kit's animation on the unit it is played on (0x0073b140). The
+            // player's own casts are its animation controller's.
+            svs->setKitAnimationSink([this](const rendering::SpellVisualSystem::KitAnimationPlay& play) {
+                auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
+                if (!cr || play.renderInstanceId == renderer->getCharacterInstanceId()) return;
+                cr->playKitAnimation(play.renderInstanceId,
+                                     {.type = play.type,
+                                      .startAnim = play.startAnim,
+                                      .anim = play.anim,
+                                      .kitFlags = play.kitFlags,
+                                      .castTime = play.castTime,
+                                      .castKitAnim = play.castKitAnim});
+            });
             svs->setUnitTypeFlags([this](uint32_t renderInstanceId) {
                 return entitySpawner_ ? entitySpawner_->creatureTypeFlags(renderInstanceId) : 0u;
             });
@@ -4330,7 +4409,21 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
     if (const uint16_t b1 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1); b1 != 0xFFFF)
         u.stealthed = ((self.getField(b1) >> 16) & 0x2u) != 0;
     u.walkSpeed = gameHandler->getServerWalkSpeed();
-    u.hovering = (u.moveFlags & 0x40000400u) != 0;
+    unitSplineState(u, *gameHandler, gameHandler->getPlayerGuid(), u.moveFlags);
+    // Looting (0x007222a0, 0x0071b6b0 read the loot target for the active
+    // player), in combat (0x0071afb0), an auto-repeating shot (+0xa38 0x200).
+    u.looting = u.canLoot = gameHandler->isLootWindowOpen();
+    if (const uint16_t f = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS); f != 0xFFFF)
+        u.inCombat = (self.getField(f) & 0x800u) != 0;
+    u.inCombat = u.inCombat || u.autoAttacking;
+    u.autoRepeat = gameHandler->isAutoRepeating();
+    // Its emote state (0x007171c0) - not one whose Emotes row has Flags
+    // 0x2000, for the active player.
+    if (const uint32_t emote = self.getNpcEmoteState(); emote != 0 &&
+        (rendering::AnimationController::getEmoteFlagsByEmotesId(emote) & 0x2000u) == 0) {
+        if (const uint32_t anim = rendering::AnimationController::getEmoteAnimByEmotesId(emote); anim != 0)
+            u.emoteStateAnim = anim;
+    }
     {
         namespace ba = rendering::base_animation;
         const auto& inventory = gameHandler->getInventory();
@@ -4344,9 +4437,13 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
         const auto mainHand = hand(game::EquipSlot::MAIN_HAND);
         const auto offHand = hand(game::EquipSlot::OFF_HAND);
         u.meleeReady = ba::meleeReady(mainHand ? &*mainHand : nullptr, offHand ? &*offHand : nullptr);
+        // The ranged weapon's subclass, for its ready (0x00714f90).
+        if (const auto ranged = hand(game::EquipSlot::RANGED); ranged && ranged->itemClass == 2)
+            u.rangedSubClass = ranged->subClass;
     }
     unitKitAnimationState(u, renderer ? renderer->getSpellVisualSystem() : nullptr, gameHandler->getPlayerGuid(),
-                          u.castTimed ? gameHandler->getCurrentCastSpellId() : 0u, unitChannelSpell(self));
+                          gameHandler->isCasting() && !u.channeling ? gameHandler->getCurrentCastSpellId() : 0u,
+                          unitChannelSpell(self));
     // The pose it rides in, as the animation controller puts it in it.
     if (u.riding && renderer && renderer->getCharacterRenderer()) {
         if (auto* svs = renderer->getSpellVisualSystem()) {
@@ -4578,11 +4675,12 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                         if (creatureMount) {
                             // The unit's animations go to its mount
                             // (0x007385c0); the rider holds its pose (+0xb7c).
-                            uint32_t mountAnim =
-                                rendering::anim::mountLocomotion(isMovingNow, isFlyingNow, isWalkingNow);
-                            if (!charRenderer->hasAnimation(creatureMount->instanceId, mountAnim))
-                                mountAnim = isMovingNow ? rendering::anim::RUN : rendering::anim::STAND;
-                            charRenderer->playAnimation(creatureMount->instanceId, mountAnim, true);
+                            playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
+                                                    entitySpawner_->getUnitBodies()[guid], guid,
+                                                    creatureMount->instanceId,
+                                                    mountLocomotionFor(*charRenderer, creatureMount->instanceId,
+                                                                       isMovingNow, isFlyingNow, isWalkingNow),
+                                                    true);
                             charRenderer->playAnimation(instanceId, entitySpawner_->riderPose(guid, instanceId),
                                                         /*loop=*/true);
                         } else {
@@ -4597,6 +4695,11 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 }
                 // A rider's seat pose outlasts emotes and state updates.
                 if (creatureMount) {
+                    playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
+                                            entitySpawner_->getUnitBodies()[guid], guid, creatureMount->instanceId,
+                                            mountLocomotionFor(*charRenderer, creatureMount->instanceId, isMovingNow,
+                                                               isFlyingNow, isWalkingNow),
+                                            false);
                     const uint32_t pose = entitySpawner_->riderPose(guid, instanceId);
                     uint32_t riderAnim = 0;
                     float riderTime = 0.0f, riderDuration = 0.0f;
@@ -4801,12 +4904,12 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                         if (remoteMount) {
                             // The rider keeps the mounted seat pose; locomotion
                             // belongs to the separately rendered mount model.
-                            uint32_t mountAnim =
-                                rendering::anim::mountLocomotion(isMovingNow, isFlyingNow, isWalkingNow);
-                            if (!charRenderer->hasAnimation(remoteMount->instanceId, mountAnim)) {
-                                mountAnim = isMovingNow ? rendering::anim::RUN : rendering::anim::STAND;
-                            }
-                            charRenderer->playAnimation(remoteMount->instanceId, mountAnim, true);
+                            playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
+                                                    entitySpawner_->getUnitBodies()[guid], guid,
+                                                    remoteMount->instanceId,
+                                                    mountLocomotionFor(*charRenderer, remoteMount->instanceId,
+                                                                       isMovingNow, isFlyingNow, isWalkingNow),
+                                                    true);
                             charRenderer->playAnimation(instanceId, mountedRiderAnim, /*loop=*/true);
                         } else {
                             // What it is in now (0x0073ac30 -> 0x00724500).
@@ -4820,6 +4923,11 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // rider's mount field is authoritative, so repair that pose
                 // even when their movement state did not transition this frame.
                 if (remoteMount) {
+                    playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
+                                            entitySpawner_->getUnitBodies()[guid], guid, remoteMount->instanceId,
+                                            mountLocomotionFor(*charRenderer, remoteMount->instanceId, isMovingNow,
+                                                               isFlyingNow, isWalkingNow),
+                                            false);
                     uint32_t riderAnim = 0;
                     float riderTime = 0.0f, riderDuration = 0.0f;
                     const bool haveRiderState = charRenderer->getAnimationState(

@@ -214,6 +214,11 @@ public:
     static constexpr float kCellSize = 1.0416666f;
 
     void setQuery(Query q) { query_ = std::move(q); }
+    /// What the fill budget times its queries by, in seconds: the steady
+    /// clock, unless given one - a test's, whose time does not depend on how
+    /// busy the machine running it is.
+    using Clock = std::function<double()>;
+    void setClock(Clock clock) { clock_ = std::move(clock); }
 
     /// Moves the window to the camera's block (0x00784f20). Cells still in it
     /// keep their heights.
@@ -349,17 +354,23 @@ private:
         const int64_t k = key(cx, cy);
         auto it = cells_.find(k);
         if (it != cells_.end()) return it->second;
-        const auto began = std::chrono::steady_clock::now();
+        const double began = now();
         const std::optional<float> h = query_ ? query_(askAt.x, askAt.y, askAt.z)
                                               : std::optional<float>(askAt.z - 200.0f);
-        fillSeconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+        fillSeconds_ += now() - began;
         if (!h) { ++unknown_; return std::nullopt; }
         cells_.emplace(k, *h);
         ++filled_;
         return h;
     }
 
+    double now() const {
+        if (clock_) return clock_();
+        return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
     Query query_;
+    Clock clock_;
     size_t filled_ = 0;
     size_t unknown_ = 0;
     double fillSeconds_ = 0.0;

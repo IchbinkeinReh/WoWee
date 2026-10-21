@@ -23,7 +23,26 @@ std::vector<uint32_t> crossed(const std::vector<uint32_t>& times, float from, fl
     return out;
 }
 
+std::vector<uint32_t> crossedBack(const std::vector<uint32_t>& times, uint32_t duration, float from, float to,
+                                  float lap) {
+    std::vector<uint32_t> out;
+    m2_event::forEachCrossedReversed(times, duration, from, to, lap, [&](uint32_t t) { out.push_back(t); });
+    return out;
+}
+
 }  // namespace
+
+TEST_CASE("A sequence played backwards passes its events from its end", "[m2_event]") {
+    const std::vector<uint32_t> times{100, 700};
+    // 1000 ms long: the event at 700 comes 300 ms in, the one at 100 at 900.
+    CHECK(crossedBack(times, 1000, 0.0f, 299.0f, 0.0f).empty());
+    CHECK(crossedBack(times, 1000, 0.0f, 300.0f, 0.0f) == std::vector<uint32_t>{700});
+    CHECK(crossedBack(times, 1000, 300.0f, 1000.0f, 0.0f) == std::vector<uint32_t>{100});
+    // Looping, in the order passed, lap after lap.
+    CHECK(crossedBack(times, 1000, 850.0f, 1350.0f, 1000.0f) == std::vector<uint32_t>{100, 700});
+    // An event past the sequence's end is never passed.
+    CHECK(crossedBack({1200}, 1000, 0.0f, 1000.0f, 0.0f).empty());
+}
 
 TEST_CASE("An event fires once as the animation passes it", "[m2_event]") {
     const std::vector<uint32_t> times{100, 500};

@@ -202,6 +202,9 @@ public:
     void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot);
     void autoEquipItemBySlot(int backpackIndex, bool confirmed = false);
     void autoEquipItemInBag(int bagIndex, int slotIndex, bool confirmed = false);
+    /// 0x006dfc40: an item of class 6 is not equipped but made the ammunition,
+    /// CMSG_SET_AMMO with its entry (u32). False for any other item.
+    bool setAmmoInstead(uint32_t itemId);
 
     /// Whether equipping what is in a slot would bind it - ItemDef carries
     /// the rule; these two just find the item.

@@ -1988,10 +1988,23 @@ void InventoryHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot) {
     owner_.getSocket()->send(pkt);
 }
 
+bool InventoryHandler::setAmmoInstead(uint32_t itemId) {
+    const auto* info = owner_.getItemInfo(itemId);
+    if (!info || !info->valid || info->itemClass != ITEM_CLASS_PROJECTILE) return false;
+    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() &&
+        wireOpcode(Opcode::CMSG_SET_AMMO) != 0xFFFF) {
+        network::Packet packet(wireOpcode(Opcode::CMSG_SET_AMMO));
+        packet.writeUInt32(itemId);
+        owner_.getSocket()->send(packet);
+    }
+    return true;
+}
+
 void InventoryHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {
     if (backpackIndex < 0 || backpackIndex >= owner_.inventoryRef().getBackpackSize()) return;
     const auto& slot = owner_.inventoryRef().getBackpackSlot(backpackIndex);
     if (slot.empty()) return;
+    if (setAmmoInstead(slot.item.itemId)) return;
 
     const uint8_t wireSlot = static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + backpackIndex);
     if (!confirmed && slot.item.wouldBindOnEquip()) {
@@ -2015,6 +2028,9 @@ void InventoryHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {
 void InventoryHandler::autoEquipItemInBag(int bagIndex, int slotIndex, bool confirmed) {
     if (bagIndex < 0 || bagIndex >= owner_.inventoryRef().NUM_BAG_SLOTS) return;
     if (slotIndex < 0 || slotIndex >= owner_.inventoryRef().getBagSize(bagIndex)) return;
+    if (const auto& bagSlot = owner_.inventoryRef().getBagSlot(bagIndex, slotIndex);
+        !bagSlot.empty() && setAmmoInstead(bagSlot.item.itemId))
+        return;
 
     if (!confirmed && equipWouldBindFromBag(bagIndex, slotIndex)) {
         pendingEquip_ = PendingEquip{.active = true, .fromBag = true, .bag = bagIndex, .slot = slotIndex,

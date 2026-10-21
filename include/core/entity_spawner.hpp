@@ -300,6 +300,12 @@ public:
     std::optional<uint32_t> creatureModelFlags(uint32_t displayId) const;
     /// Another unit's combat ready for the weapons it was last dressed in
     /// (0x00714dd0); ReadyUnarmed before that.
+    /// A vehicle's VehicleFlags (Vehicle.dbc +4); 0 for no vehicle.
+    [[nodiscard]] uint32_t vehicleFlags(uint64_t guid) const;
+    [[nodiscard]] std::optional<uint32_t> unitRangedSubClass(uint64_t guid) const {
+        auto it = unitWeaponsShown_.find(guid);
+        return it != unitWeaponsShown_.end() ? it->second.rangedSubClass : std::nullopt;
+    }
     [[nodiscard]] uint32_t unitMeleeReady(uint64_t guid) const {
         auto it = unitWeaponsShown_.find(guid);
         return it != unitWeaponsShown_.end() ? it->second.meleeReady : 25u;
@@ -489,6 +495,12 @@ public:
         /// to the left (0x800).
         bool turning = false;
         bool turningLeft = false;
+        /// The state kit animation its mount was last given (0x0071e400).
+        std::optional<uint32_t> mountKitAnimation;
+        /// +0xa38 0x200: it began a spell with AttributesEx2 0x20 - Auto
+        /// Shot, Shoot - (0x007fa2e0); only the active player's is ever
+        /// cleared (0x00807560).
+        bool autoRepeat = false;
     };
     std::unordered_map<uint64_t, UnitBody>& getUnitBodies() { return unitBodies_; }
     std::unordered_map<uint64_t, bool>& getCreatureWasSwimming() { return creatureWasSwimming_; }
@@ -895,8 +907,10 @@ private:
         uint32_t unitFlags = 0;
         uint32_t unitFlags2 = 0;
         bool offHandFollowsAnimation = false;
-        /// The combat ready its weapons give it (0x00714dd0).
+        /// The combat ready its weapons give it (0x00714dd0), and its ranged
+        /// weapon's subclass (0x00714f90).
         uint32_t meleeReady = 25;
+        std::optional<uint32_t> rangedSubClass;
     };
     std::unordered_map<uint64_t, UnitWeaponsShown> unitWeaponsShown_;
     /// Each other unit's sheath state as the client keeps it (+0xb5c), and

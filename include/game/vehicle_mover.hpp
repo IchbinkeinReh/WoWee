@@ -94,11 +94,17 @@ struct MoveSpline {
     uint32_t startMs = 0;
     uint32_t durationMs = 0;
     bool cyclic = false;
+    /// Its MoveSplineFlags: Falling 0x200, Parabolic 0x800, Flying 0x2000
+    /// (+0xbc +0x20, read by 0x004f5290, 0x006e9a70, 0x006e9aa0).
+    uint32_t flags = 0;
 };
 [[nodiscard]] inline std::optional<MoveSpline> moveSplineFrom(bool hasPath, uint32_t splineFlags, uint32_t durationMs,
                                                               uint32_t nowMs) {
     if (!hasPath || (splineFlags & 0x400u) != 0) return std::nullopt;
-    return MoveSpline{.startMs = nowMs, .durationMs = durationMs, .cyclic = (splineFlags & 0x80000u) != 0};
+    return MoveSpline{.startMs = nowMs,
+                      .durationMs = durationMs,
+                      .cyclic = (splineFlags & 0x80000u) != 0,
+                      .flags = splineFlags};
 }
 [[nodiscard]] inline bool moveSplineRunning(const MoveSpline& s, uint32_t nowMs) {
     return s.cyclic || static_cast<int32_t>(nowMs - s.startMs) < static_cast<int32_t>(s.durationMs);

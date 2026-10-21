@@ -2413,6 +2413,23 @@ void SocialHandler::setSavedInstanceExtend(uint32_t mapId, uint32_t difficulty, 
     owner_.getSocket()->send(packet);
 }
 
+void SocialHandler::requestPartyMemberStats(uint64_t guid) {
+    if (guid == 0 || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_REQUEST_PARTY_MEMBER_STATS));
+    packet.writeUInt64(guid);
+    owner_.getSocket()->send(packet);
+}
+
+void SocialHandler::playerLeftSight(uint64_t guid) {
+    if (guid == owner_.getPlayerGuid()) return;
+    for (const auto& m : partyData.members) {
+        if (m.guid == guid) {
+            requestPartyMemberStats(guid);
+            return;
+        }
+    }
+}
+
 void SocialHandler::requestRaidInfo() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = RequestRaidInfoPacket::build();
@@ -2507,6 +2524,15 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     }
 
     const bool nowInGroup = !partyData.isEmpty();
+    // A member new to the roster whose player is not here is asked about
+    // (0x0052d410 for the party's, 0x00574f10 for the raid's): a member
+    // already listed keeps the stats it had.
+    for (const auto& m : partyData.members) {
+        if (m.guid == 0 || m.guid == owner_.getPlayerGuid()) continue;
+        const bool listed = std::any_of(prevMembers.begin(), prevMembers.end(),
+                                        [&](const GroupMember& p) { return p.guid == m.guid; });
+        if (!listed && !owner_.getEntityManager().getEntity(m.guid)) requestPartyMemberStats(m.guid);
+    }
     // Who came and went, as 0x006d8870 says it - in a party only, a raid's
     // roster being the raid frame's business: ERR_JOINED_GROUP_S for each
     // member not there before and ERR_LEFT_GROUP_S for each one gone, system

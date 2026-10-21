@@ -10,6 +10,7 @@
 #include "rendering/animation/animation_data.hpp"
 #include "rendering/animation/upper_body.hpp"
 #include "rendering/animation/base_animation.hpp"
+#include "rendering/animation/kit_animation.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 #include <vulkan/vulkan.h>
@@ -110,9 +111,9 @@ public:
     /// 0x0073e840 picks, SpineLow else the head - as the client shares it
     /// (upper_body::decide); without it the body takes everything.
     void setUnitAnimationState(uint32_t instanceId, const upper_body::Unit& unit);
-    /// The upper body's own loop, if it has one, back to the body
-    /// (0x00832840): a cast or channel the unit no longer has.
-    void releaseUpperBodyLoop(uint32_t instanceId);
+    /// A spell visual kit played on the unit: its animation, as 0x0073b140
+    /// plays it (kit_animation::onKitPlayed).
+    void playKitAnimation(uint32_t instanceId, const kit_animation::KitPlay& kit);
     /// Whether the body plays a one-shot that ends into `animationId` - one
     /// asked while the body finishes the swing it took back from its upper
     /// body, which it plays once that is over (0x0073bbd0 -> 0x0073b510).
@@ -122,6 +123,10 @@ public:
     /// 0x00724500, base_animation::pick); nothing where that leaves what
     /// plays. For an instance given its unit (setUnitAnimationState).
     void playBaseAnimation(uint32_t instanceId);
+    /// The unit's stand state changed (0x0073f060): from under, Birth or
+    /// Emerge; going under, Submerge; else the base animation, which sits it
+    /// down, lies it down or gets it up from the state it was in.
+    void standStateChanged(uint32_t instanceId, uint8_t standState);
     /// The wound a unit shows for a blow it takes (0x00736640,
     /// upper_body::wound), as the unit is put in it (0x007176f0) - nothing
     /// where it shows none or the model has no sequence of it.
@@ -633,6 +638,15 @@ private:
         bool unitAnimation = false;
         upper_body::Unit unit;
         int32_t upperBodyBone = -2;
+        /// +0xa38 0x10000: the PrecastKit's StartAnimID asked, the cast's loop
+        /// until it ends (0x0073b140, 0x007224d0); -1 for none.
+        int32_t precastStart = -1;
+        /// +0xfa4: a PlayImpact kit's animation, which holds the cast loop
+        /// off until it ends (0x007224d0, 0x0073bbd0); -1 for none.
+        int32_t kitAnimationHeld = -1;
+        /// +0x9f8: the stand state its animation was last given for; -1
+        /// until it has its unit.
+        int16_t standStateSeen = -1;
         /// +0xb88: a swing asked while one played, waiting for it to end
         /// (0x007385c0); -1 for none.
         int32_t queuedAttack = -1;
@@ -792,6 +806,9 @@ private:
     /// (0x007385c0); `pass` BodyEnded when its body's one-shot has ended.
     void playUnitAnimation(uint32_t instanceId, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim,
                            upper_body::Pass pass);
+    /// An animation asked of a unit with 0x007385c0's flags: with 0x2 or 0x4
+    /// not put in it by its tier.
+    void playAskedAnimation(uint32_t instanceId, uint32_t animationId, bool loop, uint32_t askFlags);
     /// An animation on a key bone from `startMs`, blended in from what the
     /// bone set showed or straight in (0x00832ab0 -> 0x00826c40).
     bool startKeyBoneAnimation(CharacterInstance& instance, int32_t keyBoneId, uint32_t animationId, bool once,

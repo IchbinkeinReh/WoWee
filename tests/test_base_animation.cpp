@@ -148,16 +148,17 @@ TEST_CASE("turning on the spot: the shuffle its way", "[base_animation]") {
 }
 
 TEST_CASE("the stand state's loop, the emote state, the stand", "[base_animation]") {
+    // In the state it was already in: its loop.
     ub::Unit u;
-    u.standState = 1;
+    u.standState = u.standStateSeen = 1;
     CHECK(pick(u).anim == kSitGround);
     // The sit-down still going goes on.
     const auto down = pick(u, {kSitGroundDown, kSitGroundDown});
     CHECK(down.anim == kSitGroundDown);
     CHECK_FALSE(down.loop);
-    u.standState = 3;
+    u.standState = u.standStateSeen = 3;
     CHECK(pick(u).anim == kSleep);
-    u.standState = 8;
+    u.standState = u.standStateSeen = 8;
     CHECK(pick(u).anim == kKneelLoop);
     // Not riding, nor with the body taken.
     u.riding = true;
@@ -166,7 +167,7 @@ TEST_CASE("the stand state's loop, the emote state, the stand", "[base_animation
     CHECK(pick(u, {0, 0}, {.free = ba::kUpperFree}).anim == kStand);
     // Submerged where the model has it.
     ub::Unit sub;
-    sub.standState = 9;
+    sub.standState = sub.standStateSeen = 9;
     Model m;
     m.ids = {0, kSubmerged};
     CHECK(pick(sub, {0, 0}, {}, m).anim == kSubmerged);
@@ -223,4 +224,116 @@ TEST_CASE("casting: the kit's loop (0x00724330)", "[base_animation]") {
     ub::Unit idle;
     idle.castLoopAnim = kReadySpellDirected;
     CHECK(pick(idle).anim == kStand);
+}
+
+TEST_CASE("the stand state's transitions from the one it was in (+0x9f8)", "[base_animation]") {
+    ub::Unit u;
+    // Sitting down from standing; the sit once it is down.
+    u.standState = 1;
+    u.standStateSeen = 0;
+    auto p = pick(u);
+    CHECK(p.anim == kSitGroundDown);
+    CHECK_FALSE(p.loop);
+    u.standStateSeen = 1;
+    CHECK(pick(u).anim == kSitGround);
+    // Up again.
+    u.standState = 0;
+    p = pick(u);
+    CHECK(p.anim == 98u);
+    CHECK_FALSE(p.loop);
+    u.standStateSeen = 3;
+    CHECK(pick(u).anim == 101u);
+    u.standStateSeen = 8;
+    CHECK(pick(u).anim == 116u);
+    u.standStateSeen = 0;
+    CHECK(pick(u).anim == kStand);
+    // Lying down and kneeling from standing, straight into the loop from
+    // another state.
+    u.standState = 3;
+    CHECK(pick(u).anim == 99u);
+    u.standStateSeen = 1;
+    CHECK(pick(u).anim == kSleep);
+    u.standState = 8;
+    u.standStateSeen = 0;
+    CHECK(pick(u).anim == 114u);
+    // Out of the custom state, Birth where the model has it; up from
+    // under, Emerge, else Birth.
+    ub::Unit custom;
+    custom.standStateSeen = 10;
+    Model m;
+    m.ids = {0, 127, 201, 202, 224};
+    CHECK(pick(custom, {0, 0}, {}, m).anim == 127u);
+    ub::Unit under;
+    under.standState = 9;
+    CHECK(pick(under, {0, 0}, {}, m).anim == 201u);
+    under.standState = 0;
+    under.standStateSeen = 9;
+    CHECK(pick(under, {0, 0}, {}, m).anim == 224u);
+}
+
+TEST_CASE("what a body's one-shot asks of its own as it ends (0x0073b510)", "[base_animation]") {
+    const auto data = table();
+    ub::Unit u;
+    u.standState = 1;
+    auto p = ba::afterOneShot(data, u, kSitGroundDown);
+    REQUIRE(p);
+    CHECK(p->anim == kSitGround);
+    CHECK(p->loop);
+    u.standState = 0;
+    p = ba::afterOneShot(data, u, kSitGroundDown);
+    REQUIRE(p);
+    CHECK(p->anim == 98u);
+    CHECK(ba::afterOneShot(data, u, 105)->anim == 109u);
+    CHECK(ba::afterOneShot(data, u, 50)->anim == 188u);
+    CHECK(ba::afterOneShot(data, u, 201)->anim == kSubmerged);
+    CHECK(ba::afterOneShot(data, u, 69)->anim == 69u);
+    u.inCombat = true;
+    CHECK_FALSE(ba::afterOneShot(data, u, 69));
+    CHECK_FALSE(ba::afterOneShot(data, u, kAttack1H));
+}
+
+TEST_CASE("looting, the ranged readies, a flying or falling spline, a death kit", "[base_animation]") {
+    ub::Unit looter;
+    looter.canLoot = true;
+    looter.looting = true;
+    auto p = pick(looter);
+    CHECK(p.anim == 50u);
+    CHECK_FALSE(p.loop);
+    CHECK(pick(looter, {188, 188}).anim == ba::kKeep);
+    looter.looting = false;
+    CHECK(pick(looter, {188, 188}).anim == 189u);
+    CHECK(pick(looter).anim == kStand);
+    // Auto Shot with a bow out: its load; a wand, its hold.
+    ub::Unit hunter;
+    hunter.rangedDrawn = true;
+    hunter.autoRepeat = true;
+    hunter.rangedSubClass = 2;
+    CHECK(pick(hunter).anim == 105u);
+    hunter.rangedSubClass = 19;
+    CHECK(pick(hunter).anim == 111u);
+    hunter.autoRepeat = false;
+    CHECK(pick(hunter).anim == kStand);
+    // A flying spline flies; a falling one, dead, starts its death falling.
+    ub::Unit flyer;
+    flyer.moveFlags = 0x1;
+    flyer.splineFlying = true;
+    CHECK(pick(flyer).anim == 135u);
+    ub::Unit faller;
+    faller.alive = false;
+    faller.splineFalling = true;
+    Model withStart;
+    withStart.ids = {0, 466};
+    CHECK(pick(faller, {0, 0}, {}, withStart).anim == 466u);
+    // A kit whose animation is a death: dead, in it.
+    ub::Unit kit;
+    kit.deathKitAnim = kDead;
+    CHECK(pick(kit).anim == kDead);
+    // A vehicle that casts as a whole: its cast loop and nothing else.
+    ub::Unit vehicle;
+    vehicle.vehicleCastOnly = true;
+    vehicle.castTimed = true;
+    vehicle.autoAttacking = true;
+    CHECK(pick(vehicle).anim == ba::kKeep);
+    vehicle.castLoopAnim = 51;
+    CHECK(pick(vehicle).anim == 51u);
 }

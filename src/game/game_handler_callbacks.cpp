@@ -975,6 +975,19 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         // (0x00528010 -> 0x005a56f0).
         requestGuildBankWithdrawMoney();
     }
+    // Every way into the world (0x00528010, once per entry - 0x00528c30
+    // clears it on the way out): the battleground queues' status asked for
+    // (0x0054ca50, CMSG_BATTLEFIELD_STATUS), then the dungeon finder's
+    // (0x00557240: CMSG_LFG_GET_STATUS, 0x00555920, and the player's lock
+    // list, 0x00555990). All three are bare opcodes.
+    if (socket) {
+        for (Opcode op : {Opcode::CMSG_BATTLEFIELD_STATUS, Opcode::CMSG_LFG_GET_STATUS,
+                          Opcode::CMSG_LFD_PLAYER_LOCK_INFO_REQUEST}) {
+            if (wireOpcode(op) == 0xFFFF) continue;
+            network::Packet pkt(wireOpcode(op));
+            socket->send(pkt);
+        }
+    }
 
     // Fire PLAYER_ENTERING_WORLD - THE most important event for addon initialization.
     // Fires on initial login, teleports, instance transitions, and zone changes.
@@ -1170,6 +1183,17 @@ uint64_t GameHandler::activeMover() const {
 
 bool GameHandler::onMoveSpline(uint64_t guid) {
     return movementHandler_ && movementHandler_->onMoveSpline(guid);
+}
+
+std::optional<uint32_t> GameHandler::moveSplineFlags(uint64_t guid) {
+    return movementHandler_ ? movementHandler_->moveSplineFlags(guid) : std::nullopt;
+}
+
+uint32_t GameHandler::getSpellAttributesEx2(uint32_t spellId) const {
+    if (spellId == 0) return 0;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    return it != spellNameCache_.end() ? it->second.attrEx2 : 0u;
 }
 
 void GameHandler::sendRequestVehicleExit() {
@@ -1928,6 +1952,14 @@ void GameHandler::requestInspectHonorData(uint64_t guid) {
 
 const GameHandler::InspectResult* GameHandler::getInspectResult() const {
     return socialHandler_ ? socialHandler_->getInspectResult() : nullptr;
+}
+
+void GameHandler::sendZoneUpdate(uint32_t zoneId) {
+    if (zoneId == 0 || state != WorldState::IN_WORLD || !socket) return;
+    if (wireOpcode(Opcode::CMSG_ZONEUPDATE) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_ZONEUPDATE));
+    packet.writeUInt32(zoneId);
+    socket->send(packet);
 }
 
 void GameHandler::queryServerTime(bool announce) {
@@ -2850,6 +2882,13 @@ void GameHandler::sendInterfaceRequest(network::Packet& packet) {
     if (socket && state == WorldState::IN_WORLD && packet.getOpcode() != 0xFFFF) socket->send(packet);
 }
 
+void GameHandler::sendActionBarToggles(uint8_t mask) {
+    if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_SET_ACTIONBAR_TOGGLES) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_SET_ACTIONBAR_TOGGLES));
+    packet.writeUInt8(mask);
+    socket->send(packet);
+}
+
 void GameHandler::sendTutorialClear() {
     if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR) == 0xFFFF) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR));
@@ -3182,6 +3221,10 @@ void GameHandler::onPlayerEnteredWorldGuild() {
 
 void GameHandler::learnTalent(uint32_t talentId, uint32_t requestedRank) {
     if (spellHandler_) spellHandler_->learnTalent(talentId, requestedRank);
+}
+
+void GameHandler::learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks) {
+    if (spellHandler_) spellHandler_->learnPreviewTalents(talentRanks);
 }
 
 void GameHandler::switchTalentSpec(uint8_t newSpec) {

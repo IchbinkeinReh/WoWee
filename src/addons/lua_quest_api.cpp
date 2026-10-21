@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <memory>
 #include <algorithm>
+#include <tuple>
 #include <cctype>
 #include <map>
 #include <set>
@@ -2716,16 +2717,31 @@ static int lua_ResetGroupPreviewTalentPoints(lua_State* L) {
 static int lua_LearnPreviewTalents(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    // A copy, because learnTalent goes to the server and what comes back
-    // clears this map - iterating it while that happens is not safe.
-    const auto staged = previewPoints();
-    for (const auto& [id, n] : staged) {
-        const uint8_t have = gh->getTalentRank(id);
-        // One request per rank: the server counts them, and asking for the
-        // final rank in one call is not how the protocol reads it.
-        for (int r = 1; r <= n; ++r) gh->learnTalent(id, have + r);
+    // One CMSG_LEARN_PREVIEW_TALENTS (0x005c6a10): each talent with points
+    // staged, at the rank it is to have, tree by tree and in each tree in
+    // its order - a talent's tier and prerequisites are spent before it, as
+    // the server learns them in the order they come.
+    struct Staged {
+        uint32_t id;
+        uint32_t rank;
+        uint32_t tabOrder, row, column;
+    };
+    std::vector<Staged> staged;
+    for (const auto& [id, n] : previewPoints()) {
+        if (n <= 0) continue;
+        const auto* t = gh->getTalentEntry(id);
+        const auto* tab = t ? gh->getTalentTabEntry(t->tabId) : nullptr;
+        staged.push_back({id, static_cast<uint32_t>(gh->getTalentRank(id) + n), tab ? tab->orderIndex : 0u,
+                          t ? t->row : 0u, t ? t->column : 0u});
     }
+    std::sort(staged.begin(), staged.end(), [](const Staged& a, const Staged& b) {
+        return std::tie(a.tabOrder, a.row, a.column, a.id) < std::tie(b.tabOrder, b.row, b.column, b.id);
+    });
+    std::vector<std::pair<uint32_t, uint32_t>> ranks;
+    ranks.reserve(staged.size());
+    for (const Staged& s : staged) ranks.emplace_back(s.id, s.rank);
     previewPoints().clear();
+    gh->learnPreviewTalents(ranks);
     return 0;
 }
 

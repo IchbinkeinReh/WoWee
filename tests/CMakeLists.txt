@@ -1452,6 +1452,11 @@ wowee_add_test(test_animation_data
 wowee_add_test(test_upper_body
     SOURCES test_upper_body.cpp ${CMAKE_SOURCE_DIR}/src/rendering/animation/upper_body.cpp)
 
+# ── test_kit_animation ───────────────────────────────────────
+# What a spell visual kit played on a unit does to its animation (0x0073b140).
+wowee_add_test(test_kit_animation
+    SOURCES test_kit_animation.cpp ${CMAKE_SOURCE_DIR}/src/rendering/animation/kit_animation.cpp)
+
 # ── test_base_animation ──────────────────────────────────────
 # The animation a unit is in when nothing else is asked of it (0x00724500).
 wowee_add_test(test_base_animation

@@ -135,6 +135,12 @@ uint32_t AnimationController::getEmoteAnimByEmotesId(uint32_t emoteId) {
     return registry.animByEmotesId(emoteId);
 }
 
+uint32_t AnimationController::getEmoteFlagsByEmotesId(uint32_t emoteId) {
+    auto& registry = EmoteRegistry::instance();
+    registry.loadFromDbc();
+    return registry.flagsByEmotesId(emoteId);
+}
+
 bool AnimationController::isStateEmoteById(uint32_t emoteId) {
     auto& registry = EmoteRegistry::instance();
     registry.loadFromDbc();
@@ -150,9 +156,6 @@ void AnimationController::startSpellCast(uint32_t precastAnimId, uint32_t castAn
 
 void AnimationController::stopSpellCast() {
     characterAnimator_.stopSpellCast();
-    // A cast loop its upper body took up on the move goes with the cast.
-    if (auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr)
-        cr->releaseUpperBodyLoop(renderer_->getCharacterInstanceId());
 }
 
 void AnimationController::setSeatedLoopAnimation(uint32_t animationId) {

@@ -369,7 +369,7 @@ void M2Renderer::setInstanceAnimationHeld(uint32_t instanceId, uint32_t animatio
     } else {
         inst.animTime = reversed ? inst.animDuration : 0.0f;
         inst.animSpeed = reversed ? -1.0f : 1.0f;
-        inst.eventsFromStart = !reversed;
+        inst.eventsFromStart = true;
     }
 }
 
@@ -398,7 +398,7 @@ void M2Renderer::setInstanceAnimation(uint32_t instanceId, uint32_t animationId,
             // From its end back to its start.
             inst.animTime = inst.animDuration;
             inst.animSpeed = -1.0f;
-            inst.eventsFromStart = false;
+            inst.eventsFromStart = true;
             break;
         case anim::PlayMode::HoldStart:
         case anim::PlayMode::HoldEnd:

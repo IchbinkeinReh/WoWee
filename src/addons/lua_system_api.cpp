@@ -7290,6 +7290,15 @@ void registerSystemLuaAPI(lua_State* L) {
             const bool alwaysShow = lua_toboolean(L, 5) != 0;
             (void)alwaysShow;
             saveInterfaceState();
+            // And the server keeps them for the character (0x005a8290,
+            // CMSG_SET_ACTIONBAR_TOGGLES): the four as bits 0 to 3 of a byte.
+            if (auto* gh = getGameHandler(L)) {
+                uint8_t mask = 0;
+                for (int i = 0; i < 4; ++i) {
+                    if (shown[i]) mask |= static_cast<uint8_t>(1u << i);
+                }
+                gh->sendActionBarToggles(mask);
+            }
             // The fourth is this client's left bar, despite being labelled
             // "Right Bar 2" where the player ticks it: the interface's fourth
             // multi-bar is MultiBarLeft, which is action page 4, which is the

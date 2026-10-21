@@ -275,6 +275,7 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
             owner_.otherPlayerMoveTimeMsRef().erase(guid);
             owner_.inspectedPlayerItemEntriesRef().erase(guid);
             owner_.pendingAutoInspectRef().erase(guid);
+            owner_.playerLeftSight(guid);
             // Clear pending name query so the query is re-sent when this player
             // comes back into range (entity is recreated as a new object).
             pendingNameQueries.erase(guid);
@@ -3222,6 +3223,7 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
                 owner_.otherPlayerMoveTimeMsRef().erase(data.guid);
                 owner_.inspectedPlayerItemEntriesRef().erase(data.guid);
                 owner_.pendingAutoInspectRef().erase(data.guid);
+                owner_.playerLeftSight(data.guid);
                 pendingNameQueries.erase(data.guid);
             } else if (entity->getType() == ObjectType::GAMEOBJECT && owner_.gameObjectDestroyCallbackRef()) {
                 owner_.gameObjectDestroyCallbackRef()(data.guid);   // 0x004d7610

@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 
 namespace wowee {
 namespace rendering {
@@ -78,6 +79,14 @@ struct HandItem {
 [[nodiscard]] Pick pick(const anim::AnimationDataTable& data, const upper_body::Unit& unit, const Playing& playing,
                         const Ask& ask, const std::function<bool(uint32_t)>& has,
                         const std::function<bool(uint32_t)>& hasShown);
+
+/// 0x0073b510: what a body's one-shot that has ended asks of its own before
+/// the base animation - a stand state's going down into its loop, or up
+/// where the state is gone; a ranged load into its hold, Loot into its
+/// hold, Submerge into Submerged, the fishing cast into its loop, a dance
+/// again out of a fight. Nothing where the base animation follows.
+[[nodiscard]] std::optional<Pick> afterOneShot(const anim::AnimationDataTable& data, const upper_body::Unit& unit,
+                                               uint32_t ended);
 
 }  // namespace base_animation
 }  // namespace rendering

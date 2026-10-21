@@ -1,5 +1,7 @@
 #pragma once
 
+#include <unordered_map>
+
 #include <cstdint>
 #include <glm/glm.hpp>
 
@@ -25,6 +27,10 @@ private:
     EntitySpawner& entitySpawner_;
     rendering::Renderer& renderer_;
     game::GameHandler& gameHandler_;
+    /// The spell each other unit last began casting, for its end
+    /// (0x007fec00 asks the base animation again where its PrecastKit
+    /// animates the unit).
+    std::unordered_map<uint64_t, uint32_t> castSpells_;
 };
 
 } // namespace core
