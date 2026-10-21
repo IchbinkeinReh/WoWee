@@ -1,3 +1,4 @@
+#include "game/quest_status_requery.hpp"
 #include "game/entity_controller.hpp"
 #include "core/env_flag.hpp"
 #include "game/game_handler.hpp"
@@ -1359,9 +1360,17 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             }
         }
         else if (key == ufi.faction) {
+            const uint32_t factionBefore = unit->getFactionTemplate();
             unit->setFactionTemplate(val);
             // The player's own template moves how everything regards them.
-            if (block.guid == owner_.getPlayerGuid()) owner_.refreshUnitHostility();
+            if (block.guid == owner_.getPlayerGuid()) {
+                owner_.refreshUnitHostility();
+                // And what the server says about their quests: an enemy is
+                // shown none (quest_status_requery.hpp).
+                if (quest_status_requery::playerFactionChanged(factionBefore, val)) {
+                    if (auto* qh = owner_.getQuestHandler()) qh->requeryNearbyQuestGiverStatus();
+                }
+            }
             else unit->setHostile(owner_.playerRegardsHostile(*unit));
         } else if (key == ufi.boundingRadius) {
             unit->setBoundingRadius(bitsToFloat(val));
@@ -1421,7 +1430,18 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 owner_.petNextLevelExpRef() = val;
                 petExperienceChanged = true;
             }
-        } else if (key == ufi.npcFlags) { unit->setNpcFlags(val); }
+        } else if (key == ufi.npcFlags) {
+            // A questgiver is asked for its status when it is created; one
+            // that becomes a questgiver later - a seasonal NPC whose event
+            // has begun - has to be asked then.
+            const bool gained = quest_status_requery::becameQuestGiver(unit->getNpcFlags(), val);
+            unit->setNpcFlags(val);
+            if (gained && owner_.getSocket()) {
+                network::Packet qsPkt(wireOpcode(Opcode::CMSG_QUESTGIVER_STATUS_QUERY));
+                qsPkt.writeUInt64(block.guid);
+                owner_.getSocket()->send(qsPkt);
+            }
+        }
         else if (key == ufi.npcEmoteState) {
             uint32_t oldEmote = unit->getNpcEmoteState();
             unit->setNpcEmoteState(val);
@@ -1653,6 +1673,13 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                                       "You are now flagged for PvP combat and will remain so until toggled off.")
                     : interfaceString("PVP_TOGGLE_OFF_VERBOSE",
                                       "You will be unflagged for PvP combat after five minutes of non-PvP action in friendly territory."));
+            }
+            // .gm on / .gm off: the server answers quest status for the
+            // player as they are now, and an enemy gets none - so a GM who
+            // arrived among the other faction's questgivers before turning
+            // GM on kept their empty answers (quest_status_requery.hpp).
+            if (!isCreate && last.known && quest_status_requery::gmFlagChanged(last.value, val)) {
+                if (auto* qh = owner_.getQuestHandler()) qh->requeryNearbyQuestGiverStatus();
             }
             last.value = val;
             last.known = true;

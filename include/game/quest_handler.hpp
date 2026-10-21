@@ -285,6 +285,11 @@ public:
     // GameHandler::update alongside the other quest bookkeeping.
     void tickQuestGiverStatusRequery(float deltaTime);
 
+    // Ask every questgiver in view for its status again (rate-limited, see
+    // below). Also for what changes the answer outside the quest log: the
+    // player's faction or GM flag (game/quest_status_requery.hpp).
+    void requeryNearbyQuestGiverStatus();
+
 private:
     // Request fresh quest-giver status for nearby NPCs so the !/? markers update
     // live (e.g. the moment an objective completes) instead of only when the
@@ -295,7 +300,7 @@ private:
     // blow that finishes two quests, a loot that fills several objectives).
     // Requests inside the cooldown set a pending flag and are coalesced into a
     // single sweep when it expires, so no refresh is dropped.
-    void requeryNearbyQuestGiverStatus();
+    // (requeryNearbyQuestGiverStatus, public above, is the entry point.)
     void sendQuestGiverStatusQueries();
 
     // Minimum spacing between requery sweeps. Marker freshness is a cosmetic

@@ -134,3 +134,42 @@ TEST_CASE("the low-level marks hang only while trivial quests are tracked", "[qu
     CHECK(modelOf(8, true) == modelOf(8));
     CHECK(modelOf(1, true) == modelOf(1));
 }
+
+// When the marks are asked for again (game/quest_status_requery.hpp). The
+// server answers for the player as they are and never repeats itself: a Horde
+// GM who reached Goldshire before `.gm on` kept the "nothing" an enemy is
+// told, and the costumed orphan matron stood there with no mark.
+#include "game/quest_status_requery.hpp"
+
+namespace rq = wowee::game::quest_status_requery;
+
+TEST_CASE("an available quest under GM mode is drawn as the yellow mark", "[questgiver]") {
+    // What the server answered for the matron with .gm on.
+    CHECK(wowee::game::questGiverMarkerModel(wire(8), false) != nullptr);
+    CHECK(symbolOf(8) == "!");
+    // And what it answers an enemy: nothing to draw, which is why the stale
+    // answer was invisible.
+    CHECK(wowee::game::questGiverMarkerModel(wire(0), false) == nullptr);
+}
+
+TEST_CASE(".gm on and off ask the questgivers again", "[questgiver]") {
+    CHECK(rq::gmFlagChanged(0x0, rq::kPlayerFlagGm));
+    CHECK(rq::gmFlagChanged(rq::kPlayerFlagGm | 0x20, 0x20));
+    // Other player flags (resting, PvP) change nothing the server answers here.
+    CHECK_FALSE(rq::gmFlagChanged(0x20, 0x220));
+    CHECK_FALSE(rq::gmFlagChanged(rq::kPlayerFlagGm, rq::kPlayerFlagGm | 0x200));
+}
+
+TEST_CASE("a change of the player's faction asks the questgivers again", "[questgiver]") {
+    // GM mode makes the player friendly (template 35) to everyone.
+    CHECK(rq::playerFactionChanged(1610, 35));
+    CHECK_FALSE(rq::playerFactionChanged(1610, 1610));
+}
+
+TEST_CASE("a unit that becomes a questgiver is asked once", "[questgiver]") {
+    CHECK(rq::becameQuestGiver(0x0, 0x2));
+    CHECK(rq::becameQuestGiver(0x80, 0x82));
+    CHECK_FALSE(rq::becameQuestGiver(0x2, 0x3));   // already one
+    CHECK_FALSE(rq::becameQuestGiver(0x2, 0x0));   // stops being one
+    CHECK_FALSE(rq::becameQuestGiver(0x1, 0x81));  // never one
+}
