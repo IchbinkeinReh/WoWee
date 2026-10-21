@@ -134,6 +134,11 @@ struct Decision {
     /// What one slot played the other takes up, from where it had got.
     bool bodyFromUpper = false;
     bool upperFromBody = false;
+    /// A swing asked while a swing plays: the one playing - the upper
+    /// body's, else the body's - runs on at twice the speed (0x00735cc0 ->
+    /// 0x00827000, 2.0) and the asked one waits for it (+0xb88), which the
+    /// base animation gives once it ends (0x0071e0d0). Nothing else changes.
+    bool queue = false;
 };
 
 // The animation lists 0x007385c0 and 0x00723e30 test, by BehaviorID

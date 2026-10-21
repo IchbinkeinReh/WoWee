@@ -104,6 +104,12 @@ Decision decide(const anim::AnimationDataTable& data, const Unit& unit, const Sl
     const uint32_t b = data.behavior(want);
     const bool hasUpper = now.upper.anim >= 0;
     const int32_t current = hasUpper ? now.upper.anim : now.body.anim;
+    // A swing over a swing waits, the one playing hastened - not while the
+    // body's one-shot has ended (+0xa38 0x20 clear).
+    if (pass == Pass::Asked && isAttack(behaviorOf(data, current)) && isAttack(b)) {
+        d.queue = true;
+        return d;
+    }
     bool split = upperChanges && splits(data, unit, want, current);
     // Death, the whole-body specials, and a model that moves as a whole go
     // to the body alone.
@@ -227,8 +233,8 @@ Decision decide(const anim::AnimationDataTable& data, const Unit& unit, const Sl
     // Dying, the upper body goes back to the body (0x00832840 on +0xb84).
     if (isDeath(b) && hasUpper) d.upperAction = Action::Release;
     if (bodyChanges) {
-        // A one-shot asked again starts again: there is no attack queue
-        // here (0x007385c0's first test, +0xb88).
+        // A one-shot asked again starts again (a swing over a swing waits
+        // instead, above).
         const bool again = bodyIsAsked && !asked.loop;
         d.bodyAction = d.body.anim == now.body.anim && !again ? Action::Keep : Action::Play;
     }

@@ -598,6 +598,9 @@ private:
             /// before it is gone (0x00832840).
             m2_track::SequenceBlend blend;
             bool returning = false;
+            /// The speed it runs at: 2 for a swing a swing was asked over
+            /// (0x00827000 from 0x007385c0).
+            float rate = 1.0f;
         };
         std::vector<KeyBoneAnimation> keyBoneAnimations;
         std::vector<int16_t> boneKeyBoneAnimation;
@@ -613,6 +616,12 @@ private:
         bool unitAnimation = false;
         upper_body::Unit unit;
         int32_t upperBodyBone = -2;
+        /// +0xb88: a swing asked while one played, waiting for it to end
+        /// (0x007385c0); -1 for none.
+        int32_t queuedAttack = -1;
+        /// The speed 0x00827000 set the body's sequence to - 2 for a swing
+        /// a swing was asked over - over the locomotion rate; 0 for none.
+        float bodyRateSet = 0.0f;
         /// With eventsRestart, where the next update looks for events
         /// from, once: below zero for a sequence just started, so its first
         /// frame's fire, or where it started in it. Else from where the

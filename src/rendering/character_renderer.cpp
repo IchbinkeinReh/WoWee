@@ -2398,6 +2398,22 @@ void CharacterRenderer::playUnitAnimation(uint32_t instanceId, uint32_t animatio
     unit.riderPoseShown = tierAnimationFor(model, unit.riderPose, instance.animationTier);
     const upper_body::Slot asked{static_cast<int32_t>(animationId), 0.0f, loop};
     const upper_body::Decision d = upper_body::decide(anim::animationData(), unit, asked, now, pass);
+    // A swing over a swing: the one playing runs on at twice the speed and
+    // the asked one waits (+0xb88); any other ask lets it go.
+    if (d.queue) {
+        constexpr float kHastened = 2.0f;
+        bool onUpper = false;
+        for (auto& k : instance.keyBoneAnimations) {
+            if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning) {
+                k.rate = kHastened;
+                onUpper = true;
+            }
+        }
+        if (!onUpper) instance.bodyRateSet = kHastened;
+        instance.queuedAttack = static_cast<int32_t>(animationId);
+        return;
+    }
+    instance.queuedAttack = -1;
 
     // The upper body first, as 0x007385c0 plays them. Without a key bone of
     // its own, what goes there is not played (0x00737ef0).
@@ -2486,7 +2502,8 @@ void CharacterRenderer::playBaseAnimation(uint32_t instanceId) {
     auto it = instances.find(instanceId);
     if (it == instances.end() || !it->second.unitAnimation) return;
     // 0x0073ac30: what 0x00724500 answers is asked as any animation is.
-    const base_animation::Pick p = pickBaseAnimation(it->second, base_animation::Ask{});
+    const base_animation::Pick p =
+        pickBaseAnimation(it->second, base_animation::Ask{.queuedAttack = it->second.queuedAttack});
     if (p.anim != base_animation::kKeep) playAnimation(instanceId, p.anim, p.loop);
 }
 
@@ -2498,7 +2515,8 @@ void CharacterRenderer::endUpperBodyOneShot(CharacterInstance& instance) {
     // 0x007176f0) goes on the upper body where it is one of the upper
     // body's, may differ from what the body plays (0x00723e30), and is not
     // that; else the bone set follows the body again (0x00832840).
-    const base_animation::Pick p = pickBaseAnimation(instance, base_animation::Ask{});
+    const base_animation::Pick p =
+        pickBaseAnimation(instance, base_animation::Ask{.queuedAttack = instance.queuedAttack});
     const uint32_t shown =
         p.anim == base_animation::kKeep ? p.anim : tierAnimationFor(model, p.anim, instance.animationTier);
     const int32_t body = instance.currentSequenceIndex >= 0 ? static_cast<int32_t>(instance.currentAnimationId) : -1;
@@ -2535,6 +2553,7 @@ void CharacterRenderer::startAnimation(CharacterInstance& instance, uint32_t ani
                                        uint32_t oneShotReturnAnim, bool blend) {
     auto& model = models[instance.modelId].data;
     instance.oneShotReturnAnim = loop ? 0 : oneShotReturnAnim;
+    instance.bodyRateSet = 0.0f;
 
     // Track death state for preventing movement while dead
     if (animationId == 1) {
@@ -2759,7 +2778,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                 // Held where it stands in, it neither runs nor ends.
                 if (heldMode(k.mode)) continue;
                 const float duration = static_cast<float>(inst.cachedModel->data.sequences[k.sequence].duration);
-                k.time += deltaTime * 1000.0f;
+                k.time += deltaTime * 1000.0f * k.rate;
                 if (k.once && k.time >= duration) {
                     // A one-shot ended on a bone of its own: a seated
                     // passenger's upper body has passed its start (0x0073bbd0
@@ -2771,6 +2790,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                         k.mode = k.thenMode;
                         k.time = startTime(inst.cachedModel->data, k.sequence, k.mode);
                         k.once = false;
+                        k.rate = 1.0f;
                         continue;
                     }
                     k.time = duration;
@@ -2815,8 +2835,10 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
             // the rate, FUN_0082f0f0 runs time at it). Recomputed each frame
             // from the current speed, which keeps the sequence's time as
             // FUN_00827000 does when the client changes a playing rate.
-            inst.playbackRate = m2_track::locomotionPlaybackRate(
-                seq.id, seq.movingSpeed, inst.scale, inst.locomotionSpeed);
+            inst.playbackRate = inst.bodyRateSet > 0.0f
+                                    ? inst.bodyRateSet
+                                    : m2_track::locomotionPlaybackRate(seq.id, seq.movingSpeed, inst.scale,
+                                                                       inst.locomotionSpeed);
             // One held where it stands in neither runs nor ends (0x00826b00's
             // speed 0).
             const bool held = heldMode(inst.playMode);
@@ -2875,7 +2897,9 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                             // 0x00724500), asked of the body alone. Where
                             // that leaves what plays, it stays as it ended.
                             const base_animation::Pick p = pickBaseAnimation(
-                                inst, base_animation::Ask{.free = base_animation::kBodyFree, .flags = 0x10});
+                                inst, base_animation::Ask{.free = base_animation::kBodyFree,
+                                                          .flags = 0x10,
+                                                          .queuedAttack = inst.queuedAttack});
                             if (p.anim == base_animation::kKeep) {
                                 inst.animationTime = static_cast<float>(seq.duration);
                             } else {

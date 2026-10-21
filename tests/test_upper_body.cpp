@@ -182,8 +182,8 @@ TEST_CASE("standing still, the whole body plays what it is asked", "[upper_body]
     CHECK(d.body.anim == static_cast<int32_t>(kEmoteWave));
     CHECK(d.upperAction == ub::Action::Keep);
     CHECK(d.upper.anim == -1);
-    // A one-shot asked again starts again.
-    const auto again = ub::decide(t, ub::Unit{}, asked(kAttack1H, false), slots(kAttack1H, 400.0f, false));
+    // A one-shot asked again starts again (a swing over a swing waits).
+    const auto again = ub::decide(t, ub::Unit{}, asked(kEmoteWave, false), slots(kEmoteWave, 400.0f, false));
     CHECK(again.bodyAction == ub::Action::Play);
     // A loop asked again goes on.
     const auto loop = ub::decide(t, ub::Unit{}, asked(kStand, true), slots(kStand, 400.0f, true));
@@ -302,4 +302,27 @@ TEST_CASE("seated on a ride animation, the upper body takes what is no stand (0x
     const auto death = ub::decide(t, seated, asked(kDeath, false), slots(kRide));
     CHECK(death.bodyAction == ub::Action::Play);
     CHECK(death.body.anim == static_cast<int32_t>(kDeath));
+}
+
+TEST_CASE("a swing asked over a swing waits, the one playing hastened (+0xb88)", "[upper_body]") {
+    const auto data = table();
+    ub::Unit standing;
+    // On the body.
+    auto d = ub::decide(data, standing, asked(kAttack1H, false), slots(kAttack1H, 200.0f, false));
+    CHECK(d.queue);
+    CHECK(d.bodyAction == ub::Action::Keep);
+    CHECK(d.upperAction == ub::Action::Keep);
+    // On the upper body, running.
+    d = ub::decide(data, running(), asked(kAttack1H, false), slots(kRun, 0.0f, true, kAttack1H, 100.0f));
+    CHECK(d.queue);
+    CHECK(d.bodyAction == ub::Action::Keep);
+    // Not once the body's one-shot has ended, nor over anything but a swing.
+    d = ub::decide(data, standing, asked(kAttack1H, false), slots(kAttack1H, 0.0f, false), ub::Pass::BodyEnded);
+    CHECK_FALSE(d.queue);
+    d = ub::decide(data, standing, asked(kAttack1H, false), slots(kReady1H));
+    CHECK_FALSE(d.queue);
+    CHECK(d.bodyAction == ub::Action::Play);
+    // Nor a cast asked over a swing.
+    d = ub::decide(data, standing, asked(kSpellCast, false), slots(kAttack1H, 0.0f, false));
+    CHECK_FALSE(d.queue);
 }
