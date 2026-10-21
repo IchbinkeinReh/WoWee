@@ -587,6 +587,9 @@ private:
         uint32_t armAnimationId[2] = {0, 0};  // the animation each arm plays, while it has a sequence
         float armTime[2] = {0.0f, 0.0f};      // ms into each arm's sequence
         float armEventTime[2] = {-1.0f, -1.0f};  // when each arm's event comes, -1 for none
+        /// How each arm's sequence plays (0x00826350): it may stand in,
+        /// reversed or held, for an animation the model lacks.
+        anim::PlayMode armMode[2] = {anim::PlayMode::Forward, anim::PlayMode::Forward};
         uint8_t armEvents = 0;                 // kArmEvent*/kArmEnd* bits not yet taken
         std::vector<int8_t> boneArm;  // Per bone: 0 left arm, 1 right arm, -1 neither; built by playArmAnimation
         /// playKeyBoneAnimation: key bones on looped sequences of their own,

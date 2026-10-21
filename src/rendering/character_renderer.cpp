@@ -2805,6 +2805,8 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
         for (int arm = 0; arm < 2 && inst.cachedModel && !inst.animationFrozen; ++arm) {
             const int seq = inst.armSequenceIndex[arm];
             if (seq < 0 || static_cast<size_t>(seq) >= inst.cachedModel->data.sequences.size()) continue;
+            // Held where it stands in, it neither runs nor ends.
+            if (heldMode(inst.armMode[arm])) continue;
             const float before = inst.armTime[arm];
             inst.armTime[arm] += deltaTime * 1000.0f;
             const float eventTime = inst.armEventTime[arm];
@@ -3210,13 +3212,10 @@ bool CharacterRenderer::playArmAnimationNow(uint32_t instanceId, int arm, uint32
     auto& instance = it->second;
     const auto& model = models[instance.modelId].data;
     if (!hasKeyBone(instanceId, arm == 0 ? kKeyBoneShoulderL : kKeyBoneShoulderR)) return false;
-    int sequence = -1;
-    for (size_t i = 0; i < model.sequences.size(); i++) {
-        if (model.sequences[i].id == animationId && model.sequences[i].variationIndex == 0) {
-            sequence = static_cast<int>(i);
-            break;
-        }
-    }
+    // The arm's sequence for it, or the stand-in along its Fallbacks
+    // (0x00735820 -> 0x00832ab0 -> 0x00826350, for a bone as for the body).
+    const anim::ModelAnimation shown = shownAnimation(model, animationId);
+    const int sequence = animationSequenceIndex(model, shown.id);
     if (sequence < 0) return false;
 
     // Which arm each bone is in - a shoulder and everything below it. Parents
@@ -3233,11 +3232,14 @@ bool CharacterRenderer::playArmAnimationNow(uint32_t instanceId, int arm, uint32
     }
     instance.armSequenceIndex[arm] = sequence;
     instance.armAnimationId[arm] = animationId;
-    instance.armTime[arm] = 0.0f;
+    instance.armMode[arm] = shown.mode;
+    instance.armTime[arm] = startTime(model, sequence, shown.mode);
     instance.armEventTime[arm] = -1.0f;
     if (const auto* event = model.findEvent(eventId);
         event && static_cast<size_t>(sequence) < event->times.size() && !event->times[sequence].empty()) {
-        instance.armEventTime[arm] = static_cast<float>(event->times[sequence].front());
+        // Where its time reaches the event: from the end, reversed.
+        instance.armEventTime[arm] = sampledTime(model, sequence, static_cast<float>(event->times[sequence].front()),
+                                                 shown.mode);
     }
     instance.armEvents &= static_cast<uint8_t>(~((arm == 0 ? kArmEventLeft : kArmEventRight) |
                                                   (arm == 0 ? kArmEndLeft : kArmEndRight)));
@@ -3679,7 +3681,9 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
             // An arm on a sequence of its own does not take the body's old pose.
             blend = {};
             sequence = instance.armSequenceIndex[arm];
-            time = std::min(instance.armTime[arm], static_cast<float>(model.sequences[sequence].duration));
+            time = sampledTime(model, sequence,
+                               std::min(instance.armTime[arm], static_cast<float>(model.sequences[sequence].duration)),
+                               instance.armMode[arm]);
         } else if (keyAnim >= 0 && static_cast<size_t>(keyAnim) < instance.keyBoneAnimations.size() &&
                    instance.keyBoneAnimations[keyAnim].sequence >= 0) {
             blend = {};
@@ -4246,11 +4250,13 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 const float batchColorAlpha = glm::clamp(
                     evalBatchColorAlpha(gpuModel.data, batch,
                                         instance.currentSequenceIndex,
-                                        instance.animationTime,
+                                        sampledTime(gpuModel.data, instance.currentSequenceIndex,
+                                                    instance.animationTime, instance.playMode),
                                         instance.globalSequenceTime) *
                     evalBatchTextureWeight(gpuModel.data, batch,
                                            instance.currentSequenceIndex,
-                                           instance.animationTime,
+                                           sampledTime(gpuModel.data, instance.currentSequenceIndex,
+                                                       instance.animationTime, instance.playMode),
                                            instance.globalSequenceTime),
                     0.0f, 1.0f);
                 if (batchColorAlpha <= 0.01f) {
@@ -4468,7 +4474,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 if (const auto* tt = m2_track::batchTextureTransform(gpuModel.data,
                                                                      batch.textureAnimIndex)) {
                     const glm::mat4 uvm = m2_track::textureTransformMatrix(
-                        *tt, instance.currentSequenceIndex, instance.animationTime,
+                        *tt, instance.currentSequenceIndex,
+                        sampledTime(gpuModel.data, instance.currentSequenceIndex, instance.animationTime,
+                                    instance.playMode),
                         instance.globalSequenceTime, gpuModel.data.globalSequenceDurations);
                     matData.uvM00 = uvm[0][0]; matData.uvM01 = uvm[1][0];
                     matData.uvM10 = uvm[0][1]; matData.uvM11 = uvm[1][1];
@@ -4478,7 +4486,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 matData.coordSources = m2PackCoordSources(combiner);
                 const glm::vec3 batchRGB = evalBatchColorRGB(gpuModel.data, batch,
                                                              instance.currentSequenceIndex,
-                                                             instance.animationTime,
+                                                             sampledTime(gpuModel.data,
+                                                                         instance.currentSequenceIndex,
+                                                                         instance.animationTime, instance.playMode),
                                                              instance.globalSequenceTime);
                 matData.tintR = batchRGB.r;
                 matData.tintG = batchRGB.g;
@@ -4492,7 +4502,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                         if (const auto* tt2 = m2_track::batchTextureTransform(
                                 gpuModel.data, static_cast<uint16_t>(batch.textureAnimIndex + 1))) {
                             const glm::mat4 uvm = m2_track::textureTransformMatrix(
-                                *tt2, instance.currentSequenceIndex, instance.animationTime,
+                                *tt2, instance.currentSequenceIndex,
+                                sampledTime(gpuModel.data, instance.currentSequenceIndex, instance.animationTime,
+                                            instance.playMode),
                                 instance.globalSequenceTime, gpuModel.data.globalSequenceDurations);
                             matData.uv2M00 = uvm[0][0]; matData.uv2M01 = uvm[1][0];
                             matData.uv2M10 = uvm[0][1]; matData.uv2M11 = uvm[1][1];
@@ -4872,9 +4884,13 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
             }
             const float batchAlpha =
                 evalBatchColorAlpha(gpuModel.data, batch, inst.currentSequenceIndex,
-                                    inst.animationTime, inst.globalSequenceTime) *
+                                    sampledTime(gpuModel.data, inst.currentSequenceIndex, inst.animationTime,
+                                                inst.playMode),
+                                    inst.globalSequenceTime) *
                 evalBatchTextureWeight(gpuModel.data, batch, inst.currentSequenceIndex,
-                                       inst.animationTime, inst.globalSequenceTime);
+                                       sampledTime(gpuModel.data, inst.currentSequenceIndex, inst.animationTime,
+                                                   inst.playMode),
+                                       inst.globalSequenceTime);
             if (glm::clamp(batchAlpha, 0.0f, 1.0f) <= 0.01f) continue;
             if (inst.opacity <= 0.01f) continue;
 
@@ -5065,7 +5081,11 @@ bool CharacterRenderer::getInstancePose(uint32_t instanceId, glm::mat4& model,
     model = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
     bones = &inst.boneMatrices;
     sequenceIndex = inst.currentSequenceIndex;
-    animationTimeMs = inst.animationTime;
+    // The time its tracks are read at: from the end for a sequence that
+    // stands in reversed (0x00826350).
+    animationTimeMs = inst.cachedModel ? sampledTime(inst.cachedModel->data, inst.currentSequenceIndex,
+                                                     inst.animationTime, inst.playMode)
+                                       : inst.animationTime;
     globalTimeMs = inst.globalSequenceTime;
     return true;
 }
