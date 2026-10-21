@@ -631,6 +631,13 @@ private:
     void handleAuctionHello(network::Packet& packet);
     void handleAuctionListResult(network::Packet& packet);
     void handleAuctionOwnerListResult(network::Packet& packet);
+    /// SMSG_AUCTION_LIST_PENDING_SALES (0x0059e880).
+    void handleAuctionPendingSales(network::Packet& packet);
+    /// The owner's list with its rows of one kind put in place of the old
+    /// ones of that kind - the auctions (0x0059e480) or the pending sales
+    /// (0x0059e880) - and AUCTION_OWNED_LIST_UPDATE once both answers due are
+    /// in (0xc0e73c).
+    void replaceOwnerRows(std::vector<AuctionEntry> rows, bool pending);
     void handleAuctionBidderListResult(network::Packet& packet);
     void handleAuctionCommandResult(network::Packet& packet);
     void handleShowMailbox(network::Packet& packet);
@@ -846,6 +853,9 @@ private:
     bool hasAuctionSearch_ = false;  // true after any search (including empty-name browse-all)
     enum class AuctionResultTarget { BROWSE, OWNER, BIDDER };
     AuctionResultTarget pendingAuctionTarget_ = AuctionResultTarget::BROWSE;
+    /// How many owner list answers are still to come (0xc0e73c): two for
+    /// each request, the auctions and the pending sales (0x0059cc50).
+    int ownerListAnswersDue_ = 0;
 
     // ---- Trainer state ----
     bool trainerWindowOpen_ = false;

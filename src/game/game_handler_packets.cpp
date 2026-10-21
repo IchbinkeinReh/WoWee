@@ -3807,7 +3807,6 @@ void GameHandler::registerRemainingOpcodes() {
     // Consume - remaining server notifications not yet parsed
     for (auto op : {
         Opcode::SMSG_AFK_MONITOR_INFO_RESPONSE,
-        Opcode::SMSG_AUCTION_LIST_PENDING_SALES,
         Opcode::SMSG_AVAILABLE_VOICE_CHANNEL,
         Opcode::SMSG_CHEAT_DUMP_ITEMS_DEBUG_ONLY_RESPONSE,
         Opcode::SMSG_CHEAT_DUMP_ITEMS_DEBUG_ONLY_RESPONSE_WRITE_FILE,

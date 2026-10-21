@@ -187,6 +187,10 @@ wowee_add_test(test_arena_opponents
 wowee_add_test(test_tabard_design
     SOURCES test_tabard_design.cpp)
 
+# SMSG_AUCTION_LIST_PENDING_SALES's mails as owner list rows
+# (game/auction_pending_sales.hpp).
+wowee_add_packet_test(test_auction_pending_sales)
+
 # Stock-style hill climbing regression test. Run directly with:
 #   cmake --build build --target test_hill_climbing && ctest --test-dir build -R hill_climbing
 wowee_add_test(test_hill_climbing

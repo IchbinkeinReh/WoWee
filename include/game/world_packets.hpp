@@ -3813,6 +3813,9 @@ struct AuctionEntry {
     uint32_t timeLeftMs = 0;
     uint64_t bidderGuid = 0;
     uint32_t currentBid = 0;
+    /// A sale waiting to pay out, from SMSG_AUCTION_LIST_PENDING_SALES
+    /// (+0x9c): GetAuctionItemInfo's saleStatus 1.
+    bool pendingSale = false;
 };
 
 struct AuctionListResult {
