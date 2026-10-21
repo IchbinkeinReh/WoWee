@@ -3216,6 +3216,10 @@ void GameHandler::learnTalent(uint32_t talentId, uint32_t requestedRank) {
     if (spellHandler_) spellHandler_->learnTalent(talentId, requestedRank);
 }
 
+void GameHandler::learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks) {
+    if (spellHandler_) spellHandler_->learnPreviewTalents(talentRanks);
+}
+
 void GameHandler::switchTalentSpec(uint8_t newSpec) {
     if (spellHandler_) spellHandler_->switchTalentSpec(newSpec);
 }

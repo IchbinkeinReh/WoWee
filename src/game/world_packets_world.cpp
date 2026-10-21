@@ -1832,6 +1832,16 @@ network::Packet TrainerBuySpellPacket::build(uint64_t trainerGuid, uint32_t spel
 // Talents
 // ============================================================
 
+network::Packet LearnPreviewTalentsPacket::build(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks) {
+    network::Packet packet(wireOpcode(Opcode::CMSG_LEARN_PREVIEW_TALENTS));
+    packet.writeUInt32(static_cast<uint32_t>(talentRanks.size()));
+    for (const auto& [talentId, rank] : talentRanks) {
+        packet.writeUInt32(talentId);
+        packet.writeUInt32(rank > 0 ? rank - 1 : 0);
+    }
+    return packet;
+}
+
 network::Packet LearnTalentPacket::build(uint32_t talentId, uint32_t requestedRank) {
     network::Packet packet(wireOpcode(Opcode::CMSG_LEARN_TALENT));
     packet.writeUInt32(talentId);

@@ -2930,6 +2930,11 @@ void SpellHandler::learnTalent(uint32_t talentId, uint32_t requestedRank) {
     owner_.getSocket()->send(packet);
 }
 
+void SpellHandler::learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks) {
+    if (talentRanks.empty() || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    owner_.getSocket()->send(LearnPreviewTalentsPacket::build(talentRanks));
+}
+
 void SpellHandler::openCraftingWindow(uint32_t skillLine) {
     craftingWindowOpen_ = true;
     craftingSkillLine_ = skillLine;

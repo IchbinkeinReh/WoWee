@@ -3378,6 +3378,13 @@ public:
 // Talents
 // ============================================================
 
+/** CMSG_LEARN_PREVIEW_TALENTS (0x005c6a10): the count, then each talent and
+ *  the rank it is to have, counted from one here and from zero on the wire. */
+class LearnPreviewTalentsPacket {
+public:
+    static network::Packet build(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
+};
+
 /** CMSG_LEARN_TALENT packet builder */
 class LearnTalentPacket {
 public:
