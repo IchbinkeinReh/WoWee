@@ -3528,6 +3528,7 @@ std::array<uint64_t, go_interaction::kWindowCount> GameHandler::interactionWindo
     set(Window::Trainer, isTrainerWindowOpen(), getTrainerSpells().trainerGuid);
     set(Window::Bank, isBankOpen(), getBankerGuid());
     set(Window::Registrar, hasPetitionShowlist(), getPetitionNpcGuid());
+    set(Window::Tabard, tabardVendorGuid_ != 0, tabardVendorGuid_);
     set(Window::AuctionHouse, isAuctionHouseOpen(), getAuctioneerGuid());
     set(Window::Stable, isStableWindowOpen(), getStableMasterGuid());
     return with;
@@ -3594,6 +3595,7 @@ void GameHandler::closeInteractionWindow(go_interaction::Window window) {
         case Window::AuctionHouse: if (isAuctionHouseOpen()) closeAuctionHouse(); break;
         case Window::Stable:       if (isStableWindowOpen()) closeStableWindow(); break;
         case Window::Registrar:    if (hasPetitionShowlist()) closePetitionVendor(); break;
+        case Window::Tabard:       closeTabardVendor(); break;
         case Window::Count:        break;
     }
 }
@@ -3609,12 +3611,11 @@ void GameHandler::closeNpcInteraction() {
     using go_interaction::Window;
     for (Window window : {Window::Trade, Window::Book, Window::Quest, Window::Gossip, Window::Merchant,
                           Window::Trainer, Window::Taxi, Window::Bank, Window::GuildBank, Window::Mailbox,
-                          Window::AuctionHouse, Window::Stable, Window::Registrar}) {
+                          Window::AuctionHouse, Window::Stable, Window::Registrar, Window::Tabard}) {
         closeInteractionWindow(window);
     }
     // The battlemaster's list (BATTLEFIELDS_CLOSED), opened from
-    // SMSG_BATTLEFIELD_LIST, closes with the rest. The tabard designer
-    // (CLOSE_TABARD_FRAME) would too; this client does not open it.
+    // SMSG_BATTLEFIELD_LIST, closes with the rest.
     fireAddonEvent("BATTLEFIELDS_CLOSED", {});
 }
 
@@ -3662,8 +3663,8 @@ void GameHandler::onLeaveWorld(bool worldport) {
     // house, the stable and the petition vendor (0x0057ba90, 0x00598ec0,
     // 0x00599e90, 0x00571be0, 0x0059f150, 0x005a1160, 0x005a2880), and the
     // guild bank with the interaction object below.
-    for (Window window : {Window::Bank, Window::Registrar, Window::Mailbox, Window::AuctionHouse,
-                          Window::Stable, Window::GuildBank}) {
+    for (Window window : {Window::Bank, Window::Registrar, Window::Tabard, Window::Mailbox,
+                          Window::AuctionHouse, Window::Stable, Window::GuildBank}) {
         closeInteractionWindow(window);
     }
     // The socketing window (0x005c4ee0 -> 0x005c4680, SOCKET_INFO_CLOSE).

@@ -67,6 +67,7 @@ namespace wowee::game {
     class InventoryHandler;
     class SocialHandler;
     class WardenHandler;
+    namespace tabard { struct Design; }
 }
 
 namespace wowee {
@@ -1167,6 +1168,27 @@ public:
     uint32_t getEntityGuildId(uint64_t guid) const;
     /// A guild's tabard design, asked of the server when not known yet.
     std::optional<GuildEmblem> lookupGuildEmblem(uint32_t guildId);
+
+    // --- The tabard vendor (TabardModelFrame.cpp, Player_C) ---
+    /// The vendor the designer is open with (0xc0e518), 0 when it is not.
+    [[nodiscard]] uint64_t getTabardVendorGuid() const { return tabardVendorGuid_; }
+    /// CloseTabardCreation, the vendor let go (0x00598ec0).
+    void closeTabardVendor();
+    /// The design painted on the player's own tabard while it is designed
+    /// (0x004ec1c0 on the player's component).
+    void previewTabard(const GuildEmblem& emblem);
+    /// The player's guild (PLAYER_GUILDID, else the character list's).
+    [[nodiscard]] uint32_t getPlayerGuildId() const;
+    /// The player's guild's design in the cache, nullopt while not known.
+    std::optional<GuildEmblem> getPlayerGuildEmblem();
+    /// What the player's tabard is painted with: the designer's design while
+    /// one is shown, else the guild's.
+    std::optional<GuildEmblem> getPlayerTabardEmblem();
+    /// CanSaveTabardNow (0x006de1c0).
+    bool canSaveTabardNow();
+    /// TabardModel:Save (0x006db320): refused with a game error, or
+    /// MSG_SAVE_GUILD_EMBLEM sent and TABARD_SAVE_PENDING.
+    void saveGuildEmblem(const tabard::Design& design);
     /// Changes each time a guild's design arrives.
     uint32_t guildEmblemGeneration() const;
     /// A player's PLAYER_GUILD_TIMESTAMP as seen (0x006e1c60).
@@ -4977,6 +4999,12 @@ private:
     /// Everything else - inspects, auctions, calendars, voice, and a long tail
     /// that is consumed and ignored. Named for what it is.
     void registerRemainingOpcodes();
+    /// MSG_TABARDVENDOR_ACTIVATE and MSG_SAVE_GUILD_EMBLEM (game_handler_tabard.cpp).
+    void registerTabardOpcodes();
+    /// 0x00598e60.
+    void openTabardVendor(uint64_t vendor);
+    /// 0x006d9230.
+    void guildEmblemSaved(uint32_t result);
 
     /// The domain handlers registering their own. Disjoint from the two above,
     /// so the order between them carries no meaning.
@@ -5398,6 +5426,9 @@ private:
     GameObjectStateCallback gameObjectStateCallback_;
     GameObjectInteractionCallback gameObjectInteractionCallback_;
     uint64_t interactionObject_ = 0;
+    uint64_t tabardVendorGuid_ = 0;            ///< 0xc0e518
+    bool tabardSavePending_ = false;           ///< 0xc9eacc
+    std::optional<GuildEmblem> tabardPreview_; ///< the design on the player's component
     /// 0x00512e60 for the interaction object: a game object's CLOSE. With
     /// farewell, 0x00518d50's for a window that closed with nothing after it:
     /// a living creature says farewell first (0x00720860).

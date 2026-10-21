@@ -182,6 +182,11 @@ wowee_add_test(test_combat_log
 wowee_add_test(test_arena_opponents
     SOURCES test_arena_opponents.cpp)
 
+# The tabard designer's design (game/tabard_design.hpp): cycling, the start,
+# the save's refusals and answer, the files. Header-only.
+wowee_add_test(test_tabard_design
+    SOURCES test_tabard_design.cpp)
+
 # Stock-style hill climbing regression test. Run directly with:
 #   cmake --build build --target test_hill_climbing && ctest --test-dir build -R hill_climbing
 wowee_add_test(test_hill_climbing

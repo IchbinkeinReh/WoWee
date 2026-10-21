@@ -1533,20 +1533,6 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushboolean(L, carrying ? 1 : 0);
             return 1;
         }},
-                // CloseTabardCreation() - the tabard designer shutting itself
-                // when ShowUIPanel could not put it on screen.
-                //
-                // Nothing to close. This client has no tabard window and no
-                // tabard session: MSG_TABARDVENDOR_ACTIVATE is not handled and
-                // OPEN_TABARD_FRAME is never fired, so TabardFrame is only
-                // reachable through its own close path - which is this, and
-                // which raised. A no-op is the honest shape of that until the
-                // vendor side exists; answering it wrongly would be inventing
-                // a session to end.
-                {"CloseTabardCreation", [](lua_State* L) -> int {
-            (void)L;
-            return 0;
-        }},
                 // The guild bank tab dialog picks from the same icons under a
                 // name of its own.
                 {"GetNumMacroItemIcons", lua_GetNumMacroIcons},

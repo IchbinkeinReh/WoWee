@@ -672,6 +672,7 @@ set(WOWEE_SOURCES
     src/game/game_handler.cpp
     src/game/game_handler_packets.cpp
     src/game/game_handler_callbacks.cpp
+    src/game/game_handler_tabard.cpp
     src/game/chat_handler.cpp
     src/game/interface_text.cpp
     src/game/text_tokens.cpp
@@ -1108,6 +1109,7 @@ set(WOWEE_SOURCES
     src/addons/lua_absent_api.cpp
     src/addons/lua_item_query_api.cpp
     src/addons/lua_commentator_api.cpp
+    src/addons/lua_tabard_api.cpp
     src/addons/client_cvar_registry.cpp
     src/addons/lua_social_api.cpp
     src/addons/lua_system_api.cpp

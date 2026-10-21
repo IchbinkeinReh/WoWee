@@ -3883,6 +3883,7 @@ void GameHandler::registerDomainOpcodes() {
 void GameHandler::registerOpcodeHandlers() {
     registerCoreOpcodes();
     registerRemainingOpcodes();
+    registerTabardOpcodes();
     registerDomainOpcodes();
 }
 

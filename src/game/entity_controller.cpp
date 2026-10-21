@@ -2725,15 +2725,21 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         // (0x005caa40).
         if (const uint16_t unitEnd = fieldIndex(UF::UNIT_END); unitEnd != 0xFFFF) {
             bool guildMoved = false;
+            bool guildIdMoved = false;
             for (const uint16_t key : {static_cast<uint16_t>(unitEnd + 3),
                                        static_cast<uint16_t>(unitEnd + 4)}) {
                 const auto now = block.fields.find(key);
                 if (now == block.fields.end()) continue;
                 const auto& last = owner_.lastPlayerFieldsRef();
                 const auto was = last.find(key);
-                if ((was == last.end() ? 0u : was->second) != now->second) guildMoved = true;
+                if ((was == last.end() ? 0u : was->second) != now->second) {
+                    guildMoved = true;
+                    if (key == unitEnd + 3) guildIdMoved = true;
+                }
             }
             if (guildMoved) owner_.requestGuildPermissions();
+            // 0x006e1bb0 -> 0x006df7a0: TABARD_CANSAVE_CHANGED (event 0x16e).
+            if (guildIdMoved) owner_.fireAddonEvent("TABARD_CANSAVE_CHANGED", {});
         }
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.

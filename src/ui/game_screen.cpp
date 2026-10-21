@@ -832,13 +832,15 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         }
     }
 
-    // The player's guild, and its tabard design arriving (0x006d2840).
+    // The player's guild, and its tabard design arriving (0x006d2840) - or
+    // the tabard designer's design, painted as it changes (0x004ec1c0) and
+    // the guild's again as it closes (0x006db5f0).
     bool tabardEmblemChanged = false;
     if (!gameHandler.getInventory().getEquipSlot(game::EquipSlot::TABARD).empty()) {
-        uint32_t guildId = gameHandler.getEntityGuildId(gameHandler.getPlayerGuid());
-        if (guildId == 0 && gameHandler.getActiveCharacter()) guildId = gameHandler.getActiveCharacter()->guildId;
-        const auto emblem = gameHandler.lookupGuildEmblem(guildId);
-        tabardEmblemChanged = game::tabardNeedsRepaint(playerTabardGuildId_, playerTabardEmblem_, guildId, emblem);
+        const uint32_t guildId = gameHandler.getPlayerGuildId();
+        const auto emblem = gameHandler.getPlayerTabardEmblem();
+        tabardEmblemChanged = game::tabardNeedsRepaint(playerTabardGuildId_, playerTabardEmblem_, guildId, emblem) ||
+                              (gameHandler.getTabardVendorGuid() != 0 && emblem != playerTabardEmblem_);
     }
     if (inventoryScreen.consumeEquipmentDirty() || gameHandler.consumeOnlineEquipmentDirty() ||
         tabardEmblemChanged) {

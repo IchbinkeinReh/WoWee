@@ -150,9 +150,8 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
             isFemale = (ch->gender == game::Gender::FEMALE) ||
                        (ch->gender == game::Gender::NONBINARY && ch->useFemaleModel);
         }
-        playerTabardGuildId_ = gh->getEntityGuildId(gh->getPlayerGuid());
-        if (playerTabardGuildId_ == 0 && gh->getActiveCharacter()) playerTabardGuildId_ = gh->getActiveCharacter()->guildId;
-        emblem = gh->lookupGuildEmblem(playerTabardGuildId_);
+        playerTabardGuildId_ = gh->getPlayerGuildId();
+        emblem = gh->getPlayerTabardEmblem();
         playerTabardEmblem_ = emblem;
     }
     const std::vector<std::pair<int, std::string>> regionLayers =

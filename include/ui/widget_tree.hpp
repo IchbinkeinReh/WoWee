@@ -18,6 +18,7 @@
 // grows upward. Converting at the point of drawing keeps every anchor rule here
 // readable against Blizzard's own documentation, rather than mirrored.
 
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -612,6 +613,10 @@ struct Widget {
     /// model is actually built. Zero is "nothing chosen".
     uint32_t modelDisplayId = 0;
 
+    /// A TabardModel's design (+0x380..+0x390): emblem style and colour,
+    /// border style and colour, background colour - game/tabard_design.hpp.
+    std::array<int32_t, 5> tabardDesign{};
+
     /// The colour a ColorSelect frame is showing, as r, g, b. Its own state
     /// rather than the frame's tint: a colour picker draws its wheel in every
     /// colour and this is only the one being chosen.
@@ -644,6 +649,9 @@ struct Widget {
     /// Texture:SetDesaturated - drawn as its luminance, untinted
     /// (Desaturate.bls, CSimpleTop's 0x00483060).
     bool desaturated = false;
+    /// Drawn white by its alpha alone: the emblem a TabardModel put on it
+    /// (GetUpperEmblemTexture, 0x00599890), until another texture is set.
+    bool emblemMask = false;
 
     /// A texture the client renders rather than one read from a file - a unit
     /// portrait is a live view of the character, not an image on disk. Zero

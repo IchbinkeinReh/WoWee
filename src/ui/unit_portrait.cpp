@@ -71,12 +71,9 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
         if (worn.empty()) worn = self->equipment;
     }
 
-    // The guild tabard's design (0x006db510): the guild's, once known.
-    {
-        uint32_t guildId = gameHandler.getEntityGuildId(self->guid);
-        if (guildId == 0) guildId = self->guildId;
-        pendingEmblem_ = gameHandler.lookupGuildEmblem(guildId);
-    }
+    // The guild tabard's design (0x006db510): the guild's, once known, or
+    // the tabard designer's while it is open (0x004ec1c0).
+    pendingEmblem_ = gameHandler.getPlayerTabardEmblem();
 
     const uint64_t equipHash = game::hashEquipmentAppearance(worn);
     const bool changed = (loadedGuid_ != self->guid) ||

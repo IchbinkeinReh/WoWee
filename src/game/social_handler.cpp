@@ -2952,6 +2952,9 @@ void SocialHandler::handleGuildQueryResponse(network::Packet& packet) {
     // the player's own field once they have joined one, not the character
     // list's copy from login.
     const bool isLocalGuild = (ownGuildId() != 0 && ownGuildId() == data.guildId);
+    // The player in that guild told so (0x006e1b40 -> 0x006df7a0):
+    // TABARD_CANSAVE_CHANGED (event 0x16e).
+    if (isLocalGuild) owner_.fireAddonEvent("TABARD_CANSAVE_CHANGED", {});
     if (isLocalGuild) {
         const bool wasUnknown = guildName_.empty();
         guildName_ = data.guildName;

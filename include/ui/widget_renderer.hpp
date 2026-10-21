@@ -89,6 +89,8 @@ private:
     /// all three channels, as the interface's Desaturate.bls draws it
     /// (CSimpleTop, 0x00483060).
     static constexpr uint8_t kVariantDesaturate = 2;
+    /// A tabard designer's emblem: white by the art's alpha (prepareAlphaMask).
+    static constexpr uint8_t kVariantAlphaMask = 4;
     static uint8_t textureVariant(const Widget& w);
 
     /// scale is pixels per interface unit. The rect arrives in pixels, but a
