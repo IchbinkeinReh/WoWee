@@ -2658,6 +2658,21 @@ void EntityController::handleDisplayIdChange(const UpdateBlock& block,
     }
 }
 
+void EntityController::forceDisplayUpdate(uint64_t guid) {
+    // SMSG_FORCE_DISPLAY_UPDATE (0x00716cd0): the unit's model built again
+    // from what it now is (its vtable's +0x1c with 1, 0x0073e410).
+    auto entity = entityManager.getEntity(guid);
+    if (!entity || !entity->isUnit()) return;
+    auto unit = std::static_pointer_cast<Unit>(entity);
+    if (guid == owner_.getPlayerGuid()) {
+        if (owner_.playerModelRebuildCallbackRef()) owner_.playerModelRebuildCallbackRef()();
+        return;
+    }
+    if (unit->getDisplayId() == 0) return;
+    dispatchEntitySpawn(guid, entity->getType(), entity, unit,
+                        isUnitCorpseState(unit->getHealth(), unit->getMaxHealth(), unit->getDynamicFlags()));
+}
+
 void EntityController::onValuesUpdateUnit(const UpdateBlock& block, std::shared_ptr<Entity>& entity) {
     auto unit = std::static_pointer_cast<Unit>(entity);
     UnitFieldIndices ufi = UnitFieldIndices::resolve();

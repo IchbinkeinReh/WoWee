@@ -894,7 +894,7 @@ void GameHandler::registerCoreOpcodes() {
     };
     // Consume silently - opcodes we receive but don't need to act on
     for (auto op : {
-        Opcode::SMSG_FLIGHT_SPLINE_SYNC, Opcode::SMSG_FORCE_DISPLAY_UPDATE,
+        Opcode::SMSG_FLIGHT_SPLINE_SYNC,
         Opcode::SMSG_FORCE_SEND_QUEUED_PACKETS, Opcode::SMSG_FORCE_SET_VEHICLE_REC_ID,
         Opcode::SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE, Opcode::SMSG_DAMAGE_CALC_LOG,
         Opcode::SMSG_DYNAMIC_DROP_ROLL_RESULT,
@@ -2166,6 +2166,10 @@ void GameHandler::registerRemainingOpcodes() {
         const uint32_t enchantId = packet.readUInt32();
         packet.skipAll();
         combatLogFeed_->enchantment(target, caster, itemId, enchantId);
+    };
+    dispatchTable_[Opcode::SMSG_FORCE_DISPLAY_UPDATE] = [this](network::Packet& packet) {
+        if (!packet.hasFullPackedGuid()) return;
+        entityController_->forceDisplayUpdate(packet.readPackedGuid());
     };
     // 0x0054b5e0: an opponent, or an opponent's pet, gone from the arena.
     dispatchTable_[Opcode::SMSG_ARENA_UNIT_DESTROYED] = [this](network::Packet& packet) {
