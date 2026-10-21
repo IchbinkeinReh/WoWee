@@ -3477,25 +3477,39 @@ std::optional<glm::vec3> Renderer::pickGround(const glm::vec3& origin, const glm
         const float t = wmoRenderer->raycastBoundingBoxes(origin, d, best, true, &id);
         if (t < best) { best = t; hit = true; building = id; }
     }
-    // The terrain, marched in half-yard steps and the crossing halved down.
+    // The terrain, where the ray crosses it - marched in half-yard steps and
+    // the crossing halved down, as intersectSegment does.
+    //
+    // A crossing, not being under it. The terrain is a surface the ray meets,
+    // and a ray that starts beneath it has met nothing: the Undercity lies
+    // a hundred yards under Tirisfal's ground, so every ray from its camera began
+    // "below" and was stopped at its first step. The pointer then found no one
+    // there (Edward Cairn in the Trade Quarter could not be clicked, and a
+    // click on him cleared the target as a click on nothing does), and a spell
+    // aimed at the floor was put down at the camera instead.
     if (terrainManager) {
         constexpr float kStep = 0.5f;
-        auto below = [&](float t) {
+        auto below = [&](float t) -> std::optional<bool> {
             const glm::vec3 p = origin + d * t;
             const auto h = terrainManager->getHeightAt(p.x, p.y);
-            return h && p.z <= *h;
+            if (!h) return std::nullopt;
+            return p.z <= *h;
         };
+        std::optional<bool> prevSide = below(0.0f);
         float prev = 0.0f;
         for (float t = kStep; t <= best; t += kStep) {
-            if (below(t)) {
+            const auto side = below(t);
+            if (side && prevSide && *side != *prevSide) {
                 float lo = prev, hi = t;
                 for (int i = 0; i < 16; ++i) {
                     const float mid = 0.5f * (lo + hi);
-                    (below(mid) ? hi : lo) = mid;
+                    const auto midSide = below(mid);
+                    (midSide && *midSide == *prevSide ? lo : hi) = mid;
                 }
                 if (hi < best) { best = hi; hit = true; building = 0; }
                 break;
             }
+            prevSide = side;
             prev = t;
         }
     }
