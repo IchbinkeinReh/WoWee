@@ -2347,7 +2347,7 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
         return;
     }
 
-    packet.readUInt32();  // moveFlags
+    const uint32_t teleportMoveFlags = packet.readUInt32();
     if (!taNoFlags2)
         packet.readUInt16();  // moveFlags2 (WotLK only)
     uint32_t moveTime = packet.readUInt32();
@@ -2357,6 +2357,23 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
     float serverY = packet.readFloat();
     float serverZ = packet.readFloat();
     float orientation = packet.readFloat();
+    // The movement it carries says whether the place is on a transport: the
+    // transport's guid and the offset on it follow the position when it is.
+    const bool teleportOnTransport =
+        (teleportMoveFlags & static_cast<uint32_t>(MovementFlags::ONTRANSPORT)) != 0;
+    uint64_t teleportTransportGuid = 0;
+    glm::vec3 teleportTransportOffset(0.0f);
+    if (teleportOnTransport && !taNoFlags2 && packet.hasRemaining(1)) {
+        teleportTransportGuid = packet.readPackedGuid();
+        if (packet.hasRemaining(16)) {
+            teleportTransportOffset.x = packet.readFloat();
+            teleportTransportOffset.y = packet.readFloat();
+            teleportTransportOffset.z = packet.readFloat();
+            packet.readFloat();  // its facing on the transport
+        } else {
+            teleportTransportGuid = 0;
+        }
+    }
 
     LOG_WARNING("MSG_MOVE_TELEPORT_ACK: guid=0x", std::hex, guid, std::dec,
                 " counter=", counter,
@@ -2420,6 +2437,18 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
         movementInfo.z = canonical.z;
         movementInfo.orientation = core::coords::serverToCanonicalYaw(orientation);
         movementInfo.flags = 0;
+        // Off whatever transport it was on, or onto the one the teleport
+        // names. Kept, the old one went on placing the player by its offset
+        // on it, so a .go away from a lift left them riding it.
+        auto* transports = owner_.getTransportManager();
+        if (teleportTransportGuid != 0 && transports &&
+            transports->getTransport(teleportTransportGuid)) {
+            owner_.setPlayerOnTransport(
+                teleportTransportGuid,
+                transports->serverToTransportLocal(teleportTransportGuid, teleportTransportOffset));
+        } else if (owner_.isOnTransport()) {
+            owner_.clearPlayerTransport();
+        }
     }
 
     // Clear cast bar on teleport - SpellHandler owns the casting_ flag
