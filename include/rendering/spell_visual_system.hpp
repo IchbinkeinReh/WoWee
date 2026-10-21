@@ -203,6 +203,34 @@ public:
         uint32_t kitFlags = 0;
     };
     [[nodiscard]] std::optional<CastLoop> castLoop(uint32_t castSpellId, uint32_t channelSpellId);
+    /// The animations a spell's kits give its caster: its PrecastKit's
+    /// StartAnimID and AnimID, its CastKit's AnimID (-1 for none) - and
+    /// whether the cast animates it at all (0x007fa2e0 sets +0xa38 0x400 for
+    /// a PrecastKit with a StartAnimID or AnimID above 0).
+    struct CastAnimations {
+        int32_t precastStart = -1;
+        int32_t precastAnim = -1;
+        uint32_t precastFlags = 0;
+        int32_t castAnim = -1;
+        [[nodiscard]] bool animates() const { return precastStart > 0 || precastAnim > 0; }
+    };
+    [[nodiscard]] CastAnimations castAnimations(uint32_t spellId);
+    /// A kit played on a unit's model, for the unit's own part of 0x0073b140
+    /// (kit_animation::onKitPlayed): the instance, the kit's type, its
+    /// StartAnimID, AnimID and Flags, whether its spell has a cast time and
+    /// its visual's CastKit's AnimID. Not for a state kit, whose animation
+    /// is unitKitAnimation's.
+    struct KitAnimationPlay {
+        uint32_t renderInstanceId = 0;
+        uint32_t type = 0;
+        int32_t startAnim = -1;
+        int32_t anim = -1;
+        uint32_t kitFlags = 0;
+        bool castTime = false;
+        int32_t castKitAnim = -1;
+    };
+    using KitAnimationSink = std::function<void(const KitAnimationPlay&)>;
+    void setKitAnimationSink(KitAnimationSink sink) { kitAnimationSink_ = std::move(sink); }
     /// The active player, whose mount aura going puts its pose back
     /// (0x0071e930).
     using ActivePlayerResolver = std::function<uint64_t()>;
@@ -423,6 +451,7 @@ private:
         uint32_t soundId = 0;  ///< SoundID (+0x3c), SoundEntries
         uint32_t flags = 0;  ///< SpellVisualKit Flags (+0x94)
         int32_t animId = -1;  ///< AnimID (+8)
+        int32_t startAnimId = -1;  ///< StartAnimID (+4)
         uint32_t shakeId = 0;  ///< ShakeID (+0x40), SpellEffectCameraShakes
         /// CharProc (+0x44) and its CharParamZero..Three (+0x54..+0x84).
         std::array<uint32_t, 4> charProc{};
@@ -777,6 +806,7 @@ private:
     bool unitMiddle(uint32_t renderInstanceId, glm::vec3& middle, glm::mat4& frame) const;
     KitSpellResolver kitSpellResolver_;
     UnitTypeFlags unitTypeFlags_;
+    KitAnimationSink kitAnimationSink_;
     LightTintSink lightTintSink_;
     /// The unit's colour from its auras' kits (CharProc 1) - the latest's -
     /// or its fade, set on each unit's model; white once neither is left.

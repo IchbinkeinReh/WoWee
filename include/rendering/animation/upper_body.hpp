@@ -49,8 +49,9 @@ struct Unit {
     uint8_t standState = 0;
     /// UNIT_FIELD_MOUNTDISPLAYID (+0xfc) set.
     bool mounted = false;
-    /// +0xa38 0x400 with no UNIT_CHANNEL_SPELL: casting a spell with a cast
-    /// time (0x007fa2e0 sets it where SpellCastTimes has one).
+    /// +0xa38 0x400: casting a spell whose PrecastKit has a StartAnimID or
+    /// AnimID above 0 (0x007fa2e0 -> 0x00715af0; cleared as the cast ends,
+    /// 0x0072ed80). Without the kits, any cast with a cast time.
     bool castTimed = false;
     /// UNIT_CHANNEL_SPELL (+0x40).
     bool channeling = false;
@@ -215,6 +216,10 @@ void applyHover(const Unit& unit, const Slots& now, Decision& d, const ModelPlay
 /// its own, the upper body play the kit's animation `kit` (as the unit is
 /// put in it), unblended - what already plays it goes on.
 void applyKitAnimation(const Slots& now, Decision& d, uint32_t kit);
+/// The same for a rider (+0x98c): the kit's animation goes to its upper
+/// body where it is one of the upper body's and not one its mount plays
+/// (0x0071d6b0, 0x0071d800); the body is left in the rider's pose.
+void applyRiderKitAnimation(const anim::AnimationDataTable& data, const Slots& now, Decision& d, uint32_t kit);
 
 /// What 0x00736640 plays for a blow taken: StandWound, CombatWound with a
 /// melee target, CombatCritical for a critical - on the upper body, or on

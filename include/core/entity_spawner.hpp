@@ -489,6 +489,8 @@ public:
         /// to the left (0x800).
         bool turning = false;
         bool turningLeft = false;
+        /// The state kit animation its mount was last given (0x0071e400).
+        std::optional<uint32_t> mountKitAnimation;
     };
     std::unordered_map<uint64_t, UnitBody>& getUnitBodies() { return unitBodies_; }
     std::unordered_map<uint64_t, bool>& getCreatureWasSwimming() { return creatureWasSwimming_; }

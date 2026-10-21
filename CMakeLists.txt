@@ -1016,6 +1016,7 @@ set(WOWEE_SOURCES
     src/rendering/animation/animation_data.cpp
     src/rendering/animation/upper_body.cpp
     src/rendering/animation/base_animation.cpp
+    src/rendering/animation/kit_animation.cpp
     src/rendering/animation/emote_registry.cpp
     src/rendering/animation/footstep_driver.cpp
     src/rendering/animation/sfx_state_driver.cpp

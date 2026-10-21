@@ -288,6 +288,9 @@ rendering::upper_body::Unit unitAnimationState(const game::GameHandler& gh, cons
 void unitKitAnimationState(rendering::upper_body::Unit& u, rendering::SpellVisualSystem* svs, uint64_t guid,
                            uint32_t castSpellId, uint32_t channelSpellId) {
     if (!svs) return;
+    // +0xa38 0x400: casting a spell whose PrecastKit animates the unit
+    // (0x007fa2e0 -> 0x00715af0).
+    u.castTimed = castSpellId != 0 && svs->castAnimations(castSpellId).animates();
     if (const auto loop = svs->castLoop(castSpellId, channelSpellId)) {
         u.castLoopAnim = loop->anim;
         u.castLoopKitFlags = loop->kitFlags;
@@ -301,6 +304,32 @@ void unitKitAnimationState(rendering::upper_body::Unit& u, rendering::SpellVisua
 uint32_t unitChannelSpell(const game::Entity& entity) {
     const uint16_t index = game::fieldIndex(game::UF::UNIT_CHANNEL_SPELL);
     return index == 0xFFFF ? 0 : entity.getField(index);
+}
+
+// The locomotion a rider's mount plays, Run or Stand where its model lacks
+// the one its movement asks.
+uint32_t mountLocomotionFor(const rendering::CharacterRenderer& cr, uint32_t mountInstance, bool moving, bool flying,
+                            bool walking) {
+    const uint32_t anim = rendering::anim::mountLocomotion(moving, flying, walking);
+    if (cr.hasAnimation(mountInstance, anim)) return anim;
+    return moving ? rendering::anim::RUN : rendering::anim::STAND;
+}
+
+// A rider's mount model (+0x98c) plays what 0x007385c0 hands it: the
+// locomotion asked, unless a state kit animates the unit - then the kit's
+// animation, put in it by the mount's tier (0x0071e400's mount slot).
+// Played on a change of either.
+void playRiderMountAnimation(rendering::CharacterRenderer& cr, rendering::SpellVisualSystem* svs,
+                             EntitySpawner::UnitBody& body, uint64_t guid, uint32_t mountInstance,
+                             uint32_t locomotion, bool locomotionAsked) {
+    std::optional<uint32_t> kit;
+    if (svs) {
+        if (const auto k = svs->unitKitAnimation(guid)) kit = k->anim;
+    }
+    const bool kitChanged = kit != body.mountKitAnimation;
+    body.mountKitAnimation = kit;
+    if (!kitChanged && !locomotionAsked) return;
+    cr.playAnimation(mountInstance, kit ? *kit : locomotion, true);
 }
 
 // Another unit's animation tier and what 0x007385c0 reads of it, onto its
@@ -2964,6 +2993,19 @@ void Application::connectWorldHooks() {
                 info.mounts = gameHandler->spellAppliesMountedAura(spellId);
                 return info;
             });
+            // A kit's animation on the unit it is played on (0x0073b140). The
+            // player's own casts are its animation controller's.
+            svs->setKitAnimationSink([this](const rendering::SpellVisualSystem::KitAnimationPlay& play) {
+                auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
+                if (!cr || play.renderInstanceId == renderer->getCharacterInstanceId()) return;
+                cr->playKitAnimation(play.renderInstanceId,
+                                     {.type = play.type,
+                                      .startAnim = play.startAnim,
+                                      .anim = play.anim,
+                                      .kitFlags = play.kitFlags,
+                                      .castTime = play.castTime,
+                                      .castKitAnim = play.castKitAnim});
+            });
             svs->setUnitTypeFlags([this](uint32_t renderInstanceId) {
                 return entitySpawner_ ? entitySpawner_->creatureTypeFlags(renderInstanceId) : 0u;
             });
@@ -4346,7 +4388,8 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
         u.meleeReady = ba::meleeReady(mainHand ? &*mainHand : nullptr, offHand ? &*offHand : nullptr);
     }
     unitKitAnimationState(u, renderer ? renderer->getSpellVisualSystem() : nullptr, gameHandler->getPlayerGuid(),
-                          u.castTimed ? gameHandler->getCurrentCastSpellId() : 0u, unitChannelSpell(self));
+                          gameHandler->isCasting() && !u.channeling ? gameHandler->getCurrentCastSpellId() : 0u,
+                          unitChannelSpell(self));
     // The pose it rides in, as the animation controller puts it in it.
     if (u.riding && renderer && renderer->getCharacterRenderer()) {
         if (auto* svs = renderer->getSpellVisualSystem()) {
@@ -4578,11 +4621,12 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                         if (creatureMount) {
                             // The unit's animations go to its mount
                             // (0x007385c0); the rider holds its pose (+0xb7c).
-                            uint32_t mountAnim =
-                                rendering::anim::mountLocomotion(isMovingNow, isFlyingNow, isWalkingNow);
-                            if (!charRenderer->hasAnimation(creatureMount->instanceId, mountAnim))
-                                mountAnim = isMovingNow ? rendering::anim::RUN : rendering::anim::STAND;
-                            charRenderer->playAnimation(creatureMount->instanceId, mountAnim, true);
+                            playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
+                                                    entitySpawner_->getUnitBodies()[guid], guid,
+                                                    creatureMount->instanceId,
+                                                    mountLocomotionFor(*charRenderer, creatureMount->instanceId,
+                                                                       isMovingNow, isFlyingNow, isWalkingNow),
+                                                    true);
                             charRenderer->playAnimation(instanceId, entitySpawner_->riderPose(guid, instanceId),
                                                         /*loop=*/true);
                         } else {
@@ -4597,6 +4641,11 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 }
                 // A rider's seat pose outlasts emotes and state updates.
                 if (creatureMount) {
+                    playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
+                                            entitySpawner_->getUnitBodies()[guid], guid, creatureMount->instanceId,
+                                            mountLocomotionFor(*charRenderer, creatureMount->instanceId, isMovingNow,
+                                                               isFlyingNow, isWalkingNow),
+                                            false);
                     const uint32_t pose = entitySpawner_->riderPose(guid, instanceId);
                     uint32_t riderAnim = 0;
                     float riderTime = 0.0f, riderDuration = 0.0f;
@@ -4801,12 +4850,12 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                         if (remoteMount) {
                             // The rider keeps the mounted seat pose; locomotion
                             // belongs to the separately rendered mount model.
-                            uint32_t mountAnim =
-                                rendering::anim::mountLocomotion(isMovingNow, isFlyingNow, isWalkingNow);
-                            if (!charRenderer->hasAnimation(remoteMount->instanceId, mountAnim)) {
-                                mountAnim = isMovingNow ? rendering::anim::RUN : rendering::anim::STAND;
-                            }
-                            charRenderer->playAnimation(remoteMount->instanceId, mountAnim, true);
+                            playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
+                                                    entitySpawner_->getUnitBodies()[guid], guid,
+                                                    remoteMount->instanceId,
+                                                    mountLocomotionFor(*charRenderer, remoteMount->instanceId,
+                                                                       isMovingNow, isFlyingNow, isWalkingNow),
+                                                    true);
                             charRenderer->playAnimation(instanceId, mountedRiderAnim, /*loop=*/true);
                         } else {
                             // What it is in now (0x0073ac30 -> 0x00724500).
@@ -4820,6 +4869,11 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // rider's mount field is authoritative, so repair that pose
                 // even when their movement state did not transition this frame.
                 if (remoteMount) {
+                    playRiderMountAnimation(*charRenderer, renderer->getSpellVisualSystem(),
+                                            entitySpawner_->getUnitBodies()[guid], guid, remoteMount->instanceId,
+                                            mountLocomotionFor(*charRenderer, remoteMount->instanceId, isMovingNow,
+                                                               isFlyingNow, isWalkingNow),
+                                            false);
                     uint32_t riderAnim = 0;
                     float riderTime = 0.0f, riderDuration = 0.0f;
                     const bool haveRiderState = charRenderer->getAnimationState(
