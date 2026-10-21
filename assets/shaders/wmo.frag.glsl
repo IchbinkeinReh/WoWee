@@ -295,6 +295,11 @@ void main() {
     // The vertex normal as it is, on either face: the vertex programs light
     // by it and never know which side of a two-sided batch is showing.
     vec3 vertexNormal = normalize(Normal);
+    // The face's own normal, on the vertex normal's side: a room's baked
+    // colour takes the traced lamps by it (rtFaceBasedNormal).
+    vec3 faceNormal = cross(dFdx(FragPos), dFdy(FragPos));
+    faceNormal = dot(faceNormal, faceNormal) > 1e-20 ? normalize(faceNormal) : vertexNormal;
+    if (dot(faceNormal, vertexNormal) < 0.0) faceNormal = -faceNormal;
 
     // Build TBN matrix
     vec3 T = normalize(Tangent);
@@ -394,7 +399,10 @@ void main() {
     }
 
     outColor = vec4(rtGiDebug(result), alpha);
-    rtSurface.normal = norm;
+    // A room's baked colour: lit by its face, with the bumps on it, not by
+    // the smoothed vertex normal (rtFaceBasedNormal).
+    rtSurface.normal = (rtSurface.flags & RT_GB_INTERIOR) != 0u
+                           ? rtFaceBasedNormal(faceNormal, vertexNormal, norm) : norm;
     rtSurface.map = mapLit;
     rtWriteGbuffer(rtSurface, outColor.rgb);
 }

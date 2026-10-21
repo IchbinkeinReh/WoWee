@@ -278,7 +278,7 @@ constexpr SettingDesc kSchema[] = {
     // are the user's tuned look (some lamps and fires stronger and farther
     // reaching, building lights and glow weaker, darker interiors and
     // shadows). Two pages, as one does not fit in two columns.
-    {"dbgview", "Show instead of the picture", SettingKind::Enum, 0, 10, 1, "Debug Graphics", "View",
+    {"dbgview", "Show instead of the picture", SettingKind::Enum, 0, 13, 1, "Debug Graphics", "View",
      "Replace the picture with one part of the ray traced lighting.\n"
      "The traced views work in every ray tracing mode; the probe views\n"
      "need Shadows, occlusion and bounce light; what a building's baked\n"
@@ -290,11 +290,15 @@ constexpr SettingDesc kSchema[] = {
      "trace and red where it is lit as without the tracing. The baked\n"
      "shade is white where a building's painted colour shows as painted,\n"
      "cyan where its lamps' shadows darken it, red where its room's light\n"
-     "does, and dark blue where nothing is painted.\n"
+     "does, and dark blue where nothing is painted. The point light\n"
+     "added is what the lamps add on top of each surface; the baked colour\n"
+     "factor what its painted light is scaled by (grey; white as painted,\n"
+     "red where nothing is painted).\n"
      "WOWEE_GI_DEBUG, when set, wins.",
      "Off|Probe light ratio (grey = open field)|Probe irradiance|Ambient with the probes|"
      "Probe cascades|Traced sun visibility|Point lights' light|Traced occlusion|"
-     "Traced history length|How each pixel found its traced surface|Baked shade", 0},
+     "Traced history length|How each pixel found its traced surface|Baked shade|Depth edges|"
+     "Point light added|Baked colour factor", 0},
     {"dbgambient", "Ambient light (%)", SettingKind::Int, 0, 300, 5, "Debug Graphics", "Light",
      "The zone's ambient light, the base every surface starts from\n"
      "before the sun and the lamps. 100 is the zone's own.", "", 100},

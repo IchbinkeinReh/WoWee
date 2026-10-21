@@ -212,6 +212,22 @@ RtGbuf rtGbufUnpack(vec4 gb0, vec4 gb1) {
     return r;
 }
 
+// The normal a room's baked colour is lit by, for the traced lamps' N.L: its
+// face's, with the surface bumps' tilt (the shading normal less the vertex
+// normal) laid on it. An interior's vertex normals (MONR) are smoothed with
+// the walls they meet: on Undercity's Trade Quarter floor they lean 50 to
+// 65 degrees off the face, and the shop lanterns, hung five yards over that
+// floor, came in so low that N.L went to nothing over whole patches of it -
+// a dark field with a hard edge in front of the barber, which the room's
+// shade (rtInteriorShade) took for a corner no lamp reaches. The original
+// lights these colours by no normal at all (the MOHD ambient pass), so the
+// smoothing was never meant to light by. Mirrored in rt_gbuffer_pack.hpp
+// (faceBasedNormal).
+vec3 rtFaceBasedNormal(vec3 face, vec3 vertexNormal, vec3 shading) {
+    vec3 n = face + (shading - vertexNormal);
+    return dot(n, n) > 1e-8 ? normalize(n) : face;
+}
+
 // Inside, what a baked colour - an interior's vertex colours, a doodad's MODD
 // colour, a unit's floor colour - is scaled by: base where no point light
 // reaches, all of it where their light (shadowed, every light's, the

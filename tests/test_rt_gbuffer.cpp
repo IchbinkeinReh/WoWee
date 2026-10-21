@@ -478,3 +478,32 @@ TEST_CASE("The terrain's layers apply as terrain.frag lights them", "[rt_gbuffer
         }
     }
 }
+
+TEST_CASE("A room's baked colour takes the lamps by its face, not its smoothed vertex normal", "[rt_gbuffer]") {
+    using wowee::rendering::rt_gbuffer::faceBasedNormal;
+    // Undercity's Trade Quarter floor in front of the barber: flat, but its
+    // MONR normal leans 64 degrees toward the wall it shares vertices with.
+    const glm::vec3 face(0.0f, 0.0f, 1.0f);
+    const glm::vec3 vertexNormal = glm::normalize(glm::vec3(0.90f, -0.01f, 0.43f));
+    // A shop lantern five yards up and twelve away, on the other side.
+    const glm::vec3 toLamp = glm::normalize(glm::vec3(-12.0f, 0.0f, 4.8f));
+    REQUIRE(glm::dot(vertexNormal, toLamp) <= 0.0f);  // the smoothed normal turns it away
+
+    // No bumps: the face's own normal, which the lamp lights.
+    const glm::vec3 flat = faceBasedNormal(face, vertexNormal, vertexNormal);
+    REQUIRE(flat.z == Catch::Approx(1.0f));
+    REQUIRE(glm::dot(flat, toLamp) > 0.3f);
+
+    // Bumps keep their tilt, now about the face.
+    const glm::vec3 bump(0.1f, 0.05f, 0.0f);
+    const glm::vec3 bumped = faceBasedNormal(face, vertexNormal, glm::normalize(vertexNormal + bump));
+    const glm::vec3 expected = glm::normalize(face + (glm::normalize(vertexNormal + bump) - vertexNormal));
+    REQUIRE(bumped.x == Catch::Approx(expected.x));
+    REQUIRE(bumped.y == Catch::Approx(expected.y));
+    REQUIRE(bumped.z == Catch::Approx(expected.z));
+    REQUIRE(glm::length(bumped - face) > 0.01f);
+
+    // Where the vertex normal is the face's, nothing changes.
+    const glm::vec3 same = faceBasedNormal(face, face, glm::normalize(face + bump));
+    REQUIRE(glm::length(same - glm::normalize(face + bump)) < 1e-5f);
+}

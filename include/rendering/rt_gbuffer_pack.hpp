@@ -144,6 +144,14 @@ inline float bakedDarkness(float baked, float vis) {
     return baked / (baked + kBakeRest) * (1.0f - vis);
 }
 
+/// rtFaceBasedNormal: the normal a room's baked colour takes the traced
+/// lamps by - its face's, with the bumps' tilt (shading less vertex normal)
+/// laid on it, so the smoothed vertex normals (MONR) do not light it.
+inline glm::vec3 faceBasedNormal(const glm::vec3& face, const glm::vec3& vertexNormal, const glm::vec3& shading) {
+    const glm::vec3 n = face + (shading - vertexNormal);
+    return glm::dot(n, n) > 1e-8f ? glm::normalize(n) : face;
+}
+
 /// rtInteriorShade: inside, what a baked colour is scaled by - `base` where
 /// no point light reaches, all of it where their shadowed light (its
 /// brightest channel) is `fullAt` or more, linear between, weighed in by the

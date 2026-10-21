@@ -528,6 +528,38 @@ shadows leave (`rtBakedShade`), green and blue the room's light
 (`rtInteriorShade`): white as painted, cyan darkened by the lamps' shadows,
 red by the room's light, grey by both; dark blue no baked colour.
 
+### A room's baked colour takes the lamps by its face
+
+An interior's vertex normals (MONR) are smoothed with the walls they share
+vertices with: on Undercity's Trade Quarter floor in front of the barber
+(`.go xyz 1576.859 209.244 -43.103 0 4.7434`, groups 52 and 205) they lean
+50 to 65 degrees off the face (n.z 0.37-0.66). The shop's two lanterns
+(fire lights, reach about 22 yards) hang five yards over that floor, so
+their light comes in low, and N.L by the smoothed normal went to nothing
+over whole patches of the floor - with point shadows, the hard-structure
+rule and normal mapping all off. That was the harsh edge there: the lamps'
+light ended in a black pool with a straight, jagged edge, the bumps broke
+it into blotches, and the room's shade (`rtInteriorShade`, from that light)
+dropped those patches to `base`: a dark blue field. The 60-degree fallback
+in `rt_trace` above catches only the worst of these normals.
+
+The original lights these colours by no normal at all (the MOHD ambient
+pass of MapObj mode 3), so the smoothing was never meant to light by. A
+room's baked colour (`RT_GB_INTERIOR`) therefore writes into the G-buffer
+the face's own normal, from `dFdx`/`dFdy` of the position and turned to the
+vertex normal's side, with the bumps' tilt laid on it - the shading normal
+less the vertex normal (`rtFaceBasedNormal`, `faceBasedNormal` in
+`rt_gbuffer_pack.hpp`). The lamps' N.L, and with it the room's shade and
+the light they add, follow the face; normal mapping still shades the
+surface by the lamps as before, about the true face. Doodads keep their own
+normals (they are not smoothed across a wall), and so does everything
+outside.
+
+Debug view 12 shows the point lights' light each pixel adds (before the
+texture), 13 the factor its baked colour is scaled by - the lamps' shadows
+and the room's shade together, grey, white as painted, red where there is
+no baked colour.
+
 Shadows of point lights are soft by the light's size: the shadow ray aims at
 a point jittered within `clamp(0.04 * reach, 0.15, 0.5)` yards of the light
 (`rtLightRadius`), and stops that much shorter, so a lamp's shadow of a post
