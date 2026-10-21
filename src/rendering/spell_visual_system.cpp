@@ -13,6 +13,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/dbc_layout.hpp"
+#include "core/coordinates.hpp"
 #include "pipeline/m2_loader.hpp"
 #include "core/application.hpp"
 #include "core/logger.hpp"
@@ -285,6 +286,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
     const uint32_t svMissileAttField = svColumn("MissileAttachment");
     const uint32_t svMissileDstField = svColumn("MissileDestinationAttachment");
     const uint32_t svMissileSoundField = svColumn("MissileSound");
+    const uint32_t svMissileMotionField = svColumn("MissileMotion");
     const uint32_t svStateKitField     = svColumn("StateKit");
     const uint32_t svStateDoneKitField = svColumn("StateDoneKit");
     const uint32_t svChannelKitField   = svColumn("ChannelKit");
@@ -332,6 +334,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                 missile.castOffset = spell_missile::attachmentOffset(svVec(i, svCastOffField));
                 missile.impactOffset = spell_missile::attachmentOffset(svVec(i, svImpactOffField));
                 missile.soundId = static_cast<uint32_t>(std::max(svInt(i, svMissileSoundField, 0), 0));
+                missile.motionId = static_cast<uint32_t>(std::max(svInt(i, svMissileMotionField, 0), 0));
                 missileVisuals_[vid] = std::move(missile);
             }
         }
@@ -924,11 +927,31 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
     }
     const glm::vec3 target = missileTargetPoint(missile);
     float flight = spell_missile::flightTime(glm::length(target - missile.position), speed);
+    // A visual with a MissileMotion (0x00733xxx): flags 0x3800, its script
+    // (0x006ff0a0) and the row's MissileCount of copies, each its index.
+    int32_t copies = 1;
+    if (visual->motionId != 0) {
+        if (const MissileMotionRow* row = missileMotionRow(visual->motionId)) {
+            missile.hasMotion = true;
+            missile.facesDrawnMotion = true;
+            if (row->missileCount > 0) copies = row->missileCount;
+            if (!missileScripts_) missileScripts_ = std::make_unique<missile_motion::Scripts>();
+            if (missileScripts_->has(visual->motionId) ||
+                (failedMotionScripts_.count(visual->motionId) == 0 &&
+                 missileScripts_->compile(visual->motionId, row->script))) {
+                missile.motionId = visual->motionId;
+            } else if (failedMotionScripts_.insert(visual->motionId).second) {
+                LOG_WARNING("SpellVisual: SpellMissileMotion ", visual->motionId, " does not compile");
+            }
+        }
+    }
+    missile.missileCount = copies;
     // ADJUST_MISSILE (0x007022d0 hands it to 0x00700880): one flight to where
     // the target is now, timed by the server. Off the arc it flies straight,
     // homing, at the speed that lands it then.
     if (trajectory) {
         missile.adjusted = true;
+        missile.facesDrawnMotion = true;
         missile.arcStart = missile.position;
         missile.arc = spell_missile::planMissileArc(trajectory->elevation, trajectory->castSpeed,
                                                     target - missile.position,
@@ -940,16 +963,86 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
     // A missile chasing a unit that runs from it takes longer than this, so
     // the cap is generous; it only stops one that can never arrive.
     missile.maxLifetime = flight * 3.0f + 5.0f;
+    // 0x007022d0: the place it is let go, the distance from there and the
+    // speed it starts at; a point as far behind it as the target is ahead
+    // as where it was last drawn, so it first faces the target.
+    missile.firePos = missile.position;
+    missile.startDistance = glm::length(target - missile.position);
+    missile.baseSpeed = missile.speed;
+    missile.lastDrawn = missile.position - (target - missile.position);
 
-    missile.instanceId = m2Renderer_->createInstance(
-        modelId, missile.position, spell_missile::facingEuler(target - missile.position), missile.scale);
-    if (missile.instanceId == 0) return false;
-    m2Renderer_->restartInstanceAnimation(missile.instanceId);
-    missile.soundHandle = startMissileSound(visual->soundId, missile.position);
-    activeMissiles_.push_back(missile);
+    bool launched = false;
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+    for (int32_t index = 0; index < copies; ++index) {
+        ActiveMissile copy = missile;
+        copy.missileIndex = index;
+        // Rolled again for each copy as it is launched (0x007022d0).
+        for (float& r : copy.rands) r = unit(missileRng_);
+        copy.instanceId = m2Renderer_->createInstance(
+            modelId, copy.position, spell_missile::facingEuler(target - copy.position), copy.scale);
+        if (copy.instanceId == 0) break;
+        m2Renderer_->restartInstanceAnimation(copy.instanceId);
+        copy.soundHandle = startMissileSound(visual->soundId, copy.position);
+        activeMissiles_.push_back(std::move(copy));
+        launched = true;
+    }
     LOG_DEBUG("SpellVisual: missile visualId=", visualId, " speed=", speed, " flight=", flight,
-              "s model=", visual->modelPath, " target attach=", missile.targetAttachment);
-    return true;
+              "s model=", visual->modelPath, " target attach=", missile.targetAttachment, " copies=", copies);
+    return launched;
+}
+
+// SpellMissileMotion.dbc (0x00ad4950): ID, Name, ScriptBody, Flags,
+// MissileCount.
+const SpellVisualSystem::MissileMotionRow* SpellVisualSystem::missileMotionRow(uint32_t id) {
+    if (!missileMotionDbcLoaded_) {
+        missileMotionDbcLoaded_ = true;
+        auto* layouts = pipeline::getActiveDBCLayout();
+        const pipeline::DBCFieldMap* l = layouts ? layouts->getLayout("SpellMissileMotion") : nullptr;
+        auto dbc = cachedAssetManager_ && l ? cachedAssetManager_->loadDBC("SpellMissileMotion.dbc") : nullptr;
+        const uint32_t scriptField = l ? l->tryField("ScriptBody") : 0xFFFFFFFFu;
+        const uint32_t countField = l ? l->tryField("MissileCount") : 0xFFFFFFFFu;
+        if (dbc && dbc->isLoaded() && scriptField < dbc->getFieldCount() && countField < dbc->getFieldCount()) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                missileMotionRows_[dbc->getUInt32(i, 0)] =
+                    MissileMotionRow{.script = dbc->getString(i, scriptField),
+                                     .missileCount = dbc->getInt32(i, countField)};
+            }
+        }
+    }
+    auto it = missileMotionRows_.find(id);
+    return it != missileMotionRows_.end() ? &it->second : nullptr;
+}
+
+glm::vec3 SpellVisualSystem::runMissileMotion(ActiveMissile& missile, const glm::vec3& target, glm::mat4& turn) {
+    turn = glm::mat4(1.0f);
+    if (missile.motionId == 0 || !missileScripts_) return missile.position;
+    // The script works in the world's axes, this client's X and Y swapped.
+    namespace cc = core::coords;
+    const glm::vec3 pos = cc::renderToCanonical(missile.position);
+    const glm::vec3 fire = cc::renderToCanonical(missile.firePos);
+    const glm::vec3 aim = cc::renderToCanonical(target);
+    missile_motion::Inputs in;
+    in.progress = missile.progress;
+    in.time = missile.elapsed;
+    in.missileIndex = missile.missileIndex;
+    in.missileCount = missile.missileCount;
+    in.distanceToFirePos = glm::length(fire - pos);
+    in.distanceToImpactPos = glm::length(aim - pos);
+    in.startDistance = missile.startDistance;
+    in.totalDistance = glm::length(aim - fire);
+    in.rand1 = missile.rands[0];
+    in.rand2 = missile.rands[1];
+    in.rand3 = missile.rands[2];
+    in.spellID = missile.spellId;
+    const auto out = missileScripts_->run(missile.motionId, in);
+    if (!out) {
+        // 0x00701230: a script that raises is the end of the motion.
+        missile.motionId = 0;
+        return missile.position;
+    }
+    missile.speed = missile_motion::speedAfter(missile.speed, missile.baseSpeed, *out);
+    turn = missile_motion::modelTurn(*out);
+    return cc::canonicalToRender(missile_motion::drawnPosition(pos, fire, aim, *out));
 }
 
 // SpellMissile.dbc, all fifteen columns 4 bytes (0x008b8310): the arc reads
@@ -1042,9 +1135,31 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
         }
         if (!step.arrived && it->elapsed < it->maxLifetime) {
             it->position = step.position;
+            // How far along it is (flag 0x1000, a motion's): the share of the
+            // way from where it was let go that is behind it, or of its
+            // time on an arc; never less than it was (0x006ffed0).
+            if (it->hasMotion) {
+                float along = 1.0f;
+                if (it->adjusted && it->arc.onArc) {
+                    along = it->arc.flightSeconds > 0.0f ? it->elapsed / it->arc.flightSeconds : 1.0f;
+                } else if (const float total = glm::length(target - it->firePos); total > 1e-6f) {
+                    along = 1.0f - glm::length(target - it->position) / total;
+                }
+                it->progress = std::max(it->progress, along);
+            }
+            glm::mat4 turn;
+            const glm::vec3 drawn = runMissileMotion(*it, target, turn);
+            // Flag 0x800: facing the way it was drawn moving, where it moved
+            // at all (0x00701230).
+            glm::vec3 facing = travel;
+            if (it->facesDrawnMotion) {
+                const glm::vec3 moved = drawn - it->lastDrawn;
+                if (glm::length(moved) > 2.3841858e-07f) facing = moved;
+                it->lastDrawn = drawn;
+            }
             m2Renderer_->setInstanceTransform(
                 it->instanceId,
-                placementModelMatrix(it->position, spell_missile::facingEuler(travel), it->scale));
+                placementModelMatrix(drawn, spell_missile::facingEuler(facing), it->scale) * turn);
             audio::AudioEngine::instance().setSoundPosition(it->soundHandle, it->position);
             ++it;
             continue;

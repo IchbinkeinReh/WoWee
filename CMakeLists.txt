@@ -1008,6 +1008,7 @@ set(WOWEE_SOURCES
     src/rendering/world_text_renderer.cpp
     src/rendering/levelup_effect.cpp
     src/rendering/spell_visual_system.cpp
+    src/rendering/missile_motion.cpp
     src/rendering/post_process_pipeline.cpp
     src/rendering/overlay_system.cpp
     src/rendering/animation_controller.cpp
