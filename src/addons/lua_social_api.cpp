@@ -8,6 +8,7 @@
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/chat_color_table.hpp"
 #include "addons/lua_taint.hpp"
 #include "game/chat_handler.hpp"
 #include "game/difficulty_change.hpp"
@@ -2116,26 +2117,33 @@ void registerSocialLuaAPI(lua_State* L) {
                 // IsDisplayChannelOwner lives in lua_system_api.cpp, beside
                 // the selected-channel state it has to read. Two registrations
                 // of one name would be settled by load order.
-                // ChangeChatColor(type, r, g, b) - recolour one kind of chat
-                // message.
-                //
-                // The colour lives in FrameXML's ChatTypeInfo table, which its
-                // UPDATE_CHAT_COLOR handler fills from the event's own
-                // arguments, so firing the event is the whole of the change.
+                // ChangeChatColor(type, r, g, b) (0x004feaf0): the type's colour
+                // in the chat colour table, each part kept as a byte, and
+                // UPDATE_CHAT_COLOR with what was kept when a type of that name
+                // exists. FrameXML's handler fills ChatTypeInfo from the event.
                 //
                 // Three decimal places, because an event argument is only read
-                // back as a number when it is under twelve characters - a full
-                // float would arrive as a string and be assigned straight into
-                // a colour field.
+                // back as a number when it is under twelve characters.
                 {"ChangeChatColor", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3) ||
+                !lua_isnumber(L, 4)) {
+                return luaL_error(L, "Usage: ChangeChatColor(chatType, r, g, b)");
+            }
+            const std::string type = lua_tostring(L, 1);
+            const auto toByte = [](double v) {
+                return static_cast<uint8_t>(static_cast<int>(std::lrint(v * 255.0)) & 0xff);
+            };
+            const uint8_t r = toByte(lua_tonumber(L, 2));
+            const uint8_t g = toByte(lua_tonumber(L, 3));
+            const uint8_t b = toByte(lua_tonumber(L, 4));
+            if (!chatColorTable().setColor(type, r, g, b)) return 0;
             auto* gh = getGameHandler(L);
-            const char* type = luaL_optstring(L, 1, "");
-            if (!gh || !type || !*type) return 0;
-            char r[16], g[16], b[16];
-            std::snprintf(r, sizeof(r), "%.3f", luaL_optnumber(L, 2, 1.0));
-            std::snprintf(g, sizeof(g), "%.3f", luaL_optnumber(L, 3, 1.0));
-            std::snprintf(b, sizeof(b), "%.3f", luaL_optnumber(L, 4, 1.0));
-            gh->fireAddonEvent("UPDATE_CHAT_COLOR", {type, r, g, b});
+            if (!gh) return 0;
+            char rs[16], gs[16], bs[16];
+            std::snprintf(rs, sizeof(rs), "%.3f", r / 255.0);
+            std::snprintf(gs, sizeof(gs), "%.3f", g / 255.0);
+            std::snprintf(bs, sizeof(bs), "%.3f", b / 255.0);
+            gh->fireAddonEvent("UPDATE_CHAT_COLOR", {type, rs, gs, bs});
             return 0;
         }},
                 // UnitIsRaidOfficer(unit) → whether that unit is an assistant.

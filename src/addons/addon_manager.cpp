@@ -8,6 +8,8 @@ extern "C" {
 #include <lua.h>
 }
 #include "addons/addon_globals.hpp"
+#include "addons/chat_color_table.hpp"
+#include "game/handler_types.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "core/logger.hpp"
 #include "core/window.hpp"
@@ -499,6 +501,11 @@ void AddonManager::saveEnabledState() const {
     }
 }
 
+std::string AddonManager::chatCachePath() const {
+    if (characterName_.empty()) return "";
+    return core::getConfigRoot() + "/characters/" + characterName_ + ".chat-cache.txt";
+}
+
 std::string AddonManager::getSavedVariablesPath(const TocFile& addon) const {
     return addon.basePath + "/" + addon.addonName + ".lua.saved";
 }
@@ -787,89 +794,40 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
         std::string("__WoweeOwnsGameMenu = ") +
         (ui::frameXmlOwns(ui::UiElement::GameMenu) ? "true" : "false") + "\n");
 
-    // The colour of every kind of chat message, which nothing had ever sent.
+    // The colour of every kind of chat message, and whether its names are
+    // coloured by class: the client's chat colour table (0x00b746e8), read
+    // from this character's chat-cache COLORS section over the defaults, and
+    // told to the interface one UPDATE_CHAT_COLOR and one
+    // UPDATE_CHAT_COLOR_NAME_BY_CLASS per type (0x00501f00).
     //
-    // chatframe.lua builds ChatTypeInfo with sticky and flashTab and no colour
-    // at all: r, g and b arrive from the client, one UPDATE_CHAT_COLOR per
-    // type, and the real client sends them as the interface comes up. This one
-    // never did, so every entry answered nil and every line of chat in the game
-    // drew white - guild, whisper, emote, loot and system alike, all of it
-    // indistinguishable.
+    // chatframe.lua builds ChatTypeInfo with no colour at all and fills it
+    // from these events, so without them every line of chat draws white.
     //
-    // Fired straight into the interface rather than through ChangeChatColor.
-    // That binding asks the game handler to fire the event, and the application
-    // drops every event it is handed until addonsLoaded_ is true - which
-    // happens at world entry, long after this runs. So all twenty-six went
-    // nowhere and the table kept the white that chatframe.lua writes over it at
-    // file scope, and every line of chat in the game drew the same colour.
-    //
-    // Sent after FrameXML has loaded, since ChatFrame_OnLoad is what registers
-    // for the event. Same engine either way: the handler is what fills
-    // ChatTypeInfo and repaints the lines already on screen.
-    //
-    // 3.3.5's own palette. Anything not named here keeps white, which is what
-    // it had before, so a type left out is no worse than it was.
+    // Fired straight into the interface rather than through the game
+    // handler, which drops events until world entry. After FrameXML has
+    // loaded, since ChatFrame_OnLoad is what registers for them.
     //
     // Three decimals, because an event argument is only read back as a number
-    // when it is short: a full float arrives as a string and would be assigned
-    // straight into a colour field.
+    // when it is short.
     {
-        struct ChatColour { const char* type; float r, g, b; };
-        static constexpr ChatColour kChatColours[] = {
-            {"SYSTEM", 1.0f, 1.0f, 0.0f},    {"SAY", 1.0f, 1.0f, 1.0f},
-            {"YELL", 1.0f, 0.25f, 0.25f},    {"GUILD", 0.25f, 1.0f, 0.25f},
-            {"OFFICER", 0.25f, 0.75f, 0.25f},
-            {"GUILD_ACHIEVEMENT", 0.25f, 1.0f, 0.25f},
-            {"ACHIEVEMENT", 1.0f, 1.0f, 0.0f},
-            {"PARTY", 0.67f, 0.67f, 1.0f},   {"PARTY_LEADER", 0.46f, 0.78f, 1.0f},
-            {"RAID", 1.0f, 0.5f, 0.0f},      {"RAID_LEADER", 1.0f, 0.28f, 0.04f},
-            {"RAID_WARNING", 1.0f, 0.28f, 0.0f},
-            {"WHISPER", 1.0f, 0.5f, 1.0f},   {"WHISPER_INFORM", 1.0f, 0.5f, 1.0f},
-            {"EMOTE", 1.0f, 0.5f, 0.25f},    {"TEXT_EMOTE", 1.0f, 0.5f, 0.25f},
-            // Light yellow, as the original client's chat-cache has it
-            // (255 255 159) - white made an NPC's line look like a player's.
-            {"MONSTER_SAY", 1.0f, 1.0f, 0.624f},
-            {"MONSTER_YELL", 1.0f, 0.25f, 0.25f},
-            {"MONSTER_EMOTE", 1.0f, 0.5f, 0.25f},
-            {"MONSTER_WHISPER", 1.0f, 0.72f, 0.72f},
-            {"CHANNEL", 1.0f, 0.75f, 0.75f}, {"LOOT", 0.0f, 0.67f, 0.0f},
-            // A channel's lines take the colour of their slot, CHANNEL1 to
-            // CHANNEL10 - ChatFrame_MessageEventHandler reads
-            // ChatTypeInfo["CHANNEL"..index] - so "Allgemein" drew white
-            // with CHANNEL alone set. Joins, leaves and notices are greyer.
-            {"CHANNEL1", 1.0f, 0.75f, 0.75f}, {"CHANNEL2", 1.0f, 0.75f, 0.75f},
-            {"CHANNEL3", 1.0f, 0.75f, 0.75f}, {"CHANNEL4", 1.0f, 0.75f, 0.75f},
-            {"CHANNEL5", 1.0f, 0.75f, 0.75f}, {"CHANNEL6", 1.0f, 0.75f, 0.75f},
-            {"CHANNEL7", 1.0f, 0.75f, 0.75f}, {"CHANNEL8", 1.0f, 0.75f, 0.75f},
-            {"CHANNEL9", 1.0f, 0.75f, 0.75f}, {"CHANNEL10", 1.0f, 0.75f, 0.75f},
-            {"CHANNEL_JOIN", 0.75f, 0.5f, 0.5f},
-            {"CHANNEL_LEAVE", 0.75f, 0.5f, 0.5f},
-            {"CHANNEL_LIST", 0.75f, 0.5f, 0.5f},
-            {"CHANNEL_NOTICE", 0.75f, 0.75f, 0.75f},
-            {"CHANNEL_NOTICE_USER", 0.75f, 0.75f, 0.75f},
-            {"MONEY", 1.0f, 1.0f, 0.0f},
-            {"BG_SYSTEM_NEUTRAL", 1.0f, 1.0f, 0.5f},
-            {"BG_SYSTEM_ALLIANCE", 0.25f, 0.75f, 1.0f},
-            {"BG_SYSTEM_HORDE", 1.0f, 0.1f, 0.1f},
-            // The blues and the gold of skill-ups, experience, honour and
-            // reputation - "Eure Fertigkeit ... hat sich erhöht" drew white.
-            {"SKILL", 0.333f, 0.333f, 1.0f},
-            {"COMBAT_XP_GAIN", 0.435f, 0.435f, 1.0f},
-            {"COMBAT_HONOR_GAIN", 0.878f, 0.792f, 0.039f},
-            {"COMBAT_FACTION_CHANGE", 0.5f, 0.5f, 1.0f},
-            {"COMBAT_MISC_INFO", 0.5f, 0.5f, 1.0f},
-            {"OPENING", 0.5f, 0.5f, 1.0f},
-            {"PET_INFO", 0.5f, 0.5f, 1.0f},
-            {"AFK", 1.0f, 0.5f, 1.0f},       {"DND", 1.0f, 0.5f, 1.0f},
-            {"IGNORED", 1.0f, 0.0f, 0.0f},   {"FILTERED", 1.0f, 0.0f, 0.0f},
-            {"RESTRICTED", 1.0f, 0.0f, 0.0f},
-        };
+        ChatColorTable& table = chatColorTable();
+        table.setDefaults();
+        if (const std::string path = chatCachePath(); !path.empty()) {
+            std::ifstream in(path);
+            if (in) {
+                std::stringstream text;
+                text << in.rdbuf();
+                table.parse(text.str());
+            }
+        }
         char r[16], g[16], b[16];
-        for (const auto& c : kChatColours) {
-            std::snprintf(r, sizeof(r), "%.3f", c.r);
-            std::snprintf(g, sizeof(g), "%.3f", c.g);
-            std::snprintf(b, sizeof(b), "%.3f", c.b);
-            luaEngine_.fireEvent("UPDATE_CHAT_COLOR", {c.type, r, g, b});
+        for (const auto& c : table.entries()) {
+            std::snprintf(r, sizeof(r), "%.3f", c.r / 255.0);
+            std::snprintf(g, sizeof(g), "%.3f", c.g / 255.0);
+            std::snprintf(b, sizeof(b), "%.3f", c.b / 255.0);
+            luaEngine_.fireEvent("UPDATE_CHAT_COLOR", {c.name, r, g, b});
+            luaEngine_.fireEvent("UPDATE_CHAT_COLOR_NAME_BY_CLASS",
+                                 {c.name, c.nameByClass ? "1" : game::kEventNil});
         }
     }
 
@@ -1730,6 +1688,13 @@ void AddonManager::saveAllSavedVariables() {
     // the way out of the process would write every one of those files from a
     // state that never loaded them.
     if (!addonsLoaded_) return;
+    // The chat colour table, as chat-cache.txt's COLORS section (0x004fd300).
+    if (const std::string path = chatCachePath(); !path.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+        std::ofstream out(path, std::ios::trunc);
+        if (out) out << chatColorTable().serialize();
+    }
     for (const auto& addon : addons_) {
         auto savedVars = addon.getSavedVariables();
         if (!savedVars.empty()) {

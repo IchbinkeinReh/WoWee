@@ -3309,6 +3309,11 @@ wowee_add_test(test_glyph_socket
 wowee_add_test(test_latest_criteria
     SOURCES test_latest_criteria.cpp)
 
+# ── test_chat_color_table ────────────────────────────────────
+# The chat type colour table (0x00b746e8) and its COLORS section. Header-only.
+wowee_add_test(test_chat_color_table
+    SOURCES test_chat_color_table.cpp)
+
 # ── test_target_direction ────────────────────────────────────
 # TargetDirectionEnemy/Friend's choice (0x005252d0, 0x00518f40, 0x004f6d20).
 # Header-only.

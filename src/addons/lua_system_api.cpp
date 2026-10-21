@@ -27,6 +27,7 @@
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/chat_color_table.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/chat_window_background.hpp"
 #include "addons/client_cvar_registry.hpp"
@@ -4019,19 +4020,27 @@ static int lua_ResetChatWindows(lua_State* L) {
     return 0;
 }
 
-/// Whether a chat type colours player names by class. Stored per chat type
-/// rather than globally, which is how the chat options panel presents it -
-/// a row per type, each with its own tick.
-static std::set<std::string>& chatColorByClass() {
-    static std::set<std::string> types;
-    return types;
-}
+/// SetChatColorNameByClass(chatType, on) (0x004fedc0): the type's class
+/// flag in the chat colour table, and UPDATE_CHAT_COLOR_NAME_BY_CLASS when a
+/// type of that name exists.
 static int lua_SetChatColorNameByClass(lua_State* L) {
-    std::string type(luaL_optstring(L, 1, ""));
-    toLowerInPlace(type);
-    if (type.empty()) return 0;
-    if (lua_toboolean(L, 2)) chatColorByClass().insert(type);
-    else chatColorByClass().erase(type);
+    if (!lua_isstring(L, 1)) {
+        return luaL_error(L, "Usage: SetChatColorNameByClass(chatType, colorNameByClass)");
+    }
+    const std::string type = lua_tostring(L, 1);
+    const bool on = lua_toboolean(L, 2) != 0;
+    if (!chatColorTable().setNameByClass(type, on)) return 0;
+    if (auto* gh = getGameHandler(L)) {
+        gh->fireAddonEvent("UPDATE_CHAT_COLOR_NAME_BY_CLASS", {type, game::eventBool(on)});
+    }
+    return 0;
+}
+
+/// ResetChatColors() (0x004fed10): every chat type back to its colour. The
+/// class flags stay, and nothing is said - the interface asks again.
+static int lua_ResetChatColors(lua_State* L) {
+    (void)L;
+    chatColorTable().resetColors();
     return 0;
 }
 
@@ -7551,6 +7560,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"SetChatWindowUninteractable",  lua_SetChatWindowUninteractable},
                 {"ResetChatWindows",             lua_ResetChatWindows},
                 {"SetChatColorNameByClass",      lua_SetChatColorNameByClass},
+                {"ResetChatColors",              lua_ResetChatColors},
                 {"GetExistingLocales",       lua_ReturnNil},
                 // Read from the real keyboard: a shift-click means something
                 // different from a click, and FrameXML asks on every press.
