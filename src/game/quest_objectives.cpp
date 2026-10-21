@@ -1,6 +1,8 @@
 #include "game/quest_objectives.hpp"
 
 #include "game/quest_progress.hpp"
+#include "game/interface_text.hpp"
+#include "game/reputation_standing.hpp"
 
 #include <cstdlib>
 
@@ -40,8 +42,9 @@ std::vector<QuestObjective> questObjectives(GameHandler& gh,
         if (auto it = q.killCounts.find(key); it != q.killCounts.end()) current = it->second.first;
         const bool isObject = kill.npcOrGoId < 0;
         QuestObjective line;
-        line.text = questObjectiveLine(targetName(gh, kill.npcOrGoId), isObject, current,
-                                       kill.required);
+        const size_t slot = static_cast<size_t>(&kill - q.killObjectives.data());
+        line.text = questObjectiveLine(q.objectiveTexts[slot], targetName(gh, kill.npcOrGoId), isObject,
+                                       current, kill.required, interfaceString);
         line.type = isObject ? "object" : "monster";
         line.finished = current >= kill.required;
         out.push_back(std::move(line));
@@ -58,12 +61,35 @@ std::vector<QuestObjective> questObjectives(GameHandler& gh,
             name = info->name;
         } else {
             gh.queryItemInfo(item.itemId, 0);
-            name = "Item #" + std::to_string(item.itemId);
         }
         QuestObjective line;
-        line.text = name + ": " + std::to_string(current) + "/" + std::to_string(item.required);
+        line.text = questItemObjectiveLine(name, current, item.required, interfaceString);
         line.type = "item";
         line.finished = current >= item.required;
+        out.push_back(std::move(line));
+    }
+    // Then the players slain, or else the reputation (0x005e1460 answers
+    // the one and returns).
+    if (q.playersSlain > 0) {
+        uint32_t current = 0;
+        if (auto it = q.killCounts.find(0u); it != q.killCounts.end()) current = it->second.first;
+        QuestObjective line;
+        line.text = questPlayersKilledLine(current, q.playersSlain, interfaceString);
+        line.type = "player";
+        line.finished = current >= q.playersSlain;
+        out.push_back(std::move(line));
+    } else if (q.repObjectiveFaction != 0) {
+        const int32_t have = gh.getFactionStanding(q.repObjectiveFaction);
+        auto label = [](int32_t value) {
+            const int id = reputationStandingFor(value).id;
+            const std::string key = "FACTION_STANDING_LABEL" + std::to_string(id);
+            return interfaceString(key.c_str(), reputationStandingFor(value).name);
+        };
+        QuestObjective line;
+        line.text = questFactionLine(gh.getFactionNamePublic(q.repObjectiveFaction), label(have),
+                                     label(q.repObjectiveValue), interfaceString);
+        line.type = "reputation";
+        line.finished = have >= q.repObjectiveValue;
         out.push_back(std::move(line));
     }
     return out;

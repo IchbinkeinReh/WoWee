@@ -79,21 +79,49 @@ TEST_CASE("A failed quest slot reads as failed, not as unfinished",
     }
 }
 
-// An objective line names what it is about. Both the quest log and the tracker
-// read this one string, and it used to say "Creature slain: 12/15" for every
-// kill objective at once - fifteen of what, the line could not say.
-TEST_CASE("A kill objective is named, and counted", "[quest][objective]") {
-    REQUIRE(questObjectiveLine("Nightbane Worgen", false, 12, 15) ==
+namespace {
+// The interface's strings as a German client has them (GlobalStrings.lua);
+// anything not listed answers its enUS wording, as interfaceString does.
+std::string germanText(const char* key, const char* enUS) {
+    const std::string k = key;
+    if (k == "QUEST_MONSTERS_KILLED") return "%1$s getötet: %2$d/%3$d";
+    if (k == "QUEST_OBJECTS_FOUND") return "%1$s: %2$d/%3$d";
+    if (k == "QUEST_ITEMS_NEEDED") return "%1$s: %2$d/%3$d";
+    if (k == "QUEST_PLAYERS_KILLED") return "Spieler besiegt: %d/%d";
+    if (k == "QUEST_FACTION_NEEDED") return "%1$s: %2$s / %3$s";
+    return enUS;
+}
+std::string englishText(const char*, const char* enUS) { return enUS; }
+}  // namespace
+
+// An objective line names what it is about, in the interface's words
+// (GetQuestLogLeaderBoard, 0x005e1460): QUEST_MONSTERS_KILLED for a creature,
+// QUEST_OBJECTS_FOUND for a game object.
+TEST_CASE("A kill objective is named, counted and worded by the interface", "[quest][objective]") {
+    REQUIRE(questObjectiveLine("", "Nightbane Worgen", false, 12, 15, englishText) ==
             "Nightbane Worgen slain: 12/15");
-    // A game object is found rather than slain, which is the game's own
-    // QUEST_OBJECTS_FOUND against its QUEST_MONSTERS_KILLED.
-    REQUIRE(questObjectiveLine("Bundle of Wood", true, 0, 8) ==
-            "Bundle of Wood: 0/8");
+    REQUIRE(questObjectiveLine("", "Nachtsichel-Worg", false, 12, 15, germanText) ==
+            "Nachtsichel-Worg getötet: 12/15");
+    REQUIRE(questObjectiveLine("", "Bundle of Wood", true, 0, 8, englishText) == "Bundle of Wood: 0/8");
 }
 
-TEST_CASE("An objective with no name yet still counts", "[quest][objective]") {
-    // The creature query has not answered. The count is real and belongs on
-    // screen now; the name arrives behind it and rewrites the line.
-    REQUIRE(questObjectiveLine("", false, 3, 8) == "Creature slain: 3/8");
-    REQUIRE(questObjectiveLine("", true, 3, 8) == "Object: 3/8");
+TEST_CASE("The quest's own objective text names the slot instead", "[quest][objective]") {
+    // ObjectiveText, in QUEST_OBJECTS_FOUND even for a creature.
+    REQUIRE(questObjectiveLine("Verseuchte Brut befreit", "Verseuchte Brut", false, 2, 6, germanText) ==
+            "Verseuchte Brut befreit: 2/6");
+}
+
+TEST_CASE("An objective with no name yet still counts, named by a space", "[quest][objective]") {
+    // The client puts a single space where the name is not known yet.
+    REQUIRE(questObjectiveLine("", "", false, 3, 8, englishText) == "  slain: 3/8");
+    REQUIRE(questObjectiveLine("", "", true, 3, 8, englishText) == " : 3/8");
+}
+
+TEST_CASE("Items, players and reputation objectives", "[quest][objective]") {
+    // Never more than needed is shown held.
+    REQUIRE(wowee::game::questItemObjectiveLine("Wolfsfleisch", 9, 8, germanText) == "Wolfsfleisch: 8/8");
+    REQUIRE(wowee::game::questItemObjectiveLine("", 1, 8, germanText) == " : 1/8");
+    REQUIRE(wowee::game::questPlayersKilledLine(3, 10, germanText) == "Spieler besiegt: 3/10");
+    REQUIRE(wowee::game::questFactionLine("Kirin Tor", "Freundlich", "Wohlwollend", germanText) ==
+            "Kirin Tor: Freundlich / Wohlwollend");
 }

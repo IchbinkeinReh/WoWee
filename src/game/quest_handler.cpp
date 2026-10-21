@@ -524,6 +524,9 @@ struct QuestQueryObjectives {
     struct Item { uint32_t itemId; uint32_t required; };
     std::array<Kill, 4> kills{};
     std::array<Item, 6> items{};
+    /// ObjectiveText1-4, after the records: what the log names each kill or
+    /// object slot by, where the quest gives one (the cache's +0x1c94).
+    std::array<std::string, 4> texts{};
     bool valid = false;
 };
 
@@ -627,6 +630,16 @@ static QuestQueryObjectives tryParseQuestObjectivesAt(const std::vector<uint8_t>
                                          out.items[i].required))
                 return {};
         }
+    }
+
+    // ObjectiveText1-4, four strings after the records in every expansion's
+    // layout. Missing ones are left empty rather than failing the parse.
+    for (int i = 0; i < 4; ++i) {
+        const size_t start = pos;
+        while (pos < data.size() && data[pos] != 0) ++pos;
+        if (pos >= data.size()) break;
+        out.texts[i].assign(reinterpret_cast<const char*>(&data[start]), pos - start);
+        ++pos;
     }
 
     out.valid = true;
@@ -1314,6 +1327,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     q.killObjectives[i].npcOrGoId = objs.kills[i].npcOrGoId;
                     q.killObjectives[i].required  = objs.kills[i].required;
                     q.objectiveSourceItems[i] = objs.kills[i].sourceItem;
+                    q.objectiveTexts[i] = objs.texts[i];
                     if (objs.kills[i].npcOrGoId != 0 && objs.kills[i].required != 0) {
                         validKillKeys.insert(static_cast<uint32_t>(
                             objs.kills[i].npcOrGoId > 0 ? objs.kills[i].npcOrGoId
@@ -1374,6 +1388,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 q.playersSlain = rwds.playersSlain;
                 q.repObjectiveFaction = rwds.repObjectiveFaction;
                 q.repObjectiveFaction2 = rwds.repObjectiveFaction2;
+                q.repObjectiveValue = rwds.repObjectiveValue;
                 // The watch frame needs its name and icon to draw a button.
                 if (q.sourceItemId != 0) owner_.queryItemInfo(q.sourceItemId, 0);
                 for (int i = 0; i < 4; ++i) {

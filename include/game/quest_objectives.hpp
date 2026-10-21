@@ -2,8 +2,10 @@
 
 // A quest's objective lines, the way the log and the tracker write them.
 //
-// "Warmaul Reaver slain: 2/5", "Muck-ridden Core: 3/5" - one per kill or
-// object objective and one per item, kills first. The interface's quest log
+// "Warmaul Reaver slain: 2/5" ("getötet" on a German client), "Muck-ridden
+// Core: 3/5" - one per kill or object objective, one per item, then the
+// players slain or else the reputation, in the client's words
+// (GetQuestLogLeaderBoard, 0x005e1460; quest_progress.hpp). The interface's quest log
 // asks for these one at a time through GetQuestLogLeaderBoard, and the map
 // window's own quest list asks for them all at once; one builder serves both,
 // so the two cannot word an objective differently.
@@ -40,12 +42,14 @@ inline int questObjectiveCount(const GameHandler::QuestLogEntry& q) {
     for (const auto& item : q.itemObjectives) {
         if (isQuestObjective(static_cast<int32_t>(item.itemId), item.required)) ++count;
     }
+    if (q.playersSlain > 0) ++count;
+    else if (q.repObjectiveFaction != 0) ++count;
     return count;
 }
 
 /// Every objective the quest carries, in the log's order. A name still out on
-/// its query is asked for again, and stands in with a generic word until it
-/// answers - see questObjectiveLine.
+/// its query is asked for again, and is a space until it answers, as the
+/// client has it - see questObjectiveLine.
 std::vector<QuestObjective> questObjectives(GameHandler& gh,
                                             const GameHandler::QuestLogEntry& quest);
 

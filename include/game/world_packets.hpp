@@ -3241,6 +3241,7 @@ struct QuestQueryRewardsData {
     uint32_t playersSlain = 0;
     uint32_t repObjectiveFaction = 0;
     uint32_t repObjectiveFaction2 = 0;
+    int32_t repObjectiveValue = 0;  ///< RequiredMinRepValue, the word after the first faction
     /// Up to five reputation rewards: the faction id, the QuestFactionReward.dbc
     /// value index, and a direct override (hundredths). The reputation shown is
     /// override/100 when set, else the dbc column at |valueId|. WotLK only.

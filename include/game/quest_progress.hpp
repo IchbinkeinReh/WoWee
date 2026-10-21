@@ -2,7 +2,11 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <vector>
+
+#include "game/chat_channels.hpp"
 
 namespace wowee::game {
 
@@ -64,22 +68,61 @@ inline bool isQuestSlotFailed(uint8_t questLogStride, uint32_t stateField) {
     return (questSlotState(questLogStride, stateField) & 0x2u) != 0;
 }
 
-/// One objective line, the way the game writes it.
-///
-/// QUEST_MONSTERS_KILLED is "%s slain: %d/%d" and QUEST_OBJECTS_FOUND is
-/// "%s: %d/%d" - a chest is found rather than slain. The name is whatever the
-/// creature or game object query answered; while that is still out there is
-/// nothing to name it with, and the generic word stands in for the moment.
-///
-/// The quest log and the tracker both read this, and both said "Creature
-/// slain: 12/15" for every kill objective at once - which names none of the
-/// fifteen things and is the one thing an objective line is for.
-inline std::string questObjectiveLine(const std::string& name, bool isObject,
-                                      uint32_t current, uint32_t required) {
-    const std::string counts =
-        std::to_string(current) + "/" + std::to_string(required);
-    if (isObject) return (name.empty() ? "Object" : name) + ": " + counts;
-    return (name.empty() ? "Creature" : name) + " slain: " + counts;
+/// Where an objective line's wording comes from: a GlobalStrings key and its
+/// enUS text, answered with the interface's (localized) string. The game's
+/// is game::interfaceString; tests pass their own.
+using QuestTextSource = std::function<std::string(const char* key, const char* enUS)>;
+
+/// The name the client puts in a line whose creature, object or item it
+/// does not know yet (0x005e1460: a single space, 0x009e1050).
+inline const std::string& questUnknownName() {
+    static const std::string space = " ";
+    return space;
+}
+
+/// A kill or object objective's line, as GetQuestLogLeaderBoard (0x005e1460)
+/// words it: the quest's own ObjectiveText for that slot where it has one, in
+/// QUEST_OBJECTS_FOUND ("%s: %d/%d") whatever the target is; otherwise a game
+/// object's name in QUEST_OBJECTS_FOUND and a creature's in
+/// QUEST_MONSTERS_KILLED ("%s slain: %d/%d", "%s getötet: %d/%d" on a German
+/// client).
+inline std::string questObjectiveLine(const std::string& objectiveText, const std::string& name,
+                                      bool isObject, uint32_t current, uint32_t required,
+                                      const QuestTextSource& text) {
+    const std::vector<std::string> counts = {std::to_string(current), std::to_string(required)};
+    if (!objectiveText.empty()) {
+        return chat_channels::luaFormat(text("QUEST_OBJECTS_FOUND", "%s: %d/%d"),
+                                        {objectiveText, counts[0], counts[1]});
+    }
+    const std::string& shown = name.empty() ? questUnknownName() : name;
+    if (isObject) {
+        return chat_channels::luaFormat(text("QUEST_OBJECTS_FOUND", "%s: %d/%d"), {shown, counts[0], counts[1]});
+    }
+    return chat_channels::luaFormat(text("QUEST_MONSTERS_KILLED", "%s slain: %d/%d"), {shown, counts[0], counts[1]});
+}
+
+/// An item objective's line: QUEST_ITEMS_NEEDED with the count held, never
+/// more than the count needed (0x005e1460).
+inline std::string questItemObjectiveLine(const std::string& name, uint32_t held, uint32_t required,
+                                          const QuestTextSource& text) {
+    const uint32_t shownCount = held < required ? held : required;
+    return chat_channels::luaFormat(text("QUEST_ITEMS_NEEDED", "%s: %d/%d"),
+                                    {name.empty() ? questUnknownName() : name, std::to_string(shownCount),
+                                     std::to_string(required)});
+}
+
+/// The players-slain objective: QUEST_PLAYERS_KILLED.
+inline std::string questPlayersKilledLine(uint32_t current, uint32_t required, const QuestTextSource& text) {
+    return chat_channels::luaFormat(text("QUEST_PLAYERS_KILLED", "Players slain: %d/%d"),
+                                    {std::to_string(current), std::to_string(required)});
+}
+
+/// The reputation objective: QUEST_FACTION_NEEDED, the faction's name, the
+/// player's standing and the one needed, each a FACTION_STANDING_LABELn.
+inline std::string questFactionLine(const std::string& faction, const std::string& currentStanding,
+                                    const std::string& requiredStanding, const QuestTextSource& text) {
+    return chat_channels::luaFormat(text("QUEST_FACTION_NEEDED", "%s: %s / %s"),
+                                    {faction, currentStanding, requiredStanding});
 }
 
 } // namespace wowee::game

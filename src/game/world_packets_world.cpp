@@ -1629,6 +1629,7 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
         out.questFlags = fieldAt(sourceItemField + 1);
         out.playersSlain = fieldAt(sourceItemField + 3);
         out.repObjectiveFaction = fieldAt(5);
+        out.repObjectiveValue = static_cast<int32_t>(fieldAt(6));
         out.repObjectiveFaction2 = fieldAt(7);
         const uint32_t srcItem = fieldAt(sourceItemField);
         // Same plausibility gate the rewards use: a layout mismatch lands in a

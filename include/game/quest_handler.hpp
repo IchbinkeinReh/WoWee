@@ -156,12 +156,17 @@ public:
         /// The kill records' source items (ReqSourceId, the cache's +0x1c74):
         /// what a quest hands over for an objective, not an objective itself.
         std::array<uint32_t, 4> objectiveSourceItems{};
+        /// ObjectiveText1-4: the name the log gives a kill or object slot
+        /// instead of its target's (GetQuestLogLeaderBoard, 0x005e1460).
+        std::array<std::string, 4> objectiveTexts{};
         /// Flags, PlayersSlain and the reputation objectives' factions, as
         /// QuestQueryRewardsData carries them.
         uint32_t questFlags = 0;
         uint32_t playersSlain = 0;
         uint32_t repObjectiveFaction = 0;
         uint32_t repObjectiveFaction2 = 0;
+        /// The reputation the first objective faction asks for (RequiredMinRepValue).
+        int32_t repObjectiveValue = 0;
         int32_t  rewardMoney = 0;
         std::array<QuestRewardItem, 4> rewardItems{};
         std::array<QuestRewardItem, 6> rewardChoiceItems{};

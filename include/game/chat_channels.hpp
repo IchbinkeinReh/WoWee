@@ -346,7 +346,7 @@ inline std::string numberedName(const Slot* slot, const std::string& name) {
 }
 
 /// A GlobalStrings format filled the way Lua's string.format fills it, with
-/// %d, %s and the positional %1$s the localized strings use; "%%" is a percent
+/// %d, %s, %c and the positional %1$s the localized strings use; "%%" is a percent
 /// sign. Arguments past the end read as empty.
 inline std::string luaFormat(const std::string& fmt, const std::vector<std::string>& args) {
     std::string out;
@@ -362,7 +362,9 @@ inline std::string luaFormat(const std::string& fmt, const std::vector<std::stri
             positional = true;
             j += 2;
         }
-        if (j >= fmt.size() || (fmt[j] != 's' && fmt[j] != 'd')) { out += fmt[i]; continue; }
+        // %c takes its argument as the character already: the item tooltip's
+        // ITEM_MOD_* lines put the sign in front of a stat that way.
+        if (j >= fmt.size() || (fmt[j] != 's' && fmt[j] != 'd' && fmt[j] != 'c')) { out += fmt[i]; continue; }
         if (!positional) ++next;
         if (index < args.size()) out += args[index];
         i = j;
