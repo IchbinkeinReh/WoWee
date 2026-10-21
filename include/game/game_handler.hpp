@@ -24,6 +24,7 @@
 #include "game/handler_types.hpp"
 #include "game/combat_handler.hpp"
 #include "game/combat_log_feed.hpp"
+#include "game/arena_opponents.hpp"
 #include "game/spell_handler.hpp"
 #include "game/quest_handler.hpp"
 #include "game/movement_handler.hpp"
@@ -459,6 +460,16 @@ public:
     void setCombatLogEventCallback(CombatLogEventCallback cb) { combatLogEventCallback_ = std::move(cb); }
     /// The combat log and what fills it.
     CombatLogFeed& combatLogFeed() { return *combatLogFeed_; }
+    /// The arena's opponents, the units arena1..5 and arenapet1..5 name.
+    [[nodiscard]] const arena::Roster& arenaRoster() const { return arenaRoster_; }
+    /// A player or a pet come into sight (CGPlayer_C / CGUnit_C PostInit,
+    /// 0x0054d100 and 0x0054d1c0): an opponent in an arena, of the other
+    /// arena faction or a pet hostile to the player.
+    void noteArenaUnitSeen(const Entity& entity);
+    /// SMSG_ARENA_UNIT_DESTROYED (0x0054b5e0), and the roster emptied where the
+    /// battlefield is (0x0054ca50).
+    void noteArenaUnitDestroyed(uint64_t guid);
+    void clearArenaRoster() { arenaRoster_.clear(); }
 
     /// Run a line of the interface's own Lua.
     ///
@@ -5137,6 +5148,8 @@ private:
     std::unique_ptr<QuestHandler>     questHandler_;
     std::unique_ptr<WardenHandler>    wardenHandler_;
     std::unique_ptr<CombatLogFeed>    combatLogFeed_;
+    arena::Roster arenaRoster_;
+    void announceArena(const std::vector<arena::OpponentUpdate>& updates);
 
     // Opcode dispatch table - built once in registerOpcodeHandlers(), called by handlePacket()
     using PacketHandler = std::function<void(network::Packet&)>;

@@ -577,6 +577,7 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     if (socialHandler_) socialHandler_->resetForWorldEntry();
     // A new combat log, timed from now (0x007538a0).
     if (combatLogFeed_) combatLogFeed_->enterWorld();
+    arenaRoster_.clear();
 
     LOG_INFO("========================================");
     LOG_INFO("   ENTERING WORLD");

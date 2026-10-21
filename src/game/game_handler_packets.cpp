@@ -2167,6 +2167,11 @@ void GameHandler::registerRemainingOpcodes() {
         packet.skipAll();
         combatLogFeed_->enchantment(target, caster, itemId, enchantId);
     };
+    // 0x0054b5e0: an opponent, or an opponent's pet, gone from the arena.
+    dispatchTable_[Opcode::SMSG_ARENA_UNIT_DESTROYED] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(8)) return;
+        noteArenaUnitDestroyed(packet.readUInt64());
+    };
     // The log packets the server kept, replayed through their handlers with
     // what they log dated back by how long ago each was (0x006d4110).
     dispatchTable_[Opcode::SMSG_SEND_ALL_COMBAT_LOG] = [this](network::Packet& packet) {
@@ -3789,13 +3794,6 @@ void GameHandler::registerRemainingOpcodes() {
         if (packet.hasFullPackedGuid()) looters.roundRobin = packet.readPackedGuid();
         unit->setLooters(looters);
     };
-    // Sent one line before SMSG_DESTROY_OBJECT and carrying the same guid, and
-    // only inside an arena - Object::DestroyForPlayer writes both. The unit is
-    // removed by the second one whatever happens here, so this is a decision
-    // rather than a gap: the real client uses it to tell an arena opponent who
-    // died from one who merely went out of range, and nothing here draws that
-    // distinction.
-    registerSkipHandler(Opcode::SMSG_ARENA_UNIT_DESTROYED);
     // Consume - remaining server notifications not yet parsed
     for (auto op : {
         Opcode::SMSG_AFK_MONITOR_INFO_RESPONSE,

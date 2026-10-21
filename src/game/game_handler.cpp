@@ -4478,6 +4478,53 @@ bool GameHandler::arenaRosterShowOffline() const {
     return !socialHandler_ || socialHandler_->arenaRosterShowOffline();
 }
 
+void GameHandler::announceArena(const std::vector<arena::OpponentUpdate>& updates) {
+    for (const auto& u : updates) fireAddonEvent("ARENA_OPPONENT_UPDATE", {u.unit, u.state});
+}
+
+void GameHandler::noteArenaUnitSeen(const Entity& entity) {
+    // DAT_00bea570 == 4: an arena's map.
+    if (currentMapInstanceType() != 4 || entity.getGuid() == playerGuid) return;
+    if (entity.getType() == ObjectType::PLAYER) {
+        // PLAYER_BYTES_3's last byte, the arena faction, not the player's own
+        // (0xbea54a, from SMSG_BATTLEFIELD_STATUS).
+        const uint16_t idx = fieldIndex(UF::PLAYER_BYTES_3);
+        const uint8_t faction = idx != 0xFFFF ? static_cast<uint8_t>(entity.getField(idx) >> 24) : 0;
+        if (faction != battlefieldArenaFaction()) announceArena(arenaRoster_.opponentSeen(entity.getGuid(), true));
+        return;
+    }
+    if (!entity.isUnit()) return;
+    const uint16_t petIdx = fieldIndex(UF::UNIT_FIELD_PETNUMBER);
+    if (petIdx == 0xFFFF || entity.getField(petIdx) == 0 || !getEntityManager().getEntity(playerGuid)) return;
+    // The player regards it as hostile or worse (0x007251c0 below 2).
+    if (playerReactionTo(static_cast<const Unit&>(entity)) - 1 >= 2) return;
+    const auto guidAt = [&entity](UF low) {
+        const uint16_t i = fieldIndex(low);
+        return i == 0xFFFF ? 0ull
+                           : (entity.getField(i) | (static_cast<uint64_t>(entity.getField(static_cast<uint16_t>(i + 1))) << 32));
+    };
+    const uint64_t charmedBy = guidAt(UF::UNIT_FIELD_CHARMEDBY);
+    const uint64_t owner = charmedBy != 0 ? charmedBy : guidAt(UF::UNIT_FIELD_CREATEDBY);
+    announceArena(arenaRoster_.petSeen(entity.getGuid(), owner, true));
+}
+
+void GameHandler::noteArenaUnitDestroyed(uint64_t guid) {
+    if (currentMapInstanceType() != 4) return;
+    // An opponent's pet is what it has charmed, else what it has summoned.
+    const auto petOf = [this](uint64_t opponent) -> uint64_t {
+        const auto e = getEntityManager().getEntity(opponent);
+        if (!e) return 0;
+        const auto at = [&e](UF low) {
+            const uint16_t i = fieldIndex(low);
+            return i == 0xFFFF ? 0ull
+                               : (e->getField(i) | (static_cast<uint64_t>(e->getField(static_cast<uint16_t>(i + 1))) << 32));
+        };
+        const uint64_t charm = at(UF::UNIT_FIELD_CHARM);
+        return charm != 0 ? charm : at(UF::UNIT_FIELD_SUMMON);
+    };
+    announceArena(arenaRoster_.destroyed(guid, petOf));
+}
+
 uint8_t GameHandler::battlefieldArenaFaction() const {
     return socialHandler_ ? socialHandler_->battlefieldArenaFaction() : 0;
 }

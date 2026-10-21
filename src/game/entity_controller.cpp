@@ -2212,6 +2212,8 @@ void EntityController::onCreateUnit(const UpdateBlock& block, std::shared_ptr<En
 
     // Hostility
     unit->setHostile(owner_.playerRegardsHostile(*unit));
+    // An arena opponent's pet come into sight (CGUnit_C PostInit, 0x0054d1c0).
+    owner_.noteArenaUnitSeen(*unit);
 
     // Spawn dispatch
     if (unit->getDisplayId() == 0) {
@@ -2289,6 +2291,8 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
     // Hostility, and once the player is here, everything judged without them.
     if (block.guid == owner_.getPlayerGuid()) owner_.refreshUnitHostility();
     else unit->setHostile(owner_.playerRegardsHostile(*unit));
+    // An arena opponent come into sight (CGPlayer_C PostInit, 0x0054d100).
+    owner_.noteArenaUnitSeen(*unit);
 
     // Spawn dispatch
     if (unit->getDisplayId() != 0) {
