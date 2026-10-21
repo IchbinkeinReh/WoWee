@@ -975,6 +975,19 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         // (0x00528010 -> 0x005a56f0).
         requestGuildBankWithdrawMoney();
     }
+    // Every way into the world (0x00528010, once per entry - 0x00528c30
+    // clears it on the way out): the battleground queues' status asked for
+    // (0x0054ca50, CMSG_BATTLEFIELD_STATUS), then the dungeon finder's
+    // (0x00557240: CMSG_LFG_GET_STATUS, 0x00555920, and the player's lock
+    // list, 0x00555990). All three are bare opcodes.
+    if (socket) {
+        for (Opcode op : {Opcode::CMSG_BATTLEFIELD_STATUS, Opcode::CMSG_LFG_GET_STATUS,
+                          Opcode::CMSG_LFD_PLAYER_LOCK_INFO_REQUEST}) {
+            if (wireOpcode(op) == 0xFFFF) continue;
+            network::Packet pkt(wireOpcode(op));
+            socket->send(pkt);
+        }
+    }
 
     // Fire PLAYER_ENTERING_WORLD - THE most important event for addon initialization.
     // Fires on initial login, teleports, instance transitions, and zone changes.
