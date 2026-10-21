@@ -569,7 +569,29 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         if (instance.animDuration <= 0.0f && instance.cachedHasParticleEmitters) {
             instance.animDuration = rendering::M2_DEFAULT_PARTICLE_ANIM_MS;
         }
-        if (instance.animDuration > 0.0f && instance.animTime >= instance.animDuration) {
+        if (instance.animSpeed < 0.0f) {
+            // Backwards, standing in for an animation the model lacks
+            // (0x00826350): at its start it ends as it would at its end.
+            if (instance.animTime <= 0.0f) {
+                if (instance.holdAtEnd) {
+                    instance.animTime = 0.0f;
+                    instance.animSpeed = 0.0f;
+                } else if (instance.playingVariation) {
+                    instance.eventsFromStart = true;
+                    blendIntoSequence(model, instance, instance.idleSequenceIndex);
+                    instance.playingVariation = false;
+                    instance.currentSequenceIndex = instance.idleSequenceIndex;
+                    if (instance.idleSequenceIndex < static_cast<int>(model.sequences.size()))
+                        instance.animDuration =
+                            static_cast<float>(model.sequences[instance.idleSequenceIndex].duration);
+                    instance.animTime = 0.0f;
+                    instance.animSpeed = 1.0f;
+                } else {
+                    const float duration = std::max(1.0f, instance.animDuration);
+                    while (instance.animTime <= 0.0f) instance.animTime += duration;
+                }
+            }
+        } else if (instance.animDuration > 0.0f && instance.animTime >= instance.animDuration) {
             if (instance.holdAtEnd) {
                 // Stay on the last frame. A door's open sequence ends with the
                 // door open, and that is the pose the server is describing.

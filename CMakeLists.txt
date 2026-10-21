@@ -2657,6 +2657,7 @@ add_executable(wowee_editor
     src/rendering/shadow_params.cpp
     src/rendering/m2_renderer.cpp
     src/rendering/m2_renderer_instance.cpp
+    src/rendering/animation/animation_data.cpp
     src/rendering/m2_renderer_particles.cpp
     src/rendering/m2_renderer_ribbons.cpp
     src/rendering/m2_renderer_render.cpp

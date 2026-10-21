@@ -2,6 +2,7 @@
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/m2_model_classifier.hpp"
+#include "rendering/animation/animation_data.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "rendering/movement_limits.hpp"
 #include "rendering/vk_context.hpp"
@@ -316,6 +317,32 @@ bool M2Renderer::getAttachmentTransform(uint32_t instanceId, uint32_t attachment
     return true;
 }
 
+namespace {
+// 0x00832ab0 -> 0x00826350: the sequence a model plays for an animation -
+// the first with its id, else the first of the one along AnimationData's
+// Fallbacks that stands in for it - and how that plays: forward, backwards
+// from its end, or held on its first or last frame. Without AnimationData
+// (the editor) only the model's own.
+struct ShownSequence {
+    int index = -1;
+    rendering::anim::PlayMode mode = rendering::anim::PlayMode::Forward;
+};
+ShownSequence shownSequence(const std::vector<pipeline::M2Sequence>& seqs, uint32_t animationId) {
+    namespace anim = rendering::anim;
+    const auto has = [&seqs](uint32_t id) {
+        return std::any_of(seqs.begin(), seqs.end(), [id](const pipeline::M2Sequence& s) { return s.id == id; });
+    };
+    const auto& data = anim::animationData();
+    const anim::ModelAnimation shown =
+        data.empty() ? anim::ModelAnimation{animationId, anim::PlayMode::Forward}
+                     : anim::modelAnimation(data, animationId, has, seqs.empty() ? 0u : seqs[0].id);
+    for (int i = 0; i < static_cast<int>(seqs.size()); ++i) {
+        if (seqs[i].id == shown.id) return {i, shown.mode};
+    }
+    return {};
+}
+}  // namespace
+
 void M2Renderer::setInstanceAnimationHeld(uint32_t instanceId, uint32_t animationId,
                                           bool skipToEnd) {
     auto idxIt = instanceIndexById.find(instanceId);
@@ -323,24 +350,26 @@ void M2Renderer::setInstanceAnimationHeld(uint32_t instanceId, uint32_t animatio
     auto& inst = instances[idxIt->second];
     if (!inst.cachedModel) return;
     const auto& seqs = inst.cachedModel->sequences;
-    for (int i = 0; i < static_cast<int>(seqs.size()); ++i) {
-        if (seqs[i].id != animationId) continue;
-        // A door jumped straight to its end state has no old pose to leave.
-        if (!skipToEnd) blendIntoSequence(*inst.cachedModel, inst, i);
-        inst.currentSequenceIndex = i;
-        inst.animDuration = static_cast<float>(seqs[i].duration);
-        inst.playingVariation = false;   // not a variation: it does not go back
-        inst.holdAtEnd = true;
-        if (skipToEnd) {
-            inst.animTime = inst.animDuration;
-            inst.animSpeed = 0.0f;
-            inst.eventsFromStart = false;
-        } else {
-            inst.animTime = 0.0f;
-            inst.animSpeed = 1.0f;
-            inst.eventsFromStart = true;
-        }
-        return;
+    const ShownSequence shown = shownSequence(seqs, animationId);
+    const int i = shown.index;
+    if (i < 0) return;
+    // A door jumped straight to its end state has no old pose to leave.
+    if (!skipToEnd) blendIntoSequence(*inst.cachedModel, inst, i);
+    inst.currentSequenceIndex = i;
+    inst.animDuration = static_cast<float>(seqs[i].duration);
+    inst.playingVariation = false;   // not a variation: it does not go back
+    inst.holdAtEnd = true;
+    // Its end is its first frame where it stands in reversed; one held
+    // stands where it is held.
+    const bool reversed = shown.mode == anim::PlayMode::Reversed;
+    if (skipToEnd || shown.mode == anim::PlayMode::HoldEnd || shown.mode == anim::PlayMode::HoldStart) {
+        inst.animTime = shown.mode == anim::PlayMode::HoldStart || (skipToEnd && reversed) ? 0.0f : inst.animDuration;
+        inst.animSpeed = 0.0f;
+        inst.eventsFromStart = false;
+    } else {
+        inst.animTime = reversed ? inst.animDuration : 0.0f;
+        inst.animSpeed = reversed ? -1.0f : 1.0f;
+        inst.eventsFromStart = !reversed;
     }
 }
 
@@ -350,20 +379,36 @@ void M2Renderer::setInstanceAnimation(uint32_t instanceId, uint32_t animationId,
     auto& inst = instances[idxIt->second];
     if (!inst.cachedModel) return;
     const auto& seqs = inst.cachedModel->sequences;
-    // Find the first sequence matching the requested animation ID
-    for (int i = 0; i < static_cast<int>(seqs.size()); ++i) {
-        if (seqs[i].id == animationId) {
-            blendIntoSequence(*inst.cachedModel, inst, i);
-            inst.currentSequenceIndex = i;
-            inst.animDuration = static_cast<float>(seqs[i].duration);
+    const ShownSequence shown = shownSequence(seqs, animationId);
+    const int i = shown.index;
+    if (i < 0) return;
+    blendIntoSequence(*inst.cachedModel, inst, i);
+    inst.currentSequenceIndex = i;
+    inst.animDuration = static_cast<float>(seqs[i].duration);
+    // Use playingVariation=true for one-shot (returns to idle when done)
+    inst.playingVariation = !loop;
+    inst.holdAtEnd = false;
+    switch (shown.mode) {
+        case anim::PlayMode::Forward:
             inst.animTime = 0.0f;
             inst.animSpeed = 1.0f;
             inst.eventsFromStart = true;
-            // Use playingVariation=true for one-shot (returns to idle when done)
-            inst.playingVariation = !loop;
-            inst.holdAtEnd = false;
-            return;
-        }
+            break;
+        case anim::PlayMode::Reversed:
+            // From its end back to its start.
+            inst.animTime = inst.animDuration;
+            inst.animSpeed = -1.0f;
+            inst.eventsFromStart = false;
+            break;
+        case anim::PlayMode::HoldStart:
+        case anim::PlayMode::HoldEnd:
+            // Held where it stands in: it neither runs nor ends.
+            inst.animTime = shown.mode == anim::PlayMode::HoldEnd ? inst.animDuration : 0.0f;
+            inst.animSpeed = 0.0f;
+            inst.eventsFromStart = false;
+            inst.playingVariation = false;
+            inst.holdAtEnd = true;
+            break;
     }
 }
 
@@ -383,11 +428,20 @@ bool M2Renderer::sequencePlaysOnce(uint32_t instanceId, uint32_t animationId) co
     if (idxIt == instanceIndexById.end()) return false;
     const auto& inst = instances[idxIt->second];
     if (!inst.cachedModel) return false;
-    // The first with the id, as setInstanceAnimation picks.
-    for (const auto& seq : inst.cachedModel->sequences) {
-        if (seq.id == animationId) return (seq.flags & 0x1u) != 0;
-    }
-    return false;
+    // The one setInstanceAnimation plays for it.
+    const auto& seqs = inst.cachedModel->sequences;
+    const int i = shownSequence(seqs, animationId).index;
+    return i >= 0 && (seqs[static_cast<size_t>(i)].flags & 0x1u) != 0;
+}
+
+uint32_t M2Renderer::shownAnimationId(uint32_t instanceId, uint32_t animationId) const {
+    auto idxIt = instanceIndexById.find(instanceId);
+    if (idxIt == instanceIndexById.end()) return animationId;
+    const auto& inst = instances[idxIt->second];
+    if (!inst.cachedModel) return animationId;
+    const auto& seqs = inst.cachedModel->sequences;
+    const int i = shownSequence(seqs, animationId).index;
+    return i >= 0 ? seqs[static_cast<size_t>(i)].id : animationId;
 }
 
 float M2Renderer::getInstanceAnimDuration(uint32_t instanceId) const {
