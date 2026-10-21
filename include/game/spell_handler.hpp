@@ -177,6 +177,10 @@ public:
     /// their on-use spell never passes through castSpell().
     void noteGroundCastSpell(uint32_t spellId) { lastGroundCastSpellId_ = spellId; }
     void cancelCast();
+    /// 0x005faa40: the channel spell on the player (UNIT_CHANNEL_SPELL), where
+    /// its ChannelInterruptFlags has 0x8 (movement), cancelled with
+    /// CMSG_CANCEL_CHANNELLING and the spell's id, u32.
+    void cancelChannelOnMove();
     void cancelAura(uint32_t spellId);
 
     // Known spells

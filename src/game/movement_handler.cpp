@@ -668,6 +668,15 @@ void MovementHandler::sendMovement(Opcode opcode) {
             owner_.cancelCast();
         }
     }
+    // A move key, autorun, both mouse buttons or a jump (0x005fbe10,
+    // 0x005fbf10, 0x005fc0f0 -> 0x005faa40) ends the player's own channel
+    // when its spell's ChannelInterruptFlags has 0x8: CMSG_CANCEL_CHANNELLING.
+    if (moverIsPlayer && owner_.getSpellHandler() &&
+        (opcode == Opcode::MSG_MOVE_START_FORWARD || opcode == Opcode::MSG_MOVE_START_BACKWARD ||
+         opcode == Opcode::MSG_MOVE_START_STRAFE_LEFT || opcode == Opcode::MSG_MOVE_START_STRAFE_RIGHT ||
+         opcode == Opcode::MSG_MOVE_JUMP)) {
+        owner_.getSpellHandler()->cancelChannelOnMove();
+    }
 
     // The pitch's packets go out only for a unit that can pitch: swimming,
     // flying, or movement flags2 0x20 (0x007413f0 for 0xbf..0xc1 and 0xdb;

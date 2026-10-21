@@ -2833,6 +2833,20 @@ void SpellHandler::castAtLocation(uint32_t spellId, const ground_target::Place& 
         owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT", {"player", "", std::to_string(spellId)});
 }
 
+void SpellHandler::cancelChannelOnMove() {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    const auto player = std::dynamic_pointer_cast<Unit>(owner_.getEntityManager().getEntity(owner_.getPlayerGuid()));
+    const uint16_t ch = fieldIndex(UF::UNIT_CHANNEL_SPELL);
+    const uint32_t spell = player && ch != 0xFFFF ? player->getField(ch) : 0u;
+    if (spell == 0) return;
+    const auto it = owner_.spellNameCacheRef().find(spell);
+    if (it == owner_.spellNameCacheRef().end() || (it->second.channelInterruptFlags & 0x8u) == 0) return;
+    if (wireOpcode(Opcode::CMSG_CANCEL_CHANNELLING) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_CANCEL_CHANNELLING));
+    packet.writeUInt32(spell);
+    owner_.getSocket()->send(packet);
+}
+
 void SpellHandler::cancelCast() {
     if (restorationActive_) {
         const uint32_t auraSpell = restorationSpellId_;
