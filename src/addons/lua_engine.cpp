@@ -20,6 +20,7 @@
 // The clipboard, for paste and copy in an edit box.
 #include <SDL3/SDL.h>
 #include "addons/lua_api_helpers.hpp"
+#include "game/interface_text.hpp"
 #include "rendering/minimap_zoom.hpp"
 #include <cmath>
 #include "addons/lua_handler_globals.hpp"
@@ -3026,6 +3027,30 @@ int lua_Tooltip_SetUnit(lua_State* L) {
                 }
             }
             addLine(levelLine, 1.0f, 0.82f, 0.0f);
+        }
+    }
+
+    // A corpse's looters, as SMSG_LOOT_LIST left them on the unit: "Master
+    // Looter: name" and "Loot: name" (0x00621070, MASTER_LOOTER and LOOT) on
+    // a unit with no health or flagged dead. A name not yet known is asked
+    // for and left out, as the client leaves it to its name callback.
+    if (const auto unit = std::dynamic_pointer_cast<game::Unit>(entity)) {
+        const uint16_t dynIdx = game::fieldIndex(game::UF::UNIT_DYNAMIC_FLAGS);
+        const bool dead = unit->getHealth() == 0 ||
+                          (dynIdx != 0xFFFF && (unit->getField(dynIdx) & game::UNIT_DYNFLAG_DEAD) != 0);
+        if (dead) {
+            const auto looterLine = [&](uint64_t looter, const char* key, const char* enUS) {
+                if (looter == 0) return;
+                const auto& names = gh->getPlayerNameCache();
+                const auto it = names.find(looter);
+                if (it == names.end() || it->second.empty()) {
+                    gh->queryPlayerName(looter);
+                    return;
+                }
+                addLine(game::interfaceString(key, enUS) + ": " + it->second, 1.0f, 1.0f, 1.0f);
+            };
+            looterLine(unit->looters().master, "MASTER_LOOTER", "Master Looter");
+            looterLine(unit->looters().roundRobin, "LOOT", "Loot");
         }
     }
 

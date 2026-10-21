@@ -955,6 +955,16 @@ public:
     [[nodiscard]] uint8_t getPowerType() const { return powerType; }
     void setPowerType(uint8_t t) { powerType = t; }
 
+    /// Who loots this unit's corpse, as SMSG_LOOT_LIST says (0x0071bc00): the
+    /// master looter (+0xc40) and the group member whose turn it is (+0xc48).
+    /// The unit tooltip names them on a dead unit (0x00621070).
+    struct Looters {
+        uint64_t master = 0;
+        uint64_t roundRobin = 0;
+    };
+    [[nodiscard]] const Looters& looters() const { return looters_; }
+    void setLooters(const Looters& l) { looters_ = l; }
+
     /// The powers the client predicts (+0xfb4); see power_prediction.hpp.
     [[nodiscard]] power_prediction::Predicted& predictedPower() { return predicted; }
     [[nodiscard]] const power_prediction::Predicted& predictedPower() const { return predicted; }
@@ -1038,6 +1048,7 @@ protected:
     uint32_t maxPowers[7] = {};  // Max values per power type
     uint8_t powerType = 0;       // Active power type
     power_prediction::Predicted predicted;
+    Looters looters_;
     uint32_t auraState = 0;      // UNIT_FIELD_AURASTATE reactive opportunity mask
     uint32_t level = 1;
     uint32_t entry = 0;

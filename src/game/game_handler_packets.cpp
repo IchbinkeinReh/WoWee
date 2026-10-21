@@ -3711,8 +3711,21 @@ void GameHandler::registerRemainingOpcodes() {
         itemRefundInfo_[itemGuid] = info;
         fireAddonEvent("UPDATE_INVENTORY_ALERTS", {});
     };
-    // Consume silently - informational, no UI action needed
-    registerSkipHandler(Opcode::SMSG_LOOT_LIST);
+    // A corpse's looters (0x0071ca50 -> 0x0071bc00): the unit, then the master
+    // looter and the one whose turn it is as packed guids, kept on the unit
+    // for its tooltip. A unit not in sight has the rest skipped.
+    dispatchTable_[Opcode::SMSG_LOOT_LIST] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(8)) return;
+        auto unit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(packet.readUInt64()));
+        if (!unit) {
+            packet.skipAll();
+            return;
+        }
+        Unit::Looters looters;
+        if (packet.hasFullPackedGuid()) looters.master = packet.readPackedGuid();
+        if (packet.hasFullPackedGuid()) looters.roundRobin = packet.readPackedGuid();
+        unit->setLooters(looters);
+    };
     // Sent one line before SMSG_DESTROY_OBJECT and carrying the same guid, and
     // only inside an arena - Object::DestroyForPlayer writes both. The unit is
     // removed by the second one whatever happens here, so this is a decision
