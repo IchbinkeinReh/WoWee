@@ -886,6 +886,10 @@ private:
         // is drawn moving, from where it was last drawn (+0x5c).
         bool facesDrawnMotion = false;
         glm::vec3 lastDrawn{0.0f};
+        // The last way it faced that way (+0x194), once it has (flag
+        // 0x100000): a move under 0.01 is blended with it.
+        bool hasDrawnDelta = false;
+        glm::vec3 drawnDelta{0.0f};
     };
     /// One frame of a missile's motion script (0x00700350, 0x00700550,
     /// 0x006feb20): where it is drawn and how its model is turned, its speed

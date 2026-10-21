@@ -1150,11 +1150,22 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
             glm::mat4 turn;
             const glm::vec3 drawn = runMissileMotion(*it, target, turn);
             // Flag 0x800: facing the way it was drawn moving, where it moved
-            // at all (0x00701230).
+            // at all (0x00701230). A move under 0.01 once it has faced some
+            // way is that much of itself - its length times 100, at least
+            // 0.05 - and the rest the way it faced last (flag 0x100000).
             glm::vec3 facing = travel;
             if (it->facesDrawnMotion) {
-                const glm::vec3 moved = drawn - it->lastDrawn;
-                if (glm::length(moved) > 2.3841858e-07f) facing = moved;
+                glm::vec3 moved = drawn - it->lastDrawn;
+                const float length = glm::length(moved);
+                if (length > 2.3841858e-07f) {
+                    if (length < 0.01f && it->hasDrawnDelta) {
+                        const float share = std::max(length * 100.0f, 0.05f);
+                        moved = moved * share + it->drawnDelta * (1.0f - share);
+                    }
+                    it->drawnDelta = moved;
+                    it->hasDrawnDelta = true;
+                    facing = moved;
+                }
                 it->lastDrawn = drawn;
             }
             m2Renderer_->setInstanceTransform(
