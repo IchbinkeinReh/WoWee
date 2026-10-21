@@ -2459,6 +2459,57 @@ bool CharacterRenderer::bodyEndsInto(uint32_t instanceId, uint32_t animationId) 
     return it != instances.end() && !it->second.animationLoop && it->second.oneShotReturnAnim == animationId;
 }
 
+base_animation::Pick CharacterRenderer::pickBaseAnimation(CharacterInstance& instance,
+                                                          const base_animation::Ask& ask) {
+    const auto& model = models[instance.modelId].data;
+    const int32_t bone = upperBodyBone(instance);
+    // What plays: the body's (0x007172b0), and the upper body's own over it
+    // (0x00717260).
+    base_animation::Playing playing;
+    if (instance.currentSequenceIndex >= 0) playing.body = static_cast<int32_t>(instance.currentAnimationId);
+    playing.shown = playing.body;
+    for (const auto& k : instance.keyBoneAnimations) {
+        if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning) playing.shown = static_cast<int32_t>(k.animationId);
+    }
+    upper_body::Unit unit = instance.unit;
+    unit.speed = instance.locomotionSpeed;
+    const auto has = [&model](uint32_t id) {
+        return std::any_of(model.sequences.begin(), model.sequences.end(),
+                           [id](const pipeline::M2Sequence& seq) { return seq.id == id; });
+    };
+    const uint8_t tier = instance.animationTier;
+    return base_animation::pick(anim::animationData(), unit, playing, ask, has,
+                                [&has, &model, tier](uint32_t id) { return has(tierAnimationFor(model, id, tier)); });
+}
+
+void CharacterRenderer::playBaseAnimation(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || !it->second.unitAnimation) return;
+    // 0x0073ac30: what 0x00724500 answers is asked as any animation is.
+    const base_animation::Pick p = pickBaseAnimation(it->second, base_animation::Ask{});
+    if (p.anim != base_animation::kKeep) playAnimation(instanceId, p.anim, p.loop);
+}
+
+void CharacterRenderer::endUpperBodyOneShot(CharacterInstance& instance) {
+    const auto& model = models[instance.modelId].data;
+    const auto& data = anim::animationData();
+    const int32_t bone = upperBodyBone(instance);
+    // The base animation as the unit is put in it (0x00724500 ->
+    // 0x007176f0) goes on the upper body where it is one of the upper
+    // body's, may differ from what the body plays (0x00723e30), and is not
+    // that; else the bone set follows the body again (0x00832840).
+    const base_animation::Pick p = pickBaseAnimation(instance, base_animation::Ask{});
+    const uint32_t shown =
+        p.anim == base_animation::kKeep ? p.anim : tierAnimationFor(model, p.anim, instance.animationTier);
+    const int32_t body = instance.currentSequenceIndex >= 0 ? static_cast<int32_t>(instance.currentAnimationId) : -1;
+    if (!upper_body::isUpperBody(data.behavior(shown)) || !upper_body::splits(data, instance.unit, shown, body) ||
+        static_cast<int32_t>(shown) == body) {
+        returnKeyBone(instance, bone);
+        return;
+    }
+    startKeyBoneAnimation(instance, bone, shown, !p.loop, std::nullopt, 0.0f, true);
+}
+
 std::vector<uint32_t> CharacterRenderer::mirroringPassengers(uint32_t instanceId) const {
     std::vector<uint32_t> out;
     for (const auto& [id, inst] : instances) {
@@ -2686,6 +2737,13 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
         // (0x00757280 -> 0x00757420 -> 0x00735a60).
         if (inst.cachedModel && !inst.animationFrozen) {
             bool ended = false;
+            // A unit's upper body whose one-shot ends is given the base
+            // animation, or back to the body (0x0073bbd0 -> 0x00737bd0).
+            const int32_t unitUpperBone =
+                inst.unitAnimation && !inst.seatAnimationHeld && !inst.seatStandsWhole && !inst.mirrorsSeatParent
+                    ? upperBodyBone(inst)
+                    : -1;
+            bool upperEnded = false;
             for (auto& k : inst.keyBoneAnimations) {
                 if (k.sequence < 0 || static_cast<size_t>(k.sequence) >= inst.cachedModel->data.sequences.size())
                     continue;
@@ -2715,14 +2773,18 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                         k.once = false;
                         continue;
                     }
-                    // Back to following the body, blended (0x00737bd0 ->
-                    // 0x00832840).
                     k.time = duration;
+                    if (unitUpperBone >= 0 && k.keyBoneId == unitUpperBone) {
+                        upperEnded = true;
+                        continue;
+                    }
+                    // Back to following the body, blended (0x00832840).
                     returnKeyBoneState(k, inst.globalSequenceTime, inst.cachedModel->data);
                 } else if (duration > 0.0f) {
                     k.time = std::fmod(k.time, duration);
                 }
             }
+            if (upperEnded) endUpperBodyOneShot(inst);
             if (ended) {
                 auto& anims = inst.keyBoneAnimations;
                 anims.erase(std::remove_if(anims.begin(), anims.end(), [](const auto& k) { return k.sequence < 0; }),
@@ -2805,20 +2867,37 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                         // whole stand, it is back in its loop: an ended
                         // one-shot has passed its start (0x007484e0).
                         if (inst.seatStandsWhole) inst.seatUpperStartPlayed = true;
-                        const uint32_t resumeAnim =
-                            inst.oneShotReturnAnim != 0 ? inst.oneShotReturnAnim
-                            : inst.seatStandsWhole && inst.seatUpperLoop ? *inst.seatUpperLoop
-                            : inst.restAnimation != 0  ? inst.restAnimation
-                                                       : anim::STAND;
-                        // Asked again as any other is (0x0073b510 ->
-                        // 0x007385c0 -> 0x007176f0).
-                        const uint32_t resume =
-                            tierAnimationFor(inst.cachedModel->data, resumeAnim, inst.animationTier);
-                        if (inst.unitAnimation && !inst.seatAnimationHeld && !inst.seatStandsWhole &&
-                            !inst.mirrorsSeatParent) {
-                            playUnitAnimation(pair.first, resume, true, 0, upper_body::Pass::BodyEnded);
+                        const bool unitDriven = inst.unitAnimation && !inst.seatAnimationHeld &&
+                                                !inst.seatStandsWhole && !inst.mirrorsSeatParent;
+                        if (unitDriven && inst.oneShotReturnAnim == 0) {
+                            // 0x0073b510 with nothing of its own to follow
+                            // it: the base animation (0x0073ac30(0x10) ->
+                            // 0x00724500), asked of the body alone. Where
+                            // that leaves what plays, it stays as it ended.
+                            const base_animation::Pick p = pickBaseAnimation(
+                                inst, base_animation::Ask{.free = base_animation::kBodyFree, .flags = 0x10});
+                            if (p.anim == base_animation::kKeep) {
+                                inst.animationTime = static_cast<float>(seq.duration);
+                            } else {
+                                playUnitAnimation(
+                                    pair.first, tierAnimationFor(inst.cachedModel->data, p.anim, inst.animationTier),
+                                    p.loop, 0, upper_body::Pass::BodyEnded);
+                            }
                         } else {
-                            playAnimationNow(pair.first, resume, true, 0);
+                            const uint32_t resumeAnim =
+                                inst.oneShotReturnAnim != 0 ? inst.oneShotReturnAnim
+                                : inst.seatStandsWhole && inst.seatUpperLoop ? *inst.seatUpperLoop
+                                : inst.restAnimation != 0  ? inst.restAnimation
+                                                           : anim::STAND;
+                            // Asked again as any other is (0x0073b510 ->
+                            // 0x007385c0 -> 0x007176f0).
+                            const uint32_t resume =
+                                tierAnimationFor(inst.cachedModel->data, resumeAnim, inst.animationTier);
+                            if (unitDriven) {
+                                playUnitAnimation(pair.first, resume, true, 0, upper_body::Pass::BodyEnded);
+                            } else {
+                                playAnimationNow(pair.first, resume, true, 0);
+                            }
                         }
                     } else {
                         // Stay on last frame of death, or a mount

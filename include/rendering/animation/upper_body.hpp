@@ -18,6 +18,7 @@
 #include "rendering/animation/animation_data.hpp"
 
 #include <cstdint>
+#include <optional>
 
 namespace wowee {
 namespace rendering {
@@ -74,6 +75,27 @@ struct Unit {
     bool seatedRide = false;
     /// Health 1 or more (+0x48), which the seat's hold on the body asks.
     bool alive = true;
+
+    // What the base animation (0x00724500, base_animation.hpp) reads
+    // besides.
+    /// UNIT_FIELD_FLAGS_2 0x1 (+0xd8): feigning death, dead to 0x0071f560.
+    bool feignDeath = false;
+    /// GetCurrentSpeed (0x00987570), and the walk speed (+0x818): Walk at
+    /// or under twice it, Run over, Sprint over 11 (0x00717050).
+    float speed = 0.0f;
+    float walkSpeed = 2.5f;
+    /// UNIT_FIELD_BYTES_1 byte 2 0x2 (+0x112): stealthed - the stealth walk
+    /// and stand.
+    bool stealthed = false;
+    /// 0x0071c6c0: hovering (MOVEMENTFLAG_HOVER 0x40000000) or with gravity
+    /// off (0x400).
+    bool hovering = false;
+    /// Turning left on the spot (+0xa38 0x800).
+    bool turningLeft = false;
+    /// 0x00714dd0: the combat ready for its weapons (meleeReady).
+    uint32_t meleeReady = 25;
+    /// 0x007171c0: the AnimID of its UNIT_NPC_EMOTESTATE's Emotes row.
+    std::optional<uint32_t> emoteStateAnim;
 };
 
 /// What a slot plays, from where (0x008266b0's state): -1 for an upper body

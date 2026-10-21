@@ -203,6 +203,7 @@ float turnUnitBody(rendering::CharacterRenderer& cr, uint32_t instanceId,
 
     const by::TurnShuffle want = by::turnShuffle(moveFlags, r.step, mayShuffle);
     body.turning = want != by::TurnShuffle::None;
+    body.turningLeft = want == by::TurnShuffle::Left;
     uint32_t wantAnim = want == by::TurnShuffle::Left  ? rendering::anim::SHUFFLE_LEFT
                       : want == by::TurnShuffle::Right ? rendering::anim::SHUFFLE_RIGHT : 0;
     if (wantAnim != 0 && !cr.hasAnimation(instanceId, wantAnim)) wantAnim = 0;
@@ -264,6 +265,20 @@ rendering::upper_body::Unit unitAnimationState(const game::GameHandler& gh, cons
     u.riding = riderPose.has_value();
     if (riderPose) u.riderPose = *riderPose;
     u.alive = unit.getHealth() > 0;
+    // What its base animation reads besides (0x00724500): feigning death,
+    // its walk speed, stealth (UNIT_FIELD_BYTES_1 byte 2 0x2), hovering or
+    // gravity off, its weapons' ready, and its emote state's animation.
+    if (const uint16_t f2 = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2); f2 != 0xFFFF)
+        u.feignDeath = (unit.getField(f2) & 0x1u) != 0;
+    if (const uint16_t b1 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1); b1 != 0xFFFF)
+        u.stealthed = ((unit.getField(b1) >> 16) & 0x2u) != 0;
+    u.walkSpeed = unit.getMovementSpeeds().walk;
+    u.hovering = (unit.getReportedMoveFlags() & 0x40000400u) != 0;
+    u.meleeReady = spawner.unitMeleeReady(guid);
+    if (const uint32_t emote = unit.getNpcEmoteState(); emote != 0) {
+        if (const uint32_t anim = rendering::AnimationController::getEmoteAnimByEmotesId(emote); anim != 0)
+            u.emoteStateAnim = anim;
+    }
     return u;
 }
 
@@ -273,10 +288,12 @@ void syncUnitAnimation(rendering::CharacterRenderer& cr, const game::GameHandler
                        uint64_t guid, uint32_t instanceId, const game::Unit& unit, bool moving, bool swimming,
                        bool flying, bool riding) {
     cr.setAnimationTier(instanceId, unitAnimationTier(unit));
-    cr.setUnitAnimationState(
-        instanceId, unitAnimationState(gh, spawner, guid, unit, unitBodyFlags(unit, moving, swimming, flying),
-                                       spawner.getUnitBodies()[guid].turning,
-                                       riding ? std::optional(spawner.riderPose(guid, instanceId)) : std::nullopt));
+    const auto& body = spawner.getUnitBodies()[guid];
+    auto state = unitAnimationState(gh, spawner, guid, unit, unitBodyFlags(unit, moving, swimming, flying),
+                                    body.turning,
+                                    riding ? std::optional(spawner.riderPose(guid, instanceId)) : std::nullopt);
+    state.turningLeft = body.turningLeft;
+    cr.setUnitAnimationState(instanceId, state);
 }
 
 // The height a moving unit is drawn at over the floor found under it. On the
@@ -4249,9 +4266,35 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
     u.wholeBodyOnly = entitySpawner_ &&
         (entitySpawner_->creatureModelFlags(self.getDisplayId()).value_or(0) & 0x8u) != 0;
     if (auto* ac = renderer ? renderer->getAnimationController() : nullptr) {
-        // Turning on the spot shuffles it round (+0xa38 0x1800).
+        // Turning on the spot shuffles it round (+0xa38 0x1800, 0x800 to
+        // the left).
         u.turningInPlace = ac->turnShuffle() != rendering::body_yaw::TurnShuffle::None;
+        u.turningLeft = ac->turnShuffle() == rendering::body_yaw::TurnShuffle::Left;
         u.riding = ac->isMounted();
+    }
+    // What its base animation reads besides (0x00724500): its health,
+    // feigning death, stealth, its walk speed, hovering or gravity off, and
+    // the ready for the weapons in its hands (0x00714dd0).
+    u.alive = self.getHealth() > 0;
+    if (const uint16_t f2 = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2); f2 != 0xFFFF)
+        u.feignDeath = (self.getField(f2) & 0x1u) != 0;
+    if (const uint16_t b1 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1); b1 != 0xFFFF)
+        u.stealthed = ((self.getField(b1) >> 16) & 0x2u) != 0;
+    u.walkSpeed = gameHandler->getServerWalkSpeed();
+    u.hovering = (u.moveFlags & 0x40000400u) != 0;
+    {
+        namespace ba = rendering::base_animation;
+        const auto& inventory = gameHandler->getInventory();
+        const auto hand = [this, &inventory](game::EquipSlot slot) -> std::optional<ba::HandItem> {
+            const auto& equipped = inventory.getEquipSlot(slot);
+            if (equipped.empty()) return std::nullopt;
+            const auto* info = gameHandler->getItemInfo(equipped.item.itemId);
+            if (!info || !info->valid) return ba::HandItem{};
+            return ba::HandItem{info->itemClass, info->subClass};
+        };
+        const auto mainHand = hand(game::EquipSlot::MAIN_HAND);
+        const auto offHand = hand(game::EquipSlot::OFF_HAND);
+        u.meleeReady = ba::meleeReady(mainHand ? &*mainHand : nullptr, offHand ? &*offHand : nullptr);
     }
     // The pose it rides in, as the animation controller puts it in it.
     if (u.riding && renderer && renderer->getCharacterRenderer()) {
@@ -4296,7 +4339,6 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
         auto& _creatureRenderPosCache = entitySpawner_->getCreatureRenderPosCache();
         auto& _creatureSwimmingState = entitySpawner_->getCreatureSwimmingState();
         auto& _creatureFlyingState = entitySpawner_->getCreatureFlyingState();
-        auto& _creatureActiveEmotes = entitySpawner_->getCreatureActiveEmotes();
         auto& _creatureWasMoving = entitySpawner_->getCreatureWasMoving();
         auto& _creatureWasSwimming = entitySpawner_->getCreatureWasSwimming();
         auto& _creatureWasFlying = entitySpawner_->getCreatureWasFlying();
@@ -4481,44 +4523,24 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     uint32_t curAnimId = 0; float curT = 0.0f, curDur = 0.0f;
                     bool gotState = charRenderer->getAnimationState(instanceId, curAnimId, curT, curDur);
                     if (!gotState || curAnimId != rendering::anim::DEATH) {
-                        uint32_t targetAnim;
                         if (creatureMount) {
                             // The unit's animations go to its mount
                             // (0x007385c0); the rider holds its pose (+0xb7c).
-                            targetAnim = entitySpawner_->riderPose(guid, instanceId);
                             uint32_t mountAnim =
                                 rendering::anim::mountLocomotion(isMovingNow, isFlyingNow, isWalkingNow);
                             if (!charRenderer->hasAnimation(creatureMount->instanceId, mountAnim))
                                 mountAnim = isMovingNow ? rendering::anim::RUN : rendering::anim::STAND;
                             charRenderer->playAnimation(creatureMount->instanceId, mountAnim, true);
-                        } else if (isMovingNow) {
-                            if (isFlyingNow)        targetAnim = rendering::anim::FLY_FORWARD;
-                            else if (isSwimmingNow) targetAnim = rendering::anim::SWIM;
-                            else if (isWalkingNow)  targetAnim = rendering::anim::WALK;
-                            else                    targetAnim = rendering::anim::RUN;
+                            charRenderer->playAnimation(instanceId, entitySpawner_->riderPose(guid, instanceId),
+                                                        /*loop=*/true);
                         } else {
-                            if (isFlyingNow)        targetAnim = rendering::anim::FLY_IDLE;
-                            else if (isSwimmingNow) targetAnim = rendering::anim::SWIM_IDLE;
-                            else {
-                                // Resume a retained state emote (work/chop loop),
-                                // but only if this model ships the animation -
-                                // display swaps can land on models without it
-                                // (the log-carrying peasant has no chop anim).
-                                targetAnim = rendering::anim::STAND;
-                                auto emoteIt = _creatureActiveEmotes.find(guid);
-                                if (emoteIt != _creatureActiveEmotes.end() &&
-                                    charRenderer->hasAnimation(instanceId, emoteIt->second)) {
-                                    targetAnim = emoteIt->second;
-                                } else {
-                                    // Stopped while sitting/sleeping/kneeling.
-                                    const uint32_t standLoop = rendering::anim::standStateAnims(
-                                        unitPtr->getStandState()).loop;
-                                    if (charRenderer->hasAnimation(instanceId, standLoop))
-                                        targetAnim = standLoop;
-                                }
-                            }
+                            // What it is in now, as the client asks it on
+                            // each such change (0x0073ac30 -> 0x00724500):
+                            // the walk, run, swim or fall; its ready in a
+                            // fight; its stand state's loop; its emote
+                            // state's; the stand.
+                            charRenderer->playBaseAnimation(instanceId);
                         }
-                        charRenderer->playAnimation(instanceId, targetAnim, /*loop=*/true);
                     }
                 }
                 // A rider's seat pose outlasts emotes and state updates.
@@ -4723,33 +4745,20 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     uint32_t curAnimId = 0; float curT = 0.0f, curDur = 0.0f;
                     bool gotState = charRenderer->getAnimationState(instanceId, curAnimId, curT, curDur);
                     if (!gotState || curAnimId != rendering::anim::DEATH) {
-                        uint32_t targetAnim;
                         if (remoteMount) {
                             // The rider keeps the mounted seat pose; locomotion
                             // belongs to the separately rendered mount model.
-                            targetAnim = mountedRiderAnim;
                             uint32_t mountAnim =
                                 rendering::anim::mountLocomotion(isMovingNow, isFlyingNow, isWalkingNow);
                             if (!charRenderer->hasAnimation(remoteMount->instanceId, mountAnim)) {
                                 mountAnim = isMovingNow ? rendering::anim::RUN : rendering::anim::STAND;
                             }
                             charRenderer->playAnimation(remoteMount->instanceId, mountAnim, true);
-                        } else if (isMovingNow) {
-                            if (isFlyingNow)        targetAnim = rendering::anim::FLY_FORWARD;
-                            else if (isSwimmingNow) targetAnim = rendering::anim::SWIM;
-                            else if (isWalkingNow)  targetAnim = rendering::anim::WALK;
-                            else                    targetAnim = rendering::anim::RUN;
+                            charRenderer->playAnimation(instanceId, mountedRiderAnim, /*loop=*/true);
                         } else {
-                            if (isFlyingNow)        targetAnim = rendering::anim::FLY_IDLE;
-                            else if (isSwimmingNow) targetAnim = rendering::anim::SWIM_IDLE;
-                            else {
-                                targetAnim = rendering::anim::standStateAnims(
-                                    unitPtr->getStandState()).loop;
-                                if (!charRenderer->hasAnimation(instanceId, targetAnim))
-                                    targetAnim = rendering::anim::STAND;
-                            }
+                            // What it is in now (0x0073ac30 -> 0x00724500).
+                            charRenderer->playBaseAnimation(instanceId);
                         }
-                        charRenderer->playAnimation(instanceId, targetAnim, /*loop=*/true);
                     }
                 }
 

@@ -1386,6 +1386,12 @@ wowee_add_test(test_animation_data
 wowee_add_test(test_upper_body
     SOURCES test_upper_body.cpp ${CMAKE_SOURCE_DIR}/src/rendering/animation/upper_body.cpp)
 
+# ── test_base_animation ──────────────────────────────────────
+# The animation a unit is in when nothing else is asked of it (0x00724500).
+wowee_add_test(test_base_animation
+    SOURCES test_base_animation.cpp ${CMAKE_SOURCE_DIR}/src/rendering/animation/base_animation.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/animation/upper_body.cpp)
+
 # ── test_locomotion_fsm ──────────────────────────────────────
 add_executable(test_locomotion_fsm
     test_locomotion_fsm.cpp

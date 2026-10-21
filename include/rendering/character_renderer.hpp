@@ -9,6 +9,7 @@
 #include "rendering/vehicle_seat.hpp"
 #include "rendering/animation/animation_data.hpp"
 #include "rendering/animation/upper_body.hpp"
+#include "rendering/animation/base_animation.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 #include <vulkan/vulkan.h>
@@ -116,6 +117,11 @@ public:
     /// asked while the body finishes the swing it took back from its upper
     /// body, which it plays once that is over (0x0073bbd0 -> 0x0073b510).
     [[nodiscard]] bool bodyEndsInto(uint32_t instanceId, uint32_t animationId) const;
+    /// Plays what a unit is in when nothing else is asked of it, as the
+    /// client asks it on a change of how it moves (0x0073ac30 ->
+    /// 0x00724500, base_animation::pick); nothing where that leaves what
+    /// plays. For an instance given its unit (setUnitAnimationState).
+    void playBaseAnimation(uint32_t instanceId);
     /// The loop a unit rests in - its stand state's (sitting, sleeping,
     /// kneeling...) or 0 for Stand. A one-shot played with no return anim
     /// goes back to it, so a seated unit that is hit stays seated.
@@ -769,6 +775,11 @@ private:
     void returnKeyBone(CharacterInstance& instance, int32_t keyBoneId);
     /// The upper body's key bone (0x0073e840).
     int32_t upperBodyBone(CharacterInstance& instance);
+    /// 0x00724500 for an instance's unit, from what it plays.
+    base_animation::Pick pickBaseAnimation(CharacterInstance& instance, const base_animation::Ask& ask);
+    /// 0x00737bd0: the upper body's one-shot is over - it takes up the base
+    /// animation where that may go there, else follows the body again.
+    void endUpperBodyOneShot(CharacterInstance& instance);
     /// A seated passenger's upper body (setSeatAnimation): back to what the
     /// seat has it stand as, or to the body; and an animation of its own.
     void standSeatedUpperBody(uint32_t instanceId);
