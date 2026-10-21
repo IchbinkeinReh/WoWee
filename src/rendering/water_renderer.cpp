@@ -747,7 +747,15 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
     // Tile origin = NW corner = chunk(0,0) position
     const auto& chunk00 = terrain.getChunk(0, 0);
 
-    // Stormwind water lowering check
+    // The Stormwind lowering: the enhanced water draws water above 94 here
+    // a yard low, but for the moonwell. It came with the code this repository
+    // started from, without a word on why - the canals' water standing too
+    // high against their walls in that draw, by the look of it. It lowered
+    // the heights themselves, so every height query was a yard under the
+    // surface the client draws, over most of the Eastern Kingdoms: a swimmer
+    // floated low, and the camera was "under" the Burning Steppes' lava a
+    // yard below its surface. Now only the enhanced draw takes it
+    // (WaterSurface::enhancedZOffset).
     bool isStormwindArea = (tileX >= 28 && tileX <= 50 && tileY >= 28 && tileY <= 52);
     float tileWorldX = 0, tileWorldY = 0;
     glm::vec2 moonwellPos2D(0.0f);
@@ -817,10 +825,7 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
                 if (isStormwindArea && layer.minHeight > 94.0f) {
                     float distToMoonwell = glm::distance(glm::vec2(tileWorldX, tileWorldY), moonwellPos2D);
                     if (distToMoonwell > 300.0f) {
-                        for (float& h : surface.heights) h -= 1.0f;
-                        surface.minHeight -= 1.0f;
-                        surface.maxHeight -= 1.0f;
-                        surface.clientZOffset += 1.0f;
+                        surface.enhancedZOffset = -1.0f;
                     }
                 }
 
@@ -968,10 +973,7 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
         if (isStormwindArea && surface.minHeight > 94.0f) {
             float distToMoonwell = glm::distance(glm::vec2(tileWorldX, tileWorldY), moonwellPos2D);
             if (distToMoonwell > 300.0f) {
-                for (float& h : surface.heights) h -= 1.0f;
-                surface.minHeight -= 1.0f;
-                surface.maxHeight -= 1.0f;
-                surface.clientZOffset += 1.0f;
+                surface.enhancedZOffset = -1.0f;
             }
         }
 
@@ -1257,12 +1259,12 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             const glm::vec3 aabbMin(
                 std::min({c0.x, c1.x, c2.x, c3.x}),
                 std::min({c0.y, c1.y, c2.y, c3.y}),
-                surface.minHeight
+                surface.minHeight + surface.enhancedZOffset
             );
             const glm::vec3 aabbMax(
                 std::max({c0.x, c1.x, c2.x, c3.x}),
                 std::max({c0.y, c1.y, c2.y, c3.y}),
-                surface.maxHeight
+                surface.maxHeight + surface.enhancedZOffset
             );
             if (!frustum.intersectsAABB(aabbMin, aabbMax)) continue;
         }
@@ -1481,8 +1483,8 @@ void WaterRenderer::createWaterMesh(WaterSurface& surface) {
     for (int y = 0; y < gridHeight; y++) {
         for (int x = 0; x < gridWidth; x++) {
             int index = y * gridWidth + x;
-            float height = (index < static_cast<int>(surface.heights.size()))
-                ? surface.heights[index] : surface.minHeight;
+            float height = ((index < static_cast<int>(surface.heights.size()))
+                ? surface.heights[index] : surface.minHeight) + surface.enhancedZOffset;
 
             glm::vec3 pos = surface.origin +
                             surface.stepX * static_cast<float>(x) +
@@ -2228,7 +2230,8 @@ std::optional<float> WaterRenderer::getDominantWaterHeight(const glm::vec3& came
         float dist = dx * dx + dy * dy;
         if (dist < bestDist) {
             bestDist = dist;
-            bestHeight = surface.minHeight;
+            // The plane the enhanced water reflects in: where it draws it.
+            bestHeight = surface.minHeight + surface.enhancedZOffset;
             found = true;
         }
     }
@@ -2888,8 +2891,7 @@ void WaterRenderer::createClientMesh(WaterSurface& surface) {
             } else {
                 v.pos = surface.origin + surface.stepX * static_cast<float>(x) +
                         surface.stepY * static_cast<float>(y);
-                v.pos.z = (i < surface.heights.size() ? surface.heights[i] : surface.minHeight) +
-                          surface.clientZOffset;
+                v.pos.z = i < surface.heights.size() ? surface.heights[i] : surface.minHeight;
             }
             if (lvf == 1 && i < surface.storedUVs.size()) {
                 v.surfaceUV = surface.storedUVs[i];
@@ -3224,7 +3226,7 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
                 const glm::vec3 lo(std::min({c0.x, c1.x, c2.x, c3.x}), std::min({c0.y, c1.y, c2.y, c3.y}),
                                    surface.minHeight - 2.0f);
                 const glm::vec3 hi(std::max({c0.x, c1.x, c2.x, c3.x}), std::max({c0.y, c1.y, c2.y, c3.y}),
-                                   surface.maxHeight + 2.0f + surface.clientZOffset);
+                                   surface.maxHeight + 2.0f);
                 if (!frustum.intersectsAABB(lo, hi)) continue;
             }
 

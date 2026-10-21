@@ -91,9 +91,12 @@ struct WaterSurface {
     /// texture coordinate a vertex-format-1 liquid carries. Empty when absent.
     std::vector<uint8_t> depths;
     std::vector<glm::vec2> storedUVs;
-    /// What this client moved the heights by on its own account; the client's
-    /// draw puts the surface back where the file has it.
-    float clientZOffset = 0.0f;
+    /// How far the enhanced water draws this surface off the file's height:
+    /// -1 for the old Stormwind lowering, which only that draw keeps. The
+    /// heights, and so every height query - swimming, the camera under the
+    /// surface, the underwater fog - stay where the file and the client's
+    /// own draw have them.
+    float enhancedZOffset = 0.0f;
     /// A WMO liquid's vertices where the file has them, each with its own
     /// height (0x007a7cc0); this client draws its own surface flat.
     std::vector<glm::vec3> clientPositions;
