@@ -6562,6 +6562,8 @@ void Renderer::recordRtLighting() {
         if (m2Renderer) m2Renderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
         if (wmoRenderer) wmoRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
         if (characterRenderer) characterRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
+        // Lava (rt_lights::liquidGlowPatches).
+        if (waterRenderer) waterRenderer->collectRtLights(in.cameraPos, kLightRange, lightScratch);
         // The Debug Graphics settings' strength and reach per kind of light.
         for (rt_lights::PointLight& l : lightScratch) {
             const size_t k = std::min(static_cast<size_t>(l.source), rt_lights::kSourceCount - 1);

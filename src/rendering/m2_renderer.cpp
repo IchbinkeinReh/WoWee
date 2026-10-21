@@ -2177,6 +2177,26 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     // The lamp's light and what glows first: the ray traced scene leaves the
     // models that give light out of its occluders (registerRtModel).
     if (!skyMode_) {
+        // A jack-o'-lantern (Hallow's End's G_Pumpkin game objects): named for
+        // the vegetable, so the classifier took it for a crop, and the glow of
+        // anything foliage-like is left out (computeGlow). But a candle burns
+        // in it - an unlit inside, an additive glow card - and it lights as
+        // the lanterns beside it do (rt_lights::isCandleLitPumpkin).
+        {
+            std::string lower = gpuModel.name;
+            for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            bool glowBatch = false;
+            for (const auto& batch : gpuModel.batches) {
+                if (batch.batchOpacity < 0.01f) continue;
+                glowBatch = glowBatch || (batch.materialFlags & 0x01u) != 0 || batch.blendMode == 3 ||
+                            batch.blendMode == 4;
+            }
+            if (rt_lights::isCandleLitPumpkin(lower, glowBatch)) {
+                gpuModel.isLanternLike = true;
+                gpuModel.isFoliageLike = false;
+                gpuModel.isSmallFoliage = false;
+            }
+        }
         detectLamp(gpuModel, model);
         computeGlow(gpuModel, model);
     }
@@ -2275,7 +2295,8 @@ void M2Renderer::detectLamp(M2ModelGPU& gpuModel, const pipeline::M2Model& model
                              lower.find("lantern") != std::string::npos ||
                              lower.find("sconce") != std::string::npos ||
                              lower.find("candle") != std::string::npos ||
-                             lower.find("chandelier") != std::string::npos;
+                             lower.find("chandelier") != std::string::npos ||
+                             lower.find("pumpkin") != std::string::npos;  // only a lit one is lantern-like
         const bool dark = !fixture || lower.find("broken") != std::string::npos ||
                           (lower.size() >= 3 && lower.compare(lower.size() - 3, 3, "off") == 0) ||
                           lower.find("off.m2") != std::string::npos;
@@ -2665,7 +2686,9 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             l.color *= fade;
             // A lamp of a WMO interior is in the interior's baked colours
             // already: there it only casts its shadows (PointLight::baked).
-            l.baked = inst.interiorLit;
+            // Not a game object's: a server's object (Hallow's End's lit
+            // pumpkins in Undercity) was never in the bake, so it adds its light.
+            l.baked = inst.interiorLit && !inst.isGameObject;
             out.push_back(l);
             continue;
         }
@@ -2696,8 +2719,9 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                 const glm::mat4 carried = rt_lights::boneCarried(inst.modelMatrix, inst.boneMatrices, patch.bone);
                 rt_lights::PointLight l = rt_lights::glowLight(glm::vec3(carried * glm::vec4(patch.centre, 1.0f)), color,
                                                                patch.area * scale2, rt_lights::Source::Emissive);
-                // Inside, the glow is in the baked colours as a lamp's is.
-                l.baked = inst.interiorLit;
+                // Inside, the glow is in the baked colours as a lamp's is -
+                // a doodad's, not a game object's.
+                l.baked = inst.interiorLit && !inst.isGameObject;
                 out.push_back(l);
             }
             continue;

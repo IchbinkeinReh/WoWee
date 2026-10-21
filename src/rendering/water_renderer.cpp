@@ -2889,6 +2889,19 @@ void WaterRenderer::createClientMesh(WaterSurface& surface) {
             std::memcpy(v.color, color, 4);
         }
     }
+    // Lava glows (rt_lights::liquidGlowPatches): its drawn tiles, where the
+    // client draws them, as lights for the ray traced lighting.
+    surface.lavaPatches.clear();
+    if (liquid && liquid->kind == client_liquid::MaterialKind::Magma) {
+        std::vector<glm::vec3> positions;
+        positions.reserve(verts.size());
+        for (const auto& v : verts) positions.push_back(v.pos);
+        surface.lavaPatches = rt_lights::liquidGlowPatches(
+            positions, surface.width, surface.height, [&](int x, int y) {
+                return waterCellRendered(surface.mask, surface.wmoId, surface.width, surface.xOffset,
+                                         surface.yOffset, x, y);
+            });
+    }
     AllocatedBuffer vb = uploadBuffer(*vkCtx, verts.data(), verts.size() * sizeof(ClientLiquidVertex),
                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     surface.clientVertexBuffer = vb.buffer;
@@ -3289,6 +3302,38 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
             vkCmdDrawIndexed(cmd, static_cast<uint32_t>(surface.indexCount), 1, 0, 0, 0);
         }
     }
+}
+
+} // namespace rendering
+} // namespace wowee
+
+namespace wowee {
+namespace rendering {
+
+void WaterRenderer::collectRtLights(const glm::vec3& eye, float range,
+                                    std::vector<rt_lights::PointLight>& out) const {
+    std::vector<std::pair<float, rt_lights::PointLight>> closest;
+    for (const auto& surface : surfaces) {
+        for (const rt_lights::GlowPatch& patch : surface.lavaPatches) {
+            rt_lights::PointLight l =
+                rt_lights::glowLight(patch.centre, patch.color, patch.area, rt_lights::Source::Emissive);
+            const float d = glm::length(l.position - eye);
+            if (d - l.attenuationEnd > range) continue;
+            closest.emplace_back(d, l);
+        }
+    }
+    // WOWEE_RT_LIGHT_DIAG: now and then, how much lava there is and how much
+    // of it reaches.
+    static int diagTick = 0;
+    if (std::getenv("WOWEE_RT_LIGHT_DIAG") && (++diagTick % 300) == 0) {
+        size_t patches = 0, magma = 0;
+        for (const auto& surface : surfaces) { patches += surface.lavaPatches.size(); magma += surface.lavaPatches.empty() ? 0 : 1; }
+        LOG_WARNING("RT lava: surfaces ", surfaces.size(), " with lava ", magma, " patches ", patches, " in reach ", closest.size());
+    }
+    const size_t keep = std::min(closest.size(), kMaxLavaLights);
+    std::partial_sort(closest.begin(), closest.begin() + keep, closest.end(),
+                      [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (size_t i = 0; i < keep; ++i) out.push_back(closest[i].second);
 }
 
 } // namespace rendering

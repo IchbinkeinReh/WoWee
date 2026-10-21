@@ -18,6 +18,7 @@
 #include "rendering/minimap_indoor.hpp"
 #include "rendering/cube_texture.hpp"
 #include "rendering/vk_texture.hpp"
+#include "rendering/rt_glow.hpp"
 
 namespace wowee {
 namespace pipeline {
@@ -83,6 +84,9 @@ struct WaterSurface {
     /// The LiquidType.dbc row this is drawn with. MH2O names it outright; MCLQ
     /// and the merged tiles carry the basic type, turned into its row (1-4).
     uint32_t clientLiquidType = 0;
+    /// A magma surface's glow, as lights for the ray traced lighting
+    /// (rt_lights::liquidGlowPatches), in the world; empty for any other liquid.
+    std::vector<rt_lights::GlowPatch> lavaPatches;
     /// Per vertex, laid out as `heights`: the depth byte, and the stored
     /// texture coordinate a vertex-format-1 liquid carries. Empty when absent.
     std::vector<uint8_t> depths;
@@ -137,6 +141,12 @@ public:
     void removeWMOs(const std::vector<uint32_t>& wmoIds);
     void removeTile(int tileX, int tileY);
     void clear();
+
+    /// The lights the lava near `eye` gives the ray traced lighting: each
+    /// magma surface's glowing patches (rt_lights::liquidGlowPatches) whose
+    /// light reaches within `range`, nearest first, at most kMaxLavaLights.
+    void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
+    static constexpr size_t kMaxLavaLights = 32;
 
     void recreatePipelines();
 

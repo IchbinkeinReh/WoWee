@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -55,6 +56,9 @@ inline constexpr float kMinGlowArea = 0.0005f;
 /// Gathers glowing triangles into patches (GlowPatch).
 class GlowBuilder {
 public:
+    /// `cell`: how large a cell triangles are binned by (kGlowCell for a model).
+    explicit GlowBuilder(float cell = kGlowCell) : cell_(cell) {}
+
     /// One triangle of a glowing batch, `color` what it emits (the texture's
     /// mean times the batch's colour), `batch` the batch it is of and whether
     /// that batch's colour moves, `bone` the bone that carries it (~0 none).
@@ -63,7 +67,7 @@ public:
         const float area = 0.5f * glm::length(glm::cross(b - a, c - a));
         if (!(area > 0.0f) || !std::isfinite(area)) return;
         const glm::vec3 mid = (a + b + c) / 3.0f;
-        const glm::ivec3 k = glm::ivec3(glm::floor(mid / kGlowCell));
+        const glm::ivec3 k = glm::ivec3(glm::floor(mid / cell_));
         const int64_t key = (int64_t(k.x & 0x1fffff) << 42) | (int64_t(k.y & 0x1fffff) << 21) | int64_t(k.z & 0x1fffff);
         Cell& cell = cells_[key];
         cell.area += area;
@@ -155,6 +159,7 @@ private:
         uint32_t bone = ~0u;
     };
     std::unordered_map<int64_t, Cell> cells_;
+    float cell_ = kGlowCell;
 };
 
 /// A glow's light by its power - its mean brightness times the square yards
@@ -186,6 +191,44 @@ inline PointLight glowLight(const glm::vec3& position, const glm::vec3& color, f
     out.attenuationStart = 0.15f * out.attenuationEnd;
     out.color = c / bright * std::min(kGlowStrengthPerRootPower * root, kGlowMaxStrength);
     return out;
+}
+
+/// Lava: a magma liquid surface (LiquidType's material 2) glows as an
+/// emissive area the original lights nothing with. Its drawn tiles become
+/// glowing triangles binned as a model's glow is (GlowBuilder), in cells of
+/// kLavaCell yards - one light each, every cell kept, since one surface may
+/// be a whole ADT tile's lava (533 yards across) - each lifted kLavaLightLift
+/// above the lava so the ground about it is lit from above rather than along
+/// itself, of a lava's orange. A cell's light is a full glow's (16 yards,
+/// glowLight's caps), so a point by a lava lake takes three or four of them;
+/// WaterRenderer::collectRtLights keeps the nearest kMaxLavaLights.
+inline constexpr float kLavaCell = 16.0f;
+inline constexpr float kLavaLightLift = 1.0f;
+inline constexpr glm::vec3 kLavaGlowColor{1.0f, 0.42f, 0.1f};
+
+/// The glowing patches of a liquid grid: `positions` its (width + 1) x
+/// (height + 1) vertices row by row, `rendered(x, y)` whether tile (x, y) is
+/// drawn. Empty for a grid with no drawn tile.
+template <class Rendered>
+std::vector<GlowPatch> liquidGlowPatches(const std::vector<glm::vec3>& positions, int width, int height,
+                                         Rendered&& rendered, const glm::vec3& color = kLavaGlowColor) {
+    GlowBuilder builder(kLavaCell);
+    const int row = width + 1;
+    if (width <= 0 || height <= 0 || positions.size() < size_t(row) * size_t(height + 1)) return {};
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            if (!rendered(x, y)) continue;
+            const glm::vec3& a = positions[size_t(y) * row + x];
+            const glm::vec3& b = positions[size_t(y) * row + x + 1];
+            const glm::vec3& c = positions[size_t(y + 1) * row + x];
+            const glm::vec3& d = positions[size_t(y + 1) * row + x + 1];
+            builder.addTriangle(a, c, b, color, ~0u, false);
+            builder.addTriangle(b, c, d, color, ~0u, false);
+        }
+    }
+    std::vector<GlowPatch> patches = builder.finish(std::numeric_limits<size_t>::max());
+    for (GlowPatch& p : patches) p.centre.z += kLavaLightLift;
+    return patches;
 }
 
 /// What an emitter's particles give of light by how they are blended: the

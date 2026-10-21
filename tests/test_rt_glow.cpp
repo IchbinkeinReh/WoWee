@@ -156,3 +156,40 @@ TEST_CASE("The adds give their light, smoke and modulates none", "[rt_glow]") {
     CHECK(particleGlowWeight(5, true) == 0.0f);
     CHECK(particleGlowWeight(6, true) == 0.0f);
 }
+
+TEST_CASE("Lava: a magma grid's drawn tiles become a few lifted lights", "[rt_glow][lava]") {
+    // An ADT chunk's liquid: 8 x 8 tiles of 4.1667 yards at height 130.
+    const int w = 8, h = 8;
+    const float step = 33.333332f / 8.0f;
+    std::vector<glm::vec3> pos;
+    for (int y = 0; y <= h; ++y)
+        for (int x = 0; x <= w; ++x) pos.push_back({x * step, y * step, 130.0f});
+    const auto all = liquidGlowPatches(pos, w, h, [](int, int) { return true; });
+    REQUIRE(!all.empty());
+    // One light a 16-yard cell, by where each triangle's middle falls: a
+    // chunk of 33 yards is two by two of them.
+    CHECK(all.size() == 4);
+    float area = 0.0f;
+    for (const auto& p : all) {
+        area += p.area;
+        CHECK(p.centre.z == Catch::Approx(130.0f + kLavaLightLift));
+        CHECK(p.color.r == Catch::Approx(kLavaGlowColor.r));
+    }
+    // Nothing is lost when the cells merge into the kept patches.
+    CHECK(area == Catch::Approx(33.333332f * 33.333332f).epsilon(1e-3));
+    // A lava light reaches across a flow, not a city.
+    const PointLight l = glowLight(all[0].centre, all[0].color, all[0].area, Source::Emissive);
+    CHECK(l.attenuationEnd == Catch::Approx(kGlowMaxReach));
+
+    // Only what is drawn glows; a chunk with no drawn tile gives nothing.
+    const auto half = liquidGlowPatches(pos, w, h, [](int x, int) { return x < 4; });
+    for (const auto& p : half) CHECK(p.centre.x < 4 * step);
+    CHECK(liquidGlowPatches(pos, w, h, [](int, int) { return false; }).empty());
+    CHECK(liquidGlowPatches({}, w, h, [](int, int) { return true; }).empty());
+}
+
+TEST_CASE("A jack-o'-lantern is a lantern; a field's pumpkin is a crop", "[rt_glow][pumpkin]") {
+    CHECK(isCandleLitPumpkin("world\goober\g_pumpkin_01.m2", true));
+    CHECK_FALSE(isCandleLitPumpkin("world\azeroth\duskwood\passivedoodads\bush\pumpkin01.m2", false));
+    CHECK_FALSE(isCandleLitPumpkin("world\generic\passivedoodads\halloween\hangingskulllight01.m2", true));
+}

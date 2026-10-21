@@ -345,6 +345,27 @@ own intensity and reach slider in Debug Lights):
   are read by `collectRtLights` after the M2 worker is joined (or the previous
   frame's on the single-threaded path).
 
+* Lava. A magma liquid surface (LiquidType's material 2, an ADT's MCLQ/MH2O
+  liquid or a building's) is an emissive area the original lights nothing
+  with. When its client mesh is made (`WaterRenderer::createClientMesh`) its
+  drawn tiles are binned into 16-yard cells (`liquidGlowPatches`, every cell
+  kept: one surface may be a whole tile's lava), each a patch of a lava's
+  orange lifted a yard above the surface so the bank is lit from above. Per
+  frame `WaterRenderer::collectRtLights` gives the nearest 32 whose light
+  reaches the camera's range as `Source::Emissive` lights (`glowLight`: a
+  full cell reaches 16 yards at strength 1.2), so the cost is bounded
+  however much lava a zone has; `selectLights` caps the frame's total as for
+  any light.
+* Jack-o'-lanterns. Hallow's End's `G_Pumpkin_01-03` game objects are named
+  for the vegetable, so the classifier takes them for crops (foliage gets no
+  glow), but a candle burns in each: an unlit inside and an additive glow
+  card. A pumpkin with such a batch (`isCandleLitPumpkin`) is lantern-like
+  and gets a lamp's light at its glow (`lampLight`, `Source::Lamp`); a
+  field's pumpkins and the harvest festival's have no glowing batch and stay
+  crops. A game object's lamp or glow is never `baked`, even on an interior
+  floor: the building's colours were painted without it (the pumpkins in
+  Undercity's Trade Quarter).
+
 No double light: a model with an M2 light, a fire or a lamp gets neither
 glow patches nor particle lights; a model with glow patches gets no particle
 lights.
