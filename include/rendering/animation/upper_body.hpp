@@ -177,6 +177,28 @@ struct Decision {
 /// the upper body's, else the body's - plays.
 [[nodiscard]] bool splits(const anim::AnimationDataTable& data, const Unit& unit, uint32_t asked, int32_t current);
 
+/// 0x0071df30: a slot of a hovering unit (0x0071c6c0) neither swimming
+/// nor flying whose model would play Stand, StandWound or ReadyUnarmed for
+/// it (0x0082ced0 -> 0x00826350) plays Hover instead, unblended.
+inline constexpr uint32_t kHover = 193;
+[[nodiscard]] bool hoverReplaces(uint32_t modelPlays);
+/// Applies it to what 0x007385c0 decided, after the decision and before it
+/// is played: `modelPlays` is 0x00826350's id for an animation. What was to
+/// start that turns out to be what already plays goes on.
+template <class ModelPlays>
+void applyHover(const Unit& unit, const Slots& now, Decision& d, const ModelPlays& modelPlays) {
+    if (!unit.hovering || (unit.moveFlags & kMoveSwimOrFly) != 0) return;
+    const auto hover = [&modelPlays](Slot& slot, Action& action, bool& blend, int32_t playing) {
+        if (action != Action::Play || slot.anim < 0 || !hoverReplaces(modelPlays(static_cast<uint32_t>(slot.anim))))
+            return;
+        slot = Slot{static_cast<int32_t>(kHover), 0.0f, true};
+        blend = false;
+        if (playing == static_cast<int32_t>(kHover)) action = Action::Keep;
+    };
+    hover(d.body, d.bodyAction, d.bodyBlend, now.body.anim);
+    hover(d.upper, d.upperAction, d.upperBlend, now.upper.anim);
+}
+
 /// What 0x00736640 plays for a blow taken: StandWound, CombatWound with a
 /// melee target, CombatCritical for a critical - on the upper body, or on
 /// the whole body (`upper` false).

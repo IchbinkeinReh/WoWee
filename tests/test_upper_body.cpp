@@ -366,3 +366,32 @@ TEST_CASE("the wound for a blow taken (0x00736640)", "[upper_body]") {
     CHECK_FALSE(ub::wound(data, dead, false, kStand, kStand));
     CHECK_FALSE(ub::wound(data, standing, false, 121, 121));
 }
+
+TEST_CASE("hovering on the ground, the stand is the hover (0x0071df30)", "[upper_body]") {
+    const auto data = table();
+    ub::Unit hovering;
+    hovering.hovering = true;
+    // The model plays what it has: Stand for anything it lacks here.
+    const auto plays = [](uint32_t id) { return id == kEmoteWave || id == kAttack1H ? id : kStand; };
+    auto d = ub::decide(data, hovering, asked(kStand, true), slots(kEmoteWave, 0.0f, false));
+    ub::applyHover(hovering, slots(kEmoteWave, 0.0f, false), d, plays);
+    CHECK(d.bodyAction == ub::Action::Play);
+    CHECK(d.body.anim == static_cast<int32_t>(ub::kHover));
+    CHECK_FALSE(d.bodyBlend);
+    // A stand-in that falls back to Stand is the hover too; what already
+    // hovers goes on.
+    d = ub::decide(data, hovering, asked(25, true), slots(ub::kHover));
+    ub::applyHover(hovering, slots(ub::kHover), d, plays);
+    CHECK(d.bodyAction == ub::Action::Keep);
+    // Not a swing, nor swimming or flying.
+    d = ub::decide(data, hovering, asked(kAttack1H, false), slots(kStand));
+    ub::applyHover(hovering, slots(kStand), d, plays);
+    CHECK(d.body.anim == static_cast<int32_t>(kAttack1H));
+    ub::Unit flying = hovering;
+    flying.moveFlags = ub::kMoveFlying;
+    d = ub::decide(data, flying, asked(kStand, true), slots(kEmoteWave, 0.0f, false));
+    ub::applyHover(flying, slots(kEmoteWave, 0.0f, false), d, plays);
+    CHECK(d.body.anim == static_cast<int32_t>(kStand));
+    CHECK(ub::hoverReplaces(8));
+    CHECK_FALSE(ub::hoverReplaces(26));
+}

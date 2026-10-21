@@ -2397,7 +2397,7 @@ void CharacterRenderer::playUnitAnimation(uint32_t instanceId, uint32_t animatio
     unit.swimIdle = tierAnimationFor(model, anim::SWIM_IDLE, instance.animationTier);
     unit.riderPoseShown = tierAnimationFor(model, unit.riderPose, instance.animationTier);
     const upper_body::Slot asked{static_cast<int32_t>(animationId), 0.0f, loop};
-    const upper_body::Decision d = upper_body::decide(anim::animationData(), unit, asked, now, pass);
+    upper_body::Decision d = upper_body::decide(anim::animationData(), unit, asked, now, pass);
     // A swing over a swing: the one playing runs on at twice the speed and
     // the asked one waits (+0xb88); any other ask lets it go.
     if (d.queue) {
@@ -2414,6 +2414,9 @@ void CharacterRenderer::playUnitAnimation(uint32_t instanceId, uint32_t animatio
         return;
     }
     instance.queuedAttack = -1;
+    // Hovering on the ground, the stand and its like are the hover
+    // (0x0071df30).
+    upper_body::applyHover(unit, now, d, [&model](uint32_t id) { return shownAnimation(model, id).id; });
 
     // The upper body first, as 0x007385c0 plays them. Without a key bone of
     // its own, what goes there is not played (0x00737ef0).

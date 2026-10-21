@@ -91,6 +91,8 @@ bool splits(const anim::AnimationDataTable& data, const Unit& unit, uint32_t ask
     return split;
 }
 
+bool hoverReplaces(uint32_t modelPlays) { return modelPlays == 0 || modelPlays == 8 || modelPlays == 25; }
+
 std::optional<Wound> wound(const anim::AnimationDataTable& data, const Unit& unit, bool critical, int32_t shown,
                           int32_t body) {
     // Dead (0x0071f560), or knocked down (0x00722180).
