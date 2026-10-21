@@ -2294,8 +2294,31 @@ public:
     void sendAlterAppearance(uint32_t hairStyleEntry, uint32_t hairColor,
                              uint32_t facialHairEntry, uint32_t skinColorEntry);
 
-    // Instance difficulty (0=5N, 1=5H, 2=25N, 3=25H for WotLK)
+    /// The instance's difficulty (0xbd0894), from 0: SMSG_INSTANCE_DIFFICULTY's
+    /// and nothing else's.
     uint32_t getInstanceDifficulty() const;
+    /// GetDungeonDifficulty's two answers (0x00515790): the dungeon difficulty
+    /// in force - the party's in a party, the player's own otherwise - and the
+    /// player's own, both from 0.
+    std::pair<uint32_t, uint32_t> getDungeonDifficulty() const;
+    /// SetDungeonDifficulty (0x00526050): kept and asked for, `difficulty`
+    /// from 0. False where a party's member who does not lead it is refused.
+    bool setDungeonDifficulty(uint32_t difficulty);
+    /// What GetInstanceInfo answers (0x0051a8c0): the map's name and
+    /// InstanceType, the instance's difficulty and its MapDifficulty.dbc row's
+    /// name and size, the player's difficulty and whether the map is dynamic.
+    /// `known` is false where Map.dbc has no row for the map.
+    struct InstanceInfo {
+        bool known = false;
+        std::string name;
+        std::string type = "none";
+        uint32_t difficulty = 0;  ///< from 0
+        std::string difficultyName;
+        uint32_t maxPlayers = 0;
+        uint32_t playerDifficulty = 0;
+        bool dynamic = false;
+    };
+    InstanceInfo getInstanceInfo() const;
     /// GetRaidDifficulty's two answers (0x00515810): the raid difficulty in
     /// force - the group's in a group, the player's own out of one - and the
     /// player's own, both from 0.
@@ -2307,7 +2330,6 @@ public:
     bool getInstanceLockPrompt(float& secondsLeft, bool& previouslySaved,
                                uint32_t& completedMask) const;
     void respondInstanceLock(bool accept);
-    bool isInstanceHeroic() const;
     bool isInInstance() const;
     /// The current map can switch between normal and heroic (Map.dbc Flags
     /// 0x100; GetInstanceInfo's isDynamicInstance, 0x0051a8c0).

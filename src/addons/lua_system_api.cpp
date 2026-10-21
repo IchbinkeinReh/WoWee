@@ -3043,40 +3043,31 @@ static int lua_IsInInstance(lua_State* L) {
     return 2;
 }
 
-// GetInstanceInfo() → name, type, difficultyIndex, difficultyName, maxPlayers, ...
+/// GetInstanceInfo() (0x0051a8c0): name, instanceType, difficultyIndex,
+/// difficultyName, maxPlayers, playerDifficulty, isDynamicInstance - the
+/// instance's own difficulty (SMSG_INSTANCE_DIFFICULTY), counted from one, and
+/// its MapDifficulty.dbc row's name and size. A map Map.dbc has no row for
+/// answers nil, "none", 0, "", 0, 0, nil.
 static int lua_GetInstanceInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) {
-        // Seven, and a difficulty of one, so this branch answers in the same
-        // shape and the same numbering as the real one below it.
-        lua_pushstring(L, ""); lua_pushstring(L, "none"); lua_pushnumber(L, 1);
-        lua_pushstring(L, "Normal"); lua_pushnumber(L, 0);
-        lua_pushnumber(L, 0); lua_pushboolean(L, 0);
+    const auto info = gh ? gh->getInstanceInfo() : game::GameHandler::InstanceInfo{};
+    if (!info.known) {
+        lua_pushnil(L);
+        lua_pushstring(L, "none");
+        lua_pushnumber(L, 0);
+        lua_pushstring(L, "");
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, 0);
+        lua_pushnil(L);
         return 7;
     }
-    std::string mapName = gh->getMapName(gh->getCurrentMapId());
-    const uint32_t diff = gh->getInstanceDifficulty();
-    lua_pushstring(L, mapName.c_str());                    // 1: name
-    lua_pushstring(L, gh->isInInstance() ? "party" : "none"); // 2: instanceType
-    // Counted from one, which is what the interface compares against.
-    //
-    // The wire value is zero-based - social_handler reads heroic as
-    // difficulty == 1 - and this pushed it straight through. minimap.lua tests
-    // `difficulty == 1 and maxPlayers == 5` to decide there is nothing worth
-    // showing, and `difficulty == 2` for heroic, so a normal dungeon failed
-    // the first test and hung a difficulty banner on the minimap, while a
-    // heroic failed the second and had that banner read "Normal".
-    //
-    // GetInstanceDifficulty beside this already added the one; only this path
-    // did not.
-    lua_pushnumber(L, diff + 1);                           // 3: difficultyIndex
-    const char* diffName = game::instanceDifficultyName(diff);
-    lua_pushstring(L, diffName ? diffName : "Normal");      // 4: difficultyName
-    lua_pushnumber(L, 5);                                   // 5: maxPlayers (default 5-man)
-    // The two the raid branch reads; nil would reach `playerDifficulty == 1`
-    // and `if ( isDynamicInstance )` in minimap.lua.
-    lua_pushnumber(L, gh->playerDifficultyRef());           // 6: playerDifficulty (0x0051a8c0: 0xbd1980)
-    lua_pushboolean(L, gh->isDynamicDifficultyMap() ? 1 : 0); // 7: isDynamicInstance (Map.dbc Flags 0x100)
+    lua_pushstring(L, info.name.c_str());
+    lua_pushstring(L, info.type.c_str());
+    lua_pushnumber(L, info.difficulty + 1);
+    lua_pushstring(L, info.difficultyName.c_str());
+    lua_pushnumber(L, info.maxPlayers);
+    lua_pushnumber(L, info.playerDifficulty);
+    lua_pushboolean(L, info.dynamic ? 1 : 0);
     return 7;
 }
 
@@ -7088,13 +7079,15 @@ void registerSystemLuaAPI(lua_State* L) {
                 // unitpopup's `GetDungeonDifficulty() == 1` heroic-lockout
                 // check was true inside a heroic.
                 //
-                // The dungeon one answers from the value SMSG_INSTANCE_DIFFICULTY
-                // and MSG_SET_DUNGEON_DIFFICULTY both write; the raid one has
-                // its own (MSG_SET_RAID_DIFFICULTY).
+                // GetDungeonDifficulty (0x00515790): the dungeon difficulty in
+                // force and the player's own, from MSG_SET_DUNGEON_DIFFICULTY -
+                // not the instance's, which GetInstanceInfo answers.
                 {"GetDungeonDifficulty", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, (gh ? gh->getInstanceDifficulty() : 0u) + 1u);
-            return 1;
+            const auto dungeon = gh ? gh->getDungeonDifficulty() : std::pair<uint32_t, uint32_t>{0, 0};
+            lua_pushnumber(L, dungeon.first + 1u);
+            lua_pushnumber(L, dungeon.second + 1u);
+            return 2;
         }},
                 // GetRaidDifficulty (0x00515810): the raid difficulty in
                 // force and the player's own, from MSG_SET_RAID_DIFFICULTY.

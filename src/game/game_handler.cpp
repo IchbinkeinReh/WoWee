@@ -4627,8 +4627,14 @@ std::pair<uint32_t, uint32_t> GameHandler::getRaidDifficulty() const {
     return {raid.effective(!getPartyData().isEmpty()), raid.personal};
 }
 
-bool GameHandler::isInstanceHeroic() const {
-    return socialHandler_ ? socialHandler_->isInstanceHeroic() : false;
+std::pair<uint32_t, uint32_t> GameHandler::getDungeonDifficulty() const {
+    if (!socialHandler_) return {0, 0};
+    const auto& dungeon = socialHandler_->getDungeonDifficulty();
+    return {dungeon.effective(socialHandler_->inDungeonParty()), dungeon.personal};
+}
+
+bool GameHandler::setDungeonDifficulty(uint32_t difficulty) {
+    return socialHandler_ && socialHandler_->setDungeonDifficulty(difficulty);
 }
 
 bool GameHandler::isInInstance() const {
@@ -4690,6 +4696,31 @@ std::string GameHandler::savedInstanceDifficultyName(uint32_t mapId, uint32_t di
     if (row < 0) return {};
     const std::string key = md->getString(static_cast<uint32_t>(row), 22);
     return key.empty() ? std::string() : interfaceString(key.c_str(), key.c_str());
+}
+
+GameHandler::InstanceInfo GameHandler::getInstanceInfo() const {
+    InstanceInfo info;
+    loadMapNameCache();
+    const auto type = mapInstanceTypeCache_.find(currentMapId_);
+    if (type == mapInstanceTypeCache_.end()) return info;  // nil, "none", 0, "", 0, 0, nil
+    info.known = true;
+    info.name = getMapName(currentMapId_);
+    static constexpr const char* kTypes[5] = {"none", "party", "raid", "pvp", "arena"};
+    info.type = type->second < 5 ? kTypes[type->second] : "none";
+    info.difficulty = getInstanceDifficulty();
+    // The instance's MapDifficulty row (0x00634950): its name and size, or
+    // nothing and nought where there is none.
+    if (auto* am = services().assetManager; am && am->isInitialized()) {
+        auto md = am->loadDBC("MapDifficulty.dbc");
+        if (const int row = mapDifficultyRow(md, currentMapId_, info.difficulty); row >= 0) {
+            const std::string key = md->getString(static_cast<uint32_t>(row), 22);
+            info.difficultyName = interfaceString(key.c_str(), key.c_str());
+            info.maxPlayers = md->getUInt32(static_cast<uint32_t>(row), 21);
+        }
+    }
+    info.playerDifficulty = playerDifficulty_;
+    info.dynamic = isDynamicDifficultyMap();
+    return info;
 }
 
 int GameHandler::currentMapInstanceType() const {
