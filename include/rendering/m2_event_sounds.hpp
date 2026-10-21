@@ -196,6 +196,24 @@ void forEachCrossed(const std::vector<uint32_t>& times, float fromMs, float toMs
     }
 }
 
+/// The same for a sequence played backwards from its end, as one stands in
+/// for an animation the model lacks where a fallback row has Flags 0x10
+/// (0x00826350): `fromMs` and `toMs` are how long it has run, and a time
+/// `t` of the sequence is passed once it has run `durationMs - t` - 0x00830fb0
+/// times each event from the sequence's start, offset and rate, and the
+/// rate is negative there. `fire` is given the event's own time.
+template <typename Fire>
+void forEachCrossedReversed(const std::vector<uint32_t>& times, uint32_t durationMs, float fromMs, float toMs,
+                            float lapMs, Fire&& fire) {
+    std::vector<uint32_t> run;
+    run.reserve(times.size());
+    for (uint32_t t : times) {
+        if (t <= durationMs) run.push_back(durationMs - t);
+    }
+    std::sort(run.begin(), run.end());
+    forEachCrossed(run, fromMs, toMs, lapMs, [&](uint32_t r) { fire(durationMs - r); });
+}
+
 }  // namespace m2_event
 
 /// Plays the sounds of the model events M2Renderer::update found.

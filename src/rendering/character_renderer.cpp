@@ -5557,8 +5557,15 @@ void CharacterRenderer::stepInstanceEvents(uint32_t instanceId, const CharacterI
         if (unit_event::classify(event.id).kind == unit_event::Kind::None) continue;
         const size_t timeline = event.globalSequence >= 0 ? 0u : static_cast<size_t>(sequence);
         if (timeline >= event.times.size()) continue;
-        m2_event::forEachCrossed(event.times[timeline], from, to, 0.0f,
-                                 [&](uint32_t) { steppedEvents_.push_back({instanceId, e}); });
+        const auto fire = [&](uint32_t) { steppedEvents_.push_back({instanceId, e}); };
+        // A sequence standing in reversed passes them from its end
+        // (0x00830fb0 at the negative rate 0x00826350 gives it).
+        if (inst.playMode == anim::PlayMode::Reversed && sequence == inst.currentSequenceIndex) {
+            m2_event::forEachCrossedReversed(event.times[timeline], model.sequences[sequence].duration, from, to, 0.0f,
+                                             fire);
+        } else {
+            m2_event::forEachCrossed(event.times[timeline], from, to, 0.0f, fire);
+        }
     }
 }
 

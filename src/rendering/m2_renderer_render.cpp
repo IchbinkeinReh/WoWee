@@ -571,7 +571,22 @@ void M2Renderer::update(float deltaTime, const glm::vec3& cameraPos, const glm::
         }
         if (instance.animSpeed < 0.0f) {
             // Backwards, standing in for an animation the model lacks
-            // (0x00826350): at its start it ends as it would at its end.
+            // (0x00826350): its events are passed from its end (0x00830fb0),
+            // and at its start it ends as it would at its end.
+            if (steppedEvents && eventsSequence >= 0 && eventsSequence < static_cast<int>(model.sequences.size())) {
+                const uint32_t length = model.sequences[eventsSequence].duration;
+                const float ran = static_cast<float>(length) - instance.animTime;
+                const float ranBefore = eventsFrom < 0.0f ? -1.0f : static_cast<float>(length) - eventsFrom;
+                const float lap = instance.holdAtEnd || instance.playingVariation ? 0.0f : static_cast<float>(length);
+                for (uint32_t e = 0; e < model.events.size(); ++e) {
+                    const auto& event = model.events[e];
+                    const size_t timeline = event.globalSequence >= 0 ? 0u : static_cast<size_t>(eventsSequence);
+                    if (timeline >= event.times.size()) continue;
+                    m2_event::forEachCrossedReversed(event.times[timeline], length, ranBefore,
+                                                     std::min(ran, lap > 0.0f ? ran : static_cast<float>(length)),
+                                                     lap, [&](uint32_t) { steppedEvents_.push_back({idx, e}); });
+                }
+            }
             if (instance.animTime <= 0.0f) {
                 if (instance.holdAtEnd) {
                     instance.animTime = 0.0f;
