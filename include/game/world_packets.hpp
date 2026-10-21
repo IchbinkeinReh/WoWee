@@ -9,6 +9,7 @@
 #include "game/group_defines.hpp"
 #include "game/flat_field_map.hpp"
 #include "game/handler_types.hpp"
+#include "game/who_filter.hpp"
 #include <array>
 #include <functional>
 #include <optional>
@@ -1021,15 +1022,22 @@ public:
     static bool parse(network::Packet& packet, PlayedTimeData& data);
 };
 
-/** CMSG_WHO packet builder */
+/// CMSG_WHO (0x062, 0x006b5630): the levels, the name and guild, the race
+/// and class masks, the zones counted and the words counted - what
+/// who_filter::parse reads out of a /who.
 class WhoPacket {
 public:
-    static network::Packet build(uint32_t minLevel = 0, uint32_t maxLevel = 100,
-                                 const std::string& playerName = "",
-                                 const std::string& guildName = "",
-                                 uint32_t raceMask = 0xFFFFFFFF,
-                                 uint32_t classMask = 0xFFFFFFFF,
-                                 uint32_t zones = 0);
+    static network::Packet build(const who_filter::Request& request);
+};
+
+/// SMSG_WHO (0x063, 0x006b8720): how many rows and how many matched, then
+/// per row the name, the guild, level, class and race, a gender byte from
+/// WotLK on, and the zone. The client keeps at most 50 rows.
+class WhoResultParser {
+public:
+    static constexpr uint32_t kMaxRows = 50;
+    static bool parse(network::Packet& packet, bool hasGender, std::vector<WhoEntry>& rows,
+                      uint32_t& displayCount, uint32_t& onlineCount);
 };
 
 // ============================================================

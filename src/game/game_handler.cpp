@@ -4376,6 +4376,14 @@ void GameHandler::setWhoToUI(bool toUI) {
     if (socialHandler_) socialHandler_->setWhoToUI(toUI);
 }
 
+std::string GameHandler::getWhoRaceName(uint32_t raceId) const {
+    return socialHandler_ ? socialHandler_->getWhoRaceName(raceId) : std::string{};
+}
+
+std::string GameHandler::getWhoClassName(uint32_t classId) const {
+    return socialHandler_ ? socialHandler_->getWhoClassName(classId) : std::string{};
+}
+
 const std::array<GameHandler::BgQueueSlot, 3>& GameHandler::getBgQueues() const {
     if (socialHandler_) return socialHandler_->getBgQueues();
     static const std::array<BgQueueSlot, 3> empty{};

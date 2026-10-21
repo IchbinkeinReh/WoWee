@@ -2643,14 +2643,18 @@ void registerSocialLuaAPI(lua_State* L) {
             const auto& w = *view[static_cast<size_t>(index) - 1];
 
 
-            const char* raceName = (w.raceId < 12) ? kLuaRaces[w.raceId] : "Unknown";
-            const char* className = (w.classId < 12) ? kLuaClasses[w.classId] : "Unknown";
+            // The race and class by their localized names and the zone by its
+            // own, as the panel shows them (the zone was always empty, and
+            // the race and class English).
+            const std::string raceName = gh->getWhoRaceName(w.raceId);
+            const std::string className = gh->getWhoClassName(w.classId);
+            const std::string zoneName = gh->getWhoAreaName(w.zoneId);
             lua_pushstring(L, w.name.c_str());
             lua_pushstring(L, w.guildName.c_str());
             lua_pushnumber(L, w.level);
-            lua_pushstring(L, raceName);
-            lua_pushstring(L, className);
-            lua_pushstring(L, ""); // zone name (would need area lookup)
+            lua_pushstring(L, raceName.c_str());
+            lua_pushstring(L, className.c_str());
+            lua_pushstring(L, zoneName.c_str());
             // The who list reads this exactly as the guild roster does, so it
             // gets the same answer from the same place. It used to keep a
             // private copy of the token table with a fallback of "WARRIOR",
@@ -2664,11 +2668,6 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->queryWho(query);
             return 0;
         }},
-                // SetWhoToUI(toUI) - whether a /who answer should fill the
-                // panel or be printed as chat lines. Nothing to switch: this
-                // client's who handler only ever stores the rows and fires
-                // WHO_LIST_UPDATE, so the panel is already the one place they
-                // go and there is no chat print to turn off.
                 // SetWhoToUI(toUI) - where a /who answer should go.
                 //
                 // FriendsFrame turns this on while its Who tab is up and off

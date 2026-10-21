@@ -1564,11 +1564,75 @@ void SocialHandler::requestPlayedTime() {
     LOG_INFO("Requested played time");
 }
 
-void SocialHandler::queryWho(const std::string& playerName) {
+// The filter as the client reads it (0x006b5630, who_filter::parse): its
+// tags in the client's language, its zones, races and classes by their
+// localized names. This sent the whole text as a name with the levels 0 to
+// 0, which no character is, so every /who came back empty.
+void SocialHandler::queryWho(const std::string& filter) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    auto packet = WhoPacket::build(0, 0, playerName);
+    who_filter::Tags tags;
+    tags.name = interfaceString("WHO_TAG_NAME", "n-");
+    tags.guild = interfaceString("WHO_TAG_GUILD", "g-");
+    tags.zone = interfaceString("WHO_TAG_ZONE", "z-");
+    tags.race = interfaceString("WHO_TAG_RACE", "r-");
+    tags.cls = interfaceString("WHO_TAG_CLASS", "c-");
+    const WhoNames& names = whoNames();
+    const who_filter::Request request = who_filter::parse(filter, tags, names.zones, names.races, names.classes);
+    auto packet = WhoPacket::build(request);
     owner_.getSocket()->send(packet);
-    LOG_INFO("Sent WHO query", playerName.empty() ? "" : " for: " + playerName);
+    LOG_INFO("Sent WHO query \"", filter, "\": levels ", request.minLevel, "-", request.maxLevel,
+             " name=\"", request.name, "\" guild=\"", request.guild, "\" zones=", request.zones.size(),
+             " words=", request.strings.size());
+}
+
+const SocialHandler::WhoNames& SocialHandler::whoNames() const {
+    if (whoNames_.loaded) return whoNames_;
+    auto* am = owner_.services().assetManager;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    if (!am || !am->isInitialized()) return whoNames_;
+    whoNames_.loaded = true;
+    // Zones: AreaTable's rows with no parent (0x006b5630 takes those whose
+    // +0x8 is 0), by the name getAreaName reads (field 11).
+    if (auto area = am->loadDBCOptional("AreaTable.dbc"); area && area->isLoaded() && area->getFieldCount() > 11) {
+        const auto* layout = layouts ? layouts->getLayout("AreaTable") : nullptr;
+        const uint32_t parentF = layout ? layout->tryField("ParentAreaNum") : 2u;
+        for (uint32_t r = 0; r < area->getRecordCount(); ++r) {
+            if (parentF < area->getFieldCount() && area->getUInt32(r, parentF) != 0) continue;
+            const uint32_t id = area->getUInt32(r, 0);
+            std::string name = area->getString(r, 11);
+            if (id != 0 && !name.empty()) whoNames_.zones.push_back({id, std::move(name)});
+        }
+    }
+    const auto read = [&](const char* file, const char* layoutName, std::vector<who_filter::Named>& out) {
+        const auto* layout = layouts ? layouts->getLayout(layoutName) : nullptr;
+        if (!layout) return;
+        const uint32_t idF = layout->tryField("ID");
+        const uint32_t nameF = layout->tryField("Name");
+        if (idF == 0xFFFFFFFFu || nameF == 0xFFFFFFFFu) return;
+        auto dbc = am->loadDBCOptional(file);
+        if (!dbc || !dbc->isLoaded() || nameF >= dbc->getFieldCount()) return;
+        for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+            std::string name = dbc->getString(r, nameF);
+            if (!name.empty()) out.push_back({dbc->getUInt32(r, idF), std::move(name)});
+        }
+    };
+    read("ChrRaces.dbc", "ChrRaces", whoNames_.races);
+    read("ChrClasses.dbc", "ChrClasses", whoNames_.classes);
+    return whoNames_;
+}
+
+std::string SocialHandler::getWhoRaceName(uint32_t raceId) const {
+    for (const auto& r : whoNames().races) {
+        if (r.id == raceId) return r.name;
+    }
+    return getRaceName(static_cast<Race>(raceId));
+}
+
+std::string SocialHandler::getWhoClassName(uint32_t classId) const {
+    for (const auto& c : whoNames().classes) {
+        if (c.id == classId) return c.name;
+    }
+    return getClassName(static_cast<Class>(classId));
 }
 
 void SocialHandler::addFriend(const std::string& playerName, const std::string& note) {
@@ -3568,30 +3632,11 @@ void SocialHandler::handlePlayedTime(network::Packet& packet) {
 
 void SocialHandler::handleWho(network::Packet& packet) {
     const bool hasGender = isActiveExpansion("wotlk");
-    uint32_t displayCount = packet.readUInt32();
-    uint32_t onlineCount = packet.readUInt32();
-    whoResults_.clear();
+    uint32_t displayCount = 0;
+    uint32_t onlineCount = 0;
+    // What was read stands even when the packet ends early.
+    WhoResultParser::parse(packet, hasGender, whoResults_, displayCount, onlineCount);
     whoOnlineCount_ = onlineCount;
-    // No refusal for an empty answer: the count line below says "0 players
-    // total" (WHO_NUM_RESULTS, 0x006b86b0). This raised an English "No
-    // players found." on screen and told the who panel nothing.
-    for (uint32_t i = 0; i < displayCount; ++i) {
-        if (packet.getReadPos() >= packet.getSize()) break;
-        std::string playerName = packet.readString();
-        std::string guildName = packet.readString();
-        if (!packet.hasRemaining(12)) break;
-        uint32_t level   = packet.readUInt32();
-        uint32_t classId = packet.readUInt32();
-        uint32_t raceId  = packet.readUInt32();
-        if (hasGender && packet.hasRemaining(1)) packet.readUInt8();
-        uint32_t zoneId = 0;
-        if (packet.hasRemaining(4)) zoneId = packet.readUInt32();
-        WhoEntry entry;
-        entry.name = playerName; entry.guildName = guildName;
-        entry.level = level; entry.classId = classId;
-        entry.raceId = raceId; entry.zoneId = zoneId;
-        whoResults_.push_back(std::move(entry));
-    }
     // To the chat when nobody is showing a panel, which is what a stock client
     // does and what SetWhoToUI is for. FriendsFrame turns that on while its Who
     // tab is up and off again on the way out, so a /who typed into chat with
@@ -3606,27 +3651,32 @@ void SocialHandler::handleWho(network::Packet& packet) {
     // Each row is WHO_LIST_FORMAT, or WHO_LIST_GUILD_FORMAT with a guild, and
     // the count WHO_NUM_RESULTS (0x006b5030, 0x006b86b0); the zone is always
     // there, UNKNOWN where it has no name. These were English templates.
-    if (!whoToUI_) {
+    //
+    // Only a short answer goes there, though: with the panel closed the rows
+    // are printed when there are three or fewer (0x006b8720), and otherwise
+    // kept for the panel with WHO_LIST_UPDATE and nothing said in the chat.
+    // The panel open, they are its. Either way, never both.
+    constexpr uint32_t kChatRows = 3;
+    if (!whoToUI_ && whoResults_.size() <= kChatRows) {
         for (const auto& e : whoResults_) {
             std::string zone = owner_.getWhoAreaName(e.zoneId);
             if (zone.empty()) zone = interfaceString("UNKNOWN", "Unknown");
             const std::string level = std::to_string(e.level);
-            const std::string race = getRaceName(static_cast<Race>(e.raceId));
-            const std::string cls = getClassName(static_cast<Class>(e.classId));
+            const std::string race = getWhoRaceName(e.raceId);
+            const std::string cls = getWhoClassName(e.classId);
             owner_.addSystemChatMessage(e.guildName.empty()
                 ? interfaceFormat("WHO_LIST_FORMAT", "|Hplayer:%s|h[%s]|h: Level %d %s %s - %s",
                                   {e.name, e.name, level, race, cls, zone})
                 : interfaceFormat("WHO_LIST_GUILD_FORMAT", "|Hplayer:%s|h[%s]|h: Level %d %s %s <%s> - %s",
                                   {e.name, e.name, level, race, cls, e.guildName, zone}));
         }
+        // The rows the server sent, as 0x006b8720 counts them.
         owner_.addSystemChatMessage(interfaceFormat("WHO_NUM_RESULTS", "%d |4player:players; total",
-                                                    {std::to_string(whoOnlineCount_)}));
+                                                    {std::to_string(displayCount)}));
+        return;
     }
 
-    // The who panel asked for this and redraws its rows on the answer coming
-    // back. Every row was parsed and stored and only this client's own window
-    // ever read them, so a /who through the interface filled a list nobody was
-    // told about and the panel kept showing the previous search.
+    // The who panel redraws its rows on this (FriendsFrame's WhoList_Update).
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("WHO_LIST_UPDATE", {});
 }
 

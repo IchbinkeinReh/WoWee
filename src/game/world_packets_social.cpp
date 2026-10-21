@@ -588,24 +588,42 @@ bool PlayedTimeParser::parse(network::Packet& packet, PlayedTimeData& data) {
     return true;
 }
 
-network::Packet WhoPacket::build(uint32_t minLevel, uint32_t maxLevel,
-                                 const std::string& playerName,
-                                 const std::string& guildName,
-                                 uint32_t raceMask, uint32_t classMask,
-                                 uint32_t zones) {
+network::Packet WhoPacket::build(const who_filter::Request& r) {
     network::Packet packet(wireOpcode(Opcode::CMSG_WHO));
-    packet.writeUInt32(minLevel);
-    packet.writeUInt32(maxLevel);
-    packet.writeString(playerName);
-    packet.writeString(guildName);
-    packet.writeUInt32(raceMask);
-    packet.writeUInt32(classMask);
-    packet.writeUInt32(zones);    // Number of zone IDs (0 = no zone filter)
-    // Zone ID array would go here if zones > 0
-    packet.writeUInt32(0);        // stringCount (number of search strings)
-    // String array would go here if stringCount > 0
-    LOG_DEBUG("Built CMSG_WHO: player=", playerName);
+    packet.writeUInt32(r.minLevel);
+    packet.writeUInt32(r.maxLevel);
+    packet.writeString(r.name);
+    packet.writeString(r.guild);
+    packet.writeUInt32(r.raceMask);
+    packet.writeUInt32(r.classMask);
+    packet.writeUInt32(static_cast<uint32_t>(r.zones.size()));
+    for (uint32_t zone : r.zones) packet.writeUInt32(zone);
+    packet.writeUInt32(static_cast<uint32_t>(r.strings.size()));
+    for (const auto& s : r.strings) packet.writeString(s);
+    LOG_DEBUG("Built CMSG_WHO: levels ", r.minLevel, "-", r.maxLevel, " name=", r.name);
     return packet;
+}
+
+bool WhoResultParser::parse(network::Packet& packet, bool hasGender, std::vector<WhoEntry>& rows,
+                            uint32_t& displayCount, uint32_t& onlineCount) {
+    rows.clear();
+    if (!packet.hasRemaining(8)) return false;
+    displayCount = packet.readUInt32();
+    onlineCount = packet.readUInt32();
+    for (uint32_t i = 0; i < displayCount; ++i) {
+        if (!packet.hasRemaining(1)) return false;
+        WhoEntry e;
+        e.name = packet.readString();
+        e.guildName = packet.readString();
+        if (!packet.hasRemaining(hasGender ? 17 : 16)) return false;
+        e.level = packet.readUInt32();
+        e.classId = packet.readUInt32();
+        e.raceId = packet.readUInt32();
+        if (hasGender) packet.readUInt8();
+        e.zoneId = packet.readUInt32();
+        if (rows.size() < kMaxRows) rows.push_back(std::move(e));
+    }
+    return true;
 }
 
 // ============================================================

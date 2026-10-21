@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/who_filter.hpp"
 #include "game/guild_emblem.hpp"
 #include <optional>
 #include "game/world_packets.hpp"
@@ -107,6 +108,10 @@ public:
     void setWhoToUI(bool toUI) { whoToUI_ = toUI; }
     [[nodiscard]] bool isWhoToUI() const { return whoToUI_; }
     [[nodiscard]] std::string getWhoAreaName(uint32_t zoneId) const;
+    /// ChrRaces' and ChrClasses' localized names, as GetWhoInfo and the chat
+    /// rows give them; empty where the row is not known.
+    [[nodiscard]] std::string getWhoRaceName(uint32_t raceId) const;
+    [[nodiscard]] std::string getWhoClassName(uint32_t classId) const;
 
     // Social commands
     void addFriend(const std::string& playerName, const std::string& note = "");
@@ -755,6 +760,17 @@ private:
     // Who results
     std::vector<WhoEntry> whoResults_;
     uint32_t whoOnlineCount_ = 0;
+    /// The names a /who filter is read against (who_filter::parse): the
+    /// zones (AreaTable rows with no parent), races and classes, localized.
+    /// Read once, when the assets are there.
+    struct WhoNames {
+        bool loaded = false;
+        std::vector<who_filter::Named> zones;
+        std::vector<who_filter::Named> races;
+        std::vector<who_filter::Named> classes;
+    };
+    mutable WhoNames whoNames_;
+    const WhoNames& whoNames() const;
     /// Off until the interface asks otherwise, which is a stock client's
     /// default: with no panel open the results belong in the chat.
     bool whoToUI_ = false;

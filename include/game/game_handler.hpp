@@ -758,6 +758,9 @@ public:
     /// answer belongs there rather than in the chat.
     void setWhoToUI(bool toUI);
     std::string getWhoAreaName(uint32_t zoneId) const { return getAreaName(zoneId); }
+    /// ChrRaces' and ChrClasses' localized names (SocialHandler).
+    std::string getWhoRaceName(uint32_t raceId) const;
+    std::string getWhoClassName(uint32_t classId) const;
 
     // Social commands
     void addFriend(const std::string& playerName, const std::string& note = "") override;
