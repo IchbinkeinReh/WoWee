@@ -1,5 +1,7 @@
 #pragma once
 
+#include <fstream>
+
 /// What fills the combat log: the builders the log packets call
 /// (UnitCombatLog_C.cpp, 0x00750400-0x00753100), each deciding as the client
 /// does whether the event is logged and with which suffix, and the world the
@@ -32,6 +34,14 @@ public:
 
     /// 0x007538a0, when a character enters the world.
     void enterWorld();
+
+    /// LoggingCombat (0x004fbc60): turned on or off where `enable` says,
+    /// the file opened to add to as it is turned on - off again where it
+    /// cannot be. Whether it is on.
+    bool loggingCombat(std::optional<bool> enable);
+    /// Off, and the file closed, as the client leaves the world (0x00529160
+    /// -> 0x005072b0).
+    void closeLogFile();
 
     /// The arguments an entry is announced and answered with.
     [[nodiscard]] std::vector<combat_log::Arg> argsOf(const combat_log::Entry& entry) const;
@@ -119,6 +129,8 @@ public:
 private:
     struct SpellRow;
     [[nodiscard]] std::optional<SpellRow> spell(uint32_t spellId) const;
+    /// A spell's name and school, as the log's lines name it.
+    [[nodiscard]] combat_log::SpellLookup spellLookup() const;
     /// 0x00750400's start: the entry, its sides and its spell.
     combat_log::Entry& create(combat_log::Event event, uint64_t src, uint64_t dst, const SpellRow* rec);
     void setSide(combat_log::Party& side, uint64_t guid);
@@ -128,8 +140,14 @@ private:
     void commit(uint32_t delayMs = 0);
     [[nodiscard]] std::string unknownName() const;
 
+    /// The entry's line in the file, after the local time (0x0074f910 ->
+    /// 0x0074e880 -> 0x004fb3c0), ended "\r\n" (0x00775a90).
+    void writeLogLine(const combat_log::Entry& entry);
+
     GameHandler& owner_;
     combat_log::Log log_;
+    bool loggingCombat_ = false;  ///< 0xb759d4
+    std::ofstream logFile_;       ///< 0xb759dc: Logs\WoWCombatLog.txt
     uint32_t replayDelay_ = 0;
 
     struct PendingMiss {

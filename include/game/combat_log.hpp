@@ -258,6 +258,18 @@ struct Entry {
 /// guid, name and flags, then the spell and the suffix.
 [[nodiscard]] std::vector<Arg> entryArgs(const Entry& entry, double timestamp, const SpellLookup& spells);
 
+/// The entry as LoggingCombat writes it to Logs\WoWCombatLog.txt
+/// (0x0074e880): the event, then each value after a comma - guids "0x%016X",
+/// names quoted with '"' and '\' escaped, flags and a spell's school
+/// "0x%x", numbers "%d", the miss, environment and aura types bare, "nil"
+/// for what is not there. Unlike the event's arguments it has no timestamp,
+/// and writes a zero where those have nil for one.
+[[nodiscard]] std::string fileLine(const Entry& entry, const SpellLookup& spells);
+/// "%u/%u %02u:%02u:%02u.%03u  ", the local time a log file's line starts
+/// with (0x007752a0).
+[[nodiscard]] std::string fileTimePrefix(unsigned month, unsigned day, unsigned hour, unsigned minute,
+                                         unsigned second, unsigned millisecond);
+
 /// One CombatLogAddFilter.
 struct Filter {
     std::array<bool, kEventCount> events{};
