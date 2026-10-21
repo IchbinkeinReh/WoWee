@@ -14,6 +14,9 @@
 #include "core/logger.hpp"
 #include "core/config_paths.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_layout.hpp"
+#include "game/item_requirements.hpp"
+#include "game/reputation_standing.hpp"
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -314,7 +317,9 @@ static int lua_GetBuybackItemInfo(lua_State* L) {
     lua_pushnumber(L, static_cast<double>(bi.item.sellPrice) * bi.count);
     lua_pushnumber(L, bi.count);
     lua_pushnumber(L, 1);
-    lua_pushboolean(L, 1);
+    // isUsable, as for a merchant's own items (0x00585070 asks 0x006dc3f0).
+    const auto* binfo = gh->getItemInfo(bi.item.itemId);
+    lua_pushboolean(L, !binfo || gh->judgeItemRequirements(*binfo).usable());
     return 6;
 }
 
@@ -471,7 +476,11 @@ static int lua_GetMerchantItemInfo(lua_State* L) {
     lua_pushnumber(L, vi.buyPrice);                     // price (copper)
     lua_pushnumber(L, vi.stackCount > 0 ? vi.stackCount : 1); // stackCount
     lua_pushnumber(L, vi.maxCount == -1 ? -1 : vi.maxCount);  // numAvailable (-1=unlimited)
-    lua_pushboolean(L, 1);                              // isUsable
+    // isUsable: whether the player may use it (0x006dc3f0) - level, class,
+    // race, the armour or weapon type, skill, spell, reputation. The merchant
+    // frame tints the icon red where it is false. Usable while the item is
+    // not known yet, as the client answers for an entry it has no record of.
+    lua_pushboolean(L, !info || gh->judgeItemRequirements(*info).usable());
     // The extended cost - tokens, honour, arena points - which merchantframe
     // reads as `if ( extendedCost and (price <= 0) )` to decide whether to
     // show a token price instead of a coin one. It was not returned at all, so
@@ -2370,6 +2379,115 @@ std::string auctionSortColumn(const char* sort) {
 
 }  // namespace
 
+namespace {
+/// ChrRaces' and ChrClasses' names, as the tooltip's restriction lines name
+/// them (0x006277f0 reads the localized Name of each row; a race whose flag
+/// 0x1 is set is not playable and never named). Read once; empty where the
+/// layout does not say where the name is.
+struct RestrictionNameTables {
+    bool loaded = false;
+    std::vector<game::ItemRestrictionName> races;
+    std::vector<game::ItemRestrictionName> classes;
+};
+
+const RestrictionNameTables& restrictionNames(game::GameHandler* gh) {
+    static RestrictionNameTables t;
+    if (t.loaded || !gh) return t;
+    auto* am = gh->services().assetManager;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    if (!am || !am->isInitialized() || !layouts) return t;
+    t.loaded = true;
+    auto read = [&](const char* file, const char* layoutName, bool raceFlags,
+                    std::vector<game::ItemRestrictionName>& out) {
+        const auto* layout = layouts->getLayout(layoutName);
+        if (!layout) return;
+        const uint32_t idF = layout->tryField("ID");
+        const uint32_t nameF = layout->tryField("Name");
+        const uint32_t flagsF = raceFlags ? layout->tryField("Flags") : 0xFFFFFFFFu;
+        if (idF == 0xFFFFFFFFu || nameF == 0xFFFFFFFFu) return;
+        auto dbc = am->loadDBCOptional(file);
+        if (!dbc || !dbc->isLoaded() || nameF >= dbc->getFieldCount()) return;
+        for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+            game::ItemRestrictionName n;
+            n.id = dbc->getUInt32(r, idF);
+            n.name = dbc->getString(r, nameF);
+            n.playable = flagsF == 0xFFFFFFFFu || (dbc->getUInt32(r, flagsF) & 1u) == 0;
+            out.push_back(std::move(n));
+        }
+    };
+    read("ChrRaces.dbc", "ChrRaces", true, t.races);
+    read("ChrClasses.dbc", "ChrClasses", false, t.classes);
+    return t;
+}
+
+void pushStringList(lua_State* L, const std::vector<std::string>& v) {
+    lua_newtable(L);
+    for (size_t i = 0; i < v.size(); ++i) {
+        lua_pushstring(L, v[i].c_str());
+        lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+}
+
+/// What the item asks of the player and whether it is met, into the tooltip
+/// data at the top of the stack (the red lines, 0x006277f0).
+void pushItemRequirements(lua_State* L, game::GameHandler* gh, const game::ItemQueryResponseData& info) {
+    const game::ItemRequirementVerdict v = gh->judgeItemRequirements(info);
+    auto flag = [&](const char* key, bool b) { lua_pushboolean(L, b ? 1 : 0); lua_setfield(L, -2, key); };
+    flag("subclassOk", v.subclassOk);
+    flag("offHandOk", v.offHandOk);
+    flag("levelOk", v.levelOk);
+    flag("usable", v.usable());
+
+    const auto& names = restrictionNames(gh);
+    const game::ItemRestrictionLines lines = game::itemRestrictionLines(
+        info.allowableClass, info.allowableRace, gh->getPlayerRace(), gh->getPlayerClass(), names.races,
+        names.classes);
+    if (lines.hasOnly) {
+        lua_pushstring(L, lines.onlyNames.c_str());
+        lua_setfield(L, -2, "raceClassOnly");
+        flag("raceClassOnlyOk", lines.onlyOk);
+    }
+    if (!lines.races.empty()) {
+        pushStringList(L, lines.races);
+        lua_setfield(L, -2, "races");
+        flag("racesOk", lines.racesOk);
+    }
+    if (!lines.classes.empty()) {
+        pushStringList(L, lines.classes);
+        lua_setfield(L, -2, "classes");
+        flag("classesOk", lines.classesOk);
+    }
+    // The skill: "Requires %s (%d)", or "Requires %s" without a rank; not
+    // for an item that only says it can be prospected or milled.
+    if (info.requiredSkill != 0 &&
+        (info.itemFlags & (game::kItemFlagProspectable | game::kItemFlagMillable)) == 0) {
+        const std::string& skill = gh->getSkillName(info.requiredSkill);
+        lua_pushstring(L, skill.empty() ? "UNKNOWN" : skill.c_str());
+        lua_setfield(L, -2, "requiredSkillName");
+        lua_pushnumber(L, info.requiredSkillRank);
+        lua_setfield(L, -2, "requiredSkillRank");
+        flag("skillOk", v.skillOk);
+    }
+    if (info.requiredSpell != 0) {
+        const std::string& spell = gh->getSpellName(info.requiredSpell);
+        if (!spell.empty()) {
+            lua_pushstring(L, spell.c_str());
+            lua_setfield(L, -2, "requiredSpellName");
+            flag("spellOk", v.spellOk);
+        }
+    }
+    if (info.requiredReputationFaction != 0) {
+        const std::string& faction = gh->getFactionNamePublic(info.requiredReputationFaction);
+        lua_pushstring(L, faction.empty() ? "UNKNOWN" : faction.c_str());
+        lua_setfield(L, -2, "requiredFactionName");
+        // FACTION_STANDING_LABEL<rank + 1>
+        lua_pushnumber(L, (info.requiredReputationRank < 8 ? info.requiredReputationRank : 7) + 1);
+        lua_setfield(L, -2, "requiredFactionStanding");
+        flag("reputationOk", v.reputationOk);
+    }
+}
+}  // namespace
+
 // _GetItemTooltipData(itemId) → table with armor, bind, stats, damage, description
 // Returns a Lua table with detailed item info for tooltip building
 static int lua_GetItemTooltipData(lua_State* L) {
@@ -2424,6 +2542,7 @@ static int lua_GetItemTooltipData(lua_State* L) {
     // Required level
     lua_pushnumber(L, info->requiredLevel);
     lua_setfield(L, -2, "requiredLevel");
+    pushItemRequirements(L, gh, *info);
     // Extra stats (hit, crit, haste, AP, SP, etc.) as array of {type, value} pairs
     if (!info->extraStats.empty()) {
         lua_newtable(L);

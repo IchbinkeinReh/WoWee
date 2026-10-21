@@ -6,6 +6,7 @@
 #include "game/spell_mods.hpp"
 #include "game/ground_target.hpp"
 #include "game/unit_reaction.hpp"
+#include "game/item_requirements.hpp"
 #include "game/calendar_data.hpp"
 #include "game/lfg_update.hpp"
 #include "game/latest_criteria.hpp"
@@ -1517,6 +1518,12 @@ public:
     uint32_t getArmorProficiency()  const { return armorProficiency_; }
     bool canUseWeaponSubclass(uint32_t subClass) const { return (weaponProficiency_ >> subClass) & 1u; }
     bool canUseArmorSubclass(uint32_t subClass)  const { return (armorProficiency_  >> subClass) & 1u; }
+    /// Whether the player knows a spell with the DUAL_WIELD effect (40), which
+    /// is what the client keeps as "may dual wield" (0x006ceb00).
+    bool playerCanDualWield() const;
+    /// Which of an item's requirements the player meets (item_requirements.hpp):
+    /// the tooltip's red lines and the merchant's isUsable.
+    ItemRequirementVerdict judgeItemRequirements(const ItemQueryResponseData& item) const;
 
     // Minimap pings from party members
     struct MinimapPing {

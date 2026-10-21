@@ -2145,6 +2145,7 @@ struct ItemQueryResponseData {
     uint32_t requiredSkillRank = 0;   // Minimum skill value
     uint32_t allowableClass = 0;      // Class bitmask (0 = all classes)
     uint32_t allowableRace  = 0;      // Race bitmask (0 = all races)
+    uint32_t requiredSpell  = 0;      // a spell the player must know (0 = none)
     uint32_t requiredReputationFaction = 0;  // Faction.dbc ID (0 = none)
     uint32_t requiredReputationRank    = 0;  // 0=Hated..8=Exalted
     bool valid = false;

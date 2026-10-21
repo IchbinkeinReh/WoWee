@@ -83,11 +83,15 @@
     "Shortcut": 20
   },
   "ChrClasses": {
+    "ID": 0,
+    "Name": 4,
     "SpellClassSet": 56
   },
   "ChrRaces": {
     "CreatureType": 8,
-    "ID": 0
+    "Flags": 1,
+    "ID": 0,
+    "Name": 14
   },
   "CreatureDisplayInfo": {
     "CreatureModelScale": 4,

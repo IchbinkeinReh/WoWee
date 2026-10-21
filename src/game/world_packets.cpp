@@ -80,7 +80,7 @@ bool ItemQueryResponseData::readCommonRequirements(network::Packet& packet) {
     requiredLevel = packet.readUInt32();
     requiredSkill = packet.readUInt32();
     requiredSkillRank = packet.readUInt32();
-    packet.readUInt32();  // RequiredSpell
+    requiredSpell = packet.readUInt32();
     packet.readUInt32();  // RequiredHonorRank
     packet.readUInt32();  // RequiredCityRank
     requiredReputationFaction = packet.readUInt32();

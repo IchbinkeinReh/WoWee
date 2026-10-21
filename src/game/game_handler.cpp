@@ -5027,6 +5027,53 @@ const GossipMessageData& GameHandler::getCurrentGossip() const {
     if (questHandler_) return questHandler_->getCurrentGossip();
     return currentGossip;
 }
+bool GameHandler::playerCanDualWield() const {
+    // The client keeps it (DAT_00c9eac8) from a learned spell with effect 40,
+    // SPELL_EFFECT_DUAL_WIELD, and clears it when that spell is unlearned.
+    constexpr uint32_t kEffectDualWield = 40;
+    for (uint32_t spellId : getKnownSpells()) {
+        getSpellName(spellId);  // fills the cache
+        const auto it = spellNameCache_.find(spellId);
+        if (it == spellNameCache_.end()) continue;
+        for (uint32_t e : it->second.effectIds) {
+            if (e == kEffectDualWield) return true;
+        }
+    }
+    return false;
+}
+
+ItemRequirementVerdict GameHandler::judgeItemRequirements(const ItemQueryResponseData& item) const {
+    ItemRequirementFacts f;
+    f.itemClass = item.itemClass;
+    f.subClass = item.subClass;
+    f.inventoryType = item.inventoryType;
+    f.flags = item.itemFlags;
+    f.allowableClass = item.allowableClass;
+    f.allowableRace = item.allowableRace;
+    f.requiredLevel = item.requiredLevel;
+    f.requiredSkill = item.requiredSkill;
+    f.requiredSkillRank = item.requiredSkillRank;
+    f.requiredSpell = item.requiredSpell;
+    f.requiredReputationFaction = item.requiredReputationFaction;
+    f.requiredReputationRank = item.requiredReputationRank;
+
+    ItemRequirementPlayer p;
+    p.level = getPlayerLevel();
+    p.race = getPlayerRace();
+    p.playerClass = getPlayerClass();
+    // SMSG_SET_PROFICIENCY's masks; the client keeps one per item class
+    // (0x00c9d4f0) and the server sends only weapons and armour.
+    p.proficiencyMask = item.itemClass == 2 ? weaponProficiency_ : item.itemClass == 4 ? armorProficiency_ : 0;
+    p.canDualWield = item.inventoryType == kInvTypeWeaponOffHand && playerCanDualWield();
+    if (item.requiredSkill != 0) {
+        const auto it = playerSkills_.find(item.requiredSkill);
+        if (it != playerSkills_.end()) p.requiredSkillValue = it->second.value;
+    }
+    if (item.requiredSpell != 0) p.knowsRequiredSpell = getKnownSpells().count(item.requiredSpell) != 0;
+    if (item.requiredReputationFaction != 0) p.requiredFactionValue = getFactionStanding(item.requiredReputationFaction);
+    return game::judgeItemRequirements(f, p);
+}
+
 int32_t GameHandler::getFactionStanding(uint32_t factionId) const {
     auto it = factionStandings_.find(factionId);
     if (it != factionStandings_.end()) return it->second;
