@@ -157,6 +157,10 @@ enum class UF : uint16_t {
     UNIT_CREATED_BY_SPELL,
 
     // GameObject fields
+    /// Who made the object (low half; the high half is the next index):
+    /// the controller the combat log names for a trap or a totem's object
+    /// (0x0074dcb0 reads it as +0 of the object's own fields). WotLK: 6.
+    GAMEOBJECT_FIELD_CREATED_BY,
     GAMEOBJECT_DISPLAYID,
     // UNIT_FIELD_BYTES_2: byte 0 is the sheath state in every layout (164 in
     // Classic, 208 in TBC). In WotLK byte 1 is the unit's PvP flags (1 PvP, 4

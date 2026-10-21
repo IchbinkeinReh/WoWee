@@ -111,6 +111,9 @@ public:
     // --- Reset all state (called on disconnect / character switch) ---
     void clearAll();
 
+    /// SMSG_FORCE_DISPLAY_UPDATE: the unit's model built again.
+    void forceDisplayUpdate(uint64_t guid);
+
     /// Hands every entity already known to the spawn callbacks again, as its
     /// create block did: units and other players (and what they ride), game
     /// objects with their state, and corpses. For a world whose render

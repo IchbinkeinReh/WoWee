@@ -9455,6 +9455,30 @@ void pushEventArg(lua_State* L, const std::string& arg) {
 
 void LuaEngine::fireEvent(const std::string& eventName,
                            const std::vector<std::string>& args) {
+    fireEventWith(eventName, static_cast<int>(args.size()),
+                  [&args](lua_State* L) {
+                      for (const auto& arg : args) pushEventArg(L, arg);
+                  },
+                  args.empty() ? std::string{} : args[0]);
+}
+
+void LuaEngine::fireEventValues(const std::string& eventName,
+                                const std::vector<game::combat_log::Arg>& args) {
+    using Kind = game::combat_log::Arg::Kind;
+    fireEventWith(eventName, static_cast<int>(args.size()),
+                  [&args](lua_State* L) {
+                      for (const auto& arg : args) {
+                          if (arg.kind == Kind::Number) lua_pushnumber(L, arg.number);
+                          else if (arg.kind == Kind::String) lua_pushlstring(L, arg.text.data(), arg.text.size());
+                          else lua_pushnil(L);
+                      }
+                  },
+                  args.size() > 1 ? args[1].text : std::string{});
+}
+
+void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
+                              const std::function<void(lua_State*)>& pushArgs,
+                              const std::string& traceArg) {
     if (!L_) return;
 
     // Combat lockdown is the flag these two events announce, and 0x00524600
@@ -9523,12 +9547,9 @@ void LuaEngine::fireEvent(const std::string& eventName,
 
                 // Push arguments: event name first, then extra args
                 lua_pushstring(L_, eventName.c_str());
-                for (const auto& arg : args) {
-                    pushEventArg(L_, arg);
-                }
+                pushArgs(L_);
 
-                int nargs = 1 + static_cast<int>(args.size());
-                if (taint::pcallHandler(L_, nargs, 0, 0) != 0) {
+                if (taint::pcallHandler(L_, 1 + nargs, 0, 0) != 0) {
                     const char* err = lua_tostring(L_, -1);
                     std::string errStr = err ? err : "(unknown)";
                     LOG_ERROR("LuaEngine: event '", eventName, "' handler error: ", errStr);
@@ -9574,7 +9595,7 @@ void LuaEngine::fireEvent(const std::string& eventName,
             int frameCount = static_cast<int>(lua_objlen(L_, -1));
             if (traced.count(eventName)) {
                 LOG_WARNING("EventTrace: ", eventName, " (",
-                            args.empty() ? "" : args[0], ") reached ",
+                            traceArg, ") reached ",
                             frameCount, " frames");
             }
             // Iterate a copy, because a handler is allowed to unregister while
@@ -9600,9 +9621,8 @@ void LuaEngine::fireEvent(const std::string& eventName,
                     if (lua_isfunction(L_, -1)) {
                         lua_pushvalue(L_, -3);  // self (frame)
                         lua_pushstring(L_, eventName.c_str());
-                        for (const auto& arg : args) pushEventArg(L_, arg);
-                        int nargs = 2 + static_cast<int>(args.size());
-                        if (pcallScript(L_, "OnEvent", nargs, 0) != 0) {
+                        pushArgs(L_);
+                        if (pcallScript(L_, "OnEvent", 2 + nargs, 0) != 0) {
                             const char* ferr = lua_tostring(L_, -1);
                             std::string ferrStr = ferr ? ferr : "(unknown)";
                             LOG_ERROR("LuaEngine: frame OnEvent error: ", ferrStr);
@@ -9618,7 +9638,7 @@ void LuaEngine::fireEvent(const std::string& eventName,
             }
         } else if (traced.count(eventName)) {
             LOG_WARNING("EventTrace: ", eventName, " (",
-                        args.empty() ? "" : args[0],
+                        traceArg,
                         ") - no frame has registered for it");
         }
         lua_pop(L_, 1); // pop event frame list

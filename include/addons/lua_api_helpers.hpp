@@ -531,6 +531,16 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
         if (idx < 1 || idx > static_cast<int>(game::GameHandler::kMaxEncounterSlots)) return 0;
         return gh->getEncounterUnitGuid(static_cast<uint32_t>(idx - 1));
     }
+    // arena1-arena5 and arenapet1-arenapet5: the arena's opponents as the
+    // client keeps them (0xbe9f48, 0xbe9ef8).
+    if (uid.rfind("arena", 0) == 0 && uid.size() > 5) {
+        const bool pet = uid.rfind("arenapet", 0) == 0;
+        int idx = 0;
+        try { idx = std::stoi(uid.substr(pet ? 8 : 5)); } catch (...) { return 0; }
+        if (idx < 1 || idx > static_cast<int>(game::arena::Roster::kSlots)) return 0;
+        const auto& roster = gh->arenaRoster();
+        return pet ? roster.pet(static_cast<size_t>(idx - 1)) : roster.opponent(static_cast<size_t>(idx - 1));
+    }
     if (uid.rfind("raid", 0) == 0 && uid.size() > 4 && uid[4] != 'p') {
         int idx = 0;
         try { idx = std::stoi(uid.substr(4)); } catch (...) { return 0; }

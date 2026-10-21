@@ -172,7 +172,7 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
                 truncatedTargets = true;
                 break;
             }
-            (void)packet.readUInt8(); // reflectResult
+            m.reflectResult = packet.readUInt8();
         }
         if (i < storedMissLimit) {
             data.missTargets.push_back(m);

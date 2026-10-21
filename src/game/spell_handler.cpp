@@ -744,6 +744,7 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
         if (it == pendingPetNameQueries_.end()) return;
         const uint64_t guid = it->second;
         pendingPetNameQueries_.erase(it);
+        owner_.combatLogFeed().petNameAnswered(guid, name, !name.empty());
         if (name.empty()) return;
 
         auto entity = owner_.getEntityManager().getEntity(guid);
@@ -841,6 +842,7 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_SET_EXTRA_AURA_INFO_NEED_UPDATE_OBSOLETE] = [this](network::Packet& p) { handleExtraAuraInfo(p, false); };
     table[Opcode::SMSG_SPELLDISPELLOG] = [this](network::Packet& p) { handleSpellDispelLog(p); };
     table[Opcode::SMSG_SPELLSTEALLOG] = [this](network::Packet& p) { handleSpellStealLog(p); };
+    table[Opcode::SMSG_SPELLBREAKLOG] = [this](network::Packet& p) { handleSpellBreakLog(p); };
     table[Opcode::SMSG_SPELL_CHANCE_PROC_LOG] = [this](network::Packet& p) { handleSpellChanceProcLog(p); };
     table[Opcode::SMSG_SPELLINSTAKILLLOG] = [this](network::Packet& p) { handleSpellInstaKillLog(p); };
     table[Opcode::SMSG_SPELLLOGEXECUTE] = [this](network::Packet& p) { handleSpellLogExecute(p); };
@@ -3495,6 +3497,9 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
         owner_.despawnGameObjectLocally(gatherGoGuid);
     }
     if (!errMsg.empty()) owner_.addUIError(errMsg);
+    // And the combat log, in the words the screen was given (0x00808200 ->
+    // 0x00751ad0).
+    if (!errMsg.empty() && isActiveExpansion("wotlk")) owner_.combatLogFeed().castFailed(data.spellId, errMsg);
 
     // On screen and nowhere else. A cast failure went to the chat log as well
     // from here and from handleCastResult both, so the fix that took it out of
@@ -3551,6 +3556,7 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
               " spell=", data.spellId, " castTime=", data.castTime,
               " target=0x", std::hex, data.targetGuid, std::dec);
     if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, false);
+    if (isActiveExpansion("wotlk")) owner_.combatLogFeed().castStart(data.casterUnit, data.spellId, data.castFlags);
 
     // Classify spell targeting for animation selection:
     //   DIRECTED - targets a specific other unit (Frostbolt, Heal)
@@ -3692,6 +3698,7 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     SpellGoData data;
     if (!owner_.getPacketParsers()->parseSpellGo(packet, data)) return;
     noteMissileInFlight(data);
+    if (isActiveExpansion("wotlk")) owner_.combatLogFeed().castGo(data);
     const bool rangedWeaponAttack = spellclass::isRangedWeaponAutoAttack(data.spellId);
     if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, true);
     // 0x00805330 for a cast that had no start (instant), as for one that had.
@@ -4121,6 +4128,38 @@ void SpellHandler::mirrorAurasByGuid(uint64_t guid, const std::vector<AuraSlot>&
     if (&cached != &auras) cached = auras;
 }
 
+void SpellHandler::logAuraChanges(uint64_t unit, const std::vector<AuraSlot>& before,
+                                  const std::vector<std::pair<uint8_t, AuraSlot>>& updates, uint64_t nowMs) {
+    auto& feed = owner_.combatLogFeed();
+    const auto active = [](const AuraSlot& a) { return a.spellId != 0 && (a.flags & 7u) != 0; };
+    const auto debuff = [](const AuraSlot& a) { return (a.flags & 0x80u) != 0; };
+    // When a slot's aura runs out: its time as sent, or none.
+    const auto expiry = [](const AuraSlot& a, uint64_t sentAt) -> uint64_t {
+        return a.durationMs >= 0 ? sentAt + static_cast<uint64_t>(a.durationMs) : 0;
+    };
+    // What went: an aura that is not there now as it was.
+    for (const auto& [slot, now] : updates) {
+        if (slot >= before.size()) continue;
+        const AuraSlot& was = before[slot];
+        const bool kept = was.spellId == now.spellId && (now.flags & 7u) != 0;
+        if ((active(was) && !kept) || now.spellId == 0)
+            feed.aura(unit, was.casterGuid, was.spellId, debuff(was), false);
+    }
+    // What came, or changed: a new aura, its stack, or its time.
+    for (const auto& [slot, now] : updates) {
+        if (!active(now)) continue;
+        const bool known = slot < before.size();
+        const bool same = known && active(before[slot]) && before[slot].spellId == now.spellId;
+        if (!same) {
+            feed.aura(unit, now.casterGuid, now.spellId, debuff(now), true);
+        } else if (before[slot].charges != now.charges) {
+            feed.auraDose(unit, now.casterGuid, now.spellId, before[slot].charges, now.charges, debuff(now));
+        } else if (expiry(before[slot], before[slot].receivedAtMs) != expiry(now, nowMs)) {
+            feed.auraRefresh(unit, now.casterGuid, now.spellId, debuff(now));
+        }
+    }
+}
+
 void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
     AuraUpdateData data;
     if (!owner_.getPacketParsers()->parseAuraUpdate(packet, data, isAll)) return;
@@ -4142,6 +4181,9 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
         uint64_t nowMs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
+        // The combat log, from the slots as they were (0x0072f5d0). A whole
+        // list logs nothing.
+        if (!isAll && isActiveExpansion("wotlk")) logAuraChanges(data.guid, *auraList, data.updates, nowMs);
         // Grow once to fit the highest slot, instead of push_back-in-a-loop per update.
         if (!data.updates.empty()) {
             size_t maxSlot = 0;
@@ -5056,6 +5098,7 @@ void SpellHandler::loadSpellNameCache() const {
     const uint32_t dmgClassField = spellL ? spellL->tryField("DmgClass") : 0xFFFFFFFF;
     const uint32_t attrEx4Field = spellL ? spellL->tryField("AttributesEx4") : 0xFFFFFFFF;
     const uint32_t attrEx7Field = spellL ? spellL->tryField("AttributesEx7") : 0xFFFFFFFF;
+    const uint32_t stackAmountField = spellL ? spellL->tryField("StackAmount") : 0xFFFFFFFF;
     const uint32_t attrEx5Field = spellL ? spellL->tryField("AttributesEx5") : 0xFFFFFFFF;
     const uint32_t attrEx6Field = spellL ? spellL->tryField("AttributesEx6") : 0xFFFFFFFF;
     const uint32_t activeIconField = spellL ? spellL->tryField("ActiveIconID") : 0xFFFFFFFF;
@@ -5271,6 +5314,7 @@ void SpellHandler::loadSpellNameCache() const {
             }
             if (attrEx4Field < fieldCount) entry.attrEx4 = dbc->getUInt32(i, attrEx4Field);
             if (attrEx7Field < fieldCount) entry.attrEx7 = dbc->getUInt32(i, attrEx7Field);
+            if (stackAmountField < fieldCount) entry.stackAmount = dbc->getUInt32(i, stackAmountField);
             if (attrEx5Field < fieldCount) entry.attrEx5 = dbc->getUInt32(i, attrEx5Field);
             if (attrEx6Field < fieldCount) entry.attrEx6 = dbc->getUInt32(i, attrEx6Field);
             if (activeIconField < fieldCount) entry.activeIconId = dbc->getUInt32(i, activeIconField);
@@ -6227,6 +6271,9 @@ void SpellHandler::handleSpellLogMiss(network::Packet& packet) {
         }
         if (d.debug) return;
         for (const auto& miss : d.misses) {
+            // A damage shield's miss (0x00751b80 with that flag): this packet
+            // is what a shield that failed to strike sends.
+            owner_.combatLogFeed().spellMissed(d.casterGuid, miss.victimGuid, d.spellId, miss.missInfo, true, false);
             const CombatTextEntry::Type ct = combatTextTypeFromSpellMissInfo(miss.missInfo);
             if (d.casterGuid == owner_.getPlayerGuid())
                 owner_.addCombatText(ct, 0, d.spellId, true, 0, d.casterGuid, miss.victimGuid);
@@ -6417,7 +6464,8 @@ void SpellHandler::handleDispelFailed(network::Packet& packet) {
     // WotLK:       as TBC (0x00750ea0).
     if (isActiveExpansion("wotlk")) {
         DispelFailedData d;
-        DispelFailedParser::parse(packet, d);
+        if (DispelFailedParser::parse(packet, d))
+            owner_.combatLogFeed().dispelFailed(d.casterGuid, d.victimGuid, d.spellId, d.failedSpells);
         packet.skipAll();
         return;
     }
@@ -6487,7 +6535,13 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
     uint32_t count   = packet.readUInt32();
     bool isPlayerVictim = (victimGuid == owner_.getPlayerGuid());
     bool isPlayerCaster = (casterGuid == owner_.getPlayerGuid());
-    if (!isPlayerVictim && !isPlayerCaster) {
+    // 0x007531f0 logs every tick of a unit it knows; the floating text is
+    // only the player's.
+    const auto victimEntity = owner_.getEntityManager().getEntity(victimGuid);
+    const bool logIt = isActiveExpansion("wotlk") && victimEntity && victimEntity->isUnit();
+    auto& feed = owner_.combatLogFeed();
+    const bool ours = isPlayerVictim || isPlayerCaster;
+    if (!ours && !logIt) {
         packet.skipAll();
         return;
     }
@@ -6507,12 +6561,17 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
             const size_t dotSz = periodicWotlk ? 21u : 16u;
             if (!packet.hasRemaining(dotSz)) break;
             uint32_t dmg      = packet.readUInt32();
-            if (periodicWotlk) /*uint32_t overkill=*/ packet.readUInt32();
-            /*uint32_t school=*/ packet.readUInt32();
+            uint32_t overkill = periodicWotlk ? packet.readUInt32() : 0;
+            uint32_t school   = packet.readUInt32();
             uint32_t abs      = packet.readUInt32();
             uint32_t res      = packet.readUInt32();
             bool dotCrit = false;
             if (periodicWotlk) dotCrit = (packet.readUInt8() != 0);
+            if (logIt)
+                feed.spellDamage(casterGuid, victimGuid, spellId, static_cast<int32_t>(dmg),
+                                 static_cast<int32_t>(overkill), school, static_cast<int32_t>(abs),
+                                 static_cast<int32_t>(res), 0, dotCrit ? 2u : 0u, true);
+            if (!ours) continue;
             if (dmg > 0)
                 owner_.addCombatText(dotCrit ? CombatTextEntry::CRIT_DAMAGE : CombatTextEntry::PERIODIC_DAMAGE,
                               static_cast<int32_t>(dmg),
@@ -6531,12 +6590,17 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
             if (!packet.hasRemaining(hotSz)) break;
             uint32_t heal    = packet.readUInt32();
             uint32_t hotAbs  = 0;
+            uint32_t overheal = 0;
             bool hotCrit = false;
             if (healWotlk) {
-                /*uint32_t overheal=*/ packet.readUInt32();
+                overheal = packet.readUInt32();
                 hotAbs = packet.readUInt32();
                 hotCrit = (packet.readUInt8() != 0);
             }
+            if (logIt)
+                feed.spellHeal(casterGuid, victimGuid, spellId, static_cast<int32_t>(heal),
+                               static_cast<int32_t>(overheal), static_cast<int32_t>(hotAbs), hotCrit, true);
+            if (!ours) continue;
             owner_.addCombatText(hotCrit ? CombatTextEntry::CRIT_HEAL : CombatTextEntry::PERIODIC_HEAL,
                           static_cast<int32_t>(heal),
                           spellId, isPlayerCaster, 0, casterGuid, victimGuid);
@@ -6550,6 +6614,9 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
             uint8_t periodicPowerType = static_cast<uint8_t>(packet.readUInt32());
             uint32_t amount = packet.readUInt32();
             if (amount != 0) owner_.addPredictedPower(victimGuid, periodicPowerType, static_cast<int32_t>(amount));  // 0x00752040
+            if (logIt)
+                feed.spellEnergize(casterGuid, victimGuid, spellId, periodicPowerType, static_cast<int32_t>(amount),
+                                   true);
             if ((isPlayerVictim || isPlayerCaster) && amount > 0)
                 owner_.addCombatText(CombatTextEntry::ENERGIZE, static_cast<int32_t>(amount),
                               spellId, isPlayerCaster, periodicPowerType, casterGuid, victimGuid);
@@ -6561,6 +6628,7 @@ void SpellHandler::handlePeriodicAuraLog(network::Packet& packet) {
             float multiplier = packet.readFloat();
             // 0x00752100: taken from the victim's predicted power, happiness aside.
             if (amount != 0 && powerType != 4) owner_.addPredictedPower(victimGuid, powerType, -static_cast<int32_t>(amount));
+            if (logIt) feed.spellDrain(casterGuid, victimGuid, spellId, powerType, amount, multiplier, true);
             if (isPlayerVictim && amount > 0)
                 owner_.addCombatText(CombatTextEntry::POWER_DRAIN, static_cast<int32_t>(amount),
                               spellId, false, powerType, casterGuid, victimGuid);
@@ -6615,6 +6683,9 @@ void SpellHandler::handleSpellEnergizeLog(network::Packet& packet) {
     bool isPlayerCaster = (casterGuid == owner_.getPlayerGuid());
     // 0x00752040: the victim's predicted power, by the amount.
     if (amount != 0) owner_.addPredictedPower(victimGuid, energizePowerType, amount);
+    if (isActiveExpansion("wotlk"))
+        owner_.combatLogFeed().spellEnergize(casterGuid, victimGuid, spellId, energizePowerType, amount,
+                                             owner_.combatLogFeed().periodicByAttribute(spellId));
     if ((isPlayerVictim || isPlayerCaster) && amount > 0)
         owner_.addCombatText(CombatTextEntry::ENERGIZE, amount, spellId, isPlayerCaster, energizePowerType, casterGuid, victimGuid);
     packet.skipAll();
@@ -6689,8 +6760,13 @@ void SpellHandler::handleSpellDispelLog(network::Packet& packet) {
     // dropped - a dispel is a dispel, a steal comes as SMSG_SPELLSTEALLOG.
     if (isActiveExpansion("wotlk")) {
         SpellDispelLogData d;
-        if (SpellDispelLogParser::parse(packet, d) &&
-            (d.victimGuid == owner_.getPlayerGuid() || d.casterGuid == owner_.getPlayerGuid())) {
+        const bool parsed = SpellDispelLogParser::parse(packet, d);
+        if (parsed) {
+            for (const auto& aura : d.auras)
+                owner_.combatLogFeed().dispel(d.casterGuid, d.victimGuid, d.spellId, aura.spellId, aura.flag != 0,
+                                              false);
+        }
+        if (parsed && (d.victimGuid == owner_.getPlayerGuid() || d.casterGuid == owner_.getPlayerGuid())) {
             const bool isPlayerCaster = d.casterGuid == owner_.getPlayerGuid();
             for (const auto& aura : d.auras)
                 if (aura.spellId != 0)
@@ -6762,8 +6838,38 @@ void SpellHandler::handleSpellDispelLog(network::Packet& packet) {
     packet.skipAll();
 }
 
+void SpellHandler::handleSpellBreakLog(network::Packet& packet) {
+    // 0x006ce2b0 with 0x14f: the dispel log's shape, each aura broken - by the
+    // header's spell, SPELL_AURA_BROKEN_SPELL, or by damage when it is 0.
+    SpellDispelLogData d;
+    if (isActiveExpansion("wotlk") && SpellDispelLogParser::parse(packet, d)) {
+        for (const auto& aura : d.auras)
+            owner_.combatLogFeed().auraBroken(d.casterGuid, d.victimGuid, d.spellId, aura.spellId, aura.flag != 0);
+    }
+    packet.skipAll();
+}
+
 void SpellHandler::handleSpellStealLog(network::Packet& packet) {
     // Sent to the CASTER (Mage) when Spellsteal succeeds.
+    if (isActiveExpansion("wotlk")) {
+        // 0x006ce2b0 with 0x333: the dispel log's shape, logged as stolen.
+        SpellDispelLogData d;
+        if (SpellDispelLogParser::parse(packet, d)) {
+            for (const auto& aura : d.auras)
+                owner_.combatLogFeed().dispel(d.casterGuid, d.victimGuid, d.spellId, aura.spellId, aura.flag != 0,
+                                              true);
+            if (d.casterGuid == owner_.getPlayerGuid() || d.victimGuid == owner_.getPlayerGuid()) {
+                const bool isPlayerCaster = d.casterGuid == owner_.getPlayerGuid();
+                for (const auto& aura : d.auras) {
+                    if (owner_.shouldLogSpellstealAura(d.casterGuid, d.victimGuid, aura.spellId))
+                        owner_.addCombatText(CombatTextEntry::STEAL, 0, aura.spellId, isPlayerCaster, 0,
+                                             d.casterGuid, d.victimGuid);
+                }
+            }
+        }
+        packet.skipAll();
+        return;
+    }
     // Wire format mirrors SPELLDISPELLOG:
     // WotLK/Classic/Turtle: packed victim + packed caster + uint32 spellId + uint8 isStolen + uint32 count
     //                        + count × (uint32 stolenSpellId + uint8 isPositive)
@@ -6882,6 +6988,7 @@ void SpellHandler::handleSpellInstaKillLog(network::Packet& packet) {
     const uint64_t ikCaster = ik.casterGuid;
     const uint64_t ikVictim = ik.victimGuid;
     const uint32_t ikSpell = ik.spellId;
+    if (isActiveExpansion("wotlk")) owner_.combatLogFeed().instakill(ikCaster, ikVictim, ikSpell);
     // Show kill/death feedback for the local player
     if (ikCaster == owner_.getPlayerGuid()) {
         owner_.addCombatText(CombatTextEntry::INSTAKILL, 0, ikSpell, true, 0, ikCaster, ikVictim);
@@ -6971,6 +7078,39 @@ void SpellHandler::logEffectFeedPet(const SpellLogExecuteEntry& entry, bool isPl
     LOG_DEBUG("SMSG_SPELLLOGEXECUTE FEED_PET: item=", feedItem);
 }
 
+/// 0x006d3220's table: the combat log entry each logged effect makes.
+void SpellHandler::logExecuteEntry(const SpellLogExecuteEntry& entry, uint64_t caster, uint32_t spellId) {
+    auto& feed = owner_.combatLogFeed();
+    switch (entry.effect) {
+        case SpellEffect::POWER_DRAIN:
+        case SpellEffect::POWER_BURN:
+            feed.spellDrain(caster, entry.targetGuid, spellId, entry.value2, entry.value1, entry.multiplier,
+                            feed.periodicByAttribute(spellId));
+            break;
+        case 18: case 113:  // RESURRECT, RESURRECT_NEW
+            feed.resurrect(caster, entry.targetGuid, spellId);
+            break;
+        case 19:  // ADD_EXTRA_ATTACKS
+            feed.extraAttacks(caster, entry.targetGuid, spellId, static_cast<int32_t>(entry.value1));
+            break;
+        case SpellEffect::INTERRUPT_CAST:
+            feed.interrupt(caster, entry.targetGuid, spellId, entry.value1);
+            break;
+        case 28: case 50: case 56: case 76: case 81: case 83:  // the summons and the objects made
+        case 104: case 105: case 106: case 107:
+            feed.summon(caster, entry.targetGuid, spellId);
+            break;
+        case 111:  // DURABILITY_DAMAGE: every item when both words are -1
+            if (entry.value1 == 0xFFFFFFFFu && entry.value2 == 0xFFFFFFFFu)
+                feed.durabilityDamageAll(caster, entry.targetGuid, spellId);
+            else
+                feed.durabilityDamage(caster, entry.targetGuid, spellId, entry.value1);
+            break;
+        default:
+            break;
+    }
+}
+
 void SpellHandler::handleSpellLogExecute(network::Packet& packet) {
     // WotLK/Classic/Turtle: packed_guid caster + uint32 spellId + uint32 effectCount
     // TBC:                  uint64 caster + uint32 spellId + uint32 effectCount
@@ -6982,6 +7122,9 @@ void SpellHandler::handleSpellLogExecute(network::Packet& packet) {
     if (!ok && data.entries.empty()) return;
 
     const bool isPlayerCaster = (data.casterGuid == owner_.getPlayerGuid());
+    if (isActiveExpansion("wotlk")) {
+        for (const auto& entry : data.entries) logExecuteEntry(entry, data.casterGuid, data.spellId);
+    }
     for (const auto& entry : data.entries) {
         switch (entry.effect) {
             case SpellEffect::POWER_DRAIN:

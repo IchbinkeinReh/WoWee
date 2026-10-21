@@ -2674,6 +2674,8 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
 
     owner_.currentMapIdRef() = mapId;
     owner_.inInstanceRef() = false;
+    // Another map: the battlefield's opponents are behind (0x0054ca50).
+    owner_.clearArenaRoster();
     if (owner_.getSocket()) {
         owner_.getSocket()->tracePacketsFor(std::chrono::seconds(12), "new_world");
     }

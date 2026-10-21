@@ -1139,6 +1139,9 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         if (key == ufi.health) {
             unit->setHealth(val);
             result.healthChanged = true;
+            // A unit dying in front of the client is a combat log entry
+            // (0x007489c0 -> 0x007561e0), once, as its health runs out.
+            if (val == 0 && oldHealth != 0) owner_.combatLogFeed().unitDied(block.guid);
             if (val == 0) {
                 if (owner_.getCombatHandler() && block.guid == owner_.getCombatHandler()->getAutoAttackTargetGuid()) {
                     owner_.stopAutoAttack();
@@ -2209,6 +2212,8 @@ void EntityController::onCreateUnit(const UpdateBlock& block, std::shared_ptr<En
 
     // Hostility
     unit->setHostile(owner_.playerRegardsHostile(*unit));
+    // An arena opponent's pet come into sight (CGUnit_C PostInit, 0x0054d1c0).
+    owner_.noteArenaUnitSeen(*unit);
 
     // Spawn dispatch
     if (unit->getDisplayId() == 0) {
@@ -2286,6 +2291,8 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
     // Hostility, and once the player is here, everything judged without them.
     if (block.guid == owner_.getPlayerGuid()) owner_.refreshUnitHostility();
     else unit->setHostile(owner_.playerRegardsHostile(*unit));
+    // An arena opponent come into sight (CGPlayer_C PostInit, 0x0054d100).
+    owner_.noteArenaUnitSeen(*unit);
 
     // Spawn dispatch
     if (unit->getDisplayId() != 0) {
@@ -2649,6 +2656,21 @@ void EntityController::handleDisplayIdChange(const UpdateBlock& block,
         if (!uid.empty())
             pendingEvents_.emit("UNIT_MODEL_CHANGED", {uid});
     }
+}
+
+void EntityController::forceDisplayUpdate(uint64_t guid) {
+    // SMSG_FORCE_DISPLAY_UPDATE (0x00716cd0): the unit's model built again
+    // from what it now is (its vtable's +0x1c with 1, 0x0073e410).
+    auto entity = entityManager.getEntity(guid);
+    if (!entity || !entity->isUnit()) return;
+    auto unit = std::static_pointer_cast<Unit>(entity);
+    if (guid == owner_.getPlayerGuid()) {
+        if (owner_.playerModelRebuildCallbackRef()) owner_.playerModelRebuildCallbackRef()();
+        return;
+    }
+    if (unit->getDisplayId() == 0) return;
+    dispatchEntitySpawn(guid, entity->getType(), entity, unit,
+                        isUnitCorpseState(unit->getHealth(), unit->getMaxHealth(), unit->getDynamicFlags()));
 }
 
 void EntityController::onValuesUpdateUnit(const UpdateBlock& block, std::shared_ptr<Entity>& entity) {
@@ -3288,6 +3310,8 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
     }
 
     pendingNameQueries.erase(data.guid);
+    // Combat log entries waiting for it, found or not (0x0074fe90).
+    owner_.combatLogFeed().playerNameAnswered(data.guid, data.name, data.realmName, data.isValid());
 
     LOG_INFO("Name query response: guid=0x", std::hex, data.guid, std::dec,
              " found=", static_cast<int>(data.found), " name='", data.name, "'",
@@ -3389,6 +3413,7 @@ void EntityController::handleCreatureQueryResponse(network::Packet& packet) {
 
     if (data.isValid()) {
         creatureInfoCache[data.entry] = data;
+        owner_.combatLogFeed().creatureAnswered(data.entry, data.name, true);
         // Update all unit entities with this entry
         for (auto& [guid, entity] : entityManager.getEntities()) {
             if (entity->getType() == ObjectType::UNIT) {
@@ -3430,6 +3455,8 @@ void EntityController::handleCreatureQueryResponse(network::Packet& packet) {
             questObjectiveNames(owner_.getQuestLog(), data.entry, false)) {
             owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
         }
+    } else {
+        owner_.combatLogFeed().creatureAnswered(data.entry, data.name, false);
     }
 }
 
@@ -3444,6 +3471,7 @@ void EntityController::handleGameObjectQueryResponse(network::Packet& packet) {
     if (!ok) return;
 
     pendingGameObjectQueries_.erase(data.entry);
+    owner_.combatLogFeed().gameObjectAnswered(data.entry, data.name, data.isValid());
 
     if (data.isValid()) {
         gameObjectInfoCache_[data.entry] = data;

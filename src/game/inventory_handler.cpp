@@ -4925,12 +4925,14 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
             // mask it off so we can still clear the pending query by entry ID.
             uint32_t rawEntry = packet.readUInt32() & ~0x80000000u;
             owner_.pendingItemQueriesRef().erase(rawEntry);
+            owner_.combatLogFeed().itemAnswered(rawEntry, {}, false);
         }
         LOG_WARNING("handleItemQueryResponse: parse failed, size=", packet.getSize());
         return;
     }
 
     owner_.pendingItemQueriesRef().erase(data.entry);
+    owner_.combatLogFeed().itemAnswered(data.entry, data.name, data.valid);
     LOG_DEBUG("handleItemQueryResponse: RECV entry=", data.entry, " name='", data.name,
               "' displayInfoId=", data.displayInfoId,
               " class=", data.itemClass, " subClass=", data.subClass,

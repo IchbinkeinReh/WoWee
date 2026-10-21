@@ -3336,10 +3336,13 @@ void registerSocialLuaAPI(lua_State* L) {
                 // which counts from zero. Sent as it came, picking Normal set
                 // Heroic, and picking Heroic sent 2 - which the server tests
                 // against MAX_DUNGEON_DIFFICULTY and drops, so it did nothing.
+                // SetDungeonDifficulty (0x00526050): the row less one, 0 or 1,
+                // kept before the server is asked.
                 {"SetDungeonDifficulty", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetDungeonDifficulty(difficulty)");
             auto* gh = getGameHandler(L);
-            const int row = static_cast<int>(luaL_optnumber(L, 1, 1));
-            if (gh && row >= 1) gh->sendSetDifficulty(static_cast<uint32_t>(row - 1), /*raid=*/false);
+            const auto difficulty = static_cast<uint32_t>(std::llround(lua_tonumber(L, 1) - 1.0));
+            if (gh) gh->setDungeonDifficulty(difficulty);
             return 0;
         }},
                 {"SetRaidDifficulty", [](lua_State* L) -> int {

@@ -714,20 +714,10 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         if (!packet.hasRemaining(16)) return;
         uint64_t killerGuid = packet.readUInt64();
         uint64_t victimGuid = packet.readUInt64();
-        // A combat log entry and nothing in chat (0x00750c90): the original
-        // files it as PARTY_KILL (subevent 0x2b) for the combat log to word -
-        // "X tötet Y" is the combat log's line, not a system message. This
-        // printed an English "X killed Y." into the chat window instead.
-        if (owner_.addonEventCallbackRef()) {
-            char src[32], dst[32];
-            std::snprintf(src, sizeof(src), "0x%016llX", static_cast<unsigned long long>(killerGuid));
-            std::snprintf(dst, sizeof(dst), "0x%016llX", static_cast<unsigned long long>(victimGuid));
-            owner_.addonEventCallbackRef()("COMBAT_LOG_EVENT_UNFILTERED", {
-                std::to_string(static_cast<double>(std::time(nullptr))), "PARTY_KILL",
-                src, owner_.lookupName(killerGuid), "0",
-                dst, owner_.lookupName(victimGuid), "0"
-            });
-        }
+        // A combat log entry and nothing in chat (0x00750c90): PARTY_KILL
+        // for the combat log to word - "X tötet Y" is its line, not a system
+        // message.
+        owner_.combatLogFeed().partyKill(killerGuid, victimGuid);
     };
 
     // ---- Guild ----
@@ -903,9 +893,8 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     };
 
     // ---- Instance ----
-    for (auto op : { Opcode::SMSG_INSTANCE_DIFFICULTY, Opcode::MSG_SET_DUNGEON_DIFFICULTY }) {
-        table[op] = [this](network::Packet& packet) { handleInstanceDifficulty(packet); };
-    }
+    table[Opcode::SMSG_INSTANCE_DIFFICULTY] = [this](network::Packet& packet) { handleInstanceDifficulty(packet); };
+    table[Opcode::MSG_SET_DUNGEON_DIFFICULTY] = [this](network::Packet& packet) { handleSetDungeonDifficulty(packet); };
     table[Opcode::MSG_SET_RAID_DIFFICULTY] = [this](network::Packet& packet) { handleSetRaidDifficulty(packet); };
 
     // ---- Guild / RAF / PvP AFK (moved from GameHandler) ----
@@ -2500,8 +2489,13 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     // it) and then sets the roster's dungeon (0x0052c0a0), which says
     // LFG_UPDATE when that changes it - for every roster of a finder group.
     if (partyData.lfgDungeonEntry != 0) owner_.fireAddonEvent("LFG_UPDATE", {});
-    // 0x006d8870: a group with members sets the player's difficulty.
-    if (partyData.hasPlayerDifficulty) owner_.playerDifficultyRef() = partyData.playerDifficulty;
+    // 0x006d8870: a group with members sets the party's dungeon and raid
+    // difficulties and the player's (0xbd1978, 0xbd197c, 0xbd1980).
+    if (partyData.hasPlayerDifficulty) {
+        dungeonDifficulty_.group = partyData.difficultyId;
+        raidDifficulty_.group = partyData.raidDifficultyId;
+        owner_.playerDifficultyRef() = partyData.playerDifficulty;
+    }
 
     // The roster carries online state in isOnline; the per-member stat updates
     // carry it in the onlineStatus bitmask. Seed the bitmask from the roster so
@@ -4159,6 +4153,9 @@ void SocialHandler::handleRaidInstanceInfo(network::Packet& packet) {
             lo.extended = save.extended;
             instanceLockouts_.push_back(lo);
         }
+        // UPDATE_INSTANCE_INFO (event 0x1de): the saves, and what the minimap's
+        // difficulty flag rereads GetInstanceInfo on.
+        owner_.fireAddonEvent("UPDATE_INSTANCE_INFO", {});
         return;
     }
     if (!packet.hasRemaining(4)) return;
@@ -4173,41 +4170,53 @@ void SocialHandler::handleRaidInstanceInfo(network::Packet& packet) {
     }
 }
 
+// SMSG_INSTANCE_DIFFICULTY (0x00526530 case 0x33b): the instance's difficulty
+// (0xbd0894) and the player's (0xbd1980), stored and nothing said - the
+// dungeon difficulty the player has chosen is apart from it.
 void SocialHandler::handleInstanceDifficulty(network::Packet& packet) {
-    auto rem = [&]() { return packet.getRemainingSize(); };
-    if (rem() < 4) return;
-    uint32_t prevDifficulty = instanceDifficulty_;
+    if (!packet.hasRemaining(4)) return;
     instanceDifficulty_ = packet.readUInt32();
-    if (rem() >= 4) {
-        uint32_t secondField = packet.readUInt32();
-        // The player's difficulty (0x00526530 -> 0xbd1980).
-        owner_.playerDifficultyRef() = secondField;
-        if (rem() >= 4) instanceIsHeroic_ = (instanceDifficulty_ == 1);
-        else instanceIsHeroic_ = (secondField != 0);
-    } else {
-        instanceIsHeroic_ = (instanceDifficulty_ == 1);
+    if (packet.hasRemaining(4)) owner_.playerDifficultyRef() = packet.readUInt32();
+}
+
+bool SocialHandler::inDungeonParty() const {
+    if (partyData.isEmpty() || game::groupIsRaid(partyData.groupType)) return false;
+    return !partyData.members.empty();
+}
+
+// MSG_SET_DUNGEON_DIFFICULTY (0x00526530 case 0x329): the difficulty, whether
+// it is the player's own and whether it is the party's, as 0x00525530 keeps
+// them; said when the one in force changed (0x00524720).
+void SocialHandler::handleSetDungeonDifficulty(network::Packet& packet) {
+    if (!packet.hasRemaining(4)) return;
+    const uint32_t difficulty = packet.readUInt32();
+    // TBC and Classic send the one word.
+    const bool own = packet.hasRemaining(4) ? packet.readUInt32() != 0 : true;
+    const bool group = packet.hasRemaining(4) ? packet.readUInt32() != 0 : false;
+    if (difficulty_change::applyDungeonDifficulty(dungeonDifficulty_, difficulty, own, group, inDungeonParty()))
+        sayDungeonDifficulty();
+}
+
+void SocialHandler::sayDungeonDifficulty() {
+    const std::string key = "DUNGEON_DIFFICULTY" + std::to_string(dungeonDifficulty_.effective(inDungeonParty()) + 1);
+    gameError(owner_, ErrTo::Chat, "ERR_DUNGEON_DIFFICULTY_CHANGED_S", "Dungeon difficulty set to %s.",
+              {interfaceString(key.c_str(), key.c_str())});
+}
+
+bool SocialHandler::setDungeonDifficulty(uint32_t difficulty) {
+    if (difficulty > 1) return false;
+    // A party's or a raid's: only its leader sets it (ERR_NOT_LEADER, 0x54).
+    const bool grouped = !partyData.isEmpty();
+    if (grouped && partyData.leaderGuid != owner_.getPlayerGuid()) {
+        gameError(owner_, ErrTo::Chat, "ERR_NOT_LEADER", "You are not the party leader.", {});
+        return false;
     }
-    inInstance_ = true;
-    if (instanceDifficulty_ != prevDifficulty) {
-        // ERR_DUNGEON_DIFFICULTY_CHANGED_S naming DUNGEON_DIFFICULTY<n>, a
-        // system line - for the difficulty being set (MSG_SET_DUNGEON_DIFFICULTY,
-        // 0x00525530 -> 0x00524720) and not for the instance's own
-        // (SMSG_INSTANCE_DIFFICULTY, which 0x00526530 only stores). This was
-        // English, for either.
-        if (packet.getOpcode() == wireOpcode(Opcode::MSG_SET_DUNGEON_DIFFICULTY)) {
-            const std::string key = "DUNGEON_DIFFICULTY" + std::to_string(instanceDifficulty_ + 1);
-            gameError(owner_, ErrTo::Chat, "ERR_DUNGEON_DIFFICULTY_CHANGED_S",
-                      "Dungeon difficulty set to %s.", {interfaceString(key.c_str(), key.c_str())});
-        }
-        // Already noticed and already said - in chat, to the player. The
-        // minimap hangs a difficulty banner off its own corner and rereads
-        // GetInstanceInfo on this, which answers from the value just stored,
-        // so the banner was the one thing not told the difficulty had changed.
-        if (owner_.addonEventCallbackRef()) {
-            owner_.addonEventCallbackRef()("PLAYER_DIFFICULTY_CHANGED", {});
-            owner_.addonEventCallbackRef()("UPDATE_INSTANCE_INFO", {});
-        }
-    }
+    const uint32_t before = dungeonDifficulty_.effective(inDungeonParty());
+    dungeonDifficulty_.personal = difficulty;
+    dungeonDifficulty_.group = difficulty;
+    if (before != difficulty) sayDungeonDifficulty();
+    sendSetDifficulty(difficulty, false);
+    return true;
 }
 
 // MSG_SET_RAID_DIFFICULTY (0x00526530 case 0x4eb): the difficulty, whether it

@@ -104,6 +104,7 @@ GameHandler::GameHandler(GameServices& services)
     socialHandler_    = std::make_unique<SocialHandler>(*this);
     questHandler_     = std::make_unique<QuestHandler>(*this);
     wardenHandler_    = std::make_unique<WardenHandler>(*this);
+    combatLogFeed_    = std::make_unique<CombatLogFeed>(*this);
 
     // Default action bar layout
     actionBar[0].type = ActionBarSlot::SPELL;
@@ -552,6 +553,8 @@ for (const auto& [guid, entity] : entityController_->getEntityManager().getEntit
 
 void GameHandler::updateTimers(float deltaTime) {
     if (spellHandler_) spellHandler_->updateTimers(deltaTime);
+    // Misses whose missile has landed (0x00700e20).
+    if (combatLogFeed_) combatLogFeed_->update();
 
     // Periodically clear stale pending item queries so they can be retried.
     // Without this, a lost/malformed response leaves the entry stuck forever.
@@ -4483,6 +4486,53 @@ bool GameHandler::arenaRosterShowOffline() const {
     return !socialHandler_ || socialHandler_->arenaRosterShowOffline();
 }
 
+void GameHandler::announceArena(const std::vector<arena::OpponentUpdate>& updates) {
+    for (const auto& u : updates) fireAddonEvent("ARENA_OPPONENT_UPDATE", {u.unit, u.state});
+}
+
+void GameHandler::noteArenaUnitSeen(const Entity& entity) {
+    // DAT_00bea570 == 4: an arena's map.
+    if (currentMapInstanceType() != 4 || entity.getGuid() == playerGuid) return;
+    if (entity.getType() == ObjectType::PLAYER) {
+        // PLAYER_BYTES_3's last byte, the arena faction, not the player's own
+        // (0xbea54a, from SMSG_BATTLEFIELD_STATUS).
+        const uint16_t idx = fieldIndex(UF::PLAYER_BYTES_3);
+        const uint8_t faction = idx != 0xFFFF ? static_cast<uint8_t>(entity.getField(idx) >> 24) : 0;
+        if (faction != battlefieldArenaFaction()) announceArena(arenaRoster_.opponentSeen(entity.getGuid(), true));
+        return;
+    }
+    if (!entity.isUnit()) return;
+    const uint16_t petIdx = fieldIndex(UF::UNIT_FIELD_PETNUMBER);
+    if (petIdx == 0xFFFF || entity.getField(petIdx) == 0 || !getEntityManager().getEntity(playerGuid)) return;
+    // The player regards it as hostile or worse (0x007251c0 below 2).
+    if (playerReactionTo(static_cast<const Unit&>(entity)) - 1 >= 2) return;
+    const auto guidAt = [&entity](UF low) {
+        const uint16_t i = fieldIndex(low);
+        return i == 0xFFFF ? 0ull
+                           : (entity.getField(i) | (static_cast<uint64_t>(entity.getField(static_cast<uint16_t>(i + 1))) << 32));
+    };
+    const uint64_t charmedBy = guidAt(UF::UNIT_FIELD_CHARMEDBY);
+    const uint64_t owner = charmedBy != 0 ? charmedBy : guidAt(UF::UNIT_FIELD_CREATEDBY);
+    announceArena(arenaRoster_.petSeen(entity.getGuid(), owner, true));
+}
+
+void GameHandler::noteArenaUnitDestroyed(uint64_t guid) {
+    if (currentMapInstanceType() != 4) return;
+    // An opponent's pet is what it has charmed, else what it has summoned.
+    const auto petOf = [this](uint64_t opponent) -> uint64_t {
+        const auto e = getEntityManager().getEntity(opponent);
+        if (!e) return 0;
+        const auto at = [&e](UF low) {
+            const uint16_t i = fieldIndex(low);
+            return i == 0xFFFF ? 0ull
+                               : (e->getField(i) | (static_cast<uint64_t>(e->getField(static_cast<uint16_t>(i + 1))) << 32));
+        };
+        const uint64_t charm = at(UF::UNIT_FIELD_CHARM);
+        return charm != 0 ? charm : at(UF::UNIT_FIELD_SUMMON);
+    };
+    announceArena(arenaRoster_.destroyed(guid, petOf));
+}
+
 uint8_t GameHandler::battlefieldArenaFaction() const {
     return socialHandler_ ? socialHandler_->battlefieldArenaFaction() : 0;
 }
@@ -4632,8 +4682,14 @@ std::pair<uint32_t, uint32_t> GameHandler::getRaidDifficulty() const {
     return {raid.effective(!getPartyData().isEmpty()), raid.personal};
 }
 
-bool GameHandler::isInstanceHeroic() const {
-    return socialHandler_ ? socialHandler_->isInstanceHeroic() : false;
+std::pair<uint32_t, uint32_t> GameHandler::getDungeonDifficulty() const {
+    if (!socialHandler_) return {0, 0};
+    const auto& dungeon = socialHandler_->getDungeonDifficulty();
+    return {dungeon.effective(socialHandler_->inDungeonParty()), dungeon.personal};
+}
+
+bool GameHandler::setDungeonDifficulty(uint32_t difficulty) {
+    return socialHandler_ && socialHandler_->setDungeonDifficulty(difficulty);
 }
 
 bool GameHandler::isInInstance() const {
@@ -4695,6 +4751,31 @@ std::string GameHandler::savedInstanceDifficultyName(uint32_t mapId, uint32_t di
     if (row < 0) return {};
     const std::string key = md->getString(static_cast<uint32_t>(row), 22);
     return key.empty() ? std::string() : interfaceString(key.c_str(), key.c_str());
+}
+
+GameHandler::InstanceInfo GameHandler::getInstanceInfo() const {
+    InstanceInfo info;
+    loadMapNameCache();
+    const auto type = mapInstanceTypeCache_.find(currentMapId_);
+    if (type == mapInstanceTypeCache_.end()) return info;  // nil, "none", 0, "", 0, 0, nil
+    info.known = true;
+    info.name = getMapName(currentMapId_);
+    static constexpr const char* kTypes[5] = {"none", "party", "raid", "pvp", "arena"};
+    info.type = type->second < 5 ? kTypes[type->second] : "none";
+    info.difficulty = getInstanceDifficulty();
+    // The instance's MapDifficulty row (0x00634950): its name and size, or
+    // nothing and nought where there is none.
+    if (auto* am = services().assetManager; am && am->isInitialized()) {
+        auto md = am->loadDBC("MapDifficulty.dbc");
+        if (const int row = mapDifficultyRow(md, currentMapId_, info.difficulty); row >= 0) {
+            const std::string key = md->getString(static_cast<uint32_t>(row), 22);
+            info.difficultyName = interfaceString(key.c_str(), key.c_str());
+            info.maxPlayers = md->getUInt32(static_cast<uint32_t>(row), 21);
+        }
+    }
+    info.playerDifficulty = playerDifficulty_;
+    info.dynamic = isDynamicDifficultyMap();
+    return info;
 }
 
 int GameHandler::currentMapInstanceType() const {

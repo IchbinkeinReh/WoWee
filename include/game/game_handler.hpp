@@ -23,6 +23,8 @@
 #include "game/group_defines.hpp"
 #include "game/handler_types.hpp"
 #include "game/combat_handler.hpp"
+#include "game/combat_log_feed.hpp"
+#include "game/arena_opponents.hpp"
 #include "game/spell_handler.hpp"
 #include "game/quest_handler.hpp"
 #include "game/movement_handler.hpp"
@@ -450,6 +452,24 @@ public:
     // Generic addon event callback: fires named events with string args
     using AddonEventCallback = std::function<void(const std::string&, const std::vector<std::string>&)>;
     void setAddonEventCallback(AddonEventCallback cb) { addonEventCallback_ = std::move(cb); }
+
+    /// One combat log entry announced (0x0074f910): its arguments, and
+    /// whether a filter took it - COMBAT_LOG_EVENT then, and
+    /// COMBAT_LOG_EVENT_UNFILTERED always.
+    using CombatLogEventCallback = std::function<void(const std::vector<combat_log::Arg>&, bool filtered)>;
+    void setCombatLogEventCallback(CombatLogEventCallback cb) { combatLogEventCallback_ = std::move(cb); }
+    /// The combat log and what fills it.
+    CombatLogFeed& combatLogFeed() { return *combatLogFeed_; }
+    /// The arena's opponents, the units arena1..5 and arenapet1..5 name.
+    [[nodiscard]] const arena::Roster& arenaRoster() const { return arenaRoster_; }
+    /// A player or a pet come into sight (CGPlayer_C / CGUnit_C PostInit,
+    /// 0x0054d100 and 0x0054d1c0): an opponent in an arena, of the other
+    /// arena faction or a pet hostile to the player.
+    void noteArenaUnitSeen(const Entity& entity);
+    /// SMSG_ARENA_UNIT_DESTROYED (0x0054b5e0), and the roster emptied where the
+    /// battlefield is (0x0054ca50).
+    void noteArenaUnitDestroyed(uint64_t guid);
+    void clearArenaRoster() { arenaRoster_.clear(); }
 
     /// Run a line of the interface's own Lua.
     ///
@@ -2285,8 +2305,31 @@ public:
     void sendAlterAppearance(uint32_t hairStyleEntry, uint32_t hairColor,
                              uint32_t facialHairEntry, uint32_t skinColorEntry);
 
-    // Instance difficulty (0=5N, 1=5H, 2=25N, 3=25H for WotLK)
+    /// The instance's difficulty (0xbd0894), from 0: SMSG_INSTANCE_DIFFICULTY's
+    /// and nothing else's.
     uint32_t getInstanceDifficulty() const;
+    /// GetDungeonDifficulty's two answers (0x00515790): the dungeon difficulty
+    /// in force - the party's in a party, the player's own otherwise - and the
+    /// player's own, both from 0.
+    std::pair<uint32_t, uint32_t> getDungeonDifficulty() const;
+    /// SetDungeonDifficulty (0x00526050): kept and asked for, `difficulty`
+    /// from 0. False where a party's member who does not lead it is refused.
+    bool setDungeonDifficulty(uint32_t difficulty);
+    /// What GetInstanceInfo answers (0x0051a8c0): the map's name and
+    /// InstanceType, the instance's difficulty and its MapDifficulty.dbc row's
+    /// name and size, the player's difficulty and whether the map is dynamic.
+    /// `known` is false where Map.dbc has no row for the map.
+    struct InstanceInfo {
+        bool known = false;
+        std::string name;
+        std::string type = "none";
+        uint32_t difficulty = 0;  ///< from 0
+        std::string difficultyName;
+        uint32_t maxPlayers = 0;
+        uint32_t playerDifficulty = 0;
+        bool dynamic = false;
+    };
+    InstanceInfo getInstanceInfo() const;
     /// GetRaidDifficulty's two answers (0x00515810): the raid difficulty in
     /// force - the group's in a group, the player's own out of one - and the
     /// player's own, both from 0.
@@ -2298,7 +2341,6 @@ public:
     bool getInstanceLockPrompt(float& secondsLeft, bool& previouslySaved,
                                uint32_t& completedMask) const;
     void respondInstanceLock(bool accept);
-    bool isInstanceHeroic() const;
     bool isInInstance() const;
     /// The current map can switch between normal and heroic (Map.dbc Flags
     /// 0x100; GetInstanceInfo's isDynamicInstance, 0x0051a8c0).
@@ -4513,6 +4555,7 @@ public:
     // ── UI & Event Callbacks ─────────────────────────────────────────
     auto& achievementEarnedCallbackRef() { return achievementEarnedCallback_; }
     auto& addonEventCallbackRef() { return addonEventCallback_; }
+    auto& combatLogEventCallbackRef() { return combatLogEventCallback_; }
     auto& appearanceChangedCallbackRef() { return appearanceChangedCallback_; }
     auto& playerModelRebuildCallbackRef() { return playerModelRebuildCallback_; }
     auto& autoFollowCallbackRef() { return autoFollowCallback_; }
@@ -4720,6 +4763,9 @@ public:
         /// (0x0080cce0).
         uint32_t attrEx5 = 0;
         uint32_t attrEx6 = 0;
+        /// Spell.dbc StackAmount (+0xc4): an aura that stacks, whose doses
+        /// the combat log reports (0x00752860).
+        uint32_t stackAmount = 0;
         /// Spell.dbc ActiveIconID (+0x218): a spell shown as in effect,
         /// which its button turns off (0x00802cb0).
         uint32_t activeIconId = 0;
@@ -5101,6 +5147,9 @@ private:
     std::unique_ptr<SocialHandler>    socialHandler_;
     std::unique_ptr<QuestHandler>     questHandler_;
     std::unique_ptr<WardenHandler>    wardenHandler_;
+    std::unique_ptr<CombatLogFeed>    combatLogFeed_;
+    arena::Roster arenaRoster_;
+    void announceArena(const std::vector<arena::OpponentUpdate>& updates);
 
     // Opcode dispatch table - built once in registerOpcodeHandlers(), called by handlePacket()
     using PacketHandler = std::function<void(network::Packet&)>;
@@ -5151,6 +5200,7 @@ private:
     // Chat (state lives in ChatHandler; callbacks remain here for cross-domain access)
     ChatBubbleCallback chatBubbleCallback_;
     AddonEventCallback addonEventCallback_;
+    CombatLogEventCallback combatLogEventCallback_;
     InterfaceCommand   interfaceCommand_;
     InterfaceQuery     interfaceQuery_;
     SpellIconPathResolver spellIconPathResolver_;

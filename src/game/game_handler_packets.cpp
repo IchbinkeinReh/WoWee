@@ -894,11 +894,27 @@ void GameHandler::registerCoreOpcodes() {
     };
     // Consume silently - opcodes we receive but don't need to act on
     for (auto op : {
-        Opcode::SMSG_FLIGHT_SPLINE_SYNC, Opcode::SMSG_FORCE_DISPLAY_UPDATE,
+        Opcode::SMSG_FLIGHT_SPLINE_SYNC,
         Opcode::SMSG_FORCE_SEND_QUEUED_PACKETS, Opcode::SMSG_FORCE_SET_VEHICLE_REC_ID,
         Opcode::SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE, Opcode::SMSG_DAMAGE_CALC_LOG,
-        Opcode::SMSG_DYNAMIC_DROP_ROLL_RESULT, Opcode::SMSG_DESTRUCTIBLE_BUILDING_DAMAGE,
+        Opcode::SMSG_DYNAMIC_DROP_ROLL_RESULT,
     }) { registerSkipHandler(op); }
+
+    // 0x00753730: the building, the one that struck it and the player behind
+    // that, packed; the amount, and the spell. A heal when not above zero.
+    dispatchTable_[Opcode::SMSG_DESTRUCTIBLE_BUILDING_DAMAGE] = [this](network::Packet& packet) {
+        if (!isActiveExpansion("wotlk")) {
+            packet.skipAll();
+            return;
+        }
+        const uint64_t building = packet.readPackedGuid();
+        const uint64_t attacker = packet.readPackedGuid();
+        (void)packet.readPackedGuid();  // the player controlling it, for its floating text
+        const auto amount = static_cast<int32_t>(packet.readUInt32());
+        const uint32_t spellId = packet.readUInt32();
+        if (amount > 0) combatLogFeed_->buildingDamage(attacker, building, spellId, amount);
+        else combatLogFeed_->buildingHeal(attacker, building, spellId, -amount);
+    };
 
     // 0x0070bef0: the game object (type mask 0x20) plays Despawn, the
     // animation state 0x00a335e8[6] - through its type's slot 0x4c, or noted
@@ -2139,9 +2155,68 @@ void GameHandler::registerRemainingOpcodes() {
     // (0x00751050), which the client turns into a combat log entry and no
     // chat line. This read full guids, took the item id for the spell, and
     // printed English "You enchant with X." to chat.
-    dispatchTable_[Opcode::SMSG_ENCHANTMENTLOG] = [](network::Packet& packet) {
-        LOG_DEBUG("SMSG_ENCHANTMENTLOG: size=", packet.getSize());
+    dispatchTable_[Opcode::SMSG_ENCHANTMENTLOG] = [this](network::Packet& packet) {
+        if (!isActiveExpansion("wotlk")) {
+            packet.skipAll();
+            return;
+        }
+        const uint64_t target = packet.readPackedGuid();
+        const uint64_t caster = packet.readPackedGuid();
+        const uint32_t itemId = packet.readUInt32();
+        const uint32_t enchantId = packet.readUInt32();
         packet.skipAll();
+        combatLogFeed_->enchantment(target, caster, itemId, enchantId);
+    };
+    dispatchTable_[Opcode::SMSG_FORCE_DISPLAY_UPDATE] = [this](network::Packet& packet) {
+        if (!packet.hasFullPackedGuid()) return;
+        entityController_->forceDisplayUpdate(packet.readPackedGuid());
+    };
+    // 0x0054b5e0: an opponent, or an opponent's pet, gone from the arena.
+    dispatchTable_[Opcode::SMSG_ARENA_UNIT_DESTROYED] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(8)) return;
+        noteArenaUnitDestroyed(packet.readUInt64());
+    };
+    // The log packets the server kept, replayed through their handlers with
+    // what they log dated back by how long ago each was (0x006d4110).
+    dispatchTable_[Opcode::SMSG_SEND_ALL_COMBAT_LOG] = [this](network::Packet& packet) {
+        if (!isActiveExpansion("wotlk")) {
+            packet.skipAll();
+            return;
+        }
+        using K = CombatLogReplay::Kind;
+        const std::pair<LogicalOpcode, K> kinds[] = {
+            {Opcode::SMSG_SPELLLOGMISS, K::SpellLogMiss},         {Opcode::SMSG_SPELLHEALLOG, K::HealLog},
+            {Opcode::SMSG_SPELLENERGIZELOG, K::EnergizeLog},      {Opcode::SMSG_SPELLLOGEXECUTE, K::Execute},
+            {Opcode::SMSG_PERIODICAURALOG, K::PeriodicAuraLog},   {Opcode::SMSG_SPELLNONMELEEDAMAGELOG, K::NonMeleeDamage},
+            {Opcode::SMSG_SPELLDISPELLOG, K::DispelLog},          {Opcode::SMSG_SPELLSTEALLOG, K::DispelLog},
+            {Opcode::SMSG_SPELLBREAKLOG, K::DispelLog},
+        };
+        const auto kindOf = [&](uint32_t wire) {
+            const auto logical = opcodeTable_.fromWire(static_cast<uint16_t>(wire));
+            if (wire > 0xFFFF || !logical) return K::None;
+            for (const auto& [op, k] : kinds)
+                if (op == *logical) return k;
+            return K::None;
+        };
+        const auto spellKnown = [this](uint32_t spellId) {
+            loadSpellNameCache();
+            return spellNameCache_.count(spellId) != 0;
+        };
+        const auto unitKnown = [this](uint64_t guid) {
+            const auto e = getEntityManager().getEntity(guid);
+            return e && e->isUnit();
+        };
+        CombatLogReplay replay;
+        SendAllCombatLogParser::parse(packet, replay, kindOf, spellKnown, unitKnown);
+        for (auto& entry : replay.entries) {
+            const auto logical = opcodeTable_.fromWire(static_cast<uint16_t>(entry.opcode));
+            auto it = logical ? dispatchTable_.find(*logical) : dispatchTable_.end();
+            if (it == dispatchTable_.end()) continue;
+            network::Packet body(static_cast<uint16_t>(entry.opcode), std::move(entry.body));
+            combatLogFeed_->setReplayDelay(entry.delayMs);
+            it->second(body);
+            combatLogFeed_->setReplayDelay(0);
+        }
     };
     // WotLK: uint64 playerGuid + uint8 teamCount + per-team fields
     dispatchTable_[Opcode::MSG_INSPECT_ARENA_TEAMS] = [this](network::Packet& packet) {
@@ -3680,9 +3755,6 @@ void GameHandler::registerRemainingOpcodes() {
     // These packets are not damage-shield events. Consume them without
     // synthesizing reflected damage entries or misattributing GUIDs.
     registerSkipHandler(Opcode::SMSG_AURACASTLOG);
-    // These packets are not damage-shield events. Consume them without
-    // synthesizing reflected damage entries or misattributing GUIDs.
-    registerSkipHandler(Opcode::SMSG_SPELLBREAKLOG);
     // Consume silently - informational, no UI action needed
     // What an item cost and how long is left to hand it back.
     //
@@ -3726,13 +3798,6 @@ void GameHandler::registerRemainingOpcodes() {
         if (packet.hasFullPackedGuid()) looters.roundRobin = packet.readPackedGuid();
         unit->setLooters(looters);
     };
-    // Sent one line before SMSG_DESTROY_OBJECT and carrying the same guid, and
-    // only inside an arena - Object::DestroyForPlayer writes both. The unit is
-    // removed by the second one whatever happens here, so this is a decision
-    // rather than a gap: the real client uses it to tell an arena opponent who
-    // died from one who merely went out of range, and nothing here draws that
-    // distinction.
-    registerSkipHandler(Opcode::SMSG_ARENA_UNIT_DESTROYED);
     // Consume - remaining server notifications not yet parsed
     for (auto op : {
         Opcode::SMSG_AFK_MONITOR_INFO_RESPONSE,
@@ -3779,7 +3844,6 @@ void GameHandler::registerRemainingOpcodes() {
         Opcode::SMSG_QUERY_OBJECT_ROTATION,
         Opcode::SMSG_REDIRECT_CLIENT,
         Opcode::SMSG_RESET_RANGED_COMBAT_TIMER,
-        Opcode::SMSG_SEND_ALL_COMBAT_LOG,
         Opcode::SMSG_SET_EXTRA_AURA_INFO_NEED_UPDATE,
         Opcode::SMSG_SET_PLAYER_DECLINED_NAMES_RESULT,
         Opcode::SMSG_SET_PROJECTILE_POSITION,

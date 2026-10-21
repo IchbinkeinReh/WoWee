@@ -340,26 +340,14 @@ static double calendarInviteStatusFor(const wowee::game::CalendarData& cal,
     return 0;
 }
 
+/// CombatLog_Object_IsA(unitFlags, mask) (0x0074d600): 1 when the flags
+/// have one of the mask's special bits, or something of it in each of the
+/// four categories - nil otherwise, not false.
 static int lua_CombatLog_Object_IsA(lua_State* L) {
-    const auto flags = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-    const auto mask  = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
-
-    static constexpr uint32_t kCategories[] = {
-        0x0000000Fu,  // affiliation: mine / party / raid / outsider
-        0x000000F0u,  // reaction: friendly / neutral / hostile
-        0x00000300u,  // control: player / npc
-        0x0000FC00u,  // type: player / npc / pet / guardian / object
-    };
-    for (const uint32_t cat : kCategories) {
-        const uint32_t wanted = mask & cat;
-        if (wanted == 0) continue;            // unconstrained
-        if ((flags & wanted) == 0) { lua_pushboolean(L, 0); return 1; }
-    }
-    // The special bits are non-exclusive, so every one asked for must be present.
-    const uint32_t special = mask & 0xFFFF0000u;
-    if (special != 0 && (flags & special) != special) { lua_pushboolean(L, 0); return 1; }
-
-    lua_pushboolean(L, 1);
+    const auto flags = static_cast<uint32_t>(std::llround(lua_tonumber(L, 1)));
+    const auto mask = static_cast<uint32_t>(std::llround(lua_tonumber(L, 2)));
+    if (!wowee::game::combat_log::maskComplete(flags & mask)) return luaReturnNil(L);
+    lua_pushnumber(L, 1);
     return 1;
 }
 
@@ -3055,40 +3043,31 @@ static int lua_IsInInstance(lua_State* L) {
     return 2;
 }
 
-// GetInstanceInfo() → name, type, difficultyIndex, difficultyName, maxPlayers, ...
+/// GetInstanceInfo() (0x0051a8c0): name, instanceType, difficultyIndex,
+/// difficultyName, maxPlayers, playerDifficulty, isDynamicInstance - the
+/// instance's own difficulty (SMSG_INSTANCE_DIFFICULTY), counted from one, and
+/// its MapDifficulty.dbc row's name and size. A map Map.dbc has no row for
+/// answers nil, "none", 0, "", 0, 0, nil.
 static int lua_GetInstanceInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) {
-        // Seven, and a difficulty of one, so this branch answers in the same
-        // shape and the same numbering as the real one below it.
-        lua_pushstring(L, ""); lua_pushstring(L, "none"); lua_pushnumber(L, 1);
-        lua_pushstring(L, "Normal"); lua_pushnumber(L, 0);
-        lua_pushnumber(L, 0); lua_pushboolean(L, 0);
+    const auto info = gh ? gh->getInstanceInfo() : game::GameHandler::InstanceInfo{};
+    if (!info.known) {
+        lua_pushnil(L);
+        lua_pushstring(L, "none");
+        lua_pushnumber(L, 0);
+        lua_pushstring(L, "");
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, 0);
+        lua_pushnil(L);
         return 7;
     }
-    std::string mapName = gh->getMapName(gh->getCurrentMapId());
-    const uint32_t diff = gh->getInstanceDifficulty();
-    lua_pushstring(L, mapName.c_str());                    // 1: name
-    lua_pushstring(L, gh->isInInstance() ? "party" : "none"); // 2: instanceType
-    // Counted from one, which is what the interface compares against.
-    //
-    // The wire value is zero-based - social_handler reads heroic as
-    // difficulty == 1 - and this pushed it straight through. minimap.lua tests
-    // `difficulty == 1 and maxPlayers == 5` to decide there is nothing worth
-    // showing, and `difficulty == 2` for heroic, so a normal dungeon failed
-    // the first test and hung a difficulty banner on the minimap, while a
-    // heroic failed the second and had that banner read "Normal".
-    //
-    // GetInstanceDifficulty beside this already added the one; only this path
-    // did not.
-    lua_pushnumber(L, diff + 1);                           // 3: difficultyIndex
-    const char* diffName = game::instanceDifficultyName(diff);
-    lua_pushstring(L, diffName ? diffName : "Normal");      // 4: difficultyName
-    lua_pushnumber(L, 5);                                   // 5: maxPlayers (default 5-man)
-    // The two the raid branch reads; nil would reach `playerDifficulty == 1`
-    // and `if ( isDynamicInstance )` in minimap.lua.
-    lua_pushnumber(L, gh->playerDifficultyRef());           // 6: playerDifficulty (0x0051a8c0: 0xbd1980)
-    lua_pushboolean(L, gh->isDynamicDifficultyMap() ? 1 : 0); // 7: isDynamicInstance (Map.dbc Flags 0x100)
+    lua_pushstring(L, info.name.c_str());
+    lua_pushstring(L, info.type.c_str());
+    lua_pushnumber(L, info.difficulty + 1);
+    lua_pushstring(L, info.difficultyName.c_str());
+    lua_pushnumber(L, info.maxPlayers);
+    lua_pushnumber(L, info.playerDifficulty);
+    lua_pushboolean(L, info.dynamic ? 1 : 0);
     return 7;
 }
 
@@ -5554,24 +5533,108 @@ static int lua_CreateMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
 static int lua_PositionMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
 static int lua_ShowMiniWorldMapArrowFrame(lua_State* L) { (void)L; return 0; }
 
-// ---- The stored combat log (Blizzard_CombatLog's refilter) ----
+// ---- The stored combat log (UnitCombatLog_C.cpp) ----
 //
-// The client keeps no history of combat events - they are handled as they
-// arrive - so there is nothing to walk back through and the log rebuilds itself
-// from new events only.
-//
-// CombatLogGetCurrentEntry answers nil rather than zero, and that distinction
-// is the whole of it. Blizzard_CombatLog_RefilterUpdate loops
-// `while (valid and total < COMBATLOG_LIMIT_PER_FRAME)`, and a zero is true in
-// Lua - it would add a line per iteration from an entry that does not exist,
-// stop only on the per-frame cap, and be re-armed by the OnUpdate that
-// scheduled it, every frame, for as long as the log was open.
-static int lua_CombatLogGetNumEntries(lua_State* L) { lua_pushnumber(L, 0); return 1; }
-static int lua_CombatLogGetCurrentEntry(lua_State* L) { (void)L; return luaReturnNil(L); }
-static int lua_CombatLogAdvanceEntry(lua_State* L) { (void)L; return luaReturnNil(L); }
-static int lua_CombatLogSetCurrentEntry(lua_State* L) { (void)L; return 0; }
-static int lua_CombatLogAddFilter(lua_State* L) { (void)L; return 0; }
-static int lua_CombatLogResetFilter(lua_State* L) { (void)L; return 0; }
+// The entries the client keeps for combatLogRetentionTime, walked by the
+// interface when it refilters: Blizzard_CombatLog_RefilterUpdate starts at
+// the newest (CombatLogSetCurrentEntry(0)) and steps back through it with
+// CombatLogAdvanceEntry(-1) while that answers 1.
+
+static wowee::game::combat_log::Log* combatLogOf(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    return gh ? &gh->combatLogFeed().log() : nullptr;
+}
+
+/// 1 when there is a current entry, nil when there is none.
+static int pushHasCurrent(lua_State* L, bool has) {
+    if (!has) return luaReturnNil(L);
+    lua_pushnumber(L, 1);
+    return 1;
+}
+
+/// CombatLogGetNumEntries([ignoreFilter]) (0x0074fa70).
+static int lua_CombatLogGetNumEntries(lua_State* L) {
+    auto* log = combatLogOf(L);
+    lua_pushnumber(L, log ? log->numEntries(lua_toboolean(L, 1) != 0) : 0);
+    return 1;
+}
+
+/// CombatLogGetCurrentEntry() (0x0074f2b0): the entry's arguments, as
+/// COMBAT_LOG_EVENT has them, or nothing at all.
+static int lua_CombatLogGetCurrentEntry(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto* entry = gh ? gh->combatLogFeed().log().current() : nullptr;
+    if (!entry) return 0;
+    const auto args = gh->combatLogFeed().argsOf(*entry);
+    luaL_checkstack(L, static_cast<int>(args.size()), "CombatLogGetCurrentEntry");
+    for (const auto& arg : args) {
+        using Kind = wowee::game::combat_log::Arg::Kind;
+        if (arg.kind == Kind::Number) lua_pushnumber(L, arg.number);
+        else if (arg.kind == Kind::String) lua_pushlstring(L, arg.text.data(), arg.text.size());
+        else lua_pushnil(L);
+    }
+    return static_cast<int>(args.size());
+}
+
+/// CombatLogSetCurrentEntry(index [,ignoreFilter]) (0x0074fae0): the
+/// index-th from the oldest, or for 0 and below from the newest back.
+static int lua_CombatLogSetCurrentEntry(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CombatLogSetCurrentEntry(index [,ignoreFilter])");
+    auto* log = combatLogOf(L);
+    return pushHasCurrent(L, log && log->setCurrent(static_cast<int>(lua_tonumber(L, 1)), lua_toboolean(L, 2) != 0));
+}
+
+/// CombatLogAdvanceEntry(count [,ignoreFilter]) (0x0074fc20): on toward the
+/// newest, or back for a negative count; off either end is no entry.
+static int lua_CombatLogAdvanceEntry(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: CombatLogAdvanceEntry(count [,ignoreFilter])");
+    auto* log = combatLogOf(L);
+    return pushHasCurrent(L, log && log->advance(static_cast<int>(lua_tonumber(L, 1)), lua_toboolean(L, 2) != 0));
+}
+
+/// CombatLogAddFilter(events, srcMaskOrGuid, dstMaskOrGuid [,spell])
+/// (0x0074ff70): events a list of names (nil is all); each side a mask,
+/// which has to say something of every category, or a guid; the spell an id
+/// or a name.
+static int lua_CombatLogAddFilter(lua_State* L) {
+    namespace cl = wowee::game::combat_log;
+    cl::Filter filter;
+    const char* events = lua_tostring(L, 1);
+    filter.setEvents(events ? std::optional<std::string>(events) : std::nullopt);
+    const auto side = [L](int idx, uint64_t& guid, uint32_t& mask, const char* which) {
+        if (lua_type(L, idx) == LUA_TNUMBER) {
+            mask = static_cast<uint32_t>(std::llround(lua_tonumber(L, idx)));
+            if (!cl::maskComplete(mask)) {
+                luaL_error(L, "CombatLogAddFilter(): incomplete filter for %s", which);
+                return false;
+            }
+        } else if (lua_type(L, idx) == LUA_TSTRING) {
+            guid = cl::parseGuid(lua_tostring(L, idx));
+            mask = 0;
+        } else {
+            mask = 0xFFFFFFFFu;
+        }
+        return true;
+    };
+    if (!side(2, filter.srcGuid, filter.srcMask, "srcMask")) return 0;
+    if (!side(3, filter.dstGuid, filter.dstMask, "dstMask")) return 0;
+    if (lua_type(L, 4) == LUA_TNUMBER) filter.spellId = static_cast<uint32_t>(std::llround(lua_tonumber(L, 4)));
+    else if (lua_type(L, 4) == LUA_TSTRING) filter.spellName = lua_tostring(L, 4);
+    if (auto* log = combatLogOf(L)) log->addFilter(std::move(filter));
+    return 0;
+}
+
+/// CombatLogResetFilter() (0x0074fa60).
+static int lua_CombatLogResetFilter(lua_State* L) {
+    if (auto* log = combatLogOf(L)) log->resetFilters();
+    return 0;
+}
+
+/// CombatLogClearEntries() (0x00751120).
+static int lua_CombatLogClearEntries(lua_State* L) {
+    if (auto* log = combatLogOf(L)) log->clearEntries();
+    return 0;
+}
 
 // CombatTextSetActiveUnit(unit) - which unit the floating combat text follows.
 // It tells the client where to aim the events it already sends; the events do
@@ -6856,8 +6919,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"CombatLogAdvanceEntry",          lua_CombatLogAdvanceEntry},
                 // How long combat log entries are kept: the CVar
                 // combatLogRetentionTime, 300 seconds by default (0x0074d9e0,
-                // 0x0074d5b0 sets it). No entries are kept here, so clearing
-                // them walks an empty list (0x00751120).
+                // 0x0074d5b0 sets it).
                 {"CombatLogGetRetentionTime", [](lua_State* L) -> int {
             lua_pushnumber(L, std::atoi(storedCVarValue("combatlogretentiontime", "300").c_str()));
             return 1;
@@ -6872,7 +6934,7 @@ void registerSystemLuaAPI(lua_State* L) {
             }
             return 0;
         }},
-                {"CombatLogClearEntries",          [](lua_State*) -> int { return 0; }},
+                {"CombatLogClearEntries",          lua_CombatLogClearEntries},
                 {"CombatLogSetCurrentEntry",       lua_CombatLogSetCurrentEntry},
                 {"CombatLogAddFilter",             lua_CombatLogAddFilter},
                 {"CombatLogResetFilter",           lua_CombatLogResetFilter},
@@ -7017,13 +7079,15 @@ void registerSystemLuaAPI(lua_State* L) {
                 // unitpopup's `GetDungeonDifficulty() == 1` heroic-lockout
                 // check was true inside a heroic.
                 //
-                // The dungeon one answers from the value SMSG_INSTANCE_DIFFICULTY
-                // and MSG_SET_DUNGEON_DIFFICULTY both write; the raid one has
-                // its own (MSG_SET_RAID_DIFFICULTY).
+                // GetDungeonDifficulty (0x00515790): the dungeon difficulty in
+                // force and the player's own, from MSG_SET_DUNGEON_DIFFICULTY -
+                // not the instance's, which GetInstanceInfo answers.
                 {"GetDungeonDifficulty", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, (gh ? gh->getInstanceDifficulty() : 0u) + 1u);
-            return 1;
+            const auto dungeon = gh ? gh->getDungeonDifficulty() : std::pair<uint32_t, uint32_t>{0, 0};
+            lua_pushnumber(L, dungeon.first + 1u);
+            lua_pushnumber(L, dungeon.second + 1u);
+            return 2;
         }},
                 // GetRaidDifficulty (0x00515810): the raid difficulty in
                 // force and the player's own, from MSG_SET_RAID_DIFFICULTY.

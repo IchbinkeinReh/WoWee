@@ -171,6 +171,17 @@ wowee_add_test(test_sell_count
 wowee_add_test(test_client_gps
     SOURCES test_client_gps.cpp)
 
+# The combat log as UnitCombatLog_C.cpp keeps it: the unit flags
+# (0x0074dcb0), each subevent's arguments (0x0074e290), the store's order,
+# retention and walk, and CombatLogAddFilter's matching. No game state.
+wowee_add_test(test_combat_log
+    SOURCES test_combat_log.cpp ${CMAKE_SOURCE_DIR}/src/game/combat_log.cpp)
+
+# The arena opponent roster (BattlefieldInfo.cpp): slots, pets beside their
+# owners, and ARENA_OPPONENT_UPDATE's words. Header-only.
+wowee_add_test(test_arena_opponents
+    SOURCES test_arena_opponents.cpp)
+
 # Stock-style hill climbing regression test. Run directly with:
 #   cmake --build build --target test_hill_climbing && ctest --test-dir build -R hill_climbing
 wowee_add_test(test_hill_climbing

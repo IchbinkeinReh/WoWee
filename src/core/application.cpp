@@ -1293,6 +1293,10 @@ bool Application::initialize() {
                     addonManager_->fireEvent(event, args);
                 }
             });
+            gameHandler->setCombatLogEventCallback(
+                [this](const std::vector<game::combat_log::Arg>& args, bool filtered) {
+                    if (addonManager_ && addonsLoaded_) addonManager_->fireCombatLogEvent(args, filtered);
+                });
             // How a keybinding reaches the frame that replaced this client's own
             // window. Without it, a key toggled a window nothing draws.
             gameHandler->setInterfaceCommandCallback([this](const std::string& lua) {

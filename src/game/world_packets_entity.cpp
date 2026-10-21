@@ -806,7 +806,7 @@ bool AttackerStateUpdateParser::parse(network::Packet& packet, AttackerStateUpda
     if (!packet.hasRemaining(9)) return fail();
     data.victimState = packet.readUInt8();
     packet.readUInt32();  // attacker state (+0x58)
-    packet.readUInt32();  // melee spell (+0x5c)
+    data.meleeSpellId = packet.readUInt32();  // melee spell (+0x5c)
     data.blocked = 0;
     if ((data.hitInfo & 0x2000u) != 0) {  // HITINFO_BLOCK
         if (!packet.hasRemaining(4)) return fail();
@@ -878,7 +878,8 @@ bool DispelFailedParser::parse(network::Packet& packet, DispelFailedData& data) 
     data.casterGuid = packet.readUInt64();
     data.victimGuid = packet.readUInt64();
     data.spellId = packet.readUInt32();
-    while (packet.hasRemaining(4)) packet.readUInt32();
+    data.failedSpells.clear();
+    while (packet.hasRemaining(4)) data.failedSpells.push_back(packet.readUInt32());
     return true;
 }
 
@@ -953,6 +954,140 @@ bool SpellLogExecuteParser::parse(network::Packet& packet, SpellLogExecuteData& 
     return true;
 }
 
+namespace {
+
+/// One body, read as its handler reads it. False when the handler would have
+/// given up on the whole packet.
+bool readReplayBody(network::Packet& p, CombatLogReplay::Kind kind,
+                    const std::function<bool(uint32_t)>& spellKnown,
+                    const std::function<bool(uint64_t)>& unitKnown) {
+    using K = CombatLogReplay::Kind;
+    const auto u32s = [&](int n) {
+        for (int i = 0; i < n; ++i) p.readUInt32();
+    };
+    switch (kind) {
+        case K::SpellLogMiss: {  // 0x006d3090
+            p.readUInt32();
+            p.readUInt64();
+            const bool debug = p.readUInt8() != 0;
+            for (uint32_t n = p.readUInt32(); n != 0; --n) {
+                p.readUInt64();
+                p.readUInt8();
+                if (debug) u32s(2);
+            }
+            return true;
+        }
+        case K::HealLog:  // 0x006d3c30
+            p.readPackedGuid();
+            p.readPackedGuid();
+            u32s(4);
+            p.readUInt8();
+            p.readUInt8();
+            return true;
+        case K::EnergizeLog:  // 0x006d3df0
+            p.readPackedGuid();
+            p.readPackedGuid();
+            u32s(3);
+            return true;
+        case K::Execute: {  // 0x006d3220, by 0x006d368c's table
+            p.readPackedGuid();
+            if (!spellKnown(p.readUInt32())) return false;
+            for (auto effects = static_cast<int32_t>(p.readUInt32()); effects > 0; --effects) {
+                const uint32_t effect = p.readUInt32();
+                for (auto n = static_cast<int32_t>(p.readUInt32()); n > 0; --n) {
+                    switch (effect) {
+                        case 8: case 62: p.readPackedGuid(); u32s(3); break;
+                        case 18: case 113: case 28: case 33: case 50: case 56: case 76: case 81: case 83:
+                        case 102: case 104: case 105: case 106: case 107:
+                            p.readPackedGuid();
+                            break;
+                        case 19: case 68: p.readPackedGuid(); u32s(1); break;
+                        case 24: case 59: case 101: case 157: u32s(1); break;
+                        case 111: p.readPackedGuid(); u32s(2); break;
+                        default: break;
+                    }
+                }
+            }
+            return true;
+        }
+        case K::PeriodicAuraLog: {  // 0x007531f0
+            const uint64_t victim = p.readPackedGuid();
+            p.readPackedGuid();
+            const uint32_t spellId = p.readUInt32();
+            const auto count = static_cast<int32_t>(p.readUInt32());
+            if (!spellKnown(spellId) || !unitKnown(victim)) return false;
+            for (int32_t i = 0; i < count; ++i) {
+                switch (p.readUInt32()) {
+                    case 3: case 89: u32s(5); p.readUInt8(); break;
+                    case 8: case 20: u32s(3); p.readUInt8(); break;
+                    case 21: case 24: u32s(2); break;
+                    case 64: u32s(3); break;
+                    default: return false;
+                }
+            }
+            return true;
+        }
+        case K::NonMeleeDamage: {  // 0x006d3840
+            p.readPackedGuid();
+            p.readPackedGuid();
+            u32s(3);
+            p.readUInt8();
+            u32s(2);
+            p.readUInt8();
+            p.readUInt8();
+            p.readUInt32();
+            const uint32_t hitFlags = p.readUInt32();
+            if (p.readUInt8() != 0) {
+                if (hitFlags & 1u) u32s(2);
+                if (hitFlags & 4u) u32s(2);
+                if (hitFlags & 0x20u) u32s(6);
+            }
+            return true;
+        }
+        case K::DispelLog:  // 0x006ce2b0
+            p.readPackedGuid();
+            p.readPackedGuid();
+            p.readUInt32();
+            p.readUInt8();
+            for (uint32_t n = p.readUInt32(); n != 0; --n) {
+                p.readUInt32();
+                p.readUInt8();
+            }
+            return true;
+        case K::None:
+            break;
+    }
+    return true;
+}
+
+}  // namespace
+
+void SendAllCombatLogParser::parse(network::Packet& packet, CombatLogReplay& out,
+                                   const std::function<CombatLogReplay::Kind(uint32_t)>& kind,
+                                   const std::function<bool(uint32_t)>& spellKnown,
+                                   const std::function<bool(uint64_t)>& unitKnown) {
+    out.entries.clear();
+    const auto count = static_cast<int32_t>(packet.readUInt32());
+    const uint32_t now = packet.readUInt32();
+    for (int32_t i = 0; i < count && packet.getRemainingSize() > 0; ++i) {
+        CombatLogReplay::Entry e;
+        e.delayMs = now - packet.readUInt32();
+        e.opcode = packet.readUInt32();
+        const CombatLogReplay::Kind k = kind(e.opcode);
+        // An opcode it has no handler for has nothing read for it: the next
+        // entry is read from where its body begins, as the client does.
+        if (k == CombatLogReplay::Kind::None) continue;
+        const size_t start = packet.getReadPos();
+        const bool goOn = readReplayBody(packet, k, spellKnown, unitKnown);
+        const size_t end = std::min(packet.getReadPos(), packet.getData().size());
+        if (!goOn) break;
+        e.body.assign(packet.getData().begin() + static_cast<std::ptrdiff_t>(start),
+                      packet.getData().begin() + static_cast<std::ptrdiff_t>(std::max(start, end)));
+        out.entries.push_back(std::move(e));
+    }
+    packet.skipAll();
+}
+
 bool SpellDamageLogParser::parse(network::Packet& packet, SpellDamageLogData& data) {
     // Upfront validation:
     // packed GUIDs(1-8 each) + spellId(4) + damage(4) + overkill(4) + schoolMask(1)
@@ -992,11 +1127,11 @@ bool SpellDamageLogParser::parse(network::Packet& packet, SpellDamageLogData& da
         return false;
     }
 
-    (void)packet.readUInt8(); // periodicLog (not displayed)
+    data.periodicLog = packet.readUInt8();
     packet.readUInt8(); // unused
-    packet.readUInt32(); // blocked
-    uint32_t flags = packet.readUInt32();  // flags IS used - bit 0x02 = crit
-    data.isCrit = (flags & 0x02) != 0;
+    data.blocked = packet.readUInt32();
+    data.hitFlags = packet.readUInt32();  // bit 0x02 = crit
+    data.isCrit = (data.hitFlags & 0x02) != 0;
 
     LOG_DEBUG("Spell damage: spellId=", data.spellId, " dmg=", data.damage,
               data.isCrit ? " CRIT" : "");

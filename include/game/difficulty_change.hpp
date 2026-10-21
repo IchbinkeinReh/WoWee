@@ -71,6 +71,50 @@ inline RaidDifficultyApplied applyRaidDifficulty(RaidDifficulty& r, uint32_t dif
     return out;
 }
 
+/// The dungeon difficulty as 0x00525530 keeps it: the player's own
+/// (0xbd0898) and the party's (0xbd1978). The party's is in force only in a
+/// party - one with its first slot filled (0xbd1948) and no raid roster
+/// (0xbeb608); a raid, or no party, has the player's own (GetDungeonDifficulty,
+/// 0x00515790). Apart from the instance's difficulty, which only
+/// SMSG_INSTANCE_DIFFICULTY sets (0xbd0894).
+struct DungeonDifficulty {
+    uint32_t personal = 0;
+    uint32_t group = 0;
+    [[nodiscard]] uint32_t effective(bool inParty) const { return inParty ? group : personal; }
+};
+
+/// What MSG_SET_DUNGEON_DIFFICULTY's three words do to it (0x00525530): the
+/// difficulty, then whether it is the player's own and whether it is the
+/// party's. True when the one in force changed, which 0x00524720 says as
+/// ERR_DUNGEON_DIFFICULTY_CHANGED_S with DUNGEON_DIFFICULTY<n>.
+inline bool applyDungeonDifficulty(DungeonDifficulty& d, uint32_t difficulty, bool own, bool group, bool inParty) {
+    const uint32_t before = d.effective(inParty);
+    if (own) d.personal = difficulty;
+    if (group) d.group = difficulty;
+    return d.effective(inParty) != before;
+}
+
+/// The minimap's difficulty flag as MiniMapInstanceDifficulty_OnEvent draws
+/// it from GetInstanceInfo (Minimap.lua): shown in a dungeon or a raid that is
+/// not a normal five, heroic for a dungeon's difficulty 2, a dynamic raid the
+/// player has set to heroic, or a raid past difficulty 2.
+struct InstanceBanner {
+    bool shown = false;
+    bool heroic = false;
+};
+
+inline InstanceBanner instanceBanner(std::string_view instanceType, uint32_t difficulty, uint32_t maxPlayers,
+                                     uint32_t playerDifficulty, bool dynamicInstance) {
+    InstanceBanner b;
+    const bool party = instanceType == "party";
+    if ((!party && instanceType != "raid") || (difficulty == 1 && maxPlayers == 5)) return b;
+    b.shown = true;
+    if (party) b.heroic = difficulty == 2;
+    else if (dynamicInstance) b.heroic = playerDifficulty == 1;
+    else b.heroic = difficulty > 2;
+    return b;
+}
+
 /// How 0x00524780 words a raid difficulty that changed.
 enum class RaidChangeWords : uint8_t {
     Lockout,         ///< on a dynamic-difficulty map: ERR_RAID_LOCKOUT_CHANGED_S with RAID_DIFFICULTY<n>,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "addons/lua_services.hpp"
+#include "game/combat_log.hpp"
 #include "ui/widget_tree.hpp"
 #include <map>
 #include <functional>
@@ -64,6 +65,10 @@ public:
     // Fire a WoW event to all registered Lua handlers.
     void fireEvent(const std::string& eventName,
                    const std::vector<std::string>& args = {});
+    /// The same, with arguments that keep their Lua types: a combat log
+    /// entry's numbers stay numbers and its nils stay nil (0x0074e290).
+    void fireEventValues(const std::string& eventName,
+                         const std::vector<game::combat_log::Arg>& args);
 
     // Try to dispatch a slash command via SlashCmdList. Returns true if handled.
     bool dispatchSlashCommand(const std::string& command, const std::string& args);
@@ -172,6 +177,10 @@ public:
 private:
     bool eventListenersReported_ = false;
     int  eventReportFrames_ = 0;
+    /// The one dispatch both fireEvent and fireEventValues go through:
+    /// `pushArgs` puts `nargs` arguments after the event's name.
+    void fireEventWith(const std::string& eventName, int nargs,
+                       const std::function<void(lua_State*)>& pushArgs, const std::string& traceArg);
 public:
 
     /// Typed text, one UTF-8 chunk as the platform reports it.

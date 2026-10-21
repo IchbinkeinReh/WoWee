@@ -459,6 +459,7 @@
     "Speed": 47,
     "SpellMissileID": 227,
     "SpellVisualID": 131,
+    "StackAmount": 49,
     "TargetAuraState": 21,
     "TargetCreatureType": 17,
     "Targets": 16,
@@ -469,6 +470,7 @@
     "Path": 1
   },
   "SpellItemEnchantment": {
+    "Flags": 32,
     "ID": 0,
     "Name": 14
   },

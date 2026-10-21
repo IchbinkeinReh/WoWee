@@ -1,4 +1,5 @@
 #include "game/group_defines.hpp"
+#include "game/difficulty_change.hpp"
 
 #include <set>
 #include "ui/game_screen.hpp"
@@ -1671,11 +1672,16 @@ void GameScreen::renderMinimapReadouts(const MinimapFrame& frame, game::GameHand
         }
     }
 
-    // Instance difficulty indicator - just below zone name, inside minimap top edge
-    if (gameHandler.isInInstance()) {
-        uint32_t diff = gameHandler.getInstanceDifficulty();
-        const char* named = game::instanceDifficultyName(diff);
-        const char* label = named ? named : "Unknown";
+    // Instance difficulty indicator - just below zone name, inside minimap top
+    // edge: shown and coloured as the interface's own flag decides
+    // (MiniMapInstanceDifficulty_OnEvent), from GetInstanceInfo's answers.
+    const auto instance = gameHandler.getInstanceInfo();
+    const auto banner = game::difficulty_change::instanceBanner(instance.type, instance.difficulty + 1,
+                                                                instance.maxPlayers, instance.playerDifficulty,
+                                                                instance.dynamic);
+    if (instance.known && banner.shown) {
+        const std::string sized = std::to_string(instance.maxPlayers);
+        const char* label = !instance.difficultyName.empty() ? instance.difficultyName.c_str() : sized.c_str();
 
         ImFont* font = ImGui::GetFont();
         float fontSize = ImGui::GetFontSize() * 0.85f;
@@ -1686,8 +1692,8 @@ void GameScreen::renderMinimapReadouts(const MinimapFrame& frame, game::GameHand
         float pad = 2.0f;
 
         // Color-code: heroic=orange, normal=light gray
-        ImU32 bgCol = gameHandler.isInstanceHeroic() ? IM_COL32(120, 60, 0, 180) : IM_COL32(0, 0, 0, 160);
-        ImU32 textCol = gameHandler.isInstanceHeroic() ? IM_COL32(255, 180, 50, 255) : IM_COL32(200, 200, 200, 220);
+        ImU32 bgCol = banner.heroic ? IM_COL32(120, 60, 0, 180) : IM_COL32(0, 0, 0, 160);
+        ImU32 textCol = banner.heroic ? IM_COL32(255, 180, 50, 255) : IM_COL32(200, 200, 200, 220);
 
         drawList->AddRectFilled(
             ImVec2(tx - pad, ty - pad),
