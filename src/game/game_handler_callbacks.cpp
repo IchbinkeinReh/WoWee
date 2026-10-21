@@ -2882,6 +2882,13 @@ void GameHandler::sendInterfaceRequest(network::Packet& packet) {
     if (socket && state == WorldState::IN_WORLD && packet.getOpcode() != 0xFFFF) socket->send(packet);
 }
 
+void GameHandler::sendActionBarToggles(uint8_t mask) {
+    if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_SET_ACTIONBAR_TOGGLES) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_SET_ACTIONBAR_TOGGLES));
+    packet.writeUInt8(mask);
+    socket->send(packet);
+}
+
 void GameHandler::sendTutorialClear() {
     if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR) == 0xFFFF) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_TUTORIAL_CLEAR));

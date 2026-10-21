@@ -1403,6 +1403,9 @@ public:
     /// ClearTutorials (0x00530820 -> 0x00530510): CMSG_TUTORIAL_CLEAR, the
     /// server's word for every tutorial seen.
     void sendTutorialClear();
+    /// CMSG_SET_ACTIONBAR_TOGGLES: the multi-bars shown, bits 0 to 3, u8
+    /// (0x005a8290).
+    void sendActionBarToggles(uint8_t mask);
     /// A commentator's request, as CommentatorFrame.cpp builds it
     /// (CMSG_COMMENTATOR_*): sent in the world.
     void sendCommentatorRequest(network::Packet& packet);
