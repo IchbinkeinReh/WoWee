@@ -51,6 +51,7 @@
 #include <map>
 #include <optional>
 #include "game/guild_emblem.hpp"
+#include "game/world_state_ui.hpp"
 #include "game/server_notices.hpp"
 #include <algorithm>
 #include <chrono>
@@ -2811,6 +2812,12 @@ public:
     }
     uint32_t getWorldStateMapId() const { return worldStateMapId_; }
     uint32_t getWorldStateZoneId() const { return worldStateZoneId_; }
+    /// The world state frame's lines from WorldStateUI.dbc (0x005487d0) -
+    /// nullopt where this install has no such file to read.
+    std::optional<std::vector<const world_state_ui::Row*>> worldStateUiLines();
+    /// The client's time for a world state that counts down: now, moved by
+    /// what SMSG_WORLD_STATE_UI_TIMER_UPDATE said the server's is (0x00548700).
+    [[nodiscard]] int64_t worldStateNow() const;
     uint64_t getActiveCritterGuid() const { return activeCritterGuid_; }
     uint32_t getActiveCritterSpellId() const { return activeCritterSpellId_; }
     void setActiveCritter(uint64_t guid, uint32_t spellId) {
@@ -5012,6 +5019,9 @@ private:
     void registerTabardOpcodes();
     /// SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE (game_handler_corpse.cpp).
     void registerCorpseOpcodes();
+    /// SMSG_SET_PHASE_SHIFT and SMSG_WORLD_STATE_UI_TIMER_UPDATE
+    /// (game_handler_world_state_ui.cpp).
+    void registerWorldStateUiOpcodes();
     /// 0x00598e60.
     void openTabardVendor(uint64_t vendor);
     /// 0x006d9230.
@@ -5297,6 +5307,17 @@ private:
     // ---- World state and faction initialization snapshots ----
     uint32_t worldStateMapId_ = 0;
     uint32_t worldStateZoneId_ = 0;
+    /// WorldStateUI.dbc (0xad4f78), read once; the place and phases its lines
+    /// are for and which lines those are (0xbe8f88).
+    std::vector<world_state_ui::Row> worldStateUiRows_;
+    bool worldStateUiLoaded_ = false;
+    world_state_ui::Place worldStateUiPlace_;
+    std::vector<size_t> worldStateUiShown_;
+    int64_t worldStateTimeOffset_ = 0;  ///< 0xbe8f44
+    void loadWorldStateUi();
+    /// 0x00548970 / 0x00513960: the place or the phases moved, the lines
+    /// chosen again. True when anything moved.
+    bool setWorldStateUiPlace(const world_state_ui::Place& place);
     // The active non-combat companion and the spell that called it. Re-casting
     // that spell dismisses rather than re-summons, which is how a companion is
     // put away: it has no aura to cancel from the buff bar, so this toggle is

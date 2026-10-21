@@ -191,6 +191,11 @@ wowee_add_test(test_tabard_design
 # (game/auction_pending_sales.hpp).
 wowee_add_packet_test(test_auction_pending_sales)
 
+# The world state frame's lines from WorldStateUI.dbc
+# (game/world_state_ui.hpp). Header-only.
+wowee_add_test(test_world_state_ui
+    SOURCES test_world_state_ui.cpp)
+
 # Stock-style hill climbing regression test. Run directly with:
 #   cmake --build build --target test_hill_climbing && ctest --test-dir build -R hill_climbing
 wowee_add_test(test_hill_climbing

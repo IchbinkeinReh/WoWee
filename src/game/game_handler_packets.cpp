@@ -533,6 +533,9 @@ void GameHandler::registerCoreOpcodes() {
     dispatchTable_[Opcode::SMSG_WORLD_STATE_UI_TIMER_UPDATE] = [this](network::Packet& packet) {
         if (packet.hasRemaining(4)) {
             uint32_t serverTime = packet.readUInt32();
+            // The server's time against the client's, which the world state
+            // frame's countdowns run by (0x005486e0).
+            worldStateTimeOffset_ = static_cast<int64_t>(serverTime) - static_cast<int64_t>(std::time(nullptr));
             // The world state timer bar counts from this and had nothing to
             // count from - it was read and logged and dropped.
             if (addonEventCallback_)
@@ -748,7 +751,6 @@ void GameHandler::registerCoreOpcodes() {
         // question had a hole where the innkeeper should be.
         fireAddonEvent("CONFIRM_BINDER", {lookupName(binderGuid_)});
     };
-    registerSkipHandler(Opcode::SMSG_SET_PHASE_SHIFT);
     // 0x006e2e90 case 0x4ed writes "XP Gain Enabled"/"Disabled" to the
     // developer console and nowhere a player sees; this printed it in chat.
     dispatchTable_[Opcode::SMSG_TOGGLE_XP_GAIN] = [](network::Packet& packet) {
@@ -1790,9 +1792,16 @@ void GameHandler::registerCoreOpcodes() {
         // TBC added areaId in 2.1.0; WotLK kept it. Classic/Turtle use the shorter format.
         size_t remaining = packet.getRemainingSize();
         bool hasAreaId = isActiveExpansion("tbc") || isActiveExpansion("wotlk");
+        uint32_t areaId = 0;
         if (hasAreaId && remaining >= 6) {
-            packet.readUInt32(); // areaId
+            areaId = packet.readUInt32();
         }
+        // The world state frame's lines for the place (0x00548970).
+        world_state_ui::Place place = worldStateUiPlace_;
+        place.mapId = static_cast<int32_t>(worldStateMapId_);
+        place.zoneId = worldStateZoneId_;
+        place.areaId = areaId;
+        const bool placeMoved = setWorldStateUiPlace(place);
         uint16_t count = packet.readUInt16();
         size_t needed = static_cast<size_t>(count) * 8;
         size_t available = packet.getRemainingSize();
@@ -1824,7 +1833,7 @@ void GameHandler::registerCoreOpcodes() {
             uint32_t val = packet.readUInt32();
             worldStates_[key] = val;
         }
-        if (worldStates_ != before || worldStateMapId_ != mapBefore || worldStateZoneId_ != zoneBefore)
+        if (worldStates_ != before || worldStateMapId_ != mapBefore || worldStateZoneId_ != zoneBefore || placeMoved)
             fireAddonEvent("UPDATE_WORLD_STATES", {});
     };
 
@@ -3890,6 +3899,7 @@ void GameHandler::registerOpcodeHandlers() {
     registerRemainingOpcodes();
     registerTabardOpcodes();
     registerCorpseOpcodes();
+    registerWorldStateUiOpcodes();
     registerDomainOpcodes();
 }
 

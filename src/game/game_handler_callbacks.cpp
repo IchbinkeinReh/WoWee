@@ -577,6 +577,12 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     if (socialHandler_) socialHandler_->resetForWorldEntry();
     // A new combat log, timed from now (0x007538a0).
     if (combatLogFeed_) combatLogFeed_->enterWorld();
+    // The player in the first phase again (0x0052b550: 0xac80a4 = 1).
+    {
+        world_state_ui::Place place = worldStateUiPlace_;
+        place.phaseMask = 1;
+        setWorldStateUiPlace(place);
+    }
     arenaRoster_.clear();
 
     LOG_INFO("========================================");
