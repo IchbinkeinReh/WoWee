@@ -263,6 +263,7 @@ rendering::upper_body::Unit unitAnimationState(const game::GameHandler& gh, cons
     u.wholeBodyOnly = (spawner.creatureModelFlags(unit.getDisplayId()).value_or(0) & 0x8u) != 0;
     u.riding = riderPose.has_value();
     if (riderPose) u.riderPose = *riderPose;
+    u.alive = unit.getHealth() > 0;
     return u;
 }
 
@@ -4220,6 +4221,7 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
     u.leaping = (u.moveFlags & ub::kMoveFalling) != 0;
     u.standState = gameHandler->getStandState();
     u.mounted = self.getMountDisplayId() != 0;
+    u.alive = self.getHealth() > 0;
     u.channeling = gameHandler->isChanneling();
     u.castTimed = gameHandler->isCasting() && !u.channeling && gameHandler->getCastTimeTotal() > 0.0f;
     u.autoAttacking = gameHandler->isAutoAttacking();
@@ -4386,8 +4388,10 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // transport-local spline movement still reports actively moving.
                 const bool positionOnlyLocomotion =
                     posChanging && !entity->isEntityMoving() && !transportAttached;
-                const bool isMovingNow =
-                    !deadOrCorpse && (entityIsMoving || positionOnlyLocomotion);
+                // In a seat its own movement flags carry no direction: its
+                // vehicle moves it (0x00717050 reads the unit's).
+                const bool isMovingNow = !deadOrCorpse && !charRenderer->isInstanceSeated(instanceId) &&
+                                         (entityIsMoving || positionOnlyLocomotion);
                 if (creatureMount) charRenderer->setInstancePosition(creatureMount->instanceId, creatureMountPos);
                 if (deadOrCorpse || largeCorrection) {
                     charRenderer->setInstancePosition(instanceId, renderPos);
@@ -4633,8 +4637,10 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     gameHandler->transportAttachmentsRef().count(guid) != 0;
                 const bool positionOnlyLocomotion =
                     posChanging2 && !entity->isEntityMoving() && !transportAttached;
-                const bool isMovingNow =
-                    !deadOrCorpse && (entityIsMoving || positionOnlyLocomotion);
+                // In a seat its own movement flags carry no direction: its
+                // vehicle moves it (0x00717050 reads the unit's).
+                const bool isMovingNow = !deadOrCorpse && !charRenderer->isInstanceSeated(instanceId) &&
+                                         (entityIsMoving || positionOnlyLocomotion);
 
                 if (deadOrCorpse || largeCorrection) {
                     charRenderer->setInstancePosition(instanceId, renderPos);

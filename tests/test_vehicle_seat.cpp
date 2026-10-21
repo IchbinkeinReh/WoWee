@@ -169,21 +169,3 @@ TEST_CASE("a seated passenger's upper body is SpineLow, else the head (0x0073e84
     CHECK(vs::upperKeyBone(false, true) == 6);
     CHECK(vs::upperKeyBone(false, false) == vs::kNoUpperBody);
 }
-
-TEST_CASE("what a seated passenger is asked goes to its upper body unless it stands (0x007385c0)",
-          "[vehicle]") {
-    // BehaviorID 0: Stand and FlyStand give the upper body back.
-    CHECK(vs::isStandBehavior(0));
-    CHECK(vs::isStandBehavior(229));
-    CHECK_FALSE(vs::seatedUpperBodyTakes(0));
-    CHECK_FALSE(vs::seatedUpperBodyTakes(229));
-    // Casts, attacks and emotes take it.
-    CHECK(vs::seatedUpperBodyTakes(53));   // SpellCastDirected
-    CHECK(vs::seatedUpperBodyTakes(17));   // Attack1H
-    CHECK(vs::seatedUpperBodyTakes(67));   // EmoteWave
-    CHECK(vs::seatedUpperBodyTakes(124));  // ChannelCastDirected
-    // Movement a seated unit is never asked, and death, do not.
-    CHECK_FALSE(vs::seatedUpperBodyTakes(5));   // Run
-    CHECK_FALSE(vs::seatedUpperBodyTakes(42));  // Swim
-    CHECK_FALSE(vs::seatedUpperBodyTakes(1));   // Death
-}

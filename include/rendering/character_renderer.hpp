@@ -152,6 +152,11 @@ public:
     bool stopKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId);
     /// Whether the model has the key bone.
     [[nodiscard]] bool hasKeyBone(uint32_t instanceId, int32_t keyBoneId) const;
+    /// Whether the instance is hung on a seat (setInstanceSeat).
+    [[nodiscard]] bool isInstanceSeated(uint32_t instanceId) const {
+        auto it = instances.find(instanceId);
+        return it != instances.end() && it->second.seatParent != 0;
+    }
     /// What the arms' animations reached since the last call: bit 0 the
     /// left arm's event, 1 the right's; bit 2 the left's end, 3 the right's.
     uint8_t takeArmAnimationEvents(uint32_t instanceId);
@@ -300,11 +305,12 @@ public:
     /// nothing without a seat or its vehicle.
     [[nodiscard]] std::optional<glm::mat4> seatTargetMatrix(uint32_t instanceId) const;
     /// The seat's ride animation holds the passenger's body: its start once,
-    /// then its loop (0x007385c0 and 0x00724500 put the seat's first). What
-    /// else asks the body to play goes to the upper body - from SpineLow,
-    /// else the head - where it is no stand (vehicle_seat::seatedUpperBodyTakes),
-    /// and comes back from there to what the seat's upper ride animation
-    /// has it stand as, or to the body without one (0x007385c0, 0x00737bd0).
+    /// then its loop (0x007385c0 and 0x00724500 put the seat's first). In its
+    /// seat, what it is asked is shared as any unit's is, the seat holding
+    /// the body (upper_body::decide with Unit::seatedRide): its upper body -
+    /// from SpineLow, else the head - takes what is no stand, and a stand
+    /// gives it back to what the seat's upper ride animation has it stand
+    /// as, or to the body without one (0x007385c0, 0x00737bd0).
     /// Seated with no ride animation but an upper one, that is what the
     /// whole unit stands as, and nothing is held. Nothing releases it.
     void setSeatAnimation(uint32_t instanceId, const std::optional<vehicle_seat::RideAnimation>& ride);
@@ -707,8 +713,10 @@ private:
         vehicle_seat::PassengerPose seatPose;
         /// setInstanceSeatFlight.
         std::optional<vehicle_seat::Flight> seatFlight;
-        /// setSeatAnimation: the body is the seat's.
+        /// setSeatAnimation: the body is the seat's - in the seat itself
+        /// (state 3), or on the way in or out.
         bool seatAnimationHeld = false;
+        bool seatRideSeated = false;
         /// setSeatAnimation: the key bone the upper body plays from (+0xb84,
         /// -1 none), what the seat has it stand as there (Flags 0x4), and
         /// whether a one-shot of its own has ended there yet (+0x10 0x4,
@@ -765,7 +773,6 @@ private:
     /// seat has it stand as, or to the body; and an animation of its own.
     void standSeatedUpperBody(uint32_t instanceId);
     void standSeatedWhole(uint32_t instanceId);
-    void playSeatedUpperBody(uint32_t instanceId, uint32_t animationId, bool loop);
     /// Its upper body given back to the body, the seat's hold on it gone.
     void releaseSeatedUpperBody(uint32_t instanceId);
     void startAnimation(CharacterInstance& instance, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim,

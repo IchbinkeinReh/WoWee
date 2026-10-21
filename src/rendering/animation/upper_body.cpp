@@ -64,6 +64,8 @@ uint32_t behaviorOf(const anim::AnimationDataTable& data, int32_t anim) {
 
 bool splits(const anim::AnimationDataTable& data, const Unit& unit, uint32_t asked, int32_t current) {
     if (current < 0) return false;
+    // In its seat on a ride animation, always.
+    if (unit.seatedRide) return true;
     const uint32_t b = data.behavior(asked);
     if (isDeath(b)) return false;
     const uint32_t move = unit.moveFlags;
@@ -185,6 +187,26 @@ Decision decide(const anim::AnimationDataTable& data, const Unit& unit, const Sl
         bodyChanges = true;
         d.body = asked;
         bodyIsAsked = true;
+    }
+
+    // Seated and alive on a ride animation: the ride animation holds the
+    // body. What went to the upper body stays there unless it is a stand
+    // (BehaviorID 0); then, or with nothing gone there, the upper body
+    // takes what went to the body, a stand excepted.
+    if (unit.seatedRide && unit.alive) {
+        bool fromBody = !upperChanges;
+        if (upperChanges && behaviorOf(data, d.upper.anim) == 0) {
+            upperChanges = false;
+            fromBody = true;
+        }
+        if (fromBody && behaviorOf(data, d.body.anim) != 0) {
+            d.upper = d.body;
+            d.upperFromBody = !bodyIsAsked && !d.bodyFromUpper;
+            upperChanges = true;
+        }
+        d.body = now.body;
+        d.bodyFromUpper = false;
+        bodyChanges = false;
     }
 
     // 0x00737ef0 for each: the same animation goes on, another starts. An

@@ -69,6 +69,11 @@ struct Unit {
     uint32_t riderPoseShown = 91;
     /// What 0x007176f0 makes of SwimIdle for the model.
     uint32_t swimIdle = 41;
+    /// In its seat (state 3, 0x004f6250) with the seat's ride animation on
+    /// its body (0x00747b20 not 0x1fa).
+    bool seatedRide = false;
+    /// Health 1 or more (+0x48), which the seat's hold on the body asks.
+    bool alive = true;
 };
 
 /// What a slot plays, from where (0x008266b0's state): -1 for an upper body

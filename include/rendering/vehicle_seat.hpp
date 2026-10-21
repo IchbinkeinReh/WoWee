@@ -122,39 +122,4 @@ inline constexpr int32_t kNoUpperBody = -1;
     return kNoUpperBody;
 }
 
-/// Whether an animation asked of a seated passenger whose body plays its
-/// seat's ride animation goes to its upper body (0x007385c0): one whose
-/// AnimationData BehaviorID (0x007176b0) is not 0 - every one but Stand and
-/// FlyStand. The ride animation keeps the body; a stand gives the upper body
-/// back to what it stands as. Death and Dead are left to the body's own
-/// handling (the split is only for a living unit, health 1 or more), and the
-/// walking, running and swimming a seated unit's movement never asks for
-/// (its movement flags carry no direction on its vehicle) are not taken up.
-[[nodiscard]] inline bool isStandBehavior(uint32_t animationId) {
-    constexpr uint32_t kStand = 0, kFlyStand = 229;
-    return animationId == kStand || animationId == kFlyStand;
-}
-[[nodiscard]] inline bool seatedUpperBodyTakes(uint32_t animationId) {
-    switch (animationId) {
-        case 0:    // Stand
-        case 229:  // FlyStand
-        case 1:    // Death
-        case 6:    // Dead
-        case 4:    // Walk
-        case 5:    // Run
-        case 13:   // Walkbackwards
-        case 41:   // SwimIdle
-        case 42:   // Swim
-        case 43:   // SwimLeft
-        case 44:   // SwimRight
-        case 45:   // SwimBackwards
-        case 135:  // Fly
-        case 143:  // Sprint
-        case 193:  // Hover
-            return false;
-        default:
-            return true;
-    }
-}
-
 }  // namespace wowee::rendering::vehicle_seat

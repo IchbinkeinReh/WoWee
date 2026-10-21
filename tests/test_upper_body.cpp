@@ -268,3 +268,38 @@ TEST_CASE("the body's one-shot ended, only the body is asked (0x0073bbd0)", "[up
     CHECK(talk.body.anim == static_cast<int32_t>(kEmoteTalk));
     CHECK(talk.upperAction == ub::Action::Keep);
 }
+
+TEST_CASE("seated on a ride animation, the upper body takes what is no stand (0x007385c0)", "[upper_body]") {
+    const auto t = table();
+    constexpr int32_t kRide = 400;  // the seat's ride animation, on the body
+    ub::Unit seated;
+    seated.seatedRide = true;
+    // Always split, as 0x00723e30 answers first for a unit in its seat.
+    CHECK(ub::splits(t, seated, kRun, kRide));
+    CHECK(ub::splits(t, seated, kDeath, kRide));
+    // A cast, a swing, an emote, a channel: the upper body's, the ride
+    // animation keeping the body.
+    for (uint32_t a : {kSpellCastDirected, kAttack1H, kEmoteWave, kChannelCast}) {
+        const auto d = ub::decide(t, seated, asked(a, false), slots(kRide));
+        CHECK(d.upperAction == ub::Action::Play);
+        CHECK(d.upper.anim == static_cast<int32_t>(a));
+        CHECK(d.bodyAction == ub::Action::Keep);
+    }
+    // So would the run be - the client never asks it of a unit whose own
+    // movement flags carry no direction on its vehicle.
+    CHECK(ub::decide(t, seated, asked(kRun, true), slots(kRide)).upper.anim == static_cast<int32_t>(kRun));
+    // A stand: the upper body takes the body's, the ride animation.
+    const auto stand = ub::decide(t, seated, asked(kStand, true), slots(kRide));
+    CHECK(stand.upper.anim == kRide);
+    CHECK(stand.upperFromBody);
+    CHECK(stand.bodyAction == ub::Action::Keep);
+    // Over a swing above, the stand leaves the swing there.
+    const auto over = ub::decide(t, seated, asked(kStand, true), slots(kRide, 0.0f, true, kAttack1H, 100.0f, false));
+    CHECK(over.upperAction == ub::Action::Keep);
+    CHECK(over.bodyAction == ub::Action::Keep);
+    // Dead in its seat, death is the body's.
+    seated.alive = false;
+    const auto death = ub::decide(t, seated, asked(kDeath, false), slots(kRide));
+    CHECK(death.bodyAction == ub::Action::Play);
+    CHECK(death.body.anim == static_cast<int32_t>(kDeath));
+}

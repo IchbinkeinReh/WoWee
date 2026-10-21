@@ -1120,6 +1120,14 @@ void AnimationController::updateCharacterAnimation() {
     fi.jumpKeyPressed = cameraController->isJumpKeyPressed();
     fi.characterYaw = renderer_->getCharacterYaw();
     fi.shuffle = turnShuffle_;
+    // In a vehicle's seat the player's own movement flags carry no
+    // direction - the keys move the vehicle - so nothing it plays is the
+    // walk or the run (0x00717050 reads the unit's own).
+    if (characterRenderer && characterRenderer->isInstanceSeated(characterInstanceId)) {
+        fi.moving = fi.sprinting = fi.movingForward = fi.movingBackward = false;
+        fi.strafeLeft = fi.strafeRight = false;
+        fi.shuffle = body_yaw::TurnShuffle::None;
+    }
     // Melee/ranged timers
     fi.meleeSwingTimer = meleeSwingTimer_;
     fi.rangedShootTimer = rangedShootTimer_;
