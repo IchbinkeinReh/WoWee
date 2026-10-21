@@ -407,6 +407,8 @@ void RtLighting::destroyImages() {
     for (auto& s : slots_) {
         for (Target* t : {&s.gbuf, &s.hist, &s.out, &s.point}) destroyImage(dev, alloc, t->img);
     }
+    // The probes' sets bind the slots' G-buffer views.
+    probes_.forgetSets();
     traceExtent_ = {};
     ++viewsGeneration_;
 }

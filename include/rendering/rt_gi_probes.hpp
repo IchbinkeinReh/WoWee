@@ -99,6 +99,12 @@ public:
     /// open ground.
     void beginFrame(uint32_t slot, const glm::vec3& camera, uint64_t frame, const glm::vec3& sky,
                     const glm::vec3& ground, PassData& out);
+    /// The G-buffer views the sets bind were destroyed: write them again at
+    /// the next record(), even if the new views have the old handles - a
+    /// recycled handle compared equal and left the sets on the dead views.
+    void forgetSets() {
+        for (bool& w : setWritten_) w = false;
+    }
     /// Record the trace and the update. Outside a render pass, after the scene
     /// update. `ubo` is the slot's RtPassData, `gbuf` the view of the
     /// tracer's G-buffer this slot builds (for recordExposure). Leaves the
