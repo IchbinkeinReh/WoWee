@@ -3297,3 +3297,9 @@ wowee_add_test(test_macro_options
 wowee_add_test(test_quest_poi_icons
     SOURCES test_quest_poi_icons.cpp ${CMAKE_SOURCE_DIR}/src/game/quest_poi_icons.cpp)
 
+# ── test_glyph_socket ────────────────────────────────────────
+# A glyph against a socket: GlyphMatchesSocket (0x005b7410) and the placement
+# check of PlaceGlyphInSocket (0x0080c3e0). Header-only.
+wowee_add_test(test_glyph_socket
+    SOURCES test_glyph_socket.cpp)
+

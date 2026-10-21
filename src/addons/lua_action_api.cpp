@@ -16,6 +16,7 @@
 #include "core/config_paths.hpp"
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -1385,23 +1386,19 @@ static int lua_PickupSpell(lua_State* L) {
     return 0;
 }
 
-// PlaceGlyphInSocket(socket) - put the glyph on the cursor into that socket.
-//
-// Registered here rather than with the other glyph calls because the glyph is
-// on the cursor and the cursor lives in this file. There is no socketing opcode
-// in 3.3.5: the glyph item is used with the socket written into the glyphIndex
-// field CMSG_USE_ITEM already carries, and the server applies the item's spell
-// to it. The comment this replaces said socketing "needs a packet this client
-// does not send" - the packet was there, one field short of saying where.
+// PlaceGlyphInSocket(socket) (0x005b75a0) - the glyph the pending spell
+// applies put in that socket (0x0080c3e0), and the glyph item used with it:
+// 1 when it went, nil when it did not; nothing for a socket outside the six.
+// A glyph is not dragged in - using it from a bag holds its spell until a
+// socket is clicked.
 static int lua_PlaceGlyphInSocket(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: PlaceGlyphInSocket(index)");
     auto* gh = getGameHandler(L);
-    const int socket = static_cast<int>(luaL_optnumber(L, 1, 0));
+    const int socket = static_cast<int>(std::lround(lua_tonumber(L, 1)));
     if (!gh || socket < 1 || socket > game::GameHandler::MAX_GLYPH_SLOTS) return 0;
-    uint8_t bag = 0, slot = 0;
-    if (!cursorWireSlot(bag, slot)) return 0;   // nothing held: nothing to place
-    gh->placeGlyphFromBag(bag, slot, static_cast<uint32_t>(socket - 1));
-    setCursorType(L, CursorType::NONE);
-    return 0;
+    if (gh->placePendingGlyph(static_cast<uint32_t>(socket - 1))) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
 }
 
 // PickupGuildBankItem(tab, slot) - both halves of a guild bank drag.

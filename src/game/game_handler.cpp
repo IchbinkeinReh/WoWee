@@ -2290,14 +2290,43 @@ void GameHandler::ensureGlyphPropertiesLoaded() {
     if (!am || !am->isInitialized()) return;
     glyphPropertiesLoaded_ = true;
 
+    // GlyphSlot.dbc: ID, Type, Order. The type a socket takes (+0x04),
+    // which PlaceGlyphInSocket compares with the glyph's (0x0080c3e0).
+    if (auto slots = am->loadDBC("GlyphSlot.dbc"); slots && slots->isLoaded() &&
+                                                    slots->getFieldCount() >= 2) {
+        for (uint32_t i = 0; i < slots->getRecordCount(); ++i) {
+            glyphSlotTypeCache_[slots->getUInt32(i, 0)] = slots->getUInt32(i, 1);
+        }
+    }
     auto dbc = am->loadDBC("GlyphProperties.dbc");
     if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 2) return;
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
         const uint32_t id = dbc->getUInt32(i, 0);
         const uint32_t spellId = dbc->getUInt32(i, 1);
         if (id != 0 && spellId != 0) glyphSpellCache_[id] = spellId;
+        // GlyphProperties.dbc: ID, SpellID, TypeFlags, SpellIconID.
+        if (id != 0 && dbc->getFieldCount() >= 4) {
+            glyphRowCache_[id] = GlyphRow{dbc->getUInt32(i, 2), dbc->getUInt32(i, 3)};
+        }
     }
     LOG_INFO("Glyphs: ", glyphSpellCache_.size(), " properties mapped to spells");
+}
+
+bool GameHandler::getGlyphSocketFields(std::array<uint32_t, 6>& slotIds,
+                                       std::array<uint32_t, 6>& glyphs,
+                                       uint32_t& enabledMask) const {
+    const auto player = entityController_ ? entityController_->getEntityManager().getEntity(playerGuid)
+                                          : nullptr;
+    if (!player) return false;
+    const uint16_t slotsIdx = fieldIndex(UF::PLAYER_FIELD_GLYPH_SLOTS_1);
+    const uint16_t glyphsIdx = fieldIndex(UF::PLAYER_FIELD_GLYPHS_1);
+    const uint16_t enabledIdx = fieldIndex(UF::PLAYER_GLYPHS_ENABLED);
+    for (uint16_t i = 0; i < 6; ++i) {
+        slotIds[i] = slotsIdx != 0xFFFF ? player->getField(static_cast<uint16_t>(slotsIdx + i)) : 0u;
+        glyphs[i] = glyphsIdx != 0xFFFF ? player->getField(static_cast<uint16_t>(glyphsIdx + i)) : 0u;
+    }
+    enabledMask = enabledIdx != 0xFFFF ? player->getField(enabledIdx) : 0u;
+    return true;
 }
 
 void GameHandler::ensureAchievementCategoriesLoaded() {

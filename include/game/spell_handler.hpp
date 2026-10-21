@@ -471,6 +471,10 @@ public:
     /// Buy the next stable slot from the stable master currently open.
     void buyStableSlot();
 
+    /// A cast the client refuses itself, shown as its failure is
+    /// (0x00808200): the result's line on the error frame.
+    void reportLocalCastFailure(uint32_t spellId, uint8_t result);
+
 private:
     std::unordered_map<uint32_t, uint64_t> pendingPetNameQueries_;
     uint32_t nextPetNameQueryKey_ = 1;

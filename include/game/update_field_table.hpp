@@ -217,6 +217,12 @@ enum class UF : uint16_t {
     /// mask words (+0x1008 +0x1224, 0x00800d60).
     PLAYER_AMMO_ID,
     PLAYER_NO_REAGENT_COST_1,
+    /// The six glyph sockets' GlyphSlot.dbc ids (+0x1008 +0x1230), the
+    /// GlyphProperties ids in them (+0x1248), and the bitmask of the sockets
+    /// unlocked (+0x1260) - what PlaceGlyphInSocket checks (0x0080c3e0).
+    PLAYER_FIELD_GLYPH_SLOTS_1,
+    PLAYER_FIELD_GLYPHS_1,
+    PLAYER_GLYPHS_ENABLED,
     GAMEOBJECT_FLAGS,
     GAMEOBJECT_BYTES_1,
     // MO_TRANSPORT route clock. LEVEL carries the route's period in ms; the high

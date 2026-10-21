@@ -3352,6 +3352,30 @@ public:
         auto it = glyphSpellCache_.find(glyphPropertiesId);
         return it != glyphSpellCache_.end() ? it->second : 0u;
     }
+    /// GlyphProperties.dbc's TypeFlags (+0x08) and SpellIconID (+0x0c), and
+    /// GlyphSlot.dbc's Type (+0x04): false when there is no such row. Loaded
+    /// by ensureGlyphPropertiesLoaded.
+    bool getGlyphPropertiesType(uint32_t glyphPropertiesId, uint32_t& type) const {
+        auto it = glyphRowCache_.find(glyphPropertiesId);
+        if (it == glyphRowCache_.end()) return false;
+        type = it->second.type;
+        return true;
+    }
+    uint32_t getGlyphPropertiesIconId(uint32_t glyphPropertiesId) const {
+        auto it = glyphRowCache_.find(glyphPropertiesId);
+        return it != glyphRowCache_.end() ? it->second.iconId : 0u;
+    }
+    bool getGlyphSlotType(uint32_t glyphSlotId, uint32_t& type) const {
+        auto it = glyphSlotTypeCache_.find(glyphSlotId);
+        if (it == glyphSlotTypeCache_.end()) return false;
+        type = it->second;
+        return true;
+    }
+    /// The player's glyph sockets as the three update fields hold them
+    /// (PLAYER_FIELD_GLYPH_SLOTS_1, PLAYER_FIELD_GLYPHS_1,
+    /// PLAYER_GLYPHS_ENABLED). False without a player entity.
+    bool getGlyphSocketFields(std::array<uint32_t, 6>& slotIds, std::array<uint32_t, 6>& glyphs,
+                              uint32_t& enabledMask) const;
     void ensureAchievementCriteriaLoaded();
     /// Category ids in the order the panel shows them. The two tabs are
     /// disjoint sets, not one list filtered at the call site: GetCategoryList
@@ -3806,8 +3830,12 @@ public:
     void sortBankBag(int bagIndex);
     void swapBagSlots(int srcBagIndex, int dstBagIndex);
     void useItemById(uint32_t itemId, uint64_t unitTarget = 0);
-    /// Put a glyph from a bag slot into a socket, counted from zero.
-    void placeGlyphFromBag(uint8_t wireBag, uint8_t wireSlot, uint32_t socketIndex);
+    /// A used glyph waiting for its socket, and putting it in one (counted
+    /// from zero) - see InventoryHandler.
+    bool isAwaitingGlyphTarget() const;
+    uint32_t getPendingGlyphSpellId() const;
+    void cancelGlyphTargeting();
+    bool placePendingGlyph(uint32_t socketIndex);
     uint32_t getItemIdForSpell(uint32_t spellId) const;
     bool isVendorWindowOpen() const;
     const ListInventoryData& getVendorItems() const;
@@ -5704,6 +5732,9 @@ private:
     bool achievementCategoriesLoaded_ = false;
     bool glyphPropertiesLoaded_ = false;
     std::unordered_map<uint32_t, uint32_t> glyphSpellCache_;
+    struct GlyphRow { uint32_t type = 0; uint32_t iconId = 0; };
+    std::unordered_map<uint32_t, GlyphRow> glyphRowCache_;
+    std::unordered_map<uint32_t, uint32_t> glyphSlotTypeCache_;
     std::unordered_map<uint32_t, std::vector<AchievementCriterion>> achievementCriteria_;
     std::unordered_map<uint32_t, AchievementCriterionIndex> achievementCriterionById_;
     bool achievementCriteriaLoaded_ = false;

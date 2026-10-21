@@ -14,6 +14,7 @@
 #include "game/quest_progress.hpp"
 #include "game/quest_objectives.hpp"
 #include "game/quest_poi_icons.hpp"
+#include "game/glyph_socket.hpp"
 #include "game/trainer_service_list.hpp"
 #include "ui/chat/chat_utils.hpp"
 #include "core/logger.hpp"
@@ -3807,41 +3808,43 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushnumber(L, game::GameHandler::MAX_GLYPH_SLOTS);
             return 1;
         }},
+                // GetGlyphSocketInfo(index [, talentGroup]) (0x005b7260) →
+                // enabled, glyphType, glyphSpellID, icon. Enabled is the
+                // socket's bit of PLAYER_GLYPHS_ENABLED, the type its GlyphSlot
+                // row's (+1: 1 major, 2 minor); the spell and the icon are the
+                // GlyphProperties row of what the talent group holds there -
+                // its SpellIconID, which is the glyph's own art rather than
+                // the spell's. Nothing for an index outside the six.
                 {"GetGlyphSocketInfo", [](lua_State* L) -> int {
-            // GetGlyphSocketInfo(index [, talentGroup]) → enabled, glyphType, glyphSpellID, icon
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetGlyphSocketInfo(index[, talentGroup])");
             auto* gh = getGameHandler(L);
-            int index = static_cast<int>(luaL_checknumber(L, 1));
-            int spec = static_cast<int>(luaL_optnumber(L, 2, 0));
-            if (!gh || index < 1 || index > game::GameHandler::MAX_GLYPH_SLOTS) {
-                lua_pushboolean(L, 0); lua_pushnumber(L, 0); lua_pushnil(L); lua_pushnil(L);
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            const int spec = static_cast<int>(luaL_optnumber(L, 2, 0));
+            if (!gh || index < 1 || index > game::GameHandler::MAX_GLYPH_SLOTS) return 0;
+            if (spec != 0 && (spec < 1 || spec > 2)) return 0;
+            std::array<uint32_t, 6> slotIds{}, inFields{};
+            uint32_t enabled = 0;
+            if (!gh->getGlyphSocketFields(slotIds, inFields, enabled)) return 0;
+            gh->ensureGlyphPropertiesLoaded();
+            const size_t i = static_cast<size_t>(index - 1);
+            if ((enabled & (1u << i)) != 0) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
+            uint32_t slotType = 0;
+            if (gh->getGlyphSlotType(slotIds[i], slotType)) lua_pushnumber(L, slotType + 1);
+            else lua_pushnil(L);
+            const auto& glyphs = spec != 0 ? gh->getGlyphs(static_cast<uint8_t>(spec - 1))
+                                           : gh->getGlyphs();
+            const uint32_t glyphId = glyphs[i];
+            uint32_t glyphType = 0;
+            if (glyphId == 0 || !gh->getGlyphPropertiesType(glyphId, glyphType)) {
+                lua_pushnil(L);
+                lua_pushnil(L);
                 return 4;
             }
-            const auto& glyphs = (spec >= 1 && spec <= 2)
-                ? gh->getGlyphs(static_cast<uint8_t>(spec - 1)) : gh->getGlyphs();
-            uint16_t glyphId = glyphs[index - 1];
-            // Glyph type: slots 1,2,3 = major (1), slots 4,5,6 = minor (2)
-            int glyphType = (index <= 3) ? 1 : 2;
-            lua_pushboolean(L, 1);              // enabled
-            lua_pushnumber(L, glyphType);       // glyphType (1=major, 2=minor)
-            if (glyphId != 0) {
-                // The *spell*, not the properties id the server sent. Every
-                // caller treats this as a spell - the glyph panel builds its
-                // link from it and the tooltip describes it - and pushing the
-                // properties id gave them a number that means something else.
-                // GlyphProperties.dbc field 1 is the spell; checked by
-                // resolving it for all 362 rows, which come out named "Glyph
-                // of Moonfire" and the like.
-                gh->ensureGlyphPropertiesLoaded();
-                const uint32_t spellId = gh->getGlyphSpellId(glyphId);
-                lua_pushnumber(L, spellId ? spellId : glyphId);   // glyphSpellID
-                // ...and its own icon rather than a warrior glyph for everyone.
-                std::string icon = spellId ? gh->getSpellIconPath(spellId) : std::string();
-                lua_pushstring(L, icon.empty()
-                    ? "Interface\\Icons\\INV_Misc_QuestionMark" : icon.c_str());
-            } else {
-                lua_pushnil(L);
-                lua_pushnil(L);
-            }
+            lua_pushnumber(L, gh->getGlyphSpellId(glyphId));
+            const std::string icon = gh->getIconPath(gh->getGlyphPropertiesIconId(glyphId));
+            if (icon.empty()) lua_pushnil(L);
+            else lua_pushstring(L, icon.c_str());
             return 4;
         }},
                 // ---- Trade skills ---------------------------------------
@@ -4788,14 +4791,41 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushstring(L, link.c_str());
             return 1;
         }},
-                // GlyphMatchesSocket(socket) → whether what is on the cursor
-                // fits. Still false, and now for a narrower reason: the cursor
-                // does carry the item, but nothing here reads a glyph's own
-                // socket type - major glyphs go in three sockets and minor ones
-                // in the other three, and lighting all six would offer a drop
-                // the server then refuses.
+                // GlyphMatchesSocket(socket) (0x005b7410) → 1 when the glyph
+                // the pending spell applies is of the socket's kind, else
+                // nothing; nil with no player.
                 {"GlyphMatchesSocket", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0);
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GlyphMatchesSocket(socketIndex)");
+            auto* gh = getGameHandler(L);
+            const int index = static_cast<int>(std::lround(lua_tonumber(L, 1)));
+            std::array<uint32_t, 6> slotIds{}, glyphs{};
+            uint32_t enabled = 0;
+            if (!gh || !gh->getGlyphSocketFields(slotIds, glyphs, enabled)) {
+                lua_pushnil(L);
+                return 1;
+            }
+            const uint32_t spellId = gh->getPendingGlyphSpellId();
+            if (spellId == 0 || index < 1 || index > game::GameHandler::MAX_GLYPH_SLOTS) return 0;
+            const auto& cache = gh->spellNameCacheRef();
+            const auto it = cache.find(spellId);
+            if (it == cache.end()) return 0;
+            gh->ensureGlyphPropertiesLoaded();
+            if (!game::glyph_socket::matches(
+                    it->second.effectIds, it->second.effectMiscValues,
+                    slotIds[static_cast<size_t>(index - 1)],
+                    [gh](uint32_t id, uint32_t& type) { return gh->getGlyphPropertiesType(id, type); },
+                    [gh](uint32_t id, uint32_t& type) { return gh->getGlyphSlotType(id, type); })) {
+                return 0;
+            }
+            lua_pushnumber(L, 1);
+            return 1;
+        }},
+                // SpellCanTargetGlyph() (0x007fdd60) → 1 while a pending
+                // spell waits on a glyph socket (target flag 0x20000), else nil.
+                {"SpellCanTargetGlyph", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (gh && gh->isAwaitingGlyphTarget()) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
             return 1;
         }},
                 

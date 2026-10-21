@@ -908,6 +908,7 @@ bool SpellHandler::armGroundTarget(uint32_t spellId, uint64_t caster) {
         it->second.targetFlags, it->second.implicitTargetsA[0], trajectory);
     if (!ground_target::wantsLocation(required)) return false;
     if (owner_.isAwaitingItemTarget()) owner_.cancelItemTargeting();
+    owner_.cancelGlyphTargeting();
     unitTarget_ = UnitTarget{};
     groundTarget_ = GroundTarget{};
     groundTarget_.spellId = spellId;
@@ -1229,10 +1230,16 @@ bool SpellHandler::auraLetsSpell(uint64_t unit, uint32_t spellId) const {
     return false;
 }
 
+void SpellHandler::reportLocalCastFailure(uint32_t spellId, uint8_t result) {
+    const std::string text = castFailureMessage(owner_, spellId, result, -1, 0, 0);
+    if (!text.empty()) owner_.addUIError(text);
+}
+
 void SpellHandler::armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required) {
     // 0x0080cce0: the cursor holds it (0x00d3f4e4) until a unit is clicked
     // or it is put down; it takes the place of a spell held for a place.
     if (owner_.isAwaitingItemTarget()) owner_.cancelItemTargeting();
+    owner_.cancelGlyphTargeting();
     groundTarget_ = GroundTarget{};
     unitTarget_ = UnitTarget{spellId, caster, required};
     LOG_INFO("Unit targeting: spell ", spellId, " waits for a unit (wants 0x", std::hex, required, std::dec, ")");

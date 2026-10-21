@@ -1274,12 +1274,14 @@ void registerSpellLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             if (gh) gh->cancelGroundTargeting();
             if (gh && gh->isAwaitingItemTarget()) gh->cancelItemTargeting();
+            if (gh) gh->cancelGlyphTargeting();
             return 0;
         }},
                 {"SpellIsTargeting", [](lua_State* L) -> int {
             // 0x00d3f4e4: a spell is on the cursor waiting for its target.
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && (gh->isGroundTargeting() || gh->isUnitTargeting() || gh->isAwaitingItemTarget()));
+            lua_pushboolean(L, gh && (gh->isGroundTargeting() || gh->isUnitTargeting() ||
+                                      gh->isAwaitingItemTarget() || gh->isAwaitingGlyphTarget()));
             return 1;
         }},
                 // The world clicks the left and right buttons are bound to

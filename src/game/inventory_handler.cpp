@@ -1,6 +1,7 @@
 #include "game/inventory_handler.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/spell_classification.hpp"
+#include "game/glyph_socket.hpp"
 #include "game/item_text.hpp"
 #include "game/interface_text.hpp"
 #include "game/inventory_slots.hpp"
@@ -2076,6 +2077,25 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
         owner_.getSpellHandler()->noteGroundCastSpell(useSpellId);
     }
 
+    // A glyph opens the glyph frame (USE_GLYPH, 0x005d8650 for an item of
+    // class 16) and its spell waits for a socket (Targets 0x20000) rather
+    // than going out.
+    constexpr uint32_t kItemClassGlyph = 16;
+    if (itemInfo && itemInfo->valid && itemInfo->itemClass == kItemClassGlyph &&
+        owner_.addonEventCallbackRef()) {
+        owner_.addonEventCallbackRef()("USE_GLYPH", {});
+    }
+    if (useSpellId != 0 &&
+        (owner_.getSpellTargetFlags(useSpellId) & glyph_socket::kTargetFlagGlyph) != 0) {
+        pendingItemTarget_.reset();
+        pendingUnitTarget_.reset();
+        pendingGlyphTarget_ = PendingItemTarget{.bag = wowBag, .slot = wowSlot, .itemGuid = itemGuid,
+                                                .spellId = useSpellId, .itemId = item.itemId,
+                                                .itemName = item.name};
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURSOR_UPDATE", {});
+        return;
+    }
+
     if (useSpellId != 0 &&
         (owner_.getSpellTargetFlags(useSpellId) & kSpellTargetFlagItem) != 0) {
         pendingItemTarget_ = PendingItemTarget{.bag = wowBag, .slot = wowSlot, .itemGuid = itemGuid, .spellId = useSpellId,
@@ -2197,6 +2217,9 @@ uint32_t InventoryHandler::getPendingItemTargetSourceItemId() const {
 
 void InventoryHandler::cancelItemTargeting() {
     pendingItemTarget_.reset();
+    // One spell waits at a time (0x00d3f4e4): putting the cursor down drops
+    // whichever it was.
+    pendingGlyphTarget_.reset();
 }
 
 void InventoryHandler::beginSpellItemTargeting(uint32_t spellId, const std::string& spellName) {
@@ -2458,19 +2481,52 @@ void InventoryHandler::useItemInBag(int bagIndex, int slotIndex, bool confirmed,
                     unitTarget);
 }
 
-void InventoryHandler::placeGlyphFromBag(uint8_t wireBag, uint8_t wireSlot,
-                                         uint32_t socketIndex) {
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    // The server refuses the whole use when the index is past the last socket,
-    // so a bad one loses the item use as well as the placement.
-    if (socketIndex >= 6) return;
-    auto packet = UseItemPacket::build(wireBag, wireSlot, /*itemGuid=*/0,
-                                       /*spellId=*/0, /*targetGuid=*/0,
-                                       /*itemTargetGuid=*/0, /*gameObjectGuid=*/0,
-                                       socketIndex);
-    LOG_INFO("placeGlyphFromBag: bag=", (int)wireBag, " slot=", (int)wireSlot,
-             " socket=", socketIndex);
+bool InventoryHandler::isAwaitingGlyphTarget() const {
+    if (!pendingGlyphTarget_) return false;
+    if (owner_.getState() != WorldState::IN_WORLD) {
+        pendingGlyphTarget_.reset();
+        return false;
+    }
+    return true;
+}
+
+uint32_t InventoryHandler::getPendingGlyphSpellId() const {
+    return isAwaitingGlyphTarget() ? pendingGlyphTarget_->spellId : 0;
+}
+
+void InventoryHandler::cancelGlyphTargeting() {
+    pendingGlyphTarget_.reset();
+}
+
+bool InventoryHandler::placePendingGlyph(uint32_t socketIndex) {
+    if (!isAwaitingGlyphTarget() || !owner_.getSocket()) return false;
+    const PendingItemTarget pending = *pendingGlyphTarget_;
+    const auto& cache = owner_.spellNameCacheRef();
+    const auto it = cache.find(pending.spellId);
+    if (it == cache.end()) return false;
+    owner_.ensureGlyphPropertiesLoaded();
+    glyph_socket::Sockets sockets;
+    if (!owner_.getGlyphSocketFields(sockets.slotIds, sockets.glyphs, sockets.enabledMask)) {
+        return false;
+    }
+    const uint8_t result = glyph_socket::placement(
+        it->second.effectIds, it->second.effectMiscValues, static_cast<int>(socketIndex), sockets,
+        [this](uint32_t id, uint32_t& type) { return owner_.getGlyphPropertiesType(id, type); },
+        [this](uint32_t id, uint32_t& type) { return owner_.getGlyphSlotType(id, type); });
+    pendingGlyphTarget_.reset();
+    if (result != glyph_socket::kResultOk) {
+        // Through the cast's failure (0x00808200), which drops the spell.
+        if (auto* spells = owner_.getSpellHandler()) spells->reportLocalCastFailure(pending.spellId, result);
+        return false;
+    }
+    // The socket is the use's glyph index, and the cast is aimed at a glyph
+    // socket (0x0080c3e0 puts 0x20000 on its target mask).
+    auto packet = UseItemPacket::build(pending.bag, pending.slot, pending.itemGuid, pending.spellId,
+                                       0, 0, 0, socketIndex, glyph_socket::kTargetFlagGlyph);
+    LOG_INFO("Placing glyph: bag=", static_cast<int>(pending.bag), " slot=",
+             static_cast<int>(pending.slot), " spell=", pending.spellId, " socket=", socketIndex);
     owner_.getSocket()->send(packet);
+    return true;
 }
 
 void InventoryHandler::openItemBySlot(int backpackIndex) {

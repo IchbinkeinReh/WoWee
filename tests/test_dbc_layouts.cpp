@@ -284,3 +284,21 @@ TEST_CASE("A dynamic object's fields sit where the client reads them", "[update_
     CHECK(j["DYNAMICOBJECT_CASTER"].get<uint32_t>() == kObjectEnd);
     CHECK(j["DYNAMICOBJECT_CASTTIME"].get<uint32_t>() == kObjectEnd + 0x14 / 4);
 }
+
+// The glyph sockets: PlaceGlyphInSocket (0x0080c3e0) reads their GlyphSlot ids
+// at +0x1230, the glyphs in them at +0x1248 and the unlocked mask at +0x1260
+// past UNIT_END - the three right after the three no-reagent words.
+TEST_CASE("The glyph socket fields sit where the client reads them", "[update_fields]") {
+    const std::string path = (std::filesystem::path(WOWEE_SOURCE_DIR) /
+        "Data" / "expansions" / "wotlk" / "update_fields.json").string();
+    std::ifstream in(path);
+    REQUIRE(in.good());
+    nlohmann::json j;
+    in >> j;
+    const uint32_t unitEnd = j["UNIT_END"].get<uint32_t>();
+    CHECK(j["PLAYER_FIELD_GLYPH_SLOTS_1"].get<uint32_t>() == unitEnd + 0x1230 / 4);
+    CHECK(j["PLAYER_FIELD_GLYPHS_1"].get<uint32_t>() == unitEnd + 0x1248 / 4);
+    CHECK(j["PLAYER_GLYPHS_ENABLED"].get<uint32_t>() == unitEnd + 0x1260 / 4);
+    CHECK(j["PLAYER_NO_REAGENT_COST_1"].get<uint32_t>() + 3 ==
+          j["PLAYER_FIELD_GLYPH_SLOTS_1"].get<uint32_t>());
+}

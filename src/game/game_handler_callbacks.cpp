@@ -4205,8 +4205,20 @@ void GameHandler::useKeyringItem(int index, bool confirmed) {
     if (inventoryHandler_) inventoryHandler_->useKeyringItem(index, confirmed);
 }
 
-void GameHandler::placeGlyphFromBag(uint8_t wireBag, uint8_t wireSlot, uint32_t socketIndex) {
-    if (inventoryHandler_) inventoryHandler_->placeGlyphFromBag(wireBag, wireSlot, socketIndex);
+bool GameHandler::isAwaitingGlyphTarget() const {
+    return inventoryHandler_ && inventoryHandler_->isAwaitingGlyphTarget();
+}
+
+uint32_t GameHandler::getPendingGlyphSpellId() const {
+    return inventoryHandler_ ? inventoryHandler_->getPendingGlyphSpellId() : 0;
+}
+
+void GameHandler::cancelGlyphTargeting() {
+    if (inventoryHandler_) inventoryHandler_->cancelGlyphTargeting();
+}
+
+bool GameHandler::placePendingGlyph(uint32_t socketIndex) {
+    return inventoryHandler_ && inventoryHandler_->placePendingGlyph(socketIndex);
 }
 
 void GameHandler::useItemInBag(int bagIndex, int slotIndex, bool confirmed,
