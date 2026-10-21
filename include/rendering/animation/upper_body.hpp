@@ -75,6 +75,10 @@ struct Unit {
     bool seatedRide = false;
     /// Health 1 or more (+0x48), which the seat's hold on the body asks.
     bool alive = true;
+    /// A vehicle whose upper-body key bone plays an animation of its seats'
+    /// (+0xf5c +0x58 has its bit, 0x00756cd0): that bone is the vehicle's,
+    /// and nothing asked of the unit changes it.
+    bool vehicleHoldsUpper = false;
 
     // What the base animation (0x00724500, base_animation.hpp) reads
     // besides.

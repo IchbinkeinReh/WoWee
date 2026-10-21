@@ -163,6 +163,10 @@ public:
                                                             uint32_t animationId) const;
     /// The key bone back to the body (0x00735a60). False where it had none.
     bool stopKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId);
+    /// playKeyBoneAnimation for a vehicle's seat (0x00756f80): while it
+    /// plays, nothing the vehicle is asked takes the bone (0x00756cd0), and
+    /// a one-shot's end gives it back to the body (0x00757280).
+    bool playVehicleKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId, bool once = false);
     /// Whether the model has the key bone.
     [[nodiscard]] bool hasKeyBone(uint32_t instanceId, int32_t keyBoneId) const;
     /// Whether the instance is hung on a seat (setInstanceSeat).
@@ -608,6 +612,9 @@ private:
             /// The speed it runs at: 2 for a swing a swing was asked over
             /// (0x00827000 from 0x007385c0).
             float rate = 1.0f;
+            /// Played by the vehicle for a seat (0x00756f80, its bit at
+            /// +0x58): the bone is the vehicle's until it is let go.
+            bool vehicle = false;
         };
         std::vector<KeyBoneAnimation> keyBoneAnimations;
         std::vector<int16_t> boneKeyBoneAnimation;

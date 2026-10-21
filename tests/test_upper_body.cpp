@@ -395,3 +395,23 @@ TEST_CASE("hovering on the ground, the stand is the hover (0x0071df30)", "[upper
     CHECK(ub::hoverReplaces(8));
     CHECK_FALSE(ub::hoverReplaces(26));
 }
+
+TEST_CASE("a vehicle's upper body its seats animate is theirs (0x00756cd0)", "[upper_body]") {
+    const auto data = table();
+    ub::Unit vehicle = running();
+    vehicle.vehicleHoldsUpper = true;
+    // A swing on the move would go to the upper body: the bone is the
+    // seat's, so nothing changes there.
+    auto d = ub::decide(data, vehicle, asked(kAttack1H, false), slots(kRun, 0.0f, true, 160, 0.0f, true));
+    CHECK(d.upperAction == ub::Action::Keep);
+    // Stopping, the whole body does not take the upper body's back.
+    ub::Unit still;
+    still.vehicleHoldsUpper = true;
+    d = ub::decide(data, still, asked(kStand, true), slots(kRun, 0.0f, true, kSpellCast, 100.0f, false));
+    CHECK_FALSE(d.bodyFromUpper);
+    CHECK(d.body.anim == static_cast<int32_t>(kStand));
+    CHECK(d.upperAction == ub::Action::Keep);
+    // Dying, it is not let go here.
+    d = ub::decide(data, still, asked(kDeath, false), slots(kStand, 0.0f, true, 160, 0.0f, true));
+    CHECK(d.upperAction == ub::Action::Keep);
+}

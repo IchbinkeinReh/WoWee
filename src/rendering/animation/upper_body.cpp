@@ -174,8 +174,9 @@ Decision decide(const anim::AnimationDataTable& data, const Unit& unit, const Sl
             if (isMovement(want) && (isAttack(bodyB) || isSpell(bodyB))) {
                 // Moving off mid-swing or mid-cast: it goes on above.
                 bodyToUpper = true;
-            } else if (hasUpper && ((isAttackOrReady(cb) && (isReady(b) || want == 0)) ||
-                                    (isSpellOrReady(cb) && (isReadySpell(b) || isReady(b) || want == 0)))) {
+            } else if (hasUpper && !unit.vehicleHoldsUpper &&
+                       ((isAttackOrReady(cb) && (isReady(b) || want == 0)) ||
+                        (isSpellOrReady(cb) && (isReadySpell(b) || isReady(b) || want == 0)))) {
                 // Stopping mid-swing or mid-cast: the whole body takes it.
                 upperChanges = true;
                 d.body = now.upper;
@@ -238,6 +239,9 @@ Decision decide(const anim::AnimationDataTable& data, const Unit& unit, const Sl
         bodyChanges = false;
     }
 
+    // A vehicle's upper body its seats animate is left to them.
+    if (unit.vehicleHoldsUpper) upperChanges = false;
+
     // 0x00737ef0 for each: the same animation goes on, another starts. An
     // upper body taking up what the body plays comes in unblended, and the
     // body blends into what it takes up.
@@ -254,7 +258,7 @@ Decision decide(const anim::AnimationDataTable& data, const Unit& unit, const Sl
         }
     }
     // Dying, the upper body goes back to the body (0x00832840 on +0xb84).
-    if (isDeath(b) && hasUpper) d.upperAction = Action::Release;
+    if (isDeath(b) && hasUpper && !unit.vehicleHoldsUpper) d.upperAction = Action::Release;
     if (bodyChanges) {
         // A one-shot asked again starts again (a swing over a swing waits
         // instead, above).

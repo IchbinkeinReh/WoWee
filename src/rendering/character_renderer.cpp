@@ -2392,6 +2392,12 @@ void CharacterRenderer::playUnitAnimation(uint32_t instanceId, uint32_t animatio
             now.upper = {static_cast<int32_t>(k.animationId), k.time, !k.once};
     }
     upper_body::Unit unit = instance.unit;
+    // The vehicle's seats animating its upper body's bone (0x00756cd0).
+    unit.vehicleHoldsUpper =
+        std::any_of(instance.keyBoneAnimations.begin(), instance.keyBoneAnimations.end(),
+                    [bone](const CharacterInstance::KeyBoneAnimation& k) {
+                        return k.keyBoneId == bone && k.vehicle && k.sequence >= 0 && !k.returning;
+                    });
     const bool seated = instance.seatAnimationHeld && instance.seatRideSeated;
     unit.seatedRide = seated;
     unit.swimIdle = tierAnimationFor(model, anim::SWIM_IDLE, instance.animationTier);
@@ -2831,7 +2837,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                         continue;
                     }
                     k.time = duration;
-                    if (unitUpperBone >= 0 && k.keyBoneId == unitUpperBone) {
+                    if (unitUpperBone >= 0 && k.keyBoneId == unitUpperBone && !k.vehicle) {
                         upperEnded = true;
                         continue;
                     }
@@ -3510,6 +3516,15 @@ void CharacterRenderer::returnKeyBone(CharacterInstance& instance, int32_t keyBo
     auto a = std::find_if(anims.begin(), anims.end(), [&](const auto& k) { return k.keyBoneId == keyBoneId; });
     if (a == anims.end() || a->sequence < 0 || a->returning) return;
     returnKeyBoneState(*a, instance.globalSequenceTime, models[instance.modelId].data);
+}
+
+bool CharacterRenderer::playVehicleKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId,
+                                                    bool once) {
+    if (!playKeyBoneAnimation(instanceId, keyBoneId, animationId, once)) return false;
+    for (auto& k : instances[instanceId].keyBoneAnimations) {
+        if (k.keyBoneId == keyBoneId) k.vehicle = true;
+    }
+    return true;
 }
 
 bool CharacterRenderer::stopKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId) {
