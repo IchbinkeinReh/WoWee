@@ -1549,6 +1549,32 @@ const ClientCVarBinding* findClientCVar(const std::string& lowerName) {
     return nullptr;
 }
 
+/// RegisterForSave("variable") (0x0052b470) and
+/// RegisterForSavePerCharacter("variable") (0x0052b4e0): the global kept in
+/// the account's or the character's SavedVariables.lua. Blizzard's scripts
+/// only - a tainted caller is refused.
+static int registerForSave(lua_State* L, bool perCharacter) {
+    if (taint::current() != 0) {
+        return luaL_error(L, perCharacter
+            ? "RegisterForSavePerCharacter() is only available to Blizzard scripts"
+            : "RegisterForSave() is only available to Blizzard scripts");
+    }
+    if (!lua_isstring(L, 1)) {
+        return luaL_error(L, perCharacter ? "Usage: RegisterForSavePerCharacter(\"variable\")"
+                                          : "Usage: RegisterForSave(\"variable\")");
+    }
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
+    auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    if (!engine) return 0;
+    const std::string name = lua_tostring(L, 1);
+    auto& list = engine->registeredForSave(perCharacter);
+    if (std::find(list.begin(), list.end(), name) == list.end()) list.push_back(name);
+    return 0;
+}
+static int lua_RegisterForSave(lua_State* L) { return registerForSave(L, false); }
+static int lua_RegisterForSavePerCharacter(lua_State* L) { return registerForSave(L, true); }
+
 static int lua_GetCVar(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     // Folded to lower case, because the client's CVar names are not
@@ -7766,7 +7792,8 @@ void registerSystemLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->requestGuildEventLog();
             return 0;
         }},
-                {"RegisterForSave",          lua_ReturnNothing},
+                {"RegisterForSave",          lua_RegisterForSave},
+                {"RegisterForSavePerCharacter", lua_RegisterForSavePerCharacter},
                 {"RegisterStaticConstants",  lua_ReturnNothing},
                 {"SetChatWindowName",        lua_SetChatWindowName},
                 {"SetupFullscreenScale",     lua_SetupFullscreenScale},

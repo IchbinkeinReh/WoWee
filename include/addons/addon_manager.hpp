@@ -78,6 +78,9 @@ public:
     /// Where this character's chat colour table is kept, the COLORS section
     /// of the client's chat-cache.txt. Empty before a character is known.
     [[nodiscard]] std::string chatCachePath() const;
+    /// Where the globals RegisterForSave and RegisterForSavePerCharacter name
+    /// are kept: the account's SavedVariables.lua and the character's.
+    [[nodiscard]] std::string blizzardSavedVariablesPath(bool perCharacter) const;
 
     /// Take the interface down, leaving a live but empty Lua state.
     ///

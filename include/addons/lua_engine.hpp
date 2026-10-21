@@ -5,6 +5,7 @@
 #include <map>
 #include <functional>
 #include <unordered_map>
+#include <array>
 #include <string>
 #include <utility>
 #include <vector>
@@ -238,6 +239,14 @@ public:
     /// The edit box taking keystrokes, or zero (GetCurrentKeyBoardFocus).
     [[nodiscard]] uint32_t editFocus() const { return focusedWid_; }
 
+    /// The globals Blizzard's scripts registered with RegisterForSave (0) and
+    /// RegisterForSavePerCharacter (1) - the client's two lists at 0x00bd0a78,
+    /// written to the account's and the character's SavedVariables.lua and
+    /// emptied as they are (0x00527130).
+    std::vector<std::string>& registeredForSave(bool perCharacter) {
+        return registeredForSave_[perCharacter ? 1 : 0];
+    }
+
     // SavedVariables: load globals from file, save globals to file
     bool loadSavedVariables(const std::string& path);
     bool saveSavedVariables(const std::string& path, const std::vector<std::string>& varNames);
@@ -404,6 +413,7 @@ private:
     /// The edit box taking keystrokes, or zero. One at a time, which is
     /// what focus means.
     uint32_t focusedWid_ = 0;
+    std::array<std::vector<std::string>, 2> registeredForSave_;
     /// Keys held down on a SPELL, ITEM, MACRO or CLICK binding, by key code,
     /// with the command they were pressed on. The release is that binding's
     /// whatever the modifiers are by then, as 0x004f6b70 keeps the modifiers a

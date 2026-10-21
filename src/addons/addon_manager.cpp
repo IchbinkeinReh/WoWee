@@ -390,6 +390,13 @@ void AddonManager::loadAllAddons() {
         // InterfaceOptions_AddCategory is FrameXML's - the bootstrap's stub for
         // it is overwritten when the real one loads, and registering against the
         // stub would put the panel nowhere.
+        // The globals FrameXML registered for saving, read back from the
+        // account's and the character's SavedVariables.lua once FrameXML has
+        // loaded (0x0052a980 -> 0x00512930).
+        luaEngine_.loadSavedVariables(blizzardSavedVariablesPath(false));
+        if (const std::string perChar = blizzardSavedVariablesPath(true); !perChar.empty()) {
+            luaEngine_.loadSavedVariables(perChar);
+        }
         registerWoweeOptionsPanel();
         giveCoinAmountsClearance();
         // Populating a dropdown is not opening one. Catches the initializers
@@ -499,6 +506,12 @@ void AddonManager::saveEnabledState() const {
     for (const auto& addon : addons_) {
         out << addon.addonName << "=" << (isAddonEnabled(addon.addonName) ? "1" : "0") << "\n";
     }
+}
+
+std::string AddonManager::blizzardSavedVariablesPath(bool perCharacter) const {
+    if (!perCharacter) return core::getConfigRoot() + "/SavedVariables.lua";
+    if (characterName_.empty()) return "";
+    return core::getConfigRoot() + "/characters/" + characterName_ + ".SavedVariables.lua";
 }
 
 std::string AddonManager::chatCachePath() const {
@@ -1688,6 +1701,14 @@ void AddonManager::saveAllSavedVariables() {
     // the way out of the process would write every one of those files from a
     // state that never loaded them.
     if (!addonsLoaded_) return;
+    // The globals Blizzard's scripts registered, account-wide and for the
+    // character, and the two lists emptied as the client does (0x00527130).
+    for (const bool perCharacter : {false, true}) {
+        auto& names = luaEngine_.registeredForSave(perCharacter);
+        const std::string path = blizzardSavedVariablesPath(perCharacter);
+        if (!path.empty()) luaEngine_.saveSavedVariables(path, names);
+        names.clear();
+    }
     // The chat colour table, as chat-cache.txt's COLORS section (0x004fd300).
     if (const std::string path = chatCachePath(); !path.empty()) {
         std::error_code ec;
