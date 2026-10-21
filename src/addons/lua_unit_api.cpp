@@ -8,6 +8,7 @@
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "game/power_prediction.hpp"
+#include "game/unit_level_display.hpp"
 #include <cstdlib>
 
 namespace wowee::addons {
@@ -173,11 +174,25 @@ static int lua_UnitPowerMax(lua_State* L) {
     return 1;
 }
 
+// UnitLevel(unit) (0x0060f9e0): the level, or -1 for the skull - a unit
+// hostile to the player ten or more levels above them, or a boss
+// (game::displayedUnitLevel).
 static int lua_UnitLevel(lua_State* L) {
     const char* uid = luaL_optstring(L, 1, "player");
     auto* unit = resolveUnit(L, uid);
     if (unit) {
-        lua_pushnumber(L, unit->getLevel());
+        auto* gh = getGameHandler(L);
+        auto* player = gh ? resolveUnit(L, "player") : nullptr;
+        unsigned typeFlags = 0;
+        if (gh && unit->getType() == game::ObjectType::UNIT) {
+            const auto& cache = gh->getCreatureInfoCache();
+            const auto it = cache.find(unit->getEntry());
+            if (it != cache.end()) typeFlags = it->second.typeFlags;
+        }
+        const int reaction = player ? gh->unitReaction(*unit, *player) : 0;
+        lua_pushnumber(L, game::displayedUnitLevel(static_cast<int>(unit->getLevel()), player != nullptr,
+                                                   player ? static_cast<int>(player->getLevel()) : 0,
+                                                   reaction, typeFlags));
     } else {
         auto* gh = getGameHandler(L);
         std::string uidStr(uid);
