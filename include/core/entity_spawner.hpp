@@ -288,6 +288,13 @@ public:
         uint32_t behavior = kNoAnimationBehavior;
     };
     AnimationRecord animationRecord(uint32_t instanceId) const;
+    /// Another unit's sheath state as the client keeps it (+0xb5c), where
+    /// it has one.
+    [[nodiscard]] std::optional<SheathState> unitSheathState(uint64_t guid) const {
+        auto it = unitSheath_.find(guid);
+        if (it == unitSheath_.end()) return std::nullopt;
+        return it->second.state;
+    }
     /// A display's CreatureModelData Flags (+4); nothing when a record is
     /// missing (0x00717a20).
     std::optional<uint32_t> creatureModelFlags(uint32_t displayId) const;
@@ -472,6 +479,8 @@ public:
         uint32_t instanceId = 0;
         bool hasSpine = false;
         bool hasHead = false;
+        /// Shuffling round on the spot (+0xa38 0x1800), as last turned.
+        bool turning = false;
     };
     std::unordered_map<uint64_t, UnitBody>& getUnitBodies() { return unitBodies_; }
     std::unordered_map<uint64_t, bool>& getCreatureWasSwimming() { return creatureWasSwimming_; }

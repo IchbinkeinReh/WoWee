@@ -595,8 +595,11 @@ void AnimationCallbackHandler::setupCallbacks() {
                     ac->setSeatedLoopAnimation(0);
                     ac->stopSpellCast();
                 }
-            } else if (isChannel) {
-                cr->playAnimation(instanceId, rendering::anim::STAND, true);
+            } else {
+                // A cast loop its upper body took up on the move goes with
+                // the cast.
+                cr->releaseUpperBodyLoop(instanceId);
+                if (isChannel) cr->playAnimation(instanceId, rendering::anim::STAND, true);
             }
         }
     });

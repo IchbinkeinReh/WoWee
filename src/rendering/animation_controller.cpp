@@ -150,6 +150,9 @@ void AnimationController::startSpellCast(uint32_t precastAnimId, uint32_t castAn
 
 void AnimationController::stopSpellCast() {
     characterAnimator_.stopSpellCast();
+    // A cast loop its upper body took up on the move goes with the cast.
+    if (auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr)
+        cr->releaseUpperBodyLoop(renderer_->getCharacterInstanceId());
 }
 
 void AnimationController::setSeatedLoopAnimation(uint32_t animationId) {
@@ -1157,7 +1160,10 @@ void AnimationController::updateCharacterAnimation() {
     // playAnimation call).  One-shot animations must NOT be re-asserted after the
     // renderer auto-resets them to STAND on completion - the FSM detects the ID
     // change via oneShotComplete and transitions to the next state in the same frame.
-    const bool drifted = haveState && currentAnimId != animId && loop;
+    // Nor while the body finishes a swing it took back from the upper body,
+    // which ends into what was asked (0x007385c0, 0x0073b510).
+    const bool drifted = haveState && currentAnimId != animId && loop &&
+                         !characterRenderer->bodyEndsInto(characterInstanceId, animId);
     const bool shouldPlay = requestChanged || drifted;
 
     // Debug: log animation decisions (only when animation changes or replays)

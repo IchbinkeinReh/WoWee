@@ -202,6 +202,7 @@ float turnUnitBody(rendering::CharacterRenderer& cr, uint32_t instanceId,
     cr.setInstanceTorsoYaw(instanceId, r.spineYaw, r.headYaw);
 
     const by::TurnShuffle want = by::turnShuffle(moveFlags, r.step, mayShuffle);
+    body.turning = want != by::TurnShuffle::None;
     uint32_t wantAnim = want == by::TurnShuffle::Left  ? rendering::anim::SHUFFLE_LEFT
                       : want == by::TurnShuffle::Right ? rendering::anim::SHUFFLE_RIGHT : 0;
     if (wantAnim != 0 && !cr.hasAnimation(instanceId, wantAnim)) wantAnim = 0;
@@ -236,6 +237,45 @@ uint32_t unitBodyFlags(const game::Entity& entity, bool moving, bool swimming, b
 uint8_t unitAnimationTier(const game::Entity& entity) {
     const uint16_t index = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1);
     return index == 0xFFFF ? 0 : static_cast<uint8_t>(entity.getField(index) >> 24);
+}
+
+// What 0x007385c0 reads of another unit for its upper body: its movement
+// flags as FUN_0073dab0 reads them, falling, turning on the spot, its stand
+// state, its mount, its cast or channel (+0xa38 0x400 is a cast with a cast
+// time), its melee target, its ranged weapon out, whether its model moves
+// only as a whole (CreatureModelData Flags 0x8), and the pose it rides in.
+rendering::upper_body::Unit unitAnimationState(const game::GameHandler& gh, const EntitySpawner& spawner,
+                                               uint64_t guid, const game::Unit& unit, uint32_t moveFlags,
+                                               bool turning, std::optional<uint32_t> riderPose) {
+    namespace ub = rendering::upper_body;
+    ub::Unit u;
+    u.moveFlags = moveFlags | (unit.isFallingByFlags() ? ub::kMoveFalling : 0u);
+    u.leaping = unit.isFallingByFlags();
+    u.turningInPlace = turning;
+    u.standState = unit.getStandState();
+    u.mounted = unit.getMountDisplayId() != 0;
+    if (const auto* cast = gh.getUnitCastState(guid)) {
+        u.channeling = cast->isChannel;
+        u.castTimed = !cast->isChannel && cast->timeTotal > 0.0f;
+    }
+    u.autoAttacking = gh.getUnitMeleeTarget(guid) != 0;
+    u.rangedDrawn = spawner.unitSheathState(guid) == SheathState::Ranged;
+    u.wholeBodyOnly = (spawner.creatureModelFlags(unit.getDisplayId()).value_or(0) & 0x8u) != 0;
+    u.riding = riderPose.has_value();
+    if (riderPose) u.riderPose = *riderPose;
+    return u;
+}
+
+// Another unit's animation tier and what 0x007385c0 reads of it, onto its
+// instance, from what the sync has worked out of how it moves.
+void syncUnitAnimation(rendering::CharacterRenderer& cr, const game::GameHandler& gh, EntitySpawner& spawner,
+                       uint64_t guid, uint32_t instanceId, const game::Unit& unit, bool moving, bool swimming,
+                       bool flying, bool riding) {
+    cr.setAnimationTier(instanceId, unitAnimationTier(unit));
+    cr.setUnitAnimationState(
+        instanceId, unitAnimationState(gh, spawner, guid, unit, unitBodyFlags(unit, moving, swimming, flying),
+                                       spawner.getUnitBodies()[guid].turning,
+                                       riding ? std::optional(spawner.riderPose(guid, instanceId)) : std::nullopt));
 }
 
 // The height a moving unit is drawn at over the floor found under it. On the
@@ -4172,6 +4212,36 @@ void Application::applyServerMovementState(float deltaTime) {
 // ring sliding off an NPC that never moved. Player instances need the same for
 // a different reason: without it they never leave the run animation when they
 // stop.
+rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& self) const {
+    namespace ub = rendering::upper_body;
+    ub::Unit u;
+    // Its own movement flags, the ones it sends (+0x7cc).
+    u.moveFlags = gameHandler->getMovementInfo().flags;
+    u.leaping = (u.moveFlags & ub::kMoveFalling) != 0;
+    u.standState = gameHandler->getStandState();
+    u.mounted = self.getMountDisplayId() != 0;
+    u.channeling = gameHandler->isChanneling();
+    u.castTimed = gameHandler->isCasting() && !u.channeling && gameHandler->getCastTimeTotal() > 0.0f;
+    u.autoAttacking = gameHandler->isAutoAttacking();
+    u.rangedDrawn = appearanceComposer_ && appearanceComposer_->sheathState() == SheathState::Ranged;
+    u.wholeBodyOnly = entitySpawner_ &&
+        (entitySpawner_->creatureModelFlags(self.getDisplayId()).value_or(0) & 0x8u) != 0;
+    if (auto* ac = renderer ? renderer->getAnimationController() : nullptr) {
+        // Turning on the spot shuffles it round (+0xa38 0x1800).
+        u.turningInPlace = ac->turnShuffle() != rendering::body_yaw::TurnShuffle::None;
+        u.riding = ac->isMounted();
+    }
+    // The pose it rides in, as the animation controller puts it in it.
+    if (u.riding && renderer && renderer->getCharacterRenderer()) {
+        if (auto* svs = renderer->getSpellVisualSystem()) {
+            const uint32_t pose = svs->activePlayerRiderPose();
+            if (renderer->getCharacterRenderer()->hasAnimation(renderer->getCharacterInstanceId(), pose))
+                u.riderPose = pose;
+        }
+    }
+    return u;
+}
+
 void Application::syncRenderInstancesToEntities(float deltaTime) {
     auto creatureSyncStart = std::chrono::steady_clock::now();
     if (renderer && gameHandler && renderer->getCharacterRenderer()) {
@@ -4192,8 +4262,12 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             playerPos = glm::vec3(movement.x, movement.y, movement.z);
             playerRenderPos = core::coords::canonicalToRender(playerPos);
             havePlayerPos = true;
-            if (auto self = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid()))
+            if (auto self = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
+                self && self->isUnit()) {
                 charRenderer->setAnimationTier(renderer->getCharacterInstanceId(), unitAnimationTier(*self));
+                charRenderer->setUnitAnimationState(renderer->getCharacterInstanceId(),
+                                                    playerAnimationState(static_cast<const game::Unit&>(*self)));
+            }
         }
         const float syncRadiusSq = 320.0f * 320.0f;
         auto& _creatureInstances = entitySpawner_->getCreatureInstances();
@@ -4334,7 +4408,9 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // as the client's GetCurrentSpeed gives it for a unit on one.
                 charRenderer->setLocomotionSpeed(
                     instanceId, isMovingNow ? entity->getMoveSpeed() : 0.0f);
-                charRenderer->setAnimationTier(instanceId, unitAnimationTier(*entity));
+                syncUnitAnimation(*charRenderer, *gameHandler, *entitySpawner_, guid, instanceId, *unitPtr,
+                                  isMovingNow, _creatureSwimmingState.count(guid) > 0, _creatureFlyingState.count(guid) > 0,
+                                  creatureMount != nullptr);
                 if (creatureMount)
                     charRenderer->setLocomotionSpeed(creatureMount->instanceId,
                                                      isMovingNow ? entity->getMoveSpeed() : 0.0f);
@@ -4579,7 +4655,9 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // plays to - see the creature loop above.
                 const float locomotionSpeed = isMovingNow ? entity->getMoveSpeed() : 0.0f;
                 charRenderer->setLocomotionSpeed(instanceId, locomotionSpeed);
-                charRenderer->setAnimationTier(instanceId, unitAnimationTier(*entity));
+                syncUnitAnimation(*charRenderer, *gameHandler, *entitySpawner_, guid, instanceId, *unitPtr,
+                                  isMovingNow, _pCreatureSwimmingState.count(guid) > 0, _pCreatureFlyingState.count(guid) > 0,
+                                  remoteMount != nullptr);
                 if (remoteMount) {
                     charRenderer->setLocomotionSpeed(remoteMount->instanceId, locomotionSpeed);
                 }

@@ -1373,6 +1373,12 @@ register_test_target(test_animation_ids)
 wowee_add_test(test_animation_data
     SOURCES test_animation_data.cpp)
 
+# ── test_upper_body ──────────────────────────────────────────
+# A unit's upper body on an animation of its own: whether it may differ
+# from the body (0x00723e30) and where an animation asked goes (0x007385c0).
+wowee_add_test(test_upper_body
+    SOURCES test_upper_body.cpp ${CMAKE_SOURCE_DIR}/src/rendering/animation/upper_body.cpp)
+
 # ── test_locomotion_fsm ──────────────────────────────────────
 add_executable(test_locomotion_fsm
     test_locomotion_fsm.cpp

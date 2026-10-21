@@ -8,6 +8,7 @@
 #include "rendering/m2_track_sampler.hpp"
 #include "rendering/vehicle_seat.hpp"
 #include "rendering/animation/animation_data.hpp"
+#include "rendering/animation/upper_body.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 #include <vulkan/vulkan.h>
@@ -102,6 +103,19 @@ public:
     /// ground, 3 flying...), which 0x007176f0 picks the animations it is
     /// asked for by.
     void setAnimationTier(uint32_t instanceId, uint8_t tier);
+    /// The unit an instance draws, as 0x007385c0 reads it: how it moves,
+    /// sits, casts, swings and rides. Given it, what the instance is asked
+    /// is shared between its body and its upper body - the key bone
+    /// 0x0073e840 picks, SpineLow else the head - as the client shares it
+    /// (upper_body::decide); without it the body takes everything.
+    void setUnitAnimationState(uint32_t instanceId, const upper_body::Unit& unit);
+    /// The upper body's own loop, if it has one, back to the body
+    /// (0x00832840): a cast or channel the unit no longer has.
+    void releaseUpperBodyLoop(uint32_t instanceId);
+    /// Whether the body plays a one-shot that ends into `animationId` - one
+    /// asked while the body finishes the swing it took back from its upper
+    /// body, which it plays once that is over (0x0073bbd0 -> 0x0073b510).
+    [[nodiscard]] bool bodyEndsInto(uint32_t instanceId, uint32_t animationId) const;
     /// The loop a unit rests in - its stand state's (sitting, sleeping,
     /// kneeling...) or 0 for Stand. A one-shot played with no return anim
     /// goes back to it, so a seated unit that is hit stays seated.
@@ -567,6 +581,11 @@ private:
             /// it stands in for an animation the model lacks.
             anim::PlayMode mode = anim::PlayMode::Forward;
             anim::PlayMode thenMode = anim::PlayMode::Forward;
+            /// The pose it blends in from (0x00826c40); `returning`, the pose
+            /// the bone set blends from back to the body's over 150 ms
+            /// before it is gone (0x00832840).
+            m2_track::SequenceBlend blend;
+            bool returning = false;
         };
         std::vector<KeyBoneAnimation> keyBoneAnimations;
         std::vector<int16_t> boneKeyBoneAnimation;
@@ -577,6 +596,11 @@ private:
         anim::PlayMode playMode = anim::PlayMode::Forward;
         /// UNIT_FIELD_BYTES_1 byte 3 (+0xb80); see setAnimationTier.
         uint8_t animationTier = 0;
+        /// setUnitAnimationState: the unit it draws, and its upper body's
+        /// key bone (+0xb84; -2 until looked up).
+        bool unitAnimation = false;
+        upper_body::Unit unit;
+        int32_t upperBodyBone = -2;
         /// With eventsRestart, where the next update looks for events
         /// from, once: below zero for a sequence just started, so its first
         /// frame's fire, or where it started in it. Else from where the
@@ -722,7 +746,21 @@ private:
 
     /// playAnimation without the seat's say, and handed on to the
     /// passengers that mirror the instance.
-    void playAnimationNow(uint32_t instanceId, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim);
+    void playAnimationNow(uint32_t instanceId, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim,
+                          bool blend = true);
+    /// What a unit is asked, shared between its body and its upper body
+    /// (0x007385c0); `pass` BodyEnded when its body's one-shot has ended.
+    void playUnitAnimation(uint32_t instanceId, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim,
+                           upper_body::Pass pass);
+    /// An animation on a key bone from `startMs`, blended in from what the
+    /// bone set showed or straight in (0x00832ab0 -> 0x00826c40).
+    bool startKeyBoneAnimation(CharacterInstance& instance, int32_t keyBoneId, uint32_t animationId, bool once,
+                               std::optional<uint32_t> then, float startMs, bool blend);
+    /// A key bone's own animation back to the body's, blended over 150 ms
+    /// (0x00832840).
+    void returnKeyBone(CharacterInstance& instance, int32_t keyBoneId);
+    /// The upper body's key bone (0x0073e840).
+    int32_t upperBodyBone(CharacterInstance& instance);
     /// A seated passenger's upper body (setSeatAnimation): back to what the
     /// seat has it stand as, or to the body; and an animation of its own.
     void standSeatedUpperBody(uint32_t instanceId);
@@ -730,7 +768,8 @@ private:
     void playSeatedUpperBody(uint32_t instanceId, uint32_t animationId, bool loop);
     /// Its upper body given back to the body, the seat's hold on it gone.
     void releaseSeatedUpperBody(uint32_t instanceId);
-    void startAnimation(CharacterInstance& instance, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim);
+    void startAnimation(CharacterInstance& instance, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim,
+                        bool blend = true);
     bool playArmAnimationNow(uint32_t instanceId, int arm, uint32_t animationId, uint32_t eventId);
     /// The passengers that mirror an instance.
     std::vector<uint32_t> mirroringPassengers(uint32_t instanceId) const;
