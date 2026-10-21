@@ -92,6 +92,9 @@ public:
     /// world: lamps, braziers; and what of them glows (ModelData::glows):
     /// glow cards and lava outside. None of it depends on the hour.
     void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
+    /// The light's window level this frame (0..1, wmo_sidn.hpp), which the
+    /// windows' glow lights by.
+    void setRtWindowLevel(float level) { rtWindowLevel_ = level; }
     /// The storey of a building's light at `world` (rt_light_storey.hpp):
     /// from the floor straight below it to the face straight above it, in
     /// world z, in the buildings whose boxes hold it - the highest floor and
@@ -641,6 +644,7 @@ public:
     void setDeferNormalMaps(bool defer) { deferNormalMaps_ = defer; }
 
 private:
+    float rtWindowLevel_ = 0.0f;  ///< setRtWindowLevel
     // WMO material UBO - matches WMOMaterial in wmo.frag.glsl
     struct WMOMaterialUBO {
         int32_t hasTexture;        // 0
@@ -842,6 +846,11 @@ private:
         /// already (no windows, no unlit opaque ones). Gathered as its groups
         /// load.
         std::vector<rt_lights::GlowPatch> glows;
+        /// An interior group's glow: in its baked colours, shadows only.
+        std::vector<rt_lights::GlowPatch> bakedGlows;
+        /// The windows (MOMT 0x10): sidnColor x texture, by the window level
+        /// at draw time; animatedBatch 1 for an interior group's.
+        std::vector<rt_lights::GlowPatch> windowGlows;
         uint32_t mohdFlags = 0;                        // MOHD flags (0x2: see floorAlong)
         bool isLowPlatform = false;
 

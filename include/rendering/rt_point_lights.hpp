@@ -262,14 +262,6 @@ inline PointLight lampLight(const glm::vec3& local, const glm::mat4& modelMatrix
     return out;
 }
 
-/// A jack-o'-lantern: a model named for a pumpkin with a batch that glows -
-/// unlit, or added (the candle's glow card). Hallow's End's G_Pumpkin_01-03
-/// have both; a field's pumpkins (Duskwood's Pumpkin01) and the harvest
-/// festival's have neither, and stay crops. `lowerName` lower-cased.
-inline bool isCandleLitPumpkin(std::string_view lowerName, bool hasGlowBatch) {
-    return hasGlowBatch && lowerName.find("pumpkin") != std::string_view::npos;
-}
-
 /// Where a lamp's light comes from in its model's space: the middle of what
 /// glows - its unlit or additive batches, or its glow cards - weighted by
 /// their vertices; the top of its box, as a fire's, when none does.

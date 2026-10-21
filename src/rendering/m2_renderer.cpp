@@ -2177,26 +2177,6 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     // The lamp's light and what glows first: the ray traced scene leaves the
     // models that give light out of its occluders (registerRtModel).
     if (!skyMode_) {
-        // A jack-o'-lantern (Hallow's End's G_Pumpkin game objects): named for
-        // the vegetable, so the classifier took it for a crop, and the glow of
-        // anything foliage-like is left out (computeGlow). But a candle burns
-        // in it - an unlit inside, an additive glow card - and it lights as
-        // the lanterns beside it do (rt_lights::isCandleLitPumpkin).
-        {
-            std::string lower = gpuModel.name;
-            for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            bool glowBatch = false;
-            for (const auto& batch : gpuModel.batches) {
-                if (batch.batchOpacity < 0.01f) continue;
-                glowBatch = glowBatch || (batch.materialFlags & 0x01u) != 0 || batch.blendMode == 3 ||
-                            batch.blendMode == 4;
-            }
-            if (rt_lights::isCandleLitPumpkin(lower, glowBatch)) {
-                gpuModel.isLanternLike = true;
-                gpuModel.isFoliageLike = false;
-                gpuModel.isSmallFoliage = false;
-            }
-        }
         detectLamp(gpuModel, model);
         computeGlow(gpuModel, model);
     }
@@ -2233,37 +2213,30 @@ void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
 void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& model) {
     gpuModel.glowPatches.clear();
     if (model.vertices.empty() || model.indices.empty()) return;
-    // What gives a light already (an M2 light, fireLight, lampLight), and
-    // what glows without lighting anything: the sky, a trap, ground clutter,
-    // foliage, falling water, a lighthouse's beam.
+    // What gives a light already (an M2 light, fireLight, lampLight) - its
+    // glow is that light, and a second would light it twice - and a trap the
+    // renderer never draws. Nothing else is left out by what it is or what
+    // it is called (a crop, a tree, grass, falling water, a beam): whatever
+    // has a batch that glows lights, by how bright and how large that glow
+    // is (rt_lights::batchGlowColor) - a jack-o'-lantern's candle, a
+    // glowing mushroom, a crystal.
     if (!gpuModel.lights.empty() || gpuModel.isLamp || gpuModel.isBrazierOrFire || gpuModel.isTorch ||
-        gpuModel.isInvisibleTrap || gpuModel.isGroundDetail || gpuModel.isSkyBird || gpuModel.isLightBeam ||
-        gpuModel.isWaterfall || gpuModel.isFoliageLike || gpuModel.isSmallFoliage) {
+        gpuModel.isInvisibleTrap) {
         return;
     }
     rt_lights::GlowBuilder builder;
     for (uint32_t bi = 0; bi < gpuModel.batches.size(); ++bi) {
         const auto& batch = gpuModel.batches[bi];
-        if (batch.batchOpacity < 0.01f || batch.starLayer) continue;
-        // The modulates darken what is behind them; nothing of them glows.
-        if (batch.blendMode >= 5) continue;
-        const bool additive = batch.blendMode == 3 || batch.blendMode == 4;
-        const bool unlit = (batch.materialFlags & 0x01u) != 0;
-        if (!additive && !unlit && !batch.glowCardLike) continue;
-        // What it shows: the texture's mean over what of it is visible, times
-        // how much of it is (an add by alpha, a cutout, a blend), times the
-        // batch's colour - here where it does not move, per frame where it
-        // does (collectRtLights).
-        glm::vec3 color(1.0f);
-        if (batch.texture) {
-            color = batch.texture->averageColor();
-            if (batch.blendMode != 0) color *= batch.texture->alphaCoverage();
-        }
-        if (!batch.colorAnimated) color *= batch.tint * batch.staticAlpha;
-        // An unlit opaque batch is lit by nothing but shows its texture as it
-        // is: a dark one (a statue's stone, a black cloth) glows at nothing.
-        const float bright = std::max(color.r, std::max(color.g, color.b));
-        if (!additive && !batch.glowCardLike && bright < 0.35f) continue;
+        // What it shows (rt_lights::batchGlowColor): the texture's mean over
+        // what of it is visible, times the batch's colour - here where it
+        // does not move, per frame where it does (collectRtLights).
+        const glm::vec3 texel = batch.texture ? batch.texture->averageColor() : glm::vec3(1.0f);
+        const float coverage = batch.texture ? batch.texture->alphaCoverage() : 1.0f;
+        const glm::vec3 tint = batch.colorAnimated ? glm::vec3(1.0f) : batch.tint * batch.staticAlpha;
+        const auto glow = rt_lights::batchGlowColor(batch.blendMode, (batch.materialFlags & 0x01u) != 0,
+                                                    batch.glowCardLike, batch.batchOpacity, texel, coverage, tint);
+        if (!glow) continue;
+        const glm::vec3 color = *glow;
         const size_t end = std::min<size_t>(size_t(batch.indexStart) + batch.indexCount, model.indices.size());
         for (size_t i = batch.indexStart; i + 2 < end; i += 3) {
             const uint16_t a = model.indices[i], b = model.indices[i + 1], c = model.indices[i + 2];
@@ -2295,8 +2268,7 @@ void M2Renderer::detectLamp(M2ModelGPU& gpuModel, const pipeline::M2Model& model
                              lower.find("lantern") != std::string::npos ||
                              lower.find("sconce") != std::string::npos ||
                              lower.find("candle") != std::string::npos ||
-                             lower.find("chandelier") != std::string::npos ||
-                             lower.find("pumpkin") != std::string::npos;  // only a lit one is lantern-like
+                             lower.find("chandelier") != std::string::npos;
         const bool dark = !fixture || lower.find("broken") != std::string::npos ||
                           (lower.size() >= 3 && lower.compare(lower.size() - 3, 3, "off") == 0) ||
                           lower.find("off.m2") != std::string::npos;

@@ -324,14 +324,16 @@ own intensity and reach slider in Debug Lights):
   animated batch's colour and alpha tracks where they move. Its light is at
   the patch's middle, of its hue, with strength and reach growing with the
   square root of its power (brightness x area x the instance's scale squared),
-  capped (`glowLight`). WMOs (`WMORenderer::gatherGlows`): in exterior groups,
-  additive batches only, where no MOLT light stands within a few yards (that
-  light already is the glow's). Not the unlit opaque ones: in a building
-  those are windows, trims and signs painted with their light in them (the
-  inns' `mm_*_windows` textures), and each became a light at the window that
-  shone through the wall into the room behind it and cast the door frames'
-  hard shadows across its floor. Windows (MOMT 0x10) give none either. An
-  emissive doodad of an interior is `baked` like its lamps.
+  capped (`glowLight`). WMOs (`WMORenderer::gatherGlows`): by the same
+  material test, where no MOLT light stands within a few yards (that light
+  already is the glow's); an interior group's glow is `baked` (its colours
+  hold it), as an interior doodad's is. A window (MOMT 0x10) glows by its
+  sidnColor times the texture, scaled each frame by the light's window
+  level, so it lights at night and not at noon. A building's glow light
+  stands 0.4 yards off the patch along the side its faces show
+  (`glowStandOff`): a light in the plane of a window or a lit trim lit the
+  room behind the wall, since a shadow ray stopping short of the light never
+  met the wall it sat in.
 * Particle emitters. While `prepareM2Particles` writes the particles out, an
   instance within 100 yards sums each emitter's live particles
   (`ParticleGlow`): position, colour x the texture's mean, weighted by alpha x
@@ -356,15 +358,18 @@ own intensity and reach slider in Debug Lights):
   full cell reaches 16 yards at strength 1.2), so the cost is bounded
   however much lava a zone has; `selectLights` caps the frame's total as for
   any light.
-* Jack-o'-lanterns. Hallow's End's `G_Pumpkin_01-03` game objects are named
-  for the vegetable, so the classifier takes them for crops (foliage gets no
-  glow), but a candle burns in each: an unlit inside and an additive glow
-  card. A pumpkin with such a batch (`isCandleLitPumpkin`) is lantern-like
-  and gets a lamp's light at its glow (`lampLight`, `Source::Lamp`); a
-  field's pumpkins and the harvest festival's have no glowing batch and stay
-  crops. A game object's lamp or glow is never `baked`, even on an interior
-  floor: the building's colours were painted without it (the pumpkins in
-  Undercity's Trade Quarter).
+* Nothing is left out by what it is. A model's or a building's glow is
+  judged by its material alone (`batchGlowColor`): an added batch, a glow
+  card, or an unlit one whose texture is bright enough (0.35) to read as a
+  source. No name, category or kind list: a crop, a tree, grass, falling
+  water, a beam, Hallow's End's jack-o'-lanterns (an unlit inside, an added
+  candle card) all light by what of them glows. What gives a light already
+  (an M2 light, a fire, a lamp) keeps that light instead, and a trap the
+  renderer never draws gives none. A game object's glow is never `baked`,
+  even on an interior floor: the building's colours were painted without it.
+  Seen in game (Brill and Northshire at night): the pumpkins light their
+  surroundings orange; no tree, grass or crop there has a glowing batch, so
+  nothing else changed.
 
 No double light: a model with an M2 light, a fire or a lamp gets neither
 glow patches nor particle lights; a model with glow patches gets no particle

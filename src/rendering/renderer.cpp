@@ -687,6 +687,7 @@ void Renderer::updatePerFrameUBO() {
         currentFrameData.averagedAmbientColor = glm::vec4(lp.averagedAmbientColor * ambientScale, 1.0f);
         currentFrameData.windowLight = glm::vec4(
             wmo_sidn::windowLevel(lightingManager->getTimeOfDay()), 0.0f, 0.0f, 0.0f);
+        if (wmoRenderer) wmoRenderer->setRtWindowLevel(currentFrameData.windowLight.x);
         currentFrameData.specularColor = glm::vec4(lp.sunColor, clientSpecular_ ? 1.0f : 0.0f);
         currentFrameData.fogParams.x = lp.fogStart;
         currentFrameData.fogParams.y = lp.fogEnd;

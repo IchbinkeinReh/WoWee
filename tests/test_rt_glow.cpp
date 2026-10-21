@@ -188,8 +188,41 @@ TEST_CASE("Lava: a magma grid's drawn tiles become a few lifted lights", "[rt_gl
     CHECK(liquidGlowPatches({}, w, h, [](int, int) { return true; }).empty());
 }
 
-TEST_CASE("A jack-o'-lantern is a lantern; a field's pumpkin is a crop", "[rt_glow][pumpkin]") {
-    CHECK(isCandleLitPumpkin("world\goober\g_pumpkin_01.m2", true));
-    CHECK_FALSE(isCandleLitPumpkin("world\azeroth\duskwood\passivedoodads\bush\pumpkin01.m2", false));
-    CHECK_FALSE(isCandleLitPumpkin("world\generic\passivedoodads\halloween\hangingskulllight01.m2", true));
+TEST_CASE("Glow is by material alone: nothing is left out for what it is", "[rt_glow]") {
+    const glm::vec3 white(1.0f), dark(0.1f), tint(1.0f);
+    // An added batch glows with its texture by what of it shows.
+    auto add = batchGlowColor(3, false, false, 1.0f, white, 0.5f, tint);
+    REQUIRE(add);
+    CHECK(add->r == Catch::Approx(0.5f));
+    // An unlit one glows where its texture is bright - a jack-o'-lantern's
+    // lit inside, a lit sign - and not where it is dark stone.
+    CHECK(batchGlowColor(0, true, false, 1.0f, glm::vec3(0.8f, 0.5f, 0.1f), 1.0f, tint));
+    CHECK_FALSE(batchGlowColor(0, true, false, 1.0f, dark, 1.0f, tint));
+    // A glow card glows however dim; finish() drops what is too faint.
+    CHECK(batchGlowColor(2, false, true, 1.0f, dark, 1.0f, tint));
+    // Lit by the world, or a modulate that darkens, or not drawn: no glow.
+    CHECK_FALSE(batchGlowColor(0, false, false, 1.0f, white, 1.0f, tint));
+    CHECK_FALSE(batchGlowColor(5, true, false, 1.0f, white, 1.0f, tint));
+    CHECK_FALSE(batchGlowColor(3, false, false, 0.0f, white, 1.0f, tint));
+}
+
+TEST_CASE("A flat glow's light stands off the side it shows", "[rt_glow]") {
+    // A window pane in the x-z plane, wound to face +y.
+    GlowBuilder b;
+    const glm::vec3 c(1.0f, 0.8f, 0.5f);
+    b.addTriangle({0, 0, 0}, {1, 0, 1}, {1, 0, 0}, c, 0, false);
+    b.addTriangle({0, 0, 0}, {0, 0, 1}, {1, 0, 1}, c, 0, false);
+    const auto patches = b.finish();
+    REQUIRE(patches.size() == 1);
+    const glm::vec3 at = glowStandOff(patches[0]);
+    CHECK(at.y == Catch::Approx(kGlowStandOff));
+    CHECK(at.x == Catch::Approx(patches[0].centre.x));
+    // Faces turned every way (a card drawn from both sides) agree on none:
+    // the light stays in the middle.
+    GlowBuilder two;
+    two.addTriangle({0, 0, 0}, {1, 0, 1}, {1, 0, 0}, c, 0, false);
+    two.addTriangle({0, 0, 0}, {1, 0, 0}, {1, 0, 1}, c, 0, false);
+    const auto both = two.finish();
+    REQUIRE(both.size() == 1);
+    CHECK(glm::length(glowStandOff(both[0]) - both[0].centre) == Catch::Approx(0.0f));
 }

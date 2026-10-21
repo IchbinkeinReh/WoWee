@@ -41,7 +41,25 @@ struct GlowPatch {
     /// The bone that carries most of it (rt_lights::boneCarried), ~0 for the
     /// model's own space.
     uint32_t bone = ~0u;
+    /// The area-weighted mean of its triangles' face normals (by their
+    /// winding): about unit length for a flat glow seen from one side - a
+    /// window, a sign - and short where its faces turn every way (a crystal,
+    /// a two-sided card). See glowStandOff.
+    glm::vec3 normal{0.0f};
 };
+
+/// Where a patch's light sits: off its middle along its normal, on the side
+/// it shows, where its faces mostly agree on one (|normal| over a half) - a
+/// light in the plane of a window or a wall's glowing trim lit the room
+/// behind the wall as much as the street before it, since a ray stopping
+/// short of the light never meets the wall it sits in. In the middle where
+/// they do not.
+inline constexpr float kGlowStandOff = 0.4f;
+inline glm::vec3 glowStandOff(const GlowPatch& patch) {
+    const float len = glm::length(patch.normal);
+    if (!(len > 0.5f)) return patch.centre;
+    return patch.centre + patch.normal / len * kGlowStandOff;
+}
 
 /// How large a cell glowing triangles are binned by, in yards of the model's
 /// own space: one light for a lamp's glass, a few along a lava flow.
@@ -52,6 +70,29 @@ inline constexpr size_t kMaxGlowPatches = 4;
 /// (square yards) lights nothing worth a light.
 inline constexpr float kMinGlowBrightness = 0.12f;
 inline constexpr float kMinGlowArea = 0.0005f;
+
+/// What a batch glows with, by its material alone - nothing by what the model
+/// is or is called: an added batch (blend 3, 4), an unlit one (material flag
+/// 0x1) or a glow card shows its texture's mean over what of it is visible
+/// (`texel`, times `alphaCoverage` for a blended one) times its colour; a
+/// modulate (blend 5 and up) darkens and glows at nothing; an unlit opaque
+/// or alpha batch whose texture is dark (a statue's stone, a black cloth)
+/// glows at nothing either - lit by nothing, it shows its texture as it is,
+/// and only a bright one (kMinUnlitGlow) reads as a source. Nullopt for a
+/// batch that does not glow; finish() drops what is too dim or too small.
+inline constexpr float kMinUnlitGlow = 0.35f;
+inline std::optional<glm::vec3> batchGlowColor(uint16_t blendMode, bool unlit, bool glowCard, float opacity,
+                                               const glm::vec3& texel, float alphaCoverage, const glm::vec3& tint) {
+    if (opacity < 0.01f || blendMode >= 5) return std::nullopt;
+    const bool additive = blendMode == 3 || blendMode == 4;
+    if (!additive && !unlit && !glowCard) return std::nullopt;
+    glm::vec3 color = texel;
+    if (blendMode != 0) color *= alphaCoverage;
+    color *= tint;
+    const float bright = std::max(color.r, std::max(color.g, color.b));
+    if (!additive && !glowCard && bright < kMinUnlitGlow) return std::nullopt;
+    return color;
+}
 
 /// Gathers glowing triangles into patches (GlowPatch).
 class GlowBuilder {
@@ -71,6 +112,7 @@ public:
         const int64_t key = (int64_t(k.x & 0x1fffff) << 42) | (int64_t(k.y & 0x1fffff) << 21) | int64_t(k.z & 0x1fffff);
         Cell& cell = cells_[key];
         cell.area += area;
+        cell.normal += glm::dvec3(glm::cross(b - a, c - a)) * 0.5;  // area-weighted
         cell.centre += glm::dvec3(mid) * double(area);
         cell.color += glm::dvec3(color) * double(area);
         if (animated && area > cell.animatedArea) {
@@ -105,6 +147,7 @@ public:
             p.color = glm::vec3(cell.color / cell.area);
             p.animatedBatch = cell.animatedBatch;
             p.bone = cell.bone;
+            p.normal = glm::vec3(cell.normal / cell.area);
             const float bright = std::max(p.color.r, std::max(p.color.g, p.color.b));
             all.push_back({p, double(bright) * cell.area});
         }
@@ -134,6 +177,7 @@ public:
             const float total = m.area + r.area;
             m.centre = (m.centre * m.area + r.centre * r.area) / total;
             m.color = (m.color * m.area + r.color * r.area) / total;
+            m.normal = (m.normal * m.area + r.normal * r.area) / total;
             m.area = total;
         }
         out.erase(std::remove_if(out.begin(), out.end(),
@@ -152,6 +196,7 @@ private:
         double area = 0.0;
         glm::dvec3 centre{0.0};
         glm::dvec3 color{0.0};
+        glm::dvec3 normal{0.0};
         float animatedArea = 0.0f;
         uint32_t animatedBatch = ~0u;
         std::unordered_map<uint32_t, float> boneArea;

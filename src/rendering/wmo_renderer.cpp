@@ -5299,38 +5299,47 @@ namespace rendering {
 
 void WMORenderer::gatherGlows(ModelData& modelData) {
     modelData.glows.clear();
+    modelData.bakedGlows.clear();
+    modelData.windowGlows.clear();
     for (const auto& group : modelData.groups) {
         if (group.isLOD || group.allUntextured || group.collisionVertices.empty()) continue;
+        // An interior group's glow is in its baked colours already: its
+        // lights only cast their shadows there (PointLight::baked), as an
+        // interior doodad's do. Nothing is left out for being inside.
         const bool interior = (group.groupFlags & pipeline::wmo_doodad_light::kOutsideGroupFlags) == 0;
-        // An interior group gives none: the room's light is its baked
-        // colours.
-        if (interior) continue;
         rt_lights::GlowBuilder glows;
+        rt_lights::GlowBuilder windows;
         for (const auto& batch : group.batches) {
             const uint32_t mat = batch.materialId;
             const uint32_t blend = mat < modelData.materialBlendModes.size() ? modelData.materialBlendModes[mat] : 0;
-            // The windows (MOMT 0x10) give no light: their glow is the
-            // original's at night only, and a light at every hour in the
-            // window - inside the house as much as out - lit the rooms
-            // behind it at noon and cast their posts' shadows across the
-            // floors (the Goldshire inn upstairs).
-            if (mat < modelData.materialSidn.size() && modelData.materialSidn[mat] != 0) continue;
+            const bool unlit = mat < modelData.materialFlags.size() && (modelData.materialFlags[mat] & 0x01u) != 0;
+            const uint32_t sidn = mat < modelData.materialSidn.size() ? modelData.materialSidn[mat] : 0u;
             glm::vec3 texel(1.0f);
+            float coverage = 1.0f;
             if (mat < modelData.materialTextureIndices.size()) {
                 const uint32_t ti = modelData.materialTextureIndices[mat];
                 if (ti < modelData.textures.size() && modelData.textures[ti]) {
                     texel = modelData.textures[ti]->averageColor();
-                    if (blend != 0) texel *= modelData.textures[ti]->alphaCoverage();
+                    coverage = modelData.textures[ti]->alphaCoverage();
                 }
             }
-            // Outside, an additive batch: a glow card, lava, a crystal's
-            // shine. Not an unlit opaque one: in a building those are its
-            // windows, trims and signs painted with their light in them (the
-            // inns' mm_*_windows textures), not sources - each one lit as a
-            // light shone through its wall into the rooms behind it and cast
-            // the door frames' hard shadows across their floors.
-            if (blend != 3) continue;
-            const glm::vec3 color = texel;
+            // A window (MOMT 0x10) glows by its sidnColor times the light's
+            // window level - at night, not at noon (collectRtLights scales it,
+            // wmo_sidn.hpp). Any other batch by its material alone
+            // (rt_lights::batchGlowColor): an added one, or an unlit one
+            // bright enough to read as a source - a lit sign, a glowing trim.
+            std::optional<glm::vec3> color;
+            if (sidn != 0) {
+                const glm::vec3 sidnColor(((sidn >> 16) & 0xff) / 255.0f, ((sidn >> 8) & 0xff) / 255.0f,
+                                          (sidn & 0xff) / 255.0f);
+                color = sidnColor * texel;
+            } else {
+                // MOMT's blend 3 is the add; 4 and up modulate.
+                const uint16_t asM2 = blend == 3 ? 3 : (blend >= 4 ? 5 : static_cast<uint16_t>(blend));
+                color = rt_lights::batchGlowColor(asM2, unlit, false, 1.0f, texel, coverage, glm::vec3(1.0f));
+            }
+            if (!color) continue;
+            rt_lights::GlowBuilder& into = sidn != 0 ? windows : glows;
             const uint32_t end = std::min<uint32_t>(batch.startIndex + batch.indexCount,
                                                     static_cast<uint32_t>(group.collisionIndices.size()));
             for (uint32_t i = batch.startIndex; i + 2 < end; i += 3) {
@@ -5340,8 +5349,21 @@ void WMORenderer::gatherGlows(ModelData& modelData) {
                     c >= group.collisionVertices.size()) {
                     continue;
                 }
-                glows.addTriangle(group.collisionVertices[a], group.collisionVertices[b], group.collisionVertices[c],
-                                  color, 0, false);
+                // Wound so its face normal is the side it shows (its vertex
+                // normals'), which the light stands off toward (glowStandOff).
+                const glm::vec3& pa = group.collisionVertices[a];
+                const glm::vec3& pb = group.collisionVertices[b];
+                const glm::vec3& pc = group.collisionVertices[c];
+                glm::vec3 shown(0.0f);
+                if (a < group.collisionNormals.size() && b < group.collisionNormals.size() &&
+                    c < group.collisionNormals.size()) {
+                    shown = group.collisionNormals[a] + group.collisionNormals[b] + group.collisionNormals[c];
+                }
+                if (glm::dot(glm::cross(pb - pa, pc - pa), shown) < 0.0f) {
+                    into.addTriangle(pa, pc, pb, *color, 0, false);
+                } else {
+                    into.addTriangle(pa, pb, pc, *color, 0, false);
+                }
             }
         }
         for (const auto& patch : glows.finish()) {
@@ -5354,7 +5376,13 @@ void WMORenderer::gatherGlows(ModelData& modelData) {
                     break;
                 }
             }
-            if (!lit) modelData.glows.push_back(patch);
+            if (lit) continue;
+            (interior ? modelData.bakedGlows : modelData.glows).push_back(patch);
+        }
+        for (auto patch : windows.finish()) {
+            // An interior group's window is shadows only, as its other glows.
+            if (interior) patch.animatedBatch = 1u;
+            modelData.windowGlows.push_back(patch);
         }
     }
 }
@@ -5547,10 +5575,21 @@ void WMORenderer::collectRtLights(const glm::vec3& eye, float range,
             if (l) out.push_back(*l);
         }
         const float scale2 = glm::dot(glm::vec3(inst.modelMatrix[0]), glm::vec3(inst.modelMatrix[0]));
-        for (const auto& patch : model->second.glows) {
-            const glm::vec3 position = glm::vec3(inst.modelMatrix * glm::vec4(patch.centre, 1.0f));
-            if (glm::length(position - eye) - rt_lights::kGlowMaxReach > range) continue;
-            out.push_back(rt_lights::glowLight(position, patch.color, patch.area * scale2, rt_lights::Source::Emissive));
+        auto place = [&](const rt_lights::GlowPatch& patch, const glm::vec3& color, bool baked) {
+            const glm::vec3 position = glm::vec3(inst.modelMatrix * glm::vec4(rt_lights::glowStandOff(patch), 1.0f));
+            if (glm::length(position - eye) - rt_lights::kGlowMaxReach > range) return;
+            rt_lights::PointLight l =
+                rt_lights::glowLight(position, color, patch.area * scale2, rt_lights::Source::Emissive);
+            l.baked = baked;
+            out.push_back(l);
+        };
+        for (const auto& patch : model->second.glows) place(patch, patch.color, false);
+        for (const auto& patch : model->second.bakedGlows) place(patch, patch.color, true);
+        // The windows by the light's window level (wmo_sidn.hpp): dark by day.
+        if (rtWindowLevel_ > 0.0f) {
+            for (const auto& patch : model->second.windowGlows) {
+                place(patch, patch.color * rtWindowLevel_, patch.animatedBatch == 1u);
+            }
         }
     }
 }
