@@ -507,3 +507,40 @@ TEST_CASE("A room's baked colour takes the lamps by its face, not its smoothed v
     const glm::vec3 same = faceBasedNormal(face, face, glm::normalize(face + bump));
     REQUIRE(glm::length(same - glm::normalize(face + bump)) < 1e-5f);
 }
+
+// rtCapLight: the light the traced lights add, held to the Debug Lights'
+// "Maximum light" - scaled whole, so its brightest channel is the cap and
+// its hue stays; under the cap, and with no cap, as it is.
+TEST_CASE("The maximum light holds the added light at its cap, its hue kept", "[rt_gbuffer]") {
+    const glm::vec3 lantern(3.0f, 1.5f, 0.3f);  // a jack-o'-lantern's orange, close by
+    const glm::vec3 held = capLight(lantern, 1.0f);
+    REQUIRE(std::max(held.r, std::max(held.g, held.b)) == Catch::Approx(1.0f));
+    REQUIRE(held.g / held.r == Catch::Approx(lantern.g / lantern.r));
+    REQUIRE(held.b / held.r == Catch::Approx(lantern.b / lantern.r));
+    // Under the cap, and with none (0 or less), untouched.
+    REQUIRE(capLight(glm::vec3(0.4f, 0.2f, 0.1f), 1.0f) == glm::vec3(0.4f, 0.2f, 0.1f));
+    REQUIRE(capLight(lantern, 0.0f) == lantern);
+    REQUIRE(capLight(lantern, -1.0f) == lantern);
+    REQUIRE(capLight(glm::vec3(0.0f), 0.5f) == glm::vec3(0.0f));
+
+    // In the apply pass: what is added to a baked colour (the lamps' own
+    // light left out) and to a lit one, held alike; the factor untouched.
+    Texel t;
+    t.flags = kValid | kBaked;
+    t.g = glm::vec3(1.0f);
+    t.kp = glm::vec3(0.8f, 0.6f, 0.4f);
+    Traced r;
+    r.weight = 1.0f;
+    r.point = glm::vec3(4.0f, 2.0f, 0.5f);
+    r.pointOwn = glm::vec3(3.0f, 1.5f, 0.3f);
+    Tune tune;
+    const Factors open = apply(t, r, tune, glm::vec3(0.0f, 0.0f, 1.0f));
+    tune.maxLight = 0.75f;
+    const Factors capped = apply(t, r, tune, glm::vec3(0.0f, 0.0f, 1.0f));
+    REQUIRE(glm::length(capped.mul - open.mul) < 1e-6f);
+    REQUIRE(glm::length(open.add - t.kp * r.pointOwn) < 1e-5f);
+    REQUIRE(glm::length(capped.add - t.kp * capLight(r.pointOwn, 0.75f)) < 1e-5f);
+    t.flags = kValid;
+    const Factors lit = apply(t, r, tune, glm::vec3(0.0f, 0.0f, 1.0f));
+    REQUIRE(glm::length(lit.add - t.kp * capLight(r.point, 0.75f)) < 1e-5f);
+}

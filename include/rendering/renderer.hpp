@@ -742,6 +742,10 @@ public:
         /// (rt_gbuffer.glsli rtInteriorShade). 1 leaves the bake as painted.
         float interiorBase = 0.25f;
         float interiorFullAt = 1.0f;
+        /// Ray traced: the most light the point lights, glows and lava
+        /// together add to a place, its brightest channel, the hue kept
+        /// (rt_gbuffer.glsli rtCapLight). 0: no limit.
+        float maxLight = 0.0f;
         // Shadows.
         float shadowStrength = 0.65f;   ///< ray traced: how much of the light a shadow takes
         float tracedSunShadow = 1.0f;   ///< ray traced: how much of the traced sun shadows shows

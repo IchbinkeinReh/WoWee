@@ -240,6 +240,16 @@ vec3 rtFaceBasedNormal(vec3 face, vec3 vertexNormal, vec3 shading) {
 // The light eases into full (lit (2 - lit)): taken linearly, a strong lamp's
 // light crossed fullAt near the end of its reach, and the room's colour
 // jumped there along an arc.
+// The most light the traced lights may add to a place (the Debug Lights
+// "Maximum light"; 0 or less: no limit): the sum of every point light, glow
+// and lava patch reaching it, in linear light, scaled whole so its brightest
+// channel is the cap - the hue kept, not each channel cut. Mirrored in
+// rt_gbuffer_pack.hpp (capLight).
+vec3 rtCapLight(vec3 light, float cap) {
+    float m = max(light.r, max(light.g, light.b));
+    return cap > 0.0 && m > cap ? light * (cap / m) : light;
+}
+
 float rtInteriorShade(vec3 pointLight, float weight, float base, float fullAt) {
     float l = max(pointLight.r, max(pointLight.g, pointLight.b));
     float lit = clamp(l / max(fullAt, 1e-3), 0.0, 1.0);

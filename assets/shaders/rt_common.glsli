@@ -34,7 +34,8 @@ layout(set = 0, binding = 0) uniform RtPassData {
                          // the buildings' point shadows whole (rt_trace)
     vec4 tune3;          // x inside, what of a baked colour shows where no
                          // point light reaches; y the light where all of it
-                         // does (rtInteriorShade)
+                         // does (rtInteriorShade); z the most light the
+                         // traced lights add, 0 no limit (rtCapLight)
     // The probe volume (rt_gi.glsli), read only by the probe passes.
     vec4 giVolume[2];        // the grid this frame's update writes
     vec4 giVolumeMod[2];

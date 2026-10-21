@@ -363,6 +363,11 @@ constexpr SettingDesc kSchema[] = {
     {"dbgunitlightreach", "Unit lights: reach (%)", SettingKind::Int, 100, 1000, 10, "Debug Lights", "",
      "How far its light reaches: where the falloff starts and ends.\n"
      "Ray traced. 100 is its own.", "", 100},
+    {"dbgmaxlight", "Maximum light (%)", SettingKind::Int, 10, 1000, 10, "Debug Lights", "Limit",
+     "The most light the traced lights together may add to any one\n"
+     "place: every lamp, fire, glow and lava reaching it, summed and\n"
+     "held to this, its colour kept. 100 is a full white light's\n"
+     "worth over what is painted there. 1000 is no limit.", "", 1000},
     {"dbgemissivelightintensity", "Glowing surfaces: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Glow", "What glows",
      "What glows of models and buildings: lamp glass, glow cards,\n"
      "lava, crystals, glowing batches.\n"

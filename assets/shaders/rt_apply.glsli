@@ -206,6 +206,11 @@ void main() {
     // see-through unit already is (rtLightBehind); the other lights still add.
     if ((g.flags & RT_GB_UNIT_FLOOR) != 0u) shade = 1.0;
     float rIn = baked ? shade : 1.0;
+    // The light added, held to the most the settings allow (rtCapLight). Not
+    // the baked or sunlit colour under it: this pass has the factor it is
+    // scaled by, not the colour, so the light already in it is unknown here.
+    r.point = rtCapLight(r.point, pass.tune3.z);
+    r.pointOwn = rtCapLight(r.pointOwn, pass.tune3.z);
     vec3 pointIn = baked ? r.pointOwn : r.point;
     // The occlusion over the flat ambient (rtAmbient), from Shadows and
     // occlusion on.

@@ -740,7 +740,7 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
     static const bool hardStructure = core::envFlagEnabled("WOWEE_RT_HARD_STRUCTURE", true);
     d.tune2 = glm::vec4(in.bakedLampShadow, in.pointShadow, static_cast<float>(in.debugView),
                         hardStructure ? 1.0f : 0.0f);
-    d.tune3 = glm::vec4(in.interiorBase, in.interiorFullAt, 0.0f, 0.0f);
+    d.tune3 = glm::vec4(in.interiorBase, in.interiorFullAt, in.maxLight, 0.0f);
     const bool probes = mode_ == Mode::Full && probes_.hasResources();
     if (probes) {
         // The open field the zone's flat ambient was set for: that ambient as

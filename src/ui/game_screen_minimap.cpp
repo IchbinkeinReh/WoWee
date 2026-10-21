@@ -2061,6 +2061,7 @@ void GameScreen::saveSettings() {
     out << "dbg_particle_light_reach=" << settingsPanel_.pendingDbgParticleLightReach << "\n";
     out << "dbg_interior_unlit=" << settingsPanel_.pendingDbgInteriorBase << "\n";
     out << "dbg_interior_full_at=" << settingsPanel_.pendingDbgInteriorFullAt << "\n";
+    out << "dbg_max_light=" << settingsPanel_.pendingDbgMaxLight << "\n";
     out << "dbg_shadow_darkness=" << settingsPanel_.pendingDbgShadowDarkness << "\n";
     out << "dbg_traced_sun_shadow=" << settingsPanel_.pendingDbgTracedSunShadow << "\n";
     out << "dbg_map_sun_shadow=" << settingsPanel_.pendingDbgMapSunShadow << "\n";
@@ -2398,6 +2399,7 @@ void GameScreen::loadSettings() {
             // the lamps' traced light missed black.
             else if (key == "dbg_interior_unlit") settingsPanel_.pendingDbgInteriorBase = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_interior_full_at") settingsPanel_.pendingDbgInteriorFullAt = std::clamp(std::stoi(val), 5, 300);
+            else if (key == "dbg_max_light") settingsPanel_.pendingDbgMaxLight = std::clamp(std::stoi(val), 10, 1000);
             else if (key == "dbg_shadow_darkness") settingsPanel_.pendingDbgShadowDarkness = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_traced_sun_shadow") settingsPanel_.pendingDbgTracedSunShadow = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_map_sun_shadow") settingsPanel_.pendingDbgMapSunShadow = std::clamp(std::stoi(val), 0, 100);

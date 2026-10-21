@@ -799,7 +799,8 @@ void Renderer::updatePerFrameUBO() {
     // light at which all of it shows (rtInteriorShade).
     currentFrameData.rtTune2 = glm::vec4(std::max(lightingTune_.bounce, 0.0f),
                                          std::clamp(lightingTune_.interiorBase, 0.0f, 1.0f),
-                                         std::max(lightingTune_.interiorFullAt, 0.01f), 0.0f);
+                                         std::max(lightingTune_.interiorFullAt, 0.01f),
+                                         std::max(lightingTune_.maxLight, 0.0f));
 
     // Player motion, consumed by water ripples and by the foliage brush in
     // m2.vert. Horizontal speed only: a fall shouldn't read as running.
@@ -6569,6 +6570,7 @@ void Renderer::recordRtLighting() {
     in.pointShadow = currentFrameData.lightTune.z;
     in.interiorBase = currentFrameData.rtTune2.y;
     in.interiorFullAt = currentFrameData.rtTune2.z;
+    in.maxLight = currentFrameData.rtTune2.w;
     in.occlusion = currentFrameData.lightTune.w;
     in.debugView = static_cast<int>(currentFrameData.giParams.y + 0.5f);
     {

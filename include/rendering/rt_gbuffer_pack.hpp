@@ -164,12 +164,22 @@ inline float interiorShade(const glm::vec3& pointLight, float weight, float base
     return (1.0f - w) + w * (base + (1.0f - base) * lit);
 }
 
+/// rtCapLight: the light the traced lights add to a place, held to `cap` -
+/// scaled whole so its brightest channel is the cap, its hue kept. 0 or less
+/// is no limit.
+inline glm::vec3 capLight(const glm::vec3& light, float cap) {
+    const float m = std::max(light.r, std::max(light.g, light.b));
+    return cap > 0.0f && m > cap ? light * (cap / m) : light;
+}
+
 /// The Debug Graphics strengths the apply pass reads (rtTune.x, lightTune.y,
-/// lightTune.w) and the mode (occlusion from 2 on).
+/// lightTune.w), the most light the traced lights add (tune3.z, 0 no limit)
+/// and the mode (occlusion from 2 on).
 struct Tune {
     float shadowStrength = 0.65f;
     float sunShadow = 1.0f;
     float occlusion = 1.0f;
+    float maxLight = 0.0f;
     int mode = 2;
 };
 
@@ -205,13 +215,14 @@ inline Factors apply(const Texel& t, const Traced& r, const Tune& tune, const gl
                       : (t.flags & kInterior) != 0 ? std::min(r.bakedShade, r.interiorShade)
                                                     : r.bakedShade;
     const float rIn = baked ? shade : 1.0f;
-    const glm::vec3 pointIn = baked ? r.pointOwn : r.point;
+    const glm::vec3 point = capLight(r.point, tune.maxLight);
+    const glm::vec3 pointIn = baked ? capLight(r.pointOwn, tune.maxLight) : point;
     const float ao = tune.mode >= 2 ? 1.0f - r.weight * tune.occlusion * (1.0f - r.ao) : 1.0f;
     if ((t.flags & kTransition) != 0) {
         const float o = t.outside;
         const float rr = (1.0f - o) * rIn + o * rs;
         f.mul = glm::vec3(1.0f) + t.g * (o * (rs - 1.0f) + (1.0f - o) * (rIn - 1.0f)) - rr * occlusionLoss(t, ao);
-        f.add = t.kp * ((1.0f - o) * pointIn + o * r.point);
+        f.add = t.kp * ((1.0f - o) * pointIn + o * point);
         return f;
     }
     const float rr = rs * rIn;

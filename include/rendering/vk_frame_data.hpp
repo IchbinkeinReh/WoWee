@@ -101,7 +101,8 @@ struct GPUPerFrameData {
     //   colours, a doodad's MODD colour, a unit's floor colour (1); y how
     //   much of the traced sun shadows, z of the point lights' shadows and
     //   w of the traced occlusion shows (1 each).
-    // rtTune2: x how much of the probes' bounced light shows (1).
+    // rtTune2: x how much of the probes' bounced light shows (1); w the most
+    //   light the traced lights add (rtCapLight), 0 no limit.
     glm::vec4 rtTune{0.0f};
     glm::vec4 lightTune{0.0f};
     glm::vec4 rtTune2{0.0f};

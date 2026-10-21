@@ -107,6 +107,9 @@ public:
     /// which it is whole (Renderer::LightingTune::interiorBase, interiorFullAt).
     int pendingDbgInteriorBase = 25;
     int pendingDbgInteriorFullAt = 100;
+    /// The most light the traced lights add to a place, % of a full white
+    /// light; 1000 no limit (Renderer::LightingTune::maxLight).
+    int pendingDbgMaxLight = 1000;
     int pendingDbgShadowDarkness = 65;
     int pendingDbgTracedSunShadow = 100;
     int pendingDbgMapSunShadow = 100;

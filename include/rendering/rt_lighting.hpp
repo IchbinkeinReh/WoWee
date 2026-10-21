@@ -155,6 +155,8 @@ public:
         /// and the light at which all of it does (rtInteriorShade).
         float interiorBase = 1.0f;
         float interiorFullAt = 1.0f;
+        /// The most light the traced lights add (rtCapLight); 0 no limit.
+        float maxLight = 0.0f;
     };
 
     /// The scene the G-buffer pass drew: its depth image, still in

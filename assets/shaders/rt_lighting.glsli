@@ -44,7 +44,8 @@
 //                        // lights' shadows, w traced occlusion
 //     vec4 rtTune2;      // x the probes' bounced light, y z inside, a baked
 //                        // colour where no point light reaches and the light
-//                        // where all of it shows (rtInteriorShade)
+//                        // where all of it shows (rtInteriorShade), w the
+//                        // most light the traced lights add (rtCapLight)
 
 #include "rt_gi.glsli"
 #include "rt_gbuffer.glsli"
@@ -97,6 +98,8 @@ float rtBounceStrength() { return rtTune.w > 0.5 ? rtTune2.x : 1.0; }
 // without the settings.
 float rtInteriorBase() { return rtTune.w > 0.5 ? rtTune2.y : 1.0; }
 float rtInteriorFullAt() { return rtTune.w > 0.5 ? rtTune2.z : 1.0; }
+// The most light the traced lights may add (rtCapLight); 0, no limit.
+float rtMaxLight() { return rtTune.w > 0.5 ? rtTune2.w : 0.0; }
 
 // What WOWEE_GI_DEBUG shows instead of the surface, when it shows anything.
 vec3 rtGiDebugColour = vec3(0.0);
@@ -161,6 +164,10 @@ RtLight rtLightFrom(float weight, float wsum, vec2 sunAo, vec4 point, float bake
     r.pointOwn = r.point * (total > 1e-4 ? clamp(1.0 - point.a / total, 0.0, 1.0) : 1.0);
     r.bakedShade = 1.0 - rtBakedShadowStrength() * weight * bakedDark / wsum;
     r.interiorShade = rtInteriorShade(point.rgb / wsum, weight, rtInteriorBase(), rtInteriorFullAt());
+    // What is added, held to the most the settings allow; the room's shade
+    // above reads the light as traced.
+    r.point = rtCapLight(r.point, rtMaxLight());
+    r.pointOwn = rtCapLight(r.pointOwn, rtMaxLight());
     return r;
 }
 
