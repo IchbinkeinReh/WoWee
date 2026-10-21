@@ -3742,12 +3742,8 @@ void GameHandler::registerRemainingOpcodes() {
     dispatchTable_[Opcode::SMSG_GMRESPONSE_DB_ERROR] = [this](network::Packet& /*packet*/) {
         sayGameError(server_notice::kGmResponseDbError);
     };
-    // Broadcast of another player's collision height change - cosmetic only.
-    registerSkipHandler(Opcode::MSG_MOVE_SET_COLLISION_HGT);
     // Client uses this outbound; treat inbound variant as no-op for robustness.
     registerSkipHandler(Opcode::MSG_MOVE_WORLDPORT_ACK);
-    // Observed custom server packet (8 bytes). Safe-consume for now.
-    registerSkipHandler(Opcode::MSG_MOVE_TIME_SKIPPED);
     // loggingOut_ already cleared by cancelLogout(); this is server's confirmation
     // Not skipped: this is the server confirming a logout was called off, and
     // the interface hides its countdown on it. The client already cancels

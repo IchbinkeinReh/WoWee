@@ -364,6 +364,25 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
         };
     }
 
+    // Another unit's collision height (0x00741b00 -> 0x007406a0 case 0x518):
+    // its movement as any move message carries it, then the height, which
+    // the client keeps for that unit's own collision (0x006ee810) - nothing
+    // this client draws or moves others by - so the movement is what lands.
+    table[Opcode::MSG_MOVE_SET_COLLISION_HGT] = [this](network::Packet& packet) {
+        if (owner_.getState() == WorldState::IN_WORLD) handleOtherPlayerMovement(packet);
+    };
+    // Another unit's movement clock moved on (0x0071cab0 -> 0x006e9280): the
+    // packed guid and the milliseconds it skipped, added to what its
+    // timestamps are measured from, so the next move's time since the last
+    // one leaves the skip out.
+    table[Opcode::MSG_MOVE_TIME_SKIPPED] = [this](network::Packet& packet) {
+        if (owner_.getState() != WorldState::IN_WORLD) return;
+        const uint64_t guid = isPreWotlk() ? packet.readUInt64() : packet.readPackedGuid();
+        if (!packet.hasRemaining(4)) return;
+        const uint32_t skipped = packet.readUInt32();
+        if (auto it = otherPlayerMoveTimeMs_.find(guid); it != otherPlayerMoveTimeMs_.end()) it->second += skipped;
+    };
+
     // MSG_MOVE_SET_*_SPEED relay
     for (auto op : { Opcode::MSG_MOVE_SET_RUN_SPEED, Opcode::MSG_MOVE_SET_RUN_BACK_SPEED,
                      Opcode::MSG_MOVE_SET_WALK_SPEED, Opcode::MSG_MOVE_SET_SWIM_SPEED,
