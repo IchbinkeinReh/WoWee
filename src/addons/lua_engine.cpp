@@ -21,6 +21,7 @@
 #include <SDL3/SDL.h>
 #include "addons/lua_api_helpers.hpp"
 #include "game/interface_text.hpp"
+#include "game/item_stat_text.hpp"
 #include "rendering/minimap_zoom.hpp"
 #include <cmath>
 #include "addons/lua_handler_globals.hpp"
@@ -3149,64 +3150,61 @@ static void appendItemStats(wowee::ui::Widget* w, const game::ItemQueryResponseD
         l.rc[0] = l.rc[1] = l.rc[2] = l.rc[3] = 1.0f;
         w->tooltipLines.push_back(std::move(l));
     };
-    constexpr float kW = 1.0f, kGrey = 0.62f, kGold = 1.0f;
+    constexpr float kW = 1.0f, kGold = 1.0f;
     auto white = [&](std::string s) { line(std::move(s), kW, kW, kW); };
-    auto grey  = [&](std::string s) { line(std::move(s), kGrey, kGrey, kGrey); };
     auto gold  = [&](std::string s) { line(std::move(s), kGold, 0.82f, 0.0f); };
     auto green = [&](std::string s) { line(std::move(s), 0.0f, 1.0f, 0.0f); };
+    // In the interface's words, as the Lua builder has them (0x006277f0).
+    const auto text = [](const char* key, const char* enUS) { return game::interfaceString(key, enUS); };
 
-    // This one used to stop at 3, so a quest item's tooltip said nothing about
-    // being one here while the other two tooltips said so.
-    if (const char* bindText = game::itemBindText(info.bindType)) white(bindText);
-    if (info.maxCount == 1)                     gold("Unique");
-    else if (info.itemFlags & 0x1000000u)       gold("Unique-Equipped");
+    static const std::pair<const char*, const char*> kBind[] = {
+        {nullptr, nullptr},
+        {"ITEM_BIND_ON_PICKUP", "Binds when picked up"},
+        {"ITEM_BIND_ON_EQUIP", "Binds when equipped"},
+        {"ITEM_BIND_ON_USE", "Binds when used"},
+        {"ITEM_BIND_QUEST", "Quest Item"},
+    };
+    if (info.bindType >= 1 && info.bindType <= 4) white(text(kBind[info.bindType].first, kBind[info.bindType].second));
+    if (info.maxCount == 1)                     white(text("ITEM_UNIQUE", "Unique"));
+    else if (info.itemFlags & 0x1000000u)       white(text("ITEM_UNIQUE_EQUIPPABLE", "Unique-Equipped"));
 
     if (info.containerSlots > 0) {
-        white(std::to_string(info.containerSlots) + " Slot Container");
+        white(game::interfaceFormat("CONTAINER_SLOTS", "%d Slot %s",
+                                    {std::to_string(info.containerSlots), info.subclassName}));
     }
 
     // A weapon says its damage, its speed and the two multiplied out, because
     // damage alone compares two weapons wrongly whenever their speeds differ.
     if (info.damageMax > 0.0f) {
-        char buf[96];
-        std::snprintf(buf, sizeof(buf), "%.0f - %.0f Damage",
-                      static_cast<double>(info.damageMin), static_cast<double>(info.damageMax));
-        white(buf);
+        white(game::interfaceFormat("DAMAGE_TEMPLATE", "%d - %d Damage",
+                                    {std::to_string(static_cast<int>(info.damageMin + 0.5f)),
+                                     std::to_string(static_cast<int>(info.damageMax + 0.5f))}));
         if (info.delayMs > 0) {
             const double speed = info.delayMs / 1000.0;
-            std::snprintf(buf, sizeof(buf), "Speed %.2f", speed);
-            white(buf);
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.2f", speed);
+            white(text("SPEED", "Speed") + " " + buf);
             const double dps = (info.damageMin + info.damageMax) / 2.0 / speed;
-            std::snprintf(buf, sizeof(buf), "(%.1f damage per second)", dps);
-            grey(buf);
+            std::snprintf(buf, sizeof(buf), "%.1f", dps);
+            std::string dpsLine = text("DPS_TEMPLATE", "(%.1f damage per second)");
+            if (const size_t at = dpsLine.find("%.1f"); at != std::string::npos) dpsLine.replace(at, 4, buf);
+            white(dpsLine);
         }
     }
-    if (info.armor > 0) white(std::to_string(info.armor) + " Armor");
+    if (info.armor > 0) white(game::interfaceFormat("ARMOR_TEMPLATE", "%d Armor", {std::to_string(info.armor)}));
 
-    const std::pair<int32_t, const char*> kBase[] = {
-        {info.strength,  "Strength"},  {info.agility, "Agility"},
-        {info.stamina,   "Stamina"},   {info.intellect, "Intellect"},
-        {info.spirit,    "Spirit"},
-    };
-    for (const auto& [v, name] : kBase) {
-        if (v != 0) white((v > 0 ? "+" : "") + std::to_string(v) + " " + name);
-    }
-    const std::pair<int32_t, const char*> kRes[] = {
-        {info.holyRes, "Holy"},   {info.fireRes,   "Fire"},  {info.natureRes, "Nature"},
-        {info.frostRes, "Frost"}, {info.shadowRes, "Shadow"}, {info.arcaneRes, "Arcane"},
-    };
-    for (const auto& [v, name] : kRes) {
-        if (v != 0) white("+" + std::to_string(v) + " " + name + " Resistance");
-    }
-    for (const auto& es : info.extraStats) {
-        if (es.statValue == 0) continue;
-        if (const char* n = game::itemStatName(es.statType)) {
-            green(std::string(es.statValue > 0 ? "+" : "") + std::to_string(es.statValue) +
-                  " " + n);
-        }
-    }
+    std::vector<std::pair<uint32_t, int32_t>> stats = {
+        {3, info.agility}, {4, info.strength}, {5, info.intellect}, {6, info.spirit}, {7, info.stamina}};
+    for (const auto& es : info.extraStats) stats.emplace_back(es.statType, es.statValue);
+    const auto statLines = game::itemStatLines(stats, text);
+    for (const auto& sl : statLines) if (!sl.equip) white(sl.text);
+    const int32_t res[6] = {info.holyRes, info.fireRes, info.natureRes, info.frostRes, info.shadowRes, info.arcaneRes};
+    for (const auto& r : game::itemResistLines(res, text)) white(r);
 
-    if (info.requiredLevel > 0) white("Requires Level " + std::to_string(info.requiredLevel));
+    if (info.requiredLevel > 1) {
+        white(game::interfaceFormat("ITEM_MIN_LEVEL", "Requires Level %d", {std::to_string(info.requiredLevel)}));
+    }
+    for (const auto& sl : statLines) if (sl.equip) green(sl.text);
     if (!info.description.empty()) {
         gold("\"" + info.description + "\"");
         w->tooltipLines.back().wrap = true;  // prose; see fillSpellTooltip
@@ -3387,15 +3385,16 @@ static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
         if (!already) title += " " + suffix;
     }
 
-    // Green and after the item's own lines, where the real client puts them.
+    // After the item's own lines.
     for (const auto& b : gh->getRandomStatBonuses(item.randomPropertyId,
                                                   item.suffixFactor)) {
         if (b.value == 0) continue;
-        // itemModStatName, not itemStatName: the second is for a query
-        // response's extra stats and answers nothing for the five primaries,
-        // which is every stat the animal suffixes roll.
-        const char* statName = game::itemModStatName(b.statType);
-        if (!statName) {
+        // Worded as the item's own stats are (item_stat_text.hpp): white for a
+        // primary, green "Equip:" for a rating.
+        bool equip = false;
+        for (uint32_t t : game::kItemEquipStatOrder) equip = equip || t == b.statType;
+        const game::ItemStatLine worded = game::itemStatLine(b.statType, b.value, equip, game::interfaceString);
+        if (worded.text.empty()) {
             // Once per type. A stat with no name is dropped from the tooltip,
             // and a suffix that rolled one looks exactly like a suffix that
             // rolled nothing.
@@ -3406,11 +3405,11 @@ static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
             }
             continue;
         }
-        char buf[96];
-        std::snprintf(buf, sizeof(buf), "%+d %s", b.value, statName);
         wowee::ui::Widget::TooltipLine line;
-        line.left = buf;
-        line.lc[0] = 0.0f; line.lc[1] = 1.0f; line.lc[2] = 0.0f; line.lc[3] = 1.0f;
+        line.left = worded.text;
+        if (equip) { line.lc[0] = 0.0f; line.lc[1] = 1.0f; line.lc[2] = 0.0f; }
+        else       { line.lc[0] = 1.0f; line.lc[1] = 1.0f; line.lc[2] = 1.0f; }
+        line.lc[3] = 1.0f;
         line.rc[0] = line.rc[1] = line.rc[2] = line.rc[3] = 1.0f;
         w->tooltipLines.push_back(std::move(line));
     }
@@ -3420,20 +3419,16 @@ static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
 /// tooltip. Both bag and paperdoll tooltips build from the item's template id
 /// - _WoweePopulateItemTooltip calls GetItemInfo, which knows nothing of any
 /// one instance - so this line, like the random suffix above, has to be
-/// appended from the instance separately. Colored the same way as the bag
-/// window's own durability line (item_tooltip.cpp), so the two agree.
+/// appended from the instance separately. Worded and coloured as the client
+/// does: DURABILITY_TEMPLATE in white, red once the item is broken.
 static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item) {
     if (!w || item.maxDurability == 0) return;
-    const float pct = static_cast<float>(item.curDurability) /
-                       static_cast<float>(item.maxDurability);
     wowee::ui::Widget::TooltipLine line;
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "Durability %u / %u",
-                  item.curDurability, item.maxDurability);
-    line.left = buf;
-    if (pct > 0.5f)       { line.lc[0] = 0.1f; line.lc[1] = 1.0f; line.lc[2] = 0.1f; }
-    else if (pct > 0.25f) { line.lc[0] = 1.0f; line.lc[1] = 1.0f; line.lc[2] = 0.0f; }
-    else                  { line.lc[0] = 1.0f; line.lc[1] = 0.2f; line.lc[2] = 0.2f; }
+    // DURABILITY_TEMPLATE, white, red once it is broken (0x006277f0).
+    line.left = game::interfaceFormat("DURABILITY_TEMPLATE", "Durability %d / %d",
+                                      {std::to_string(item.curDurability), std::to_string(item.maxDurability)});
+    if (item.curDurability == 0) { line.lc[0] = 1.0f; line.lc[1] = 0.125f; line.lc[2] = 0.125f; }
+    else                         { line.lc[0] = 1.0f; line.lc[1] = 1.0f;   line.lc[2] = 1.0f; }
     line.lc[3] = 1.0f;
     line.rc[0] = line.rc[1] = line.rc[2] = line.rc[3] = 1.0f;
     w->tooltipLines.push_back(std::move(line));
@@ -8635,7 +8630,6 @@ void LuaEngine::registerCoreAPI() {
         "    local _, value, link = GetMerchantItemCostItem(index, costIndex)\n"
         "    if link then\n"
         "        self:SetHyperlink(link)\n"
-        "        if value and value > 1 then self:AddLine('Required: ' .. value, 1, 1, 1) end\n"
         "    end\n"
         "end\n"
         // The reward icons on the dungeon-ready popup.
@@ -8686,50 +8680,34 @@ void LuaEngine::registerCoreAPI() {
         "    if link then self:SetHyperlink(link) end\n"
         "end\n"
         // Shared item tooltip builder using GetItemInfo return values
+        // The shared item tooltip, in the client's order and words (0x006277f0):
+        // name, heroic, binding, unique; slot and type; damage, speed and DPS;
+        // armour; the white stats and the resistances; sockets; the
+        // requirements; the green "Equip:" stats; the item's spells; flavour
+        // text; the quest it starts; the sell price. Every phrase is the
+        // interface's GlobalStrings one, so a German client reads German; the
+        // stat and requirement lines come worded from _GetItemTooltipData.
         "function _WoweePopulateItemTooltip(self, itemId)\n"
         "    local name, itemLink, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture, sellPrice = GetItemInfo(itemId)\n"
         "    if not name then return false end\n"
         "    local qColors = {[0]={0.62,0.62,0.62},[1]={1,1,1},[2]={0.12,1,0},[3]={0,0.44,0.87},[4]={0.64,0.21,0.93},[5]={1,0.5,0},[6]={0.9,0.8,0.5},[7]={0,0.8,1}}\n"
         "    local c = qColors[quality or 1] or {1,1,1}\n"
         "    self:SetText(name, c[1], c[2], c[3])\n"
-        // Colorblind Mode names the quality instead of only colouring it.
-        //
-        // The colour is the whole of how an item's quality is told here, which
-        // is exactly the assumption the setting exists to undo. It goes
-        // directly under the name, in the quality colour, which is where the
-        // real client puts it.
-        "    if GetCVar(\'colorblindMode\') == \'1\' then\n"
-        "        local qNames = {[0]=\'Poor\',[1]=\'Common\',[2]=\'Uncommon\',[3]=\'Rare\',\n"
-        "                        [4]=\'Epic\',[5]=\'Legendary\',[6]=\'Artifact\',[7]=\'Heirloom\'}\n"
-        "        local qn = qNames[quality or 1]\n"
+        "    if GetCVar('colorblindMode') == '1' then\n"
+        "        local qn = _G['ITEM_QUALITY'..(quality or 1)..'_DESC']\n"
         "        if qn then self:AddLine(qn, c[1], c[2], c[3]) end\n"
         "    end\n"
-        // Item level, when the player asked for it. The panel offers the
-        // switch and nothing read it, so the line was on every equipment
-        // tooltip whatever it said - and its default was unset, so the box
-        // would have shown itself unticked with the line on screen.
-        "    -- Item level for equipment\n"
-        "    if equipSlot and equipSlot ~= '' and iLevel and iLevel > 0\n"
-        "       and GetCVar('showItemLevel') == '1' then\n"
-        "        self:AddLine('Item Level '..iLevel, 1, 0.82, 0)\n"
-        "    end\n"
-        // Read here rather than below the class line, because what a bag says
-        // about itself takes the place of that line.
         "    local data = _GetItemTooltipData(itemId)\n"
-        "    -- Equip slot and subclass on same line\n"
+        "    if data then\n"
+        "        if data.isHeroic then self:AddLine(ITEM_HEROIC or 'Heroic', 0, 1, 0) end\n"
+        "        local bind = ({[1]='ITEM_BIND_ON_PICKUP',[2]='ITEM_BIND_ON_EQUIP',[3]='ITEM_BIND_ON_USE',[4]='ITEM_BIND_QUEST'})[data.bindType or 0]\n"
+        "        if bind and _G[bind] then self:AddLine(_G[bind], 1, 1, 1) end\n"
+        "        if data.isUnique then self:AddLine(ITEM_UNIQUE or 'Unique', 1, 1, 1)\n"
+        "        elseif data.isUniqueEquipped then self:AddLine(ITEM_UNIQUE_EQUIPPABLE or 'Unique-Equipped', 1, 1, 1) end\n"
+        "    end\n"
         "    if equipSlot and equipSlot ~= '' then\n"
-        "        local slotNames = {INVTYPE_HEAD='Head',INVTYPE_NECK='Neck',INVTYPE_SHOULDER='Shoulder',\n"
-        "            INVTYPE_CHEST='Chest',INVTYPE_WAIST='Waist',INVTYPE_LEGS='Legs',INVTYPE_FEET='Feet',\n"
-        "            INVTYPE_WRIST='Wrist',INVTYPE_HAND='Hands',INVTYPE_FINGER='Finger',\n"
-        "            INVTYPE_TRINKET='Trinket',INVTYPE_CLOAK='Back',INVTYPE_WEAPON='One-Hand',\n"
-        "            INVTYPE_SHIELD='Off Hand',INVTYPE_2HWEAPON='Two-Hand',INVTYPE_RANGED='Ranged',\n"
-        "            INVTYPE_WEAPONMAINHAND='Main Hand',INVTYPE_WEAPONOFFHAND='Off Hand',\n"
-        "            INVTYPE_HOLDABLE='Held In Off-Hand',INVTYPE_TABARD='Tabard',INVTYPE_ROBE='Chest'}\n"
-        "        local slotText = slotNames[equipSlot] or ''\n"
-        "        local subText = (subclass and subclass ~= '') and subclass or ''\n"
-        // Red where the player cannot use it (0x006277f0, its red 0xff2020):
-        // the armour or weapon type they have no proficiency in, and "Off
-        // Hand" for a weapon of that hand without dual wield.
+        "        local slotText = _G[equipSlot] or ''\n"
+        "        local subText = (data and data.subclassName) or ((subclass and subclass ~= '') and subclass or '')\n"
         "        local lr, lg, lb = 1, 1, 1\n"
         "        local rr, rg, rb = 1, 1, 1\n"
         "        if data and data.offHandOk == false then lr, lg, lb = 1, 0.125, 0.125 end\n"
@@ -8737,98 +8715,40 @@ void LuaEngine::registerCoreAPI() {
         "        if slotText ~= '' or subText ~= '' then\n"
         "            self:AddDoubleLine(slotText, subText, lr,lg,lb, rr,rg,rb)\n"
         "        end\n"
-        // A bag says how much it holds, which is what the class line would
-        // otherwise be spent on: "16 Slot Bag" rather than "Container". The
-        // subclass names the kind, so a quiver and an ammo pouch read as
-        // themselves.
         "    elseif data and data.containerSlots then\n"
-        "        local kind = (subclass and subclass ~= '') and subclass or (class or 'Bag')\n"
-        "        self:AddLine(format(CONTAINER_SLOTS or '%d Slot %s', data.containerSlots, kind),\n"
-        "                     1, 1, 1)\n"
+        "        local kind = (subclass and subclass ~= '') and subclass or (class or '')\n"
+        "        self:AddLine(format(CONTAINER_SLOTS or '%d Slot %s', data.containerSlots, kind), 1, 1, 1)\n"
         "    elseif class and class ~= '' then\n"
         "        self:AddLine(class, 1, 1, 1)\n"
         "    end\n"
-        "    -- Fetch detailed stats from C side\n"
         "    if data then\n"
-        "        -- Bind type\n"
-        "        if data.isHeroic then self:AddLine('Heroic', 0, 1, 0) end\n"
-        "        if data.isUnique then self:AddLine('Unique', 1, 1, 1)\n"
-        "        elseif data.isUniqueEquipped then self:AddLine('Unique-Equipped', 1, 1, 1) end\n"
-        // The fourth copy of this table, and the one that cannot share: it is
-        // Lua source compiled into the tooltip shim. It stops at 3, like the C++
-        // copy beside it used to, so a quest item says nothing here about being
-        // one. Left as it is rather than changed on inference - what FrameXML's
-        // tooltip shows is a question about FrameXML.
-        "        if data.bindType == 1 then self:AddLine('Binds when picked up', 1, 1, 1)\n"
-        "        elseif data.bindType == 2 then self:AddLine('Binds when equipped', 1, 1, 1)\n"
-        "        elseif data.bindType == 3 then self:AddLine('Binds when used', 1, 1, 1) end\n"
-        "        -- Armor\n"
-        "        if data.armor and data.armor > 0 then\n"
-        "            self:AddLine(data.armor..' Armor', 1, 1, 1)\n"
-        "        end\n"
-        "        -- Weapon damage and speed\n"
         "        if data.damageMin and data.damageMax and data.damageMin > 0 then\n"
         "            local speed = (data.speed or 0) / 1000\n"
         "            if speed > 0 then\n"
-        "                self:AddDoubleLine(string.format('%.0f - %.0f Damage', data.damageMin, data.damageMax), string.format('Speed %.2f', speed), 1,1,1, 1,1,1)\n"
+        "                self:AddDoubleLine(format(DAMAGE_TEMPLATE or '%d - %d Damage', data.damageMin, data.damageMax),\n"
+        "                                   format('%s %.2f', SPEED or 'Speed', speed), 1,1,1, 1,1,1)\n"
         "                local dps = (data.damageMin + data.damageMax) / 2 / speed\n"
-        "                self:AddLine(string.format('(%.1f damage per second)', dps), 1, 1, 1)\n"
+        "                self:AddLine(format(DPS_TEMPLATE or '(%.1f damage per second)', dps), 1, 1, 1)\n"
         "            end\n"
         "        end\n"
-        "        -- Stats\n"
-        "        if data.stamina then self:AddLine('+'..data.stamina..' Stamina', 0, 1, 0) end\n"
-        "        if data.strength then self:AddLine('+'..data.strength..' Strength', 0, 1, 0) end\n"
-        "        if data.agility then self:AddLine('+'..data.agility..' Agility', 0, 1, 0) end\n"
-        "        if data.intellect then self:AddLine('+'..data.intellect..' Intellect', 0, 1, 0) end\n"
-        "        if data.spirit then self:AddLine('+'..data.spirit..' Spirit', 0, 1, 0) end\n"
-        "        -- Extra stats (hit, crit, haste, AP, SP, etc.)\n"
-        "        if data.extraStats then\n"
-        "            local statNames = {[3]='Agility',[4]='Strength',[5]='Intellect',[6]='Spirit',[7]='Stamina',\n"
-        "                [12]='Defense Rating',[13]='Dodge Rating',[14]='Parry Rating',[15]='Block Rating',\n"
-        "                [16]='Melee Hit Rating',[17]='Ranged Hit Rating',[18]='Spell Hit Rating',\n"
-        "                [19]='Melee Crit Rating',[20]='Ranged Crit Rating',[21]='Spell Crit Rating',\n"
-        "                [28]='Melee Haste Rating',[29]='Ranged Haste Rating',[30]='Spell Haste Rating',\n"
-        "                [31]='Hit Rating',[32]='Crit Rating',[36]='Haste Rating',\n"
-        "                [33]='Resilience Rating',[34]='Attack Power',[35]='Spell Power',\n"
-        "                [37]='Expertise Rating',[38]='Attack Power',[39]='Ranged Attack Power',\n"
-        "                [43]='Mana per 5 sec.',[44]='Armor Penetration Rating',\n"
-        "                [45]='Spell Power',[46]='Health per 5 sec.',[47]='Spell Penetration'}\n"
-        "            for _, stat in ipairs(data.extraStats) do\n"
-        "                local name = statNames[stat.type]\n"
-        "                if name and stat.value ~= 0 then\n"
-        "                    local prefix = stat.value > 0 and '+' or ''\n"
-        "                    self:AddLine(prefix..stat.value..' '..name, 0, 1, 0)\n"
-        "                end\n"
+        "        if data.armor and data.armor > 0 then\n"
+        "            self:AddLine(format(ARMOR_TEMPLATE or '%d Armor', data.armor), 1, 1, 1)\n"
+        "        end\n"
+        "        if data.statLines then\n"
+        "            for _, st in ipairs(data.statLines) do\n"
+        "                if not st.equip then self:AddLine(st.text, 1, 1, 1) end\n"
         "            end\n"
         "        end\n"
-        "        -- Resistances\n"
-        "        if data.fireRes and data.fireRes ~= 0 then self:AddLine('+'..data.fireRes..' Fire Resistance', 0, 1, 0) end\n"
-        "        if data.natureRes and data.natureRes ~= 0 then self:AddLine('+'..data.natureRes..' Nature Resistance', 0, 1, 0) end\n"
-        "        if data.frostRes and data.frostRes ~= 0 then self:AddLine('+'..data.frostRes..' Frost Resistance', 0, 1, 0) end\n"
-        "        if data.shadowRes and data.shadowRes ~= 0 then self:AddLine('+'..data.shadowRes..' Shadow Resistance', 0, 1, 0) end\n"
-        "        if data.arcaneRes and data.arcaneRes ~= 0 then self:AddLine('+'..data.arcaneRes..' Arcane Resistance', 0, 1, 0) end\n"
-        "        -- Item spell effects (Use: / Equip: / Chance on Hit:)\n"
-        "        if data.itemSpells then\n"
-        "            local triggerLabels = {[0]='Use: ',[1]='Equip: ',[2]='Chance on hit: ',[5]=''}\n"
-        "            for _, sp in ipairs(data.itemSpells) do\n"
-        "                local label = triggerLabels[sp.trigger] or ''\n"
-        "                local text = sp.description or sp.name or ''\n"
-        "                if text ~= '' then\n"
-        "                    self:AddLine(label .. text, 0, 1, 0, 1)\n"
-        "                end\n"
-        "            end\n"
+        "        if data.resistLines then\n"
+        "            for _, text in ipairs(data.resistLines) do self:AddLine(text, 1, 1, 1) end\n"
         "        end\n"
-        "        -- Gem sockets\n"
         "        if data.sockets then\n"
-        "            local socketNames = {[1]='Meta',[2]='Red',[4]='Yellow',[8]='Blue'}\n"
+        "            local socketKeys = {[1]='EMPTY_SOCKET_META',[2]='EMPTY_SOCKET_RED',[4]='EMPTY_SOCKET_YELLOW',[8]='EMPTY_SOCKET_BLUE'}\n"
         "            for _, sock in ipairs(data.sockets) do\n"
-        "                local colorName = socketNames[sock.color] or 'Prismatic'\n"
-        "                self:AddLine('[' .. colorName .. ' Socket]', 0.5, 0.5, 0.5)\n"
+        "                local key = socketKeys[sock.color] or 'EMPTY_SOCKET_NO_COLOR'\n"
+        "                self:AddLine(_G[key] or key, 0.5, 0.5, 0.5)\n"
         "            end\n"
         "        end\n"
-        // The requirements, in the client's order and words (0x006277f0):
-        // races and classes, level, skill, spell, reputation - each red where
-        // the player does not meet it.
         "        local function req(text, ok)\n"
         "            if ok == false then self:AddLine(text, 1, 0.125, 0.125)\n"
         "            else self:AddLine(text, 1, 1, 1) end\n"
@@ -8845,6 +8765,9 @@ void LuaEngine::registerCoreAPI() {
         "        if data.requiredLevel and data.requiredLevel > 1 then\n"
         "            req(format(ITEM_MIN_LEVEL or 'Requires Level %d', data.requiredLevel), data.levelOk)\n"
         "        end\n"
+        "        if equipSlot and equipSlot ~= '' and iLevel and iLevel > 0 and GetCVar('showItemLevel') == '1' then\n"
+        "            self:AddLine(format(ITEM_LEVEL or 'Item Level %d', iLevel), 1, 1, 1)\n"
+        "        end\n"
         "        if data.requiredSkillName then\n"
         "            if data.requiredSkillRank and data.requiredSkillRank > 0 then\n"
         "                req(format(ITEM_MIN_SKILL or 'Requires %s (%d)', data.requiredSkillName, data.requiredSkillRank), data.skillOk)\n"
@@ -8859,17 +8782,28 @@ void LuaEngine::registerCoreAPI() {
         "            local standing = _G['FACTION_STANDING_LABEL'..data.requiredFactionStanding] or ''\n"
         "            req(format(ITEM_REQ_REPUTATION or 'Requires %s - %s', data.requiredFactionName, standing), data.reputationOk)\n"
         "        end\n"
-        "        -- Flavor text\n"
+        "        if data.statLines then\n"
+        "            for _, st in ipairs(data.statLines) do\n"
+        "                if st.equip then self:AddLine(st.text, 0, 1, 0, 1) end\n"
+        "            end\n"
+        "        end\n"
+        "        if data.itemSpells then\n"
+        "            local triggerKeys = {[0]='ITEM_SPELL_TRIGGER_ONUSE',[1]='ITEM_SPELL_TRIGGER_ONEQUIP',[2]='ITEM_SPELL_TRIGGER_ONPROC'}\n"
+        "            for _, sp in ipairs(data.itemSpells) do\n"
+        "                local text = sp.description or sp.name or ''\n"
+        "                if text ~= '' then\n"
+        "                    local key = triggerKeys[sp.trigger]\n"
+        "                    local label = key and _G[key]\n"
+        "                    if label then text = label .. ' ' .. text end\n"
+        "                    self:AddLine(text, 0, 1, 0, 1)\n"
+        "                end\n"
+        "            end\n"
+        "        end\n"
         "        if data.description then self:AddLine('\"'..data.description..'\"', 1, 0.82, 0, 1) end\n"
-        "        if data.startsQuest then self:AddLine('This Item Begins a Quest', 1, 0.82, 0) end\n"
+        "        if data.startsQuest then self:AddLine(ITEM_STARTS_QUEST or 'This Item Begins a Quest', 1, 1, 1) end\n"
         "    end\n"
-        "    -- Sell price from GetItemInfo\n"
-        // Through the one money formatter, which writes the coin's picture
-        // rather than a letter. This split the copper up itself and appended
-        // 'g', 's' and 'c' - a third copy of the same arithmetic, and the only
-        // one left still writing letters.
         "    if sellPrice and sellPrice > 0 then\n"
-        "        self:AddLine('Sell Price: '..GetCoinTextureString(sellPrice), 1, 1, 1)\n"
+        "        self:AddLine(format('%s: ', SELL_PRICE or 'Sell Price')..GetCoinTextureString(sellPrice), 1, 1, 1)\n"
         "    end\n"
         "    self.__itemId = itemId\n"
         "    return true\n"
@@ -8892,7 +8826,6 @@ void LuaEngine::registerCoreAPI() {
         "    if not id then return end\n"
         "    _WoweePopulateItemTooltip(self, tonumber(id))\n"
         "    self:_WoweeAppendItemEnchants(bag, slot)\n"
-        "    if count and count > 1 then self:AddLine('Count: '..count, 0.5, 0.5, 0.5) end\n"
         "end\n"
         // The spellbook's tooltip. SpellButton_OnEnter calls this and nothing
         // answered it, so hovering any spell in the book showed nothing -

@@ -16,6 +16,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "game/item_requirements.hpp"
+#include "game/item_stat_text.hpp"
 #include "game/reputation_standing.hpp"
 #include <array>
 #include <cmath>
@@ -24,10 +25,15 @@
 #include <filesystem>
 #include <ranges>
 #include <sstream>
+#include <map>
 #include <set>
 #include <string_view>
 
 namespace wowee::addons {
+
+static std::string itemClassDisplayName(game::GameHandler* gh, uint32_t itemClass);
+static std::string itemSubclassDisplayName(game::GameHandler* gh, uint32_t itemClass, uint32_t subClass,
+                                           bool verbose);
 
 /// One row of StringLookups.dbc, as 0x00634910 hands back its string (+4);
 /// empty for a row that is not there.
@@ -717,13 +723,19 @@ static int lua_GetItemInfo(lua_State* L) {
             "Trade Goods", "Generic", "Recipe", "Money", "Quiver", "Quest", "Key",
             "Permanent", "Miscellaneous", "Glyph"
         };
-        if (info->itemClass < 17)
-            lua_pushstring(L, kItemClasses[info->itemClass]);
-        else
-            lua_pushstring(L, "Miscellaneous");
+        // The interface's own (localized) name from ItemClass.dbc, as the
+        // client answers it; the English table only where there is none.
+        std::string cls = itemClassDisplayName(gh, info->itemClass);
+        if (cls.empty()) cls = info->itemClass < 17 ? kItemClasses[info->itemClass] : "Miscellaneous";
+        lua_pushstring(L, cls.c_str());
     }
-    // 7: subclass - use subclassName from ItemDef if available, else generic
-    lua_pushstring(L, info->subclassName.empty() ? "" : info->subclassName.c_str());
+    // 7: subclass - ItemSubClass's VerboseName, else its DisplayName
+    // (0x00516c60), else the name the item query left.
+    {
+        std::string sub = itemSubclassDisplayName(gh, info->itemClass, info->subClass, true);
+        if (sub.empty()) sub = info->subclassName;
+        lua_pushstring(L, sub.c_str());
+    }
     lua_pushnumber(L, info->maxStack > 0 ? info->maxStack : 1); // 8: maxStack
     // 9: equipSlot - WoW inventoryType to INVTYPE string
     {
@@ -2380,6 +2392,52 @@ std::string auctionSortColumn(const char* sort) {
 }  // namespace
 
 namespace {
+/// ItemClass.dbc's and ItemSubClass.dbc's names, as the client has them
+/// (localized): the class's name (field 3), and per class and subclass its
+/// DisplayName (10) and VerboseName (27). Read once.
+struct ItemClassNames {
+    bool loaded = false;
+    std::map<uint32_t, std::string> classes;
+    std::map<std::pair<uint32_t, uint32_t>, std::pair<std::string, std::string>> subclasses;
+};
+
+const ItemClassNames& itemClassNames(game::GameHandler* gh) {
+    static ItemClassNames t;
+    if (t.loaded || !gh) return t;
+    auto* am = gh->services().assetManager;
+    if (!am || !am->isInitialized()) return t;
+    t.loaded = true;
+    if (auto dbc = am->loadDBCOptional("ItemClass.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() > 3) {
+        for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) t.classes[dbc->getUInt32(r, 0)] = dbc->getString(r, 3);
+    }
+    if (auto dbc = am->loadDBCOptional("ItemSubClass.dbc"); dbc && dbc->isLoaded() && dbc->getFieldCount() > 27) {
+        for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+            t.subclasses[{dbc->getUInt32(r, 0), dbc->getUInt32(r, 1)}] = {dbc->getString(r, 10), dbc->getString(r, 27)};
+        }
+    }
+    return t;
+}
+}  // namespace
+
+/// GetItemInfo's class (0x00516c60): ItemClass's name; empty where unknown.
+static std::string itemClassDisplayName(game::GameHandler* gh, uint32_t itemClass) {
+    const auto& t = itemClassNames(gh);
+    const auto it = t.classes.find(itemClass);
+    return it != t.classes.end() ? it->second : std::string();
+}
+
+/// The subclass's name: GetItemInfo's is the VerboseName, or the DisplayName
+/// without one ("Einhandstreitkolben"); the tooltip's type line uses the
+/// DisplayName ("Streitkolben", 0x006277f0).
+static std::string itemSubclassDisplayName(game::GameHandler* gh, uint32_t itemClass, uint32_t subClass, bool verbose) {
+    const auto& t = itemClassNames(gh);
+    const auto it = t.subclasses.find({itemClass, subClass});
+    if (it == t.subclasses.end()) return {};
+    if (verbose && !it->second.second.empty()) return it->second.second;
+    return it->second.first;
+}
+
+namespace {
 /// ChrRaces' and ChrClasses' names, as the tooltip's restriction lines name
 /// them (0x006277f0 reads the localized Name of each row; a race whose flag
 /// 0x1 is set is not playable and never named). Read once; empty where the
@@ -2543,6 +2601,35 @@ static int lua_GetItemTooltipData(lua_State* L) {
     lua_pushnumber(L, info->requiredLevel);
     lua_setfield(L, -2, "requiredLevel");
     pushItemRequirements(L, gh, *info);
+    // The type line's name: the subclass's DisplayName (0x006277f0).
+    {
+        std::string sub = itemSubclassDisplayName(gh, info->itemClass, info->subClass, false);
+        if (sub.empty()) sub = info->subclassName;
+        if (!sub.empty()) { lua_pushstring(L, sub.c_str()); lua_setfield(L, -2, "subclassName"); }
+    }
+    // The stat and resistance lines, in the client's order and words
+    // (item_stat_text.hpp): white primaries, green "Equip:" ratings.
+    {
+        std::vector<std::pair<uint32_t, int32_t>> stats = {
+            {3, info->agility}, {4, info->strength}, {5, info->intellect},
+            {6, info->spirit}, {7, info->stamina}};
+        for (const auto& es : info->extraStats) stats.emplace_back(es.statType, es.statValue);
+        const auto lines = game::itemStatLines(stats, game::interfaceString);
+        lua_newtable(L);
+        for (size_t i = 0; i < lines.size(); ++i) {
+            lua_newtable(L);
+            lua_pushstring(L, lines[i].text.c_str());
+            lua_setfield(L, -2, "text");
+            lua_pushboolean(L, lines[i].equip ? 1 : 0);
+            lua_setfield(L, -2, "equip");
+            lua_rawseti(L, -2, static_cast<int>(i) + 1);
+        }
+        lua_setfield(L, -2, "statLines");
+        const int32_t res[6] = {info->holyRes, info->fireRes, info->natureRes,
+                                info->frostRes, info->shadowRes, info->arcaneRes};
+        pushStringList(L, game::itemResistLines(res, game::interfaceString));
+        lua_setfield(L, -2, "resistLines");
+    }
     // Extra stats (hit, crit, haste, AP, SP, etc.) as array of {type, value} pairs
     if (!info->extraStats.empty()) {
         lua_newtable(L);

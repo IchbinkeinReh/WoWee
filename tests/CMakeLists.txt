@@ -167,6 +167,11 @@ endfunction()
 wowee_add_test(test_sell_count
     SOURCES test_sell_count.cpp)
 
+# An item's stat and resistance lines in the interface's words (0x006277f0).
+# Header-only.
+wowee_add_test(test_item_stat_text
+    SOURCES test_item_stat_text.cpp)
+
 # An item's requirements as the tooltip reds them and the merchant's
 # isUsable (0x006277f0, 0x006dc3f0). Header-only.
 wowee_add_test(test_item_requirements
