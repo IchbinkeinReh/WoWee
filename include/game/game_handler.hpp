@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/mirror_image.hpp"
 #include "game/rune_state.hpp"
 #include "game/spell_history.hpp"
 #include "game/quest_giver_status.hpp"
@@ -2027,6 +2028,11 @@ public:
                                                       const std::array<uint32_t, 19>& displayInfoIds,
                                                       const std::array<uint8_t, 19>& inventoryTypes)>;
     void setPlayerEquipmentCallback(PlayerEquipmentCallback cb) { playerEquipmentCallback_ = std::move(cb); }
+
+    /// The look of a unit drawn as a player character (SMSG_MIRRORIMAGE_DATA,
+    /// game/mirror_image.hpp).
+    using MirrorImageCallback = std::function<void(const MirrorImageLook& look)>;
+    void setMirrorImageCallback(MirrorImageCallback cb) { mirrorImageCallback_ = std::move(cb); }
 
     /// A CORPSE object to draw, from its fields (0x00705670, 0x00705b20).
     /// Removed through the player despawn callback.
@@ -5470,6 +5476,7 @@ private:
     CorpseLootableCallback corpseLootableCallback_;
     PlayerDespawnCallback playerDespawnCallback_;
     PlayerEquipmentCallback playerEquipmentCallback_;
+    MirrorImageCallback mirrorImageCallback_;
     CreatureMoveCallback creatureMoveCallback_;
     TransportMoveCallback transportMoveCallback_;
     TransportSpawnCallback transportSpawnCallback_;

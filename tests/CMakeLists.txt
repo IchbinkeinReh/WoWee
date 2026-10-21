@@ -3201,6 +3201,12 @@ wowee_add_test(test_blob_shadow
 wowee_add_test(test_shadow_pass_work
     SOURCES test_shadow_pass_work.cpp)
 
+# ── test_mirror_image ────────────────────────────────────────
+# SMSG_MIRRORIMAGE_DATA, which dresses a unit drawn as a player character
+# (game/mirror_image.hpp).
+wowee_add_test(test_mirror_image
+    SOURCES test_mirror_image.cpp)
+
 # ── test_gossip_quest_status ─────────────────────────────────
 # Which taken quests the gossip and greeting lists show as ready to hand in
 # (game/gossip_quest_status.hpp).

@@ -1597,7 +1597,10 @@ std::string EntitySpawner::getModelPathForDisplayId(uint32_t displayId) const {
     // beyond that are corrupted update-field data or packet parse errors.
     // Silently reject to avoid pointless DBC lookups and log spam.
     constexpr uint32_t kMaxReasonableDisplayId = 100000;
-    if (displayId == 0 || displayId > kMaxReasonableDisplayId) {
+    // Past that is also where a unit drawn as a player character gets its
+    // display of its own (mirrorDisplayId), which is real.
+    if (displayId == 0 ||
+        (displayId > kMaxReasonableDisplayId && displayId < game::kMirrorDisplayIdBase)) {
         return "";
     }
 
@@ -1697,6 +1700,77 @@ audio::VoiceType EntitySpawner::detectVoiceTypeFromDisplayId(uint32_t displayId)
 
     LOG_INFO("Voice detection: displayId ", displayId, " -> ", raceName, " ", sexName, " (race=", static_cast<int>(raceId), ", sex=", static_cast<int>(sexId), ")");
     return result;
+}
+
+void EntitySpawner::setMirrorLook(const game::MirrorImageLook& look) {
+    auto it = mirrorLooks_.find(look.guid);
+    // A changed look - other gear, the barber - is a display of its own: the
+    // old one's model was textured for what it wore then.
+    if (it != mirrorLooks_.end() && !it->second.sameLookAs(look)) mirrorDisplayIds_.erase(look.guid);
+    mirrorLooks_[look.guid] = look;
+}
+
+uint32_t EntitySpawner::mirrorDisplayId(uint64_t guid, uint32_t serverDisplayId) {
+    const auto it = mirrorLooks_.find(guid);
+    if (it == mirrorLooks_.end() || !it->second.hasCharacter()) return serverDisplayId;
+    buildCreatureDisplayLookups();
+    const game::MirrorImageLook& look = it->second;
+    // The body is the race and sex's character model, as a player's is. The
+    // display the answer names is whatever the server dressed the unit in
+    // before - a bot's placeholder can be another race's NPC altogether - so
+    // it is taken only when it is that model.
+    const auto race = static_cast<game::Race>(look.raceId);
+    if (!game::hasPlayerModel(race)) return serverDisplayId;
+    const std::string wanted = game::getPlayerModelPath(
+        race, look.gender == 1 ? game::Gender::FEMALE : game::Gender::MALE);
+    const auto isWanted = [&](uint32_t displayId) {
+        const auto d = displayDataMap_.find(displayId);
+        if (d == displayDataMap_.end()) return false;
+        const auto p = modelIdToPath_.find(d->second.modelId);
+        return p != modelIdToPath_.end() && game::mirror_model_path::samePath(p->second, wanted);
+    };
+    uint32_t baseId = 0;
+    if (isWanted(look.displayId)) baseId = look.displayId;
+    else if (isWanted(serverDisplayId)) baseId = serverDisplayId;
+    else {
+        const uint64_t key = (static_cast<uint64_t>(look.raceId) << 8) | look.gender;
+        auto cached = mirrorBaseDisplays_.find(key);
+        if (cached == mirrorBaseDisplays_.end()) {
+            uint32_t found = 0;
+            for (const auto& [id, d] : displayDataMap_) {
+                if (id >= game::kMirrorDisplayIdBase) continue;
+                if (isWanted(id) && (found == 0 || id < found)) found = id;
+            }
+            cached = mirrorBaseDisplays_.emplace(key, found).first;
+        }
+        baseId = cached->second;
+    }
+    auto base = displayDataMap_.find(baseId);
+    if (baseId == 0 || base == displayDataMap_.end()) return serverDisplayId;
+
+    uint32_t& id = mirrorDisplayIds_[guid];
+    if (id == 0) id = nextMirrorDisplayId_++;
+    CreatureDisplayData data = base->second;
+    data.extraDisplayId = id;
+    // Nothing of the base's own skins: the look is composited from the
+    // character's sections, as for any NPC dressed by an extra.
+    data.skin1.clear();
+    data.skin2.clear();
+    data.skin3.clear();
+    displayDataMap_[id] = data;
+
+    HumanoidDisplayExtra extra;
+    extra.raceId = look.raceId;
+    extra.sexId = look.gender;
+    extra.skinId = look.skin;
+    extra.faceId = look.face;
+    extra.hairStyleId = look.hairStyle;
+    extra.hairColorId = look.hairColor;
+    extra.facialHairId = look.facialHair;
+    const auto items = look.itemsInExtraOrder();
+    for (size_t i = 0; i < items.size(); ++i) extra.equipDisplayId[i] = items[i];
+    humanoidExtraMap_[id] = extra;
+    return id;
 }
 
 void EntitySpawner::buildGameObjectDisplayLookups() {

@@ -1,3 +1,4 @@
+#include "game/mirror_image.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "core/env_flag.hpp"
 #include "core/app_clock.hpp"
@@ -3294,47 +3295,27 @@ void GameHandler::registerRemainingOpcodes() {
             if (key) addSystemChatMessage(interfaceFormat(key, enUS, {played}));
         }
     };
-    // WotLK 3.3.5a format:
-    //   uint64 mirrorGuid - GUID of the mirror image unit
-    //   uint32 displayId  - display ID to render the image with
-    //   uint8  raceId     - race of caster
-    //   uint8  genderFlag - gender of caster
-    //   uint8  classId    - class of caster
-    //   uint64 casterGuid - GUID of the player who cast the spell
-    //   Followed by equipped item display IDs (11 × uint32) if casterGuid != 0
-    // Purpose: tells client how to render the image (same appearance as caster).
-    // We parse the GUIDs so units render correctly via their existing display IDs.
+    // The look of a unit drawn as a player character (game/mirror_image.hpp),
+    // answering CMSG_GET_MIRRORIMAGE_DATA. Read and dropped before: only the
+    // display id was taken, and only for a unit that had none, so a bot came
+    // out as its placeholder display.
     dispatchTable_[Opcode::SMSG_MIRRORIMAGE_DATA] = [this](network::Packet& packet) {
-        // WotLK 3.3.5a format:
-        //   uint64 mirrorGuid - GUID of the mirror image unit
-        //   uint32 displayId  - display ID to render the image with
-        //   uint8  raceId     - race of caster
-        //   uint8  genderFlag - gender of caster
-        //   uint8  classId    - class of caster
-        //   uint64 casterGuid - GUID of the player who cast the spell
-        //   Followed by equipped item display IDs (11 × uint32) if casterGuid != 0
-        // Purpose: tells client how to render the image (same appearance as caster).
-        // We parse the GUIDs so units render correctly via their existing display IDs.
-        if (!packet.hasRemaining(8)) return;
-        uint64_t mirrorGuid = packet.readUInt64();
-        if (!packet.hasRemaining(4)) return;
-        uint32_t displayId  = packet.readUInt32();
-        if (!packet.hasRemaining(3)) return;
-        /*uint8_t raceId   =*/ packet.readUInt8();
-        /*uint8_t gender   =*/ packet.readUInt8();
-        /*uint8_t classId  =*/ packet.readUInt8();
-        // Apply display ID to the mirror image unit so it renders correctly
-        if (mirrorGuid != 0 && displayId != 0) {
-            auto entity = entityController_->getEntityManager().getEntity(mirrorGuid);
-            if (entity) {
-                auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
-                if (unit && unit->getDisplayId() == 0)
-                    unit->setDisplayId(displayId);
-            }
-        }
-        LOG_DEBUG("SMSG_MIRRORIMAGE_DATA: mirrorGuid=0x", std::hex, mirrorGuid,
-                  " displayId=", std::dec, displayId);
+        const size_t pos = packet.getReadPos();
+        const auto& bytes = packet.getData();
+        const auto look = pos <= bytes.size()
+            ? parseMirrorImageData(bytes.data() + pos, bytes.size() - pos)
+            : std::nullopt;
         packet.skipAll();
+        if (!look || look->guid == 0) return;
+        LOG_INFO("SMSG_MIRRORIMAGE_DATA: guid=0x", std::hex, look->guid, std::dec,
+                 " display=", look->displayId, " race=", static_cast<int>(look->raceId),
+                 " gender=", static_cast<int>(look->gender), " class=", static_cast<int>(look->classId),
+                 " skin=", static_cast<int>(look->skin), " face=", static_cast<int>(look->face),
+                 " hair=", static_cast<int>(look->hairStyle), "/", static_cast<int>(look->hairColor),
+                 " facial=", static_cast<int>(look->facialHair), " items=", look->items[0], ",", look->items[1], ",",
+                 look->items[2], ",", look->items[3], ",", look->items[4], ",", look->items[5], ",", look->items[6], ",",
+                 look->items[7], ",", look->items[8], ",", look->items[9], ",", look->items[10]);
+        if (mirrorImageCallback_) mirrorImageCallback_(*look);
     };
     // uint64 battlefieldGuid + uint32 zoneId + uint64 expireUnixTime (seconds)
     dispatchTable_[Opcode::SMSG_BATTLEFIELD_MGR_ENTRY_INVITE] = [this](network::Packet& packet) {

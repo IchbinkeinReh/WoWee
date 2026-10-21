@@ -1,6 +1,7 @@
 #pragma once
 
 #include "game/character.hpp"
+#include "game/mirror_image.hpp"
 #include "game/guild_emblem.hpp"
 #include "game/game_services.hpp"
 #include "pipeline/blp_loader.hpp"
@@ -75,6 +76,15 @@ public:
     /// A spell's worn item over what a player wears in an equipment slot
     /// (CharProc 17, 0x006f82d0); display 0 gives it its own back (0x00723730).
     void setPlayerItemOverride(uint64_t guid, int equipSlot, uint32_t displayId, uint8_t inventoryType);
+
+    /// A unit drawn as a player character (game/mirror_image.hpp): its look,
+    /// kept for as long as the session, and drawn through the humanoid NPC
+    /// path as a display of its own - the server's display, standing for the
+    /// race's body, with a CreatureDisplayInfoExtra made from the look.
+    void setMirrorLook(const game::MirrorImageLook& look);
+    /// The display a creature is drawn with: its mirror look's, where it has
+    /// one with a character in it, else the server's.
+    uint32_t mirrorDisplayId(uint64_t guid, uint32_t serverDisplayId);
 
     // Immediate despawn
     void despawnCreature(uint64_t guid);
@@ -780,6 +790,14 @@ private:
     };
     std::unordered_map<uint32_t, CreatureDisplayData> displayDataMap_;  // displayId → display data
     std::unordered_map<uint32_t, HumanoidDisplayExtra> humanoidExtraMap_;  // extraDisplayId → humanoid data
+    // Mirror looks by guid, and the display each is drawn as. The displays
+    // are made in a range no DBC row uses, and made again after the lookups
+    // are rebuilt.
+    std::unordered_map<uint64_t, game::MirrorImageLook> mirrorLooks_;
+    std::unordered_map<uint64_t, uint32_t> mirrorDisplayIds_;
+    uint32_t nextMirrorDisplayId_ = game::kMirrorDisplayIdBase;
+    // (race << 8 | sex) -> a CreatureDisplayInfo row on that character model.
+    std::unordered_map<uint64_t, uint32_t> mirrorBaseDisplays_;
     std::unordered_map<uint32_t, std::string> modelIdToPath_;   // modelId → M2 path (from CreatureModelData.dbc)
     std::unordered_map<uint32_t, float> modelIdToScale_;        // modelId → CreatureModelData.ModelScale
     /// CreatureModelData's GeoBox (+0x44) and MountHeight (+0x40), by model id.

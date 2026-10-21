@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <array>
 #include <functional>
+#include <unordered_map>
 
 namespace wowee {
 
@@ -28,6 +29,14 @@ private:
     rendering::Renderer& renderer_;
     game::GameHandler& gameHandler_;
     std::function<bool(uint64_t)> isLocalPlayerGuid_;
+
+    // Where each creature was last asked to be drawn, with the server's own
+    // display: a mirror look arrives after the unit and draws it again there.
+    struct LastCreatureSpawn {
+        uint32_t displayId = 0;
+        float x = 0.0f, y = 0.0f, z = 0.0f, orientation = 0.0f, scale = 1.0f;
+    };
+    std::unordered_map<uint64_t, LastCreatureSpawn> lastCreatureSpawns_;
 };
 
 } // namespace core

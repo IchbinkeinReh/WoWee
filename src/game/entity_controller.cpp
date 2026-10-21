@@ -1,3 +1,4 @@
+#include "game/mirror_image.hpp"
 #include "game/quest_status_requery.hpp"
 #include "game/entity_controller.hpp"
 #include "core/env_flag.hpp"
@@ -1903,6 +1904,17 @@ void EntityController::dispatchEntitySpawn(uint64_t guid, ObjectType objectType,
     }
     if (isDead && owner_.npcDeathCallbackRef()) {
         owner_.npcDeathCallbackRef()(guid);
+    }
+    // A unit drawn as a player character - a mage's mirror image, the
+    // server's player-like bots - is drawn from the look it is asked for
+    // (game/mirror_image.hpp), not from its own display.
+    if (objectType == ObjectType::UNIT && owner_.getSocket()) {
+        const uint16_t flags2Idx = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+        if (flags2Idx != 0xFFFF && (entity->getField(flags2Idx) & kUnitFlag2MirrorImage) != 0) {
+            network::Packet miPkt(wireOpcode(Opcode::CMSG_GET_MIRRORIMAGE_DATA));
+            miPkt.writeUInt64(guid);
+            owner_.getSocket()->send(miPkt);
+        }
     }
     // Query quest giver status for NPCs with questgiver flag (0x02)
     if (objectType == ObjectType::UNIT && (unit->getNpcFlags() & NPC_FLAG_QUESTGIVER) &&

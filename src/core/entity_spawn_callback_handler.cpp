@@ -27,7 +27,10 @@ EntitySpawnCallbackHandler::EntitySpawnCallbackHandler(
 
 void EntitySpawnCallbackHandler::setupCallbacks() {
     // Creature spawn callback (online mode) - spawn creature models
-    gameHandler_.setCreatureSpawnCallback([this](uint64_t guid, uint32_t displayId, float x, float y, float z, float orientation, float scale) {
+    gameHandler_.setCreatureSpawnCallback([this](uint64_t guid, uint32_t serverDisplayId, float x, float y, float z, float orientation, float scale) {
+        lastCreatureSpawns_[guid] = {serverDisplayId, x, y, z, orientation, scale};
+        // A unit drawn as a player character is drawn from its look.
+        const uint32_t displayId = entitySpawner_.mirrorDisplayId(guid, serverDisplayId);
         // Queue spawns to avoid hanging when many creatures appear at once.
         // A VALUES update can change a creature's display in place (Westfall
         // lumberjacks alternate between the normal and log-carrying models).
@@ -82,7 +85,33 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
 
     // Creature despawn callback (online mode) - remove creature models
     gameHandler_.setCreatureDespawnCallback([this](uint64_t guid) {
+        lastCreatureSpawns_.erase(guid);
         entitySpawner_.despawnCreature(guid);
+    });
+
+    // The look of a unit drawn as a player character, which comes after the
+    // unit itself: drawn again, from the look, where it is already in view.
+    gameHandler_.setMirrorImageCallback([this](const game::MirrorImageLook& look) {
+        entitySpawner_.setMirrorLook(look);
+        const auto it = lastCreatureSpawns_.find(look.guid);
+        if (it == lastCreatureSpawns_.end()) return;
+        LastCreatureSpawn spawn = it->second;
+        // Where it stands now, which can be some way from where it came into view.
+        if (auto entity = gameHandler_.getEntityManager().getEntity(look.guid)) {
+            spawn.x = entity->getX();
+            spawn.y = entity->getY();
+            spawn.z = entity->getZ();
+            spawn.orientation = entity->getOrientation();
+        }
+        const uint32_t displayId = entitySpawner_.mirrorDisplayId(look.guid, spawn.displayId);
+        if (entitySpawner_.isCreatureSpawned(look.guid)) {
+            const auto& displayIds = entitySpawner_.getCreatureDisplayIds();
+            auto shown = displayIds.find(look.guid);
+            if (shown != displayIds.end() && shown->second == displayId) return;
+            entitySpawner_.despawnCreature(look.guid);
+        }
+        entitySpawner_.queueCreatureSpawn(look.guid, displayId, spawn.x, spawn.y, spawn.z,
+                                          spawn.orientation, spawn.scale);
     });
 
     gameHandler_.setPlayerDespawnCallback([this](uint64_t guid) {
