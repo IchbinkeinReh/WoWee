@@ -4168,10 +4168,35 @@ static std::vector<WorldStateLine> worldStateLines(game::GameHandler* gh) {
     return out;
 }
 
-// GetNumWorldStateUI() - how many always-up lines there are to draw.
+// GetNumWorldStateUI() - how many always-up lines there are to draw: the
+// WorldStateUI.dbc rows for the place and the player's phases (0x00548720);
+// the battleground's two scores where this install has no such file.
 static int lua_GetNumWorldStateUI(lua_State* L) {
-    lua_pushinteger(L, static_cast<lua_Integer>(worldStateLines(getGameHandler(L)).size()));
+    auto* gh = getGameHandler(L);
+    if (const auto lines = gh ? gh->worldStateUiLines() : std::nullopt) {
+        lua_pushnumber(L, static_cast<double>(lines->size()));
+        return 1;
+    }
+    lua_pushinteger(L, static_cast<lua_Integer>(worldStateLines(gh).size()));
     return 1;
+}
+
+/// GetWorldStateUIInfo from the file's row (0x00548d40): its type, the
+/// state its variable holds (1 where it names none), the text with the
+/// world states put in, the icons, tooltips and extended UI, and the
+/// extended UI's three states.
+static int pushWorldStateUiRow(lua_State* L, game::GameHandler& gh, const game::world_state_ui::Row& row) {
+    const auto state = [&gh](uint32_t id) { return gh.getWorldState(id).value_or(0u); };
+    lua_pushnumber(L, row.type);
+    lua_pushnumber(L, row.stateVariable == 0 ? 1.0 : static_cast<double>(state(row.stateVariable)));
+    lua_pushstring(L, game::world_state_ui::text(row.text, state, gh.worldStateNow()).c_str());
+    lua_pushstring(L, row.icon.c_str());
+    lua_pushstring(L, row.dynamicIcon.c_str());
+    lua_pushstring(L, row.tooltip.c_str());
+    lua_pushstring(L, row.dynamicTooltip.c_str());
+    lua_pushstring(L, row.extendedUI.c_str());
+    for (uint32_t variable : row.extendedUIState) lua_pushnumber(L, static_cast<double>(state(variable)));
+    return 11;
 }
 
 // GetWorldStateUIInfo(index) → uiType, state, text, icon, dynamicIcon, tooltip,
@@ -4180,6 +4205,16 @@ static int lua_GetNumWorldStateUI(lua_State* L) {
 // uiType 0 keeps worldstateframe.lua out of its world-PvP branch, which is the
 // one gated on a CVar and on IsSubZonePVPPOI. state 1 means "show, no flash".
 static int lua_GetWorldStateUIInfo(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (const auto rows = gh ? gh->worldStateUiLines() : std::nullopt) {
+        if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetWorldStateUIInfo(index)");
+        const auto at = static_cast<int64_t>(std::llround(lua_tonumber(L, 1))) - 1;
+        if (at < 0 || at >= static_cast<int64_t>(rows->size())) {
+            lua_pushnumber(L, 0);
+            return 1;
+        }
+        return pushWorldStateUiRow(L, *gh, *(*rows)[static_cast<size_t>(at)]);
+    }
     const int index = static_cast<int>(luaL_optinteger(L, 1, 0));
     const auto lines = worldStateLines(getGameHandler(L));
     if (index < 1 || index > static_cast<int>(lines.size())) return 0;

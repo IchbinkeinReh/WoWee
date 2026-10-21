@@ -5112,7 +5112,10 @@ void registerInventoryLuaAPI(lua_State* L) {
             else if (t == "owner") r = &gh->getAuctionOwnerResults();
             else if (t == "bidder") r = &gh->getAuctionBidderResults();
             lua_pushnumber(L, r ? r->auctions.size() : 0);
-            lua_pushnumber(L, r ? r->totalCount : 0);
+            // The owner's list answers its own rows twice, the pending sales
+            // among them (0x0059c1a0).
+            if (t == "owner") lua_pushnumber(L, r ? r->auctions.size() : 0);
+            else lua_pushnumber(L, r ? r->totalCount : 0);
             return 2;
         }},
                 {"GetAuctionItemInfo", [](lua_State* L) -> int {
@@ -5183,7 +5186,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             const std::string ownerName =
                 a.ownerGuid ? gh->lookupName(a.ownerGuid) : std::string();
             lua_pushstring(L, ownerName.c_str());   // owner
-            lua_pushnumber(L, 0);                   // saleStatus
+            // 1 for a sale still to pay out (+0x9c, 0x0059d5e0).
+            lua_pushnumber(L, a.pendingSale ? 1 : 0);  // saleStatus
             return 13;
         }},
                 {"GetAuctionItemTimeLeft", [](lua_State* L) -> int {

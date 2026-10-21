@@ -177,10 +177,30 @@ wowee_add_test(test_client_gps
 wowee_add_test(test_combat_log
     SOURCES test_combat_log.cpp ${CMAKE_SOURCE_DIR}/src/game/combat_log.cpp)
 
+# A chat line as LoggingChat writes it to WoWChatLog.txt (0x00509dd0's end):
+# the channel, the type's header, the language, the text made plain.
+# Header-only.
+wowee_add_test(test_chat_log
+    SOURCES test_chat_log.cpp)
+
 # The arena opponent roster (BattlefieldInfo.cpp): slots, pets beside their
 # owners, and ARENA_OPPONENT_UPDATE's words. Header-only.
 wowee_add_test(test_arena_opponents
     SOURCES test_arena_opponents.cpp)
+
+# The tabard designer's design (game/tabard_design.hpp): cycling, the start,
+# the save's refusals and answer, the files. Header-only.
+wowee_add_test(test_tabard_design
+    SOURCES test_tabard_design.cpp)
+
+# SMSG_AUCTION_LIST_PENDING_SALES's mails as owner list rows
+# (game/auction_pending_sales.hpp).
+wowee_add_packet_test(test_auction_pending_sales)
+
+# The world state frame's lines from WorldStateUI.dbc
+# (game/world_state_ui.hpp). Header-only.
+wowee_add_test(test_world_state_ui
+    SOURCES test_world_state_ui.cpp)
 
 # Stock-style hill climbing regression test. Run directly with:
 #   cmake --build build --target test_hill_climbing && ctest --test-dir build -R hill_climbing

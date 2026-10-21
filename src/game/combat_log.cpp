@@ -247,6 +247,132 @@ std::vector<Arg> entryArgs(const Entry& e, double timestamp, const SpellLookup& 
     return out;
 }
 
+namespace {
+
+/// 0x0074e880's writers, each after a comma.
+class LineWriter {
+public:
+    void bare(std::string_view text) {  // 0x0074d310
+        line_ += ',';
+        line_ += text;
+    }
+    void quoted(std::string_view text) {  // 0x0074d350
+        line_ += ",\"";
+        for (char c : text) {
+            if (c == '"' || c == '\\') line_ += '\\';
+            line_ += c;
+        }
+        line_ += '"';
+    }
+    void hex(uint32_t v) {  // 0x0074d280
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), ",0x%x", v);
+        line_ += buf;
+    }
+    void number(int64_t v) {  // "%d"
+        line_ += ',';
+        line_ += std::to_string(static_cast<int32_t>(v));
+    }
+    void guid(uint64_t g) {  // 0x0074d0d0
+        line_ += ',';
+        line_ += guidString(g);
+    }
+    void name(const Party& p) {
+        if (!p.name) bare("nil");
+        else if (p.realm.empty()) quoted(*p.name);
+        else quoted(*p.name + "-" + p.realm);
+    }
+    void oneOrNil(bool v) {
+        if (v) number(1);
+        else bare("nil");
+    }
+    template <size_t N>
+    void fromTable(const std::array<const char*, N>& table, uint32_t index) {
+        bare(index < N ? table[index] : "nil");
+    }
+    std::string line_;
+};
+
+}  // namespace
+
+std::string fileLine(const Entry& e, const SpellLookup& spells) {
+    LineWriter w;
+    w.line_ = eventName(e.event);
+    w.guid(e.src.guid);
+    w.name(e.src);
+    w.hex(e.src.flags);
+    w.guid(e.dst.guid);
+    w.name(e.dst);
+    w.hex(e.dst.flags);
+    if (e.spellId != 0) {
+        w.number(e.spellId);
+        if (const auto info = spells ? spells(e.spellId) : std::nullopt) {
+            w.quoted(info->name);
+            w.hex(info->school);
+        } else {
+            w.bare("nil");
+            w.bare("0x0");
+        }
+    }
+    const uint32_t s = e.suffix;
+    if (s & suffix::kAmount) w.number(e.amount);
+    if (s & suffix::kFailedType) w.quoted(e.failedType);
+    if (s & suffix::kMissType) w.fromTable(kMissNames, e.missType);
+    if (s & suffix::kEnvironmental) w.fromTable(kEnvironmentalNames, e.environmentalType);
+    if (s & suffix::kDamage) {
+        w.number(e.damage.amount);
+        w.number(e.damage.overkill);
+        w.number(e.damage.school);
+        w.number(e.damage.resisted);
+        w.number(e.damage.blocked);
+        w.number(e.damage.absorbed);
+        w.oneOrNil(e.damage.critical);
+        w.oneOrNil(e.damage.glancing);
+        w.oneOrNil(e.damage.crushing);
+    }
+    if (s & suffix::kMissAbsorbed) w.number(e.missAbsorbed);
+    if (s & suffix::kMissResisted) w.number(e.missResisted);
+    if (s & suffix::kMissBlocked) w.number(e.missBlocked);
+    if (s & suffix::kHeal) {
+        w.number(e.heal.amount);
+        w.number(e.heal.overhealing);
+        w.number(e.heal.absorbed);
+        w.oneOrNil(e.heal.critical);
+    }
+    if (s & suffix::kEnergize) {
+        w.number(e.power.amount);
+        w.number(e.power.powerType);
+    }
+    if (s & suffix::kDrain) {
+        w.number(e.power.amount);
+        w.number(e.power.powerType);
+        w.number(e.power.extraAmount);
+    }
+    if (s & suffix::kExtraSpell) {
+        // The extra spell's school in decimal, 0 for one with no row.
+        w.number(e.extraSpellId);
+        const auto info = spells ? spells(e.extraSpellId) : std::nullopt;
+        if (info) w.quoted(info->name);
+        else w.bare("nil");
+        w.number(info ? info->school : 0);
+    }
+    if (s & suffix::kEnchantName) w.quoted(e.enchantName);
+    if (s & suffix::kItem) {
+        w.number(e.itemId);
+        w.quoted(e.itemName.value_or(""));
+    }
+    if (s & suffix::kAuraType) w.bare(e.auraDebuff ? "DEBUFF" : "BUFF");
+    if (s & suffix::kAuraAmount) w.number(e.auraAmount);
+    return std::move(w.line_);
+}
+
+std::string fileTimePrefix(unsigned month, unsigned day, unsigned hour, unsigned minute, unsigned second,
+                           unsigned millisecond) {
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "%u/%u %02u:%02u:%02u.%03u  ", month, day, hour, minute, second, millisecond);
+    return buf;
+}
+
 void Filter::setEvents(const std::optional<std::string>& list) {
     if (!list) {
         events.fill(true);

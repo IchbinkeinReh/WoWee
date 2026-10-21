@@ -4148,6 +4148,7 @@ int lua_Region_GetAlpha(lua_State* L) {
 int lua_Texture_SetTexture(lua_State* L) {
     auto* w = widgetToRemeasure(L, 1);
     if (!w) return 0;
+    w->emblemMask = false;  // a texture of its own replaces a TabardModel's emblem
     if (lua_isnumber(L, 2)) {
         w->solidColor = true;
         w->texturePath.clear();
@@ -6655,6 +6656,7 @@ void LuaEngine::registerCoreAPI() {
     registerAbsentLuaAPI(L_);
     registerItemQueryLuaAPI(L_);
     registerCommentatorLuaAPI(L_);
+    registerTabardLuaAPI(L_);
 
     // WoW aliases
     lua_getglobal(L_, "string");
@@ -7065,6 +7067,7 @@ void LuaEngine::registerCoreAPI() {
             lua_pushcfunction(L_, r->func);
             lua_setfield(L_, -2, r->name);
         }
+        addTabardModelMethods(L_);
         lua_pop(L_, 1);
     };
 
@@ -7072,6 +7075,7 @@ void LuaEngine::registerCoreAPI() {
         lua_pushcfunction(L_, r->func);
         lua_setfield(L_, -2, r->name);
     }
+    addTabardModelMethods(L_);
     lua_setglobal(L_, "__WoweeFrameMT");
 
     // Commonly called frame methods that are no-ops for now, so an addon
@@ -7655,11 +7659,11 @@ void LuaEngine::registerCoreAPI() {
         "__WoweeWidgetMethods = {\n"
         "AddDoubleLine=1,AddHistoryLine=1,AddLine=1,AddMessage=1,AddTexture=1,\n"
         "AddToAutoHide=1,AllowAttributeChanges=1,Animate=1,\n"
-        "CallMethod=1,CanSaveTabardNow=1,ChildUpdate=1,Clear=1,ClearAllPoints=1,\n"
+        "CallMethod=1,ChildUpdate=1,Clear=1,ClearAllPoints=1,\n"
         "ClearBinding=1,ClearBindings=1,ClearFocus=1,ClearHistory=1,ClearLines=1,\n"
         "ClearModel=1,CreateFontString=1,CreatePlayerArrowFrame=1,\n"
         // DrawQuestBlob is a real binding now, applied after this set.
-        "CreateTexture=1,CreateTitleRegion=1,CycleVariation=1,Disable=1,\n"
+        "CreateTexture=1,CreateTitleRegion=1,Disable=1,\n"
         "Dress=1,Enable=1,EnableKeyboard=1,EnableMouse=1,EnableMouseWheel=1,\n"
         "EnableSubtitles=1,FadeOut=1,Free=1,GetAlpha=1,GetAnchorType=1,GetAttribute=1,\n"
         "GetBackdrop=1,GetBottom=1,GetButtonState=1,GetCenter=1,GetChecked=1,\n"
@@ -7670,7 +7674,7 @@ void LuaEngine::registerCoreAPI() {
         "GetFontString=1,GetFrame=1,GetFrameLevel=1,GetFrameRef=1,\n"
         "GetFrameStrata=1,GetHeight=1,GetHighlightTexture=1,GetHorizontalScroll=1,\n"
         "GetHorizontalScrollRange=1,GetID=1,\n"
-        "GetItem=1,GetLeft=1,GetLowerEmblemTexture=1,GetMessageInfo=1,\n"
+        "GetItem=1,GetLeft=1,GetMessageInfo=1,\n"
         "GetMinMaxValues=1,GetMousePosition=1,GetName=1,GetNormalTexture=1,GetNumber=1,\n"
         "GetNumChildren=1,GetNumMessages=1,GetNumPoints=1,GetNumTooltips=1,\n"
         "GetObjectType=1,GetParent=1,GetPoint=1,GetPushedTexture=1,GetRect=1,\n"
@@ -7682,10 +7686,10 @@ void LuaEngine::registerCoreAPI() {
         // A real method wins the lookup either way, but a name left here is a
         // claim that nothing implements it, and autocomplete's arithmetic is
         // the reason it could not stay a no-op.
-        "GetUIPanel=1,GetUpperEmblemTexture=1,GetValue=1,\n"
+        "GetUIPanel=1,GetValue=1,\n"
         "GetVerticalScroll=1,GetVerticalScrollRange=1,GetWidth=1,\n"
         "GetZoom=1,GetZoomLevels=1,HasFocus=1,HasScript=1,Hide=1,HideUIPanel=1,\n"
-        "HighlightText=1,HookScript=1,IgnoreDepth=1,InitializeTabardColors=1,Insert=1,\n"
+        "HighlightText=1,HookScript=1,IgnoreDepth=1,Insert=1,\n"
         "IsEnabled=1,IsEquippedItem=1,IsEventRegistered=1,IsMouseEnabled=1,\n"
         "IsObjectType=1,IsShown=1,IsUnderMouse=1,\n"
         "IsUnit=1,IsVisible=1,LockHighlight=1,Lower=1,MoveUIPanel=1,\n"
@@ -7694,7 +7698,7 @@ void LuaEngine::registerCoreAPI() {
         "Play=1,Raise=1,RefreshValue=1,RegisterAutoHide=1,RegisterEvent=1,\n"
         "RegisterForClicks=1,RegisterForDrag=1,ReleaseFrame=1,\n"
         "RemoveMessagesByAccessID=1,ReplaceIconTexture=1,Reset=1,Reuse=1,Run=1,\n"
-        "RunAttribute=1,RunFor=1,Save=1,ScrollDown=1,ScrollToBottom=1,ScrollUp=1,\n"
+        "RunAttribute=1,RunFor=1,ScrollDown=1,ScrollToBottom=1,ScrollUp=1,\n"
         "SelectWindow=1,SetAction=1,SetAllPoints=1,SetAlpha=1,SetAlphaGradient=1,\n"
         "SetAnchorType=1,SetAttribute=1,SetBackdrop=1,\n"
         "SetBackdropBorderColor=1,SetBackdropColor=1,SetBagItem=1,SetBinding=1,\n"

@@ -142,12 +142,15 @@ struct ComponentItem {
 };
 
 /// The body texture's item layers for these items, a guild tabard's
-/// emblem on it when the design is known; for compositeWithRegions.
+/// emblem on it when the design is known; for compositeWithRegions. With
+/// `tabardDesigner`, the design is painted over the torso's layers 2 to 4
+/// whatever is worn there (0x004ec1c0).
 std::vector<std::pair<int, std::string>> characterComponentLayers(pipeline::AssetManager& assets,
                                                                   const pipeline::DBCFile& itemDisplayInfo,
                                                                   const std::vector<ComponentItem>& items,
                                                                   bool female,
-                                                                  const std::optional<game::GuildEmblem>& emblem);
+                                                                  const std::optional<game::GuildEmblem>& emblem,
+                                                                  bool tabardDesigner = false);
 
 }  // namespace core
 }  // namespace wowee

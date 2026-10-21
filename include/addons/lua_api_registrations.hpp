@@ -21,6 +21,11 @@ void registerAbsentLuaAPI(lua_State* L);
 void registerItemQueryLuaAPI(lua_State* L);
 /// The arena commentator's functions (lua_commentator_api).
 void registerCommentatorLuaAPI(lua_State* L);
+/// CloseTabardCreation (lua_tabard_api).
+void registerTabardLuaAPI(lua_State* L);
+/// The TabardModel frame's methods onto the table on top of the stack - the
+/// metatable every frame shares, so applied with the frame methods.
+void addTabardModelMethods(lua_State* L);
 
 /// Re-apply every CVar restored from disk, now that the services behind them
 /// exist. See applyCVarSideEffects.

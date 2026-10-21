@@ -118,8 +118,9 @@ struct CharacterEquipmentGeosets {
 };
 
 /// The component's flags +8: 0x20 a chest whose display has flag 0x4
-/// (0x004f2640 case 3) - its legs are its own - and 0x40, which this
-/// client never sets.
+/// (0x004f2640 case 3) - its legs are its own - and 0x40, the player's
+/// while the tabard designer is open (0x006d2900; 0x004ec510 clears it),
+/// which shows the tabard's geosets whether one is worn or not.
 struct CharacterGeosetFlags {
     bool chestOwnsLegs = false;
     bool flag40 = false;

@@ -739,5 +739,20 @@
     "LocTop": 6,
     "MapID": 1,
     "ParentWorldMapID": 10
+  },
+  "WorldStateUI": {
+    "ID": 0,
+    "MapID": 1,
+    "AreaID": 2,
+    "PhaseShift": 3,
+    "Icon": 4,
+    "String": 5,
+    "Tooltip": 22,
+    "StateVariable": 39,
+    "Type": 40,
+    "DynamicIcon": 41,
+    "DynamicTooltip": 42,
+    "ExtendedUI": 59,
+    "ExtendedUIStateVariable": 60
   }
 }

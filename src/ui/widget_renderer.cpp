@@ -81,6 +81,7 @@ static std::string cacheKey(const std::string& path, uint8_t variant) {
     std::string key = path;
     if (variant & 1u) key += "|add";             // kVariantAdd
     if (variant & 2u) key += "|desat";           // kVariantDesaturate
+    if (variant & 4u) key += "|mask";            // kVariantAlphaMask
     return key;
 }
 
@@ -95,7 +96,8 @@ const VkDescriptorSet* WidgetRenderer::cachedTexture(const std::string& path,
 
 uint8_t WidgetRenderer::textureVariant(const Widget& w) {
     return static_cast<uint8_t>((w.blendAdd ? kVariantAdd : 0) |
-                                (w.desaturated ? kVariantDesaturate : 0));
+                                (w.desaturated ? kVariantDesaturate : 0) |
+                                (w.emblemMask ? kVariantAlphaMask : 0));
 }
 
 VkDescriptorSet WidgetRenderer::resident(const std::string& path, uint8_t variant) const {
@@ -188,6 +190,7 @@ VkDescriptorSet WidgetRenderer::texture(const std::string& path, uint8_t variant
     // Desaturate.bls reads the texture's own colour and only the vertex
     // alpha, so the draw passes white for the rest (textureColor).
     if (variant & kVariantDesaturate) prepareDesaturated(image.data);
+    if (variant & kVariantAlphaMask) prepareAlphaMask(image.data);
     VkDescriptorSet set = vkCtx_->uploadImGuiTexture(image.data.data(),
                                                      image.width, image.height);
     textures_[key] = set;

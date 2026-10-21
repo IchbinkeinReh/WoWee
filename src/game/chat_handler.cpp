@@ -1,4 +1,8 @@
 #include "game/chat_handler.hpp"
+#include "game/chat_log.hpp"
+#include "game/combat_log.hpp"
+#include "core/config_paths.hpp"
+#include "core/local_time.hpp"
 
 #include <set>
 #include "addons/lua_api_registrations.hpp"
@@ -198,6 +202,63 @@ void ChatHandler::logChatMessage(const MessageChatData& msg, const char* source)
         << escapeChatLogField(msg.channelName) << '\t'
         << escapeChatLogField(msg.message) << '\n';
     chatLogStream_.flush();
+}
+
+bool ChatHandler::loggingChat(std::optional<bool> enable) {
+    if (enable) {
+        loggingChat_ = *enable;
+        if (loggingChat_ && !chatLogFile_.is_open()) {
+            // The same folder and opening as the combat log's (0x00461d10):
+            // made if need be, the file added to.
+            std::error_code ec;
+            const std::filesystem::path dir = std::filesystem::path(core::getConfigRoot()) / "Logs";
+            std::filesystem::create_directories(dir, ec);
+            chatLogFile_.open(dir / "WoWChatLog.txt", std::ios::binary | std::ios::app);
+            if (!chatLogFile_.is_open()) loggingChat_ = false;
+        }
+    }
+    return loggingChat_;
+}
+
+void ChatHandler::closeChatLog() {
+    if (chatLogFile_.is_open()) chatLogFile_.close();
+    loggingChat_ = false;
+}
+
+void ChatHandler::writeChatLogLine(ChatType type, const std::string& text, const std::string& sender,
+                                   const std::string& channelName, uint32_t language, const std::string& target) {
+    if (!loggingChat_ || !chatLogFile_.is_open()) return;
+    const uint32_t t = static_cast<uint32_t>(type);
+    chat_log::Line l;
+    l.type = t;
+    l.text = text;
+    l.sender = sender;
+    l.target = target;
+    if (!channelName.empty()) {
+        const chat_channels::Slot* slot = channelSlots_.byName(channelName);
+        l.channel = channelName;
+        l.channelNumber = slot ? slot->number : 0;
+    }
+    // The language named where it is not Universal, not the player's own
+    // (Orcish for the horde races, Common otherwise) and the type is not an
+    // emote or a system line.
+    static const std::set<uint8_t> kHordeRaces = {2, 5, 6, 8, 10};
+    const uint32_t ownLanguage = kHordeRaces.count(owner_.getPlayerRace()) ? 1u : 7u;
+    if (language != 0 && language != ownLanguage && t != 0x0a && t != 0x10 && t != 0x00 && t != 0x29)
+        l.language = owner_.getLanguageName(language);
+    const auto line = chat_log::line(l, [](const std::string& key, const std::vector<std::string>& args) {
+        return interfaceFormat(key.c_str(), "", args);
+    });
+    if (!line) return;
+    const auto now = std::chrono::system_clock::now();
+    const std::tm tm = core::localTime(std::chrono::system_clock::to_time_t(now));
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+    chatLogFile_ << combat_log::fileTimePrefix(static_cast<unsigned>(tm.tm_mon + 1),
+                                               static_cast<unsigned>(tm.tm_mday),
+                                               static_cast<unsigned>(tm.tm_hour),
+                                               static_cast<unsigned>(tm.tm_min),
+                                               static_cast<unsigned>(tm.tm_sec), static_cast<unsigned>(ms))
+                 << *line << "\r\n";
 }
 
 void ChatHandler::registerOpcodes(DispatchTable& table) {
@@ -905,6 +966,12 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
 
     LOG_DEBUG("[", getChatTypeString(data.type), "] ", channelInfo, senderInfo, ": ", data.message);
 
+    // To the chat log as well, under the name the line shows.
+    writeChatLogLine(data.type, data.message,
+                     data.type == ChatType::WHISPER_INFORM && !data.receiverName.empty() ? data.receiverName
+                                                                                          : data.senderName,
+                     data.channelName, static_cast<uint32_t>(data.language), data.receiverName);
+
     // Fire CHAT_MSG_* addon events
     if (owner_.addonEventCallbackRef()) {
         // The language's *name*, not its id. ChatFrame_MessageEventHandler
@@ -1479,6 +1546,7 @@ void ChatHandler::fireChannelNotice(ChatType type, const std::string& word, cons
         logChatMessage(msg, "channel");
     }
     LOG_WARNING("Channel notice ", word, " for '", channelName, "' (", numbered, ")");
+    writeChatLogLine(type, word, player, channelName, 0, target);
 
     if (!owner_.addonEventCallbackRef()) return;
     char guidBuf[32] = "";
@@ -1528,9 +1596,11 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
             const auto* slot = channelSlots_.byName(data.channelName);
             if (!slot || slot->pending) return;
             const std::string who = nameOf(data.senderGuid);
-            if (who.empty() || !owner_.addonEventCallbackRef()) return;
+            if (who.empty()) return;
             const ChatType t = data.notifyType == ChannelNotifyType::PLAYER_JOINED
                 ? ChatType::CHANNEL_JOIN : ChatType::CHANNEL_LEAVE;
+            writeChatLogLine(t, "", who, data.channelName, 0, "");
+            if (!owner_.addonEventCallbackRef()) return;
             char guidBuf[32];
             snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)data.senderGuid);
             owner_.addonEventCallbackRef()(chatEventNameFor(t, who), {
@@ -1679,7 +1749,6 @@ void ChatHandler::addLocalChatMessage(const MessageChatData& msg) {
 }
 
 void ChatHandler::fireChatEvent(const MessageChatData& msg) {
-    if (!owner_.addonEventCallbackRef()) return;
     const Character* ac = owner_.getActiveCharacter();
     // A channel line with no sender at all - the defense notices - is from no
     // one, and chatframe.lua prints it without a name only when it has none.
@@ -1697,6 +1766,9 @@ void ChatHandler::fireChatEvent(const MessageChatData& msg) {
         (msg.type == ChatType::WHISPER_INFORM && !msg.receiverName.empty())
             ? msg.receiverName
             : senderName;
+    writeChatLogLine(msg.type, msg.message, shownName, msg.channelName, static_cast<uint32_t>(msg.language),
+                     msg.receiverName);
+    if (!owner_.addonEventCallbackRef()) return;
     const std::string eventName = chatEventNameFor(msg.type, shownName);
     char guidBuf[32];
     snprintf(guidBuf, sizeof(guidBuf), "0x%016llX",

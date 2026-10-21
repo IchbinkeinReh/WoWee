@@ -197,14 +197,14 @@ struct Step {
 ///   GuildBank     0xc1dc10, 0x005a4270(0)
 ///   Registrar     0xc0e570, 0x00599e90 (the guild's; the arena's, 0xc0f7c8,
 ///                 comes after the stable - wowee keeps one for both)
+///   Tabard        0xc0e518, 0x00598ec0
 ///   Mailbox       0xbeb030, 0x00571730
 ///   AuctionHouse  0xc0f3e8, 0x0059f150
 ///   Stable        0xc0f6c0, 0x005a0f10
-/// The tabard designer (0xc0e518) and the battlemaster (0xbea568), which
-/// wowee does not open, are left out.
+/// The battlemaster (0xbea568), which wowee does not open, is left out.
 enum class Window : uint8_t {
     Trade, Book, Gossip, Quest, Merchant, Taxi, Trainer, Bank, GuildBank,
-    Registrar, Mailbox, AuctionHouse, Stable, Count
+    Registrar, Tabard, Mailbox, AuctionHouse, Stable, Count
 };
 inline constexpr size_t kWindowCount = static_cast<size_t>(Window::Count);
 

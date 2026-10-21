@@ -2575,6 +2575,7 @@ void Application::shutdownPortraits() {
     inspectModel_.shutdown(renderer.get());
     dressUpModel_.shutdown(renderer.get());
     auctionDressUpModel_.shutdown(renderer.get());
+    tabardModel_.shutdown(renderer.get());
     petModel_.shutdown(renderer.get());
     stableModel_.shutdown(renderer.get());
     companionModel_.shutdown(renderer.get());
@@ -5589,13 +5590,17 @@ void Application::render() {
                     const char* name;
                     ui::UnitPortrait* model;
                     uint32_t* widgetId;
+                    float* facing;
                 };
                 // NOLINTBEGIN(modernize-use-designated-initializers) - a table
                 // whose columns are its field names, with the struct in view
                 // directly above.
                 const DressUp kDressUps[] = {
-                    {"DressUpModel",        &dressUpModel_,        &dressUpWidgetId_},
-                    {"AuctionDressUpModel", &auctionDressUpModel_, &auctionDressUpWidgetId_},
+                    {"DressUpModel",        &dressUpModel_,        &dressUpWidgetId_,        &dressUpFacing_},
+                    {"AuctionDressUpModel", &auctionDressUpModel_, &auctionDressUpWidgetId_, &auctionDressUpFacing_},
+                    // The tabard designer's, the player in the design being
+                    // made (0x004ec1c0 paints it on the player's component).
+                    {"TabardModel",         &tabardModel_,         &tabardModelWidgetId_,    &tabardFacing_},
                 };
                 // NOLINTEND(modernize-use-designated-initializers)
                 for (const DressUp& room : kDressUps) {
@@ -5658,12 +5663,15 @@ void Application::render() {
                                   self->useFemaleModel)) ? 1 : 0;
                             sizeFor(*room.model, dressUp);
                             room.model->setFraming(ui::UnitPortrait::Framing::FullBody);
-                            // The guild tabard's design (0x006db510).
-                            {
-                                uint32_t guildId = gameHandler->getEntityGuildId(self->guid);
-                                if (guildId == 0) guildId = self->guildId;
-                                room.model->setGuildEmblem(gameHandler->lookupGuildEmblem(guildId));
+                            // Turned by SetRotation as the paperdoll is.
+                            if (dressUp->modelFacing != *room.facing) {
+                                room.model->rotate(dressUp->modelFacing - *room.facing);
+                                *room.facing = dressUp->modelFacing;
                             }
+                            // The guild tabard's design (0x006db510), or the
+                            // designer's while it is open (0x004ec1c0).
+                            room.model->setGuildEmblem(gameHandler->getPlayerTabardEmblem());
+                            room.model->setTabardDesigner(gameHandler->getTabardVendorGuid() != 0);
                             room.model->setUnitClass(static_cast<uint8_t>(self->characterClass));
                             shown = room.model->updatePlayer(
                                 static_cast<uint8_t>(self->race), gender,

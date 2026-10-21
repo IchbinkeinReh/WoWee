@@ -128,6 +128,7 @@ std::unordered_set<uint16_t> characterLookGeosets(pipeline::AssetManager& assets
     }
     CharacterGeosetFlags flags;
     const CharacterEquipmentGeosets eq = equipmentGeosets(assets, look.worn, &flags);
+    flags.flag40 = look.tabardDesigner;
     const bool glow = look.classId == kClassDeathKnight ||
                       faceHasDeathKnightGlow(assets, look.raceId, look.genderId, look.faceId, look.skinId);
     return characterGeosets(d, glow, eq, flags);

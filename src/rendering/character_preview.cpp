@@ -93,6 +93,7 @@ core::CharacterLook CharacterPreview::characterLook() {
     look.genderId = (gender_ == game::Gender::FEMALE ||
                      (gender_ == game::Gender::NONBINARY && useFemaleModel_)) ? 1u : 0u;
     look.classId = classId_;
+    look.tabardDesigner = tabardDesigner_;
     look.skinId = skin_;
     look.faceId = face_;
     look.hairGeoset = appearanceTables_.hairGeoset(look.raceId, look.genderId, hairStyle_);
@@ -882,7 +883,8 @@ bool CharacterPreview::dress(const std::vector<game::EquipmentItem>& equipment, 
         componentItems.push_back({core::componentItemForInventoryType(it.inventoryType), it.displayModel});
     }
     const std::vector<std::pair<int, std::string>> regionLayers = core::characterComponentLayers(
-        *assetManager_, *displayInfoDbc, componentItems, gender_ == game::Gender::FEMALE, guildEmblem_);
+        *assetManager_, *displayInfoDbc, componentItems, gender_ == game::Gender::FEMALE, guildEmblem_,
+        tabardDesigner_);
 
     if (!regionLayers.empty()) {
         VkTexture* newTex = charRenderer_->compositeWithRegions(bodySkinPath_, baseLayers_, regionLayers);

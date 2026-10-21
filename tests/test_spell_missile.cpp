@@ -218,3 +218,14 @@ TEST_CASE("an elevation past vertical folds back", "[spell_missile][arc]") {
     CHECK(sm::foldElevation(2.0f) == Catch::Approx(kPi - 2.0f).epsilon(1e-5));
     CHECK(sm::foldElevation(-2.0f) == Catch::Approx(-(kPi - 2.0f)).epsilon(1e-5));
 }
+
+TEST_CASE("a stopped missile lands once a step takes it past the stop", "[spell_missile][stop]") {
+    // SMSG_SET_PROJECTILE_POSITION (flag 0x400000 in 0x007015d0).
+    const glm::vec3 stop(10.0f, 0.0f, 0.0f);
+    CHECK_FALSE(sm::passedStop(glm::vec3(0.0f), glm::vec3(5.0f, 0.0f, 0.0f), stop));
+    CHECK_FALSE(sm::passedStop(glm::vec3(5.0f, 0.0f, 0.0f), glm::vec3(10.0f, 0.0f, 0.0f), stop));
+    CHECK(sm::passedStop(glm::vec3(9.0f, 0.0f, 0.0f), glm::vec3(12.0f, 0.0f, 0.0f), stop));
+    // Passing beside it: once the closest point is behind.
+    CHECK_FALSE(sm::passedStop(glm::vec3(8.0f, 3.0f, 0.0f), glm::vec3(10.0f, 3.0f, 0.0f), stop));
+    CHECK(sm::passedStop(glm::vec3(10.0f, 3.0f, 0.0f), glm::vec3(12.0f, 3.0f, 0.0f), stop));
+}

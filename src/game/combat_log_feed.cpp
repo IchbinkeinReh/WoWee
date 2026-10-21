@@ -1,12 +1,16 @@
 #include "game/combat_log_feed.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <ctime>
+#include <filesystem>
 
 #include <glm/glm.hpp>
 
 #include "addons/lua_api_registrations.hpp"
 #include "core/app_clock.hpp"
+#include "core/config_paths.hpp"
+#include "core/local_time.hpp"
 #include "game/game_handler.hpp"
 #include "game/interface_text.hpp"
 #include "game/spell_handler.hpp"
@@ -91,6 +95,7 @@ CombatLogFeed::CombatLogFeed(GameHandler& owner) : owner_(owner) {
     };
     hooks.announce = [this](const cl::Entry& entry, bool filtered) {
         if (owner_.combatLogEventCallbackRef()) owner_.combatLogEventCallbackRef()(argsOf(entry), filtered);
+        if (loggingCombat_) writeLogLine(entry);
     };
     log_.setHooks(std::move(hooks));
     log_.reset(clientNowMs(), static_cast<int64_t>(std::time(nullptr)));
@@ -102,14 +107,49 @@ void CombatLogFeed::enterWorld() {
     replayDelay_ = 0;
 }
 
-std::vector<cl::Arg> CombatLogFeed::argsOf(const cl::Entry& entry) const {
-    const cl::SpellLookup spells = [this](uint32_t id) -> std::optional<cl::SpellInfo> {
+bool CombatLogFeed::loggingCombat(std::optional<bool> enable) {
+    if (enable) {
+        loggingCombat_ = *enable;
+        if (loggingCombat_ && !logFile_.is_open()) {
+            // The Logs folder made, the file opened to add to (0x00461d10,
+            // 0x007757e0 flag 4: OPEN_ALWAYS, then to its end).
+            std::error_code ec;
+            const std::filesystem::path dir = std::filesystem::path(core::getConfigRoot()) / "Logs";
+            std::filesystem::create_directories(dir, ec);
+            logFile_.open(dir / "WoWCombatLog.txt", std::ios::binary | std::ios::app);
+            if (!logFile_.is_open()) loggingCombat_ = false;
+        }
+    }
+    return loggingCombat_;
+}
+
+void CombatLogFeed::closeLogFile() {
+    if (logFile_.is_open()) logFile_.close();
+    loggingCombat_ = false;
+}
+
+void CombatLogFeed::writeLogLine(const cl::Entry& entry) {
+    if (!logFile_.is_open()) return;
+    const auto now = std::chrono::system_clock::now();
+    const std::tm tm = core::localTime(std::chrono::system_clock::to_time_t(now));
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+    logFile_ << cl::fileTimePrefix(static_cast<unsigned>(tm.tm_mon + 1), static_cast<unsigned>(tm.tm_mday),
+                                   static_cast<unsigned>(tm.tm_hour), static_cast<unsigned>(tm.tm_min),
+                                   static_cast<unsigned>(tm.tm_sec), static_cast<unsigned>(ms))
+             << cl::fileLine(entry, spellLookup()) << "\r\n";
+}
+
+cl::SpellLookup CombatLogFeed::spellLookup() const {
+    return [this](uint32_t id) -> std::optional<cl::SpellInfo> {
         owner_.loadSpellNameCache();
         auto it = owner_.spellNameCacheRef().find(id);
         if (it == owner_.spellNameCacheRef().end()) return std::nullopt;
         return cl::SpellInfo{.name = it->second.name, .school = it->second.schoolMask};
     };
-    return cl::entryArgs(entry, log_.timestampOf(entry), spells);
+}
+
+std::vector<cl::Arg> CombatLogFeed::argsOf(const cl::Entry& entry) const {
+    return cl::entryArgs(entry, log_.timestampOf(entry), spellLookup());
 }
 
 std::optional<CombatLogFeed::SpellRow> CombatLogFeed::spell(uint32_t spellId) const {

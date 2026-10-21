@@ -129,6 +129,15 @@ inline Step advance(const glm::vec3& position, const glm::vec3& target,
     return {position + toTarget * (stepLength / distance), false};
 }
 
+/// A missile SMSG_SET_PROJECTILE_POSITION has stopped (flag 0x400000 in
+/// 0x007015d0): it lands where it is once the step it would take leaves it
+/// further from the stop than it is now.
+inline bool passedStop(const glm::vec3& position, const glm::vec3& next, const glm::vec3& stop) {
+    const glm::vec3 now = position - stop;
+    const glm::vec3 then = next - stop;
+    return glm::dot(now, now) < glm::dot(then, then);
+}
+
 // ---------------------------------------------------------------------------
 // ADJUST_MISSILE: the arc.
 //

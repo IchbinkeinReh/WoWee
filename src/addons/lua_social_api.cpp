@@ -1533,20 +1533,6 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushboolean(L, carrying ? 1 : 0);
             return 1;
         }},
-                // CloseTabardCreation() - the tabard designer shutting itself
-                // when ShowUIPanel could not put it on screen.
-                //
-                // Nothing to close. This client has no tabard window and no
-                // tabard session: MSG_TABARDVENDOR_ACTIVATE is not handled and
-                // OPEN_TABARD_FRAME is never fired, so TabardFrame is only
-                // reachable through its own close path - which is this, and
-                // which raised. A no-op is the honest shape of that until the
-                // vendor side exists; answering it wrongly would be inventing
-                // a session to end.
-                {"CloseTabardCreation", [](lua_State* L) -> int {
-            (void)L;
-            return 0;
-        }},
                 // The guild bank tab dialog picks from the same icons under a
                 // name of its own.
                 {"GetNumMacroItemIcons", lua_GetNumMacroIcons},
@@ -3625,10 +3611,29 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh && name && *name) gh->setGuildLeader(name);
             return 0;
         }},
-                // Not logging, and there is nothing to turn on - false is the
-                // true answer rather than a placeholder.
-                {"LoggingChat",   [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                {"LoggingCombat", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                // LoggingChat([on]) (0x004fbc60 with index 0): with an
+                // argument, the chat lines written to Logs\WoWChatLog.txt or
+                // not; 1 while they are, nil otherwise.
+                {"LoggingChat", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            std::optional<bool> enable;
+            if (lua_gettop(L) > 0) enable = luaClientSwitchArg(L, 1, false);
+            auto* chat = gh ? gh->getChatHandler() : nullptr;
+            if (chat && chat->loggingChat(enable)) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
+            return 1;
+        }},
+                // LoggingCombat([on]) (0x004fbc60): with an argument, the
+                // combat log's lines written to Logs\WoWCombatLog.txt or not;
+                // 1 while they are, nil otherwise.
+                {"LoggingCombat", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            std::optional<bool> enable;
+            if (lua_gettop(L) > 0) enable = luaClientSwitchArg(L, 1, false);
+            if (gh && gh->combatLogFeed().loggingCombat(enable)) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
+            return 1;
+        }},
                 {"BNIsFriend",      [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
                 {"BNIsToonBlocked", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
                 {"BNGetNumFriendInvites", [](lua_State* L) -> int { lua_pushnumber(L, 0); return 1; }},

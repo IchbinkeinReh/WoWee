@@ -51,6 +51,7 @@
 #include <map>
 #include <optional>
 #include "game/guild_emblem.hpp"
+#include "game/world_state_ui.hpp"
 #include "game/server_notices.hpp"
 #include <algorithm>
 #include <chrono>
@@ -67,6 +68,7 @@ namespace wowee::game {
     class InventoryHandler;
     class SocialHandler;
     class WardenHandler;
+    namespace tabard { struct Design; }
 }
 
 namespace wowee {
@@ -1167,6 +1169,27 @@ public:
     uint32_t getEntityGuildId(uint64_t guid) const;
     /// A guild's tabard design, asked of the server when not known yet.
     std::optional<GuildEmblem> lookupGuildEmblem(uint32_t guildId);
+
+    // --- The tabard vendor (TabardModelFrame.cpp, Player_C) ---
+    /// The vendor the designer is open with (0xc0e518), 0 when it is not.
+    [[nodiscard]] uint64_t getTabardVendorGuid() const { return tabardVendorGuid_; }
+    /// CloseTabardCreation, the vendor let go (0x00598ec0).
+    void closeTabardVendor();
+    /// The design painted on the player's own tabard while it is designed
+    /// (0x004ec1c0 on the player's component).
+    void previewTabard(const GuildEmblem& emblem);
+    /// The player's guild (PLAYER_GUILDID, else the character list's).
+    [[nodiscard]] uint32_t getPlayerGuildId() const;
+    /// The player's guild's design in the cache, nullopt while not known.
+    std::optional<GuildEmblem> getPlayerGuildEmblem();
+    /// What the player's tabard is painted with: the designer's design while
+    /// one is shown, else the guild's.
+    std::optional<GuildEmblem> getPlayerTabardEmblem();
+    /// CanSaveTabardNow (0x006de1c0).
+    bool canSaveTabardNow();
+    /// TabardModel:Save (0x006db320): refused with a game error, or
+    /// MSG_SAVE_GUILD_EMBLEM sent and TABARD_SAVE_PENDING.
+    void saveGuildEmblem(const tabard::Design& design);
     /// Changes each time a guild's design arrives.
     uint32_t guildEmblemGeneration() const;
     /// A player's PLAYER_GUILD_TIMESTAMP as seen (0x006e1c60).
@@ -2365,19 +2388,27 @@ public:
         if (!corpsePositionValid_ || currentMapId_ != corpseMapId_) return -1.0f;
         // movementInfo is canonical (x=north=server_y, y=west=server_x);
         // corpse coords are raw server (x=west, y=north) - swap to compare.
-        float dx = movementInfo.x - corpseY_;
-        float dy = movementInfo.y - corpseX_;
-        float dz = movementInfo.z - corpseZ_;
+        const glm::vec3 corpse = corpseServerPos();
+        float dx = movementInfo.x - corpse.y;
+        float dy = movementInfo.y - corpse.x;
+        float dz = movementInfo.z - corpse.z;
         return std::sqrt(dx*dx + dy*dy + dz*dz);
     }
     /** Corpse position in canonical WoW coords (X=north, Y=west).
      *  Returns false if no corpse data or on a different map. */
     bool getCorpseCanonicalPos(float& outX, float& outY) const {
         if (!corpsePositionValid_ || currentMapId_ != corpseMapId_) return false;
-        outX = corpseY_;  // server Y = canonical X (north)
-        outY = corpseX_;  // server X = canonical Y (west)
+        const glm::vec3 corpse = corpseServerPos();
+        outX = corpse.y;  // server Y = canonical X (north)
+        outY = corpse.x;  // server X = canonical Y (west)
         return true;
     }
+    /// The corpse where it lies in the world, server coordinates (0x0051f430):
+    /// the place as kept, or for a corpse on a transport that place in the
+    /// transport's frame - the transport's own where it is in sight, else
+    /// the one SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE gave, asked for at most
+    /// every thirty seconds.
+    [[nodiscard]] glm::vec3 corpseServerPos() const;
     /** Send CMSG_RECLAIM_CORPSE; noop if not a ghost or not near corpse. */
     void reclaimCorpse();
     void releaseSpirit();
@@ -2781,6 +2812,12 @@ public:
     }
     uint32_t getWorldStateMapId() const { return worldStateMapId_; }
     uint32_t getWorldStateZoneId() const { return worldStateZoneId_; }
+    /// The world state frame's lines from WorldStateUI.dbc (0x005487d0) -
+    /// nullopt where this install has no such file to read.
+    std::optional<std::vector<const world_state_ui::Row*>> worldStateUiLines();
+    /// The client's time for a world state that counts down: now, moved by
+    /// what SMSG_WORLD_STATE_UI_TIMER_UPDATE said the server's is (0x00548700).
+    [[nodiscard]] int64_t worldStateNow() const;
     uint64_t getActiveCritterGuid() const { return activeCritterGuid_; }
     uint32_t getActiveCritterSpellId() const { return activeCritterSpellId_; }
     void setActiveCritter(uint64_t guid, uint32_t spellId) {
@@ -4492,6 +4529,7 @@ public:
     auto& corpseXRef() { return corpseX_; }
     auto& corpseYRef() { return corpseY_; }
     auto& corpseZRef() { return corpseZ_; }
+    auto& corpseTransportLowRef() { return corpseTransportLow_; }
     auto& hasHomeBindRef() { return hasHomeBind_; }
     auto& homeBindMapIdRef() { return homeBindMapId_; }
     auto& homeBindPosRef() { return homeBindPos_; }
@@ -4977,6 +5015,17 @@ private:
     /// Everything else - inspects, auctions, calendars, voice, and a long tail
     /// that is consumed and ignored. Named for what it is.
     void registerRemainingOpcodes();
+    /// MSG_TABARDVENDOR_ACTIVATE and MSG_SAVE_GUILD_EMBLEM (game_handler_tabard.cpp).
+    void registerTabardOpcodes();
+    /// SMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE (game_handler_corpse.cpp).
+    void registerCorpseOpcodes();
+    /// SMSG_SET_PHASE_SHIFT and SMSG_WORLD_STATE_UI_TIMER_UPDATE
+    /// (game_handler_world_state_ui.cpp).
+    void registerWorldStateUiOpcodes();
+    /// 0x00598e60.
+    void openTabardVendor(uint64_t vendor);
+    /// 0x006d9230.
+    void guildEmblemSaved(uint32_t result);
 
     /// The domain handlers registering their own. Disjoint from the two above,
     /// so the order between them carries no meaning.
@@ -5258,6 +5307,17 @@ private:
     // ---- World state and faction initialization snapshots ----
     uint32_t worldStateMapId_ = 0;
     uint32_t worldStateZoneId_ = 0;
+    /// WorldStateUI.dbc (0xad4f78), read once; the place and phases its lines
+    /// are for and which lines those are (0xbe8f88).
+    std::vector<world_state_ui::Row> worldStateUiRows_;
+    bool worldStateUiLoaded_ = false;
+    world_state_ui::Place worldStateUiPlace_;
+    std::vector<size_t> worldStateUiShown_;
+    int64_t worldStateTimeOffset_ = 0;  ///< 0xbe8f44
+    void loadWorldStateUi();
+    /// 0x00548970 / 0x00513960: the place or the phases moved, the lines
+    /// chosen again. True when anything moved.
+    bool setWorldStateUiPlace(const world_state_ui::Place& place);
     // The active non-combat companion and the spell that called it. Re-casting
     // that spell dismisses rather than re-summons, which is how a companion is
     // put away: it has no aura to cancel from the buff bar, so this toggle is
@@ -5398,6 +5458,9 @@ private:
     GameObjectStateCallback gameObjectStateCallback_;
     GameObjectInteractionCallback gameObjectInteractionCallback_;
     uint64_t interactionObject_ = 0;
+    uint64_t tabardVendorGuid_ = 0;            ///< 0xc0e518
+    bool tabardSavePending_ = false;           ///< 0xc9eacc
+    std::optional<GuildEmblem> tabardPreview_; ///< the design on the player's component
     /// 0x00512e60 for the interaction object: a game object's CLOSE. With
     /// farewell, 0x00518d50's for a window that closed with nothing after it:
     /// a living creature says farewell first (0x00720860).
@@ -6066,6 +6129,18 @@ private:
     uint32_t corpseMapId_ = 0;
     bool corpsePositionValid_ = false;
     float corpseX_ = 0.0f, corpseY_ = 0.0f, corpseZ_ = 0.0f;
+    /// The transport the corpse lies on, its low guid (0xbd0830), 0 for the
+    /// world - MSG_CORPSE_QUERY's last word.
+    uint32_t corpseTransportLow_ = 0;
+    /// The transport's place and facing as SMSG_CORPSE_MAP_POSITION_QUERY_
+    /// RESPONSE gave them (0x00512bd0 -> 0xac8aa0), and when the question may
+    /// be asked again (0xbd0824).
+    struct CorpseTransportFrame {
+        glm::vec3 position{0.0f};
+        float facing = 0.0f;
+    };
+    std::optional<CorpseTransportFrame> corpseTransportFrame_;
+    mutable int64_t corpseMapQueryAllowedAt_ = 0;
     uint64_t corpseGuid_ = 0;
     // Absolute time (ms since epoch) when PvP corpse-reclaim delay expires.
     // 0 means no active delay (reclaim allowed immediately upon proximity).

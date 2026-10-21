@@ -520,3 +520,51 @@ TEST_CASE("A creature whose template hides it is logged without its spawn", "[co
     REQUIRE(h.log.setCurrent(0, true));
     CHECK(h.log.current()->dst.guid == (kWolf & 0xFFFFFFFFFF000000ull));
 }
+
+TEST_CASE("LoggingCombat's lines, as 0x0074e880 writes them", "[combat_log][file]") {
+    SECTION("a swing: zeros written, nil for the flags not set") {
+        Entry e = sides(Event::SwingDamage);
+        e.suffix = suffix::kDamage;
+        e.damage = {.amount = 120, .overkill = 0, .school = 1, .resisted = 0, .blocked = 30, .absorbed = 0,
+                    .critical = true, .glancing = false, .crushing = false};
+        CHECK(fileLine(e, kSpells) ==
+              "SWING_DAMAGE,0x0000000000000010,\"Ich\",0x511,0xF130000123000045,\"Wolf\",0xa48,"
+              "120,0,1,0,30,0,1,nil,nil");
+    }
+    SECTION("a spell: its school in hex; one with no row nil and 0x0") {
+        Entry e = sides(Event::SpellMissed, 133);
+        e.suffix = suffix::kMissType;
+        e.missType = miss::kDodge;
+        CHECK(fileLine(e, kSpells) ==
+              "SPELL_MISSED,0x0000000000000010,\"Ich\",0x511,0xF130000123000045,\"Wolf\",0xa48,"
+              "133,\"Feuerball\",0x4,DODGE");
+        e = sides(Event::SpellInstakill, 99999);
+        CHECK(fileLine(e, kSpells).ends_with(",99999,nil,0x0"));
+    }
+    SECTION("an empty side, a realm, and quotes escaped") {
+        Entry e = sides(Event::EnvironmentalDamage);
+        e.src = {};
+        e.dst.name = "Al\"x\\";
+        e.dst.realm = "Realm";
+        e.suffix = suffix::kEnvironmental | suffix::kDamage;
+        e.environmentalType = 2;
+        e.damage.amount = 50;
+        CHECK(fileLine(e, kSpells) ==
+              "ENVIRONMENTAL_DAMAGE,0x0000000000000000,nil,0x80000000,0xF130000123000045,\"Al\\\"x\\\\-Realm\",0xa48,"
+              "FALLING,50,0,0,0,0,0,nil,nil,nil");
+    }
+    SECTION("a dispel: the extra spell's school in decimal") {
+        Entry e = sides(Event::SpellDispel, 133);
+        e.suffix = suffix::kExtraSpell | suffix::kAuraType;
+        e.extraSpellId = 2139;
+        e.auraDebuff = true;
+        CHECK(fileLine(e, kSpells).ends_with(",133,\"Feuerball\",0x4,2139,\"Gegenzauber\",64,DEBUFF"));
+    }
+    SECTION("a drain writes its extra amount even when it is 0") {
+        Entry e = sides(Event::SpellDrain, 133);
+        e.suffix = suffix::kDrain;
+        e.power = {.amount = 40, .powerType = 0, .extraAmount = 0};
+        CHECK(fileLine(e, kSpells).ends_with(",40,0,0"));
+    }
+    CHECK(fileTimePrefix(10, 21, 9, 5, 3, 7) == "10/21 09:05:03.007  ");
+}

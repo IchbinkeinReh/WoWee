@@ -1,4 +1,5 @@
 #include "game/inventory_handler.hpp"
+#include "game/auction_pending_sales.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/spell_classification.hpp"
 #include "game/glyph_socket.hpp"
@@ -1043,6 +1044,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::MSG_AUCTION_HELLO] = [this](network::Packet& packet) { handleAuctionHello(packet); };
     table[Opcode::SMSG_AUCTION_LIST_RESULT] = [this](network::Packet& packet) { handleAuctionListResult(packet); };
     table[Opcode::SMSG_AUCTION_OWNER_LIST_RESULT] = [this](network::Packet& packet) { handleAuctionOwnerListResult(packet); };
+    table[Opcode::SMSG_AUCTION_LIST_PENDING_SALES] = [this](network::Packet& packet) { handleAuctionPendingSales(packet); };
     table[Opcode::SMSG_AUCTION_BIDDER_LIST_RESULT] = [this](network::Packet& packet) { handleAuctionBidderListResult(packet); };
     table[Opcode::SMSG_AUCTION_COMMAND_RESULT] = [this](network::Packet& packet) { handleAuctionCommandResult(packet); };
 
@@ -4039,6 +4041,7 @@ void InventoryHandler::openAuctionHouse(uint64_t guid) {
     owner_.setInteractionObject(guid);
     auctioneerGuid_ = guid;
     auctionOpen_ = true;
+    ownerListAnswersDue_ = 0;  // 0xc0e73c
     auctionActiveTab_ = 0;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_HOUSE_SHOW", {});
 }
@@ -4135,6 +4138,45 @@ void InventoryHandler::auctionListOwnerItems(uint32_t offset) {
     pendingAuctionTarget_ = AuctionResultTarget::OWNER;
     auto packet = AuctionListOwnerItemsPacket::build(auctioneerGuid_, offset);
     owner_.getSocket()->send(packet);
+    // 0x0059cc50: the sales still to pay out asked for with them, each answer
+    // counted.
+    if (wireOpcode(Opcode::CMSG_AUCTION_LIST_PENDING_SALES) != 0xFFFF) {
+        network::Packet pending(wireOpcode(Opcode::CMSG_AUCTION_LIST_PENDING_SALES));
+        pending.writeUInt64(auctioneerGuid_);
+        owner_.getSocket()->send(pending);
+        ownerListAnswersDue_ += 2;
+    }
+}
+
+void InventoryHandler::replaceOwnerRows(std::vector<AuctionEntry> rows, bool pending) {
+    ownerListAnswersDue_ = std::max(ownerListAnswersDue_ - 1, 0);
+    auto& list = auctionOwnerResults_.auctions;
+    std::erase_if(list, [pending](const AuctionEntry& e) { return e.pendingSale == pending; });
+    for (auto& row : rows) {
+        owner_.ensureItemInfo(row.itemEntry);
+        list.push_back(std::move(row));
+    }
+    if (ownerListAnswersDue_ < 1 && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("AUCTION_OWNED_LIST_UPDATE", {});
+}
+
+void InventoryHandler::handleAuctionPendingSales(network::Packet& packet) {
+    // 0x0059e880: a count, then each a subject, a body, two words and the
+    // days the money is from coming.
+    if (!packet.hasRemaining(4)) return;
+    const uint32_t count = packet.readUInt32();
+    std::vector<AuctionEntry> rows;
+    for (uint32_t i = 0; i < count && packet.hasData(); ++i) {
+        auction_pending::Mail mail;
+        mail.subject = packet.readString();
+        mail.body = packet.readString();
+        if (!packet.hasRemaining(12)) break;
+        (void)packet.readUInt32();
+        (void)packet.readUInt32();
+        mail.daysLeft = packet.readFloat();
+        if (auto row = auction_pending::row(mail, owner_.getPlayerGuid())) rows.push_back(std::move(*row));
+    }
+    replaceOwnerRows(std::move(rows), /*pending=*/true);
 }
 
 void InventoryHandler::auctionListBidderItems(uint32_t offset) {
@@ -4182,8 +4224,9 @@ void InventoryHandler::handleAuctionListResult(network::Packet& packet) {
     }
 
     if (pendingAuctionTarget_ == AuctionResultTarget::OWNER) {
-        auctionOwnerResults_ = std::move(result);
-        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_OWNED_LIST_UPDATE", {});
+        auctionOwnerResults_.totalCount = result.totalCount;
+        auctionOwnerResults_.searchDelay = result.searchDelay;
+        replaceOwnerRows(std::move(result.auctions), /*pending=*/false);
     } else if (pendingAuctionTarget_ == AuctionResultTarget::BIDDER) {
         auctionBidderResults_ = std::move(result);
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_BIDDER_LIST_UPDATE", {});

@@ -71,19 +71,18 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
         if (worn.empty()) worn = self->equipment;
     }
 
-    // The guild tabard's design (0x006db510): the guild's, once known.
-    {
-        uint32_t guildId = gameHandler.getEntityGuildId(self->guid);
-        if (guildId == 0) guildId = self->guildId;
-        pendingEmblem_ = gameHandler.lookupGuildEmblem(guildId);
-    }
+    // The guild tabard's design (0x006db510): the guild's, once known, or
+    // the tabard designer's while it is open (0x004ec1c0).
+    pendingEmblem_ = gameHandler.getPlayerTabardEmblem();
+    pendingDesigner_ = gameHandler.getTabardVendorGuid() != 0;
 
     const uint64_t equipHash = game::hashEquipmentAppearance(worn);
     const bool changed = (loadedGuid_ != self->guid) ||
                          (loadedAppearance_ != self->appearanceBytes) ||
                          (loadedFacialFeatures_ != self->facialFeatures) ||
                          (loadedEquipHash_ != equipHash) ||
-                         (loadedEmblem_ != pendingEmblem_);
+                         (loadedEmblem_ != pendingEmblem_) ||
+                         (loadedDesigner_ != pendingDesigner_);
     if (changed) {
         beginRebuild();
         const uint8_t skin      =  self->appearanceBytes        & 0xFF;
@@ -95,6 +94,7 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
         // built in the first place.
         preview_->setTransparentBackground(true, framing_ == Framing::Face);
         preview_->setCharacterClass(static_cast<uint8_t>(self->characterClass));
+        preview_->setTabardDesigner(pendingDesigner_);
         if (preview_->loadCharacter(self->race, self->gender, skin, face,
                                     hairStyle, hairColor, self->facialFeatures,
                                     self->useFemaleModel)) {
@@ -120,6 +120,7 @@ void UnitPortrait::update(game::GameHandler& gameHandler,
         loadedFacialFeatures_ = self->facialFeatures;
         loadedEquipHash_ = equipHash;
         loadedEmblem_ = pendingEmblem_;
+        loadedDesigner_ = pendingDesigner_;
     }
 
     present(deltaTime);
@@ -154,6 +155,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
                          (loadedBake_ != pendingBake_) ||
                          (loadedClass_ != pendingClass_) ||
                          (loadedEmblem_ != pendingEmblem_) ||
+                         (loadedDesigner_ != pendingDesigner_) ||
                          !loadedCreaturePath_.empty();
     if (changed) {
         beginRebuild();
@@ -165,6 +167,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
         preview_->setTransparentBackground(true, framing_ == Framing::Face);
         // The class decides a death knight's eye glow (0x004ed900).
         preview_->setCharacterClass(pendingClass_);
+        preview_->setTabardDesigner(pendingDesigner_);
         if (preview_->loadCharacter(static_cast<game::Race>(race),
                                     static_cast<game::Gender>(gender),
                                     skin, face, hairStyle, hairColor,
@@ -194,6 +197,7 @@ bool UnitPortrait::updatePlayer(uint8_t race, uint8_t gender,
         loadedBake_ = pendingBake_;
         loadedClass_ = pendingClass_;
         loadedEmblem_ = pendingEmblem_;
+        loadedDesigner_ = pendingDesigner_;
     }
 
     present(deltaTime);

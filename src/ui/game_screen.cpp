@@ -832,12 +832,17 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         }
     }
 
-    // The player's guild, and its tabard design arriving (0x006d2840).
-    bool tabardEmblemChanged = false;
-    if (!gameHandler.getInventory().getEquipSlot(game::EquipSlot::TABARD).empty()) {
-        uint32_t guildId = gameHandler.getEntityGuildId(gameHandler.getPlayerGuid());
-        if (guildId == 0 && gameHandler.getActiveCharacter()) guildId = gameHandler.getActiveCharacter()->guildId;
-        const auto emblem = gameHandler.lookupGuildEmblem(guildId);
+    // The player's guild, and its tabard design arriving (0x006d2840) - or
+    // the tabard designer's design, painted as it changes (0x004ec1c0) and
+    // the guild's again as it closes (0x006db5f0).
+    // With the designer open the body wears the design and the tabard's
+    // geosets whatever is worn (0x006d2900), and goes back as it closes.
+    const bool tabardDesigner = gameHandler.getTabardVendorGuid() != 0;
+    bool tabardEmblemChanged = tabardDesigner != playerTabardDesigner_ ||
+                               (tabardDesigner && gameHandler.getPlayerTabardEmblem() != playerTabardEmblem_);
+    if (!tabardEmblemChanged && !gameHandler.getInventory().getEquipSlot(game::EquipSlot::TABARD).empty()) {
+        const uint32_t guildId = gameHandler.getPlayerGuildId();
+        const auto emblem = gameHandler.getPlayerTabardEmblem();
         tabardEmblemChanged = game::tabardNeedsRepaint(playerTabardGuildId_, playerTabardEmblem_, guildId, emblem);
     }
     if (inventoryScreen.consumeEquipmentDirty() || gameHandler.consumeOnlineEquipmentDirty() ||
@@ -847,6 +852,7 @@ void GameScreen::render(game::GameHandler& gameHandler) {
                                                       : gameHandler.getInventory();
         updateCharacterGeosets(dressed);
         updateCharacterTextures(dressed);
+        playerTabardDesigner_ = tabardDesigner;
         if (appearanceComposer_) appearanceComposer_->loadEquippedWeapons();
         // Update renderer weapon type for animation selection
         auto* r = services_.renderer;

@@ -32,5 +32,11 @@ inline void prepareDesaturated(std::vector<uint8_t>& rgba) {
     }
 }
 
+/// TabardModel:GetUpperEmblemTexture / GetLowerEmblemTexture (0x00599890):
+/// the emblem white, by its alpha alone. RGBA8.
+inline void prepareAlphaMask(std::vector<uint8_t>& rgba) {
+    for (size_t i = 0; i + 3 < rgba.size(); i += 4) rgba[i] = rgba[i + 1] = rgba[i + 2] = 255;
+}
+
 }  // namespace ui
 }  // namespace wowee

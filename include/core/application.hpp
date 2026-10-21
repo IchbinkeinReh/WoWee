@@ -349,6 +349,13 @@ private:
     /// second try-on list rather than the same one reused.
     ui::UnitPortrait auctionDressUpModel_;
     uint32_t auctionDressUpWidgetId_ = 0;
+    /// The tabard designer's TabardModel: the player in the design.
+    ui::UnitPortrait tabardModel_;
+    uint32_t tabardModelWidgetId_ = 0;
+    /// Each dressing room's facing as last applied, as the paperdoll's.
+    float dressUpFacing_ = 0.0f;
+    float auctionDressUpFacing_ = 0.0f;
+    float tabardFacing_ = 0.0f;
     /// The pet tab's figure. A creature by display id, like its portrait.
     ui::UnitPortrait petModel_;
     uint32_t petModelWidgetId_ = 0;

@@ -156,6 +156,13 @@ public:
     using ChatAutoJoin = game::ChatAutoJoin;
     ChatAutoJoin chatAutoJoin;
 
+    /// LoggingChat([on]) (0x004fbc60 with index 0): with an argument, the
+    /// chat lines written to Logs\WoWChatLog.txt or not; true while they are.
+    bool loggingChat(std::optional<bool> enable);
+    /// The chat log file closed and its logging off, on leaving the world
+    /// (0x005072b0).
+    void closeChatLog();
+
 private:
     /// A chat line waiting for a name: its sender's, or that of the player an
     /// NPC's line is written for. See deliverChatMessage.
@@ -240,6 +247,12 @@ private:
     bool chatLogInitialized_ = false;
     std::string chatLogPath_;
     std::ofstream chatLogStream_;
+    /// The chat line as 0x00509dd0 writes it to WoWChatLog.txt, while
+    /// loggingChat_ (0xb759d0) is on: the sender is the name the line shows.
+    void writeChatLogLine(ChatType type, const std::string& text, const std::string& sender,
+                          const std::string& channelName, uint32_t language, const std::string& target);
+    bool loggingChat_ = false;
+    std::ofstream chatLogFile_;
 
     // Track senders we've already auto-replied to (AFK/DND) this session
     // to prevent infinite reply loops. Cleared when AFK/DND is toggled off.

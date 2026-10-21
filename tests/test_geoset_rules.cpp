@@ -158,6 +158,22 @@ TEST_CASE("a chest with display flag 4 keeps the legs' columns out", "[geoset]")
     CHECK_FALSE(has(shown, 1105));
 }
 
+TEST_CASE("the tabard designer shows a tabard where none is worn", "[geoset]") {
+    // Flag 0x40 (0x006d2900): 1201 and 1202 with nothing worn.
+    CharacterEquipmentGeosets eq;
+    CharacterGeosetFlags flags;
+    flags.flag40 = true;
+    auto shown = characterGeosets(kInitialCharacterGeosets, false, eq, flags);
+    CHECK(has(shown, 1201));
+    CHECK(has(shown, 1202));
+    CHECK_FALSE(has(characterGeosets(kInitialCharacterGeosets, false, eq), 1202));
+    // Under the legs' robe, the short one only.
+    eq.legs = item(0, 0, 1);
+    shown = characterGeosets(kInitialCharacterGeosets, false, eq, flags);
+    CHECK(has(shown, 1201));
+    CHECK_FALSE(has(shown, 1202));
+}
+
 TEST_CASE("the cloak and the belt replace their groups' defaults", "[geoset]") {
     CharacterEquipmentGeosets eq;
     eq.cape = item(2);

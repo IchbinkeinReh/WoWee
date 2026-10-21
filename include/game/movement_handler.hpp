@@ -81,6 +81,9 @@ public:
     [[nodiscard]] bool unitHasClientControl(uint64_t guid) const;
     /// The player's PLAYER_FARSIGHT changed (0x006e4fd0 -> 0x006e2880).
     void onFarsightChanged(uint64_t farsight);
+    /// SMSG_CLEAR_FAR_SIGHT_IMMEDIATE (0x006e2e90 case 0x20d -> 0x006e2b00):
+    /// while looking through far sight, PLAYER_FARSIGHT is gone through again.
+    void clearFarSightImmediate();
     /// A unit came into view: a control update that waited for it is
     /// applied (0x007402b0 -> 0x0072cca0), and the farsight object looked
     /// through once it is there.

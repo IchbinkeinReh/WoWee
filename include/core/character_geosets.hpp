@@ -75,6 +75,10 @@ struct CharacterLook {
     uint32_t hairGeoset = 1;                       ///< CharHairGeosets' geoset
     std::optional<FacialGeosetColumns> facial;     ///< CharacterFacialHairStyles
     WornDisplays worn;
+    /// The player's component with the tabard designer open: its flags 0x44
+    /// (0x006d2900), the tabard's geosets shown and the design painted
+    /// whatever is worn.
+    bool tabardDesigner = false;
 };
 std::unordered_set<uint16_t> characterLookGeosets(pipeline::AssetManager& assets,
                                                   const CharacterLook& look);

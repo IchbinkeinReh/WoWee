@@ -630,6 +630,21 @@ void SpellVisualSystem::playKit(uint32_t kitId, spell_kit::KitType type, const g
 void SpellVisualSystem::playSpellAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact,
                                           uint32_t spellId, uint64_t casterGuid, float speed,
                                           const std::optional<glm::vec3>& casterPosition) {
+    // Mode 1: on the caster, at now plus the way at the spell's speed.
+    const auto delayMs = casterGuid != 0 ? spell_kit::areaImpactDelayMs(speed, casterPosition, place) : std::nullopt;
+    playAreaKits(visualId, place, missileCarriesImpact, spellId, casterGuid, delayMs);
+}
+
+void SpellVisualSystem::playDestinationAreaKits(uint32_t visualId, const glm::vec3& place,
+                                                bool missileCarriesImpact, uint32_t spellId, uint64_t casterGuid,
+                                                uint32_t impactDelayMs) {
+    // 0x008022d0 hands the kit now plus the packet's delay.
+    playAreaKits(visualId, place, missileCarriesImpact, spellId, casterGuid,
+                 impactDelayMs > 0 ? std::optional<uint32_t>(impactDelayMs) : std::nullopt);
+}
+
+void SpellVisualSystem::playAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact,
+                                     uint32_t spellId, uint64_t casterGuid, std::optional<uint32_t> impactDelayMs) {
     if (!m2Renderer_ || visualId == 0) return;
     if (!cachedAssetManager_) cachedAssetManager_ = core::Application::getInstance().getAssetManager();
     if (!cachedAssetManager_) return;
@@ -641,16 +656,15 @@ void SpellVisualSystem::playSpellAreaKits(uint32_t visualId, const glm::vec3& pl
     if (it->second.instantArea != 0)
         playKitOnUnit(it->second.instantArea, spell_kit::KitType::Area, 0, place, &place, 0, spellId, byCaster);
     if (it->second.impactArea == 0 || missileCarriesImpact) return;
-    if (const auto delayMs = spell_kit::areaImpactDelayMs(speed, casterPosition, place);
-        delayMs && casterGuid != 0) {
-        // Mode 1: on the caster, at now plus the way at the spell's speed.
+    if (impactDelayMs) {
+        // Timed (0x00728050 mode 1), played by the caster at its deadline.
         waitingKits_.push_back({.unitGuid = casterGuid,
                                 .spellId = spellId,
                                 .kitId = it->second.impactArea,
                                 .type = spell_kit::KitType::Area,
                                 .hasPlace = true,
                                 .place = place,
-                                .deadlineMs = colourClockMs_ + *delayMs,
+                                .deadlineMs = colourClockMs_ + *impactDelayMs,
                                 .mode = 1});
         return;
     }
@@ -812,28 +826,29 @@ const SpellVisualSystem::MissileVisual* SpellVisualSystem::findMissileVisual(uin
     return it != missileVisuals_.end() ? &it->second : nullptr;
 }
 
-// Where the caster lets the missile go, as FUN_00720bf0 finds it. A visual
-// naming MissileAttachment leaves from that attachment, carried by
-// MissileCastOffset in its frame; one naming only an offset carries it from
-// the directed spell hand (38, DAT_00ADAA50). Neither, and the client takes
-// the cast model's $CSL, $CSR or $CST event position, in that order, then
-// the unit's own position (FUN_0071a720). Those events sit in the spell
-// hands, and WoWee does not read M2 events, so the hands stand in for them.
+// Where the caster lets the missile go (0x006fcd60: FUN_0071a720, then
+// FUN_00720bf0). A visual naming MissileAttachment leaves from that
+// attachment, carried by MissileCastOffset in its frame; one naming only an
+// offset carries it from the directed spell hand (38, DAT_00ADAA50), or from
+// the model's own frame where it has no such hand. Neither, and the client
+// takes the caster's model's $CSL, $CSR or $CST event position, in that
+// order, then the unit's own position (FUN_0071a720).
 glm::vec3 SpellVisualSystem::missileSource(const MissileVisual& visual, const MissileEnd& from) const {
     CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!charRenderer || from.renderInstanceId == 0) return from.position;
-    glm::mat4 attachMat;
-    const bool hasOffset = visual.castOffset != glm::vec3(0.0f);
-    if (visual.sourceAttachment >= 0 || hasOffset) {
-        const int32_t attachment = visual.sourceAttachment >= 0 ? visual.sourceAttachment : 38;
+    glm::mat4 frame;
+    if (visual.sourceAttachment >= 0) {
         if (charRenderer->getAttachmentTransform(from.renderInstanceId,
-                                                 static_cast<uint32_t>(attachment), attachMat)) {
-            return glm::vec3(attachMat * glm::vec4(visual.castOffset, 1.0f));
-        }
+                                                 static_cast<uint32_t>(visual.sourceAttachment), frame))
+            return glm::vec3(frame * glm::vec4(visual.castOffset, 1.0f));
+    } else if (visual.castOffset != glm::vec3(0.0f)) {
+        if (charRenderer->getAttachmentTransform(from.renderInstanceId, 38u, frame) ||
+            charRenderer->getInstanceFrame(from.renderInstanceId, frame))
+            return glm::vec3(frame * glm::vec4(visual.castOffset, 1.0f));
     }
-    for (uint32_t hand : {21u /* SpellLeftHand */, 22u /* SpellRightHand */}) {
-        if (charRenderer->getAttachmentTransform(from.renderInstanceId, hand, attachMat))
-            return glm::vec3(attachMat[3]);
+    glm::vec3 event;
+    for (uint32_t id : {0x4C534324u /* $CSL */, 0x52534324u /* $CSR */, 0x54534324u /* $CST */}) {
+        if (charRenderer->getEventPosition(from.renderInstanceId, id, event)) return event;
     }
     return from.position;
 }
@@ -860,7 +875,8 @@ glm::vec3 SpellVisualSystem::missileTargetPoint(ActiveMissile& missile) const {
 
 bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
                                            const MissileEnd& to, std::vector<MissileEnd> impacts,
-                                           const MissileTrajectory* trajectory, uint32_t spellId) {
+                                           const MissileTrajectory* trajectory, uint32_t spellId,
+                                           uint64_t casterGuid, uint8_t castCount) {
     if (!m2Renderer_ || visualId == 0 || !(speed > 0.0f)) return false;
     const SyncEffectLoadScope syncLoads(syncEffectLoads_,
                                         involvesPlayer(from.renderInstanceId, to.renderInstanceId));
@@ -881,6 +897,8 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
     missile.position = missileSource(*visual, from);
     missile.casterInstanceId = from.renderInstanceId;
     missile.spellId = spellId;
+    missile.casterGuid = casterGuid;
+    missile.castCount = castCount;
     missile.lastTarget = to.position;
 
     // The attachment is settled once, at launch, as FUN_007022d0 settles it:
@@ -912,7 +930,8 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
     if (trajectory) {
         missile.adjusted = true;
         missile.arcStart = missile.position;
-        missile.arc = spell_missile::planMissileArc(trajectory->elevation, 0.0f, target - missile.position,
+        missile.arc = spell_missile::planMissileArc(trajectory->elevation, trajectory->castSpeed,
+                                                    target - missile.position,
                                                     spellMissileRow(trajectory->spellMissileId),
                                                     trajectory->flightSeconds);
         if (!missile.arc.onArc) missile.speed = missile.arc.straightSpeed;
@@ -1012,6 +1031,15 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
         } else {
             step = spell_missile::advance(it->position, target, it->speed, deltaTime);
         }
+        // Stopped by SMSG_SET_PROJECTILE_POSITION: once this step would leave
+        // it further from the stop than it is, it lands where it is, its
+        // target let go (0x007015d0, flag 0x400000; 0x00703410).
+        if (it->hasStop && spell_missile::passedStop(it->position, step.position, it->stopPoint)) {
+            step.arrived = true;
+            step.position = it->position;
+            it->targetInstanceId = 0;
+            it->lastTarget = it->position;
+        }
         if (!step.arrived && it->elapsed < it->maxLifetime) {
             it->position = step.position;
             m2Renderer_->setInstanceTransform(
@@ -1069,6 +1097,14 @@ void SpellVisualSystem::updateMissiles(float deltaTime) {
             playSpellVisual(visualId, impactPos, /*useImpactKit=*/true, impactInstance,
                             impactInstance != 0 && impactInstance == casterInstance, missileSpell);
         }
+    }
+}
+
+void SpellVisualSystem::setProjectilePosition(uint64_t casterGuid, uint8_t castCount, const glm::vec3& point) {
+    for (ActiveMissile& missile : activeMissiles_) {
+        if (missile.casterGuid != casterGuid || missile.castCount != castCount) continue;
+        missile.hasStop = true;
+        missile.stopPoint = point;
     }
 }
 
