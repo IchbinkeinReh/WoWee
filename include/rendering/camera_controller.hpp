@@ -134,6 +134,8 @@ public:
     // falling either - treating it as falling made leaving the water register as
     // a hard landing.
     [[nodiscard]] bool isFalling() const { return !grounded && !swimming && verticalVelocity <= 0.0f; }
+    /// How long it has been off the ground: zero on it.
+    [[nodiscard]] float airborneSeconds() const { return airborneSeconds_; }
 
     // Call every frame while riding a transport that forces Z to a locked value
     // externally (e.g. the Deeprun Tram, which has no real floor mid-tunnel).
@@ -145,7 +147,6 @@ public:
     // through the floor.
     void suppressVerticalPhysics() { verticalVelocity = 0.0f; grounded = true; }
     [[nodiscard]] bool isJumpKeyPressed() const { return jumpBufferTimer > 0.0f; }
-    [[nodiscard]] bool isSprinting() const;
     [[nodiscard]] bool isMovingForward() const { return moveForwardActive; }
     [[nodiscard]] bool isMovingBackward() const { return moveBackwardActive; }
     [[nodiscard]] bool isStrafingLeft() const { return strafeLeftActive; }
@@ -915,7 +916,6 @@ private:
     float maxDistanceFactor_ = 1.0f;
     bool xKeyWasDown = false;
     bool rKeyWasDown = false;
-    bool runPace = false;
     bool autoRunning = false;
     bool bindingTurnLeft_ = false;
     bool bindingTurnRight_ = false;

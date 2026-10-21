@@ -35,6 +35,34 @@ enum class JumpLanding : uint8_t {
                              (moveFlags & 0x100u) == 0 && currentSpeed > walkSpeed + walkSpeed);
 }
 
+/// What touching down asks of a unit's animation (FUN_0073d2b0), from the
+/// movement flags it had in the air and has now.
+enum class Landed : uint8_t {
+    Nothing,      // What plays goes on
+    Base,         // Its base animation again (FUN_0073ac30)
+    End,          // JumpEnd (39)
+    LandRun,      // JumpLandRun (187)
+};
+
+/// FUN_0073d2b0. A fall that was neither launched (a jump or a knockback)
+/// nor far (0x2000) leaves what plays, unless the direction it moves in
+/// (0x40f) changed on the way down; then its base animation is asked. A
+/// launched or far one lands into JumpEnd with no direction held, into
+/// JumpLandRun running on - not backing up, not walking, faster than twice
+/// walk speed (FUN_00716fa0) - and into its base animation otherwise; one
+/// that ends in water or in flight (0x2200000) into its base animation too.
+[[nodiscard]] constexpr Landed landed(uint32_t flagsBefore, uint32_t flagsNow, bool launched,
+                                      bool running) noexcept {
+    constexpr uint32_t kFallingFar = 0x2000, kSwimOrFly = 0x2200000, kDirection = 0x40f;
+    if (!launched && (flagsBefore & kFallingFar) == 0) {
+        return ((flagsNow ^ flagsBefore) & kDirection) == 0 ? Landed::Nothing : Landed::Base;
+    }
+    if ((flagsNow & kSwimOrFly) != 0) return Landed::Base;
+    if ((flagsNow & 0xfu) == 0) return Landed::End;
+    if ((flagsNow & 0x2u) == 0 && (flagsNow & 0x100u) == 0 && running) return Landed::LandRun;
+    return Landed::Base;
+}
+
 /// What the per-frame sync of another unit's animation does about its jump.
 enum class AirborneAnimSync : uint8_t {
     None,       // Nothing to do with a jump: pick locomotion as usual

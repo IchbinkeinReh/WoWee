@@ -2075,7 +2075,6 @@ void Renderer::setCharacterFollow(uint32_t instanceId) {
     if (cameraController && instanceId > 0) {
         cameraController->setFollowTarget(&characterPosition);
     }
-    if (animationController_) animationController_->onCharacterFollow(instanceId);
 }
 
 bool Renderer::startRecording(const std::string& path, std::string& error) {
@@ -3112,7 +3111,6 @@ void Renderer::update(float deltaTime) {
         // Update animation based on movement state (delegated to AnimationController §4.2)
         if (animationController_) {
             WOWEE_PROFILE_SCOPE("player animation", Cpu);
-            animationController_->updateMeleeTimers(deltaTime);
             animationController_->setDeltaTime(deltaTime);
             animationController_->updateCharacterAnimation();
         }

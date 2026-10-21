@@ -654,6 +654,8 @@ void MovementHandler::sendMovement(Opcode opcode) {
                                static_cast<uint32_t>(MovementFlags::STRAFE_LEFT) |
                                static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT);
     const bool wasMoving = (movementInfo.flags & kMoveMask) != 0;
+    const uint32_t flagsBefore = movementInfo.flags;
+    const bool launchedBefore = movementInfo.jumpVelocity != 0.0f;
 
     // Cancel any timed non-channel cast, plus food/water restoration, the moment
     // the player starts moving. Other channels retain their normal behavior.
@@ -825,6 +827,7 @@ void MovementHandler::sendMovement(Opcode opcode) {
         default:
             break;
     }
+    if (moverIsPlayer) moverEvent(opcode, flagsBefore, launchedBefore);
 
     // A full-speed pitcher (flags2 0x10) holds its START_PITCH for 100 ms; a
     // stop before it went out is one MSG_MOVE_SET_PITCH, or nothing where the
@@ -1298,6 +1301,7 @@ void MovementHandler::handleForceSpeedChange(network::Packet& packet, const char
 
     if (forPlayer) {
         if (speedStorage) *speedStorage = newSpeed;
+        moverEvent(ackOpcode, movementInfo.flags, movementInfo.jumpVelocity != 0.0f);
     } else if (unitMember) {
         unit->movementSpeeds().*unitMember = newSpeed;
     }
@@ -1334,6 +1338,7 @@ void MovementHandler::handleForceMoveRootState(network::Packet& packet, bool roo
     Opcode ackOp = rooted ? Opcode::CMSG_FORCE_MOVE_ROOT_ACK : Opcode::CMSG_FORCE_MOVE_UNROOT_ACK;
     if (wireOpcode(ackOp) == 0xFFFF) return;
     owner_.getSocket()->send(buildForceAck(ackOp, counter, guid));
+    if (guid == owner_.getPlayerGuid()) moverEvent(ackOp, info->flags, info->jumpVelocity != 0.0f);
 }
 
 void MovementHandler::handleForceMoveFlagChange(network::Packet& packet, const char* name,
@@ -1385,6 +1390,10 @@ void MovementHandler::handleMoveSetCollisionHeight(network::Packet& packet) {
     owner_.getSocket()->send(ack);
 }
 
+void MovementHandler::moverEvent(Opcode op, uint32_t flagsBefore, bool launchedBefore) {
+    if (owner_.moverEventCallbackRef()) owner_.moverEventCallbackRef()(op, flagsBefore, launchedBefore);
+}
+
 void MovementHandler::handleMoveKnockBack(network::Packet& packet) {
     const bool mkbTbc = isPreWotlk();
     if (packet.getRemainingSize() < (mkbTbc ? 8u : 2u)) return;
@@ -1410,6 +1419,7 @@ void MovementHandler::handleMoveKnockBack(network::Packet& packet) {
     if (!owner_.getSocket()) return;
     if (wireOpcode(Opcode::CMSG_MOVE_KNOCK_BACK_ACK) == 0xFFFF) return;
     owner_.getSocket()->send(buildForceAck(Opcode::CMSG_MOVE_KNOCK_BACK_ACK, counter));
+    moverEvent(Opcode::CMSG_MOVE_KNOCK_BACK_ACK, movementInfo.flags, movementInfo.jumpVelocity != 0.0f);
 }
 
 // ============================================================

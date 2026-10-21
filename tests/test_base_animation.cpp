@@ -292,6 +292,26 @@ TEST_CASE("what a body's one-shot asks of its own as it ends (0x0073b510)", "[ba
     CHECK_FALSE(ba::afterOneShot(data, u, kAttack1H));
 }
 
+TEST_CASE("a jump's start goes into its loop, a fall falls on (0x0073b510)", "[base_animation]") {
+    const auto data = table();
+    ub::Unit u;
+    u.leaping = true;
+    auto p = ba::afterOneShot(data, u, 37);
+    REQUIRE(p);
+    CHECK(p->anim == kJumpLoop);
+    p = ba::afterOneShot(data, u, kJumpLoop);
+    REQUIRE(p);
+    CHECK(p->anim == kJumpLoop);
+    p = ba::afterOneShot(data, u, kFall);
+    REQUIRE(p);
+    CHECK(p->anim == kFall);
+    // Taking off into flight: the flight's locomotion follows.
+    u.moveFlags = 0x2000000;
+    CHECK_FALSE(ba::afterOneShot(data, u, 37));
+    // The landing asks the base animation.
+    CHECK_FALSE(ba::afterOneShot(data, u, 39));
+}
+
 TEST_CASE("looting, the ranged readies, a flying or falling spline, a death kit", "[base_animation]") {
     ub::Unit looter;
     looter.canLoot = true;

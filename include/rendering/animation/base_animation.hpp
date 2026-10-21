@@ -81,8 +81,9 @@ struct HandItem {
                         const std::function<bool(uint32_t)>& hasShown);
 
 /// 0x0073b510: what a body's one-shot that has ended asks of its own before
-/// the base animation - a stand state's going down into its loop, or up
-/// where the state is gone; a ranged load into its hold, Loot into its
+/// the base animation - a jump's start or loop the loop again out of
+/// flight, a fall the fall; a stand state's going down into its loop, or
+/// up where the state is gone; a ranged load into its hold, Loot into its
 /// hold, Submerge into Submerged, the fishing cast into its loop, a dance
 /// again out of a fight. Nothing where the base animation follows.
 [[nodiscard]] std::optional<Pick> afterOneShot(const anim::AnimationDataTable& data, const upper_body::Unit& unit,

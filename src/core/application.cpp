@@ -22,6 +22,7 @@
 #include "game/spell_classification.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/animation/jump_landing.hpp"
+#include "rendering/animation/mover_event.hpp"
 #include "rendering/animation_controller.hpp"
 #include "rendering/movement_limits.hpp"
 #include <bit>
@@ -260,6 +261,9 @@ void unitSplineState(rendering::upper_body::Unit& u, game::GameHandler& gh, uint
 // state, its mount, its cast or channel (+0xa38 0x400 is a cast with a cast
 // time), its melee target, its ranged weapon out, whether its model moves
 // only as a whole (CreatureModelData Flags 0x8), and the pose it rides in.
+// Falling far (MOVEMENTFLAG_FALLING_FAR).
+constexpr uint32_t kMoveFallingFar = 0x2000;
+
 rendering::upper_body::Unit unitAnimationState(game::GameHandler& gh, EntitySpawner& spawner,
                                                uint64_t guid, const game::Unit& unit, uint32_t moveFlags,
                                                bool turning, std::optional<uint32_t> riderPose) {
@@ -2913,21 +2917,17 @@ void Application::connectWorldHooks() {
                 gameHandler->sendMovement(static_cast<game::Opcode>(opcode));
             }
         });
-        cc->setStandUpCallback([this]() {
-            if (gameHandler) {
-                gameHandler->setStandState(rendering::AnimationController::STAND_STATE_STAND);
-            }
-        });
-        cc->setSitDownCallback([this]() {
-            if (gameHandler) {
-                gameHandler->setStandState(rendering::AnimationController::STAND_STATE_SIT);
-            }
-            if (renderer) {
-                if (auto* ac = renderer->getAnimationController()) {
-                    ac->setStandState(rendering::AnimationController::STAND_STATE_SIT);
-                }
-            }
-        });
+        // The player sitting down or getting up: the request to the server,
+        // and the animation at once (0x006d SetStandState -> 0x0073f060).
+        const auto standTo = [this](uint8_t state) {
+            if (!gameHandler) return;
+            gameHandler->setStandState(state);
+            auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
+            if (cr && renderer->getCharacterInstanceId() != 0)
+                cr->standStateChanged(renderer->getCharacterInstanceId(), state);
+        };
+        cc->setStandUpCallback([standTo]() { standTo(rendering::AnimationController::STAND_STATE_STAND); });
+        cc->setSitDownCallback([standTo]() { standTo(rendering::AnimationController::STAND_STATE_SIT); });
         // The stand state is carried by AnimationCallbackHandler, which
         // owns the one callback slot for it. A second registration here
         // replaced or was replaced by that one depending on which was
@@ -2967,6 +2967,11 @@ void Application::connectWorldHooks() {
             return canon;
         });
 
+        // The player's own movement events, as the client animates the unit
+        // it moves (0x00741xxx -> 0x0073ed10).
+        gameHandler->setMoverEventCallback([this](game::Opcode op, uint32_t flagsBefore, bool launchedBefore) {
+            animatePlayerMovement(op, flagsBefore, launchedBefore);
+        });
         gameHandler->setMeleeSwingCallback([this](uint32_t spellId) {
             if (renderer) {
                 // Ranged auto-attack spells: Auto Shot (75), Shoot (5019), Throw (2764)
@@ -3030,11 +3035,11 @@ void Application::connectWorldHooks() {
                 info.mounts = gameHandler->spellAppliesMountedAura(spellId);
                 return info;
             });
-            // A kit's animation on the unit it is played on (0x0073b140). The
-            // player's own casts are its animation controller's.
+            // A kit's animation on the unit it is played on (0x0073b140), the
+            // player's as any unit's.
             svs->setKitAnimationSink([this](const rendering::SpellVisualSystem::KitAnimationPlay& play) {
                 auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
-                if (!cr || play.renderInstanceId == renderer->getCharacterInstanceId()) return;
+                if (!cr) return;
                 cr->playKitAnimation(play.renderInstanceId,
                                      {.type = play.type,
                                       .startAnim = play.startAnim,
@@ -4288,9 +4293,6 @@ void Application::applyServerMovementState(float deltaTime) {
         } else {
             hasM2RideLock_ = false;
         }
-        if (auto* ac = renderer->getAnimationController()) {
-            ac->setM2TransportRiding(hasM2RideLock_);
-        }
 
         // Model-Z reversal probe: the floor-selection log stays
         // quiet through the reported Undercity bob, so the bob is in
@@ -4381,9 +4383,15 @@ void Application::applyServerMovementState(float deltaTime) {
 rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& self) const {
     namespace ub = rendering::upper_body;
     ub::Unit u;
-    // Its own movement flags, the ones it sends (+0x7cc).
-    u.moveFlags = gameHandler->getMovementInfo().flags;
-    u.leaping = (u.moveFlags & ub::kMoveFalling) != 0;
+    // Its own movement flags, the ones it sends (+0x7cc). In the air as
+    // 0x00723350 has it: falling with a jump's vertical speed, or falling
+    // far - which a drop off a ledge is here once it has lasted as long as a
+    // fall the landing is told of.
+    const auto& movement = gameHandler->getMovementInfo();
+    u.moveFlags = movement.flags;
+    const bool launched = (u.moveFlags & ub::kMoveFalling) != 0 && movement.jumpVelocity != 0.0f;
+    if (!launched && playerFallsFar()) u.moveFlags |= ub::kMoveFalling | kMoveFallingFar;
+    u.leaping = launched || (u.moveFlags & kMoveFallingFar) != 0;
     u.standState = gameHandler->getStandState();
     u.mounted = self.getMountDisplayId() != 0;
     u.alive = self.getHealth() > 0;
@@ -4455,6 +4463,106 @@ rendering::upper_body::Unit Application::playerAnimationState(const game::Unit& 
     return u;
 }
 
+// A drop off a ledge the player is in the air for: not a jump, not in water,
+// in flight or on a ride locked to a transport, and lasting as long as a fall
+// the landing is sent for (CameraController, MSG_MOVE_FALL_LAND).
+bool Application::playerFallsFar() const {
+    const auto* cc = renderer ? renderer->getCameraController() : nullptr;
+    constexpr float kFallSeconds = 0.15f;
+    return cc && !cc->isGrounded() && !cc->isSwimming() && !cc->isFlightAirborne() && !hasM2RideLock_ &&
+           cc->airborneSeconds() >= kFallSeconds;
+}
+
+// The player's unit, onto its instance each frame, and its base animation
+// asked again where what it reads has changed: in the air off a ledge, a
+// turn on the spot started or stopped (0x0073dab0), alive or dead, looting,
+// stealth, a melee target taken or dropped. Its movement events ask it as
+// they come (animatePlayerMovement).
+void Application::syncPlayerAnimation(const game::Unit& self) {
+    auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
+    const uint32_t instanceId = renderer ? renderer->getCharacterInstanceId() : 0;
+    if (!cr || instanceId == 0) return;
+    cr->setAnimationTier(instanceId, unitAnimationTier(self));
+    const rendering::upper_body::Unit u = playerAnimationState(self);
+    cr->setUnitAnimationState(instanceId, u);
+    const PlayerAnimationSeen now{.instanceId = instanceId,
+                                  .leaping = u.leaping,
+                                  .fellFar = (u.moveFlags & kMoveFallingFar) != 0,
+                                  .turning = u.turningInPlace,
+                                  .turningLeft = u.turningLeft,
+                                  .alive = u.alive,
+                                  .looting = u.looting,
+                                  .stealthed = u.stealthed,
+                                  .autoAttacking = u.autoAttacking};
+    const PlayerAnimationSeen before = std::exchange(playerAnimationSeen_, now);
+    if (before.instanceId != instanceId || u.riding) return;
+    const bool changed = (now.leaping && !before.leaping) || now.turning != before.turning ||
+                         now.turningLeft != before.turningLeft || now.alive != before.alive ||
+                         now.looting != before.looting || now.stealthed != before.stealthed ||
+                         now.autoAttacking != before.autoAttacking;
+    if (changed) cr->playBaseAnimation(instanceId);
+}
+
+// What an event of the player's own movement does to its animation: the
+// client's switch for it (0x0073ed10, mover_event), and for a landing
+// 0x0073d3d0 -> 0x0073d2b0.
+void Application::animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, bool launchedBefore) {
+    namespace me = rendering::mover_event;
+    auto* cr = renderer ? renderer->getCharacterRenderer() : nullptr;
+    const uint32_t instanceId = renderer ? renderer->getCharacterInstanceId() : 0;
+    if (!cr || instanceId == 0 || !gameHandler) return;
+    auto self = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
+    if (!self || !self->isUnit()) return;
+    // A mount takes what its rider is asked (its own driver).
+    if (auto* ac = renderer->getAnimationController(); ac && ac->isMounted()) return;
+    // The state the event leaves it in, and the speed its flags move it at
+    // (CMovement::GetCurrentSpeed).
+    const uint32_t flags = gameHandler->getMovementInfo().flags;
+    game::MovementSpeeds speeds;
+    speeds.walk = gameHandler->getServerWalkSpeed();
+    speeds.run = gameHandler->getServerRunSpeed();
+    speeds.runBack = gameHandler->getServerRunBackSpeed();
+    speeds.swim = gameHandler->getServerSwimSpeed();
+    speeds.swimBack = gameHandler->getServerSwimBackSpeed();
+    speeds.flight = gameHandler->getServerFlightSpeed();
+    speeds.flightBack = gameHandler->getServerFlightBackSpeed();
+    const float speed = game::Entity::speedForFlags(speeds, flags);
+    cr->setLocomotionSpeed(instanceId, speed);
+    const bool fellFar = playerAnimationSeen_.fellFar;
+    syncPlayerAnimation(static_cast<const game::Unit&>(*self));
+
+    if (op == game::Opcode::MSG_MOVE_FALL_LAND) {
+        const auto landed = rendering::landed(flagsBefore | (fellFar ? kMoveFallingFar : 0u), flags,
+                                              launchedBefore, speed > speeds.walk + speeds.walk);
+        switch (landed) {
+            case rendering::Landed::Nothing: break;
+            case rendering::Landed::Base: cr->playBaseAnimation(instanceId); break;
+            case rendering::Landed::End: cr->playAnimation(instanceId, rendering::anim::JUMP_END, false); break;
+            case rendering::Landed::LandRun:
+                cr->playAnimation(instanceId, rendering::anim::JUMP_LAND_RUN, false);
+                break;
+        }
+        return;
+    }
+    uint32_t current = 0;
+    float time = 0.0f, duration = 0.0f;
+    const bool fallPlaying = cr->getAnimationState(instanceId, current, time, duration) &&
+                             current == rendering::anim::FALL;
+    // In a vehicle's seat that keeps the jump's animations from it
+    // (VehicleFlags 0x4000000, 0x007571c0).
+    const auto& movement = gameHandler->getMovementInfo();
+    const bool seatHolds = movement.transportSeat >= 0 && entitySpawner_ &&
+                           (entitySpawner_->vehicleFlags(movement.transportGuid) & 0x4000000u) != 0;
+    const me::Reaction r = me::react(op, flags, fallPlaying, seatHolds);
+    switch (r.play) {
+        case me::Play::Nothing: break;
+        case me::Play::Base: cr->playBaseAnimation(instanceId); break;
+        case me::Play::JumpStart: cr->playAnimation(instanceId, rendering::anim::JUMP_START, false); break;
+        case me::Play::Fall: cr->playAnimation(instanceId, rendering::anim::FALL, true); break;
+        case me::Play::JumpLandRun: cr->playAnimation(instanceId, rendering::anim::JUMP_LAND_RUN, false); break;
+    }
+}
+
 void Application::syncRenderInstancesToEntities(float deltaTime) {
     auto creatureSyncStart = std::chrono::steady_clock::now();
     if (renderer && gameHandler && renderer->getCharacterRenderer()) {
@@ -4477,9 +4585,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
             havePlayerPos = true;
             if (auto self = gameHandler->getEntityManager().getEntity(gameHandler->getPlayerGuid());
                 self && self->isUnit()) {
-                charRenderer->setAnimationTier(renderer->getCharacterInstanceId(), unitAnimationTier(*self));
-                charRenderer->setUnitAnimationState(renderer->getCharacterInstanceId(),
-                                                    playerAnimationState(static_cast<const game::Unit&>(*self)));
+                syncPlayerAnimation(static_cast<const game::Unit&>(*self));
             }
         }
         const float syncRadiusSq = 320.0f * 320.0f;
@@ -6939,11 +7045,6 @@ bool Application::getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, fl
 
 bool Application::gameObjectDrawsNothing(uint64_t guid) const {
     return entitySpawner_ && entitySpawner_->gameObjectDrawsNothing(guid);
-}
-
-bool Application::getRenderFootZForGuid(uint64_t guid, float& outFootZ) const {
-    if (entitySpawner_) return entitySpawner_->getRenderFootZForGuid(guid, outFootZ);
-    return false;
 }
 
 void Application::setHighlightedGameObject(uint64_t guid) {

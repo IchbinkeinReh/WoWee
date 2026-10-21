@@ -1,6 +1,5 @@
 #pragma once
 
-#include "rendering/animation/anim_capability_set.hpp"
 #include "rendering/animation/anim_event.hpp"
 #include <cstdint>
 #include <vector>

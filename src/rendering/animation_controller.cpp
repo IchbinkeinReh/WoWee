@@ -3,7 +3,6 @@
 #include "rendering/animation/melee_anim_chains.hpp"
 #include "rendering/animation_controller.hpp"
 #include "rendering/animation/emote_registry.hpp"
-#include "rendering/animation/anim_capability_probe.hpp"
 #include "rendering/animation/mount_fsm.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/renderer.hpp"
@@ -50,58 +49,27 @@ void AnimationController::initialize(Renderer* renderer) {
     renderer_ = renderer;
 }
 
-void AnimationController::probeCapabilities() {
-    if (!renderer_) return;
-    uint32_t instanceId = renderer_->getCharacterInstanceId();
-    if (instanceId == 0) return;
-    auto caps = AnimCapabilityProbe::probe(renderer_, instanceId);
-    characterAnimator_.setCapabilities(caps);
-    capabilitiesProbed_ = true;
-}
-
-void AnimationController::onCharacterFollow(uint32_t /*instanceId*/) {
-    // Reset animation state when follow target changes
-    capabilitiesProbed_ = false;
-}
-
 // ── Emote support ────────────────────────────────────────────────────────────
 
+// An emote the player does: its Emotes row's animation, asked as any
+// animation of the unit's is (0x007385c0) - looped for a state emote, once
+// for the rest, which ends into the unit's base animation (0x0073b510).
 void AnimationController::playEmote(const std::string& emoteName) {
     auto& registry = EmoteRegistry::instance();
     registry.loadFromDbc();
     auto result = registry.findEmote(emoteName);
     if (!result) return;
 
-    uint32_t animId = result->animId;
-    bool loop = result->loop;
-
+    auto* characterRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    const uint32_t characterInstanceId = renderer_ ? renderer_->getCharacterInstanceId() : 0;
+    if (!characterRenderer || characterInstanceId == 0) return;
     // What an emote resolved to, and whether the model can play it. An emote
     // that does nothing is either a name that resolved to no animation or an
     // animation the model does not carry, and from outside those look the same.
-    {
-        auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
-        uint32_t ci = renderer_ ? renderer_->getCharacterInstanceId() : 0;
-        const bool has = (cr && ci > 0) ? cr->hasAnimation(ci, animId) : false;
-        LOG_WARNING("Emote '", emoteName, "' -> animation ", animId,
-                    (loop ? " (looping)" : " (one shot)"),
-                    " model has it: ", (has ? "yes" : "NO"));
-    }
-
-    // Forward to CharacterAnimator (ActivityFSM handles emote state)
-    characterAnimator_.playEmote(animId, loop);
-
-    // Immediately play the emote animation on the renderer
-    auto* characterRenderer = renderer_->getCharacterRenderer();
-    uint32_t characterInstanceId = renderer_->getCharacterInstanceId();
-    if (characterRenderer && characterInstanceId > 0) {
-        characterRenderer->playAnimation(characterInstanceId, animId, loop);
-        lastPlayerAnimRequest_ = animId;
-        lastPlayerAnimLoopRequest_ = loop;
-    }
-}
-
-void AnimationController::cancelEmote() {
-    characterAnimator_.cancelEmote();
+    LOG_WARNING("Emote '", emoteName, "' -> animation ", result->animId,
+                (result->loop ? " (looping)" : " (one shot)"),
+                " model has it: ", (characterRenderer->hasAnimation(characterInstanceId, result->animId) ? "yes" : "NO"));
+    characterRenderer->playAnimation(characterInstanceId, result->animId, result->loop);
 }
 
 std::string AnimationController::getEmoteText(const std::string& emoteName, const std::string* targetName) {
@@ -147,125 +115,22 @@ bool AnimationController::isStateEmoteById(uint32_t emoteId) {
     return registry.isStateEmote(emoteId);
 }
 
-// ── Spell casting ────────────────────────────────────────────────────────────
-
-void AnimationController::startSpellCast(uint32_t precastAnimId, uint32_t castAnimId, bool castLoop,
-                                         uint32_t finalizeAnimId) {
-    characterAnimator_.startSpellCast(precastAnimId, castAnimId, castLoop, finalizeAnimId);
-}
-
-void AnimationController::stopSpellCast() {
-    characterAnimator_.stopSpellCast();
-}
-
-void AnimationController::setSeatedLoopAnimation(uint32_t animationId) {
-    characterAnimator_.getActivity().setSeatedLoopAnimation(animationId);
-}
-
-// ── Loot animation ───────────────────────────────────────────────────────────
-
-void AnimationController::startLooting() {
-    characterAnimator_.startLooting();
-}
-
-void AnimationController::stopLooting() {
-    characterAnimator_.stopLooting();
-}
-
-// ── Hit reactions ────────────────────────────────────────────────────────────
-
-void AnimationController::triggerHitReaction(uint32_t animId) {
-    characterAnimator_.triggerHitReaction(animId);
-}
-
-// ── Crowd control ────────────────────────────────────────────────────────────
-
-void AnimationController::setStunned(bool stunned) {
-    stunned_ = stunned;
-    characterAnimator_.setStunned(stunned);
-}
-
-// ── Health-based idle ────────────────────────────────────────────────────────
-
-void AnimationController::setLowHealth(bool low) {
-    characterAnimator_.setLowHealth(low);
-}
-
-// ── Stand state ──────────────────────────────────────────────────────────────
-
-void AnimationController::setStandState(uint8_t state) {
-    characterAnimator_.setStandState(state);
-}
-
-// ── Stealth ──────────────────────────────────────────────────────────────────
-
-void AnimationController::setStealthed(bool stealth) {
-    characterAnimator_.setStealthed(stealth);
-}
-
-// ── Sprint aura ──────────────────────────────────────────────────────────────
-
-void AnimationController::setSprintAuraActive(bool active) {
-    // Straight through. The animator keeps the copy the locomotion state
-    // machine reads; this class kept one of its own and read it nowhere.
-    characterAnimator_.setSprintAuraActive(active);
-}
-
-// ── Targeting / combat ───────────────────────────────────────────────────────
-
-void AnimationController::setTargetPosition(const glm::vec3* pos) {
-    targetPosition_ = pos;
-}
-
-void AnimationController::setInCombat(bool combat) {
-    inCombat_ = combat;
-    characterAnimator_.setInCombat(combat);
-}
-
 void AnimationController::resetCombatVisualState() {
-    inCombat_ = false;
-    targetPosition_ = nullptr;
-    meleeSwingTimer_ = 0.0f;
-    meleeSwingCooldown_ = 0.0f;
-    specialAttackAnimId_ = 0;
-    rangedShootTimer_ = 0.0f;
-    rangedAnimId_ = 0;
-    characterAnimator_.setRangedWeaponActive(false);
-    stunned_ = false;
-
-    // Reset all CharacterAnimator combat state
-    characterAnimator_.setInCombat(false);
-    characterAnimator_.setStunned(false);
-    characterAnimator_.setLowHealth(false);
-    characterAnimator_.stopSpellCast();
-    characterAnimator_.triggerHitReaction(0);  // Clear hit reaction
-
     if (auto* svs = renderer_->getSpellVisualSystem()) svs->reset();
-}
-
-bool AnimationController::isMoving() const {
-    auto* cameraController = renderer_->getCameraController();
-    return cameraController && cameraController->isMoving();
 }
 
 // ── Melee combat ─────────────────────────────────────────────────────────────
 
+// The player's swing (0x00756800): the attack for its weapons, asked as any
+// animation is (0x007385c0) - on the upper body while it moves, and waiting
+// behind a swing still playing (+0xb88).
 void AnimationController::triggerMeleeSwing() {
     auto* characterRenderer = renderer_->getCharacterRenderer();
     uint32_t characterInstanceId = renderer_->getCharacterInstanceId();
     if (!characterRenderer || characterInstanceId == 0) return;
-    if (meleeSwingCooldown_ > 0.0f) return;
-    if (characterAnimator_.getActivity().isEmoteActive()) {
-        characterAnimator_.cancelEmote();
+    if (const uint32_t swing = resolveMeleeAnimId(); swing != 0) {
+        characterRenderer->playAnimation(characterInstanceId, swing, false);
     }
-    specialAttackAnimId_ = 0;  // Clear any special attack override
-    resolveMeleeAnimId();
-    meleeSwingCooldown_ = 0.1f;
-    float durationSec = meleeAnimDurationMs_ > 0.0f ? meleeAnimDurationMs_ / 1000.0f : 0.6f;
-    if (durationSec < 0.25f) durationSec = 0.25f;
-    if (durationSec > 1.0f) durationSec = 1.0f;
-    meleeSwingTimer_ = durationSec;
-
     if (renderer_->getAudioCoordinator()->getActivitySoundManager()) {
         renderer_->getAudioCoordinator()->getActivitySoundManager()->playMeleeSwing();
     }
@@ -285,18 +150,12 @@ void AnimationController::setEquippedWeaponType(uint32_t inventoryType, bool is2
     weaponLoadout_.offHandIsDagger = offHandIsDagger;
     weaponLoadout_.hasShield = hasShield;
     meleeAnimId_ = 0;  // Force re-resolve on next swing
-    characterAnimator_.setEquippedWeaponType(weaponLoadout_);
 }
 
 void AnimationController::triggerSpecialAttack(uint32_t /*spellId*/) {
     auto* characterRenderer = renderer_->getCharacterRenderer();
     uint32_t characterInstanceId = renderer_->getCharacterInstanceId();
     if (!characterRenderer || characterInstanceId == 0) return;
-    if (meleeSwingCooldown_ > 0.0f) return;
-    if (characterAnimator_.getActivity().isEmoteActive()) {
-        characterAnimator_.cancelEmote();
-    }
-
     auto has = [&](uint32_t id) { return characterRenderer->hasAnimation(characterInstanceId, id); };
 
     // Choose special attack animation based on equipped weapon type
@@ -319,22 +178,7 @@ void AnimationController::triggerSpecialAttack(uint32_t /*spellId*/) {
         return;
     }
 
-    specialAttackAnimId_ = specAnim;
-    meleeSwingCooldown_ = 0.1f;
-    // Query the special attack animation duration
-    std::vector<pipeline::M2Sequence> sequences;
-    float dur = 0.6f;
-    if (characterRenderer->getAnimationSequences(characterInstanceId, sequences)) {
-        for (const auto& seq : sequences) {
-            if (seq.id == specAnim && seq.duration > 0) {
-                dur = static_cast<float>(seq.duration) / 1000.0f;
-                break;
-            }
-        }
-    }
-    if (dur < 0.25f) dur = 0.25f;
-    if (dur > 1.0f) dur = 1.0f;
-    meleeSwingTimer_ = dur;
+    characterRenderer->playAnimation(characterInstanceId, specAnim, false);
     if (renderer_->getAudioCoordinator()->getActivitySoundManager()) {
         renderer_->getAudioCoordinator()->getActivitySoundManager()->playMeleeSwing();
     }
@@ -344,20 +188,12 @@ void AnimationController::triggerSpecialAttack(uint32_t /*spellId*/) {
 
 void AnimationController::setEquippedRangedType(RangedWeaponType type) {
     weaponLoadout_.rangedType = type;
-    rangedAnimId_ = 0;
-    characterAnimator_.setEquippedRangedType(type);
-}
-
-void AnimationController::setRangedWeaponActive(bool active) {
-    characterAnimator_.setRangedWeaponActive(active);
 }
 
 void AnimationController::triggerRangedShot() {
     auto* characterRenderer = renderer_->getCharacterRenderer();
     uint32_t characterInstanceId = renderer_->getCharacterInstanceId();
     if (!characterRenderer || characterInstanceId == 0) return;
-    if (rangedShootTimer_ > 0.0f) return;
-    if (characterAnimator_.getActivity().isEmoteActive()) characterAnimator_.cancelEmote();
 
     auto has = [&](uint32_t id) { return characterRenderer->hasAnimation(characterInstanceId, id); };
 
@@ -393,22 +229,7 @@ void AnimationController::triggerRangedShot() {
     }
     if (shootAnim == 0) return;  // Model has no ranged animation
 
-    rangedAnimId_ = shootAnim;
-
-    // Query animation duration
-    std::vector<pipeline::M2Sequence> sequences;
-    float dur = 0.6f;
-    if (characterRenderer->getAnimationSequences(characterInstanceId, sequences)) {
-        for (const auto& seq : sequences) {
-            if (seq.id == shootAnim && seq.duration > 0) {
-                dur = static_cast<float>(seq.duration) / 1000.0f;
-                break;
-            }
-        }
-    }
-    if (dur < 0.25f) dur = 0.25f;
-    if (dur > 1.5f) dur = 1.5f;
-    rangedShootTimer_ = dur;
+    characterRenderer->playAnimation(characterInstanceId, shootAnim, false);
 }
 
 uint32_t AnimationController::resolveMeleeAnimId() {
@@ -416,7 +237,6 @@ uint32_t AnimationController::resolveMeleeAnimId() {
     uint32_t characterInstanceId = renderer_->getCharacterInstanceId();
     if (!characterRenderer || characterInstanceId == 0) {
         meleeAnimId_ = 0;
-        meleeAnimDurationMs_ = 0.0f;
         return 0;
     }
 
@@ -428,18 +248,8 @@ uint32_t AnimationController::resolveMeleeAnimId() {
     std::vector<pipeline::M2Sequence> sequences;
     if (!characterRenderer->getAnimationSequences(characterInstanceId, sequences)) {
         meleeAnimId_ = 0;
-        meleeAnimDurationMs_ = 0.0f;
         return 0;
     }
-
-    auto findDuration = [&](uint32_t id) -> float {
-        for (const auto& seq : sequences) {
-            if (seq.id == id && seq.duration > 0) {
-                return static_cast<float>(seq.duration);
-            }
-        }
-        return 0.0f;
-    };
 
     std::span<const uint32_t> chain;
     // The chains live in melee_anim_chains.hpp, which the capability probe
@@ -479,7 +289,6 @@ uint32_t AnimationController::resolveMeleeAnimId() {
     for (uint32_t id : chain) {
         if (characterRenderer->hasAnimation(characterInstanceId, id)) {
             meleeAnimId_ = id;
-            meleeAnimDurationMs_ = findDuration(id);
             return meleeAnimId_;
         }
     }
@@ -517,7 +326,6 @@ uint32_t AnimationController::resolveMeleeAnimId() {
     }
 
     meleeAnimId_ = bestId;
-    meleeAnimDurationMs_ = static_cast<float>(bestDuration);
     return meleeAnimId_;
 }
 
@@ -775,14 +583,14 @@ void AnimationController::setMounted(uint32_t mountInstId, uint32_t mountDisplay
         " stand=", mountAnims.stand,
         " fidgets=", mountAnims.fidgets.size());
 
-    // Configure MountFSM via CharacterAnimator.
+    // Configure the MountFSM.
     //
     // What is passed here is only what was true at this moment. The FSM takes
     // the per-frame answer as well now, and either counts - a taxi sets the
     // mount up before it says the flight has begun, so this one is false on
     // every flight.
     LOG_INFO("Mount configured: displayId=", mountDisplayId, " taxiFlight=", taxiFlight_);
-    characterAnimator_.configureMountFSM(mountAnims, taxiFlight_);
+    mountFSM_.configure(mountAnims, taxiFlight_);
 
     if (renderer_->getAudioCoordinator()->getMountSoundManager()) {
         bool isFlying = taxiFlight_;
@@ -800,8 +608,7 @@ void AnimationController::clearMount() {
     smoothedMountSeatPos_ = glm::vec3(0.0f);
     mountSeatSmoothingInit_ = false;
 
-    // Clear MountFSM via CharacterAnimator
-    characterAnimator_.clearMountFSM();
+    mountFSM_.clear();
 
     if (auto* cameraController = renderer_->getCameraController()) {
         cameraController->setMounted(false);
@@ -810,29 +617,6 @@ void AnimationController::clearMount() {
 
     if (renderer_->getAudioCoordinator()->getMountSoundManager()) {
         renderer_->getAudioCoordinator()->getMountSoundManager()->onDismount();
-    }
-}
-
-// ── Query helpers ────────────────────────────────────────────────────────────
-
-bool AnimationController::isFootstepAnimationState() const {
-    auto state = characterAnimator_.getLocomotion().getState();
-    return state == LocomotionFSM::State::WALK || state == LocomotionFSM::State::RUN;
-}
-
-// ── Melee timers ─────────────────────────────────────────────────────────────
-
-void AnimationController::updateMeleeTimers(float deltaTime) {
-    if (meleeSwingCooldown_ > 0.0f) {
-        meleeSwingCooldown_ = std::max(0.0f, meleeSwingCooldown_ - deltaTime);
-    }
-    if (meleeSwingTimer_ > 0.0f) {
-        meleeSwingTimer_ = std::max(0.0f, meleeSwingTimer_ - deltaTime);
-        if (meleeSwingTimer_ <= 0.0f) specialAttackAnimId_ = 0;
-    }
-    // Ranged shot timer (same pattern as melee)
-    if (rangedShootTimer_ > 0.0f) {
-        rangedShootTimer_ = std::max(0.0f, rangedShootTimer_ - deltaTime);
     }
 }
 
@@ -978,7 +762,7 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
     float characterYaw = (hasMountBodyYaw_ && !taxiFlight_) ? mountBodyYawDeg_
                                                             : renderer_->getCharacterYaw();
     hasMountBodyYaw_ = false;
-    auto& mountFSM = characterAnimator_.getMountFSM();
+    auto& mountFSM = mountFSM_;
 
     // Build MountFSM input
     MountFSM::Input mountIn;
@@ -1049,8 +833,6 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
     bool haveState = characterRenderer->getAnimationState(characterInstanceId, currentAnimId, currentAnimTimeMs, currentAnimDurationMs);
     if (!haveState || currentAnimId != riderAnim) {
         characterRenderer->playAnimation(characterInstanceId, riderAnim, true);
-        lastPlayerAnimRequest_ = riderAnim;
-        lastPlayerAnimLoopRequest_ = true;
     }
 
     // Handle mount sounds
@@ -1078,125 +860,23 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
     applyMountPositioning(mountOut.mountBob, finalRoll, characterYaw);
 }
 
-// ── Character animation state machine (delegates to CharacterAnimator) ──────────
+// ── The player's animation ───────────────────────────────────────────────────
 
+// The player is animated as any unit is: its base animation asked on each
+// event of its movement (Application, 0x0073ed10), its swings, emotes,
+// kits and wounds as they come, and what follows a one-shot by the
+// CharacterRenderer (0x0073b510). Each frame leaves only the speed its
+// movement animation plays at (0x007385c0), and the mount's driving.
 void AnimationController::updateCharacterAnimation() {
-    auto* characterRenderer = renderer_->getCharacterRenderer();
-    auto* cameraController = renderer_->getCameraController();
-    uint32_t characterInstanceId = renderer_->getCharacterInstanceId();
-
-    // Lazy probe: populate capability set once per model.
-    // Re-probe if melee capabilities are missing (model may not have been fully
-    // loaded on the first probe attempt).
-    if (characterRenderer && characterInstanceId != 0) {
-        if (!capabilitiesProbed_) {
-            probeCapabilities();
-        } else if (meleeSwingTimer_ > 0.0f && !characterAnimator_.getCapabilities().hasMelee) {
-            capabilitiesProbed_ = false;
-            probeCapabilities();
-        }
-    }
-
-    // When mounted, delegate to MountFSM and handle positioning
     if (isMounted()) {
         updateMountedAnimation(lastDeltaTime_);
         return;
     }
-
-    // Build FrameInput for CharacterAnimator from camera/renderer state
-    CharacterAnimator::FrameInput fi;
-    fi.moving = cameraController->isMoving();
-    fi.sprinting = cameraController->isSprinting();
-    fi.movingForward = cameraController->isMovingForward();
-    fi.movingBackward = cameraController->isMovingBackward();
-    fi.strafeLeft = cameraController->isStrafingLeft();
-    fi.strafeRight = cameraController->isStrafingRight();
-    // See setM2TransportRiding() comment: real physics correctly reports "not grounded"
-    // over open track under a moving platform, but the animation FSM needs "grounded"
-    // to avoid playing a falling animation for the whole ride.
-    fi.grounded = m2TransportRiding_ ? true : cameraController->isGrounded();
-    fi.jumping = cameraController->isJumping();
-    fi.swimming = cameraController->isSwimming();
-    fi.sitting = cameraController->isSitting();
-    fi.ascending = cameraController->isAscending();
-    fi.descending = cameraController->isDescending();
-    fi.jumpKeyPressed = cameraController->isJumpKeyPressed();
-    fi.characterYaw = renderer_->getCharacterYaw();
-    fi.shuffle = turnShuffle_;
-    // In a vehicle's seat the player's own movement flags carry no
-    // direction - the keys move the vehicle - so nothing it plays is the
-    // walk or the run (0x00717050 reads the unit's own).
-    if (characterRenderer && characterRenderer->isInstanceSeated(characterInstanceId)) {
-        fi.moving = fi.sprinting = fi.movingForward = fi.movingBackward = false;
-        fi.strafeLeft = fi.strafeRight = false;
-        fi.shuffle = body_yaw::TurnShuffle::None;
-    }
-    // Melee/ranged timers
-    fi.meleeSwingTimer = meleeSwingTimer_;
-    fi.rangedShootTimer = rangedShootTimer_;
-    fi.specialAttackAnimId = specialAttackAnimId_;
-    fi.rangedAnimId = rangedAnimId_;
-    // Animation state query for one-shot completion detection
-    if (characterRenderer && characterInstanceId > 0) {
-        fi.haveAnimState = characterRenderer->getAnimationState(
-            characterInstanceId, fi.currentAnimId, fi.currentAnimTime, fi.currentAnimDuration);
-    }
-
-    // The speed the character's movement animation plays to (FUN_007385c0).
-    if (characterRenderer && characterInstanceId > 0) {
-        characterRenderer->setLocomotionSpeed(characterInstanceId,
-                                              cameraController->getLocomotionSpeed());
-    }
-
-    // Inject FrameInput and resolve animation via CharacterAnimator
-    characterAnimator_.setFrameInput(fi);
-    characterAnimator_.update(lastDeltaTime_);
-
-    // Read the resolved animation output
-    AnimOutput output = characterAnimator_.getLastOutput();
-
-    // STAY policy: if CharacterAnimator returns invalid, keep current animation
-    if (!output.valid) return;
-
-    uint32_t animId = output.animId;
-    bool loop = output.loop;
-
-    // Apply animation to the character renderer
-    uint32_t currentAnimId = 0;
-    float currentAnimTimeMs = 0.0f;
-    float currentAnimDurationMs = 0.0f;
-    bool haveState = characterRenderer->getAnimationState(characterInstanceId, currentAnimId, currentAnimTimeMs, currentAnimDurationMs);
-    const bool requestChanged = (lastPlayerAnimRequest_ != animId) || (lastPlayerAnimLoopRequest_ != loop);
-    // Only re-assert looping animations if the renderer drifted (e.g., external
-    // playAnimation call).  One-shot animations must NOT be re-asserted after the
-    // renderer auto-resets them to STAND on completion - the FSM detects the ID
-    // change via oneShotComplete and transitions to the next state in the same frame.
-    // Nor while the body finishes a swing it took back from the upper body,
-    // which ends into what was asked (0x007385c0, 0x0073b510).
-    const bool drifted = haveState && currentAnimId != animId && loop &&
-                         !characterRenderer->bodyEndsInto(characterInstanceId, animId);
-    const bool shouldPlay = requestChanged || drifted;
-
-    // Debug: log animation decisions (only when animation changes or replays)
-    static uint32_t dbgLastAnim = UINT32_MAX;
-    if (shouldPlay || animId != dbgLastAnim) {
-        LOG_DEBUG("[AnimDbg] FSM→", animId, " loop=", loop,
-                  " cur=", currentAnimId, " t=", currentAnimTimeMs, "/", currentAnimDurationMs,
-                  " haveState=", haveState,
-                  " reqChanged=", requestChanged, " drifted=", drifted, " shouldPlay=", shouldPlay,
-                  " lastReq=", lastPlayerAnimRequest_,
-                  " locoState=", static_cast<int>(characterAnimator_.getLocomotion().getState()),
-                  " actState=", static_cast<int>(characterAnimator_.getActivity().getState()),
-                  " fwd=", fi.movingForward, " back=", fi.movingBackward,
-                  " strafeL=", fi.strafeLeft, " strafeR=", fi.strafeRight,
-                  " moving=", fi.moving, " sprinting=", fi.sprinting);
-        dbgLastAnim = animId;
-    }
-
-    if (shouldPlay) {
-        characterRenderer->playAnimation(characterInstanceId, animId, loop);
-        lastPlayerAnimRequest_ = animId;
-        lastPlayerAnimLoopRequest_ = loop;
+    auto* characterRenderer = renderer_->getCharacterRenderer();
+    auto* cameraController = renderer_->getCameraController();
+    const uint32_t characterInstanceId = renderer_->getCharacterInstanceId();
+    if (characterRenderer && cameraController && characterInstanceId > 0) {
+        characterRenderer->setLocomotionSpeed(characterInstanceId, cameraController->getLocomotionSpeed());
     }
 }
 
@@ -1204,7 +884,8 @@ void AnimationController::updateCharacterAnimation() {
 
 void AnimationController::updateFootsteps(float deltaTime) {
     footstepDriver_.update(deltaTime, renderer_, isMounted(), mountInstanceId_,
-                            taxiFlight_, isFootstepAnimationState());
+                            taxiFlight_,
+                            renderer_->getCameraController() && renderer_->getCameraController()->isMoving());
 }
 
 // ── Activity SFX state tracking ──────────────────────────────────────────────

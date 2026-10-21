@@ -697,9 +697,6 @@ void CombatHandler::handleAttackStart(network::Packet& packet) {
         auto unit = std::static_pointer_cast<Unit>(entity);
         if (!unit->hasCreepVisibility()) return;
         unit->clearCreepVisibility();
-        if (guid == owner_.getPlayerGuid() && owner_.stealthStateCallbackRef()) {
-            owner_.stealthStateCallbackRef()(false);
-        }
     };
     revealCombatant(data.attackerGuid);
     revealCombatant(data.victimGuid);

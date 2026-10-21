@@ -316,6 +316,9 @@ private:
     [[nodiscard]] MovementInfo* movementFor(uint64_t guid);
     void handleForceMoveRootState(network::Packet& packet, bool rooted);
     void handleMoveKnockBack(network::Packet& packet);
+    /// An event of the player's own movement, handed to its animation
+    /// (0x00741xxx -> 0x0073ed10).
+    void moverEvent(Opcode op, uint32_t flagsBefore, bool launchedBefore);
     void handleTeleportAck(network::Packet& packet);
     void handleNewWorld(network::Packet& packet);
     void handleShowTaxiNodes(network::Packet& packet);

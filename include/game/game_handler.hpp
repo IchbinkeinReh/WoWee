@@ -1836,18 +1836,6 @@ public:
     using HitReactionCallback = std::function<void(uint64_t victimGuid, HitReaction reaction)>;
     void setHitReactionCallback(HitReactionCallback cb) { hitReactionCallback_ = std::move(cb); }
 
-    // Stun state callback - fires when UNIT_FLAG_STUNNED changes on the local player
-    using StunStateCallback = std::function<void(bool stunned)>;
-    void setStunStateCallback(StunStateCallback cb) { stunStateCallback_ = std::move(cb); }
-
-    // Stealth state callback - fires when UNIT_FLAG_SNEAKING changes on the local player
-    using StealthStateCallback = std::function<void(bool stealthed)>;
-    void setStealthStateCallback(StealthStateCallback cb) { stealthStateCallback_ = std::move(cb); }
-
-    // Player health changed callback - fires when local player HP changes
-    using PlayerHealthCallback = std::function<void(uint32_t health, uint32_t maxHealth)>;
-    void setPlayerHealthCallback(PlayerHealthCallback cb) { playerHealthCallback_ = std::move(cb); }
-
     // NPC greeting callback (plays voice line when NPC is clicked)
     using NpcGreetingCallback = std::function<void(uint64_t guid, const glm::vec3& position)>;
     void setNpcGreetingCallback(NpcGreetingCallback cb) { npcGreetingCallback_ = std::move(cb); }
@@ -1966,6 +1954,11 @@ public:
     }
     using KnockBackCallback = std::function<void(float vcos, float vsin, float hspeed, float vspeed)>;
     void setKnockBackCallback(KnockBackCallback cb) { knockBackCallback_ = std::move(cb); }
+    // An event of the player's own movement as the client handles it for the
+    // unit it moves (0x00741xxx): the opcode, and the movement flags and
+    // whether it had been launched (a jump's vertical speed) before it.
+    using MoverEventCallback = std::function<void(Opcode op, uint32_t flagsBefore, bool launchedBefore)>;
+    void setMoverEventCallback(MoverEventCallback cb) { moverEventCallback_ = std::move(cb); }
 
     // SMSG_CAMERA_SHAKE: its SpellEffectCameraShakes and SoundEntries ids.
     using CameraShakeCallback = std::function<void(uint32_t spellEffectCameraShakesId, uint32_t soundId)>;
@@ -2096,10 +2089,6 @@ public:
     /// 0x0070bac0).
     using GameObjectInteractionCallback = std::function<void(uint64_t guid, bool open)>;
     void setGameObjectInteractionCallback(GameObjectInteractionCallback cb) { gameObjectInteractionCallback_ = std::move(cb); }
-
-    // Sprint aura callback - fired when sprint-type aura active state changes on player
-    using SprintAuraCallback = std::function<void(bool active)>;
-    void setSprintAuraCallback(SprintAuraCallback cb) { sprintAuraCallback_ = std::move(cb); }
 
     // Faction hostility map (populated from FactionTemplate.dbc by Application)
     void setFactionHostileMap(std::unordered_map<uint32_t, bool> map) { factionHostileMap_ = std::move(map); }
@@ -3687,9 +3676,6 @@ public:
     using ItemLootCallback = std::function<void(uint32_t itemId, uint32_t count, uint32_t quality, const std::string& name)>;
     void setItemLootCallback(ItemLootCallback cb) { itemLootCallback_ = std::move(cb); }
 
-    // Loot window open/close callback (for loot kneel animation)
-    using LootWindowCallback = std::function<void(bool open)>;
-    void setLootWindowCallback(LootWindowCallback cb) { lootWindowCallback_ = std::move(cb); }
 
     // Quest turn-in completion callback
     using QuestCompleteCallback = std::function<void(uint32_t questId, const std::string& questTitle)>;
@@ -4644,7 +4630,7 @@ public:
     auto& hitReactionCallbackRef() { return hitReactionCallback_; }
     auto& itemLootCallbackRef() { return itemLootCallback_; }
     auto& knockBackCallbackRef() { return knockBackCallback_; }
-    auto& lootWindowCallbackRef() { return lootWindowCallback_; }
+    auto& moverEventCallbackRef() { return moverEventCallback_; }
     auto& meleeSwingCallbackRef() { return meleeSwingCallback_; }
     auto& spellCastBeginCallbackRef() { return spellCastBeginCallback_; }
     auto& unitAttackSwingCallbackRef() { return unitAttackSwingCallback_; }
@@ -4667,7 +4653,6 @@ public:
     auto& otherPlayerMountCallbackRef() { return otherPlayerMountCallback_; }
     auto& playerDespawnCallbackRef() { return playerDespawnCallback_; }
     auto& playerEquipmentCallbackRef() { return playerEquipmentCallback_; }
-    auto& playerHealthCallbackRef() { return playerHealthCallback_; }
     auto& playerSpawnCallbackRef() { return playerSpawnCallback_; }
     auto& corpseSpawnCallbackRef() { return corpseSpawnCallback_; }
     auto& corpseLootableCallbackRef() { return corpseLootableCallback_; }
@@ -4677,9 +4662,6 @@ public:
     auto& repChangeCallbackRef() { return repChangeCallback_; }
     auto& spellCastAnimCallbackRef() { return spellCastAnimCallback_; }
     auto& spellCastFailedCallbackRef() { return spellCastFailedCallback_; }
-    auto& sprintAuraCallbackRef() { return sprintAuraCallback_; }
-    auto& stealthStateCallbackRef() { return stealthStateCallback_; }
-    auto& stunStateCallbackRef() { return stunStateCallback_; }
     auto& taxiFlightStartCallbackRef() { return taxiFlightStartCallback_; }
     auto& taxiOrientationCallbackRef() { return taxiOrientationCallback_; }
     auto& playerPositionCorrectionCallbackRef() { return playerPositionCorrectionCallback_; }
@@ -5454,6 +5436,7 @@ private:
 
     WorldEntryCallback worldEntryCallback_;
     KnockBackCallback knockBackCallback_;
+    MoverEventCallback moverEventCallback_;
     MoverStopCallback moverStopCallback_;
     CameraShakeCallback cameraShakeCallback_;
     PlayerSoundCallback playerSoundCallback_;
@@ -5498,7 +5481,6 @@ private:
     bool interactionWindowOpen(uint64_t guid);
     /// Closes one of them, as 0x00512e60 does.
     void closeInteractionWindow(go_interaction::Window window);
-    SprintAuraCallback sprintAuraCallback_;
 
     // Transport tracking
     std::unordered_map<uint64_t, TransportAttachment> transportAttachments_;
@@ -6109,9 +6091,6 @@ private:
     UnitMoveFlagsCallback unitMoveFlagsCallback_;
     NpcSwingCallback npcSwingCallback_;
     HitReactionCallback hitReactionCallback_;
-    StunStateCallback stunStateCallback_;
-    StealthStateCallback stealthStateCallback_;
-    PlayerHealthCallback playerHealthCallback_;
     NpcGreetingCallback npcGreetingCallback_;
     NpcFarewellCallback npcFarewellCallback_;
     NpcVendorCallback npcVendorCallback_;
@@ -6255,7 +6234,6 @@ private:
     ItemLootCallback itemLootCallback_;
 
     // ---- Loot window callback ----
-    LootWindowCallback lootWindowCallback_;
 
     // ---- Quest completion callback ----
     QuestCompleteCallback questCompleteCallback_;

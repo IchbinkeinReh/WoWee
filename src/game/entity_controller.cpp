@@ -1236,29 +1236,11 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                     pendingEvents_.emit((val & 0x800u) ? "PET_ATTACK_START" : "PET_ATTACK_STOP", {});
                 }
             }
-            // Detect stun state change on local player
-            constexpr uint32_t UNIT_FLAG_STUNNED = 0x00040000;
-            if (block.guid == owner_.getPlayerGuid() && owner_.stunStateCallbackRef()) {
-                bool wasStunned = (oldFlags & UNIT_FLAG_STUNNED) != 0;
-                bool nowStunned = (val & UNIT_FLAG_STUNNED) != 0;
-                // The server stuns the player for the logout countdown, to root them
-                // in place - it sits them down in the same breath. That is a movement
-                // restriction, not a stun: playing the stun animation over it leaves
-                // the character slumped rather than seated. Clearing the flag is still
-                // honoured, so a cancelled logout recovers.
-                if (nowStunned && owner_.isLoggingOut()) {
-                    nowStunned = false;
-                }
-                if (wasStunned != nowStunned) {
-                    owner_.stunStateCallbackRef()(nowStunned);
-                }
-            }
         }
         else if (ufi.auraState != 0xFFFF && key == ufi.auraState) {
             unit->setAuraState(val);
         }
         else if (ufi.bytes1 != 0xFFFF && key == ufi.bytes1) {
-            const uint8_t oldVisibilityFlags = unit->getVisibilityFlags();
             const uint8_t newVisibilityFlags = static_cast<uint8_t>((val >> 16) & 0xFF);
             unit->setVisibilityFlags(newVisibilityFlags);
 
@@ -1273,12 +1255,6 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             }
 
             if (block.guid == owner_.getPlayerGuid()) {
-                const bool wasStealthed = (oldVisibilityFlags & UNIT_VIS_FLAG_CREEP) != 0;
-                const bool nowStealthed = (newVisibilityFlags & UNIT_VIS_FLAG_CREEP) != 0;
-                if (wasStealthed != nowStealthed && owner_.stealthStateCallbackRef()) {
-                    owner_.stealthStateCallbackRef()(nowStealthed);
-                }
-
                 // Before WotLK. WotLK keeps the form in UNIT_FIELD_BYTES_2
                 // byte 3 (applyPlayerShapeshiftForm); this byte is not it.
                 uint8_t newForm = static_cast<uint8_t>((val >> 24) & 0xFF);
@@ -1508,11 +1484,6 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 // (0x00722c50 -> 0x0053d1b0), not from the field.
             }
         }
-    }
-
-    // Fire player health callback for wounded-idle animation
-    if (result.healthChanged && block.guid == owner_.getPlayerGuid() && owner_.playerHealthCallbackRef()) {
-        owner_.playerHealthCallbackRef()(unit->getHealth(), unit->getMaxHealth());
     }
 
     // The pet frame's experience bar reads GetPetExperience and redraws on

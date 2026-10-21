@@ -50,7 +50,8 @@ bool isRangedHold(uint32_t b) {
 // 0x0071c720: hovering, swimming or flying - no shuffling round there.
 bool levitates(const ub::Unit& u) { return u.hovering || (u.moveFlags & ub::kMoveSwimOrFly) != 0; }
 
-constexpr uint32_t kMoveBackward = 0x2, kMoveStrafeLeft = 0x4, kMoveTurnLeft = 0x10, kMoveFallingFar = 0x2000;
+constexpr uint32_t kMoveBackward = 0x2, kMoveStrafeLeft = 0x4, kMoveTurnLeft = 0x10, kMoveFallingFar = 0x2000,
+                   kMoveFlying = 0x2000000, kJumpStart = 37, kJump = 38;
 
 }  // namespace
 
@@ -203,6 +204,13 @@ Pick pick(const anim::AnimationDataTable& data, const ub::Unit& unit, const Play
 std::optional<Pick> afterOneShot(const anim::AnimationDataTable& data, const ub::Unit& unit, uint32_t ended) {
     const uint32_t st = unit.standState;
     switch (data.behavior(ended)) {
+        // A jump's start into its loop, the loop on - not in flight, which
+        // takes its locomotion; a fall on.
+        case kJumpStart:
+        case kJump:
+            if ((unit.moveFlags & kMoveFlying) == 0) return Pick{kJump, true};
+            break;
+        case kFall: return Pick{kFall, true};
         case kSitGroundDown:
         case kSitGround:
             return st != 1 ? Pick{kSitGroundUp, false} : Pick{kSitGround, true};

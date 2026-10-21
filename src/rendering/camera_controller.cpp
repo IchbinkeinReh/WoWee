@@ -3293,15 +3293,6 @@ void CameraController::update(float deltaTime) {
         }
     }
 
-    bool hasMoveInput = nowForward || nowBackward || nowStrafeLeft || nowStrafeRight;
-    if (useWoWSpeed) {
-        // "Sprinting" flag drives run animation/stronger footstep set.
-        // In WoW mode this means running pace (not walk/backpedal), not Shift.
-        runPace = hasMoveInput && !walkMode_ && !nowBackward;
-    } else {
-        runPace = hasMoveInput && shiftDown;
-    }
-
     // Get camera axes - project forward onto XY plane for walking
     glm::vec3 forward3D = camera->getForward();
     // In water the camera always steers, moving or turning, the way holding the
@@ -3314,6 +3305,7 @@ void CameraController::update(float deltaTime) {
     // happened to be left. Retail turns the swimmer to the camera and swims
     // them where they look.
     //
+    const bool hasMoveInput = nowForward || nowBackward || nowStrafeLeft || nowStrafeRight;
     // Only while there is movement input. Treading on the spot and orbiting the
     // camera to look around should not spin the character on the water.
     // steering_ is the touch controls saying a finger is dragging the view.
@@ -4219,10 +4211,6 @@ void CameraController::clearMovementInputs() {
     turningLeftActive = false;
     turningRightActive = false;
     autoRunning = false;
-}
-
-bool CameraController::isSprinting() const {
-    return enabled && camera && runPace;
 }
 
 void CameraController::triggerMountJump() {

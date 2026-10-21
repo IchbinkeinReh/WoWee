@@ -1310,7 +1310,6 @@ void InventoryHandler::closeLoot() {
         owner_.getSocket()->send(packet);
     }
     lootWindowOpen_ = false;
-    if (owner_.lootWindowCallbackRef()) owner_.lootWindowCallbackRef()(false);
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LOOT_CLOSED", {});
     // Do NOT locally despawn a gather node on loot-close. Node lifetime is
     // server-authoritative: a mineral vein / herb can still hold charges for another
@@ -1344,7 +1343,6 @@ void InventoryHandler::handleLootResponse(network::Packet& packet) {
         return;
     }
     lootWindowOpen_ = true;
-    if (owner_.lootWindowCallbackRef()) owner_.lootWindowCallbackRef()(true);
     if (owner_.addonEventCallbackRef()) {
         // Carries whether this loot is being taken automatically. The loot
         // frame reads it on the path where it could not show itself, and
@@ -1422,7 +1420,6 @@ void InventoryHandler::handleLootReleaseResponse(network::Packet& packet) {
     const uint64_t lootGuid = currentLoot_.lootGuid;
     localLootState_.erase(lootGuid);
     lootWindowOpen_ = false;
-    if (owner_.lootWindowCallbackRef()) owner_.lootWindowCallbackRef()(false);
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LOOT_CLOSED", {});
     // Node lifetime is server-authoritative - see closeLoot(). The server despawns a
     // depleted gather node via SMSG_DESTROY_OBJECT; don't predict it here or a node the
