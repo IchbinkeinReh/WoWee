@@ -2885,10 +2885,16 @@ void registerUnitLuaAPI(lua_State* L) {
                                 gh->getPartyData().leaderGuid == guid) ? 1 : 0);
             return 1;
         }},
+                // Whether the token names a corpse object (0x0060c6f0: the
+                // object of type mask 0x80), not whether a unit is dead
+                // (game::isCorpseObject).
                 {"UnitIsCorpse", [](lua_State* L) -> int {
-            const char* uid = luaL_optstring(L, 1, "player");
-            auto* unit = resolveUnit(L, uid);
-            lua_pushboolean(L, (unit && unit->getHealth() == 0) ? 1 : 0);
+            auto* gh = getGameHandler(L);
+            std::string uid(luaL_optstring(L, 1, "player"));
+            toLowerInPlace(uid);
+            const uint64_t guid = gh ? resolveUnitGuid(gh, uid) : 0;
+            const auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
+            lua_pushboolean(L, game::isCorpseObject(entity.get()) ? 1 : 0);
             return 1;
         }},
                 // Whether the first unit may help the second: 0x0060d690

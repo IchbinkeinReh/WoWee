@@ -1140,6 +1140,16 @@ inline std::string entityDisplayName(const std::shared_ptr<Entity>& entity) {
 /**
  * Entity manager for tracking all entities in view
  */
+/// UnitIsCorpse's answer (0x0060c6f0): whether the object a unit token names
+/// is a corpse object (TYPEMASK_CORPSE, 0x80) - a dead player's corpse, not a
+/// dead creature. A creature that died stays a unit; asked by health, every
+/// dead mob came out a corpse and TargetFrame_CheckLevel drew it a skull in
+/// place of its level, which showed whenever the frame checked the level of
+/// one already dead (logging in beside it, or targeting it again).
+inline bool isCorpseObject(const Entity* e) {
+    return e != nullptr && e->getType() == ObjectType::CORPSE;
+}
+
 class EntityManager {
 public:
     // Add entity

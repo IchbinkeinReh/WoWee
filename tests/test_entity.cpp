@@ -820,3 +820,23 @@ TEST_CASE("A move on a transport goes where the transport takes its ends (0x0098
     CHECK(f.getX() == 1.0f);
     CHECK_FALSE(f.isEntityMoving());
 }
+
+TEST_CASE("UnitIsCorpse: a dead creature is a unit, not a corpse", "[entity]") {
+    // Logged in beside a mob already dead: its create block has health 0 and
+    // the dead and lootable dynamic flags. TargetFrame_CheckLevel shows the
+    // skull for UnitIsCorpse, so this must be false and the level shown.
+    Unit mob(0xF130000001000001ull);
+    mob.setMaxHealth(100);
+    mob.setHealth(0);
+    mob.setDynamicFlags(UNIT_DYNFLAG_DEAD | UNIT_DYNFLAG_LOOTABLE);
+    mob.setLevel(12);
+    REQUIRE(isUnitCorpseState(mob.getHealth(), mob.getMaxHealth(), mob.getDynamicFlags()));
+    REQUIRE_FALSE(isCorpseObject(&mob));
+    REQUIRE(mob.getLevel() == 12);
+
+    // A player's corpse object is one.
+    Entity corpse(0xF101000000000001ull);
+    corpse.setType(ObjectType::CORPSE);
+    REQUIRE(isCorpseObject(&corpse));
+    REQUIRE_FALSE(isCorpseObject(nullptr));
+}
