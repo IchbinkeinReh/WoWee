@@ -2664,6 +2664,10 @@ struct SpellGoData {
     uint32_t missileDelayMs = 0;
     /// Target flag 0x80000's places, as read (WotLK only).
     std::vector<SpellGoExtraTarget> extraTargets;
+    /// Target flag 0x40's byte: where it is not 0, the caster's count of casts
+    /// at a place, which SMSG_NOTIFY_DEST_LOC_SPELL_CAST is then not played
+    /// again for (0x0080e100).
+    uint8_t destLocationCounter = 0;
 
     [[nodiscard]] bool isValid() const { return spellId != 0; }
 };
@@ -2672,6 +2676,32 @@ class SpellGoParser {
 public:
     static bool parse(network::Packet& packet, SpellGoData& data);
 };
+
+/// SMSG_NOTIFY_DEST_LOC_SPELL_CAST: a cast at a place, 0x40 bytes the client
+/// copies as they are (0x00810050) and plays as 0x008022d0 does. Points are
+/// server coordinates.
+struct NotifyDestLocSpellCastData {
+    uint64_t caster = 0;        ///< +0x00: the missile's caster, and the key of its count
+    uint64_t casterObject = 0;  ///< +0x08: handed to the area kits
+    uint32_t spellId = 0;       ///< +0x10
+    float source[3] = {};       ///< +0x14: where the missile leaves from
+    float dest[3] = {};         ///< +0x20: where it lands, and the area kits play
+    float elevation = 0.0f;     ///< +0x2c
+    float speed = 0.0f;         ///< +0x30: above 0, the missile flies an arc at this speed
+    uint32_t delayMs = 0;       ///< +0x34: when that arc lands, or the ImpactAreaKit plays, from now
+    uint8_t counter = 0;        ///< +0x38: the caster's count of such casts
+    uint8_t castCount = 0;      ///< +0x39: the missile's cast count
+};
+bool parseNotifyDestLocSpellCast(network::Packet& packet, NotifyDestLocSpellCastData& data);
+
+/// SMSG_SET_PROJECTILE_POSITION (0x008005a0): the caster's full guid, the
+/// cast count, and the point its missiles stop at, server coordinates.
+struct ProjectilePositionData {
+    uint64_t caster = 0;
+    uint8_t castCount = 0;
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+};
+bool parseProjectilePosition(network::Packet& packet, ProjectilePositionData& data);
 
 /** SMSG_AURA_UPDATE / SMSG_AURA_UPDATE_ALL data */
 struct AuraUpdateData {

@@ -76,6 +76,12 @@ public:
     void playSpellAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact,
                            uint32_t spellId = 0, uint64_t casterGuid = 0, float speed = 0.0f,
                            const std::optional<glm::vec3>& casterPosition = std::nullopt);
+    /// The same two kits for a cast another client saw and this one only
+    /// hears of (SMSG_NOTIFY_DEST_LOC_SPELL_CAST, 0x008022d0): the
+    /// ImpactAreaKit, unless a missile carries it, `impactDelayMs` after now
+    /// as the packet times it.
+    void playDestinationAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact,
+                                 uint32_t spellId, uint64_t casterGuid, uint32_t impactDelayMs);
 
     // Launch a physical weapon projectile (arrow, bullet, or thrown item)
     // without invoking the spell visual pipeline.
@@ -115,11 +121,14 @@ public:
 
     /// What an ADJUST_MISSILE cast (flag 0x20000) hands its missile: the
     /// elevation and flight time from SMSG_SPELL_GO and the spell's
-    /// SpellMissile row, which put it on an arc (0x00700880).
+    /// SpellMissile row, which put it on an arc (0x00700880). `castSpeed` is
+    /// the speed the arc is timed by first (+0x11c): none for SMSG_SPELL_GO's
+    /// casts of others, SMSG_NOTIFY_DEST_LOC_SPELL_CAST's own (0x008022d0).
     struct MissileTrajectory {
         float elevation = 0.0f;
         float flightSeconds = 0.0f;
         uint32_t spellMissileId = 0;
+        float castSpeed = 0.0f;
     };
 
     /// Launch the visual's missile from `from` to `to` at `speed` yards per
@@ -127,9 +136,18 @@ public:
     /// plays on each of `impacts` - the client plays them then, not at
     /// SMSG_SPELL_GO (FUN_00700e20). False when nothing was launched (no
     /// missile, no speed, no model), so the caller plays the impacts itself.
+    /// `casterGuid` and `castCount` name the missile as the client keeps it
+    /// (+0, +0x20) for SMSG_SET_PROJECTILE_POSITION.
     bool launchSpellMissile(uint32_t visualId, float speed, const MissileEnd& from,
                             const MissileEnd& to, std::vector<MissileEnd> impacts,
-                            const MissileTrajectory* trajectory = nullptr, uint32_t spellId = 0);
+                            const MissileTrajectory* trajectory = nullptr, uint32_t spellId = 0,
+                            uint64_t casterGuid = 0, uint8_t castCount = 0);
+
+    /// SMSG_SET_PROJECTILE_POSITION (0x008005a0): the missiles of this
+    /// caster's cast stop at `point` - each lands where it is once a step
+    /// would take it further from there than it is (0x006ff2c0, 0x006fc290,
+    /// flag 0x400000 in 0x007015d0).
+    void setProjectilePosition(uint64_t casterGuid, uint8_t castCount, const glm::vec3& point);
 
     /// Whether the unit drawn by a CharacterRenderer instance holds a kit's
     /// weapon effects - its CreatureModelData +4 lacks 0x10 (0x0073a6c0,
@@ -582,6 +600,11 @@ private:
     std::unordered_map<uint64_t, int32_t> unitChainCounters_;
     /// A kit's camera shake where it plays (0x0073b140, 0x006f9840).
     void playKitShake(uint32_t kitId, const glm::vec3& origin);
+    /// playSpellAreaKits and playDestinationAreaKits: the ImpactAreaKit
+    /// timed `impactDelayMs` from now where there is a delay, at once where
+    /// there is none.
+    void playAreaKits(uint32_t visualId, const glm::vec3& place, bool missileCarriesImpact, uint32_t spellId,
+                      uint64_t casterGuid, std::optional<uint32_t> impactDelayMs);
     /// A kit's colour fade (CharProc 13) on the unit drawn by an instance,
     /// and its light tint (CharProc 6), for its spell.
     void playKitColourFade(uint32_t kitId, uint32_t renderInstanceId, uint32_t spellId);
@@ -833,6 +856,12 @@ private:
         float elapsed = 0.0f;
         float maxLifetime = 0.0f;
         uint32_t soundHandle = 0;  // its MissileSound, looping where it flies
+        // Whose cast it is (+0, +0x20), and where SMSG_SET_PROJECTILE_POSITION
+        // stops it (+0x14c, flag 0x400000).
+        uint64_t casterGuid = 0;
+        uint8_t castCount = 0;
+        bool hasStop = false;
+        glm::vec3 stopPoint{0.0f};
         // An ADJUST_MISSILE cast's flight, planned at launch from `arcStart`.
         bool adjusted = false;
         spell_missile::MissileArc arc;

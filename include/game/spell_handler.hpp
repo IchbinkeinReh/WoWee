@@ -490,6 +490,19 @@ private:
     /// SMSG_SPELL_UPDATE_CHAIN_TARGETS (0x00800470): a cast's targets
     /// changed while its chains run.
     void handleSpellUpdateChainTargets(network::Packet& packet);
+    /// SMSG_NOTIFY_DEST_LOC_SPELL_CAST (0x00810050, 0x008022d0): a cast at a
+    /// place played as SMSG_SPELL_GO plays one, unless its caster's count says
+    /// this client has played it already.
+    void handleNotifyDestLocSpellCast(network::Packet& packet);
+    /// The caster's last count of casts at a place, held ten seconds
+    /// (0x0080e100): from SMSG_SPELL_GO's target flag 0x40 byte and from
+    /// SMSG_NOTIFY_DEST_LOC_SPELL_CAST.
+    struct DestLocationCount {
+        uint8_t counter = 0;
+        int64_t expiresMs = 0;
+    };
+    std::unordered_map<uint64_t, DestLocationCount> destLocationCounts_;
+    void rememberDestLocationCount(uint64_t caster, uint8_t counter);
     void handleSpellCooldown(network::Packet& packet);
     void handleCooldownEvent(network::Packet& packet);
     void handleAuraUpdate(network::Packet& packet, bool isAll);

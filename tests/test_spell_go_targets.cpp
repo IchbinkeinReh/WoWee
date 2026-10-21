@@ -316,3 +316,60 @@ TEST_CASE("an object's frame turns with its facing", "[spell_go]") {
     CHECK(side.x == Catch::Approx(5.0f));
     CHECK(side.y == Catch::Approx(7.0f));
 }
+
+TEST_CASE("a ground cast's counter byte is kept", "[spell_go]") {
+    auto p = spellGoHead(42208);
+    p.writeUInt32(0x40);  // DEST_LOCATION
+    p.writePackedGuid(0);
+    p.writeFloat(1.0f); p.writeFloat(2.0f); p.writeFloat(3.0f);
+    p.writeUInt8(7);  // the caster's count of casts at a place (0x0080e100)
+    SpellGoData data;
+    REQUIRE(SpellGoParser::parse(p, data));
+    CHECK(data.destLocationCounter == 7);
+}
+
+TEST_CASE("SMSG_NOTIFY_DEST_LOC_SPELL_CAST is the client's 0x40 bytes", "[spell_go][dest_loc]") {
+    wowee::network::Packet p(0);
+    p.writeUInt64(kCaster);
+    p.writeUInt64(kTarget);
+    p.writeUInt32(42208);
+    for (float v : {1.0f, 2.0f, 3.0f, -10.0f, 20.0f, 30.0f}) p.writeFloat(v);
+    p.writeFloat(0.5f);    // elevation
+    p.writeFloat(18.0f);   // speed
+    p.writeUInt32(1500);   // delay
+    p.writeUInt8(9);       // counter
+    p.writeUInt8(4);       // cast count
+    for (int i = 0; i < 6; ++i) p.writeUInt8(0);
+    REQUIRE(p.getSize() == 0x40);
+    NotifyDestLocSpellCastData d;
+    REQUIRE(parseNotifyDestLocSpellCast(p, d));
+    CHECK(d.caster == kCaster);
+    CHECK(d.casterObject == kTarget);
+    CHECK(d.spellId == 42208);
+    CHECK(d.source[2] == 3.0f);
+    CHECK(d.dest[0] == -10.0f);
+    CHECK(d.dest[2] == 30.0f);
+    CHECK(d.elevation == 0.5f);
+    CHECK(d.speed == 18.0f);
+    CHECK(d.delayMs == 1500);
+    CHECK(d.counter == 9);
+    CHECK(d.castCount == 4);
+    CHECK_FALSE(p.hasData());
+
+    wowee::network::Packet shortPacket(0);
+    shortPacket.writeUInt64(kCaster);
+    CHECK_FALSE(parseNotifyDestLocSpellCast(shortPacket, d));
+}
+
+TEST_CASE("SMSG_SET_PROJECTILE_POSITION: caster, cast count, point", "[spell_go][projectile]") {
+    wowee::network::Packet p(0);
+    p.writeUInt64(kCaster);
+    p.writeUInt8(3);
+    p.writeFloat(5.0f); p.writeFloat(6.0f); p.writeFloat(7.0f);
+    ProjectilePositionData d;
+    REQUIRE(parseProjectilePosition(p, d));
+    CHECK(d.caster == kCaster);
+    CHECK(d.castCount == 3);
+    CHECK(d.x == 5.0f);
+    CHECK(d.z == 7.0f);
+}

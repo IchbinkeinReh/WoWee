@@ -637,12 +637,15 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
     case sm::Targeting::EachTarget: {
         for (uint64_t guid : data.hitTargets) {
             MissileEnd to;
-            if (unitEnd(guid, to) && svs->launchSpellMissile(visualId, speed, from, to, {to}, trajectory, data.spellId))
+            if (unitEnd(guid, to) && svs->launchSpellMissile(visualId, speed, from, to, {to}, trajectory,
+                                                             data.spellId, data.casterUnit, data.castCount))
                 carried.push_back(guid);
         }
         for (const auto& miss : data.missTargets) {
             MissileEnd to;
-            if (unitEnd(miss.targetGuid, to)) svs->launchSpellMissile(visualId, speed, from, to, {}, trajectory, data.spellId);
+            if (unitEnd(miss.targetGuid, to))
+                svs->launchSpellMissile(visualId, speed, from, to, {}, trajectory, data.spellId, data.casterUnit,
+                                        data.castCount);
         }
         break;
     }
@@ -670,7 +673,8 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
         }
         // 0x00700e20: and at the point it flies to, whatever it hit.
         impacts.push_back(to);
-        if (svs->launchSpellMissile(visualId, speed, from, to, std::move(impacts), trajectory, data.spellId)) {
+        if (svs->launchSpellMissile(visualId, speed, from, to, std::move(impacts), trajectory, data.spellId,
+                                    data.casterUnit, data.castCount)) {
             carried = data.hitTargets;
             if (flewToPlace) *flewToPlace = true;
         }
@@ -680,6 +684,64 @@ std::vector<uint64_t> SpellHandler::launchSpellMissiles(const SpellGoData& data,
         break;
     }
     return carried;
+}
+
+void SpellHandler::rememberDestLocationCount(uint64_t caster, uint8_t counter) {
+    const int64_t now = historyNowMs();
+    // 0x0080e100 keeps it ten seconds.
+    std::erase_if(destLocationCounts_, [now](const auto& e) { return e.second.expiresMs <= now; });
+    destLocationCounts_[caster] = {counter, now + 10000};
+}
+
+void SpellHandler::handleNotifyDestLocSpellCast(network::Packet& packet) {
+    NotifyDestLocSpellCastData d;
+    if (!parseNotifyDestLocSpellCast(packet, d)) {
+        packet.skipAll();
+        return;
+    }
+    // 0x00810050: a caster's count no newer than the one kept is a cast
+    // already played; a newer one is kept. A cast with no caster is played.
+    if (d.caster != 0) {
+        const auto it = destLocationCounts_.find(d.caster);
+        if (it != destLocationCounts_.end() && it->second.expiresMs > historyNowMs() &&
+            static_cast<int8_t>(d.counter - it->second.counter) < 1)
+            return;
+        rememberDestLocationCount(d.caster, d.counter);
+    }
+    const uint32_t visualId = resolveSpellVisualId(d.spellId);
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    if (visualId == 0 || !svs) return;
+    const auto place = [](const float* p) {
+        return core::coords::canonicalToRender(core::coords::serverToCanonical(glm::vec3(p[0], p[1], p[2])));
+    };
+    const glm::vec3 to = place(d.dest);
+    // 0x008022d0: a visual with a missile and a spell with a speed fly the
+    // missile from the source to the place - on an arc where the packet
+    // gives a speed of its own, landing its delay from now - and the missile
+    // carries the ImpactAreaKit there.
+    loadSpellNameCache();
+    const auto spellIt = owner_.spellNameCacheRef().find(d.spellId);
+    const float speed = spellIt != owner_.spellNameCacheRef().end() ? spellIt->second.missileSpeed : 0.0f;
+    bool flew = false;
+    if (speed > 0.0f && svs->findMissileVisual(visualId)) {
+        using SVS = rendering::SpellVisualSystem;
+        SVS::MissileTrajectory trajectory;
+        const bool onArc = d.speed > 0.0f;
+        if (onArc) {
+            trajectory.elevation = d.elevation;
+            trajectory.castSpeed = d.speed;
+            trajectory.flightSeconds = static_cast<float>(d.delayMs) * 0.001f;
+            trajectory.spellMissileId = spellIt->second.spellMissileId;
+        }
+        // Aimed at the place alone (no target, +8 cleared), so no unit's
+        // impact kit waits for it.
+        flew = svs->launchSpellMissile(visualId, speed, SVS::MissileEnd{0, place(d.source)}, SVS::MissileEnd{0, to},
+                                       {}, onArc ? &trajectory : nullptr, d.spellId, d.caster, d.castCount);
+    }
+    // The InstantAreaKit now; the ImpactAreaKit the delay from now where no
+    // missile carries it.
+    svs->playDestinationAreaKits(visualId, to, flew, d.spellId, d.casterObject, d.delayMs);
 }
 
 SpellHandler::SpellHandler(GameHandler& owner)
@@ -766,6 +828,22 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_CAST_FAILED] = [this](network::Packet& packet) { handleCastFailed(packet); };
     table[Opcode::SMSG_SPELL_START] = [this](network::Packet& packet) { handleSpellStart(packet); };
     table[Opcode::SMSG_SPELL_GO] = [this](network::Packet& packet) { handleSpellGo(packet); };
+    table[Opcode::SMSG_NOTIFY_DEST_LOC_SPELL_CAST] = [this](network::Packet& packet) {
+        handleNotifyDestLocSpellCast(packet);
+    };
+    // 0x008005a0: the missiles of a cast stop at a point.
+    table[Opcode::SMSG_SET_PROJECTILE_POSITION] = [this](network::Packet& packet) {
+        ProjectilePositionData d;
+        if (!parseProjectilePosition(packet, d)) {
+            packet.skipAll();
+            return;
+        }
+        auto* renderer = owner_.services().renderer;
+        if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr)
+            svs->setProjectilePosition(d.caster, d.castCount,
+                                       core::coords::canonicalToRender(
+                                           core::coords::serverToCanonical(glm::vec3(d.x, d.y, d.z))));
+    };
     table[Opcode::SMSG_SPELL_UPDATE_CHAIN_TARGETS] = [this](network::Packet& packet) {
         handleSpellUpdateChainTargets(packet);
     };
@@ -3699,6 +3777,8 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     if (!owner_.getPacketParsers()->parseSpellGo(packet, data)) return;
     noteMissileInFlight(data);
     if (isActiveExpansion("wotlk")) owner_.combatLogFeed().castGo(data);
+    if ((data.targetFlags & 0x40u) && data.destLocationCounter != 0)
+        rememberDestLocationCount(data.casterUnit, data.destLocationCounter);
     const bool rangedWeaponAttack = spellclass::isRangedWeaponAutoAttack(data.spellId);
     if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, true);
     // 0x00805330 for a cast that had no start (instant), as for one that had.

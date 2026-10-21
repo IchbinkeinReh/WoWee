@@ -257,7 +257,7 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
     // Target flag 0x40: a byte the client keeps by the caster (0x0080e100).
     if (data.targetFlags & 0x40u) {
         if (!packet.hasRemaining(1)) return true;
-        packet.readUInt8();
+        data.destLocationCounter = packet.readUInt8();
     }
     // Target flag 0x80000: a u32 count, then each a place (three floats) and
     // the u64 of what it is relative to, 0 for the world.
@@ -277,6 +277,32 @@ bool SpellGoParser::parse(network::Packet& packet, SpellGoData& data) {
 
     LOG_DEBUG("Spell go: spell=", data.spellId, " hits=", static_cast<int>(data.hitCount),
              " misses=", static_cast<int>(data.missCount));
+    return true;
+}
+
+bool parseNotifyDestLocSpellCast(network::Packet& packet, NotifyDestLocSpellCastData& data) {
+    if (!packet.hasRemaining(0x40)) return false;
+    data.caster = packet.readUInt64();
+    data.casterObject = packet.readUInt64();
+    data.spellId = packet.readUInt32();
+    for (float& v : data.source) v = packet.readFloat();
+    for (float& v : data.dest) v = packet.readFloat();
+    data.elevation = packet.readFloat();
+    data.speed = packet.readFloat();
+    data.delayMs = packet.readUInt32();
+    data.counter = packet.readUInt8();
+    data.castCount = packet.readUInt8();
+    for (int i = 0; i < 6; ++i) (void)packet.readUInt8();  // the struct's padding to 0x40
+    return true;
+}
+
+bool parseProjectilePosition(network::Packet& packet, ProjectilePositionData& data) {
+    if (!packet.hasRemaining(8 + 1 + 12)) return false;
+    data.caster = packet.readUInt64();
+    data.castCount = packet.readUInt8();
+    data.x = packet.readFloat();
+    data.y = packet.readFloat();
+    data.z = packet.readFloat();
     return true;
 }
 
