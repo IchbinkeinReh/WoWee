@@ -111,8 +111,7 @@ int luaReturnNothing(lua_State* L) { (void)L; return 0; }
 /// dialog names the role it found you a group for, and a static in this file
 /// was not somewhere GetLFGProposal could reach.
 uint8_t offeredRoles(game::GameHandler* gh) {
-    const uint8_t roles = gh ? gh->getLfgOfferedRoles() : 0;
-    return roles ? roles : 0x01;   // "player" is always set
+    return gh ? gh->getLfgOfferedRoles() : 0;
 }
 
 /// Build the ordered id list one side of the panel shows: a header, then the
@@ -330,8 +329,8 @@ void registerLfgLuaAPI(lua_State* L) {
         if (id != 0) collapsedHeaders()[id] = lua_toboolean(L, 2) != 0;
         return 0;
     }},
-    // ClearLFGDungeon(type, id) (0x00559500 -> 0x005593a0): one dungeon taken
-    // out of what is picked - a type the client knows (under 7) and an id
+    // ClearLFGDungeon(type, id) (0x00559500 -> 0x005593a0): one slot taken out
+    // of the local join record - a type the client knows (under 7) and an id
     // LFGDungeons.dbc has.
     {"ClearLFGDungeon", [](lua_State* L) -> int {
         if (!lua_isnumber(L, 1) && !lua_isnumber(L, 2)) {
@@ -343,31 +342,40 @@ void registerLfgLuaAPI(lua_State* L) {
         if (!gh || type < 0 || type >= 7) return 0;
         for (const auto& d : gh->getLfgDungeons()) {
             if (static_cast<int64_t>(d.id) != id) continue;
-            enabledDungeons().erase(static_cast<int>(id));
+            gh->lfgRemoveSlot((static_cast<uint32_t>(id) & 0x00FFFFFFu) |
+                              (static_cast<uint32_t>(type) << 24));
             break;
         }
         return 0;
     }},
+    // ClearAllLFGDungeons() (0x005595d0 -> 0x00559340).
     {"ClearAllLFGDungeons", [](lua_State* L) -> int {
-        (void)L;
-        enabledDungeons().clear();
+        if (auto* gh = getGameHandler(L)) gh->lfgClearSlots();
         return 0;
     }},
-    // Picking the single dungeon a "specific" queue is for.
+    // SetLFGDungeon(id) (0x00559f50 -> 0x00559b70): the dungeon's slot - its
+    // LFGDungeons type in the top byte - added to the local join record.
+    // FrameXML calls it once per dungeon ticked, after ClearAllLFGDungeons.
     {"SetLFGDungeon", [](lua_State* L) -> int {
-        const int id = static_cast<int>(luaL_optinteger(L, 1, 0));
-        enabledDungeons().clear();
-        if (id != 0) enabledDungeons()[id] = true;
+        if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetLFGDungeon(type)");
+        auto* gh = getGameHandler(L);
+        if (!gh) return 0;
+        const uint32_t id = static_cast<uint32_t>(std::llround(lua_tonumber(L, 1)));
+        for (const auto& d : gh->getLfgDungeons()) {
+            if (d.id != id) continue;
+            gh->lfgAddSlot((d.typeId << 24) | (id & 0x00FFFFFFu));
+            break;
+        }
         return 0;
     }},
 
     // ---- Roles ----
 
-    // GetLFGRoles() → leader, tank, healer, damage. The client keeps the three
-    // role flags; nobody here is a leader of an LFG group that does not exist.
+    // GetLFGRoles() → leader, tank, healer, damage: the four role bits as
+    // SetLFGRoles kept them.
     {"GetLFGRoles", [](lua_State* L) -> int {
         const uint8_t roles = offeredRoles(getGameHandler(L));
-        lua_pushboolean(L, 0);
+        lua_pushboolean(L, (roles & 0x01) ? 1 : 0);   // leader (0x00552e10)
         lua_pushboolean(L, (roles & 0x02) ? 1 : 0);   // tank
         lua_pushboolean(L, (roles & 0x04) ? 1 : 0);   // healer
         lua_pushboolean(L, (roles & 0x08) ? 1 : 0);   // damage
@@ -376,8 +384,9 @@ void registerLfgLuaAPI(lua_State* L) {
     {"SetLFGRoles", [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
         if (!gh) return 0;
-        // arg 1 is leader, which the server does not take here.
-        uint8_t roles = 0x01;                                   // always "player"
+        // 0x00553d60: leader, tank, healer, damage as bits 1, 2, 4, 8.
+        uint8_t roles = 0;
+        if (lua_toboolean(L, 1)) roles |= 0x01;
         if (lua_toboolean(L, 2)) roles |= 0x02;
         if (lua_toboolean(L, 3)) roles |= 0x04;
         if (lua_toboolean(L, 4)) roles |= 0x08;
@@ -399,10 +408,17 @@ void registerLfgLuaAPI(lua_State* L) {
         lua_pushboolean(L, 1);
         return 3;
     }},
-    // The role check a party leader starts. Answering it is CMSG_LFG_SET_ROLES,
-    // which SetLFGRoles above already sends, so this is the confirmation and
-    // has nothing left to send.
-    {"CompleteLFGRoleCheck",  luaReturnNothing},
+    // CompleteLFGRoleCheck(accept) (0x00553e20): the role check answered -
+    // CMSG_LFG_SET_ROLES with the roles kept, or none when declined - true
+    // when it went, false refused for want of a role.
+    {"CompleteLFGRoleCheck", [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        if (!gh) return 0;
+        const int r = gh->lfgCompleteRoleCheck(lua_toboolean(L, 1) != 0);
+        if (r < 0) return 0;
+        lua_pushboolean(L, r);
+        return 1;
+    }},
     // GetLFGRoleUpdateSlot(index) → dungeonType, dungeonID
     //
     // The dungeons a role check is being run for. The popup names the one when
@@ -422,23 +438,44 @@ void registerLfgLuaAPI(lua_State* L) {
 
     // ---- The queue ----
 
+    // JoinLFG() (0x00557660): the local join record sent, as SetLFGDungeon
+    // built it - refused without a slot or a role.
     {"JoinLFG", [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
-        if (!gh) return 0;
-        // Everything ticked, in a settled order. CMSG_LFG_JOIN carries a list
-        // and the server queues for all of it, so a multi-select queue is one
-        // join rather than a choice between them.
-        //
-        // This used to send the first entry of an unordered map and stop, which
-        // is not the first dungeon the player picked - it is whichever one the
-        // container happened to hand back, and a different one between runs.
-        std::vector<uint32_t> chosen;
-        for (const auto& [id, on] : enabledDungeons()) {
-            if (on && id > 0) chosen.push_back(static_cast<uint32_t>(id));
-        }
-        std::sort(chosen.begin(), chosen.end());
-        gh->lfgJoin(chosen, offeredRoles(gh));
+        if (gh) gh->lfgJoinLocal(offeredRoles(gh));
         return 0;
+    }},
+    // GetLFGInfoLocal() (0x00552e90) → joined, noPartialClear, achievements,
+    // comment, slotCount, and the three needs. The two flags and the needs
+    // are never set by anything in the client and stay as they start.
+    {"GetLFGInfoLocal", [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        const auto* join = gh ? gh->getLfgLocalJoin() : nullptr;
+        lua_pushboolean(L, join && join->joined);
+        lua_pushboolean(L, 0);
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, join ? join->comment.c_str() : "");
+        lua_pushnumber(L, join ? static_cast<double>(join->slots.size()) : 0.0);
+        for (int i = 0; i < 3; ++i) lua_pushnumber(L, 0);
+        return 8;
+    }},
+    // GetLastQueueStatusIndex() (0x00559ff0 -> 0x00559c40) → where, among the
+    // queued slots, the one 0x00beaa0c names sits, counted from one; nil when
+    // it is not there. Nothing in 12340 writes 0x00beaa0c (the queue status
+    // keeps its dungeon at 0x00beaa28), so what is looked for is a zero slot.
+    {"GetLastQueueStatusIndex", [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        const auto* queued = gh ? gh->getLfgQueuedSlots() : nullptr;
+        constexpr uint32_t kLastQueueStatusSlot = 0;
+        if (queued) {
+            for (size_t i = 0; i < queued->size(); ++i) {
+                if ((*queued)[i] != kLastQueueStatusSlot) continue;
+                lua_pushnumber(L, static_cast<double>(i + 1));
+                return 1;
+            }
+        }
+        lua_pushnil(L);
+        return 1;
     }},
     // The two buttons on the dungeon-ready dialog, and the same pair on the
     // minimap's queue menu. Neither was bound, so a pop that did appear could
@@ -464,14 +501,32 @@ void registerLfgLuaAPI(lua_State* L) {
         return 0;
     }},
 
+    // GetLFGQueuedList([table]) (0x00557520) → the queued dungeons as keys,
+    // each true: the party's in a group, the player's otherwise. A table
+    // passed in is emptied and filled rather than a new one made.
     {"GetLFGQueuedList", [](lua_State* L) -> int {
+        if (lua_type(L, 1) != LUA_TTABLE && lua_gettop(L) > 0 && !lua_isnil(L, 1)) {
+            return luaL_error(L, "Usage: GetLFDQueuedList([table])");
+        }
+        if (lua_type(L, 1) == LUA_TTABLE) {
+            lua_settop(L, 1);
+            lua_pushnil(L);
+            while (lua_next(L, 1) != 0) {
+                lua_pop(L, 1);
+                lua_pushvalue(L, -1);
+                lua_pushnil(L);
+                lua_rawset(L, 1);
+            }
+        } else {
+            lua_settop(L, 0);
+            lua_newtable(L);
+        }
         auto* gh = getGameHandler(L);
-        lua_newtable(L);
-        if (gh && gh->isLfgQueued()) {
-            const uint32_t id = gh->getLfgDungeonId();
-            if (id != 0) {
+        if (const auto* queued = gh ? gh->getLfgQueuedSlots() : nullptr) {
+            for (const uint32_t slot : *queued) {
+                lua_pushnumber(L, slot & 0x00FFFFFFu);
                 lua_pushboolean(L, 1);
-                lua_rawseti(L, -2, static_cast<lua_Integer>(id));
+                lua_rawset(L, -3);
             }
         }
         return 1;
@@ -631,8 +686,9 @@ void registerLfgLuaAPI(lua_State* L) {
     // unfinished - but this one is an OnClick on a column header, so leaving it
     // unbound meant clicking a header raised instead of doing nothing.
     {"SearchLFGSort", [](lua_State* L) -> int { (void)L; return 0; }},
+    // LeaveLFG() (0x00554160 -> 0x00553ab0).
     {"LeaveLFG", [](lua_State* L) -> int {
-        if (auto* gh = getGameHandler(L)) gh->lfgLeave();
+        if (auto* gh = getGameHandler(L)) gh->lfgLeaveLocal();
         return 0;
     }},
     {"RequestLFDPlayerLockInfo", [](lua_State* L) -> int {
@@ -816,7 +872,13 @@ void registerLfgLuaAPI(lua_State* L) {
     {"GetPartyLFGBackfillInfo",  [](lua_State* L) -> int { return luaReturnNil(L); }},
     {"PartyLFGStartBackfill",    luaReturnNothing},
     // A note shown beside the queue. Nothing carries it.
-    {"SetLFGComment",            luaReturnNothing},
+    // SetLFGComment([text]) (0x00553f50 -> 0x005539a0): kept for the next
+    // join, and sent at once while joined.
+    {"SetLFGComment", [](lua_State* L) -> int {
+        const char* text = lua_isstring(L, 1) ? lua_tostring(L, 1) : nullptr;
+        if (auto* gh = getGameHandler(L)) gh->lfgSetComment(text ? text : "");
+        return 0;
+    }},
 
     // ---- The raid browser ----
     //

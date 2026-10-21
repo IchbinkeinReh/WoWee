@@ -683,6 +683,10 @@ set(WOWEE_SOURCES
     src/game/inventory_handler.cpp
     src/game/social_handler.cpp
     src/game/skill_ups.cpp
+    src/game/trainer_service_list.cpp
+    src/game/quest_poi_icons.cpp
+    src/game/macro_eval.cpp
+    src/game/macro_options.cpp
     src/game/game_handler_skill_ups.cpp
     src/game/quest_handler.cpp
     src/game/quest_objectives.cpp
@@ -1003,6 +1007,9 @@ set(WOWEE_SOURCES
     src/rendering/overlay_system.cpp
     src/rendering/animation_controller.cpp
     src/rendering/animation/animation_ids.cpp
+    src/rendering/animation/animation_data.cpp
+    src/rendering/animation/upper_body.cpp
+    src/rendering/animation/base_animation.cpp
     src/rendering/animation/emote_registry.cpp
     src/rendering/animation/footstep_driver.cpp
     src/rendering/animation/sfx_state_driver.cpp
@@ -2650,6 +2657,7 @@ add_executable(wowee_editor
     src/rendering/shadow_params.cpp
     src/rendering/m2_renderer.cpp
     src/rendering/m2_renderer_instance.cpp
+    src/rendering/animation/animation_data.cpp
     src/rendering/m2_renderer_particles.cpp
     src/rendering/m2_renderer_ribbons.cpp
     src/rendering/m2_renderer_render.cpp

@@ -33,6 +33,8 @@ namespace wowee {
 
 // Forward declarations
 namespace rendering { class Renderer; class VkContext; class LoadingScreen; }
+namespace rendering::upper_body { struct Unit; }
+namespace game { class Unit; }
 namespace ui { class UIManager; class MapWindow; }
 namespace auth { class AuthHandler; }
 namespace game { class GameHandler; class World; class ExpansionRegistry; struct ExpansionProfile; }
@@ -189,6 +191,8 @@ private:
     /// once at spawn and would otherwise stay there while its target circle
     /// follows the entity, which reads as a ring sliding off a still NPC.
     void syncRenderInstancesToEntities(float deltaTime);
+    /// What 0x007385c0 reads of the player's own unit for its upper body.
+    rendering::upper_body::Unit playerAnimationState(const game::Unit& self) const;
     void render();
     void performLogoutToLogin();
     void processDeferredLogoutToLogin();

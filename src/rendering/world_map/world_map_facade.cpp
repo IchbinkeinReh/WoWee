@@ -861,6 +861,25 @@ bool WorldMapFacade::mapUVForCanonical(float wowX, float wowY, float wowZ,
     return true;
 }
 
+WorldMapFacade::PoiFrame WorldMapFacade::currentPoiFrame() const {
+    PoiFrame frame;
+    const ViewLevel level = impl_->viewState.currentLevel();
+    if (level != ViewLevel::ZONE && level != ViewLevel::CONTINENT) return frame;
+    const int idx = impl_->viewState.currentZoneIdx();
+    const auto& zones = impl_->data.zones();
+    if (idx < 0 || idx >= static_cast<int>(zones.size())) return frame;
+    const Zone& zone = zones[static_cast<size_t>(idx)];
+    frame.valid = true;
+    frame.zoneLevel = level == ViewLevel::ZONE && zone.areaID != 0;
+    frame.dungeon = zone.areaID != 0 && zone.dungeonFloor != 0;
+    frame.worldMapAreaId = zone.wmaID;
+    frame.mapId = zone.mapID;
+    frame.dungeonFloor = zone.dungeonFloor;
+    frame.locLeft = zone.bounds.locLeft;
+    frame.locRight = zone.bounds.locRight;
+    return frame;
+}
+
 std::vector<WorldMapFacade::Landmark> WorldMapFacade::currentLandmarks() const {
     const int idx = impl_->viewState.currentZoneIdx();
     const auto& zones = impl_->data.zones();

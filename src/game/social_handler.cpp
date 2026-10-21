@@ -21,6 +21,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -764,6 +765,18 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::MSG_GUILD_BANK_LOG_QUERY] = [this](network::Packet& packet) { handleGuildBankLog(packet); };
     table[Opcode::SMSG_PETITION_QUERY_RESPONSE] = [this](network::Packet& packet) { handlePetitionQueryResponse(packet); };
     table[Opcode::SMSG_PETITION_SHOW_SIGNATURES] = [this](network::Packet& packet) { handlePetitionShowSignatures(packet); };
+    // The charter's new name, as the server took it (0x006dd270): the item's
+    // guid and the name. The client finds the charter the item holds in its
+    // petition cache, writes the name over it and raises PETITION_SHOW; here
+    // the charter is the one this client knows, petitionInfo_.
+    table[Opcode::MSG_PETITION_RENAME] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(9)) return;
+        const uint64_t itemGuid = packet.readUInt64();
+        std::string name = packet.readString();
+        if (name.empty() || itemGuid == 0 || petitionInfo_.petitionGuid != itemGuid) return;
+        petitionInfo_.guildName = std::move(name);
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PETITION_SHOW", {});
+    };
     table[Opcode::SMSG_PETITION_SIGN_RESULTS] = [this](network::Packet& packet) { handlePetitionSignResults(packet); };
 
     // ---- Battlefield / BG ----
@@ -893,6 +906,7 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     for (auto op : { Opcode::SMSG_INSTANCE_DIFFICULTY, Opcode::MSG_SET_DUNGEON_DIFFICULTY }) {
         table[op] = [this](network::Packet& packet) { handleInstanceDifficulty(packet); };
     }
+    table[Opcode::MSG_SET_RAID_DIFFICULTY] = [this](network::Packet& packet) { handleSetRaidDifficulty(packet); };
 
     // ---- Guild / RAF / PvP AFK (moved from GameHandler) ----
     table[Opcode::SMSG_GUILD_DECLINE] = [this](network::Packet& packet) {
@@ -3848,6 +3862,9 @@ void SocialHandler::handleLogoutComplete(network::Packet& /*packet*/) {
     // complete." on the way out.
     const bool exiting = exitAfterLogout_;
     loggingOut_ = false; exitAfterLogout_ = false; logoutCountdown_ = 0.0f;
+    // The quest POI icon list goes with the character (0x005e70d0).
+    if (auto* quests = owner_.getQuestHandler()) quests->questPoiIcons().clear();
+    owner_.clearLatestUpdatedStats();  // 0x005b4f00
     LOG_WARNING("Logout complete (exiting=", exiting ? "yes" : "no", ")");  // temporary: visible at default log level
     if (owner_.logoutCompleteCallbackRef()) owner_.logoutCompleteCallbackRef()(exiting);
 }
@@ -4190,6 +4207,48 @@ void SocialHandler::handleInstanceDifficulty(network::Packet& packet) {
             owner_.addonEventCallbackRef()("PLAYER_DIFFICULTY_CHANGED", {});
             owner_.addonEventCallbackRef()("UPDATE_INSTANCE_INFO", {});
         }
+    }
+}
+
+// MSG_SET_RAID_DIFFICULTY (0x00526530 case 0x4eb): the difficulty, whether it
+// is the player's own and whether it is the group's - AzerothCore's
+// SendRaidDifficulty writes 1 and IsInGroup for the two. Stored as 0x005255a0
+// stores it, and said as 0x00524780 says it where the one in force changed.
+void SocialHandler::handleSetRaidDifficulty(network::Packet& packet) {
+    if (!packet.hasRemaining(12)) return;
+    const uint32_t difficulty = packet.readUInt32();
+    const bool own = packet.readUInt32() != 0;
+    const bool group = packet.readUInt32() != 0;
+    const bool inGroup = !owner_.getPartyData().isEmpty();
+    const bool dynamicMap = owner_.isDynamicDifficultyMap();
+    const auto applied =
+        difficulty_change::applyRaidDifficulty(raidDifficulty_, difficulty, own, group, dynamicMap, inGroup);
+    if (applied.askPlayer) owner_.changePlayerDifficulty(*applied.askPlayer);
+    if (!applied.changed) return;
+
+    const std::string raidKey = "RAID_DIFFICULTY" + std::to_string(raidDifficulty_.effective(inGroup) + 1);
+    const std::string raidWords = interfaceString(raidKey.c_str(), raidKey.c_str());
+    switch (difficulty_change::raidChangeWords(dynamicMap, owner_.currentMapInstanceType())) {
+        case difficulty_change::RaidChangeWords::Lockout: {
+            gameError(owner_, ErrTo::Chat, "ERR_RAID_LOCKOUT_CHANGED_S", "Raid Lockout set to %s.", {raidWords});
+            const std::string playerKey = "PLAYER_DIFFICULTY" + std::to_string(owner_.playerDifficultyRef() + 1);
+            gameError(owner_, ErrTo::Chat, "ERR_PLAYER_DIFFICULTY_CHANGED_S", "Difficulty set to %s.",
+                      {interfaceString(playerKey.c_str(), playerKey.c_str())});
+            break;
+        }
+        case difficulty_change::RaidChangeWords::MapDifficulty: {
+            // The instance's own row (0x00634950 with 0xbd0894); the client
+            // reads it unchecked, and a raid with no row says the difficulty
+            // instead of failing.
+            std::string words = owner_.savedInstanceDifficultyName(owner_.getCurrentMapId(), instanceDifficulty_);
+            if (words.empty()) words = raidWords;
+            gameError(owner_, ErrTo::Chat, "ERR_RAID_DIFFICULTY_CHANGED_S", "Raid Difficulty set to %s.", {words});
+            break;
+        }
+        case difficulty_change::RaidChangeWords::RaidDifficulty:
+            gameError(owner_, ErrTo::Chat, "ERR_RAID_DIFFICULTY_CHANGED_S", "Raid Difficulty set to %s.",
+                      {raidWords});
+            break;
     }
 }
 
@@ -4813,6 +4872,106 @@ void SocialHandler::lfgJoin(const std::vector<uint32_t>& dungeonIds, uint8_t rol
     owner_.getSocket()->send(LfgJoinPacket::build(dungeonIds, roles));
 }
 
+namespace {
+
+/// The client's send throttle (0x005572d0, 0x005539a0): two go out freely,
+/// then one more each time the window has passed since the last reset.
+bool lfgThrottlePasses(int& sends, double& windowStart, double windowSeconds) {
+    ++sends;
+    if (sends <= 2) return true;
+    const double now = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch()).count()) / 1000.0;
+    if (now - windowStart < windowSeconds) return false;
+    windowStart = now;
+    sends = 0;
+    return true;
+}
+
+}  // namespace
+
+void SocialHandler::lfgAddSlot(uint32_t slot, int partyMembers) {
+    auto& join = lfgLocalJoin_;
+    const uint32_t type = slot >> 24;
+    const auto typeOf = [](uint32_t s) { return s >> 24; };
+    bool keep = false;
+    if (type == 1 || type == 5) {
+        keep = std::all_of(join.slots.begin(), join.slots.end(),
+                           [&](uint32_t s) { return typeOf(s) == 1 || typeOf(s) == 5; });
+    } else if (type == 2 && partyMembers == 0) {
+        keep = std::all_of(join.slots.begin(), join.slots.end(),
+                           [&](uint32_t s) { return typeOf(s) == 2; });
+    }
+    if (!keep) lfgClearSlots();
+    if (std::find(join.slots.begin(), join.slots.end(), slot) != join.slots.end()) return;
+    join.slots.push_back(slot);
+    join.dirty = true;
+}
+
+void SocialHandler::lfgRemoveSlot(uint32_t slot) {
+    auto& slots = lfgLocalJoin_.slots;
+    auto it = std::find(slots.begin(), slots.end(), slot);
+    if (it == slots.end()) return;
+    slots.erase(it);
+    lfgLocalJoin_.dirty = true;
+}
+
+void SocialHandler::lfgClearSlots() {
+    lfgLocalJoin_.slots.clear();
+    lfgLocalJoin_.dirty = true;
+}
+
+void SocialHandler::lfgJoinLocal(uint8_t roles) {
+    if (lfgLocalJoin_.slots.empty()) {
+        gameError(owner_, ErrTo::Error, "ERR_LFG_NO_SLOTS_SELECTED", "You did not select any valid slots.");
+        return;
+    }
+    if ((roles & 0xfeu) == 0) {
+        gameError(owner_, ErrTo::Error, "ERR_LFG_NO_ROLES_SELECTED", "You must select at least one role.");
+        return;
+    }
+    if (lfgLocalJoin_.joined && !lfgLocalJoin_.dirty) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (wireOpcode(Opcode::CMSG_LFG_JOIN) == 0xFFFF) return;
+    if (!lfgThrottlePasses(lfgJoinSends_, lfgJoinWindowStart_, 10.0)) return;
+    owner_.getSocket()->send(LfgJoinPacket::build(lfgLocalJoin_.slots, roles, lfgLocalJoin_.comment));
+    lfgLocalJoin_.joined = true;
+    lfgLocalJoin_.dirty = false;
+}
+
+void SocialHandler::lfgLeaveLocal() {
+    const LfgUpdateBody& body = isInGroup() ? lfgPartyUpdate_ : lfgPlayerUpdate_;
+    if (!lfgLocalJoin_.joined && !body.extraInfo) return;
+    lfgLocalJoin_.joined = false;
+    lfgLocalJoin_.dirty = false;
+    if (!owner_.getSocket()) return;
+    const uint16_t wire = wireOpcode(Opcode::CMSG_LFG_LEAVE);
+    if (wire == 0xFFFF) return;
+    // The opcode alone: 0x00553ab0 writes nothing after it.
+    owner_.getSocket()->send(network::Packet(wire));
+}
+
+void SocialHandler::lfgSetComment(const std::string& comment) {
+    // At most sixty-three characters, counted as UTF-8 (0x007e1830 with 64).
+    std::string kept;
+    int chars = 0;
+    for (const char c : comment) {
+        if ((static_cast<unsigned char>(c) & 0xc0u) != 0x80u && ++chars == 64) break;
+        kept.push_back(c);
+    }
+    lfgLocalJoin_.comment = std::move(kept);
+    if (!lfgLocalJoin_.joined) {
+        lfgLocalJoin_.dirty = true;
+        return;
+    }
+    if (!owner_.getSocket()) return;
+    const uint16_t wire = wireOpcode(Opcode::CMSG_SET_LFG_COMMENT);
+    if (wire == 0xFFFF) return;
+    if (!lfgThrottlePasses(lfgCommentSends_, lfgCommentWindowStart_, 2.0)) return;
+    network::Packet pkt(wire);
+    pkt.writeString(lfgLocalJoin_.comment);
+    owner_.getSocket()->send(pkt);
+}
+
 void SocialHandler::lfgLeave() {
     if (!owner_.getSocket()) return;
     lfgState_ = LfgState::None;
@@ -4831,15 +4990,33 @@ void SocialHandler::lfgSetRoles(uint8_t roles) {
     // firing it left whichever frame was clicked correct and the other two
     // showing what they were last drawn with, which is the shape that reads as
     // "it only takes after a relog".
+    //
+    // Nothing is sent: SetLFGRoles (0x00553d60) only keeps them. The role
+    // check's answer is CompleteLFGRoleCheck's.
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("LFG_ROLE_UPDATE", {});
     }
-    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    const uint32_t wire = wireOpcode(Opcode::CMSG_LFG_SET_ROLES);
-    if (wire == 0xFFFF) return;
-    network::Packet pkt(static_cast<uint16_t>(wire));
-    pkt.writeUInt8(roles);
-    owner_.getSocket()->send(pkt);
+}
+
+int SocialHandler::lfgCompleteRoleCheck(bool accept) {
+    if (!lfgThrottlePasses(lfgRoleSends_, lfgRoleWindowStart_, 10.0)) return -1;
+    uint8_t roles = 0;
+    if (accept) {
+        roles = lfgOfferedRoles_;
+        if ((roles & 0x0eu) == 0) {
+            gameError(owner_, ErrTo::Error, "ERR_LFG_NO_ROLES_SELECTED", "You must select at least one role.");
+            return 0;
+        }
+    }
+    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket()) {
+        const uint32_t wire = wireOpcode(Opcode::CMSG_LFG_SET_ROLES);
+        if (wire != 0xFFFF) {
+            network::Packet pkt(static_cast<uint16_t>(wire));
+            pkt.writeUInt8(roles);
+            owner_.getSocket()->send(pkt);
+        }
+    }
+    return 1;
 }
 
 void SocialHandler::lfgAcceptProposal(uint32_t proposalId, bool accept) {

@@ -930,6 +930,12 @@ inline uint32_t spellIdForBookSlot(game::GameHandler* gh, int slot) {
 int spellCastCheckKind(game::GameHandler* gh, uint32_t spellId);
 
 /// That check, asked for `spellId` (taint::allowed with its kind).
+/// 0x007261b0 for a unit, or 0x0051a1d0 alone with none (unit 0): the area
+/// the player is in may be flown in - its AreaTable row, the subzone's or
+/// else the zone's, flagged 0x400 and not 0x20000000 - and for a player in
+/// Northrend (map 571), only with Cold Weather Flying (54197) known.
+bool flyableHere(lua_State* L, uint64_t unit);
+
 bool spellCastAllowed(lua_State* L, game::GameHandler* gh, uint32_t spellId);
 
 /// The same for using an item (lua_inventory_api.cpp): equipping it, or the

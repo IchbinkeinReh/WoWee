@@ -8,6 +8,7 @@
 #include "game/unit_reaction.hpp"
 #include "game/calendar_data.hpp"
 #include "game/lfg_update.hpp"
+#include "game/latest_criteria.hpp"
 #include "game/game_interfaces.hpp"
 #include "game/world_packets.hpp"
 #include "game/character.hpp"
@@ -48,6 +49,7 @@
 #include <map>
 #include <optional>
 #include "game/guild_emblem.hpp"
+#include "game/server_notices.hpp"
 #include <algorithm>
 #include <chrono>
 #include <future>
@@ -304,6 +306,8 @@ public:
     /// InCinematic (0x00516760, DAT_00bd07fc).
     [[nodiscard]] bool inCinematic() const { return inCinematic_; }
     void setInCinematic(bool in) { inCinematic_ = in; }
+    /// A cinematic waits for the world to load (DAT_00c9eaac, 0x006cf290).
+    [[nodiscard]] bool cinematicWaiting() const { return deferredCinematic_ != 0; }
     /// What plays a cinematic (game/cinematic.hpp): its start with the
     /// sequence SMSG_TRIGGER_CINEMATIC names (0x00528af0), and StopCinematic.
     using CinematicStartCallback = std::function<void(uint32_t sequenceId)>;
@@ -1408,6 +1412,11 @@ public:
     bool isPetSpellAutocast(uint32_t spellId) const {
         return petAutocastSpells_.count(spellId) != 0;
     }
+    /// A pet spell that can be cast automatically: its entry's top bit
+    /// (0x80 of the state byte) in SMSG_PET_SPELLS' spell list (0x00c23538).
+    bool isPetSpellAutocastable(uint32_t spellId) const {
+        return petAutocastableSpells_.count(spellId) != 0;
+    }
     // Send CMSG_PET_ACTION to issue a pet command
     void sendPetAction(uint32_t action, uint64_t targetGuid = 0);
     /// The pet bar's slot used (0x005d4210) at a unit, or none for the
@@ -1857,6 +1866,9 @@ public:
         bool abandonable = false;
     };
     SkillPurchaseInfo getSkillPurchaseInfo(uint32_t skillId);
+    /// 0x00812410 for the player's race and class: the skill line a spell is
+    /// listed under, 0 for none.
+    uint32_t spellSkillLine(uint32_t spellId);
     /// The player's skill points, PLAYER_CHARACTER_POINTS2 (0x005cd970(1)).
     uint32_t getSkillPoints() const;
     /// GetAdjustedSkillPoints (0x005ce540): the points less those pending.
@@ -2275,6 +2287,10 @@ public:
 
     // Instance difficulty (0=5N, 1=5H, 2=25N, 3=25H for WotLK)
     uint32_t getInstanceDifficulty() const;
+    /// GetRaidDifficulty's two answers (0x00515810): the raid difficulty in
+    /// force - the group's in a group, the player's own out of one - and the
+    /// player's own, both from 0.
+    std::pair<uint32_t, uint32_t> getRaidDifficulty() const;
 
     /// The bind-or-leave prompt raised on entering an instance in progress.
     /// False when nothing is pending, in which case the out-params are
@@ -2449,6 +2465,16 @@ public:
     // roles bitmask: 0x02=tank, 0x04=healer, 0x08=dps; pass LFGDungeonEntry ID
     void lfgJoin(const std::vector<uint32_t>& dungeonIds, uint8_t roles);
     void lfgLeave();
+    /// The local join record and what changes it - see SocialHandler.
+    const LfgLocalJoin* getLfgLocalJoin() const;
+    const std::vector<uint32_t>* getLfgQueuedSlots() const;
+    void lfgAddSlot(uint32_t slot);
+    void lfgRemoveSlot(uint32_t slot);
+    void lfgClearSlots();
+    void lfgJoinLocal(uint8_t roles);
+    int lfgCompleteRoleCheck(bool accept);
+    void lfgLeaveLocal();
+    void lfgSetComment(const std::string& comment);
     /// Ask the server to re-send which dungeons are locked and what they pay.
     /// The ready popup asks for both as it opens.
     void requestLfgPlayerLockInfo();
@@ -3130,6 +3156,7 @@ public:
     /// The object a book being read is from - a game object or an item - which
     /// the reading window opens with (0x0058a1a0 -> 0x0051fce0).
     void setBookObject(uint64_t guid) { bookObjectGuid_ = guid; setInteractionObject(guid, go_interaction::Window::Book); }
+    uint64_t getBookObject() const { return bookObjectGuid_; }
 
     /// What is being read, for the heading over the page. Known at every point
     /// a book is opened - the game object's name from its query cache, or the
@@ -3342,6 +3369,30 @@ public:
         auto it = glyphSpellCache_.find(glyphPropertiesId);
         return it != glyphSpellCache_.end() ? it->second : 0u;
     }
+    /// GlyphProperties.dbc's TypeFlags (+0x08) and SpellIconID (+0x0c), and
+    /// GlyphSlot.dbc's Type (+0x04): false when there is no such row. Loaded
+    /// by ensureGlyphPropertiesLoaded.
+    bool getGlyphPropertiesType(uint32_t glyphPropertiesId, uint32_t& type) const {
+        auto it = glyphRowCache_.find(glyphPropertiesId);
+        if (it == glyphRowCache_.end()) return false;
+        type = it->second.type;
+        return true;
+    }
+    uint32_t getGlyphPropertiesIconId(uint32_t glyphPropertiesId) const {
+        auto it = glyphRowCache_.find(glyphPropertiesId);
+        return it != glyphRowCache_.end() ? it->second.iconId : 0u;
+    }
+    bool getGlyphSlotType(uint32_t glyphSlotId, uint32_t& type) const {
+        auto it = glyphSlotTypeCache_.find(glyphSlotId);
+        if (it == glyphSlotTypeCache_.end()) return false;
+        type = it->second;
+        return true;
+    }
+    /// The player's glyph sockets as the three update fields hold them
+    /// (PLAYER_FIELD_GLYPH_SLOTS_1, PLAYER_FIELD_GLYPHS_1,
+    /// PLAYER_GLYPHS_ENABLED). False without a player entity.
+    bool getGlyphSocketFields(std::array<uint32_t, 6>& slotIds, std::array<uint32_t, 6>& glyphs,
+                              uint32_t& enabledMask) const;
     void ensureAchievementCriteriaLoaded();
     /// Category ids in the order the panel shows them. The two tabs are
     /// disjoint sets, not one list filtered at the call site: GetCategoryList
@@ -3422,6 +3473,16 @@ public:
         auto it = achievementFlagsCache_.find(id);
         return (it != achievementFlagsCache_.end()) ? it->second : 0u;
     }
+    /// Achievement.dbc's Faction (field 1): -1 either side, 0 Horde, 1 Alliance.
+    int32_t getAchievementFaction(uint32_t id) const {
+        auto it = achievementFactionCache_.find(id);
+        return it != achievementFactionCache_.end() ? it->second : -1;
+    }
+    /// Achievement.dbc's UI order (field 40, +0x20 of the client's record).
+    uint32_t getAchievementUiOrder(uint32_t id) const {
+        auto it = achievementUiOrderCache_.find(id);
+        return it != achievementUiOrderCache_.end() ? it->second : 0u;
+    }
     uint32_t getAchievementIconId(uint32_t id) const {
         auto it = achievementIconCache_.find(id);
         return (it != achievementIconCache_.end()) ? it->second : 0u;
@@ -3437,6 +3498,25 @@ public:
         auto it = inspectedPlayerAchievements_.find(guid);
         return (it != inspectedPlayerAchievements_.end()) ? &it->second : nullptr;
     }
+
+    /// The statistics most recently updated, newest first: the player's
+    /// (0x00acfda8) and the comparison unit's (0x00acfdcc) - see
+    /// game/latest_criteria.hpp.
+    const LatestCriteriaList& getLatestUpdatedStats() const { return latestUpdatedStats_; }
+    const LatestCriteriaList& getLatestUpdatedComparisonStats() const {
+        return latestUpdatedComparisonStats_;
+    }
+    /// ClearAchievementComparisonUnit (0x005b4760 -> 0x005b2fb0): the
+    /// comparison's criteria lists emptied.
+    void clearAchievementComparisonLists() { latestUpdatedComparisonStats_.clear(); }
+    /// Logout (0x005b4f00): both lists emptied.
+    void clearLatestUpdatedStats() {
+        latestUpdatedStats_.clear();
+        latestUpdatedComparisonStats_.clear();
+    }
+    /// 0x005b0de0: a criteria of an achievement whose category is the
+    /// Statistics tree's (category 1, or one below it).
+    bool isStatisticCriteria(uint32_t criteriaId);
 
     /// Who the achievement comparison tab is looking at, or zero.
     uint64_t getAchievementComparisonGuid() const { return achievementComparisonGuid_; }
@@ -3786,8 +3866,12 @@ public:
     void sortBankBag(int bagIndex);
     void swapBagSlots(int srcBagIndex, int dstBagIndex);
     void useItemById(uint32_t itemId, uint64_t unitTarget = 0);
-    /// Put a glyph from a bag slot into a socket, counted from zero.
-    void placeGlyphFromBag(uint8_t wireBag, uint8_t wireSlot, uint32_t socketIndex);
+    /// A used glyph waiting for its socket, and putting it in one (counted
+    /// from zero) - see InventoryHandler.
+    bool isAwaitingGlyphTarget() const;
+    uint32_t getPendingGlyphSpellId() const;
+    void cancelGlyphTargeting();
+    bool placePendingGlyph(uint32_t socketIndex);
     uint32_t getItemIdForSpell(uint32_t spellId) const;
     bool isVendorWindowOpen() const;
     const ListInventoryData& getVendorItems() const;
@@ -4401,6 +4485,7 @@ public:
     // ── Pet & Stable ─────────────────────────────────────────────────
     auto& petActionSlotsRef() { return petActionSlots_; }
     auto& petAutocastSpellsRef() { return petAutocastSpells_; }
+    auto& petAutocastableSpellsRef() { return petAutocastableSpells_; }
     auto& petCommandRef() { return petCommand_; }
     auto& petGuidRef() { return petGuid_; }
     auto& petReactRef() { return petReact_; }
@@ -4521,6 +4606,9 @@ public:
     /// mattered: "Not ready", "Not enough rage" and "You can't do that right
     /// now" arrive once per rejected keypress.
     void raiseUiError(const std::string& message);
+    /// A row of the client's game error table, worded with its arguments and
+    /// put on the line the row names (0x005216f0).
+    void sayGameError(const server_notice::GameError& error, const std::vector<std::string>& args = {});
     void raiseDifficultyCooldownError(uint32_t ms);
     void sendPing();
     void setTransportAttachment(uint64_t childGuid, ObjectType type,
@@ -5323,6 +5411,7 @@ private:
     bool     petRenameablePending_ = false;  // set by SMSG_PET_RENAMEABLE, consumed by UI
     std::vector<uint32_t> petSpellList_; // known pet spells
     std::unordered_set<uint32_t> petAutocastSpells_;  // spells with autocast on
+    std::unordered_set<uint32_t> petAutocastableSpells_;  // spells autocast can be turned on for
     std::array<int32_t, 5> petStats_{};
     int32_t petAttackPower_ = 0;
     float petMinDamage_ = 0.0f;
@@ -5661,6 +5750,8 @@ private:
     std::unordered_map<uint32_t, uint32_t>    achievementPointsCache_;
     std::unordered_map<uint32_t, uint32_t>    achievementIconCache_;  // achievementId → SpellIcon.dbc ID
     std::unordered_map<uint32_t, uint32_t>    achievementFlagsCache_; // achievementId → Achievement.dbc Flags
+    std::unordered_map<uint32_t, int32_t>     achievementFactionCache_;  // only rows not open to both sides
+    std::unordered_map<uint32_t, uint32_t>    achievementUiOrderCache_;
     int selectedGuildRank_ = 1;
     PendingGuildRank pendingGuildRank_;
     std::vector<CurrencyType> currencyTypes_;
@@ -5680,6 +5771,9 @@ private:
     bool achievementCategoriesLoaded_ = false;
     bool glyphPropertiesLoaded_ = false;
     std::unordered_map<uint32_t, uint32_t> glyphSpellCache_;
+    struct GlyphRow { uint32_t type = 0; uint32_t iconId = 0; };
+    std::unordered_map<uint32_t, GlyphRow> glyphRowCache_;
+    std::unordered_map<uint32_t, uint32_t> glyphSlotTypeCache_;
     std::unordered_map<uint32_t, std::vector<AchievementCriterion>> achievementCriteria_;
     std::unordered_map<uint32_t, AchievementCriterionIndex> achievementCriterionById_;
     bool achievementCriteriaLoaded_ = false;
@@ -5697,6 +5791,11 @@ private:
     // Per-player achievement data from SMSG_RESPOND_INSPECT_ACHIEVEMENTS
     // Key: inspected player's GUID; value: set of earned achievement IDs
     std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>> inspectedPlayerAchievements_;
+    LatestCriteriaList latestUpdatedStats_;
+    LatestCriteriaList latestUpdatedComparisonStats_;
+    /// A criteria record as 0x005b2520 takes it: a statistic not flagged
+    /// removed goes on the front of the player's list.
+    void noteCriteriaForLatestStats(uint32_t criteriaId, uint32_t flags);
     uint64_t achievementComparisonGuid_ = 0;
 
     /// Sort moves still to send, one per tick. See sortBags.

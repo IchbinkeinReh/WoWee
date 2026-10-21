@@ -225,7 +225,8 @@ bool entersOrSits(SeatState s) {
 
 std::optional<rendering::vehicle_seat::RideAnimation> toRide(const std::optional<game::vehicle::SeatAnimation>& a) {
     if (!a) return std::nullopt;
-    return rendering::vehicle_seat::RideAnimation{.start = a->start, .loop = a->loop};
+    return rendering::vehicle_seat::RideAnimation{
+        .start = a->start, .loop = a->loop, .upperStart = a->upperStart, .upperLoop = a->upperLoop, .seated = a->seated};
 }
 
 }  // namespace
@@ -367,7 +368,7 @@ void EntitySpawner::startVehicleRideLoop(SeatedPassenger& p, const game::vehicle
     const int32_t bone = game::vehicle::vehicleAnimBone(seat.vehicleRideAnimLoopBone);
     const auto anim = static_cast<uint32_t>(seat.vehicleRideAnimLoop);
     if (bone == game::vehicle::kWholeModelBone) cr->playAnimation(vehicleInstance, anim, true);
-    else if (!cr->playKeyBoneAnimation(vehicleInstance, bone, anim)) return;
+    else if (!cr->playVehicleKeyBoneAnimation(vehicleInstance, bone, anim)) return;
     p.rideLoopVehicleInstance = vehicleInstance;
     p.rideLoopBone = bone;
 }
@@ -791,7 +792,7 @@ bool EntitySpawner::holdVehicleMove(uint64_t mover, uint64_t transport, uint8_t 
     // as a whole past 0x22.
     if (anim->bone == game::vehicle::kWholeModelBone) {
         cr->playAnimation(vehicleInstance, anim->animation, false);
-    } else if (!cr->playKeyBoneAnimation(vehicleInstance, anim->bone, anim->animation, true)) {
+    } else if (!cr->playVehicleKeyBoneAnimation(vehicleInstance, anim->bone, anim->animation, true)) {
         return false;
     }
     // 0x007479e0: leaving, its ride animation on that bone is the exit's now.

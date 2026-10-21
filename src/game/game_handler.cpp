@@ -1033,6 +1033,16 @@ void GameHandler::raiseUiError(const std::string& message) {
     addUIError(message);
 }
 
+void GameHandler::sayGameError(const server_notice::GameError& error, const std::vector<std::string>& args) {
+    const std::string text = interfaceFormat(error.key, error.enUS, args);
+    if (text.empty()) return;
+    switch (error.line) {
+        case server_notice::Line::Chat:  addSystemChatMessage(text); break;
+        case server_notice::Line::Info:  addUIInfoMessage(text); break;
+        case server_notice::Line::Error: addUIError(text); break;
+    }
+}
+
 // ============================================================
 // Taxi / Flight Path Handlers
 // ============================================================
@@ -2177,6 +2187,13 @@ void GameHandler::loadAchievementNameCache() {
             uint32_t flags = dbc->getUInt32(i, 41);
             if (flags != 0) achievementFlagsCache_[id] = flags;
         }
+        // Faction (1) and UI order (40), which the comparison tab counts and
+        // orders by (0x005b3dc0, 0x005b2ab0).
+        if (const auto faction = static_cast<int32_t>(dbc->getUInt32(i, 1)); faction != -1)
+            achievementFactionCache_[id] = faction;
+        if (fieldCount > 40) {
+            if (const uint32_t order = dbc->getUInt32(i, 40)) achievementUiOrderCache_[id] = order;
+        }
     }
     LOG_INFO("Achievement: loaded ", achievementNameCache_.size(), " names from Achievement.dbc");
 }
@@ -2291,14 +2308,68 @@ void GameHandler::ensureGlyphPropertiesLoaded() {
     if (!am || !am->isInitialized()) return;
     glyphPropertiesLoaded_ = true;
 
+    // GlyphSlot.dbc: ID, Type, Order. The type a socket takes (+0x04),
+    // which PlaceGlyphInSocket compares with the glyph's (0x0080c3e0).
+    if (auto slots = am->loadDBC("GlyphSlot.dbc"); slots && slots->isLoaded() &&
+                                                    slots->getFieldCount() >= 2) {
+        for (uint32_t i = 0; i < slots->getRecordCount(); ++i) {
+            glyphSlotTypeCache_[slots->getUInt32(i, 0)] = slots->getUInt32(i, 1);
+        }
+    }
     auto dbc = am->loadDBC("GlyphProperties.dbc");
     if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 2) return;
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
         const uint32_t id = dbc->getUInt32(i, 0);
         const uint32_t spellId = dbc->getUInt32(i, 1);
         if (id != 0 && spellId != 0) glyphSpellCache_[id] = spellId;
+        // GlyphProperties.dbc: ID, SpellID, TypeFlags, SpellIconID.
+        if (id != 0 && dbc->getFieldCount() >= 4) {
+            glyphRowCache_[id] = GlyphRow{dbc->getUInt32(i, 2), dbc->getUInt32(i, 3)};
+        }
     }
     LOG_INFO("Glyphs: ", glyphSpellCache_.size(), " properties mapped to spells");
+}
+
+bool GameHandler::getGlyphSocketFields(std::array<uint32_t, 6>& slotIds,
+                                       std::array<uint32_t, 6>& glyphs,
+                                       uint32_t& enabledMask) const {
+    const auto player = entityController_ ? entityController_->getEntityManager().getEntity(playerGuid)
+                                          : nullptr;
+    if (!player) return false;
+    const uint16_t slotsIdx = fieldIndex(UF::PLAYER_FIELD_GLYPH_SLOTS_1);
+    const uint16_t glyphsIdx = fieldIndex(UF::PLAYER_FIELD_GLYPHS_1);
+    const uint16_t enabledIdx = fieldIndex(UF::PLAYER_GLYPHS_ENABLED);
+    for (uint16_t i = 0; i < 6; ++i) {
+        slotIds[i] = slotsIdx != 0xFFFF ? player->getField(static_cast<uint16_t>(slotsIdx + i)) : 0u;
+        glyphs[i] = glyphsIdx != 0xFFFF ? player->getField(static_cast<uint16_t>(glyphsIdx + i)) : 0u;
+    }
+    enabledMask = enabledIdx != 0xFFFF ? player->getField(enabledIdx) : 0u;
+    return true;
+}
+
+bool GameHandler::isStatisticCriteria(uint32_t criteriaId) {
+    ensureAchievementCriteriaLoaded();
+    ensureAchievementCategoriesLoaded();
+    const uint32_t achievement = getAchievementCriterionIndex(criteriaId).achievementId;
+    if (achievement == 0) return false;
+    auto cat = achievementCategoryCache_.find(achievement);
+    if (cat == achievementCategoryCache_.end()) return false;
+    // Up the parents until the Statistics root, id 1.
+    int32_t c = static_cast<int32_t>(cat->second);
+    for (int guard = 0; c >= 0 && guard < 64; ++guard) {
+        if (c == 1) return true;
+        auto it = achievementCategoryInfo_.find(static_cast<uint32_t>(c));
+        if (it == achievementCategoryInfo_.end()) return false;
+        c = it->second.parentId;
+    }
+    return false;
+}
+
+void GameHandler::noteCriteriaForLatestStats(uint32_t criteriaId, uint32_t flags) {
+    if ((flags & 1u) != 0 || !isStatisticCriteria(criteriaId)) return;
+    latestUpdatedStats_.notePlayer(criteriaId, [this](uint32_t id) {
+        return getAchievementCriterionIndex(id).achievementId;
+    });
 }
 
 void GameHandler::ensureAchievementCategoriesLoaded() {
@@ -2482,6 +2553,7 @@ void GameHandler::handleAllAchievementData(network::Packet& packet) {
         CriteriaProgressRecord rec;
         if (!readCriteriaProgressTail(packet, rec)) break;
         criteriaProgress_[id] = rec.counter;
+        noteCriteriaForLatestStats(id, rec.flags);
     }
 
     LOG_INFO("SMSG_ALL_ACHIEVEMENT_DATA: loaded ", earnedAchievements_.size(),
@@ -4552,6 +4624,12 @@ const std::vector<GameHandler::ReadyCheckResult>& GameHandler::getReadyCheckResu
 
 uint32_t GameHandler::getInstanceDifficulty() const {
     return socialHandler_ ? socialHandler_->getInstanceDifficulty() : 0;
+}
+
+std::pair<uint32_t, uint32_t> GameHandler::getRaidDifficulty() const {
+    if (!socialHandler_) return {0, 0};
+    const auto& raid = socialHandler_->getRaidDifficulty();
+    return {raid.effective(!getPartyData().isEmpty()), raid.personal};
 }
 
 bool GameHandler::isInstanceHeroic() const {

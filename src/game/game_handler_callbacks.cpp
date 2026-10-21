@@ -53,6 +53,7 @@
 #include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
 #include "rendering/animation/animation_ids.hpp"
+#include "rendering/animation/animation_data.hpp"
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
 #include <cmath>
@@ -649,6 +650,7 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     petGuid_ = 0;
     petSpellList_.clear();
     petAutocastSpells_.clear();
+    petAutocastableSpells_.clear();
     std::fill(std::begin(petActionSlots_), std::end(petActionSlots_), 0u);
     petComboPoints_ = 0;
     petComboTarget_ = 0;
@@ -2628,6 +2630,46 @@ void GameHandler::lfgJoin(const std::vector<uint32_t>& dungeonIds, uint8_t roles
     if (socialHandler_) socialHandler_->lfgJoin(dungeonIds, roles);
 }
 
+const LfgLocalJoin* GameHandler::getLfgLocalJoin() const {
+    return socialHandler_ ? &socialHandler_->getLfgLocalJoin() : nullptr;
+}
+
+const std::vector<uint32_t>* GameHandler::getLfgQueuedSlots() const {
+    return socialHandler_ ? &socialHandler_->getLfgQueuedSlots(socialHandler_->isInGroup()) : nullptr;
+}
+
+void GameHandler::lfgAddSlot(uint32_t slot) {
+    if (!socialHandler_) return;
+    // 0x0052bd10: how many others the party holds.
+    const size_t others = socialHandler_->isInGroup()
+        ? std::min<size_t>(socialHandler_->getPartyData().members.size(), 4) : 0;
+    socialHandler_->lfgAddSlot(slot, static_cast<int>(others));
+}
+
+void GameHandler::lfgRemoveSlot(uint32_t slot) {
+    if (socialHandler_) socialHandler_->lfgRemoveSlot(slot);
+}
+
+void GameHandler::lfgClearSlots() {
+    if (socialHandler_) socialHandler_->lfgClearSlots();
+}
+
+void GameHandler::lfgJoinLocal(uint8_t roles) {
+    if (socialHandler_) socialHandler_->lfgJoinLocal(roles);
+}
+
+int GameHandler::lfgCompleteRoleCheck(bool accept) {
+    return socialHandler_ ? socialHandler_->lfgCompleteRoleCheck(accept) : -1;
+}
+
+void GameHandler::lfgLeaveLocal() {
+    if (socialHandler_) socialHandler_->lfgLeaveLocal();
+}
+
+void GameHandler::lfgSetComment(const std::string& comment) {
+    if (socialHandler_) socialHandler_->lfgSetComment(comment);
+}
+
 void GameHandler::lfgLeave() {
     if (socialHandler_) socialHandler_->lfgLeave();
 }
@@ -4203,8 +4245,20 @@ void GameHandler::useKeyringItem(int index, bool confirmed) {
     if (inventoryHandler_) inventoryHandler_->useKeyringItem(index, confirmed);
 }
 
-void GameHandler::placeGlyphFromBag(uint8_t wireBag, uint8_t wireSlot, uint32_t socketIndex) {
-    if (inventoryHandler_) inventoryHandler_->placeGlyphFromBag(wireBag, wireSlot, socketIndex);
+bool GameHandler::isAwaitingGlyphTarget() const {
+    return inventoryHandler_ && inventoryHandler_->isAwaitingGlyphTarget();
+}
+
+uint32_t GameHandler::getPendingGlyphSpellId() const {
+    return inventoryHandler_ ? inventoryHandler_->getPendingGlyphSpellId() : 0;
+}
+
+void GameHandler::cancelGlyphTargeting() {
+    if (inventoryHandler_) inventoryHandler_->cancelGlyphTargeting();
+}
+
+bool GameHandler::placePendingGlyph(uint32_t socketIndex) {
+    return inventoryHandler_ && inventoryHandler_->placePendingGlyph(socketIndex);
 }
 
 void GameHandler::useItemInBag(int bagIndex, int slotIndex, bool confirmed,
@@ -4358,6 +4412,9 @@ void GameHandler::preloadDBCCaches() const {
     if (auto* am = services_.assetManager) {
         auto animDbc = am->loadDBC("AnimationData.dbc");
         rendering::anim::validateAgainstDBC(animDbc);
+        // The rows the renderer walks for what a model lacks (0x00826350,
+        // 0x007176f0).
+        if (animDbc) rendering::anim::setAnimationData(rendering::anim::loadAnimationData(*animDbc));
     }
 
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(

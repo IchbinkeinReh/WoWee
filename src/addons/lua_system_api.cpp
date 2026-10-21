@@ -27,6 +27,7 @@
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/chat_color_table.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/chat_window_background.hpp"
 #include "addons/client_cvar_registry.hpp"
@@ -1313,21 +1314,19 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // tracker worked until the login event that is supposed to configure it,
     // then went down on its next update, every session.
     //
-    // Three: achievements and completed quests, and *not* quests from other
-    // zones - which is what a stock 3.3.5 client has, with "Quests in other
-    // zones" unticked in the tracker's own filter menu. Seven ticked it, so
-    // the tracker listed every watched quest in the log whatever continent it
-    // was on.
-    //
-    // Zero would not raise but is worse than it looks: the two tests at
-    // watchframe.lua:813 skip a quest that is complete and a quest outside the
-    // current map, so an empty mask hides most of the log.
-    //
-    // Clearing the remote-zones bit only filters if CURRENT_MAP_QUESTS is
-    // filled, which is why it was left set - see the override of
-    // WatchFrame_GetCurrentMapQuests in AddonManager, which fills it from the
-    // log's zone headers rather than from map POIs.
-    else if (n == "trackerfilter") lua_pushstring(L, "3");
+    // Seven, the default the client registers it with (0x00510000 area,
+    // "trackerFilter" -> 0x00a01c0c "7"): achievements, completed quests and
+    // quests from other zones. With the last bit clear watchframe.lua keeps
+    // only the quests CURRENT_MAP_QUESTS holds, which WatchFrame_GetCurrentMapQuests
+    // builds from QuestMapUpdateAllQuests and QuestPOIGetQuestIDByVisibleIndex -
+    // the client's POI icon list, not the log's zone headers.
+    else if (n == "trackerfilter") lua_pushstring(L, "7");
+    // The trainer's service type filter (0x00bd09e4): available and
+    // unavailable shown, used hidden.
+    else if (n == "servicetypefilter") lua_pushstring(L, "3");
+    // Quest POI marks of completed quests fanned out by this much
+    // (0x005e71a0: "POIShiftComplete", 0x009f3548 "0.6").
+    else if (n == "poishiftcomplete") lua_pushstring(L, "0.6");
     // Manual, which is WATCHFRAME_SORT_MANUAL. Only ever compared with ==, so
     // nil was survivable here - it is answered for the same reason its
     // neighbour is, and because the sort menu's ticks read it.
@@ -1549,6 +1548,32 @@ const ClientCVarBinding* findClientCVar(const std::string& lowerName) {
     }
     return nullptr;
 }
+
+/// RegisterForSave("variable") (0x0052b470) and
+/// RegisterForSavePerCharacter("variable") (0x0052b4e0): the global kept in
+/// the account's or the character's SavedVariables.lua. Blizzard's scripts
+/// only - a tainted caller is refused.
+static int registerForSave(lua_State* L, bool perCharacter) {
+    if (taint::current() != 0) {
+        return luaL_error(L, perCharacter
+            ? "RegisterForSavePerCharacter() is only available to Blizzard scripts"
+            : "RegisterForSave() is only available to Blizzard scripts");
+    }
+    if (!lua_isstring(L, 1)) {
+        return luaL_error(L, perCharacter ? "Usage: RegisterForSavePerCharacter(\"variable\")"
+                                          : "Usage: RegisterForSave(\"variable\")");
+    }
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
+    auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    if (!engine) return 0;
+    const std::string name = lua_tostring(L, 1);
+    auto& list = engine->registeredForSave(perCharacter);
+    if (std::find(list.begin(), list.end(), name) == list.end()) list.push_back(name);
+    return 0;
+}
+static int lua_RegisterForSave(lua_State* L) { return registerForSave(L, false); }
+static int lua_RegisterForSavePerCharacter(lua_State* L) { return registerForSave(L, true); }
 
 static int lua_GetCVar(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
@@ -2402,6 +2427,38 @@ static std::string zoneNameFromId(lua_State* L) {
     }
     if (zoneId == 0) zoneId = gh->getWorldStateZoneId();
     return zoneId != 0 ? gh->getWhoAreaName(zoneId) : std::string();
+}
+
+bool flyableHere(lua_State* L, uint64_t unit) {
+    auto* gh = getGameHandler(L);
+    auto* svc = getLuaServices(L);
+    if (!gh || !svc || !svc->getZoneTexts) return false;
+    const auto t = svc->getZoneTexts();
+    if (!t.known) return false;
+    // The subzone's row where it has one, the zone's otherwise.
+    const uint32_t area = (t.subzoneId != 0 && !gh->getAreaName(t.subzoneId).empty())
+        ? t.subzoneId : t.zoneId;
+    const uint32_t flags = gh->getAreaFlags(area);
+    if ((flags & 0x400u) == 0 || (flags & 0x20000000u) != 0) return false;
+    if (unit == 0) return true;
+    const auto e = gh->getEntityManager().getEntity(unit);
+    constexpr uint32_t kNorthrend = 571;
+    constexpr uint32_t kColdWeatherFlying = 54197;
+    if (e && e->getType() == game::ObjectType::PLAYER && gh->getCurrentMapId() == kNorthrend &&
+        !(gh->getSpellHandler() && gh->getSpellHandler()->hasKnownSpell(kColdWeatherFlying))) {
+        return false;
+    }
+    return true;
+}
+
+/// IsFlyableArea() (0x00612260) → 1 where the player may fly, else nil.
+static int lua_IsFlyableArea(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint64_t player = gh && gh->getEntityManager().getEntity(gh->getPlayerGuid())
+        ? gh->getPlayerGuid() : 0;
+    if (flyableHere(L, player)) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
 }
 
 static LuaServices::ZoneTexts zoneTexts(lua_State* L) {
@@ -4021,19 +4078,27 @@ static int lua_ResetChatWindows(lua_State* L) {
     return 0;
 }
 
-/// Whether a chat type colours player names by class. Stored per chat type
-/// rather than globally, which is how the chat options panel presents it -
-/// a row per type, each with its own tick.
-static std::set<std::string>& chatColorByClass() {
-    static std::set<std::string> types;
-    return types;
-}
+/// SetChatColorNameByClass(chatType, on) (0x004fedc0): the type's class
+/// flag in the chat colour table, and UPDATE_CHAT_COLOR_NAME_BY_CLASS when a
+/// type of that name exists.
 static int lua_SetChatColorNameByClass(lua_State* L) {
-    std::string type(luaL_optstring(L, 1, ""));
-    toLowerInPlace(type);
-    if (type.empty()) return 0;
-    if (lua_toboolean(L, 2)) chatColorByClass().insert(type);
-    else chatColorByClass().erase(type);
+    if (!lua_isstring(L, 1)) {
+        return luaL_error(L, "Usage: SetChatColorNameByClass(chatType, colorNameByClass)");
+    }
+    const std::string type = lua_tostring(L, 1);
+    const bool on = lua_toboolean(L, 2) != 0;
+    if (!chatColorTable().setNameByClass(type, on)) return 0;
+    if (auto* gh = getGameHandler(L)) {
+        gh->fireAddonEvent("UPDATE_CHAT_COLOR_NAME_BY_CLASS", {type, game::eventBool(on)});
+    }
+    return 0;
+}
+
+/// ResetChatColors() (0x004fed10): every chat type back to its colour. The
+/// class flags stay, and nothing is said - the interface asks again.
+static int lua_ResetChatColors(lua_State* L) {
+    (void)L;
+    chatColorTable().resetColors();
     return 0;
 }
 
@@ -6952,18 +7017,22 @@ void registerSystemLuaAPI(lua_State* L) {
                 // unitpopup's `GetDungeonDifficulty() == 1` heroic-lockout
                 // check was true inside a heroic.
                 //
-                // Both answer from the one value this client tracks. Only one
-                // of the two applies at a time, so that holds until a party
-                // sets a raid difficulty while standing in a dungeon.
+                // The dungeon one answers from the value SMSG_INSTANCE_DIFFICULTY
+                // and MSG_SET_DUNGEON_DIFFICULTY both write; the raid one has
+                // its own (MSG_SET_RAID_DIFFICULTY).
                 {"GetDungeonDifficulty", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             lua_pushnumber(L, (gh ? gh->getInstanceDifficulty() : 0u) + 1u);
             return 1;
         }},
+                // GetRaidDifficulty (0x00515810): the raid difficulty in
+                // force and the player's own, from MSG_SET_RAID_DIFFICULTY.
                 {"GetRaidDifficulty", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, (gh ? gh->getInstanceDifficulty() : 0u) + 1u);
-            return 1;
+            const auto raid = gh ? gh->getRaidDifficulty() : std::pair<uint32_t, uint32_t>{0, 0};
+            lua_pushnumber(L, raid.first + 1u);
+            lua_pushnumber(L, raid.second + 1u);
+            return 2;
         }},
                 {"GetChatTypeIndex",         lua_ReturnOne},
                 {"GetDefaultLanguage",       lua_GetDefaultLanguage},
@@ -7553,6 +7622,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"SetChatWindowUninteractable",  lua_SetChatWindowUninteractable},
                 {"ResetChatWindows",             lua_ResetChatWindows},
                 {"SetChatColorNameByClass",      lua_SetChatColorNameByClass},
+                {"ResetChatColors",              lua_ResetChatColors},
                 {"GetExistingLocales",       lua_ReturnNil},
                 // Read from the real keyboard: a shift-click means something
                 // different from a click, and FrameXML asks on every press.
@@ -7631,7 +7701,7 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, stackable);
             return 1;
         }},
-                {"IsFlyableArea",            lua_ReturnFalse},
+                {"IsFlyableArea",            lua_IsFlyableArea},
                 // The renderer knows whether the camera is inside a WMO, and
                 // the macro conditionals [indoors] / [outdoors] have read it
                 // all along. These two answered a flat false and a flat true.
@@ -7758,7 +7828,8 @@ void registerSystemLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->requestGuildEventLog();
             return 0;
         }},
-                {"RegisterForSave",          lua_ReturnNothing},
+                {"RegisterForSave",          lua_RegisterForSave},
+                {"RegisterForSavePerCharacter", lua_RegisterForSavePerCharacter},
                 {"RegisterStaticConstants",  lua_ReturnNothing},
                 {"SetChatWindowName",        lua_SetChatWindowName},
                 {"SetupFullscreenScale",     lua_SetupFullscreenScale},
@@ -8472,6 +8543,17 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"IsInInstance",         lua_IsInInstance},
                 {"GetInstanceInfo",      lua_GetInstanceInfo},
                 {"GetInstanceDifficulty", lua_GetInstanceDifficulty},
+                // CanShowResetInstances() (0x0051a880 -> 0x005194e0): nil, in
+                // every state this build can reach. Read off the code rather
+                // than the name: with the reset flag set (0xbd0890) and the
+                // current map a party or raid instance, it first requires the
+                // map's MapDifficulty row for the difficulty to have a reset
+                // time (+0x10) and then, for the previous instance, that the
+                // same row - of the *current* map, still in esi - has none; out
+                // of an instance it fails the second test of the current map's
+                // type outright. The two cannot both hold, so the button it
+                // guards never shows.
+                {"CanShowResetInstances", lua_ReturnNil},
                 {"strsplit",          lua_strsplit},
                 {"strtrim",           lua_strtrim},
                 {"strlenutf8",        lua_strlenutf8},

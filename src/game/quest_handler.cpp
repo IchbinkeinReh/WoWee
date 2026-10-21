@@ -519,7 +519,7 @@ static QuestQueryTextCandidate pickBestQuestQueryTexts(const std::vector<uint8_t
 }
 
 struct QuestQueryObjectives {
-    struct Kill { int32_t npcOrGoId; uint32_t required; };
+    struct Kill { int32_t npcOrGoId; uint32_t required; uint32_t sourceItem = 0; };
     struct Item { uint32_t itemId; uint32_t required; };
     std::array<Kill, 4> kills{};
     std::array<Item, 6> items{};
@@ -597,6 +597,7 @@ static QuestQueryObjectives tryParseQuestObjectivesAt(const std::vector<uint8_t>
             pos += sizeof(kill);
             out.kills[i].npcOrGoId = decodeQuestNpcOrGo(kill.npcOrGoId);
             out.kills[i].required  = kill.required;
+            out.kills[i].sourceItem = kill.itemDrop;
             if (!plausibleQuestObjective(out.kills[i].npcOrGoId, out.kills[i].required))
                 return {};
         }
@@ -1311,6 +1312,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 for (int i = 0; i < 4; ++i) {
                     q.killObjectives[i].npcOrGoId = objs.kills[i].npcOrGoId;
                     q.killObjectives[i].required  = objs.kills[i].required;
+                    q.objectiveSourceItems[i] = objs.kills[i].sourceItem;
                     if (objs.kills[i].npcOrGoId != 0 && objs.kills[i].required != 0) {
                         validKillKeys.insert(static_cast<uint32_t>(
                             objs.kills[i].npcOrGoId > 0 ? objs.kills[i].npcOrGoId
@@ -1367,6 +1369,10 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     q.factionRewards[i].override  = rwds.factionValueOverride[i];
                 }
                 q.sourceItemId = rwds.sourceItemId;
+                q.questFlags = rwds.questFlags;
+                q.playersSlain = rwds.playersSlain;
+                q.repObjectiveFaction = rwds.repObjectiveFaction;
+                q.repObjectiveFaction2 = rwds.repObjectiveFaction2;
                 // The watch frame needs its name and icon to draw a button.
                 if (q.sourceItemId != 0) owner_.queryItemInfo(q.sourceItemId, 0);
                 for (int i = 0; i < 4; ++i) {
@@ -2598,6 +2604,11 @@ void QuestHandler::handleQuestPoiQueryResponse(network::Packet& packet) {
                 }),
             gossipPois_.end());
 
+        // Every area, whatever its map, for the client's icon list
+        // (0x005e7370); the markers below keep only this map's.
+        std::vector<QuestPoiArea> iconAreas;
+        bool complete = true;
+
         // Find the quest title for the marker label.
         std::string questTitle;
         for (const auto& q : questLog_) {
@@ -2605,28 +2616,37 @@ void QuestHandler::handleQuestPoiQueryResponse(network::Packet& packet) {
         }
 
         for (uint32_t pi = 0; pi < poiCount; ++pi) {
-            if (!packet.hasRemaining(32)) return;
-            packet.readUInt32();  // poiId
+            if (!packet.hasRemaining(32)) { complete = false; break; }
+            QuestPoiArea area;
+            area.poiId = packet.readUInt32();
             const int32_t objIndex = static_cast<int32_t>(packet.readUInt32());
             const uint32_t mapId    = packet.readUInt32();
-            packet.readUInt32();  // areaId
-            packet.readUInt32();  // floorId
-            packet.readUInt32();  // unk1
-            packet.readUInt32();  // unk2
+            area.objectiveIndex = objIndex;
+            area.mapId = mapId;
+            area.worldMapAreaId = packet.readUInt32();
+            area.floor = packet.readUInt32();
+            area.priority = static_cast<int32_t>(packet.readUInt32());
+            area.flags = packet.readUInt32();
             const uint32_t pointCount = packet.readUInt32();
-            if (pointCount == 0) continue;
-            if (packet.getRemainingSize() < pointCount * 8) return;
+            if (packet.getRemainingSize() < static_cast<size_t>(pointCount) * 8) {
+                complete = false;
+                break;
+            }
             float sumX = 0.0f, sumY = 0.0f;
             std::vector<std::pair<float, float>> outline;
             outline.reserve(pointCount);
+            area.points.reserve(pointCount);
             for (uint32_t pt = 0; pt < pointCount; ++pt) {
                 const int32_t px = static_cast<int32_t>(packet.readUInt32());
                 const int32_t py = static_cast<int32_t>(packet.readUInt32());
+                area.points.emplace_back(px, py);
                 sumX += static_cast<float>(px);
                 sumY += static_cast<float>(py);
                 // Canonical, the same swap the centroid below makes.
                 outline.emplace_back(static_cast<float>(py), static_cast<float>(px));
             }
+            iconAreas.push_back(std::move(area));
+            if (pointCount == 0) continue;
             // Skip POIs for maps other than the player's current map.
             if (mapId != owner_.currentMapIdRef()) continue;
             GossipPoi poi;
@@ -2648,6 +2668,11 @@ void QuestHandler::handleQuestPoiQueryResponse(network::Packet& packet) {
             if (gossipPois_.size() >= 200) gossipPois_.erase(gossipPois_.begin());
             gossipPois_.push_back(std::move(poi));
         }
+        if (!complete) break;
+        questPoiIcons_.receive(static_cast<int32_t>(questId), std::move(iconAreas),
+                               [this](int32_t id) {
+                                   return id > 0 && hasQuestInLog(static_cast<uint32_t>(id));
+                               });
     }
     // The tracker draws its POI marks from this and had no way to know the
     // points had arrived - the query is answered well after the row is drawn.

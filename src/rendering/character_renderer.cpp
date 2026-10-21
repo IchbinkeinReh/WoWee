@@ -2230,6 +2230,90 @@ uint32_t CharacterRenderer::createInstance(uint32_t modelId, const glm::vec3& po
     return id;
 }
 
+namespace {
+// The index of an animation's sequence - its variation 0, the head of its
+// variations, else the first of that id - or -1 where the model has none.
+int animationSequenceIndex(const pipeline::M2Model& model, uint32_t animationId) {
+    int firstMatch = -1;
+    for (size_t i = 0; i < model.sequences.size(); i++) {
+        if (model.sequences[i].id != animationId) continue;
+        if (model.sequences[i].variationIndex == 0) return static_cast<int>(i);
+        if (firstMatch < 0) firstMatch = static_cast<int>(i);
+    }
+    return firstMatch;
+}
+
+bool modelHasAnimation(const pipeline::M2Model& model, uint32_t animationId) {
+    return std::any_of(model.sequences.begin(), model.sequences.end(),
+                       [animationId](const auto& seq) { return seq.id == animationId; });
+}
+
+// 0x00826350: the model's sequence for an animation, or the one along
+// AnimationData's Fallbacks that stands in for it and how that one plays.
+anim::ModelAnimation shownAnimation(const pipeline::M2Model& model, uint32_t animationId) {
+    const auto has = [&model](uint32_t id) { return modelHasAnimation(model, id); };
+    return anim::modelAnimation(anim::animationData(), animationId, has,
+                                model.sequences.empty() ? 0u : model.sequences[0].id);
+}
+
+// 0x007176f0: what a unit of the instance's tier is put in for an
+// animation it is asked.
+uint32_t tierAnimationFor(const pipeline::M2Model& model, uint32_t animationId, uint8_t tier) {
+    const auto has = [&model](uint32_t id) { return modelHasAnimation(model, id); };
+    return anim::unitAnimation(anim::animationData(), animationId, tier, has);
+}
+
+// The time a sequence is sampled at: backwards from its end where it plays
+// that way (0x00826b00 negates the speed and starts it at its length).
+float sampledTime(const pipeline::M2Model& model, int sequence, float time, anim::PlayMode mode) {
+    if (mode != anim::PlayMode::Reversed || sequence < 0 ||
+        static_cast<size_t>(sequence) >= model.sequences.size()) {
+        return time;
+    }
+    return std::max(0.0f, static_cast<float>(model.sequences[static_cast<size_t>(sequence)].duration) - time);
+}
+
+// Held on its first or last frame: its time does not run (0x00826b00's
+// speed 0) and it never ends.
+bool heldMode(anim::PlayMode mode) {
+    return mode == anim::PlayMode::HoldStart || mode == anim::PlayMode::HoldEnd;
+}
+
+// A key bone's animation turned to blending back into the body's: from
+// where it is, over 150 ms (0x00832840: end now + 0x96, rate 1/150).
+template <class KeyBoneAnimation>
+void returnKeyBoneState(KeyBoneAnimation& k, float clockMs, const pipeline::M2Model& model) {
+    constexpr uint32_t kReturnMs = 150;
+    m2_track::beginSequenceBlend(k.blend, clockMs, k.sequence, sampledTime(model, k.sequence, k.time, k.mode),
+                                 !k.once, k.once, -1, kReturnMs, model.sequences);
+    k.returning = true;
+    k.once = false;
+    k.thenSequence = -1;
+}
+
+// BehaviorID 0 (0x007176b0): Stand, FlyStand - those two by the rows
+// before AnimationData is loaded.
+bool isStand(uint32_t animationId) {
+    const auto& data = anim::animationData();
+    if (data.empty()) return animationId == anim::STAND || animationId == anim::FLY_STAND;
+    return data.behavior(animationId) == 0;
+}
+
+// Where a sequence starts: its end for one held there.
+float startTime(const pipeline::M2Model& model, int sequence, anim::PlayMode mode) {
+    if (mode != anim::PlayMode::HoldEnd || sequence < 0 ||
+        static_cast<size_t>(sequence) >= model.sequences.size()) {
+        return 0.0f;
+    }
+    return static_cast<float>(model.sequences[static_cast<size_t>(sequence)].duration);
+}
+}  // namespace
+
+void CharacterRenderer::setAnimationTier(uint32_t instanceId, uint8_t tier) {
+    auto it = instances.find(instanceId);
+    if (it != instances.end()) it->second.animationTier = tier;
+}
+
 void CharacterRenderer::setRestAnimation(uint32_t instanceId, uint32_t restAnim) {
     auto it = instances.find(instanceId);
     if (it != instances.end()) it->second.restAnimation = restAnim;
@@ -2242,10 +2326,272 @@ void CharacterRenderer::playAnimation(uint32_t instanceId, uint32_t animationId,
         core::Logger::getInstance().warning("Cannot play animation: instance ", instanceId, " not found");
         return;
     }
-    // A seated passenger's body is its seat's (0x007385c0, 0x00724500), or
-    // its vehicle's where it mirrors it (0x007385c0 asks 0x007487e0).
-    if (it->second.seatAnimationHeld || it->second.mirrorsSeatParent) return;
+    // The animation of its tier the model has (0x007385c0 -> 0x007176f0).
+    animationId = tierAnimationFor(models[it->second.modelId].data, animationId, it->second.animationTier);
+    // A seated passenger's body is its vehicle's where it mirrors it
+    // (0x007385c0 asks 0x007487e0), else its seat's (0x007385c0,
+    // 0x00724500). On the way in or out nothing else is played; in the
+    // seat, a stand is what the seat has its upper body stand as (the base
+    // 0x00724500 asks there, 0x007485b0), and the rest is shared as any
+    // unit's is.
+    if (it->second.mirrorsSeatParent) return;
+    if (it->second.seatAnimationHeld) {
+        if (!it->second.seatRideSeated) return;
+        if (isStand(animationId)) {
+            standSeatedUpperBody(instanceId);
+            return;
+        }
+        playUnitAnimation(instanceId, animationId, loop, oneShotReturnAnim, upper_body::Pass::Asked);
+        return;
+    }
+    if (it->second.seatStandsWhole && isStand(animationId)) {
+        standSeatedWhole(instanceId);
+        return;
+    }
+    // A unit's body and upper body share it (0x007385c0).
+    if (it->second.unitAnimation) {
+        playUnitAnimation(instanceId, animationId, loop, oneShotReturnAnim, upper_body::Pass::Asked);
+        return;
+    }
     playAnimationNow(instanceId, animationId, loop, oneShotReturnAnim);
+}
+
+void CharacterRenderer::setUnitAnimationState(uint32_t instanceId, const upper_body::Unit& unit) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    // A state kit that animates the unit coming or going asks its base
+    // animation again (0x0073b140 type 2 and 0x0073c1d0 -> 0x0073ac30),
+    // which the kit's animation then takes over (0x0071e400).
+    const bool kitChanged = it->second.unitAnimation && (it->second.unit.kitAnim != unit.kitAnim ||
+                                                          it->second.unit.kitAnimTiered != unit.kitAnimTiered);
+    it->second.unitAnimation = true;
+    it->second.unit = unit;
+    if (kitChanged) playBaseAnimation(instanceId);
+}
+
+int32_t CharacterRenderer::upperBodyBone(CharacterInstance& instance) {
+    if (instance.upperBodyBone == -2) {
+        const auto& bones = models[instance.modelId].data.bones;
+        const auto has = [&bones](int32_t key) {
+            return std::any_of(bones.begin(), bones.end(), [key](const auto& b) { return b.keyBoneId == key; });
+        };
+        instance.upperBodyBone = vehicle_seat::upperKeyBone(has(4), has(6));
+    }
+    return instance.upperBodyBone;
+}
+
+void CharacterRenderer::playUnitAnimation(uint32_t instanceId, uint32_t animationId, bool loop,
+                                          uint32_t oneShotReturnAnim, upper_body::Pass pass) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    const auto& model = models[instance.modelId].data;
+    const int32_t bone = upperBodyBone(instance);
+    // What each plays now (0x007173f0): the body - nothing once its one-shot
+    // has ended - and the upper body's own.
+    upper_body::Slots now;
+    if (instance.currentSequenceIndex >= 0 && pass == upper_body::Pass::Asked) {
+        now.body = {static_cast<int32_t>(instance.currentAnimationId), instance.animationTime, instance.animationLoop};
+    }
+    for (const auto& k : instance.keyBoneAnimations) {
+        if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning)
+            now.upper = {static_cast<int32_t>(k.animationId), k.time, !k.once};
+    }
+    upper_body::Unit unit = instance.unit;
+    // The vehicle's seats animating its upper body's bone (0x00756cd0).
+    unit.vehicleHoldsUpper =
+        std::any_of(instance.keyBoneAnimations.begin(), instance.keyBoneAnimations.end(),
+                    [bone](const CharacterInstance::KeyBoneAnimation& k) {
+                        return k.keyBoneId == bone && k.vehicle && k.sequence >= 0 && !k.returning;
+                    });
+    const bool seated = instance.seatAnimationHeld && instance.seatRideSeated;
+    unit.seatedRide = seated;
+    unit.swimIdle = tierAnimationFor(model, anim::SWIM_IDLE, instance.animationTier);
+    unit.riderPoseShown = tierAnimationFor(model, unit.riderPose, instance.animationTier);
+    const upper_body::Slot asked{static_cast<int32_t>(animationId), 0.0f, loop};
+    upper_body::Decision d = upper_body::decide(anim::animationData(), unit, asked, now, pass);
+    // A swing over a swing: the one playing runs on at twice the speed and
+    // the asked one waits (+0xb88); any other ask lets it go.
+    if (d.queue) {
+        constexpr float kHastened = 2.0f;
+        bool onUpper = false;
+        for (auto& k : instance.keyBoneAnimations) {
+            if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning) {
+                k.rate = kHastened;
+                onUpper = true;
+            }
+        }
+        if (!onUpper) instance.bodyRateSet = kHastened;
+        instance.queuedAttack = static_cast<int32_t>(animationId);
+        return;
+    }
+    instance.queuedAttack = -1;
+    // Hovering on the ground, the stand and its like are the hover
+    // (0x0071df30).
+    upper_body::applyHover(unit, now, d, [&model](uint32_t id) { return shownAnimation(model, id).id; });
+    // A state kit animating the unit has the body and an upper body of its
+    // own play its animation, unblended, whatever was asked but a death
+    // (0x0071e400).
+    if (unit.kitAnim && !unit.riding && !upper_body::isDeath(anim::animationData().behavior(animationId))) {
+        const uint32_t kit =
+            unit.kitAnimTiered ? tierAnimationFor(model, *unit.kitAnim, instance.animationTier) : *unit.kitAnim;
+        upper_body::applyKitAnimation(now, d, kit);
+    }
+
+    // The upper body first, as 0x007385c0 plays them. Without a key bone of
+    // its own, what goes there is not played (0x00737ef0).
+    if (bone >= 0) {
+        // In its seat, the upper body given back, or given the ride
+        // animation the body plays, stands as the seat has it; a one-shot
+        // there ends into the seat's loop (0x00737bd0 with Flags 0x4).
+        const bool seatStand =
+            seated && (d.upperAction == upper_body::Action::Release ||
+                       (d.upperAction == upper_body::Action::Play && d.upperFromBody &&
+                        d.upper.anim == static_cast<int32_t>(instance.currentAnimationId)));
+        if (seatStand) {
+            standSeatedUpperBody(instanceId);
+        } else if (d.upperAction == upper_body::Action::Release) {
+            returnKeyBone(instance, bone);
+        } else if (d.upperAction == upper_body::Action::Play && d.upper.anim >= 0) {
+            const bool once = !d.upper.loop;
+            startKeyBoneAnimation(instance, bone, static_cast<uint32_t>(d.upper.anim), once,
+                                  seated && once ? instance.seatUpperLoop : std::nullopt, d.upper.timeMs,
+                                  d.upperBlend);
+        }
+    }
+    // What the mount plays is its own driver's.
+    if (d.bodyAction != upper_body::Action::Play || d.body.anim < 0) return;
+    const auto bodyAnim = static_cast<uint32_t>(d.body.anim);
+    if (d.bodyFromUpper) {
+        // The swing taken back goes on from where it had got, and ends into
+        // what was asked (0x0073bbd0 -> 0x0073b510 asks it then).
+        playAnimationNow(instanceId, bodyAnim, d.body.loop, loop ? animationId : oneShotReturnAnim, d.bodyBlend);
+        if (instance.currentSequenceIndex >= 0) {
+            const float duration =
+                static_cast<float>(model.sequences[static_cast<size_t>(instance.currentSequenceIndex)].duration);
+            instance.animationTime = std::clamp(d.body.timeMs, 0.0f, duration);
+            instance.eventsFrom = instance.animationTime;
+        }
+    } else if (bodyAnim == animationId) {
+        playAnimationNow(instanceId, bodyAnim, loop, oneShotReturnAnim, d.bodyBlend);
+    } else {
+        // What the client asks of its own: SwimIdle, the rider's pose.
+        playAnimationNow(instanceId, bodyAnim, true, 0, d.bodyBlend);
+    }
+}
+
+void CharacterRenderer::releaseUpperBodyLoop(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || it->second.seatAnimationHeld) return;
+    auto& instance = it->second;
+    const int32_t bone = upperBodyBone(instance);
+    for (const auto& k : instance.keyBoneAnimations) {
+        if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning && !k.once) {
+            returnKeyBone(instance, bone);
+            return;
+        }
+    }
+}
+
+bool CharacterRenderer::bodyEndsInto(uint32_t instanceId, uint32_t animationId) const {
+    auto it = instances.find(instanceId);
+    return it != instances.end() && !it->second.animationLoop && it->second.oneShotReturnAnim == animationId;
+}
+
+base_animation::Pick CharacterRenderer::pickBaseAnimation(CharacterInstance& instance,
+                                                          const base_animation::Ask& ask) {
+    const auto& model = models[instance.modelId].data;
+    const int32_t bone = upperBodyBone(instance);
+    // What plays: the body's (0x007172b0), and the upper body's own over it
+    // (0x00717260).
+    base_animation::Playing playing;
+    if (instance.currentSequenceIndex >= 0) playing.body = static_cast<int32_t>(instance.currentAnimationId);
+    playing.shown = playing.body;
+    for (const auto& k : instance.keyBoneAnimations) {
+        if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning) playing.shown = static_cast<int32_t>(k.animationId);
+    }
+    upper_body::Unit unit = instance.unit;
+    unit.speed = instance.locomotionSpeed;
+    const auto has = [&model](uint32_t id) {
+        return std::any_of(model.sequences.begin(), model.sequences.end(),
+                           [id](const pipeline::M2Sequence& seq) { return seq.id == id; });
+    };
+    const uint8_t tier = instance.animationTier;
+    return base_animation::pick(anim::animationData(), unit, playing, ask, has,
+                                [&has, &model, tier](uint32_t id) { return has(tierAnimationFor(model, id, tier)); });
+}
+
+void CharacterRenderer::playBaseAnimation(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || !it->second.unitAnimation) return;
+    // 0x0073ac30: what 0x00724500 answers is asked as any animation is.
+    const base_animation::Pick p =
+        pickBaseAnimation(it->second, base_animation::Ask{.queuedAttack = it->second.queuedAttack});
+    if (p.anim != base_animation::kKeep) playAnimation(instanceId, p.anim, p.loop);
+}
+
+std::optional<upper_body::Wound> CharacterRenderer::woundFor(uint32_t instanceId, bool critical) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || !it->second.unitAnimation) return std::nullopt;
+    auto& instance = it->second;
+    const auto& model = models[instance.modelId].data;
+    const int32_t bone = upperBodyBone(instance);
+    const int32_t body = instance.currentSequenceIndex >= 0 ? static_cast<int32_t>(instance.currentAnimationId) : -1;
+    int32_t shown = body;
+    for (const auto& k : instance.keyBoneAnimations) {
+        if (k.keyBoneId == bone && k.sequence >= 0 && !k.returning) shown = static_cast<int32_t>(k.animationId);
+    }
+    auto w = upper_body::wound(anim::animationData(), instance.unit, critical, shown, body);
+    if (!w) return std::nullopt;
+    w->anim = tierAnimationFor(model, w->anim, instance.animationTier);
+    // Played only where the model has it (0x00825ee0), on the key bone
+    // where it has one.
+    if (std::none_of(model.sequences.begin(), model.sequences.end(),
+                     [&w](const pipeline::M2Sequence& seq) { return seq.id == w->anim; })) {
+        return std::nullopt;
+    }
+    if (bone < 0) w->upper = false;
+    return w;
+}
+
+void CharacterRenderer::playWound(uint32_t instanceId, const upper_body::Wound& wound) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    if (wound.upper) {
+        startKeyBoneAnimation(it->second, upperBodyBone(it->second), wound.anim, true, std::nullopt, 0.0f, false);
+    } else {
+        playAnimationNow(instanceId, wound.anim, false, 0, false);
+    }
+}
+
+void CharacterRenderer::endUpperBodyOneShot(CharacterInstance& instance) {
+    const auto& model = models[instance.modelId].data;
+    const auto& data = anim::animationData();
+    const int32_t bone = upperBodyBone(instance);
+    // The base animation as the unit is put in it (0x00724500 ->
+    // 0x007176f0) goes on the upper body where it is one of the upper
+    // body's, may differ from what the body plays (0x00723e30), and is not
+    // that; else the bone set follows the body again (0x00832840).
+    // A state kit animating the unit takes the upper body (0x0071e400).
+    if (instance.unit.kitAnim) {
+        const uint32_t kit = instance.unit.kitAnimTiered
+                                 ? tierAnimationFor(model, *instance.unit.kitAnim, instance.animationTier)
+                                 : *instance.unit.kitAnim;
+        startKeyBoneAnimation(instance, bone, kit, false, std::nullopt, 0.0f, true);
+        return;
+    }
+    const base_animation::Pick p =
+        pickBaseAnimation(instance, base_animation::Ask{.queuedAttack = instance.queuedAttack});
+    const uint32_t shown = p.anim == base_animation::kKeep || (p.flags & 0x6) != 0
+                               ? p.anim
+                               : tierAnimationFor(model, p.anim, instance.animationTier);
+    const int32_t body = instance.currentSequenceIndex >= 0 ? static_cast<int32_t>(instance.currentAnimationId) : -1;
+    if (!upper_body::isUpperBody(data.behavior(shown)) || !upper_body::splits(data, instance.unit, shown, body) ||
+        static_cast<int32_t>(shown) == body) {
+        returnKeyBone(instance, bone);
+        return;
+    }
+    startKeyBoneAnimation(instance, bone, shown, !p.loop, std::nullopt, 0.0f, true);
 }
 
 std::vector<uint32_t> CharacterRenderer::mirroringPassengers(uint32_t instanceId) const {
@@ -2257,10 +2603,10 @@ std::vector<uint32_t> CharacterRenderer::mirroringPassengers(uint32_t instanceId
 }
 
 void CharacterRenderer::playAnimationNow(uint32_t instanceId, uint32_t animationId, bool loop,
-                                         uint32_t oneShotReturnAnim) {
+                                         uint32_t oneShotReturnAnim, bool blend) {
     auto it = instances.find(instanceId);
     if (it == instances.end()) return;
-    startAnimation(it->second, animationId, loop, oneShotReturnAnim);
+    startAnimation(it->second, animationId, loop, oneShotReturnAnim, blend);
     // The vehicle hands what it plays to the passengers mirroring it
     // (0x00735a60, 0x00735820).
     for (uint32_t passenger : mirroringPassengers(instanceId)) {
@@ -2270,9 +2616,10 @@ void CharacterRenderer::playAnimationNow(uint32_t instanceId, uint32_t animation
 }
 
 void CharacterRenderer::startAnimation(CharacterInstance& instance, uint32_t animationId, bool loop,
-                                       uint32_t oneShotReturnAnim) {
+                                       uint32_t oneShotReturnAnim, bool blend) {
     auto& model = models[instance.modelId].data;
     instance.oneShotReturnAnim = loop ? 0 : oneShotReturnAnim;
+    instance.bodyRateSet = 0.0f;
 
     // Track death state for preventing movement while dead
     if (animationId == 1) {
@@ -2283,32 +2630,29 @@ void CharacterRenderer::startAnimation(CharacterInstance& instance, uint32_t ani
 
     // What is playing now, for the blend out of it below.
     const int previousSequence = instance.currentSequenceIndex;
-    const float previousTime = instance.animationTime;
+    const float previousTime = sampledTime(model, previousSequence, instance.animationTime, instance.playMode);
     const bool previousLoops = instance.animationLoop;
     const bool previousFinished = !previousLoops && previousSequence >= 0 &&
         static_cast<size_t>(previousSequence) < model.sequences.size() &&
-        previousTime >= static_cast<float>(model.sequences[previousSequence].duration);
+        instance.animationTime >= static_cast<float>(model.sequences[previousSequence].duration);
 
-    // Find animation sequence index by ID
+    // The animation keeps the id it was asked by (the model's +0x90,
+    // 0x008267e0 reads it back); the sequence is the model's own for it, or
+    // the one AnimationData's Fallbacks reach, played as they say
+    // (0x00832ab0 -> 0x00826350).
+    const anim::ModelAnimation shown = shownAnimation(model, animationId);
     instance.currentAnimationId = animationId;
-    instance.currentSequenceIndex = -1;
+    instance.currentSequenceIndex = animationSequenceIndex(model, shown.id);
     instance.primarySequenceIndex = -1;
+    instance.playMode = shown.mode;
     instance.animationTime = 0.0f;
     instance.animationLoop = loop;
-
-    // Prefer variationIndex==0 (primary animation); fall back to first match
-    int firstMatch = -1;
-    for (size_t i = 0; i < model.sequences.size(); i++) {
-        if (model.sequences[i].id == animationId) {
-            if (firstMatch < 0) firstMatch = static_cast<int>(i);
-            if (model.sequences[i].variationIndex == 0) {
-                instance.currentSequenceIndex = static_cast<int>(i);
-                break;
-            }
+    if (instance.currentSequenceIndex >= 0 && shown.id != animationId) {
+        static std::unordered_map<uint32_t, std::unordered_set<uint32_t>> loggedStandIns;
+        if (loggedStandIns[instance.modelId].insert(animationId).second) {
+            LOG_DEBUG("Animation ", animationId, " not in model ", instance.modelId, ": playing ", shown.id,
+                      " (mode ", static_cast<int>(shown.mode), ")");
         }
-    }
-    if (instance.currentSequenceIndex < 0 && firstMatch >= 0) {
-        instance.currentSequenceIndex = firstMatch;
     }
     if (instance.currentSequenceIndex >= 0) {
         // Roll the variation as the client does on every play (FUN_00832bxx ->
@@ -2317,6 +2661,8 @@ void CharacterRenderer::startAnimation(CharacterInstance& instance, uint32_t ani
         instance.currentSequenceIndex =
             m2_track::pickSequenceVariation(model.sequences, instance.primarySequenceIndex,
                                             static_cast<uint32_t>(std::rand()) & 0x7FFFu);
+        // One held on its last frame starts there (0x00826b00).
+        instance.animationTime = startTime(model, instance.currentSequenceIndex, shown.mode);
     }
 
     if (instance.currentSequenceIndex < 0) {
@@ -2337,7 +2683,7 @@ void CharacterRenderer::startAnimation(CharacterInstance& instance, uint32_t ani
 
     // Blend from the old pose over the new sequence's blendTime, as the
     // client's FUN_00826c40 does for every animation a unit is told to play.
-    if (instance.currentSequenceIndex >= 0) {
+    if (instance.currentSequenceIndex >= 0 && blend) {
         m2_track::beginSequenceBlend(
             instance.sequenceBlend, instance.globalSequenceTime, previousSequence, previousTime,
             previousLoops, previousFinished, instance.currentSequenceIndex,
@@ -2352,6 +2698,7 @@ void CharacterRenderer::startAnimation(CharacterInstance& instance, uint32_t ani
     // movingSpeed, the unit is moving, and the old sequence has a movingSpeed
     // and a length.
     if (instance.locomotionSpeed > 0.0f && instance.currentSequenceIndex >= 0 &&
+        instance.playMode == anim::PlayMode::Forward &&
         previousSequence >= 0 && static_cast<size_t>(previousSequence) < model.sequences.size()) {
         const auto& from = model.sequences[static_cast<size_t>(previousSequence)];
         const auto& to = model.sequences[static_cast<size_t>(instance.currentSequenceIndex)];
@@ -2458,6 +2805,8 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
         for (int arm = 0; arm < 2 && inst.cachedModel && !inst.animationFrozen; ++arm) {
             const int seq = inst.armSequenceIndex[arm];
             if (seq < 0 || static_cast<size_t>(seq) >= inst.cachedModel->data.sequences.size()) continue;
+            // Held where it stands in, it neither runs nor ends.
+            if (heldMode(inst.armMode[arm])) continue;
             const float before = inst.armTime[arm];
             inst.armTime[arm] += deltaTime * 1000.0f;
             const float eventTime = inst.armEventTime[arm];
@@ -2475,18 +2824,55 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
         // (0x00757280 -> 0x00757420 -> 0x00735a60).
         if (inst.cachedModel && !inst.animationFrozen) {
             bool ended = false;
+            // A unit's upper body whose one-shot ends is given the base
+            // animation, or back to the body (0x0073bbd0 -> 0x00737bd0).
+            const int32_t unitUpperBone =
+                inst.unitAnimation && !inst.seatAnimationHeld && !inst.seatStandsWhole && !inst.mirrorsSeatParent
+                    ? upperBodyBone(inst)
+                    : -1;
+            bool upperEnded = false;
             for (auto& k : inst.keyBoneAnimations) {
                 if (k.sequence < 0 || static_cast<size_t>(k.sequence) >= inst.cachedModel->data.sequences.size())
                     continue;
+                // Back to the body's once its blend there is done (0x00832840).
+                if (k.returning) {
+                    if (m2_track::currentBlend(k.blend, inst.globalSequenceTime, inst.cachedModel->data.sequences, -1,
+                                               0.0f).weight <= 0.0f) {
+                        k.sequence = -1;
+                        ended = true;
+                    }
+                    continue;
+                }
+                // Held where it stands in, it neither runs nor ends.
+                if (heldMode(k.mode)) continue;
                 const float duration = static_cast<float>(inst.cachedModel->data.sequences[k.sequence].duration);
-                k.time += deltaTime * 1000.0f;
+                k.time += deltaTime * 1000.0f * k.rate;
                 if (k.once && k.time >= duration) {
-                    k.sequence = -1;
-                    ended = true;
+                    // A one-shot ended on a bone of its own: a seated
+                    // passenger's upper body has passed its start (0x0073bbd0
+                    // -> 0x007484e0).
+                    if (k.keyBoneId == inst.seatUpperBone) inst.seatUpperStartPlayed = true;
+                    if (k.thenSequence >= 0) {
+                        k.sequence = std::exchange(k.thenSequence, -1);
+                        k.animationId = k.thenAnimationId;
+                        k.mode = k.thenMode;
+                        k.time = startTime(inst.cachedModel->data, k.sequence, k.mode);
+                        k.once = false;
+                        k.rate = 1.0f;
+                        continue;
+                    }
+                    k.time = duration;
+                    if (unitUpperBone >= 0 && k.keyBoneId == unitUpperBone && !k.vehicle) {
+                        upperEnded = true;
+                        continue;
+                    }
+                    // Back to following the body, blended (0x00832840).
+                    returnKeyBoneState(k, inst.globalSequenceTime, inst.cachedModel->data);
                 } else if (duration > 0.0f) {
                     k.time = std::fmod(k.time, duration);
                 }
             }
+            if (upperEnded) endUpperBodyOneShot(inst);
             if (ended) {
                 auto& anims = inst.keyBoneAnimations;
                 anims.erase(std::remove_if(anims.begin(), anims.end(), [](const auto& k) { return k.sequence < 0; }),
@@ -2517,11 +2903,17 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
             // the rate, FUN_0082f0f0 runs time at it). Recomputed each frame
             // from the current speed, which keeps the sequence's time as
             // FUN_00827000 does when the client changes a playing rate.
-            inst.playbackRate = m2_track::locomotionPlaybackRate(
-                seq.id, seq.movingSpeed, inst.scale, inst.locomotionSpeed);
-            inst.animationTime += deltaTime * 1000.0f * inst.playbackRate;
-            if (!(seq.duration > 0 && inst.animationTime >= static_cast<float>(seq.duration))) {
-                stepEvents(eventsSequence, eventsFrom, inst.animationTime);
+            inst.playbackRate = inst.bodyRateSet > 0.0f
+                                    ? inst.bodyRateSet
+                                    : m2_track::locomotionPlaybackRate(seq.id, seq.movingSpeed, inst.scale,
+                                                                       inst.locomotionSpeed);
+            // One held where it stands in neither runs nor ends (0x00826b00's
+            // speed 0).
+            const bool held = heldMode(inst.playMode);
+            if (!held) inst.animationTime += deltaTime * 1000.0f * inst.playbackRate;
+            const bool ended = !held && seq.duration > 0 && inst.animationTime >= static_cast<float>(seq.duration);
+            if (!ended) {
+                if (!held) stepEvents(eventsSequence, eventsFrom, inst.animationTime);
             } else {
                 stepEvents(eventsSequence, eventsFrom, static_cast<float>(seq.duration));
                 const auto& seqs = inst.cachedModel->data.sequences;
@@ -2561,11 +2953,47 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                     // resume anim (NPC state emote), else the loop the unit
                     // rests in (sitting, sleeping...), else Stand, unless dead
                     if (inst.currentAnimationId != anim::DEATH && !inst.holdsLastFrame) {
-                        const uint32_t resumeAnim =
-                            inst.oneShotReturnAnim != 0 ? inst.oneShotReturnAnim
-                            : inst.restAnimation != 0  ? inst.restAnimation
-                                                       : anim::STAND;
-                        playAnimationNow(pair.first, resumeAnim, true, 0);
+                        // Seated with its seat's upper ride animation as its
+                        // whole stand, it is back in its loop: an ended
+                        // one-shot has passed its start (0x007484e0).
+                        if (inst.seatStandsWhole) inst.seatUpperStartPlayed = true;
+                        const bool unitDriven = inst.unitAnimation && !inst.seatAnimationHeld &&
+                                                !inst.seatStandsWhole && !inst.mirrorsSeatParent;
+                        if (unitDriven && inst.oneShotReturnAnim == 0) {
+                            // 0x0073b510 with nothing of its own to follow
+                            // it: the base animation (0x0073ac30(0x10) ->
+                            // 0x00724500), asked of the body alone. Where
+                            // that leaves what plays, it stays as it ended.
+                            const base_animation::Pick p = pickBaseAnimation(
+                                inst, base_animation::Ask{.free = base_animation::kBodyFree,
+                                                          .flags = 0x10,
+                                                          .queuedAttack = inst.queuedAttack});
+                            if (p.anim == base_animation::kKeep) {
+                                inst.animationTime = static_cast<float>(seq.duration);
+                            } else {
+                                // Kit Flags 0x4 and 0x8 leave the tier be.
+                                const uint32_t shown =
+                                    (p.flags & 0x6) != 0
+                                        ? p.anim
+                                        : tierAnimationFor(inst.cachedModel->data, p.anim, inst.animationTier);
+                                playUnitAnimation(pair.first, shown, p.loop, 0, upper_body::Pass::BodyEnded);
+                            }
+                        } else {
+                            const uint32_t resumeAnim =
+                                inst.oneShotReturnAnim != 0 ? inst.oneShotReturnAnim
+                                : inst.seatStandsWhole && inst.seatUpperLoop ? *inst.seatUpperLoop
+                                : inst.restAnimation != 0  ? inst.restAnimation
+                                                           : anim::STAND;
+                            // Asked again as any other is (0x0073b510 ->
+                            // 0x007385c0 -> 0x007176f0).
+                            const uint32_t resume =
+                                tierAnimationFor(inst.cachedModel->data, resumeAnim, inst.animationTier);
+                            if (unitDriven) {
+                                playUnitAnimation(pair.first, resume, true, 0, upper_body::Pass::BodyEnded);
+                            } else {
+                                playAnimationNow(pair.first, resume, true, 0);
+                            }
+                        }
                     } else {
                         // Stay on last frame of death, or a mount
                         // transition's arrived rider's (0x0073bbd0)
@@ -2784,13 +3212,10 @@ bool CharacterRenderer::playArmAnimationNow(uint32_t instanceId, int arm, uint32
     auto& instance = it->second;
     const auto& model = models[instance.modelId].data;
     if (!hasKeyBone(instanceId, arm == 0 ? kKeyBoneShoulderL : kKeyBoneShoulderR)) return false;
-    int sequence = -1;
-    for (size_t i = 0; i < model.sequences.size(); i++) {
-        if (model.sequences[i].id == animationId && model.sequences[i].variationIndex == 0) {
-            sequence = static_cast<int>(i);
-            break;
-        }
-    }
+    // The arm's sequence for it, or the stand-in along its Fallbacks
+    // (0x00735820 -> 0x00832ab0 -> 0x00826350, for a bone as for the body).
+    const anim::ModelAnimation shown = shownAnimation(model, animationId);
+    const int sequence = animationSequenceIndex(model, shown.id);
     if (sequence < 0) return false;
 
     // Which arm each bone is in - a shoulder and everything below it. Parents
@@ -2807,11 +3232,14 @@ bool CharacterRenderer::playArmAnimationNow(uint32_t instanceId, int arm, uint32
     }
     instance.armSequenceIndex[arm] = sequence;
     instance.armAnimationId[arm] = animationId;
-    instance.armTime[arm] = 0.0f;
+    instance.armMode[arm] = shown.mode;
+    instance.armTime[arm] = startTime(model, sequence, shown.mode);
     instance.armEventTime[arm] = -1.0f;
     if (const auto* event = model.findEvent(eventId);
         event && static_cast<size_t>(sequence) < event->times.size() && !event->times[sequence].empty()) {
-        instance.armEventTime[arm] = static_cast<float>(event->times[sequence].front());
+        // Where its time reaches the event: from the end, reversed.
+        instance.armEventTime[arm] = sampledTime(model, sequence, static_cast<float>(event->times[sequence].front()),
+                                                 shown.mode);
     }
     instance.armEvents &= static_cast<uint8_t>(~((arm == 0 ? kArmEventLeft : kArmEventRight) |
                                                   (arm == 0 ? kArmEndLeft : kArmEndRight)));
@@ -2856,6 +3284,61 @@ void CharacterRenderer::clearInstanceSeat(uint32_t instanceId) {
     instance.seatAnimationHeld = false;
     instance.mirrorsSeatParent = false;
     instance.hasOverrideModelMatrix = instance.seatFlight.has_value();
+    releaseSeatedUpperBody(instanceId);
+}
+
+void CharacterRenderer::releaseSeatedUpperBody(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    const int32_t bone = std::exchange(instance.seatUpperBone, vehicle_seat::kNoUpperBody);
+    instance.seatUpperStart.reset();
+    instance.seatUpperLoop.reset();
+    instance.seatUpperStartPlayed = false;
+    instance.seatStandsWhole = false;
+    instance.seatRideSeated = false;
+    if (bone != vehicle_seat::kNoUpperBody) stopKeyBoneAnimation(instanceId, bone);
+}
+
+void CharacterRenderer::standSeatedWhole(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    const bool start = instance.seatUpperStart && !instance.seatUpperStartPlayed;
+    const uint32_t current = instance.currentAnimationId;
+    if ((instance.seatUpperStart && current == *instance.seatUpperStart) ||
+        (instance.seatUpperLoop && current == *instance.seatUpperLoop))
+        return;
+    if (start) {
+        playAnimationNow(instanceId, *instance.seatUpperStart, false, instance.seatUpperLoop.value_or(0));
+    } else if (instance.seatUpperLoop) {
+        playAnimationNow(instanceId, *instance.seatUpperLoop, true, 0);
+    }
+}
+
+void CharacterRenderer::standSeatedUpperBody(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    auto& instance = it->second;
+    const int32_t bone = instance.seatUpperBone;
+    if (bone == vehicle_seat::kNoUpperBody) return;
+    // 0x007485b0: RideUpperAnimStart until a one-shot of its own has ended
+    // there, then RideUpperAnimLoop - kept where it plays already.
+    const auto& anims = instance.keyBoneAnimations;
+    const auto playing =
+        std::find_if(anims.begin(), anims.end(), [&](const auto& k) { return k.keyBoneId == bone; });
+    const bool start = instance.seatUpperStart && !instance.seatUpperStartPlayed;
+    if (start || instance.seatUpperLoop) {
+        if (playing != anims.end() &&
+            ((instance.seatUpperStart && playing->animationId == *instance.seatUpperStart) ||
+             (instance.seatUpperLoop && playing->animationId == *instance.seatUpperLoop)))
+            return;
+        if (start && playKeyBoneAnimation(instanceId, bone, *instance.seatUpperStart, true, instance.seatUpperLoop))
+            return;
+        if (instance.seatUpperLoop && playKeyBoneAnimation(instanceId, bone, *instance.seatUpperLoop)) return;
+    }
+    // None: the upper body follows the body's ride animation.
+    stopKeyBoneAnimation(instanceId, bone);
 }
 
 void CharacterRenderer::setSeatAnimation(uint32_t instanceId,
@@ -2863,8 +3346,32 @@ void CharacterRenderer::setSeatAnimation(uint32_t instanceId,
     auto it = instances.find(instanceId);
     if (it == instances.end()) return;
     auto& instance = it->second;
-    if (!ride) {
-        instance.seatAnimationHeld = false;
+    releaseSeatedUpperBody(instanceId);
+    instance.seatAnimationHeld = false;
+    if (!ride) return;
+    // What the seat has it stand as is asked of it as anything is
+    // (0x00724500 -> 0x007485b0, then 0x007385c0 -> 0x007176f0): the
+    // animation of its tier the model has. One that comes out a stand
+    // (BehaviorID 0) is none - 0x007385c0 gives a standing upper body the
+    // body's.
+    const auto& model = models[instance.modelId].data;
+    const auto asked = [&](std::optional<uint32_t> a) -> std::optional<uint32_t> {
+        if (!a) return std::nullopt;
+        const uint32_t id = tierAnimationFor(model, *a, instance.animationTier);
+        const auto has = [&model](uint32_t x) { return modelHasAnimation(model, x); };
+        if (anim::animationData().behavior(id) == 0 || !anim::modelPlays(anim::animationData(), id, has))
+            return std::nullopt;
+        return id;
+    };
+    if (!ride->start && !ride->loop) {
+        // No ride animation: seated, the whole unit stands as the seat's
+        // upper ride animation (0x00724500 -> 0x007485b0), and plays what
+        // else it is asked as itself.
+        if (!ride->seated) return;
+        instance.seatUpperStart = asked(ride->upperStart);
+        instance.seatUpperLoop = asked(ride->upperLoop);
+        instance.seatStandsWhole = true;
+        standSeatedWhole(instanceId);
         return;
     }
     // 0x00747b20: the start until it has played once (the passenger's +0x10
@@ -2875,6 +3382,14 @@ void CharacterRenderer::setSeatAnimation(uint32_t instanceId,
         startAnimation(instance, *ride->loop, true, 0);
     }
     instance.seatAnimationHeld = ride->loop.has_value();
+    if (!instance.seatAnimationHeld || !ride->seated) return;
+    instance.seatRideSeated = true;
+    // The upper body's own (+0xb84, 0x0073e840) and what the seat has it
+    // stand as there.
+    instance.seatUpperBone = vehicle_seat::upperKeyBone(hasKeyBone(instanceId, 4), hasKeyBone(instanceId, 6));
+    instance.seatUpperStart = asked(ride->upperStart);
+    instance.seatUpperLoop = asked(ride->upperLoop);
+    standSeatedUpperBody(instanceId);
 }
 
 void CharacterRenderer::setMirrorsSeatParent(uint32_t instanceId, bool mirrors) {
@@ -2935,6 +3450,7 @@ void CharacterRenderer::placeSeatedInstances() {
             inst.seatAnimationHeld = false;
             inst.mirrorsSeatParent = false;
             inst.hasOverrideModelMatrix = false;
+            releaseSeatedUpperBody(id);
             if (!inst.seatFlight) continue;
         }
         const std::optional<glm::mat4> seat = seatWorld(inst);
@@ -2972,24 +3488,70 @@ std::optional<glm::mat4> CharacterRenderer::seatTargetMatrix(uint32_t instanceId
 
 
 bool CharacterRenderer::playKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId,
-                                             bool once) {
+                                             bool once, std::optional<uint32_t> then) {
     auto it = instances.find(instanceId);
     if (it == instances.end() || keyBoneId < 0 || !hasKeyBone(instanceId, keyBoneId)) return false;
-    auto& instance = it->second;
+    return startKeyBoneAnimation(it->second, keyBoneId, animationId, once, then, 0.0f, false);
+}
+
+bool CharacterRenderer::startKeyBoneAnimation(CharacterInstance& instance, int32_t keyBoneId, uint32_t animationId,
+                                              bool once, std::optional<uint32_t> then, float startMs, bool blend) {
     const auto& model = models[instance.modelId].data;
-    int sequence = -1;
-    for (size_t i = 0; i < model.sequences.size(); i++) {
-        if (model.sequences[i].id == animationId && model.sequences[i].variationIndex == 0) {
-            sequence = static_cast<int>(i);
-            break;
-        }
-    }
+    // The bone's sequence for it, or the stand-in along its Fallbacks
+    // (0x00832ab0 -> 0x00826350, for a bone as for the body).
+    const auto sequenceOf = [&model](uint32_t id) {
+        const anim::ModelAnimation shown = shownAnimation(model, id);
+        return std::pair{animationSequenceIndex(model, shown.id), shown.mode};
+    };
+    const auto [sequence, mode] = sequenceOf(animationId);
     if (sequence < 0) return false;
     auto& anims = instance.keyBoneAnimations;
     auto a = std::find_if(anims.begin(), anims.end(), [&](const auto& k) { return k.keyBoneId == keyBoneId; });
+    // What the bone set shows now - its own, else the body's - which the
+    // new one blends in from over its blendTime (0x00826c40).
+    m2_track::SequenceBlend from;
+    if (blend) {
+        const bool own = a != anims.end() && a->sequence >= 0 && !a->returning;
+        if (a != anims.end()) from = a->blend;
+        if (own) {
+            m2_track::beginSequenceBlend(from, instance.globalSequenceTime, a->sequence,
+                                         sampledTime(model, a->sequence, a->time, a->mode), !a->once, false, sequence,
+                                         model.sequences[static_cast<size_t>(sequence)].blendTime, model.sequences);
+        } else {
+            m2_track::beginSequenceBlend(
+                from, instance.globalSequenceTime, instance.currentSequenceIndex,
+                sampledTime(model, instance.currentSequenceIndex, instance.animationTime, instance.playMode),
+                instance.animationLoop, false, sequence, model.sequences[static_cast<size_t>(sequence)].blendTime,
+                model.sequences, instance.playbackRate);
+        }
+    }
     if (a == anims.end()) a = anims.insert(anims.end(), CharacterInstance::KeyBoneAnimation{});
-    *a = CharacterInstance::KeyBoneAnimation{keyBoneId, animationId, sequence, 0.0f, once};
+    const float duration = static_cast<float>(model.sequences[static_cast<size_t>(sequence)].duration);
+    const float time = startMs > 0.0f ? std::min(startMs, duration) : startTime(model, sequence, mode);
+    *a = CharacterInstance::KeyBoneAnimation{keyBoneId, animationId, sequence, time, once};
+    a->mode = mode;
+    a->blend = from;
+    if (once && then) {
+        std::tie(a->thenSequence, a->thenMode) = sequenceOf(*then);
+        a->thenAnimationId = *then;
+    }
     assignKeyBoneAnimations(model, anims, instance.boneKeyBoneAnimation);
+    return true;
+}
+
+void CharacterRenderer::returnKeyBone(CharacterInstance& instance, int32_t keyBoneId) {
+    auto& anims = instance.keyBoneAnimations;
+    auto a = std::find_if(anims.begin(), anims.end(), [&](const auto& k) { return k.keyBoneId == keyBoneId; });
+    if (a == anims.end() || a->sequence < 0 || a->returning) return;
+    returnKeyBoneState(*a, instance.globalSequenceTime, models[instance.modelId].data);
+}
+
+bool CharacterRenderer::playVehicleKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId,
+                                                    bool once) {
+    if (!playKeyBoneAnimation(instanceId, keyBoneId, animationId, once)) return false;
+    for (auto& k : instances[instanceId].keyBoneAnimations) {
+        if (k.keyBoneId == keyBoneId) k.vehicle = true;
+    }
     return true;
 }
 
@@ -3101,15 +3663,17 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
 
     // The pose the body is blending out of, the same for every bone: the
     // client sets the state on the root and the rest inherit it (FUN_0082f0f0).
+    const float bodyTime =
+        sampledTime(model, instance.currentSequenceIndex, instance.animationTime, instance.playMode);
     const m2_track::BlendSample bodyBlend = m2_track::currentBlend(
         instance.sequenceBlend, instance.globalSequenceTime, model.sequences,
-        instance.currentSequenceIndex, instance.animationTime);
+        instance.currentSequenceIndex, bodyTime);
 
     for (size_t i = 0; i < numBones; i++) {
         const auto& bone = model.bones[i];
 
         int sequence = instance.currentSequenceIndex;
-        float time = instance.animationTime;
+        float time = bodyTime;
         m2_track::BlendSample blend = bodyBlend;
         const int arm = armsOwnSequences ? instance.boneArm[i] : -1;
         const int keyAnim = instance.boneKeyBoneAnimation.size() == numBones ? instance.boneKeyBoneAnimation[i] : -1;
@@ -3117,12 +3681,21 @@ void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
             // An arm on a sequence of its own does not take the body's old pose.
             blend = {};
             sequence = instance.armSequenceIndex[arm];
-            time = std::min(instance.armTime[arm], static_cast<float>(model.sequences[sequence].duration));
+            time = sampledTime(model, sequence,
+                               std::min(instance.armTime[arm], static_cast<float>(model.sequences[sequence].duration)),
+                               instance.armMode[arm]);
         } else if (keyAnim >= 0 && static_cast<size_t>(keyAnim) < instance.keyBoneAnimations.size() &&
                    instance.keyBoneAnimations[keyAnim].sequence >= 0) {
             blend = {};
-            sequence = instance.keyBoneAnimations[keyAnim].sequence;
-            time = instance.keyBoneAnimations[keyAnim].time;
+            const auto& k = instance.keyBoneAnimations[keyAnim];
+            if (k.returning) {
+                // The body's, from the bone set's last pose.
+                blend = m2_track::currentBlend(k.blend, instance.globalSequenceTime, model.sequences, -1, 0.0f);
+            } else {
+                sequence = k.sequence;
+                time = sampledTime(model, k.sequence, k.time, k.mode);
+                blend = m2_track::currentBlend(k.blend, instance.globalSequenceTime, model.sequences, k.sequence, time);
+            }
         }
 
         // Local transform includes pivot bracket: T(pivot)*T*R*S*T(-pivot)
@@ -3677,11 +4250,13 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 const float batchColorAlpha = glm::clamp(
                     evalBatchColorAlpha(gpuModel.data, batch,
                                         instance.currentSequenceIndex,
-                                        instance.animationTime,
+                                        sampledTime(gpuModel.data, instance.currentSequenceIndex,
+                                                    instance.animationTime, instance.playMode),
                                         instance.globalSequenceTime) *
                     evalBatchTextureWeight(gpuModel.data, batch,
                                            instance.currentSequenceIndex,
-                                           instance.animationTime,
+                                           sampledTime(gpuModel.data, instance.currentSequenceIndex,
+                                                       instance.animationTime, instance.playMode),
                                            instance.globalSequenceTime),
                     0.0f, 1.0f);
                 if (batchColorAlpha <= 0.01f) {
@@ -3899,7 +4474,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 if (const auto* tt = m2_track::batchTextureTransform(gpuModel.data,
                                                                      batch.textureAnimIndex)) {
                     const glm::mat4 uvm = m2_track::textureTransformMatrix(
-                        *tt, instance.currentSequenceIndex, instance.animationTime,
+                        *tt, instance.currentSequenceIndex,
+                        sampledTime(gpuModel.data, instance.currentSequenceIndex, instance.animationTime,
+                                    instance.playMode),
                         instance.globalSequenceTime, gpuModel.data.globalSequenceDurations);
                     matData.uvM00 = uvm[0][0]; matData.uvM01 = uvm[1][0];
                     matData.uvM10 = uvm[0][1]; matData.uvM11 = uvm[1][1];
@@ -3909,7 +4486,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                 matData.coordSources = m2PackCoordSources(combiner);
                 const glm::vec3 batchRGB = evalBatchColorRGB(gpuModel.data, batch,
                                                              instance.currentSequenceIndex,
-                                                             instance.animationTime,
+                                                             sampledTime(gpuModel.data,
+                                                                         instance.currentSequenceIndex,
+                                                                         instance.animationTime, instance.playMode),
                                                              instance.globalSequenceTime);
                 matData.tintR = batchRGB.r;
                 matData.tintG = batchRGB.g;
@@ -3923,7 +4502,9 @@ void CharacterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                         if (const auto* tt2 = m2_track::batchTextureTransform(
                                 gpuModel.data, static_cast<uint16_t>(batch.textureAnimIndex + 1))) {
                             const glm::mat4 uvm = m2_track::textureTransformMatrix(
-                                *tt2, instance.currentSequenceIndex, instance.animationTime,
+                                *tt2, instance.currentSequenceIndex,
+                                sampledTime(gpuModel.data, instance.currentSequenceIndex, instance.animationTime,
+                                            instance.playMode),
                                 instance.globalSequenceTime, gpuModel.data.globalSequenceDurations);
                             matData.uv2M00 = uvm[0][0]; matData.uv2M01 = uvm[1][0];
                             matData.uv2M10 = uvm[0][1]; matData.uv2M11 = uvm[1][1];
@@ -4303,9 +4884,13 @@ void CharacterRenderer::renderShadow(VkCommandBuffer cmd, const glm::mat4& light
             }
             const float batchAlpha =
                 evalBatchColorAlpha(gpuModel.data, batch, inst.currentSequenceIndex,
-                                    inst.animationTime, inst.globalSequenceTime) *
+                                    sampledTime(gpuModel.data, inst.currentSequenceIndex, inst.animationTime,
+                                                inst.playMode),
+                                    inst.globalSequenceTime) *
                 evalBatchTextureWeight(gpuModel.data, batch, inst.currentSequenceIndex,
-                                       inst.animationTime, inst.globalSequenceTime);
+                                       sampledTime(gpuModel.data, inst.currentSequenceIndex, inst.animationTime,
+                                                   inst.playMode),
+                                       inst.globalSequenceTime);
             if (glm::clamp(batchAlpha, 0.0f, 1.0f) <= 0.01f) continue;
             if (inst.opacity <= 0.01f) continue;
 
@@ -4496,7 +5081,11 @@ bool CharacterRenderer::getInstancePose(uint32_t instanceId, glm::mat4& model,
     model = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
     bones = &inst.boneMatrices;
     sequenceIndex = inst.currentSequenceIndex;
-    animationTimeMs = inst.animationTime;
+    // The time its tracks are read at: from the end for a sequence that
+    // stands in reversed (0x00826350).
+    animationTimeMs = inst.cachedModel ? sampledTime(inst.cachedModel->data, inst.currentSequenceIndex,
+                                                     inst.animationTime, inst.playMode)
+                                       : inst.animationTime;
     globalTimeMs = inst.globalSequenceTime;
     return true;
 }

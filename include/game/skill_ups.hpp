@@ -43,6 +43,22 @@ public:
     /// hold them (0x00810ed0).
     const RaceClassInfo* raceClassInfo(uint32_t skillId, uint8_t race, uint8_t classId) const;
     bool hasSkillLine(uint32_t skillId) const { return skillCostsId_.count(skillId) != 0; }
+    /// One SkillLineAbility.dbc row: its skill (+4) and the masks at +0xc..+0x18.
+    struct Ability {
+        uint32_t skillId = 0;
+        uint32_t raceMask = 0;
+        uint32_t classMask = 0;
+        uint32_t raceMaskNot = 0;   ///< nonzero: raceMask is read inverted
+        uint32_t classMaskNot = 0;  ///< nonzero: classMask is read inverted
+    };
+    /// 0x00812410: the skill line a spell belongs to for this race and class -
+    /// the first SkillLineAbility row of the spell whose skill the race and
+    /// class have (0x00810ed0) and whose own masks hold them (0x00810320).
+    /// 0 for none.
+    uint32_t abilitySkillLine(uint32_t spellId, uint8_t race, uint8_t classId) const;
+    /// For tests: rows as load() would read them.
+    void addRaceClassInfo(const RaceClassInfo& info) { raceClass_.push_back(info); }
+    void addAbility(uint32_t spellId, const Ability& ability) { abilities_.emplace(spellId, ability); }
     /// What raising the skill to `rank` costs (0x00810f50): the cost column
     /// of the rank'th row of the skill's SkillCostsData, 0 past the last or
     /// with none.
@@ -68,6 +84,7 @@ public:
 private:
     bool loaded_ = false;
     std::vector<RaceClassInfo> raceClass_;
+    std::multimap<uint32_t, Ability> abilities_;   ///< by spell, in file order
     std::unordered_map<uint32_t, uint32_t> skillCostsId_;  ///< SkillLine id -> SkillCostsID
     std::unordered_map<uint32_t, std::vector<std::array<uint32_t, 3>>> costs_;
     std::unordered_map<uint32_t, std::array<uint32_t, 16>> tierCosts_;

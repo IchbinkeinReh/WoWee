@@ -225,6 +225,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
             if (kitSoundField != 0xFFFFFFFFu)
                 kit.soundId = static_cast<uint32_t>(std::max(kitDbc->getInt32(i, kitSoundField), 0));
             if (kitFlagsField != 0xFFFFFFFFu) kit.flags = kitDbc->getUInt32(i, kitFlagsField);
+            if (kitAnimField != 0xFFFFFFFFu) kit.animId = kitDbc->getInt32(i, kitAnimField);
             if (kitShakeField != 0xFFFFFFFFu)
                 kit.shakeId = static_cast<uint32_t>(std::max(kitDbc->getInt32(i, kitShakeField), 0));
             bool hasProc = false;
@@ -237,7 +238,7 @@ void SpellVisualSystem::loadSpellVisualDbc() {
                 hasProc = hasProc || kit.charProc[k] <= 0x11u;
             }
             if (!kit.models.empty() || !kit.weaponEffects.empty() || kit.soundId != 0 || kit.flags != 0 ||
-                kit.shakeId != 0 || hasProc)
+                kit.shakeId != 0 || hasProc || kit.animId > 0)
                 kits_[kitId] = std::move(kit);
         }
     }
@@ -1199,6 +1200,38 @@ void SpellVisualSystem::stepRiderPose(uint64_t unitGuid, uint32_t spellId, bool 
                              : mount_seat::riderPoseOnMountAuraGone(current, kitAnim, activePlayer);
     if (next == mount_seat::kRiderPoseMount) riderPoses_.erase(unitGuid);
     else riderPoses_[unitGuid] = next;
+}
+
+std::optional<SpellVisualSystem::KitAnimation> SpellVisualSystem::unitKitAnimation(uint64_t unitGuid) const {
+    auto it = unitAuraKits_.find(unitGuid);
+    if (it == unitAuraKits_.end()) return std::nullopt;
+    // The unit's kits newest first (0x006f76c0 puts each at the head).
+    const auto& auras = it->second.auras;
+    for (auto a = auras.rbegin(); a != auras.rend(); ++a) {
+        if (!a->playing || a->awaitingMissile || a->awaitingChain) continue;
+        auto kitIt = kits_.find(a->kitId);
+        if (kitIt == kits_.end() || kitIt->second.animId <= 0) continue;
+        if (kitSpellResolver_ && kitSpellResolver_(a->spellId).mounts) continue;
+        return KitAnimation{static_cast<uint32_t>(kitIt->second.animId), (kitIt->second.flags & 0xcu) == 0};
+    }
+    return std::nullopt;
+}
+
+std::optional<SpellVisualSystem::CastLoop> SpellVisualSystem::castLoop(uint32_t castSpellId, uint32_t channelSpellId) {
+    if (castSpellId == 0 && channelSpellId == 0) return std::nullopt;
+    if (!spellVisualDbcLoaded_) loadSpellVisualDbc();
+    const auto visualOf = [this](uint32_t spell) { return spellVisualResolver_ ? spellVisualResolver_(spell) : 0u; };
+    uint32_t kitId = 0;
+    if (castSpellId != 0) {
+        auto it = visualKits_.find(visualOf(castSpellId));
+        kitId = it != visualKits_.end() ? it->second.precast : 0;
+    } else {
+        auto it = visualAuraKits_.find(visualOf(channelSpellId));
+        kitId = it != visualAuraKits_.end() ? it->second.channelKit : 0;
+    }
+    auto kitIt = kitId ? kits_.find(kitId) : kits_.end();
+    if (kitIt == kits_.end() || kitIt->second.animId <= 0) return std::nullopt;
+    return CastLoop{static_cast<uint32_t>(kitIt->second.animId), kitIt->second.flags};
 }
 
 uint32_t SpellVisualSystem::riderPose(uint64_t unitGuid) const {

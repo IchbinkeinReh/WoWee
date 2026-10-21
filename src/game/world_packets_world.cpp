@@ -603,7 +603,8 @@ network::Packet AutostoreLootItemPacket::build(uint8_t slotIndex) {
 network::Packet UseItemPacket::build(uint8_t bagIndex, uint8_t slotIndex,
                                      uint64_t itemGuid, uint32_t spellId,
                                      uint64_t targetGuid, uint64_t itemTargetGuid,
-                                     uint64_t gameObjectGuid, uint32_t glyphIndex) {
+                                     uint64_t gameObjectGuid, uint32_t glyphIndex,
+                                     uint32_t noTargetFlags) {
     network::Packet packet(wireOpcode(Opcode::CMSG_USE_ITEM));
     packet.writeUInt8(bagIndex);
     packet.writeUInt8(slotIndex);
@@ -625,7 +626,7 @@ network::Packet UseItemPacket::build(uint8_t bagIndex, uint8_t slotIndex,
         packet.writeUInt32(0x02); // TARGET_FLAG_UNIT
         packet.writePackedGuid(targetGuid);
     } else {
-        packet.writeUInt32(0x00); // TARGET_FLAG_SELF
+        packet.writeUInt32(noTargetFlags); // TARGET_FLAG_SELF, or a glyph socket
     }
     return packet;
 }
@@ -1596,6 +1597,13 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
         }
     }
     if (sourceItemField) {
+        // Flags is the word after the start item, PlayersSlain the one after
+        // the title, and the two reputation objectives' factions are fields
+        // 5 and 7 of the same count (AzerothCore's Quest::BuildQuestData).
+        out.questFlags = fieldAt(sourceItemField + 1);
+        out.playersSlain = fieldAt(sourceItemField + 3);
+        out.repObjectiveFaction = fieldAt(5);
+        out.repObjectiveFaction2 = fieldAt(7);
         const uint32_t srcItem = fieldAt(sourceItemField);
         // Same plausibility gate the rewards use: a layout mismatch lands in a
         // float or a string and reads as an enormous item id.

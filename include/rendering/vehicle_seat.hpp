@@ -93,6 +93,12 @@ struct Flight {
 struct RideAnimation {
     std::optional<uint32_t> start;
     std::optional<uint32_t> loop;
+    /// Seat Flags 0x4: the upper body's (0x007485b0), on upperKeyBone.
+    std::optional<uint32_t> upperStart;
+    std::optional<uint32_t> upperLoop;
+    /// Seated (state 3, 0x004f6250): what the unit is asked to play goes to
+    /// its upper body. On the way in or out it is not played.
+    bool seated = false;
 };
 [[nodiscard]] inline std::optional<RideAnimation> rideAnimation(uint32_t seatFlags, int32_t rideAnimStart,
                                                                 int32_t rideAnimLoop) {
@@ -104,6 +110,16 @@ struct RideAnimation {
     if (rideAnimLoop >= 0 && rideAnimLoop != kNoAnimation) out.loop = static_cast<uint32_t>(rideAnimLoop);
     if (!out.start && !out.loop) return std::nullopt;
     return out;
+}
+
+/// The key bone a unit's upper body animates from (+0xb84, set as its model
+/// loads, 0x0073e840): SpineLow (4) where the model has it, else the head
+/// (6), else none - it has no upper body of its own.
+inline constexpr int32_t kNoUpperBody = -1;
+[[nodiscard]] inline int32_t upperKeyBone(bool hasSpine, bool hasHead) {
+    if (hasSpine) return 4;
+    if (hasHead) return 6;
+    return kNoUpperBody;
 }
 
 }  // namespace wowee::rendering::vehicle_seat

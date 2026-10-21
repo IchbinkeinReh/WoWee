@@ -3,6 +3,7 @@
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
 #include "game/handler_types.hpp"
+#include "game/quest_poi_icons.hpp"
 #include "network/packet.hpp"
 #include <array>
 #include <chrono>
@@ -94,6 +95,9 @@ public:
     using GossipPoi = game::GossipPoi;
     [[nodiscard]] const std::vector<GossipPoi>& getGossipPois() const { return gossipPois_; }
     void clearGossipPois() { gossipPois_.clear(); }
+    /// The client's 25-entry quest POI icon list, filled from
+    /// SMSG_QUEST_POI_QUERY_RESPONSE (0x005e7370) for every map.
+    [[nodiscard]] QuestPoiIconList& questPoiIcons() { return questPoiIcons_; }
 
     // Quest turn-in
     [[nodiscard]] bool isQuestRequestItemsOpen() const { return questRequestItemsOpen_; }
@@ -149,6 +153,15 @@ public:
         // usable item some quests hand you and the watch frame draws a button
         // for. Zero when the quest has none, which is most of them.
         uint32_t sourceItemId = 0;
+        /// The kill records' source items (ReqSourceId, the cache's +0x1c74):
+        /// what a quest hands over for an objective, not an objective itself.
+        std::array<uint32_t, 4> objectiveSourceItems{};
+        /// Flags, PlayersSlain and the reputation objectives' factions, as
+        /// QuestQueryRewardsData carries them.
+        uint32_t questFlags = 0;
+        uint32_t playersSlain = 0;
+        uint32_t repObjectiveFaction = 0;
+        uint32_t repObjectiveFaction2 = 0;
         int32_t  rewardMoney = 0;
         std::array<QuestRewardItem, 4> rewardItems{};
         std::array<QuestRewardItem, 6> rewardChoiceItems{};
@@ -306,6 +319,7 @@ private:
     GossipMessageData currentGossip_;
     std::string questGreeting_;
     std::vector<GossipPoi> gossipPois_;
+    QuestPoiIconList questPoiIcons_;
 
     // Quest details
     bool questDetailsOpen_ = false;

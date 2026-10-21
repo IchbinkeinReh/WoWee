@@ -764,6 +764,13 @@ wowee_add_test(test_difficulty_change
     SOURCES test_difficulty_change.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_server_notices ──────────────────────────────────────
+# The game errors MSG_QUEST_PUSH_RESULT, the voice and GM ticket notices and
+# SMSG_READ_ITEM_FAILED come down to, row by row of the client's table.
+wowee_add_test(test_server_notices
+    SOURCES test_server_notices.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_world_leave_sound ───────────────────────────────────
 # The teleports that unload the world's sound.
 wowee_add_test(test_world_leave_sound
@@ -1370,6 +1377,24 @@ target_include_directories(test_animation_ids SYSTEM PRIVATE ${TEST_SYSTEM_INCLU
 target_link_libraries(test_animation_ids PRIVATE catch2_main)
 add_test(NAME animation_ids COMMAND test_animation_ids)
 register_test_target(test_animation_ids)
+
+# ── test_animation_data ──────────────────────────────────────
+# AnimationData's fallbacks: what a model plays for an animation it lacks
+# (0x00826350) and what a unit of a tier is put in (0x007176f0).
+wowee_add_test(test_animation_data
+    SOURCES test_animation_data.cpp)
+
+# ── test_upper_body ──────────────────────────────────────────
+# A unit's upper body on an animation of its own: whether it may differ
+# from the body (0x00723e30) and where an animation asked goes (0x007385c0).
+wowee_add_test(test_upper_body
+    SOURCES test_upper_body.cpp ${CMAKE_SOURCE_DIR}/src/rendering/animation/upper_body.cpp)
+
+# ── test_base_animation ──────────────────────────────────────
+# The animation a unit is in when nothing else is asked of it (0x00724500).
+wowee_add_test(test_base_animation
+    SOURCES test_base_animation.cpp ${CMAKE_SOURCE_DIR}/src/rendering/animation/base_animation.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/animation/upper_body.cpp)
 
 # ── test_locomotion_fsm ──────────────────────────────────────
 add_executable(test_locomotion_fsm
@@ -3261,3 +3286,53 @@ wowee_add_test(test_client_cvar_registry
 # which GetAddOnDependencies answers.
 wowee_add_test(test_toc_dependencies
     SOURCES test_toc_dependencies.cpp ${CMAKE_SOURCE_DIR}/src/addons/toc_parser.cpp)
+
+# ── test_trainer_service_list ────────────────────────────────
+# The trainer window's list as the client keeps it: header rows per skill
+# line, the shown rows first, and the type, skill line and collapse filters
+# (0x00596450, 0x00594ba0).
+wowee_add_test(test_trainer_service_list
+    SOURCES test_trainer_service_list.cpp ${CMAKE_SOURCE_DIR}/src/game/trainer_service_list.cpp)
+
+# ── test_macro_eval ──────────────────────────────────────────
+# What a macro shows, read out of its text as the client reads it: the
+# commands kept (0x00565c40) and what the first applying one names
+# (0x005650c0).
+wowee_add_test(test_macro_eval
+    SOURCES test_macro_eval.cpp ${CMAKE_SOURCE_DIR}/src/game/macro_eval.cpp)
+
+# ── test_macro_options ───────────────────────────────────────
+# The macro conditional language as the client parses it: clauses, groups,
+# units, "no", arguments and the condition table (0x005f0df0, 0x005ef5c0).
+wowee_add_test(test_macro_options
+    SOURCES test_macro_options.cpp ${CMAKE_SOURCE_DIR}/src/game/macro_options.cpp)
+
+# ── test_quest_poi_icons ─────────────────────────────────────
+# The client's 25-entry quest POI icon list: slots from the query response
+# (0x005e7370/0x005e7020), the visible count (0x005e5a50), the marks pushed
+# apart (0x005e2eb0) and the visible order (0x005e3840).
+wowee_add_test(test_quest_poi_icons
+    SOURCES test_quest_poi_icons.cpp ${CMAKE_SOURCE_DIR}/src/game/quest_poi_icons.cpp)
+
+# ── test_glyph_socket ────────────────────────────────────────
+# A glyph against a socket: GlyphMatchesSocket (0x005b7410) and the placement
+# check of PlaceGlyphInSocket (0x0080c3e0). Header-only.
+wowee_add_test(test_glyph_socket
+    SOURCES test_glyph_socket.cpp)
+
+# ── test_latest_criteria ─────────────────────────────────────
+# The statistics most recently updated (0x005b2520, 0x005b2cb0) that
+# GetLatestUpdatedStats and GetLatestUpdatedComparisonStats read. Header-only.
+wowee_add_test(test_latest_criteria
+    SOURCES test_latest_criteria.cpp)
+
+# ── test_chat_color_table ────────────────────────────────────
+# The chat type colour table (0x00b746e8) and its COLORS section. Header-only.
+wowee_add_test(test_chat_color_table
+    SOURCES test_chat_color_table.cpp)
+
+# ── test_target_direction ────────────────────────────────────
+# TargetDirectionEnemy/Friend's choice (0x005252d0, 0x00518f40, 0x004f6d20).
+# Header-only.
+wowee_add_test(test_target_direction
+    SOURCES test_target_direction.cpp)

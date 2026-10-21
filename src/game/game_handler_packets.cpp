@@ -880,7 +880,9 @@ void GameHandler::registerCoreOpcodes() {
     dispatchTable_[Opcode::SMSG_CLEAR_FAR_SIGHT_IMMEDIATE] = [](network::Packet& /*packet*/) {
         LOG_DEBUG("SMSG_CLEAR_FAR_SIGHT_IMMEDIATE");
     };
-    registerSkipHandler(Opcode::SMSG_COMBAT_EVENT_FAILED);
+    // Read as a movement packet and dropped: 0x00740d30's case 0xd9 returns
+    // before anything is done with it.
+    registerSkipHandler(Opcode::MSG_MOVE_TOGGLE_COLLISION_CHEAT);
     dispatchTable_[Opcode::SMSG_FORCE_ANIM] = [this](network::Packet& packet) {
         if (packet.hasRemaining(1)) {
             uint64_t animGuid = packet.readPackedGuid();
@@ -1972,6 +1974,7 @@ void GameHandler::registerCoreOpcodes() {
             if (readCriteriaProgressTail(packet, rec)) {
                 // A timed criteria whose window ran out reads as zero, which is
                 // what the server means by the flag and what the panel shows.
+                noteCriteriaForLatestStats(criteriaId, rec.flags);
                 const uint64_t progress = (rec.flags == 1) ? 0 : rec.counter;
                 uint64_t oldProgress = 0;
                 auto cpit = criteriaProgress_.find(criteriaId);
@@ -2038,6 +2041,54 @@ void GameHandler::registerCoreOpcodes() {
 // as five batches of whatever was left over, and the honest description of that
 // is 'the rest'.
 void GameHandler::registerRemainingOpcodes() {
+    // The opcodes that are a game error and nothing more (server_notices.hpp
+    // names each handler and row).
+    for (const auto& [op, error] : std::initializer_list<std::pair<LogicalOpcode, const server_notice::GameError*>>{
+             {Opcode::SMSG_COMSAT_RECONNECT_TRY, &server_notice::kComsatReconnectAttempt},
+             {Opcode::SMSG_COMSAT_DISCONNECT, &server_notice::kComsatDisconnect},
+             {Opcode::SMSG_COMSAT_CONNECT_FAIL, &server_notice::kComsatConnectFail},
+             {Opcode::SMSG_VOICESESSION_FULL, &server_notice::kVoiceSessionFull},
+             {Opcode::SMSG_BATTLEGROUND_INFO_THROTTLED, &server_notice::kBattlegroundInfoThrottled},
+             {Opcode::SMSG_INVALID_PROMOTION_CODE, &server_notice::kInvalidPromotionCode},
+         }) {
+        dispatchTable_[op] = [this, error](network::Packet& packet) {
+            packet.skipAll();
+            sayGameError(*error);
+        };
+    }
+    // 0x006e2e90 case 0x4c8: a uint32, and the error only where it is not zero.
+    dispatchTable_[Opcode::SMSG_ARENA_TEAM_CHANGE_FAILED_QUEUED] = [this](network::Packet& packet) {
+        if (packet.hasRemaining(4) && packet.readUInt32() != 0)
+            sayGameError(server_notice::kArenaTeamChangeFailedQueued);
+    };
+    // The quest the player shared, as each one it went to answered (0x006e2e90
+    // case 0x276): guid and a result byte, worded with that player's name -
+    // and only when the name is already known, as 0x0067d770 without a
+    // callback has it.
+    dispatchTable_[Opcode::MSG_QUEST_PUSH_RESULT] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(9)) return;
+        const uint64_t guid = packet.readUInt64();
+        const uint8_t result = packet.readUInt8();
+        const auto* error = server_notice::questPushResult(result);
+        if (!error) return;
+        const auto& names = getPlayerNameCache();
+        if (auto it = names.find(guid); it != names.end() && !it->second.empty())
+            sayGameError(*error, {it->second});
+    };
+    // A group leader took the player's voice away or gave it back (0x005725c0).
+    dispatchTable_[Opcode::MSG_NOTIFY_PARTY_SQUELCH] = [this](network::Packet& packet) {
+        if (packet.hasRemaining(4)) sayGameError(server_notice::partySquelch(packet.readUInt32()));
+    };
+    // The leader's echo of the same, naming whom (0x00572610) - a name known
+    // or nothing, as above.
+    dispatchTable_[Opcode::SMSG_ECHO_PARTY_SQUELCH] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(12)) return;
+        const uint64_t guid = packet.readUInt64();
+        const uint32_t silenced = packet.readUInt32();
+        const auto& names = getPlayerNameCache();
+        if (auto it = names.find(guid); it != names.end() && !it->second.empty())
+            sayGameError(server_notice::partySquelchEcho(silenced), {it->second});
+    };
     // -----------------------------------------------------------------------
     // Batch 8-12: Remaining opcodes (inspects, quests, auctions, spells,
     //             calendars, battlefields, voice, misc consume-only)
@@ -3088,11 +3139,15 @@ void GameHandler::registerRemainingOpcodes() {
         // The criteria records are SMSG_ALL_ACHIEVEMENT_DATA's (0x005b34a0):
         // packed counter, packed guid, flags, date and two timers - not the
         // fixed sixteen bytes this stepped over them by.
+        // The comparison unit's statistics go on its list (0x005b2cb0),
+        // whatever their flags; any other player's are not kept.
+        const bool comparing = inspectedGuid == achievementComparisonGuid_;
         while (packet.hasRemaining(4)) {
             uint32_t id = packet.readUInt32();
             if (id == 0xFFFFFFFF) break;
             CriteriaProgressRecord rec;
             if (!readCriteriaProgressTail(packet, rec)) break;
+            if (comparing && isStatisticCriteria(id)) latestUpdatedComparisonStats_.noteComparison(id);
         }
         inspectedPlayerAchievements_[inspectedGuid] = std::move(achievements);
         LOG_INFO("SMSG_RESPOND_INSPECT_ACHIEVEMENTS: guid=0x", std::hex, inspectedGuid, std::dec,
@@ -3102,10 +3157,12 @@ void GameHandler::registerRemainingOpcodes() {
         fireAddonEvent("INSPECT_ACHIEVEMENT_READY", {});
     };
     // The client only lets go of the player's wait for a seat change it
-    // asked for (0x00800510 -> 0x00747900, passenger +0x10 &= ~0x8); the
-    // vehicle the player is - its own rec id - is untouched.
-    dispatchTable_[Opcode::SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA] = [](network::Packet& packet) {
+    // asked for (0x00800510 -> 0x00747900, passenger +0x10 &= ~0x8), which
+    // held its mover; the vehicle the player is - its own rec id - is
+    // untouched. The packet has no body the client reads.
+    dispatchTable_[Opcode::SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA] = [this](network::Packet& packet) {
         packet.skipAll();
+        vehicleRoster_.cancelSeatChangeAsked(playerGuid);
     };
     // uint32 type (0=normal, 1=heavy, 2=tired/restricted) + uint32 minutes played
     dispatchTable_[Opcode::SMSG_PLAY_TIME_WARNING] = [this](network::Packet& packet) {
@@ -3569,8 +3626,32 @@ void GameHandler::registerRemainingOpcodes() {
             LOG_DEBUG("SMSG_GMRESPONSE_STATUS_UPDATE: survey=", survey);
         }
     };
-    // GM ticket status (new/updated); no ticket UI yet
-    registerSkipHandler(Opcode::SMSG_GM_TICKET_STATUS_UPDATE);
+    // 0x005ad240 case 0x328: a uint32 through the jump table at 0x005ad5ec.
+    // 1 and 4 ask for the ticket again and say nothing; 2 lets it go
+    // (0xc1e8d0 = 0) with UPDATE_TICKET, and 3 the same with GMSURVEY_DISPLAY
+    // in its place.
+    dispatchTable_[Opcode::SMSG_GM_TICKET_STATUS_UPDATE] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(4)) return;
+        using server_notice::TicketStatusAction;
+        const TicketStatusAction action = server_notice::ticketStatusAction(packet.readUInt32());
+        switch (action) {
+            case TicketStatusAction::Refresh:
+                requestGmTicket();
+                break;
+            case TicketStatusAction::Closed:
+            case TicketStatusAction::ClosedSurvey:
+                gmTicketActive_ = false;
+                gmTicketText_.clear();
+                fireAddonEvent(action == TicketStatusAction::ClosedSurvey ? "GMSURVEY_DISPLAY" : "UPDATE_TICKET", {});
+                break;
+            case TicketStatusAction::None:
+                break;
+        }
+    };
+    // ERR_GMRESPONSE_DB_ERROR and nothing else (0x005ad240 case 0x4ee).
+    dispatchTable_[Opcode::SMSG_GMRESPONSE_DB_ERROR] = [this](network::Packet& /*packet*/) {
+        sayGameError(server_notice::kGmResponseDbError);
+    };
     // Broadcast of another player's collision height change - cosmetic only.
     registerSkipHandler(Opcode::MSG_MOVE_SET_COLLISION_HGT);
     // Client uses this outbound; treat inbound variant as no-op for robustness.
@@ -3630,8 +3711,21 @@ void GameHandler::registerRemainingOpcodes() {
         itemRefundInfo_[itemGuid] = info;
         fireAddonEvent("UPDATE_INVENTORY_ALERTS", {});
     };
-    // Consume silently - informational, no UI action needed
-    registerSkipHandler(Opcode::SMSG_LOOT_LIST);
+    // A corpse's looters (0x0071ca50 -> 0x0071bc00): the unit, then the master
+    // looter and the one whose turn it is as packed guids, kept on the unit
+    // for its tooltip. A unit not in sight has the rest skipped.
+    dispatchTable_[Opcode::SMSG_LOOT_LIST] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(8)) return;
+        auto unit = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(packet.readUInt64()));
+        if (!unit) {
+            packet.skipAll();
+            return;
+        }
+        Unit::Looters looters;
+        if (packet.hasFullPackedGuid()) looters.master = packet.readPackedGuid();
+        if (packet.hasFullPackedGuid()) looters.roundRobin = packet.readPackedGuid();
+        unit->setLooters(looters);
+    };
     // Sent one line before SMSG_DESTROY_OBJECT and carrying the same guid, and
     // only inside an arena - Object::DestroyForPlayer writes both. The unit is
     // removed by the second one whatever happens here, so this is a decision
@@ -3696,7 +3790,6 @@ void GameHandler::registerRemainingOpcodes() {
         Opcode::SMSG_UPDATE_ACCOUNT_DATA_COMPLETE,
         Opcode::SMSG_UPDATE_INSTANCE_OWNERSHIP,
         Opcode::SMSG_UPDATE_LAST_INSTANCE,
-        Opcode::SMSG_VOICESESSION_FULL,
         Opcode::SMSG_VOICE_CHAT_STATUS,
         Opcode::SMSG_VOICE_PARENTAL_CONTROLS,
         Opcode::SMSG_VOICE_SESSION_ADJUST_PRIORITY,

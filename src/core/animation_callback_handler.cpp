@@ -116,8 +116,27 @@ void AnimationCallbackHandler::setupCallbacks() {
             case game::GameHandler::HitReaction::WOUND:      animId = rendering::anim::COMBAT_WOUND; break;
         }
 
+        // A blow taken (0x00755e40 -> 0x00736640): StandWound, CombatWound
+        // in a fight, CombatCritical, on the upper body or the whole body as
+        // the unit stands.
+        const bool isLocalPlayer = (victimGuid == gameHandler_.getPlayerGuid());
+        if (reaction == game::GameHandler::HitReaction::WOUND ||
+            reaction == game::GameHandler::HitReaction::CRIT_WOUND) {
+            uint32_t instanceId = isLocalPlayer ? renderer_.getCharacterInstanceId()
+                                                : entitySpawner_.getCreatureInstanceId(victimGuid);
+            if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(victimGuid);
+            if (instanceId == 0) return;
+            const auto wound =
+                cr->woundFor(instanceId, reaction == game::GameHandler::HitReaction::CRIT_WOUND);
+            if (!wound) return;
+            // The player's whole body is its animation controller's.
+            auto* ac = isLocalPlayer && !wound->upper ? renderer_.getAnimationController() : nullptr;
+            if (ac) ac->triggerHitReaction(wound->anim);
+            else cr->playWound(instanceId, *wound);
+            return;
+        }
+
         // For local player: use AnimationController state
-        bool isLocalPlayer = (victimGuid == gameHandler_.getPlayerGuid());
         if (isLocalPlayer) {
             auto* ac = renderer_.getAnimationController();
             if (ac) {
@@ -595,8 +614,13 @@ void AnimationCallbackHandler::setupCallbacks() {
                     ac->setSeatedLoopAnimation(0);
                     ac->stopSpellCast();
                 }
-            } else if (isChannel) {
-                cr->playAnimation(instanceId, rendering::anim::STAND, true);
+            } else {
+                // A cast loop its upper body took up on the move goes with
+                // the cast.
+                cr->releaseUpperBodyLoop(instanceId);
+                // A channel's end asks the base animation again (0x0073eb50
+                // -> 0x0073ac30).
+                if (isChannel) cr->playBaseAnimation(instanceId);
             }
         }
     });

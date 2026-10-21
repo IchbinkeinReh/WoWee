@@ -2213,7 +2213,8 @@ GoAnimState goAnimStateFor(uint8_t from, uint8_t to) {
 
 // FUN_0070d1e0: the state's own animation, or what stands in for it, and
 // whether the stand-in is held on its first frame (the client's speed 0).
-// The model may lack even that; see goShownAnimation.
+// The model may lack even that, and then plays what AnimationData's
+// fallbacks give (M2Renderer::shownAnimationId).
 struct GoStateAnimation { uint32_t anim; bool hold; };
 template <typename Has>
 GoStateAnimation goStateAnimation(uint8_t state, const Has& has) {
@@ -2247,13 +2248,6 @@ GoStateAnimation goStateAnimation(uint8_t state, const Has& has) {
         }
     }
     return {anim, hold};
-}
-
-// An animation the model lacks plays its idle instead, as the client's own
-// lookup falls back to Stand.
-template <typename Has>
-uint32_t goShownAnimation(uint32_t anim, const Has& has) {
-    return has(anim) ? anim : rendering::anim::STAND;
 }
 
 // Puts the model in a state's animation.
@@ -2385,7 +2379,7 @@ void EntitySpawner::applyGameObjectState(uint64_t guid, uint8_t goState) {
         }
     }
 
-    const uint32_t shown = goShownAnimation(anim, has);
+    const uint32_t shown = m2->shownAnimationId(instanceId, anim);
     playGoStateAnimation(*m2, instanceId, state, shown, hold);
     startGoAnimationPartWay(*m2, instanceId, shown, progress);
     noteGameObjectTransitionEnd(guid, instanceId, state, shown);
@@ -2438,8 +2432,8 @@ void EntitySpawner::applyGameObjectInteraction(uint64_t guid, bool open) {
         case gi::Action::EnterUnlessShowingOpen: {
             // 0x0070fe10: Open, or AnimationData's fallback for it, against
             // what the model shows now (0x008267e0).
-            const uint32_t target = goShownAnimation(rendering::anim::OPEN, has);
-            const uint32_t shown = goShownAnimation(goStateAnimation(current, has).anim, has);
+            const uint32_t target = m2->shownAnimationId(instanceId, rendering::anim::OPEN);
+            const uint32_t shown = m2->shownAnimationId(instanceId, goStateAnimation(current, has).anim);
             if (shown == target) return;
             break;
         }
@@ -2521,7 +2515,7 @@ void EntitySpawner::enterGameObjectAnimState(uint64_t guid, uint32_t instanceId,
     }
     const auto has = [&](uint32_t anim) { return m2->hasAnimation(instanceId, anim); };
     const auto [anim, hold] = goStateAnimation(state, has);
-    const uint32_t shown = goShownAnimation(anim, has);
+    const uint32_t shown = m2->shownAnimationId(instanceId, anim);
     playGoStateAnimation(*m2, instanceId, state, shown, hold);
     startGoAnimationPartWay(*m2, instanceId, shown, progress);
     noteGameObjectTransitionEnd(guid, instanceId, state, shown);

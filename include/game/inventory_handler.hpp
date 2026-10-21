@@ -447,13 +447,18 @@ public:
     void withdrawGuildBankMoney(uint32_t amount);
     void guildBankWithdrawItem(uint8_t tabId, uint8_t bankSlot, uint8_t destBag,
                                uint8_t destSlot, uint32_t splitCount = 0);
-    /// Put a glyph from a bag slot into a socket.
-    ///
-    /// There is no separate socketing opcode in 3.3.5: the glyph item is used
-    /// with the socket written into the glyphIndex field CMSG_USE_ITEM already
-    /// carries, and the server applies the item's spell to that socket. The
-    /// wire's bag and slot are the same ones a plain use writes.
-    void placeGlyphFromBag(uint8_t wireBag, uint8_t wireSlot, uint32_t socketIndex);
+    // ---- A glyph waiting for its socket ----
+    /// A used glyph's spell, held until a socket is picked: the pending spell
+    /// (0x00d3f4e4) with the glyph-socket target flag 0x20000 outstanding
+    /// (0x00d3f4e0) - what SpellCanTargetGlyph asks.
+    bool isAwaitingGlyphTarget() const;
+    uint32_t getPendingGlyphSpellId() const;
+    void cancelGlyphTargeting();
+    /// PlaceGlyphInSocket's step (0x0080c3e0): the socket checked - unlocked,
+    /// of the glyph's kind, not holding the glyph already - and the item used
+    /// with it. A refusal is reported as the cast's failure and drops the
+    /// pending spell. True when the use was sent.
+    bool placePendingGlyph(uint32_t socketIndex);
 
     /// Ask for a tab's info text, and read back what arrived.
     ///
@@ -668,6 +673,8 @@ private:
     mutable std::optional<PendingItemTarget> pendingItemTarget_;
     /// The same, for an item waiting on a unit rather than on another item.
     mutable std::optional<PendingItemTarget> pendingUnitTarget_;
+    /// The same, for a glyph waiting on a socket.
+    mutable std::optional<PendingItemTarget> pendingGlyphTarget_;
 
     // Per-equip-slot (permanentEnchant << 32 | temporaryEnchant), so an enchant
     // change marks equipment dirty even though the displayInfoId is unchanged.
@@ -843,6 +850,7 @@ private:
     // ---- Trainer state ----
     bool trainerWindowOpen_ = false;
     TrainerListData currentTrainerList_;
+    uint64_t trainerListSerial_ = 0;
     std::vector<TrainerTab> trainerTabs_;
 
     // ---- Equipment set state ----

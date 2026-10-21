@@ -157,4 +157,15 @@ TEST_CASE("an asked seat change lasts until the seat state changes or 2 s pass",
     roster.markSeatChangeAsked(kPlayer, 5000);
     roster.setSeatState(kPlayer, 5);
     CHECK_FALSE(roster.seatChangeAsked(kPlayer, 5001));
+    // 0x00800510 -> 0x00747900: the server lets it go.
+    roster.markSeatChangeAsked(kPlayer, 6000);
+    roster.cancelSeatChangeAsked(kPlayer);
+    CHECK_FALSE(roster.seatChangeAsked(kPlayer, 6001));
+}
+
+TEST_CASE("a seated passenger's upper body is SpineLow, else the head (0x0073e840)", "[vehicle]") {
+    CHECK(vs::upperKeyBone(true, true) == 4);
+    CHECK(vs::upperKeyBone(true, false) == 4);
+    CHECK(vs::upperKeyBone(false, true) == 6);
+    CHECK(vs::upperKeyBone(false, false) == vs::kNoUpperBody);
 }

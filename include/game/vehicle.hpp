@@ -209,6 +209,9 @@ public:
     /// state next changes (0x007489c0) or 2 s pass (0x0074af70).
     void markSeatChangeAsked(uint64_t guid, uint32_t nowMs);
     [[nodiscard]] bool seatChangeAsked(uint64_t guid, uint32_t nowMs) const;
+    /// The server let the asked seat change go (0x00747900, from
+    /// SMSG_ON_CANCEL_EXPECTED_RIDE_VEHICLE_AURA's 0x00800510).
+    void cancelSeatChangeAsked(uint64_t guid) { seatChangeAskedMs_.erase(guid); }
     void setTables(const VehicleTables* tables) { tables_ = tables; }
     [[nodiscard]] const VehicleTables* tables() const { return tables_; }
     /// The VehicleSeat row of the unit's seat, whatever its state

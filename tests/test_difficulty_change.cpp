@@ -106,3 +106,38 @@ TEST_CASE("changePlayerDifficulty reads its argument as 0x0076f0d0 does", "[diff
     // 2^32 + 1 wraps to 1, as the client's unsigned arithmetic does.
     CHECK(dc::consoleDifficulty("4294967297") == 1u);
 }
+
+TEST_CASE("MSG_SET_RAID_DIFFICULTY's own and group words, as 0x005255a0 keeps them", "[difficulty]") {
+    dc::RaidDifficulty r;
+    // Out of a group the player's own is in force.
+    auto a = dc::applyRaidDifficulty(r, 1, true, false, false, false);
+    CHECK(a.changed);
+    CHECK_FALSE(a.askPlayer.has_value());
+    CHECK(r.effective(false) == 1);
+    CHECK(r.effective(true) == 0);
+    // The same again changes nothing and says nothing.
+    CHECK_FALSE(dc::applyRaidDifficulty(r, 1, true, false, false, false).changed);
+    // In a group the group's is in force; AzerothCore sends own=1, group=1.
+    a = dc::applyRaidDifficulty(r, 3, true, true, false, true);
+    CHECK(a.changed);
+    CHECK(r.group == 3);
+    CHECK(r.personal == 3);
+    // On a map that switches in place the group's is not stored: the player's
+    // difficulty is asked for instead - heroic past 25 normal.
+    dc::RaidDifficulty d;
+    a = dc::applyRaidDifficulty(d, 2, false, true, true, true);
+    CHECK_FALSE(a.changed);
+    CHECK(d.group == 0);
+    REQUIRE(a.askPlayer.has_value());
+    CHECK(*a.askPlayer == 1u);
+    a = dc::applyRaidDifficulty(d, 1, false, true, true, true);
+    REQUIRE(a.askPlayer.has_value());
+    CHECK(*a.askPlayer == 0u);
+}
+
+TEST_CASE("a raid difficulty change is worded by the map it is said on", "[difficulty]") {
+    CHECK(dc::raidChangeWords(true, 2) == dc::RaidChangeWords::Lockout);
+    CHECK(dc::raidChangeWords(false, 2) == dc::RaidChangeWords::MapDifficulty);
+    CHECK(dc::raidChangeWords(false, 1) == dc::RaidChangeWords::RaidDifficulty);
+    CHECK(dc::raidChangeWords(false, 0) == dc::RaidChangeWords::RaidDifficulty);
+}

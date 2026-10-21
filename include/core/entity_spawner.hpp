@@ -288,9 +288,22 @@ public:
         uint32_t behavior = kNoAnimationBehavior;
     };
     AnimationRecord animationRecord(uint32_t instanceId) const;
+    /// Another unit's sheath state as the client keeps it (+0xb5c), where
+    /// it has one.
+    [[nodiscard]] std::optional<SheathState> unitSheathState(uint64_t guid) const {
+        auto it = unitSheath_.find(guid);
+        if (it == unitSheath_.end()) return std::nullopt;
+        return it->second.state;
+    }
     /// A display's CreatureModelData Flags (+4); nothing when a record is
     /// missing (0x00717a20).
     std::optional<uint32_t> creatureModelFlags(uint32_t displayId) const;
+    /// Another unit's combat ready for the weapons it was last dressed in
+    /// (0x00714dd0); ReadyUnarmed before that.
+    [[nodiscard]] uint32_t unitMeleeReady(uint64_t guid) const {
+        auto it = unitWeaponsShown_.find(guid);
+        return it != unitWeaponsShown_.end() ? it->second.meleeReady : 25u;
+    }
     /// Whether the unit a CharacterRenderer instance draws holds a kit's
     /// weapon effects (CreatureModelData +4 without 0x10, 0x0073a6c0), and
     /// then its AttachedEffectScale (+0x60, 0x006f8c50).
@@ -472,6 +485,10 @@ public:
         uint32_t instanceId = 0;
         bool hasSpine = false;
         bool hasHead = false;
+        /// Shuffling round on the spot (+0xa38 0x1800), as last turned, and
+        /// to the left (0x800).
+        bool turning = false;
+        bool turningLeft = false;
     };
     std::unordered_map<uint64_t, UnitBody>& getUnitBodies() { return unitBodies_; }
     std::unordered_map<uint64_t, bool>& getCreatureWasSwimming() { return creatureWasSwimming_; }
@@ -878,6 +895,8 @@ private:
         uint32_t unitFlags = 0;
         uint32_t unitFlags2 = 0;
         bool offHandFollowsAnimation = false;
+        /// The combat ready its weapons give it (0x00714dd0).
+        uint32_t meleeReady = 25;
     };
     std::unordered_map<uint64_t, UnitWeaponsShown> unitWeaponsShown_;
     /// Each other unit's sheath state as the client keeps it (+0xb5c), and

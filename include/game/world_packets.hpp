@@ -2822,10 +2822,13 @@ public:
     /// zero. The server reads it out of every use - it sits between the item
     /// guid and the cast flags - and refuses the whole request when it is past
     /// MAX_GLYPH_SLOT_INDEX, so it is a field rather than an extra opcode.
+    /// noTargetFlags is the target mask written when no unit, item or object
+    /// is named: 0x20000 for a glyph socket (0x0080c3e0 sets it on the cast).
     static network::Packet build(uint8_t bagIndex, uint8_t slotIndex,
                                  uint64_t itemGuid, uint32_t spellId = 0,
                                  uint64_t targetGuid = 0, uint64_t itemTargetGuid = 0,
-                                 uint64_t gameObjectGuid = 0, uint32_t glyphIndex = 0);
+                                 uint64_t gameObjectGuid = 0, uint32_t glyphIndex = 0,
+                                 uint32_t noTargetFlags = 0);
 };
 
 /** CMSG_OPEN_ITEM packet builder (for locked containers / lockboxes) */
@@ -3160,6 +3163,13 @@ struct QuestQueryRewardsData {
     uint32_t arenaPoints = 0;
     /// CharTitles.dbc id of a title the quest awards (few quests do). WotLK only.
     uint32_t rewardTitleId = 0;
+    /// The quest's Flags word, the PlayersSlain count and the two reputation
+    /// objectives' factions (the cache's +0x50, +0x2098, +0x1c and +0x24),
+    /// which the quest POI list reads (0x005e2950, 0x005e10b0). WotLK only.
+    uint32_t questFlags = 0;
+    uint32_t playersSlain = 0;
+    uint32_t repObjectiveFaction = 0;
+    uint32_t repObjectiveFaction2 = 0;
     /// Up to five reputation rewards: the faction id, the QuestFactionReward.dbc
     /// value index, and a direct override (hundredths). The reputation shown is
     /// override/100 when set, else the dbc column at |valueId|. WotLK only.
@@ -3276,6 +3286,9 @@ struct TrainerListData {
     uint32_t trainerType = 0;  // 0=class, 1=mounts, 2=tradeskills, 3=pets
     std::vector<TrainerSpell> spells;
     std::string greeting;
+    /// Not on the wire: which list this is, counted by the receiver, so what
+    /// is built from a list can tell a new one arrived. 0 for none.
+    uint64_t serial = 0;
     [[nodiscard]] bool isValid() const { return true; }
 };
 

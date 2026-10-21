@@ -22,6 +22,18 @@ void SkillUps::load(pipeline::AssetManager* assets) {
                                   .costIndex = dbc->getUInt32(i, 7)});
         }
     }
+    // SkillLineAbility: ID, skill, spell, race mask, class mask and the two
+    // that invert them.
+    if (auto dbc = assets->loadDBC("SkillLineAbility.dbc"); dbc && dbc->isLoaded() &&
+        dbc->getFieldCount() >= 7) {
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i)
+            abilities_.emplace(dbc->getUInt32(i, 2),
+                               Ability{.skillId = dbc->getUInt32(i, 1),
+                                       .raceMask = dbc->getUInt32(i, 3),
+                                       .classMask = dbc->getUInt32(i, 4),
+                                       .raceMaskNot = dbc->getUInt32(i, 5),
+                                       .classMaskNot = dbc->getUInt32(i, 6)});
+    }
     // SkillLine: ID, category, SkillCostsID (+8).
     if (auto dbc = assets->loadDBC("SkillLine.dbc"); dbc && dbc->isLoaded() &&
         dbc->getFieldCount() >= 3) {
@@ -58,6 +70,25 @@ const SkillUps::RaceClassInfo* SkillUps::raceClassInfo(uint32_t skillId, uint8_t
         return &info;
     }
     return nullptr;
+}
+
+uint32_t SkillUps::abilitySkillLine(uint32_t spellId, uint8_t race, uint8_t classId) const {
+    if (race == 0 || classId == 0) return 0;
+    const uint32_t raceBit = 1u << ((race - 1u) & 31u);
+    const uint32_t classBit = 1u << ((classId - 1u) & 31u);
+    // A multimap keeps equal keys in insertion order, which is the file's.
+    const auto [lo, hi] = abilities_.equal_range(spellId);
+    for (auto it = lo; it != hi; ++it) {
+        const Ability& a = it->second;
+        if (!raceClassInfo(a.skillId, race, classId)) continue;
+        // 0x00810320 inverts a mask whose "not" column is set, and tests the
+        // result the same way.
+        const uint32_t races = a.raceMaskNot != 0 ? ~a.raceMask : a.raceMask;
+        const uint32_t classes = a.classMaskNot != 0 ? ~a.classMask : a.classMask;
+        if ((races == 0 || (races & raceBit) != 0) && (classes == 0 || (classes & classBit) != 0))
+            return a.skillId;
+    }
+    return 0;
 }
 
 uint32_t SkillUps::rankCost(const RaceClassInfo& info, int32_t rank) const {

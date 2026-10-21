@@ -252,6 +252,9 @@ public:
     // Known spells mutation (formerly accessed via friend)
     void addKnownSpell(uint32_t spellId) { knownSpells_.insert(spellId); }
     [[nodiscard]] bool hasKnownSpell(uint32_t spellId) const { return knownSpells_.count(spellId) > 0; }
+    /// 0x007260e0 || 0x00726160: the spell known, or one SkillLineAbility
+    /// supersedes it with, followed down the chain.
+    [[nodiscard]] bool knowsSpellOrSuccessor(uint32_t spellId) const;
 
     // Target aura mutation (formerly accessed via friend)
     void clearTargetAuras() { for (auto& slot : targetAuras_) slot = AuraSlot{}; }
@@ -467,6 +470,10 @@ public:
 
     /// Buy the next stable slot from the stable master currently open.
     void buyStableSlot();
+
+    /// A cast the client refuses itself, shown as its failure is
+    /// (0x00808200): the result's line on the error frame.
+    void reportLocalCastFailure(uint32_t spellId, uint8_t result);
 
 private:
     std::unordered_map<uint32_t, uint64_t> pendingPetNameQueries_;

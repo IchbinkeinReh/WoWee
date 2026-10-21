@@ -908,6 +908,7 @@ bool SpellHandler::armGroundTarget(uint32_t spellId, uint64_t caster) {
         it->second.targetFlags, it->second.implicitTargetsA[0], trajectory);
     if (!ground_target::wantsLocation(required)) return false;
     if (owner_.isAwaitingItemTarget()) owner_.cancelItemTargeting();
+    owner_.cancelGlyphTargeting();
     unitTarget_ = UnitTarget{};
     groundTarget_ = GroundTarget{};
     groundTarget_.spellId = spellId;
@@ -1229,10 +1230,16 @@ bool SpellHandler::auraLetsSpell(uint64_t unit, uint32_t spellId) const {
     return false;
 }
 
+void SpellHandler::reportLocalCastFailure(uint32_t spellId, uint8_t result) {
+    const std::string text = castFailureMessage(owner_, spellId, result, -1, 0, 0);
+    if (!text.empty()) owner_.addUIError(text);
+}
+
 void SpellHandler::armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required) {
     // 0x0080cce0: the cursor holds it (0x00d3f4e4) until a unit is clicked
     // or it is put down; it takes the place of a spell held for a place.
     if (owner_.isAwaitingItemTarget()) owner_.cancelItemTargeting();
+    owner_.cancelGlyphTargeting();
     groundTarget_ = GroundTarget{};
     unitTarget_ = UnitTarget{spellId, caster, required};
     LOG_INFO("Unit targeting: spell ", spellId, " waits for a unit (wants 0x", std::hex, required, std::dec, ")");
@@ -2395,10 +2402,7 @@ cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& pla
     for (int k = 0; k < 3; ++k) {
         const uint32_t learn = e.effectTriggerSpell[k];
         if (e.effectIds[k] != 36 || learn == 0) continue;
-        bool known = knownSpells_.count(learn) != 0;
-        for (uint32_t next = supersededBy(learn), n = 0; !known && next != 0 && n < 32; next = supersededBy(next), ++n)
-            known = knownSpells_.count(next) != 0;
-        c.learnKnown[k] = known;
+        c.learnKnown[k] = knowsSpellOrSuccessor(learn);
     }
     c.hasCharm = entityGuidField(player, UF::UNIT_FIELD_CHARM) != 0;
     c.hasSummon = entityGuidField(player, UF::UNIT_FIELD_SUMMON) != 0;
@@ -2513,6 +2517,13 @@ cast_check::Caster SpellHandler::casterState(uint32_t spellId, const Entity& pla
         c.flyable = fly ? 1 : 0;
     }
     return c;
+}
+
+bool SpellHandler::knowsSpellOrSuccessor(uint32_t spellId) const {
+    bool known = knownSpells_.count(spellId) != 0;
+    for (uint32_t next = supersededBy(spellId), n = 0; !known && next != 0 && n < 32; next = supersededBy(next), ++n)
+        known = knownSpells_.count(next) != 0;
+    return known;
 }
 
 uint32_t SpellHandler::supersededBy(uint32_t spellId) const {
@@ -4583,6 +4594,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
         owner_.petComboPointsRef() = 0;
         owner_.petSpellListRef().clear();
         owner_.petAutocastSpellsRef().clear();
+        owner_.petAutocastableSpellsRef().clear();
         memset(owner_.petActionSlotsRef(), 0, sizeof(owner_.petActionSlotsRef()));
         LOG_INFO("SMSG_PET_SPELLS: pet cleared");
         owner_.fireAddonEvent("UNIT_PET", {"player"});
@@ -4605,6 +4617,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
         owner_.petComboPointsRef() = 0;
         owner_.petSpellListRef().clear();
         owner_.petAutocastSpellsRef().clear();
+        owner_.petAutocastableSpellsRef().clear();
         memset(owner_.petActionSlotsRef(), 0, sizeof(owner_.petActionSlotsRef()));
         LOG_INFO("SMSG_PET_SPELLS: pet cleared (guid=0)");
         owner_.fireAddonEvent("UNIT_PET", {"player"});
@@ -4651,6 +4664,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
         uint8_t spellCount = packet.readUInt8();
         owner_.petSpellListRef().clear();
         owner_.petAutocastSpellsRef().clear();
+        owner_.petAutocastableSpellsRef().clear();
         for (uint8_t i = 0; i < spellCount; ++i) {
             // One uint32, not six bytes: MAKE_UNIT_ACTION_BUTTON puts the spell
             // in the low twenty-four bits and the state in the top byte, the
@@ -4669,6 +4683,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
             if (state & 0x40) {
                 owner_.petAutocastSpellsRef().insert(spellId);
             }
+            if (state & 0x80) owner_.petAutocastableSpellsRef().insert(spellId);
         }
 
         // The cooldowns: spell, category (uint16), the time left of its

@@ -7,6 +7,9 @@
 #include "pipeline/m2_loader.hpp"
 #include "rendering/m2_track_sampler.hpp"
 #include "rendering/vehicle_seat.hpp"
+#include "rendering/animation/animation_data.hpp"
+#include "rendering/animation/upper_body.hpp"
+#include "rendering/animation/base_animation.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
 #include <vulkan/vulkan.h>
@@ -90,8 +93,42 @@ public:
     // oneShotReturnAnim: animation to resume (looping) when a non-looping
     // animation finishes; 0 = Stand. Lets NPC one-shot emotes return to their
     // persistent work/state loop instead of idling.
+    //
+    // What a unit is asked is first made the animation of its tier the model
+    // has (0x007176f0, see setAnimationTier); whatever plays, the model plays
+    // it from its own sequence or the one along AnimationData's Fallbacks
+    // that stands in for it (0x00826350).
     void playAnimation(uint32_t instanceId, uint32_t animationId, bool loop = true,
                        uint32_t oneShotReturnAnim = 0);
+    /// The unit's animation tier (UNIT_FIELD_BYTES_1 byte 3, +0xb80: 0 the
+    /// ground, 3 flying...), which 0x007176f0 picks the animations it is
+    /// asked for by.
+    void setAnimationTier(uint32_t instanceId, uint8_t tier);
+    /// The unit an instance draws, as 0x007385c0 reads it: how it moves,
+    /// sits, casts, swings and rides. Given it, what the instance is asked
+    /// is shared between its body and its upper body - the key bone
+    /// 0x0073e840 picks, SpineLow else the head - as the client shares it
+    /// (upper_body::decide); without it the body takes everything.
+    void setUnitAnimationState(uint32_t instanceId, const upper_body::Unit& unit);
+    /// The upper body's own loop, if it has one, back to the body
+    /// (0x00832840): a cast or channel the unit no longer has.
+    void releaseUpperBodyLoop(uint32_t instanceId);
+    /// Whether the body plays a one-shot that ends into `animationId` - one
+    /// asked while the body finishes the swing it took back from its upper
+    /// body, which it plays once that is over (0x0073bbd0 -> 0x0073b510).
+    [[nodiscard]] bool bodyEndsInto(uint32_t instanceId, uint32_t animationId) const;
+    /// Plays what a unit is in when nothing else is asked of it, as the
+    /// client asks it on a change of how it moves (0x0073ac30 ->
+    /// 0x00724500, base_animation::pick); nothing where that leaves what
+    /// plays. For an instance given its unit (setUnitAnimationState).
+    void playBaseAnimation(uint32_t instanceId);
+    /// The wound a unit shows for a blow it takes (0x00736640,
+    /// upper_body::wound), as the unit is put in it (0x007176f0) - nothing
+    /// where it shows none or the model has no sequence of it.
+    [[nodiscard]] std::optional<upper_body::Wound> woundFor(uint32_t instanceId, bool critical);
+    /// Plays it, once, unblended, on the upper body's key bone or the whole
+    /// body (0x00735820), past what 0x007385c0 decides.
+    void playWound(uint32_t instanceId, const upper_body::Wound& wound);
     /// The loop a unit rests in - its stand state's (sitting, sleeping,
     /// kneeling...) or 0 for Stand. A one-shot played with no return anim
     /// goes back to it, so a seated unit that is hit stays seated.
@@ -116,15 +153,27 @@ public:
     /// lacks the bone or the animation.
     /// `once` plays it through a single time and gives the bone back to the
     /// body at its end (0x00756f80's one-shot, 0x00757280 -> 0x00757420).
-    bool playKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId, bool once = false);
+    /// `then`, with `once`, loops that animation on the bone at the end in
+    /// place of giving it back.
+    bool playKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId, bool once = false,
+                              std::optional<uint32_t> then = std::nullopt);
     /// How far into its own animation a key bone is, in ms; nothing where it
     /// plays none, or another.
     [[nodiscard]] std::optional<float> keyBoneAnimationTime(uint32_t instanceId, int32_t keyBoneId,
                                                             uint32_t animationId) const;
     /// The key bone back to the body (0x00735a60). False where it had none.
     bool stopKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId);
+    /// playKeyBoneAnimation for a vehicle's seat (0x00756f80): while it
+    /// plays, nothing the vehicle is asked takes the bone (0x00756cd0), and
+    /// a one-shot's end gives it back to the body (0x00757280).
+    bool playVehicleKeyBoneAnimation(uint32_t instanceId, int32_t keyBoneId, uint32_t animationId, bool once = false);
     /// Whether the model has the key bone.
     [[nodiscard]] bool hasKeyBone(uint32_t instanceId, int32_t keyBoneId) const;
+    /// Whether the instance is hung on a seat (setInstanceSeat).
+    [[nodiscard]] bool isInstanceSeated(uint32_t instanceId) const {
+        auto it = instances.find(instanceId);
+        return it != instances.end() && it->second.seatParent != 0;
+    }
     /// What the arms' animations reached since the last call: bit 0 the
     /// left arm's event, 1 the right's; bit 2 the left's end, 3 the right's.
     uint8_t takeArmAnimationEvents(uint32_t instanceId);
@@ -273,8 +322,14 @@ public:
     /// nothing without a seat or its vehicle.
     [[nodiscard]] std::optional<glm::mat4> seatTargetMatrix(uint32_t instanceId) const;
     /// The seat's ride animation holds the passenger's body: its start once,
-    /// then its loop; what else asks the body to play is not played
-    /// (0x007385c0 and 0x00724500 put the seat's first). Nothing releases it.
+    /// then its loop (0x007385c0 and 0x00724500 put the seat's first). In its
+    /// seat, what it is asked is shared as any unit's is, the seat holding
+    /// the body (upper_body::decide with Unit::seatedRide): its upper body -
+    /// from SpineLow, else the head - takes what is no stand, and a stand
+    /// gives it back to what the seat's upper ride animation has it stand
+    /// as, or to the body without one (0x007385c0, 0x00737bd0).
+    /// Seated with no ride animation but an upper one, that is what the
+    /// whole unit stands as, and nothing is held. Nothing releases it.
     void setSeatAnimation(uint32_t instanceId, const std::optional<vehicle_seat::RideAnimation>& ride);
     /// The passenger plays what its seat's parent plays and nothing of its
     /// own (the passenger's +0x10 0x800: 0x00748620 copies the vehicle's
@@ -532,6 +587,9 @@ private:
         uint32_t armAnimationId[2] = {0, 0};  // the animation each arm plays, while it has a sequence
         float armTime[2] = {0.0f, 0.0f};      // ms into each arm's sequence
         float armEventTime[2] = {-1.0f, -1.0f};  // when each arm's event comes, -1 for none
+        /// How each arm's sequence plays (0x00826350): it may stand in,
+        /// reversed or held, for an animation the model lacks.
+        anim::PlayMode armMode[2] = {anim::PlayMode::Forward, anim::PlayMode::Forward};
         uint8_t armEvents = 0;                 // kArmEvent*/kArmEnd* bits not yet taken
         std::vector<int8_t> boneArm;  // Per bone: 0 left arm, 1 right arm, -1 neither; built by playArmAnimation
         /// playKeyBoneAnimation: key bones on looped sequences of their own,
@@ -542,10 +600,45 @@ private:
             int sequence = -1;
             float time = 0.0f;
             bool once = false;
+            /// Looped on the bone once a `once` ends (-1: the bone goes back).
+            int thenSequence = -1;
+            uint32_t thenAnimationId = 0;
+            /// How the sequence plays (0x00826350): backwards or held where
+            /// it stands in for an animation the model lacks.
+            anim::PlayMode mode = anim::PlayMode::Forward;
+            anim::PlayMode thenMode = anim::PlayMode::Forward;
+            /// The pose it blends in from (0x00826c40); `returning`, the pose
+            /// the bone set blends from back to the body's over 150 ms
+            /// before it is gone (0x00832840).
+            m2_track::SequenceBlend blend;
+            bool returning = false;
+            /// The speed it runs at: 2 for a swing a swing was asked over
+            /// (0x00827000 from 0x007385c0).
+            float rate = 1.0f;
+            /// Played by the vehicle for a seat (0x00756f80, its bit at
+            /// +0x58): the bone is the vehicle's until it is let go.
+            bool vehicle = false;
         };
         std::vector<KeyBoneAnimation> keyBoneAnimations;
         std::vector<int16_t> boneKeyBoneAnimation;
         float animationTime = 0.0f;
+        /// How the body's sequence plays (0x00826350): forward, or - for an
+        /// animation the model lacks, played as one along its Fallbacks -
+        /// backwards, or held on its first or last frame.
+        anim::PlayMode playMode = anim::PlayMode::Forward;
+        /// UNIT_FIELD_BYTES_1 byte 3 (+0xb80); see setAnimationTier.
+        uint8_t animationTier = 0;
+        /// setUnitAnimationState: the unit it draws, and its upper body's
+        /// key bone (+0xb84; -2 until looked up).
+        bool unitAnimation = false;
+        upper_body::Unit unit;
+        int32_t upperBodyBone = -2;
+        /// +0xb88: a swing asked while one played, waiting for it to end
+        /// (0x007385c0); -1 for none.
+        int32_t queuedAttack = -1;
+        /// The speed 0x00827000 set the body's sequence to - 2 for a swing
+        /// a swing was asked over - over the locomotion rate; 0 for none.
+        float bodyRateSet = 0.0f;
         /// With eventsRestart, where the next update looks for events
         /// from, once: below zero for a sequence just started, so its first
         /// frame's fire, or where it started in it. Else from where the
@@ -652,8 +745,21 @@ private:
         vehicle_seat::PassengerPose seatPose;
         /// setInstanceSeatFlight.
         std::optional<vehicle_seat::Flight> seatFlight;
-        /// setSeatAnimation: the body is the seat's.
+        /// setSeatAnimation: the body is the seat's - in the seat itself
+        /// (state 3), or on the way in or out.
         bool seatAnimationHeld = false;
+        bool seatRideSeated = false;
+        /// setSeatAnimation: the key bone the upper body plays from (+0xb84,
+        /// -1 none), what the seat has it stand as there (Flags 0x4), and
+        /// whether a one-shot of its own has ended there yet (+0x10 0x4,
+        /// 0x007484e0), after which it stands as the loop.
+        int32_t seatUpperBone = -1;
+        std::optional<uint32_t> seatUpperStart;
+        std::optional<uint32_t> seatUpperLoop;
+        bool seatUpperStartPlayed = false;
+        /// Seated with no ride animation, the seat's upper one is what the
+        /// whole unit stands as (0x007485b0).
+        bool seatStandsWhole = false;
         /// setMirrorsSeatParent.
         bool mirrorsSeatParent = false;
 
@@ -680,8 +786,34 @@ private:
 
     /// playAnimation without the seat's say, and handed on to the
     /// passengers that mirror the instance.
-    void playAnimationNow(uint32_t instanceId, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim);
-    void startAnimation(CharacterInstance& instance, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim);
+    void playAnimationNow(uint32_t instanceId, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim,
+                          bool blend = true);
+    /// What a unit is asked, shared between its body and its upper body
+    /// (0x007385c0); `pass` BodyEnded when its body's one-shot has ended.
+    void playUnitAnimation(uint32_t instanceId, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim,
+                           upper_body::Pass pass);
+    /// An animation on a key bone from `startMs`, blended in from what the
+    /// bone set showed or straight in (0x00832ab0 -> 0x00826c40).
+    bool startKeyBoneAnimation(CharacterInstance& instance, int32_t keyBoneId, uint32_t animationId, bool once,
+                               std::optional<uint32_t> then, float startMs, bool blend);
+    /// A key bone's own animation back to the body's, blended over 150 ms
+    /// (0x00832840).
+    void returnKeyBone(CharacterInstance& instance, int32_t keyBoneId);
+    /// The upper body's key bone (0x0073e840).
+    int32_t upperBodyBone(CharacterInstance& instance);
+    /// 0x00724500 for an instance's unit, from what it plays.
+    base_animation::Pick pickBaseAnimation(CharacterInstance& instance, const base_animation::Ask& ask);
+    /// 0x00737bd0: the upper body's one-shot is over - it takes up the base
+    /// animation where that may go there, else follows the body again.
+    void endUpperBodyOneShot(CharacterInstance& instance);
+    /// A seated passenger's upper body (setSeatAnimation): back to what the
+    /// seat has it stand as, or to the body; and an animation of its own.
+    void standSeatedUpperBody(uint32_t instanceId);
+    void standSeatedWhole(uint32_t instanceId);
+    /// Its upper body given back to the body, the seat's hold on it gone.
+    void releaseSeatedUpperBody(uint32_t instanceId);
+    void startAnimation(CharacterInstance& instance, uint32_t animationId, bool loop, uint32_t oneShotReturnAnim,
+                        bool blend = true);
     bool playArmAnimationNow(uint32_t instanceId, int arm, uint32_t animationId, uint32_t eventId);
     /// The passengers that mirror an instance.
     std::vector<uint32_t> mirroringPassengers(uint32_t instanceId) const;

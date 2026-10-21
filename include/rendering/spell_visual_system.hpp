@@ -165,6 +165,24 @@ public:
     /// The pose the unit's rider holds on its mount (+0xb7c): Mount, or the
     /// AnimID of a mount aura's state kit (0x00724820, 0x0071e930).
     uint32_t riderPose(uint64_t unitGuid) const;
+    /// The AnimID (+8) of the newest state kit on a unit that animates it
+    /// (0x0071e400): an aura's StateKit or a channel's ChannelKit (type 2,
+    /// played with 0x1000 by 0x00745230) whose AnimID is above 0, unless the
+    /// spell mounts (aura 78 sets 0x800000) - and whether the unit is put in
+    /// it by its tier (not with kit Flags 0xc, 0x1000000).
+    struct KitAnimation {
+        uint32_t anim = 0;
+        bool tiered = true;
+    };
+    [[nodiscard]] std::optional<KitAnimation> unitKitAnimation(uint64_t unitGuid) const;
+    /// 0x007224d0: the loop a cast holds a unit in - the cast spell's
+    /// PrecastKit's AnimID, else the channel's ChannelKit's - with the kit's
+    /// Flags (+0x94).
+    struct CastLoop {
+        uint32_t anim = 0;
+        uint32_t kitFlags = 0;
+    };
+    [[nodiscard]] std::optional<CastLoop> castLoop(uint32_t castSpellId, uint32_t channelSpellId);
     /// The active player, whose mount aura going puts its pose back
     /// (0x0071e930).
     using ActivePlayerResolver = std::function<uint64_t()>;
@@ -384,6 +402,7 @@ private:
         std::vector<KitWeaponEffect> weaponEffects;  ///< +0x24, +0x28 (0x0073a6c0)
         uint32_t soundId = 0;  ///< SoundID (+0x3c), SoundEntries
         uint32_t flags = 0;  ///< SpellVisualKit Flags (+0x94)
+        int32_t animId = -1;  ///< AnimID (+8)
         uint32_t shakeId = 0;  ///< ShakeID (+0x40), SpellEffectCameraShakes
         /// CharProc (+0x44) and its CharParamZero..Three (+0x54..+0x84).
         std::array<uint32_t, 4> charProc{};

@@ -10,7 +10,7 @@
 namespace wowee::core  { class Window; }
 namespace wowee::audio { class AudioCoordinator; }
 namespace wowee::game  { class ExpansionRegistry; }
-namespace wowee::rendering { class CameraController; }
+namespace wowee::rendering { class CameraController; class Camera; }
 
 namespace wowee::addons {
 
@@ -194,6 +194,21 @@ struct LuaServices {
     /// across the image. False when it is off this map. GetPlayerMapPosition
     /// answers in this space - FrameXML multiplies it by the map frame's width.
     std::function<bool(float, float, float, float&, float&)> mapUVForWorldPos;
+    /// The shown map's row as the quest POI icon list needs it: whether there
+    /// is one, whether it is a zone or floor rather than a continent, whether
+    /// it is a dungeon floor, its WorldMapArea id, map, floor and left and
+    /// right edges.
+    struct MapPoiFrame {
+        bool valid = false;
+        bool zoneLevel = false;
+        bool dungeon = false;
+        uint32_t worldMapAreaId = 0;
+        uint32_t mapId = 0;
+        uint32_t dungeonFloor = 0;
+        float locLeft = 0.0f;
+        float locRight = 0.0f;
+    };
+    std::function<MapPoiFrame()> getMapPoiFrame;
     std::function<uint32_t()> getMapWorldAreaId;
     std::function<void(uint32_t)> setMapWorldAreaId;
 
@@ -214,6 +229,9 @@ struct LuaServices {
     /// instance with no ground - and the callers fall back to the zone id.
     struct ZoneTexts {
         bool known = false;
+        /// The zone and subzone ids the texts are for (0x00bd080c, 0x00bd0810).
+        uint32_t zoneId = 0;
+        uint32_t subzoneId = 0;
         std::string zone;
         std::string realZone;
         std::string subzone;
@@ -348,6 +366,9 @@ struct LuaServices {
     /// The camera, for the saved views (SetView, SaveView, ResetView,
     /// NextView, PrevView) and FlipCameraYaw; none before there is one.
     std::function<rendering::CameraController*()> getCameraController;
+    /// The camera the world is drawn through, for what is asked of the screen
+    /// (TargetDirection*: 0x004f6d20 projects through it).
+    std::function<const rendering::Camera*()> getCamera;
     /// ToggleSheath: the toggle the key makes (0x0051a6b0 -> 0x006e23a0).
     std::function<void()> toggleSheath;
     /// InteractUnit: what right-clicking the target does (0x005277b0).

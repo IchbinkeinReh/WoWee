@@ -2,6 +2,9 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/shapeshift_forms.hpp"
 #include "game/game_utils.hpp"
+#include "game/target_direction.hpp"
+#include "core/coordinates.hpp"
+#include "rendering/camera.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -982,6 +985,118 @@ static int lua_TargetNearest(lua_State* L) {
     return 0;
 }
 
+// ── TargetDirectionEnemy / TargetDirectionFriend ───────────────────────────
+//
+// The unit in a direction on screen, chosen as 0x005252d0 chooses it (see
+// game/target_direction.hpp). The choice is held (0x00bd07d8) until
+// TargetDirectionFinished clears it, and nothing else is chosen until then.
+
+/// 0x00bd07d8: the unit the last scan chose.
+static uint64_t& targetDirectionChosen() {
+    static uint64_t chosen = 0;
+    return chosen;
+}
+
+/// CreatureType.dbc's flag 1 (critters, companions, gas clouds): never chosen.
+static bool creatureTypeSkipped(game::GameHandler* gh, uint32_t creatureType) {
+    static std::unordered_map<uint32_t, uint32_t> flags;
+    static bool loaded = false;
+    if (!loaded) {
+        auto* am = gh ? gh->services().assetManager : nullptr;
+        if (am && am->isInitialized()) {
+            loaded = true;
+            if (auto dbc = am->loadDBCOptional("CreatureType.dbc"); dbc && dbc->getFieldCount() >= 2) {
+                const uint32_t last = dbc->getFieldCount() - 1;
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                    flags[dbc->getUInt32(i, 0)] = dbc->getUInt32(i, last);
+                }
+            }
+        }
+    }
+    auto it = flags.find(creatureType);
+    return it != flags.end() && (it->second & 1u) != 0;
+}
+
+static int targetDirection(lua_State* L, bool enemy) {
+    if (!lua_isnumber(L, 1)) {
+        return luaL_error(L, enemy ? "Usage: TargetDirectionEnemy(facing)"
+                                   : "Usage: TargetDirectionFriend(facing)");
+    }
+    const float facing = static_cast<float>(lua_tonumber(L, 1));
+    const float cone = lua_isnumber(L, 2) ? static_cast<float>(lua_tonumber(L, 2)) : 0.0f;
+    if (!taint::allowedSecureOnly(L)) return 0;   // 0x00513530
+    if (targetDirectionChosen() != 0) return 0;
+    auto* gh = getGameHandler(L);
+    auto* svc = getLuaServices(L);
+    const rendering::Camera* cam = svc && svc->getCamera ? svc->getCamera() : nullptr;
+    if (!gh || !cam) return 0;
+    auto& em = gh->getEntityManager();
+    const uint64_t playerGuid = gh->getPlayerGuid();
+    const auto player = em.getEntity(playerGuid);
+    if (!player) return 0;
+    // World positions are the render space's: canonical with x and y swapped.
+    const auto worldOf = [](const game::Entity& e) {
+        return core::coords::canonicalToRender(glm::vec3(e.getX(), e.getY(), e.getZ()));
+    };
+    game::target_direction::View view;
+    view.position = cam->getPosition();
+    view.forward = cam->getForward();
+    view.viewProjection = cam->getForwardDepthProjectionMatrix() * cam->getViewMatrix();
+    view.nearPlane = cam->getNearPlane();
+    view.farPlane = cam->getFarPlane();
+    view.aspect = cam->getAspectRatio();
+
+    // From the target where it is on screen, from the player otherwise.
+    const glm::vec3 playerPos = worldOf(*player);
+    uint64_t originGuid = playerGuid;
+    glm::vec3 origin = playerPos;
+    if (const uint64_t target = gh->getTargetGuid(); target != 0) {
+        if (auto t = em.getEntity(target)) {
+            game::target_direction::ScreenPoint sp;
+            if (game::target_direction::project(view, worldOf(*t), sp)) {
+                originGuid = target;
+                origin = worldOf(*t);
+            }
+        }
+    }
+
+    // 0x00518e40: an enemy one the player may attack and alive; a friend one
+    // the player may assist and with health.
+    std::vector<game::target_direction::Candidate> candidates;
+    for (const auto& [guid, entity] : em.getEntities()) {
+        if (!entity || !entity->isUnit()) continue;
+        const auto unit = std::static_pointer_cast<game::Unit>(entity);
+        if (enemy) {
+            if (!gh->unitMayAttack(playerGuid, guid)) continue;
+            if (unit->getHealth() == 0 || (unit->getDynamicFlags() & 0x20u) != 0) continue;
+        } else {
+            if (!gh->unitMayAssist(playerGuid, guid) || unit->getHealth() < 1) continue;
+        }
+        if (entity->getType() == game::ObjectType::UNIT &&
+            creatureTypeSkipped(gh, gh->getCreatureType(unit->getEntry()))) {
+            continue;
+        }
+        candidates.push_back({guid, worldOf(*entity)});
+    }
+    const uint64_t chosen = game::target_direction::choose(view, facing, cone, originGuid, origin,
+                                                           playerGuid, playerPos, candidates);
+    if (chosen != 0) {
+        gh->targetUnit(chosen);
+        targetDirectionChosen() = chosen;
+    }
+    return 0;
+}
+
+// TargetDirectionEnemy(facing[, cone]) (0x00525c30), TargetDirectionFriend
+// (0x00525cd0) and TargetDirectionFinished() (0x00515560).
+static int lua_TargetDirectionEnemy(lua_State* L) { return targetDirection(L, true); }
+static int lua_TargetDirectionFriend(lua_State* L) { return targetDirection(L, false); }
+static int lua_TargetDirectionFinished(lua_State* L) {
+    (void)L;
+    targetDirectionChosen() = 0;
+    return 0;
+}
+
 // InteractUnit(unit[, exactMatch]) (0x00527f00): the unit targeted and then
 // right-clicked (0x005277b0) - 1 when it is there, nil when it is not, and 1
 // with no player at all. "mouseover" is the unit under the pointer
@@ -1274,12 +1389,14 @@ void registerSpellLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             if (gh) gh->cancelGroundTargeting();
             if (gh && gh->isAwaitingItemTarget()) gh->cancelItemTargeting();
+            if (gh) gh->cancelGlyphTargeting();
             return 0;
         }},
                 {"SpellIsTargeting", [](lua_State* L) -> int {
             // 0x00d3f4e4: a spell is on the cursor waiting for its target.
             auto* gh = getGameHandler(L);
-            lua_pushboolean(L, gh && (gh->isGroundTargeting() || gh->isUnitTargeting() || gh->isAwaitingItemTarget()));
+            lua_pushboolean(L, gh && (gh->isGroundTargeting() || gh->isUnitTargeting() ||
+                                      gh->isAwaitingItemTarget() || gh->isAwaitingGlyphTarget()));
             return 1;
         }},
                 // The world clicks the left and right buttons are bound to
@@ -1365,6 +1482,9 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"TargetNearestEnemy",  lua_TargetNearestEnemy},
                 {"TargetNearestFriend", lua_TargetNearestFriend},
                 {"TargetNearest",       lua_TargetNearest},
+                {"TargetDirectionEnemy",  lua_TargetDirectionEnemy},
+                {"TargetDirectionFriend", lua_TargetDirectionFriend},
+                {"TargetDirectionFinished", lua_TargetDirectionFinished},
                 {"AttackTarget",        lua_AttackTarget},
                 {"InteractUnit",        lua_InteractUnit},
                 {"ToggleSheath",        lua_ToggleSheath},

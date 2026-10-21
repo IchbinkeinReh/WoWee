@@ -671,3 +671,52 @@ TEST_CASE("from a control seat the vehicle camera watches the vehicle (0x0075a93
     CHECK_FALSE(cameraWatchesVehicle(true, &seat));
     CHECK_FALSE(cameraWatchesVehicle(false, nullptr));
 }
+
+TEST_CASE("seated with Flags 0x4 the upper body stands as the upper ride animation (0x007485b0)", "[vehicle]") {
+    gv::SeatRecord s = seatWithMoves();
+    s.flags |= gv::kSeatFlagHasRideAnim;
+    s.rideAnimLoop = 103;
+    s.rideUpperAnimStart = 128;  // UseStandingStart, as seat 121 has it
+    s.rideUpperAnimLoop = 123;   // UseStandingLoop
+    auto a = gv::seatAnimation(SeatState::Seated, s, false);
+    REQUIRE(a);
+    CHECK(a->seated);
+    // Without the flag the upper body is the body's.
+    CHECK_FALSE(a->upperStart);
+    CHECK_FALSE(a->upperLoop);
+    s.flags |= gv::kSeatFlagHasUpperRideAnim;
+    a = gv::seatAnimation(SeatState::Seated, s, false);
+    REQUIRE(a);
+    CHECK(a->upperStart == 128u);
+    CHECK(a->upperLoop == 123u);
+    // Only seated (0x007485b0 asks for state 3).
+    s.flags |= gv::kSeatFlagHasEnterAnim;
+    s.enterAnimLoop = 101;
+    a = gv::seatAnimation(SeatState::Entering, s, false);
+    REQUIRE(a);
+    CHECK_FALSE(a->seated);
+    CHECK_FALSE(a->upperLoop);
+    // -1 and 0x1fa name none.
+    s.rideUpperAnimStart = -1;
+    s.rideUpperAnimLoop = gv::kNoAnimation;
+    a = gv::seatAnimation(SeatState::Seated, s, false);
+    REQUIRE(a);
+    CHECK_FALSE(a->upperStart);
+    CHECK_FALSE(a->upperLoop);
+}
+
+TEST_CASE("seated with an upper ride animation and no ride one, that is the whole stand (0x007485b0)",
+          "[vehicle]") {
+    gv::SeatRecord s = seatWithMoves();
+    s.flags = gv::kSeatFlagHasUpperRideAnim;
+    s.rideUpperAnimLoop = 216;  // CustomSpell04
+    const auto a = gv::seatAnimation(SeatState::Seated, s, false);
+    REQUIRE(a);
+    CHECK(a->seated);
+    CHECK_FALSE(a->start);
+    CHECK_FALSE(a->loop);
+    CHECK(a->upperLoop == 216u);
+    // Neither: nothing.
+    s.rideUpperAnimLoop = -1;
+    CHECK_FALSE(gv::seatAnimation(SeatState::Seated, s, false));
+}
