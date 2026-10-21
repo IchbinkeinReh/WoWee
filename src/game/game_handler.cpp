@@ -2329,6 +2329,31 @@ bool GameHandler::getGlyphSocketFields(std::array<uint32_t, 6>& slotIds,
     return true;
 }
 
+bool GameHandler::isStatisticCriteria(uint32_t criteriaId) {
+    ensureAchievementCriteriaLoaded();
+    ensureAchievementCategoriesLoaded();
+    const uint32_t achievement = getAchievementCriterionIndex(criteriaId).achievementId;
+    if (achievement == 0) return false;
+    auto cat = achievementCategoryCache_.find(achievement);
+    if (cat == achievementCategoryCache_.end()) return false;
+    // Up the parents until the Statistics root, id 1.
+    int32_t c = static_cast<int32_t>(cat->second);
+    for (int guard = 0; c >= 0 && guard < 64; ++guard) {
+        if (c == 1) return true;
+        auto it = achievementCategoryInfo_.find(static_cast<uint32_t>(c));
+        if (it == achievementCategoryInfo_.end()) return false;
+        c = it->second.parentId;
+    }
+    return false;
+}
+
+void GameHandler::noteCriteriaForLatestStats(uint32_t criteriaId, uint32_t flags) {
+    if ((flags & 1u) != 0 || !isStatisticCriteria(criteriaId)) return;
+    latestUpdatedStats_.notePlayer(criteriaId, [this](uint32_t id) {
+        return getAchievementCriterionIndex(id).achievementId;
+    });
+}
+
 void GameHandler::ensureAchievementCategoriesLoaded() {
     if (achievementCategoriesLoaded_) return;
     auto* am = services_.assetManager;
@@ -2510,6 +2535,7 @@ void GameHandler::handleAllAchievementData(network::Packet& packet) {
         CriteriaProgressRecord rec;
         if (!readCriteriaProgressTail(packet, rec)) break;
         criteriaProgress_[id] = rec.counter;
+        noteCriteriaForLatestStats(id, rec.flags);
     }
 
     LOG_INFO("SMSG_ALL_ACHIEVEMENT_DATA: loaded ", earnedAchievements_.size(),

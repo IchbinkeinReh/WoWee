@@ -1972,6 +1972,7 @@ void GameHandler::registerCoreOpcodes() {
             if (readCriteriaProgressTail(packet, rec)) {
                 // A timed criteria whose window ran out reads as zero, which is
                 // what the server means by the flag and what the panel shows.
+                noteCriteriaForLatestStats(criteriaId, rec.flags);
                 const uint64_t progress = (rec.flags == 1) ? 0 : rec.counter;
                 uint64_t oldProgress = 0;
                 auto cpit = criteriaProgress_.find(criteriaId);
@@ -3088,11 +3089,15 @@ void GameHandler::registerRemainingOpcodes() {
         // The criteria records are SMSG_ALL_ACHIEVEMENT_DATA's (0x005b34a0):
         // packed counter, packed guid, flags, date and two timers - not the
         // fixed sixteen bytes this stepped over them by.
+        // The comparison unit's statistics go on its list (0x005b2cb0),
+        // whatever their flags; any other player's are not kept.
+        const bool comparing = inspectedGuid == achievementComparisonGuid_;
         while (packet.hasRemaining(4)) {
             uint32_t id = packet.readUInt32();
             if (id == 0xFFFFFFFF) break;
             CriteriaProgressRecord rec;
             if (!readCriteriaProgressTail(packet, rec)) break;
+            if (comparing && isStatisticCriteria(id)) latestUpdatedComparisonStats_.noteComparison(id);
         }
         inspectedPlayerAchievements_[inspectedGuid] = std::move(achievements);
         LOG_INFO("SMSG_RESPOND_INSPECT_ACHIEVEMENTS: guid=0x", std::hex, inspectedGuid, std::dec,

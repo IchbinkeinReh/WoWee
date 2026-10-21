@@ -5168,8 +5168,28 @@ void registerQuestLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"ClearAchievementComparisonUnit", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L)) gh->setAchievementComparisonGuid(0);
+            if (auto* gh = getGameHandler(L)) {
+                gh->setAchievementComparisonGuid(0);
+                gh->clearAchievementComparisonLists();
+            }
             return 0;
+        }},
+                // GetLatestUpdatedStats() (0x005b1c90) and
+                // GetLatestUpdatedComparisonStats() (0x005b1d60) → up to five
+                // criteria ids, the statistics most recently updated first.
+                {"GetLatestUpdatedStats", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            const auto ids = gh->getLatestUpdatedStats().latest();
+            for (const uint32_t id : ids) lua_pushnumber(L, id);
+            return static_cast<int>(ids.size());
+        }},
+                {"GetLatestUpdatedComparisonStats", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            const auto ids = gh->getLatestUpdatedComparisonStats().latest();
+            for (const uint32_t id : ids) lua_pushnumber(L, id);
+            return static_cast<int>(ids.size());
         }},
                 // GetAchievementComparisonInfo(id) → completed, month, day, year.
                 //

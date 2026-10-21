@@ -8,6 +8,7 @@
 #include "game/unit_reaction.hpp"
 #include "game/calendar_data.hpp"
 #include "game/lfg_update.hpp"
+#include "game/latest_criteria.hpp"
 #include "game/game_interfaces.hpp"
 #include "game/world_packets.hpp"
 #include "game/character.hpp"
@@ -3482,6 +3483,25 @@ public:
         return (it != inspectedPlayerAchievements_.end()) ? &it->second : nullptr;
     }
 
+    /// The statistics most recently updated, newest first: the player's
+    /// (0x00acfda8) and the comparison unit's (0x00acfdcc) - see
+    /// game/latest_criteria.hpp.
+    const LatestCriteriaList& getLatestUpdatedStats() const { return latestUpdatedStats_; }
+    const LatestCriteriaList& getLatestUpdatedComparisonStats() const {
+        return latestUpdatedComparisonStats_;
+    }
+    /// ClearAchievementComparisonUnit (0x005b4760 -> 0x005b2fb0): the
+    /// comparison's criteria lists emptied.
+    void clearAchievementComparisonLists() { latestUpdatedComparisonStats_.clear(); }
+    /// Logout (0x005b4f00): both lists emptied.
+    void clearLatestUpdatedStats() {
+        latestUpdatedStats_.clear();
+        latestUpdatedComparisonStats_.clear();
+    }
+    /// 0x005b0de0: a criteria of an achievement whose category is the
+    /// Statistics tree's (category 1, or one below it).
+    bool isStatisticCriteria(uint32_t criteriaId);
+
     /// Who the achievement comparison tab is looking at, or zero.
     uint64_t getAchievementComparisonGuid() const { return achievementComparisonGuid_; }
     void setAchievementComparisonGuid(uint64_t guid) { achievementComparisonGuid_ = guid; }
@@ -5752,6 +5772,11 @@ private:
     // Per-player achievement data from SMSG_RESPOND_INSPECT_ACHIEVEMENTS
     // Key: inspected player's GUID; value: set of earned achievement IDs
     std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>> inspectedPlayerAchievements_;
+    LatestCriteriaList latestUpdatedStats_;
+    LatestCriteriaList latestUpdatedComparisonStats_;
+    /// A criteria record as 0x005b2520 takes it: a statistic not flagged
+    /// removed goes on the front of the player's list.
+    void noteCriteriaForLatestStats(uint32_t criteriaId, uint32_t flags);
     uint64_t achievementComparisonGuid_ = 0;
 
     /// Sort moves still to send, one per tick. See sortBags.

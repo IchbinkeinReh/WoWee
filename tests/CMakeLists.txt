@@ -3303,3 +3303,9 @@ wowee_add_test(test_quest_poi_icons
 wowee_add_test(test_glyph_socket
     SOURCES test_glyph_socket.cpp)
 
+# ── test_latest_criteria ─────────────────────────────────────
+# The statistics most recently updated (0x005b2520, 0x005b2cb0) that
+# GetLatestUpdatedStats and GetLatestUpdatedComparisonStats read. Header-only.
+wowee_add_test(test_latest_criteria
+    SOURCES test_latest_criteria.cpp)
+
