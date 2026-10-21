@@ -534,8 +534,6 @@ private:
     std::map<uint32_t, LightParamsProfile> lightParamsProfiles_;
     std::map<uint32_t, std::string> lightSkyboxPaths_;
     std::map<uint32_t, uint32_t> lightSkyboxFlags_;
-    // Every Light row by ID, for a LiquidType's own light
-    std::map<uint32_t, LightVolume> lightsById_;
     struct LiquidTypeLight {
         float maxDarkenDepth = 0.0f;
         float ambDarken = 0.0f;

@@ -146,6 +146,10 @@ public:
     /// magma surface's glowing patches (rt_lights::liquidGlowPatches) whose
     /// light reaches within `range`, nearest first, at most kMaxLavaLights.
     void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
+    /// What the liquid at (x, y) is made of (client_liquid::liquidKindOfRow):
+    /// lava and slime are Magma, and take no water's swim effects. None with
+    /// no liquid there.
+    client_liquid::MaterialKind getLiquidKindAt(float glX, float glY) const;
     static constexpr size_t kMaxLavaLights = 32;
 
     void recreatePipelines();

@@ -432,6 +432,15 @@ void SwimEffects::update(const Camera& camera, const CameraController& cc,
 
     bool swimming = cc.isSwimming();
     bool moving = cc.isMoving();
+    // Ripples, spray and bubbles are water's: in lava or slime (a magma
+    // material) the client throws none of them, and blue rings and rising
+    // bubbles read as swimming in water.
+    if (water.getLiquidKindAt(charPos.x, charPos.y) == client_liquid::MaterialKind::Magma) {
+        charWaterH.reset();
+    }
+    if (water.getLiquidKindAt(camPos.x, camPos.y) == client_liquid::MaterialKind::Magma) {
+        camWaterH.reset();
+    }
 
     // --- Ripple/splash spawning ---
     if (swimming && charWaterH) {

@@ -58,6 +58,18 @@ inline MaterialKind materialKind(uint32_t materialId) {
     }
 }
 
+/// What a LiquidType row is made of: its LiquidMaterial (1 water, 2 magma -
+/// lava and slime both - 3 procedural water) where LiquidType.dbc has the
+/// row, else by the basic type the first twenty rows cycle through (water,
+/// ocean, magma, slime). Water for any other row, none for 0.
+inline MaterialKind liquidKindOfRow(uint32_t row, const LiquidTypeRecord* record) {
+    if (record) return materialKind(record->materialId);
+    if (row == 0) return MaterialKind::None;
+    if (row < 0x15) return ((row - 1) & 3) >= 2 ? MaterialKind::Magma : MaterialKind::Water;
+    return MaterialKind::Water;
+}
+
+
 /// The period a texture slot not tied to a LiquidType int is animated over,
 /// in milliseconds: the 0x4e2 each fixed-function material passes to 0x008a1d60.
 inline constexpr uint32_t kFixedSlotPeriodMs = 1250;

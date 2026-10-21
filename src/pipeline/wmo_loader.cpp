@@ -787,6 +787,12 @@ bool WMOLoader::loadGroup(const std::vector<uint8_t>& groupData,
                         } else if (tileCount > 0) {
                             group.liquid.flags.resize(tileCount, 0);
                         }
+                        // A group naming no liquid of its own takes its tiles' (0x007c8d80,
+                        // 0x007d7310).
+                        if (group.liquid.liquidType == 0) {
+                            group.liquid.liquidType =
+                                wmoLiquidTypeFromTiles(group.liquid.flags, group.flags);
+                        }
                     }
                 }
 

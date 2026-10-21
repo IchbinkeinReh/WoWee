@@ -134,6 +134,26 @@ inline uint32_t wmoGroupLiquidType(uint32_t mogpLiquid, uint32_t mogpFlags, uint
     return t;
 }
 
+/// An old-style group's liquid whose MOGP names none (15 with MOHD flag 4
+/// clear): the client takes it from the first tile that has liquid (the
+/// first MLIQ tile flag whose low nibble is not 0xF), that nibble plus one
+/// (0x007c8d80), and turns it as wmoGroupLiquidType does (0x007d7310) - so
+/// Blackrock Mountain's lava, tiles of 6, is 7, WMO Magma (19). 0 with no
+/// liquid tile at all.
+inline uint32_t wmoLiquidTypeFromTiles(const std::vector<uint8_t>& tileFlags, uint32_t mogpFlags) {
+    for (uint8_t f : tileFlags) {
+        if ((f & 0xF) == 0xF) continue;
+        const uint32_t t = (f & 0xFu) + 1u;
+        switch ((t - 1) & 3) {
+            case 0: return (mogpFlags & 0x80000) != 0 ? 14u : 13u;
+            case 1: return 14u;
+            case 2: return 19u;
+            default: return 20u;
+        }
+    }
+    return 0;
+}
+
 struct WMOLiquid {
     uint32_t xVerts = 0;        // Vertices in X direction
     uint32_t yVerts = 0;        // Vertices in Y direction

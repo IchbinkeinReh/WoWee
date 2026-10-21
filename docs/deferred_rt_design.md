@@ -357,7 +357,10 @@ own intensity and reach slider in Debug Lights):
   reaches the camera's range as `Source::Emissive` lights (`glowLight`: a
   full cell reaches 16 yards at strength 1.2), so the cost is bounded
   however much lava a zone has; `selectLights` caps the frame's total as for
-  any light.
+  any light. A building's liquid whose group names no type (Blackrock
+  Mountain's: MOGP liquid 15 with MOHD 0x4 clear) has it from its first shown
+  tile, as the client does (`wmoLiquidTypeFromTiles`, 0x007c8d80), so it is
+  drawn as magma and lights as lava too.
 * Nothing is left out by what it is. A model's or a building's glow is
   judged by its material alone (`batchGlowColor`): an added batch, a glow
   card, or an unlit one whose texture is bright enough (0.35) to read as a

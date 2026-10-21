@@ -202,3 +202,40 @@ TEST_CASE("a WMO group's LiquidType from MOGP's liquid (0x007d82e0, 0x007d7310)"
     CHECK(wmoGroupLiquidType(21, 0, 4) == 21);
     CHECK(wmoGroupLiquidType(0, 0, 4) == 0);
 }
+
+TEST_CASE("a group naming no liquid takes its first liquid tile's type", "[liquid][wmo]") {
+    using wowee::pipeline::wmoGroupLiquidType;
+    using wowee::pipeline::wmoLiquidTypeFromTiles;
+    // Blackrock Mountain's lava (blackrock_038): MOGP liquid 15 with MOHD
+    // flag 4 clear names none, so 0x007c8d80 reads the tiles - 0xF is no
+    // liquid, 6 is the first - and 6 + 1 turns into WMO Magma (0x007d7310).
+    CHECK(wmoGroupLiquidType(15, 0x3a05, 0) == 0);
+    const std::vector<uint8_t> tiles = {0x0F, 0x4F, 0x06, 0x46, 0x0F};
+    CHECK(wmoLiquidTypeFromTiles(tiles, 0x3a05) == 19);
+    // A tile of 0 is water: 13, or 14 in a group flagged 0x80000.
+    CHECK(wmoLiquidTypeFromTiles({0x00}, 0) == 13);
+    CHECK(wmoLiquidTypeFromTiles({0x00}, 0x80000) == 14);
+    CHECK(wmoLiquidTypeFromTiles({0x01}, 0) == 14);
+    CHECK(wmoLiquidTypeFromTiles({0x03}, 0) == 20);
+    // No liquid tile at all: none.
+    CHECK(wmoLiquidTypeFromTiles({0x0F, 0xFF}, 0) == 0);
+    CHECK(wmoLiquidTypeFromTiles({}, 0) == 0);
+}
+
+TEST_CASE("a LiquidType row is water or magma by its material", "[liquid]") {
+    cl::LiquidTypeRecord magma;
+    magma.materialId = 2;
+    cl::LiquidTypeRecord water;
+    water.materialId = 1;
+    CHECK(cl::liquidKindOfRow(3, &magma) == cl::MaterialKind::Magma);
+    CHECK(cl::liquidKindOfRow(2, &water) == cl::MaterialKind::Water);
+    // Without LiquidType.dbc: the first twenty rows cycle water, ocean,
+    // magma, slime; slime is drawn with the magma material.
+    CHECK(cl::liquidKindOfRow(0, nullptr) == cl::MaterialKind::None);
+    CHECK(cl::liquidKindOfRow(1, nullptr) == cl::MaterialKind::Water);
+    CHECK(cl::liquidKindOfRow(2, nullptr) == cl::MaterialKind::Water);
+    CHECK(cl::liquidKindOfRow(3, nullptr) == cl::MaterialKind::Magma);
+    CHECK(cl::liquidKindOfRow(4, nullptr) == cl::MaterialKind::Magma);
+    CHECK(cl::liquidKindOfRow(19, nullptr) == cl::MaterialKind::Magma);
+    CHECK(cl::liquidKindOfRow(17, nullptr) == cl::MaterialKind::Water);
+}

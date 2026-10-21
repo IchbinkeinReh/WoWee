@@ -1009,7 +1009,9 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
     if (!liquid.hasLiquid() || liquid.xTiles == 0 || liquid.yTiles == 0) return;
     if (liquid.xVerts < 2 || liquid.yVerts < 2) return;
     if (liquid.xTiles != liquid.xVerts - 1 || liquid.yTiles != liquid.yVerts - 1) return;
-    if (liquid.xTiles > 64 || liquid.yTiles > 64) return;
+    // A tile count fits a surface's byte; Blackrock Mountain's lava lake is
+    // 54 by 81 tiles, and a cap of 64 left it undrawn.
+    if (liquid.xTiles > 255 || liquid.yTiles > 255) return;
 
     WaterSurface surface;
     surface.tileX = -1;
@@ -1682,11 +1684,26 @@ std::optional<uint16_t> WaterRenderer::getWaterTypeAt(float glX, float glY) cons
         float h = surface.minHeight;
         if (!bestHeight || h > *bestHeight) {
             bestHeight = h;
-            bestType = surface.liquidType;
+            // The LiquidType row, as every caller reads it (1 water, 2 ocean,
+            // 3 magma, 4 slime, 13+ a building's): an ADT's MCLQ layer keeps
+            // the basic type (0 water .. 2 magma) in liquidType, one below
+            // its row, and lava read as ocean - underwater lava drew the
+            // ocean's blue light and fog.
+            // A building's liquidType is its row already (wmoGroupLiquidType).
+            bestType = static_cast<uint16_t>(surface.wmoId == 0 && surface.clientLiquidType != 0
+                                                 ? surface.clientLiquidType
+                                                 : surface.liquidType);
         }
     }
 
     return bestType;
+}
+
+client_liquid::MaterialKind WaterRenderer::getLiquidKindAt(float glX, float glY) const {
+    const auto row = getWaterTypeAt(glX, glY);
+    if (!row) return client_liquid::MaterialKind::None;
+    const auto it = clientTypeRecords_.find(*row);
+    return client_liquid::liquidKindOfRow(*row, it != clientTypeRecords_.end() ? &it->second : nullptr);
 }
 
 std::vector<audio::zone_ambience::LiquidCell>

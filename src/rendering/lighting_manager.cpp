@@ -123,7 +123,6 @@ bool LightingManager::loadLightDbc(pipeline::AssetManager* assetManager) {
         // usually is - fell to invented constants.
         //
         // Light ID 1 stands in for a map that has no default of its own.
-        lightsById_[volume.lightId] = volume;
         if (volume.lightId == 1) {
             globalDefaultLight_ = volume;
             hasGlobalDefaultLight_ = true;
@@ -415,22 +414,25 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
     const LightVolume* base = defaultLight(mapId);
     // Under a liquid whose LiquidType names a light of its own, that light is
     // the whole of it, in place of the default and the nearby lights
-    // (0x007f3230: the row's +0x28 decides the branch).
+    // (0x007f3230: the row's +0x28 decides the branch, which samples it with
+    // 0x007ecd80 and calls no 0x007eb180). The column is a LightParams row,
+    // not a Light one: magma's 7 is the orange set (fog 0xc83400, its end 27
+    // yards) - read as Light 7, a zone light in the Burning Steppes, lava
+    // took that light's underwater set, which is blue.
     const LiquidTypeLight* liquidRow = nullptr;
     if (cameraInLiquid) {
         auto lq = liquidTypes_.find(liquid.liquidType);
         if (lq != liquidTypes_.end()) liquidRow = &lq->second;
     }
-    const LightVolume* liquidLight = nullptr;
+    const LightParamsProfile* liquidParams = nullptr;
     if (liquidRow && liquidRow->lightId != 0) {
-        auto ll = lightsById_.find(liquidRow->lightId);
-        if (ll != lightsById_.end()) liquidLight = &ll->second;
+        auto lp = lightParamsProfiles_.find(liquidRow->lightId);
+        if (lp != lightParamsProfiles_.end()) liquidParams = &lp->second;
     }
-    if (liquidLight) {
+    if (liquidParams) {
         activeVolumes_.clear();
-        uint32_t skyboxId = 0;
-        newParams = sampleLight(*liquidLight, true, storm, timeHalfMinutes, skyboxId);
-        addSky(skyboxId, 1.0f);
+        newParams = sampleLightParams(liquidParams, timeHalfMinutes);
+        addSky(liquidParams->lightSkyboxId, 1.0f);
     } else if (base) {
         uint32_t skyboxId = 0;
         newParams = sampleLight(*base, cameraInLiquid, storm, timeHalfMinutes, skyboxId);
@@ -450,7 +452,7 @@ void LightingManager::update(const glm::vec3& playerPos, uint32_t mapId,
     // alphas and the sky models, which are kept; the set's own sky model goes
     // up on top at full weight.
     uint32_t deathSkyboxId = 0;
-    if (lightOverride >= 0 && lightOverride < static_cast<int>(LightVolume::PARAMS_SLOT_COUNT) && !liquidLight && base &&
+    if (lightOverride >= 0 && lightOverride < static_cast<int>(LightVolume::PARAMS_SLOT_COUNT) && !liquidParams && base &&
         base->lightParamsIds[lightOverride] != 0) {
         auto it = lightParamsProfiles_.find(base->lightParamsIds[lightOverride]);
         if (it != lightParamsProfiles_.end()) {
