@@ -877,8 +877,8 @@ void GameHandler::registerCoreOpcodes() {
                       std::dec, " threshold=", threshold, " itemId=", itemId);
         }
     };
-    dispatchTable_[Opcode::SMSG_CLEAR_FAR_SIGHT_IMMEDIATE] = [](network::Packet& /*packet*/) {
-        LOG_DEBUG("SMSG_CLEAR_FAR_SIGHT_IMMEDIATE");
+    dispatchTable_[Opcode::SMSG_CLEAR_FAR_SIGHT_IMMEDIATE] = [this](network::Packet& /*packet*/) {
+        if (movementHandler_) movementHandler_->clearFarSightImmediate();
     };
     // Read as a movement packet and dropped: 0x00740d30's case 0xd9 returns
     // before anything is done with it.

@@ -4507,6 +4507,20 @@ void MovementHandler::onFarsightChanged(uint64_t farsight) {
                                                unitHasClientControl(player)));
 }
 
+void MovementHandler::clearFarSightImmediate() {
+    // 0x006e2b00: only once CMSG_FAR_SIGHT has said so (+0x1858 0x1). The
+    // camera then asks again which vehicle it rides and moves for the
+    // player's seat (0x00604b90, 0x0074c4a0 -> 0x0074c0e0, which returns at
+    // once for the seat it last moved for); here the camera works out its
+    // vehicle every frame and moves for a seat as the seat changes.
+    if (!farSightAnnounced_) return;
+    auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    const uint16_t field = fieldIndex(UF::PLAYER_FARSIGHT);
+    if (!player || field == 0xFFFF) return;
+    onFarsightChanged((static_cast<uint64_t>(player->getField(static_cast<uint16_t>(field + 1))) << 32) |
+                      player->getField(field));
+}
+
 MovementSpeeds MovementHandler::moverSpeeds() const {
     const uint64_t mover = activeMover();
     if (mover != owner_.getPlayerGuid()) {
