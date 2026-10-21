@@ -27,6 +27,7 @@
 #include "pipeline/dbc_layout.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <chrono>
 #include <cstdlib>
 #include <sstream>
@@ -498,11 +499,35 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_READ_ITEM_OK] = [](network::Packet& packet) {
         packet.skipAll();
     };
-    table[Opcode::SMSG_READ_ITEM_FAILED] = [](network::Packet& packet) {
+    table[Opcode::SMSG_READ_ITEM_FAILED] = [this](network::Packet& packet) {
         // No words: 0x006d5d90 answers a refusal with ITEM_TEXT_TRANSLATION or
         // ITEM_TEXT_CLOSED and nothing on screen. This printed "You cannot
         // read this item." twice, red and in chat.
-        packet.skipAll();
+        //
+        // The item's guid and a reason. 0 reads as SMSG_READ_ITEM_OK does - the
+        // page is already asked for, so there is nothing more. 1 is a text in
+        // a language still being worked out: ITEM_TEXT_TRANSLATION with the
+        // uint32 after it in seconds ("%f" of milliseconds * 0.001), which is
+        // what runs the frame's progress bar. Anything else closes the reading
+        // window, if it is this item's.
+        if (!packet.hasRemaining(9)) return;
+        const uint64_t itemGuid = packet.readUInt64();
+        switch (server_notice::readItemFailure(packet.readUInt8())) {
+            case server_notice::ReadItemFailure::Readable:
+                break;
+            case server_notice::ReadItemFailure::Translate: {
+                if (!packet.hasRemaining(4)) return;
+                char seconds[32];
+                std::snprintf(seconds, sizeof(seconds), "%f",
+                              static_cast<double>(static_cast<float>(static_cast<int32_t>(packet.readUInt32())) * 0.001f));
+                owner_.fireAddonEvent("ITEM_TEXT_TRANSLATION", {seconds});
+                break;
+            }
+            case server_notice::ReadItemFailure::Close:
+                if (itemGuid != 0 && itemGuid == owner_.getBookObject())
+                    owner_.fireAddonEvent("ITEM_TEXT_CLOSED", {});
+                break;
+        }
     };
 
     // ---- Loot roll start / notifications ----

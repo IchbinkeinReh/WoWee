@@ -3152,6 +3152,7 @@ public:
     /// The object a book being read is from - a game object or an item - which
     /// the reading window opens with (0x0058a1a0 -> 0x0051fce0).
     void setBookObject(uint64_t guid) { bookObjectGuid_ = guid; setInteractionObject(guid, go_interaction::Window::Book); }
+    uint64_t getBookObject() const { return bookObjectGuid_; }
 
     /// What is being read, for the heading over the page. Known at every point
     /// a book is opened - the game object's name from its query cache, or the
