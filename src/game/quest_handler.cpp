@@ -1,3 +1,4 @@
+#include "game/gossip_quest_status.hpp"
 #include <chrono>
 #include "ui/framexml_takeover.hpp"
 #include "game/item_text.hpp"
@@ -2154,10 +2155,16 @@ bool QuestHandler::resyncQuestLogFromServerSlots(bool forceQueryMetadata) {
     for (auto& quest : questLog_) {
         auto it = serverQuestComplete.find(quest.questId);
         if (it == serverQuestComplete.end()) continue;
-        if (it->second && !quest.complete) {
-            quest.complete = true;
-            ++marked;
-            LOG_DEBUG("Quest ", quest.questId, " marked complete from update fields");
+        // Assigned, as the failed bit below: the slot is the server's answer,
+        // and a quest stops being complete when it says so - a quest item
+        // lost, or the quest dropped and taken again. Latched, the gossip and
+        // greeting lists showed such a quest as ready to hand in.
+        // (A layout with no state field says nothing either way. Absent from
+        // the fields, the state is zero: the server sends no zero fields.)
+        if (qStride >= 2 && it->second != quest.complete) {
+            quest.complete = it->second;
+            if (it->second) ++marked;
+            LOG_DEBUG("Quest ", quest.questId, " complete=", it->second, " from update fields");
         }
         // Assigned rather than latched: a quest that stops being failed -
         // the server clears the bit when a timer is restarted - has to stop
@@ -2224,13 +2231,14 @@ void QuestHandler::applyQuestStateFromFields(const FlatFieldMap& fields) {
 
         auto stateIt = fields.find(stateField);
         if (stateIt == fields.end()) continue;
-        bool serverComplete = isQuestSlotComplete(qStride, stateIt->second);
-        if (!serverComplete) continue;
-
+        // The slot's state says complete or not, whichever it is: not only
+        // on the way to complete (see resyncQuestLogFromServerSlots).
+        const bool serverComplete = isQuestSlotComplete(qStride, stateIt->second);
         for (auto& quest : questLog_) {
-            if (quest.questId == questId && !quest.complete) {
-                quest.complete = true;
-                LOG_INFO("Quest ", questId, " marked complete from VALUES update field state");
+            if (quest.questId == questId && quest.complete != serverComplete) {
+                quest.complete = serverComplete;
+                LOG_INFO("Quest ", questId, " complete=", serverComplete,
+                         " from VALUES update field state");
                 break;
             }
         }
@@ -2439,11 +2447,11 @@ void QuestHandler::handleQuestgiverQuestList(network::Packet& packet) {
 // does this because it has the freshest data; quest-list handler skips it because
 // completion updates arrive via separate packets).
 void QuestHandler::classifyGossipQuests(bool updateQuestLog) {
-    // Icon values come from the server's QUEST_STATUS enum, not a client constant,
-    // so these magic numbers are protocol-defined and stable across expansions.
-    auto isCompletable = [](uint32_t icon) { return icon == 5 || icon == 6 || icon == 10; };
-    auto isIncomplete  = [](uint32_t icon) { return icon == 3 || icon == 4; };
-    auto isAvailable   = [](uint32_t icon) { return icon == 2 || icon == 7 || icon == 8; };
+    // What each icon says, and what it cannot (gossip_quest_status.hpp).
+    using namespace gossip_quest;
+    auto isCompletable = [](uint32_t icon) { return iconIsCompletable(icon); };
+    auto isIncomplete  = [](uint32_t icon) { return iconIsIncomplete(icon); };
+    auto isAvailable   = [](uint32_t icon) { return iconIsAvailable(icon); };
 
     bool hasAvailable = false, hasReward = false, hasIncomplete = false;
     for (const auto& q : currentGossip_.quests) {
@@ -2457,7 +2465,11 @@ void QuestHandler::classifyGossipQuests(bool updateQuestLog) {
         if (updateQuestLog) {
             for (auto& entry : questLog_) {
                 if (entry.questId == q.questId) {
-                    entry.complete = completable;
+                    // Only an icon that says "done" is news: 4 comes for a
+                    // finished quest and an unfinished one alike, and taking
+                    // it as "not complete" cleared the slot's complete bit,
+                    // so the list then showed every turn-in as unfinished.
+                    entry.complete = logCompleteAfterList(q.questIcon, entry.complete);
                     entry.title = normalizeQuestText(q.title, true);
                     if (q.questLevel > 0 && entry.level <= 0) entry.level = q.questLevel;
                     break;

@@ -3182,6 +3182,12 @@ wowee_add_test(test_blob_shadow
 wowee_add_test(test_shadow_pass_work
     SOURCES test_shadow_pass_work.cpp)
 
+# ── test_gossip_quest_status ─────────────────────────────────
+# Which taken quests the gossip and greeting lists show as ready to hand in
+# (game/gossip_quest_status.hpp).
+wowee_add_test(test_gossip_quest_status
+    SOURCES test_gossip_quest_status.cpp)
+
 # ── test_generation_keyed_cache ──────────────────────────────
 # What is made over the scene's targets is let go when they are rebuilt,
 # whatever handles the new ones get (rendering/generation_keyed_cache.hpp).

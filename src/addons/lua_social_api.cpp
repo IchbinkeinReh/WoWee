@@ -1,5 +1,6 @@
 // lua_social_api.cpp - Chat, guild, friends, ignore, gossip, party management, and emotes Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
+#include "game/gossip_quest_status.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -879,12 +880,25 @@ namespace {
 /// Daily quests take a different icon in the list. Protocol-defined, WotLK.
 constexpr uint32_t kQuestFlagsDaily = 0x1000;
 
-bool gossipQuestIsAvailable(uint32_t icon)   { return icon == 2 || icon == 7 || icon == 8; }
-bool gossipQuestIsCompletable(uint32_t icon) { return icon == 5 || icon == 6 || icon == 10; }
-bool gossipQuestIsIncomplete(uint32_t icon)  { return icon == 3 || icon == 4; }
+bool gossipQuestIsAvailable(uint32_t icon) { return game::gossip_quest::iconIsAvailable(icon); }
 /// Taken already, finished or not - which is one list in the gossip window.
-bool gossipQuestIsActive(uint32_t icon) {
-    return gossipQuestIsIncomplete(icon) || gossipQuestIsCompletable(icon);
+bool gossipQuestIsActive(uint32_t icon) { return game::gossip_quest::iconIsActive(icon); }
+
+/// Whether a taken quest of the list is ready to hand in: the yellow "?"
+/// rather than the grey one. A 3.3.5 server sends the same icon for both, so
+/// the quest log's complete flag decides (gossip_quest_status.hpp).
+bool gossipQuestIsComplete(game::GameHandler* gh, const game::GossipQuestItem& q) {
+    bool inLog = false;
+    bool logComplete = false;
+    if (gh) {
+        for (const auto& entry : gh->getQuestLog()) {
+            if (entry.questId != q.questId) continue;
+            inLog = true;
+            logComplete = entry.complete;
+            break;
+        }
+    }
+    return game::gossip_quest::activeQuestIsComplete(q.questIcon, inLog, logComplete);
 }
 
 /// The i-th quest of one kind, or null past the end. One walk shared by
@@ -950,11 +964,17 @@ int countGossipQuests(lua_State* L, bool available) {
     return n;
 }
 
+/// GetAvailableTitle(index) -> title; GetActiveTitle(index) -> title,
+/// isComplete. QuestFrameGreetingPanel_OnShow reads the second value of the
+/// active one to choose the yellow "?" over the grey: returned alone, the
+/// title left every quest there drawn as unfinished.
 int pushGossipQuestTitle(lua_State* L, bool available) {
     const int index = static_cast<int>(luaL_checknumber(L, 1));
     const auto* q = gossipQuestAt(L, available, index);
     lua_pushstring(L, q ? q->title.c_str() : "");
-    return 1;
+    if (available) return 1;
+    lua_pushboolean(L, q && gossipQuestIsComplete(getGameHandler(L), *q) ? 1 : 0);
+    return 2;
 }
 
 /// Index into whichever of the two lists the caller means, then ask for that
@@ -2713,7 +2733,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 lua_pushstring(L, q.title.c_str());
                 lua_pushnumber(L, q.questLevel);
                 lua_pushboolean(L, 0);
-                lua_pushboolean(L, gossipQuestIsCompletable(q.questIcon) ? 1 : 0);
+                lua_pushboolean(L, gossipQuestIsComplete(gh, q) ? 1 : 0);
                 n += 4;
             }
             return n;
