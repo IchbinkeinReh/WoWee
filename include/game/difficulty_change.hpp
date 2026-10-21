@@ -37,6 +37,54 @@ inline bool mayChange(uint32_t mapInstanceType, uint32_t mapFlags, bool inRaid,
            leaderGuid != 0 && leaderGuid == playerGuid;
 }
 
+/// The raid difficulty as 0x005255a0 keeps it: the player's own (0xbd089c)
+/// and its group's (0xbd197c). Which one is in force depends on whether the
+/// player is in a group at all (0xbeb608, the group's member count) -
+/// GetRaidDifficulty (0x00515810) answers that one first and the player's own
+/// second.
+struct RaidDifficulty {
+    uint32_t personal = 0;
+    uint32_t group = 0;
+    [[nodiscard]] uint32_t effective(bool inGroup) const { return inGroup ? group : personal; }
+};
+
+/// What MSG_SET_RAID_DIFFICULTY's three words do to it (0x005255a0): the
+/// difficulty, then whether it is the player's own and whether it is the
+/// group's. The group's is not stored on a map that can switch difficulty in
+/// place; there the player's difficulty is asked to follow it instead -
+/// heroic for anything past 25 normal (0x0052d8d0 with difficulty > 1).
+struct RaidDifficultyApplied {
+    bool changed = false;                ///< the one in force differs: 0x00524780 says so
+    std::optional<uint32_t> askPlayer;   ///< CMSG_CHANGEPLAYER_DIFFICULTY with this
+};
+
+inline RaidDifficultyApplied applyRaidDifficulty(RaidDifficulty& r, uint32_t difficulty, bool own, bool group,
+                                                 bool dynamicMap, bool inGroup) {
+    RaidDifficultyApplied out;
+    const uint32_t before = r.effective(inGroup);
+    if (own) r.personal = difficulty;
+    if (group) {
+        if (!dynamicMap) r.group = difficulty;
+        else out.askPlayer = difficulty > 1 ? 1u : 0u;
+    }
+    out.changed = r.effective(inGroup) != before;
+    return out;
+}
+
+/// How 0x00524780 words a raid difficulty that changed.
+enum class RaidChangeWords : uint8_t {
+    Lockout,         ///< on a dynamic-difficulty map: ERR_RAID_LOCKOUT_CHANGED_S with RAID_DIFFICULTY<n>,
+                     ///< then ERR_PLAYER_DIFFICULTY_CHANGED_S with PLAYER_DIFFICULTY<n>
+    MapDifficulty,   ///< in a raid (InstanceType 2): ERR_RAID_DIFFICULTY_CHANGED_S with the
+                     ///< MapDifficulty.dbc row's difficulty string for the instance's difficulty
+    RaidDifficulty,  ///< anywhere else: ERR_RAID_DIFFICULTY_CHANGED_S with RAID_DIFFICULTY<n>
+};
+
+inline RaidChangeWords raidChangeWords(bool dynamicMap, int mapInstanceType) {
+    if (dynamicMap) return RaidChangeWords::Lockout;
+    return mapInstanceType == 2 ? RaidChangeWords::MapDifficulty : RaidChangeWords::RaidDifficulty;
+}
+
 /// 0x0052d000 and 0x0052d8d0: the cooldown is a wall-clock time in seconds
 /// (0xbd1984, time() plus the seconds result 6 sends), 0 for none, running
 /// while time() is before it.

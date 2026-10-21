@@ -906,6 +906,7 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     for (auto op : { Opcode::SMSG_INSTANCE_DIFFICULTY, Opcode::MSG_SET_DUNGEON_DIFFICULTY }) {
         table[op] = [this](network::Packet& packet) { handleInstanceDifficulty(packet); };
     }
+    table[Opcode::MSG_SET_RAID_DIFFICULTY] = [this](network::Packet& packet) { handleSetRaidDifficulty(packet); };
 
     // ---- Guild / RAF / PvP AFK (moved from GameHandler) ----
     table[Opcode::SMSG_GUILD_DECLINE] = [this](network::Packet& packet) {
@@ -4206,6 +4207,48 @@ void SocialHandler::handleInstanceDifficulty(network::Packet& packet) {
             owner_.addonEventCallbackRef()("PLAYER_DIFFICULTY_CHANGED", {});
             owner_.addonEventCallbackRef()("UPDATE_INSTANCE_INFO", {});
         }
+    }
+}
+
+// MSG_SET_RAID_DIFFICULTY (0x00526530 case 0x4eb): the difficulty, whether it
+// is the player's own and whether it is the group's - AzerothCore's
+// SendRaidDifficulty writes 1 and IsInGroup for the two. Stored as 0x005255a0
+// stores it, and said as 0x00524780 says it where the one in force changed.
+void SocialHandler::handleSetRaidDifficulty(network::Packet& packet) {
+    if (!packet.hasRemaining(12)) return;
+    const uint32_t difficulty = packet.readUInt32();
+    const bool own = packet.readUInt32() != 0;
+    const bool group = packet.readUInt32() != 0;
+    const bool inGroup = !owner_.getPartyData().isEmpty();
+    const bool dynamicMap = owner_.isDynamicDifficultyMap();
+    const auto applied =
+        difficulty_change::applyRaidDifficulty(raidDifficulty_, difficulty, own, group, dynamicMap, inGroup);
+    if (applied.askPlayer) owner_.changePlayerDifficulty(*applied.askPlayer);
+    if (!applied.changed) return;
+
+    const std::string raidKey = "RAID_DIFFICULTY" + std::to_string(raidDifficulty_.effective(inGroup) + 1);
+    const std::string raidWords = interfaceString(raidKey.c_str(), raidKey.c_str());
+    switch (difficulty_change::raidChangeWords(dynamicMap, owner_.currentMapInstanceType())) {
+        case difficulty_change::RaidChangeWords::Lockout: {
+            gameError(owner_, ErrTo::Chat, "ERR_RAID_LOCKOUT_CHANGED_S", "Raid Lockout set to %s.", {raidWords});
+            const std::string playerKey = "PLAYER_DIFFICULTY" + std::to_string(owner_.playerDifficultyRef() + 1);
+            gameError(owner_, ErrTo::Chat, "ERR_PLAYER_DIFFICULTY_CHANGED_S", "Difficulty set to %s.",
+                      {interfaceString(playerKey.c_str(), playerKey.c_str())});
+            break;
+        }
+        case difficulty_change::RaidChangeWords::MapDifficulty: {
+            // The instance's own row (0x00634950 with 0xbd0894); the client
+            // reads it unchecked, and a raid with no row says the difficulty
+            // instead of failing.
+            std::string words = owner_.savedInstanceDifficultyName(owner_.getCurrentMapId(), instanceDifficulty_);
+            if (words.empty()) words = raidWords;
+            gameError(owner_, ErrTo::Chat, "ERR_RAID_DIFFICULTY_CHANGED_S", "Raid Difficulty set to %s.", {words});
+            break;
+        }
+        case difficulty_change::RaidChangeWords::RaidDifficulty:
+            gameError(owner_, ErrTo::Chat, "ERR_RAID_DIFFICULTY_CHANGED_S", "Raid Difficulty set to %s.",
+                      {raidWords});
+            break;
     }
 }
 

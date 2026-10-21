@@ -4618,6 +4618,12 @@ uint32_t GameHandler::getInstanceDifficulty() const {
     return socialHandler_ ? socialHandler_->getInstanceDifficulty() : 0;
 }
 
+std::pair<uint32_t, uint32_t> GameHandler::getRaidDifficulty() const {
+    if (!socialHandler_) return {0, 0};
+    const auto& raid = socialHandler_->getRaidDifficulty();
+    return {raid.effective(!getPartyData().isEmpty()), raid.personal};
+}
+
 bool GameHandler::isInstanceHeroic() const {
     return socialHandler_ ? socialHandler_->isInstanceHeroic() : false;
 }

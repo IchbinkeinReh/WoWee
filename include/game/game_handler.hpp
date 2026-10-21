@@ -2287,6 +2287,10 @@ public:
 
     // Instance difficulty (0=5N, 1=5H, 2=25N, 3=25H for WotLK)
     uint32_t getInstanceDifficulty() const;
+    /// GetRaidDifficulty's two answers (0x00515810): the raid difficulty in
+    /// force - the group's in a group, the player's own out of one - and the
+    /// player's own, both from 0.
+    std::pair<uint32_t, uint32_t> getRaidDifficulty() const;
 
     /// The bind-or-leave prompt raised on entering an instance in progress.
     /// False when nothing is pending, in which case the out-params are

@@ -7017,18 +7017,22 @@ void registerSystemLuaAPI(lua_State* L) {
                 // unitpopup's `GetDungeonDifficulty() == 1` heroic-lockout
                 // check was true inside a heroic.
                 //
-                // Both answer from the one value this client tracks. Only one
-                // of the two applies at a time, so that holds until a party
-                // sets a raid difficulty while standing in a dungeon.
+                // The dungeon one answers from the value SMSG_INSTANCE_DIFFICULTY
+                // and MSG_SET_DUNGEON_DIFFICULTY both write; the raid one has
+                // its own (MSG_SET_RAID_DIFFICULTY).
                 {"GetDungeonDifficulty", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             lua_pushnumber(L, (gh ? gh->getInstanceDifficulty() : 0u) + 1u);
             return 1;
         }},
+                // GetRaidDifficulty (0x00515810): the raid difficulty in
+                // force and the player's own, from MSG_SET_RAID_DIFFICULTY.
                 {"GetRaidDifficulty", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, (gh ? gh->getInstanceDifficulty() : 0u) + 1u);
-            return 1;
+            const auto raid = gh ? gh->getRaidDifficulty() : std::pair<uint32_t, uint32_t>{0, 0};
+            lua_pushnumber(L, raid.first + 1u);
+            lua_pushnumber(L, raid.second + 1u);
+            return 2;
         }},
                 {"GetChatTypeIndex",         lua_ReturnOne},
                 {"GetDefaultLanguage",       lua_GetDefaultLanguage},

@@ -8,6 +8,7 @@
 #include "game/handler_types.hpp"
 #include "game/calendar_data.hpp"
 #include "game/lfg_update.hpp"
+#include "game/difficulty_change.hpp"
 #include "network/packet.hpp"
 #include <array>
 #include <chrono>
@@ -425,6 +426,8 @@ public:
 
     // Instance difficulty
     [[nodiscard]] uint32_t getInstanceDifficulty() const { return instanceDifficulty_; }
+    /// The raid difficulty MSG_SET_RAID_DIFFICULTY keeps (0xbd089c, 0xbd197c).
+    [[nodiscard]] const difficulty_change::RaidDifficulty& getRaidDifficulty() const { return raidDifficulty_; }
     [[nodiscard]] bool isInstanceHeroic() const { return instanceIsHeroic_; }
     [[nodiscard]] bool isInInstance() const { return inInstance_; }
 
@@ -670,6 +673,7 @@ private:
     void handleBattlefieldList(network::Packet& packet);
     void handleRaidInstanceInfo(network::Packet& packet);
     void handleInstanceDifficulty(network::Packet& packet);
+    void handleSetRaidDifficulty(network::Packet& packet);
     void handleDuelRequested(network::Packet& packet);
     void handleDuelComplete(network::Packet& packet);
     void handleDuelWinner(network::Packet& packet);
@@ -809,6 +813,7 @@ private:
     /// Six item tabs and the money log after them.
     std::array<std::vector<GuildBankLogEntry>, 7> guildBankLogs_;
     uint32_t instanceDifficulty_ = 0;
+    difficulty_change::RaidDifficulty raidDifficulty_;
     bool instanceIsHeroic_ = false;
     bool inInstance_ = false;
 
