@@ -638,6 +638,9 @@ bool VkContext::selectPhysicalDevice() {
     // shadow pass draws every chunk that casts that way; without it each
     // command is still read from the buffer, one call apiece.
     multiDrawIndirectSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::multiDrawIndirect);
+    // Occlusion queries that count samples rather than answer only whether
+    // any passed: how much of the sun's disc is in view (Celestial).
+    occlusionQueryPreciseSupported_ = enableIfPresent(&VkPhysicalDeviceFeatures::occlusionQueryPrecise);
     // The ray traced lighting's apply pass blends with a second source
     // (dst * factor + addend), its G-buffer pass writes the G-buffer
     // unblended beside a blended colour, and under MSAA it applies per sample.

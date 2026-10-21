@@ -389,3 +389,18 @@ TEST_CASE("LiquidType's flags are read from column 2", "[daynight][dbc-layout]")
     REQUIRE(std::regex_search(body, m, std::regex(R"("Flags"\s*:\s*(\d+))")));
     CHECK(std::stoi(m[1].str()) == 2);
 }
+
+TEST_CASE("the sun's occlusion query is the share of its disc left in view", "[daynight][sun-query]") {
+    // All of it, none of it, and the leaves of a crown letting a quarter through.
+    REQUIRE(dn::sunQueryVisibility(400, 400, true) == Catch::Approx(1.0f));
+    REQUIRE(dn::sunQueryVisibility(0, 400, true) == Catch::Approx(0.0f));
+    REQUIRE(dn::sunQueryVisibility(100, 400, true) == Catch::Approx(0.25f));
+    // Never more than all of it.
+    REQUIRE(dn::sunQueryVisibility(500, 400, true) == Catch::Approx(1.0f));
+    // A disc all but off the screen says nothing.
+    REQUIRE(dn::sunQueryVisibility(3, 8, true) < 0.0f);
+    REQUIRE(dn::sunQueryVisibility(0, 0, true) < 0.0f);
+    // An imprecise query is a yes or a no.
+    REQUIRE(dn::sunQueryVisibility(1, 400, false) == Catch::Approx(1.0f));
+    REQUIRE(dn::sunQueryVisibility(0, 400, false) == Catch::Approx(0.0f));
+}

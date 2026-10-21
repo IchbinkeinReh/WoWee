@@ -572,4 +572,16 @@ inline float cloudGlow(float storm) { return 1.0f - 0.75f * storm; }
 /// lighting in weather (0x007efae0: 64 + 192 storm).
 inline float cloudLightHeight(float storm) { return 64.0f + 192.0f * storm; }
 
+/// How much of the sun's disc is in view, from its occlusion query (0x009abe00
+/// divides the samples that passed by the disc's projected area): `visible`
+/// of the `all` samples the disc covers on screen. Negative - nothing to go
+/// by - when the disc is all but off the screen, too few samples to tell a
+/// leaf from the sky. An imprecise query only promises zero or not.
+inline float sunQueryVisibility(uint64_t visible, uint64_t all, bool precise) {
+    if (all < 16) return -1.0f;
+    if (!precise) return visible > 0 ? 1.0f : 0.0f;
+    const float v = static_cast<float>(visible) / static_cast<float>(all);
+    return v < 1.0f ? v : 1.0f;
+}
+
 }  // namespace wowee::rendering::daynight

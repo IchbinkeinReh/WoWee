@@ -395,6 +395,8 @@ public:
     /// pipeline cannot be built and the wireframe views are unavailable.
     [[nodiscard]] bool isWireframeSupported() const { return fillModeNonSolidSupported_; }
     [[nodiscard]] bool isMultiDrawIndirectSupported() const { return multiDrawIndirectSupported_; }
+    /// Whether an occlusion query may be asked for an exact sample count.
+    [[nodiscard]] bool isOcclusionQueryPreciseSupported() const { return occlusionQueryPreciseSupported_; }
     [[nodiscard]] uint32_t getMaxDrawIndirectCount() const { return maxDrawIndirectCount_; }
     /// False on hardware missing shaderStorageImageWriteWithoutFormat or
     /// shaderInt16, which the FSR2 compute shaders both need.
@@ -759,6 +761,7 @@ private:
     bool sampleRateShadingSupported_ = false;
     bool fillModeNonSolidSupported_ = false;
     bool multiDrawIndirectSupported_ = false;
+    bool occlusionQueryPreciseSupported_ = false;
     uint32_t maxDrawIndirectCount_ = 1;
     bool fsr2ComputeFeaturesSupported_ = false;
     bool blockCompressionSupported_ = false;

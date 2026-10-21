@@ -62,6 +62,79 @@ VkPipeline Celestial::buildPipeline(VkDevice device,
         .build(device, vkCtx_->getPipelineCache());
 }
 
+void Celestial::buildSunQueryPipelines(VkDevice device,
+                                       const VkPipelineShaderStageCreateInfo& vertStage,
+                                       const VkPipelineShaderStageCreateInfo& fragStage) {
+    // The sun body's own quad, texture and horizon cut, so what is counted is
+    // the disc render() draws; in the scene pass, writing neither colour nor
+    // depth. One tested against the far plane as the body is, one not.
+    VkVertexInputBindingDescription binding = tightVertexBinding(5 * sizeof(float));
+    std::vector<VkVertexInputAttributeDescription> attrs = positionPlusUvAttrs();
+    VkPipelineColorBlendAttachmentState noColour = PipelineBuilder::blendDisabled();
+    noColour.colorWriteMask = 0;
+    const auto build = [&](bool tested) {
+        return PipelineBuilder()
+            .setShaders(vertStage, fragStage)
+            .setVertexInput({binding}, attrs)
+            .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+            .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+            .setDepthTest(tested, false, depth::kNearerOrEqual)
+            .setColorBlendAttachment(noColour)
+            .setMultisample(vkCtx_->getMsaaSamples())
+            .setLayout(pipelineLayout_)
+            .setRenderPass(vkCtx_->getImGuiRenderPass())
+            .setDynamicStates(viewportAndScissorDynamic())
+            .build(device, vkCtx_->getPipelineCache());
+    };
+    sunQueryTestedPipeline_ = build(true);
+    sunQueryAllPipeline_ = build(false);
+    if (sunQueryTestedPipeline_ == VK_NULL_HANDLE || sunQueryAllPipeline_ == VK_NULL_HANDLE) {
+        LOG_WARNING("Celestial: no sun occlusion query pipelines - the sun's visibility "
+                    "falls back to the terrain and building test");
+    }
+}
+
+void Celestial::resetSunQuery(VkCommandBuffer cmd, uint32_t frame) {
+    if (sunQueryPool_ == VK_NULL_HANDLE || frame >= kQuerySlots || cmd == VK_NULL_HANDLE) return;
+    vkCmdResetQueryPool(cmd, sunQueryPool_, frame * 2, 2);
+    sunQueryReset_[frame] = true;
+    sunQueryIssued_[frame] = false;
+}
+
+void Celestial::renderSunQuery(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, uint32_t frame) {
+    if (frame >= kQuerySlots || !sunQueryReset_[frame] || sunQueryIssued_[frame]) return;
+    if (!renderingEnabled_ || !sunQueryWanted_ || sunQueryPool_ == VK_NULL_HANDLE ||
+        sunQueryTestedPipeline_ == VK_NULL_HANDLE || sunQueryAllPipeline_ == VK_NULL_HANDLE ||
+        texSets_[TEX_SUN] == VK_NULL_HANDLE || sunQuerySize_ <= 0.0f) {
+        return;
+    }
+    const VkQueryControlFlags control = sunQueryPrecise_ ? VK_QUERY_CONTROL_PRECISE_BIT : 0;
+    const glm::vec4 white(1.0f);
+    bindQuad(cmd, sunQueryTestedPipeline_, perFrameSet);
+    vkCmdBeginQuery(cmd, sunQueryPool_, frame * 2, control);
+    drawSprite(cmd, TEX_SUN, sunQueryDir_, sunQuerySize_, white, true);
+    vkCmdEndQuery(cmd, sunQueryPool_, frame * 2);
+    bindQuad(cmd, sunQueryAllPipeline_, perFrameSet);
+    vkCmdBeginQuery(cmd, sunQueryPool_, frame * 2 + 1, control);
+    drawSprite(cmd, TEX_SUN, sunQueryDir_, sunQuerySize_, white, true);
+    vkCmdEndQuery(cmd, sunQueryPool_, frame * 2 + 1);
+    sunQueryIssued_[frame] = true;
+}
+
+float Celestial::readSunVisibility(uint32_t frame) {
+    if (frame >= kQuerySlots || !sunQueryIssued_[frame] || sunQueryPool_ == VK_NULL_HANDLE || !vkCtx_) {
+        return -1.0f;
+    }
+    sunQueryIssued_[frame] = false;
+    // Two results, each followed by its availability; never waited for.
+    uint64_t r[4] = {};
+    const VkResult got = vkGetQueryPoolResults(
+        vkCtx_->getDevice(), sunQueryPool_, frame * 2, 2, sizeof(r), r, 2 * sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    if ((got != VK_SUCCESS && got != VK_NOT_READY) || r[1] == 0 || r[3] == 0) return -1.0f;
+    return daynight::sunQueryVisibility(r[0], r[2], sunQueryPrecise_);
+}
+
 bool Celestial::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout) {
     LOG_INFO("Initializing celestial renderer (Vulkan)");
 
@@ -99,6 +172,18 @@ bool Celestial::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout)
         LOG_ERROR("Failed to create celestial pipeline");
         return false;
     }
+    buildSunQueryPipelines(device, shaders.vertStage, shaders.fragStage);
+
+    // Two occlusion queries per frame in flight (resetSunQuery).
+    sunQueryPrecise_ = vkCtx_->isOcclusionQueryPreciseSupported();
+    VkQueryPoolCreateInfo queryInfo{};
+    queryInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    queryInfo.queryType = VK_QUERY_TYPE_OCCLUSION;
+    queryInfo.queryCount = kQuerySlots * 2;
+    if (vkCreateQueryPool(device, &queryInfo, nullptr, &sunQueryPool_) != VK_SUCCESS) {
+        sunQueryPool_ = VK_NULL_HANDLE;
+        LOG_WARNING("Celestial: no sun occlusion query pool");
+    }
 
     createQuad();
 
@@ -112,6 +197,8 @@ void Celestial::recreatePipelines() {
 
     destroy(device, pipeline_);
     destroy(device, glarePipeline_);
+    destroy(device, sunQueryTestedPipeline_);
+    destroy(device, sunQueryAllPipeline_);
 
     auto shaders = loadShaderPair(device, "assets/shaders/celestial.vert.spv", "assets/shaders/celestial.frag.spv", "celestial");
     if (!shaders) return;
@@ -121,6 +208,7 @@ void Celestial::recreatePipelines() {
     if (pipeline_ == VK_NULL_HANDLE || glarePipeline_ == VK_NULL_HANDLE) {
         LOG_ERROR("Celestial::recreatePipelines: failed to create pipeline");
     }
+    buildSunQueryPipelines(device, shaders.vertStage, shaders.fragStage);
 }
 
 bool Celestial::glarePipelineStale() const {
@@ -147,6 +235,10 @@ void Celestial::shutdown() {
     if (vkCtx_) {
         VkDevice device = vkCtx_->getDevice();
         destroy(device, glarePipeline_);
+        destroy(device, sunQueryTestedPipeline_);
+        destroy(device, sunQueryAllPipeline_);
+        if (sunQueryPool_ != VK_NULL_HANDLE) vkDestroyQueryPool(device, sunQueryPool_, nullptr);
+        sunQueryPool_ = VK_NULL_HANDLE;
         destroyPipeline(device, pipeline_, pipelineLayout_);
         destroy(device, texSetLayout_);
     }
@@ -271,6 +363,11 @@ void Celestial::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const F
 void Celestial::updateGlare(const Frame& frame) {
     using namespace daynight;
     const float t = frame.dayFraction;
+
+    // The sun the occlusion query asks about: the body render() draws.
+    sunQueryDir_ = frame.sunDir;
+    sunQuerySize_ = sampleCurve(kSunSize, t);
+    sunQueryWanted_ = frame.sunDir.z > 0.0f;
 
     // The glare (0x007ef6e0, for the sun and then the White Lady from
     // 0x007f0870): what it should show is the hour's curve, times whether
