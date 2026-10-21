@@ -3611,9 +3611,18 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh && name && *name) gh->setGuildLeader(name);
             return 0;
         }},
-                // Not logging, and there is nothing to turn on - false is the
-                // true answer rather than a placeholder.
-                {"LoggingChat",   [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                // LoggingChat([on]) (0x004fbc60 with index 0): with an
+                // argument, the chat lines written to Logs\WoWChatLog.txt or
+                // not; 1 while they are, nil otherwise.
+                {"LoggingChat", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            std::optional<bool> enable;
+            if (lua_gettop(L) > 0) enable = luaClientSwitchArg(L, 1, false);
+            auto* chat = gh ? gh->getChatHandler() : nullptr;
+            if (chat && chat->loggingChat(enable)) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
+            return 1;
+        }},
                 // LoggingCombat([on]) (0x004fbc60): with an argument, the
                 // combat log's lines written to Logs\WoWCombatLog.txt or not;
                 // 1 while they are, nil otherwise.

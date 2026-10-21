@@ -177,6 +177,12 @@ wowee_add_test(test_client_gps
 wowee_add_test(test_combat_log
     SOURCES test_combat_log.cpp ${CMAKE_SOURCE_DIR}/src/game/combat_log.cpp)
 
+# A chat line as LoggingChat writes it to WoWChatLog.txt (0x00509dd0's end):
+# the channel, the type's header, the language, the text made plain.
+# Header-only.
+wowee_add_test(test_chat_log
+    SOURCES test_chat_log.cpp)
+
 # The arena opponent roster (BattlefieldInfo.cpp): slots, pets beside their
 # owners, and ARENA_OPPONENT_UPDATE's words. Header-only.
 wowee_add_test(test_arena_opponents

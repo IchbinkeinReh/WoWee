@@ -195,8 +195,9 @@ void GameHandler::disconnect() {
     // skill window closes (0x005da5a0), and the rest of what goes with the
     // world on any way out of it (0x00528c30). Nothing is sent: the
     // connection is already gone.
-    // The combat log file closed and its logging off (0x005072b0).
+    // The combat and chat log files closed and their logging off (0x005072b0).
     if (combatLogFeed_) combatLogFeed_->closeLogFile();
+    if (chatHandler_) chatHandler_->closeChatLog();
     if (wasInWorld) {
         closeCraftingWindow();
         onLeaveWorld(/*worldport=*/false);
