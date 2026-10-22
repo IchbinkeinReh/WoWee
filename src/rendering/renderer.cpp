@@ -137,6 +137,18 @@
 namespace wowee {
 namespace rendering {
 
+#ifdef WOWEE_VR
+namespace {
+// The minimap is the interface's, and in the headset the interface is on its
+// own panel: the disc is drawn into that image, under the interface, and not
+// into either eye. Its pipeline is built for the panel's pass once per
+// minimap (vrRetargetMinimap); renderMinimapOverlay draws only while the
+// panel's image is being recorded.
+bool gVrMinimapIntoPanel = false;
+const void* gVrMinimapBuiltFor = nullptr;
+}  // namespace
+#endif
+
 namespace {
 /// The light-space depth every cascade shares, near and far, in yards from
 /// the light: from a yard in front of it to 6.5 x the shadow distance.
@@ -1670,6 +1682,14 @@ void Renderer::beginFrame() {
     // (a screen-space effect that lands in a different place in each eye).
     sunShaftsEnabled_ = false;
     if (rtRequestedMode_ != 0) setRtLightingMode(0);
+    // The minimap's display pipeline, built for the panel's pass, once for
+    // each minimap there is (one is made with each world's renderers).
+    if (minimap && gVrMinimapBuiltFor != minimap.get() && vkCtx->getOverlayRenderPass() != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(vkCtx->getDevice());
+        minimap->setTargetPass(vkCtx->getOverlayRenderPass(), VK_SAMPLE_COUNT_1_BIT);
+        minimap->recreatePipelines();
+        gVrMinimapBuiltFor = minimap.get();
+    }
     if (postProcessPipeline_ && postProcessPipeline_->isFSREnabled()) setFSREnabled(false);
     if (postProcessPipeline_ && postProcessPipeline_->isFSR2Enabled()) setFSR2Enabled(false);
 #else
@@ -2088,6 +2108,11 @@ void Renderer::endFrame() {
 
     // Submit and present
 #ifdef WOWEE_VR
+    vr::Runtime::get().setPanelUnderlay([this](VkCommandBuffer panelCmd) {
+        gVrMinimapIntoPanel = true;
+        renderMinimapOverlay(panelCmd);
+        gVrMinimapIntoPanel = false;
+    });
     if (currentImageIndex < vkCtx->getSwapchainImages().size()) {
         vr::Runtime::get().recordAfterFrame(currentCmd, vkCtx->getSwapchainImages()[currentImageIndex]);
     }
@@ -5010,8 +5035,15 @@ void Renderer::syncSwimEffectsTargetPass() {
     // onto an off-screen scene, or no continuation pass at all - water is drawn
     // before this and the minimap is already on top of it.
     if (minimap) {
+#ifdef WOWEE_VR
+        // Onto the interface's panel (see gVrMinimapIntoPanel): its pass,
+        // single-sampled, whatever the world's passes are.
+        minimapDrawsWithWater_ = false;
+        minimap->setTargetPass(vkCtx->getOverlayRenderPass(), VK_SAMPLE_COUNT_1_BIT);
+#else
         minimap->setTargetPass(minimapDrawsWithWater_ ? pass : VK_NULL_HANDLE,
                                samples);
+#endif
     }
 }
 
@@ -5150,6 +5182,9 @@ void Renderer::renderPostSceneOverlays(VkCommandBuffer cmd) {
 
 /// The minimap disc, over whatever has been drawn so far.
 void Renderer::renderMinimapOverlay(VkCommandBuffer cmd) {
+#ifdef WOWEE_VR
+    if (!gVrMinimapIntoPanel) return;
+#endif
     if (minimap && minimap->isEnabled() && camera && window) {
         glm::vec3 minimapCenter = camera->getPosition();
         if (cameraController && cameraController->isThirdPerson())

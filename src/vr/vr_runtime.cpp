@@ -248,6 +248,7 @@ struct Runtime::Impl {
     OwnImage ui;
     VkExtent2D uiExtent{0, 0};
     VkFramebuffer uiFramebuffer = VK_NULL_HANDLE;
+    std::function<void(VkCommandBuffer)> underlay;  ///< see setPanelUnderlay
 
     // The frame.
     XrFrameState frameState{XR_TYPE_FRAME_STATE};
@@ -1281,6 +1282,7 @@ void Runtime::Impl::recordUi(VkCommandBuffer cmd) {
     vkCmdSetViewport(cmd, 0, 1, &vp);
     VkRect2D sc{{0, 0}, uiExtent};
     vkCmdSetScissor(cmd, 0, 1, &sc);
+    if (underlay) underlay(cmd);
     if (draw && draw->Valid) ImGui_ImplVulkan_RenderDrawData(draw, cmd);
     vkCmdEndRenderPass(cmd);
     // The pass leaves it ready to present; it is copied instead.
@@ -1318,6 +1320,7 @@ void Runtime::recordAfterFrame(VkCommandBuffer cmd, VkImage engineImage) {
         m.recordUi(cmd);
         m.uiDrawnThisFrame = true;
     }
+    m.underlay = nullptr;
     if (m.running && m.frameBegun) m.fillLaser(cmd);
 
     // The eye, into the headset.
@@ -1345,6 +1348,10 @@ void Runtime::recordAfterFrame(VkCommandBuffer cmd, VkImage engineImage) {
 }
 
 void Runtime::afterSubmit() { impl_->releaseAll(); }
+
+void Runtime::setPanelUnderlay(std::function<void(VkCommandBuffer)> underlay) {
+    impl_->underlay = std::move(underlay);
+}
 
 std::optional<Runtime::WorldClick> Runtime::takeWorldClick() {
     std::optional<WorldClick> click;

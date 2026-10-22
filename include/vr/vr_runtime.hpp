@@ -26,6 +26,7 @@
 
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -100,6 +101,11 @@ public:
     /// interface into its image (once a frame), the eye into the headset, the
     /// mirror into the window.
     void recordAfterFrame(VkCommandBuffer cmd, VkImage engineImage);
+
+    /// What is drawn into the interface's image before the interface itself,
+    /// in its pass: the minimap's disc, which the client draws with Vulkan
+    /// rather than through ImGui. For the next recordAfterFrame only.
+    void setPanelUnderlay(std::function<void(VkCommandBuffer)> underlay);
 
     /// From VkContext::endFrame, once the command buffer is submitted.
     void afterSubmit();
