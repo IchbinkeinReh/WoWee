@@ -80,6 +80,10 @@ public:
     void setFullResolution(bool full) { fullResolution_ = full; }
     [[nodiscard]] bool fullResolution() const { return fullResolution_; }
     [[nodiscard]] bool active() const { return mode_ != Mode::Off && pipelinesOk_; }
+    /// What the first traced frame would otherwise do over seconds: the
+    /// pipelines, and every mesh of the scene built and uploaded. For the
+    /// loading screen; nothing while the tracing is off.
+    void warmUp();
     /// Whether a frame can be drawn through the G-buffer pass now: active,
     /// with its images, and the device able to (VkContext::getGbufferRenderPass).
     [[nodiscard]] bool ready() const;

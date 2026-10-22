@@ -154,6 +154,12 @@ public:
     /// Switching off must happen with the device idle.
     void setActive(bool active);
     [[nodiscard]] bool isActive() const { return active_; }
+    /// Every mesh still waiting to be built and uploaded, now, in submits of
+    /// their own that are waited on - rather than a share a frame, which on
+    /// entering a city was some four seconds of 100 ms frames (14,000
+    /// meshes at 150,000 triangles a frame). For the loading screen, and for
+    /// the frame the tracing is switched on.
+    void uploadAllPending();
 
     /// Record uploads and acceleration structure builds for this frame.
     /// Must run outside a render pass and before any trace dispatch.
@@ -185,6 +191,7 @@ private:
         RtAabb bounds;
         bool uploaded = false;
         bool queued = false;
+        bool prebuilt = false;  ///< built by uploadAllPending's workers, waiting for its upload
         // Static instances placing it: only their arrival in the pools
         // changes the static top level.
         uint32_t staticRefs = 0;

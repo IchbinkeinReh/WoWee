@@ -1,4 +1,6 @@
 #include "rendering/rt_scene.hpp"
+#include <atomic>
+#include <thread>
 
 #include "core/frame_profiler.hpp"
 #include "core/logger.hpp"
@@ -317,6 +319,13 @@ void RtScene::buildMesh(Mesh& m) {
         if (unpackRtSurface(surface).a < 1.0f) m.hasTranslucent = true;
     }
     m.extraCount = static_cast<uint32_t>(m.extras.size());
+    // The hardware builds its own hierarchy from the triangles (the BLAS);
+    // the one made here is the compute tracer's alone.
+    if (backend_ == Backend::Hardware) {
+        m.nodeCount = 0;
+        m.nodes.clear();
+        return;
+    }
     RtBvh bvh = buildRtTriangleBvh(m.tris);
     m.nodeCount = static_cast<uint32_t>(bvh.nodes.size());
     m.nodes = std::move(bvh.nodes);
@@ -337,6 +346,50 @@ void RtScene::setActive(bool active) {
         }
     }
     ++sceneVersion_;
+}
+
+void RtScene::uploadAllPending() {
+    if (!ctx_ || !active_) return;
+    // The triangles of every mesh first, on as many threads as there are
+    // cores: each mesh is its own, and this is most of the time the upload
+    // took on one (4.4 s for a city's 14,000 meshes).
+    {
+        std::vector<MeshId> todo;
+        for (MeshId id : pendingMeshes_) {
+            const Mesh& m = meshes_[id];
+            if (m.live && m.queued && !m.prebuilt) todo.push_back(id);
+        }
+        std::atomic<size_t> next{0};
+        const auto work = [&]() {
+            for (size_t i = next.fetch_add(1); i < todo.size(); i = next.fetch_add(1)) {
+                Mesh& m = meshes_[todo[i]];
+                buildMesh(m);
+                m.prebuilt = true;
+            }
+        };
+        const unsigned threads = std::clamp(std::thread::hardware_concurrency(), 1u, 16u);
+        std::vector<std::thread> pool;
+        for (unsigned t = 1; t < threads && todo.size() > 64; ++t) pool.emplace_back(work);
+        work();
+        for (auto& th : pool) th.join();
+    }
+    while (!pendingMeshes_.empty()) {
+        const size_t before = pendingMeshes_.size();
+        VkCommandBuffer cmd = ctx_->beginSingleTimeCommands();
+        if (cmd == VK_NULL_HANDLE) return;
+        uploadPending(cmd);
+        ctx_->endSingleTimeCommands(cmd);
+        if (pendingMeshes_.size() >= before) break;  // nothing taken: give up rather than spin
+    }
+    // Any left over build again from their source when their turn comes.
+    for (MeshId id : pendingMeshes_) {
+        Mesh& m = meshes_[id];
+        if (!m.prebuilt) continue;
+        m.prebuilt = false;
+        m.tris.clear();
+        m.nodes.clear();
+        m.extras.clear();
+    }
 }
 
 void RtScene::releaseGpu() {
@@ -584,7 +637,8 @@ void RtScene::uploadPending(VkCommandBuffer cmd) {
         Mesh& m = meshes_[id];
         if (!m.live || !m.queued) continue;
         m.queued = false;
-        buildMesh(m);
+        if (!m.prebuilt) buildMesh(m);
+        m.prebuilt = false;
         built += m.triCount;
         batch.push_back(id);
     }

@@ -718,6 +718,9 @@ public:
     /// Ray traced lighting: 0 off, 1 sun shadows, 2 + ambient occlusion,
     /// 3 + multi-bounce diffuse from a probe volume. See RtLighting.
     void setRtLightingMode(int mode);
+    /// The ray tracing's pipelines and scene, ready before the loading screen
+    /// lets go (RtLighting::warmUp).
+    void warmUpRayTracing();
     /// Why the ray traced lighting cannot run on this device at the current
     /// sample count, in the words the settings show; empty when it can. The
     /// mode asked for is then held at off (setRtLightingMode).

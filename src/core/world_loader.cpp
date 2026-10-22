@@ -1362,6 +1362,11 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         }
     }
 
+    // The ray tracing's scene, built while the loading screen is still up:
+    // left to the first frames, every mesh in view was built a share a frame
+    // and the first seconds in the world crawled.
+    renderer_->warmUpRayTracing();
+
     // No pan around the player on the way in: the client enters the world with
     // the camera behind the character, where it stays until the player moves
     // it. A 140-degree orbit over three seconds here turned the camera around

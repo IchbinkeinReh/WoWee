@@ -6402,6 +6402,14 @@ std::string Renderer::rtUnavailableReason() const {
     return rt_capability::settingsReason(vkCtx->rtCapability());
 }
 
+void Renderer::warmUpRayTracing() {
+    if (!rtLighting_ || !rtScene_) return;
+    // The meshes the world's renderers have added on the way in; the GPU is
+    // the loading screen's to keep busy, and waiting on it here costs the
+    // player nothing they would see.
+    rtLighting_->warmUp();
+}
+
 void Renderer::setRtLightingMode(int mode) {
     if (!rtLighting_) return;
     // WOWEE_RT_LIGHTING=<0..3> holds the mode whatever the settings say, so

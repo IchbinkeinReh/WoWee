@@ -435,6 +435,14 @@ void RtLighting::destroyGbuffer() {
     ++viewsGeneration_;
 }
 
+void RtLighting::warmUp() {
+    if (mode_ == Mode::Off || !scene_ || ctx_->getGbufferRenderPass() == VK_NULL_HANDLE) return;
+    if (!pipelinesTried_ && !createPipelines()) return;
+    if (!pipelinesOk_) return;
+    scene_->setActive(true);
+    scene_->uploadAllPending();
+}
+
 bool RtLighting::ready() const {
     return active() && traceExtent_.width != 0 && gbuf0_.image != VK_NULL_HANDLE && apply_ != VK_NULL_HANDLE &&
            ctx_->getGbufferRenderPass() != VK_NULL_HANDLE && ctx_->getSceneResumeRenderPass() != VK_NULL_HANDLE &&
@@ -461,7 +469,11 @@ bool RtLighting::prepare(VkExtent2D sceneExtent, VkSampleCountFlagBits samples) 
     }
     if (!pipelinesTried_ && !createPipelines()) return false;
     if (!pipelinesOk_) return false;
+    // Switched on: the whole scene in one hitch here, before the first
+    // traced frame, rather than seconds of frames each building a share.
+    const bool wasActive = scene_->isActive();
     scene_->setActive(true);
+    if (!wasActive) scene_->uploadAllPending();
 
     // The probe volume lives only in Full mode: its atlas is some 47 MB.
     bool changed = false;
