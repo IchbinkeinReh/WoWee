@@ -10,9 +10,14 @@
 #include "game/power_prediction.hpp"
 #include "game/unit_level_display.hpp"
 #include <cstdlib>
+#include "game/interface_text.hpp"
 
 namespace wowee::addons {
 
+// UnitName(unit): the name and the realm (0x0060e740). A token that names
+// nothing - "target" with no target - is nil and nil; a unit whose name the
+// client does not know yet is UNKNOWNOBJECT. It said "Unknown" to both, so an
+// addon testing `if UnitName("target")` found a target where there was none.
 static int lua_UnitName(lua_State* L) {
     const char* uid = luaL_optstring(L, 1, "player");
     auto* unit = resolveUnit(L, uid);
@@ -60,13 +65,18 @@ static int lua_UnitName(lua_State* L) {
                         if (c.guid == guid) { own = c.name; break; }
                     }
                 }
-                lua_pushstring(L, own.empty() ? "Unknown" : own.c_str());
+                if (own.empty()) {
+                    lua_pushstring(L, game::interfaceString("UNKNOWNOBJECT", "Unknown").c_str());
+                } else {
+                    lua_pushstring(L, own.c_str());
+                }
             }
         } else {
-            lua_pushstring(L, "Unknown");
+            lua_pushnil(L);
         }
     }
-    return 1;
+    lua_pushnil(L);  // the realm: none for one's own
+    return 2;
 }
 
 
@@ -1003,7 +1013,10 @@ static int lua_UnitPVPName(lua_State* L) {
             if (!titled.empty()) { lua_pushstring(L, titled.c_str()); return 1; }
         }
     }
-    return lua_UnitName(L);
+    // One value, the name, where UnitName gives the realm beside it.
+    lua_UnitName(L);
+    lua_pop(L, 1);
+    return 1;
 }
 
 static int lua_UnitIsPlayer(lua_State* L) {
