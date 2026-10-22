@@ -494,6 +494,12 @@ void main() {
         // Mod2x's doubling then makes its net effect dst * texture.
         result = combineStages(vec4(vec3(blendMode == 5 ? 1.0 : 0.5), batchFade), tex0, tex1).rgb;
         if (fogOn) result = mix(vec3(blendMode == 5 ? 1.0 : 0.5019608), result, fogFactor);
+        // The instance's fade - in at the edge of the draw distance, out as it
+        // goes - has no alpha to work through in a multiply's factors: it
+        // moves toward 1 (Mod) or 0.5 (Mod2x), which leave the scene as it is,
+        // as the character shader's layers do. Without it these batches
+        // popped on and off while the rest of the doodad faded.
+        result = mix(vec3(blendMode == 5 ? 1.0 : 0.5019608), result, clamp(vFadeAlpha, 0.0, 1.0));
     } else if (blendMode == 3) {
         // NoAlphaAdd ignores alpha: the fade has to be in the colour.
         result *= vFadeAlpha;
