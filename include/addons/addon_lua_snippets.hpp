@@ -21,6 +21,22 @@ namespace addons {
 ///
 /// Built from WoweeSettingList() rather than written out, so a setting added to
 /// the schema appears without anyone editing Lua.
+/// The channel notices GlobalStrings has no format for
+/// (chat_channels::noticeFallbackFormat), in the client's language.
+///
+/// Run once the client's locale is known - LuaEngine::setLuaServices, which is
+/// what hands GetLocale the expansion profile. It ran in the bootstrap before,
+/// when GetLocale had no profile to read and answered enUS: a German client
+/// was told in English. Run again it puts the language right: what it set
+/// before is its own and is replaced, and a GlobalStrings that has the string
+/// keeps it.
+inline constexpr const char* kNoticeFallbackLua = R"LUA(
+if CHAT_NOT_IN_LFG_NOTICE == nil or CHAT_NOT_IN_LFG_NOTICE == __WoweeNoticeFallbackSet then
+    CHAT_NOT_IN_LFG_NOTICE = __WoweeNoticeFallback('NOT_IN_LFG', GetLocale and GetLocale() or 'enUS')
+    __WoweeNoticeFallbackSet = CHAT_NOT_IN_LFG_NOTICE
+end
+)LUA";
+
 inline constexpr const char* kWoweeOptionsPanelLua = R"LUA(
 local list = WoweeSettingList and WoweeSettingList()
 if not list or #list == 0 then return end
