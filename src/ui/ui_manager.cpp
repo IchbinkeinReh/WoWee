@@ -569,6 +569,7 @@ void UIManager::finishImGuiFrame() {
         ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), size, IM_COL32(0, 0, 0, a));
     }
     drawGloveCursor();
+    if (foregroundOverlay_) foregroundOverlay_();
     ImGui::Render();
 }
 

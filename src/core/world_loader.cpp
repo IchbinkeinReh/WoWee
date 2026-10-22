@@ -774,7 +774,8 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     pendingWorldEntry_.reset();
 
     // --- Loading screen for online mode ---
-    rendering::LoadingScreen loadingScreen;
+    auto loadingScreenOwned = std::make_unique<rendering::LoadingScreen>();
+    rendering::LoadingScreen& loadingScreen = *loadingScreenOwned;
     loadingScreen.setVkContext(window_->getVkContext());
     loadingScreen.setSDLWindow(window_->getSDLWindow());
     bool loadingScreenOk = loadingScreen.initialize(assetManager_, mapId);
@@ -1201,6 +1202,10 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
                 } while (entitySpawner_->hasWorkPending() &&
                          std::chrono::steady_clock::now() - spawnStart < std::chrono::milliseconds(50));
             }
+            // The units' weapons too: in play two are dressed a frame, each
+            // loading its models, and a city's worth took the first seconds in
+            // the world with them (single frames of 280 ms).
+            entitySpawner_->updateUnitWeapons(16);
             endStage(kStageSpawn);
             if (auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {
                 cr->processPendingNormalMaps(4);
@@ -1391,7 +1396,17 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // starts its own. Before the screen lets the world's sound go, so what
     // waited for its end starts and the old world's does not.
     if (auto* ac = renderer_->getAudioCoordinator()) ac->leaveWorld();
-    loadingScreen.shutdown();
+    // Not taken down yet: it stays over the world's first frames until they
+    // settle (Application::beginWorldSettle), so what those frames do the
+    // first time - the units' weapons, the last tiles, the first draws of
+    // everything - is done behind it rather than in front of the player.
+    // It keeps the world's sound held until then too.
+    if (loadingScreenOk) {
+        loadingScreen.setProgress(1.0f);
+        app_.beginWorldSettle(std::move(loadingScreenOwned));
+    } else {
+        loadingScreen.shutdown();
+    }
     LOG_WARNING("World entry: map ", mapId, " loaded in ",
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - entryStart).count(), " s");
     // It is the one loading screen: a difficulty change's ends here too.

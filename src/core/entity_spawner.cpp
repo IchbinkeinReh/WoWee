@@ -1123,7 +1123,7 @@ void EntitySpawner::onUnitAttackSwing(uint64_t guid) {
     if (it->second.state != SheathState::Melee) setUnitSheathState(guid, it->second, SheathState::Melee, false);
 }
 
-void EntitySpawner::updateUnitWeapons() {
+void EntitySpawner::updateUnitWeapons(int attaches) {
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!charRenderer || !gameHandler_ || !assetManager_ || !assetManager_->isInitialized()) return;
     const uint16_t bytes2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
@@ -1134,7 +1134,7 @@ void EntitySpawner::updateUnitWeapons() {
     const uint16_t goBytes1Index = game::fieldIndex(game::UF::GAMEOBJECT_BYTES_1);
     const uint16_t healthIndex = game::fieldIndex(game::UF::UNIT_FIELD_HEALTH);
     const uint64_t localGuid = gameHandler_->getPlayerGuid();
-    int budget = MAX_WEAPON_ATTACHES_PER_TICK;
+    int budget = attaches;
 
     // The client's own state for a unit, as each of its paths moves it.
     auto updateSheath = [&](uint64_t guid, uint32_t instanceId, const game::Unit& unit) -> UnitSheath& {

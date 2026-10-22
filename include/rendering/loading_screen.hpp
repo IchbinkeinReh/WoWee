@@ -6,6 +6,7 @@
 #include <string>
 
 struct SDL_Window;
+struct ImDrawList;
 
 namespace wowee::pipeline { class AssetManager; }
 
@@ -28,6 +29,10 @@ public:
 
     // Render the loading screen: the picture and the bar (0x0040a270)
     void render();
+    /// The same picture and bar over whatever this frame's interface draws
+    /// (ImGui's foreground list), for the world's first frames: they run
+    /// behind it, as everything before them did (Application::worldSettle).
+    void drawOverlay();
 
     void setProgress(float progress) { loadProgress = progress; }
     /// What is being loaded, for the log: the client's screen says nothing.
@@ -46,6 +51,7 @@ private:
     };
     bool loadTexture(pipeline::AssetManager* assets, const std::string& path, Texture& out);
     bool upload(const uint8_t* rgba, int width, int height, Texture& out);
+    void drawPicture(ImDrawList* drawList, float screenW, float screenH) const;
     void release(Texture& tex);
 
     VkContext* vkCtx = nullptr;

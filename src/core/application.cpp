@@ -1,4 +1,5 @@
 #include "core/application.hpp"
+#include "core/world_settle.hpp"
 #include "core/cinematic_player.hpp"
 #include "game/vehicle_camera.hpp"
 #include "game/vehicle_mover.hpp"
@@ -1851,6 +1852,7 @@ void Application::run() {
         // writes itself to disk one line at a time - see Logger::flushIfStale -
         // so this is what keeps the tail of one from sitting there.
         Logger::getInstance().flushIfStale();
+        if (settleScreen_) stepWorldSettle(frameStart);
 
         // Handle watchdog mouse-release request on the main thread where
         // SDL video calls are safe (required by SDL2 threading model).
@@ -2635,6 +2637,59 @@ void Application::shutdown() {
 
     running = false;
     LOG_DEBUG("Application shutdown complete");
+}
+
+void Application::beginWorldSettle(std::unique_ptr<rendering::LoadingScreen> screen) {
+    endWorldSettle("superseded");
+    if (!screen || !uiManager) {
+        if (screen) screen->shutdown();
+        return;
+    }
+    settleScreen_ = std::move(screen);
+    settleStart_ = settleLastFrame_ = std::chrono::steady_clock::now();
+    settleCalmFrames_ = 0;
+    settleTiming_ = false;
+    rendering::LoadingScreen* drawn = settleScreen_.get();
+    uiManager->setForegroundOverlay([drawn]() { drawn->drawOverlay(); });
+}
+
+void Application::stepWorldSettle(std::chrono::steady_clock::time_point frameStart) {
+    if (!settleScreen_) return;
+    if (state != AppState::IN_GAME) {
+        endWorldSettle("left the world");
+        return;
+    }
+    // Nobody walks off behind a loading screen.
+    if (renderer && renderer->getCameraController()) renderer->getCameraController()->suppressMovementFor(0.1f);
+    // Timed from the first frame in the world, not from the load's end: the
+    // interface loads between the two, and took up to 25 s here - which, on
+    // the clock, ran out the cap before a single frame had been drawn.
+    if (!settleTiming_) {
+        settleTiming_ = true;
+        settleStart_ = settleLastFrame_ = frameStart;
+        return;
+    }
+    const float frameMs = std::chrono::duration<float, std::milli>(frameStart - settleLastFrame_).count();
+    settleLastFrame_ = frameStart;
+    const float elapsed = std::chrono::duration<float>(frameStart - settleStart_).count();
+    // Settled: a run of frames at an ordinary pace with nothing left queued
+    // to spawn. Capped, as a machine that never reaches that pace must still
+    // get in, and a crowd that never stops arriving must not hold it out.
+    constexpr float kCalmFrameMs = core::world_settle::kCalmFrameMs;
+    const bool queued = entitySpawner_ && entitySpawner_->hasWorkPending();
+    settleCalmFrames_ = (frameMs <= kCalmFrameMs && !queued) ? settleCalmFrames_ + 1 : 0;
+    const char* why = core::world_settle::verdict(elapsed, settleCalmFrames_);
+    if (why) endWorldSettle(why);
+}
+
+void Application::endWorldSettle(const char* why) {
+    if (!settleScreen_) return;
+    if (uiManager) uiManager->setForegroundOverlay({});
+    LOG_WARNING("World entry: settled behind the loading screen in ",
+             std::chrono::duration<float>(std::chrono::steady_clock::now() - settleStart_).count(), " s (", why, ")");
+    // Takes the world's sound hold with it.
+    settleScreen_->shutdown();
+    settleScreen_.reset();
 }
 
 void Application::shutdownPortraits() {

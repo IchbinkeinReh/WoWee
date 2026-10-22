@@ -274,6 +274,42 @@ bool LoadingScreen::upload(const uint8_t* rgba, int imageWidth, int imageHeight,
     return true;
 }
 
+void LoadingScreen::drawPicture(ImDrawList* drawList, float screenW, float screenH) const {
+    // 0x0040a270: the screen black, the picture in a viewport of its own
+    // shape, and on it the bar - its fill, then its border (0x004090c0).
+    namespace ls = loading_screen;
+    const float aspect = screenH > 0.0f ? screenW / screenH : 0.0f;
+    const ls::Rect view = ls::pictureViewport(aspect, widePicture_);
+    // A rectangle of the viewport's 0..1, y up, in ImGui's pixels, y down.
+    auto toScreen = [&](const ls::Rect& r, ImVec2& p0, ImVec2& p1) {
+        const float vx = view.x0 * screenW, vw = (view.x1 - view.x0) * screenW;
+        const float vy = view.y0 * screenH, vh = (view.y1 - view.y0) * screenH;
+        p0 = ImVec2(vx + r.x0 * vw, screenH - (vy + r.y1 * vh));
+        p1 = ImVec2(vx + r.x1 * vw, screenH - (vy + r.y0 * vh));
+    };
+    if (picture_.descriptor) {
+        ImVec2 p0, p1;
+        toScreen(ls::Rect{}, p0, p1);
+        drawList->AddImage(reinterpret_cast<ImTextureID>(picture_.descriptor), p0, p1);
+    }
+    for (size_t i = 0; i < ls::kBar.size(); ++i) {
+        if (!bar_[i].descriptor) continue;
+        ImVec2 p0, p1;
+        toScreen(ls::barPieceRect(ls::kBar[i], loadProgress), p0, p1);
+        if (p1.x <= p0.x) continue;
+        drawList->AddImage(reinterpret_cast<ImTextureID>(bar_[i].descriptor), p0, p1);
+    }
+
+}
+
+void LoadingScreen::drawOverlay() {
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    // Black first, as the screen is black around a picture of another shape.
+    drawList->AddRectFilled(ImVec2(0.0f, 0.0f), size, IM_COL32(0, 0, 0, 255));
+    drawPicture(drawList, size.x, size.y);
+}
+
 void LoadingScreen::render() {
     // If a frame is already in progress (e.g. called from a UI callback),
     // end it before starting our own
@@ -300,31 +336,7 @@ void LoadingScreen::render() {
         ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBackground |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    // 0x0040a270: the screen black, the picture in a viewport of its own
-    // shape, and on it the bar - its fill, then its border (0x004090c0).
-    namespace ls = loading_screen;
-    const float aspect = screenH > 0.0f ? screenW / screenH : 0.0f;
-    const ls::Rect view = ls::pictureViewport(aspect, widePicture_);
-    // A rectangle of the viewport's 0..1, y up, in ImGui's pixels, y down.
-    auto toScreen = [&](const ls::Rect& r, ImVec2& p0, ImVec2& p1) {
-        const float vx = view.x0 * screenW, vw = (view.x1 - view.x0) * screenW;
-        const float vy = view.y0 * screenH, vh = (view.y1 - view.y0) * screenH;
-        p0 = ImVec2(vx + r.x0 * vw, screenH - (vy + r.y1 * vh));
-        p1 = ImVec2(vx + r.x1 * vw, screenH - (vy + r.y0 * vh));
-    };
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    if (picture_.descriptor) {
-        ImVec2 p0, p1;
-        toScreen(ls::Rect{}, p0, p1);
-        drawList->AddImage(reinterpret_cast<ImTextureID>(picture_.descriptor), p0, p1);
-    }
-    for (size_t i = 0; i < ls::kBar.size(); ++i) {
-        if (!bar_[i].descriptor) continue;
-        ImVec2 p0, p1;
-        toScreen(ls::barPieceRect(ls::kBar[i], loadProgress), p0, p1);
-        if (p1.x <= p0.x) continue;
-        drawList->AddImage(reinterpret_cast<ImTextureID>(bar_[i].descriptor), p0, p1);
-    }
+    drawPicture(ImGui::GetWindowDrawList(), screenW, screenH);
 
     ImGui::End();
     ImGui::Render();

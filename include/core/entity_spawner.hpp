@@ -263,7 +263,9 @@ public:
     /// changes it: by its animation, cast or attack (0x00738180), its stand
     /// state (0x0073f060) and a channel at a fishing bobber (0x0073a520).
     /// Once a frame.
-    void updateUnitWeapons();
+    /// `attaches`: how many units may be dressed this call - a few a frame
+    /// in play, all of them behind the loading screen.
+    void updateUnitWeapons(int attaches = MAX_WEAPON_ATTACHES_PER_TICK);
     /// A spell's cast beginning on a unit other than the active player
     /// (0x007fa2e0, with 0x0073a6c0 for its kits).
     void onUnitSpellCastBegin(uint64_t guid, uint32_t spellId);

@@ -7,6 +7,7 @@
 #include "ui/character_screen.hpp"
 #include "ui/game_screen.hpp"
 #include "ui/ui_services.hpp"
+#include <functional>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -105,6 +106,9 @@ public:
     /// The black a cinematic fades the screen to, 0..1 (0x005ed120's layer,
     /// over the world and the interface), drawn as the frame finishes.
     void setScreenFade(float alpha) { screenFade_ = alpha; }
+    /// Drawn over everything as the frame finishes, the pointer included -
+    /// the loading screen kept up over the world's first frames.
+    void setForegroundOverlay(std::function<void()> overlay) { foregroundOverlay_ = std::move(overlay); }
 
     /// Where the pointer's art comes from. The client draws its own glove
     /// (Interface\Cursor\Point.blp) for the pointer everywhere, and the
@@ -141,6 +145,7 @@ private:
     /// once per change rather than every frame.
     bool textInputUp_ = false;
     float screenFade_ = 0.0f;
+    std::function<void()> foregroundOverlay_;
     pipeline::AssetManager* cursorAssets_ = nullptr;
     VkDescriptorSet gloveCursor_ = VK_NULL_HANDLE;
     bool gloveCursorFailed_ = false;

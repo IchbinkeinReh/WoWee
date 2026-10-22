@@ -310,6 +310,18 @@ private:
     /// The current map's loading screen while a player difficulty change is
     /// under way (0x0052c460 cases 6 and 9), drawn instead of the world.
     std::unique_ptr<rendering::LoadingScreen> difficultyLoadingScreen_;
+    /// The world entry's loading screen, kept over the world's first frames
+    /// until they settle: what those frames do for the first time - the
+    /// units' weapons, the tiles still finishing, the first draws of what was
+    /// loaded - is then done behind it, as the rest of the load was.
+    std::unique_ptr<rendering::LoadingScreen> settleScreen_;
+    std::chrono::steady_clock::time_point settleStart_{};
+    std::chrono::steady_clock::time_point settleLastFrame_{};
+    int settleCalmFrames_ = 0;
+    bool settleTiming_ = false;  ///< the clock starts with the first frame in the world
+    void beginWorldSettle(std::unique_ptr<rendering::LoadingScreen> screen);
+    void stepWorldSettle(std::chrono::steady_clock::time_point frameStart);
+    void endWorldSettle(const char* why);
     /// A failed open is not retried every frame; switching the setting off
     /// and on again tries again.
     bool mapWindowFailed_ = false;
