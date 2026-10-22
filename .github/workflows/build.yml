@@ -462,3 +462,49 @@ jobs:
         name: wowee-android-arm64-apk
         path: android/app/build/outputs/apk/release/*.apk
         if-no-files-found: error
+
+  # Every push to master publishes what the builds above made as a GitHub
+  # release of its own, tagged with the run and the commit, and marked as the
+  # latest - so the newest build is always the one the release page offers.
+  # Pull requests and manual runs build only.
+  release:
+    name: Publish release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [ build, build-windows-arm, build-windows, build-android ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v5
+      with:
+        path: artifacts/
+
+    - name: Create GitHub release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        SHORT="${GITHUB_SHA::8}"
+        TAG="build-${GITHUB_RUN_NUMBER}-${SHORT}"
+        SUBJECT="$(gh api "repos/${GH_REPO}/commits/${GITHUB_SHA}" --jq '.commit.message' | head -n1)"
+
+        mapfile -t FILES < <(find artifacts -type f | sort)
+        if [ "${#FILES[@]}" -eq 0 ]; then
+          echo "No artifacts to publish" >&2
+          exit 1
+        fi
+        printf 'Publishing %s\n' "${FILES[@]}"
+
+        if gh release view "${TAG}" >/dev/null 2>&1; then
+          gh release upload "${TAG}" --clobber "${FILES[@]}"
+          gh release edit "${TAG}" --latest
+        else
+          gh release create "${TAG}" \
+            --target "${GITHUB_SHA}" \
+            --title "Wowee build ${GITHUB_RUN_NUMBER} (${SHORT})" \
+            --notes "Built from ${GITHUB_SHA}: ${SUBJECT}" \
+            --latest \
+            "${FILES[@]}"
+        fi
