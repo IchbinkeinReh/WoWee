@@ -305,3 +305,18 @@ TEST_CASE("a teleport lands on the floor at or under the server's height") {
         CHECK_FALSE(teleportLandingFloor({std::nullopt, std::nullopt}, 100.0f));
     }
 }
+
+// A floor under the body's edge: a step's height on the ground, in the air
+// only one the feet come down onto - a crate's lid beside a jump is its side.
+TEST_CASE("An edge above the feet is a step on the ground, a wall in the air", "[movement]") {
+    using namespace wowee::rendering::movement;
+    // On the ground, up a step.
+    CHECK(edgeFloorCeiling(true, 49.79f, 1.0f) == Catch::Approx(50.79f));
+    // Coming down past a crate's lid 1 yd up: not taken once the feet are
+    // below it by more than the tolerance.
+    CHECK(50.795f > edgeFloorCeiling(false, 50.5f, 1.2f, -3.0f));
+    // Coming down onto it from above: taken.
+    CHECK(50.795f <= edgeFloorCeiling(false, 50.72f, 1.2f, -3.0f));
+    // Rising past it: never.
+    CHECK(50.795f > edgeFloorCeiling(false, 50.79f, 1.2f, 4.0f));
+}

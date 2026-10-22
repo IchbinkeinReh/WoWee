@@ -1616,8 +1616,10 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
             const float minWalkableWmo =
                 cachedInsideWMO ? MIN_WALKABLE_NORMAL_WMO : MIN_WALKABLE_NORMAL_TERRAIN;
             // Airborne, anything above the last known ground is a roof rather
-            // than a step, so the ceiling of the band comes down.
-            float maxZ = targetPos.z + stepUpBudget;
+            // than a step, so the ceiling of the band comes down - and an edge
+            // above the feet is the side of something, not a floor
+            // (movement::edgeFloorCeiling). The centre was asked already.
+            float maxZ = movement::edgeFloorCeiling(grounded, targetPos.z, stepUpBudget, verticalVelocity);
             if (!grounded) maxZ = std::min(maxZ, lastGroundZ + stepUpBudget + 0.5f);
 
             auto wh = highestWalkableFloor(
@@ -1697,9 +1699,17 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
             // Not highestWalkableFloor: this one prefers an M2 floor even when
             // it is slightly lower than the terrain, so a ship's deck wins over
             // the water under it.
-            const auto offsets = feetRing(0.6f);
+            // In the air the body's own width, not the plank-catching ring
+            // that walking uses: a crate beside a jump is beside it.
+            const auto offsets = feetRing(grounded ? 0.6f : 0.35f);
             float m2ProbeZ = std::max(targetPos.z, lastGroundZ) + 6.0f;
             for (const auto& o : offsets) {
+                // Off the centre, airborne, only an edge the body comes down
+                // onto (movement::edgeFloorCeiling); under the centre, the
+                // step's height as before.
+                const bool centre = o.x == 0.0f && o.y == 0.0f;
+                const float ceilingZ = centre ? targetPos.z + stepUpBudget
+                                              : movement::edgeFloorCeiling(grounded, targetPos.z, stepUpBudget, verticalVelocity);
                 float m2NormalZ = 1.0f;
                 auto m2H = m2Renderer->getFloorHeight(
                     targetPos.x + o.x, targetPos.y + o.y, m2ProbeZ, &m2NormalZ);
@@ -1711,7 +1721,7 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
 
                 // Prefer M2 floors (ships, platforms) even if slightly lower than terrain
                 // to prevent falling through ship decks to water below
-                if (m2H && *m2H <= targetPos.z + stepUpBudget) {
+                if (m2H && *m2H <= ceilingZ) {
                     if (!groundH || *m2H > *groundH ||
                         (*m2H >= targetPos.z - 0.5f && *groundH < targetPos.z - 1.0f)) {
                         groundH = m2H;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <initializer_list>
 #include <optional>
@@ -167,6 +168,24 @@ inline bool standingOnLastGround(bool grounded, float feetZ, float lastGroundZ) 
 
 inline float floorArbitrationAnchor(bool grounded, float feetZ, float lastGroundZ) {
     return standingOnLastGround(grounded, feetZ, lastGroundZ) ? feetZ : lastGroundZ;
+}
+
+/// How far above the feet a floor found off-centre, under the body's edge,
+/// may be and still be stood on.
+///
+/// On the ground, a step's height: walking against a low box or a pallet
+/// steps up onto it. In the air, hardly at all: an edge that the feet are
+/// already below is the side of the thing, not its top, and the body lands
+/// on it only by coming down onto it from above. With the step's height in
+/// the air too, a jump beside a crate in the Goldshire inn's cellar came
+/// down on the crate's lid a yard up (50.795 over a floor at 49.79): its
+/// edge was in reach of the foot ring the moment the feet dropped past it.
+/// Rising, not even that: the feet have not come down onto anything yet.
+inline constexpr float kAirborneEdgeTolerance = 0.1f;
+inline float edgeFloorCeiling(bool grounded, float feetZ, float stepUp, float verticalVelocity = 0.0f) {
+    if (grounded) return feetZ + stepUp;
+    if (verticalVelocity > 0.0f) return feetZ;
+    return feetZ + std::min(stepUp, kAirborneEdgeTolerance);
 }
 
 /// At a tunnel seam, whether the WMO floor should be taken over the terrain.
