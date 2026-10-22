@@ -1804,6 +1804,7 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
         // the wall beside a shelf in the Goldshire inn's south bedroom.
         // Only exterior groups are ever dropped here, never a room, and only
         // where the floor below the camera is a room's (cameraOnInteriorFloor)
+        // and so is the ceiling above it (cameraUnderInteriorCeiling)
         // as well as its box, so a camera at a door stays outdoors.
         bool exteriorByPortals = false;
         if (!usePortalCulling && !model.portals.empty() && !model.portalRefs.empty() &&
@@ -1812,7 +1813,8 @@ void WMORenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const
             const int camGroup = findContainingGroup(model, localRealCam);
             if (camGroup >= 0) {
                 const uint32_t f = model.groups[camGroup].groupFlags;
-                if ((f & 0x2000u) != 0 && (f & 0x8u) == 0 && cameraOnInteriorFloor(model, localRealCam)) {
+                if ((f & 0x2000u) != 0 && (f & 0x8u) == 0 && cameraOnInteriorFloor(model, localRealCam) &&
+                    cameraUnderInteriorCeiling(model, localRealCam)) {
                     portalVisibleGroupSet_.clear();
                     const glm::vec3 localViewer =
                         glm::vec3(instance.invModelMatrix * glm::vec4(portalViewerPos, 1.0f));
@@ -3237,8 +3239,17 @@ static bool trianglesAlongRay(const Group& group, const glm::vec3& localOrigin,
 
 bool WMORenderer::cameraOnInteriorFloor(const ModelData& model, const glm::vec3& localPos) const {
     // Straight down in the model's own space, the nearest face drawn or
-    // collided with, as a floor query takes it; 30 yards is any storey.
-    const glm::vec3 dir(0.0f, 0.0f, -1.0f);
+    // collided with, as a floor query takes it.
+    return firstFaceIsInterior(model, localPos, glm::vec3(0.0f, 0.0f, -1.0f));
+}
+
+bool WMORenderer::cameraUnderInteriorCeiling(const ModelData& model, const glm::vec3& localPos) const {
+    return firstFaceIsInterior(model, localPos, glm::vec3(0.0f, 0.0f, 1.0f));
+}
+
+bool WMORenderer::firstFaceIsInterior(const ModelData& model, const glm::vec3& localPos,
+                                      const glm::vec3& dir) const {
+    // 30 yards is any storey.
     constexpr float kReach = 30.0f;
     float best = kReach;
     const GroupResources* bestGroup = nullptr;

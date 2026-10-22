@@ -1027,6 +1027,12 @@ private:
     /// at a door with an interior's box spilling out past it. The exterior
     /// shell's box holds the whole building, so its box says nothing.
     bool cameraOnInteriorFloor(const ModelData& model, const glm::vec3& localPos) const;
+    /// The same straight up: a room's ceiling over the camera. At the mouth of
+    /// a gate - Icecrown Citadel's, where the tunnel's floor runs out under
+    /// the open sky - the floor below is a room's and the sky above is not,
+    /// and taking that for a room drew the citadel outside the gate as nothing.
+    bool cameraUnderInteriorCeiling(const ModelData& model, const glm::vec3& localPos) const;
+    bool firstFaceIsInterior(const ModelData& model, const glm::vec3& localPos, const glm::vec3& dir) const;
 
     /// A portal's outline on screen, in NDC, clipped to `clip` (x0, y0, x1,
     /// y1); empty (x0 >= x1) when it does not show through it. The whole of
