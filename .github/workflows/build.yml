@@ -378,8 +378,12 @@ jobs:
         test -x build/bin/asset_extract.exe
         test -x build/bin/wowee_assets.exe
         test -x build/bin/wowee_editor.exe
+        # The headset client (cmake/WoweeVr.cmake), built by default here and
+        # installed beside wowee.exe; required, so a configure that lost it
+        # fails here rather than shipping without it.
+        test -x build/bin/wowee_vr.exe
         for exe in build/bin/wowee.exe build/bin/asset_extract.exe build/bin/wowee_assets.exe \
-                   build/bin/wowee_editor.exe; do
+                   build/bin/wowee_editor.exe build/bin/wowee_vr.exe; do
           ldd "$exe" \
             | awk '/=> \// { print $3 }' \
             | grep -iv '^/c/Windows' \

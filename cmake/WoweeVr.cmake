@@ -16,7 +16,10 @@
 # statically: a headset's runtime (Meta Quest Link, SteamVR) is found through
 # it at run time, and nothing has to be installed beside the exe.
 
-if(WIN32 AND NOT ANDROID)
+# Windows on x86-64 only. Meta Quest Link and SteamVR run on x64 PCs, and the
+# ARM64 build (clang, CLANGARM64) has never built the OpenXR loader; it can
+# be asked for with -DWOWEE_BUILD_VR=ON.
+if(WIN32 AND NOT ANDROID AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64|AARCH64)$")
     set(_wowee_vr_default ON)
 else()
     set(_wowee_vr_default OFF)
@@ -84,4 +87,7 @@ if(WIN32)
         set_target_properties(wowee_vr PROPERTIES WIN32_EXECUTABLE ON)
     endif()
 endif()
+# Beside wowee.exe in the packages, needing nothing wowee does not: the
+# OpenXR loader is linked in.
+install(TARGETS wowee_vr RUNTIME DESTINATION bin)
 message(STATUS "  wowee_vr (OpenXR ${openxr_sdk_SOURCE_DIR}): ENABLED")

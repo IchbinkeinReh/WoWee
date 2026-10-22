@@ -540,6 +540,13 @@ jobs:
         cp extract_assets.ps1 "${STAGING}/"
         cp extract_assets.bat "${STAGING}/"
 
+        # The headset client, on x86-64 where it is built
+        # (cmake/WoweeVr.cmake); required there.
+        if [ "${{ matrix.arch }}" = "x86-64" ]; then
+          test -x build/bin/wowee_vr.exe
+          cp build/bin/wowee_vr.exe "${STAGING}/"
+        fi
+
         # This client's own addons, beside the exe where the addon search looks.
         cp -r addons "${STAGING}/"
 

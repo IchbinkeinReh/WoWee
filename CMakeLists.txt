@@ -2779,6 +2779,11 @@ if(APPLE)
 endif()
 message(STATUS "")
 
+# The headset client, beside wowee (cmake/WoweeVr.cmake). After everything
+# that sets a property of wowee, which it copies, and before the packaging,
+# which installs it and gives it a shortcut.
+include(cmake/WoweeVr.cmake)
+
 # ---- CPack packaging ----
 set(CPACK_PACKAGE_NAME "wowee")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
@@ -2813,6 +2818,13 @@ if(WIN32)
         "SetOutPath '$INSTDIR\\\\bin'\nCreateShortCut '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Wowee.lnk' '$INSTDIR\\\\bin\\\\wowee.exe'\nCreateShortCut '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Wowee Asset Manager.lnk' '$INSTDIR\\\\bin\\\\wowee_assets.exe'")
     set(CPACK_NSIS_DELETE_ICONS_EXTRA
         "Delete '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Wowee.lnk'\nDelete '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Wowee Asset Manager.lnk'")
+    # And the headset client, where it is built (cmake/WoweeVr.cmake).
+    if(TARGET wowee_vr)
+        string(APPEND CPACK_NSIS_CREATE_ICONS_EXTRA
+            "\nCreateShortCut '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\WoWee VR.lnk' '$INSTDIR\\\\bin\\\\wowee_vr.exe'")
+        string(APPEND CPACK_NSIS_DELETE_ICONS_EXTRA
+            "\nDelete '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\WoWee VR.lnk'")
+    endif()
 elseif(APPLE)
     set(CPACK_GENERATOR "DragNDrop")
 else()
@@ -2874,7 +2886,3 @@ add_custom_target(copy_bundled_addons ALL
     COMMENT "Copying bundled addons")
 add_dependencies(copy_bundled_addons wowee)
 
-
-# The headset client, beside wowee (cmake/WoweeVr.cmake). Last, so every
-# property of wowee it copies has been set.
-include(cmake/WoweeVr.cmake)
