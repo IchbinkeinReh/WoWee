@@ -338,6 +338,26 @@ inline Notice noticeFor(uint8_t type, bool slotWasJoined = false, bool slotFound
     }
 }
 
+/// The format for a notice word the interface's GlobalStrings has no
+/// CHAT_<word>_NOTICE for, or null.
+///
+/// NOT_IN_LFG is the one: the client sends it (0x0050e8f0, type 0x21) to the
+/// interface like any other, and chatframe.lua formats
+/// _G["CHAT_"..arg1.."_NOTICE"] - which 3.3.5's GlobalStrings never defines.
+/// format(nil, ...) raises, and the chat frame's handler stopped there. It
+/// comes on every login to a server that keeps LookingForGroup for those
+/// queued: the client joins it with the other initial channels, and the
+/// server answers this. Shaped as its neighbour CHAT_NOT_IN_AREA_NOTICE is,
+/// "[%s] ..." over the channel's number.
+inline const char* noticeFallbackFormat(const std::string& word, const std::string& locale) {
+    if (word == "NOT_IN_LFG") {
+        if (locale == "deDE")
+            return "[%s] Ihr m\xc3\xbcsst f\xc3\xbcr die Gruppensuche angemeldet sein, um diesem Channel beizutreten.";
+        return "[%s] You must be queued in looking for group before joining this channel.";
+    }
+    return nullptr;
+}
+
 /// The channel as a chat event's arg4 names it (0x00509dd0): "1. Allgemein -
 /// Dalaran" when a slot carries that name, the bare name when none does.
 inline std::string numberedName(const Slot* slot, const std::string& name) {

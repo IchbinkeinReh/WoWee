@@ -239,3 +239,19 @@ TEST_CASE("the login channel join waits out a flight path and a cinematic", "[ch
     CHECK_FALSE(cc::loginJoinMayRun(false, false, true, true));
     CHECK_FALSE(cc::loginJoinMayRun(false, false, false, false));
 }
+
+// A notice GlobalStrings has no format for gets one: chatframe.lua formats
+// CHAT_<word>_NOTICE with the channel's number and name, and a nil format
+// raised in the chat frame's handler on every login to a server that keeps
+// LookingForGroup for those queued.
+TEST_CASE("NOT_IN_LFG has a notice format, as its neighbours do", "[chat_channels]") {
+    const char* en = cc::noticeFallbackFormat("NOT_IN_LFG", "enUS");
+    const char* de = cc::noticeFallbackFormat("NOT_IN_LFG", "deDE");
+    REQUIRE(en != nullptr);
+    REQUIRE(de != nullptr);
+    CHECK(cc::luaFormat(en, {"4", "4. LookingForGroup"}).rfind("[4] ", 0) == 0);
+    CHECK(cc::luaFormat(de, {"4", "4. SucheNachGruppe"}).rfind("[4] ", 0) == 0);
+    // The ones GlobalStrings has stay its own.
+    CHECK(cc::noticeFallbackFormat("NOT_IN_AREA", "deDE") == nullptr);
+    CHECK(cc::noticeFallbackFormat("YOU_JOINED", "enUS") == nullptr);
+}

@@ -20,6 +20,7 @@
 // The clipboard, for paste and copy in an edit box.
 #include <SDL3/SDL.h>
 #include "addons/lua_api_helpers.hpp"
+#include "game/chat_channels.hpp"
 #include "game/interface_text.hpp"
 #include "game/item_stat_text.hpp"
 #include "rendering/minimap_zoom.hpp"
@@ -6573,6 +6574,17 @@ void LuaEngine::registerCoreAPI() {
     // 0x00817170), and first, because bootstrap code below hooks with it.
     taint::registerLuaApi(L_);
     lua_register(L_, "__WoweeSetProtected", lua_WoweeSetProtected);
+    // __WoweeNoticeFallback(word, locale): chat_channels::noticeFallbackFormat.
+    lua_register(L_, "__WoweeNoticeFallback", [](lua_State* L) -> int {
+        const char* word = luaL_optstring(L, 1, "");
+        const char* locale = luaL_optstring(L, 2, "enUS");
+        if (const char* fmt = game::chat_channels::noticeFallbackFormat(word, locale)) {
+            lua_pushstring(L, fmt);
+        } else {
+            lua_pushnil(L);
+        }
+        return 1;
+    });
     lua_register(L_, "__WoweeTemplate", lua_WoweeTemplate);
 
     // Override print() to go to chat
@@ -8223,6 +8235,12 @@ void LuaEngine::registerCoreAPI() {
         "    end\n"
         "    string.format = positional\n"
         "    format = positional\n"
+        "end\n"
+        // The channel notices GlobalStrings has no format for
+        // (chat_channels::noticeFallbackFormat): defined only where it is
+        // missing, so a GlobalStrings that has one keeps its own.
+        "if CHAT_NOT_IN_LFG_NOTICE == nil then\n"
+        "    CHAT_NOT_IN_LFG_NOTICE = __WoweeNoticeFallback('NOT_IN_LFG', GetLocale and GetLocale() or 'enUS')\n"
         "end\n"
         "table.wipe = wipe\n"
         "function SetDesaturation() end\n"
