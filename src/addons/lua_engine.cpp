@@ -1,4 +1,5 @@
 #include "addons/lua_engine.hpp"
+#include "addons/interface_prefetch.hpp"
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
 #include "ui/plural_escape.hpp"
@@ -12756,7 +12757,9 @@ bool LuaEngine::executeFile(const std::string& path) {
     // place: a file that fails deep inside a handler otherwise reports only
     // the line that broke, never the OnLoad that reached it.
     std::string source;
-    {
+    // Read ahead while the player logged in (interface_prefetch.hpp), or
+    // from disk.
+    if (!interface_prefetch::take(path, source)) {
         std::ifstream in(path, std::ios::binary);
         if (!in) {
             lastError_ = "cannot open " + path;

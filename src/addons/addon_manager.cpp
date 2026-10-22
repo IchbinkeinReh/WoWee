@@ -1,4 +1,5 @@
 #include "addons/addon_manager.hpp"
+#include "addons/interface_prefetch.hpp"
 #include "addons/lua_handler_globals.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/addon_lua_snippets.hpp"
@@ -237,6 +238,14 @@ void AddonManager::scanAddons(const std::string& addonsPath) {
              noToc, " without a .toc, ", duplicates, " duplicate)");
     // Load persisted enable/disable choices now that we know which addons exist.
     loadEnabledState();
+
+    // The interface's files, read into memory now, while the player logs in
+    // and the disk is the client's alone - not on the first frame in the
+    // world, when the terrain and model workers have it (interface_prefetch).
+    std::vector<std::string> prefetchRoots;
+    if (!frameXmlDir_.empty()) prefetchRoots.push_back(frameXmlDir_);
+    for (const auto& dir : dirs) prefetchRoots.push_back(dir.string());
+    interface_prefetch::start(std::move(prefetchRoots));
 }
 
 std::vector<std::string> AddonManager::deferredAddonGlobals() const {
@@ -1358,18 +1367,24 @@ bool AddonManager::loadXmlFile(const std::string& path, int depth) {
         return false;
     }
 
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        lastXmlError_ = "not on disk";
-        LOG_WARNING("AddonManager: XML not found: ", path);
-        return false;
+    // Read ahead while the player logged in (interface_prefetch.hpp), or
+    // from disk.
+    std::string text;
+    if (!interface_prefetch::take(path, text)) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) {
+            lastXmlError_ = "not on disk";
+            LOG_WARNING("AddonManager: XML not found: ", path);
+            return false;
+        }
+        std::stringstream buffer;
+        buffer << in.rdbuf();
+        text = buffer.str();
     }
-    std::stringstream buffer;
-    buffer << in.rdbuf();
 
     ui::XmlNode root;
     std::string error;
-    if (!ui::parseXml(buffer.str(), root, error)) {
+    if (!ui::parseXml(text, root, error)) {
         lastXmlError_ = "XML parse: " + error;
         LOG_ERROR("AddonManager: ", path, ": ", error);
         return false;
@@ -1780,6 +1795,7 @@ void AddonManager::reapplyStoredCVars() {
 }
 
 void AddonManager::shutdown() {
+    interface_prefetch::stop();
     saveAllSavedVariables();
     addons_.clear();
     luaEngine_.shutdown();

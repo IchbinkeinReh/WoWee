@@ -3164,6 +3164,12 @@ wowee_add_test(test_shadow_pass_work
 wowee_add_test(test_mirror_image
     SOURCES test_mirror_image.cpp)
 
+# ── test_interface_prefetch ──────────────────────────────────
+# The interface's files read ahead into memory, and found by any spelling.
+wowee_add_test(test_interface_prefetch
+    SOURCES test_interface_prefetch.cpp ${TEST_COMMON_SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/addons/interface_prefetch.cpp)
+
 # ── test_world_settle ────────────────────────────────────────
 # When the loading screen kept over the world's first frames may go.
 wowee_add_test(test_world_settle

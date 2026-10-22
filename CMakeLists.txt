@@ -1096,6 +1096,7 @@ set(WOWEE_SOURCES
 
     # Addons
     src/addons/addon_manager.cpp
+    src/addons/interface_prefetch.cpp
     src/addons/lua_engine.cpp
     src/addons/lua_handler_globals.cpp
     src/addons/lua_taint.cpp
