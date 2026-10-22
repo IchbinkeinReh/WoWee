@@ -9,6 +9,7 @@
 // with a plate has no name over its head; the plate carries it.
 
 #include "ui/game_screen.hpp"
+#include "core/frame_profiler.hpp"
 
 #include "addons/addon_manager.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -90,7 +91,10 @@ un::UnitFacts unitFacts(game::GameHandler& gh, const game::Entity& e, const game
     f.alive = unit.getHealth() >= 1 && (unit.getDynamicFlags() & game::UNIT_DYNFLAG_DEAD) == 0;
     // 0x00729b30 with the player asking.
     const uint64_t me = gh.getPlayerGuid();
-    f.friendlyGroup = gh.unitsCooperate(me, e.getGuid());
+    // For a creature, mayAttack was this same question (unitMayAttack, the
+    // player asking): asked once, not twice.
+    f.friendlyGroup = f.isPlayer ? gh.unitsCooperate(me, e.getGuid())
+                                 : gh.unitsCooperate(me, e.getGuid(), f.attackable);
     if (charmedBy != 0) {
         // 0x00729c70: a charmer that charms it back and is the player or of
         // the player's side (0x00729b30 again).
@@ -203,6 +207,7 @@ std::optional<ImVec2> project(const glm::mat4& viewProj, const glm::vec3& p, flo
 }  // namespace
 
 void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
+    WOWEE_PROFILE_SCOPE("interface: names and plates", Cpu);
     if (gameHandler.getState() != game::WorldState::IN_WORLD) return;
     gameHandler.setMouseoverGuid(0);
 

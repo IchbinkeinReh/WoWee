@@ -2803,6 +2803,14 @@ bool GameHandler::unitMayAssist(uint64_t helper, uint64_t unit) const {
 }
 
 bool GameHandler::unitsCooperate(uint64_t a, uint64_t b) const {
+    return unitsCooperateGiven(a, b, std::nullopt);
+}
+
+bool GameHandler::unitsCooperate(uint64_t a, uint64_t b, bool aMayAttackB) const {
+    return unitsCooperateGiven(a, b, aMayAttackB);
+}
+
+bool GameHandler::unitsCooperateGiven(uint64_t a, uint64_t b, std::optional<bool> aMayAttackB) const {
     if (a == b) return false;
     const auto ea = getEntityManager().getEntity(a);
     const auto eb = getEntityManager().getEntity(b);
@@ -2814,7 +2822,8 @@ bool GameHandler::unitsCooperate(uint64_t a, uint64_t b) const {
     const bool aCharmed = reactionGuidField(*ea, UF::UNIT_FIELD_CHARMEDBY) != 0;
     const bool bCharmed = reactionGuidField(*eb, UF::UNIT_FIELD_CHARMEDBY) != 0;
     if (aCharmed || bCharmed) return false;
-    return reaction::sameSide(row(*ea), row(*eb), false, false, unitMayAttack(a, b));
+    return reaction::sameSide(row(*ea), row(*eb), false, false,
+                              aMayAttackB ? *aMayAttackB : unitMayAttack(a, b));
 }
 
 bool GameHandler::isPlayerOrGroupUnit(uint64_t guid) const {

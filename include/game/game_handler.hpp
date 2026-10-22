@@ -2169,6 +2169,10 @@ public:
     /// charmed, of one faction group, and `a` may not attack `b`. False
     /// when either is not a unit here.
     [[nodiscard]] bool unitsCooperate(uint64_t a, uint64_t b) const;
+    /// The same, with unitMayAttack(a, b) already in hand: it is the whole
+    /// of the cost, and the names over heads ask it of every unit a frame
+    /// just before they ask this.
+    [[nodiscard]] bool unitsCooperate(uint64_t a, uint64_t b, bool aMayAttackB) const;
 
     // Creature move callback (online mode - triggered by SMSG_MONSTER_MOVE)
     // Parameters: guid, x, y, z (canonical), duration_ms (0 = instant)
@@ -5017,6 +5021,8 @@ public:
     }
 
 private:
+    /// unitsCooperate, with unitMayAttack(a, b) asked only when not given.
+    [[nodiscard]] bool unitsCooperateGiven(uint64_t a, uint64_t b, std::optional<bool> aMayAttackB) const;
     bool autoRepeating_ = false;
     // Dead: autoTargetAttacker moved to CombatHandler
 
