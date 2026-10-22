@@ -3368,7 +3368,20 @@ void WMORenderer::GroupResources::buildCollisionGrid() {
     float invCellW = gridCellsX / std::max(0.01f, extentX);
     float invCellH = gridCellsY / std::max(0.01f, extentY);
 
-    for (size_t i = 0; i + 2 < collisionIndices.size(); i += 3) {
+    // Two passes: each triangle's bounds, normal and cell rectangle first,
+    // with how many triangles each cell gets, then the cells filled at their
+    // final size. Filled by push_back alone, the three arrays of up to 4096
+    // cells grew a reallocation at a time, and that was most of what
+    // finalizing a building cost the loading screen - half a second of
+    // Dalaran's entry. The cells hold the same triangles in the same order.
+    struct TriCells {
+        int x0, y0, x1, y1;
+        bool floor;
+    };
+    std::vector<TriCells> triCells(numTriangles);
+    std::vector<uint32_t> countAll(totalCells, 0), countFloor(totalCells, 0);
+    for (size_t t = 0; t < numTriangles; ++t) {
+        const size_t i = t * 3;
         const glm::vec3& v0 = collisionVertices[collisionIndices[i]];
         const glm::vec3& v1 = collisionVertices[collisionIndices[i + 1]];
         const glm::vec3& v2 = collisionVertices[collisionIndices[i + 2]];
@@ -3382,7 +3395,7 @@ void WMORenderer::GroupResources::buildCollisionGrid() {
         // Per-triangle Z bounds
         float triMinZ = std::min({v0.z, v1.z, v2.z});
         float triMaxZ = std::max({v0.z, v1.z, v2.z});
-        triBounds[i / 3] = { .minZ = triMinZ, .maxZ = triMaxZ };
+        triBounds[t] = { .minZ = triMinZ, .maxZ = triMaxZ };
 
         // Precompute and store unit normal
         glm::vec3 edge1 = v1 - v0;
@@ -3394,25 +3407,38 @@ void WMORenderer::GroupResources::buildCollisionGrid() {
         } else {
             normal = glm::vec3(0.0f, 0.0f, 1.0f);
         }
-        triNormals[i / 3] = normal;
+        triNormals[t] = normal;
 
         // Classify floor vs wall by normal; see kWallMaxAbsNormalZ.
-        float absNz = std::abs(normal.z);
-        bool isFloor = (absNz >= kWallMaxAbsNormalZ);
-        bool isWall = (absNz < kWallMaxAbsNormalZ);
-
-        int cellMinX = std::max(0, static_cast<int>((triMinX - gridOrigin.x) * invCellW));
-        int cellMinY = std::max(0, static_cast<int>((triMinY - gridOrigin.y) * invCellH));
-        int cellMaxX = std::min(gridCellsX - 1, static_cast<int>((triMaxX - gridOrigin.x) * invCellW));
-        int cellMaxY = std::min(gridCellsY - 1, static_cast<int>((triMaxY - gridOrigin.y) * invCellH));
-
-        uint32_t triIdx = static_cast<uint32_t>(i);
-        for (int cy = cellMinY; cy <= cellMaxY; ++cy) {
-            for (int cx = cellMinX; cx <= cellMaxX; ++cx) {
-                int cellIdx = cy * gridCellsX + cx;
+        TriCells& c = triCells[t];
+        c.floor = std::abs(normal.z) >= kWallMaxAbsNormalZ;
+        c.x0 = std::max(0, static_cast<int>((triMinX - gridOrigin.x) * invCellW));
+        c.y0 = std::max(0, static_cast<int>((triMinY - gridOrigin.y) * invCellH));
+        c.x1 = std::min(gridCellsX - 1, static_cast<int>((triMaxX - gridOrigin.x) * invCellW));
+        c.y1 = std::min(gridCellsY - 1, static_cast<int>((triMaxY - gridOrigin.y) * invCellH));
+        for (int cy = c.y0; cy <= c.y1; ++cy) {
+            for (int cx = c.x0; cx <= c.x1; ++cx) {
+                const int cellIdx = cy * gridCellsX + cx;
+                ++countAll[cellIdx];
+                if (c.floor) ++countFloor[cellIdx];
+            }
+        }
+    }
+    for (size_t cell = 0; cell < totalCells; ++cell) {
+        if (countAll[cell] == 0) continue;
+        cellTriangles[cell].reserve(countAll[cell]);
+        if (countFloor[cell] != 0) cellFloorTriangles[cell].reserve(countFloor[cell]);
+        if (countAll[cell] != countFloor[cell]) cellWallTriangles[cell].reserve(countAll[cell] - countFloor[cell]);
+    }
+    for (size_t t = 0; t < numTriangles; ++t) {
+        const TriCells& c = triCells[t];
+        const uint32_t triIdx = static_cast<uint32_t>(t * 3);
+        for (int cy = c.y0; cy <= c.y1; ++cy) {
+            for (int cx = c.x0; cx <= c.x1; ++cx) {
+                const int cellIdx = cy * gridCellsX + cx;
                 cellTriangles[cellIdx].push_back(triIdx);
-                if (isFloor) cellFloorTriangles[cellIdx].push_back(triIdx);
-                if (isWall) cellWallTriangles[cellIdx].push_back(triIdx);
+                if (c.floor) cellFloorTriangles[cellIdx].push_back(triIdx);
+                else cellWallTriangles[cellIdx].push_back(triIdx);
             }
         }
     }
