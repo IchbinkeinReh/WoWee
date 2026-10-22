@@ -120,6 +120,7 @@
 
 #include <thread>
 #ifdef WOWEE_VR
+#include "ui/scene_pick.hpp"
 #include "vr/vr_runtime.hpp"
 #endif
 #ifdef __linux__
@@ -667,6 +668,12 @@ bool Application::initialize() {
     // Pace rendering to the display by default. The old 240 FPS default kept
     // the main thread near a full core even while the scene was idle.
     windowConfig.vsync = true;
+#ifdef WOWEE_VR
+    // The interface is laid out at the window's size and shown on the
+    // headset's panel at that resolution: a bigger window is a sharper panel.
+    windowConfig.width = 1920;
+    windowConfig.height = 1080;
+#endif
 
     window = std::make_unique<Window>(windowConfig);
     if (!window->initialize()) {
@@ -6581,6 +6588,24 @@ void Application::render() {
     runRenderStage("endFrame", [&] { renderer->endFrame(); });
 
 #ifdef WOWEE_VR
+    // Where the pointer is, for the next frame's clicks: on one of the
+    // client's own windows or a FrameXML frame, or on nothing of the
+    // interface - which makes a click a click into the world.
+    {
+        const bool overFrameXml = drawWidgets && addonManager_ && addonManager_->getLuaEngine() &&
+                                  addonManager_->getLuaEngine()->mouseOverFrameXml();
+        vrRuntime.setPointerOverInterface(ImGui::GetIO().WantCaptureMouse || overFrameXml);
+    }
+    // A click into the world: what the desktop's left click (target) and
+    // right click (target and interact) do, along the controller's ray.
+    if (auto click = vrRuntime.takeWorldClick(); click && gameHandler && uiManager && state == AppState::IN_GAME) {
+        const rendering::Ray ray{.origin = click->origin, .direction = click->direction};
+        const ui::ScenePick pick = ui::pickScene(*gameHandler, ray, ui::ScenePickParams{});
+        if (const uint64_t guid = pick.resolve(); guid != 0) {
+            gameHandler->setTarget(guid);
+            if (click->interact) uiManager->getGameScreen().interactWithTarget(*gameHandler);
+        }
+    }
     if (vrEyes > 0) {
         vrRuntime.restoreCamera(*vrCamera);
         // The right eye: the same world from its place, without the

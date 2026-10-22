@@ -282,6 +282,8 @@ struct Runtime::Impl {
     bool mouseLeftHeld = false;
     bool mouseRightHeld = false;
     bool pointerOnQuad = false;
+    bool pointerOverInterface = false;  ///< as the last frame's interface found it
+    std::optional<Runtime::WorldClick> worldClick;
     float laserLength = 0.0f;
     std::array<bool, 4> buttonWas{false, false, false, false};  // jump, target, autorun, menu
     bool recenterWas = false;
@@ -1018,6 +1020,9 @@ void Runtime::Impl::readInput(rendering::Renderer* renderer, SDL_Window* window,
                          glm::ivec2(static_cast<int>(uiExtent.width), static_cast<int>(uiExtent.height)));
         laserLength = hit ? hit->distance : 2.0f;
     }
+    // Over the panel but on nothing of it: in the world, the ray goes on.
+    const bool onInterface = hit && (pointerOverInterface || !inWorld);
+    if (inWorld && aim[pointerHand] && !onInterface) laserLength = 8.0f;
     if (io) {
         if (hit) {
             const float sx = io->DisplayFramebufferScale.x > 0.0f ? io->DisplayFramebufferScale.x : 1.0f;
@@ -1032,13 +1037,31 @@ void Runtime::Impl::readInput(rendering::Renderer* renderer, SDL_Window* window,
         // on, so a button cannot be left held when the ray slips off.
         const bool left = clickNow[pointerHand];
         const bool right = rightNow[pointerHand];
-        if (left != mouseLeftHeld && (!left || hit)) {
+        if (left != mouseLeftHeld && (!left || onInterface)) {
             io->AddMouseButtonEvent(ImGuiMouseButton_Left, left);
             mouseLeftHeld = left;
         }
-        if (right != mouseRightHeld && (!right || hit)) {
+        if (right != mouseRightHeld && (!right || onInterface)) {
             io->AddMouseButtonEvent(ImGuiMouseButton_Right, right);
             mouseRightHeld = right;
+        }
+    }
+    // A press anywhere else is a click into the world, along the ray as the
+    // world has it: from the hand, placed about the character's eyes as the
+    // eyes are (applyEyeCamera), and turned with the body.
+    {
+        const bool leftPressed = clickNow[pointerHand] && !clickDown[pointerHand];
+        const bool rightPressed = rightNow[pointerHand] && !rightDown[pointerHand];
+        rendering::Camera* camera = renderer ? renderer->getCamera() : nullptr;
+        if (inWorld && !onInterface && (leftPressed || rightPressed) && aim[pointerHand] && camera && bodySettled) {
+            const Pose& a = *aim[pointerHand];
+            const glm::vec3 anchorNow = camera->getPosition() + camera->getForward() * 0.5f;
+            Runtime::WorldClick click;
+            click.origin = anchorNow + xrToWorld((a.position - headOrigin) * kYardsPerMetre, bodyYawDeg);
+            click.direction =
+                glm::normalize(xrToWorld(a.orientation * glm::vec3(0.0f, 0.0f, -1.0f), bodyYawDeg));
+            click.interact = rightPressed;
+            worldClick = click;
         }
     }
     for (int h = 0; h < 2; ++h) {
@@ -1279,6 +1302,14 @@ void Runtime::recordAfterFrame(VkCommandBuffer cmd, VkImage engineImage) {
 }
 
 void Runtime::afterSubmit() { impl_->releaseAll(); }
+
+std::optional<Runtime::WorldClick> Runtime::takeWorldClick() {
+    std::optional<WorldClick> click;
+    click.swap(impl_->worldClick);
+    return click;
+}
+
+void Runtime::setPointerOverInterface(bool over) { impl_->pointerOverInterface = over; }
 
 void Runtime::endFrame() {
     Impl& m = *impl_;

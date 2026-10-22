@@ -27,6 +27,7 @@
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -109,6 +110,23 @@ public:
     /// interface's quad - the loading picture on the menus' big screen.
     /// recordAfterFrame and endFrame follow as for any other.
     void beginLoadingFrame(SDL_Window* window);
+
+    /// A trigger or grip pulled with the controller's ray on nothing of the
+    /// interface: a click into the world along that ray, in the world's
+    /// coordinates. `interact` for the grip - the desktop's right click,
+    /// which speaks to, loots or attacks what it lands on.
+    struct WorldClick {
+        glm::vec3 origin{0.0f};
+        glm::vec3 direction{0.0f, 0.0f, -1.0f};
+        bool interact = false;
+    };
+    [[nodiscard]] std::optional<WorldClick> takeWorldClick();
+
+    /// Whether the pointer is over a part of the interface - one of the
+    /// client's own windows or a FrameXML frame - as the frame just laid out
+    /// found it. A click there is the interface's; anywhere else on the
+    /// panel, which is mostly see-through, it goes into the world.
+    void setPointerOverInterface(bool over);
 
     /// Asked by the client to quit (the runtime is exiting or lost).
     [[nodiscard]] bool exitRequested() const;
