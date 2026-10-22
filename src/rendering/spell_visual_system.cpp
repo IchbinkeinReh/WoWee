@@ -1462,6 +1462,15 @@ void SpellVisualSystem::setUnitAuraSlots(uint64_t unitGuid, const std::vector<Au
     for (const AuraSlotSpell& entry : slotSpells) setUnitAuraSlot(unitGuid, entry.slot, entry.spellId, entry.casterGuid);
 }
 
+void SpellVisualSystem::replayUnitAuraSlots(uint64_t unitGuid, const std::vector<AuraSlotSpell>& slotSpells) {
+    if (unitGuid == 0) return;
+    if (auto it = unitAuraKits_.find(unitGuid); it != unitAuraKits_.end()) {
+        for (AuraKit& aura : it->second.auras) hideAuraKit(aura);
+        unitAuraKits_.erase(it);
+    }
+    setUnitAuraSlots(unitGuid, slotSpells);
+}
+
 void SpellVisualSystem::applyAuraStateKit(uint64_t unitGuid, uint32_t spellId, uint32_t visualId,
                                           uint64_t casterGuid) {
     if (unitGuid == 0 || spellId == 0 || visualId == 0) return;

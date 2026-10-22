@@ -4230,6 +4230,30 @@ void SpellHandler::mirrorAurasByGuid(uint64_t guid, const std::vector<AuraSlot>&
     if (&cached != &auras) cached = auras;
 }
 
+void SpellHandler::replayAuraStateKits() {
+    // A teleport resets the spell visuals, the aura kits on every unit
+    // among them, while the units the server keeps in view keep their
+    // auras and are not sent them again; and the auras sent while the world
+    // loads come before the visual system can resolve a spell's visual. Either
+    // way an imp's Phase Shift lost its fade until the imp cast it again.
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    if (!svs) return;
+    const auto replay = [svs](uint64_t guid, const std::vector<AuraSlot>& auras) {
+        std::vector<rendering::SpellVisualSystem::AuraSlotSpell> slots;
+        for (size_t slot = 0; slot < auras.size(); ++slot) {
+            if (auras[slot].spellId == 0) continue;
+            slots.push_back({.slot = static_cast<uint32_t>(slot), .spellId = auras[slot].spellId,
+                             .casterGuid = auras[slot].casterGuid});
+        }
+        if (!slots.empty()) svs->replayUnitAuraSlots(guid, slots);
+    };
+    if (owner_.getPlayerGuid() != 0) replay(owner_.getPlayerGuid(), playerAuras_);
+    for (const auto& [guid, auras] : unitAurasCache_) {
+        if (owner_.getEntityManager().getEntity(guid)) replay(guid, auras);
+    }
+}
+
 void SpellHandler::logAuraChanges(uint64_t unit, const std::vector<AuraSlot>& before,
                                   const std::vector<std::pair<uint8_t, AuraSlot>>& updates, uint64_t nowMs) {
     auto& feed = owner_.combatLogFeed();

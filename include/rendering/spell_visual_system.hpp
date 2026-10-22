@@ -182,6 +182,10 @@ public:
         uint64_t casterGuid = 0;
     };
     void setUnitAuraSlots(uint64_t unitGuid, const std::vector<AuraSlotSpell>& slotSpells);
+    /// The unit's slots shown afresh: what it shows dropped without its
+    /// StateDoneKits, and the slots given played as if new - for auras taken
+    /// while this could not resolve their visuals, or after reset().
+    void replayUnitAuraSlots(uint64_t unitGuid, const std::vector<AuraSlotSpell>& slotSpells);
     /// The pose the unit's rider holds on its mount (+0xb7c): Mount, or the
     /// AnimID of a mount aura's state kit (0x00724820, 0x0071e930).
     uint32_t riderPose(uint64_t unitGuid) const;

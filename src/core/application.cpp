@@ -92,6 +92,7 @@
 #include "ui/ui_services.hpp"
 #include "auth/auth_handler.hpp"
 #include "game/game_handler.hpp"
+#include "game/spell_handler.hpp"
 #include "game/chat_handler.hpp"
 #include "game/faction_hostility.hpp"
 #include "game/transport_manager.hpp"
@@ -3263,6 +3264,12 @@ void Application::connectWorldHooks() {
         gameHandler->setPlayerModelRebuildCallback([this]() {
             refreshPlayerCharacterModel();
         });
+    }
+    // The auras that came in while the world loaded found the spell visual
+    // system without its resolvers, and showed nothing (0x00724820 plays the
+    // kit as the slot fills); now that it has them, they are shown.
+    if (gameHandler) {
+        if (auto* spells = gameHandler->getSpellHandler()) spells->replayAuraStateKits();
     }
 }
 

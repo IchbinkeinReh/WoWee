@@ -11,6 +11,7 @@
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "game/game_handler.hpp"
+#include "game/spell_handler.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "pipeline/asset_manager.hpp"
 
@@ -163,6 +164,8 @@ void WorldEntryCallbackHandler::setupCallbacks() {
         LOG_INFO("Online world entry: mapId=", mapId, " pos=(", x, ", ", y, ", ", z, ")"
                  " initial=", isInitialEntry);
         renderer_.resetCombatVisualState();
+        // The units still in view keep their auras; their kits come back.
+        if (auto* spells = gameHandler_.getSpellHandler()) spells->replayAuraStateKits();
         // Where the server turned the player: the teleport's orientation,
         // already in the movement info (handleTeleportAck). The character
         // and the camera behind it face it; left as they were, a .go xyz or

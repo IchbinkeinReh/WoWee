@@ -252,6 +252,9 @@ public:
     /// Copy a unit's auras into the by-guid list the party frames read.
     void mirrorAurasByGuid(uint64_t guid, const std::vector<AuraSlot>& auras);
     void removeUnitAuraCache(uint64_t guid) { unitAurasCache_.erase(guid); }
+    /// Hand the spell visual system every aura it should be showing again -
+    /// the player's and every unit's still in view - after it was reset.
+    void replayAuraStateKits();
 
     // Known spells mutation (formerly accessed via friend)
     void addKnownSpell(uint32_t spellId) { knownSpells_.insert(spellId); }
