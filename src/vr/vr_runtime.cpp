@@ -283,6 +283,7 @@ struct Runtime::Impl {
     bool mouseLeftHeld = false;
     bool mouseRightHeld = false;
     bool pointerOnQuad = false;
+    PointerFilter pointerFilter;
     bool pointerOverInterface = false;  ///< as the last frame's interface found it
     std::optional<Runtime::WorldClick> worldClick;
     float laserLength = 0.0f;
@@ -1067,12 +1068,21 @@ void Runtime::Impl::readInput(rendering::Renderer* renderer, SDL_Window* window,
     const bool onInterface = hit && (pointerOverInterface || !inWorld);
     if (inWorld && aim[pointerHand] && !onInterface) laserLength = 8.0f;
     if (io) {
+        // A controller is no mouse: the interface's own lines between a click
+        // and a drag, and between two clicks and a double, are drawn wider -
+        // and the pointer itself is steadied (PointerFilter).
+        io->MouseDragThreshold = 18.0f;
+        io->MouseDoubleClickTime = 0.55f;
+        io->MouseDoubleClickMaxDist = 32.0f;
         if (hit) {
+            const bool held = clickNow[pointerHand] || rightNow[pointerHand];
+            const glm::vec2 steady = pointerFilter.update(hit->pixel, held && onInterface, dt);
             const float sx = io->DisplayFramebufferScale.x > 0.0f ? io->DisplayFramebufferScale.x : 1.0f;
             const float sy = io->DisplayFramebufferScale.y > 0.0f ? io->DisplayFramebufferScale.y : 1.0f;
-            io->AddMousePosEvent(hit->pixel.x / sx, hit->pixel.y / sy);
+            io->AddMousePosEvent(steady.x / sx, steady.y / sy);
             pointerOnQuad = true;
         } else if (pointerOnQuad) {
+            pointerFilter.reset();
             io->AddMousePosEvent(-FLT_MAX, -FLT_MAX);
             pointerOnQuad = false;
         }

@@ -127,6 +127,42 @@ float Turn::update(float stickX, float deltaSeconds) {
     return 0.0f;
 }
 
+glm::vec2 PointerFilter::update(const glm::vec2& raw, bool held, float deltaSeconds) {
+    if (!has_) {
+        rope_ = eased_ = raw;
+        has_ = true;
+    }
+    // The rope: the pointer moves only by what the ray goes past the radius.
+    const glm::vec2 d = raw - rope_;
+    const float dist = glm::length(d);
+    if (dist > settings_.stillRadius) rope_ = raw - d * (settings_.stillRadius / dist);
+    // And eases the last few pixels in.
+    const float t = 1.0f - std::exp(-settings_.easePerSecond * std::max(deltaSeconds, 0.0f));
+    eased_ += (rope_ - eased_) * t;
+
+    glm::vec2 out = eased_;
+    if (held && !wasHeld_) {
+        latched_ = true;
+        latchAt_ = eased_;
+    }
+    if (held && latched_ && glm::length(raw - latchAt_) > settings_.latchRadius) {
+        // Far enough to mean it: a drag, which follows the ray from here.
+        latched_ = false;
+        rope_ = eased_ = raw;
+        out = raw;
+    }
+    if (latched_) out = latchAt_;
+    if (!held && wasHeld_) latched_ = false;  // this frame's release is still at the latch
+    wasHeld_ = held;
+    return out;
+}
+
+void PointerFilter::reset() {
+    has_ = false;
+    wasHeld_ = false;
+    latched_ = false;
+}
+
 float LazyFollow::update(float headYawDeg, float deltaSeconds) {
     const float diff = wrapDegrees(headYawDeg - yaw_);
     if (!following_ && std::abs(diff) > slackDeg_) following_ = true;

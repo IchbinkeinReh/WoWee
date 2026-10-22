@@ -6594,6 +6594,12 @@ void Application::render() {
     {
         const bool overFrameXml = drawWidgets && addonManager_ && addonManager_->getLuaEngine() &&
                                   addonManager_->getLuaEngine()->mouseOverFrameXml();
+        // FrameXML's own lines, drawn wider for a controller: a press has to
+        // travel 16 interface units to be a drag, and a second click may come
+        // 0.55 s after the first.
+        if (addonManager_ && addonManager_->getLuaEngine()) {
+            addonManager_->getLuaEngine()->setPointerTolerance(16.0f, 0.55);
+        }
         vrRuntime.setPointerOverInterface(ImGui::GetIO().WantCaptureMouse || overFrameXml);
     }
     // A click into the world: what the desktop's left click (target) and

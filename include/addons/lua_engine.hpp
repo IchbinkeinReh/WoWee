@@ -394,6 +394,13 @@ private:
     /// apart - and only the widget tree knows.
 public:
     [[nodiscard]] bool mouseOverFrameXml() const { return lastMouseHit_ != 0; }
+    /// A pointer less steady than a mouse - a headset's controller - wants a
+    /// press to travel further before it is a drag, and a second click more
+    /// time to be a double. The defaults are WoW's (4 units, 0.4 s).
+    void setPointerTolerance(float dragThreshold, double doubleClickSeconds) {
+        dragThreshold_ = dragThreshold;
+        doubleClickSeconds_ = doubleClickSeconds;
+    }
 private:
     uint32_t lastMouseHit_ = 0;
     /// Where the cursor last was, in interface units. Static so a widget
@@ -417,7 +424,11 @@ private:
     /// from the first. WoW's threshold, near enough.
     uint32_t lastClickWid_ = 0;
     double   lastClickTime_ = 0.0;
-    static constexpr double kDoubleClickSeconds = 0.4;
+    /// WoW's 0.4 s, unless setPointerTolerance says otherwise.
+    double   doubleClickSeconds_ = 0.4;
+    /// How far a press travels before it is a drag, in interface units: 4,
+    /// as WoW draws the line, unless setPointerTolerance says otherwise.
+    float    dragThreshold_ = 4.0f;
 
     /// The edit box taking keystrokes, or zero. One at a time, which is
     /// what focus means.

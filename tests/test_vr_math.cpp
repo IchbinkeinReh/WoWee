@@ -244,3 +244,52 @@ TEST_CASE("An eye's height does not change with where the head looks", "[vr]") {
     CHECK(diag.z == Approx(vr::kYardsPerMetre));
 }
 
+// The pointer on the panel, steadied: a shaking hand neither wanders the
+// pointer nor turns a click into a drag or a click beside the button.
+TEST_CASE("The panel's pointer ignores a shake and holds a press where it was", "[vr]") {
+    vr::PointerFilter filter;
+    const float dt = 1.0f / 90.0f;
+    const glm::vec2 button(800.0f, 500.0f);
+    // Settle on the button.
+    glm::vec2 at(0.0f);
+    for (int i = 0; i < 60; ++i) at = filter.update(button, false, dt);
+    CHECK(glm::distance(at, button) < 0.5f);
+
+    SECTION("a shake inside the still radius does not move it") {
+        const glm::vec2 before = at;
+        for (int i = 0; i < 90; ++i) {
+            const glm::vec2 shake(i % 2 ? 3.0f : -3.0f, i % 3 ? 2.0f : -2.0f);
+            at = filter.update(button + shake, false, dt);
+            CHECK(glm::distance(at, before) < 4.0f);
+        }
+    }
+    SECTION("a press holds the pointer, through a shake, to the release") {
+        const glm::vec2 pressAt = filter.update(button, true, dt);
+        for (int i = 0; i < 30; ++i) {
+            const glm::vec2 shake(i % 2 ? 20.0f : -20.0f, i % 2 ? -15.0f : 15.0f);
+            CHECK(glm::distance(filter.update(button + shake, true, dt), pressAt) < 1e-4f);
+        }
+        // Released mid-shake: still where it was pressed.
+        CHECK(glm::distance(filter.update(button + glm::vec2(22.0f, 9.0f), false, dt), pressAt) < 1e-4f);
+        CHECK_FALSE(filter.latched());
+    }
+    SECTION("a held press that travels far is a drag, and follows") {
+        filter.update(button, true, dt);
+        const glm::vec2 away = button + glm::vec2(120.0f, 0.0f);
+        const glm::vec2 dragged = filter.update(away, true, dt);
+        CHECK_FALSE(filter.latched());
+        CHECK(glm::distance(dragged, away) < 1e-3f);
+        // And keeps following while held.
+        glm::vec2 follow(0.0f);
+        for (int i = 0; i < 30; ++i) follow = filter.update(away + glm::vec2(40.0f, 0.0f), true, dt);
+        CHECK(glm::distance(follow, away + glm::vec2(40.0f, 0.0f)) <= 5.0f);
+    }
+    SECTION("a deliberate move is followed without lag beyond the radius") {
+        const glm::vec2 target = button + glm::vec2(300.0f, -200.0f);
+        at = filter.update(target, false, dt);
+        // The rope takes the pointer to within the radius of the ray at once;
+        // the ease covers the rest over a few frames.
+        for (int i = 0; i < 20; ++i) at = filter.update(target, false, dt);
+        CHECK(glm::distance(at, target) <= 5.0f);
+    }
+}

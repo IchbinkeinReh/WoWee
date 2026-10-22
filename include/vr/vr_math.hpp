@@ -119,6 +119,45 @@ private:
     bool armed_ = true;
 };
 
+/// The pointer on the interface's panel, steadied. A controller held out at
+/// arm's length shakes by a few pixels of a 1920-wide panel, and every pixel
+/// of that reached the interface: a click became a drag, a press on a button
+/// was released beside it and did nothing.
+///
+/// - While no button is held, the pointer hangs from the ray on a short
+///   rope: a shake inside `stillRadius` pixels leaves it where it is, a move
+///   beyond pulls it along at once (no lag on a deliberate sweep), and what
+///   is left is eased in a little.
+/// - A press latches it where it was: the press, anything held, and the
+///   release all land on that pixel, however the hand shakes - until the ray
+///   has gone `latchRadius` from it, which is a drag, and the pointer follows
+///   again.
+class PointerFilter {
+public:
+    struct Settings {
+        float stillRadius = 4.0f;    ///< pixels the pointer ignores
+        float latchRadius = 32.0f;   ///< pixels a held press has to travel to become a drag
+        float easePerSecond = 30.0f; ///< how fast the last of a move is taken up
+    };
+    PointerFilter() = default;
+    explicit PointerFilter(const Settings& settings) : settings_(settings) {}
+    /// The pointer for this frame, from where the ray meets the panel and
+    /// whether a button is held.
+    glm::vec2 update(const glm::vec2& raw, bool held, float deltaSeconds);
+    /// The ray left the panel: start afresh where it comes back.
+    void reset();
+    [[nodiscard]] bool latched() const { return latched_; }
+
+private:
+    Settings settings_{};
+    bool has_ = false;
+    glm::vec2 rope_{0.0f};
+    glm::vec2 eased_{0.0f};
+    bool wasHeld_ = false;
+    bool latched_ = false;
+    glm::vec2 latchAt_{0.0f};
+};
+
 /// A head-following panel's yaw, lazily: it stays where it is while the head
 /// looks within `slackDeg` of it, and beyond that turns toward the head at
 /// `rateDegPerSec` until it is back inside half the slack - so glancing at a

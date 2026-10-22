@@ -11573,7 +11573,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
     // draws the same line: below the threshold it is a click, above it the
     // frame's OnDragStart runs and the click is abandoned.
     if (draggingWid_ == 0) {
-        constexpr float kDragThreshold = 4.0f;   // interface units
+        const float threshold = dragThreshold_;   // interface units
         for (int i = 0; i < kMouseButtons; ++i) {
             if (!buttonDown_[i] || pressedWid_[i] == 0) continue;
             // Up through the parents until something is registered for this
@@ -11608,7 +11608,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
             }
             const float mx = x - pressX_[i], my = y - pressY_[i];
             const bool movedEnough =
-                mx * mx + my * my >= kDragThreshold * kDragThreshold;
+                mx * mx + my * my >= threshold * threshold;
             if (owner == 0) {
                 // The silent case, and the one with nothing to show for it.
                 // A press that travels far enough to be a drag and finds
@@ -12040,7 +12040,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                     // frames that care about one usually care about the other.
                     const double now = core::appTimeSeconds();
                     if (pressedWid_[i] == lastClickWid_ &&
-                        (now - lastClickTime_) <= kDoubleClickSeconds) {
+                        (now - lastClickTime_) <= doubleClickSeconds_) {
                         taint::HardwareEvent hardware;   // 0x0096fb60
                         callFrameScript(pressedWid_[i], "OnDoubleClick", b.name);
                         // Cleared, or a third click reads as a second double.
