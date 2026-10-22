@@ -64,8 +64,12 @@ add_executable(wowee_vr
     "$<FILTER:$<TARGET_OBJECTS:wowee>,EXCLUDE,/src/(core/application|rendering/renderer|rendering/vk_context|rendering/loading_screen)\\.cpp\\.(o|obj)$>"
 )
 
+# INTERPROCEDURAL_OPTIMIZATION_RELEASE too: wowee's objects are LTO in a
+# Release build, and the four recompiled here must be as well. Mixed, the
+# link takes GameHandler's inline thunks from the plain objects' discarded
+# COMDATs and fails ("defined in discarded section", CI's Windows x86-64).
 foreach(_prop INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS LINK_LIBRARIES
-              LINK_DIRECTORIES LINK_OPTIONS)
+              LINK_DIRECTORIES LINK_OPTIONS INTERPROCEDURAL_OPTIMIZATION_RELEASE)
     get_target_property(_val wowee ${_prop})
     if(_val)
         set_property(TARGET wowee_vr PROPERTY ${_prop} "${_val}")
