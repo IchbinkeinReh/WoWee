@@ -762,7 +762,7 @@ static_assert(offsetof(M2ParticleEmitterDiskVanilla, deceleration) == 0x130 &&
               offsetof(M2ParticleEmitterDiskVanilla, scaleValues) == 0x15C,
               "M2ParticleEmitterDiskVanilla fields must sit where vanilla files keep them");
 
-// WotLK ribbon emitter (0xAC bytes).
+// WotLK ribbon emitter (0xB0 bytes).
 struct M2RibbonEmitterDisk {
     int32_t ribbonId;               // 0x00
     uint32_t bone;                  // 0x04
@@ -780,9 +780,16 @@ struct M2RibbonEmitterDisk {
     uint16_t textureCols;           // 0x82
     M2TrackDisk texSlotTrack;       // 0x84 - uint16
     M2TrackDisk visibilityTrack;    // 0x98 - uint8 0/1
+    int16_t priorityPlane;          // 0xAC
+    uint16_t pad;                   // 0xAE
 };
-static_assert(sizeof(M2RibbonEmitterDisk) == 0xAC,
-              "M2RibbonEmitterDisk is read straight from the file: 0xAC bytes, no padding");
+// 0xB0 a record in a WotLK model: the emitters of CD_Altar_02.m2 and
+// SC_Crystal.m2 sit 0xB0 apart (their bones run 9, 10, 11...). Read 0xAC
+// apart, every emitter after the first came from the middle of the one
+// before it - its bone, its texture and its tracks garbage - and drew as
+// white sheets ("texture 2368 of 3 missing").
+static_assert(sizeof(M2RibbonEmitterDisk) == 0xB0,
+              "M2RibbonEmitterDisk is read straight from the file: 0xB0 bytes, no padding");
 static_assert(offsetof(M2RibbonEmitterDisk, edgesPerSecond) == 0x74 &&
               offsetof(M2RibbonEmitterDisk, texSlotTrack) == 0x84,
               "M2RibbonEmitterDisk fields must sit where the client reads them");
@@ -2042,7 +2049,7 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
     }
 
     // Parse ribbon emitters (WotLK only; vanilla format TBD).
-    // WotLK M2RibbonEmitter = 0xAC (172) bytes per entry.
+    // WotLK M2RibbonEmitter = 0xB0 (176) bytes per entry.
     if (header.nRibbonEmitters > 0 && header.ofsRibbonEmitters > 0 &&
         header.nRibbonEmitters < 64 && header.version >= 264) {
 

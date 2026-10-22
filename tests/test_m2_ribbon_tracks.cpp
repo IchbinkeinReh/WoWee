@@ -15,6 +15,7 @@
 // skips when there is none.
 #include <catch_amalgamated.hpp>
 
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -116,4 +117,38 @@ TEST_CASE("ribbon track sequences line up with their timestamps",
             }
         }
     }
+}
+
+// A WotLK ribbon emitter record is 0xB0 bytes (CD_Altar_02.m2's six sit 0xB0
+// apart, bones 9 to 14). Read 0xAC apart, every emitter after the first came
+// from the middle of the one before it. A model built here with two, so it
+// needs no extracted asset.
+TEST_CASE("WotLK ribbon emitters are read 0xB0 bytes apart", "[m2][ribbon]") {
+    std::vector<uint8_t> data(4096, 0);
+    const auto put32 = [&](size_t at, uint32_t v) { std::memcpy(data.data() + at, &v, 4); };
+    const auto put16 = [&](size_t at, uint16_t v) { std::memcpy(data.data() + at, &v, 2); };
+    std::memcpy(data.data(), "MD20", 4);
+    put32(4, 264);
+    // nRibbonEmitters / ofsRibbonEmitters: after 40 counts and offsets,
+    // fourteen floats of bounds and eighteen more counts and offsets.
+    constexpr size_t kRibbonCount = (40 + 14 + 18) * 4;
+    constexpr size_t kRecords = 1024;
+    constexpr size_t kStride = 0xB0;
+    put32(kRibbonCount, 2);
+    put32(kRibbonCount + 4, kRecords);
+    for (uint32_t i = 0; i < 2; ++i) {
+        const size_t rec = kRecords + i * kStride;
+        put32(rec + 0x00, 0xFFFFFFFFu);  // ribbonId -1
+        put32(rec + 0x04, 9 + i);        // bone
+        put32(rec + 0x14, 1);            // one texture index ...
+        put32(rec + 0x18, static_cast<uint32_t>(2048 + i * 2));
+        put16(2048 + i * 2, static_cast<uint16_t>(i + 1));
+    }
+
+    const M2Model model = M2Loader::load(data);
+    REQUIRE(model.ribbonEmitters.size() == 2);
+    CHECK(model.ribbonEmitters[0].bone == 9);
+    CHECK(model.ribbonEmitters[0].textureIndex == 1);
+    CHECK(model.ribbonEmitters[1].bone == 10);
+    CHECK(model.ribbonEmitters[1].textureIndex == 2);
 }
