@@ -2199,6 +2199,14 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
     // doorway or hill crest doesn't cause a zoom-out snap).
     collisionDistance = currentDistance;
 
+    // How far out the obstruction is looked for: as far as the player asked
+    // to stand (the zoom plus what collisions took off it), not as far as the
+    // camera happens to be yet. Probed to the camera's own distance, a camera
+    // still on its way out - after the wheel, after an indoor cap was lifted
+    // on arrival - met "something" exactly where it stood, the pull below
+    // took that for a wall and took the zoom in, and the zoom crept back out
+    // a tenth of a yard a second while the player stood still.
+    const float probeDistance = std::max(currentDistance, userTargetDistance + collisionZoomDebt_);
     if ((wmoRenderer || terrainManager) && currentDistance > MIN_DISTANCE) {
         // Built geometry and the ground are treated separately from here on.
         //
@@ -2215,9 +2223,9 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // slid along at an angle never crossed the line, came inside the near
         // plane's corners, and the building's interior showed through it.
         auto wmoLimitAlong = [&](const glm::vec3& dir) -> float {
-            if (!wmoRenderer) return currentDistance;
+            if (!wmoRenderer) return probeDistance;
             // hit == maxDistance means no hit
-            float nearest = wmoRenderer->raycastBoundingBoxes(pivot, dir, currentDistance);
+            float nearest = wmoRenderer->raycastBoundingBoxes(pivot, dir, probeDistance);
             glm::vec3 right = glm::cross(dir, glm::vec3(0.0f, 0.0f, 1.0f));
             const float rightLen = glm::length(right);
             right = rightLen > 1e-4f ? right / rightLen : glm::vec3(1.0f, 0.0f, 0.0f);
@@ -2235,7 +2243,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
                 nearest = std::min(nearest, wmoRenderer->raycastBoundingBoxes(
                                                 pivot + offset, dir, nearest));
             }
-            return camera_sweep::sweptDistance(currentDistance, nearest, MIN_DISTANCE);
+            return camera_sweep::sweptDistance(probeDistance, nearest, MIN_DISTANCE);
         };
 
         float rawLimit = wmoLimitAlong(camDir);
@@ -2251,7 +2259,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // arrives as a shudder if it is passed straight through.
         if (!cachedInsideInteriorWMO) {
             const float terrainLimit =
-                raymarchTerrainCameraLimit(pivot, camDir, currentDistance);
+                raymarchTerrainCameraLimit(pivot, camDir, probeDistance);
             if (smoothedTerrainDist_ < 0.0f) smoothedTerrainDist_ = terrainLimit;
             // Slower coming in than the built geometry above, which is what
             // makes a slope feel like a slope rather than a series of nudges.
@@ -4273,6 +4281,21 @@ void CameraController::faceAfterTeleport(float yawDeg) {
     yaw = yawDeg;
     // The view is only turned where something turns it; a teleport must.
     if (camera) camera->setRotation(yaw, pitch);
+    // And the distance is the player's again at once. What a wall took off it
+    // at the old place (collisionZoomDebt_) was otherwise handed back here a
+    // little at a time once nothing stood in the way - the camera easing out
+    // by itself for seconds after a login or a teleport, the player standing
+    // still. A wall at the new place takes its share on the next frame.
+    if (collisionZoomDebt_ > 0.0f) {
+        userTargetDistance = clampedZoomDistance(userTargetDistance + collisionZoomDebt_);
+        collisionZoomDebt_ = 0.0f;
+    }
+    currentDistance = userTargetDistance;
+    collisionClearSeconds_ = 0.0f;
+    // The smoothed limits belonged to the old place too: eased up from there,
+    // the first frames here read as a wall and took the zoom in again.
+    smoothedCollisionDist_ = -1.0f;
+    smoothedTerrainDist_ = -1.0f;
 }
 
 } // namespace rendering
