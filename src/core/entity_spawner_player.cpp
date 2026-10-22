@@ -673,7 +673,10 @@ EntitySpawner::PreparedGameObjectM2 EntitySpawner::prepareGameObjectM2(pipeline:
     // are often generic and caused herb/grass gameobjects to be treated
     // as solid props.
     model->name = modelPath;
-    if (model->vertices.empty()) {
+    // A model can be its emitters alone - UndeadFireLarge.m2, the Hallow's
+    // End fires the server shows a game master (entry 193411), has no
+    // vertex - and the client draws it as any other; M2Renderer takes it.
+    if (model->vertices.empty() && model->particleEmitters.empty() && model->ribbonEmitters.empty()) {
         out.error = "Failed to parse gameobject M2: ";
         return out;
     }

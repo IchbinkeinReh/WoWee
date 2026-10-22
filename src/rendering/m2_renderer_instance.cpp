@@ -485,7 +485,10 @@ bool M2Renderer::instanceDrawsNothing(uint32_t instanceId) const {
     auto idxIt = instanceIndexById.find(instanceId);
     if (idxIt == instanceIndexById.end()) return false;
     auto modelIt = models.find(instances[idxIt->second].modelId);
-    return modelIt != models.end() && modelIt->second.isInvisibleTrap;
+    if (modelIt == models.end()) return false;
+    // A model of emitters alone (UndeadFireLarge.m2) has no triangle to meet.
+    return modelIt->second.isInvisibleTrap || modelIt->second.indexCount == 0 ||
+           modelIt->second.vertexCount == 0;
 }
 
 bool M2Renderer::getInstanceHeight(uint32_t instanceId, glm::vec3& outPosition, float& outScale,
