@@ -1523,6 +1523,7 @@ void TerrainManager::workerLoop() {
             if (readyQueue.size() >= maxReadyQueueSize_) {
                 // Finalization is behind - sleep briefly to let the main
                 // thread catch up.
+                ++readyFullWaits_;
                 lock.unlock();
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 continue;
@@ -1541,6 +1542,7 @@ void TerrainManager::workerLoop() {
             auto pending = prepareTile(coord.x, coord.y);
             const double prepMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - prepStart).count();
+            prepareNs_ += static_cast<long long>(prepMs * 1e6);
             if (prepMs > 1000.0) {
                 LOG_INFO("Terrain tile [", coord.x, ",", coord.y, "] took ", static_cast<int>(prepMs),
                          "ms to prepare", pending ? "" : " (failed)",

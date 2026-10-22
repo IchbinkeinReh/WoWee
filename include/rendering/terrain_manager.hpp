@@ -409,6 +409,22 @@ public:
     /** Process one ready tile (for loading screens with per-tile progress updates) */
     /// The loading screen's: finalizes one ready tile whole; 1 if it did.
     int processOneReadyTile();
+    /// What the workers did since the last call, for the loading screen's
+    /// report: seconds spent preparing tiles (all workers together), and how
+    /// often one waited because the ready queue was full - the main thread,
+    /// not the workers, holding the tiles back. Read and reset.
+    struct WorkerReport {
+        double prepareSec = 0.0;
+        long long readyFullWaits = 0;
+        int workers = 0;
+    };
+    WorkerReport takeWorkerReport() {
+        WorkerReport r;
+        r.prepareSec = static_cast<double>(prepareNs_.exchange(0)) * 1e-9;
+        r.readyFullWaits = readyFullWaits_.exchange(0);
+        r.workers = workerCount;
+        return r;
+    }
 
     /** Process a bounded batch of ready tiles with async GPU upload (no sync wait) */
     void processReadyTiles();
@@ -556,6 +572,8 @@ private:
     // Workers sleep when this limit is reached, letting the main thread
     // finalize (GPU-upload + free) before more tiles are prepared.
     static constexpr size_t maxReadyQueueSize_ = 3;
+    std::atomic<long long> prepareNs_{0};      // takeWorkerReport
+    std::atomic<long long> readyFullWaits_{0};
 
     // In-RAM tile cache (LRU) to avoid re-reading from disk
     struct CachedTile {

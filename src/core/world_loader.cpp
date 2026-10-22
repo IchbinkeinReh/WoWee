@@ -626,6 +626,7 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
             terrainMgr->setUnloadRadius(9);
 
             // Trigger tile streaming for surrounding area
+            (void)terrainMgr->takeWorkerReport();  // counted from here
             terrainMgr->update(*camera, 1.0f);
 
             auto startTime = std::chrono::high_resolution_clock::now();
@@ -731,10 +732,16 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
             }
 
             LOG_INFO("Online terrain streaming complete: ", terrainMgr->getLoadedTileCount(), " tiles loaded");
+            // And the workers' side: what preparing the tiles cost them, and
+            // how often they waited on a full ready queue. Many such waits
+            // say the main thread's finalizing is what holds the entry back.
+            const auto workers = terrainMgr->takeWorkerReport();
             LOG_WARNING("Terrain wait: ",
                         std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count(),
                         " s, ", finalizedTiles, " tiles finalized in ", finalizeSec, " s over ", waitFrames,
-                        " loading-screen frames");
+                        " loading-screen frames; ", workers.workers, " workers prepared tiles in ",
+                        workers.prepareSec, " s together and waited ", workers.readyFullWaits,
+                        " times on a full ready queue");
 
             // Restore full load radius - remaining tiles stream in-game
             terrainMgr->setLoadRadius(savedLoadRadius);
