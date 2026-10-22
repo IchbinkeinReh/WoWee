@@ -300,7 +300,9 @@ struct Runtime::Impl {
     bool bodySettled = false;
     bool wasInWorld = false;
 
-    // The camera as the client left it.
+    // The camera as the client left it, and the renderer whose character's
+    // eyes the headset's eyes hang from.
+    rendering::Renderer* renderer = nullptr;
     glm::vec3 anchor{0.0f};
     glm::vec3 savedPosition{0.0f};
     bool cameraSaved = false;
@@ -336,6 +338,10 @@ struct Runtime::Impl {
     void destroyMirror();
     void fillLaser(VkCommandBuffer cmd);
     void settleBody(rendering::CameraController* cc);
+    /// Where the headset's eyes hang from in the world: the character's own
+    /// eye point (CameraController::eyePoint), raised or lowered by
+    /// WOWEE_VR_EYE_OFFSET yards; the camera's place when there is none.
+    glm::vec3 eyeAnchor(const rendering::Camera& camera) const;
 };
 
 Runtime& Runtime::get() {
@@ -795,6 +801,7 @@ void Runtime::Impl::pollEvents() {
 
 void Runtime::beginFrame(rendering::Renderer* renderer, SDL_Window* window, bool inWorld, float deltaSeconds) {
     Impl& m = *impl_;
+    m.renderer = renderer;
     recordingEye_ = -1;
     m.eyeRendered = {false, false};
     m.uiDrawnThisFrame = false;
@@ -888,6 +895,15 @@ void Runtime::Impl::settleBody(rendering::CameraController* cc) {
     bodyYawDeg = wrapDegrees((cc ? cc->getYaw() : 0.0f) - headYaw);
     headOrigin = head.position;
     bodySettled = true;
+}
+
+glm::vec3 Runtime::Impl::eyeAnchor(const rendering::Camera& camera) const {
+    static const float offset = envFloat("WOWEE_VR_EYE_OFFSET", 0.0f);
+    rendering::CameraController* cc = renderer ? renderer->getCameraController() : nullptr;
+    if (cc) {
+        if (const auto eye = cc->eyePoint()) return *eye + glm::vec3(0.0f, 0.0f, offset);
+    }
+    return camera.getPosition();
 }
 
 void Runtime::Impl::placeQuad(bool inWorld, float dt, bool recenter) {
@@ -1055,9 +1071,9 @@ void Runtime::Impl::readInput(rendering::Renderer* renderer, SDL_Window* window,
         rendering::Camera* camera = renderer ? renderer->getCamera() : nullptr;
         if (inWorld && !onInterface && (leftPressed || rightPressed) && aim[pointerHand] && camera && bodySettled) {
             const Pose& a = *aim[pointerHand];
-            const glm::vec3 anchorNow = camera->getPosition() + camera->getForward() * 0.5f;
+            const glm::vec3 anchorNow = eyeAnchor(*camera);
             Runtime::WorldClick click;
-            click.origin = anchorNow + xrToWorld((a.position - headOrigin) * kYardsPerMetre, bodyYawDeg);
+            click.origin = eyeWorldPosition(anchorNow, a.position, headOrigin, bodyYawDeg);
             click.direction =
                 glm::normalize(xrToWorld(a.orientation * glm::vec3(0.0f, 0.0f, -1.0f), bodyYawDeg));
             click.interact = rightPressed;
@@ -1135,16 +1151,17 @@ void Runtime::applyEyeCamera(int eye, rendering::Camera& camera) {
     Impl& m = *impl_;
     if (eye < 0 || eye > 1 || !m.viewsValid) return;
     if (!m.cameraSaved) {
-        // The first-person camera stands half a yard behind the head, along
-        // the view (CameraController's MIN_DISTANCE); the eyes are at the head.
+        // The eyes hang from the character's eye point, not from the
+        // third-person rig's camera: that one is lifted and swept by the
+        // ground behind it, which moves with the pitch - looking down put
+        // the eyes at a child's height, looking up at a giant's.
         m.savedPosition = camera.getPosition();
-        m.anchor = camera.getPosition() + camera.getForward() * 0.5f;
+        m.anchor = m.eyeAnchor(camera);
         m.cameraSaved = true;
     }
     const XrView& v = m.views[static_cast<size_t>(eye)];
     const Pose pose = toPose(v.pose);
-    const glm::vec3 offset = (pose.position - m.headOrigin) * kYardsPerMetre;
-    camera.setPosition(m.anchor + xrToWorld(offset, m.bodyYawDeg));
+    camera.setPosition(eyeWorldPosition(m.anchor, pose.position, m.headOrigin, m.bodyYawDeg));
     const glm::vec3 fwd = xrToWorld(pose.orientation * glm::vec3(0.0f, 0.0f, -1.0f), m.bodyYawDeg);
     const glm::vec3 up = xrToWorld(pose.orientation * glm::vec3(0.0f, 1.0f, 0.0f), m.bodyYawDeg);
     camera.setLookDirection(fwd, up);

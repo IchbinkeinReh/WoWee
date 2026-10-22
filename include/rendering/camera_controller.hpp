@@ -247,6 +247,12 @@ public:
     [[nodiscard]] bool ignoresSlopeLimit() const { return ignoreSlopeLimit_; }
     [[nodiscard]] bool isOnTaxi() const { return externalFollow_; }
     [[nodiscard]] const glm::vec3* getFollowTarget() const { return followTarget; }
+    /// The character's eyes for a view that is not this rig's - a headset's:
+    /// where it stands, raised by the pivot height and a mount's offset, and
+    /// nothing else. None of the third-person camera's terrain lift, wall
+    /// sweep or zoom, which move with the pitch: a head tilted down must not
+    /// lower the eyes. Nothing when no character is followed.
+    [[nodiscard]] std::optional<glm::vec3> eyePoint() const;
     glm::vec3* getFollowTargetMutable() { return followTarget; }
 
     // Movement callback for sending opcodes to server

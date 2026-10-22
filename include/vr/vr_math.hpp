@@ -63,6 +63,13 @@ struct QuadHit {
 /// +Y the world's up. Lengths are kept (no metre-to-yard scaling).
 [[nodiscard]] glm::vec3 xrToWorld(const glm::vec3& v, float bodyYawDeg);
 
+/// Where an eye is in the world: the character's eye point, moved by how far
+/// the tracked eye is from where the head was when the view was settled -
+/// metres to yards alike on every axis - turned with the body. The head's
+/// orientation plays no part: turning or tilting it only turns the view.
+[[nodiscard]] glm::vec3 eyeWorldPosition(const glm::vec3& eyeAnchor, const glm::vec3& eyeXr,
+                                         const glm::vec3& headOriginXr, float bodyYawDeg);
+
 /// The world yaw a direction points along, in degrees (-180, 180].
 [[nodiscard]] float worldYawDeg(const glm::vec3& worldDirection);
 

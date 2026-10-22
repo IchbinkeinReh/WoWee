@@ -219,3 +219,28 @@ TEST_CASE("The head-following panel lets the head look around it", "[vr]") {
     follow.snapTo(170.0f);
     CHECK(follow.update(-150.0f, 0.1f) == Approx(180.0f));
 }
+
+// The eyes hang from the character's eye point; only where the tracked eye
+// is moves them. Pitching the head moved the camera rig's pivot up and down
+// with it - a child looking down, a giant looking up - and that must not be
+// possible here: the orientation is not an input at all, and an eye that
+// stays where it was stays at the anchor's height whatever the head does.
+TEST_CASE("An eye's height does not change with where the head looks", "[vr]") {
+    const glm::vec3 anchor(100.0f, 200.0f, 31.6f);  // the character's eyes, in yards
+    const glm::vec3 origin(0.0f, 1.20f, 0.0f);       // the head when the view was settled, metres
+    for (float yaw : {0.0f, 73.0f, -150.0f}) {
+        // The eye where the head was: the anchor exactly.
+        const glm::vec3 still = vr::eyeWorldPosition(anchor, origin, origin, yaw);
+        CHECK(glm::distance(still, anchor) < 1e-4f);
+        // Leaning 10 cm forward and 5 cm down moves the eye that far, in yards,
+        // and only the down part changes its height.
+        const glm::vec3 lean = vr::eyeWorldPosition(anchor, origin + glm::vec3(0.0f, -0.05f, -0.10f), origin, yaw);
+        CHECK(lean.z == Approx(anchor.z - 0.05f * vr::kYardsPerMetre).margin(1e-4));
+        CHECK(glm::distance(glm::vec2(lean), glm::vec2(anchor)) == Approx(0.10f * vr::kYardsPerMetre).margin(1e-4));
+    }
+    // One scale on every axis: a metre each way is a yard-scaled diagonal.
+    const glm::vec3 diag = vr::eyeWorldPosition(glm::vec3(0.0f), glm::vec3(1.0f), glm::vec3(0.0f), 37.0f);
+    CHECK(glm::length(diag) == Approx(std::sqrt(3.0f) * vr::kYardsPerMetre).epsilon(1e-5));
+    CHECK(diag.z == Approx(vr::kYardsPerMetre));
+}
+

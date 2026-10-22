@@ -66,6 +66,11 @@ glm::vec3 xrToWorld(const glm::vec3& v, float bodyYawDeg) {
     return v.x * right + v.y * up - v.z * forward;
 }
 
+glm::vec3 eyeWorldPosition(const glm::vec3& eyeAnchor, const glm::vec3& eyeXr, const glm::vec3& headOriginXr,
+                           float bodyYawDeg) {
+    return eyeAnchor + xrToWorld((eyeXr - headOriginXr) * kYardsPerMetre, bodyYawDeg);
+}
+
 float wrapDegrees(float degrees) {
     float a = std::fmod(degrees, 360.0f);
     if (a <= -180.0f) a += 360.0f;

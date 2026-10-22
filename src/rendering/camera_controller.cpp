@@ -4109,6 +4109,13 @@ bool CameraController::groundNotStreamedYet(float x, float y) const {
     return terrainManager != nullptr && !terrainManager->isTileLoadedAt(x, y);
 }
 
+std::optional<glm::vec3> CameraController::eyePoint() const {
+    if (!followTarget) return std::nullopt;
+    const glm::vec3 base = vehiclePivot_ ? *vehiclePivot_ : *followTarget;
+    const float mountedOffset = mounted_ ? mountHeightOffset_ : 0.0f;
+    return base + glm::vec3(0.0f, 0.0f, followedPivotHeight() + mountedOffset);
+}
+
 void CameraController::applyLookDelta(float dxPixels, float dyPixels) {
     if (!enabled || !camera || introActive) return;
 
