@@ -781,7 +781,10 @@ void M2Renderer::clear() {
         }
         // Reset descriptor pools so new allocations succeed after reload.
         // destroyModelGPU/destroyInstanceBones don't free individual sets,
-        // so the pools fill up across map changes without this reset.
+        // so the pools fill up across map changes without this reset. What
+        // is still queued to free sets from them runs first (see
+        // WMORenderer::clearAll).
+        vkCtx_->flushDeferredCleanup();
         VkDevice device = vkCtx_->getDevice();
         if (materialDescPool_) {
             vkResetDescriptorPool(device, materialDescPool_, 0);

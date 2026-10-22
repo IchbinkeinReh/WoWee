@@ -1427,7 +1427,14 @@ void WMORenderer::clearAll() {
             if (entry.normalHeightMap) entry.normalHeightMap->destroy(device, allocator);
         }
 
-        // Reset descriptor pool so new allocations succeed after reload
+        // Reset descriptor pool so new allocations succeed after reload -
+        // once what is still queued to free sets from it has run. A group
+        // unloaded with its tile, or a batch's set retired for one with a
+        // normal map, waits for the frame fences to free its set; reset
+        // under it, that free named a set the pool no longer had (ten
+        // "Invalid VkDescriptorSet" from vkFreeDescriptorSets on every
+        // far teleport within a map).
+        vkCtx_->flushDeferredCleanup();
         if (materialDescPool_) {
             vkResetDescriptorPool(device, materialDescPool_, 0);
         }

@@ -854,7 +854,10 @@ void CharacterRenderer::clear() {
         offset = 0;
     }
 
-    // Reset descriptor pools (don't destroy - reuse for new allocations)
+    // Reset descriptor pools (don't destroy - reuse for new allocations),
+    // once what is still queued to free sets from them has run (see
+    // WMORenderer::clearAll).
+    vkCtx_->flushDeferredCleanup();
     for (auto& materialDescPool : materialDescPools_) {
         if (materialDescPool) {
             vkResetDescriptorPool(device, materialDescPool, 0);
