@@ -902,12 +902,9 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         }
     }
 
-    // Update renderer face-target position and selection circle
+    // The ghost's opacity and the selection circle
     auto* renderer = services_.renderer;
     if (renderer) {
-        if (auto* ac = renderer->getAnimationController()) ac->setInCombat(gameHandler.isInCombat() &&
-                              !gameHandler.isPlayerDead() &&
-                              !gameHandler.isPlayerGhost());
         // The renderer is asked for only once there is something to change.
         // Asking for it waits for the world's doodads to finish recording, and
         // asking every frame made this the point where the interface stopped
@@ -925,33 +922,9 @@ void GameScreen::render(game::GameHandler& gameHandler) {
                 ghostOpacityLastInstanceId_ = charInstId;
             }
         }
-        static glm::vec3 targetGLPos;
         if (gameHandler.hasTarget()) {
             auto target = gameHandler.getTarget();
             if (target) {
-                // Prefer the renderer's actual instance position so the target
-                // position the animation controller reads tracks the rendered
-                // model (not a parallel entity-space interpolator that can
-                // drift from the visual position).
-                glm::vec3 instPos;
-                if (core::Application::getInstance().getRenderPositionForGuid(target->getGuid(), instPos)) {
-                    targetGLPos = instPos;
-                    // Override Z with foot position to sit the circle on the ground.
-                    float footZ = 0.0f;
-                    if (core::Application::getInstance().getRenderFootZForGuid(target->getGuid(), footZ)) {
-                        targetGLPos.z = footZ;
-                    }
-                } else {
-                    // Fallback: entity game-logic position (no CharacterRenderer instance yet)
-                    targetGLPos = core::coords::canonicalToRender(
-                        glm::vec3(target->getX(), target->getY(), target->getZ()));
-                    float footZ = 0.0f;
-                    if (core::Application::getInstance().getRenderFootZForGuid(target->getGuid(), footZ)) {
-                        targetGLPos.z = footZ;
-                    }
-                }
-                if (auto* ac = renderer->getAnimationController()) ac->setTargetPosition(&targetGLPos);
-
                 // The circle under the target (0x00743ec0 hands it to the
                 // world frame, 0x00725980 draws it): a unit or a player, never
                 // the player itself, while ObjectSelectionCircle is on (its
@@ -970,11 +943,9 @@ void GameScreen::render(game::GameHandler& gameHandler) {
                     renderer->clearSelectionCircle();
                 }
             } else {
-                if (auto* ac = renderer->getAnimationController()) ac->setTargetPosition(nullptr);
                 renderer->clearSelectionCircle();
             }
         } else {
-            if (auto* ac = renderer->getAnimationController()) ac->setTargetPosition(nullptr);
             renderer->clearSelectionCircle();
         }
     }

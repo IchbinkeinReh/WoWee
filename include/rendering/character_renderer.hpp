@@ -114,10 +114,6 @@ public:
     /// A spell visual kit played on the unit: its animation, as 0x0073b140
     /// plays it (kit_animation::onKitPlayed).
     void playKitAnimation(uint32_t instanceId, const kit_animation::KitPlay& kit);
-    /// Whether the body plays a one-shot that ends into `animationId` - one
-    /// asked while the body finishes the swing it took back from its upper
-    /// body, which it plays once that is over (0x0073bbd0 -> 0x0073b510).
-    [[nodiscard]] bool bodyEndsInto(uint32_t instanceId, uint32_t animationId) const;
     /// Plays what a unit is in when nothing else is asked of it, as the
     /// client asks it on a change of how it moves (0x0073ac30 ->
     /// 0x00724500, base_animation::pick); nothing where that leaves what
@@ -403,7 +399,6 @@ public:
     /// where it usually is, which is not the same for a race whose hair is
     /// half the distance from its chin to the top of the box.
     bool getInstanceKeyBonePivotZ(uint32_t instanceId, int32_t keyBoneId, float& outZ) const;
-    bool getInstanceFootZ(uint32_t instanceId, float& outFootZ) const;
     bool getInstancePosition(uint32_t instanceId, glm::vec3& outPos) const;
     /// The instance's world matrix - position, facing and scale - which an
     /// effect parented to the unit rides on.

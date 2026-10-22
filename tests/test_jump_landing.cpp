@@ -1,6 +1,5 @@
 // The client's jump landing (FUN_0073d2b0) and the airborne animation hold
-// (FUN_00724200 / FUN_0071dc20), shared by the local player's LocomotionFSM
-// and other units' animation sync.
+// (FUN_00724200 / FUN_0071dc20).
 #include <catch_amalgamated.hpp>
 #include "rendering/animation/jump_landing.hpp"
 
@@ -76,4 +75,22 @@ TEST_CASE("Taking off into flight plays JumpStart out", "[jump_landing]") {
     CHECK(airborneAnimSync(false, anim::JUMP, true, false) == AirborneAnimSync::Refresh);
     // Landing from flight holds JumpLandRun like any landing.
     CHECK(airborneAnimSync(false, anim::JUMP_LAND_RUN, false, false) == AirborneAnimSync::Hold);
+}
+
+TEST_CASE("A short drop lands into what plays unless the direction changed", "[jump_landing]") {
+    constexpr uint32_t kFalling = 0x1000;
+    CHECK(landed(kForward | kFalling, kForward, false, true) == Landed::Nothing);
+    CHECK(landed(kFalling, 0, false, false) == Landed::Nothing);
+    CHECK(landed(kForward | kFalling, 0, false, false) == Landed::Base);
+}
+
+TEST_CASE("A launched or far fall lands into its landing", "[jump_landing]") {
+    constexpr uint32_t kFallingFar = 0x2000, kSwimming = 0x200000;
+    CHECK(landed(0, 0, true, false) == Landed::End);
+    CHECK(landed(kFallingFar, 0, false, false) == Landed::End);
+    CHECK(landed(kForward, kForward, true, true) == Landed::LandRun);
+    CHECK(landed(kForward, kForward | kWalking, true, true) == Landed::Base);
+    CHECK(landed(kBackward, kBackward, true, true) == Landed::Base);
+    CHECK(landed(kForward, kForward, true, false) == Landed::Base);
+    CHECK(landed(0, kSwimming, true, false) == Landed::Base);
 }

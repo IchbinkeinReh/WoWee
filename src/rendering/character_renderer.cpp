@@ -2533,11 +2533,6 @@ void CharacterRenderer::playAskedAnimation(uint32_t instanceId, uint32_t animati
     playUnitAnimation(instanceId, animationId, loop, 0, upper_body::Pass::Asked);
 }
 
-bool CharacterRenderer::bodyEndsInto(uint32_t instanceId, uint32_t animationId) const {
-    auto it = instances.find(instanceId);
-    return it != instances.end() && !it->second.animationLoop && it->second.oneShotReturnAnim == animationId;
-}
-
 base_animation::Pick CharacterRenderer::pickBaseAnimation(CharacterInstance& instance,
                                                           const base_animation::Ask& ask) {
     const auto& model = models[instance.modelId].data;
@@ -5959,19 +5954,6 @@ bool CharacterRenderer::getInstanceHeight(uint32_t instanceId, float& outHeight)
     if (top <= 0.001f) return false;
 
     outHeight = top * std::max(0.001f, it->second.scale);
-    return true;
-}
-
-bool CharacterRenderer::getInstanceFootZ(uint32_t instanceId, float& outFootZ) const {
-    auto it = instances.find(instanceId);
-    if (it == instances.end()) return false;
-    auto mIt = models.find(it->second.modelId);
-    if (mIt == models.end()) return false;
-
-    const auto& inst = it->second;
-    const auto& model = mIt->second.data;
-    float scale = std::max(0.001f, inst.scale);
-    outFootZ = inst.position.z + model.boundMin.z * scale;
     return true;
 }
 

@@ -1895,15 +1895,6 @@ bool EntitySpawner::gameObjectDrawsNothing(uint64_t guid) const {
     return m2 && m2->instanceDrawsNothing(goIt->second.instanceId);
 }
 
-bool EntitySpawner::getRenderFootZForGuid(uint64_t guid, float& outFootZ) const {
-    const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
-    if (!characters) return false;
-    const uint32_t instanceId = characterInstanceIdForGuid(guid);
-    if (instanceId == 0) return false;
-
-    return characters->getInstanceFootZ(instanceId, outFootZ);
-}
-
 bool EntitySpawner::getRenderPositionForGuid(uint64_t guid, glm::vec3& outPos) const {
     const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
     if (!characters) return false;

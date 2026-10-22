@@ -173,7 +173,6 @@ public:
     /// instanceDrawsNothing). False while there is no model yet.
     [[nodiscard]] bool gameObjectDrawsNothing(uint64_t guid) const;
     uint32_t characterInstanceIdForGuid(uint64_t guid) const;
-    bool getRenderFootZForGuid(uint64_t guid, float& outFootZ) const;
     /// Where the client puts a unit's name (0x0071fef0): its model's
     /// PlayerNameMounted attachment while it rides (the mount's model),
     /// else PlayerName, else its position raised by 1.25 of its

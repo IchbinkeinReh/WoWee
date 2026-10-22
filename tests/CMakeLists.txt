@@ -1463,18 +1463,6 @@ wowee_add_test(test_base_animation
     SOURCES test_base_animation.cpp ${CMAKE_SOURCE_DIR}/src/rendering/animation/base_animation.cpp
             ${CMAKE_SOURCE_DIR}/src/rendering/animation/upper_body.cpp)
 
-# ── test_locomotion_fsm ──────────────────────────────────────
-add_executable(test_locomotion_fsm
-    test_locomotion_fsm.cpp
-    ${TEST_COMMON_SOURCES}
-    ${CMAKE_SOURCE_DIR}/src/rendering/animation/locomotion_fsm.cpp
-)
-target_include_directories(test_locomotion_fsm PRIVATE ${TEST_INCLUDE_DIRS})
-target_include_directories(test_locomotion_fsm SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_link_libraries(test_locomotion_fsm PRIVATE catch2_main)
-add_test(NAME locomotion_fsm COMMAND test_locomotion_fsm)
-register_test_target(test_locomotion_fsm)
-
 # ── test_body_yaw ────────────────────────────────────────────
 # The body yaw a unit is drawn at behind its facing (FUN_0073dab0), its spring
 # (FUN_00719660) and the shuffle it asks for turning on the spot.
@@ -1484,6 +1472,12 @@ wowee_add_test(test_body_yaw
 # ── test_jump_landing ────────────────────────────────────────
 wowee_add_test(test_jump_landing
     SOURCES test_jump_landing.cpp ${TEST_COMMON_SOURCES})
+
+# ── test_mover_event ─────────────────────────────────────────
+# What the active player's own movement events do to its animation
+# (0x0073ed10).
+wowee_add_test(test_mover_event
+    SOURCES test_mover_event.cpp ${CMAKE_SOURCE_DIR}/src/rendering/animation/mover_event.cpp)
 
 # ── test_movement_fall_block ─────────────────────────────────
 # The pitch, fall time and jump block after another unit's movement head.
@@ -1532,43 +1526,6 @@ target_include_directories(test_combat_text_filter SYSTEM PRIVATE ${TEST_SYSTEM_
 target_link_libraries(test_combat_text_filter PRIVATE catch2_main)
 add_test(NAME combat_text_filter COMMAND test_combat_text_filter)
 register_test_target(test_combat_text_filter)
-
-# ── test_combat_fsm ──────────────────────────────────────────
-add_executable(test_combat_fsm
-    test_combat_fsm.cpp
-    ${TEST_COMMON_SOURCES}
-    ${CMAKE_SOURCE_DIR}/src/rendering/animation/combat_fsm.cpp
-)
-target_include_directories(test_combat_fsm PRIVATE ${TEST_INCLUDE_DIRS})
-target_include_directories(test_combat_fsm SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_link_libraries(test_combat_fsm PRIVATE catch2_main)
-add_test(NAME combat_fsm COMMAND test_combat_fsm)
-register_test_target(test_combat_fsm)
-
-# ── test_activity_fsm ────────────────────────────────────────
-add_executable(test_activity_fsm
-    test_activity_fsm.cpp
-    ${TEST_COMMON_SOURCES}
-    ${CMAKE_SOURCE_DIR}/src/rendering/animation/activity_fsm.cpp
-)
-target_include_directories(test_activity_fsm PRIVATE ${TEST_INCLUDE_DIRS})
-target_include_directories(test_activity_fsm SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_link_libraries(test_activity_fsm PRIVATE catch2_main)
-add_test(NAME activity_fsm COMMAND test_activity_fsm)
-register_test_target(test_activity_fsm)
-
-# NPC animator tests removed - NpcAnimator replaced by generic CharacterAnimator
-
-# ── test_anim_capability ─────────────────────────────────────
-# Header-only struct tests - no source files needed
-add_executable(test_anim_capability
-    test_anim_capability.cpp
-)
-target_include_directories(test_anim_capability PRIVATE ${TEST_INCLUDE_DIRS})
-target_include_directories(test_anim_capability SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
-target_link_libraries(test_anim_capability PRIVATE catch2_main)
-add_test(NAME anim_capability COMMAND test_anim_capability)
-register_test_target(test_anim_capability)
 
 # ── test_indoor_shadows ──────────────────────────────────────
 wowee_add_test(test_indoor_shadows

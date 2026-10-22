@@ -4403,26 +4403,6 @@ void SpellHandler::handleAuraUpdate(network::Packet& packet, bool isAll) {
             }
         }
 
-        // Sprint aura detection - check if any sprint/dash speed buff is active
-        if (data.guid == owner_.getPlayerGuid() && owner_.sprintAuraCallbackRef()) {
-            static constexpr uint32_t sprintSpells[] = {
-                2983, 8696, 11305,   // Rogue Sprint (ranks 1-3)
-                1850, 9821, 33357,   // Druid Dash (ranks 1-3)
-                36554,               // Shadowstep (speed component)
-                68992, 68991,        // Darkflight (worgen racial)
-                58984,               // Aspect of the Pack speed 
-            };
-            bool hasSprint = false;
-            for (const auto& a : playerAuras_) {
-                if (a.isEmpty()) continue;
-                for (uint32_t sid : sprintSpells) {
-                    if (a.spellId == sid) { hasSprint = true; break; }
-                }
-                if (hasSprint) break;
-            }
-            owner_.sprintAuraCallbackRef()(hasSprint);
-        }
-
         if (data.guid == owner_.getPlayerGuid()) {
             refreshRestorationFromPlayerAuras();
         }

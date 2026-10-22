@@ -8,7 +8,6 @@
 #include "rendering/character_renderer.hpp"
 #include "rendering/spell_visual_system.hpp"
 #include "rendering/camera_controller.hpp"
-#include "rendering/animation_controller.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/animation/emote_registry.hpp"
 #include "rendering/animation/jump_landing.hpp"
@@ -35,12 +34,6 @@ AnimationCallbackHandler::AnimationCallbackHandler(
 }
 
 void AnimationCallbackHandler::setupCallbacks() {
-    // Sprint aura callback - use SPRINT(143) animation when sprint-type buff is active
-    gameHandler_.setSprintAuraCallback([this](bool active) {
-        auto* ac = renderer_.getAnimationController();
-        if (ac) ac->setSprintAuraActive(active);
-    });
-
     // GUID → CharacterRenderer instance for bone-attached spell visuals:
     // local player uses the dedicated character instance, other units the
     // spawner's creature/player instances (0 = not rendered, no attachment).
@@ -119,60 +112,20 @@ void AnimationCallbackHandler::setupCallbacks() {
 
         // A blow taken (0x00755e40 -> 0x00736640): StandWound, CombatWound
         // in a fight, CombatCritical, on the upper body or the whole body as
-        // the unit stands.
-        const bool isLocalPlayer = (victimGuid == gameHandler_.getPlayerGuid());
+        // the unit stands - the player's as any unit's.
+        uint32_t instanceId = victimGuid == gameHandler_.getPlayerGuid()
+                                  ? renderer_.getCharacterInstanceId()
+                                  : entitySpawner_.getCreatureInstanceId(victimGuid);
+        if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(victimGuid);
+        if (instanceId == 0) return;
         if (reaction == game::GameHandler::HitReaction::WOUND ||
             reaction == game::GameHandler::HitReaction::CRIT_WOUND) {
-            uint32_t instanceId = isLocalPlayer ? renderer_.getCharacterInstanceId()
-                                                : entitySpawner_.getCreatureInstanceId(victimGuid);
-            if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(victimGuid);
-            if (instanceId == 0) return;
             const auto wound =
                 cr->woundFor(instanceId, reaction == game::GameHandler::HitReaction::CRIT_WOUND);
-            if (!wound) return;
-            // The player's whole body is its animation controller's.
-            auto* ac = isLocalPlayer && !wound->upper ? renderer_.getAnimationController() : nullptr;
-            if (ac) ac->triggerHitReaction(wound->anim);
-            else cr->playWound(instanceId, *wound);
+            if (wound) cr->playWound(instanceId, *wound);
             return;
         }
-
-        // For local player: use AnimationController state
-        if (isLocalPlayer) {
-            auto* ac = renderer_.getAnimationController();
-            if (ac) {
-                uint32_t charInstId = renderer_.getCharacterInstanceId();
-                if (charInstId && cr->hasAnimation(charInstId, animId))
-                    ac->triggerHitReaction(animId);
-            }
-            return;
-        }
-
-        // For NPCs/other players: direct playAnimation
-        uint32_t instanceId = entitySpawner_.getCreatureInstanceId(victimGuid);
-        if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(victimGuid);
-        if (instanceId != 0 && cr->hasAnimation(instanceId, animId))
-            cr->playAnimation(instanceId, animId, false);
-    });
-
-    // Stun state callback - enters/exits STUNNED animation on local player
-    gameHandler_.setStunStateCallback([this](bool stunned) {
-        auto* ac = renderer_.getAnimationController();
-        if (ac) ac->setStunned(stunned);
-    });
-
-    // Stealth state callback - switches to stealth animation variants
-    gameHandler_.setStealthStateCallback([this](bool stealthed) {
-        auto* ac = renderer_.getAnimationController();
-        if (ac) ac->setStealthed(stealthed);
-    });
-
-    // Player health callback - switches to wounded idle when HP < 20%
-    gameHandler_.setPlayerHealthCallback([this](uint32_t health, uint32_t maxHealth) {
-        auto* ac = renderer_.getAnimationController();
-        if (!ac) return;
-        bool lowHp = (maxHealth > 0) && (health > 0) && (health * 5 <= maxHealth);
-        ac->setLowHealth(lowHp);
+        if (cr->hasAnimation(instanceId, animId)) cr->playAnimation(instanceId, animId, false);
     });
 
     // Another unit's jump, as the client plays it for one. MSG_MOVE_JUMP
@@ -346,198 +299,51 @@ void AnimationCallbackHandler::setupCallbacks() {
     });
 
     // A cast's start and end: what its caster plays is its spell's kits'
-    // (0x0073b140) - for the player through its animation controller.
+    // (0x0073b140), the player's as any unit's.
     gameHandler_.setSpellCastAnimCallback([this](uint64_t guid, bool start, bool isChannel,
                                                   game::SpellCastType /*castType*/) {
         auto* cr = renderer_.getCharacterRenderer();
         if (!cr) return;
-
-        // Determine if this is the local player
-        bool isLocalPlayer = false;
-        uint32_t instanceId = 0;
-        {
-            uint32_t charInstId = renderer_.getCharacterInstanceId();
-            if (charInstId != 0 && guid == gameHandler_.getPlayerGuid()) {
-                instanceId = charInstId;
-                isLocalPlayer = true;
-            }
-        }
-        if (instanceId == 0) instanceId = entitySpawner_.getCreatureInstanceId(guid);
-        if (instanceId == 0) instanceId = entitySpawner_.getPlayerInstanceId(guid);
+        const bool isLocalPlayer = guid == gameHandler_.getPlayerGuid();
+        uint32_t instanceId = isLocalPlayer ? renderer_.getCharacterInstanceId() : 0;
+        if (instanceId == 0 && !isLocalPlayer) instanceId = entitySpawner_.getCreatureInstanceId(guid);
+        if (instanceId == 0 && !isLocalPlayer) instanceId = entitySpawner_.getPlayerInstanceId(guid);
         if (instanceId == 0) return;
 
+        // Its spell's kits animate it as they are played on it - the
+        // PrecastKit's StartAnimID or AnimID at the cast's start, the
+        // CastKit's as it goes (0x0073b140), the cast loop between
+        // (0x00724330) and a channel's ChannelKit over all (0x0071e400). The
+        // end of a cast whose PrecastKit animates it asks the base animation
+        // again (0x007fec00), as does a channel's (0x0073eb50).
         auto* svs = renderer_.getSpellVisualSystem();
-        if (!isLocalPlayer) {
-            // Another unit: its spell's kits animate it as they are played
-            // on it - the PrecastKit's StartAnimID or AnimID at the cast's
-            // start, the CastKit's as it goes (0x0073b140), the cast loop
-            // between (0x00724330) and a channel's ChannelKit over all
-            // (0x0071e400). The end of a cast whose PrecastKit animates it
-            // asks the base animation again (0x007fec00), as does a
-            // channel's (0x0073eb50).
-            if (start) {
-                const auto* cast = gameHandler_.getUnitCastState(guid);
-                castSpells_[guid] = cast ? cast->spellId : 0u;
-                return;
+        if (start) {
+            uint32_t spell = 0;
+            if (isLocalPlayer) {
+                spell = gameHandler_.getCurrentCastSpellId();
+            } else if (const auto* cast = gameHandler_.getUnitCastState(guid)) {
+                spell = cast->spellId;
             }
-            const uint32_t spell = castSpells_.count(guid) ? castSpells_[guid] : 0u;
-            castSpells_.erase(guid);
-            if (isChannel || (svs && svs->castAnimations(spell).animates())) cr->playBaseAnimation(instanceId);
+            castSpells_[guid] = spell;
+            // A potion or a drink taken standing: one swig's sound.
+            if (isLocalPlayer && spell != 0) {
+                gameHandler_.loadSpellNameCache();
+                const auto it = gameHandler_.spellNameCacheRef().find(spell);
+                const auto rest = it != gameHandler_.spellNameCacheRef().end()
+                                      ? game::spellclass::classifyRestChannel(it->second.name)
+                                      : game::spellclass::RestChannelKind::NONE;
+                if (rest == game::spellclass::RestChannelKind::POTION ||
+                    rest == game::spellclass::RestChannelKind::ALCOHOL) {
+                    if (auto* audio = gameHandler_.services().audioCoordinator) {
+                        if (auto* ui = audio->getUiSoundManager()) ui->playDrinking();
+                    }
+                }
+            }
             return;
         }
-
-        if (start) {
-            uint32_t currentSpell = gameHandler_.getCurrentCastSpellId();
-            bool isFishing = isChannel && game::spellclass::isFishingCast(currentSpell);
-
-            // Helper: pick first animation the model supports from a list
-            auto pickFirst = [&](std::initializer_list<uint32_t> ids) -> uint32_t {
-                for (uint32_t id : ids)
-                    if (cr->hasAnimation(instanceId, id)) return id;
-                return 0;
-            };
-
-            bool isBandage = false;
-            bool isMining = false;
-            bool isGathering = false;
-            game::spellclass::RestChannelKind restChannel =
-                game::spellclass::RestChannelKind::NONE;
-            if (currentSpell != 0) {
-                gameHandler_.loadSpellNameCache();
-                auto it = gameHandler_.spellNameCacheRef().find(currentSpell);
-                isBandage = (it != gameHandler_.spellNameCacheRef().end() &&
-                             it->second.name.find("Bandage") != std::string::npos);
-                if (it != gameHandler_.spellNameCacheRef().end()) {
-                    restChannel = game::spellclass::classifyRestChannel(it->second.name);
-                }
-                if (!isBandage && !isFishing && it != gameHandler_.spellNameCacheRef().end()) {
-                    const auto& nm = it->second.name;
-                    isMining = (nm == "Mining" || nm == "Smelting");
-                    if (!isMining) {
-                        isGathering = gameHandler_.isProfessionSpell(currentSpell);
-                        if (!isGathering)
-                            isGathering = (nm == "Opening" || nm == "Open Lock");
-                    }
-                }
-            }
-
-            if (restChannel != game::spellclass::RestChannelKind::NONE) {
-                if (auto* ac = renderer_.getAnimationController()) {
-                    if (restChannel == game::spellclass::RestChannelKind::CANNIBALIZE) {
-                        // Standing, and looping for the length of the channel.
-                        //
-                        // Not the food path: that seats the player and swaps
-                        // the seated idle, and cannibalize does not sit - the
-                        // character stays on their feet over the corpse. Not
-                        // the potion path either, which is one swig and done,
-                        // where this runs until the channel ends.
-                        uint32_t eatAnim = pickFirst({rendering::anim::EMOTE_EAT,
-                                                      rendering::anim::EATING_LOOP});
-                        if (eatAnim != 0) {
-                            ac->startSpellCast(0, eatAnim, /*castLoop=*/true, 0);
-                        }
-                    } else if (restChannel == game::spellclass::RestChannelKind::POTION ||
-                        restChannel == game::spellclass::RestChannelKind::ALCOHOL) {
-                        // Potions/alcohol are drunk standing: one EmoteEat swig.
-                        uint32_t swigAnim = pickFirst({rendering::anim::EMOTE_EAT});
-                        if (swigAnim != 0) {
-                            ac->startSpellCast(0, swigAnim, false, 0);
-                        }
-                    } else {
-                        // Food and water keep the player seated (UNIT_FIELD_BYTES_1)
-                        // with the plain seated idle, exactly like the real client:
-                        // player models ship NO seated eating animation - EmoteEat is
-                        // authored standing (root bone stays at stand height) and
-                        // looping it while seated pops the model upright. Only
-                        // override the seated idle for models that truly have the
-                        // dedicated EatingLoop sequence.
-                        ac->setSeatedLoopAnimation(
-                            pickFirst({rendering::anim::EATING_LOOP}));
-                    }
-                }
-                // Food/water consume sounds repeat from SpellHandler::updateTimers
-                // for the whole aura; potions get their single swig sound here.
-                if (restChannel == game::spellclass::RestChannelKind::POTION ||
-                    restChannel == game::spellclass::RestChannelKind::ALCOHOL) {
-                    if (auto* audio = gameHandler_.services().audioCoordinator) {
-                        if (auto* ui = audio->getUiSoundManager()) {
-                            ui->playDrinking();
-                        }
-                    }
-                }
-            } else if (isMining) {
-                // The pick is the mining kit's weapon effect (0x0073a6c0).
-                uint32_t mineAnim = pickFirst({
-                    rendering::anim::ATTACK_1H,
-                    rendering::anim::EMOTE_WORK,
-                    rendering::anim::EMOTE_USE_STANDING
-                });
-                if (auto* ac = renderer_.getAnimationController()) {
-                    ac->startSpellCast(0, mineAnim ? mineAnim : rendering::anim::STAND, true, 0);
-                }
-            } else if (isBandage || isGathering) {
-                uint32_t useStart = isChannel ? 0 : pickFirst({
-                    rendering::anim::USE_STANDING_START,
-                    rendering::anim::EMOTE_USE_STANDING_NO_SHEATHE,
-                    rendering::anim::EMOTE_USE_STANDING
-                });
-                uint32_t useLoop = pickFirst({
-                    rendering::anim::USE_STANDING_LOOP,
-                    rendering::anim::EMOTE_USE_STANDING_NO_SHEATHE,
-                    rendering::anim::EMOTE_USE_STANDING,
-                    rendering::anim::CHANNEL_CAST_OMNI,
-                    rendering::anim::READY_SPELL_OMNI,
-                    rendering::anim::STAND
-                });
-                uint32_t useEnd = isChannel ? 0 : pickFirst({
-                    rendering::anim::USE_STANDING_END,
-                    rendering::anim::STAND
-                });
-                if (auto* ac = renderer_.getAnimationController()) {
-                    ac->startSpellCast(useStart, useLoop ? useLoop : rendering::anim::STAND, true, useEnd);
-                }
-            } else if (isFishing && cr->hasAnimation(instanceId, rendering::anim::FISHING_LOOP)) {
-                // Fishing is a one-shot pole cast followed by the channel idle.
-                // The pole is the main hand, drawn by the channel at the bobber
-                // (0x0073a520).
-                if (auto* ac = renderer_.getAnimationController()) {
-                    uint32_t castAnim = cr->hasAnimation(instanceId, rendering::anim::FISHING_CAST)
-                        ? rendering::anim::FISHING_CAST : 0;
-                    ac->startSpellCast(castAnim, rendering::anim::FISHING_LOOP, true, 0);
-                }
-            } else {
-            // The spell's kits, as 0x0073b140 plays them: the PrecastKit's
-            // StartAnimID once, then its AnimID while the cast runs - a
-            // channel's ChannelKit's over everything (0x0071e400) - and the
-            // CastKit's AnimID as it goes. A spell whose kits have none
-            // animates nothing.
-            const auto kits = svs ? svs->castAnimations(currentSpell)
-                                  : rendering::SpellVisualSystem::CastAnimations{};
-            const bool castTime = gameHandler_.getCastTimeTotal() > 0.0f;
-            const uint32_t precastAnim = !isChannel && kits.precastStart >= 0
-                                             ? static_cast<uint32_t>(kits.precastStart) : 0u;
-            uint32_t castAnim = 0;
-            if (isChannel) {
-                if (const auto loop = svs ? svs->castLoop(0, currentSpell) : std::nullopt) castAnim = loop->anim;
-            } else if (kits.precastAnim > 0 && castTime) {
-                castAnim = static_cast<uint32_t>(kits.precastAnim);
-            }
-            const uint32_t finalizeAnim = !isChannel && kits.castAnim >= 0 ? static_cast<uint32_t>(kits.castAnim) : 0u;
-            if (precastAnim != 0 || castAnim != 0 || finalizeAnim != 0) {
-                // The animation controller needs a hold between: the start
-                // where there is no loop, else the release.
-                const uint32_t hold = castAnim != 0 ? castAnim : precastAnim != 0 ? precastAnim : finalizeAnim;
-                if (auto* ac = renderer_.getAnimationController())
-                    ac->startSpellCast(precastAnim, hold, castAnim != 0, finalizeAnim);
-            }
-            } // end !isFishing
-        } else {
-            // Cast/channel ended - plays finalization anim completely then returns to idle
-            if (auto* ac = renderer_.getAnimationController()) {
-                ac->setSeatedLoopAnimation(0);
-                ac->stopSpellCast();
-            }
-        }
+        const uint32_t spell = castSpells_.count(guid) ? castSpells_[guid] : 0u;
+        castSpells_.erase(guid);
+        if (isChannel || (svs && svs->castAnimations(spell).animates())) cr->playBaseAnimation(instanceId);
     });
 
     // Ghost state callback - make player semi-transparent when in spirit form
@@ -549,11 +355,10 @@ void AnimationCallbackHandler::setupCallbacks() {
         cr->setInstanceOpacity(charInstId, isGhost ? 0.5f : 1.0f);
     });
 
-    // Stand state animation callback - route through AnimationController state machine
-    // for proper sit/sleep/kneel transition animations (down → loop → up)
+    // The player's stand state as the server has it (SMSG_STANDSTATE_UPDATE,
+    // 0x0073f540 -> 0x0073f060): sat down, laid down, knelt or got up from
+    // the state its animation was given for.
     gameHandler_.setStandStateCallback([this](uint8_t standState) {
-        using AC = rendering::AnimationController;
-
         // The camera controller's two flags, from the one number: movement is
         // blocked while sitting or kneeling, and grounding stands down while
         // the server has the character in a chair.
@@ -567,38 +372,9 @@ void AnimationCallbackHandler::setupCallbacks() {
         if (auto* cc = renderer_.getCameraController()) {
             cc->applyServerStandState(standState);
         }
-
-        auto* ac = renderer_.getAnimationController();
-        if (!ac) return;
-
-        // Death is special - play directly, not through sit state machine
-        if (standState == AC::STAND_STATE_DEAD) {
-            auto* cr = renderer_.getCharacterRenderer();
-            if (!cr) return;
-            uint32_t charInstId = renderer_.getCharacterInstanceId();
-            if (charInstId == 0) return;
-            cr->playAnimation(charInstId, rendering::anim::DEATH, false);
-            return;
-        }
-
-        ac->setStandState(standState);
-        // Restoration food/water is an aura rather than MSG_CHANNEL_START on
-        // supported realms. The aura update starts its loop; standing up ends it.
-        // Only stop the cast presentation while restoring - the server also
-        // stands a seated player when a real cast begins, and stopping there
-        // would kill that cast's animation as it starts.
-        if (standState == AC::STAND_STATE_STAND) {
-            ac->setSeatedLoopAnimation(0);
-            if (gameHandler_.isRestoring()) ac->stopSpellCast();
-        }
-    });
-
-    // Loot window callback - play kneel/loot animation while looting
-    gameHandler_.setLootWindowCallback([this](bool open) {
-        auto* ac = renderer_.getAnimationController();
-        if (!ac) return;
-        if (open) ac->startLooting();
-        else      ac->stopLooting();
+        auto* cr = renderer_.getCharacterRenderer();
+        const uint32_t instanceId = renderer_.getCharacterInstanceId();
+        if (cr && instanceId != 0) cr->standStateChanged(instanceId, standState);
     });
 }
 

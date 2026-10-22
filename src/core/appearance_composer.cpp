@@ -9,7 +9,6 @@
 #include "rendering/renderer.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/spell_visual_system.hpp"
-#include "rendering/animation_controller.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -468,11 +467,6 @@ void AppearanceComposer::attachEquippedWeapons() {
     std::array<UnitWeaponItem, 3> items{};
     const UnitWeaponItems present = playerWeaponItems(items);
     const DressedKey key = currentDressKey();
-    // The animations' ranged stance and shot follow the ranged state.
-    if (renderer_->getAnimationController()) {
-        renderer_->getAnimationController()->setRangedWeaponActive(
-            static_cast<SheathState>(key.state) == SheathState::Ranged);
-    }
     const UnitWeaponDress dress{
         .state = static_cast<SheathState>(key.state),
         .rangedJustPutAway = rangedJustPutAway_,

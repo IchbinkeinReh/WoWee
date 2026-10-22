@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/window.hpp"
+#include "game/opcodes.hpp"
 #include <chrono>
 #include "core/gamepad.hpp"
 #include "ui/unit_portrait.hpp"
@@ -136,7 +137,6 @@ public:
     // Render bounds lookup (for click targeting / selection) - delegates to EntitySpawner
     bool getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, float& outRadius) const;
     [[nodiscard]] bool gameObjectDrawsNothing(uint64_t guid) const;
-    bool getRenderFootZForGuid(uint64_t guid, float& outFootZ) const;
     /// The game object highlight on the mouseover (0x0051f790 calls
     /// 0x00743c70 on the new mouseover, 0x00743bc0 on the old). Guid 0, or
     /// anything not a game object, takes it off whatever had it.
@@ -193,6 +193,13 @@ private:
     void syncRenderInstancesToEntities(float deltaTime);
     /// What 0x007385c0 reads of the player's own unit for its upper body.
     rendering::upper_body::Unit playerAnimationState(const game::Unit& self) const;
+    /// The player's unit onto its instance, and its base animation asked
+    /// again where what it reads has changed.
+    void syncPlayerAnimation(const game::Unit& self);
+    /// An event of the player's own movement, on its animation (0x0073ed10).
+    void animatePlayerMovement(game::Opcode op, uint32_t flagsBefore, bool launchedBefore);
+    /// In the air off a ledge, long enough to be falling far.
+    [[nodiscard]] bool playerFallsFar() const;
     void render();
     void performLogoutToLogin();
     void processDeferredLogoutToLogin();
@@ -447,6 +454,19 @@ private:
     float facingSendCooldown_ = 0.0f;        // Rate-limits MSG_MOVE_SET_FACING
     float lastSentCanonicalYaw_ = 1000.0f;   // Sentinel - triggers first send
     bool idleYawned_ = false;
+    // What the player's base animation read last frame (syncPlayerAnimation).
+    struct PlayerAnimationSeen {
+        uint32_t instanceId = 0;
+        bool leaping = false;
+        bool fellFar = false;
+        bool turning = false;
+        bool turningLeft = false;
+        bool alive = true;
+        bool looting = false;
+        bool stealthed = false;
+        bool autoAttacking = false;
+    };
+    PlayerAnimationSeen playerAnimationSeen_;
 
     // M2 transport riding: last frame's locked (canonical) render position, used to
     // detect how far the player tried to walk this frame so that delta can be applied
