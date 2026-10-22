@@ -6677,7 +6677,8 @@ void Renderer::recordRtLighting() {
         }
         Frustum frustum;
         frustum.extractFromMatrix(in.viewProj);
-        rt_lights::selectLights(lightScratch, in.cameraPos, kLightRange, RtLighting::kMaxPointLights,
+        rt_lights::selectLights(lightScratch, in.cameraPos, kLightRange,
+                                rt_lights::lightLimit(lightingTune_.lightCountLimit),
                                 [&](const glm::vec3& p, float r) { return frustum.intersectsSphere(p, r); });
         // A building's light shades the baked colours of its own storey only
         // (rt_light_storey.hpp): found once per place, a quarter yard apart,

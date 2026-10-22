@@ -930,7 +930,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "dbgview", "dbgtimeoverride", "dbgtime", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
     "dbgmodellightintensity", "dbgmodellightreach", "dbgfirelightintensity", "dbgfirelightreach", "dbglamplightintensity", "dbglamplightreach", "dbgbuildinglightintensity", "dbgbuildinglightreach", "dbgunitlightintensity", "dbgunitlightreach",
     "dbgemissivelightintensity", "dbgemissivelightreach", "dbgparticlelightintensity", "dbgparticlelightreach",
-    "dbginteriorbase", "dbginteriorfullat", "dbgmaxlight",
+    "dbginteriorbase", "dbginteriorfullat", "dbgmaxlight", "dbglightcountlimit",
     "dbgtracedsunshadow", "dbgmapsunshadow", "dbgpointshadow", "dbgbakedlampshadow", "dbgocclusion", "dbgterrainshadow", "dbgblobshadow",
     // Moved off the game's own Effects panel, so this list is now what
     // applies them at startup; the cvar store used to do it.
@@ -1147,6 +1147,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "dbginteriorbase", .asInt = &SettingsPanel::pendingDbgInteriorBase},
     {.key = "dbginteriorfullat", .asInt = &SettingsPanel::pendingDbgInteriorFullAt},
     {.key = "dbgmaxlight", .asInt = &SettingsPanel::pendingDbgMaxLight},
+    {.key = "dbglightcountlimit", .asInt = &SettingsPanel::pendingDbgLightCountLimit},
     {.key = "dbgshadowdarkness", .asInt = &SettingsPanel::pendingDbgShadowDarkness},
     {.key = "dbgtracedsunshadow", .asInt = &SettingsPanel::pendingDbgTracedSunShadow},
     {.key = "dbgmapsunshadow", .asInt = &SettingsPanel::pendingDbgMapSunShadow},
@@ -1378,6 +1379,7 @@ void SettingsPanel::applyLightingTune() {
     t.interiorFullAt = pct(pendingDbgInteriorFullAt);
     // The slider's top is no limit (0).
     t.maxLight = pendingDbgMaxLight >= 1000 ? 0.0f : pct(static_cast<float>(pendingDbgMaxLight));
+    t.lightCountLimit = pendingDbgLightCountLimit;
     t.shadowStrength = pct(pendingDbgShadowDarkness);
     t.tracedSunShadow = pct(pendingDbgTracedSunShadow);
     t.mapSunShadow = pct(pendingDbgMapSunShadow);
@@ -1632,6 +1634,7 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
                key == "dbginteriorbase" ||
                key == "dbginteriorfullat" ||
                key == "dbgmaxlight" ||
+               key == "dbglightcountlimit" ||
                key == "dbgshadowdarkness" ||
                key == "dbgtracedsunshadow" ||
                key == "dbgmapsunshadow" ||

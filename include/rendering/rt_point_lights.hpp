@@ -127,6 +127,19 @@ inline float importance(const PointLight& l, const glm::vec3& eye) {
     return strength * reach * reach / (reach * reach + outside * outside);
 }
 
+/// How many point lights one frame may trace at most: the Debug Lights
+/// "Light count limit" (dbglightcountlimit). Past it a crowded view keeps
+/// the most important (selectLights) and drops the rest, so a light can come
+/// and go as the camera moves; a higher limit keeps more of a city's at a
+/// cost of the trace's time, which loops over every kept light per pixel.
+/// The buffer the shader reads holds kMaxLightLimit (RtLighting).
+inline constexpr int kMinLightLimit = 8;
+inline constexpr int kMaxLightLimit = 512;
+inline constexpr int kDefaultLightLimit = 128;
+inline size_t lightLimit(int requested) {
+    return static_cast<size_t>(std::clamp(requested, kMinLightLimit, kMaxLightLimit));
+}
+
 /// Keep the lights that can light something within `maxDistance` of the eye
 /// and that `visible(position, radius)` says reach into the view, the
 /// `maxLights` most important of them, most important first. Lights too faint

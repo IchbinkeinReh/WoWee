@@ -238,6 +238,38 @@ TEST_CASE("the lights kept are those that reach the view, the strongest first", 
     CHECK(twins[1].attenuationStart == 1.0f);
 }
 
+TEST_CASE("the light count limit is held to what the buffer takes", "[rt][lights]") {
+    CHECK(lightLimit(kDefaultLightLimit) == 128u);
+    CHECK(lightLimit(0) == static_cast<size_t>(kMinLightLimit));
+    CHECK(lightLimit(-5) == static_cast<size_t>(kMinLightLimit));
+    CHECK(lightLimit(8) == 8u);
+    CHECK(lightLimit(300) == 300u);
+    CHECK(lightLimit(512) == 512u);
+    CHECK(lightLimit(100000) == static_cast<size_t>(kMaxLightLimit));
+    STATIC_CHECK(kMinLightLimit <= kDefaultLightLimit);
+    STATIC_CHECK(kDefaultLightLimit <= kMaxLightLimit);
+
+    // A city's worth: 600 lights in a row along the view, the nearer the
+    // stronger. A limit keeps that many, the most important - the nearest -
+    // first; the same lights whatever limit, as far as the lower one goes.
+    std::vector<PointLight> city;
+    for (int i = 0; i < 600; ++i) {
+        PointLight l;
+        l.position = {2.0f + 0.15f * float(i), 0.0f, 0.0f};
+        l.color = glm::vec3(1.0f);
+        l.attenuationEnd = 4.0f;
+        city.push_back(l);
+    }
+    const glm::vec3 eye(0.0f);
+    const auto all = [](const glm::vec3&, float) { return true; };
+    for (int asked : {0, 8, 64, 128, 300, 512, 2000}) {
+        std::vector<PointLight> kept = city;
+        const size_t limit = lightLimit(asked);
+        REQUIRE(selectLights(kept, eye, 200.0f, limit, all) == limit);
+        for (size_t i = 0; i < kept.size(); ++i) CHECK(kept[i].position.x == Catch::Approx(2.0f + 0.15f * float(i)));
+    }
+}
+
 TEST_CASE("the GPU record carries the window beside position and colour", "[rt][lights]") {
     PointLight l;
     l.position = {1, 2, 3};

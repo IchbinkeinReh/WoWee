@@ -104,9 +104,11 @@ public:
     [[nodiscard]] VkImageView giViewForSlot(uint32_t slot) const;
     [[nodiscard]] VkImageView pointViewForSlot(uint32_t slot) const;
 
-    /// The most point lights one frame traces; the rest of a crowded view's
-    /// are the least of them (rt_lights::selectLights).
-    static constexpr uint32_t kMaxPointLights = 128;
+    /// The most point lights one frame can trace, what the lights buffer
+    /// holds; how many it does is the Debug Lights limit, at most this
+    /// (rt_lights::lightLimit). The rest of a crowded view's are the least
+    /// of them (rt_lights::selectLights).
+    static constexpr uint32_t kMaxPointLights = static_cast<uint32_t>(rt_lights::kMaxLightLimit);
     /// This frame's point lights, most important first, for the next
     /// record(). Past kMaxPointLights are dropped.
     void setPointLights(const std::vector<rt_lights::PointLight>& lights);
