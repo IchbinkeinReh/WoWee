@@ -275,3 +275,35 @@ TEST_CASE("a label with no anchors sits where its button's font justifies", "[ad
     });
     CHECK(got == "CENTER/CENTER LEFT/LEFT RIGHT/RIGHT CENTER/CENTER");
 }
+
+// The NOT_IN_LFG notice in the client's language. It was defined in the
+// bootstrap, before GetLocale had a profile to read, so a German client got
+// it in English. Run again once the locale is known, it replaces what it set
+// itself - and leaves a GlobalStrings' own string alone.
+TEST_CASE("the NOT_IN_LFG notice follows the client's locale once it is known", "[addonlua]") {
+    const char* stubs = R"LUA(
+        locale = 'enUS'
+        function GetLocale() return locale end
+        function __WoweeNoticeFallback(word, loc) return loc .. ':' .. word end
+    )LUA";
+    SECTION("set early in English, then right") {
+        const std::string got = runChunks({
+            {stubs, "Stubs"},
+            {wowee::addons::kNoticeFallbackLua, "Early"},
+            {"locale = 'deDE'", "Locale"},
+            {wowee::addons::kNoticeFallbackLua, "Known"},
+            {"return CHAT_NOT_IN_LFG_NOTICE", "Read"},
+        });
+        CHECK(got == "deDE:NOT_IN_LFG");
+    }
+    SECTION("a GlobalStrings that has it keeps it") {
+        const std::string got = runChunks({
+            {stubs, "Stubs"},
+            {"CHAT_NOT_IN_LFG_NOTICE = 'own'", "GlobalStrings"},
+            {"locale = 'deDE'", "Locale"},
+            {wowee::addons::kNoticeFallbackLua, "Known"},
+            {"return CHAT_NOT_IN_LFG_NOTICE", "Read"},
+        });
+        CHECK(got == "own");
+    }
+}

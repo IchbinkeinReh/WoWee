@@ -6567,6 +6567,9 @@ void LuaEngine::setLuaServices(const LuaServices& services) {
     if (L_) {
         lua_pushlightuserdata(L_, &luaServices_);
         lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_lua_services");
+        // Now that GetLocale reads the expansion profile, the strings that
+        // are in the client's language (kNoticeFallbackLua).
+        executeString(kNoticeFallbackLua);
     }
 }
 
@@ -8239,12 +8242,9 @@ void LuaEngine::registerCoreAPI() {
         "    string.format = positional\n"
         "    format = positional\n"
         "end\n"
-        // The channel notices GlobalStrings has no format for
-        // (chat_channels::noticeFallbackFormat): defined only where it is
-        // missing, so a GlobalStrings that has one keeps its own.
-        "if CHAT_NOT_IN_LFG_NOTICE == nil then\n"
-        "    CHAT_NOT_IN_LFG_NOTICE = __WoweeNoticeFallback('NOT_IN_LFG', GetLocale and GetLocale() or 'enUS')\n"
-        "end\n"
+        // The channel notices GlobalStrings has no format for are defined in
+        // setLuaServices, once GetLocale knows the client's language
+        // (kNoticeFallbackLua).
         "table.wipe = wipe\n"
         "function SetDesaturation() end\n"
         // A class circle rather than the 3D portrait the real client renders,
