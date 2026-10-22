@@ -351,11 +351,18 @@ Runtime& Runtime::get() {
 
 Runtime::Runtime() : impl_(std::make_unique<Impl>()) {}
 
-Runtime::~Runtime() {
-    if (gInstance != XR_NULL_HANDLE) {
-        xrDestroyInstance(gInstance);
-        gInstance = XR_NULL_HANDLE;
-    }
+// Nothing of OpenXR is touched here. This runs among the static destructors,
+// after the loader's own are gone, and a call into it then fails inside it
+// ("OpenXR-Loader: Unknown failure: Invalid argument" on every exit).
+// destroyInstance does it in order, from VkContext::shutdown; a program that
+// never got that far leaves the process to clean up.
+Runtime::~Runtime() = default;
+
+void Runtime::destroyInstance() {
+    if (gInstance == XR_NULL_HANDLE) return;
+    xrDestroyInstance(gInstance);
+    gInstance = XR_NULL_HANDLE;
+    gSystem = XR_NULL_SYSTEM_ID;
 }
 
 bool Runtime::initialized() const { return gInstance != XR_NULL_HANDLE && gSystem != XR_NULL_SYSTEM_ID; }
@@ -586,7 +593,7 @@ void Runtime::Impl::destroySwapchain(XrChain& chain) {
 }
 
 bool Runtime::Impl::acquire(XrChain& chain) {
-    if (chain.handle == XR_NULL_HANDLE) return false;
+    if (chain.handle == XR_NULL_HANDLE || !running) return false;
     if (chain.acquired != UINT32_MAX) return true;
     uint32_t index = 0;
     XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
@@ -749,7 +756,15 @@ void Runtime::shutdown() {
     if (m.view != XR_NULL_HANDLE) xrDestroySpace(m.view);
     m.local = m.view = XR_NULL_HANDLE;
     if (m.session != XR_NULL_HANDLE) {
-        if (m.running) xrEndSession(m.session);
+        // Destroyed as it is: xrEndSession is only for a session the runtime
+        // has asked to stop, and refuses one that is still running.
+        if (m.frameBegun) {
+            XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO};
+            ei.displayTime = m.frameState.predictedDisplayTime;
+            ei.environmentBlendMode = m.blendMode;
+            xrEndFrame(m.session, &ei);
+            m.frameBegun = false;
+        }
         xrDestroySession(m.session);
     }
     m.session = XR_NULL_HANDLE;
@@ -774,6 +789,17 @@ void Runtime::Impl::pollEvents() {
                     running = xrOk(xrBeginSession(session, &bi), "xrBeginSession");
                     if (running) LOG_WARNING("OpenXR: session running - the headset is showing WoWee");
                 } else if (state == XR_SESSION_STATE_STOPPING && running) {
+                    // Anything still held goes back, and a frame still open is
+                    // closed, before the session ends: a call on either after
+                    // xrEndSession is refused.
+                    releaseAll();
+                    if (frameBegun) {
+                        XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO};
+                        ei.displayTime = frameState.predictedDisplayTime;
+                        ei.environmentBlendMode = blendMode;
+                        xrEndFrame(session, &ei);
+                        frameBegun = false;
+                    }
                     xrEndSession(session);
                     running = false;
                     LOG_WARNING("OpenXR: session stopped");

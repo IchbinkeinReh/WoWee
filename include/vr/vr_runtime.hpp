@@ -73,6 +73,8 @@ public:
     void destroyEyeTargets(rendering::VkContext& vk);
 
     void shutdown();
+    /// The OpenXR instance, after the Vulkan instance it made is gone.
+    void destroyInstance();
 
     // ---- each frame ----
 

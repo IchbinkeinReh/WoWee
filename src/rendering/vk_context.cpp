@@ -312,6 +312,9 @@ void VkContext::shutdown() {
     }
 
     if (instance) { vkDestroyInstance(instance, nullptr); instance = VK_NULL_HANDLE; }
+#ifdef WOWEE_VR
+    vr::Runtime::get().destroyInstance();
+#endif
 
     LOG_DEBUG("Vulkan context shutdown complete");
 }
