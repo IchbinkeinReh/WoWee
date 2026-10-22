@@ -3394,3 +3394,14 @@ wowee_add_test(test_chat_color_table
 # Header-only.
 wowee_add_test(test_target_direction
     SOURCES test_target_direction.cpp)
+
+# ── test_vr_math ─────────────────────────────────────────────
+# The headset's arithmetic (vr/vr_math.hpp): the per-eye projection with the
+# scene's reversed depth, the controller ray on the interface's quad, the
+# sticks, the snap turn and the panel that follows the head. Built and run
+# whether or not wowee_vr is: none of it needs OpenXR.
+wowee_add_test(test_vr_math
+    SOURCES test_vr_math.cpp
+            ${CMAKE_SOURCE_DIR}/src/vr/vr_math.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/camera.cpp
+            ${TEST_COMMON_SOURCES})

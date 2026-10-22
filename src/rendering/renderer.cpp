@@ -125,6 +125,9 @@
 #include <set>
 #include <future>
 #include <thread>
+#ifdef WOWEE_VR
+#include "vr/vr_runtime.hpp"
+#endif
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__linux__)
@@ -1661,7 +1664,17 @@ void Renderer::beginFrame() {
     // Anything queued (an MSAA change, a swapchain marked dirty) waits for it.
     // After the ablation's clock, so the time spent minimised is not counted
     // against the first frame drawn afterwards.
+#ifdef WOWEE_VR
+    // Off in the headset: the ray traced lighting (its cost twice over), the
+    // upscalers (their history would be the other eye's) and the sun shafts
+    // (a screen-space effect that lands in a different place in each eye).
+    sunShaftsEnabled_ = false;
+    if (rtRequestedMode_ != 0) setRtLightingMode(0);
+    if (postProcessPipeline_ && postProcessPipeline_->isFSREnabled()) setFSREnabled(false);
+    if (postProcessPipeline_ && postProcessPipeline_->isFSR2Enabled()) setFSR2Enabled(false);
+#else
     if (!window->hasDrawableArea()) return;
+#endif
 
     // Apply deferred MSAA change between frames (before any rendering state is used)
     // Not onto a surface with no area: the rebuild would refuse it, and a
@@ -1716,8 +1729,10 @@ void Renderer::beginFrame() {
         // it never answers zero here; the surface is asked as well, because
         // it can be 0x0 while SDL still reports a size - a window something
         // has hidden for a moment, as a screenshot tool does.
+#ifndef WOWEE_VR
         if (window->getDrawableWidth() == 0 || window->getDrawableHeight() == 0) return;
         if (!vkCtx->surfaceHasArea()) return;
+#endif
         // Nothing below is rebuilt against a swapchain that did not come back.
         // It stays dirty and the next frame tries again; resizing the post
         // effects at a size that failed is what disabled FXAA for good.
@@ -2052,7 +2067,9 @@ void Renderer::endFrame() {
         // records inline here rather than into a scene-pass secondary buffer.
         {
             WOWEE_PROFILE_SCOPE("record interface (ImGui)", Cpu);
+#ifndef WOWEE_VR
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), currentCmd);
+#endif
         }
         vkCmdEndRenderPass(currentCmd);
         if (vkCtx) vkCtx->gpuMark(currentCmd, "interface (ImGui)");
@@ -2070,6 +2087,11 @@ void Renderer::endFrame() {
     if (afterInterface_ || recorder_) vkCtx->gpuMark(currentCmd, "capture / after interface");
 
     // Submit and present
+#ifdef WOWEE_VR
+    if (currentImageIndex < vkCtx->getSwapchainImages().size()) {
+        vr::Runtime::get().recordAfterFrame(currentCmd, vkCtx->getSwapchainImages()[currentImageIndex]);
+    }
+#endif
     vkCtx->endFrame(currentCmd, currentImageIndex);
     currentCmd = VK_NULL_HANDLE;
 }

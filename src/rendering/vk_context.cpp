@@ -21,6 +21,9 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#ifdef WOWEE_VR
+#include "vr/vr_runtime.hpp"
+#endif
 
 namespace wowee {
 namespace rendering {
@@ -103,6 +106,9 @@ bool VkContext::initialize(SDL_Window* window) {
     if (!selectPhysicalDevice()) return false;
     if (!createLogicalDevice()) return false;
     if (!createAllocator()) return false;
+#ifdef WOWEE_VR
+    if (!vr::Runtime::get().createSession(*this)) return false;
+#endif
 
     // Pipeline cache: try to load from disk, fall back to empty cache.
     // Not fatal - if it fails we just skip caching.
@@ -152,6 +158,15 @@ void VkContext::shutdown() {
 
     LOG_DEBUG("VkContext::shutdown - destroyImGuiResources...");
     destroyImGuiResources();
+#ifdef WOWEE_VR
+    for (auto fb : swapchainFramebuffers) {
+        if (fb) vkDestroyFramebuffer(device, fb, nullptr);
+    }
+    swapchainFramebuffers.clear();
+    vr::Runtime::get().shutdown();
+    swapchainImageViews.clear();
+    swapchainImages.clear();
+#endif
 
     // Destroy sync objects
     if (frameTimeline_) {
@@ -461,7 +476,13 @@ bool VkContext::createInstance([[maybe_unused]] SDL_Window* window) {
     const char* const* sdlExtNames = SDL_Vulkan_GetInstanceExtensions(&sdlExtCount);
     std::vector<const char*> sdlExts(sdlExtNames, sdlExtNames + sdlExtCount);
 
+#ifdef WOWEE_VR
+    // The headset's runtime creates the instance and the device
+    // (XR_KHR_vulkan_enable2): vk-bootstrap calls both through this.
+    vkb::InstanceBuilder builder{vr::Runtime::get().instanceProcAddr()};
+#else
     vkb::InstanceBuilder builder;
+#endif
     builder.set_app_name("Wowee")
            .set_app_version(VK_MAKE_VERSION(1, 0, 0))
            // 1.3, which is what synchronization2 and dynamic rendering are
@@ -593,6 +614,11 @@ bool VkContext::selectPhysicalDevice() {
     selector.set_surface(surface)
             .set_minimum_version(1, 1)
             .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete);
+#ifdef WOWEE_VR
+    if (const std::string xrGpu = vr::Runtime::get().physicalDeviceName(instance); !xrGpu.empty()) {
+        selector.set_name(xrGpu);
+    }
+#endif
 
     auto physRet = selector.select();
     if (!physRet) {
@@ -1355,6 +1381,20 @@ static bool requestIdentityTransform(vkb::SwapchainBuilder& builder,
 }
 
 bool VkContext::createSwapchain(int width, int height) {
+#ifdef WOWEE_VR
+    // No swapchain on the window: each eye is rendered into an image of its
+    // own, at the headset's size, and copied into the headset's swapchain at
+    // the end of its frame. The window gets a mirror (vr_runtime.cpp).
+    (void)width;
+    (void)height;
+    if (!vr::Runtime::get().createEyeTargets(*this, MAX_FRAMES_IN_FLIGHT, swapchainImages, swapchainImageViews,
+                                             swapchainExtent, swapchainFormat)) {
+        LOG_ERROR("VR: could not create the eye render targets");
+        return false;
+    }
+    swapchainDirty = false;
+    return true;
+#endif
     vkb::SwapchainBuilder swapchainBuilder{physicalDevice, device, surface};
 
     auto& builder = swapchainBuilder
@@ -1413,6 +1453,9 @@ bool VkContext::createSwapchain(int width, int height) {
 }
 
 void VkContext::destroySwapchain() {
+#ifdef WOWEE_VR
+    swapchainImageViews.clear();  // the runtime's, destroyed with its images
+#endif
     for (auto fb : swapchainFramebuffers) {
         if (fb) vkDestroyFramebuffer(device, fb, nullptr);
     }
@@ -2980,6 +3023,35 @@ bool VkContext::surfaceHasArea() const {
 }
 
 bool VkContext::recreateSwapchain(int width, int height) {
+#ifdef WOWEE_VR
+    // The window's size has nothing to do with the eyes': the images stay,
+    // and the targets and passes made from them are made again (an MSAA
+    // change comes this way).
+    (void)width;
+    (void)height;
+    vkDeviceWaitIdle(device);
+    for (auto fb : swapchainFramebuffers) {
+        if (fb) vkDestroyFramebuffer(device, fb, nullptr);
+    }
+    swapchainFramebuffers.clear();
+    destroyMsaaColorImage();
+    destroyDepthResolveImage();
+    destroyDepthBuffer();
+    destroyOverlayRenderPass();
+    if (imguiRenderPass) {
+        vkDestroyRenderPass(device, imguiRenderPass, nullptr);
+        imguiRenderPass = VK_NULL_HANDLE;
+    }
+    swapchainDirty = true;
+    if (!createSwapchainRenderTargets("recreate")) return false;
+    if (!createOverlayRenderPass()) return false;
+    if (!createSceneContinueRenderPass()) return false;
+    createDeferredScenePasses();
+    swapchainDirty = false;
+    ++swapchainGeneration_;
+    LOG_INFO("VR: eye targets rebuilt at ", swapchainExtent.width, "x", swapchainExtent.height);
+    return true;
+#endif
     // Before anything is destroyed. Minimising the window on Windows answers
     // a 0x0 surface, vk-bootstrap builds the swapchain at that size whatever
     // it is asked for, and then the depth buffer, the MSAA and depth-resolve
@@ -3233,7 +3305,9 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     // Nothing is drawn in the background, nor to a surface the driver has
     // said is gone; syncSurface rebuilds it before the next frame.
     if (!lifecycle_.canRender()) return VK_NULL_HANDLE;
+#ifndef WOWEE_VR
     if (swapchain == VK_NULL_HANDLE) return VK_NULL_HANDLE;  // Swapchain lost; recreate pending
+#endif
     // A rebuild that failed partway leaves the swapchain with no render pass
     // and no framebuffers behind it. Every caller indexes the framebuffers by
     // the image it is handed, so there is no frame to begin until a rebuild
@@ -3288,6 +3362,10 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     // Acquire next swapchain image using the free semaphore.
     // After acquiring we swap it into the per-image slot so the old per-image
     // semaphore (now released by the presentation engine) becomes the free one.
+#ifdef WOWEE_VR
+    // One eye image per frame slot, free once the slot's fence has passed.
+    imageIndex = currentFrame;
+#else
     VkResult result;
     {
         // Blocks when every image is queued for the display - vsync with
@@ -3324,6 +3402,7 @@ VkCommandBuffer VkContext::beginFrame(uint32_t& imageIndex) {
     currentAcquireSemaphore_ = nextAcquireSemaphore_;
     nextAcquireSemaphore_ = imageAcquiredSemaphores_[imageIndex];
     imageAcquiredSemaphores_[imageIndex] = currentAcquireSemaphore_;
+#endif
 
     // A timeline only ever moves forward, so there is nothing to unsignal.
     if (frameTimeline_ == VK_NULL_HANDLE) {
@@ -3414,6 +3493,11 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     std::vector<VkSemaphore> waitSemaphores{acquireSem};
     std::vector<VkPipelineStageFlags> waitStages{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
     std::vector<VkSemaphore> signalSemaphores{renderSem};
+#ifdef WOWEE_VR
+    waitSemaphores.clear();
+    waitStages.clear();
+    signalSemaphores.clear();
+#endif
     for (const ExtraPresent& extra : extras) {
         waitSemaphores.push_back(extra.acquired);
         waitStages.push_back(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
@@ -3506,9 +3590,16 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
         for (const ExtraPresent& extra : extras) {
             if (extra.onResult) extra.onResult(VK_NOT_READY);
         }
+#ifdef WOWEE_VR
+        vr::Runtime::get().afterSubmit();
+#endif
         return;
     }
 
+#ifdef WOWEE_VR
+    // The headset's images go back to it now the work on them is submitted.
+    vr::Runtime::get().afterSubmit();
+#else
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
@@ -3539,6 +3630,7 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     } else if (result == VK_ERROR_DEVICE_LOST) {
         noteDeviceLost("vkQueuePresentKHR", result);
     }
+#endif
 
     // Each on its own, after the main image: one call for several swapchains
     // answers for each in pResults, but a window that went out of date would

@@ -119,6 +119,9 @@
 #include <fstream>
 
 #include <thread>
+#ifdef WOWEE_VR
+#include "vr/vr_runtime.hpp"
+#endif
 #ifdef __linux__
 #include <sched.h>
 #include <pthread.h>
@@ -640,9 +643,25 @@ bool Application::initialize() {
     // Initialize memory monitoring for dynamic cache sizing
     core::MemoryMonitor::getInstance().initialize();
 
+#ifdef WOWEE_VR
+    // The headset first: without one there is nothing for this exe to do,
+    // and the runtime has to be there before Vulkan is, since it makes
+    // Vulkan's instance and device (vr/vr_runtime.hpp).
+    {
+        std::string why;
+        if (!vr::Runtime::get().initialize(why)) {
+            vr::reportUnavailable(why);
+            return false;
+        }
+    }
+#endif
+
     // Create window
     WindowConfig windowConfig;
     windowConfig.title = "Wowee";
+#ifdef WOWEE_VR
+    windowConfig.title = "Wowee VR";
+#endif
     windowConfig.width = 1280;
     windowConfig.height = 720;
     // Pace rendering to the display by default. The old 240 FPS default kept
@@ -1875,10 +1894,12 @@ void Application::run() {
         // it paces rather than a stall the next one has to absorb. Sleep
         // granularity is a millisecond or so, which is close enough for a
         // cap and far cheaper than spinning.
+#ifndef WOWEE_VR
         if (window) {
             WOWEE_PROFILE_SCOPE("sleep: frame cap", Idle);
             pacer.waitForCap(window->frameCap());
         }
+#endif
 
         // Delta, and the start of the frame the cap above will pace. Taken
         // together from one clock reading so the two cannot disagree about
@@ -2350,6 +2371,19 @@ void Application::run() {
             ui::gamepadControls().setCameraController(nullptr);
             ui::gamepadControls().update(deltaTime);
         }
+
+#ifdef WOWEE_VR
+        // The headset's frame begins here, before the update: xrWaitFrame
+        // paces the loop, and the controllers' input is applied where the
+        // pad's is - before Input samples its virtual keys and before ImGui
+        // opens its frame.
+        {
+            WOWEE_PROFILE_SCOPE("vr: wait frame + input", Wait);
+            vr::Runtime::get().beginFrame(renderer.get(), window ? window->getSDLWindow() : nullptr,
+                                          state == AppState::IN_GAME, deltaTime);
+            if (vr::Runtime::get().exitRequested()) running = false;
+        }
+#endif
 
         // Update input
         Input::getInstance().update();
@@ -5577,6 +5611,13 @@ void Application::beatWatchdog() {
 }
 
 void Application::render() {
+#ifdef WOWEE_VR
+    // However this returns, the headset's frame is ended - a begun frame
+    // left open stops the compositor taking the next.
+    struct VrFrameEnd {
+        ~VrFrameEnd() { vr::Runtime::get().endFrame(); }
+    } vrFrameEnd;
+#endif
     // Nothing to draw to between the app leaving the foreground and its
     // surface being rebuilt, and nothing is drawn in the background at all.
     // syncSurface is also where a surface the driver reported lost, or one
@@ -5642,6 +5683,16 @@ void Application::render() {
     // screen, and only while a thumb is holding it.
     ui::touchControls().setInWorld(state == AppState::IN_GAME);
     ui::touchControls().draw();
+#endif
+
+#ifdef WOWEE_VR
+    // In the world, the frame below is the left eye's and the right eye's
+    // follows it; in the menus it is drawn only for the interface.
+    vr::Runtime& vrRuntime = vr::Runtime::get();
+    rendering::Camera* vrCamera = renderer->getCamera();
+    const int vrEyes = vrCamera ? vrRuntime.eyesToRender(state == AppState::IN_GAME) : 0;
+    vrRuntime.setRecordingEye(vrEyes > 0 ? 0 : -1);
+    if (vrEyes > 0) vrRuntime.applyEyeCamera(0, *vrCamera);
 #endif
 
     renderingFrame_ = true;
@@ -6528,6 +6579,23 @@ void Application::render() {
     // through Renderer's getters, which wait for the worker first.
     runRenderStage("finishWorld", [&] { renderer->finishRenderWorld(); });
     runRenderStage("endFrame", [&] { renderer->endFrame(); });
+
+#ifdef WOWEE_VR
+    if (vrEyes > 0) {
+        vrRuntime.restoreCamera(*vrCamera);
+        // The right eye: the same world from its place, without the
+        // interface, which went onto its own quad with the left.
+        vrRuntime.setRecordingEye(1);
+        vrRuntime.applyEyeCamera(1, *vrCamera);
+        runRenderStage("vr: right eye", [&] {
+            renderer->beginFrame();
+            renderer->renderWorld(world ? world.get() : nullptr, gameHandler.get());
+            renderer->finishRenderWorld();
+            renderer->endFrame();
+        });
+        vrRuntime.restoreCamera(*vrCamera);
+    }
+#endif
 
     // A picture of the client, written once and then done with.
     //

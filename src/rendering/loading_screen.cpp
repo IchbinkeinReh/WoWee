@@ -14,6 +14,9 @@
 #include <imgui_impl_vulkan.h>
 #include <imgui_impl_sdl3.h>
 #include <SDL3/SDL.h>
+#ifdef WOWEE_VR
+#include "vr/vr_runtime.hpp"
+#endif
 #include <cstring>
 
 // The one definition of stb_image the other image readers link against.
@@ -358,6 +361,9 @@ void LoadingScreen::render() {
             }
         }
 
+#ifdef WOWEE_VR
+        vr::Runtime::get().beginLoadingFrame(sdlWindow);
+#endif
         uint32_t imageIndex = 0;
         VkCommandBuffer cmd = vkCtx->beginFrame(imageIndex);
         if (cmd != VK_NULL_HANDLE) {
@@ -388,8 +394,14 @@ void LoadingScreen::render() {
                 vkCmdEndRenderPass(cmd);
             }
 
+#ifdef WOWEE_VR
+            if (overlayReady) vr::Runtime::get().recordAfterFrame(cmd, vkCtx->getSwapchainImages()[imageIndex]);
+#endif
             vkCtx->endFrame(cmd, imageIndex);
         }
+#ifdef WOWEE_VR
+        vr::Runtime::get().endFrame();
+#endif
     }
 }
 

@@ -2874,3 +2874,7 @@ add_custom_target(copy_bundled_addons ALL
     COMMENT "Copying bundled addons")
 add_dependencies(copy_bundled_addons wowee)
 
+
+# The headset client, beside wowee (cmake/WoweeVr.cmake). Last, so every
+# property of wowee it copies has been set.
+include(cmake/WoweeVr.cmake)
