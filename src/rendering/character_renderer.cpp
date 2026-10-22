@@ -5173,6 +5173,25 @@ bool CharacterRenderer::getInstancePose(uint32_t instanceId, glm::mat4& model,
     return true;
 }
 
+void CharacterRenderer::collectAttachedInstances(std::vector<AttachedInstance>& out) const {
+    out.clear();
+    for (const auto& [id, inst] : instances) {
+        if (inst.weaponAttachments.empty()) continue;
+        const float wearerAlpha = inst.visible ? inst.opacity * inst.kitAlpha * inst.cameraAlpha : 0.0f;
+        auto add = [&](uint32_t attachedId) {
+            auto it = instances.find(attachedId);
+            if (it == instances.end()) return;
+            out.push_back({.instanceId = attachedId,
+                           .modelId = it->second.modelId,
+                           .alpha = it->second.visible ? wearerAlpha : 0.0f});
+        };
+        for (const auto& wa : inst.weaponAttachments) {
+            add(wa.weaponInstanceId);
+            for (const auto& fx : wa.effects) add(fx.effectInstanceId);
+        }
+    }
+}
+
 glm::mat4 CharacterRenderer::getModelMatrix(const CharacterInstance& instance) const {
     glm::mat4 model = glm::mat4(1.0f);
 

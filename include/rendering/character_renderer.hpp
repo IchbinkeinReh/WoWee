@@ -442,6 +442,18 @@ public:
     // frame-fence deferral path; shared textures stay in the cache.
     void unloadModelIfUnused(uint32_t modelId);
 
+    /// An instance riding another one's attachment point - a helm, a
+    /// shoulder, a weapon or a weapon's enchant visual - with the alpha its
+    /// wearer is drawn at (0 while either is hidden).
+    struct AttachedInstance {
+        uint32_t instanceId = 0;
+        uint32_t modelId = 0;
+        float alpha = 1.0f;
+    };
+    /// Every attached instance, for what this renderer does not draw of them
+    /// (their particles and ribbons).
+    void collectAttachedInstances(std::vector<AttachedInstance>& out) const;
+
     // Model id an instance renders with (0 if the instance doesn't exist).
     [[nodiscard]] uint32_t getInstanceModelId(uint32_t instanceId) const {
         auto it = instances.find(instanceId);

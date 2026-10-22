@@ -909,6 +909,16 @@ private:
     std::unordered_map<uint32_t, uint32_t> mountParticleTwins_;
     void spawnMountParticleTwin(uint32_t displayId, uint32_t charModelId, uint32_t mountInstanceId);
     void removeMountParticleTwin(uint32_t mountInstanceId);
+    /// Helms, shoulders, weapons and enchant visuals: their twins by the
+    /// attached instance's id, and the attached instances found to have no
+    /// emitters (so they are not looked at again).
+    std::unordered_map<uint32_t, uint32_t> attachmentParticleTwins_;
+    std::unordered_set<uint32_t> attachmentsWithoutParticles_;
+    void syncAttachmentParticleTwins();
+    /// ItemDisplayInfo.dbc's ItemVisual: ItemVisuals.dbc's effects for the
+    /// item model at `point`.
+    static constexpr uint32_t kItemDisplayItemVisualColumn = 23;
+    void attachDisplayItemVisual(uint32_t instanceId, uint32_t point, uint32_t itemVisualId);
     /// The model of the game object a held ground-targeted spell summons, at
     /// the cursor's place (0x0080cce0 -> 0x007fe9e0, drawn by 0x004f66c0).
     void syncGroundTargetModel();

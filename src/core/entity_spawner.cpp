@@ -110,6 +110,7 @@ void EntitySpawner::update() {
     syncCreatureStealthVisuals();
     refreshCreatureScales();
     syncCreatureParticleTwins();
+    syncAttachmentParticleTwins();
     syncGroundTargetModel();
     updateGameObjectCustomAnims();
     updateGameObjectDestroyPending();
@@ -221,6 +222,8 @@ void EntitySpawner::shutdown() {
     creatureInstances_.clear();
     creatureParticleTwins_.clear();
     mountParticleTwins_.clear();
+    attachmentParticleTwins_.clear();
+    attachmentsWithoutParticles_.clear();
     creatureModelIds_.clear();
     creatureDisplayIds_.clear();
     requestedCreatureDisplayIds_.clear();
@@ -274,6 +277,8 @@ void EntitySpawner::resetAllState() {
     creatureInstances_.clear();
     creatureParticleTwins_.clear();
     mountParticleTwins_.clear();
+    attachmentParticleTwins_.clear();
+    attachmentsWithoutParticles_.clear();
     creatureModelIds_.clear();
     creatureDisplayIds_.clear();
     requestedCreatureDisplayIds_.clear();
@@ -813,9 +818,33 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const UnitWeaponEntrie
         if (!loadWeaponM2(dir + art.modelFile, model)) continue;
         std::string texturePath;
         if (!art.textureName.empty()) texturePath = dir + art.textureName + ".blp";
-        charRenderer->attachWeapon(instanceId, point, model, nextWeaponModelId_++, texturePath);
+        if (!charRenderer->attachWeapon(instanceId, point, model, nextWeaponModelId_++, texturePath)) continue;
+        // The display's own item visual - a staff's glowing crystal - which
+        // the client puts on any unit's item model, a creature's included,
+        // where no enchant names another (ItemDisplayInfo column 23).
+        attachDisplayItemVisual(instanceId, point,
+                                displayDbc->getUInt32(static_cast<uint32_t>(rec), kItemDisplayItemVisualColumn));
     }
     return true;
+}
+
+void EntitySpawner::attachDisplayItemVisual(uint32_t instanceId, uint32_t point, uint32_t itemVisualId) {
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || !assetManager_ || itemVisualId == 0 || itemVisualId == 0xFFFFFFFFu) return;
+    auto visualsDbc = assetManager_->loadDBC("ItemVisuals.dbc");
+    auto effectsDbc = assetManager_->loadDBC("ItemVisualEffects.dbc");
+    if (!visualsDbc || !visualsDbc->isLoaded() || !effectsDbc || !effectsDbc->isLoaded()) return;
+    const auto models = pipeline::resolveItemVisualModels(itemVisualId, visualsDbc.get(), effectsDbc.get());
+    for (uint32_t slot = 0; slot < models.size(); ++slot) {
+        if (models[slot].empty()) continue;
+        // The table names .mdx; the files are .m2.
+        std::string m2Path = models[slot];
+        const size_t dot = m2Path.rfind('.');
+        m2Path = (dot != std::string::npos ? m2Path.substr(0, dot) : m2Path) + ".m2";
+        pipeline::M2Model effect;
+        if (!loadWeaponM2(m2Path, effect)) continue;
+        charRenderer->attachWeaponEffect(instanceId, point, slot, effect, nextWeaponModelId_++);
+    }
 }
 
 void EntitySpawner::refreshGuildTabards() {
@@ -2929,6 +2958,57 @@ void EntitySpawner::removeCreatureParticleTwin(uint64_t guid) {
     if (it == creatureParticleTwins_.end()) return;
     if (auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr) m2->removeInstance(it->second);
     creatureParticleTwins_.erase(it);
+}
+
+void EntitySpawner::syncAttachmentParticleTwins() {
+    // What a unit wears or holds draws its own emitters and ribbons too - a
+    // helm's crest, a staff's glow, an enchant's sparks - as the client draws
+    // every M2 it attaches to a unit. The character renderer draws none of
+    // them, so each attached model with any
+    // gets a particles-only twin like a creature's, posed from it each frame
+    // and faded with its wearer.
+    auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    auto* m2 = renderer_ ? renderer_->getM2Renderer() : nullptr;
+    if (!charRenderer || !m2) return;
+    std::vector<rendering::CharacterRenderer::AttachedInstance> attached;
+    charRenderer->collectAttachedInstances(attached);
+    std::unordered_set<uint32_t> present;
+    present.reserve(attached.size());
+    for (const auto& a : attached) {
+        present.insert(a.instanceId);
+        auto twinIt = attachmentParticleTwins_.find(a.instanceId);
+        if (twinIt == attachmentParticleTwins_.end()) {
+            if (attachmentsWithoutParticles_.count(a.instanceId)) continue;
+            const pipeline::M2Model* data = charRenderer->getModelData(a.modelId);
+            if (!data) continue;  // not loaded yet
+            if (data->particleEmitters.empty() && data->ribbonEmitters.empty()) {
+                attachmentsWithoutParticles_.insert(a.instanceId);
+                continue;
+            }
+            const uint32_t twin = spawnParticleTwin(0, a.modelId, a.instanceId);
+            if (twin == 0) continue;
+            twinIt = attachmentParticleTwins_.emplace(a.instanceId, twin).first;
+        }
+        glm::mat4 model(1.0f);
+        const std::vector<glm::mat4>* bones = nullptr;
+        int seq = 0;
+        float t = 0.0f, gt = 0.0f;
+        if (charRenderer->getInstancePose(a.instanceId, model, bones, seq, t, gt) && bones) {
+            m2->setInstanceExternalPose(twinIt->second, model, *bones, seq, t, gt);
+        }
+        m2->setInstanceFade(twinIt->second, a.alpha);
+    }
+    for (auto it = attachmentParticleTwins_.begin(); it != attachmentParticleTwins_.end();) {
+        if (present.count(it->first)) {
+            ++it;
+            continue;
+        }
+        m2->removeInstance(it->second);
+        it = attachmentParticleTwins_.erase(it);
+    }
+    for (auto it = attachmentsWithoutParticles_.begin(); it != attachmentsWithoutParticles_.end();) {
+        it = present.count(*it) ? std::next(it) : attachmentsWithoutParticles_.erase(it);
+    }
 }
 
 void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float x, float y, float z, float orientation, float scale) {
