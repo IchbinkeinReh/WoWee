@@ -490,7 +490,15 @@ jobs:
         TAG="build-${GITHUB_RUN_NUMBER}-${SHORT}"
         SUBJECT="$(gh api "repos/${GH_REPO}/commits/${GITHUB_SHA}" --jq '.commit.message' | head -n1)"
 
-        mapfile -t FILES < <(find artifacts -type f | sort)
+        # Builds for different targets can name their packages alike (both
+        # Linux debs are wowee-<ver>-Linux.deb), and a release holds one asset
+        # per name, so each file goes up under its artifact's name as well.
+        mkdir -p dist
+        while IFS= read -r f; do
+          art="$(basename "$(dirname "$f")")"
+          cp "$f" "dist/${art}-$(basename "$f")"
+        done < <(find artifacts -type f)
+        mapfile -t FILES < <(find dist -type f | sort)
         if [ "${#FILES[@]}" -eq 0 ]; then
           echo "No artifacts to publish" >&2
           exit 1
