@@ -140,6 +140,23 @@ private:
     std::vector<uint64_t> words_;
 };
 
+/// The settings windows: the game menu, the Interface, Video and Audio
+/// options (where this client's own panels are too), the key bindings and the
+/// chat settings. They stay where the interface puts them and are never
+/// dragged - StartMoving leaves them be. A window of settings is opened,
+/// changed and closed; one dragged half off the screen, or out of reach of a
+/// headset's pointer, is a window that cannot be used.
+inline bool isFixedSettingsWindow(std::string_view name) {
+    static constexpr std::string_view kFixed[] = {
+        "GameMenuFrame",   "InterfaceOptionsFrame", "VideoOptionsFrame",
+        "AudioOptionsFrame", "KeyBindingFrame",     "ChatConfigFrame",
+    };
+    for (std::string_view fixed : kFixed) {
+        if (name == fixed) return true;
+    }
+    return false;
+}
+
 struct Widget {
     uint32_t id = 0;
     WidgetKind kind = WidgetKind::Frame;

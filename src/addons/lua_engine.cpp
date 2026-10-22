@@ -931,6 +931,8 @@ int lua_Frame_StartMoving(lua_State* L) {
     // WoW raises on a frame that is not movable. Ignoring it loses nothing and
     // keeps a mistake in one frame from taking down the file that asked.
     if (!w || !w->movable) return 0;
+    // The settings windows stay put, whatever their XML says.
+    if (wowee::ui::isFixedSettingsWindow(w->name)) return 0;
     tree->pinToCurrentPosition(id);
     tree->setMovingWidget(id);
     return 0;

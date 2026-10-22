@@ -3258,3 +3258,19 @@ TEST_CASE("findByName sees frames made after an earlier lookup", "[widget][name]
     CHECK(tree.findByName("Dup")->id == newer);
     CHECK(tree.findByName("Other") != nullptr);
 }
+
+// The settings windows are not dragged: the game menu and the options frames
+// say movable in their XML, and a window of settings dragged off the screen
+// (or out of a headset pointer's reach) cannot be used. Everything else that
+// moves still does.
+TEST_CASE("Settings windows are fixed in place", "[widget]") {
+    for (const char* name : {"GameMenuFrame", "InterfaceOptionsFrame", "VideoOptionsFrame",
+                             "AudioOptionsFrame", "KeyBindingFrame", "ChatConfigFrame"}) {
+        INFO(name);
+        CHECK(isFixedSettingsWindow(name));
+    }
+    for (const char* name : {"ContainerFrame1", "CharacterFrame", "WorldMapFrame", "", "InterfaceOptionsFrameOkay"}) {
+        INFO(name);
+        CHECK_FALSE(isFixedSettingsWindow(name));
+    }
+}
