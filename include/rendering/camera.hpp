@@ -53,6 +53,18 @@ public:
         if (!std::isfinite(fov) || fov <= 0.0f || fov >= 180.0f) return;
         this->fov = fov; updateProjectionMatrix();
     }
+    /// A projection given whole rather than built from the field of view and
+    /// aspect: a headset's eye, whose frustum is off-centre. `forward` is in
+    /// the form getForwardDepthProjectionMatrix returns - Vulkan's Y down,
+    /// depth 0 at the near plane - and the scene's reversed one is made from
+    /// it as usual. Held until cleared, through any setFov or setAspectRatio.
+    void setProjectionOverride(const glm::mat4& forward) {
+        projectionOverride_ = true; overrideForward_ = forward; updateProjectionMatrix();
+    }
+    void clearProjectionOverride() {
+        if (!projectionOverride_) return;
+        projectionOverride_ = false; updateProjectionMatrix();
+    }
 
     [[nodiscard]] const glm::vec3& getPosition() const { return position; }
     [[nodiscard]] const glm::mat4& getViewMatrix() const { return viewMatrix; }
@@ -102,7 +114,9 @@ private:
     glm::mat4 projectionMatrix = glm::mat4(1.0f);
     glm::mat4 unjitteredProjectionMatrix = glm::mat4(1.0f);
     glm::mat4 forwardDepthProjectionMatrix = glm::mat4(1.0f);
-    glm::vec2 jitterOffset = glm::vec2(0.0f);  // NDC jitter (applied to projection)
+    glm::vec2 jitterOffset = glm::vec2(0.0f);
+    bool projectionOverride_ = false;
+    glm::mat4 overrideForward_ = glm::mat4(1.0f);  // NDC jitter (applied to projection)
 };
 
 } // namespace rendering

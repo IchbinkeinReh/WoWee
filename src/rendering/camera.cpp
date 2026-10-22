@@ -22,6 +22,7 @@ void Camera::updateProjectionMatrix() {
     glm::mat4 forward = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);
     // Vulkan clip-space has Y pointing down; flip the projection's Y axis.
     forward[1][1] *= -1.0f;
+    if (projectionOverride_) forward = overrideForward_;
     projectionMatrix = depth::reversed(forward);
     unjitteredProjectionMatrix = projectionMatrix;
     forwardDepthProjectionMatrix = forward;

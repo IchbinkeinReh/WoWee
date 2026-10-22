@@ -91,3 +91,23 @@ TEST_CASE("Camera::getRight/getUp degrade safely at +/-90 pitch", "[camera]") {
     // Right should be the +X fallback (since cross would be zero).
     REQUIRE(r == glm::vec3(1.0f, 0.0f, 0.0f));
 }
+
+// A headset's eye hands the camera a whole projection; the scene's reversed
+// one is still made from it, and clearing it puts the field of view back.
+TEST_CASE("Camera projection override is reversed like its own and clears", "[camera]") {
+    wowee::rendering::Camera camera;
+    const glm::mat4 own = camera.getProjectionMatrix();
+    glm::mat4 forward = camera.getForwardDepthProjectionMatrix();
+    forward[2][0] = 0.25f;  // an off-centre frustum
+    camera.setProjectionOverride(forward);
+    CHECK(camera.getForwardDepthProjectionMatrix()[2][0] == Catch::Approx(0.25f));
+    CHECK(camera.getProjectionMatrix()[2][0] == Catch::Approx(0.25f));
+    // Survives a field of view change...
+    camera.setFov(70.0f);
+    CHECK(camera.getProjectionMatrix()[2][0] == Catch::Approx(0.25f));
+    // ...and is gone when cleared, the field of view then being 70.
+    camera.setFov(54.0f);
+    camera.clearProjectionOverride();
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r) CHECK(camera.getProjectionMatrix()[c][r] == Catch::Approx(own[c][r]));
+}
