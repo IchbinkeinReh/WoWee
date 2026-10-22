@@ -21,6 +21,56 @@ namespace addons {
 ///
 /// Built from WoweeSettingList() rather than written out, so a setting added to
 /// the schema appears without anyone editing Lua.
+/// WoW's bit library, which Lua 5.1 does not have: band, bor and bxor over
+/// any number of values, as the client's take them, on unsigned 32-bit
+/// integers (a negative is taken modulo 2^32, as the client's does).
+///
+/// They took two. FrameXML's constants.lua builds its combat log filters
+/// with five - COMBATLOG_FILTER_MINE is bit.bor(MINE, FRIENDLY, PLAYER
+/// control, PLAYER type, OBJECT type) - so every one of them came out as the
+/// first two bits alone, a mask with nothing to say about control or type.
+/// CombatLogAddFilter refuses such a mask, as the client does, and the combat
+/// log's own default filter raised "incomplete filter for srcMask" on every
+/// entry into the world.
+///
+/// Only the base library: no math, so a plain Lua state can run it.
+inline constexpr const char* kBitLibLua = R"LUA(
+bit = bit or {}
+local TWO32 = 4294967296
+local function u32(a)
+    a = (tonumber(a) or 0) % TWO32
+    return a - a % 1
+end
+local function fold(a, b, both, either)
+    local r, m = 0, 1
+    for _ = 0, 31 do
+        local x, y = a % 2, b % 2
+        local on
+        if both then on = x == 1 and y == 1
+        elseif either then on = x == 1 or y == 1
+        else on = x ~= y end
+        if on then r = r + m end
+        a, b, m = (a - x) / 2, (b - y) / 2, m * 2
+    end
+    return r
+end
+local function over(both, either)
+    return function(a, ...)
+        local r = u32(a)
+        for i = 1, select('#', ...) do
+            r = fold(r, u32((select(i, ...))), both, either)
+        end
+        return r
+    end
+end
+bit.band = bit.band or over(true, false)
+bit.bor = bit.bor or over(false, true)
+bit.bxor = bit.bxor or over(false, false)
+bit.bnot = bit.bnot or function(a) return 4294967295 - u32(a) end
+bit.lshift = bit.lshift or function(a, n) return u32(u32(a) * 2 ^ n) end
+bit.rshift = bit.rshift or function(a, n) local v = u32(a) / 2 ^ n return v - v % 1 end
+)LUA";
+
 /// The channel notices GlobalStrings has no format for
 /// (chat_channels::noticeFallbackFormat), in the client's language.
 ///

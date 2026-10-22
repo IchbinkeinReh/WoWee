@@ -307,3 +307,30 @@ TEST_CASE("the NOT_IN_LFG notice follows the client's locale once it is known", 
         CHECK(got == "own");
     }
 }
+
+// WoW's bit functions take any number of values. Ours took two, so
+// constants.lua's five-way bit.bor made every combat log filter the first two
+// bits alone - COMBATLOG_FILTER_MINE an incomplete mask that CombatLogAddFilter
+// refused on every entry into the world.
+TEST_CASE("bit.band, bor and bxor take any number of values", "[addonlua]") {
+    const std::string got = runChunks({
+        {wowee::addons::kBitLibLua, "BitLib"},
+        {R"LUA(
+            -- constants.lua's own construction.
+            local mine = bit.bor(0x00000001, 0x00000010, 0x00000100, 0x00000400, 0x00004000)
+            local out = {
+                mine,                               -- 0x4511
+                bit.bor(5),                         -- one value
+                bit.band(0xFF, 0x0F, 0x03),         -- 3
+                bit.bxor(1, 3, 4),                  -- 6
+                bit.bor(0x80000000, 1),             -- 2147483649, unsigned
+                bit.band(-1, 0xFF),                 -- 255: -1 is 0xFFFFFFFF
+                bit.bnot(0),                        -- 4294967295
+                bit.lshift(1, 4), bit.rshift(0x4511, 8),
+            }
+            for i = 1, #out do out[i] = tostring(out[i]) end
+            return table.concat(out, ' ')
+        )LUA", "Use"},
+    });
+    CHECK(got == "17681 5 3 6 2147483649 255 4294967295 16 69");
+}
