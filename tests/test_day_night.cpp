@@ -422,3 +422,40 @@ TEST_CASE("A sky body is as hidden as the line or its query says, the more of th
     CHECK(bodyOcclusion(-0.5f, 2.0f) == Catch::Approx(0.0f));
     CHECK(bodyOcclusion(1.5f, -1.0f) == Catch::Approx(1.0f));
 }
+
+// A sun behind a tree's crown, turned onto the screen: hidden from the first
+// answer on, not eased down from "in view"; off screen the last answer stands;
+// coming into view is eased.
+TEST_CASE("A sky body that comes on screen hidden starts hidden", "[day_night]") {
+    using namespace wowee::rendering::daynight;
+    const float rate = 0.12f;  // a frame of the quarter-second ease
+    SkyBodyOcclusion s;
+    // In view on screen.
+    for (int i = 0; i < 30; ++i) stepSkyBodyOcclusion(s, 0.0f, 1.0f, rate);
+    CHECK(s.eased == Catch::Approx(0.0f).margin(1e-3));
+    // Turned away: no answer. Then turned onto it behind a crown: the query
+    // takes two frames to answer, then says hidden.
+    for (int i = 0; i < 20; ++i) stepSkyBodyOcclusion(s, 0.0f, -1.0f, rate);
+    CHECK(s.eased == Catch::Approx(0.0f).margin(1e-3));
+    stepSkyBodyOcclusion(s, 0.0f, 0.0f, rate);
+    CHECK(s.eased == Catch::Approx(1.0f));  // at once, not a twelfth of the way
+    // Turned away again and back: it left hidden, so it is hidden while there
+    // is no answer, and stays so.
+    for (int i = 0; i < 20; ++i) {
+        stepSkyBodyOcclusion(s, 0.0f, -1.0f, rate);
+        CHECK(s.eased == Catch::Approx(1.0f));
+    }
+    // Clear of the crown: eased back into view, not snapped.
+    stepSkyBodyOcclusion(s, 0.0f, 1.0f, rate);
+    CHECK(s.eased > 0.8f);
+    CHECK(s.eased < 1.0f);
+    for (int i = 0; i < 60; ++i) stepSkyBodyOcclusion(s, 0.0f, 1.0f, rate);
+    CHECK(s.eased == Catch::Approx(0.0f).margin(1e-3));
+    // A hill edge the line sees while the body is on screen: eased, both ways.
+    stepSkyBodyOcclusion(s, 1.0f, 1.0f, rate);
+    CHECK(s.eased == Catch::Approx(rate).margin(2e-3));
+    // The line alone, before any answer, hides it too.
+    SkyBodyOcclusion fresh;
+    stepSkyBodyOcclusion(fresh, 1.0f, -1.0f, 1.0f);
+    CHECK(fresh.eased == Catch::Approx(1.0f));
+}

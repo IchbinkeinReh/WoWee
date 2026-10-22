@@ -2777,8 +2777,11 @@ void Renderer::update(float deltaTime) {
             const float hidden = 1.0f - glm::clamp(sunQueryVisibility_, 0.0f, 1.0f);
             if (glareDiag && hidden > sunTarget) why += "; the world over the sun's disc, " + std::to_string(hidden);
         }
-        sunTarget = daynight::bodyOcclusion(sunTarget, sunQueryVisibility_);
-        sunOcclusion_ += (sunTarget - sunOcclusion_) * rate;
+        // The line and the query, the query's last answer standing while the
+        // sun is off screen, and taken at once when it first comes back
+        // hidden (daynight::stepSkyBodyOcclusion).
+        daynight::stepSkyBodyOcclusion(sunOcclusionState_, sunTarget, sunQueryVisibility_, rate);
+        sunOcclusion_ = sunOcclusionState_.eased;
         if (glareDiag && (glareDiagTimer_ -= deltaTime) <= 0.0f) {
             glareDiagTimer_ = 3.0f;
             const bool anyGroup = camera && wmoRenderer &&
@@ -2792,9 +2795,9 @@ void Renderer::update(float deltaTime) {
         }
         // The White Lady the same: the line and her own query, so a tree in
         // front of her puts out her glare as it does the sun's.
-        const float moonTarget =
-            daynight::bodyOcclusion(lp ? sampleSunOcclusion(lp->moonDir) : 1.0f, moonQueryVisibility_);
-        moonOcclusion_ += (moonTarget - moonOcclusion_) * rate;
+        daynight::stepSkyBodyOcclusion(moonOcclusionState_, lp ? sampleSunOcclusion(lp->moonDir) : 1.0f,
+                                       moonQueryVisibility_, rate);
+        moonOcclusion_ = moonOcclusionState_.eased;
     }
 
     auto updateStart = std::chrono::steady_clock::now();

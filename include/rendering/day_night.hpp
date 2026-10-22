@@ -595,4 +595,43 @@ inline float bodyOcclusion(float line, float queryVisibility) {
     return l > 1.0f - v ? l : 1.0f - v;
 }
 
+/// A sky body's occlusion as the glare, the flare, the shafts and the mist
+/// take it, from frame to frame.
+///
+/// The query answers only while the body is on screen, and two frames late;
+/// the answer is eased over a quarter second so a hill edge crossing the
+/// line does not snap the glare on and off. Taken as it was, a sun hidden
+/// behind a tree's crown came on screen as "no answer" - in view - and its
+/// glare flashed up for the frames until the query said otherwise and the
+/// ease brought it down. So:
+///   - with no answer (off screen), the last answer stands: a body that left
+///     the screen hidden comes back hidden;
+///   - the first answer after a gap is taken at once when it hides more than
+///     what stands, rather than eased toward;
+///   - otherwise it is eased toward, either way - coming into view always so.
+struct SkyBodyOcclusion {
+    float eased = 0.0f;       ///< 0 in view .. 1 hidden, what is used
+    float queryHidden = 0.0f; ///< the last answer the query gave
+    bool  known = false;      ///< whether it has given one
+    bool  answered = false;   ///< whether it gave one last frame
+};
+
+/// One frame: the line test's `line` (0 clear .. 1 blocked), the query's
+/// `queryVisibility` (negative: no answer) and the ease's share `rate`.
+inline void stepSkyBodyOcclusion(SkyBodyOcclusion& s, float line, float queryVisibility, float rate) {
+    const bool answer = queryVisibility >= 0.0f;
+    const bool afterGap = answer && !s.answered;
+    if (answer) {
+        s.queryHidden = 1.0f - (queryVisibility > 1.0f ? 1.0f : queryVisibility);
+        s.known = true;
+    }
+    s.answered = answer;
+    const float target = bodyOcclusion(line, s.known ? 1.0f - s.queryHidden : -1.0f);
+    if (afterGap && target > s.eased) {
+        s.eased = target;
+        return;
+    }
+    s.eased += (target - s.eased) * rate;
+}
+
 }  // namespace wowee::rendering::daynight

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/day_night.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "rendering/animation/body_yaw.hpp"
 #include <chrono>
@@ -404,6 +405,9 @@ private:
     /// The same toward the White Lady, for her glare.
     float moonOcclusion_ = 0.0f;
     float moonQueryVisibility_ = -1.0f;
+    /// The two as they are eased and remembered (daynight::stepSkyBodyOcclusion).
+    daynight::SkyBodyOcclusion sunOcclusionState_;
+    daynight::SkyBodyOcclusion moonOcclusionState_;
 
     /// The line toward `dir`, asked of the terrain, the buildings and where
     /// the camera is. The client asks a hardware occlusion query (0x009abe00).
