@@ -355,6 +355,7 @@ struct M2Instance {
     bool floorQueried = false;
     glm::vec3 floorQueryPos{0.0f};
     uint64_t floorGeneration = 0;  ///< the buildings' generation it was asked in
+    double floorQueryAt = -1.0;    ///< refreshGameObjectLights' clock when it was asked
     /// An alpha its owner sets on the whole model - the sky's crossfade
     /// between zones. Below one the instance is drawn in the blended pass
     /// alone, every layer of it, since an opaque layer cannot fade otherwise.
@@ -1374,6 +1375,7 @@ private:
     std::vector<uint32_t> gameObjectInstanceIds_;
     uint64_t lightsPassGeneration_ = ~0ull;  ///< the pass the doodads were last asked against
     size_t lightsCursor_ = 0;                ///< how far the walk of them against it has got
+    double lightsClock_ = 0.0;               ///< seconds, summed from refreshGameObjectLights' steps
     uint32_t lastDrawCallCount = 0;
     size_t modelCacheLimit_ = 6000;
     uint32_t modelLimitRejectWarnings_ = 0;

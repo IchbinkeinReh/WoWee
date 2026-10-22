@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include "rendering/m2_renderer.hpp"
+#include "core/frame_profiler.hpp"
 #include "rendering/m2_renderer_internal.h"
 #include "rendering/m2_model_classifier.hpp"
 #include "rendering/animation/animation_data.hpp"
@@ -161,6 +162,7 @@ void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const Interi
         lightsCursor_ = 0;
     }
     if (lightsCursor_ < instances.size()) {
+        WOWEE_PROFILE_SCOPE("lighting: doodad interior pass", Cpu);
         const size_t end = std::min(instances.size(), lightsCursor_ + instances.size() / 4 + 1);
         for (size_t i = lightsCursor_; i < end; ++i) {
             auto& inst = instances[i];
@@ -175,6 +177,12 @@ void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const Interi
     // world's geometry, and a city has dozens of objects that shift a little
     // every frame.
     int floorBudget = 3;
+    // And not more than four times a second for any one of them. Something
+    // that never stops - a ship at its dock, an elevator, a turning wheel -
+    // took the three every frame: two and a half milliseconds of the main
+    // thread in Orgrimmar, for a light that eases over a second anyway.
+    constexpr double kMovedFloorInterval = 0.25;
+    lightsClock_ += std::max(0.0f, seconds);
     // Once the buildings have changed, every object asks again, a few a
     // frame: one placed before the building it stands in was loaded found no
     // floor and kept the zone's light (and the probes' ambient) indoors - the
@@ -194,12 +202,16 @@ void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const Interi
         inst.interiorPass = inInteriorPass && inInteriorPass(inst.position);
         const glm::vec3 d = inst.position - inst.floorQueryPos;
         const bool moved = glm::dot(d, d) >= 0.25f * 0.25f;
+        // A mover asked a moment ago keeps that floor until its next turn.
+        const bool movedDue = moved && lightsClock_ - inst.floorQueryAt >= kMovedFloorInterval;
         const bool buildingsChanged = inst.floorGeneration != floorGeneration;
-        if (!inst.floorQueried || (moved && floorBudget > 0) || (!moved && buildingsChanged && changedBudget > 0)) {
+        if (!inst.floorQueried || (movedDue && floorBudget > 0) || (!moved && buildingsChanged && changedBudget > 0)) {
             if (inst.floorQueried) --(moved ? floorBudget : changedBudget);
             inst.floorQueried = true;
             inst.floorQueryPos = inst.position;
+            inst.floorQueryAt = lightsClock_;
             inst.floorGeneration = floorGeneration;
+            WOWEE_PROFILE_SCOPE("lighting: game object floor", Cpu);
             inst.floor = floorAt(inst.position, wl::gameObjectFloorStart(inst.position.z, inst.worldBoundsMax.z));
         }
         const auto& floorLight = inst.floor.light;
