@@ -1538,6 +1538,18 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
             break;
         }
     }
+    {
+        std::vector<int16_t> parents(model.bones.size());
+        std::vector<bool> billboard(model.bones.size());
+        bool any = false;
+        for (size_t b = 0; b < model.bones.size(); ++b) {
+            parents[b] = model.bones[b].parentBone;
+            billboard[b] = (model.bones[b].flags & kM2BoneSphericalBillboard) != 0;
+            any = any || billboard[b];
+        }
+        gpuModel.billboardOwner.clear();
+        if (any) gpuModel.billboardOwner = rt_lights::billboardOwners(parents, billboard);
+    }
 
     // Build collision mesh + spatial grid from M2 bounding geometry
     gpuModel.collision.vertices = model.collisionVertices;
@@ -2197,6 +2209,15 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
 namespace wowee {
 namespace rendering {
 
+// Where the traced lighting takes a point of `model` carried by `bone`
+// (rt_lights::steadyBoneCarried): by this frame's pose, but not turned with
+// the camera by a billboard bone above it.
+static glm::mat4 rtSteadyCarried(const M2ModelGPU& model, const M2Instance& inst, uint32_t bone) {
+    const uint32_t owner = bone < model.billboardOwner.size() ? model.billboardOwner[bone] : ~0u;
+    const glm::vec3 pivot = owner < model.bones.size() ? model.bones[owner].pivot : glm::vec3(0.0f);
+    return rt_lights::steadyBoneCarried(inst.modelMatrix, inst.boneMatrices, bone, owner, pivot);
+}
+
 void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
     for (const M2Instance& inst : instances) {
         const M2ModelGPU* model = inst.cachedModel;
@@ -2592,9 +2613,7 @@ void M2Renderer::syncRtScene() {
         inst.rtPieceInstances.resize(model->rtPieces.size(), RtScene::kInvalid);
         for (size_t i = 0; i < model->rtPieces.size(); ++i) {
             const auto& piece = model->rtPieces[i];
-            const glm::mat4 m = piece.bone < inst.boneMatrices.size()
-                                    ? inst.modelMatrix * inst.boneMatrices[piece.bone]
-                                    : inst.modelMatrix;
+            const glm::mat4 m = rtSteadyCarried(*model, inst, piece.bone);
             uint32_t& id = inst.rtPieceInstances[i];
             if (id != RtScene::kInvalid && ownedBy(id, piece.mesh, inst.id)) {
                 rtScene_->setInstanceTransform(id, m);
@@ -2654,7 +2673,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             // A lamp with no light of its own (rt_lights::lampLight).
             // Where the bones hold the glass this frame (a lantern swings).
             rt_lights::PointLight l = rt_lights::lampLight(
-                model->lampLocal, rt_lights::boneCarried(inst.modelMatrix, inst.boneMatrices, model->lampBone));
+                model->lampLocal, rtSteadyCarried(*model, inst, model->lampBone));
             l.color *= fade;
             // A lamp of a WMO interior is in the interior's baked colours
             // already: there it only casts its shadows (PointLight::baked).
@@ -2688,7 +2707,7 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                                                         inst.globalSequenceTime);
                     if (mul.a >= 0.0f) color *= glm::vec3(mul) * mul.a;
                 }
-                const glm::mat4 carried = rt_lights::boneCarried(inst.modelMatrix, inst.boneMatrices, patch.bone);
+                const glm::mat4 carried = rtSteadyCarried(*model, inst, patch.bone);
                 rt_lights::PointLight l = rt_lights::glowLight(glm::vec3(carried * glm::vec4(patch.centre, 1.0f)), color,
                                                                patch.area * scale2, rt_lights::Source::Emissive);
                 // Inside, the glow is in the baked colours as a lamp's is -
@@ -2699,9 +2718,16 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             continue;
         }
         for (const auto& light : model->lights) {
-            auto l = rt_lights::evaluateM2Light(light, inst.currentSequenceIndex, inst.animTime,
-                                                inst.globalSequenceTime, model->globalSequenceDurations,
-                                                inst.modelMatrix, inst.boneMatrices);
+            // On a billboard bone, carried as rtSteadyCarried has it - the
+            // pose given as the model's matrix, with no bones to add to it.
+            const bool turned = light.bone >= 0 && static_cast<size_t>(light.bone) < model->billboardOwner.size() &&
+                                model->billboardOwner[static_cast<size_t>(light.bone)] != ~0u;
+            static const std::vector<glm::mat4> kNoBones;
+            auto l = rt_lights::evaluateM2Light(
+                light, inst.currentSequenceIndex, inst.animTime, inst.globalSequenceTime,
+                model->globalSequenceDurations,
+                turned ? rtSteadyCarried(*model, inst, static_cast<uint32_t>(light.bone)) : inst.modelMatrix,
+                turned ? kNoBones : inst.boneMatrices);
             if (!l) continue;
             l->color *= fade;
             out.push_back(*l);

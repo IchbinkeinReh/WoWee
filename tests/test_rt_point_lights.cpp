@@ -393,3 +393,47 @@ TEST_CASE("A light the ground or a building stops gives nothing at any shadow st
     CHECK(hardShadowVisibility(0.0f) == 0.0f);
     CHECK(shadowedShare(hardShadowVisibility(0.0f), 0.0f) == Catch::Approx(1.0f));
 }
+
+TEST_CASE("A light on a billboard bone stays put however the camera looks", "[rt_point_lights]") {
+    // Bone 1 is a billboard under the root, bone 2 hangs from it, bone 3 is
+    // on its own; a parent loop (4 <-> 5) ends the walk.
+    const std::vector<int16_t> parents = {-1, 0, 1, 0, 5, 4};
+    const std::vector<bool> billboard = {false, true, false, false, false, false};
+    const auto owners = billboardOwners(parents, billboard);
+    REQUIRE(owners.size() == 6);
+    CHECK(owners[0] == ~0u);
+    CHECK(owners[1] == 1u);
+    CHECK(owners[2] == 1u);
+    CHECK(owners[3] == ~0u);
+    CHECK(owners[4] == ~0u);
+    CHECK(owners[5] == ~0u);
+
+    // The billboard turned two ways, as from two cameras, about its pivot,
+    // after its animation moved it half a yard up.
+    const glm::vec3 pivot(1.0f, 0.0f, 2.0f);
+    const glm::vec3 local(1.3f, 0.0f, 2.0f);  // the glow, 0.3 yards in front of the pivot
+    const glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(100.0f, 50.0f, 0.0f));
+    auto posed = [&](float turn) {
+        std::vector<glm::mat4> bones(3, glm::mat4(1.0f));
+        glm::mat4 b = glm::translate(glm::mat4(1.0f), pivot + glm::vec3(0.0f, 0.0f, 0.5f));
+        b = glm::rotate(b, turn, glm::vec3(0.0f, 0.0f, 1.0f));
+        bones[1] = glm::translate(b, -pivot);
+        bones[2] = bones[1];
+        return bones;
+    };
+    const auto a = posed(0.0f), b = posed(2.0f);
+    // Carried as drawn, the light goes round with the card.
+    const glm::vec3 drawnA = glm::vec3(boneCarried(model, a, 2) * glm::vec4(local, 1.0f));
+    const glm::vec3 drawnB = glm::vec3(boneCarried(model, b, 2) * glm::vec4(local, 1.0f));
+    CHECK(glm::length(drawnA - drawnB) > 0.3f);
+    // Carried steadily, it is where the animation took it, from either view.
+    const glm::vec3 steadyA = glm::vec3(steadyBoneCarried(model, a, 2, owners[2], pivot) * glm::vec4(local, 1.0f));
+    const glm::vec3 steadyB = glm::vec3(steadyBoneCarried(model, b, 2, owners[2], pivot) * glm::vec4(local, 1.0f));
+    CHECK(glm::length(steadyA - steadyB) < 1e-5f);
+    CHECK(steadyA.x == Catch::Approx(101.3f));
+    CHECK(steadyA.y == Catch::Approx(50.0f));
+    CHECK(steadyA.z == Catch::Approx(2.5f));
+    // Without a billboard above it, as boneCarried.
+    const glm::vec3 plain = glm::vec3(steadyBoneCarried(model, a, 2, ~0u, pivot) * glm::vec4(local, 1.0f));
+    CHECK(glm::length(plain - drawnA) < 1e-5f);
+}

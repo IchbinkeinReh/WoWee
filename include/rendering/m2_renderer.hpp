@@ -192,6 +192,9 @@ struct M2ModelGPU {
 
     // Skeletal animation data (kept from M2Model for bone computation)
     std::vector<pipeline::M2Bone> bones;
+    /// Per bone, the billboard bone that turns it toward the camera, ~0u for
+    /// none (rt_lights::billboardOwners); empty where the model has none.
+    std::vector<uint32_t> billboardOwner;
     /// The model's attachment points, to hang another model on (0x00831630).
     std::vector<pipeline::M2Attachment> attachments;
     std::vector<uint16_t> attachmentLookup;

@@ -333,6 +333,47 @@ inline glm::mat4 boneCarried(const glm::mat4& modelMatrix, const std::vector<glm
     return bone < bones.size() ? modelMatrix * bones[bone] : modelMatrix;
 }
 
+/// For each bone, the bone that turns what it carries toward the camera:
+/// itself where it is a spherical billboard (`billboard[b]`), else the
+/// nearest of its parents that is (`parents[b]`, below 0 for a root); ~0u
+/// where none is. A cycle in a broken file ends the walk.
+inline std::vector<uint32_t> billboardOwners(const std::vector<int16_t>& parents, const std::vector<bool>& billboard) {
+    std::vector<uint32_t> owners(parents.size(), ~0u);
+    for (size_t b = 0; b < parents.size(); ++b) {
+        size_t at = b;
+        for (size_t hops = 0; hops <= parents.size(); ++hops) {
+            if (at < billboard.size() && billboard[at]) {
+                owners[b] = static_cast<uint32_t>(at);
+                break;
+            }
+            if (parents[at] < 0 || static_cast<size_t>(parents[at]) >= parents.size()) break;
+            at = static_cast<size_t>(parents[at]);
+        }
+    }
+    return owners;
+}
+
+/// boneCarried for what the traced lighting places - a light, a piece of a
+/// model that casts - the same from wherever the camera looks at it. A
+/// billboard bone (`billboard`, from billboardOwners; ~0u for none) turns
+/// its card to face the camera about its `pivot` every frame, and a light
+/// at the card or a piece hanging from it went round with the camera: a
+/// Hallow's End skull lantern's glow, a few tenths of a yard off its pivot,
+/// swung its light about the beam it hangs from, and the beam's shadow
+/// turned across the ground as the camera moved. Such a point is carried
+/// to where the bones take the pivot - which the turn leaves in place -
+/// and keeps its authored offset from it, turned only by the model.
+inline glm::mat4 steadyBoneCarried(const glm::mat4& modelMatrix, const std::vector<glm::mat4>& bones, uint32_t bone,
+                                   uint32_t billboard, const glm::vec3& pivot) {
+    if (billboard < bones.size()) {
+        const glm::vec3 at = glm::vec3(bones[billboard] * glm::vec4(pivot, 1.0f));
+        glm::mat4 shift(1.0f);
+        shift[3] = glm::vec4(at - pivot, 1.0f);
+        return modelMatrix * shift;
+    }
+    return boneCarried(modelMatrix, bones, bone);
+}
+
 /// A WMO's omni light (MOLT type 0) placed by its instance. Spot,
 /// directional and ambient lights are only the baked lighting's.
 inline std::optional<PointLight> placeWmoLight(const glm::vec3& localPosition, const glm::vec3& color,
