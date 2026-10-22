@@ -2548,6 +2548,25 @@ void pushItemRequirements(lua_State* L, game::GameHandler* gh, const game::ItemQ
 
 // _GetItemTooltipData(itemId) → table with armor, bind, stats, damage, description
 // Returns a Lua table with detailed item info for tooltip building
+// _WoweeContainerItemInstance(bag, slot) - what one held item is beside its
+// template, for the item tooltip (_WoweePopulateItemTooltip's `inst`): its
+// soulbound flag and durability. nil for an empty slot.
+static int lua_WoweeContainerItemInstance(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const int bag = static_cast<int>(luaL_optnumber(L, 1, -1));
+    const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
+    const game::ItemSlot* s = gh ? containerItemSlot(gh->getInventory(), bag, slot) : nullptr;
+    if (!s || s->empty()) { lua_pushnil(L); return 1; }
+    lua_newtable(L);
+    lua_pushboolean(L, s->item.soulbound ? 1 : 0);
+    lua_setfield(L, -2, "soulbound");
+    lua_pushnumber(L, static_cast<lua_Number>(s->item.curDurability));
+    lua_setfield(L, -2, "durability");
+    lua_pushnumber(L, static_cast<lua_Number>(s->item.maxDurability));
+    lua_setfield(L, -2, "maxDurability");
+    return 1;
+}
+
 static int lua_GetItemTooltipData(lua_State* L) {
     auto* gh = getGameHandler(L);
     uint32_t itemId = static_cast<uint32_t>(luaL_checknumber(L, 1));
@@ -4035,6 +4054,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"IsDressableItem",   lua_IsDressableItem},
                 {"GetItemQualityColor", lua_GetItemQualityColor},
                 {"_GetItemTooltipData", lua_GetItemTooltipData},
+                {"_WoweeContainerItemInstance", lua_WoweeContainerItemInstance},
                 // GetItemSpell(item) → spellName, spellRank
                 //
                 // The "Use:" spell on an item, which is what /use and the chat

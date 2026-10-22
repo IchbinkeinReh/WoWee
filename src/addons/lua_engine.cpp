@@ -2228,7 +2228,7 @@ int lua_Tooltip_SetText(lua_State* L) {
 static bool fillItemTooltipById(wowee::ui::Widget* w, game::GameHandler* gh,
                                 uint32_t itemId);
 static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
-                                uint32_t itemId);
+                                uint32_t itemId, const game::ItemDef* instance = nullptr);
 static void appendRandomSuffix(wowee::ui::Widget* w, game::GameHandler* gh,
                                const game::ItemDef& item);
 static void appendDurabilityLine(wowee::ui::Widget* w, const game::ItemDef& item);
@@ -3254,7 +3254,7 @@ static bool fillItemTooltipById(wowee::ui::Widget* w, game::GameHandler* gh,
 /// isTooltip is set before the call because SetText refuses a frame that is not
 /// one, and the builder opens with SetText.
 static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
-                                uint32_t itemId) {
+                                uint32_t itemId, const game::ItemDef* instance) {
     auto* w = widgetOf(L, 1);
     if (!w || !gh || itemId == 0) return false;
     const int top = lua_gettop(L);
@@ -3264,7 +3264,20 @@ static bool fillItemTooltipById(lua_State* L, game::GameHandler* gh,
         w->tooltipLines.clear();
         lua_pushvalue(L, 1);                                  // self
         lua_pushnumber(L, static_cast<lua_Number>(itemId));
-        if (lua_pcall(L, 2, 1, 0) == 0) {
+        // What this one item is, beside what its template says: whether it
+        // is bound, and its durability (the instance's fields, 0x006277f0).
+        if (instance) {
+            lua_newtable(L);
+            lua_pushboolean(L, instance->soulbound ? 1 : 0);
+            lua_setfield(L, -2, "soulbound");
+            lua_pushnumber(L, static_cast<lua_Number>(instance->curDurability));
+            lua_setfield(L, -2, "durability");
+            lua_pushnumber(L, static_cast<lua_Number>(instance->maxDurability));
+            lua_setfield(L, -2, "maxDurability");
+        } else {
+            lua_pushnil(L);
+        }
+        if (lua_pcall(L, 3, 1, 0) == 0) {
             const bool ok = lua_toboolean(L, -1) != 0;
             lua_settop(L, top);
             if (ok) { w->shown = true; fireTooltipSetItem(L); return true; }
@@ -3522,20 +3535,18 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     // floor: the slot knows the name and quality even for an entry no
     // GetItemInfo has arrived for, and answering nothing there would be worse
     // than answering briefly.
-    if (!fillItemTooltipById(L, gh, s.item.itemId)) {
+    if (!fillItemTooltipById(L, gh, s.item.itemId, &s.item)) {
         fillItemTooltip(w, s.item, gh);
         noteTooltipItem(L, s.item.itemId);
         fireTooltipSetItem(L);
+        // Durability lives on the instance. The Lua builder puts it in its
+        // place, before the requirements; this short fallback ends with it.
+        appendDurabilityLine(w, s.item);
     } else {
         // Only on the by-id path. fillItemTooltip builds from the instance and
         // has named the suffix itself.
         appendRandomSuffix(w, gh, s.item);
     }
-    // Durability lives on the instance, same as the suffix above - the
-    // paperdoll's own icon tint already reads it correctly, but the tooltip
-    // never carried it, so hovering an equipped item said nothing a bag
-    // item's own ImGui tooltip already says.
-    appendDurabilityLine(w, s.item);
     // Equipment only: the guid list behind it is one per equipped slot, and a
     // bank slot's id would read off the end of it.
     if (slot <= static_cast<int>(game::EquipSlot::NUM_SLOTS)) {
@@ -3644,10 +3655,11 @@ int lua_Tooltip_SetBagItem(lua_State* L) {
     // floor: the slot knows the name and quality even for an entry no
     // GetItemInfo has arrived for, and answering nothing there would be worse
     // than answering briefly.
-    if (!fillItemTooltipById(L, gh, s.item.itemId)) {
+    if (!fillItemTooltipById(L, gh, s.item.itemId, &s.item)) {
         fillItemTooltip(w, s.item, gh);
         noteTooltipItem(L, s.item.itemId);
         fireTooltipSetItem(L);
+        appendDurabilityLine(w, s.item);
     }
     lua_pushboolean(L, 1);
     return 1;
@@ -8687,7 +8699,9 @@ void LuaEngine::registerCoreAPI() {
         // text; the quest it starts; the sell price. Every phrase is the
         // interface's GlobalStrings one, so a German client reads German; the
         // stat and requirement lines come worded from _GetItemTooltipData.
-        "function _WoweePopulateItemTooltip(self, itemId)\n"
+        // `inst`, when the tooltip is of one item held: its soulbound flag
+        // and durability, which the template does not carry.
+        "function _WoweePopulateItemTooltip(self, itemId, inst)\n"
         "    local name, itemLink, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture, sellPrice = GetItemInfo(itemId)\n"
         "    if not name then return false end\n"
         "    local qColors = {[0]={0.62,0.62,0.62},[1]={1,1,1},[2]={0.12,1,0},[3]={0,0.44,0.87},[4]={0.64,0.21,0.93},[5]={1,0.5,0},[6]={0.9,0.8,0.5},[7]={0,0.8,1}}\n"
@@ -8700,7 +8714,11 @@ void LuaEngine::registerCoreAPI() {
         "    local data = _GetItemTooltipData(itemId)\n"
         "    if data then\n"
         "        if data.isHeroic then self:AddLine(ITEM_HEROIC or 'Heroic', 0, 1, 0) end\n"
+        // A bound item says so, whatever its template's binding: the line
+        // is ITEM_SOULBOUND in its place (0x006277f0 tests the instance's
+        // flag 0x1 first). A quest item stays a quest item.
         "        local bind = ({[1]='ITEM_BIND_ON_PICKUP',[2]='ITEM_BIND_ON_EQUIP',[3]='ITEM_BIND_ON_USE',[4]='ITEM_BIND_QUEST'})[data.bindType or 0]\n"
+        "        if inst and inst.soulbound and data.bindType ~= 4 then bind = 'ITEM_SOULBOUND' end\n"
         "        if bind and _G[bind] then self:AddLine(_G[bind], 1, 1, 1) end\n"
         "        if data.isUnique then self:AddLine(ITEM_UNIQUE or 'Unique', 1, 1, 1)\n"
         "        elseif data.isUniqueEquipped then self:AddLine(ITEM_UNIQUE_EQUIPPABLE or 'Unique-Equipped', 1, 1, 1) end\n"
@@ -8748,6 +8766,14 @@ void LuaEngine::registerCoreAPI() {
         "                local key = socketKeys[sock.color] or 'EMPTY_SOCKET_NO_COLOR'\n"
         "                self:AddLine(_G[key] or key, 0.5, 0.5, 0.5)\n"
         "            end\n"
+        "        end\n"
+        // The durability, between what the item is and what it asks for
+        // (0x006277f0): white, red once broken.
+        "        if inst and inst.maxDurability and inst.maxDurability > 0 then\n"
+        "            local cur = inst.durability or 0\n"
+        "            local r, g, b = 1, 1, 1\n"
+        "            if cur == 0 then r, g, b = 1, 0.125, 0.125 end\n"
+        "            self:AddLine(format(DURABILITY_TEMPLATE or 'Durability %d / %d', cur, inst.maxDurability), r, g, b)\n"
         "        end\n"
         "        local function req(text, ok)\n"
         "            if ok == false then self:AddLine(text, 1, 0.125, 0.125)\n"
@@ -8824,7 +8850,7 @@ void LuaEngine::registerCoreAPI() {
         "    if not link then return end\n"
         "    local id = link:match('item:(%d+)')\n"
         "    if not id then return end\n"
-        "    _WoweePopulateItemTooltip(self, tonumber(id))\n"
+        "    _WoweePopulateItemTooltip(self, tonumber(id), _WoweeContainerItemInstance(bag, slot))\n"
         "    self:_WoweeAppendItemEnchants(bag, slot)\n"
         "end\n"
         // The spellbook's tooltip. SpellButton_OnEnter calls this and nothing
