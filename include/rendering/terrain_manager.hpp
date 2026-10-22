@@ -407,7 +407,8 @@ public:
     [[nodiscard]] TileCoord getCurrentTile() const { return currentTile; }
 
     /** Process one ready tile (for loading screens with per-tile progress updates) */
-    void processOneReadyTile();
+    /// The loading screen's: finalizes one ready tile whole; 1 if it did.
+    int processOneReadyTile();
 
     /** Process a bounded batch of ready tiles with async GPU upload (no sync wait) */
     void processReadyTiles();

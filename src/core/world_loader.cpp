@@ -635,9 +635,15 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
             int initialRemaining = terrainMgr->getRemainingTileCount();
             if (initialRemaining < 1) initialRemaining = 1;
             int lastRemaining = initialRemaining;
+            // What the wait costs, said once it is over: how long, and how
+            // much of it the main thread spent finalizing tiles.
+            double finalizeSec = 0.0;
+            int finalizedTiles = 0;
+            int waitFrames = 0;
 
             // Wait until all pending + ready-queue tiles are finalized
             while (terrainMgr->getRemainingTileCount() > 0) {
+                ++waitFrames;
                 // This loop presents its own frames but never reaches showProgress,
                 // so it must beat the watchdog itself or the whole tile stream reads
                 // as a hung main loop.
@@ -665,7 +671,13 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
 
                 // Process ONE tile per iteration so the progress bar updates
                 // smoothly between tiles instead of stalling on large batches.
-                terrainMgr->processOneReadyTile();
+                // (Several a frame in one upload batch was tried and measured:
+                // the frames saved went into a longer upload wait per batch.)
+                {
+                    const auto finStart = std::chrono::steady_clock::now();
+                    finalizedTiles += terrainMgr->processOneReadyTile();
+                    finalizeSec += std::chrono::duration<double>(std::chrono::steady_clock::now() - finStart).count();
+                }
 
                 int remaining = terrainMgr->getRemainingTileCount();
                 int loaded = terrainMgr->getLoadedTileCount();
@@ -719,6 +731,10 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
             }
 
             LOG_INFO("Online terrain streaming complete: ", terrainMgr->getLoadedTileCount(), " tiles loaded");
+            LOG_WARNING("Terrain wait: ",
+                        std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count(),
+                        " s, ", finalizedTiles, " tiles finalized in ", finalizeSec, " s over ", waitFrames,
+                        " loading-screen frames");
 
             // Restore full load radius - remaining tiles stream in-game
             terrainMgr->setLoadRadius(savedLoadRadius);
@@ -747,6 +763,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // Guard against re-entrant calls. The worldEntryCallback defers new
     // entries while this flag is set; we process them at the end.
     loadingWorld_ = true;
+    const auto entryStart = std::chrono::steady_clock::now();
     pendingWorldEntry_.reset();
 
     // --- Loading screen for online mode ---
@@ -1362,6 +1379,8 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // waited for its end starts and the old world's does not.
     if (auto* ac = renderer_->getAudioCoordinator()) ac->leaveWorld();
     loadingScreen.shutdown();
+    LOG_WARNING("World entry: map ", mapId, " loaded in ",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - entryStart).count(), " s");
     // It is the one loading screen: a difficulty change's ends here too.
     app_.difficultyLoadingScreen_.reset();
 

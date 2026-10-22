@@ -1717,7 +1717,7 @@ void TerrainManager::processPendingUnloads() {
     }
 }
 
-void TerrainManager::processOneReadyTile() {
+int TerrainManager::processOneReadyTile() {
     // Move ready tiles into finalizing deque
     {
         std::lock_guard<std::mutex> lock(queueMutex);
@@ -1748,7 +1748,9 @@ void TerrainManager::processOneReadyTile() {
         finalizingTiles_.pop_front();
 
         if (vkCtx) vkCtx->endUploadBatchSync();  // Sync - load screen needs data ready
+        return 1;
     }
+    return 0;
 }
 
 std::shared_ptr<PendingTile> TerrainManager::getCachedTile(const TileCoord& coord) {
