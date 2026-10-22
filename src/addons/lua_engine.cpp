@@ -21,6 +21,7 @@
 // The clipboard, for paste and copy in an edit box.
 #include <SDL3/SDL.h>
 #include "addons/lua_api_helpers.hpp"
+#include "addons/addon_lua_snippets.hpp"
 #include "game/chat_channels.hpp"
 #include "game/interface_text.hpp"
 #include "game/item_stat_text.hpp"
@@ -9337,15 +9338,9 @@ void LuaEngine::registerCoreAPI() {
         "strjoin = function(delim, ...)\n"
         "    return table.concat({...}, delim)\n"
         "end\n"
-        // Bit operations (WoW provides these; Lua 5.1 doesn't have native bit ops)
-        "bit = bit or {}\n"
-        "bit.band = bit.band or function(a, b) local r,m=0,1 for i=0,31 do if a%2==1 and b%2==1 then r=r+m end a=math.floor(a/2) b=math.floor(b/2) m=m*2 end return r end\n"
-        "bit.bor = bit.bor or function(a, b) local r,m=0,1 for i=0,31 do if a%2==1 or b%2==1 then r=r+m end a=math.floor(a/2) b=math.floor(b/2) m=m*2 end return r end\n"
-        "bit.bxor = bit.bxor or function(a, b) local r,m=0,1 for i=0,31 do if (a%2==1)~=(b%2==1) then r=r+m end a=math.floor(a/2) b=math.floor(b/2) m=m*2 end return r end\n"
-        "bit.bnot = bit.bnot or function(a) return 4294967295 - a end\n"
-        "bit.lshift = bit.lshift or function(a, n) return a * (2^n) end\n"
-        "bit.rshift = bit.rshift or function(a, n) return math.floor(a / (2^n)) end\n"
     );
+    // Bit operations (WoW provides these; Lua 5.1 doesn't): kBitLibLua.
+    executeString(kBitLibLua);
 }
 
 // ---- Event System ----
