@@ -1677,11 +1677,20 @@ void Renderer::beginFrame() {
     // After the ablation's clock, so the time spent minimised is not counted
     // against the first frame drawn afterwards.
 #ifdef WOWEE_VR
-    // Off in the headset: the ray traced lighting (its cost twice over), the
-    // upscalers (their history would be the other eye's) and the sun shafts
-    // (a screen-space effect that lands in a different place in each eye).
+    // Off in the headset: the upscalers (their history would be the other
+    // eye's, at a jitter it was not rendered with) and the sun shafts (a
+    // screen-space effect that lands in a different place in each eye).
+    //
+    // The ray traced lighting stays as the player set it. Each eye is a whole
+    // frame of its own, so its G-buffer, depth, trace and apply are that
+    // eye's, with that eye's matrices. Its temporal history is the other
+    // slot's - the other eye's, one frame earlier - and it is reprojected
+    // through that eye's own view-projection (prevViewProj_), which is
+    // exactly the reuse a camera moving by the distance between the eyes
+    // would get. The eyes alternate slots strictly in the world (two frames
+    // to each headset frame), so the history is always the frame right
+    // before, as RtLighting requires.
     sunShaftsEnabled_ = false;
-    if (rtRequestedMode_ != 0) setRtLightingMode(0);
     // The minimap's display pipeline, built for the panel's pass, once for
     // each minimap there is (one is made with each world's renderers).
     if (minimap && gVrMinimapBuiltFor != minimap.get() && vkCtx->getOverlayRenderPass() != VK_NULL_HANDLE) {
