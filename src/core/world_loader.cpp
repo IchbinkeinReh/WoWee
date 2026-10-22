@@ -1362,10 +1362,11 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         }
     }
 
-    // Start intro pan right before entering gameplay so it's visible after loading.
-    if (renderer_->getCameraController()) {
-        renderer_->getCameraController()->startIntroPan(2.8f, 140.0f);
-    }
+    // No pan around the player on the way in: the client enters the world with
+    // the camera behind the character, where it stays until the player moves
+    // it. A 140-degree orbit over three seconds here turned the camera around
+    // the player on every login and loading screen, holding the movement keys
+    // while it did.
 
     showProgress("Entering world...", 1.0f);
 
