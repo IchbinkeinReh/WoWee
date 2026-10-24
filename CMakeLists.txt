@@ -1629,6 +1629,13 @@ endif()
 # Release build optimizations
 include(CheckIPOSupported)
 check_ipo_supported(RESULT _ipo_supported OUTPUT _ipo_error)
+# GCC's LTO objects carry GIMPLE that only GNU ld (or gold) can read through
+# GCC's linker plugin; LLD links them as empty, so main is lost and the link
+# fails on WinMain. With GCC and -fuse-ld=lld, LTO stays off.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_EXE_LINKER_FLAGS MATCHES "-fuse-ld=lld")
+    set(_ipo_supported FALSE)
+    message(STATUS "LTO: off (GCC with LLD cannot link GCC's LTO objects)")
+endif()
 if(_ipo_supported)
     set_property(TARGET wowee PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
 endif()
