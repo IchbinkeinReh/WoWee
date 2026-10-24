@@ -137,6 +137,10 @@ public:
     // Render bounds lookup (for click targeting / selection) - delegates to EntitySpawner
     bool getRenderBoundsForGuid(uint64_t guid, glm::vec3& outCenter, float& outRadius) const;
     [[nodiscard]] bool gameObjectDrawsNothing(uint64_t guid) const;
+    /// Where a world ray first meets the triangles a unit's model draws
+    /// (CharacterRenderer::rayHitInstance); none for a unit without one.
+    [[nodiscard]] std::optional<float> rayHitUnit(uint64_t guid, const glm::vec3& origin,
+                                                  const glm::vec3& direction, float maxDistance) const;
     /// The game object highlight on the mouseover (0x0051f790 calls
     /// 0x00743c70 on the new mouseover, 0x00743bc0 on the old). Guid 0, or
     /// anything not a game object, takes it off whatever had it.

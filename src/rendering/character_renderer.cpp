@@ -42,6 +42,7 @@
 #include "core/env_flag.hpp"
 #include "core/geoset_rules.hpp"
 #include "core/logger.hpp"
+#include "rendering/ray_mesh.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
@@ -5929,6 +5930,30 @@ bool CharacterRenderer::getInstanceBounds(uint32_t instanceId, glm::vec3& outCen
     outCenter = inst.position + glm::vec3(rotation * glm::vec4(localCenter * scale, 0.0f));
     outRadius = std::max(0.5f, radius * scale);
     return true;
+}
+
+std::optional<float> CharacterRenderer::rayHitInstance(uint32_t instanceId, const glm::vec3& origin,
+                                                       const glm::vec3& direction, float maxDistance) const {
+    auto it = instances.find(instanceId);
+    if (it == instances.end() || !it->second.visible) return std::nullopt;
+    auto mIt = models.find(it->second.modelId);
+    if (mIt == models.end()) return std::nullopt;
+    const auto& inst = it->second;
+    const auto& data = mIt->second.data;
+    // The batches it draws: its active geosets, or all of them where the
+    // filter would leave none (as the draw does).
+    std::vector<std::pair<uint32_t, uint32_t>> ranges;
+    for (const auto& batch : data.batches) {
+        if (!inst.activeGeosets.empty() && !inst.activeGeosets.count(batch.submeshId)) continue;
+        ranges.emplace_back(batch.indexStart, batch.indexCount);
+    }
+    if (ranges.empty()) {
+        for (const auto& batch : data.batches) ranges.emplace_back(batch.indexStart, batch.indexCount);
+    }
+    if (ranges.empty()) ranges.emplace_back(0u, static_cast<uint32_t>(data.indices.size()));
+    const glm::mat4 model = inst.hasOverrideModelMatrix ? inst.overrideModelMatrix : getModelMatrix(inst);
+    return ray_mesh::rayHitSkinned(data.vertices, data.indices, ranges, inst.boneMatrices, model, origin,
+                                   direction, maxDistance);
 }
 
 bool CharacterRenderer::getInstanceKeyBonePivotZ(uint32_t instanceId, int32_t keyBoneId,

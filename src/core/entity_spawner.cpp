@@ -1895,6 +1895,15 @@ bool EntitySpawner::gameObjectDrawsNothing(uint64_t guid) const {
     return m2 && m2->instanceDrawsNothing(goIt->second.instanceId);
 }
 
+std::optional<float> EntitySpawner::rayHitUnit(uint64_t guid, const glm::vec3& origin,
+                                              const glm::vec3& direction, float maxDistance) const {
+    const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
+    if (!characters) return std::nullopt;
+    const uint32_t instanceId = characterInstanceIdForGuid(guid);
+    if (instanceId == 0) return std::nullopt;
+    return characters->rayHitInstance(instanceId, origin, direction, maxDistance);
+}
+
 bool EntitySpawner::getRenderPositionForGuid(uint64_t guid, glm::vec3& outPos) const {
     const auto* characters = renderer_ ? renderer_->queryCharacterRenderer() : nullptr;
     if (!characters) return false;

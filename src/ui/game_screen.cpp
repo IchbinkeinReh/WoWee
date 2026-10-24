@@ -62,7 +62,9 @@
 #include <cmath>
 #include <cstring>
 #include <sstream>
+#include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <filesystem>
 #include <fstream>
 #include <cctype>
@@ -2086,6 +2088,15 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             glm::vec2 mousePos = input.getMousePosition();
             float screenW = static_cast<float>(window->getWidth());
             float screenH = static_cast<float>(window->getHeight());
+            // WOWEE_PICK_AT=x,y (fractions of the window): the pointer held
+            // there for the hover pick, to test what it finds without a mouse.
+            static const std::optional<glm::vec2> pickAt = []() -> std::optional<glm::vec2> {
+                const char* v = std::getenv("WOWEE_PICK_AT");
+                float x = 0.0f, y = 0.0f;
+                if (v && std::sscanf(v, "%f,%f", &x, &y) == 2) return glm::vec2(x, y);
+                return std::nullopt;
+            }();
+            if (pickAt) mousePos = *pickAt * glm::vec2(screenW, screenH);
             rendering::Ray ray = camera->screenToWorldRay(mousePos.x, mousePos.y, screenW, screenH);
             // The same picker the click uses, so the cursor affordance cannot
             // disagree with what clicking would actually select - including the

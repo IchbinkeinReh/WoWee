@@ -387,6 +387,12 @@ public:
     bool getAnimationSequences(uint32_t instanceId, std::vector<pipeline::M2Sequence>& out) const;
     bool getInstanceModelName(uint32_t instanceId, std::string& modelName) const;
     bool getInstanceBounds(uint32_t instanceId, glm::vec3& outCenter, float& outRadius) const;
+    /// Where a world ray (`direction` unit length) first meets the triangles
+    /// the instance draws - its active geosets, in the pose it was last
+    /// drawn in - no farther than `maxDistance`; none if it misses them
+    /// (rendering::ray_mesh, as the client's first pick pass, 0x0081df10).
+    [[nodiscard]] std::optional<float> rayHitInstance(uint32_t instanceId, const glm::vec3& origin,
+                                                      const glm::vec3& direction, float maxDistance) const;
 
     /// How tall this character stands, from its feet to the top of its head,
     /// with its scale applied. The model origin is at the feet.

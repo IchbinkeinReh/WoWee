@@ -5,10 +5,13 @@
 #include "game/game_handler.hpp"
 #include "game/entity.hpp"
 #include "rendering/camera.hpp"
+#include "rendering/ray_mesh.hpp"
 #include "rendering/renderer.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include <vector>
 
 namespace wowee {
 namespace ui {
@@ -80,6 +83,15 @@ ScenePick pickScene(game::GameHandler& gameHandler,
         worldTracedTo = t;
         return worldT < 1e29f && t > worldT + kOcclusionSlack;
     };
+
+    // The living units whose spheres the ray meets, for the triangle test
+    // below when there is more than one.
+    struct UnitCandidate {
+        uint64_t guid;
+        float centerT;
+        float sphereT;  // no body of it nearer along the ray than this
+    };
+    std::vector<UnitCandidate> livingHits;
 
     for (const auto& [guid, entity] : gameHandler.getEntityManager().getEntities()) {
         if (!entity) continue;
@@ -169,6 +181,9 @@ ScenePick pickScene(game::GameHandler& gameHandler,
                     pick.livingUnitCenterT = centerT;
                     pick.livingUnitGuid = guid;
                 }
+                // No nearer than its centre less its radius along the ray,
+                // even from inside it.
+                livingHits.push_back({guid, centerT, std::max(centerT - hitRadius, 0.0f)});
             }
         } else if (type == game::ObjectType::GAMEOBJECT) {
             // What the real client lets the pointer rest on, and of that what
@@ -230,6 +245,32 @@ ScenePick pickScene(game::GameHandler& gameHandler,
         }
 
         if (onHit) onHit(guid, entity, hitT, centerT);
+    }
+
+    // Units standing in one another - two NPCs on one spot, a crowd at a
+    // trainer - all answer the sphere test, and the one whose centre is
+    // nearest won wherever the pointer was on them. The client takes the
+    // model whose triangles the ray meets first (0x004f9550, 0x0081df10's
+    // first pass): the body in front at the pointer, so pointing at what
+    // shows of the one behind picks it. The spheres decide only where the ray
+    // meets no unit's triangles, as their forgiving margin is for.
+    // Nearest sphere first: one whose sphere the ray enters only past a body
+    // already met cannot be in front of it, and is not skinned at all.
+    if (livingHits.size() > 1) {
+        std::sort(livingHits.begin(), livingHits.end(),
+                  [](const UnitCandidate& a, const UnitCandidate& b) { return a.sphereT < b.sphereT; });
+        std::vector<std::optional<float>> precise(livingHits.size());
+        auto& app = core::Application::getInstance();
+        float front = 1e30f;
+        for (size_t i = 0; i < livingHits.size(); ++i) {
+            if (livingHits[i].sphereT > front) break;
+            precise[i] = app.rayHitUnit(livingHits[i].guid, ray.origin, ray.direction, front);
+            if (precise[i]) front = *precise[i];
+        }
+        if (const auto best = rendering::ray_mesh::nearestPrecise(precise)) {
+            pick.livingUnitGuid = livingHits[*best].guid;
+            pick.livingUnitCenterT = livingHits[*best].centerT;
+        }
     }
 
     return pick;

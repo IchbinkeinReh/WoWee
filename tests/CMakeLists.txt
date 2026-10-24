@@ -1707,6 +1707,11 @@ wowee_add_test(test_npc_flags SOURCES test_npc_flags.cpp)
 # vendor cursor was asking the wrong one.
 wowee_add_test(test_scene_pick SOURCES test_scene_pick.cpp)
 
+# ── test_ray_mesh ────────────────────────────────────────────
+# Header-only: a pick ray against a skinned model's triangles, and which of
+# two units standing in one another is in front at the pointer.
+wowee_add_test(test_ray_mesh SOURCES test_ray_mesh.cpp)
+
 # ── test_plural_escape ───────────────────────────────────────
 # WoW's |4singular:plural; escape, which nothing resolved - so the logout
 # prompt read "5 |4Second:Seconds; until logout" and seventy-four other

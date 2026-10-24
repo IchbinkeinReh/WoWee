@@ -7208,6 +7208,12 @@ bool Application::gameObjectDrawsNothing(uint64_t guid) const {
     return entitySpawner_ && entitySpawner_->gameObjectDrawsNothing(guid);
 }
 
+std::optional<float> Application::rayHitUnit(uint64_t guid, const glm::vec3& origin, const glm::vec3& direction,
+                                             float maxDistance) const {
+    if (!entitySpawner_) return std::nullopt;
+    return entitySpawner_->rayHitUnit(guid, origin, direction, maxDistance);
+}
+
 void Application::setHighlightedGameObject(uint64_t guid) {
     if (!renderer) return;
     // Resolved every frame: the object's model can arrive, or be replaced,

@@ -172,6 +172,10 @@ public:
     /// A game object whose model is loaded and draws nothing (M2Renderer::
     /// instanceDrawsNothing). False while there is no model yet.
     [[nodiscard]] bool gameObjectDrawsNothing(uint64_t guid) const;
+    /// Where a world ray first meets the triangles a unit's model draws
+    /// (CharacterRenderer::rayHitInstance); none for a unit without one.
+    [[nodiscard]] std::optional<float> rayHitUnit(uint64_t guid, const glm::vec3& origin,
+                                                  const glm::vec3& direction, float maxDistance) const;
     uint32_t characterInstanceIdForGuid(uint64_t guid) const;
     /// Where the client puts a unit's name (0x0071fef0): its model's
     /// PlayerNameMounted attachment while it rides (the mount's model),
