@@ -388,6 +388,7 @@
     "PreventionType": 214,
     "MinFactionId": 219,
     "MinReputation": 220,
+    "RequiredAuraVision": 221,
     "AreaGroupId": 224,
     "EquippedItemClass": 68,
     "EquippedItemSubClassMask": 69,

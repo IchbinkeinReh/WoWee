@@ -3130,7 +3130,11 @@ void Application::connectWorldHooks() {
                 info.castTimeMs = gameHandler->getSpellData(spellId).castTimeMs;
                 info.targetKind = gameHandler->getSpellTargetKind(spellId);
                 info.mounts = gameHandler->spellAppliesMountedAura(spellId);
+                info.requiredVision = gameHandler->spellRequiredVision(spellId);
                 return info;
+            });
+            svs->setPlayerVisionResolver([this]() -> uint32_t {
+                return gameHandler ? gameHandler->playerAuraVision() : 0u;
             });
             // A kit's animation on the unit it is played on (0x0073b140), the
             // player's as any unit's.

@@ -1347,6 +1347,15 @@ void SpellVisualSystem::hideAuraKit(AuraKit& aura) {
 
 void SpellVisualSystem::setUnitAuraSlot(uint64_t unitGuid, uint32_t slot, uint32_t spellId, uint64_t casterGuid) {
     if (unitGuid == 0) return;
+    // 0x00724820: an aura asking for an aura vision the player lacks - a
+    // detection of stealth or invisibility, a spell's RequiredAuraVision -
+    // is not taken into the unit's slot at all, and shows nothing
+    // (game::aura_vision): the eye over Silvermoon's Arcane Guardians.
+    if (spellId != 0 && kitSpellResolver_) {
+        const uint32_t required = kitSpellResolver_(spellId).requiredVision;
+        const uint32_t vision = playerVisionResolver_ ? playerVisionResolver_() : 0u;
+        if (required != 0 && (required & vision) == 0) spellId = 0;
+    }
     auto& slots = unitAuraKits_[unitGuid].slots;
     auto it = slots.find(slot);
     const uint32_t old = it != slots.end() ? it->second : 0;

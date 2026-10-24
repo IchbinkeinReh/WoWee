@@ -363,9 +363,16 @@ public:
         uint32_t castTimeMs = 0;
         uint32_t targetKind = 0;  ///< 2 enemies, 1 friends, 0 neither
         bool mounts = false;      ///< an effect applies aura 78, Mounted (0x00724820)
+        /// The aura vision the player needs to see it on a unit
+        /// (game::aura_vision::requiredVision); 0 for none.
+        uint32_t requiredVision = 0;
     };
     using KitSpellResolver = std::function<KitSpellInfo(uint32_t spellId)>;
     void setKitSpellResolver(KitSpellResolver resolver) { kitSpellResolver_ = std::move(resolver); }
+    /// The player's aura vision, PLAYER_FIELD_BYTES2's high byte: which of
+    /// the auras asking for one (KitSpellInfo::requiredVision) it is shown.
+    using PlayerVisionResolver = std::function<uint32_t()>;
+    void setPlayerVisionResolver(PlayerVisionResolver resolver) { playerVisionResolver_ = std::move(resolver); }
     /// The creature cache's type flags (+0x964 +0xc) of the unit an instance
     /// draws; 0 for a player or a unit with no row.
     using UnitTypeFlags = std::function<uint32_t(uint32_t renderInstanceId)>;
@@ -817,6 +824,7 @@ private:
     /// The unit's feet raised three quarters of its height, and its frame.
     bool unitMiddle(uint32_t renderInstanceId, glm::vec3& middle, glm::mat4& frame) const;
     KitSpellResolver kitSpellResolver_;
+    PlayerVisionResolver playerVisionResolver_;
     UnitTypeFlags unitTypeFlags_;
     KitAnimationSink kitAnimationSink_;
     LightTintSink lightTintSink_;

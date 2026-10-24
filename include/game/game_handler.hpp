@@ -4247,6 +4247,10 @@ public:
     /// Whether any of a spell's effects applies aura 78, Mounted
     /// (0x00724820 reads EffectApplyAuraName alone).
     bool spellAppliesMountedAura(uint32_t spellId) const;
+    /// The aura vision a spell's aura on a unit asks of the player, and the
+    /// player's own (PLAYER_FIELD_BYTES2's high byte): game::aura_vision.
+    uint32_t spellRequiredVision(uint32_t spellId) const;
+    uint32_t playerAuraVision() const;
     /// Whether any of a spell's effects applies the given aura (0x007fde50).
     bool spellAppliesAura(uint32_t spellId, uint32_t auraType) const;
     /// Returns the school bitmask for the spell from Spell.dbc
@@ -4939,6 +4943,9 @@ public:
         uint32_t preventionType = 0;
         uint32_t minFactionId = 0;
         uint32_t minReputation = 0;
+        /// Spell.dbc RequiredAuraVision (+0x274): the aura vision a player
+        /// needs to see the aura on a unit (game::aura_vision).
+        uint32_t requiredAuraVision = 0;
         uint32_t areaGroupId = 0;
         int32_t equippedItemClass = -1;
         uint32_t equippedItemSubClassMask = 0;

@@ -20,6 +20,7 @@
 #include "game/movement_handler.hpp"
 #include "game/combat_handler.hpp"
 #include "game/spell_handler.hpp"
+#include "game/aura_vision.hpp"
 #include "game/inventory_handler.hpp"
 #include "game/social_handler.hpp"
 #include "game/quest_handler.hpp"
@@ -4868,6 +4869,22 @@ bool GameHandler::spellAppliesMountedAura(uint32_t spellId) const {
         if (it->second.effectAuraIds[i] == rendering::mount_transition::kAuraMounted) return true;
     }
     return false;
+}
+
+uint32_t GameHandler::spellRequiredVision(uint32_t spellId) const {
+    if (spellId == 0) return 0;
+    loadSpellNameCache();
+    auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return 0;
+    return aura_vision::requiredVision(it->second.requiredAuraVision, it->second.effectAuraIds,
+                                       it->second.effectMiscValues);
+}
+
+uint32_t GameHandler::playerAuraVision() const {
+    const uint16_t i = fieldIndex(UF::PLAYER_FIELD_BYTES2);
+    auto player = getEntityManager().getEntity(getPlayerGuid());
+    if (i == 0xFFFF || !player) return 0;
+    return (player->getField(i) >> 24) & 0xFFu;
 }
 
 bool GameHandler::spellAppliesAura(uint32_t spellId, uint32_t auraType) const {

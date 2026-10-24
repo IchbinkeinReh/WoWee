@@ -1707,6 +1707,11 @@ wowee_add_test(test_npc_flags SOURCES test_npc_flags.cpp)
 # vendor cursor was asking the wrong one.
 wowee_add_test(test_scene_pick SOURCES test_scene_pick.cpp)
 
+# ── test_aura_vision ─────────────────────────────────────────
+# Header-only: which auras on a unit the player is shown, by the aura vision
+# their detection or their spell asks for and the player's.
+wowee_add_test(test_aura_vision SOURCES test_aura_vision.cpp)
+
 # ── test_ray_mesh ────────────────────────────────────────────
 # Header-only: a pick ray against a skinned model's triangles, and which of
 # two units standing in one another is in front at the pointer.

@@ -5082,7 +5082,7 @@ namespace {
 struct CastCheckColumns {
     uint32_t mechanic, stances, stancesNot, casterState, casterStateNot, casterAura, excludeAura, interrupt,
         auraInterrupt, channelInterrupt, powerType, manaCost, perLevel, costPct, baseLevel, maxLevel,
-        castTimeIndex, effectMechanic, trigger, prevention, minFaction, minRep, areaGroup, itemClass,
+        castTimeIndex, effectMechanic, trigger, prevention, minFaction, minRep, auraVision, areaGroup, itemClass,
         itemSubClassMask, runeCost, targetStateNot, targetAura, excludeTargetAura, totem, totemCategory;
 
     template <class Layout>
@@ -5097,6 +5097,7 @@ struct CastCheckColumns {
         baseLevel = named("BaseLevel"), maxLevel = named("MaxLevel"), castTimeIndex = named("CastingTimeIndex");
         effectMechanic = named("EffectMechanic0"), trigger = named("EffectTriggerSpell0");
         prevention = named("PreventionType"), minFaction = named("MinFactionId"), minRep = named("MinReputation");
+        auraVision = named("RequiredAuraVision");
         areaGroup = named("AreaGroupId"), itemClass = named("EquippedItemClass");
         itemSubClassMask = named("EquippedItemSubClassMask"), runeCost = named("RuneCostID");
         targetStateNot = named("TargetAuraStateNot"), targetAura = named("TargetAuraSpell");
@@ -5136,6 +5137,7 @@ struct CastCheckColumns {
         entry.preventionType = u(prevention);
         entry.minFactionId = u(minFaction);
         entry.minReputation = u(minRep);
+        entry.requiredAuraVision = u(auraVision);
         entry.areaGroupId = u(areaGroup);
         if (itemClass < fieldCount) entry.equippedItemClass = n(itemClass);
         entry.equippedItemSubClassMask = u(itemSubClassMask);
