@@ -2401,7 +2401,7 @@ void GameScreen::loadSettings() {
             else if (key == "dbg_interior_unlit") settingsPanel_.pendingDbgInteriorBase = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_interior_full_at") settingsPanel_.pendingDbgInteriorFullAt = std::clamp(std::stoi(val), 5, 300);
             else if (key == "dbg_max_light") settingsPanel_.pendingDbgMaxLight = std::clamp(std::stoi(val), 10, 1000);
-            else if (key == "dbg_light_count_limit") settingsPanel_.pendingDbgLightCountLimit = std::clamp(std::stoi(val), 8, 512);
+            else if (key == "dbg_light_count_limit") settingsPanel_.pendingDbgLightCountLimit = std::clamp(std::stoi(val), 8, 2048);
             else if (key == "dbg_shadow_darkness") settingsPanel_.pendingDbgShadowDarkness = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_traced_sun_shadow") settingsPanel_.pendingDbgTracedSunShadow = std::clamp(std::stoi(val), 0, 100);
             else if (key == "dbg_map_sun_shadow") settingsPanel_.pendingDbgMapSunShadow = std::clamp(std::stoi(val), 0, 100);

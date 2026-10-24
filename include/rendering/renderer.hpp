@@ -753,10 +753,10 @@ public:
         /// Ray traced: the most light the point lights, glows and lava
         /// together add to a place, its brightest channel, the hue kept
         /// (rt_gbuffer.glsli rtCapLight). 0: no limit.
-        float maxLight = 0.0f;
+        float maxLight = 1.0f;  // Debug Lights default 100%
         /// Ray traced: how many point lights a frame keeps at most, the most
         /// important of a crowded view's (rt_lights::lightLimit).
-        int lightCountLimit = 128;  // rt_lights::kDefaultLightLimit
+        int lightCountLimit = 512;  // rt_lights::kDefaultLightLimit
         // Shadows.
         float shadowStrength = 0.65f;   ///< ray traced: how much of the light a shadow takes
         float tracedSunShadow = 1.0f;   ///< ray traced: how much of the traced sun shadows shows

@@ -367,12 +367,13 @@ constexpr SettingDesc kSchema[] = {
      "The most light the traced lights together may add to any one\n"
      "place: every lamp, fire, glow and lava reaching it, summed and\n"
      "held to this, its colour kept. 100 is a full white light's\n"
-     "worth over what is painted there. 1000 is no limit.", "", 1000},
-    {"dbglightcountlimit", "Light count limit", SettingKind::Int, 8, 512, 8, "Debug Lights", "",
+     "worth over what is painted there, the default. 1000 is no\n"
+     "limit.", "", 100},
+    {"dbglightcountlimit", "Light count limit", SettingKind::Int, 8, 2048, 8, "Debug Lights", "",
      "How many point lights the trace keeps at most each frame. Past\n"
      "it a crowded view keeps the most important near the camera, and a\n"
      "light can drop out as the camera moves. More costs trace time.\n"
-     "128 is the default.", "", 128},
+     "512 is the default.", "", 512},
     {"dbgemissivelightintensity", "Glowing surfaces: intensity (%)", SettingKind::Float, 0.001f, 1000, 0.001f, "Debug Glow", "What glows",
      "What glows of models and buildings: lamp glass, glow cards,\n"
      "lava, crystals, glowing batches.\n"

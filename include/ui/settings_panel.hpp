@@ -109,10 +109,10 @@ public:
     int pendingDbgInteriorFullAt = 100;
     /// The most light the traced lights add to a place, % of a full white
     /// light; 1000 no limit (Renderer::LightingTune::maxLight).
-    int pendingDbgMaxLight = 1000;
+    int pendingDbgMaxLight = 100;
     /// How many point lights the trace keeps at most, 8-512
     /// (Renderer::LightingTune::lightCountLimit).
-    int pendingDbgLightCountLimit = 128;
+    int pendingDbgLightCountLimit = 512;
     int pendingDbgShadowDarkness = 65;
     int pendingDbgTracedSunShadow = 100;
     int pendingDbgMapSunShadow = 100;

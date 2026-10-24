@@ -134,8 +134,8 @@ inline float importance(const PointLight& l, const glm::vec3& eye) {
 /// cost of the trace's time, which loops over every kept light per pixel.
 /// The buffer the shader reads holds kMaxLightLimit (RtLighting).
 inline constexpr int kMinLightLimit = 8;
-inline constexpr int kMaxLightLimit = 512;
-inline constexpr int kDefaultLightLimit = 128;
+inline constexpr int kMaxLightLimit = 2048;
+inline constexpr int kDefaultLightLimit = 512;
 inline size_t lightLimit(int requested) {
     return static_cast<size_t>(std::clamp(requested, kMinLightLimit, kMaxLightLimit));
 }
