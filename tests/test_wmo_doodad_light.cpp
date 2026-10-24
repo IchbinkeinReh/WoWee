@@ -358,3 +358,19 @@ TEST_CASE("a WMO material draws texture_1, or the empty name's texture") {
     CHECK(std::string(wowee::pipeline::wmo_doodad_light::kEmptyTextureName) ==
           "createcrappygreentexture.blp");
 }
+
+TEST_CASE("a world object off a floor takes the zone's light as the frame dims it", "[wmo][doodad-light]") {
+    using wowee::pipeline::wmo_doodad_light::drawnObjectLight;
+    const glm::vec3 eased(0.4f, 0.3f, 0.2f);
+    // Outside: the glare and the Debug Graphics strength scale it, as they
+    // scale the zone's ambient and direct light for everything else.
+    const glm::vec3 dimmed = drawnObjectLight(eased, true, 0.65f);
+    CHECK(dimmed.r == Catch::Approx(0.26f));
+    CHECK(dimmed.g == Catch::Approx(0.195f));
+    CHECK(dimmed.b == Catch::Approx(0.13f));
+    CHECK(drawnObjectLight(eased, true, 1.0f) == eased);
+    // A negative scale is none.
+    CHECK(drawnObjectLight(eased, true, -1.0f) == glm::vec3(0.0f));
+    // On an interior floor its baked colour is no light of the zone's.
+    CHECK(drawnObjectLight(eased, false, 0.65f) == eased);
+}

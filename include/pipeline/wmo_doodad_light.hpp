@@ -26,6 +26,7 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <unordered_map>
 #include <optional>
@@ -142,6 +143,18 @@ struct ObjectLight {
     glm::vec3 direct{0.0f};
     float towardSun = 0.0f;
 };
+
+/// The light a world object - a unit, a game object - is drawn with this
+/// frame: what refreshInteriorLights / refreshGameObjectLights eased, and off
+/// any interior floor (`zoneLit`) times the frame's scale on the zone's
+/// light - the sun's glare dimming it (0x007816f0) and the Debug Graphics
+/// strengths - as the doodads, the terrain and the buildings around it take
+/// it. The easing follows the zone's light undimmed, so a glance at the sun
+/// does not have to ease out again; a floor's baked colour is not the
+/// zone's light and keeps its own.
+inline glm::vec3 drawnObjectLight(const glm::vec3& eased, bool zoneLit, float frameScale) {
+    return zoneLit ? eased * std::max(frameScale, 0.0f) : eased;
+}
 
 /// A floor's light with the zone's outdoor light blended in by its alpha
 /// (0x007a0d60, 0x007c1730).

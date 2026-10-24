@@ -5469,7 +5469,8 @@ void CharacterRenderer::clearTextureSlotOverride(uint32_t instanceId, uint16_t t
 
 void CharacterRenderer::refreshInteriorLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
                                               const glm::vec3& zoneAmbient, const glm::vec3& zoneDirect,
-                                              float seconds, uint64_t floorGeneration) {
+                                              float seconds, uint64_t floorGeneration,
+                                              float frameAmbientScale, float frameDirectScale) {
     namespace wl = pipeline::wmo_doodad_light;
     const auto toBytes = [](const glm::vec3& c) {
         return glm::ivec3(glm::round(glm::clamp(c, 0.0f, 1.0f) * 255.0f));
@@ -5527,9 +5528,14 @@ void CharacterRenderer::refreshInteriorLights(const FloorQuery& floorAt, const I
                                                         instance.floor.inBakedShadow && !instance.floor.onWmo);
         instance.directScale = wl::easeDirectScale(instance.directScale, scaleTarget, seconds);
         instance.lightKnown = true;
-        instance.drawAmbient = glm::vec4(glm::vec3(instance.easedAmbient) / 255.0f,
-                                         floorLight ? 2.0f : 1.0f);
-        instance.drawDirect = glm::vec4(light.direct, light.towardSun);
+        // Off a floor the zone's light as the frame dims it, as a game
+        // object's (wl::drawnObjectLight).
+        const bool zoneLit = !floorLight.has_value();
+        instance.drawAmbient = glm::vec4(
+            wl::drawnObjectLight(glm::vec3(instance.easedAmbient) / 255.0f, zoneLit, frameAmbientScale),
+            floorLight ? 2.0f : 1.0f);
+        instance.drawDirect = glm::vec4(wl::drawnObjectLight(light.direct, zoneLit, frameDirectScale),
+                                        light.towardSun);
         instance.drawFlags = glm::vec4(inInteriorPass && inInteriorPass(feet) ? 1.0f : 0.0f,
                                        instance.directScale, 0.0f, 0.0f);
     }

@@ -815,7 +815,8 @@ public:
     /// floor again, a few a frame.
     void refreshGameObjectLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
                                  uint64_t passGeneration, const glm::vec3& zoneAmbient,
-                                 const glm::vec3& zoneDirect, float seconds, uint64_t floorGeneration = 0);
+                                 const glm::vec3& zoneDirect, float seconds, uint64_t floorGeneration = 0,
+                                 float frameAmbientScale = 1.0f, float frameDirectScale = 1.0f);
     void setSkipCollision(uint32_t instanceId, bool skip);
     void clear();
     /** Drop all instances but keep models in GPU memory. Cheap path for the
@@ -1383,6 +1384,9 @@ private:
     uint64_t lightsPassGeneration_ = ~0ull;  ///< the pass the doodads were last asked against
     size_t lightsCursor_ = 0;                ///< how far the walk of them against it has got
     double lightsClock_ = 0.0;               ///< seconds, summed from refreshGameObjectLights' steps
+    /// The frame's scale on the zone's light (wmo_doodad_light::drawnObjectLight).
+    float frameAmbientScale_ = 1.0f;
+    float frameDirectScale_ = 1.0f;
     uint32_t lastDrawCallCount = 0;
     size_t modelCacheLimit_ = 6000;
     uint32_t modelLimitRejectWarnings_ = 0;

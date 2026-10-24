@@ -1068,8 +1068,14 @@ void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) co
     e.flags = (inst.interiorLit ? kInstanceInteriorLit : 0) | (inst.interiorPass ? kInstanceInteriorPass : 0) |
               (inst.worldObjectLit && !inst.interiorLit ? kInstanceWorldObject : 0) |
               (inst.worldObjectLit && inst.interiorLit ? kInstanceFloorLit : 0);
-    e.interiorAmbient = glm::vec4(inst.interiorAmbient, 0.0f);
-    e.interiorDirect = glm::vec4(inst.interiorDirect, inst.interiorTowardSun);
+    // A game object outside takes the zone's light as the frame dims it -
+    // the sun's glare, the Debug Graphics strengths - as the units and the
+    // world around it do (wmo_doodad_light::drawnObjectLight).
+    namespace wl = pipeline::wmo_doodad_light;
+    const bool zoneLit = inst.worldObjectLit && !inst.interiorLit;
+    e.interiorAmbient = glm::vec4(wl::drawnObjectLight(inst.interiorAmbient, zoneLit, frameAmbientScale_), 0.0f);
+    e.interiorDirect = glm::vec4(wl::drawnObjectLight(inst.interiorDirect, zoneLit, frameDirectScale_),
+                                 inst.interiorTowardSun);
 }
 
 void M2Renderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,

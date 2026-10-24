@@ -3061,13 +3061,21 @@ void Renderer::update(float deltaTime) {
                 return state;
             };
             const auto inPass = [&](const glm::vec3& p) { return wmoRenderer->inInteriorPass(p); };
+            // The frame's scale on the zone's light, as updatePerFrameUBO puts
+            // it on ambientColor and lightColor: the sun's glare and the Debug
+            // Graphics strengths. A world object off any floor takes it too
+            // (wmo_doodad_light::drawnObjectLight).
+            const float glare = skySystem ? 1.0f - skySystem->getSunGlareDim() : 1.0f;
+            const float frameAmbient = glare * std::max(lightingTune_.ambient, 0.0f);
+            const float frameDirect = glare * std::max(lightingTune_.sun, 0.0f);
             { WOWEE_PROFILE_SCOPE("lighting: characters", Cpu);
             if (characterRenderer) {
                 characterRenderer->refreshInteriorLights(
                     [&](const glm::vec3& feet) {
                         return objectFloor(feet, feet.z + pipeline::wmo_doodad_light::kUnitFloorAbove, true);
                     },
-                    inPass, zl.ambientColor, zl.diffuseColor, deltaTime, wmoRenderer->instanceGeneration());
+                    inPass, zl.ambientColor, zl.diffuseColor, deltaTime, wmoRenderer->instanceGeneration(),
+                    frameAmbient, frameDirect);
             }
             }
             WOWEE_PROFILE_SCOPE("lighting: game objects", Cpu);
@@ -3075,7 +3083,7 @@ void Renderer::update(float deltaTime) {
                 m2Renderer->refreshGameObjectLights(
                     [&](const glm::vec3& feet, float startZ) { return objectFloor(feet, startZ, false); },
                     inPass, wmoRenderer->interiorPassGeneration(), zl.ambientColor, zl.diffuseColor, deltaTime,
-                    wmoRenderer->instanceGeneration());
+                    wmoRenderer->instanceGeneration(), frameAmbient, frameDirect);
             }
         }
         if (waterRenderer) {

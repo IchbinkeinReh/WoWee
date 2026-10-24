@@ -147,8 +147,11 @@ void M2Renderer::setInstanceInteriorLight(uint32_t instanceId, const glm::vec3& 
 
 void M2Renderer::refreshGameObjectLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
                                          uint64_t passGeneration, const glm::vec3& zoneAmbient,
-                                         const glm::vec3& zoneDirect, float seconds, uint64_t floorGeneration) {
+                                         const glm::vec3& zoneDirect, float seconds, uint64_t floorGeneration,
+                                         float frameAmbientScale, float frameDirectScale) {
     namespace wl = pipeline::wmo_doodad_light;
+    frameAmbientScale_ = frameAmbientScale;
+    frameDirectScale_ = frameDirectScale;
     const auto toBytes = [](const glm::vec3& c) {
         return glm::ivec3(glm::round(glm::clamp(c, 0.0f, 1.0f) * 255.0f));
     };

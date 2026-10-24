@@ -361,7 +361,8 @@ public:
     /// moving or not, in its turn.
     void refreshInteriorLights(const FloorQuery& floorAt, const InteriorPassQuery& inInteriorPass,
                                const glm::vec3& zoneAmbient, const glm::vec3& zoneDirect, float seconds,
-                               uint64_t floorGeneration = 0);
+                               uint64_t floorGeneration = 0, float frameAmbientScale = 1.0f,
+                               float frameDirectScale = 1.0f);
     void removeInstance(uint32_t instanceId);
     bool getAnimationState(uint32_t instanceId, uint32_t& animationId, float& animationTimeMs, float& animationDurationMs) const;
     /// Everything an M2 instance needs to pose its particles as this one is
