@@ -1198,6 +1198,10 @@ private:
     /// colour under it (a its MCSH shadow), interiorDirect.xyz the terrain's
     /// face normal and w the distance it is gone by (groundEffectDist).
     static constexpr int32_t kInstanceDetailDoodad = 8;
+    /// A game object on an interior floor (with kInstanceInteriorLit): lit
+    /// by the floor's colour as a unit on it is, not by a MODD colour
+    /// (model_light.glsli modelBakedLight's byFloor).
+    static constexpr int32_t kInstanceFloorLit = 16;
     void writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) const;
     // How many instances one frame may hand the GPU, not how many exist. Ground
     // clutter is what fills it: it is drawn by the thousand and every tuft

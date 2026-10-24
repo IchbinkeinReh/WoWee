@@ -40,6 +40,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
 #include "rt_lighting.glsli"
 #include "texture_filter.glsli"
 #include "shadow_csm.glsli"
+#include "model_light.glsli"
 
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
 
@@ -411,101 +412,48 @@ void main() {
         // No light: the client draws an unlit batch with its colour as the
         // emissive and nothing else (FUN_0081fb10).
         light = vec3(1.0);
-    } else if (pc.interiorAmbient.w > 1.5) {
-        // On an interior floor: its vertex colour as the ambient and as one
-        // light down from a fixed direction (0xaeedf0, the same in render
-        // space), nothing of the sun's shadow. On a transition face the
-        // direction turns toward the sun's by the floor's alpha (0x007c1730),
-        // the colours having been carried toward the zone's already.
-        const vec3 interiorTravel = vec3(-0.30822, -0.30822, -0.9);
-        vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, pc.interiorDirect.w));
-        float idiff = max(dot(norm, toLight), 0.0);
-        // The ray tracing, where it has a result: the floor's colour is the
-        // building's baked light, its lamps in it already as they reach the
-        // floor, so it is taken as painted (RT_GB_UNIT_FLOOR: neither the
-        // lamps' shadows nor the room's light over it, rt_apply.glsli) and
-        // the other lights - fires, M2 lights - add theirs
-        // (rtPointLightOwn); the occlusion darkens the ambient. Without a
-        // result all of it is as the client has it.
-        RtLight rt = kGbuffer ? rtNeutral() : rtLightBehind(FragPos);
-        // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct).
-        const vec3 ambientLit = rtAmbient(rt, pc.interiorAmbient.rgb);
-        const vec3 floorDirect = idiff * pc.interiorDirect.rgb * pc.diffuseColour.rgb * pc.lightFlags.y;
-        light = clamp(ambientLit + floorDirect, 0.0, 1.0) * rtBakedLight() + rtPointLightOwn(rt);
-        rtSurface.flags = RT_GB_VALID | RT_GB_BAKED | RT_GB_INTERIOR | RT_GB_UNIT_FLOOR;
-        rtSurface.g = clamp(ambientLit + floorDirect, 0.0, 1.0) * rtBakedLight();
-        rtSurfaceOcclusion(rtSurface, ambientLit, floorDirect, vec3(1.0));
-        rtSurface.occY *= rtBakedLight();
-        rtSurface.occE *= rtBakedLight();
-        rtSurface.kp = vec3(1.0);
     } else {
-        vec3 ldir = normalize(-lightDir.xyz);
-        float diff = max(dot(norm, ldir), 0.0);
-
-        // Ambient and diffuse only, as the client lights a model: no
-        // specular term (its 'specular' option is off by default and
-        // reaches only the terrain).
-
-        float shadow = 1.0;
-        if (shadowParams.x > 0.5) {
-            // The interpolated vertex normal, not the normal-mapped one, for
-            // the normal offset: a map's per-texel tilt moves the sample
-            // point about and speckles the result.
-            float nl = dot(vertexNormal, ldir);
-            float bias = max(0.0005 * (1.0 - abs(nl)), 0.00005);
-            // No shadow from the model's own body. With the near cascade at
-            // three or four hundredths of a yard a texel, the normal offset
-            // no longer carries a fragment out of its own limb as the single
-            // 0.29-yard map's did, and a constant bias of about a tenth of a
-            // yard is near an arm's or a shin's thickness: blotches where the
-            // body is a little thicker, none where it is thinner. The client
-            // never self-shadows a model, so the bias is the model's whole
-            // depth along the ray (lightFlags.z yards, cascadeInfo.w a yard in
-            // depth units); only what is farther toward the sun than that -
-            // a roof, a tree, a cliff - shadows a character.
-            bias = max(bias, pc.lightFlags.z * cascadeInfo.w);
-            shadow = csmShadow(uShadowMap, FragPos, vertexNormal, nl, bias);
-            shadow = mix(1.0, shadow, shadowParams.y);
-        }
         // Drawn into the G-buffer with the traced terms neutral; drawn after
         // the trace - see-through, or a blended batch - with what it finds
         // of itself in this frame's result, or what stands behind it
-        // (rtLightBehind).
+        // (rtLightBehind): a unit drawn see-through is in no G-buffer.
         RtLight rt = kGbuffer ? rtNeutral() : rtLightBehind(FragPos);
-        rtSurface.map = shadow;
-        shadow = rtShadow(rt, shadow);
-        // The shadow variants let a face turned edge-on to the sun out of the
-        // shadow: by |1.2 - |N.L||^4, saturated (c4 is the light's view-space
-        // direction, 0x00875c10).
-        shadow += (1.0 - shadow) * clamp(pow(abs(1.2 - abs(dot(norm, normalize(-lightDir.xyz)))), 4.0), 0.0, 1.0);
-
-        // The ambient as it eases in from an interior's (w = 1), or the
-        // zone's as it is (0x007a1e90). The direct light by its scale:
-        // halved in the terrain's baked shadow (0x007c1730 multiplies by +0x8c).
-        vec3 ambient = pc.interiorAmbient.w > 0.5 ? pc.interiorAmbient.rgb * rtBakedLight() : ambientColor.rgb;
-        // An interior's ambient is its own baked light; the probes there
-        // would only take the open sky back out of it a second time.
-        vec3 ambientLit = pc.interiorAmbient.w > 0.5 ? rtAmbient(rt, ambient)
-                                                     : rtAmbient(rt, ambient, FragPos, norm);
-        // The Diffuse_* programs' light: clamp(ambient + clamp(N.L) x direct),
-        // the direct light no more than one a channel (0x00873ca0), then the
-        // shadow variants' 0.7 + 0.3 x the light the shadow map lets through.
-        vec3 direct = min(lightColor.rgb * pc.diffuseColour.rgb * pc.lightFlags.y, vec3(1.0));
-        const float shadowScale = rtShadowScale(rt, shadow);
-        light = clamp(ambientLit + diff * direct, 0.0, 1.0)
-              * shadowScale;
-        rtSurface.flags = RT_GB_VALID | RT_GB_SUN | RT_GB_LIFT_AFTER |
-                          (pc.interiorAmbient.w > 0.5 ? RT_GB_BAKED : 0u);
-        rtSurface.g = light;
-        rtSurfaceOcclusion(rtSurface, ambientLit, diff * direct, vec3(1.0));
-        rtSurface.occY *= shadowScale;
-        rtSurface.occE *= shadowScale;
-        rtSurface.kp = vec3(1.0);
-        // The torches' and lamps' light, where the ray tracing has it. An
-        // interior's colour is its baked light, its lamps in it already:
-        // those only shadow it (rtPointLightOwn, rtBakedShade).
-        if (pc.interiorAmbient.w > 0.5) light = light * rtBakedShade(rt) + rtPointLightOwn(rt);
-        else light += rtPointLight(rt);
+        // Its light as refreshInteriorLights samples it at its feet, as a
+        // game object's (model_light.glsli): w 2 on an interior floor, 1 the
+        // zone's light eased in, 0 not known yet (the zone's as it is). The
+        // direct light by its scale (halved in the terrain's baked shadow,
+        // 0x007c1730 multiplies by +0x8c) and the unit's colour (CM2Model
+        // +0x180).
+        const bool known = pc.interiorAmbient.w > 0.5;
+        const vec3 direct = (known ? pc.interiorDirect.rgb * pc.lightFlags.y : lightColor.rgb) * pc.diffuseColour.rgb;
+        if (pc.interiorAmbient.w > 1.5) {
+            light = modelBakedLight(rt, norm, pc.interiorAmbient.rgb, direct, pc.interiorDirect.w, true, rtSurface);
+        } else {
+            float shadow = 1.0;
+            if (shadowParams.x > 0.5) {
+                // The interpolated vertex normal, not the normal-mapped one, for
+                // the normal offset: a map's per-texel tilt moves the sample
+                // point about and speckles the result.
+                vec3 ldir = normalize(-lightDir.xyz);
+                float nl = dot(vertexNormal, ldir);
+                float bias = max(0.0005 * (1.0 - abs(nl)), 0.00005);
+                // No shadow from the model's own body. With the near cascade at
+                // three or four hundredths of a yard a texel, the normal offset
+                // no longer carries a fragment out of its own limb as the single
+                // 0.29-yard map's did, and a constant bias of about a tenth of a
+                // yard is near an arm's or a shin's thickness: blotches where the
+                // body is a little thicker, none where it is thinner. The client
+                // never self-shadows a model, so the bias is the model's whole
+                // depth along the ray (lightFlags.z yards, cascadeInfo.w a yard in
+                // depth units); only what is farther toward the sun than that -
+                // a roof, a tree, a cliff - shadows a character.
+                bias = max(bias, pc.lightFlags.z * cascadeInfo.w);
+                shadow = csmShadow(uShadowMap, FragPos, vertexNormal, nl, bias);
+                shadow = mix(1.0, shadow, shadowParams.y);
+            }
+            const vec3 ambient = known ? pc.interiorAmbient.rgb : ambientColor.rgb;
+            light = modelZoneLight(rt, norm, FragPos, shadow, ambient, direct, rtSurface);
+        }
     }
 
     // The batch's colour times the light is the diffuse the stages combine

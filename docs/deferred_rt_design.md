@@ -105,7 +105,9 @@ r = sigma(lit') / sigma(lit0)  (if sun-shadowed)  *  bakedShade (if baked)
 * `Kp`: what the point light (or, for baked colour, the other lights) is
   multiplied by on its way to the screen (texture stages, fog).
 * `lit0`: the shadow map's value (after the edge-on lift for the shadow
-  variants); characters lift after the min, flagged.
+  variants), the same for every model (model_light.glsli). RT_GB_LIFT_AFTER,
+  the lift after the min, is still understood by the apply pass but no shader
+  sets it since the characters light as the other models do.
 
 Everything after the lighting (texture combiners, `surface()`, fog) is a
 positive affine map per channel, so `G`, `Y`, `E`, `Kp` are carried through it

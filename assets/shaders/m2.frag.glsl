@@ -40,6 +40,7 @@ layout(set = 0, binding = 0) uniform PerFrame {
 #include "rt_lighting.glsli"
 #include "texture_filter.glsli"
 #include "shadow_csm.glsli"
+#include "model_light.glsli"
 
 layout(set = 1, binding = 0) uniform sampler2D uTexture;
 layout(set = 1, binding = 3) uniform sampler2D uTexture2;
@@ -353,7 +354,6 @@ void main() {
     vec3 norm = normalize(Normal);
 
     vec3 ldir = normalize(-lightDir.xyz);
-    float diff = max(dot(norm, ldir), 0.0);
 
     // The game object highlight: 0x00743c70 sets the model's +0x18c..0x194
     // to the light's ambient bytes (0xd38cac / 255), and 0x0082e140 adds
@@ -369,70 +369,30 @@ void main() {
         // No light: the client draws an unlit batch with the batch colour
         // alone and adds nothing (FUN_0081fb10).
         light = vec3(1.0);
-    } else if ((vInteriorLit & 1) != 0) {
-        // A doodad of a WMO interior group (0x007c1150): its MODD colour as
-        // the ambient and as one light down from a fixed direction (0xaeedf0,
-        // the same in render space), and nothing of the sun - neither its
-        // light nor its shadow. A game object on an interior floor the same,
-        // by the floor's colour; on a transition face its light turns toward
-        // the sun's by w (0x007c1730). A doodad's w is 0.
-        const vec3 interiorTravel = vec3(-0.30822, -0.30822, -0.9);
-        vec3 toLight = normalize(-mix(interiorTravel, lightDir.xyz, vInteriorDirect.w));
-        float idiff = max(dot(norm, toLight), 0.0);
-        // The Diffuse_* programs' light, clamp(ambient + clamp(N.L) x direct),
-        // and the torches' and lamps' where the ray tracing has it. The MODD
-        // colour is the group's baked light, its lamps in it already: those
-        // only shadow it (rtPointLightOwn, rtBakedShade).
-        RtLight rt = kGbuffer ? rtNeutral() : rtLightAt(FragPos);
-        const vec3 baked = clamp(vInteriorAmbient + highlightAmbient + idiff * vInteriorDirect.rgb, 0.0, 1.0)
-                         * rtBakedLight();
-        // Inside a building its room's own light shades it too
-        // (rtInteriorShade).
-        light = baked * rtInteriorBakedShade(rt) + rtPointLightOwn(rt);
-        rtSurface.flags = RT_GB_VALID | RT_GB_BAKED | RT_GB_INTERIOR;
-        // The building's lights of other storeys leave it as painted (rt_trace).
-        rtSurface.storeyBound = 1u;
-        rtSurface.g = baked;
-        rtSurface.kp = vec3(1.0);
     } else {
-        // Ambient and diffuse only. The client lights an M2 batch with the
-        // fixed-function light (FUN_0081fb10) and no specular term; its
-        // 'specular' option defaults off and only the terrain reads it.
-        float shadow = 1.0;
-
-        if (shadowParams.x > 0.5) {
-            float nl = dot(norm, ldir);
-            float bias = max(0.0005 * (1.0 - abs(nl)), 0.00005);
-            shadow = csmShadow(uShadowMap, FragPos, norm, nl, bias);
-            shadow = mix(1.0, shadow, shadowParams.y);
-        }
-
         // Drawn into the G-buffer, with the traced terms neutral.
         RtLight rt = kGbuffer ? rtNeutral() : rtLightAt(FragPos);
-        // The shadow variants let a face turned edge-on to the sun out of the
-        // map's shadow (rtEdgeOnLift); the traced one keeps its own.
-        rtSurface.map = rtMapEdgeOn(shadow, norm, normalize(-lightDir.xyz));
-        shadow = rtShadowEdgeOn(rt, shadow, norm, normalize(-lightDir.xyz));
-        // A game object takes its own: its ambient as it eases, its direct
-        // light as scaled in the terrain's baked shadow (0x007a1e90).
+        // A game object takes its own light, as a unit does: the light at its
+        // feet eased in (0x007a1e90), its direct light scaled in the terrain's
+        // baked shadow, an interior floor's colour where it stands on one
+        // (16). A doodad of a WMO interior group takes its MODD colour
+        // (0x007c1150); any other doodad the zone's (model_light.glsli).
         const bool worldObject = (vInteriorLit & 4) != 0;
-        vec3 ambient = (worldObject ? vInteriorAmbient : ambientColor.rgb) + highlightAmbient;
-        vec3 direct = worldObject ? vInteriorDirect.rgb : lightColor.rgb;
-        // The Diffuse_* programs' light: clamp(ambient + clamp(N.L) x direct),
-        // the direct light no more than one a channel (0x00873ca0), then the
-        // shadow variants' 0.7 + 0.3 x the light the shadow map lets through
-        // over all of it.
-        const vec3 ambientLit = rtAmbient(rt, ambient, FragPos, norm);
-        const float shadowScale = rtShadowScale(rt, shadow);
-        light = clamp(ambientLit + diff * min(direct, vec3(1.0)), 0.0, 1.0) * shadowScale;
-        rtSurface.flags = RT_GB_VALID | RT_GB_SUN;
-        rtSurface.g = light;
-        rtSurfaceOcclusion(rtSurface, ambientLit, diff * min(direct, vec3(1.0)), vec3(1.0));
-        rtSurface.occY *= shadowScale;
-        rtSurface.occE *= shadowScale;
-        rtSurface.kp = vec3(1.0);
-        // The torches' and lamps' light, where the ray tracing has it.
-        light += rtPointLight(rt);
+        if ((vInteriorLit & 1) != 0) {
+            light = modelBakedLight(rt, norm, vInteriorAmbient + highlightAmbient, vInteriorDirect.rgb,
+                                    vInteriorDirect.w, (vInteriorLit & 16) != 0, rtSurface);
+        } else {
+            float shadow = 1.0;
+            if (shadowParams.x > 0.5) {
+                float nl = dot(norm, ldir);
+                float bias = max(0.0005 * (1.0 - abs(nl)), 0.00005);
+                shadow = csmShadow(uShadowMap, FragPos, norm, nl, bias);
+                shadow = mix(1.0, shadow, shadowParams.y);
+            }
+            const vec3 ambient = (worldObject ? vInteriorAmbient : ambientColor.rgb) + highlightAmbient;
+            const vec3 direct = worldObject ? vInteriorDirect.rgb : lightColor.rgb;
+            light = modelZoneLight(rt, norm, FragPos, shadow, ambient, direct, rtSurface);
+        }
     }
     vec3 result = combineStages(vec4(light * tint, batchFade), tex0, tex1).rgb;
     // The stages are affine in the diffuse: what multiplies the light on its

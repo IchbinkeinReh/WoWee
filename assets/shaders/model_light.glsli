@@ -1,0 +1,75 @@
+// The light of an M2 model's lit batch - a unit (character.frag), a doodad or
+// a game object (m2.frag) alike. The client lights every one of them through
+// the same CM2Model path: the Diffuse_* programs' clamp(ambient + clamp(N.L)
+// x direct), with the light handed in per model (0x0082e140): the zone's
+// for a doodad outdoors; the light at its feet for a world object - a unit
+// or a game object, eased from one place's to the next (0x007a1e90) - which
+// is an interior floor's colour where it stands on one (0x007a0d60); a WMO
+// doodad's own MODD colour inside a building (0x007c1150). What differs is
+// only which light that is, which the caller passes; how it lights is here.
+//
+// The ray traced terms (rt_lighting.glsli) go in the same way for all of
+// them, and the G-buffer record (rt_gbuffer.glsli) says the same.
+//
+// The including shader declares lightDir in its PerFrame block and includes
+// rt_lighting.glsli first.
+
+// The direction the interior light travels (0xaeedf0, the same in render
+// space; wmo_doodad_light::kInteriorLightDir).
+const vec3 MODEL_INTERIOR_TRAVEL = vec3(-0.30822, -0.30822, -0.9);
+
+// Lit by the zone's light: `ambient` and `direct` as the model takes them,
+// `mapShadow` the shadow map's light at the fragment (1 without the map).
+// The shadow variants let a face edge-on to the sun out of the map's shadow
+// (rtEdgeOnLift) and the traced one is taken as it is; the direct light no
+// more than one a channel (0x00873ca0); then the shadow variants' scale over
+// all of it, and the point lights added where the tracing has them.
+vec3 modelZoneLight(RtLight rt, vec3 n, vec3 worldPos, float mapShadow, vec3 ambient, vec3 direct,
+                    inout RtSurface s) {
+    const vec3 toSun = normalize(-lightDir.xyz);
+    const float diff = max(dot(n, toSun), 0.0);
+    s.map = rtMapEdgeOn(mapShadow, n, toSun);
+    const float shadow = rtShadowEdgeOn(rt, mapShadow, n, toSun);
+    const vec3 ambientLit = rtAmbient(rt, ambient, worldPos, n);
+    const vec3 d = diff * min(direct, vec3(1.0));
+    const float k = rtShadowScale(rt, shadow);
+    const vec3 light = clamp(ambientLit + d, 0.0, 1.0) * k;
+    s.flags = RT_GB_VALID | RT_GB_SUN;
+    s.g = light;
+    rtSurfaceOcclusion(s, ambientLit, d, vec3(1.0));
+    s.occY *= k;
+    s.occE *= k;
+    s.kp = vec3(1.0);
+    return light + rtPointLight(rt);
+}
+
+// Lit by a building's baked light: its colour as the ambient and as one
+// light from the fixed interior direction, turned toward the sun's by
+// `towardSun` on a transition face (0x007c1730), and nothing of the sun.
+// The colour holds the building's own lamps already: only the other lights
+// add (rtPointLightOwn), and the occlusion darkens its ambient.
+//
+// `byFloor`: a world object lit by the interior floor it stands on. That
+// colour is the room's light as it reaches the floor, so it is taken as
+// painted (RT_GB_UNIT_FLOOR): shaded again at the model's own pixels, an
+// upright body took the shadow of every building light the floor turns away
+// from - the hearth's under the Goldshire inn's upper floor - and drew at
+// half its colour. A doodad's MODD colour is its own, and the lamps' shadows
+// and the room's light shade it (rtInteriorBakedShade).
+vec3 modelBakedLight(RtLight rt, vec3 n, vec3 ambient, vec3 direct, float towardSun, bool byFloor,
+                     inout RtSurface s) {
+    const vec3 toLight = normalize(-mix(MODEL_INTERIOR_TRAVEL, lightDir.xyz, towardSun));
+    const float idiff = max(dot(n, toLight), 0.0);
+    const vec3 ambientLit = rtAmbient(rt, ambient);
+    const vec3 d = idiff * direct;
+    const vec3 baked = clamp(ambientLit + d, 0.0, 1.0) * rtBakedLight();
+    s.flags = RT_GB_VALID | RT_GB_BAKED | RT_GB_INTERIOR | (byFloor ? RT_GB_UNIT_FLOOR : 0u);
+    // The building's lights of other storeys leave it as painted (rt_trace).
+    s.storeyBound = 1u;
+    s.g = baked;
+    rtSurfaceOcclusion(s, ambientLit, d, vec3(1.0));
+    s.occY *= rtBakedLight();
+    s.occE *= rtBakedLight();
+    s.kp = vec3(1.0);
+    return baked * (byFloor ? 1.0 : rtInteriorBakedShade(rt)) + rtPointLightOwn(rt);
+}

@@ -1066,7 +1066,8 @@ void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) co
         return;
     }
     e.flags = (inst.interiorLit ? kInstanceInteriorLit : 0) | (inst.interiorPass ? kInstanceInteriorPass : 0) |
-              (inst.worldObjectLit && !inst.interiorLit ? kInstanceWorldObject : 0);
+              (inst.worldObjectLit && !inst.interiorLit ? kInstanceWorldObject : 0) |
+              (inst.worldObjectLit && inst.interiorLit ? kInstanceFloorLit : 0);
     e.interiorAmbient = glm::vec4(inst.interiorAmbient, 0.0f);
     e.interiorDirect = glm::vec4(inst.interiorDirect, inst.interiorTowardSun);
 }
