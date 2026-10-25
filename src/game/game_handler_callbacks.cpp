@@ -4236,6 +4236,16 @@ void GameHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {
     if (inventoryHandler_) inventoryHandler_->autoEquipItemBySlot(backpackIndex, confirmed);
 }
 
+void GameHandler::setAmmo(uint32_t itemId) {
+    if (inventoryHandler_) inventoryHandler_->setAmmo(itemId);
+}
+
+uint32_t GameHandler::getAmmoId() const {
+    const uint16_t idx = fieldIndex(UF::PLAYER_AMMO_ID);
+    const auto player = getEntityManager().getEntity(playerGuid);
+    return player && idx != 0xFFFF ? player->getField(idx) : 0u;
+}
+
 bool GameHandler::equipWouldBindFromBackpack(int backpackIndex) const {
     return inventoryHandler_ && inventoryHandler_->equipWouldBindFromBackpack(backpackIndex);
 }

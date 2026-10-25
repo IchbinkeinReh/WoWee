@@ -1985,6 +1985,16 @@ void InventoryHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot) {
     owner_.getSocket()->send(pkt);
 }
 
+void InventoryHandler::setAmmo(uint32_t itemId) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() ||
+        wireOpcode(Opcode::CMSG_SET_AMMO) == 0xFFFF) {
+        return;
+    }
+    network::Packet packet(wireOpcode(Opcode::CMSG_SET_AMMO));
+    packet.writeUInt32(itemId);
+    owner_.getSocket()->send(packet);
+}
+
 bool InventoryHandler::setAmmoInstead(uint32_t itemId) {
     const auto* info = owner_.getItemInfo(itemId);
     if (!info || !info->valid || info->itemClass != ITEM_CLASS_PROJECTILE) return false;

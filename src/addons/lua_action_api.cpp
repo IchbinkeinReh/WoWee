@@ -53,7 +53,10 @@ namespace wowee::addons {
 //
 // EQUIPMENT_SET is the client's cursor type 0xd (0x00520dc0): s_cursorId is the
 // set's id (DAT_00ac80a0), which may be 0 - a set, not nothing.
-enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET };
+/// AMMO is the ammunition lifted off the paperdoll's ammo slot (the client's
+/// cursor type 9): an item to the interface, holding an entry rather than an
+/// item, since the ammunition never left the bags.
+enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET, AMMO };
 static CursorType s_cursorType = CursorType::NONE;
 static uint32_t   s_cursorId   = 0;    // spellId, itemId, or action slot
 static int        s_cursorSlot = 0;    // source slot for placement
@@ -1184,6 +1187,9 @@ static int lua_GetCursorInfo(lua_State* L) {
         // drop is a withdrawal - and saying so here would only give the
         // interface a kind it has no branch for.
         case CursorType::GUILDBANK:
+        // And the ammunition off the ammo slot: "item" and its entry
+        // (0x00515200 cases 7, 9 and 0xb).
+        case CursorType::AMMO:
             lua_pushstring(L, "item");
             lua_pushnumber(L, s_cursorId);
             return 2;
@@ -1221,8 +1227,11 @@ static int lua_CursorHasItem(lua_State* L) {
     // A guild bank item counts. The bank frame's own OnClick tests this before
     // deciding a click is a drop, so answering no for one would have left the
     // item stuck on the cursor with nowhere that would take it.
+    // The ammunition off the ammo slot is an item too (0x00515100 answers 1
+    // for cursor type 9 as for type 1).
     lua_pushboolean(L, (s_cursorType == CursorType::ITEM ||
-                        s_cursorType == CursorType::GUILDBANK) ? 1 : 0);
+                        s_cursorType == CursorType::GUILDBANK ||
+                        s_cursorType == CursorType::AMMO) ? 1 : 0);
     return 1;
 }
 
@@ -2046,6 +2055,51 @@ static int lua_PickupInventoryItem(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     int slot = static_cast<int>(luaL_checknumber(L, 1));
+
+    // The ammo slot, Lua slot 0 (0x005e85d0 with slot -1). The ammunition is a
+    // reference to arrows or bullets in the bags, not an item that moves:
+    // - the ammunition lifted off it goes back on (CMSG_SET_AMMO, 0x268);
+    // - a held item is auto-equipped (0x006dfc40): a projectile becomes the
+    //   ammunition, anything else goes to its own slot;
+    // - with nothing held, the ammunition comes off onto the cursor - an item
+    //   to the interface, as cursor type 9 - and CMSG_SET_AMMO 0 takes it off,
+    //   so long as the bags still carry some of it.
+    if (slot == 0) {
+        if (s_cursorType == CursorType::AMMO) {
+            gh->setAmmo(s_cursorId);
+            clearCursorItem(L);
+            return 0;
+        }
+        if (s_cursorType == CursorType::ITEM) {
+            if (s_cursorBag == 0) {
+                gh->autoEquipItemBySlot(s_cursorSlot - 1);
+            } else if (s_cursorBag >= 1 && s_cursorBag <= game::Inventory::NUM_BAG_SLOTS) {
+                gh->autoEquipItemInBag(s_cursorBag - 1, s_cursorSlot - 1);
+            } else {
+                LOG_WARNING("PickupInventoryItem(0): the held item is not in a carried bag");
+            }
+            clearCursorItem(L);
+            return 0;
+        }
+        if (s_cursorType != CursorType::NONE) {
+            LOG_WARNING("PickupInventoryItem(0): the cursor holds something that is not an item");
+            return 0;
+        }
+        const uint32_t ammo = gh->getAmmoId();
+        if (ammo == 0 || gh->countItemInBags(ammo) == 0) {
+            LOG_WARNING("PickupInventoryItem(0): no ammunition is put in, or none is carried");
+            return 0;
+        }
+        setCursorType(L, CursorType::AMMO);
+        s_cursorId = ammo;
+        s_cursorSlot = 0;
+        s_cursorBag = -1;
+        uint32_t displayId = 0;
+        if (const auto* info = gh->getItemInfo(ammo)) displayId = info->displayInfoId;
+        wowee::ui::frameXmlSetCursorItem(displayId != 0 ? gh->getItemIconPath(displayId) : std::string());
+        gh->setAmmo(0);
+        return 0;
+    }
     if (slot < 1 || slot > 23) return 0;
 
     // Before the pickup, because the paperdoll has no SpellCanTargetItem branch

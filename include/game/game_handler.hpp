@@ -3886,6 +3886,10 @@ public:
     /// Equip a held item into a named equipment slot. See InventoryHandler.
     void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot);
     void autoEquipItemBySlot(int backpackIndex, bool confirmed = false);
+    /// CMSG_SET_AMMO: put this entry in as the ammunition, or take it off with 0.
+    void setAmmo(uint32_t itemId);
+    /// The ammunition put in (PLAYER_AMMO_ID), zero for none.
+    [[nodiscard]] uint32_t getAmmoId() const;
     void autoEquipItemInBag(int bagIndex, int slotIndex, bool confirmed = false);
     /// Would equipping this bind it? Asked by both interfaces before they put
     /// their own prompt up.

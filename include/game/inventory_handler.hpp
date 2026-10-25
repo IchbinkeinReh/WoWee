@@ -205,6 +205,9 @@ public:
     /// 0x006dfc40: an item of class 6 is not equipped but made the ammunition,
     /// CMSG_SET_AMMO with its entry (u32). False for any other item.
     bool setAmmoInstead(uint32_t itemId);
+    /// CMSG_SET_AMMO with any entry, zero taking the ammunition off (0x268, as
+    /// the paperdoll's ammo slot sends it).
+    void setAmmo(uint32_t itemId);
 
     /// Whether equipping what is in a slot would bind it - ItemDef carries
     /// the rule; these two just find the item.
