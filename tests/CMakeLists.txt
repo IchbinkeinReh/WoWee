@@ -3029,6 +3029,11 @@ wowee_add_test(test_mount_transition
 wowee_add_test(test_mount_seat
     SOURCES test_mount_seat.cpp)
 
+# ── test_mount_bank ──────────────────────────────────
+# A flying mount banks into the turn, a ground mount never (0x00719b80).
+wowee_add_test(test_mount_bank
+    SOURCES test_mount_bank.cpp ../src/rendering/animation/mount_fsm.cpp)
+
 # ── test_rider_mount_wait ────────────────────────────
 # A rider kept out of the world until its mount is drawn (0x0073d5d0 hangs
 # it on the mount's model; 0x008251b0 -> 0x00743110 waits for both).

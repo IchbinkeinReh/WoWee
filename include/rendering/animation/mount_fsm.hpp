@@ -47,6 +47,7 @@ public:
 
     struct Input {
         bool moving = false;
+        bool movingForward = false;
         bool movingBackward = false;
         bool strafeLeft = false;
         bool strafeRight = false;

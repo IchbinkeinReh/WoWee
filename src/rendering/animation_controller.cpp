@@ -767,6 +767,7 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
     // Build MountFSM input
     MountFSM::Input mountIn;
     mountIn.moving = cameraController->isMoving();
+    mountIn.movingForward = cameraController->isMovingForward();
     mountIn.movingBackward = cameraController->isMovingBackward();
     mountIn.strafeLeft = cameraController->isStrafingLeft();
     mountIn.strafeRight = cameraController->isStrafingRight();
