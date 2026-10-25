@@ -490,6 +490,10 @@ public:
     /// A cast the client refuses itself, shown as its failure is
     /// (0x00808200): the result's line on the error frame.
     void reportLocalCastFailure(uint32_t spellId, uint8_t result);
+    /// The character's line for the player's failed cast: its game error's
+    /// (cast_failure::gameError), where the client's table gives it one
+    /// (0x00808200 -> 0x005216f0 -> 0x00986d00).
+    void sayCastFailure(uint32_t spellId, uint8_t result) const;
 
 private:
     std::unordered_map<uint32_t, uint64_t> pendingPetNameQueries_;

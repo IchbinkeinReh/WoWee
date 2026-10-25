@@ -472,6 +472,7 @@
     "SpellFamilyName": 208,
     "Speed": 47,
     "SpellMissileID": 227,
+    "PowerDisplayId": 228,
     "SpellVisualID": 131,
     "StackAmount": 49,
     "TargetAuraState": 21,

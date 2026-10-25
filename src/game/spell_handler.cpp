@@ -17,6 +17,7 @@
 #include "game/go_interaction_anim.hpp"
 #include "game/transport_manager.hpp"
 #include "game/spell_target_point.hpp"
+#include "game/cast_failure_error.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
@@ -37,7 +38,6 @@
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "audio/ui_sound_manager.hpp"
-#include "audio/player_voice_manager.hpp"
 #include <algorithm>
 #include <bit>
 #include <cctype>
@@ -105,9 +105,10 @@ constexpr uint8_t kSpellFailedUnitNotInFront = 134;
 ///
 /// These arrive once per keypress and a held key repeats them, so a few seconds
 /// of a fight produces several a second: the cooldown, the power cost, the
-/// range, the facing. The red line above the middle of the screen is the whole
-/// of what the real client shows for them - no chat line, and no sound either,
-/// since a beep per rejected keypress is the same spam in another channel.
+/// range, the facing. The red line above the middle of the screen is what the
+/// real client shows for them - no chat line, and no error chime, since a beep
+/// per rejected keypress is the same spam in another channel. The character's
+/// line for them is still spoken (sayCastFailure), one at a time.
 ///
 /// Codes checked against AzerothCore's SharedDefines.h rather than inferred:
 /// 128 is TOO_CLOSE, not the in-progress code it reads like.
@@ -220,42 +221,70 @@ std::string spellFailedText(uint8_t result, int powerType) {
     return interfaceString(key.c_str(), enUS ? enUS : "Unknown reason");
 }
 
+/// What 0x00807f10 and 0x00808200 read off the failed spell's row
+/// (cast_failure::SpellRow); all zero for a spell this client has no row of.
+cast_failure::SpellRow spellRowOf(const GameHandler& owner, uint32_t spellId) {
+    cast_failure::SpellRow row;
+    owner.loadSpellNameCache();
+    const auto it = owner.spellNameCacheRef().find(spellId);
+    if (it == owner.spellNameCacheRef().end()) return row;
+    const auto& e = it->second;
+    row.category = e.category;
+    row.attributes = e.attr;
+    row.targets = e.targetFlags;
+    row.powerType = static_cast<int32_t>(e.powerType);
+    // A PowerDisplay row by the id (0x0065c290): none for 0 or -1.
+    if (e.powerDisplayId != 0 && e.powerDisplayId != 0xFFFFFFFFu) {
+        auto* am = owner.services().assetManager;
+        auto dbc = am ? am->loadDBCOptional("PowerDisplay.dbc") : nullptr;
+        row.powerDisplay = dbc && dbc->findRecordById(e.powerDisplayId) >= 0;
+    }
+    return row;
+}
+
+/// A game error's words in English, for an interface without them.
+const char* castFailureEnUS(std::string_view key) {
+    struct Words { std::string_view key; const char* enUS; };
+    static constexpr Words kWords[] = {
+        {"ERR_SPELL_FAILED_ALREADY_AT_FULL_HEALTH", "You are already at full health."},
+        {"ERR_SPELL_FAILED_ALREADY_AT_FULL_MANA", "You are already at full mana."},
+        {"ERR_SPELL_FAILED_ALREADY_AT_FULL_POWER_S", "You are already at full %s."},
+        {"ERR_GENERIC_NO_TARGET", "You have no target."},
+        {"ERR_INVALID_ITEM_TARGET", "That item is not a valid target."},
+        {"ERR_SPELL_FAILED_EQUIPPED_ITEM", "Must have the proper item equipped."},
+        {"ERR_ITEM_COOLDOWN", "Item is not ready yet."},
+        {"ERR_POTION_COOLDOWN", "You cannot drink any more yet."},
+        {"ERR_FOOD_COOLDOWN", "You are too full to eat more now."},
+        {"ERR_ABILITY_COOLDOWN", "Ability is not ready yet."},
+        {"ERR_SPELL_COOLDOWN", "Spell is not ready yet."},
+        {"ERR_SPELL_FAILED_NOTUNSHEATHED", "You have to be unsheathed to do that!"},
+        {"ERR_SPELL_OUT_OF_RANGE", "Out of range."},
+        {"ERR_PLAY_TIME_EXCEEDED", "Max play time exceeded"},
+        {"ERR_BAD_ON_USE_ENCHANT", "This item already has an on use effect."},
+        {"ERR_TOO_MANY_SOCKETS", "Too many sockets"},
+        {"ERR_GENERIC_NO_VALID_TARGETS", "No valid targets."},
+        {"ERR_MAX_SOCKETS", "This item already has the maximum number of sockets"},
+    };
+    for (const Words& w : kWords) {
+        if (w.key == key) return w.enUS;
+    }
+    // ERR_SPELL_FAILED_S and the other "%s" ones; and ERR_INVALID_GLYPH_SLOT,
+    // whose words this client does not carry - the SPELL_FAILED_ text stands
+    // in for them.
+    return "%s";
+}
+
 /// The ERR_ line a player's cast failure is shown through, as 0x00807f10
-/// picks it. Most are ERR_SPELL_FAILED_S, which is "%s" and shows the
-/// SPELL_FAILED_ text as it is; the others put that text inside their own
-/// words or replace it.
+/// picks it (cast_failure::gameError). Most are ERR_SPELL_FAILED_S, which is
+/// "%s" and shows the SPELL_FAILED_ text as it is; the others put that text
+/// inside their own words or replace it. NO_POWER's is worded by
+/// castFailureMessage, by the power.
 struct CastFailureLine { const char* key; const char* enUS; };
 CastFailureLine castFailureLine(const GameHandler& owner, uint32_t spellId, uint8_t result) {
-    switch (result) {
-        case 0x02: return {"ERR_SPELL_FAILED_ALREADY_AT_FULL_HEALTH", "You are already at full health."};
-        case 0x03: return {"ERR_SPELL_FAILED_ALREADY_AT_FULL_MANA", "You are already at full mana."};
-        case 0x04: return {"ERR_SPELL_FAILED_ALREADY_AT_FULL_POWER_S", "You are already at full %s."};
-        case 0x0b: return {"ERR_GENERIC_NO_TARGET", "You have no target."};
-        case 0x1c: return {"ERR_SPELL_FAILED_EQUIPPED_ITEM", "Must have the proper item equipped."};
-        case 0x1d: case 0x1e: case 0x1f:
-                   return {"ERR_SPELL_FAILED_EQUIPPED_ITEM_CLASS_S", "%s"};
-        // The potion and food variants go by the spell's category, which is
-        // not to hand here.
-        case 0x2d: return {"ERR_ITEM_COOLDOWN", "Item is not ready yet."};
-        case 0x34: return {"ERR_NOAMMO_S", "%s"};
-        case 0x43: {
-            const auto attrs = owner.getSpellAttributes(spellId);
-            if (attrs && (*attrs & 0x10u) != 0)
-                return {"ERR_ABILITY_COOLDOWN", "Ability is not ready yet."};
-            return {"ERR_SPELL_COOLDOWN", "Spell is not ready yet."};
-        }
-        case 0x48: return {"ERR_SPELL_FAILED_NOTUNSHEATHED", "You have to be unsheathed to do that!"};
-        case 0x5e: return {"ERR_SPELL_FAILED_SHAPESHIFT_FORM_S", "%s"};
-        case 0x61: return {"ERR_SPELL_OUT_OF_RANGE", "Out of range."};
-        case 0x64: return {"ERR_SPELL_FAILED_REAGENTS", "%s"};
-        case 0x83: return {"ERR_SPELL_FAILED_TOTEMS", "%s"};
-        case 0x94: return {"ERR_PLAY_TIME_EXCEEDED", "Max play time exceeded"};
-        case 0xaa: return {"ERR_BAD_ON_USE_ENCHANT", "This item already has an on use effect."};
-        case 0xae: return {"ERR_TOO_MANY_SOCKETS", "Too many sockets"};
-        case 0xb2: return {"ERR_GENERIC_NO_VALID_TARGETS", "No valid targets."};
-        case 0xb8: return {"ERR_MAX_SOCKETS", "This item already has the maximum number of sockets"};
-        default:   return {"ERR_SPELL_FAILED_S", "%s"};
-    }
+    if (result == 0x55) return {"ERR_SPELL_FAILED_S", "%s"};
+    // A string literal, so its view is terminated.
+    const std::string_view key = cast_failure::gameError(result, spellRowOf(owner, spellId));
+    return {key.data(), castFailureEnUS(key)};
 }
 
 /// The interface's name for a power, as 0x007fe4b0 lists them.
@@ -365,51 +394,6 @@ bool shouldDespawnGatherTarget(uint8_t result) {
     return result == kSpellFailedAlreadyOpen || result == kSpellFailedChestInUse;
 }
 
-// Map a (WotLK-normalized) SpellCastResult to a character speech response.
-// Results without a matching voice line return nullopt.
-std::optional<audio::PlayerErrorSpeech> errorSpeechForCastResult(
-        uint32_t spellId, uint8_t result, int powerType) {
-    using audio::PlayerErrorSpeech;
-    // Fishing has no unit target: the server validates a randomly sampled water
-    // point in front of the caster. The generic "no target" voice line is both
-    // misleading and contradicted by the on-screen fishing-specific guidance.
-    if (spellclass::isFishingCast(spellId) && (result == 11 || result == 60 || result == 156 || result == 178))
-        return std::nullopt;
-    switch (result) {
-        case 11:  // Bad implicit targets
-        case 178: // No valid targets
-            return PlayerErrorSpeech::GENERIC_NO_TARGET;
-        case 12:  // Invalid target
-            return PlayerErrorSpeech::INVALID_ATTACK_TARGET;
-        case 25:  // Chest in use
-            return PlayerErrorSpeech::CHEST_IN_USE;
-        case 45:  // Item not ready
-            return PlayerErrorSpeech::ITEM_COOLDOWN;
-        case 52:  // Need ammo
-        case 53:  // Need ammo pouch
-        case 54:  // Need exotic ammo
-        case 75:  // No ammo
-            return PlayerErrorSpeech::NO_AMMO;
-        case 67:  // Not ready
-            // Ranged weapon attacks are abilities, not conventional spells. If the
-            // server rejects one (weapon/ammo/attack state), use the generic "I can't
-            // do that yet" response instead of "That spell isn't ready yet."
-            return spellclass::isRangedWeaponAutoAttack(spellId)
-                ? PlayerErrorSpeech::ABILITY_COOLDOWN
-                : PlayerErrorSpeech::SPELL_COOLDOWN;
-        case 85:  // Not enough power
-            switch (powerType) {
-                case 1:  return PlayerErrorSpeech::NO_RAGE;
-                case 3:  return PlayerErrorSpeech::NO_ENERGY;
-                case 2: case 6: return std::nullopt; // no focus/runic power voice lines
-                default: return PlayerErrorSpeech::NO_MANA;
-            }
-        case 97:  // Out of range
-            return PlayerErrorSpeech::OUT_OF_RANGE;
-        default:
-            return std::nullopt;
-    }
-}
 } // namespace
 
 static CombatTextEntry::Type combatTextTypeFromSpellMissInfo(uint8_t missInfo) {
@@ -1277,7 +1261,12 @@ SpellHandler::UnitTake SpellHandler::takeUnit(uint32_t spellId, uint64_t casterG
         });
         const glm::vec3 d(unit->getX() - caster->getX(), unit->getY() - caster->getY(), unit->getZ() - caster->getZ());
         if (const uint8_t fail = unit_target::reachFailure(glm::dot(d, d), range)) {
-            if (say) owner_.addUIError(castFailureMessage(owner_, spellId, fail, -1, 0, 0));
+            if (say) {
+                owner_.addUIError(castFailureMessage(owner_, spellId, fail, -1, 0, 0));
+                // The player's cast speaks it (0x00808200); a pet's is not
+                // shown that way.
+                if (casterGuid == owner_.getPlayerGuid()) sayCastFailure(spellId, fail);
+            }
             out.outOfReach = true;
             return out;
         }
@@ -1312,7 +1301,13 @@ bool SpellHandler::auraLetsSpell(uint64_t unit, uint32_t spellId) const {
 
 void SpellHandler::reportLocalCastFailure(uint32_t spellId, uint8_t result) {
     const std::string text = castFailureMessage(owner_, spellId, result, -1, 0, 0);
-    if (!text.empty()) owner_.addUIError(text);
+    if (text.empty()) return;
+    owner_.addUIError(text);
+    sayCastFailure(spellId, result);
+}
+
+void SpellHandler::sayCastFailure(uint32_t spellId, uint8_t result) const {
+    owner_.playGameErrorSpeech(cast_failure::gameError(result, spellRowOf(owner_, spellId)));
 }
 
 void SpellHandler::armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required) {
@@ -1331,6 +1326,8 @@ void SpellHandler::spellTargetUnit(uint64_t unitGuid) {
     if (!owner_.getEntityManager().getEntity(unitGuid)) {
         // 0x0080dc00: no unit there.
         owner_.addUIError(castFailureMessage(owner_, unitTarget_.spellId, unit_target::kFailedOutOfRange, -1, 0, 0));
+        if (unitTarget_.caster == owner_.getPlayerGuid())
+            sayCastFailure(unitTarget_.spellId, unit_target::kFailedOutOfRange);
         return;
     }
     const auto t = takeUnit(unitTarget_.spellId, unitTarget_.caster, unitGuid, unitTarget_.required, true);
@@ -1792,6 +1789,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
                                        owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::MAIN_HAND)) != 0,
                                        false) == unit_target::kFailedMainhand) {
             owner_.addUIError(castFailureMessage(owner_, spellId, unit_target::kFailedMainhand, -1, 0, 0));
+            sayCastFailure(spellId, unit_target::kFailedMainhand);
             return;
         }
         if (owner_.isAwaitingItemTarget()) {
@@ -1953,6 +1951,7 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid) {
             // ERR_SPELL_ALREADY_KNOWN_S with the spell's name (0x005216f0 0x36).
             owner_.addUIError(interfaceFormat("ERR_SPELL_ALREADY_KNOWN_S", "You already know %s.",
                                               {getSpellName(r.errorSpell)}));
+            owner_.playGameErrorSpeech("ERR_SPELL_ALREADY_KNOWN_S");
             return false;
         case cast_check::GameError::TameFailedTooMany:
             // 0x00800390(2): ERR_TAME_FAILED with PETTAME_TOOMANY.
@@ -1962,7 +1961,9 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid) {
         case cast_check::GameError::None: break;
     }
     if (r.code == 0) return true;
-    owner_.raiseUiError(castFailureMessage(owner_, spellId, r.code, static_cast<int32_t>(e.powerType), r.arg));
+    const std::string text = castFailureMessage(owner_, spellId, r.code, static_cast<int32_t>(e.powerType), r.arg);
+    owner_.raiseUiError(text);
+    if (!text.empty()) sayCastFailure(spellId, r.code);
     return false;
 }
 
@@ -2716,6 +2717,7 @@ void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targe
     if (const uint8_t fail = unit_target::noUnitFailure(spell.attr, spell.attrEx5, required, byPlayer, mainhand,
                                                         owner_.getTargetGuid() != 0)) {
         owner_.addUIError(castFailureMessage(owner_, spellId, fail, -1, 0, 0));
+        if (byPlayer) sayCastFailure(spellId, fail);
         return;
     }
     armUnitTarget(spellId, caster, required);
@@ -3632,13 +3634,11 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
         }
     }
 
-    // Character speech response ("Not enough mana", "I'm out of range", ...)
-    // Suppressed for gather casts, whose failures are routine and already
-    // rephrased, and for the rejections that repeat with the keypress.
-    if (!gatherCast && !routine) {
-        if (auto speech = errorSpeechForCastResult(data.spellId, data.result, powerType))
-            owner_.playErrorSpeech(*speech);
-    }
+    // And the character's line for the failure's game error ("Not enough
+    // mana", "That ability isn't ready yet"), the routine ones included -
+    // the client speaks those most of all, one line at a time (0x00808200 ->
+    // 0x005216f0 -> 0x00986d00).
+    if (!errMsg.empty()) sayCastFailure(data.spellId, data.result);
 
     // Not for a cast refused beside the running one: its bar goes on.
     if (otherCast) return;
@@ -5380,6 +5380,7 @@ void SpellHandler::loadSpellNameCache() const {
     // Only the WotLK layout names Speed: it is what gates spell missiles.
     const uint32_t speedField = spellL ? spellL->tryField("Speed") : 0xFFFFFFFF;
     const uint32_t spellMissileField = spellL ? spellL->tryField("SpellMissileID") : 0xFFFFFFFF;
+    const uint32_t powerDisplayField = spellL ? spellL->tryField("PowerDisplayId") : 0xFFFFFFFF;
     // Read off the file's own shape. Only TBC's layout named these two, so on
     // WotLK, Classic and Turtle every cooldown this client worked out for itself
     // came back zero - which is most of them, since the server sends a cooldown
@@ -5506,6 +5507,8 @@ void SpellHandler::loadSpellNameCache() const {
                 entry.missileSpeed = dbc->getFloat(i, speedField);
             if (spellMissileField != 0xFFFFFFFF && spellMissileField < fieldCount)
                 entry.spellMissileId = dbc->getUInt32(i, spellMissileField);
+            if (powerDisplayField != 0xFFFFFFFF && powerDisplayField < fieldCount)
+                entry.powerDisplayId = dbc->getUInt32(i, powerDisplayField);
             if (recoveryField != 0xFFFFFFFF && recoveryField < fieldCount)
                 entry.recoveryMs = dbc->getUInt32(i, recoveryField);
             if (categoryRecoveryField != 0xFFFFFFFF && categoryRecoveryField < fieldCount)
@@ -6247,6 +6250,7 @@ void SpellHandler::handleCastResult(network::Packet& packet) {
                 owner_.despawnGameObjectLocally(gatherGoGuid);
             }
             if (!errMsg.empty()) owner_.addUIError(errMsg);
+            if (!errMsg.empty()) sayCastFailure(castResultSpellId, castResult);
             if (owner_.spellCastFailedCallbackRef()) owner_.spellCastFailedCallbackRef()(castResultSpellId);
                 owner_.fireAddonEvent("UNIT_SPELLCAST_FAILED", spellcastArgs("player", castResultSpellId));
                 owner_.fireAddonEvent("UNIT_SPELLCAST_STOP",   spellcastArgs("player", castResultSpellId));

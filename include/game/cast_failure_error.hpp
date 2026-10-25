@@ -1,0 +1,86 @@
+#pragma once
+
+// The game error a player's failed cast goes through.
+//
+// Every refusal of a spell the player casts - the server's SMSG_CAST_FAILED
+// and the client's own checks before it sends one (0x00739650 and the rest)
+// alike - is shown by 0x00808200, which ends in 0x005216f0 with a game error:
+// the line it is shown in, and the line the character speaks for it
+// (audio/vocal_error.hpp). Which one is 0x00807f10's choice by the result,
+// most often ERR_SPELL_FAILED_S ("%s", the SPELL_FAILED_ text as it is);
+// for NO_POWER, 0x00808200's own by the spell's power.
+
+#include <cstdint>
+#include <string_view>
+
+namespace wowee::game::cast_failure {
+
+/// What the two read off the failed spell's Spell.dbc row.
+struct SpellRow {
+    uint32_t category = 0;    ///< Category (+0x4): 4 and 9 potions, 10 and 11 food
+    uint32_t attributes = 0;  ///< Attributes (+0x10): 0x10 an ability
+    uint32_t targets = 0;     ///< Targets (+0x40): 0x10 an item, 0x20000 a glyph slot
+    int32_t powerType = 0;    ///< PowerType (+0xa4): -2 health
+    bool powerDisplay = false; ///< a PowerDisplay row by PowerDisplayId (+0x290)
+};
+
+constexpr uint32_t kAttrAbility = 0x10;
+constexpr uint32_t kTargetItem = 0x10;
+constexpr uint32_t kTargetGlyphSlot = 0x20000;
+
+/// The game error, by its GlobalStrings key, for a failed cast's result.
+constexpr std::string_view gameError(uint8_t result, const SpellRow& spell) {
+    const bool potion = spell.category == 4 || spell.category == 9;
+    const bool food = spell.category == 10 || spell.category == 11;
+    switch (result) {
+    case 0x02: return "ERR_SPELL_FAILED_ALREADY_AT_FULL_HEALTH";
+    case 0x03: return "ERR_SPELL_FAILED_ALREADY_AT_FULL_MANA";
+    case 0x04: return "ERR_SPELL_FAILED_ALREADY_AT_FULL_POWER_S";
+    case 0x0b: return "ERR_GENERIC_NO_TARGET";
+    case 0x0c:  // BAD_TARGETS: an item's or a glyph slot's own line
+        if ((spell.targets & kTargetItem) != 0) return "ERR_INVALID_ITEM_TARGET";
+        if ((spell.targets & kTargetGlyphSlot) != 0) return "ERR_INVALID_GLYPH_SLOT";
+        break;
+    case 0x1c: return "ERR_SPELL_FAILED_EQUIPPED_ITEM";
+    case 0x1d:
+    case 0x1e:
+    case 0x1f: return "ERR_SPELL_FAILED_EQUIPPED_ITEM_CLASS_S";
+    case 0x2d:  // ITEM_NOT_READY
+        if (potion) return "ERR_POTION_COOLDOWN";
+        if (food) return "ERR_FOOD_COOLDOWN";
+        return "ERR_ITEM_COOLDOWN";
+    case 0x34: return "ERR_NOAMMO_S";
+    case 0x43:  // NOT_READY
+        if (potion) return "ERR_POTION_COOLDOWN";
+        if (food) return "ERR_FOOD_COOLDOWN";
+        return (spell.attributes & kAttrAbility) != 0 ? "ERR_ABILITY_COOLDOWN" : "ERR_SPELL_COOLDOWN";
+    case 0x48: return "ERR_SPELL_FAILED_NOTUNSHEATHED";
+    case 0x55:  // NO_POWER: a displayed power's, health's, else the power's (0x00a439c8)
+        if (spell.powerDisplay) return "ERR_OUT_OF_POWER_DISPLAY";
+        switch (spell.powerType) {
+        case -2: return "ERR_OUT_OF_HEALTH";
+        case 0: return "ERR_OUT_OF_MANA";
+        case 1: return "ERR_OUT_OF_RAGE";
+        case 2: return "ERR_OUT_OF_FOCUS";
+        case 3: return "ERR_OUT_OF_ENERGY";
+        case 4: return "ERR_NOT_HAPPY_ENOUGH";
+        case 5: return "ERR_OUT_OF_RUNES";
+        case 6: return "ERR_OUT_OF_RUNIC_POWER";
+        default: break;
+        }
+        break;
+    case 0x5e: return "ERR_SPELL_FAILED_SHAPESHIFT_FORM_S";
+    case 0x61: return "ERR_SPELL_OUT_OF_RANGE";
+    case 0x64: return "ERR_SPELL_FAILED_REAGENTS";
+    case 0x83: return "ERR_SPELL_FAILED_TOTEMS";
+    case 0x94: return "ERR_PLAY_TIME_EXCEEDED";
+    case 0xaa: return "ERR_BAD_ON_USE_ENCHANT";
+    case 0xae: return "ERR_TOO_MANY_SOCKETS";
+    case 0xb2: return "ERR_GENERIC_NO_VALID_TARGETS";
+    case 0xb8: return "ERR_MAX_SOCKETS";
+    default: break;
+    }
+    return "ERR_SPELL_FAILED_S";
+}
+
+}  // namespace wowee::game::cast_failure

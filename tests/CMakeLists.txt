@@ -863,6 +863,12 @@ wowee_add_test(test_vocal_error
     SOURCES test_vocal_error.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_cast_failure_error ──────────────────────────────────
+# The game error a refused cast goes through, and the line it speaks.
+wowee_add_test(test_cast_failure_error
+    SOURCES test_cast_failure_error.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_tile_size_agreement ─────────────────────────────────
 # The ADT tile size, which three headers each declared and two files spelled
 # with two fewer decimals. Pins the value against its own arithmetic.

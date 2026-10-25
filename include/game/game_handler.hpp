@@ -4535,6 +4535,7 @@ public:
     auto& spellFlatModsRef() { return spellFlatMods_; }
     auto& spellPctModsRef() { return spellPctMods_; }
     auto& spellNameCacheRef() { return spellNameCache_; }
+    const auto& spellNameCacheRef() const { return spellNameCache_; }
     /// The $name=expression declarations a spell's description draws on, or
     /// empty. Keyed by SpellDescriptionVariables.dbc id.
     auto& spellDescriptionVariablesRef() { return spellDescriptionVariables_; }
@@ -4926,6 +4927,10 @@ public:
         // Spell.dbc SpellMissileID: the SpellMissile row an ADJUST_MISSILE
         // cast's arc takes its gravity from (0x00700880). 0 = none.
         uint32_t spellMissileId = 0;
+        /// Spell.dbc PowerDisplayId (+0x290): the PowerDisplay row a vehicle's
+        /// spell names its power by, whose NO_POWER says nothing aloud
+        /// (0x00808200). 0 = none.
+        uint32_t powerDisplayId = 0;
         uint32_t recoveryMs = 0;
         uint32_t categoryRecoveryMs = 0;
         /// Spell.dbc Category (+0x4), StartRecoveryCategory (+0x234),
