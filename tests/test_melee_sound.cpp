@@ -50,6 +50,17 @@ TEST_CASE("the target's part: parry, block, deflect, absorb", "[melee_sound]") {
     CHECK_FALSE(ms::absorbs(hit(ms::kStateHit, 50)));
 }
 
+TEST_CASE("who plays no wound animation", "[melee_sound]") {
+    // A vehicle busy with a cast, whatever else it is.
+    CHECK(ms::noWound(true, 0u, 0));
+    // A creature by its cache's flags, knocked down or not.
+    CHECK(ms::noWound(false, ms::kCreatureTypeFlagNoWound, 0));
+    CHECK_FALSE(ms::noWound(false, 0u, ms::kAnimKnockdown));
+    // Anyone without a cache entry - a player - while knocked down.
+    CHECK(ms::noWound(false, std::nullopt, ms::kAnimKnockdown));
+    CHECK_FALSE(ms::noWound(false, std::nullopt, 0));
+}
+
 TEST_CASE("a no-wound target's hold runs three to five seconds", "[melee_sound]") {
     CHECK(ms::reactionHoldMs(0) == 3000);
     CHECK(ms::reactionHoldMs(0x80000000u) == 4000);

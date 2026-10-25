@@ -37,8 +37,6 @@ constexpr uint32_t kSlotMainHand = 15, kSlotChest = 4;
 /// CreatureSoundData CreatureImpactType (+0x64); CreatureDisplayInfo
 /// ModelID and SoundID; CreatureModelData SoundID.
 constexpr uint32_t kSoundImpactType = 25;
-/// The creature cache's flag of a target that plays no wound animation.
-constexpr uint32_t kTypeFlagNoWound = 0x8u;
 
 uint32_t steadyMs() {
     return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -266,6 +264,50 @@ uint32_t EntitySpawner::impactColumn(const game::Entity& target) const {
     return row >= 0 ? ms::creatureImpactColumn(sounds->getUInt32(static_cast<uint32_t>(row), kSoundImpactType)) : 0;
 }
 
+std::optional<ms::Item> EntitySpawner::defenderItem(const game::Entity& unit, bool block) const {
+    // 0x00754ef0: the main hand's item, unless blocking or it holds
+    // something other than a weapon - then the off hand's weapon or shield.
+    std::optional<ms::Item> item = heldItem(unit, 0);
+    if (block || (item && item->itemClass != ms::kClassWeapon)) {
+        item = heldItem(unit, 1);
+        if (item && item->itemClass != ms::kClassWeapon && item->itemClass != ms::kClassArmor) item.reset();
+    }
+    return item;
+}
+
+bool EntitySpawner::playsNoWound(const game::Entity& unit) const {
+    // 0x00722180.
+    const uint64_t guid = unit.getGuid();
+    const bool self = guid == gameHandler_->getPlayerGuid();
+    bool vehicleCasting = false;
+    if (const auto* vehicle = gameHandler_->vehicleRoster().vehicleOf(guid);
+        vehicle && (vehicle->flags & ms::kVehicleFlagCastNoWound) != 0) {
+        vehicleCasting = self ? gameHandler_->isCasting() : gameHandler_->getUnitCastState(guid) != nullptr;
+    }
+    std::optional<uint32_t> typeFlags;
+    if (unit.getType() == game::ObjectType::UNIT) {
+        const auto& info = gameHandler_->getCreatureInfoCache();
+        if (const auto it = info.find(static_cast<const game::Unit&>(unit).getEntry()); it != info.end())
+            typeFlags = it->second.typeFlags;
+    }
+    uint32_t animation = 0;
+    if (renderer_) {
+        if (rendering::CharacterRenderer* cr = renderer_->getCharacterRenderer()) {
+            uint32_t instance = 0;
+            if (self) {
+                instance = renderer_->getCharacterInstanceId();
+            } else {
+                for (const auto* instances : {&creatureInstances_, &playerInstances_}) {
+                    if (const auto it = instances->find(guid); it != instances->end()) instance = it->second;
+                }
+            }
+            float timeMs = 0.0f, durationMs = 0.0f;
+            if (instance != 0 && !cr->getAnimationState(instance, animation, timeMs, durationMs)) animation = 0;
+        }
+    }
+    return ms::noWound(vehicleCasting, typeFlags, animation);
+}
+
 void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
     // 0x00755e40 on the target: nothing of one already lootable
     // (UNIT_DYNAMIC_FLAGS 0x1); else the settling, then its own part.
@@ -278,15 +320,11 @@ void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
     // A blow landing on a target that plays no wound animation holds off
     // the next such target's reaction for three to five seconds, and is
     // silent while one is held (0x00722180, 0x00ca1600).
-    if (target->getType() == game::ObjectType::UNIT) {
-        const auto& info = gameHandler_->getCreatureInfoCache();
-        const auto it = info.find(static_cast<const game::Unit&>(*target).getEntry());
-        if (it != info.end() && (it->second.typeFlags & kTypeFlagNoWound) != 0) {
-            const uint32_t now = steadyMs();
-            if (meleeReactionHeld_ && static_cast<int32_t>(now - meleeReactionUntilMs_) <= 0) return;
-            meleeReactionHeld_ = true;
-            meleeReactionUntilMs_ = now + ms::reactionHoldMs(nextMeleeRandom(meleeRandom_));
-        }
+    if (playsNoWound(*target)) {
+        const uint32_t now = steadyMs();
+        if (meleeReactionHeld_ && static_cast<int32_t>(now - meleeReactionUntilMs_) <= 0) return;
+        meleeReactionHeld_ = true;
+        meleeReactionUntilMs_ = now + ms::reactionHoldMs(nextMeleeRandom(meleeRandom_));
     }
     const auto at = unitSoundPosition(hit.target);
     if (!at) return;
@@ -297,19 +335,16 @@ void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
     switch (ms::defend(hit)) {
     case ms::Defend::Parry:
     case ms::Defend::Block: {
-        // 0x00746540 -> 0x004d0540: the attacker's weapon on the target's
-        // main-hand weapon (a parry), else its off hand's weapon or shield.
+        // 0x00746540 -> 0x004d0540: the attacker's weapon on what the
+        // target defends with (0x00754ef0) - nothing at all where it has
+        // nothing to.
         const auto attacker = entities.getEntity(hit.attacker);
         std::optional<ms::Item> weapon;
         if (attacker && attacker->isUnit()) {
             weapon = heldItem(*attacker, (hit.hitInfo & ms::kHitOffhand) != 0 ? 1u : 0u);
             if (weapon && weapon->itemClass != ms::kClassWeapon) weapon.reset();
         }
-        std::optional<ms::Item> guard = heldItem(*target, 0);
-        if (ms::defend(hit) == ms::Defend::Block || !guard || guard->itemClass != ms::kClassWeapon) {
-            guard = heldItem(*target, 1);
-            if (guard && guard->itemClass != ms::kClassWeapon && guard->itemClass != ms::kClassArmor) guard.reset();
-        }
+        const std::optional<ms::Item> guard = defenderItem(*target, ms::defend(hit) == ms::Defend::Block);
         if (!guard) break;
         const uint32_t sound = meleeTables_->impact(ms::impactSubclass(weapon, meleeUnarmedSubclass_),
                                                     ms::defenceColumn(guard, metalMaterial(guard)),

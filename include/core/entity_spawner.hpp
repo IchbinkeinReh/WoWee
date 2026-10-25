@@ -1374,6 +1374,8 @@ private:
     std::optional<rendering::melee_sound::Item> meleeItem(uint32_t entry) const;
     std::optional<rendering::melee_sound::Item> heldItem(const game::Entity& entity, uint32_t hand) const;
     bool metalMaterial(const std::optional<rendering::melee_sound::Item>& item) const;
+    std::optional<rendering::melee_sound::Item> defenderItem(const game::Entity& unit, bool block) const;
+    bool playsNoWound(const game::Entity& unit) const;
     std::optional<glm::vec3> unitSoundPosition(uint64_t guid) const;
     float combatVolume() const;
     uint32_t impactColumn(const game::Entity& target) const;

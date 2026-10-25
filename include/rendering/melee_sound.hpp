@@ -29,8 +29,9 @@
 // columns 3-6 by the defender's item and its metal flag); a deflection
 // unblocked "ShieldWoodImpact"; a full absorb or resist, or immunity,
 // "AbsorbGetHit" - those three not again for three to five seconds once a
-// blow lands on a target that plays no wound animation (0x00722180, type
-// flag 0x8). Nothing at all - not even the settling - of a target already
+// blow lands on a target that plays no wound animation (0x00722180,
+// noWound below). A parry or block of a target with nothing to defend
+// with - an empty main hand parrying - is silent (0x00754ef0). Nothing at all - not even the settling - of a target already
 // lootable (UNIT_DYNAMIC_FLAGS 0x1).
 //
 // A hit kept and never landed is settled - impact or miss, not the
@@ -120,6 +121,21 @@ constexpr Defend defend(const Hit& hit) {
 constexpr bool absorbs(const Hit& hit) {
     return (hit.hitInfo & (kHitFullAbsorb | kHitFullResist)) != 0 || hit.victimState == kStateImmune;
 }
+/// Whether a unit plays no wound animation (0x00722180): a vehicle busy
+/// with a cast (0x007571c0 - its Vehicle.dbc Flags 0x10000 while it casts,
+/// +0xa38 0x400 being set as a cast's precast kit animates it); else a
+/// creature as its cache's type flags 0x8 have it; else - a player, or a
+/// creature whose cache entry has not come - one knocked down (its
+/// animation 121, Knockdown).
+constexpr uint32_t kVehicleFlagCastNoWound = 0x10000;
+constexpr uint32_t kCreatureTypeFlagNoWound = 0x8;
+constexpr uint32_t kAnimKnockdown = 121;
+constexpr bool noWound(bool vehicleCasting, std::optional<uint32_t> creatureTypeFlags, uint32_t animation) {
+    if (vehicleCasting) return true;
+    if (creatureTypeFlags) return (*creatureTypeFlags & kCreatureTypeFlagNoWound) != 0;
+    return animation == kAnimKnockdown;
+}
+
 /// How long a no-wound target's landing holds off the next one's parry,
 /// block and absorb: three seconds and a draw of up to two more
 /// (0x00755ed3: 3000 plus 0x00464580's 32 bits scaled to [0, 2000)).
