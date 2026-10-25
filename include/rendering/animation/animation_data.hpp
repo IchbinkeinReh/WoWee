@@ -90,6 +90,15 @@ private:
 /// held on the last.
 enum class PlayMode : uint8_t { Forward = 0, Reversed = 1, HoldStart = 2, HoldEnd = 3 };
 
+/// The time a sequence of `duration` ms is sampled at after `time` ms of
+/// play: backwards from its end where it plays reversed (0x00826b00 negates the
+/// speed and starts it at its length), as it is otherwise. Every reader of a
+/// unit's tracks - its bones, its events, its lights - samples through this.
+inline float sampledSequenceTime(float time, uint32_t duration, PlayMode mode) {
+    if (mode != PlayMode::Reversed) return time;
+    return std::max(0.0f, static_cast<float>(duration) - time);
+}
+
 struct ModelAnimation {
     uint32_t id = 0;
     PlayMode mode = PlayMode::Forward;

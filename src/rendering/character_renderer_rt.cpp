@@ -469,8 +469,16 @@ void CharacterRenderer::collectRtLights(const glm::vec3& eye, float range,
         if (glm::dot(at - eye, at - eye) > reach * reach) continue;
         const auto& data = inst.cachedModel->data;
         const float fade = std::clamp(inst.opacity * inst.kitAlpha, 0.0f, 1.0f);
+        // The light's tracks read the sequence where the bones do: from its end
+        // when it plays reversed (0x00826b00), not forwards from its start.
+        const int seq = inst.currentSequenceIndex;
+        const float lightTime =
+            seq >= 0 && static_cast<size_t>(seq) < data.sequences.size()
+                ? anim::sampledSequenceTime(inst.animationTime, data.sequences[static_cast<size_t>(seq)].duration,
+                                            inst.playMode)
+                : inst.animationTime;
         for (const auto& light : data.lights) {
-            auto l = rt_lights::evaluateM2Light(light, inst.currentSequenceIndex, inst.animationTime,
+            auto l = rt_lights::evaluateM2Light(light, inst.currentSequenceIndex, lightTime,
                                                 inst.globalSequenceTime, data.globalSequenceDurations, modelMat,
                                                 inst.boneMatrices);
             if (!l) continue;
