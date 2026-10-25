@@ -39,3 +39,33 @@ TEST_CASE("Without a player only the boss rule applies", "[unit_level]") {
 TEST_CASE("A dead or low mob far below the player keeps its level", "[unit_level]") {
     CHECK(displayedUnitLevel(1, true, 80, kHostile, 0) == 1);
 }
+
+TEST_CASE("A drunk player sees an enemy lower, by round(share x 5 + 0.5)", "[unit_level]") {
+    using wowee::game::drunkLevelReduction;
+    // Sober takes nothing off; fully drunk (100, or more held to it) six.
+    CHECK(drunkLevelReduction(0, 0) == 0);
+    CHECK(drunkLevelReduction(100, 0) == 6);
+    CHECK(drunkLevelReduction(0, 250) == 6);
+    // The x87 rounds to the nearest even: 1.5 -> 2, 2.5 -> 2, 3.5 -> 4.
+    CHECK(drunkLevelReduction(10, 0) == 1);   // 0.5 + 0.5
+    CHECK(drunkLevelReduction(20, 0) == 2);   // 1.0 + 0.5
+    CHECK(drunkLevelReduction(40, 0) == 2);   // 2.0 + 0.5
+    CHECK(drunkLevelReduction(60, 0) == 4);   // 3.0 + 0.5
+    // The larger of the drunk byte and the fake inebriation counts.
+    CHECK(drunkLevelReduction(20, 60) == 4);
+    CHECK(drunkLevelReduction(60, 20) == 4);
+}
+
+TEST_CASE("The drunk view lowers only a unit the player may attack, never below 1", "[unit_level]") {
+    // An enemy the player may attack, seen drunk.
+    CHECK(displayedUnitLevel(30, true, 30, kHostile, 0, 100, 0, true) == 24);
+    CHECK(displayedUnitLevel(3, true, 30, kHostile, 0, 100, 0, true) == 1);
+    // Not attackable, or sober: the level stands.
+    CHECK(displayedUnitLevel(30, true, 30, kFriendly, 0, 100, 0, false) == 30);
+    CHECK(displayedUnitLevel(30, true, 30, kHostile, 0, 0, 0, true) == 30);
+    // The skull and the boss come first and are not lowered.
+    CHECK(displayedUnitLevel(45, true, 30, kHostile, 0, 100, 0, true) == -1);
+    CHECK(displayedUnitLevel(30, true, 30, kHostile, kBoss, 100, 0, true) == -1);
+    // Without a player there is nobody drunk.
+    CHECK(displayedUnitLevel(30, false, 0, kHostile, 0, 100, 0, true) == 30);
+}

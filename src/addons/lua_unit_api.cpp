@@ -200,9 +200,23 @@ static int lua_UnitLevel(lua_State* L) {
             if (it != cache.end()) typeFlags = it->second.typeFlags;
         }
         const int reaction = player ? gh->unitReaction(*unit, *player) : 0;
+        // How drunk the player is - PLAYER_BYTES_3's byte 1 and the fake
+        // inebriation (0x004f7290) - and whether the player may attack the
+        // unit (0x00729740, the player attacking): a drunk player sees an
+        // enemy lower than it is.
+        int drunk = 0, fakeInebriation = 0;
+        bool mayAttack = false;
+        if (player) {
+            const uint16_t b3 = game::fieldIndex(game::UF::PLAYER_BYTES_3);
+            const uint16_t fake = game::fieldIndex(game::UF::PLAYER_FAKE_INEBRIATION);
+            if (b3 != 0xFFFF) drunk = static_cast<int>((player->getField(b3) >> 8) & 0xFFu);
+            if (fake != 0xFFFF) fakeInebriation = static_cast<int>(player->getField(fake));
+            if (drunk != 0 || fakeInebriation != 0)
+                mayAttack = gh->unitMayAttack(player->getGuid(), unit->getGuid());
+        }
         lua_pushnumber(L, game::displayedUnitLevel(static_cast<int>(unit->getLevel()), player != nullptr,
                                                    player ? static_cast<int>(player->getLevel()) : 0,
-                                                   reaction, typeFlags));
+                                                   reaction, typeFlags, drunk, fakeInebriation, mayAttack));
     } else {
         auto* gh = getGameHandler(L);
         std::string uidStr(uid);
