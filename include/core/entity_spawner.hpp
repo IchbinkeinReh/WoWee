@@ -1390,7 +1390,11 @@ private:
     bool playsNoWound(const game::Entity& unit) const;
     std::optional<glm::vec3> unitSoundPosition(uint64_t guid) const;
     float combatVolume() const;
-    int meleePriority(const rendering::melee_sound::Hit& hit) const;
+    /// Whose part in a hit raises its plays' priority: the active player's
+    /// (0x00755a60's impact and miss) or the active mover's (the swing,
+    /// a parry's or block's clash).
+    enum class MeleeParty : uint8_t { ActivePlayer, ActiveMover };
+    int meleePriority(const rendering::melee_sound::Hit& hit, MeleeParty party) const;
     uint32_t impactColumn(const game::Entity& target) const;
     void settleKeptMeleeHit(uint64_t attacker);
     void settleMeleeHit(const rendering::melee_sound::Hit& hit);

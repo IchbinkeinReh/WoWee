@@ -163,16 +163,15 @@ float EntitySpawner::combatVolume() const {
     return std::clamp(combat->getVolumeScale() / effects, 0.0f, 1.0f);
 }
 
-int EntitySpawner::meleePriority(const ms::Hit& hit) const {
-    // The active player or the unit it moves as attacker or target: its
-    // voice is kept over a crowd's (0x004d0720, 0x004d0660, 0x004d0540 and
-    // 0x004d0850 take 0x6e then).
+int EntitySpawner::meleePriority(const ms::Hit& hit, MeleeParty party) const {
+    // A play the active mover (DAT_00ca1238) or the active player
+    // (0x004d3790) is attacker or target of keeps its voice over a crowd's:
+    // the caller works out which and hands 0x004d0720, 0x004d0660, 0x004d0540
+    // or 0x004d0850 the answer as its last argument, which asks 0x6e.
     if (!gameHandler_) return audio::voice_priority::kDefault;
-    const uint64_t self = gameHandler_->getPlayerGuid();
-    const uint64_t mover = gameHandler_->activeMover();
-    const auto own = [&](uint64_t guid) { return guid != 0 && (guid == self || guid == mover); };
-    return own(hit.attacker) || own(hit.target) ? audio::voice_priority::kActiveMover
-                                                : audio::voice_priority::kDefault;
+    const uint64_t own = party == MeleeParty::ActivePlayer ? gameHandler_->getPlayerGuid() : gameHandler_->activeMover();
+    return own != 0 && (hit.attacker == own || hit.target == own) ? audio::voice_priority::kActiveMover
+                                                                  : audio::voice_priority::kDefault;
 }
 
 void EntitySpawner::onMeleeHit(const game::AttackerStateUpdateData& data) {
@@ -244,8 +243,9 @@ void EntitySpawner::settleMeleeHit(const ms::Hit& hit) {
         if (!at) return;
         const char* name = ms::twoHanded(heldItem(*attacker, 0)) ? "(DONOTRENAME)Combat Miss 2H"
                                                                  : "(DONOTRENAME)Combat Miss 1H";
+        // 0x00755a60 asks of the active player.
         player.playOnce(player.idByName(name, assetManager_), &*at, volume, assetManager_, audio::PlayLimit::None,
-                        false, meleePriority(hit));
+                        false, meleePriority(hit, MeleeParty::ActivePlayer));
         return;
     }
     case ms::Settle::Impact: {
@@ -261,7 +261,7 @@ void EntitySpawner::settleMeleeHit(const ms::Hit& hit) {
                                  metalMaterial(weapon), (hit.hitInfo & ms::kHitCrit) != 0);
         if (sound != 0)
             player.playOnce(sound, &*at, volume, assetManager_, audio::PlayLimit::WeaponImpact, false,
-                            meleePriority(hit));
+                            meleePriority(hit, MeleeParty::ActivePlayer));
         return;
     }
     }
@@ -383,7 +383,7 @@ void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
                                                     metalMaterial(weapon), crit);
         if (sound != 0)
             player.playOnce(sound, &above, volume, assetManager_, audio::PlayLimit::WeaponImpact, false,
-                            meleePriority(hit));
+                            meleePriority(hit, MeleeParty::ActiveMover));
         break;
     }
     case ms::Defend::Deflect:
@@ -484,12 +484,14 @@ void EntitySpawner::onSpellMiss(uint64_t caster, uint64_t target, uint8_t missTy
                                                 ms::defenceColumn(guard, metalMaterial(guard)),
                                                 metalMaterial(weapon), false);
     if (sound != 0) {
-        // 0x00755850 hands 0x004d0540 no fifth argument; what is on the
-        // stack in its place - the caller's EDI - is all but never 0, so the
-        // play takes the active mover's priority.
+        // 0x00755850 hands 0x004d0540, as its last argument, whether the
+        // caster is the active mover (DAT_00ca1238): pushed ahead of the
+        // position for 0x2c to leave behind (0x007558e8..0x00755969).
+        const uint64_t mover = gameHandler_->activeMover();
         renderer_->getM2EventSounds().playOnce(sound, &above, combatVolume(), assetManager_,
                                                audio::PlayLimit::WeaponImpact, false,
-                                               audio::voice_priority::kActiveMover);
+                                               mover != 0 && caster == mover ? audio::voice_priority::kActiveMover
+                                                                             : audio::voice_priority::kDefault);
     }
 }
 
@@ -521,7 +523,7 @@ void EntitySpawner::meleeModelEvent(uint64_t unitGuid, uint32_t eventId, const g
         const float volume = ((hit.hitInfo & ms::kHitMiss) != 0 ? 0.5f : 1.0f) * combatVolume();
         if (sound != 0)
             renderer_->getM2EventSounds().playOnce(sound, &at, volume, assetManager_, audio::PlayLimit::WeaponSwing,
-                                                   true, meleePriority(hit));
+                                                   true, meleePriority(hit, MeleeParty::ActiveMover));
         return;
     }
     if (!ms::isLandEvent(eventId)) return;
