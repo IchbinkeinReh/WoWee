@@ -211,4 +211,20 @@ inline bool footInWater(std::optional<float> liquidLevel, float footZ, uint32_t 
 constexpr uint32_t kBytes1HoverFlag = 0x02u;
 constexpr bool hovers(uint32_t bytes1) { return ((bytes1 >> 16) & kBytes1HoverFlag) != 0; }
 
+/// MOVEMENTFLAG_HOVER, and PLAYER_FLAGS_GHOST.
+constexpr uint32_t kMoveFlagHover = 0x40000000u;
+constexpr uint32_t kPlayerFlagGhost = 0x10u;
+
+/// Whether a unit's footfall is silent before its sounds are looked at
+/// (0x00747240's four tests): hovering by UNIT_FIELD_BYTES_1 (its fields'
+/// +0x112 & 2) or by its movement (+0x7cc & MOVEMENTFLAG_HOVER); using a
+/// vehicle - seated, or on its way into or out of a seat (its passenger
+/// component's state, +0xf60 +0x14, UnitUsingVehicle's test); or a player's
+/// ghost (PLAYER_FLAGS & 0x10 through +0x1008, UnitIsGhost's test).
+constexpr bool footfallSilent(uint32_t bytes1, uint32_t moveFlags, uint8_t seatState, bool isPlayer,
+                              uint32_t playerFlags) {
+    return hovers(bytes1) || (moveFlags & kMoveFlagHover) != 0 || seatState != 0 ||
+           (isPlayer && (playerFlags & kPlayerFlagGhost) != 0);
+}
+
 }  // namespace wowee::rendering::unit_event

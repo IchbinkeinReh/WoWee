@@ -221,10 +221,20 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
             break;
         }
         case ue::Kind::Footstep: {
-            // 0x00747240: not a hovering unit's; with FootstepSounds on.
+            // 0x00747240: not a hovering unit's, one using a vehicle or a
+            // player's ghost; with FootstepSounds on.
             if (addons::storedCVarValue("FootstepSounds", "1") == "0") break;
+            const bool activePlayer = guid == self;
+            const uint32_t moveFlags =
+                activePlayer ? gameHandler_->getMovementInfo().flags : unit.getReportedMoveFlags();
             const uint16_t bytes1 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_1);
-            if (bytes1 != 0xFFFF && ue::hovers(unit.getField(bytes1))) break;
+            const uint16_t playerFlags = game::fieldIndex(game::UF::PLAYER_FLAGS);
+            const bool isPlayer = entity->getType() == game::ObjectType::PLAYER;
+            if (ue::footfallSilent(bytes1 != 0xFFFF ? unit.getField(bytes1) : 0u, moveFlags,
+                                   gameHandler_->vehicleRoster().seatState(guid), isPlayer,
+                                   isPlayer && playerFlags != 0xFFFF ? unit.getField(playerFlags) : 0u)) {
+                break;
+            }
             const int32_t row = soundRow(unit, true);
             if (row < 0) break;
             const uint32_t footstepId = sounds->getUInt32(static_cast<uint32_t>(row), ue::kColumnFootstep);
@@ -233,9 +243,6 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
             if (!footstepSounds_) break;
             // The foot in water, where the unit is and not swimming
             // (0x0071a030).
-            const bool activePlayer = guid == self;
-            const uint32_t moveFlags =
-                activePlayer ? gameHandler_->getMovementInfo().flags : unit.getReportedMoveFlags();
             std::optional<float> liquid;
             if (auto* water = renderer_->getWaterRenderer()) liquid = water->getWaterHeightAt(unitPosition.x, unitPosition.y);
             const bool inWater = ue::footInWater(liquid, event.position.z, moveFlags);
@@ -247,7 +254,7 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
             // four at once; every other unit's as type 13, six at once
             // (0x009f2268) - past them a footfall is not heard.
             const float volume = footstepVolume();
-            const bool own = activePlayer && entity->getType() == game::ObjectType::PLAYER;
+            const bool own = activePlayer && isPlayer;
             const auto limit = own ? audio::PlayLimit::OwnFootstep : audio::PlayLimit::UnitFootstep;
             if (own && listenerAtCharacter) {
                 player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume * volume, assetManager_, limit);

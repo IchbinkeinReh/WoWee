@@ -132,3 +132,19 @@ TEST_CASE("a footfall in water, and a hovering unit", "[unit_model_events]") {
     CHECK_FALSE(ue::hovers(0x00010000u));
     CHECK_FALSE(ue::hovers(0x00000002u));
 }
+
+TEST_CASE("the footfalls 0x00747240 silences before looking for a sound", "[unit_model_events]") {
+    // A unit walking on the ground: heard.
+    CHECK_FALSE(ue::footfallSilent(0, 0x1, 0, true, 0));
+    // Hovering, by its bytes or by its movement.
+    CHECK(ue::footfallSilent(0x00020000u, 0x1, 0, false, 0));
+    CHECK(ue::footfallSilent(0, ue::kMoveFlagHover | 0x1, 0, false, 0));
+    // Using a vehicle: in its seat (3), or on the way in or out of it.
+    CHECK(ue::footfallSilent(0, 0x1, 3, true, 0));
+    CHECK(ue::footfallSilent(0, 0x1, 1, false, 0));
+    // A player's ghost - and the same flag on a creature means nothing.
+    CHECK(ue::footfallSilent(0, 0x1, 0, true, ue::kPlayerFlagGhost));
+    CHECK_FALSE(ue::footfallSilent(0, 0x1, 0, false, ue::kPlayerFlagGhost));
+    // Other player flags do not.
+    CHECK_FALSE(ue::footfallSilent(0, 0x1, 0, true, 0x8u));
+}
