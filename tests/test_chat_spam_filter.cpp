@@ -1,66 +1,45 @@
-// The server's chat spam filter (SMSG_EXPECTED_SPAM_RECORDS, 0x00501c70 ->
-// 0x00509dd0): the patterns it hands over mask the matched run in player chat.
+// The chat spam filter (0x00509bd0): SpamMessages.dbc's patterns and the
+// server's (SMSG_EXPECTED_SPAM_RECORDS), compiled caseless as PCRE does, and
+// a line any of them finds is dropped. The patterns below are SpamMessages.dbc
+// rows 4 and 8 of the 3.3.5a client, verbatim - Perl syntax, \s* between every
+// letter, which POSIX extended cannot even compile.
 #include <catch_amalgamated.hpp>
 
 #include "game/chat_spam_filter.hpp"
 
 using wowee::game::ChatSpamFilter;
 
-TEST_CASE("invalid patterns are dropped, the rest kept", "[chat_spam_filter]") {
+namespace {
+const std::string kItembay = R"((w\s*w\s*w\s*\.)?\s*i\s*t\s*e\s*m\s*b\s*a\s*y\s*(\.\s*c\s*a))";
+const std::string kGamebmo = R"((w\s*w\s*w\s*\.)?\s*g\s*a\s*m\s*e\s*b\s*m\s*o\s*(\.\s*c\s*o\s*m))";
+}  // namespace
+
+TEST_CASE("the client's own Perl-syntax patterns compile and catch spaced-out spam", "[chat_spam_filter]") {
     ChatSpamFilter f;
-    f.setPatterns({"gold", "buy[0-9]+", "([unclosed", ""});
-    // The two that compile; the unclosed group and the empty one are dropped.
-    CHECK(f.patternCount() == 2);
+    f.setClientPatterns({kItembay, kGamebmo});
+    CHECK(f.clientPatternCount() == 2);
+    CHECK(f.matches("buy gold at w w w . itembay . c a now"));
+    CHECK(f.matches("WWW.GAMEBMO.COM cheap"));       // caseless
+    CHECK(f.matches("g a m e b m o . c o m"));
+    CHECK_FALSE(f.matches("hello friend, want to quest?"));
+    CHECK_FALSE(f.matches(""));
 }
 
-TEST_CASE("a matched run is masked with rotating symbols", "[chat_spam_filter]") {
+TEST_CASE("the server's list is a second list beside the client's", "[chat_spam_filter]") {
     ChatSpamFilter f;
-    f.setPatterns({"gold"});
-    std::string line = "cheap gold here";
-    CHECK(f.censor(line));
-    // "gold" (4 chars) becomes the first four of !@#$%^&*, the rest untouched.
-    CHECK(line == "cheap !@#$ here");
-    // Nothing to match: left alone, no mask reported.
-    std::string clean = "hello friends";
-    CHECK_FALSE(f.censor(clean));
-    CHECK(clean == "hello friends");
+    f.setClientPatterns({kItembay});
+    f.setServerPatterns({R"(c\s*h\s*e\s*a\s*p\s*g\s*o\s*l\s*d)"});
+    CHECK(f.matches("c h e a p g o l d"));
+    CHECK(f.matches("itembay.ca"));
+    // A new server list replaces the old one, not the client's.
+    f.setServerPatterns({});
+    CHECK_FALSE(f.matches("c h e a p g o l d"));
+    CHECK(f.matches("itembay.ca"));
 }
 
-TEST_CASE("the symbol index carries across calls and matches", "[chat_spam_filter]") {
+TEST_CASE("an expression that does not compile is dropped and the rest kept", "[chat_spam_filter]") {
     ChatSpamFilter f;
-    f.setPatterns({"ab"});
-    std::string a = "ab";
-    f.censor(a);
-    CHECK(a == "!@");        // index 0,1
-    std::string b = "ab";
-    f.censor(b);
-    CHECK(b == "#$");        // carries on from 2,3
-}
-
-TEST_CASE("case-insensitive, as REG_ICASE", "[chat_spam_filter]") {
-    ChatSpamFilter f;
-    f.setPatterns({"wow"});
-    std::string line = "WoW GoLd";
-    CHECK(f.censor(line));
-    CHECK(line.substr(0, 3) == "!@#");
-}
-
-TEST_CASE("a match inside a colour span is left alone (0x004fcf40)", "[chat_spam_filter]") {
-    ChatSpamFilter f;
-    f.setPatterns({"item"});
-    // The word sits inside a |c..|r hyperlink colour span: not masked.
-    std::string link = "|cff00ff00item|r";
-    CHECK_FALSE(f.censor(link));
-    CHECK(link == "|cff00ff00item|r");
-    // The same word outside a span is masked.
-    std::string plain = "item";
-    CHECK(f.censor(plain));
-    CHECK(plain == "!@#$");
-}
-
-TEST_CASE("insideColorSpan tracks open and closed spans", "[chat_spam_filter]") {
-    const std::string s = "|cff112233link|r after";
-    CHECK(ChatSpamFilter::insideColorSpan(s, 12));   // within the link text
-    CHECK_FALSE(ChatSpamFilter::insideColorSpan(s, 20));  // after |r
-    CHECK_FALSE(ChatSpamFilter::insideColorSpan("plain", 3));
+    f.setServerPatterns({"gold", "([unclosed", ""});
+    CHECK(f.serverPatternCount() == 1);
+    CHECK(f.matches("GOLD"));
 }

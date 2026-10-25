@@ -125,6 +125,10 @@
     "SexID": 2,
     "SkinID": 3
   },
+  "SpamMessages": {
+    "ID": 0,
+    "Text": 1
+  },
   "ScalingStatDistribution": {
     "ID": 0,
     "MaxLevel": 21
