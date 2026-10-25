@@ -727,6 +727,9 @@ private:
     bool autoSellGrey_ = false;
     bool autoRepair_ = false;
     LootResponseData currentLoot_;
+    /// The loot the player last asked for by CMSG_LOOT (+0x18e0): a refusal
+    /// of it is shown and spoken (game/loot_error.hpp).
+    uint64_t pendingLootGuid_ = 0;
     std::vector<uint64_t> masterLootCandidates_;
 
     // Group loot roll state

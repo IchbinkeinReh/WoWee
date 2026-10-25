@@ -4,6 +4,7 @@
 #include "game/spell_classification.hpp"
 #include "game/glyph_socket.hpp"
 #include "game/item_text.hpp"
+#include "game/loot_error.hpp"
 #include "game/interface_text.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/player_display_flags.hpp"
@@ -1205,6 +1206,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
 void InventoryHandler::lootTarget(uint64_t targetGuid) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     currentLoot_.items.clear();
+    pendingLootGuid_ = targetGuid;
     LOG_INFO("Looting target 0x", std::hex, targetGuid, std::dec);
     auto packet = LootPacket::build(targetGuid);
     owner_.getSocket()->send(packet);
@@ -1306,7 +1308,28 @@ void InventoryHandler::lootMasterGive(uint8_t lootSlot, uint64_t targetGuid) {
 }
 
 void InventoryHandler::handleLootResponse(network::Packet& packet) {
+    // A refusal - loot type 0 and the reason after it - as 0x006d53b0 shows
+    // it: by its game error, with its sound, for the loot the player asked
+    // for; for anything else only an already picked pocket. The parse
+    // below finds nothing in it and goes no further.
+    if (const size_t start = packet.getReadPos(); packet.hasRemaining(10)) {
+        const uint64_t guid = packet.readUInt64();
+        const uint8_t lootType = packet.readUInt8();
+        if (lootType == 0) {
+            const uint8_t reason = packet.readUInt8();
+            const bool asked = guid != 0 && guid == pendingLootGuid_;
+            if (asked || reason == loot_error::kAlreadyPickpocketed) {
+                const loot_error::Line line =
+                    asked ? loot_error::forReason(reason) : loot_error::alreadyPickpocketed();
+                owner_.addUIError(uiText(line.key, line.enUS));
+                owner_.playGameErrorSound(line.key);
+            }
+            if (asked) pendingLootGuid_ = 0;
+        }
+        packet.setReadPos(start);
+    }
     if (!LootResponseParser::parse(packet, currentLoot_)) return;
+    if (currentLoot_.lootGuid == pendingLootGuid_) pendingLootGuid_ = 0;
     const bool hasLoot = !currentLoot_.items.empty() || currentLoot_.gold > 0;
     LOG_INFO("SMSG_LOOT_RESPONSE: guid=0x", std::hex, currentLoot_.lootGuid, std::dec,
              " items=", currentLoot_.items.size(), " gold=", currentLoot_.gold);
