@@ -181,6 +181,9 @@ public:
     /// its ChannelInterruptFlags has 0x8 (movement), cancelled with
     /// CMSG_CANCEL_CHANNELLING and the spell's id, u32.
     void cancelChannelOnMove();
+    /// A turn key starting a turn ends a channel that turning breaks
+    /// (ChannelInterruptFlags 0x10 with AttributesEx 0x4000, 0x0072e7e0).
+    void cancelChannelOnTurn();
     void cancelAura(uint32_t spellId);
 
     // Known spells

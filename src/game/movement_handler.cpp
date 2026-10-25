@@ -679,6 +679,14 @@ void MovementHandler::sendMovement(Opcode opcode) {
          opcode == Opcode::MSG_MOVE_JUMP)) {
         owner_.getSpellHandler()->cancelChannelOnMove();
     }
+    // A turn key starting a turn (0x005fb0b0 -> 0x0072e7e0) ends the player's
+    // channel when turning breaks it: ChannelInterruptFlags 0x10 together with
+    // AttributesEx 0x4000. A mouse turn is a facing, not a turn start, and
+    // leaves it alone, as the client's does.
+    if (moverIsPlayer && owner_.getSpellHandler() &&
+        (opcode == Opcode::MSG_MOVE_START_TURN_LEFT || opcode == Opcode::MSG_MOVE_START_TURN_RIGHT)) {
+        owner_.getSpellHandler()->cancelChannelOnTurn();
+    }
 
     // The pitch's packets go out only for a unit that can pitch: swimming,
     // flying, or movement flags2 0x20 (0x007413f0 for 0xbf..0xc1 and 0xdb;
