@@ -5063,6 +5063,36 @@ bool GameHandler::playerCanDualWield() const {
     return false;
 }
 
+bool GameHandler::itemSpellAlreadyKnown(const ItemQueryResponseData& item) const {
+    // 0x006277f0, after the skill line: the item's first spell, when it is one
+    // that teaches (SPELL_EFFECT_LEARN_SPELL, 36, as its first effect).
+    constexpr uint32_t kEffectLearnSpell = 36;
+    constexpr uint32_t kItemSpellTriggerLearn = 6;
+    constexpr uint32_t kTargetPet = 5;
+    const uint32_t first = item.spells[0].spellId;
+    if (first == 0) return false;
+    loadSpellNameCache();
+    const auto it = spellNameCache_.find(first);
+    if (it == spellNameCache_.end() || it->second.effectIds[0] != kEffectLearnSpell) return false;
+    // The spell taught: the effect's trigger spell, else the item's spell with
+    // the learn trigger (6).
+    uint32_t taught = it->second.effectTriggerSpell[0];
+    if (taught == 0) {
+        for (const auto& s : item.spells) {
+            if (s.spellTrigger == kItemSpellTriggerLearn) {
+                taught = s.spellId;
+                break;
+            }
+        }
+    }
+    if (taught == 0) return false;
+    // Aimed at the pet, the pet's spells are asked; there being no pet, no line.
+    if (it->second.implicitTargetsA[0] == kTargetPet || it->second.implicitTargetsB[0] == kTargetPet) {
+        return hasPet() && std::find(petSpellList_.begin(), petSpellList_.end(), taught) != petSpellList_.end();
+    }
+    return getKnownSpells().count(taught) != 0;
+}
+
 ItemRequirementVerdict GameHandler::judgeItemRequirements(const ItemQueryResponseData& item) const {
     ItemRequirementFacts f;
     f.itemClass = item.itemClass;

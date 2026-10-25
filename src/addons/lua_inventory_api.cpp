@@ -2493,6 +2493,34 @@ const RestrictionNameTables& restrictionNames(game::GameHandler* gh) {
     return t;
 }
 
+/// ScalingStatDistribution.dbc's MaxLevel (+0x54) by id, the top of an
+/// heirloom's level range (0x006277f0, 0x0061e740). Read once; zero for an id
+/// the file does not have, or where the layout does not say where it is.
+uint32_t scalingStatMaxLevel(game::GameHandler* gh, uint32_t ssdId) {
+    static std::unordered_map<uint32_t, uint32_t> maxLevel;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        auto* am = gh->services().assetManager;
+        const auto* layouts = pipeline::getActiveDBCLayout();
+        if (am && am->isInitialized() && layouts) {
+            loaded = true;
+            if (const auto* layout = layouts->getLayout("ScalingStatDistribution")) {
+                const uint32_t idF = layout->tryField("ID");
+                const uint32_t maxF = layout->tryField("MaxLevel");
+                auto dbc = am->loadDBCOptional("ScalingStatDistribution.dbc");
+                if (dbc && dbc->isLoaded() && idF != 0xFFFFFFFFu && maxF != 0xFFFFFFFFu &&
+                    maxF < dbc->getFieldCount()) {
+                    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+                        maxLevel[dbc->getUInt32(r, idF)] = dbc->getUInt32(r, maxF);
+                    }
+                }
+            }
+        }
+    }
+    const auto it = maxLevel.find(ssdId);
+    return it != maxLevel.end() ? it->second : 0u;
+}
+
 void pushStringList(lua_State* L, const std::vector<std::string>& v) {
     lua_newtable(L);
     for (size_t i = 0; i < v.size(); ++i) {
@@ -2541,6 +2569,9 @@ void pushItemRequirements(lua_State* L, game::GameHandler* gh, const game::ItemQ
         lua_setfield(L, -2, "requiredSkillRank");
         flag("skillOk", v.skillOk);
     }
+    // A recipe whose spell is already known: "Already known" in red, after the
+    // skill line and before the required spell (0x006277f0).
+    if (gh->itemSpellAlreadyKnown(info)) flag("spellKnown", true);
     if (info.requiredSpell != 0) {
         const std::string& spell = gh->getSpellName(info.requiredSpell);
         if (!spell.empty()) {
@@ -2610,6 +2641,11 @@ static int lua_GetItemTooltipData(lua_State* L) {
     // Bind type
     lua_pushnumber(L, info->bindType);
     lua_setfield(L, -2, "bindType");
+    // Bound to the account (item flag 0x8000000), an heirloom: its bind line
+    // is ITEM_BIND_TO_ACCOUNT, and ITEM_ACCOUNTBOUND once bound (0x006277f0).
+    if (info->itemFlags & 0x8000000u) { lua_pushboolean(L, 1); lua_setfield(L, -2, "accountBound"); }
+    lua_pushnumber(L, info->itemClass);
+    lua_setfield(L, -2, "itemClass");
     // Armor
     lua_pushnumber(L, info->armor);
     lua_setfield(L, -2, "armor");
@@ -2634,6 +2670,28 @@ static int lua_GetItemTooltipData(lua_State* L) {
     // Required level
     lua_pushnumber(L, info->requiredLevel);
     lua_setfield(L, -2, "requiredLevel");
+    // An item that scales with its wearer (ScalingStatValue set, with its
+    // ScalingStatDistribution row): "Requires level %d to %d (%d)" in place
+    // of the plain level - the required level, the row's MaxLevel and the
+    // level it is shown at, which is the player's held between the two
+    // (0x0061e740); red below the range or above it (0x006277f0).
+    if (info->scalingStatValue != 0) {
+        const uint32_t ssdMax = scalingStatMaxLevel(gh, info->scalingStatDistribution);
+        if (ssdMax != 0) {
+            const int req = static_cast<int>(info->requiredLevel);
+            const int top = static_cast<int>(ssdMax);
+            const int player = static_cast<int>(gh->getPlayerLevel());
+            int shown = player < req ? req : player;
+            if (shown > top) shown = top;
+            if (shown < 1) shown = 1;
+            lua_pushnumber(L, top);
+            lua_setfield(L, -2, "levelRangeMax");
+            lua_pushnumber(L, shown);
+            lua_setfield(L, -2, "levelRangeCurrent");
+            lua_pushboolean(L, (player >= req && player <= top) ? 1 : 0);
+            lua_setfield(L, -2, "levelRangeOk");
+        }
+    }
     pushItemRequirements(L, gh, *info);
     // The type line's name: the subclass's DisplayName (0x006277f0).
     {

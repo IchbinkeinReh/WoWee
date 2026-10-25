@@ -1535,6 +1535,12 @@ public:
     /// Which of an item's requirements the player meets (item_requirements.hpp):
     /// the tooltip's red lines and the merchant's isUsable.
     ItemRequirementVerdict judgeItemRequirements(const ItemQueryResponseData& item) const;
+    /// Whether the item teaches a spell its learner already knows - the red
+    /// "Already known" of a recipe (0x006277f0): its first spell learns one
+    /// (Effect[0] 36), the spell taught being that effect's trigger spell or
+    /// the item's learn-trigger spell, known by the pet when the effect is
+    /// aimed at the pet (implicit target 5) and by the player otherwise.
+    [[nodiscard]] bool itemSpellAlreadyKnown(const ItemQueryResponseData& item) const;
 
     // Minimap pings from party members
     struct MinimapPing {

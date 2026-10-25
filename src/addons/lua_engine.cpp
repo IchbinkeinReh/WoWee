@@ -8739,8 +8739,16 @@ void LuaEngine::registerCoreAPI() {
         // A bound item says so, whatever its template's binding: the line
         // is ITEM_SOULBOUND in its place (0x006277f0 tests the instance's
         // flag 0x1 first). A quest item stays a quest item.
-        "        local bind = ({[1]='ITEM_BIND_ON_PICKUP',[2]='ITEM_BIND_ON_EQUIP',[3]='ITEM_BIND_ON_USE',[4]='ITEM_BIND_QUEST'})[data.bindType or 0]\n"
-        "        if inst and inst.soulbound and data.bindType ~= 4 then bind = 'ITEM_SOULBOUND' end\n"
+        // Bound to the account (item flag 0x8000000): ITEM_ACCOUNTBOUND once
+        // bound, ITEM_BIND_TO_ACCOUNT before. A class 10 item says nothing.
+        "        local bind\n"
+        "        if inst and inst.soulbound then\n"
+        "            if data.bindType == 4 then bind = 'ITEM_BIND_QUEST'\n"
+        "            elseif data.itemClass ~= 10 then bind = data.accountBound and 'ITEM_ACCOUNTBOUND' or 'ITEM_SOULBOUND' end\n"
+        "        elseif (data.bindType or 0) ~= 0 and data.itemClass ~= 10 then\n"
+        "            bind = data.accountBound and 'ITEM_BIND_TO_ACCOUNT'\n"
+        "                or ({[1]='ITEM_BIND_ON_PICKUP',[2]='ITEM_BIND_ON_EQUIP',[3]='ITEM_BIND_ON_USE',[4]='ITEM_BIND_QUEST'})[data.bindType]\n"
+        "        end\n"
         "        if bind and _G[bind] then self:AddLine(_G[bind], 1, 1, 1) end\n"
         "        if data.isUnique then self:AddLine(ITEM_UNIQUE or 'Unique', 1, 1, 1)\n"
         "        elseif data.isUniqueEquipped then self:AddLine(ITEM_UNIQUE_EQUIPPABLE or 'Unique-Equipped', 1, 1, 1) end\n"
@@ -8810,7 +8818,10 @@ void LuaEngine::registerCoreAPI() {
         "        if data.classes then\n"
         "            req(format(ITEM_CLASSES_ALLOWED or 'Classes: %s', table.concat(data.classes, ', ')), data.classesOk)\n"
         "        end\n"
-        "        if data.requiredLevel and data.requiredLevel > 1 then\n"
+        // An heirloom's range in place of the plain level (0x006277f0).
+        "        if data.levelRangeMax then\n"
+        "            req(format(ITEM_LEVEL_RANGE_CURRENT or 'Requires level %d to %d (%d)', math.max(data.requiredLevel or 1, 1), data.levelRangeMax, data.levelRangeCurrent), data.levelRangeOk)\n"
+        "        elseif data.requiredLevel and data.requiredLevel > 1 then\n"
         "            req(format(ITEM_MIN_LEVEL or 'Requires Level %d', data.requiredLevel), data.levelOk)\n"
         "        end\n"
         "        if equipSlot and equipSlot ~= '' and iLevel and iLevel > 0 and GetCVar('showItemLevel') == '1' then\n"
@@ -8822,6 +8833,9 @@ void LuaEngine::registerCoreAPI() {
         "            else\n"
         "                req(format(ITEM_REQ_SKILL or 'Requires %s', data.requiredSkillName), data.skillOk)\n"
         "            end\n"
+        "        end\n"
+        "        if data.spellKnown then\n"
+        "            req(ITEM_SPELL_KNOWN or 'Already known', false)\n"
         "        end\n"
         "        if data.requiredSpellName then\n"
         "            req(format(ITEM_REQ_SKILL or 'Requires %s', data.requiredSpellName), data.spellOk)\n"

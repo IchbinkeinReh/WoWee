@@ -125,6 +125,10 @@
     "SexID": 2,
     "SkinID": 3
   },
+  "ScalingStatDistribution": {
+    "ID": 0,
+    "MaxLevel": 21
+  },
   "CreatureFamily": {
     "ID": 0,
     "MaxScale": 3,
