@@ -77,10 +77,7 @@ static int lua_GetTabardCreationCost(lua_State* L) {
     return 1;
 }
 
-static int lua_GetSendMailPrice(lua_State* L) {
-    lua_pushnumber(L, 30.0);
-    return 1;
-}
+static int lua_GetSendMailPrice(lua_State* L);  // with the letter's state, below
 
 /// Uncommon, which is the default a fresh group starts on. Concatenated
 /// straight into a global name - "ITEM_QUALITY" .. threshold .. "_DESC" - so
@@ -1491,6 +1488,24 @@ static int lua_PickupSendMailMoney(lua_State* L) {
 static int lua_AddSendMailCOD(lua_State* L) {
     s_sendMailCOD += copperArg(L, 1);
     return 0;
+}
+
+/// GetSendMailPrice() (0x00571b00): 30 copper a letter, 30 an attachment once
+/// there is more than one - max(30, attachments x 30) - plus the money set to
+/// go with it (SetSendMailMoney, 0x00beb1bc). A chosen stationery or package
+/// adds its own price there; this client offers neither, so neither adds.
+/// It was a flat 30 whatever was attached, so a letter with twelve items showed
+/// thirty copper of postage and cost three hundred and sixty.
+static int lua_GetSendMailPrice(lua_State* L) {
+    uint32_t attached = 0;
+    if (auto* gh = getGameHandler(L)) {
+        for (const auto& slot : gh->getMailAttachments()) {
+            if (slot.occupied()) ++attached;
+        }
+    }
+    const uint64_t postage = std::max<uint64_t>(30, uint64_t{attached} * 30);
+    lua_pushnumber(L, static_cast<double>(postage + s_sendMailMoney));
+    return 1;
 }
 
 static int lua_GetSendMailMoney(lua_State* L) {

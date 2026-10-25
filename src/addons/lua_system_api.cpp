@@ -3354,6 +3354,18 @@ static std::array<bool, 4>& actionBarToggles() {
     return shown;
 }
 
+/// SetEuropeanNumbers' switch (0x00d413b8), which the client's formatting reads.
+static bool& europeanNumbers() {
+    static bool on = false;
+    return on;
+}
+
+/// SetLayoutMode's value (frame manager +0xd08).
+static int32_t& layoutMode() {
+    static int32_t mode = 0;
+    return mode;
+}
+
 
 /// A cooldown that is not running: start and duration both zero. Two values,
 /// because the caller adds them together on the next line -
@@ -7079,6 +7091,46 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"TurnInGuildCharter",       lua_ReturnNothing},
+                // GetMovieResolution() (0x004dd610): the width read out of
+                // gxResolution's "WxH" - which here is the window's.
+                {"GetMovieResolution", [](lua_State* L) -> int {
+            auto* svc = getLuaServices(L);
+            auto* win = svc ? svc->window : nullptr;
+            lua_pushnumber(L, win ? win->getWidth() : 1920);
+            return 1;
+        }},
+                // SetEuropeanNumbers([on]) (0x00510de0 -> 0x0084f010): on by
+                // default; the client's format and SetFormattedText then swap
+                // '.' and ',' inside numbers (0x0084f030). Kept as the client
+                // keeps it; this client's string.format is Lua's own, so the
+                // swap is not made.
+                {"SetEuropeanNumbers", [](lua_State* L) -> int {
+            europeanNumbers() = luaClientSwitchArg(L, 1, true);
+            return 0;
+        }},
+                // SetLayoutMode([mode]) (0x0050f8f0): the frame manager's layout
+                // mode, 1 when none is given. Kept; nothing here lays out by it.
+                {"SetLayoutMode", [](lua_State* L) -> int {
+            layoutMode() = lua_isnumber(L, 1) ? luaToClientInt(L, 1) : 1;
+            return 0;
+        }},
+                // SetConsoleKey(key) (0x0050f990) names the key that opens the
+                // developer console. This client has no console to open.
+                {"SetConsoleKey", lua_ReturnNothing},
+                // UploadSettings() and DownloadSettings() (0x006b9c60,
+                // 0x006b9ca0) push the account data that has changed to the
+                // server, or ask for what it holds. This client keeps its
+                // settings locally and has no server copy to sync.
+                {"UploadSettings",   lua_ReturnNothing},
+                {"DownloadSettings", lua_ReturnNothing},
+                // PlayDance(name) (0x005761f0 -> 0x00576100): a dance from the
+                // dance studio's own cache, sent as opcode 1099. That studio
+                // and its dances were never shipped, so no name finds one; the
+                // usage error is the client's.
+                {"PlayDance", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: PlayDance(\"dance name\")");
+            return 0;
+        }},
                 // The pitch keys' control bits (0x005fc8e0 -> 0x005fa170,
                 // 0x400 and 0x800): the mover pitches up or down at its
                 // pitch rate while one is held (0x005fb1a0).
