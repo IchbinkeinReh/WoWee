@@ -257,6 +257,8 @@ private:
         uint16_t coinage, honor, arena;
         uint16_t playerFlags, armor;
         uint16_t pBytes, pBytes2, chosenTitle;
+        /// PLAYER_FIELD_BYTES: byte 2 is the extra action bars the realm keeps.
+        uint16_t pFieldBytes;
         uint16_t stats[5];
         uint16_t meleeAP, rangedAP;
         uint16_t spDmg1, healBonus;

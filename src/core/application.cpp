@@ -3333,6 +3333,22 @@ void Application::connectWorldHooks() {
                 logoutToLogin();
             }
         });
+        // The extra action bars as the realm keeps them (PLAYER_FIELD_BYTES
+        // byte 2): this client's own bars follow them, so a bar switched on
+        // from another computer, or before a reinstall, comes back on. Mapped
+        // as SetActionBarToggles maps them - bottom left onto showbar2, the
+        // right bar onto showrightbar, right bar 2 onto showleftbar (page 4,
+        // drawn at the left edge). Bottom right has no bar here to drive.
+        gameHandler->setActionBarTogglesCallback([this](uint8_t bars) {
+            if (!uiManager) return;
+            auto& gs = uiManager->getGameScreen();
+            auto& panel = gs.getSettingsPanel();
+            bool changed = false;
+            changed |= panel.setSettingValue("showbar2", (bars & 0x1u) ? "1" : "0");
+            changed |= panel.setSettingValue("showrightbar", (bars & 0x4u) ? "1" : "0");
+            changed |= panel.setSettingValue("showleftbar", (bars & 0x8u) ? "1" : "0");
+            if (changed) gs.saveSettings();
+        });
         gameHandler->setMoverStopCallback([this]() {
             if (renderer && renderer->getCameraController()) renderer->getCameraController()->stopForwardBack();
         });

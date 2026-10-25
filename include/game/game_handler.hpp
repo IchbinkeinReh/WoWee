@@ -4385,6 +4385,15 @@ public:
     auto& chosenTitleBitRef() { return chosenTitleBit_; }
     auto& cloakVisibleRef() { return cloakVisible_; }
     auto& helmVisibleRef() { return helmVisible_; }
+    /// The four extra action bars as the realm keeps them for the character:
+    /// PLAYER_FIELD_BYTES byte 2, bits 0-3 (bottom left, bottom right, right,
+    /// right 2), which GetActionBarToggles reads (0x005a8790). Empty until the
+    /// player's fields have arrived.
+    [[nodiscard]] std::optional<uint8_t> getActionBarToggles() const { return actionBarToggles_; }
+    auto& actionBarTogglesRef() { return actionBarToggles_; }
+    using ActionBarTogglesCallback = std::function<void(uint8_t)>;
+    void setActionBarTogglesCallback(ActionBarTogglesCallback cb) { actionBarTogglesCallback_ = std::move(cb); }
+    auto& actionBarTogglesCallbackRef() { return actionBarTogglesCallback_; }
     auto& currentMountDisplayIdRef() { return currentMountDisplayId_; }
     auto& mountAuraSpellIdRef() { return mountAuraSpellId_; }
     /// Spell of the aura currently keeping the player mounted, 0 when on foot.
@@ -5359,6 +5368,8 @@ private:
 
     // ---- Display state ----
     bool helmVisible_ = true;
+    std::optional<uint8_t> actionBarToggles_;
+    ActionBarTogglesCallback actionBarTogglesCallback_;
     bool cloakVisible_ = true;
     uint8_t standState_ = 0;  // 0=stand, 1=sit, ..., 7=dead, 8=kneel (server-confirmed)
 

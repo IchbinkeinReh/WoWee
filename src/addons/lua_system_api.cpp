@@ -7338,6 +7338,20 @@ void registerSystemLuaAPI(lua_State* L) {
                 // than what this file last stored. The two disagreed whenever
                 // the bar was turned on from the client's own settings window.
                 {"GetActionBarToggles", [](lua_State* L) -> int {
+            // 0x005a8790: the active player's PLAYER_FIELD_BYTES byte 2, the
+            // bars the realm keeps for the character - 1 for a bar that is on,
+            // nil for one that is off, four of them.
+            if (auto* gh = getGameHandler(L)) {
+                if (const auto bars = gh->getActionBarToggles()) {
+                    for (int i = 0; i < 4; ++i) {
+                        if ((*bars & (1u << i)) != 0) lua_pushnumber(L, 1);
+                        else lua_pushnil(L);
+                    }
+                    return 4;
+                }
+            }
+            // Before the player's fields have arrived there is nothing kept to
+            // read; what this client last had stands in.
             auto shown = actionBarToggles();
             if (auto* svc = getLuaServices(L); svc && svc->getClientSetting) {
                 const auto readBool = [&svc](const char* key, bool fallback) {

@@ -821,6 +821,7 @@ EntityController::PlayerFieldIndices EntityController::PlayerFieldIndices::resol
         .pBytes = fieldIndex(UF::PLAYER_BYTES),
         .pBytes2 = fieldIndex(UF::PLAYER_BYTES_2),
         .chosenTitle = fieldIndex(UF::PLAYER_CHOSEN_TITLE),
+        .pFieldBytes = fieldIndex(UF::PLAYER_FIELD_BYTES),
         .stats = {fieldIndex(UF::UNIT_FIELD_STAT0), fieldIndex(UF::UNIT_FIELD_STAT1),
          fieldIndex(UF::UNIT_FIELD_STAT2), fieldIndex(UF::UNIT_FIELD_STAT3),
          fieldIndex(UF::UNIT_FIELD_STAT4)},
@@ -1520,6 +1521,18 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
     bool resistancesChanged = false;
     bool spellBonusChanged = false;
     for (const auto& [key, val] : fields) {
+        // The extra action bars, which the realm keeps for the character in
+        // PLAYER_FIELD_BYTES byte 2 (CMSG_SET_ACTIONBAR_TOGGLES writes them,
+        // GetActionBarToggles reads them back, 0x005a8790). On create as well
+        // as on change: they arrive with the player, and this client's own bar
+        // settings are made to follow them rather than the other way round.
+        if (pfi.pFieldBytes != 0xFFFF && key == pfi.pFieldBytes) {
+            const uint8_t bars = static_cast<uint8_t>((val >> 16) & 0x0Fu);
+            if (owner_.actionBarTogglesRef() != bars) {
+                owner_.actionBarTogglesRef() = bars;
+                if (owner_.actionBarTogglesCallbackRef()) owner_.actionBarTogglesCallbackRef()(bars);
+            }
+        }
         if (key == pfi.xp) {
             owner_.playerXpRef() = val;
             if (!isCreate) {
