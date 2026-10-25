@@ -1005,6 +1005,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "nameplateshowenemies") lua_pushstring(L, "0");
     else if (n == "sound_enablesfx") lua_pushstring(L, "1");
     else if (n == "sound_enableerrorspeech") lua_pushstring(L, "1");
+    // On with two processors or more (0x004d1600 registers it by 0x0086b240).
+    else if (n == "sound_enabledspeffects") lua_pushstring(L, "1");
     // One, not zero: the slider is a multiple of the original client's limit
     // and zero is not a position on it. Answering zero pinned it at minimum.
     else if (n == "cameradistancemaxfactor") lua_pushstring(L, "1");
