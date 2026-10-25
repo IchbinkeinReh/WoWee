@@ -83,4 +83,24 @@ constexpr std::string_view gameError(uint8_t result, const SpellRow& spell) {
     return "ERR_SPELL_FAILED_S";
 }
 
+/// The game error a pet's failed cast is shown through (0x00805610, from
+/// SMSG_PET_CAST_FAILED): the pet's own ERR_PET_SPELL_* lines, the cooldown
+/// line by the ability flag alone, NO_POWER's as the player's, and
+/// ERR_SPELL_FAILED_S for the rest.
+constexpr std::string_view petGameError(uint8_t result, const SpellRow& spell) {
+    switch (result) {
+    case 0x01: return "ERR_PET_SPELL_AFFECTING_COMBAT";
+    case 0x17: return "ERR_PET_SPELL_DEAD";
+    case 0x38: return "ERR_PET_SPELL_NOPATH";
+    case 0x39: return "ERR_PET_SPELL_NOT_BEHIND";
+    case 0x43: return (spell.attributes & kAttrAbility) != 0 ? "ERR_ABILITY_COOLDOWN" : "ERR_SPELL_COOLDOWN";
+    case 0x55: return gameError(result, spell);
+    case 0x5e: return "ERR_SPELL_FAILED_SHAPESHIFT_FORM_S";
+    case 0x61: return "ERR_PET_SPELL_OUT_OF_RANGE";
+    case 0x67: return "ERR_PET_SPELL_ROOTED";
+    case 0x6d: return "ERR_PET_SPELL_TARGETS_DEAD";
+    default: return "ERR_SPELL_FAILED_S";
+    }
+}
+
 }  // namespace wowee::game::cast_failure

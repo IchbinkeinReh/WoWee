@@ -47,6 +47,7 @@ void showTaxiError(GameHandler& owner, const TaxiError& e) {
     const std::string text = interfaceString(e.key, e.enUS);
     if (e.info) owner.addUIInfoMessage(text);
     else owner.addUIError(text);
+    owner.playGameErrorSpeech(e.key);
 }
 
 /// SMSG_ACTIVATETAXIREPLY's result -> its error, as 0x006cee90 looks it up
@@ -4219,12 +4220,14 @@ void MovementHandler::followTarget() {
     // (0x005224c0) says it for /follow on its own. These were English.
     if (owner_.getTargetGuid() == 0) {
         owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
+        owner_.playGameErrorSpeech("ERR_GENERIC_NO_TARGET");
         return;
     }
 
     auto target = owner_.getTarget();
     if (!target) {
         owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
+        owner_.playGameErrorSpeech("ERR_GENERIC_NO_TARGET");
         return;
     }
 

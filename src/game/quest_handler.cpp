@@ -831,6 +831,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_BAG_FULL_S",
                                                                "%s failed: Inventory is full.", questTitle));
                     owner_.addUIError(interfaceString("ERR_INV_FULL", "Inventory is full."));
+                    owner_.playGameErrorSpeech("ERR_INV_FULL");
                 } else if (reason == 0x11) {
                     owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_MAX_COUNT_S",
                                                                "%s failed: Duplicate item found.", questTitle));

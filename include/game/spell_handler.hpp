@@ -494,6 +494,9 @@ public:
     /// (cast_failure::gameError), where the client's table gives it one
     /// (0x00808200 -> 0x005216f0 -> 0x00986d00).
     void sayCastFailure(uint32_t spellId, uint8_t result) const;
+    /// And a pet's (0x00805610): its cooldown and power lines speak too, in
+    /// the player's voice.
+    void sayPetCastFailure(uint32_t spellId, uint8_t result) const;
 
 private:
     std::unordered_map<uint32_t, uint64_t> pendingPetNameQueries_;

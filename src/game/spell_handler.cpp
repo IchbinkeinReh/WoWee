@@ -1310,6 +1310,10 @@ void SpellHandler::sayCastFailure(uint32_t spellId, uint8_t result) const {
     owner_.playGameErrorSpeech(cast_failure::gameError(result, spellRowOf(owner_, spellId)));
 }
 
+void SpellHandler::sayPetCastFailure(uint32_t spellId, uint8_t result) const {
+    owner_.playGameErrorSpeech(cast_failure::petGameError(result, spellRowOf(owner_, spellId)));
+}
+
 void SpellHandler::armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required) {
     // 0x0080cce0: the cursor holds it (0x00d3f4e4) until a unit is clicked
     // or it is put down; it takes the place of a spell held for a place.

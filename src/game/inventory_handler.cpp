@@ -1863,6 +1863,7 @@ void InventoryHandler::repairItem(uint64_t vendorGuid, uint64_t itemGuid) {
     if (cost > 0 && owner_.getMoneyCopper() < cost) {
         // ERR_NOT_ENOUGH_MONEY, as the repair cursor checks it (0x005d8650).
         owner_.addUIError(uiText("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        owner_.playGameErrorSpeech("ERR_NOT_ENOUGH_MONEY");
         return;
     }
 
@@ -1892,6 +1893,7 @@ void InventoryHandler::repairAll(uint64_t vendorGuid, bool useGuildBank) {
     if (!useGuildBank && totalCost > 0 && owner_.getMoneyCopper() < totalCost) {
         // ERR_NOT_ENOUGH_MONEY, as RepairAllItems checks it (0x00585c90).
         owner_.addUIError(uiText("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        owner_.playGameErrorSpeech("ERR_NOT_ENOUGH_MONEY");
         return;
     }
 
@@ -3647,11 +3649,13 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
             ? static_cast<uint8_t>(packet.readUInt32()) : 0;
         const GameErrorText err = inventoryChangeError(equipError);
         if (err.key) owner_.addUIError(uiText(err.key, err.enUS));
+        if (err.key) owner_.playGameErrorSpeech(err.key);
     } else if (error != 0 && error != 20) {
         const GameErrorText err = mailError(error);
         // ERR_USER_SQUELCHED is the one the table sends to chat.
         if (error == 17) owner_.addSystemChatMessage(uiText(err.key, err.enUS));
         else owner_.addUIError(uiText(err.key, err.enUS));
+        owner_.playGameErrorSpeech(err.key);
     }
 
     if (action == MAIL_SEND) {
@@ -3825,6 +3829,7 @@ void InventoryHandler::handleBuyBankSlotResult(network::Packet& packet) {
     };
     if (result < 3) {
         owner_.addUIError(uiText(kBankSlotErrors[result].key, kBankSlotErrors[result].enUS));
+        owner_.playGameErrorSpeech(kBankSlotErrors[result].key);
     } else if (result == 3) {
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PLAYERBANKBAGSLOTS_CHANGED", {});
     }
@@ -4308,6 +4313,7 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
             default: err = {"ERR_AUCTION_DATABASE_ERROR", "Internal auction error."}; break;
         }
         if (err.key) owner_.addUIError(uiText(err.key, err.enUS));
+        if (err.key) owner_.playGameErrorSpeech(err.key);
     }
 }
 
@@ -4464,6 +4470,7 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
     // you."
     auto error = [this](const char* key, const char* enUS) {
         owner_.addUIError(uiText(key, enUS));
+        owner_.playGameErrorSpeech(key);
     };
     switch (status) {
         // The codes are AzerothCore's TradeStatus enum, checked against

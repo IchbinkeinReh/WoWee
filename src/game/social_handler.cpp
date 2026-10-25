@@ -57,6 +57,9 @@ enum class ErrTo { Chat, Info, Error };
 
 void gameError(GameHandler& gh, ErrTo to, const char* key, const char* enUS,
                const std::vector<std::string>& args = {}) {
+    // The character's line for it first, as 0x005216f0 plays it before the
+    // words are made - wherever they go.
+    gh.playGameErrorSpeech(key);
     const std::string text = interfaceFormat(key, enUS, args);
     if (text.empty()) return;
     switch (to) {

@@ -83,3 +83,22 @@ TEST_CASE("most refusals say nothing", "[cast_failure]") {
         CHECK_FALSE(spoken(r, spell));
     }
 }
+
+TEST_CASE("a pet's refused cast speaks only its cooldown and power lines", "[cast_failure]") {
+    cf::SpellRow claw{};
+    claw.attributes = cf::kAttrAbility;
+    claw.powerType = 2;  // focus
+    CHECK(forGameError(cf::petGameError(0x43, claw)) == PlayerErrorSpeech::ABILITY_COOLDOWN);
+    CHECK_FALSE(forGameError(cf::petGameError(0x55, claw)));
+    cf::SpellRow firebolt{};
+    firebolt.powerType = 0;
+    CHECK(forGameError(cf::petGameError(0x43, firebolt)) == PlayerErrorSpeech::SPELL_COOLDOWN);
+    CHECK(forGameError(cf::petGameError(0x55, firebolt)) == PlayerErrorSpeech::NO_MANA);
+    // Its own lines are silent: out of range is ERR_PET_SPELL_OUT_OF_RANGE.
+    CHECK(cf::petGameError(0x61, firebolt) == "ERR_PET_SPELL_OUT_OF_RANGE");
+    CHECK_FALSE(forGameError(cf::petGameError(0x61, firebolt)));
+    // No potion or food variant for a pet.
+    cf::SpellRow potion{};
+    potion.category = 4;
+    CHECK(cf::petGameError(0x43, potion) == "ERR_SPELL_COOLDOWN");
+}
