@@ -4,6 +4,7 @@
 
 #include "game/chat_channels.hpp"
 #include "game/chat_filters.hpp"
+#include "game/chat_spam_filter.hpp"
 
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
@@ -207,6 +208,8 @@ private:
                              uint8_t memberFlags, bool removing);
     void initializeChatLog();
     void logChatMessage(const MessageChatData& msg, const char* source);
+    /// SMSG_EXPECTED_SPAM_RECORDS (0x00501c70): the server's spam regexes.
+    void handleExpectedSpamRecords(network::Packet& packet);
 
     GameHandler& owner_;
 
@@ -216,6 +219,9 @@ private:
     /// is looking for a line pasted again a moment later, not keeping a record
     /// of the conversation. See repeatsRecentLine in chat_filters.hpp.
     std::deque<RecentChatLine> recentChatLines_;
+    /// The server's compiled spam regexes (SMSG_EXPECTED_SPAM_RECORDS), run
+    /// over player chat to mask gold-seller spam (0x00509dd0).
+    ChatSpamFilter serverSpam_;
     size_t maxChatHistory_ = 100;
     uint64_t chatUidCounter_ = 0;  // monotonic uid for MessageChatData::uid
     std::vector<std::string> joinedChannels_;

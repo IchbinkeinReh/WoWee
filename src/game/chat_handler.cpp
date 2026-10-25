@@ -261,6 +261,21 @@ void ChatHandler::writeChatLogLine(ChatType type, const std::string& text, const
                  << *line << "\r\n";
 }
 
+void ChatHandler::handleExpectedSpamRecords(network::Packet& packet) {
+    // SMSG_EXPECTED_SPAM_RECORDS (0x00501c70): a count, then that many
+    // null-terminated regular expressions the server wants matched against chat.
+    if (!packet.hasRemaining(4)) return;
+    const uint32_t count = packet.readUInt32();
+    std::vector<std::string> patterns;
+    patterns.reserve(count);
+    for (uint32_t i = 0; i < count && packet.hasRemaining(1); ++i) {
+        patterns.push_back(packet.readString());
+    }
+    serverSpam_.setPatterns(patterns);
+    LOG_DEBUG("SMSG_EXPECTED_SPAM_RECORDS: ", serverSpam_.patternCount(), " of ", count,
+              " spam patterns compiled");
+}
+
 void ChatHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_MESSAGECHAT] = [this](network::Packet& packet) {
         if (owner_.getState() == WorldState::IN_WORLD) handleMessageChat(packet);
@@ -294,6 +309,10 @@ void ChatHandler::registerOpcodes(DispatchTable& table) {
     };
     table[Opcode::SMSG_TEXT_EMOTE] = [this](network::Packet& packet) {
         if (owner_.getState() == WorldState::IN_WORLD) handleTextEmote(packet);
+    };
+    // The server's spam regexes, which mask gold-seller lines in player chat.
+    table[Opcode::SMSG_EXPECTED_SPAM_RECORDS] = [this](network::Packet& packet) {
+        handleExpectedSpamRecords(packet);
     };
     table[Opcode::SMSG_EMOTE] = [this](network::Packet& packet) {
         if (owner_.getState() != WorldState::IN_WORLD) return;
@@ -919,6 +938,11 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
     if (fromAPlayer) {
         // Disable Spam Filter, so the CVar being on means filtering happens.
         if (addons::storedCVarValue("spamFilter", "1") != "0") {
+            // The server's own spam regexes (SMSG_EXPECTED_SPAM_RECORDS) mask
+            // the matched run in place - the gold-seller filter (0x00509dd0).
+            // Masked here, before the bubble, the event and the log, so every
+            // one shows the masked line, as the client does.
+            serverSpam_.censor(data.message);
             const double now = std::chrono::duration<double>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
             if (repeatsRecentLine(recentChatLines_, data.senderGuid, data.message, now)) {

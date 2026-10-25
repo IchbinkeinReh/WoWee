@@ -3034,6 +3034,13 @@ wowee_add_test(test_mount_seat
 wowee_add_test(test_mount_bank
     SOURCES test_mount_bank.cpp ../src/rendering/animation/mount_fsm.cpp)
 
+# ── test_chat_spam_filter ────────────────────
+# The server's spam regexes mask matched runs in player chat (0x00501c70,
+# 0x00509dd0), skipping colour spans (0x004fcf40).
+wowee_add_test(test_chat_spam_filter
+    SOURCES test_chat_spam_filter.cpp ${CMAKE_SOURCE_DIR}/src/game/chat_spam_filter.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_rider_mount_wait ────────────────────────────
 # A rider kept out of the world until its mount is drawn (0x0073d5d0 hangs
 # it on the mount's model; 0x008251b0 -> 0x00743110 waits for both).
