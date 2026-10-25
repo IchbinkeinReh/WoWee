@@ -857,6 +857,12 @@ wowee_add_test(test_play_limit
     SOURCES test_play_limit.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_vocal_error ─────────────────────────────────────────
+# Which game errors the character speaks, and the line each one is.
+wowee_add_test(test_vocal_error
+    SOURCES test_vocal_error.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_tile_size_agreement ─────────────────────────────────
 # The ADT tile size, which three headers each declared and two files spelled
 # with two fewer decimals. Pins the value against its own arithmetic.
