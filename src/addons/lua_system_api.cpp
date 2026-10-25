@@ -1385,6 +1385,27 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // everything unlisted, which is right for a flag and wrong for any setting
     // whose value is a word.
     else if (n == "showtimestamps") lua_pushstring(L, "none");
+    // The selection circle under the target and the highlight circle under the
+    // mouseover unit, both registered on (0x00740000 "ObjectSelectionCircle"
+    // &DAT_009e1464 = "1"; 0x00510000 "unitHighlights" "1") and both drawn by
+    // this client regardless: GameScreen's target circle is unconditional
+    // (0x00743ec0, "while ObjectSelectionCircle is on - its default"), and the
+    // unit highlight follows the mouseover whenever the interface is shown,
+    // which here is always. Falling through to "0" left either control reading
+    // off while the circle was on screen.
+    else if (n == "objectselectioncircle") lua_pushstring(L, "1");
+    else if (n == "unithighlights") lua_pushstring(L, "1");
+    // Helpful spells self-cast when nothing friendly is targeted, as the client
+    // registers it (0x00510000 "autoSelfCast" "1") and as this client does:
+    // GameHandler::autoSelfCast_ starts true and GetCVar answers "1" from it,
+    // so only GetCVarDefault was left on "0" - the value the Combat panel's
+    // Defaults button would have restored, turning off a feature that is on.
+    else if (n == "autoselfcast") lua_pushstring(L, "1");
+    // Offline guild members are listed, as the client registers it (0x00510000
+    // "guildShowOffline" "1") and as this client's roster shows them
+    // (guildShowOffline() starts true, and the roster it is given holds
+    // everyone); the default answered "0" against a list that shows them.
+    else if (n == "guildshowoffline") lua_pushstring(L, "1");
     else lua_pushstring(L, "0");
 }
 
