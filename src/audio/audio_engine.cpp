@@ -973,6 +973,27 @@ void AudioEngine::update(float deltaTime) {
     }
 }
 
+bool AudioEngine::decodeToFloat(const std::vector<uint8_t>& data, std::vector<float>& samples, uint32_t& channels,
+                                uint32_t& sampleRate) {
+    if (data.empty()) return false;
+    ma_decoder decoder;
+    ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 0, 0);
+    if (ma_decoder_init_memory(data.data(), data.size(), &config, &decoder) != MA_SUCCESS) return false;
+    channels = decoder.outputChannels;
+    sampleRate = decoder.outputSampleRate;
+    ma_uint64 frames = 0;
+    if (ma_decoder_get_length_in_pcm_frames(&decoder, &frames) != MA_SUCCESS || frames == 0 ||
+        frames > static_cast<ma_uint64>(sampleRate) * 60) {
+        frames = static_cast<ma_uint64>(sampleRate) * 60;
+    }
+    samples.assign(static_cast<size_t>(frames) * channels, 0.0f);
+    ma_uint64 read = 0;
+    const ma_result result = ma_decoder_read_pcm_frames(&decoder, samples.data(), frames, &read);
+    ma_decoder_uninit(&decoder);
+    samples.resize(static_cast<size_t>(read) * channels);
+    return (result == MA_SUCCESS || result == MA_AT_END) && read > 0 && channels > 0;
+}
+
 uint32_t AudioEngine::playingOf(PlayLimit limit) const {
     if (limit == PlayLimit::None) return 0;
     uint32_t playing = 0;

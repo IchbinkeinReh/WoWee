@@ -875,6 +875,13 @@ wowee_add_test(test_loot_error
     SOURCES test_loot_error.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_sound_filter ────────────────────────────────────────
+# A SoundFilter chain's units over a clip: echo, pitch, low pass, bypass.
+wowee_add_test(test_sound_filter
+    SOURCES test_sound_filter.cpp
+            ${CMAKE_SOURCE_DIR}/src/audio/sound_filter.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_tile_size_agreement ─────────────────────────────────
 # The ADT tile size, which three headers each declared and two files spelled
 # with two fewer decimals. Pins the value against its own arithmetic.

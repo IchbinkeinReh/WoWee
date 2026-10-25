@@ -120,6 +120,12 @@ public:
     /// cleaned up like a sound that ended (no-op once it has finished).
     void stopSoundWithFade(uint32_t id, float seconds);
 
+    /// A whole clip decoded to interleaved float samples, for a caller that
+    /// works on them before playing (audio/sound_filter.hpp). False when it
+    /// will not decode.
+    static bool decodeToFloat(const std::vector<uint8_t>& data, std::vector<float>& samples,
+                              uint32_t& channels, uint32_t& sampleRate);
+
     // Music streaming (for background music)
     // Retains shared ownership: the decoder streams directly from encoded tracks that
     // run to several MB, so cached music must not be copied for every playback.

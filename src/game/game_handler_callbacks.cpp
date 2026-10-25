@@ -526,7 +526,8 @@ void GameHandler::playErrorSpeech(audio::PlayerErrorSpeech type) {
     const Character* ch = getActiveCharacter();
     if (!ch) return;
     voice->playError(type, static_cast<uint8_t>(ch->race),
-                     static_cast<uint8_t>(toServerGender(ch->gender)));
+                     static_cast<uint8_t>(toServerGender(ch->gender)),
+                     static_cast<uint8_t>(ch->characterClass));
 }
 
 void GameHandler::playGameErrorSound(std::string_view gameErrorKey) {

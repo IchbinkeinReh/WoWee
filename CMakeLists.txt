@@ -737,6 +737,7 @@ set(WOWEE_SOURCES
     src/audio/mount_sound_manager.cpp
     src/audio/npc_voice_manager.cpp
     src/audio/player_voice_manager.cpp
+    src/audio/sound_filter.cpp
     src/audio/ambient_sound_manager.cpp
     src/audio/ui_sound_manager.cpp
     src/audio/combat_sound_manager.cpp

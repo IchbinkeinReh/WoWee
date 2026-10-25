@@ -3,6 +3,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
+#include "addons/lua_api_registrations.hpp"
 
 #include <algorithm>
 #include <numeric>
@@ -25,6 +26,19 @@ constexpr uint32_t kSoundFreq0 = 13;
 constexpr uint32_t kSoundDirectory = 23;
 constexpr uint32_t kSoundVolume = 24;
 
+/// SoundFilter.dbc: ID, Name. SoundFilterElem.dbc: ID, SoundFilterID,
+/// OrderIndex, FilterType, Params[9].
+constexpr uint32_t kFilterElemCount = 13;
+
+/// The client's race names for the filter (0x00b24180).
+const char* filterRaceName(uint8_t race) {
+    static constexpr const char* kNames[] = {nullptr, "Human", "Orc", "Dwarf", "NightElf", "Scourge", "Tauren",
+                                             "Gnome", "Troll", "Goblin", "BloodElf", "Draenei"};
+    return race < std::size(kNames) ? kNames[race] : nullptr;
+}
+
+constexpr uint8_t kClassDeathKnight = 6;
+
 } // namespace
 
 bool PlayerVoiceManager::initialize(pipeline::AssetManager* assets) {
@@ -35,6 +49,9 @@ bool PlayerVoiceManager::initialize(pipeline::AssetManager* assets) {
 void PlayerVoiceManager::shutdown() {
     sounds_.fill(0);
     kits_.clear();
+    deathKnightFilter_.clear();
+    deathKnightFilterFor_ = -1;
+    filtered_.clear();
     loadedRace_ = -1;
     loadedGender_ = -1;
     assetManager_ = nullptr;
@@ -95,7 +112,47 @@ const PlayerVoiceManager::Kit* PlayerVoiceManager::kit(uint32_t soundId) {
     return it->second.files.empty() ? nullptr : &it->second;
 }
 
-void PlayerVoiceManager::playError(PlayerErrorSpeech type, uint8_t raceId, uint8_t gender) {
+std::vector<sound_filter::Element> PlayerVoiceManager::loadFilter(const std::string& name) const {
+    std::vector<sound_filter::Element> chain;
+    if (!assetManager_) return chain;
+    auto filters = assetManager_->loadDBCOptional("SoundFilter.dbc");
+    auto elems = assetManager_->loadDBCOptional("SoundFilterElem.dbc");
+    if (!filters || !elems || filters->getFieldCount() < 2 || elems->getFieldCount() < kFilterElemCount) return chain;
+    uint32_t id = 0;
+    for (uint32_t i = 0; i < filters->getRecordCount() && id == 0; ++i) {
+        if (filters->getString(i, 1) == name) id = filters->getUInt32(i, 0);
+    }
+    if (id == 0) return chain;
+    std::vector<std::pair<uint32_t, sound_filter::Element>> ordered;
+    for (uint32_t i = 0; i < elems->getRecordCount(); ++i) {
+        if (elems->getUInt32(i, 1) != id) continue;
+        sound_filter::Element e;
+        e.type = elems->getUInt32(i, 3);
+        for (uint32_t p = 0; p < e.params.size(); ++p) e.params[p] = elems->getFloat(i, 4 + p);
+        ordered.emplace_back(elems->getUInt32(i, 2), e);
+    }
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (auto& [order, e] : ordered) chain.push_back(e);
+    return chain;
+}
+
+const std::vector<uint8_t>* PlayerVoiceManager::filtered(const std::vector<uint8_t>& file) {
+    if (auto it = filtered_.find(&file); it != filtered_.end()) return it->second.empty() ? &file : &it->second;
+    std::vector<float> samples;
+    uint32_t channels = 0, rate = 0;
+    std::vector<uint8_t> out;
+    if (AudioEngine::decodeToFloat(file, samples, channels, rate)) {
+        sound_filter::apply(samples, channels, rate, deathKnightFilter_);
+        out = sound_filter::encodeWav(samples, channels, rate);
+    }
+    // Remembered either way: a file that will not decode plays as it is.
+    auto& kept = filtered_[&file];
+    kept = std::move(out);
+    return kept.empty() ? &file : &kept;
+}
+
+void PlayerVoiceManager::playError(PlayerErrorSpeech type, uint8_t raceId, uint8_t gender, uint8_t classId) {
     if (!enabled_ || !assetManager_) return;
     if (!AudioEngine::instance().isInitialized()) return;
 
@@ -119,6 +176,21 @@ void PlayerVoiceManager::playError(PlayerErrorSpeech type, uint8_t raceId, uint8
             }
             roll -= k->frequency[i];
         }
+    }
+    // A Death Knight's through its race's and gender's filter, with DSP
+    // effects on (0x004cdf70 builds none without them; on by default with
+    // two processors or more).
+    if (classId == kClassDeathKnight && addons::storedCVarValue("Sound_EnableDSPEffects", "1") != "0") {
+        const int key = raceId * 2 + (gender != 0 ? 1 : 0);
+        if (key != deathKnightFilterFor_) {
+            deathKnightFilterFor_ = key;
+            filtered_.clear();
+            const char* race = filterRaceName(raceId);
+            deathKnightFilter_ = race ? loadFilter(std::string("Death Knight ") + race +
+                                                   (gender != 0 ? " Female" : " Male"))
+                                      : std::vector<sound_filter::Element>{};
+        }
+        if (!deathKnightFilter_.empty()) file = filtered(*file);
     }
     AudioEngine::instance().playSound2D(*file, k->volume * volumeScale_, 1.0f, Channel::Own,
                                         PlayLimit::ErrorSpeech);
