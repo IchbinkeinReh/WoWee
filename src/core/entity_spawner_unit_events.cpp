@@ -12,6 +12,7 @@
 #include "rendering/m2_event_sounds.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/unit_model_events.hpp"
+#include "rendering/unit_splash.hpp"
 #include "rendering/terrain_manager.hpp"
 #include "rendering/water_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
@@ -20,6 +21,7 @@
 #include "audio/footstep_manager.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <limits>
 
@@ -267,6 +269,98 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
             break;
         }
     }
+}
+
+
+void EntitySpawner::playUnitSplashes(uint32_t localPlayerInstance) {
+    namespace us = rendering::unit_splash;
+    rendering::CharacterRenderer* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!cr || !gameHandler_ || !assetManager_) return;
+    auto races = assetManager_->loadDBCOptional("ChrRaces.dbc");
+    if (!races || races->getFieldCount() <= us::kChrRacesSplashSoundColumn) return;
+    auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
+    auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+    rendering::WaterRenderer* water = renderer_->getWaterRenderer();
+    const auto& entities = gameHandler_->getEntityManager();
+    const auto& creatureInfo = gameHandler_->getCreatureInfoCache();
+    const uint64_t self = gameHandler_->getPlayerGuid();
+    const uint64_t mover = gameHandler_->activeMover();
+    const bool listenerAtCharacter = addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0";
+    const uint16_t bytes0 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0);
+    const uint16_t scaleField = game::fieldIndex(game::UF::OBJECT_FIELD_SCALE_X);
+    rendering::M2EventSounds& player = renderer_->getM2EventSounds();
+
+    // The display's CreatureModelData CollisionHeight at its scale.
+    const auto modelHeight = [&](const game::Unit& unit) -> float {
+        const int32_t display = displays ? displays->findRecordById(unit.getDisplayId()) : -1;
+        if (display < 0 || !models || models->getFieldCount() <= us::kModelCollisionHeightColumn)
+            return us::kDefaultCollisionHeight;
+        const auto drow = static_cast<uint32_t>(display);
+        const int32_t model = models->findRecordById(displays->getUInt32(drow, 1));
+        if (model < 0) return us::kDefaultCollisionHeight;
+        const auto mrow = static_cast<uint32_t>(model);
+        const float objectScale =
+            scaleField != 0xFFFF ? std::bit_cast<float>(unit.getField(scaleField)) : 1.0f;
+        return us::collisionHeight(models->getFloat(mrow, us::kModelCollisionHeightColumn), objectScale,
+                                   displays->getFloat(drow, us::kDisplayScaleColumn),
+                                   models->getFloat(mrow, us::kModelScaleColumn));
+    };
+
+    std::unordered_map<uint64_t, float> kept;
+    const auto check = [&](uint64_t guid, uint32_t instanceId) {
+        auto entity = entities.getEntity(guid);
+        if (!entity || !entity->isUnit()) return;
+        const auto& unit = static_cast<const game::Unit&>(*entity);
+        // Only a unit with a race has a splash to play (+0x8f0).
+        const uint32_t race = bytes0 != 0xFFFF ? (unit.getField(bytes0) & 0xFFu) : 0u;
+        const int32_t raceRow = race != 0 ? races->findRecordById(race) : -1;
+        const uint32_t sound =
+            raceRow >= 0 ? races->getUInt32(static_cast<uint32_t>(raceRow), us::kChrRacesSplashSoundColumn) : 0u;
+        if (sound == 0) return;
+        // Where the unit stands: the renderer's own character, else the
+        // instance it is drawn by - its mount's while it rides.
+        glm::vec3 at;
+        if (guid == self) {
+            at = renderer_->getCharacterPosition();
+        } else {
+            uint32_t drawn = instanceId;
+            if (const RemotePlayerMount* mount = getRemotePlayerMount(guid); mount && mount->instanceId != 0)
+                drawn = mount->instanceId;
+            if (!cr->getInstancePosition(drawn, at)) return;
+        }
+        float depth = 0.0f;
+        if (water) {
+            if (const auto level = water->getWaterHeightAt(at.x, at.y)) depth = *level - at.z;
+        }
+        const auto last = splashDepth_.find(guid);
+        const float lastDepth = last != splashDepth_.end() ? last->second : 0.0f;
+        const uint32_t moveFlags = guid == self ? gameHandler_->getMovementInfo().flags : unit.getReportedMoveFlags();
+        if ((moveFlags & ue::kMoveFlagSwimming) != 0) {
+            // Kept as it was while swimming.
+            kept[guid] = lastDepth;
+            return;
+        }
+        kept[guid] = depth;
+        const bool isPlayer = entity->getType() == game::ObjectType::PLAYER;
+        bool byModel = isPlayer;
+        if (!isPlayer) {
+            if (auto it = creatureInfo.find(unit.getEntry()); it != creatureInfo.end())
+                byModel = (it->second.typeFlags & us::kTypeFlagModelCollision) != 0;
+        }
+        const float height = byModel ? modelHeight(unit) : us::kDefaultCollisionHeight;
+        if (!us::crossed(height, depth, lastDepth)) return;
+        if (guid == mover && listenerAtCharacter) {
+            player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_,
+                            audio::PlayLimit::RaceSplash);
+        } else {
+            player.playOnce(sound, &at, 1.0f, assetManager_, audio::PlayLimit::RaceSplash);
+        }
+    };
+
+    check(self, localPlayerInstance);
+    for (const auto& [guid, instanceId] : playerInstances_) check(guid, instanceId);
+    for (const auto& [guid, instanceId] : creatureInstances_) check(guid, instanceId);
+    splashDepth_ = std::move(kept);
 }
 
 }  // namespace wowee::core

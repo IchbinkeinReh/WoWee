@@ -3,6 +3,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "rendering/unit_model_events.hpp"
+#include "rendering/unit_splash.hpp"
 
 namespace ue = wowee::rendering::unit_event;
 
@@ -147,4 +148,20 @@ TEST_CASE("the footfalls 0x00747240 silences before looking for a sound", "[unit
     CHECK_FALSE(ue::footfallSilent(0, 0x1, 0, false, ue::kPlayerFlagGhost));
     // Other player flags do not.
     CHECK_FALSE(ue::footfallSilent(0, 0x1, 0, true, 0x8u));
+}
+
+TEST_CASE("a unit splashes crossing four tenths of its height in water", "[unit_splash]") {
+    namespace us = wowee::rendering::unit_splash;
+    // A human: HumanMale's 2.031 at scale 1 - the mark at 0.81 deep.
+    const float h = us::collisionHeight(2.031f, 1.0f, 1.0f, 1.0f);
+    CHECK(h == Catch::Approx(2.031f));
+    CHECK(us::crossed(h, 0.9f, 0.7f));     // wading in
+    CHECK(us::crossed(h, 0.7f, 0.9f));     // and out
+    CHECK_FALSE(us::crossed(h, 0.5f, 0.2f));
+    CHECK_FALSE(us::crossed(h, 1.4f, 0.9f));
+    // A scale below 1 counts as 1; a display scale of nothing as 1.
+    CHECK(us::collisionHeight(2.0f, 0.5f, 0.0f, 1.0f) == Catch::Approx(2.0f));
+    CHECK(us::collisionHeight(1.653f, 1.0f, 1.35f, 1.0f) == Catch::Approx(1.653f * 1.35f));
+    // A creature not sized by its model is 73/36 tall.
+    CHECK(us::kDefaultCollisionHeight == Catch::Approx(2.0277778f));
 }

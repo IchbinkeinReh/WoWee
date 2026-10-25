@@ -357,6 +357,9 @@ public:
     /// mount's (0x0073d5d0 hands the mount the unit's callback).
     /// `localPlayerInstance` is the renderer's own character.
     void playUnitModelEvents(uint32_t localPlayerInstance);
+    /// The race splash of each unit wading across four tenths of its height
+    /// into or out of water (rendering/unit_splash.hpp).
+    void playUnitSplashes(uint32_t localPlayerInstance);
 
     // Mount
     void setMountDisplayId(uint32_t displayId) { pendingMountDisplayId_ = displayId; }
@@ -1346,6 +1349,9 @@ private:
     /// (0x00ca12d4), in steady-clock ms; and the draws the slots' chances take.
     uint32_t lastStandSoundMs_ = 0;
     uint32_t unitEventRandom_ = 0x2545F491u;
+    /// Each unit's depth below the water at its last check while not
+    /// swimming (+0x784), by guid.
+    std::unordered_map<uint64_t, float> splashDepth_;
     /// FootstepTerrainLookup by creature footstep id and terrain type, built
     /// once its tables are read (0x004cf990).
     std::shared_ptr<const rendering::unit_event::FootstepTerrainSounds> footstepSounds_;

@@ -9,6 +9,7 @@ namespace pl = wowee::audio::play_limit;
 
 TEST_CASE("the client's counted play types allow its own numbers", "[audio]") {
     CHECK(pl::maxPlaying(PlayLimit::ErrorSpeech) == 1);
+    CHECK(pl::maxPlaying(PlayLimit::RaceSplash) == 2);
     CHECK(pl::maxPlaying(PlayLimit::UnitFootstep) == 6);
     CHECK(pl::maxPlaying(PlayLimit::OwnFootstep) == 4);
 }

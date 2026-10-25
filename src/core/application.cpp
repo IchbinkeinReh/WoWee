@@ -5194,6 +5194,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
     if (entitySpawner_ && renderer) {
         entitySpawner_->updateBlobShadows(renderer->getCharacterInstanceId());
         entitySpawner_->playUnitModelEvents(renderer->getCharacterInstanceId());
+        entitySpawner_->playUnitSplashes(renderer->getCharacterInstanceId());
     }
 }
 
