@@ -617,6 +617,9 @@ private:
     // --- Spell state ---
     std::unordered_set<uint32_t> knownSpells_;
     uint8_t castCount_ = 0;
+    /// The cast count of the player's cast the server last started: the
+    /// running cast a cancel ends (0x00806200).
+    uint8_t runningCastCount_ = 0;
 
     struct GroundTarget {
         uint32_t spellId = 0;

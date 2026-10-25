@@ -3271,6 +3271,11 @@ wowee_add_test(test_minimap_blips
 wowee_add_test(test_unit_model_events
     SOURCES test_unit_model_events.cpp)
 
+# ── test_unit_cast_visual ────────────────────────────────────
+# The cast a unit shows (+0xa60) and its animating bits (game/unit_cast_visual.hpp).
+wowee_add_test(test_unit_cast_visual
+    SOURCES test_unit_cast_visual.cpp)
+
 # ── test_melee_sound ─────────────────────────────────────────
 # What a melee swing's kept hit plays as its attacker's model lands it.
 wowee_add_test(test_melee_sound

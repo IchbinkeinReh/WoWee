@@ -17,6 +17,7 @@
 #include "game/opcode_table.hpp"
 #include "game/corpse_look.hpp"
 #include "game/vehicle.hpp"
+#include "game/unit_cast_visual.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "game/update_field_table.hpp"
 #include "game/go_interaction_anim.hpp"
@@ -3897,6 +3898,13 @@ public:
     void setVehicleAimPower(float power) { vehicleAimPower_ = vehicle::clampAimPower(power); }
     /// Which units are vehicles and who sits in them (game/vehicle.hpp).
     vehicle::VehicleRoster& vehicleRoster() { return vehicleRoster_; }
+    /// The cast each unit shows (+0xa5c, +0xa60, +0xa38 0x400 and 0x200,
+    /// game/unit_cast_visual.hpp).
+    cast_visual::Roster& castVisuals() { return castVisuals_; }
+    const cast_visual::Roster& castVisuals() const { return castVisuals_; }
+    /// What 0x00805330 and 0x007fa2e0 read of a spell: its attributes and
+    /// whether its SpellVisual's PrecastKit animates.
+    cast_visual::Spell castVisualSpell(uint32_t spellId) const;
     const vehicle::VehicleRoster& vehicleRoster() const { return vehicleRoster_; }
 
     // Vendor
@@ -5809,6 +5817,8 @@ private:
     // Vehicle (WotLK): non-zero when player is seated in a vehicle
     uint32_t vehicleId_ = 0;
     vehicle::VehicleRoster vehicleRoster_;
+    cast_visual::Roster castVisuals_;
+    mutable std::unordered_map<uint32_t, bool> precastKitAnimates_;
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     bool petActionsOnBonusBar_ = false;

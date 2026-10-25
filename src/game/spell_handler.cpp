@@ -1624,6 +1624,16 @@ void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
         owner_.askVehicleSeatChange();
         owner_.stopMover();
     }
+    // 0x0080ac90 -> 0x00805330(spell, 0, 1): the cast sent, shown on its
+    // caster as one sent here.
+    {
+        cast_visual::Begin begin;
+        begin.castCount = castCount_;
+        begin.spellId = spellId;
+        begin.casterIsActivePlayer = caster == owner_.getPlayerGuid();
+        begin.spell = owner_.castVisualSpell(spellId);
+        owner_.castVisuals().sent(caster, begin);
+    }
     // Then the global cooldown begins (0x00805d70) - the player's here, the
     // pet's where its bar sends it (notePetActionCast).
     if (caster == owner_.getPlayerGuid()) {
@@ -2897,6 +2907,9 @@ void SpellHandler::cancelCast() {
         auto packet = CancelCastPacket::build(currentCastSpellId_);
         owner_.getSocket()->send(packet);
     }
+    // 0x00806200 on the running cast: it ends (0x007fecc0).
+    if (currentCastSpellId_ != 0)
+        owner_.castVisuals().ended(owner_.getPlayerGuid(), runningCastCount_, currentCastSpellId_);
     owner_.pendingGameObjectInteractGuidRef() = 0;
     owner_.lastInteractedGoGuidRef() = 0;
     casting_ = false;
@@ -3566,6 +3579,9 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
 
     const uint64_t gatherGoGuid = owner_.lastInteractedGoGuidRef();
     const bool gatherCast = gatherGoGuid != 0 && isGatherSpellId(data.spellId);
+    // 0x00809af0 -> 0x00808200: the player's cast of that count ends
+    // (0x007fecc0).
+    owner_.castVisuals().ended(owner_.getPlayerGuid(), data.castCount, data.spellId);
 
     // 0x00809af0 fails the pending cast the count names (0x008051d0), not
     // whatever is casting: a spell sent during a cast and refused
@@ -3708,6 +3724,20 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     const bool rangedWeaponAttack = spellclass::isRangedWeaponAutoAttack(data.spellId);
     // 0x00805330: the cast's beginning on the caster (0x007fa2e0).
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
+    // 0x00806700 -> 0x00805330(spell, cast time, 0) for a start not pending
+    // (cast flags 0x1): the cast the caster shows. No cast object here is
+    // aimed (+0x139): only 0x00809f80 marks one, on a trajectory cast the
+    // player sends, which this client does not send.
+    if ((data.castFlags & 0x1u) == 0) {
+        cast_visual::Begin begin;
+        begin.castCount = data.castCount;
+        begin.spellId = data.spellId;
+        begin.castTimeMs = static_cast<int32_t>(data.castTime);
+        begin.casterIsActivePlayer = data.casterUnit == owner_.getPlayerGuid();
+        begin.spell = owner_.castVisualSpell(data.spellId);
+        owner_.castVisuals().started(data.casterUnit, begin);
+    }
+    if (data.casterUnit == owner_.getPlayerGuid()) runningCastCount_ = data.castCount;
 
     // Track cast bar for any non-player caster
     if (data.casterUnit != owner_.getPlayerGuid() && data.castTime > 0 && !rangedWeaponAttack) {
@@ -3842,6 +3872,9 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // Any cast going off, bar a pending one, lets the next failure be
     // reported (0x0080e1b0 clears 0x00d397c4).
     if ((data.castFlags & 0x1u) == 0) failureHold_.forget();
+    // 0x0080e1b0 -> 0x007fecc0 for a cast not pending: the caster's shown
+    // cast ends where it is this one.
+    if ((data.castFlags & 0x1u) == 0) owner_.castVisuals().ended(data.casterUnit, data.castCount, data.spellId);
     if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, true);
     // 0x00805330 for a cast that had no start (instant), as for one that had.
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
@@ -6292,6 +6325,15 @@ void SpellHandler::handleSpellFailedOther(network::Packet& packet) {
     uint64_t failOtherGuid = tbcLike2
         ? (packet.hasRemaining(8) ? packet.readUInt64() : 0)
         : packet.readPackedGuid();
+    // 0x00806ad0: castCount, spellId, result - the caster's shown cast ends
+    // where it is this one (0x007fecc0).
+    if (!tbcLike2 && failOtherGuid != 0 && packet.hasRemaining(5)) {
+        const size_t at = packet.getReadPos();
+        const uint8_t castCount = packet.readUInt8();
+        const uint32_t spellId = packet.readUInt32();
+        packet.setReadPos(at);
+        owner_.castVisuals().ended(failOtherGuid, castCount, spellId);
+    }
     if (failOtherGuid != 0 && failOtherGuid != owner_.getPlayerGuid()) {
         // Which spell it was, before the state that says so is dropped: the
         // cast bar matches the id on a stop against the one it started with,
@@ -6532,9 +6574,18 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
     // Classic omits the castCount byte; TBC and WotLK include it
     const size_t remainingFields = isClassic ? 5u : 6u;  // spellId(4)+reason(1) [+castCount(1)]
     if (packet.hasRemaining(remainingFields)) {
-        if (!isClassic) /*uint8_t castCount =*/ packet.readUInt8();
+        const uint8_t failCastCount = isClassic ? 0 : packet.readUInt8();
         uint32_t failSpellId = packet.readUInt32();
         uint8_t rawFailReason = packet.readUInt8();
+        // 0x00809c70: the caster's shown cast ends where it is this one
+        // (0x007fecc0, after 0x0072ed80); the player's auto-repeat bit goes
+        // for results 0x34..0x36 (0x00807560).
+        if (!isClassic) {
+            const uint64_t caster = failGuid != 0 ? failGuid : owner_.getPlayerGuid();
+            if (caster == owner_.getPlayerGuid() && rawFailReason >= 0x34 && rawFailReason <= 0x36)
+                owner_.castVisuals().autoRepeatStopped(caster);
+            owner_.castVisuals().ended(caster, failCastCount, failSpellId);
+        }
         // Classic result enum starts at 0=AFFECTING_COMBAT; shift +1 for WotLK table
         uint8_t failReason = isClassic ? static_cast<uint8_t>(rawFailReason + 1) : rawFailReason;
         // Nothing said, for the player's own failure either: 0x00809c70 only

@@ -366,9 +366,6 @@ public:
     /// (rendering/melee_sound.hpp).
     void onMeleeHit(const game::AttackerStateUpdateData& data);
     void onMeleeAttackStop(uint64_t attacker);
-    /// A unit beginning a cast (0x00805330): the spell its attack's landing
-    /// sounds by when nothing is kept (rendering/melee_sound.hpp).
-    void noteUnitCast(uint64_t guid, uint32_t spellId);
     /// A spell missing a target (SMSG_SPELL_GO): a parry's or block's
     /// clash on it (0x00755850).
     void onSpellMiss(uint64_t caster, uint64_t target, uint8_t missType, uint32_t spellId);
@@ -693,6 +690,19 @@ private:
         std::optional<uint32_t> eventMs;   ///< the "$VG"/"$VT" event for its seat
     };
     std::unordered_map<uint64_t, HeldVehicleMove> heldVehicleMoves_;
+    /// A vehicle's VehicleEnterAnim / VehicleExitAnim playing on its whole
+    /// model (key bone 0x1a), by vehicle: the instance and animation, until
+    /// it ends (0x00756f80 sets the kit's +0x58 bit 26, 0x00757280 clears
+    /// it).
+    struct WholeModelSeatAnim {
+        uint32_t instance = 0;
+        uint32_t animation = 0;
+    };
+    std::unordered_map<uint64_t, WholeModelSeatAnim> wholeModelSeatAnims_;
+    /// The vehicle kit's +0x58 bit 26: a VehicleSeat animation playing on
+    /// the vehicle's whole model - a passenger's way in or out, or a
+    /// seated one's ride loop (0x007571c0).
+    bool vehicleWholeModelAnimating(uint64_t vehicleGuid) const;
     void stepHeldVehicleMoves(uint32_t nowMs);
     void releaseSeatedPassenger(uint64_t guid, SeatedPassenger& seated, bool landing);
     /// The vehicle a unit's seats count from while it is in a passenger
@@ -1401,8 +1411,6 @@ private:
     void landMeleeHit(const rendering::melee_sound::Hit& hit);
     void meleeModelEvent(uint64_t unitGuid, uint32_t eventId, const glm::vec3& at);
     void landWithNothingKept(uint64_t guid, const glm::vec3& at);
-    /// The spell each unit last began casting (+0xa60).
-    std::unordered_map<uint64_t, uint32_t> lastCastSpell_;
     /// FootstepTerrainLookup by creature footstep id and terrain type, built
     /// once its tables are read (0x004cf990).
     std::shared_ptr<const rendering::unit_event::FootstepTerrainSounds> footstepSounds_;

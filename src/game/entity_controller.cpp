@@ -291,6 +291,7 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
         serverUpdatedTransportGuids_.erase(guid);
         owner_.clearTransportAttachment(guid);
         owner_.vehicleRoster().forget(guid);
+        owner_.castVisuals().forget(guid);
         if (owner_.playerTransportGuidRef() == guid) {
             owner_.clearPlayerTransport();
         }
@@ -3238,6 +3239,7 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
         }
         owner_.clearTransportAttachment(data.guid);
         owner_.vehicleRoster().forget(data.guid);
+        owner_.castVisuals().forget(data.guid);
         entityManager.removeEntity(data.guid);
         LOG_INFO("Destroyed entity: 0x", std::hex, data.guid, std::dec,
                  " (", (data.isDeath ? "death" : "despawn"), ")");

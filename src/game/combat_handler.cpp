@@ -1427,8 +1427,23 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
     const bool hasCount = isActiveExpansion("wotlk");
     const size_t minSize = hasCount ? 6u : 5u;
     if (packet.hasRemaining(minSize)) {
-        if (hasCount) /*uint8_t castCount =*/ packet.readUInt8();
+        const uint8_t castCount = hasCount ? packet.readUInt8() : 0;
         uint32_t spellId   = packet.readUInt32();
+        // 0x00806c30: the cast of that count by the player's charm, else
+        // its summon, ends (0x007fecc0).
+        if (hasCount) {
+            if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+                const auto guidAt = [&](UF f) -> uint64_t {
+                    const uint16_t i = fieldIndex(f);
+                    if (i == 0xFFFF) return 0;
+                    return (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(i + 1))) << 32) |
+                           player->getField(i);
+                };
+                uint64_t pet = guidAt(UF::UNIT_FIELD_CHARM);
+                if (pet == 0) pet = guidAt(UF::UNIT_FIELD_SUMMON);
+                if (pet != 0) owner_.castVisuals().ended(pet, castCount, spellId);
+            }
+        }
         uint8_t  reason    = (packet.hasRemaining(1))
                                  ? packet.readUInt8() : 0;
         // Up to two ids after the result, read when present, as

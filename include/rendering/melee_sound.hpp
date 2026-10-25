@@ -107,7 +107,7 @@ constexpr uint32_t customAttackColumn(uint32_t eventId) {
 /// A landing with nothing kept and no target: a creature's Exertion
 /// (CreatureSoundData +0x4, its pet row in its place), at the event,
 /// outright; a player's the AnimEventSoundID (SpellVisual +0x30) of the
-/// spell it last began casting (+0xa60), a yard over it.
+/// cast it shows (+0xa60, game/unit_cast_visual.hpp), a yard over it.
 constexpr uint32_t kSoundExertionColumn = 1;
 constexpr uint32_t kSpellVisualAnimEventSound = 12;
 constexpr float kAnimEventSoundHeight = 1.0f;
@@ -184,16 +184,16 @@ constexpr bool absorbs(const Hit& hit) {
     return (hit.hitInfo & (kHitFullAbsorb | kHitFullResist)) != 0 || hit.victimState == kStateImmune;
 }
 /// Whether a unit plays no wound animation (0x00722180): a vehicle busy
-/// with a cast (0x007571c0 - its Vehicle.dbc Flags 0x10000 while it casts,
-/// +0xa38 0x400 being set as a cast's precast kit animates it); else a
-/// creature as its cache's type flags 0x8 have it; else - a player, or a
-/// creature whose cache entry has not come - one knocked down (its
-/// animation 121, Knockdown).
+/// (0x007571c0 - a VehicleSeat animation on its whole model, or its
+/// Vehicle.dbc Flags 0x10000 while the cast it shows animates it, +0xa38
+/// 0x400); else a creature as its cache's type flags 0x8 have it; else - a
+/// player, or a creature whose cache entry has not come - one knocked down
+/// (its animation 121, Knockdown).
 constexpr uint32_t kVehicleFlagCastNoWound = 0x10000;
 constexpr uint32_t kCreatureTypeFlagNoWound = 0x8;
 constexpr uint32_t kAnimKnockdown = 121;
-constexpr bool noWound(bool vehicleCasting, std::optional<uint32_t> creatureTypeFlags, uint32_t animation) {
-    if (vehicleCasting) return true;
+constexpr bool noWound(bool vehicleBusy, std::optional<uint32_t> creatureTypeFlags, uint32_t animation) {
+    if (vehicleBusy) return true;
     if (creatureTypeFlags) return (*creatureTypeFlags & kCreatureTypeFlagNoWound) != 0;
     return animation == kAnimKnockdown;
 }

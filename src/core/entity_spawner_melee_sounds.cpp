@@ -201,15 +201,8 @@ void EntitySpawner::onMeleeHit(const game::AttackerStateUpdateData& data) {
         if (ms::exertsOnArrival(hit, unit.getHealth() > 0)) playUnitSlot(unit, ms::exertionSlot(hit), false, nullptr);
     }
     // Units gone from the world take what was kept of them along.
-    if (pendingMeleeHits_.size() + lastCastSpell_.size() > 256) {
+    if (pendingMeleeHits_.size() > 256)
         std::erase_if(pendingMeleeHits_, [&](const auto& kept) { return !entities.getEntity(kept.first); });
-        std::erase_if(lastCastSpell_, [&](const auto& cast) { return !entities.getEntity(cast.first); });
-    }
-}
-
-void EntitySpawner::noteUnitCast(uint64_t guid, uint32_t spellId) {
-    // 0x00805330 -> 0x00715a80 (+0xa60).
-    if (guid != 0 && spellId != 0) lastCastSpell_[guid] = spellId;
 }
 
 void EntitySpawner::onMeleeAttackStop(uint64_t attacker) { settleKeptMeleeHit(attacker); }
@@ -311,10 +304,18 @@ bool EntitySpawner::playsNoWound(const game::Entity& unit) const {
     // 0x00722180.
     const uint64_t guid = unit.getGuid();
     const bool self = guid == gameHandler_->getPlayerGuid();
-    bool vehicleCasting = false;
-    if (const auto* vehicle = gameHandler_->vehicleRoster().vehicleOf(guid);
-        vehicle && (vehicle->flags & ms::kVehicleFlagCastNoWound) != 0) {
-        vehicleCasting = self ? gameHandler_->isCasting() : gameHandler_->getUnitCastState(guid) != nullptr;
+    // 0x007571c0 on its vehicle kit (+0xf5c, with a Vehicle row): a
+    // VehicleSeat animation on its whole model (+0x58 bit 26), or Flags
+    // 0x10000 while the cast it shows animates it (+0xa38 0x400) or a kit's
+    // animation it was told to hold plays (+0xfa4) - which only a type 0 kit
+    // sets (0x0073b140 with 0x00745230's flag 0x80), and only DanceMoves
+    // plays those (0x006e18d0, SMSG_PLAY_DANCE), which this client does not.
+    bool vehicleBusy = false;
+    if (const auto* vehicle = gameHandler_->vehicleRoster().vehicleOf(guid)) {
+        const auto* shown = gameHandler_->castVisuals().state(guid);
+        const bool castAnimates = shown && shown->precastAnimating;
+        vehicleBusy = vehicleWholeModelAnimating(guid) ||
+                      ((vehicle->flags & ms::kVehicleFlagCastNoWound) != 0 && castAnimates);
     }
     std::optional<uint32_t> typeFlags;
     if (unit.getType() == game::ObjectType::UNIT) {
@@ -337,7 +338,7 @@ bool EntitySpawner::playsNoWound(const game::Entity& unit) const {
             if (instance != 0 && !cr->getAnimationState(instance, animation, timeMs, durationMs)) animation = 0;
         }
     }
-    return ms::noWound(vehicleCasting, typeFlags, animation);
+    return ms::noWound(vehicleBusy, typeFlags, animation);
 }
 
 void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
@@ -418,11 +419,11 @@ void EntitySpawner::landWithNothingKept(uint64_t guid, const glm::vec3& at) {
         if (sound != 0) player.playOnce(sound, &at, 1.0f, assetManager_);
         return;
     }
-    // A player's (0x00763570): the AnimEventSoundID of the spell it last
-    // began casting, a yard over it.
-    const auto cast = lastCastSpell_.find(guid);
-    if (cast == lastCastSpell_.end()) return;
-    const uint32_t visualId = gameHandler_->getSpellVisualId(cast->second);
+    // A player's (0x00763570): the AnimEventSoundID of the cast it shows
+    // (+0xa60), a yard over it.
+    const auto* shown = gameHandler_->castVisuals().state(guid);
+    if (!shown || shown->spellId == 0) return;
+    const uint32_t visualId = gameHandler_->getSpellVisualId(shown->spellId);
     auto visuals = assetManager_->loadDBCOptional("SpellVisual.dbc");
     if (visualId == 0 || !visuals || visuals->getFieldCount() <= ms::kSpellVisualAnimEventSound) return;
     const int32_t row = visuals->findRecordById(visualId);

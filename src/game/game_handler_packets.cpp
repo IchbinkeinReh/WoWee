@@ -1766,7 +1766,11 @@ void GameHandler::registerCoreOpcodes() {
     };
 
     // ---- Auto-repeat / auras / dispel / totem ----
-    dispatchTable_[Opcode::SMSG_CANCEL_AUTO_REPEAT] = [this](network::Packet& /*packet*/) {
+    dispatchTable_[Opcode::SMSG_CANCEL_AUTO_REPEAT] = [this](network::Packet& packet) {
+        // 0x0072d130: the unit it names loses its auto-repeat bit (+0xa38
+        // 0x200); the player's own auto-repeat stops with it (0x00807560).
+        if (isActiveExpansion("wotlk") && packet.hasRemaining(1)) castVisuals_.autoRepeatStopped(packet.readPackedGuid());
+        packet.skipAll();
         // The server saying a repeating spell has stopped. Nothing in this
         // client's own interface reads it, which is why it did nothing - but
         // the action button flashes for as long as one is running and stops on
