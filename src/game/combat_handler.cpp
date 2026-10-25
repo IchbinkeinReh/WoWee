@@ -796,17 +796,8 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     if (!isPlayerAttacker && owner_.npcSwingCallbackRef()) {
         owner_.npcSwingCallbackRef()(data.attackerGuid);
     }
-    if (!isPlayerAttacker) {
-        auto entity = owner_.getEntityManager().getEntity(data.attackerGuid);
-        auto* audioCoordinator = owner_.services().audioCoordinator;
-        auto* voiceManager = audioCoordinator ? audioCoordinator->getNpcVoiceManager() : nullptr;
-        if (entity && entity->getType() == ObjectType::UNIT && voiceManager) {
-            auto unit = std::static_pointer_cast<Unit>(entity);
-            const glm::vec3 canonical(unit->getLatestX(), unit->getLatestY(), unit->getLatestZ());
-            voiceManager->playCombatAttack(
-                data.attackerGuid, unit->getDisplayId(), core::coords::canonicalToRender(canonical));
-        }
-    }
+    // A creature's exertion as its hit arrives is its sound slot's, played
+    // with the swing's sounds (rendering/melee_sound.hpp).
 
     if (isPlayerTarget && data.attackerGuid != 0) {
         hostileAttackers_.insert(data.attackerGuid);

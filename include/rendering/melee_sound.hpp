@@ -91,6 +91,50 @@ constexpr bool isLandEvent(uint32_t id) {
     return id == kEventHit || id == 0x30484124 || id == 0x31484124 || id == 0x32484124 || id == 0x33484124;
 }
 
+/// A creature's custom attack sound as its attack lands (0x00756240): for
+/// $AH0..$AH3, a kept hit that did damage plays the attacker's
+/// CreatureSoundData CustomAttack[0..3] (+0x4c..+0x58, columns 19..22) at
+/// the event, counted as type 14, before the blow lands; $CAH has none.
+constexpr uint32_t customAttackColumn(uint32_t eventId) {
+    switch (eventId) {
+    case 0x30484124: return 19;  // $AH0
+    case 0x31484124: return 20;  // $AH1
+    case 0x32484124: return 21;  // $AH2
+    case 0x33484124: return 22;  // $AH3
+    default: return 0;
+    }
+}
+/// A landing with nothing kept and no target: a creature's Exertion
+/// (CreatureSoundData +0x4, its pet row in its place), at the event,
+/// outright; a player's the AnimEventSoundID (SpellVisual +0x30) of the
+/// spell it last began casting (+0xa60), a yard over it.
+constexpr uint32_t kSoundExertionColumn = 1;
+constexpr uint32_t kSpellVisualAnimEventSound = 12;
+constexpr float kAnimEventSoundHeight = 1.0f;
+
+constexpr uint32_t kHitAffectsVictim = 0x2;
+constexpr uint32_t kHitCrushing = 0x20000;
+constexpr uint32_t kHitNoAnimation = 0x40000;
+/// Whether the attacker exerts itself as a hit arrives (0x00755130): alive,
+/// the hit not flagged unanimated, and with a victim state - its Exertion
+/// slot, or ExertionCritical's for a crit, by the slot's chance.
+constexpr bool exertsOnArrival(const Hit& hit, bool attackerAlive) {
+    return attackerAlive && (hit.hitInfo & kHitNoAnimation) == 0 && hit.victimState != 0;
+}
+constexpr uint32_t exertionSlot(const Hit& hit) { return (hit.hitInfo & kHitCrit) != 0 ? 1u : 0u; }
+/// The target's injury slot as the blow lands, after its part (0x00755e40):
+/// none for an absorb, resist or immunity - those are "AbsorbGetHit" - or a
+/// hit that did not reach it; InjuryCrushingBlow (9) for a crushing blow,
+/// InjuryCritical (3) for a crit, Injury (2) for any other but a miss.
+constexpr std::optional<uint32_t> injurySlot(const Hit& hit) {
+    if ((hit.hitInfo & (kHitFullAbsorb | kHitFullResist)) != 0 || hit.victimState == kStateImmune) return std::nullopt;
+    if ((hit.hitInfo & kHitAffectsVictim) == 0) return std::nullopt;
+    if ((hit.hitInfo & kHitCrushing) != 0) return 9u;
+    if ((hit.hitInfo & kHitCrit) != 0) return 3u;
+    if ((hit.hitInfo & kHitMiss) == 0) return 2u;
+    return std::nullopt;
+}
+
 /// An item a unit holds, as its virtual item info has it.
 struct Item {
     uint32_t itemClass = 0;

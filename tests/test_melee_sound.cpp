@@ -59,6 +59,25 @@ TEST_CASE("a spell's parry and block sound only for one that lands at once", "[m
     CHECK(ms::spellDefend(ms::kSpellMissDodge) == ms::SpellDefend::None);
 }
 
+TEST_CASE("the cries of a melee hit", "[melee_sound]") {
+    CHECK(ms::customAttackColumn(0x30484124) == 19);
+    CHECK(ms::customAttackColumn(0x33484124) == 22);
+    CHECK(ms::customAttackColumn(ms::kEventHit) == 0);
+    // The attacker exerts itself for a hit with a state, alive and animated.
+    CHECK(ms::exertsOnArrival(hit(ms::kStateHit, 10), true));
+    CHECK_FALSE(ms::exertsOnArrival(hit(ms::kStateHit, 10), false));
+    CHECK_FALSE(ms::exertsOnArrival(hit(ms::kStateHit, 10, ms::kHitNoAnimation), true));
+    CHECK_FALSE(ms::exertsOnArrival(hit(0, 0), true));
+    CHECK(ms::exertionSlot(hit(ms::kStateHit, 10, ms::kHitCrit)) == 1);
+    // The target's injury.
+    CHECK(ms::injurySlot(hit(ms::kStateHit, 10, ms::kHitAffectsVictim)) == 2u);
+    CHECK(ms::injurySlot(hit(ms::kStateHit, 10, ms::kHitAffectsVictim | ms::kHitCrit)) == 3u);
+    CHECK(ms::injurySlot(hit(ms::kStateHit, 10, ms::kHitAffectsVictim | ms::kHitCrushing | ms::kHitCrit)) == 9u);
+    CHECK_FALSE(ms::injurySlot(hit(ms::kStateHit, 10)));
+    CHECK_FALSE(ms::injurySlot(hit(ms::kStateHit, 0, ms::kHitAffectsVictim | ms::kHitFullAbsorb)));
+    CHECK_FALSE(ms::injurySlot(hit(ms::kStateHit, 0, ms::kHitAffectsVictim | ms::kHitMiss)));
+}
+
 TEST_CASE("who plays no wound animation", "[melee_sound]") {
     // A vehicle busy with a cast, whatever else it is.
     CHECK(ms::noWound(true, 0u, 0));

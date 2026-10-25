@@ -14,6 +14,10 @@ TEST_CASE("the client's counted play types allow its own numbers", "[audio]") {
     CHECK(pl::maxPlaying(PlayLimit::OwnFootstep) == 4);
     CHECK(pl::maxPlaying(PlayLimit::WeaponSwing) == 2);
     CHECK(pl::maxPlaying(PlayLimit::WeaponImpact) == 4);
+    CHECK(pl::maxPlaying(PlayLimit::Exertion) == 1);
+    CHECK(pl::maxPlaying(PlayLimit::Injury) == 2);
+    CHECK(pl::maxPlaying(PlayLimit::ExertionAudible) == 1);
+    CHECK(pl::maxPlaying(PlayLimit::InjuryAudible) == 2);
 }
 
 TEST_CASE("a counted type is refused once its count is playing", "[audio]") {

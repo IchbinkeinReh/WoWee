@@ -27,6 +27,8 @@
 // FootstepTerrainLookup sound - its splash where the foot is in water - see
 // FootstepTerrainSounds.
 
+#include "audio/play_limit.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
@@ -124,6 +126,29 @@ constexpr uint32_t slotChance(uint32_t slot) {
 constexpr bool slotPlays(uint32_t slot, uint32_t random32) {
     const auto roll = static_cast<uint32_t>((static_cast<uint64_t>(random32) * 101u) >> 32);
     return roll <= slotChance(slot);
+}
+
+/// The slots a melee hit asks for: the attacker's exertion as the hit
+/// arrives (0x00755130), the target's injury as it lands (0x00755e40).
+constexpr uint32_t kSlotExertion = 0, kSlotExertionCritical = 1, kSlotInjury = 2, kSlotInjuryCritical = 3,
+                   kSlotInjuryCrushingBlow = 9;
+
+/// The play type a slot's sound is counted as (0x00746b30): the exertions
+/// 9, the injuries 11 - 15 and 16 for a creature whose cache's type flags
+/// have 0x20, which is heard over more of them; the rest uncounted.
+constexpr uint32_t kCreatureTypeFlagMoreAudible = 0x20;
+constexpr audio::PlayLimit slotPlayType(uint32_t slot, bool moreAudible) {
+    switch (slot) {
+    case kSlotExertion:
+    case kSlotExertionCritical:
+        return moreAudible ? audio::PlayLimit::ExertionAudible : audio::PlayLimit::Exertion;
+    case kSlotInjury:
+    case kSlotInjuryCritical:
+    case kSlotInjuryCrushingBlow:
+        return moreAudible ? audio::PlayLimit::InjuryAudible : audio::PlayLimit::Injury;
+    default:
+        return audio::PlayLimit::None;
+    }
 }
 
 /// $FDX's Stand sound: at most once in this long, of every unit (0x00ca12d4).

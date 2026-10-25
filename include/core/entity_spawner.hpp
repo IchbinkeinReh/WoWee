@@ -34,7 +34,7 @@ namespace wowee {
 namespace rendering { class Renderer; namespace unit_event { class FootstepTerrainSounds; } }
 namespace pipeline { class AssetManager; class DBCFile; struct M2Model; struct WMOModel; }
 namespace audio { enum class VoiceType; }
-namespace game { class GameHandler; class Entity; struct CorpseLook; struct AttackerStateUpdateData; }
+namespace game { class GameHandler; class Entity; class Unit; struct CorpseLook; struct AttackerStateUpdateData; }
 
 namespace core {
 
@@ -366,6 +366,9 @@ public:
     /// (rendering/melee_sound.hpp).
     void onMeleeHit(const game::AttackerStateUpdateData& data);
     void onMeleeAttackStop(uint64_t attacker);
+    /// A unit beginning a cast (0x00805330): the spell its attack's landing
+    /// sounds by when nothing is kept (rendering/melee_sound.hpp).
+    void noteUnitCast(uint64_t guid, uint32_t spellId);
     /// A spell missing a target (SMSG_SPELL_GO): a parry's or block's
     /// clash on it (0x00755850).
     void onSpellMiss(uint64_t caster, uint64_t target, uint8_t missType, uint32_t spellId);
@@ -1357,6 +1360,12 @@ private:
     /// When a unit's $FDX last played its Stand sound, of all units
     /// (0x00ca12d4), in steady-clock ms; and the draws the slots' chances take.
     uint32_t lastStandSoundMs_ = 0;
+    /// A unit's CreatureSoundData row, its pet row in its place where asked
+    /// (0x0071a3f0); -1 for none.
+    int32_t unitSoundRow(const game::Unit& unit, bool petRow) const;
+    /// A unit's sound slot (0x00747310): by its chance unless `always`, at
+    /// `at` or where the unit is.
+    void playUnitSlot(const game::Unit& unit, uint32_t slot, bool always, const glm::vec3* at);
     uint32_t unitEventRandom_ = 0x2545F491u;
     /// Each unit's depth below the water at its last check while not
     /// swimming (+0x784), by guid.
@@ -1386,6 +1395,9 @@ private:
     void settleMeleeHit(const rendering::melee_sound::Hit& hit);
     void landMeleeHit(const rendering::melee_sound::Hit& hit);
     void meleeModelEvent(uint64_t unitGuid, uint32_t eventId, const glm::vec3& at);
+    void landWithNothingKept(uint64_t guid, const glm::vec3& at);
+    /// The spell each unit last began casting (+0xa60).
+    std::unordered_map<uint64_t, uint32_t> lastCastSpell_;
     /// FootstepTerrainLookup by creature footstep id and terrain type, built
     /// once its tables are read (0x004cf990).
     std::shared_ptr<const rendering::unit_event::FootstepTerrainSounds> footstepSounds_;

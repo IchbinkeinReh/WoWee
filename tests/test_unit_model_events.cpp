@@ -66,6 +66,15 @@ TEST_CASE("a slot's chance out of 101 draws", "[unit_model_events]") {
     CHECK(ue::slotChance(2) == 60);
 }
 
+TEST_CASE("a slot's play type", "[unit_model_events]") {
+    using wowee::audio::PlayLimit;
+    CHECK(ue::slotPlayType(ue::kSlotExertion, false) == PlayLimit::Exertion);
+    CHECK(ue::slotPlayType(ue::kSlotExertionCritical, true) == PlayLimit::ExertionAudible);
+    CHECK(ue::slotPlayType(ue::kSlotInjuryCrushingBlow, false) == PlayLimit::Injury);
+    CHECK(ue::slotPlayType(ue::kSlotInjuryCritical, true) == PlayLimit::InjuryAudible);
+    CHECK(ue::slotPlayType(ue::kSlotStand, false) == PlayLimit::None);
+}
+
 TEST_CASE("the Stand sound at most every ten seconds", "[unit_model_events]") {
     CHECK(ue::standSoundDue(10000, 0));
     CHECK_FALSE(ue::standSoundDue(19999, 10000));

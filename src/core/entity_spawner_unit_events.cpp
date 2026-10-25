@@ -71,6 +71,72 @@ std::shared_ptr<const ue::FootstepTerrainSounds> loadFootstepSounds(pipeline::As
 
 }  // namespace
 
+int32_t EntitySpawner::unitSoundRow(const game::Unit& unit, bool petRow) const {
+    // The unit's display's CreatureSoundData row (+0x974), and - for the
+    // fidgets and the slots - its pet row in its place while the unit has a
+    // pet number (0x0071a3f0).
+    if (!assetManager_) return -1;
+    auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
+    auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+    auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
+    if (!displays || !models || !sounds || sounds->getFieldCount() < ue::kColumnCount) return -1;
+    const int32_t display = displays->findRecordById(unit.getDisplayId());
+    if (display < 0 || displays->getFieldCount() <= kDisplaySoundColumn) return -1;
+    uint32_t soundId = displays->getUInt32(static_cast<uint32_t>(display), kDisplaySoundColumn);
+    if (soundId == 0 && models->getFieldCount() > kModelSoundColumn) {
+        const int32_t model =
+            models->findRecordById(displays->getUInt32(static_cast<uint32_t>(display), kDisplayModelColumn));
+        if (model >= 0) soundId = models->getUInt32(static_cast<uint32_t>(model), kModelSoundColumn);
+    }
+    int32_t row = soundId != 0 ? sounds->findRecordById(soundId) : -1;
+    if (row < 0 || !petRow) return row;
+    const uint16_t petNumber = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
+    if (petNumber == 0xFFFF || unit.getField(petNumber) == 0) return row;
+    const auto pet = static_cast<int32_t>(sounds->getUInt32(static_cast<uint32_t>(row), ue::kColumnPetRow));
+    if (pet > 0) row = sounds->findRecordById(static_cast<uint32_t>(pet));
+    return row;
+}
+
+void EntitySpawner::playUnitSlot(const game::Unit& unit, uint32_t slot, bool always, const glm::vec3* at) {
+    // 0x00747310, a unit's sound slot: by its chance unless asked for
+    // outright; the Stand sound at most every ten seconds of all units.
+    if (!renderer_ || !gameHandler_ || !assetManager_) return;
+    if (!always && !ue::slotPlays(slot, nextRandom(unitEventRandom_))) return;
+    if (slot == ue::kSlotStand) {
+        const auto nowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                     std::chrono::steady_clock::now().time_since_epoch())
+                                                     .count());
+        if (!ue::standSoundDue(nowMs, lastStandSoundMs_)) return;
+        lastStandSoundMs_ = nowMs;
+    }
+    const int32_t row = unitSoundRow(unit, true);
+    if (row < 0) return;
+    auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
+    const uint32_t sound = sounds->getUInt32(static_cast<uint32_t>(row), ue::slotColumn(slot));
+    if (sound == 0) return;
+    // Counted by its kind (0x00746b30), more of a creature heard further.
+    bool moreAudible = false;
+    if (unit.getType() == game::ObjectType::UNIT) {
+        const auto& info = gameHandler_->getCreatureInfoCache();
+        const auto it = info.find(unit.getEntry());
+        moreAudible = it != info.end() && (it->second.typeFlags & ue::kCreatureTypeFlagMoreAudible) != 0;
+    }
+    const audio::PlayLimit type = ue::slotPlayType(slot, moreAudible);
+    rendering::M2EventSounds& player = renderer_->getM2EventSounds();
+    // The active player's own, and the vehicle it drives, with the listener
+    // at the character: where the listener is and fainter.
+    const uint64_t guid = unit.getGuid();
+    const bool own = guid == gameHandler_->getPlayerGuid() || guid == gameHandler_->activeMover();
+    if (own && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
+        player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_, type);
+        return;
+    }
+    std::optional<glm::vec3> where;
+    if (at) where = *at;
+    else where = unitSoundPosition(guid);
+    if (where) player.playOnce(sound, &*where, 1.0f, assetManager_, type);
+}
+
 void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
     rendering::CharacterRenderer* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!cr) return;
@@ -98,31 +164,8 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
     auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
     if (!displays || !models || !sounds || sounds->getFieldCount() < ue::kColumnCount) return;
 
-    // The unit's display's CreatureSoundData row (+0x974), and - for the
-    // fidgets and the slots - its pet row in its place while the unit has a
-    // pet number (0x0071a3f0).
-    const auto soundRow = [&](const game::Unit& unit, bool petRow) -> int32_t {
-        const int32_t display = displays->findRecordById(unit.getDisplayId());
-        if (display < 0 || displays->getFieldCount() <= kDisplaySoundColumn) return -1;
-        uint32_t soundId = displays->getUInt32(static_cast<uint32_t>(display), kDisplaySoundColumn);
-        if (soundId == 0 && models->getFieldCount() > kModelSoundColumn) {
-            const int32_t model =
-                models->findRecordById(displays->getUInt32(static_cast<uint32_t>(display), kDisplayModelColumn));
-            if (model >= 0) soundId = models->getUInt32(static_cast<uint32_t>(model), kModelSoundColumn);
-        }
-        int32_t row = soundId != 0 ? sounds->findRecordById(soundId) : -1;
-        if (row < 0 || !petRow) return row;
-        const uint16_t petNumber = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
-        if (petNumber == 0xFFFF || unit.getField(petNumber) == 0) return row;
-        const auto pet = static_cast<int32_t>(sounds->getUInt32(static_cast<uint32_t>(row), ue::kColumnPetRow));
-        if (pet > 0) row = sounds->findRecordById(static_cast<uint32_t>(pet));
-        return row;
-    };
+    const auto soundRow = [&](const game::Unit& unit, bool petRow) { return unitSoundRow(unit, petRow); };
 
-    // The unit the client moves - the player, or the vehicle it drives
-    // (DAT_00ca1238): its creature sounds, as the player's own, are heard
-    // at the listener (0x00747310).
-    const uint64_t mover = gameHandler_->activeMover();
     const bool listenerAtCharacter = addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0";
 
     // The ground a unit stands on (0x007c2a70 from z + 0.1 down): a
@@ -168,9 +211,6 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
     };
 
     rendering::M2EventSounds& player = renderer_->getM2EventSounds();
-    const auto nowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                 std::chrono::steady_clock::now().time_since_epoch())
-                                                 .count());
     for (const auto& event : fired) {
         // A melee swing's whoosh and landing (0x00756240).
         if (event.id == rendering::melee_sound::kEventSwing || rendering::melee_sound::isLandEvent(event.id)) {
@@ -199,26 +239,8 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
         }
         case ue::Kind::Slot: {
             // $FDX's Stand sound is not the active player's (0x007465e0).
-            const bool activePlayer = guid == self;
-            if (action.index == ue::kSlotStand && activePlayer) break;
-            if (!ue::slotPlays(action.index, nextRandom(unitEventRandom_))) break;
-            if (action.index == ue::kSlotStand) {
-                if (!ue::standSoundDue(nowMs, lastStandSoundMs_)) break;
-                lastStandSoundMs_ = nowMs;
-            }
-            const int32_t row = soundRow(unit, true);
-            if (row < 0) break;
-            const uint32_t sound =
-                sounds->getUInt32(static_cast<uint32_t>(row), ue::slotColumn(action.index));
-            if (sound == 0) break;
-            // The active player's own, and the vehicle it drives, with the
-            // listener at the character: where the listener is and fainter
-            // (0x00747310).
-            if ((activePlayer || guid == mover) && listenerAtCharacter) {
-                player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_);
-            } else {
-                player.playOnce(sound, &unitPosition, 1.0f, assetManager_);
-            }
+            if (action.index == ue::kSlotStand && guid == self) break;
+            playUnitSlot(unit, action.index, false, &unitPosition);
             break;
         }
         case ue::Kind::AtEvent: {

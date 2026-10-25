@@ -182,6 +182,23 @@ void EntitySpawner::onMeleeHit(const game::AttackerStateUpdateData& data) {
     }
     settleKeptMeleeHit(hit.attacker);
     pendingMeleeHits_[hit.attacker] = hit;
+    // 0x00755130: the attacker's exertion, by its slot's chance - a
+    // creature's; a player's voice is the ActivitySoundManager's.
+    if (const auto attacker = entities.getEntity(hit.attacker);
+        attacker && attacker->getType() == game::ObjectType::UNIT) {
+        const auto& unit = static_cast<const game::Unit&>(*attacker);
+        if (ms::exertsOnArrival(hit, unit.getHealth() > 0)) playUnitSlot(unit, ms::exertionSlot(hit), false, nullptr);
+    }
+    // Units gone from the world take what was kept of them along.
+    if (pendingMeleeHits_.size() + lastCastSpell_.size() > 256) {
+        std::erase_if(pendingMeleeHits_, [&](const auto& kept) { return !entities.getEntity(kept.first); });
+        std::erase_if(lastCastSpell_, [&](const auto& cast) { return !entities.getEntity(cast.first); });
+    }
+}
+
+void EntitySpawner::noteUnitCast(uint64_t guid, uint32_t spellId) {
+    // 0x00805330 -> 0x00715a80 (+0xa60).
+    if (guid != 0 && spellId != 0) lastCastSpell_[guid] = spellId;
 }
 
 void EntitySpawner::onMeleeAttackStop(uint64_t attacker) { settleKeptMeleeHit(attacker); }
@@ -361,7 +378,43 @@ void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
     }
     if (ms::absorbs(hit)) {
         player.playOnce(player.idByName("(DONOTRENAME)AbsorbGetHit", assetManager_), &above, volume, assetManager_);
+    } else if (const auto slot = ms::injurySlot(hit); slot && target->getType() == game::ObjectType::UNIT) {
+        // A creature's injury, by its slot's chance; a player's voice is
+        // the ActivitySoundManager's.
+        playUnitSlot(static_cast<const game::Unit&>(*target), *slot, false, nullptr);
     }
+}
+
+void EntitySpawner::landWithNothingKept(uint64_t guid, const glm::vec3& at) {
+    // 0x00756240 with no hit kept and no target.
+    if (!gameHandler_ || !renderer_ || !assetManager_) return;
+    const auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    if (!entity || !entity->isUnit()) return;
+    const auto& unit = static_cast<const game::Unit&>(*entity);
+    rendering::M2EventSounds& player = renderer_->getM2EventSounds();
+    if (entity->getType() != game::ObjectType::PLAYER) {
+        // A creature's Exertion (0x0071a3f0's row), outright.
+        const int32_t row = unitSoundRow(unit, true);
+        auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
+        if (row < 0 || !sounds) return;
+        const uint32_t sound = sounds->getUInt32(static_cast<uint32_t>(row), ms::kSoundExertionColumn);
+        if (sound != 0) player.playOnce(sound, &at, 1.0f, assetManager_);
+        return;
+    }
+    // A player's (0x00763570): the AnimEventSoundID of the spell it last
+    // began casting, a yard over it.
+    const auto cast = lastCastSpell_.find(guid);
+    if (cast == lastCastSpell_.end()) return;
+    const uint32_t visualId = gameHandler_->getSpellVisualId(cast->second);
+    auto visuals = assetManager_->loadDBCOptional("SpellVisual.dbc");
+    if (visualId == 0 || !visuals || visuals->getFieldCount() <= ms::kSpellVisualAnimEventSound) return;
+    const int32_t row = visuals->findRecordById(visualId);
+    if (row < 0) return;
+    const uint32_t sound = visuals->getUInt32(static_cast<uint32_t>(row), ms::kSpellVisualAnimEventSound);
+    const auto where = unitSoundPosition(guid);
+    if (sound == 0 || !where) return;
+    const glm::vec3 above = *where + glm::vec3(0.0f, 0.0f, ms::kAnimEventSoundHeight);
+    player.playOnce(sound, &above, 1.0f, assetManager_);
 }
 
 void EntitySpawner::onSpellMiss(uint64_t caster, uint64_t target, uint8_t missType, uint32_t spellId) {
@@ -423,7 +476,10 @@ void EntitySpawner::meleeModelEvent(uint64_t unitGuid, uint32_t eventId, const g
     // 0x00756240: the swing's whoosh at $CSS; the blow landing at $CAH and
     // $AH0..$AH3.
     const auto it = pendingMeleeHits_.find(unitGuid);
-    if (it == pendingMeleeHits_.end()) return;
+    if (it == pendingMeleeHits_.end()) {
+        if (ms::isLandEvent(eventId)) landWithNothingKept(unitGuid, at);
+        return;
+    }
     if (eventId == ms::kEventSwing) {
         const ms::Hit& hit = it->second;
         if (!ms::swingSounds(hit) || !gameHandler_) return;
@@ -450,6 +506,18 @@ void EntitySpawner::meleeModelEvent(uint64_t unitGuid, uint32_t eventId, const g
     if (!ms::isLandEvent(eventId)) return;
     const ms::Hit hit = it->second;
     pendingMeleeHits_.erase(it);
+    // $AH0..$AH3 of a hit that did damage: the attacker's custom attack
+    // sound first (its own row, not its pet row).
+    if (const uint32_t column = ms::customAttackColumn(eventId); column != 0 && hit.damage != 0 && gameHandler_) {
+        const auto attacker = gameHandler_->getEntityManager().getEntity(hit.attacker);
+        auto sounds = assetManager_ ? assetManager_->loadDBCOptional("CreatureSoundData.dbc") : nullptr;
+        if (attacker && attacker->isUnit() && sounds && renderer_) {
+            const int32_t row = unitSoundRow(static_cast<const game::Unit&>(*attacker), false);
+            const uint32_t sound = row >= 0 ? sounds->getUInt32(static_cast<uint32_t>(row), column) : 0u;
+            if (sound != 0)
+                renderer_->getM2EventSounds().playOnce(sound, &at, 1.0f, assetManager_, audio::PlayLimit::WeaponImpact);
+        }
+    }
     if (hit.target != 0 && gameHandler_ && gameHandler_->getEntityManager().getEntity(hit.target)) landMeleeHit(hit);
 }
 

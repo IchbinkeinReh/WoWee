@@ -3085,6 +3085,7 @@ void Application::connectWorldHooks() {
         // ranged spell such as Auto Shot draws the ranged weapon.
         gameHandler->setSpellCastBeginCallback([this](uint64_t caster, uint32_t spellId) {
             if (!gameHandler) return;
+            if (entitySpawner_) entitySpawner_->noteUnitCast(caster, spellId);
             if (caster == gameHandler->getPlayerGuid()) {
                 if (appearanceComposer_) appearanceComposer_->onSpellCastBegin(spellId);
             } else if (entitySpawner_) {

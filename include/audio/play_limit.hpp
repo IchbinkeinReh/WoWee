@@ -38,9 +38,13 @@ enum class PlayLimit : uint8_t {
     None = 0,
     ErrorSpeech = 7,
     RaceSplash = 8,
+    Exertion = 9,
     WeaponSwing = 10,
+    Injury = 11,
     UnitFootstep = 13,
     WeaponImpact = 14,
+    ExertionAudible = 15,
+    InjuryAudible = 16,
     OwnFootstep = 17,
 };
 
