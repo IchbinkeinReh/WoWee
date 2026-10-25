@@ -3580,8 +3580,12 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     const uint64_t gatherGoGuid = owner_.lastInteractedGoGuidRef();
     const bool gatherCast = gatherGoGuid != 0 && isGatherSpellId(data.spellId);
     // 0x00809af0 -> 0x00808200: the player's cast of that count ends
-    // (0x007fecc0).
+    // (0x007fecc0); auto-repeating, its auto-repeat bit goes for any result
+    // but 0x1b (0x00807560, only while 0x00d397d0 - the player's
+    // auto-repeat target - is set).
     owner_.castVisuals().ended(owner_.getPlayerGuid(), data.castCount, data.spellId);
+    if (owner_.isAutoRepeating() && data.result != 0x1b)
+        owner_.castVisuals().autoRepeatStopped(owner_.getPlayerGuid());
 
     // 0x00809af0 fails the pending cast the count names (0x008051d0), not
     // whatever is casting: a spell sent during a cast and refused
