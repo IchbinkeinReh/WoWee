@@ -3258,6 +3258,20 @@ void Application::connectWorldHooks() {
             svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
                 return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
             });
+            // Whose spell sounds keep their voice: the active mover's and the
+            // listener object's (0x007022d0, 0x006f9840, 0x006f7e40).
+            svs->setActiveUnitsQuery([this]() {
+                rendering::SpellVisualSystem::ActiveUnits units;
+                if (gameHandler) {
+                    units.mover = gameHandler->activeMover();
+                    units.listener = gameHandler->listenerObject();
+                }
+                return units;
+            });
+            // 0x006f7b00: a spell effect's $SND on the active mover's unit.
+            renderer->getM2EventSounds().setMoverInstanceQuery([this]() -> uint32_t {
+                return gameHandler ? gameHandler->resolveUnitRenderInstance(gameHandler->activeMover()) : 0;
+            });
             // 0x00804cc0: a dynamic object waits on its cast's missile.
             svs->setMissileInFlightQuery([this](uint64_t caster, uint32_t spellId, uint32_t castTime) {
                 return gameHandler && gameHandler->isSpellMissileInFlight(caster, spellId, castTime);
@@ -3375,9 +3389,12 @@ void Application::connectWorldHooks() {
             svs->playCameraShakes(shakesId, at);
             svs->playSoundAt(soundId, at);
         });
+        // 0x006da130's DruidMorph_Impact_Base: the active player's own
+        // sound - at the listener with it at the character, kept over a
+        // crowd's.
         gameHandler->setPlayerSoundCallback([this](uint32_t soundId) {
             auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
-            if (svs) svs->playSoundAt(soundId, renderer->getCharacterPosition());
+            if (svs) svs->playOwnSoundAt(soundId, renderer->getCharacterPosition());
         });
         gameHandler->setAutoFollowCallback([this](const glm::vec3* renderPos) {
             if (renderer && renderer->getCameraController()) {

@@ -3860,6 +3860,10 @@ public:
     /// The unit the client moves (DAT_00ca1238): the player, a vehicle it
     /// drives, or none.
     uint64_t activeMover() const;
+    /// The object the listener is (0x007450b0): the active mover where it
+    /// is a unit, else the player - and for the player, with far sight on
+    /// (+0x1858 0x1), the PLAYER_FARSIGHT object where it is there.
+    uint64_t listenerObject() const;
     /// Whether a server move spline carries the unit (+0xbc): SMSG_MONSTER_MOVE
     /// moves any unit so, the player among them (0x0073c8e0).
     bool onMoveSpline(uint64_t guid);

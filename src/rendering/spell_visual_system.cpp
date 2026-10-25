@@ -484,9 +484,10 @@ bool SpellVisualSystem::involvesPlayer(uint32_t instanceA, uint32_t instanceB) c
 }
 
 // A kit's model is an effect (0x006f94c0 gives it 0x006f7b00 for its
-// events), on the unit the kit plays on - the active player's or another's.
+// events), on the unit the kit plays on: that unit's instance, asked of as
+// each event fires whether it is the active mover's (M2EventSounds).
 void SpellVisualSystem::setEffectEventOwner(uint32_t instanceId, uint32_t unitInstanceId) {
-    m2Renderer_->setInstanceEventOwner(instanceId, m2_event::Owner::Effect, involvesPlayer(unitInstanceId) ? 1u : 0u);
+    m2Renderer_->setInstanceEventOwner(instanceId, m2_event::Owner::Effect, unitInstanceId);
 }
 
 uint32_t SpellVisualSystem::acquireEffectModel(const std::string& modelPath) {
@@ -616,9 +617,19 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
     // flags the kit to play its SoundID); for a missile that is on arrival.
     if (useImpactKit) {
         auto kitIt = kits_.find(kitId);
-        if (const LoadedSound* sound = kitIt != kits_.end() ? soundEntry(kitIt->second.soundId) : nullptr)
-            audio::AudioEngine::instance().playSound3D(sound->data, worldPosition, sound->volume, 1.0f, 100.0f,
-                                                       1.0f, audio::Channel::Effects);
+        if (const LoadedSound* sound = kitIt != kits_.end() ? soundEntry(kitIt->second.soundId) : nullptr) {
+            // Its voice (0x6e): a kit with models sounds through its effect
+            // (0x006f9840) - the unit it plays on being the listener's
+            // object or the active mover; one without through the unit
+            // (0x0073b140 -> 0x006f7e40) - the unit being the mover, and the
+            // sound not a looping one (0x00745230 flag 0x1).
+            const bool own = !kitIt->second.models.empty()
+                                 ? instanceIsListener(attachInstanceId) || instanceIsMover(attachInstanceId)
+                                 : instanceIsMover(attachInstanceId) && !sound->loops;
+            audio::AudioEngine::instance().playSound3D(
+                sound->data, worldPosition, sound->volume, 1.0f, 100.0f, 1.0f, audio::Channel::Effects,
+                audio::PlayLimit::None, own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault);
+        }
     }
     playKitOnUnit(kitId, spell_kit::KitType::Cast, attachInstanceId, worldPosition,
                   attachInstanceId == 0 ? &worldPosition : nullptr, 0, spellId);
@@ -997,7 +1008,13 @@ bool SpellVisualSystem::launchSpellMissile(uint32_t visualId, float speed, const
             modelId, copy.position, spell_missile::facingEuler(target - copy.position), copy.scale);
         if (copy.instanceId == 0) break;
         m2Renderer_->restartInstanceAnimation(copy.instanceId);
-        copy.soundHandle = startMissileSound(visual->soundId, copy.position);
+        // 0x007022d0: 0x6e where the caster or the target is the mover.
+        const uint64_t mover = activeUnitsQuery_ ? activeUnitsQuery_().mover : 0;
+        const bool moverPart =
+            mover != 0 && (copy.casterGuid == mover || instanceIsMover(copy.targetInstanceId));
+        copy.soundHandle = startMissileSound(visual->soundId, copy.position,
+                                             moverPart ? audio::voice_priority::kActiveMover
+                                                       : audio::voice_priority::kDefault);
         activeMissiles_.push_back(std::move(copy));
         launched = true;
     }
@@ -1102,6 +1119,7 @@ const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t sou
             const float volume = dbc->getFloat(row, 24);
             if (volume > 0.0f) loaded.volume = volume;
             if (dbc->getFieldCount() > 27) {
+                loaded.loops = (dbc->getUInt32(row, 25) & 0x200u) != 0;
                 loaded.minDistance = dbc->getFloat(row, 26);
                 loaded.cutoff = dbc->getFloat(row, 27);
             }
@@ -1112,12 +1130,25 @@ const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t sou
     return it->second.data.empty() ? nullptr : &it->second;
 }
 
-// The missile's sound (FUN_007022d0): looping, at the missile.
-uint32_t SpellVisualSystem::startMissileSound(uint32_t soundId, const glm::vec3& position) {
+// The missile's sound (FUN_007022d0): looping, at the missile; kept over a
+// crowd's (0x6e) where its caster or target is the active mover.
+uint32_t SpellVisualSystem::startMissileSound(uint32_t soundId, const glm::vec3& position, int priority) {
     const LoadedSound* sound = soundEntry(soundId);
     if (!sound) return 0;
     return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, sound->volume, 100.0f, 1.0f,
-                                                             0.0f, audio::Channel::Effects);
+                                                             0.0f, audio::Channel::Effects, priority);
+}
+
+bool SpellVisualSystem::instanceIsMover(uint32_t renderInstanceId) const {
+    if (renderInstanceId == 0 || !activeUnitsQuery_ || !instanceUnitResolver_) return false;
+    const uint64_t mover = activeUnitsQuery_().mover;
+    return mover != 0 && instanceUnitResolver_(renderInstanceId) == mover;
+}
+
+bool SpellVisualSystem::instanceIsListener(uint32_t renderInstanceId) const {
+    if (renderInstanceId == 0 || !activeUnitsQuery_ || !instanceUnitResolver_) return false;
+    const uint64_t listener = activeUnitsQuery_().listener;
+    return listener != 0 && instanceUnitResolver_(renderInstanceId) == listener;
 }
 
 // One frame of every missile in flight (FUN_007015d0): home on the target,
@@ -2587,10 +2618,24 @@ void SpellVisualSystem::loadCameraShakes() {
     }
 }
 
-void SpellVisualSystem::playSoundAt(uint32_t soundId, const glm::vec3& position) {
+void SpellVisualSystem::playSoundAt(uint32_t soundId, const glm::vec3& position, int priority) {
     if (const LoadedSound* sound = soundId ? soundEntry(soundId) : nullptr)
         audio::AudioEngine::instance().playSound3D(sound->data, position, sound->volume, 1.0f, 100.0f, 1.0f,
-                                                   audio::Channel::Effects);
+                                                   audio::Channel::Effects, audio::PlayLimit::None, priority);
+}
+
+void SpellVisualSystem::playOwnSoundAt(uint32_t soundId, const glm::vec3& position) {
+    const LoadedSound* sound = soundId ? soundEntry(soundId) : nullptr;
+    if (!sound) return;
+    auto& audio = audio::AudioEngine::instance();
+    constexpr int kOwn = audio::voice_priority::kActiveMover;
+    if (addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
+        audio.playSound2D(sound->data, sound->volume * 0.65f, 1.0f, audio::Channel::Effects, audio::PlayLimit::None,
+                          kOwn);
+    } else {
+        audio.playSound3D(sound->data, position, sound->volume, 1.0f, 100.0f, 1.0f, audio::Channel::Effects,
+                          audio::PlayLimit::None, kOwn);
+    }
 }
 
 void SpellVisualSystem::stepUnarmedKits(uint64_t unitGuid, UnitAuraKits& unit, bool force) {

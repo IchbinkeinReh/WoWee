@@ -526,7 +526,7 @@ void AudioEngine::stopSound(uint32_t id) {
     }
 }
 
-bool AudioEngine::playSound2D(const std::string& mpqPath, float volume, float pitch, Channel channel) {
+bool AudioEngine::playSound2D(const std::string& mpqPath, float volume, float pitch, Channel channel, int priority) {
     // Which file, and how loud, for the one-shots that name a path.
     //
     // A sound reported as playing loudly on every world entry cannot be found
@@ -543,7 +543,7 @@ bool AudioEngine::playSound2D(const std::string& mpqPath, float volume, float pi
         LOG_WARNING("AudioEngine::playSound2D: failed to load '", mpqPath, "'");
         return false;
     }
-    return playSound2D(data, volume, pitch, channel);
+    return playSound2D(data, volume, pitch, channel, PlayLimit::None, priority);
 }
 
 bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
@@ -644,7 +644,7 @@ bool AudioEngine::playSound3D(const std::string& mpqPath, const glm::vec3& posit
 
 uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                                          float volume, float maxDistance, float minDistance,
-                                         float fadeInSeconds, Channel channel) {
+                                         float fadeInSeconds, Channel channel, int priority) {
     if (!initialized_ || !engine_ || wavData.empty()) return 0;
     if (masterVolume_ <= 0.0f) return 0;
 
@@ -694,7 +694,7 @@ uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, co
     if (nextSoundId_ == 0) nextSoundId_ = 1;  // Skip 0 (sentinel)
     activeSounds_.push_back(
         {sound.release(), audioBuffer.release(), decoded.pcmData, id, held, maxDistance, culled});
-    noteStarted(voice_priority::kDefault, volume, channel, true, std::max(minDistance, 0.0f));
+    noteStarted(priority, volume, channel, true, std::max(minDistance, 0.0f));
     return id;
 }
 

@@ -85,7 +85,7 @@ public:
                      Channel channel = Channel::Own, PlayLimit limit = PlayLimit::None,
                      int priority = voice_priority::kDefault);
     bool playSound2D(const std::string& mpqPath, float volume = 1.0f, float pitch = 1.0f,
-                     Channel channel = Channel::Own);
+                     Channel channel = Channel::Own, int priority = voice_priority::kDefault);
 
     // Stoppable 2D sound - returns a non-zero handle, or 0 on failure.
     /// `loop` plays it until stopped; it rises from silence over
@@ -114,7 +114,7 @@ public:
     uint32_t playSound3DLooping(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                                 float volume = 1.0f, float maxDistance = 100.0f,
                                 float minDistance = 1.0f, float fadeInSeconds = 0.0f,
-                                Channel channel = Channel::Own);
+                                Channel channel = Channel::Own, int priority = voice_priority::kDefault);
     /// Move a sound started with a handle (no-op once it has finished).
     void setSoundPosition(uint32_t id, const glm::vec3& position);
     /// Change the volume of a sound started with a handle (no-op once it has

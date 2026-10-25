@@ -6,6 +6,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "game/game_handler.hpp"
+#include "addons/lua_api_registrations.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/music_manager.hpp"
 #include "audio/audio_engine.hpp"
@@ -87,6 +88,15 @@ void AudioCallbackHandler::setupCallbacks() {
         // Play as 3D sound if source entity position is available.
         // Entity stores canonical coords; listener uses render coords (camera).
         auto entity = gameHandler_.getEntityManager().getEntity(sourceGuid);
+        // A unit's (0x00526530 -> 0x007469c0): the active mover's, with the
+        // listener at the character, where the listener is at 0.65 and kept
+        // over a crowd's.
+        if (entity && entity->isUnit() && sourceGuid == gameHandler_.activeMover() &&
+            addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
+            audio::AudioEngine::instance().playSound2D(*path, 0.65f, 1.0f, audio::Channel::Effects,
+                                                       audio::voice_priority::kActiveMover);
+            return;
+        }
         if (entity) {
             glm::vec3 canonical{entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()};
             glm::vec3 pos = core::coords::canonicalToRender(canonical);

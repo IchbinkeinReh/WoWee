@@ -227,6 +227,10 @@ public:
     using ShakeCamera = std::function<void(uint32_t shakesId, const glm::vec3& at)>;
     /// Play this frame's events, and follow (and end) the loops they start.
     void update(M2Renderer& m2, pipeline::AssetManager* assets, const ShakeCamera& shakeCamera = {});
+    /// The render instance of the active mover (DAT_00ca1238): a spell
+    /// effect's $SND on it is heard as its own (0x006f7b00).
+    using MoverInstanceQuery = std::function<uint32_t()>;
+    void setMoverInstanceQuery(MoverInstanceQuery query) { moverInstanceQuery_ = std::move(query); }
     /// Stop every loop, as the world goes.
     void clear();
     /// A SoundEntries kit once, owned by nothing (0x004c6a40 with no sound
@@ -266,6 +270,7 @@ private:
         float fadeOut = 0.0f;      ///< how long a $DSE takes to end it
     };
     std::unordered_map<uint32_t, Kit> kits_;
+    MoverInstanceQuery moverInstanceQuery_;
     std::unordered_map<std::string, uint32_t> idsByName_;
     bool idsByNameLoaded_ = false;
     std::unordered_map<uint32_t, std::array<uint32_t, 10>> displaySounds_;

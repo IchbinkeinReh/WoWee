@@ -4865,6 +4865,29 @@ uint32_t GameHandler::getSpellVisualId(uint32_t spellId) const {
                                                             std::to_string(spell_visual::kViolenceLevelLimit))));
 }
 
+uint64_t GameHandler::listenerObject() const {
+    auto& entities = entityController_->getEntityManager();
+    uint64_t object = 0;
+    if (const uint64_t mover = activeMover(); mover != 0) {
+        if (auto unit = entities.getEntity(mover); unit && unit->isUnit()) object = mover;
+    }
+    if (object == 0 && entities.getEntity(playerGuid)) object = playerGuid;
+    if (object == 0) return 0;
+    // 0x004f7310 answers for the active player only.
+    if (object == playerGuid && movementHandler_ && movementHandler_->farSightAnnounced()) {
+        if (auto player = entities.getEntity(playerGuid)) {
+            const uint16_t field = fieldIndex(UF::PLAYER_FARSIGHT);
+            if (field != 0xFFFF) {
+                const uint64_t farsight =
+                    (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(field + 1))) << 32) |
+                    player->getField(field);
+                if (farsight != 0 && entities.getEntity(farsight)) return farsight;
+            }
+        }
+    }
+    return object;
+}
+
 cast_visual::Spell GameHandler::castVisualSpell(uint32_t spellId) const {
     cast_visual::Spell spell;
     loadSpellNameCache();
