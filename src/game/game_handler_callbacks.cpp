@@ -529,8 +529,15 @@ void GameHandler::playErrorSpeech(audio::PlayerErrorSpeech type) {
                      static_cast<uint8_t>(toServerGender(ch->gender)));
 }
 
-void GameHandler::playGameErrorSpeech(std::string_view gameErrorKey) {
-    if (const auto speech = audio::vocal_error::forGameError(gameErrorKey)) playErrorSpeech(*speech);
+void GameHandler::playGameErrorSound(std::string_view gameErrorKey) {
+    if (const auto speech = audio::vocal_error::forGameError(gameErrorKey)) {
+        playErrorSpeech(*speech);
+        return;
+    }
+    if (const auto sound = audio::vocal_error::namedSound(gameErrorKey)) {
+        if (auto* ac = services_.audioCoordinator)
+            if (auto* ui = ac->getUiSoundManager()) ui->playByName(std::string(*sound));
+    }
 }
 
 void GameHandler::handleCharLoginFailed(network::Packet& packet) {

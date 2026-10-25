@@ -1416,7 +1416,7 @@ void CombatHandler::handlePetActionFeedback(network::Packet& packet) {
             const char* key = friendly ? "ERR_GENERIC_NO_VALID_TARGETS" : "ERR_NO_ATTACK_TARGET";
             owner_.addUIError(friendly ? interfaceString(key, "No valid targets.")
                                        : interfaceString(key, "There is nothing to attack."));
-            owner_.playGameErrorSpeech(key);
+            owner_.playGameErrorSound(key);
             // The spell's global cooldown comes off the pet's bar
             // (0x00804780 -> 0x00804720), as for a failed pet cast.
             if (auto* spells = owner_.getSpellHandler()) spells->notePetCastFailed(spellId);
@@ -1424,7 +1424,7 @@ void CombatHandler::handlePetActionFeedback(network::Packet& packet) {
         }
         case 3: {
             owner_.addUIError(interfaceString("ERR_INVALID_ATTACK_TARGET", "You cannot attack that target."));
-            owner_.playGameErrorSpeech("ERR_INVALID_ATTACK_TARGET");
+            owner_.playGameErrorSound("ERR_INVALID_ATTACK_TARGET");
             // The spell follows the message here too, and is let go the same way.
             const uint32_t spellId = packet.hasRemaining(4) ? packet.readUInt32() : 0;
             if (auto* spells = owner_.getSpellHandler()) spells->notePetCastFailed(spellId);
@@ -2086,14 +2086,14 @@ void CombatHandler::assistTarget() {
     // (0x00525eb0) says it for /assist on its own. These were English.
     if (owner_.getTargetGuid() == 0) {
         owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
-        owner_.playGameErrorSpeech("ERR_GENERIC_NO_TARGET");
+        owner_.playGameErrorSound("ERR_GENERIC_NO_TARGET");
         return;
     }
 
     auto target = getTarget();
     if (!target) {
         owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
-        owner_.playGameErrorSpeech("ERR_GENERIC_NO_TARGET");
+        owner_.playGameErrorSound("ERR_GENERIC_NO_TARGET");
         return;
     }
 

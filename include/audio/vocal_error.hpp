@@ -154,5 +154,61 @@ inline std::optional<PlayerErrorSpeech> forGameError(std::string_view key) {
     return std::nullopt;
 }
 
+/// The SoundEntries row, by name, a game error with no line plays - the
+/// table's sound column (0x004c74a0 for any but "NONE"), for the 40 rows
+/// that name one.
+inline std::optional<std::string_view> namedSound(std::string_view key) {
+    struct Row {
+        std::string_view key;
+        std::string_view sound;
+    };
+    static constexpr Row kRows[] = {
+        {"ERR_RECEIVE_ITEM_S", "ITEMGENERICSOUND"},
+        {"ERR_DECLINE_GROUP_S", "igPlayerInviteDecline"},
+        {"ERR_GUILD_CREATE_S", "LEVELUP"},
+        {"ERR_INVITED_TO_GUILD_SSS", "LEVELUP"},
+        {"ERR_QUEST_ACCEPTED_S", "QUESTADDED"},
+        {"ERR_QUEST_FAILED_S", "igQuestFailed"},
+        {"ERR_QUEST_FAILED_BAG_FULL_S", "igQuestFailed"},
+        {"ERR_QUEST_FAILED_MAX_COUNT_S", "igQuestFailed"},
+        {"ERR_QUEST_FAILED_LOW_LEVEL", "igQuestFailed"},
+        {"ERR_QUEST_FAILED_MISSING_ITEMS", "igQuestFailed"},
+        {"ERR_QUEST_FAILED_WRONG_RACE", "igQuestFailed"},
+        {"ERR_QUEST_FAILED_NOT_ENOUGH_MONEY", "igQuestFailed"},
+        {"ERR_QUEST_FAILED_EXPANSION", "igQuestFailed"},
+        {"ERR_QUEST_ONLY_ONE_TIMED", "igQuestFailed"},
+        {"ERR_QUEST_NEED_PREREQS", "igQuestFailed"},
+        {"ERR_QUEST_ALREADY_ON", "igQuestFailed"},
+        {"ERR_QUEST_ALREADY_DONE", "igQuestFailed"},
+        {"ERR_QUEST_ALREADY_DONE_DAILY", "igQuestFailed"},
+        {"ERR_QUEST_MUST_CHOOSE", "igQuestFailed"},
+        {"ERR_QUEST_LOG_FULL", "igQuestFailed"},
+        {"ERR_TRADE_REQUEST_S", "LEVELUP"},
+        {"ERR_NEWTAXIPATH", "TaxiNodeDiscovered"},
+        {"ERR_FRIEND_ONLINE_SS", "FRIENDJOINGAME"},
+        {"ERR_DUEL_REQUESTED", "LEVELUP"},
+        {"ERR_PETITION_SIGNED", "igPlayerInviteAccept"},
+        {"ERR_PETITION_SIGNED_S", "igPlayerInviteAccept"},
+        {"ERR_PETITION_DECLINED_S", "igPlayerInviteDecline"},
+        {"ERR_PETITION_ALREADY_SIGNED", "igPlayerInviteDecline"},
+        {"ERR_PETITION_RESTRICTED_ACCOUNT", "igPlayerInviteDecline"},
+        {"ERR_PETITION_ALREADY_SIGNED_OTHER", "igPlayerInviteDecline"},
+        {"ERR_PETITION_IN_GUILD", "igPlayerInviteDecline"},
+        {"ERR_PETITION_CREATOR", "igPlayerInviteDecline"},
+        {"ERR_PETITION_NOT_ENOUGH_SIGNATURES", "igPlayerInviteDecline"},
+        {"ERR_PETITION_NOT_SAME_SERVER", "igPlayerInviteDecline"},
+        {"ERR_PETITION_FULL", "igPlayerInviteDecline"},
+        {"ERR_MEETING_STONE_IN_QUEUE_S", "PVPENTERQUEUE"},
+        {"ERR_ARENA_TEAM_CREATE_S", "LEVELUP"},
+        {"ERR_INVITED_TO_ARENA_TEAM", "LEVELUP"},
+        {"ERR_QUEST_FAILED_TOO_MANY_DAILY_QUESTS_I", "igQuestFailed"},
+        {"ERR_QUEST_FAILED_CAIS", "igQuestFailed"},
+    };
+    for (const Row& row : kRows) {
+        if (row.key == key) return row.sound;
+    }
+    return std::nullopt;
+}
+
 }  // namespace vocal_error
 }  // namespace wowee::audio

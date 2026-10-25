@@ -1304,11 +1304,11 @@ void SpellHandler::reportLocalCastFailure(uint32_t spellId, uint8_t result) {
 }
 
 void SpellHandler::sayCastFailure(uint32_t spellId, uint8_t result) const {
-    owner_.playGameErrorSpeech(cast_failure::gameError(result, spellRowOf(owner_, spellId)));
+    owner_.playGameErrorSound(cast_failure::gameError(result, spellRowOf(owner_, spellId)));
 }
 
 void SpellHandler::sayPetCastFailure(uint32_t spellId, uint8_t result) const {
-    owner_.playGameErrorSpeech(cast_failure::petGameError(result, spellRowOf(owner_, spellId)));
+    owner_.playGameErrorSound(cast_failure::petGameError(result, spellRowOf(owner_, spellId)));
 }
 
 void SpellHandler::showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text) const {
@@ -1964,7 +1964,7 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid) {
             // ERR_SPELL_ALREADY_KNOWN_S with the spell's name (0x005216f0 0x36).
             owner_.addUIError(interfaceFormat("ERR_SPELL_ALREADY_KNOWN_S", "You already know %s.",
                                               {getSpellName(r.errorSpell)}));
-            owner_.playGameErrorSpeech("ERR_SPELL_ALREADY_KNOWN_S");
+            owner_.playGameErrorSound("ERR_SPELL_ALREADY_KNOWN_S");
             return false;
         case cast_check::GameError::TameFailedTooMany:
             // 0x00800390(2): ERR_TAME_FAILED with PETTAME_TOOMANY.

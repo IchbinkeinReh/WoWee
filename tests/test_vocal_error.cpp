@@ -29,3 +29,14 @@ TEST_CASE("most game errors say nothing", "[audio]") {
     CHECK_FALSE(ve::forGameError("ERR_WRONG_BAG_TYPE"));
     CHECK_FALSE(ve::forGameError(""));
 }
+
+TEST_CASE("a game error with no line plays the sound its row names", "[audio]") {
+    CHECK(ve::namedSound("ERR_QUEST_FAILED_S") == std::optional<std::string_view>("igQuestFailed"));
+    CHECK(ve::namedSound("ERR_QUEST_LOG_FULL") == std::optional<std::string_view>("igQuestFailed"));
+    CHECK(ve::namedSound("ERR_NEWTAXIPATH") == std::optional<std::string_view>("TaxiNodeDiscovered"));
+    CHECK(ve::namedSound("ERR_FRIEND_ONLINE_SS") == std::optional<std::string_view>("FRIENDJOINGAME"));
+    CHECK(ve::namedSound("ERR_DUEL_REQUESTED") == std::optional<std::string_view>("LEVELUP"));
+    // One that speaks has no named sound, and most have neither.
+    CHECK_FALSE(ve::namedSound("ERR_OUT_OF_MANA"));
+    CHECK_FALSE(ve::namedSound("ERR_FRIEND_OFFLINE_S"));
+}

@@ -636,7 +636,7 @@ void GameHandler::registerCoreOpcodes() {
         switch (result) {
             case 0x01:
                 addUIError(interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
-                playGameErrorSpeech("ERR_NOT_ENOUGH_MONEY");
+                playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
                 break;
             case 0x0B:
                 fireAddonEvent("PET_STABLE_UPDATE", {});
@@ -1621,6 +1621,7 @@ void GameHandler::registerCoreOpcodes() {
     // printed English "New flight path discovered!" to chat.
     dispatchTable_[Opcode::SMSG_NEW_TAXI_PATH] = [this](network::Packet& /*packet*/) {
         addUIInfoMessage(interfaceString("ERR_NEWTAXIPATH", "New flight path discovered!"));
+        playGameErrorSound("ERR_NEWTAXIPATH");
     };
 
     // (MSG_TALENT_WIPE_CONFIRM → registered by SpellHandler, which owns the
@@ -1679,12 +1680,12 @@ void GameHandler::registerCoreOpcodes() {
         const uint32_t result = packet.readUInt32();
         if (result == 10) {
             addUIError(interfaceString("ERR_INV_FULL", "Inventory is full."));
-            playGameErrorSpeech("ERR_INV_FULL");
+            playGameErrorSound("ERR_INV_FULL");
             return;
         }
         if (result == 11) {
             addUIError(interfaceString("ERR_CURRENCY_FULL", "You can't carry any more of that currency."));
-            playGameErrorSpeech("ERR_CURRENCY_FULL");
+            playGameErrorSound("ERR_CURRENCY_FULL");
             return;
         }
         if (result != 0) {
@@ -2062,7 +2063,7 @@ void GameHandler::registerCoreOpcodes() {
                 fireAddonEvent("BARBER_SHOP_CLOSE", {});
             } else if (result == 1 || result == 3) {
                 addUIError(interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
-                playGameErrorSpeech("ERR_NOT_ENOUGH_MONEY");
+                playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
             } else if (result == 2) {
                 addUIError(interfaceString("ERR_NOT_BARBER_SITTING", "You must be sitting in a barber chair."));
             }
