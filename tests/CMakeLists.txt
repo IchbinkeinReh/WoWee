@@ -851,6 +851,12 @@ wowee_add_test(test_sound_distance
     SOURCES test_sound_distance.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_play_limit ──────────────────────────────────────────
+# How many sounds of a counted kind play at once: footfalls, error speech.
+wowee_add_test(test_play_limit
+    SOURCES test_play_limit.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_tile_size_agreement ─────────────────────────────────
 # The ADT tile size, which three headers each declared and two files spelled
 # with two fewer decimals. Pins the value against its own arithmetic.

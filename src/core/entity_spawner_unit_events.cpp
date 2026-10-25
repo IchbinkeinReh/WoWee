@@ -240,12 +240,16 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
             if (sound == 0) break;
             // 0x004cf170: the active player's own, a player's, with the
             // listener at the character - where the listener is, at 0.65;
-            // every other where the foot is.
+            // every other where the foot is. The player's own as type 17,
+            // four at once; every other unit's as type 13, six at once
+            // (0x009f2268) - past them a footfall is not heard.
             const float volume = footstepVolume();
-            if (activePlayer && entity->getType() == game::ObjectType::PLAYER && listenerAtCharacter) {
-                player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume * volume, assetManager_);
+            const bool own = activePlayer && entity->getType() == game::ObjectType::PLAYER;
+            const auto limit = own ? audio::PlayLimit::OwnFootstep : audio::PlayLimit::UnitFootstep;
+            if (own && listenerAtCharacter) {
+                player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume * volume, assetManager_, limit);
             } else {
-                player.playOnce(sound, &event.position, volume, assetManager_);
+                player.playOnce(sound, &event.position, volume, assetManager_, limit);
             }
             break;
         }

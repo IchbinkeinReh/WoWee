@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include "audio/play_limit.hpp"
 #include "audio/world_sound_hold.hpp"
 
 // Forward declare miniaudio types to avoid exposing implementation in header
@@ -75,8 +76,10 @@ public:
     [[nodiscard]] const glm::vec3& getListenerPosition() const { return listenerPosition_; }
 
     // Simple 2D sound playback (non-blocking)
+    /// A `limit` play is refused while as many of its type as the client
+    /// allows are playing (audio/play_limit.hpp).
     bool playSound2D(const std::vector<uint8_t>& wavData, float volume = 1.0f, float pitch = 1.0f,
-                     Channel channel = Channel::Own);
+                     Channel channel = Channel::Own, PlayLimit limit = PlayLimit::None);
     bool playSound2D(const std::string& mpqPath, float volume = 1.0f, float pitch = 1.0f,
                      Channel channel = Channel::Own);
 
@@ -94,7 +97,8 @@ public:
     /// DistanceCutoff, the client's 3D min and max (0x004c6a40 -> 0x00879390).
     bool playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                      float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f,
-                     float minDistance = 1.0f, Channel channel = Channel::Own);
+                     float minDistance = 1.0f, Channel channel = Channel::Own,
+                     PlayLimit limit = PlayLimit::None);
     bool playSound3D(const std::string& mpqPath, const glm::vec3& position,
                      float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f,
                      Channel channel = Channel::Own);
@@ -186,8 +190,13 @@ private:
         bool held = false;  // waiting, not started, for the world sound hold to end
         float cutoff = 0.0f;  // a 3D sound's DistanceCutoff: not heard past it (0: none)
         bool culled = false;  // a looping one paused out past its cutoff
+        PlayLimit limit = PlayLimit::None;  // the counted type it was played as
     };
     std::vector<ActiveSound> activeSounds_;
+    /// How many of a counted type are still playing - one that has ended is
+    /// not, though update() has yet to take it away (0x004c62b0 counts it
+    /// off as it ends).
+    [[nodiscard]] uint32_t playingOf(PlayLimit limit) const;
     /// Pauses what is out past its cutoff and resumes what has come back in
     /// (audio/sound_distance.hpp), once a frame.
     void cullByDistance();

@@ -386,7 +386,8 @@ void AudioEngine::setListenerOrientation(const glm::vec3& forward, const glm::ve
     }
 }
 
-bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume, float pitch, Channel channel) {
+bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume, float pitch, Channel channel,
+                              PlayLimit limit) {
     // Size and volume, because this overload is handed decoded bytes and has
     // no name to report. The sample managers all cache their clips and call
     // this one, so the path-named log above never fires for them - and a sound
@@ -398,6 +399,8 @@ bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume,
     if (masterVolume_ <= 0.0f) return false;
     // Played once: not while the loading screen holds the world's sound.
     if (world_sound_hold::start(isWorldSoundHeld(), false) == world_sound_hold::Start::Refused) return false;
+    // Not past as many of its type as may play at once (0x004c6a40).
+    if (!play_limit::admits(limit, playingOf(limit))) return false;
 
     DecodedWavCacheEntry decoded;
     if (!decodeWavCached(wavData, decoded) || !decoded.pcmData || decoded.frames == 0) {
@@ -453,7 +456,7 @@ bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume,
     }
 
     // Track this sound for cleanup (decoded PCM shared across plays)
-    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, 0u});
+    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, 0u, false, 0.0f, false, limit});
 
     return true;
 }
@@ -542,13 +545,16 @@ bool AudioEngine::playSound2D(const std::string& mpqPath, float volume, float pi
 }
 
 bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
-                              float volume, float pitch, float maxDistance, float minDistance, Channel channel) {
+                              float volume, float pitch, float maxDistance, float minDistance, Channel channel,
+                              PlayLimit limit) {
     if (!initialized_ || !engine_ || wavData.empty()) return false;
     if (masterVolume_ <= 0.0f) return false;
     // Past its cutoff it is not heard, so not played (audio/sound_distance.hpp).
     if (!sound_distance::heard(position, listenerPosition_, maxDistance)) return false;
     // Played once: not while the loading screen holds the world's sound.
     if (world_sound_hold::start(isWorldSoundHeld(), false) == world_sound_hold::Start::Refused) return false;
+    // Not past as many of its type as may play at once (0x004c6a40).
+    if (!play_limit::admits(limit, playingOf(limit))) return false;
 
     DecodedWavCacheEntry decoded;
     if (!decodeWavCached(wavData, decoded) || !decoded.pcmData || decoded.frames == 0) {
@@ -613,7 +619,8 @@ bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::ve
     }
 
     // Track for cleanup
-    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, 0u, false, maxDistance});
+    activeSounds_.push_back(
+        {sound.release(), audioBuffer.release(), decoded.pcmData, 0u, false, maxDistance, false, limit});
 
     return true;
 }
@@ -964,6 +971,15 @@ void AudioEngine::update(float deltaTime) {
             ++i;
         }
     }
+}
+
+uint32_t AudioEngine::playingOf(PlayLimit limit) const {
+    if (limit == PlayLimit::None) return 0;
+    uint32_t playing = 0;
+    for (const auto& active : activeSounds_) {
+        if (active.limit == limit && ma_sound_is_playing(active.sound)) ++playing;
+    }
+    return playing;
 }
 
 void AudioEngine::cullByDistance() {

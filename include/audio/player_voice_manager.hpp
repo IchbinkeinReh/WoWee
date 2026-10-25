@@ -5,7 +5,6 @@
 #include <unordered_map>
 #include <cstdint>
 #include <random>
-#include <chrono>
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
@@ -71,7 +70,10 @@ public:
     void setVolumeScale(float scale);
     [[nodiscard]] float getVolumeScale() const { return volumeScale_; }
 
-    /// Play a spoken error response for the player's race/gender.
+    /// Play a spoken error response for the player's race/gender - none
+    /// while the last one still plays, as the client's error speech has one
+    /// sound object it asks first (0x00986d00) and plays as type 7, one at a
+    /// time (audio/play_limit.hpp).
     /// raceId: game Race enum value (1=Human .. 11=Draenei); gender: 0=male, 1=female
     void playError(PlayerErrorSpeech type, uint8_t raceId, uint8_t gender);
 
@@ -93,9 +95,6 @@ private:
     int loadedGender_ = -1;
     std::unordered_map<uint8_t, std::vector<SpeechSample>> library_;
 
-    // Global throttle so key-mashing doesn't stack voice lines
-    std::chrono::steady_clock::time_point lastPlayTime_{};
-    static constexpr float PLAY_COOLDOWN = 1.0f;  // seconds
 
     std::mt19937 rng_{std::random_device{}()};
 };

@@ -48,6 +48,8 @@
 
 #include <glm/glm.hpp>
 
+#include "audio/play_limit.hpp"
+
 namespace wowee::pipeline { class AssetManager; }
 
 namespace wowee::rendering {
@@ -228,8 +230,10 @@ public:
     /// A SoundEntries kit once, owned by nothing (0x004c6a40 with no sound
     /// object): where `at` is, or with none where the listener is; at its
     /// VolumeFloat times `volumeScale`. A unit's model events play this way
-    /// (unit_model_events.hpp).
-    void playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale, pipeline::AssetManager* assets);
+    /// (unit_model_events.hpp). Of a counted `limit` type, not while as many
+    /// of it as may play at once are playing (audio/play_limit.hpp).
+    void playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale, pipeline::AssetManager* assets,
+                  audio::PlayLimit limit = audio::PlayLimit::None);
 
 private:
     struct Kit {

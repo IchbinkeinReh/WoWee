@@ -183,12 +183,6 @@ void PlayerVoiceManager::playError(PlayerErrorSpeech type, uint8_t raceId, uint8
     if (!enabled_ || !assetManager_) return;
     if (!AudioEngine::instance().isInitialized()) return;
 
-    auto now = std::chrono::steady_clock::now();
-    if (lastPlayTime_.time_since_epoch().count() != 0) {
-        float elapsed = std::chrono::duration<float>(now - lastPlayTime_).count();
-        if (elapsed < PLAY_COOLDOWN) return;
-    }
-
     ensureLibrary(raceId, gender);
 
     auto it = library_.find(static_cast<uint8_t>(type));
@@ -198,9 +192,7 @@ void PlayerVoiceManager::playError(PlayerErrorSpeech type, uint8_t raceId, uint8
     std::uniform_int_distribution<size_t> dist(0, samples.size() - 1);
     const auto& sample = samples[dist(rng_)];
 
-    if (AudioEngine::instance().playSound2D(sample.data, volumeScale_, 1.0f)) {
-        lastPlayTime_ = now;
-    }
+    AudioEngine::instance().playSound2D(sample.data, volumeScale_, 1.0f, Channel::Own, PlayLimit::ErrorSpeech);
 }
 
 } // namespace audio
