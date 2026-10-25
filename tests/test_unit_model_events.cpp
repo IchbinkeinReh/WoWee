@@ -112,6 +112,10 @@ TEST_CASE("the ground a unit stands on", "[unit_model_events]") {
     // not met first only if it is above the probe, which the caller drops.
     CHECK(ue::groundTerrainType(1.0f, 4, 2.0f, 7) == 7);
     CHECK(ue::groundTerrainType(std::nullopt, -1, 2.0f, 7) == 7);
+    // Under the terrain's surface with no building's floor beneath - on a
+    // doodad in a cave mouth, say: the quad's type all the same, read by x
+    // and y (0x007a0530).
+    CHECK(ue::groundTerrainType(std::nullopt, -1, std::nullopt, 7) == 7);
     // A hole, or a layer with no effect row: none.
     CHECK(ue::groundTerrainType(std::nullopt, -1, 2.0f, std::nullopt) == -1);
 }

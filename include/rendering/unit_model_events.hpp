@@ -184,11 +184,13 @@ private:
     std::unordered_map<uint64_t, Sounds> bySound_;
 };
 
-/// The terrain type a unit stands on, as its collision has it (0x007c2440):
+/// The terrain type a unit stands on, as its collision has it (0x007c2a70):
 /// a building's floor's material's ground type where the probe down from
 /// the unit meets the building first (0x007b39b0), else the terrain's
-/// (0x007a0530: GroundEffectTexture TerrainType of the quad's layer), else
-/// none (-1).
+/// (0x007a0530: GroundEffectTexture TerrainType of the quad's layer, by x
+/// and y alone - `terrainFloor` is only the terrain met on the way down, if
+/// any), else none (-1). A doodad's model is no floor to it: the probe meets
+/// buildings and the terrain only (0x007c28f0).
 inline int32_t groundTerrainType(std::optional<float> buildingFloor, int32_t buildingGroundType,
                                  std::optional<float> terrainFloor, std::optional<int32_t> terrainGroundType) {
     if (buildingFloor && (!terrainFloor || *buildingFloor >= *terrainFloor)) return buildingGroundType;

@@ -122,7 +122,7 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
     const uint64_t mover = gameHandler_->activeMover();
     const bool listenerAtCharacter = addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0";
 
-    // The ground a unit stands on (0x007c2440 from z + 0.1 down): a
+    // The ground a unit stands on (0x007c2a70 from z + 0.1 down): a
     // building's floor material's, else the terrain's quad's, else none.
     const auto groundTerrainType = [&](const glm::vec3& at) -> int32_t {
         const float probeZ = at.z + 0.1f;
@@ -135,18 +135,21 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
         std::optional<float> terrainFloor;
         std::optional<int32_t> terrainType;
         if (auto* terrain = renderer_->getTerrainManager()) {
+            // The terrain met on the way down, to weigh a building's floor
+            // against: none where it is over the probe (0x007c28f0).
             terrainFloor = terrain->getHeightAt(at.x, at.y);
             if (terrainFloor && *terrainFloor > probeZ) terrainFloor.reset();
-            if (terrainFloor) {
-                if (const auto effect = terrain->getGroundEffectIdAt(at.x, at.y)) {
-                    auto effects = assetManager_->loadDBCOptional("GroundEffectTexture.dbc");
-                    const int32_t row = effects && effects->getFieldCount() > kGroundEffectTerrainTypeColumn
-                                            ? effects->findRecordById(*effect)
-                                            : -1;
-                    if (row >= 0) {
-                        terrainType = static_cast<int32_t>(
-                            effects->getUInt32(static_cast<uint32_t>(row), kGroundEffectTerrainTypeColumn));
-                    }
+            // The quad's type, read by where the unit is and not how high
+            // (0x007a0530 takes x and y alone): under the terrain's surface
+            // with no building's floor beneath, still the quad's.
+            if (const auto effect = terrain->getGroundEffectIdAt(at.x, at.y)) {
+                auto effects = assetManager_->loadDBCOptional("GroundEffectTexture.dbc");
+                const int32_t row = effects && effects->getFieldCount() > kGroundEffectTerrainTypeColumn
+                                        ? effects->findRecordById(*effect)
+                                        : -1;
+                if (row >= 0) {
+                    terrainType = static_cast<int32_t>(
+                        effects->getUInt32(static_cast<uint32_t>(row), kGroundEffectTerrainTypeColumn));
                 }
             }
         }
