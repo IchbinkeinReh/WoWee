@@ -529,6 +529,10 @@ void GameHandler::playErrorSpeech(audio::PlayerErrorSpeech type) {
                      static_cast<uint8_t>(toServerGender(ch->gender)));
 }
 
+void GameHandler::playGameErrorSpeech(std::string_view gameErrorKey) {
+    if (const auto speech = audio::vocal_error::forGameError(gameErrorKey)) playErrorSpeech(*speech);
+}
+
 void GameHandler::handleCharLoginFailed(network::Packet& packet) {
     uint8_t reason = packet.readUInt8();
 

@@ -38,6 +38,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <deque>
 #include <array>
@@ -3692,6 +3693,10 @@ public:
     // Play the player character's spoken error response ("Not enough mana", ...)
     // using the active character's race/gender. Gated by the Character Speech setting.
     void playErrorSpeech(audio::PlayerErrorSpeech type);
+    /// The line a game error speaks, by its GlobalStrings key, where the
+    /// client's table of them gives it one (0x005216f0 -> 0x00986d00);
+    /// nothing for the rest.
+    void playGameErrorSpeech(std::string_view gameErrorKey);
 
     // Reputation change toast: factionName, delta, new standing
     using RepChangeCallback = std::function<void(const std::string& factionName, int32_t delta, int32_t standing)>;

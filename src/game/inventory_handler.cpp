@@ -16,7 +16,6 @@
 #include "rendering/renderer.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
-#include "audio/player_voice_manager.hpp"
 #include "core/application.hpp"
 #include "core/logger.hpp"
 #include "game/sell_count.hpp"
@@ -834,33 +833,14 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             msg = uiText(err.key, err.enUS);
         }
         owner_.addUIError(msg);
-        if (error == 1) {
-            owner_.playErrorSpeech(audio::PlayerErrorSpeech::CANT_EQUIP_LEVEL);
-            return;
-        }
+        // And the line the game error speaks, where the client's table
+        // gives it one (0x005216f0): a full bag's for every code that ends
+        // in ERR_BAG_FULL, a missing proficiency's own, none for a full bank.
+        owner_.playGameErrorSpeech(err.key);
+        if (error == 1) return;
         if (auto* ac = owner_.services().audioCoordinator) {
             if (auto* sfx = ac->getUiSoundManager())
                 sfx->playError();
-        }
-
-        // Character speech response for errors with a matching voice line
-        using audio::PlayerErrorSpeech;
-        switch (error) {
-            case 4:  owner_.playErrorSpeech(PlayerErrorSpeech::BAG_FULL); break;
-            case 7:  owner_.playErrorSpeech(PlayerErrorSpeech::AMMO_ONLY); break;
-            case 8:  owner_.playErrorSpeech(PlayerErrorSpeech::CANT_USE_ITEM); break;
-            case 10:
-            case 11: owner_.playErrorSpeech(PlayerErrorSpeech::CANT_EQUIP_EVER); break;
-            case 17: owner_.playErrorSpeech(PlayerErrorSpeech::ITEM_MAX_COUNT); break;
-            case 20: owner_.playErrorSpeech(PlayerErrorSpeech::NOT_EQUIPPABLE); break;
-            case 24: owner_.playErrorSpeech(PlayerErrorSpeech::CANT_DROP_SOULBOUND); break;
-            case 25: owner_.playErrorSpeech(PlayerErrorSpeech::OUT_OF_RANGE); break;
-            case 29: owner_.playErrorSpeech(PlayerErrorSpeech::NOT_ENOUGH_MONEY); break;
-            case 30: owner_.playErrorSpeech(PlayerErrorSpeech::NOT_A_BAG); break;
-            case 36: owner_.playErrorSpeech(PlayerErrorSpeech::ITEM_LOCKED); break;
-            case 50:
-            case 51: owner_.playErrorSpeech(PlayerErrorSpeech::INVENTORY_FULL); break;
-            default: break;
         }
     };
 
@@ -928,10 +908,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                 if (auto* sfx = ac->getUiSoundManager())
                     sfx->playError();
             }
-            if (errCode == 2)
-                owner_.playErrorSpeech(audio::PlayerErrorSpeech::NOT_ENOUGH_MONEY);
-            else if (errCode == 8)
-                owner_.playErrorSpeech(audio::PlayerErrorSpeech::ITEM_MAX_COUNT);
+            owner_.playGameErrorSpeech(err.key);
         }
     };
 
@@ -6457,13 +6434,9 @@ void InventoryHandler::handleTrainerBuyFailed(network::Packet& packet) {
     // No words for any of them: 0x006d8410 writes "Trainer service %d
     // unavailable" and the like to the developer console only. This printed
     // "Cannot learn X (not enough money)" in English, red and in chat.
+    // Nor a sound: no game error is raised (0x005216f0 is not reached), so
+    // there is neither the error's chime nor the character's line.
     LOG_INFO("SMSG_TRAINER_BUY_FAILED: spell=", spellId, " error=", errorCode);
-    if (auto* ac = owner_.services().audioCoordinator)
-        if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
-    if (errorCode == 1)
-        owner_.playErrorSpeech(audio::PlayerErrorSpeech::NOT_ENOUGH_MONEY);
-    else
-        owner_.playErrorSpeech(audio::PlayerErrorSpeech::CANT_LEARN_SPELL);
 }
 
 // ============================================================
