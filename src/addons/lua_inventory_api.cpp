@@ -392,6 +392,23 @@ static const game::GameHandler::ExtendedCostEntry* merchantCost(lua_State* L, in
     return costId ? gh->getExtendedCost(costId) : nullptr;
 }
 
+/// _GetMerchantItemArenaRequirement(index) → rating, bracket, met - the
+/// arena rating a vendor item's extended cost asks for, its bracket (0 two,
+/// 1 three, 2 five, held to 0..3 as 0x006277f0 holds it) and whether one of
+/// the player's teams reaches it (0x005a37b0); nothing when it asks none.
+/// The tooltip's ITEM_REQ_ARENA_RATING line, for the merchant item it is
+/// built for.
+static int lua_GetMerchantItemArenaRequirement(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto* cost = merchantCost(L, static_cast<int>(luaL_optnumber(L, 1, 0)));
+    if (!gh || !cost || cost->requiredArenaRating == 0) return 0;
+    const uint32_t bracket = cost->arenaBracket > 3 ? 3u : cost->arenaBracket;
+    lua_pushnumber(L, cost->requiredArenaRating);
+    lua_pushnumber(L, bracket);
+    lua_pushboolean(L, gh->meetsArenaRating(cost->requiredArenaRating, bracket) ? 1 : 0);
+    return 3;
+}
+
 // GetMerchantItemCostInfo(index) → honorPoints, arenaPoints, itemCount
 //
 // Three values, not one. The merchant frame reads all three and then tests
@@ -4117,6 +4134,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetRepairAllCost",        lua_GetRepairAllCost},
                 {"CloseMerchant",           lua_CloseMerchant},
                 {"GetMerchantItemMaxStack", lua_GetMerchantItemMaxStack},
+                {"_GetMerchantItemArenaRequirement", lua_GetMerchantItemArenaRequirement},
                 {"GetMerchantItemCostInfo", lua_GetMerchantItemCostInfo},
                 {"GetMerchantItemCostItem", lua_GetMerchantItemCostItem},
                 {"GetItemInfo",       lua_GetItemInfo},

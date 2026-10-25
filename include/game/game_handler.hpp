@@ -3341,7 +3341,15 @@ public:
         uint32_t arenaPoints = 0;
         uint32_t itemId[5] = {};
         uint32_t itemCount[5] = {};
+        /// The arena bracket (+0xc: 0 two, 1 three, 2 five) and the personal and
+        /// team rating it asks for (+0x38), which the tooltip states (0x006277f0).
+        uint32_t arenaBracket = 0;
+        uint32_t requiredArenaRating = 0;
     };
+    /// 0x005a37b0: whether one of the player's arena teams at least the
+    /// bracket's size (2, 3, 5) has both the player's personal rating and the
+    /// team's rating at `rating` or more.
+    [[nodiscard]] bool meetsArenaRating(uint32_t rating, uint32_t bracket) const;
     /// Null when the id is unknown or the DBC is not there.
     ///
     /// Lives here rather than in the window that draws vendors, because the

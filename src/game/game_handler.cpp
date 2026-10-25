@@ -5384,6 +5384,27 @@ GameHandler::getContinentBounds(uint32_t mapId) const {
     return continentBoundsCache_.emplace(mapId, bounds).first->second;
 }
 
+bool GameHandler::meetsArenaRating(uint32_t rating, uint32_t bracket) const {
+    // 0x005a37b0: the player's three PLAYER_FIELD_ARENA_TEAM_INFO slots, seven
+    // fields each (id, type, ..., personal rating at +6). A slot whose team is
+    // at least the bracket's size (0x00a15abc: 2, 3, 5) and whose personal
+    // rating reaches the mark counts when that team's own rating does too.
+    static constexpr uint32_t kBracketTeamSize[3] = {2, 3, 5};
+    const uint32_t minSize = kBracketTeamSize[bracket < 3 ? bracket : 2];
+    const uint16_t base = fieldIndex(UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1);
+    const auto player = getEntityManager().getEntity(playerGuid);
+    if (!player || base == 0xFFFF) return false;
+    for (uint32_t slot = 0; slot < 3; ++slot) {
+        const uint32_t type = player->getField(static_cast<uint16_t>(base + slot * 7 + 1));
+        const uint32_t personal = player->getField(static_cast<uint16_t>(base + slot * 7 + 6));
+        if (type < minSize || personal < rating) continue;
+        for (const auto& team : getArenaTeamStats()) {
+            if (team.teamType == type && team.rating >= rating) return true;
+        }
+    }
+    return false;
+}
+
 const GameHandler::ExtendedCostEntry*
 GameHandler::getExtendedCost(uint32_t extendedCostId) const {
     if (!extendedCostCacheLoaded_) {
@@ -5403,6 +5424,10 @@ GameHandler::getExtendedCost(uint32_t extendedCostId) const {
                     for (int j = 0; j < 5; ++j) {
                         e.itemId[j]    = dbc->getUInt32(i, 4 + j);
                         e.itemCount[j] = dbc->getUInt32(i, 9 + j);
+                    }
+                    if (dbc->getFieldCount() > 14) {
+                        e.arenaBracket = dbc->getUInt32(i, 3);
+                        e.requiredArenaRating = dbc->getUInt32(i, 14);
                     }
                     extendedCostCache_[id] = e;
                 }
