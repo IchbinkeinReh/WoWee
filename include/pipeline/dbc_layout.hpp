@@ -116,10 +116,12 @@ CharSectionsFields detectCharSectionsFields(const DBCFile* dbc, const DBCFieldMa
 /**
  * Which columns of CharacterFacialHairStyles.dbc hold the geoset numbers.
  *
- * Two shapes ship. The stock 3.3.5a file has nine columns with three unused
- * ones after the variation, so the geosets are at 6, 7, 8. The eight-column
- * file - which is what both installs on this machine carry - puts them at
- * 3, 4, 5 and fills 6 and 7 with zero or 0xCCCCCCCC.
+ * Two shapes are seen. The 3.3.5a (12340) client's own file has eight columns:
+ * race, sex, variation, then the geosets at 3, 4, 5 and the two the client adds
+ * to groups 16 and 17 at 6 and 7 (zero in every row it ships). A nine-column
+ * file keeps three unused columns after the variation instead, so its geosets
+ * are at 6, 7, 8. The layout describes the client's; the nine-column shape is
+ * told apart by its field count.
  *
  * Reading the wrong pair is silent: the geosets come out zero, so a beard, a
  * moustache, a pair of sideburns or a draenei's face tendrils simply are not
@@ -130,9 +132,9 @@ CharSectionsFields detectCharSectionsFields(const DBCFile* dbc, const DBCFieldMa
  * the first column is geoset group 100, the second 300, the third 200.
  */
 struct FacialHairFields {
-    uint32_t geoset100 = 6;
-    uint32_t geoset300 = 7;
-    uint32_t geoset200 = 8;
+    uint32_t geoset100 = 3;
+    uint32_t geoset300 = 4;
+    uint32_t geoset200 = 5;
     /// The columns the client adds to groups 16 and 17 (0x004ee460: +0x18
     /// and +0x1c of its row). Past the end - none - where the file keeps no
     /// such columns.

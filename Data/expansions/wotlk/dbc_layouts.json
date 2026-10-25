@@ -68,9 +68,11 @@
     "TitleBit": 36
   },
   "CharacterFacialHairStyles": {
-    "Geoset100": 6,
-    "Geoset200": 8,
-    "Geoset300": 7,
+    "Geoset100": 3,
+    "Geoset1600": 6,
+    "Geoset1700": 7,
+    "Geoset200": 5,
+    "Geoset300": 4,
     "RaceID": 0,
     "SexID": 1,
     "Variation": 2

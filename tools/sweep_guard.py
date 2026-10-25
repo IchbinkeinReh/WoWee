@@ -473,7 +473,7 @@ CHECKS = [
     # set of DBCs here; checking a Classic layout against WotLK data reported
     # three expansions' worth of noise that looked exactly like findings.
     ("dbc_layout_check.py",
-     r"^(\d+) field\(s\) naming a column the file does not have", 1,
+     r"^(\d+) field\(s\) naming a column the file does not have", 0,
      "DBC field indices naming a column the file does not have"),
     # Packet handlers that change this client's own model, tell the player in
     # chat, and tell the interface nothing - the shape that produces a bug
