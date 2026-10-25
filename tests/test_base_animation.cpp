@@ -328,7 +328,14 @@ TEST_CASE("looting, the ranged readies, a flying or falling spline, a death kit"
     hunter.rangedDrawn = true;
     hunter.autoRepeat = true;
     hunter.rangedSubClass = 2;
-    CHECK(pick(hunter).anim == 105u);
+    CHECK(pick(hunter).anim == 105u);  // no BowPull: the LoadBow nock
+    // A bow whose model has BowPull (160) draws the string with it, held into
+    // the drawn bow (HoldBow, 109) - 0x00756040.
+    Model withPull;
+    withPull.ids = {0, 160};
+    CHECK(pick(hunter, {}, {}, withPull).anim == 160u);
+    CHECK(ba::afterOneShot(table(), hunter, 160)->anim == 109u);
+    CHECK(ba::afterOneShot(table(), hunter, 160)->loop);
     hunter.rangedSubClass = 19;
     CHECK(pick(hunter).anim == 111u);
     // A thrown weapon out: its load, which holds into HoldThrown the way the

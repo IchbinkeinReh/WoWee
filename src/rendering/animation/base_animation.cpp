@@ -33,7 +33,8 @@ constexpr uint32_t kStand = 0, kDead = 6, kShuffleLeft = 11, kShuffleRight = 12,
                    kEmerge = 224, kSitGroundUp = 98, kSleepDown = 99, kSleepUp = 101, kKneelStart = 114,
                    kKneelEnd = 116, kFly = 135, kLoot = 50, kLootHold = 188, kLootUp = 189, kReadyUnarmed = 25,
                    kLoadBow = 105, kLoadRifle = 106, kHoldBow = 109, kHoldRifle = 110, kHoldThrown = 111,
-                   kLoadThrown = 112, kFishingCast = 133, kFishingLoop = 134, kEmoteDance = 69;
+                   kLoadThrown = 112, kFishingCast = 133, kFishingLoop = 134, kEmoteDance = 69,
+                   kBowPull = 160;
 
 uint32_t behaviorOf(const anim::AnimationDataTable& data, int32_t a) {
     return a < 0 ? anim::kNoBehavior : data.behavior(static_cast<uint32_t>(a));
@@ -160,7 +161,10 @@ Pick pick(const anim::AnimationDataTable& data, const ub::Unit& unit, const Play
     if (unit.rangedDrawn && unit.autoRepeat) {
         if (!unit.rangedSubClass) return loop(kReadyUnarmed);
         switch (*unit.rangedSubClass) {
-            case 2: return once(kLoadBow);
+            // A bow draws its string with BowPull where the model has it
+            // (0x00756040 plays 0xa0 once the model answers 0x00825ee0 for it),
+            // held drawn after; LoadBow is the nock the model falls back to.
+            case 2: return has(kBowPull) ? once(kBowPull) : once(kLoadBow);
             case 3: case 18: return once(kLoadRifle);
             case 16: return once(kLoadThrown);
             case 19: return loop(kHoldThrown);
@@ -230,6 +234,11 @@ std::optional<Pick> afterOneShot(const anim::AnimationDataTable& data, const ub:
         case kKneelLoop:
             return st != 8 ? Pick{kKneelEnd, false} : Pick{kKneelLoop, true};
         case kLoadBow: return Pick{kHoldBow, true};
+        // The bow's string drawn (BowPull), held there - the drawn bow, which
+        // HoldBow is. The client holds the pulled pose off a flag (+0x28e
+        // 0x4000, set at the $BWP event) rather than a follow animation; held
+        // into HoldBow is the same drawn bow without re-nocking each shot.
+        case kBowPull: return Pick{kHoldBow, true};
         case kLoadRifle: return Pick{kHoldRifle, true};
         // 0x0073b510 case 0x70: a thrown weapon's load holds the same way the
         // bow's and the rifle's do, into HoldThrown. Without it the load ended
