@@ -1165,7 +1165,9 @@ public:
     bool hasPetitionSignaturesUI() const;
     void clearPetitionSignaturesUI() { petitionInfo_.showUI = false; }
     void signPetition(uint64_t petitionGuid);
-    void turnInPetition(uint64_t petitionGuid);
+    /// CMSG_TURN_IN_PETITION. With blankDesign the five tabard words follow
+    /// at -1, as TurnInPetition sends them (0x005a2600).
+    void turnInPetition(uint64_t petitionGuid, bool blankDesign = false);
     void offerPetition(uint64_t petitionGuid, uint64_t targetGuid);
 
     // Guild name lookup for other players' nameplates

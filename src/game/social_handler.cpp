@@ -2000,10 +2000,15 @@ void SocialHandler::signPetition(uint64_t petitionGuid) {
     owner_.getSocket()->send(pkt);
 }
 
-void SocialHandler::turnInPetition(uint64_t petitionGuid) {
+void SocialHandler::turnInPetition(uint64_t petitionGuid, bool blankDesign) {
     if (!owner_.getSocket() || owner_.getState() != WorldState::IN_WORLD) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_TURN_IN_PETITION));
     pkt.writeUInt64(petitionGuid);
+    // 0x005a2600: the vendor slot's turn-in carries the five tabard words of a
+    // team banner, all -1 - only the arena turn-in designs one.
+    if (blankDesign) {
+        for (int i = 0; i < 5; ++i) pkt.writeUInt32(0xFFFFFFFFu);
+    }
     owner_.getSocket()->send(pkt);
 }
 

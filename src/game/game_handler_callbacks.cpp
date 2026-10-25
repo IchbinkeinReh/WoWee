@@ -3529,8 +3529,8 @@ void GameHandler::signPetition(uint64_t petitionGuid) {
     if (socialHandler_) socialHandler_->signPetition(petitionGuid);
 }
 
-void GameHandler::turnInPetition(uint64_t petitionGuid) {
-    if (socialHandler_) socialHandler_->turnInPetition(petitionGuid);
+void GameHandler::turnInPetition(uint64_t petitionGuid, bool blankDesign) {
+    if (socialHandler_) socialHandler_->turnInPetition(petitionGuid, blankDesign);
 }
 
 void GameHandler::offerPetition(uint64_t petitionGuid, uint64_t targetGuid) {
