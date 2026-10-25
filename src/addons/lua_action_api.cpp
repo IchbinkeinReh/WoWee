@@ -1895,21 +1895,31 @@ static int lua_ClickPetitionButton(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const uint64_t vendor = gh->getPetitionNpcGuid();
-    if (vendor == 0) return 0;   // 0x005a2140: no vendor open, nothing done
+    if (vendor == 0) {   // 0x005a2140: no vendor open, nothing done
+        LOG_WARNING("ClickPetitionButton: no petition vendor is open");
+        return 0;
+    }
     auto& slot = petitionSlot();
     if (slot.vendor != vendor) slot = {};
     const PetitionSlot old = slot;
 
     if (s_cursorType == CursorType::ITEM) {
-        if (s_cursorBag < 0) return 0;
+        if (s_cursorBag < 0) {
+            LOG_WARNING("ClickPetitionButton: the held item is not in a bag");
+            return 0;
+        }
         const uint64_t guid = containerSlotGuid(gh, s_cursorBag, s_cursorSlot);
         const auto* info = gh->getItemInfo(cursorItemId());
-        if (guid == 0 || !info || (info->itemFlags & 0x2000u) == 0) return 0;
+        if (guid == 0 || !info || (info->itemFlags & 0x2000u) == 0) {
+            LOG_WARNING("ClickPetitionButton: the held item is not a charter (item flag 0x2000)");
+            return 0;
+        }
         slot = {s_cursorBag, s_cursorSlot, guid, vendor};
         clearCursorItem(L);
     } else if (s_cursorType == CursorType::NONE) {
         slot = {};
     } else {
+        LOG_WARNING("ClickPetitionButton: the cursor holds something that is not an item");
         return 0;
     }
     gh->fireAddonEvent("PETITION_VENDOR_UPDATE", {});
