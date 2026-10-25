@@ -102,3 +102,26 @@ TEST_CASE("a pet's refused cast speaks only its cooldown and power lines", "[cas
     potion.category = 4;
     CHECK(cf::petGameError(0x43, potion) == "ERR_SPELL_COOLDOWN");
 }
+
+TEST_CASE("a failure repeating the last is held three seconds from each repeat", "[cast_failure]") {
+    cf::RepeatHold hold;
+    // The first is reported; the same again at once is not.
+    CHECK(hold.report(133, 0x43, 1000));
+    CHECK_FALSE(hold.report(133, 0x43, 1500));
+    // Each repeat takes the time again: 2.9 s after the last one is still held,
+    // though 4.4 s after the first.
+    CHECK_FALSE(hold.report(133, 0x43, 4400));
+    // Three seconds without, and it is said again.
+    CHECK(hold.report(133, 0x43, 7400));
+}
+
+TEST_CASE("another spell or reason is reported, and a cast going off forgets", "[cast_failure]") {
+    cf::RepeatHold hold;
+    CHECK(hold.report(133, 0x43, 0));
+    CHECK(hold.report(133, 0x55, 100));   // another reason
+    CHECK(hold.report(116, 0x55, 200));   // another spell
+    CHECK(hold.report(133, 0x55, 300));   // the one before last, again
+    CHECK_FALSE(hold.report(133, 0x55, 400));
+    hold.forget();
+    CHECK(hold.report(133, 0x55, 500));
+}

@@ -103,4 +103,37 @@ constexpr std::string_view petGameError(uint8_t result, const SpellRow& spell) {
     }
 }
 
+/// A failed cast is not reported again while it repeats the last one.
+///
+/// 0x00808200 keeps the spell and the result of the last failure it saw
+/// (0x00d397c4, 0x00d397c0) and when (0x00d397bc): the same spell refused
+/// for the same reason less than three seconds after that is not shown,
+/// spoken or logged - and the time is taken again each time, so a key held
+/// on a spell that is not ready says so once, and again only after three
+/// seconds without. Any spell going off (SMSG_SPELL_GO without its pending
+/// flag, 0x0080e1b0) forgets it.
+class RepeatHold {
+public:
+    static constexpr uint32_t kHoldMs = 3000;
+
+    /// Whether this failure is reported; noted either way.
+    bool report(uint32_t spellId, uint8_t result, uint32_t nowMs) {
+        if (spellId == spellId_ && result == result_) {
+            const bool due = static_cast<int32_t>(nowMs - atMs_ - kHoldMs) >= 0;
+            atMs_ = nowMs;
+            return due;
+        }
+        spellId_ = spellId;
+        result_ = result;
+        atMs_ = nowMs;
+        return true;
+    }
+    void forget() { spellId_ = 0; }
+
+private:
+    uint32_t spellId_ = 0;
+    uint8_t result_ = 0;
+    uint32_t atMs_ = 0;
+};
+
 }  // namespace wowee::game::cast_failure

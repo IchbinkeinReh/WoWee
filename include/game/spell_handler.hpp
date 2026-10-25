@@ -8,6 +8,7 @@
 #include "game/spell_history.hpp"
 #include "game/spell_missiles_in_flight.hpp"
 #include "game/cast_checks.hpp"
+#include "game/cast_failure_error.hpp"
 #include "game/spell_unit_target.hpp"
 #include "game/handler_types.hpp"
 #include "audio/spell_sound_manager.hpp"
@@ -497,6 +498,10 @@ public:
     /// And a pet's (0x00805610): its cooldown and power lines speak too, in
     /// the player's voice.
     void sayPetCastFailure(uint32_t spellId, uint8_t result) const;
+    /// The player's own refusal, as 0x00808200 shows it: on the error line
+    /// with the character's line, unless it repeats the last one within
+    /// three seconds (cast_failure::RepeatHold). Nothing for empty words.
+    void showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text) const;
 
 private:
     std::unordered_map<uint32_t, uint64_t> pendingPetNameQueries_;
@@ -635,6 +640,9 @@ private:
     uint64_t castItemGuid_ = 0;
     spell_history::History petHistory_;
     spell_history::History playerHistory_;
+    /// The last failure 0x00808200 reported, held three seconds. Mutable:
+    /// the const reach test reports through it.
+    mutable cast_failure::RepeatHold failureHold_;
     /// 0x00af5274: the casts whose missile still flies.
     spell_missiles::InFlightList missilesInFlight_;
     /// 0x0080e1b0: a cast whose spell has a missile Speed joins the list.

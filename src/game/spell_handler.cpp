@@ -17,7 +17,6 @@
 #include "game/go_interaction_anim.hpp"
 #include "game/transport_manager.hpp"
 #include "game/spell_target_point.hpp"
-#include "game/cast_failure_error.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
@@ -1262,10 +1261,11 @@ SpellHandler::UnitTake SpellHandler::takeUnit(uint32_t spellId, uint64_t casterG
         const glm::vec3 d(unit->getX() - caster->getX(), unit->getY() - caster->getY(), unit->getZ() - caster->getZ());
         if (const uint8_t fail = unit_target::reachFailure(glm::dot(d, d), range)) {
             if (say) {
-                owner_.addUIError(castFailureMessage(owner_, spellId, fail, -1, 0, 0));
-                // The player's cast speaks it (0x00808200); a pet's is not
-                // shown that way.
-                if (casterGuid == owner_.getPlayerGuid()) sayCastFailure(spellId, fail);
+                // The player's cast reports it as 0x00808200 does; a pet's
+                // is only shown.
+                const std::string text = castFailureMessage(owner_, spellId, fail, -1, 0, 0);
+                if (casterGuid == owner_.getPlayerGuid()) showPlayerCastFailure(spellId, fail, text);
+                else owner_.addUIError(text);
             }
             out.outOfReach = true;
             return out;
@@ -1300,10 +1300,7 @@ bool SpellHandler::auraLetsSpell(uint64_t unit, uint32_t spellId) const {
 }
 
 void SpellHandler::reportLocalCastFailure(uint32_t spellId, uint8_t result) {
-    const std::string text = castFailureMessage(owner_, spellId, result, -1, 0, 0);
-    if (text.empty()) return;
-    owner_.addUIError(text);
-    sayCastFailure(spellId, result);
+    showPlayerCastFailure(spellId, result, castFailureMessage(owner_, spellId, result, -1, 0, 0));
 }
 
 void SpellHandler::sayCastFailure(uint32_t spellId, uint8_t result) const {
@@ -1312,6 +1309,16 @@ void SpellHandler::sayCastFailure(uint32_t spellId, uint8_t result) const {
 
 void SpellHandler::sayPetCastFailure(uint32_t spellId, uint8_t result) const {
     owner_.playGameErrorSpeech(cast_failure::petGameError(result, spellRowOf(owner_, spellId)));
+}
+
+void SpellHandler::showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text) const {
+    // OsGetAsyncTimeMs's milliseconds (0x0086ae20); only their differences count.
+    const auto nowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                 std::chrono::steady_clock::now().time_since_epoch())
+                                                 .count());
+    if (!failureHold_.report(spellId, result, nowMs) || text.empty()) return;
+    owner_.addUIError(text);
+    sayCastFailure(spellId, result);
 }
 
 void SpellHandler::armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required) {
@@ -1329,9 +1336,11 @@ void SpellHandler::spellTargetUnit(uint64_t unitGuid) {
     if (unitTarget_.spellId == 0) return;
     if (!owner_.getEntityManager().getEntity(unitGuid)) {
         // 0x0080dc00: no unit there.
-        owner_.addUIError(castFailureMessage(owner_, unitTarget_.spellId, unit_target::kFailedOutOfRange, -1, 0, 0));
+        const std::string text =
+            castFailureMessage(owner_, unitTarget_.spellId, unit_target::kFailedOutOfRange, -1, 0, 0);
         if (unitTarget_.caster == owner_.getPlayerGuid())
-            sayCastFailure(unitTarget_.spellId, unit_target::kFailedOutOfRange);
+            showPlayerCastFailure(unitTarget_.spellId, unit_target::kFailedOutOfRange, text);
+        else owner_.addUIError(text);
         return;
     }
     const auto t = takeUnit(unitTarget_.spellId, unitTarget_.caster, unitGuid, unitTarget_.required, true);
@@ -1792,8 +1801,8 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
             unit_target::noUnitFailure(it->second.attr, it->second.attrEx5, 0, true,
                                        owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::MAIN_HAND)) != 0,
                                        false) == unit_target::kFailedMainhand) {
-            owner_.addUIError(castFailureMessage(owner_, spellId, unit_target::kFailedMainhand, -1, 0, 0));
-            sayCastFailure(spellId, unit_target::kFailedMainhand);
+            showPlayerCastFailure(spellId, unit_target::kFailedMainhand,
+                                  castFailureMessage(owner_, spellId, unit_target::kFailedMainhand, -1, 0, 0));
             return;
         }
         if (owner_.isAwaitingItemTarget()) {
@@ -1965,9 +1974,8 @@ bool SpellHandler::castChecksPass(uint32_t spellId, uint64_t targetGuid) {
         case cast_check::GameError::None: break;
     }
     if (r.code == 0) return true;
-    const std::string text = castFailureMessage(owner_, spellId, r.code, static_cast<int32_t>(e.powerType), r.arg);
-    owner_.raiseUiError(text);
-    if (!text.empty()) sayCastFailure(spellId, r.code);
+    showPlayerCastFailure(spellId, r.code,
+                          castFailureMessage(owner_, spellId, r.code, static_cast<int32_t>(e.powerType), r.arg));
     return false;
 }
 
@@ -2720,8 +2728,9 @@ void SpellHandler::castAtUnits(uint32_t spellId, uint64_t caster, uint64_t targe
     const bool mainhand = byPlayer && owner_.getEquipSlotGuid(static_cast<int>(EquipSlot::MAIN_HAND)) != 0;
     if (const uint8_t fail = unit_target::noUnitFailure(spell.attr, spell.attrEx5, required, byPlayer, mainhand,
                                                         owner_.getTargetGuid() != 0)) {
-        owner_.addUIError(castFailureMessage(owner_, spellId, fail, -1, 0, 0));
-        if (byPlayer) sayCastFailure(spellId, fail);
+        const std::string text = castFailureMessage(owner_, spellId, fail, -1, 0, 0);
+        if (byPlayer) showPlayerCastFailure(spellId, fail, text);
+        else owner_.addUIError(text);
         return;
     }
     armUnitTarget(spellId, caster, required);
@@ -3621,6 +3630,12 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     if (gatherCast && shouldDespawnGatherTarget(data.result)) {
         owner_.despawnGameObjectLocally(gatherGoGuid);
     }
+    // Not at all while it repeats the last failure within three seconds
+    // (cast_failure::RepeatHold): no line, no speech, no log.
+    const auto holdNowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                     std::chrono::steady_clock::now().time_since_epoch())
+                                                     .count());
+    if (!failureHold_.report(data.spellId, data.result, holdNowMs)) errMsg.clear();
     if (!errMsg.empty()) owner_.addUIError(errMsg);
     // And the combat log, in the words the screen was given (0x00808200 ->
     // 0x00751ad0).
@@ -3631,7 +3646,7 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // GameHandler::raiseUiError changed nothing that was being reported.
     const bool routine = isRoutineCastRejection(data.result);
 
-    if (!routine) {
+    if (!routine && !errMsg.empty()) {
         if (auto* ac = owner_.services().audioCoordinator) {
             if (auto* sfx = ac->getUiSoundManager())
                 sfx->playError();
@@ -3825,6 +3840,9 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     if ((data.targetFlags & 0x40u) && data.destLocationCounter != 0)
         rememberDestLocationCount(data.casterUnit, data.destLocationCounter);
     const bool rangedWeaponAttack = spellclass::isRangedWeaponAutoAttack(data.spellId);
+    // Any cast going off, bar a pending one, lets the next failure be
+    // reported (0x0080e1b0 clears 0x00d397c4).
+    if ((data.castFlags & 0x1u) == 0) failureHold_.forget();
     if (data.hasPower) castPowerSaid(data.casterUnit, data.spellId, data.power, true);
     // 0x00805330 for a cast that had no start (instant), as for one that had.
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
@@ -6253,8 +6271,7 @@ void SpellHandler::handleCastResult(network::Packet& packet) {
             if (gatherCast && shouldDespawnGatherTarget(castResult)) {
                 owner_.despawnGameObjectLocally(gatherGoGuid);
             }
-            if (!errMsg.empty()) owner_.addUIError(errMsg);
-            if (!errMsg.empty()) sayCastFailure(castResultSpellId, castResult);
+            showPlayerCastFailure(castResultSpellId, castResult, errMsg);
             if (owner_.spellCastFailedCallbackRef()) owner_.spellCastFailedCallbackRef()(castResultSpellId);
                 owner_.fireAddonEvent("UNIT_SPELLCAST_FAILED", spellcastArgs("player", castResultSpellId));
                 owner_.fireAddonEvent("UNIT_SPELLCAST_STOP",   spellcastArgs("player", castResultSpellId));
