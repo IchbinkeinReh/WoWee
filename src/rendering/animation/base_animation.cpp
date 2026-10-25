@@ -231,6 +231,11 @@ std::optional<Pick> afterOneShot(const anim::AnimationDataTable& data, const ub:
             return st != 8 ? Pick{kKneelEnd, false} : Pick{kKneelLoop, true};
         case kLoadBow: return Pick{kHoldBow, true};
         case kLoadRifle: return Pick{kHoldRifle, true};
+        // 0x0073b510 case 0x70: a thrown weapon's load holds the same way the
+        // bow's and the rifle's do, into HoldThrown. Without it the load ended
+        // to nothing, so pickBaseAnimation chose once(LoadThrown) again and the
+        // throw was re-cocked every pass instead of held.
+        case kLoadThrown: return Pick{kHoldThrown, true};
         case kLoot: return Pick{kLootHold, true};
         case kSubmerge: return Pick{kSubmerged, true};
         case kFishingCast: return Pick{kFishingLoop, true};
