@@ -15,11 +15,12 @@
 //    7  1  the player's error speech (0x00986d00)
 //    8  2  a unit's race splash, wading in or out (0x00746720)
 //    9  1  a unit's Exertion and ExertionCritical (0x00746b30)
-//   10  2  0x004d0720's
+//   10  2  a melee swing's whoosh (0x004d0720)
 //   11  2  a unit's Injury, InjuryCritical and InjuryCrushingBlow
 //   12  1
 //   13  6  a unit's footfall, any but the active player's (0x004cf170)
-//   14  4  0x004d0540's, 0x004d0660's and 0x00756240's
+//   14  4  a weapon's impact (0x004d0540, 0x004d0660) and a creature's
+//          custom attack sound (0x00756240)
 //   15  1  9, for a creature the server flags as more audible
 //   16  2  11, likewise
 //   17  4  the active player's footfall (0x004cf170)
@@ -37,7 +38,9 @@ enum class PlayLimit : uint8_t {
     None = 0,
     ErrorSpeech = 7,
     RaceSplash = 8,
+    WeaponSwing = 10,
     UnitFootstep = 13,
+    WeaponImpact = 14,
     OwnFootstep = 17,
 };
 

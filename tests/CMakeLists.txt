@@ -3266,6 +3266,11 @@ wowee_add_test(test_minimap_blips
 wowee_add_test(test_unit_model_events
     SOURCES test_unit_model_events.cpp)
 
+# ── test_melee_sound ─────────────────────────────────────────
+# What a melee swing's kept hit plays as its attacker's model lands it.
+wowee_add_test(test_melee_sound
+    SOURCES test_melee_sound.cpp)
+
 # ── test_cinematic ───────────────────────────────────────────
 # A cinematic's camera tracks and its course, fades and all (game/cinematic.hpp,
 # rendering/m2_camera_track.hpp).

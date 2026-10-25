@@ -13,6 +13,7 @@
 #include "rendering/renderer.hpp"
 #include "rendering/unit_model_events.hpp"
 #include "rendering/unit_splash.hpp"
+#include "rendering/melee_sound.hpp"
 #include "rendering/terrain_manager.hpp"
 #include "rendering/water_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
@@ -171,6 +172,11 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
                                                  std::chrono::steady_clock::now().time_since_epoch())
                                                  .count());
     for (const auto& event : fired) {
+        // A melee swing's whoosh and landing (0x00756240).
+        if (event.id == rendering::melee_sound::kEventSwing || rendering::melee_sound::isLandEvent(event.id)) {
+            if (const uint64_t attacker = ownerOf(event.instanceId)) meleeModelEvent(attacker, event.id, event.position);
+            continue;
+        }
         const ue::Action action = ue::classify(event.id);
         if (action.kind == ue::Kind::None) continue;
         const uint64_t guid = ownerOf(event.instanceId);

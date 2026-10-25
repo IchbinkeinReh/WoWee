@@ -43,6 +43,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -232,8 +233,13 @@ public:
     /// VolumeFloat times `volumeScale`. A unit's model events play this way
     /// (unit_model_events.hpp). Of a counted `limit` type, not while as many
     /// of it as may play at once are playing (audio/play_limit.hpp).
+    /// With `absolute`, `volumeScale` is the volume itself, not a scale of
+    /// the kit's - a play whose own volume is set (0x004c6a40 takes one in
+    /// (0, 1] in place of the kit's).
     void playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale, pipeline::AssetManager* assets,
-                  audio::PlayLimit limit = audio::PlayLimit::None);
+                  audio::PlayLimit limit = audio::PlayLimit::None, bool absolute = false);
+    /// A SoundEntries row by its Name (0x004ccaa0), 0 for none.
+    uint32_t idByName(const std::string& name, pipeline::AssetManager* assets);
 
 private:
     struct Kit {
@@ -256,6 +262,8 @@ private:
         float fadeOut = 0.0f;      ///< how long a $DSE takes to end it
     };
     std::unordered_map<uint32_t, Kit> kits_;
+    std::unordered_map<std::string, uint32_t> idsByName_;
+    bool idsByNameLoaded_ = false;
     std::unordered_map<uint32_t, std::array<uint32_t, 10>> displaySounds_;
     bool displaySoundsLoaded_ = false;
     /// The loop an instance plays, by instance id: one each, as the client's

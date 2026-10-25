@@ -1794,6 +1794,13 @@ public:
     /// Any unit's melee swing (SMSG_ATTACKERSTATEUPDATE, 0x00756800).
     using UnitAttackSwingCallback = std::function<void(uint64_t attackerGuid)>;
     void setUnitAttackSwingCallback(UnitAttackSwingCallback cb) { unitAttackSwingCallback_ = std::move(cb); }
+    /// Any unit's melee hit as it arrives (0x00756800 case 0x14a), to be kept
+    /// on its attacker until its model lands it; and any attack stopping
+    /// (SMSG_ATTACKSTOP, 0x00756770), which settles the one kept.
+    using MeleeHitCallback = std::function<void(const AttackerStateUpdateData& hit)>;
+    void setMeleeHitCallback(MeleeHitCallback cb) { meleeHitCallback_ = std::move(cb); }
+    using AttackStopCallback = std::function<void(uint64_t attackerGuid)>;
+    void setAttackStopCallback(AttackStopCallback cb) { attackStopCallback_ = std::move(cb); }
     /// The active player sending a text emote (0x006dd9e0): whether it is
     /// sent, refused, or refused with ERR_NOEMOTEWHILERUNNING.
     enum class TextEmoteGate : uint8_t { Send, Refuse, RefuseWhileMoving };
@@ -4683,6 +4690,8 @@ public:
     auto& meleeSwingCallbackRef() { return meleeSwingCallback_; }
     auto& spellCastBeginCallbackRef() { return spellCastBeginCallback_; }
     auto& unitAttackSwingCallbackRef() { return unitAttackSwingCallback_; }
+    auto& meleeHitCallbackRef() { return meleeHitCallback_; }
+    auto& attackStopCallbackRef() { return attackStopCallback_; }
     void suppressNextMeleeSwingAnim() { suppressMeleeSwingAnim_ = true; }
     bool consumeSuppressMeleeSwingAnim() {
         bool v = suppressMeleeSwingAnim_;
@@ -6140,6 +6149,8 @@ private:
     FaceCameraProvider faceCameraProvider_;
     SpellCastBeginCallback spellCastBeginCallback_;
     UnitAttackSwingCallback unitAttackSwingCallback_;
+    MeleeHitCallback meleeHitCallback_;
+    AttackStopCallback attackStopCallback_;
     TextEmoteGateCallback textEmoteGateCallback_;
     bool suppressMeleeSwingAnim_ = false;
     // lastMeleeSwingMs_ moved to CombatHandler

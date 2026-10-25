@@ -24,7 +24,6 @@
 #include "rendering/spell_missile.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/spell_sound_manager.hpp"
-#include "audio/combat_sound_manager.hpp"
 #include "core/app_clock.hpp"
 #include "core/application.hpp"
 #include "addons/addon_manager.hpp"
@@ -3993,15 +3992,10 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                 isMeleeAbility = (currentCastSpellId_ != sid);
             }
         }
+        // The ability's swing sounds by its animation's own events and the
+        // hit the server reports for it (rendering/melee_sound.hpp).
         if (isMeleeAbility) {
             if (owner_.meleeSwingCallbackRef()) owner_.meleeSwingCallbackRef()(sid);
-            if (auto* ac = owner_.services().audioCoordinator) {
-                if (auto* csm = ac->getCombatSoundManager()) {
-                    csm->playWeaponSwing(audio::CombatSoundManager::WeaponSize::MEDIUM, false);
-                    csm->playImpact(audio::CombatSoundManager::WeaponSize::MEDIUM,
-                                    audio::CombatSoundManager::ImpactType::FLESH, false);
-                }
-            }
         }
 
         const bool wasInTimedCast = casting_ && (data.spellId == currentCastSpellId_);

@@ -12,6 +12,8 @@ TEST_CASE("the client's counted play types allow its own numbers", "[audio]") {
     CHECK(pl::maxPlaying(PlayLimit::RaceSplash) == 2);
     CHECK(pl::maxPlaying(PlayLimit::UnitFootstep) == 6);
     CHECK(pl::maxPlaying(PlayLimit::OwnFootstep) == 4);
+    CHECK(pl::maxPlaying(PlayLimit::WeaponSwing) == 2);
+    CHECK(pl::maxPlaying(PlayLimit::WeaponImpact) == 4);
 }
 
 TEST_CASE("a counted type is refused once its count is playing", "[audio]") {
@@ -25,6 +27,11 @@ TEST_CASE("a counted type is refused once its count is playing", "[audio]") {
     // One error line at a time.
     CHECK(pl::admits(PlayLimit::ErrorSpeech, 0));
     CHECK_FALSE(pl::admits(PlayLimit::ErrorSpeech, 1));
+    // A melee brawl: two whooshes and four impacts heard at once.
+    CHECK(pl::admits(PlayLimit::WeaponSwing, 1));
+    CHECK_FALSE(pl::admits(PlayLimit::WeaponSwing, 2));
+    CHECK(pl::admits(PlayLimit::WeaponImpact, 3));
+    CHECK_FALSE(pl::admits(PlayLimit::WeaponImpact, 4));
 }
 
 TEST_CASE("an uncounted play is never refused for those playing", "[audio]") {

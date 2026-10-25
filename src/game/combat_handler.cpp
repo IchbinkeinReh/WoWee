@@ -13,7 +13,6 @@
 #include "game/opcode_table.hpp"
 #include "rendering/renderer.hpp"
 #include "audio/audio_coordinator.hpp"
-#include "audio/combat_sound_manager.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "core/application.hpp"
@@ -743,8 +742,10 @@ void CombatHandler::handleAttackStop(network::Packet& packet) {
     AttackStopData data;
     if (!AttackStopParser::parse(packet, data)) return;
 
-    // 0x00756770: the attacker's melee target is gone.
+    // 0x00756770: the attacker's melee target is gone, and the hit it
+    // kept settled.
     unitMeleeTargets_.erase(data.attackerGuid);
+    if (owner_.attackStopCallbackRef()) owner_.attackStopCallbackRef()(data.attackerGuid);
     // Keep intent, but clear server-confirmed active state until ATTACKSTART resumes.
     if (data.attackerGuid == owner_.getPlayerGuid()) {
         autoAttacking_ = false;
@@ -774,6 +775,9 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     if (data.attackerGuid != 0 && owner_.unitAttackSwingCallbackRef()) {
         owner_.unitAttackSwingCallbackRef()(data.attackerGuid);
     }
+    // Its sounds, whoever fought: kept on the attacker for its model's
+    // swing and landing events (rendering/melee_sound.hpp).
+    if (owner_.meleeHitCallbackRef()) owner_.meleeHitCallbackRef()(data);
     if (!isPlayerAttacker && !isPlayerTarget) return;  // Not our combat
 
     if (isPlayerAttacker) {
@@ -809,22 +813,9 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
         autoTargetAttacker(data.attackerGuid);
     }
 
-    // Play combat sounds via CombatSoundManager + character vocalizations
+    // Character vocalizations (the swing's whoosh and impact are its
+    // attacker's model's, above).
     if (auto* ac = owner_.services().audioCoordinator) {
-        if (auto* csm = ac->getCombatSoundManager()) {
-            auto weaponSize = audio::CombatSoundManager::WeaponSize::MEDIUM;
-            if (data.isMiss()) {
-                csm->playWeaponMiss(false);
-            } else if (data.victimState == 2 || data.victimState == 3) {
-                // Dodge/parry - swing whoosh but no impact
-                csm->playWeaponSwing(weaponSize, false);
-            } else {
-                // Hit - swing + flesh impact
-                csm->playWeaponSwing(weaponSize, data.isCrit());
-                csm->playImpact(weaponSize, audio::CombatSoundManager::ImpactType::FLESH, data.isCrit());
-            }
-        }
-        // Character vocalizations
         if (auto* asm_ = ac->getActivitySoundManager()) {
             if (isPlayerAttacker && !data.isMiss() && data.victimState != 2 && data.victimState != 3) {
                 asm_->playAttackGrunt();

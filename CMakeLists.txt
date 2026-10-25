@@ -613,6 +613,7 @@ set(WOWEE_SOURCES
     src/core/entity_spawner_player.cpp
     src/core/entity_spawner_blob.cpp
     src/core/entity_spawner_unit_events.cpp
+    src/core/entity_spawner_melee_sounds.cpp
     src/core/entity_spawner_corpse.cpp
     src/core/entity_spawner_vehicle.cpp
     src/core/entity_spawner_processing.cpp

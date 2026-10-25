@@ -3101,6 +3101,14 @@ void Application::connectWorldHooks() {
                 entitySpawner_->onUnitAttackSwing(attacker);
             }
         });
+        // A melee hit kept for its attacker's model, and an attack stopping
+        // that settles it (rendering/melee_sound.hpp).
+        gameHandler->setMeleeHitCallback([this](const game::AttackerStateUpdateData& hit) {
+            if (entitySpawner_) entitySpawner_->onMeleeHit(hit);
+        });
+        gameHandler->setAttackStopCallback([this](uint64_t attacker) {
+            if (entitySpawner_) entitySpawner_->onMeleeAttackStop(attacker);
+        });
         // Which units hold a kit's weapon effects, and at what scale
         // (0x0073a6c0, 0x006f8c50).
         if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr) {

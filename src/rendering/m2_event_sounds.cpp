@@ -6,6 +6,8 @@
 #include "addons/lua_api_registrations.hpp"
 #include "audio/audio_engine.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <numeric>
 #include <random>
 #include <string>
@@ -82,8 +84,26 @@ uint32_t M2EventSounds::displaySound(uint32_t displayId, uint32_t slot, pipeline
     return it != displaySounds_.end() && slot < it->second.size() ? it->second[slot] : 0u;
 }
 
+uint32_t M2EventSounds::idByName(const std::string& name, pipeline::AssetManager* assets) {
+    if (!idsByNameLoaded_ && assets) {
+        idsByNameLoaded_ = true;
+        auto dbc = assets->loadDBC("SoundEntries.dbc");
+        if (dbc && dbc->isLoaded() && dbc->getFieldCount() > 2) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                std::string n = dbc->getString(i, 2);
+                std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return std::tolower(c); });
+                idsByName_.emplace(std::move(n), dbc->getUInt32(i, 0));
+            }
+        }
+    }
+    std::string key = name;
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
+    const auto it = idsByName_.find(key);
+    return it != idsByName_.end() ? it->second : 0;
+}
+
 void M2EventSounds::playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale,
-                             pipeline::AssetManager* assets, audio::PlayLimit limit) {
+                             pipeline::AssetManager* assets, audio::PlayLimit limit, bool absolute) {
     const Kit* k = kit(soundId, assets);
     if (!k) return;
     const float maxDistance = k->cutoff > 0.0f ? k->cutoff : 100.0f;
@@ -92,8 +112,9 @@ void M2EventSounds::playOnce(uint32_t soundId, const glm::vec3* at, float volume
     auto& audio = audio::AudioEngine::instance();
     // An SFX play, as every one 0x004c5990 sets up (type 0).
     constexpr auto kSfx = audio::Channel::Effects;
-    if (!at) audio.playSound2D(*file, k->volume * volumeScale, 1.0f, kSfx, limit);
-    else audio.playSound3D(*file, *at, k->volume * volumeScale, 1.0f, maxDistance, minDistance, kSfx, limit);
+    const float volume = absolute ? volumeScale : k->volume * volumeScale;
+    if (!at) audio.playSound2D(*file, volume, 1.0f, kSfx, limit);
+    else audio.playSound3D(*file, *at, volume, 1.0f, maxDistance, minDistance, kSfx, limit);
 }
 
 void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const ShakeCamera& shakeCamera) {
