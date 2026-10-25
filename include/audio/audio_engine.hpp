@@ -7,6 +7,7 @@
 #include <vector>
 #include <cstdint>
 #include "audio/play_limit.hpp"
+#include "audio/voice_priority.hpp"
 #include "audio/world_sound_hold.hpp"
 
 // Forward declare miniaudio types to avoid exposing implementation in header
@@ -77,9 +78,12 @@ public:
 
     // Simple 2D sound playback (non-blocking)
     /// A `limit` play is refused while as many of its type as the client
-    /// allows are playing (audio/play_limit.hpp).
+    /// allows are playing (audio/play_limit.hpp). `priority` is FMOD's:
+    /// past the real voices the least important play on silent
+    /// (audio/voice_priority.hpp).
     bool playSound2D(const std::vector<uint8_t>& wavData, float volume = 1.0f, float pitch = 1.0f,
-                     Channel channel = Channel::Own, PlayLimit limit = PlayLimit::None);
+                     Channel channel = Channel::Own, PlayLimit limit = PlayLimit::None,
+                     int priority = voice_priority::kDefault);
     bool playSound2D(const std::string& mpqPath, float volume = 1.0f, float pitch = 1.0f,
                      Channel channel = Channel::Own);
 
@@ -98,7 +102,7 @@ public:
     bool playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                      float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f,
                      float minDistance = 1.0f, Channel channel = Channel::Own,
-                     PlayLimit limit = PlayLimit::None);
+                     PlayLimit limit = PlayLimit::None, int priority = voice_priority::kDefault);
     bool playSound3D(const std::string& mpqPath, const glm::vec3& position,
                      float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f,
                      Channel channel = Channel::Own);
@@ -148,6 +152,12 @@ public:
     /// The Sound Effects volume, 0 with Sound_EnableSFX off: what the
     /// Effects channel is heard at.
     void setEffectsVolume(float volume);
+
+    /// How many sounds are heard at once - Sound_NumChannels, held to
+    /// 12..128 (0x0087c710); the rest play on silent until a voice is free,
+    /// the least important first (audio/voice_priority.hpp).
+    void setMaxRealVoices(int voices) { maxRealVoices_ = voice_priority::clampRealVoices(voices); }
+    [[nodiscard]] int getMaxRealVoices() const { return maxRealVoices_; }
     [[nodiscard]] float getEffectsVolume() const { return effectsVolume_; }
 
     /// The world's sound held while a loading screen is up. The client does
@@ -197,6 +207,13 @@ private:
         float cutoff = 0.0f;  // a 3D sound's DistanceCutoff: not heard past it (0: none)
         bool culled = false;  // a looping one paused out past its cutoff
         PlayLimit limit = PlayLimit::None;  // the counted type it was played as
+        int priority = voice_priority::kDefault;  // FMOD's: lower is more important
+        float volume = 1.0f;          // what it was asked to play at
+        bool virtualVoice = false;    // playing on silent, without a real voice
+        bool spatial = false;         // a 3D sound: heard less with distance
+        float minDistance = 1.0f;     // a 3D sound's full-volume reach
+        Channel channel = Channel::Own;
+        uint64_t serial = 0;          // the order it started in
     };
     std::vector<ActiveSound> activeSounds_;
     /// How many of a counted type are still playing - one that has ended is
@@ -206,6 +223,15 @@ private:
     /// Pauses what is out past its cutoff and resumes what has come back in
     /// (audio/sound_distance.hpp), once a frame.
     void cullByDistance();
+    /// Gives the real voices to the most important sounds playing and
+    /// silences the rest (audio/voice_priority.hpp), each frame and as a
+    /// sound starts.
+    void assignVoices();
+    /// The sound just tracked: its priority, volume and reach, then the
+    /// voices given out again.
+    void noteStarted(int priority, float volume, Channel channel, bool spatial, float minDistance);
+    int maxRealVoices_ = voice_priority::kDefaultRealVoices;
+    uint64_t nextSerial_ = 1;
     uint32_t nextSoundId_ = 1;
 
     // Music track state

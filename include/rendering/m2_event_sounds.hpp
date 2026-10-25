@@ -50,6 +50,7 @@
 #include <glm/glm.hpp>
 
 #include "audio/play_limit.hpp"
+#include "audio/voice_priority.hpp"
 
 namespace wowee::pipeline { class AssetManager; }
 
@@ -235,9 +236,12 @@ public:
     /// of it as may play at once are playing (audio/play_limit.hpp).
     /// With `absolute`, `volumeScale` is the volume itself, not a scale of
     /// the kit's - a play whose own volume is set (0x004c6a40 takes one in
-    /// (0, 1] in place of the kit's).
+    /// (0, 1] in place of the kit's). `priority` is its voice's
+    /// (audio/voice_priority.hpp): kActiveMover for one the active mover is
+    /// part of.
     void playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale, pipeline::AssetManager* assets,
-                  audio::PlayLimit limit = audio::PlayLimit::None, bool absolute = false);
+                  audio::PlayLimit limit = audio::PlayLimit::None, bool absolute = false,
+                  int priority = audio::voice_priority::kDefault);
     /// A SoundEntries row by its Name (0x004ccaa0), 0 for none.
     uint32_t idByName(const std::string& name, pipeline::AssetManager* assets);
 

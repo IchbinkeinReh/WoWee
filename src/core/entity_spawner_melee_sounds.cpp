@@ -163,6 +163,18 @@ float EntitySpawner::combatVolume() const {
     return std::clamp(combat->getVolumeScale() / effects, 0.0f, 1.0f);
 }
 
+int EntitySpawner::meleePriority(const ms::Hit& hit) const {
+    // The active player or the unit it moves as attacker or target: its
+    // voice is kept over a crowd's (0x004d0720, 0x004d0660, 0x004d0540 and
+    // 0x004d0850 take 0x6e then).
+    if (!gameHandler_) return audio::voice_priority::kDefault;
+    const uint64_t self = gameHandler_->getPlayerGuid();
+    const uint64_t mover = gameHandler_->activeMover();
+    const auto own = [&](uint64_t guid) { return guid != 0 && (guid == self || guid == mover); };
+    return own(hit.attacker) || own(hit.target) ? audio::voice_priority::kActiveMover
+                                                : audio::voice_priority::kDefault;
+}
+
 void EntitySpawner::onMeleeHit(const game::AttackerStateUpdateData& data) {
     if (!gameHandler_) return;
     ms::Hit hit{.attacker = data.attackerGuid,
@@ -232,7 +244,8 @@ void EntitySpawner::settleMeleeHit(const ms::Hit& hit) {
         if (!at) return;
         const char* name = ms::twoHanded(heldItem(*attacker, 0)) ? "(DONOTRENAME)Combat Miss 2H"
                                                                  : "(DONOTRENAME)Combat Miss 1H";
-        player.playOnce(player.idByName(name, assetManager_), &*at, volume, assetManager_);
+        player.playOnce(player.idByName(name, assetManager_), &*at, volume, assetManager_, audio::PlayLimit::None,
+                        false, meleePriority(hit));
         return;
     }
     case ms::Settle::Impact: {
@@ -246,7 +259,9 @@ void EntitySpawner::settleMeleeHit(const ms::Hit& hit) {
         const uint32_t sound =
             meleeTables_->impact(ms::impactSubclass(weapon, meleeUnarmedSubclass_), impactColumn(*target),
                                  metalMaterial(weapon), (hit.hitInfo & ms::kHitCrit) != 0);
-        if (sound != 0) player.playOnce(sound, &*at, volume, assetManager_, audio::PlayLimit::WeaponImpact);
+        if (sound != 0)
+            player.playOnce(sound, &*at, volume, assetManager_, audio::PlayLimit::WeaponImpact, false,
+                            meleePriority(hit));
         return;
     }
     }
@@ -366,7 +381,9 @@ void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
         const uint32_t sound = meleeTables_->impact(ms::impactSubclass(weapon, meleeUnarmedSubclass_),
                                                     ms::defenceColumn(guard, metalMaterial(guard)),
                                                     metalMaterial(weapon), crit);
-        if (sound != 0) player.playOnce(sound, &above, volume, assetManager_, audio::PlayLimit::WeaponImpact);
+        if (sound != 0)
+            player.playOnce(sound, &above, volume, assetManager_, audio::PlayLimit::WeaponImpact, false,
+                            meleePriority(hit));
         break;
     }
     case ms::Defend::Deflect:
@@ -467,8 +484,12 @@ void EntitySpawner::onSpellMiss(uint64_t caster, uint64_t target, uint8_t missTy
                                                 ms::defenceColumn(guard, metalMaterial(guard)),
                                                 metalMaterial(weapon), false);
     if (sound != 0) {
+        // 0x00755850 hands 0x004d0540 no fifth argument; what is on the
+        // stack in its place - the caller's EDI - is all but never 0, so the
+        // play takes the active mover's priority.
         renderer_->getM2EventSounds().playOnce(sound, &above, combatVolume(), assetManager_,
-                                               audio::PlayLimit::WeaponImpact);
+                                               audio::PlayLimit::WeaponImpact, false,
+                                               audio::voice_priority::kActiveMover);
     }
 }
 
@@ -500,7 +521,7 @@ void EntitySpawner::meleeModelEvent(uint64_t unitGuid, uint32_t eventId, const g
         const float volume = ((hit.hitInfo & ms::kHitMiss) != 0 ? 0.5f : 1.0f) * combatVolume();
         if (sound != 0)
             renderer_->getM2EventSounds().playOnce(sound, &at, volume, assetManager_, audio::PlayLimit::WeaponSwing,
-                                                   true);
+                                                   true, meleePriority(hit));
         return;
     }
     if (!ms::isLandEvent(eventId)) return;

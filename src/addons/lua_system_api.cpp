@@ -841,6 +841,10 @@ static void applySoundCVars(lua_State* L) {
     // has no equivalent for. They multiply whatever the settings applied.
     // Music off is the MUSIC category muted and the music stopped, the slots
     // picking nothing until it is on again (0x004d1590, 0x004c88b0).
+    // How many sounds are heard at once (0x0087c710 sets FMOD up with
+    // Sound_NumChannels real voices); the rest play on silent.
+    audio::AudioEngine::instance().setMaxRealVoices(
+        static_cast<int>(soundCVar("sound_numchannels", static_cast<float>(audio::voice_priority::kDefaultRealVoices))));
     const bool musicOn = soundCVar("sound_enablemusic", 1.0f) != 0.0f;
     if (!musicOn) {
         if (auto* music = ac->getMusicManager()) music->setVolume(0);
@@ -985,7 +989,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "spelleffectlevel") lua_pushstring(L, "9");
     // On (0x0051d9b0): UnitPower and the cast read the predicted power.
     else if (n == "predictedpower") lua_pushstring(L, "1");
-    else if (n == "sound_numchannels") lua_pushstring(L, "64");
+    // 0x004d0000's registration: "32" (0x009e21dc), the real voices the
+    // sound engine is set up with (audio/voice_priority.hpp).
+    else if (n == "sound_numchannels") lua_pushstring(L, "32");
     else if (n == "sound_outputquality") lua_pushstring(L, "2");
     else if (n == "uiscale") lua_pushstring(L, "1");
     // The tracking menu's own entry, by name; none (0x0057e070).

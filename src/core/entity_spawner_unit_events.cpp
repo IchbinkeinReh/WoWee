@@ -123,18 +123,20 @@ void EntitySpawner::playUnitSlot(const game::Unit& unit, uint32_t slot, bool alw
     }
     const audio::PlayLimit type = ue::slotPlayType(slot, moreAudible);
     rendering::M2EventSounds& player = renderer_->getM2EventSounds();
-    // The active player's own, and the vehicle it drives, with the listener
-    // at the character: where the listener is and fainter.
+    // The active player's own, and the vehicle it drives: kept over a
+    // crowd's (0x6e) and, with the listener at the character, where the
+    // listener is and fainter.
     const uint64_t guid = unit.getGuid();
     const bool own = guid == gameHandler_->getPlayerGuid() || guid == gameHandler_->activeMover();
+    const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
     if (own && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
-        player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_, type);
+        player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_, type, false, priority);
         return;
     }
     std::optional<glm::vec3> where;
     if (at) where = *at;
     else where = unitSoundPosition(guid);
-    if (where) player.playOnce(sound, &*where, 1.0f, assetManager_, type);
+    if (where) player.playOnce(sound, &*where, 1.0f, assetManager_, type, false, priority);
 }
 
 void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {

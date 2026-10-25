@@ -387,7 +387,7 @@ void AudioEngine::setListenerOrientation(const glm::vec3& forward, const glm::ve
 }
 
 bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume, float pitch, Channel channel,
-                              PlayLimit limit) {
+                              PlayLimit limit, int priority) {
     // Size and volume, because this overload is handed decoded bytes and has
     // no name to report. The sample managers all cache their clips and call
     // this one, so the path-named log above never fires for them - and a sound
@@ -457,6 +457,7 @@ bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume,
 
     // Track this sound for cleanup (decoded PCM shared across plays)
     activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, 0u, false, 0.0f, false, limit});
+    noteStarted(priority, volume, channel, false, 0.0f);
 
     return true;
 }
@@ -505,6 +506,7 @@ uint32_t AudioEngine::playSound2DStoppable(const std::vector<uint8_t>& wavData, 
     uint32_t id = nextSoundId_++;
     if (nextSoundId_ == 0) nextSoundId_ = 1;  // Skip 0 (sentinel)
     activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, id, held});
+    noteStarted(voice_priority::kDefault, volume, Channel::Own, false, 0.0f);
     return id;
 }
 
@@ -546,7 +548,7 @@ bool AudioEngine::playSound2D(const std::string& mpqPath, float volume, float pi
 
 bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                               float volume, float pitch, float maxDistance, float minDistance, Channel channel,
-                              PlayLimit limit) {
+                              PlayLimit limit, int priority) {
     if (!initialized_ || !engine_ || wavData.empty()) return false;
     if (masterVolume_ <= 0.0f) return false;
     // Past its cutoff it is not heard, so not played (audio/sound_distance.hpp).
@@ -621,6 +623,7 @@ bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::ve
     // Track for cleanup
     activeSounds_.push_back(
         {sound.release(), audioBuffer.release(), decoded.pcmData, 0u, false, maxDistance, false, limit});
+    noteStarted(priority, volume, channel, true, std::max(minDistance, 0.0f));
 
     return true;
 }
@@ -691,6 +694,7 @@ uint32_t AudioEngine::playSound3DLooping(const std::vector<uint8_t>& wavData, co
     if (nextSoundId_ == 0) nextSoundId_ = 1;  // Skip 0 (sentinel)
     activeSounds_.push_back(
         {sound.release(), audioBuffer.release(), decoded.pcmData, id, held, maxDistance, culled});
+    noteStarted(voice_priority::kDefault, volume, channel, true, std::max(minDistance, 0.0f));
     return id;
 }
 
@@ -708,7 +712,9 @@ void AudioEngine::setSoundVolume(uint32_t id, float volume) {
     if (id == 0) return;
     for (auto& active : activeSounds_) {
         if (active.id == id) {
-            ma_sound_set_volume(active.sound, volume);
+            // One without a real voice keeps it for when it gets one back.
+            active.volume = volume;
+            if (!active.virtualVoice) ma_sound_set_volume(active.sound, volume);
             return;
         }
     }
@@ -945,6 +951,7 @@ void AudioEngine::update(float deltaTime) {
         return;
     }
     cullByDistance();
+    assignVoices();
 
     // Clean up finished sounds - swap-and-pop avoids the O(N) shift that
     // vector::erase does for each removal (and the ref-count atomics in
@@ -1017,6 +1024,63 @@ void AudioEngine::cullByDistance() {
         } else {
             ma_sound_start(active.sound);
             active.culled = false;
+        }
+    }
+}
+
+void AudioEngine::noteStarted(int priority, float volume, Channel channel, bool spatial, float minDistance) {
+    ActiveSound& active = activeSounds_.back();
+    active.priority = priority;
+    active.volume = volume;
+    active.channel = channel;
+    active.spatial = spatial;
+    active.minDistance = minDistance;
+    active.serial = nextSerial_++;
+    assignVoices();
+}
+
+void AudioEngine::assignVoices() {
+    // The sounds that would be heard: started and in range, by how loud
+    // they reach the listener.
+    std::vector<size_t> playing;
+    playing.reserve(activeSounds_.size());
+    for (size_t i = 0; i < activeSounds_.size(); ++i) {
+        const ActiveSound& active = activeSounds_[i];
+        if (!active.held && !active.culled && ma_sound_is_playing(active.sound)) playing.push_back(i);
+    }
+    // The music and the zone's streams hold real voices of their own.
+    int reserved = musicSound_ && ma_sound_is_playing(musicSound_) ? 1 : 0;
+    for (const auto& stream : activeStreams_) {
+        if (!stream.held && stream.sound && ma_sound_is_playing(stream.sound)) ++reserved;
+    }
+    const auto real = static_cast<uint32_t>(std::max(0, maxRealVoices_ - reserved));
+    std::vector<bool> heard(activeSounds_.size(), true);
+    if (playing.size() > real) {
+        std::sort(playing.begin(), playing.end(),
+                  [&](size_t a, size_t b) { return activeSounds_[a].serial < activeSounds_[b].serial; });
+        std::vector<voice_priority::Voice> voices;
+        voices.reserve(playing.size());
+        for (const size_t i : playing) {
+            const ActiveSound& active = activeSounds_[i];
+            float audibility = active.volume * (active.channel == Channel::Effects ? effectsVolume_ : 1.0f);
+            if (active.spatial) {
+                const ma_vec3f p = ma_sound_get_position(active.sound);
+                const float distance = glm::length(glm::vec3(p.x, p.y, p.z) - listenerPosition_);
+                audibility *= voice_priority::distanceGain(distance, active.minDistance, active.cutoff);
+            }
+            voices.push_back({active.priority, audibility});
+        }
+        const std::vector<bool> given = voice_priority::heard(voices, real);
+        for (size_t k = 0; k < playing.size(); ++k) heard[playing[k]] = given[k];
+    }
+    for (size_t i = 0; i < activeSounds_.size(); ++i) {
+        ActiveSound& active = activeSounds_[i];
+        if (heard[i] && active.virtualVoice) {
+            ma_sound_set_volume(active.sound, active.volume);
+            active.virtualVoice = false;
+        } else if (!heard[i] && !active.virtualVoice) {
+            ma_sound_set_volume(active.sound, 0.0f);
+            active.virtualVoice = true;
         }
     }
 }

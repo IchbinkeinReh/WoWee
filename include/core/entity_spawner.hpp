@@ -1390,6 +1390,7 @@ private:
     bool playsNoWound(const game::Entity& unit) const;
     std::optional<glm::vec3> unitSoundPosition(uint64_t guid) const;
     float combatVolume() const;
+    int meleePriority(const rendering::melee_sound::Hit& hit) const;
     uint32_t impactColumn(const game::Entity& target) const;
     void settleKeptMeleeHit(uint64_t attacker);
     void settleMeleeHit(const rendering::melee_sound::Hit& hit);

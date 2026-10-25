@@ -857,6 +857,11 @@ wowee_add_test(test_play_limit
     SOURCES test_play_limit.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_voice_priority ──────────────────────────────────────
+# Which sounds keep a voice past Sound_NumChannels: priority, then loudness.
+wowee_add_test(test_voice_priority
+    SOURCES test_voice_priority.cpp)
+
 # ── test_vocal_error ─────────────────────────────────────────
 # Which game errors the character speaks, and the line each one is.
 wowee_add_test(test_vocal_error
