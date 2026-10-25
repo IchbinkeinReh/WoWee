@@ -50,6 +50,15 @@ TEST_CASE("the target's part: parry, block, deflect, absorb", "[melee_sound]") {
     CHECK_FALSE(ms::absorbs(hit(ms::kStateHit, 50)));
 }
 
+TEST_CASE("a spell's parry and block sound only for one that lands at once", "[melee_sound]") {
+    CHECK(ms::spellMissSounds(0.0f, 0));
+    CHECK_FALSE(ms::spellMissSounds(24.0f, 0));
+    CHECK_FALSE(ms::spellMissSounds(0.0f, ms::kSpellAttrEx2NoMissSound));
+    CHECK(ms::spellDefend(ms::kSpellMissParry) == ms::SpellDefend::Parry);
+    CHECK(ms::spellDefend(ms::kSpellMissBlock) == ms::SpellDefend::Block);
+    CHECK(ms::spellDefend(ms::kSpellMissDodge) == ms::SpellDefend::None);
+}
+
 TEST_CASE("who plays no wound animation", "[melee_sound]") {
     // A vehicle busy with a cast, whatever else it is.
     CHECK(ms::noWound(true, 0u, 0));

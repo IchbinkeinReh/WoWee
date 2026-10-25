@@ -4093,6 +4093,19 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
     // Clear unit cast bar
     unitCastStates_.erase(data.casterUnit);
 
+    // Each target missed, on the target (0x00755850): its parry and block
+    // sounds (rendering/melee_sound.hpp). The caster is the cast's where
+    // that is a unit or game object, else its unit (0x0080e1b0).
+    if (!data.missTargets.empty() && owner_.spellMissCallbackRef()) {
+        uint64_t missCaster = data.casterUnit;
+        if (auto casterEntity = owner_.getEntityManager().getEntity(data.casterGuid);
+            casterEntity && (casterEntity->isUnit() || casterEntity->getType() == ObjectType::GAMEOBJECT)) {
+            missCaster = data.casterGuid;
+        }
+        for (const auto& m : data.missTargets)
+            owner_.spellMissCallbackRef()(missCaster, m.targetGuid, m.missType, data.spellId);
+    }
+
     // Miss combat text
     if (!data.missTargets.empty()) {
         const uint64_t spellCasterGuid = data.casterUnit != 0 ? data.casterUnit : data.casterGuid;

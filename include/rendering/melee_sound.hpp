@@ -66,6 +66,24 @@ constexpr uint32_t kHitNoDamageImpact = 0x1000000;
 constexpr uint32_t kStateHit = 1, kStateDodge = 2, kStateParry = 3, kStateBlock = 5, kStateEvade = 6,
                    kStateImmune = 7, kStateDeflect = 8;
 
+/// A spell missing a target (0x0080e1b0 -> 0x00755850): a spell that lands
+/// at once (Speed 0) and lacks AttributesEx2 0x80 has its parry and block
+/// sounded on the target as SMSG_SPELL_GO arrives - the caster's main-hand
+/// weapon on what the target parries with, a bare hand on its off hand's
+/// weapon or shield for a block - at the target, two yards up. A dodge
+/// only animates. Not a target feigning death (UNIT_FIELD_FLAGS_2 0x1) or
+/// one whose stand state is 7, dead.
+constexpr uint8_t kSpellMissDodge = 3, kSpellMissParry = 4, kSpellMissBlock = 5;
+constexpr uint32_t kSpellAttrEx2NoMissSound = 0x80;
+constexpr bool spellMissSounds(float speed, uint32_t attributesEx2) {
+    return speed == 0.0f && (attributesEx2 & kSpellAttrEx2NoMissSound) == 0;
+}
+enum class SpellDefend { None, Parry, Block };
+constexpr SpellDefend spellDefend(uint8_t missType) {
+    if (missType == kSpellMissParry) return SpellDefend::Parry;
+    return missType == kSpellMissBlock ? SpellDefend::Block : SpellDefend::None;
+}
+
 /// The model events (four characters, little-endian).
 constexpr uint32_t kEventSwing = 0x53534324;  ///< $CSS
 constexpr uint32_t kEventHit = 0x48414324;    ///< $CAH

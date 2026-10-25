@@ -1801,6 +1801,13 @@ public:
     void setMeleeHitCallback(MeleeHitCallback cb) { meleeHitCallback_ = std::move(cb); }
     using AttackStopCallback = std::function<void(uint64_t attackerGuid)>;
     void setAttackStopCallback(AttackStopCallback cb) { attackStopCallback_ = std::move(cb); }
+    /// A spell missing a target, for each of SMSG_SPELL_GO's miss entries
+    /// (0x0080e1b0 -> 0x00755850 on the target): its caster as the client
+    /// takes it - the cast's caster where that is a unit or game object,
+    /// else its unit - and the SpellMissInfo.
+    using SpellMissCallback =
+        std::function<void(uint64_t casterGuid, uint64_t targetGuid, uint8_t missType, uint32_t spellId)>;
+    void setSpellMissCallback(SpellMissCallback cb) { spellMissCallback_ = std::move(cb); }
     /// The active player sending a text emote (0x006dd9e0): whether it is
     /// sent, refused, or refused with ERR_NOEMOTEWHILERUNNING.
     enum class TextEmoteGate : uint8_t { Send, Refuse, RefuseWhileMoving };
@@ -4692,6 +4699,7 @@ public:
     auto& unitAttackSwingCallbackRef() { return unitAttackSwingCallback_; }
     auto& meleeHitCallbackRef() { return meleeHitCallback_; }
     auto& attackStopCallbackRef() { return attackStopCallback_; }
+    auto& spellMissCallbackRef() { return spellMissCallback_; }
     void suppressNextMeleeSwingAnim() { suppressMeleeSwingAnim_ = true; }
     bool consumeSuppressMeleeSwingAnim() {
         bool v = suppressMeleeSwingAnim_;
@@ -6151,6 +6159,7 @@ private:
     UnitAttackSwingCallback unitAttackSwingCallback_;
     MeleeHitCallback meleeHitCallback_;
     AttackStopCallback attackStopCallback_;
+    SpellMissCallback spellMissCallback_;
     TextEmoteGateCallback textEmoteGateCallback_;
     bool suppressMeleeSwingAnim_ = false;
     // lastMeleeSwingMs_ moved to CombatHandler

@@ -366,6 +366,9 @@ public:
     /// (rendering/melee_sound.hpp).
     void onMeleeHit(const game::AttackerStateUpdateData& data);
     void onMeleeAttackStop(uint64_t attacker);
+    /// A spell missing a target (SMSG_SPELL_GO): a parry's or block's
+    /// clash on it (0x00755850).
+    void onSpellMiss(uint64_t caster, uint64_t target, uint8_t missType, uint32_t spellId);
 
     // Mount
     void setMountDisplayId(uint32_t displayId) { pendingMountDisplayId_ = displayId; }

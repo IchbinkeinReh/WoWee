@@ -364,6 +364,61 @@ void EntitySpawner::landMeleeHit(const ms::Hit& hit) {
     }
 }
 
+void EntitySpawner::onSpellMiss(uint64_t caster, uint64_t target, uint8_t missType, uint32_t spellId) {
+    // 0x0080e1b0: only a spell that lands at once, without AttributesEx2
+    // 0x80.
+    const ms::SpellDefend defend = ms::spellDefend(missType);
+    if (defend == ms::SpellDefend::None || !gameHandler_ || !renderer_) return;
+    gameHandler_->loadSpellNameCache();
+    const auto& spells = gameHandler_->spellNameCacheRef();
+    const auto spell = spells.find(spellId);
+    if (spell == spells.end() || !ms::spellMissSounds(spell->second.missileSpeed, spell->second.attrEx2)) return;
+    // 0x00755850 on the target: not one feigning death or dead.
+    auto& entities = gameHandler_->getEntityManager();
+    const auto victim = entities.getEntity(target);
+    if (!victim || !victim->isUnit()) return;
+    const uint16_t flags2 = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS_2);
+    if (flags2 != 0xFFFF && (victim->getField(flags2) & 0x1u) != 0) return;
+    if (static_cast<const game::Unit&>(*victim).getStandState() == 7) return;
+    loadMeleeSoundTables();
+    if (!meleeTables_) return;
+    const auto at = unitSoundPosition(target);
+    if (!at) return;
+    const glm::vec3 above = *at + glm::vec3(0.0f, 0.0f, 2.0f);
+    std::optional<ms::Item> weapon;
+    std::optional<ms::Item> guard;
+    if (defend == ms::SpellDefend::Parry) {
+        // The caster's main-hand weapon, while its weapons are out of their
+        // sheaths (+0xb5c), on what the target parries with.
+        if (const auto attacker = entities.getEntity(caster); attacker && attacker->isUnit()) {
+            uint32_t sheath = 0;
+            if (caster == gameHandler_->getPlayerGuid()) {
+                const uint16_t bytes2 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2);
+                if (bytes2 != 0xFFFF) sheath = attacker->getField(bytes2) & 0xFFu;
+            } else if (const auto state = unitSheathState(caster)) {
+                sheath = static_cast<uint32_t>(*state);
+            }
+            if (sheath != 0) {
+                weapon = heldItem(*attacker, 0);
+                if (weapon && weapon->itemClass != ms::kClassWeapon) weapon.reset();
+            }
+        }
+        guard = defenderItem(*victim, false);
+    } else {
+        // A bare hand on the off hand's weapon or shield.
+        guard = heldItem(*victim, 1);
+        if (guard && guard->itemClass != ms::kClassWeapon && guard->itemClass != ms::kClassArmor) guard.reset();
+    }
+    // 0x004d0540, with nothing to defend with on the wooden weapon column.
+    const uint32_t sound = meleeTables_->impact(ms::impactSubclass(weapon, meleeUnarmedSubclass_),
+                                                ms::defenceColumn(guard, metalMaterial(guard)),
+                                                metalMaterial(weapon), false);
+    if (sound != 0) {
+        renderer_->getM2EventSounds().playOnce(sound, &above, combatVolume(), assetManager_,
+                                               audio::PlayLimit::WeaponImpact);
+    }
+}
+
 void EntitySpawner::meleeModelEvent(uint64_t unitGuid, uint32_t eventId, const glm::vec3& at) {
     // 0x00756240: the swing's whoosh at $CSS; the blow landing at $CAH and
     // $AH0..$AH3.

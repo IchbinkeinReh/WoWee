@@ -3109,6 +3109,9 @@ void Application::connectWorldHooks() {
         gameHandler->setAttackStopCallback([this](uint64_t attacker) {
             if (entitySpawner_) entitySpawner_->onMeleeAttackStop(attacker);
         });
+        gameHandler->setSpellMissCallback([this](uint64_t caster, uint64_t target, uint8_t missType, uint32_t spellId) {
+            if (entitySpawner_) entitySpawner_->onSpellMiss(caster, target, missType, spellId);
+        });
         // Which units hold a kit's weapon effects, and at what scale
         // (0x0073a6c0, 0x006f8c50).
         if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr) {
