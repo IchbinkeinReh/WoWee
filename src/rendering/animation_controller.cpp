@@ -393,114 +393,20 @@ void AnimationController::setMounted(uint32_t mountInstId, uint32_t mountDisplay
         return 0;
     };
 
-    // Property-based jump animation discovery with chain-based scoring
-    auto discoverJumpSet = [&]() {
-        LOG_DEBUG("=== Full sequence table for mount ===");
-        for (const auto& seq : sequences) {
-            LOG_DEBUG("SEQ id=", seq.id,
-                     " dur=", seq.duration,
-                     " flags=0x", std::hex, seq.flags, std::dec,
-                     " moveSpd=", seq.movingSpeed,
-                     " blend=", seq.blendTime,
-                     " next=", seq.nextAnimation,
-                     " alias=", seq.aliasNext);
-        }
-        LOG_DEBUG("=== End sequence table ===");
-
-        std::set<uint32_t> forbiddenIds = {53, 54, 16};
-
-        auto scoreNear = [](int a, int b) -> int {
-            int d = std::abs(a - b);
-            return (d <= 8) ? (20 - d) : 0;
-        };
-
-        auto isForbidden = [&](uint32_t id) {
-            return forbiddenIds.count(id) != 0;
-        };
-
-        auto findSeqById = [&](uint32_t id) -> const pipeline::M2Sequence* {
-            for (const auto& s : sequences) {
-                if (s.id == id) return &s;
-            }
-            return nullptr;
-        };
-
-        uint32_t runId = findFirst({anim::RUN, anim::WALK});
-        uint32_t standId = findFirst({anim::STAND});
-
-        std::vector<uint32_t> loops;
-        for (const auto& seq : sequences) {
-            if (isForbidden(seq.id)) continue;
-            bool isLoop = (seq.flags & 0x01) == 0;
-            if (isLoop && seq.duration >= 350 && seq.duration <= 1000 &&
-                seq.id != runId && seq.id != standId) {
-                loops.push_back(seq.id);
-            }
-        }
-
-        uint32_t loop = 0;
-        if (!loops.empty()) {
-            uint32_t best = loops[0];
-            int bestScore = -999;
-            for (uint32_t id : loops) {
-                int sc = 0;
-                sc += scoreNear(static_cast<int>(id), 38);
-                const auto* s = findSeqById(id);
-                if (s) sc += (s->duration >= 500 && s->duration <= 800) ? 5 : 0;
-                if (sc > bestScore) {
-                    bestScore = sc;
-                    best = id;
-                }
-            }
-            loop = best;
-        }
-
-        uint32_t start = 0, end = 0;
-        int bestStart = -999, bestEnd = -999;
-
-        for (const auto& seq : sequences) {
-            if (isForbidden(seq.id)) continue;
-            bool isLoop = (seq.flags & 0x01) == 0;
-            if (isLoop) continue;
-
-            if (seq.duration >= 450 && seq.duration <= 1100) {
-                int sc = 0;
-                if (loop) sc += scoreNear(static_cast<int>(seq.id), static_cast<int>(loop));
-                if (loop && (seq.nextAnimation == static_cast<int16_t>(loop) || seq.aliasNext == loop)) sc += 30;
-                if (loop && scoreNear(seq.nextAnimation, static_cast<int>(loop)) > 0) sc += 10;
-                if (seq.blendTime > 400) sc -= 5;
-
-                if (sc > bestStart) {
-                    bestStart = sc;
-                    start = seq.id;
-                }
-            }
-
-            if (seq.duration >= 650 && seq.duration <= 1600) {
-                int sc = 0;
-                if (loop) sc += scoreNear(static_cast<int>(seq.id), static_cast<int>(loop));
-                if (seq.nextAnimation == static_cast<int16_t>(runId) || seq.nextAnimation == static_cast<int16_t>(standId)) sc += 10;
-                if (seq.nextAnimation < 0) sc += 5;
-                if (sc > bestEnd) {
-                    bestEnd = sc;
-                    end = seq.id;
-                }
-            }
-        }
-
-        LOG_DEBUG("Property-based jump discovery: start=", start, " loop=", loop, " end=", end,
-                 " scores: start=", bestStart, " end=", bestEnd);
-        return std::make_tuple(start, loop, end);
-    };
-
-    auto [discoveredStart, discoveredLoop, discoveredEnd] = discoverJumpSet();
 
     // Build MountAnimSet for MountFSM
     MountFSM::MountAnimSet mountAnims;
-    mountAnims.jumpStart = discoveredStart > 0 ? discoveredStart : findFirst({anim::FALL, anim::JUMP_START});
-    mountAnims.jumpLoop  = discoveredLoop > 0 ? discoveredLoop : findFirst({anim::JUMP});
-    mountAnims.jumpEnd   = discoveredEnd > 0 ? discoveredEnd : findFirst({anim::JUMP_END});
-    mountAnims.rearUp    = findFirst({anim::MOUNT_SPECIAL, anim::RUN_RIGHT, anim::FALL});
+    // A jump is the unit's own, played on the model it shows - the mount's
+    // while it rides: JumpStart on MSG_MOVE_JUMP (0x0073ed3f case 0xbb),
+    // Jump looping once that ends (0x0073b510 cases 0x25, 0x26), JumpEnd on
+    // landing, then the base animation (case 0x27). The ids as they are; a
+    // guess at them by length took JumpStart (two thirds of a second) for
+    // the landing on the Dreadsteed and played the take-off again on the
+    // ground. The client plays no MountSpecial for a jump, standing or not.
+    mountAnims.jumpStart = findFirst({anim::JUMP_START});
+    mountAnims.jumpLoop  = findFirst({anim::JUMP});
+    mountAnims.jumpEnd   = findFirst({anim::JUMP_END});
+    mountAnims.rearUp    = 0;
     mountAnims.run       = findFirst({anim::RUN, anim::WALK});
     mountAnims.stand     = findFirst({anim::STAND});
     // Discover flight animations (flying mounts only - may all be 0 for ground mounts)

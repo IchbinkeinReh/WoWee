@@ -2367,9 +2367,15 @@ void CharacterRenderer::setUnitAnimationState(uint32_t instanceId, const upper_b
     // which the kit's animation then takes over (0x0071e400).
     const bool kitChanged = it->second.unitAnimation && (it->second.unit.kitAnim != unit.kitAnim ||
                                                           it->second.unit.kitAnimTiered != unit.kitAnimTiered);
+    // Off its mount the rider's pose goes with it: its model is its own
+    // again and takes its base animation (0x0073ac30), as it does whenever
+    // its model changes. Nothing else asked for one, and a player who
+    // dismounted standing still held the Mount pose (or a mount aura kit's)
+    // until it next moved.
+    const bool dismounted = it->second.unitAnimation && it->second.unit.riding && !unit.riding;
     it->second.unitAnimation = true;
     it->second.unit = unit;
-    if (kitChanged) playBaseAnimation(instanceId);
+    if (kitChanged || dismounted) playBaseAnimation(instanceId);
 }
 
 int32_t CharacterRenderer::upperBodyBone(CharacterInstance& instance) {

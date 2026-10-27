@@ -207,36 +207,21 @@ MountFSM::Output MountFSM::evaluate(const Input& in) {
         return out;
     }
 
-    // ── Jump/rear-up trigger ────────────────────────────────────────────
-    if (in.jumpKeyPressed && in.grounded && action_ == MountAction::None) {
-        if (in.moving && anims_.jumpLoop > 0) {
-            action_ = MountAction::Jump;
-            actionPhase_ = 1; // Start with loop directly (matching original)
-            actionAnimId_ = anims_.jumpLoop;
-            out.mountAnimId = anims_.jumpLoop;
-            out.mountAnimLoop = true;
-            out.mountAnimChanged = true;
-            out.playJumpSound = true;
-            out.triggerMountJump = true;
-
-            // Bob calc
-            if (in.haveMountState && in.curMountDuration > 1.0f) {
-                float wrappedTime = in.curMountTime;
-                while (wrappedTime >= in.curMountDuration) wrappedTime -= in.curMountDuration;
-                float norm = wrappedTime / in.curMountDuration;
-                out.mountBob = std::sin(norm * core::coords::TWO_PI) * 0.12f;
-            }
-            return out;
-        } if (!in.moving && anims_.rearUp > 0) {
-            action_ = MountAction::RearUp;
-            actionPhase_ = 0;
-            actionAnimId_ = anims_.rearUp;
-            out.mountAnimId = anims_.rearUp;
-            out.mountAnimLoop = false;
-            out.mountAnimChanged = true;
-            out.playRearUpSound = true;
-            return out;
-        }
+    // ── Jump trigger ────────────────────────────────────────────────────
+    // JumpStart as the jump begins, moving or standing (0x0073ed3f case
+    // 0xbb); Jump where the model has no JumpStart.
+    if (in.jumpKeyPressed && in.grounded && action_ == MountAction::None &&
+        (anims_.jumpStart > 0 || anims_.jumpLoop > 0)) {
+        action_ = MountAction::Jump;
+        jumpAirborne_ = false;
+        actionPhase_ = anims_.jumpStart > 0 ? 0 : 1;
+        actionAnimId_ = anims_.jumpStart > 0 ? anims_.jumpStart : anims_.jumpLoop;
+        out.mountAnimId = actionAnimId_;
+        out.mountAnimLoop = actionPhase_ == 1;
+        out.mountAnimChanged = true;
+        out.playJumpSound = true;
+        out.triggerMountJump = true;
+        return out;
     }
 
     // ── Handle active mount actions (jump chaining or rear-up) ──────────
@@ -244,6 +229,12 @@ MountFSM::Output MountFSM::evaluate(const Input& in) {
         bool animFinished = actionAnimComplete(in);
 
         if (action_ == MountAction::Jump) {
+            // Only a landing after leaving the ground ends it; the frame the
+            // jump is pressed is still on it.
+            if (!in.grounded) jumpAirborne_ = true;
+            const bool landed = in.grounded && jumpAirborne_;
+            // Landed before JumpStart was through: straight to JumpEnd.
+            if (actionPhase_ == 0 && landed) actionPhase_ = 1;
             if (actionPhase_ == 0 && animFinished && anims_.jumpLoop > 0) {
                 actionPhase_ = 1;
                 actionAnimId_ = anims_.jumpLoop;
@@ -254,14 +245,14 @@ MountFSM::Output MountFSM::evaluate(const Input& in) {
                 actionPhase_ = 1;
                 actionAnimId_ = 0;
                 out.mountAnimId = in.curMountAnim;
-            } else if (actionPhase_ == 1 && in.grounded && anims_.jumpEnd > 0) {
+            } else if (actionPhase_ == 1 && landed && anims_.jumpEnd > 0) {
                 actionPhase_ = 2;
                 actionAnimId_ = anims_.jumpEnd;
                 out.mountAnimId = anims_.jumpEnd;
                 out.mountAnimLoop = false;
                 out.mountAnimChanged = true;
                 out.playLandSound = true;
-            } else if (actionPhase_ == 1 && in.grounded) {
+            } else if (actionPhase_ == 1 && landed) {
                 action_ = MountAction::None;
                 actionAnimId_ = 0;
                 out.mountAnimId = in.moving ? anims_.run : anims_.stand;

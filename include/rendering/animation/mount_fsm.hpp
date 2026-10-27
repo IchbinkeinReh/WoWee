@@ -113,6 +113,7 @@ private:
     // are auto-switched to STAND by the renderer when they finish, so seeing a
     // different anim than requested also means the action anim completed.
     uint32_t actionAnimId_ = 0;
+    bool jumpAirborne_ = false;  ///< the jump has left the ground
 
     MountAnimSet anims_;
     bool taxiFlight_ = false;

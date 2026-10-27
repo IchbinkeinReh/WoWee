@@ -1476,6 +1476,22 @@ target_link_libraries(test_animation_ids PRIVATE catch2_main)
 add_test(NAME animation_ids COMMAND test_animation_ids)
 register_test_target(test_animation_ids)
 
+# ── test_mount_fsm ───────────────────────────────────────────
+# The mount's jump: JumpStart, Jump and JumpEnd as the unit's own.
+add_executable(test_mount_fsm
+    test_mount_fsm.cpp
+    ${TEST_COMMON_SOURCES}
+    ${CMAKE_SOURCE_DIR}/src/rendering/animation/mount_fsm.cpp
+    ${CMAKE_SOURCE_DIR}/src/rendering/animation/animation_ids.cpp
+    ${CMAKE_SOURCE_DIR}/src/pipeline/dbc_loader.cpp
+)
+target_include_directories(test_mount_fsm PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_mount_fsm SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_mount_fsm PRIVATE catch2_main)
+wowee_test_link_glm(test_mount_fsm)
+add_test(NAME mount_fsm COMMAND test_mount_fsm)
+register_test_target(test_mount_fsm)
+
 # ── test_animation_data ──────────────────────────────────────
 # AnimationData's fallbacks: what a model plays for an animation it lacks
 # (0x00826350) and what a unit of a tier is put in (0x007176f0).
