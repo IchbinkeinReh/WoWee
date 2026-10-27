@@ -22,7 +22,13 @@ bool ChatSpamFilter::matches(const std::string& text) const {
     if (text.empty()) return false;
     for (const auto* list : {&client_, &server_}) {
         for (const std::regex& re : *list) {
-            if (std::regex_search(text, re)) return true;
+            // A pattern the server sent can still blow up on a line
+            // (error_complexity / error_stack); one such line is let through
+            // rather than taking the chat handler down with it.
+            try {
+                if (std::regex_search(text, re)) return true;
+            } catch (const std::regex_error&) {
+            }
         }
     }
     return false;
