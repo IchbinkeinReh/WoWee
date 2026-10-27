@@ -1316,6 +1316,12 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
 
     addLocalChatMessage(chatMsg);
 
+    // And the emote's own voice line, which the client asks of the sender at
+    // the same moment it narrates it: EmotesTextSound picks the clip by the
+    // emote text and the sender's race and sex, and the sender's own sound
+    // path plays it - gates for emote and pet sounds included.
+    if (owner_.emoteSoundCallbackRef()) owner_.emoteSoundCallbackRef()(data.senderGuid, data.textEmoteId);
+
     LOG_INFO("TEXT_EMOTE from ", senderName, " (emoteId=", data.textEmoteId, ")");
 }
 

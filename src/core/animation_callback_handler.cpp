@@ -303,6 +303,16 @@ void AnimationCallbackHandler::setupCallbacks() {
         }
     });
 
+    // An emote's voice line. The client asks it of the unit the emote shows
+    // on - 0x00746d60's emote-flagged branch, which is also where both emote
+    // CVars are read - so what reaches the spawner is the narrated emote's
+    // EmotesText id and nothing else.
+    gameHandler_.setEmoteSoundCallback([this](uint64_t guid, uint32_t emotesTextId) {
+        auto entity = gameHandler_.getEntityManager().getEntity(guid);
+        if (!entity || !entity->isUnit()) return;
+        entitySpawner_.playUnitEmoteSound(static_cast<const game::Unit&>(*entity), emotesTextId);
+    });
+
     // Other units' stand state (UNIT_FIELD_BYTES_1 byte 0), as the client
     // takes its change (0x0073f460 -> 0x0073f060): the base animation, from
     // the state its animation was given for, sits it down, lies it down,

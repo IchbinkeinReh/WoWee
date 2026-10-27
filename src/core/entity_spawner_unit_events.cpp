@@ -146,6 +146,74 @@ void EntitySpawner::playUnitJumpSound(const game::Unit& unit, uint32_t slot) {
     playUnitSlot(unit, slot, true, nullptr);
 }
 
+const std::vector<ue::EmoteSoundRow>& EntitySpawner::emoteSoundRows() {
+    if (emoteSoundRowsLoaded_ || !assetManager_) return emoteSoundRows_;
+    emoteSoundRowsLoaded_ = true;
+    auto table = assetManager_->loadDBCOptional("EmotesTextSound.dbc");
+    if (!table || table->getRecordCount() == 0) {
+        LOG_WARNING("Emotes: EmotesTextSound.dbc not available - an emote says nothing");
+        return emoteSoundRows_;
+    }
+    // ID, EmotesText id, race, sex, SoundEntries id: what the client insists
+    // the table is when it loads it (0x0063e4f0 refuses five columns or a
+    // twenty-byte row differently, and reads no layout for either).
+    if (table->getFieldCount() < ue::kEmoteSoundColumnCount) {
+        LOG_WARNING("EmotesTextSound.dbc has ", table->getFieldCount(), " fields, expected ",
+                    ue::kEmoteSoundColumnCount);
+        return emoteSoundRows_;
+    }
+    const uint32_t records = table->getRecordCount();
+    emoteSoundRows_.reserve(records);
+    for (uint32_t i = 0; i < records; ++i) {
+        emoteSoundRows_.push_back({
+            .emotesTextId = table->getUInt32(i, ue::kEmoteSoundColumnEmotesText),
+            .race = table->getUInt32(i, ue::kEmoteSoundColumnRace),
+            .sex = table->getUInt32(i, ue::kEmoteSoundColumnSex),
+            .soundId = table->getUInt32(i, ue::kEmoteSoundColumnSound),
+        });
+    }
+    LOG_INFO("EmotesTextSound: ", emoteSoundRows_.size(), " voice lines read");
+    return emoteSoundRows_;
+}
+
+void EntitySpawner::playUnitEmoteSound(const game::Unit& unit, uint32_t emotesTextId) {
+    // An emote's voice line, asked of the unit the emote shows on. Both gates
+    // are the client's, and they sit inside the play itself - 0x00746d60's
+    // branch for an emote-flagged ask: nothing at all while
+    // Sound_EnableEmoteSounds is off, and while Sound_EnablePetSounds is off a
+    // pet stays quiet, where its own unit still emotes. The client's pet test
+    // is its sound component's owner link (+0x114); who summoned the unit is
+    // the same question asked of the fields.
+    if (!renderer_ || !gameHandler_ || !assetManager_) return;
+    if (addons::storedCVarValue("Sound_EnableEmoteSounds", "1") == "0") return;
+    const uint64_t guid = unit.getGuid();
+    if (addons::storedCVarValue("Sound_EnablePetSounds", "1") == "0" &&
+        game::unitSummonedByGuid(unit) != 0)
+        return;
+    // The line is the speaker's race's and sex's, which only a player has -
+    // and only once its name has been answered, so a first emote from someone
+    // out of sight stays unheard rather than guessed at.
+    const uint32_t sound = ue::emoteSoundId(emoteSoundRows(), emotesTextId,
+                                            gameHandler_->lookupPlayerRace(guid),
+                                            gameHandler_->lookupPlayerGender(guid));
+    if (sound == 0) return;
+    // Heard as that unit's own voice, by the rule its slots are heard by: the
+    // active player's own, and the mover it drives, are kept over a crowd's
+    // (0x6e) and, with the listener at the character, at the listener and
+    // fainter. The client counts an emote's line by no kind at all, so nothing
+    // here caps how many of them are going at once.
+    const bool own = guid == gameHandler_->getPlayerGuid() || guid == gameHandler_->activeMover();
+    const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
+    rendering::M2EventSounds& player = renderer_->getM2EventSounds();
+    if (own && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
+        player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_,
+                        audio::PlayLimit::None, false, priority);
+        return;
+    }
+    if (const auto where = unitSoundPosition(guid))
+        player.playOnce(sound, &*where, 1.0f, assetManager_, audio::PlayLimit::None, false, priority);
+}
+
 void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
     rendering::CharacterRenderer* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!cr) return;

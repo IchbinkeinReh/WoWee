@@ -334,6 +334,7 @@ FrameXML calls into, plus what the client draws in the world.
 - `MusicManager` - Zone music (ZoneMusic.dbc day and night tracks pooled, plus this project's own soundtrack)
 - `CombatSoundManager`, `UiSoundManager`, `NpcVoiceManager`, `PlayerVoiceManager`
 - A spell's own sounds are no manager's business: each visual kit brings the SoundEntries row its DBC names, and `SpellVisualSystem` plays it with the kit. Where that row loops it runs as long as the kit does — an aura's state or channel kit holds its sound until the aura leaves the unit, a precast kit's lasts its cast's timed length — and stops with it
+- A unit's own sounds are the spawner's, out of its CreatureSoundData row: the slots its model events ask for — fidgets, wingbeats, the stand sound, a flying unit's take-off and landing — its footfalls over the ground it stands on, and an emote's voice line, which `EmotesTextSound.dbc` picks by the emote text and the speaker's race and sex under `Sound_EnableEmoteSounds` and `Sound_EnablePetSounds`
 
 ### 9. Warden Anti-Cheat (`src/game/`)
 

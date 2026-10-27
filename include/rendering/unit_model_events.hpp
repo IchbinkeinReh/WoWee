@@ -261,4 +261,36 @@ constexpr bool footfallSilent(uint32_t bytes1, uint32_t moveFlags, uint8_t seatS
            (isPlayer && (playerFlags & kPlayerFlagGhost) != 0);
 }
 
+// An emote's voice line, which is not in the unit's CreatureSoundData row at
+// all: EmotesTextSound says which race's and which sex's clip answers an
+// EmotesText id. The client reads the table as five columns and a twenty-byte
+// row (0x0063e4f0 insists on both) and asks for the line through the same play
+// a unit's slots go through - 0x00746d60, whose emote-flagged branch holds both
+// emote CVars.
+constexpr uint32_t kEmoteSoundColumnEmotesText = 1;
+constexpr uint32_t kEmoteSoundColumnRace = 2;
+constexpr uint32_t kEmoteSoundColumnSex = 3;
+constexpr uint32_t kEmoteSoundColumnSound = 4;
+constexpr uint32_t kEmoteSoundColumnCount = 5;
+
+/// One of its rows, held once the table has been read.
+struct EmoteSoundRow {
+    uint32_t emotesTextId = 0;
+    uint32_t race = 0;
+    uint32_t sex = 0;
+    uint32_t soundId = 0;
+};
+
+/// Which clip an emote asks for: the row naming the emote text, the speaker's
+/// race and its sex - 3.3.5a's table has one row per those three, two to
+/// twenty rows per emote. Nothing asks where no row answers, which is how a
+/// speaker whose race and sex are not known yet stays quiet, and a creature
+/// with it: every row names a playable race and one of the two sexes.
+inline uint32_t emoteSoundId(const std::vector<EmoteSoundRow>& rows, uint32_t emotesTextId,
+                             uint32_t race, uint32_t sex) {
+    for (const auto& row : rows)
+        if (row.emotesTextId == emotesTextId && row.race == race && row.sex == sex) return row.soundId;
+    return 0;
+}
+
 }  // namespace wowee::rendering::unit_event

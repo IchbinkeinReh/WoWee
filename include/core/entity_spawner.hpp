@@ -7,6 +7,7 @@
 #include "pipeline/blp_loader.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "rendering/melee_sound.hpp"
+#include "rendering/unit_model_events.hpp"
 #include "rendering/animation/body_yaw.hpp"
 #include "core/character_geosets.hpp"
 #include "core/weapon_attachment.hpp"
@@ -369,6 +370,10 @@ public:
     /// handlers ask it: kSlotJumpStart leaving the ground, kSlotJumpEnd
     /// coming down (unit_model_events.hpp).
     void playUnitJumpSound(const game::Unit& unit, uint32_t slot);
+    /// The voice line an emote asks for, played as the unit it shows on speaks
+    /// it: EmotesTextSound by the emote text and the speaker's race and sex,
+    /// under the client's two emote CVars (unit_model_events.hpp).
+    void playUnitEmoteSound(const game::Unit& unit, uint32_t emotesTextId);
     /// A unit's melee hit arriving (SMSG_ATTACKERSTATEUPDATE), kept on its
     /// attacker for its model's events; an attack stopping, which settles it
     /// (rendering/melee_sound.hpp).
@@ -1384,6 +1389,11 @@ private:
     /// A unit's sound slot (0x00747310): by its chance unless `always`, at
     /// `at` or where the unit is.
     void playUnitSlot(const game::Unit& unit, uint32_t slot, bool always, const glm::vec3* at);
+    /// EmotesTextSound's rows, read once when an emote first asks (0x0063e4f0,
+    /// which will not load the table twice).
+    const std::vector<rendering::unit_event::EmoteSoundRow>& emoteSoundRows();
+    std::vector<rendering::unit_event::EmoteSoundRow> emoteSoundRows_;
+    bool emoteSoundRowsLoaded_ = false;
     uint32_t unitEventRandom_ = 0x2545F491u;
     /// Each unit's depth below the water at its last check while not
     /// swimming (+0x784), by guid.
