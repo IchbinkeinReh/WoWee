@@ -742,8 +742,9 @@ void SpellVisualSystem::playKitSound(const KitRecord& kit, spell_kit::KitType ty
     if (loops) return;
     const bool own = spell_kit::kitSoundOwnVoice(!kit.models.empty(), loops, instanceIsListener(renderInstanceId),
                                                  instanceIsMover(renderInstanceId));
-    playSoundAt(kit.soundId, position,
-                own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault);
+    audio::AudioEngine::instance().playSound3D(
+        sound->data, position, sound->volume * kitSoundVolumeScale_, 1.0f, 100.0f, 1.0f, audio::Channel::Effects,
+        audio::PlayLimit::None, own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault);
 }
 
 void SpellVisualSystem::playKitWeaponEffects(const std::vector<KitWeaponEffect>& effects,

@@ -43,7 +43,7 @@
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "audio/spell_sound_manager.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "audio/movement_sound_manager.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
@@ -1849,8 +1849,10 @@ void SettingsPanel::applyAudioVolumes(audio::AudioCoordinator* ac) {
         ui->setVolumeScale(fx * pendingUiVolume / 100.0f);
     if (auto* combat = ac->getCombatSoundManager())
         combat->setVolumeScale(fx * pendingCombatVolume / 100.0f);
-    if (auto* spell = ac->getSpellSoundManager())
-        spell->setVolumeScale(fx * pendingSpellVolume / 100.0f);
+    // The spells' own balance is over what the kits already bring - a kit's
+    // sound comes in with its SoundEntries volume.
+    if (auto* svs = services_.renderer ? services_.renderer->getSpellVisualSystem() : nullptr)
+        svs->setKitSoundVolumeScale(fx * static_cast<float>(pendingSpellVolume) / 100.0f);
     if (auto* movement = ac->getMovementSoundManager())
         movement->setVolumeScale(fx * pendingMovementVolume / 100.0f);
     if (auto* footstep = ac->getFootstepManager())

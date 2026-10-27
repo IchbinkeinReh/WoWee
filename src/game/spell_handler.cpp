@@ -23,7 +23,6 @@
 #include "rendering/spell_visual_system.hpp"
 #include "rendering/spell_missile.hpp"
 #include "audio/audio_coordinator.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "core/app_clock.hpp"
 #include "core/application.hpp"
 #include "addons/addon_manager.hpp"
@@ -411,34 +410,6 @@ static CombatTextEntry::Type combatTextTypeFromSpellMissInfo(uint8_t missInfo) {
         case SpellMissInfo::REFLECT: return CombatTextEntry::REFLECT;
         default: return CombatTextEntry::MISS;
     }
-}
-
-static audio::SpellSoundManager::MagicSchool schoolMaskToMagicSchool(uint32_t mask) {
-    if (mask & 0x04) return audio::SpellSoundManager::MagicSchool::FIRE;
-    if (mask & 0x10) return audio::SpellSoundManager::MagicSchool::FROST;
-    if (mask & 0x02) return audio::SpellSoundManager::MagicSchool::HOLY;
-    if (mask & 0x08) return audio::SpellSoundManager::MagicSchool::NATURE;
-    if (mask & 0x20) return audio::SpellSoundManager::MagicSchool::SHADOW;
-    if (mask & 0x40) return audio::SpellSoundManager::MagicSchool::ARCANE;
-    return audio::SpellSoundManager::MagicSchool::ARCANE;
-}
-
-// ---- Extracted helpers to reduce nesting in handleSpellGo ----
-
-audio::SpellSoundManager::MagicSchool SpellHandler::resolveSpellSchool(uint32_t spellId) {
-    owner_.loadSpellNameCache();
-    auto it = owner_.spellNameCacheRef().find(spellId);
-    if (it != owner_.spellNameCacheRef().end() && it->second.schoolMask)
-        return schoolMaskToMagicSchool(it->second.schoolMask);
-    return audio::SpellSoundManager::MagicSchool::ARCANE;
-}
-
-void SpellHandler::playSpellCastSound(uint32_t spellId) {
-    auto* ac = owner_.services().audioCoordinator;
-    if (!ac) return;
-    auto* ssm = ac->getSpellSoundManager();
-    if (!ssm) return;
-    ssm->playCast(resolveSpellSchool(spellId));
 }
 
 // ---- Spell visual effect helpers ----
@@ -3607,12 +3578,6 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
                 svs->cancelAllPrecastVisuals();
         }
 
-        // Stop precast sound
-        if (auto* ac = owner_.services().audioCoordinator) {
-            if (auto* ssm = ac->getSpellSoundManager()) {
-                ssm->stopPrecast();
-            }
-        }
     }
 
     // Show failure reason
@@ -3774,20 +3739,6 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
         castTimeTotal_ = data.castTime / 1000.0f;
         castTimeRemaining_ = castTimeTotal_;
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURRENT_SPELL_CAST_CHANGED", {});
-
-        // Play precast sound - skip profession/tradeskill spells
-        if (!owner_.isProfessionSpell(data.spellId)) {
-            if (auto* ac = owner_.services().audioCoordinator) {
-                if (auto* ssm = ac->getSpellSoundManager()) {
-                    owner_.loadSpellNameCache();
-                    auto it = owner_.spellNameCacheRef().find(data.spellId);
-                    auto school = (it != owner_.spellNameCacheRef().end() && it->second.schoolMask)
-                        ? schoolMaskToMagicSchool(it->second.schoolMask)
-                        : audio::SpellSoundManager::MagicSchool::ARCANE;
-                    ssm->playPrecast(school, audio::SpellSoundManager::SpellPower::MEDIUM);
-                }
-            }
-        }
 
         if (owner_.spellCastAnimCallbackRef()) {
             owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), true, false, castType);
@@ -4001,10 +3952,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         if (restorationLoop) {
             owner_.setStandState(1); // UNIT_STAND_STATE_SIT
         }
-        // Play cast-complete sound
-        if (!owner_.isProfessionSpell(data.spellId) && !rangedWeaponAttack)
-            playSpellCastSound(data.spellId);
-
         // Ranged auto-attack spells (Auto Shot, Shoot, Throw) complete as timed
         // casts and are NOT classified as instant melee abilities, so trigger the
         // ranged shot animation explicitly here.
@@ -4119,12 +4066,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         if (!rangedWeaponAttack && owner_.spellCastAnimCallbackRef()) {
             owner_.spellCastAnimCallbackRef()(data.casterUnit, false, false, SpellCastType::OMNI);
         }
-        bool targetsPlayer = false;
-        for (const auto& tgt : data.hitTargets) {
-            if (tgt == owner_.getPlayerGuid()) { targetsPlayer = true; break; }
-        }
-        if (targetsPlayer && !rangedWeaponAttack)
-            playSpellCastSound(data.spellId);
     }
 
     // Clear unit cast bar
@@ -6622,11 +6563,6 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
         if (auto* renderer = owner_.services().renderer) {
             if (auto* svs = renderer->getSpellVisualSystem())
                 svs->cancelAllPrecastVisuals();
-        }
-        if (auto* ac = owner_.services().audioCoordinator) {
-            if (auto* ssm = ac->getSpellSoundManager()) {
-                ssm->stopPrecast();
-            }
         }
         if (owner_.spellCastAnimCallbackRef()) {
             owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), false, false, SpellCastType::OMNI);

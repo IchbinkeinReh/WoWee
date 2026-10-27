@@ -44,7 +44,6 @@
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "audio/movement_sound_manager.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"

@@ -52,7 +52,6 @@
 #include "audio/music_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "audio/player_voice_manager.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "core/app_clock.hpp"
 #include "core/window.hpp"
@@ -876,7 +875,6 @@ static void applySoundCVars(lua_State* L) {
     if (!sfxOn) {
         if (auto* m = ac->getUiSoundManager())        m->setVolumeScale(0.0f);
         if (auto* m = ac->getCombatSoundManager())    m->setVolumeScale(0.0f);
-        if (auto* m = ac->getSpellSoundManager())     m->setVolumeScale(0.0f);
         if (auto* m = ac->getMovementSoundManager())  m->setVolumeScale(0.0f);
         if (auto* m = ac->getFootstepManager())       m->setVolumeScale(0.0f);
         if (auto* m = ac->getActivitySoundManager())  m->setVolumeScale(0.0f);

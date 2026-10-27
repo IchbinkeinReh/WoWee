@@ -332,7 +332,8 @@ FrameXML calls into, plus what the client draws in the world.
 - `MovementSoundManager` - Water entry and wading splashes
 - `MountSoundManager` - Mount-specific movement audio
 - `MusicManager` - Zone music (ZoneMusic.dbc day and night tracks pooled, plus this project's own soundtrack)
-- `CombatSoundManager`, `SpellSoundManager`, `UiSoundManager`, `NpcVoiceManager`, `PlayerVoiceManager`
+- `CombatSoundManager`, `UiSoundManager`, `NpcVoiceManager`, `PlayerVoiceManager`
+- A spell's own sounds are no manager's business: each visual kit brings the SoundEntries row its DBC names, and `SpellVisualSystem` plays it with the kit
 
 ### 9. Warden Anti-Cheat (`src/game/`)
 

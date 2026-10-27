@@ -407,6 +407,9 @@ public:
     /// listener at the character; else where it is - kept over a crowd's
     /// either way.
     void playOwnSoundAt(uint32_t soundId, const glm::vec3& position);
+    /// The settings' "Spells" balance, over what each kit's own SoundEntries
+    /// volume brings - the client scales these with the Effects channel alone.
+    void setKitSoundVolumeScale(float scale) { kitSoundVolumeScale_ = scale; }
 
     /// The cast a dynamic object carries: DYNAMICOBJECT_CASTER, SPELLID and
     /// CASTTIME (0x00804cc0).
@@ -641,6 +644,7 @@ private:
     /// kit whose entry it loops, which nothing here stops again.
     void playKitSound(const KitRecord& kit, spell_kit::KitType type, uint32_t renderInstanceId,
                       const glm::vec3& position);
+    float kitSoundVolumeScale_ = 1.0f;  ///< The settings' "Spells" balance
     /// The unit's virtual 0x104 (0x0072af60): a kit with Flags 0x1 of a
     /// spell whose visual has a chain kit (0x00800bf0) waits on its unit
     /// (0x00728050) for a chain's pulse to reach it, ten seconds at most.

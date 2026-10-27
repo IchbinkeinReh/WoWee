@@ -38,7 +38,6 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "network/world_socket.hpp"

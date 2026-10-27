@@ -742,7 +742,6 @@ set(WOWEE_SOURCES
     src/audio/ambient_sound_manager.cpp
     src/audio/ui_sound_manager.cpp
     src/audio/combat_sound_manager.cpp
-    src/audio/spell_sound_manager.cpp
     src/audio/movement_sound_manager.cpp
 
     # Pipeline (asset loaders)
@@ -1167,7 +1166,6 @@ set(WOWEE_HEADERS
     include/audio/ambient_sound_manager.hpp
     include/audio/ui_sound_manager.hpp
     include/audio/combat_sound_manager.hpp
-    include/audio/spell_sound_manager.hpp
     include/audio/movement_sound_manager.hpp
 
     include/pipeline/blp_loader.hpp

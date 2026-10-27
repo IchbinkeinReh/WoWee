@@ -24,7 +24,6 @@ class PlayerVoiceManager;
 class AmbientSoundManager;
 class UiSoundManager;
 class CombatSoundManager;
-class SpellSoundManager;
 class MovementSoundManager;
 
 /// Flat context passed from Renderer into updateZoneAudio() each frame.
@@ -122,7 +121,6 @@ public:
     AmbientSoundManager* getAmbientSoundManager() { return ambientSoundManager_.get(); }
     UiSoundManager* getUiSoundManager() { return uiSoundManager_.get(); }
     CombatSoundManager* getCombatSoundManager() { return combatSoundManager_.get(); }
-    SpellSoundManager* getSpellSoundManager() { return spellSoundManager_.get(); }
     MovementSoundManager* getMovementSoundManager() { return movementSoundManager_.get(); }
 
 private:
@@ -148,7 +146,6 @@ private:
     std::unique_ptr<AmbientSoundManager> ambientSoundManager_;
     std::unique_ptr<UiSoundManager> uiSoundManager_;
     std::unique_ptr<CombatSoundManager> combatSoundManager_;
-    std::unique_ptr<SpellSoundManager> spellSoundManager_;
     std::unique_ptr<MovementSoundManager> movementSoundManager_;
 
     bool audioAvailable_ = false;
