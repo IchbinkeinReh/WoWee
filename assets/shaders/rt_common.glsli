@@ -118,6 +118,32 @@ vec3 rtRelFromDepth(vec2 uv, float depth) {
     return w.xyz / w.w;
 }
 
+// The geometric normal at a pixel p (camera-relative, reversed depth d) from
+// its neighbours, left and right, down and up - their depths and their
+// positions: on each axis the one that continues the slope best. rt_prepare
+// takes it for the texels and rt_apply for the pixels, alike, so the two
+// compare like with like (rtNormalWeight).
+//
+// A neighbour that is the sky (depth 0) is no point to take a slope to: its
+// position is at infinity. rt_prepare took it where it was the only one on
+// an axis - a leaf a pixel across against the evening sky, a twig - or the
+// nearer slope, and the normal came out NaN; rt_apply's weight of every
+// texel there went NaN with it, and the canopy drew black pixels in columns
+// where the leaves are narrow, that came and went as the leaves swayed and
+// the camera moved. The other neighbour where one is the sky; with the sky
+// on both sides, no slope, and the pixel faces the camera.
+vec3 rtSlopeNormal(vec3 p, float d, float dl, vec3 pl, float dr, vec3 pr, float dd, vec3 pd, float du, vec3 pu) {
+    bool skyL = dl <= 0.0, skyR = dr <= 0.0, skyD = dd <= 0.0, skyU = du <= 0.0;
+    bool takeR = !skyR && (skyL || abs(dr - d) < abs(d - dl));
+    bool takeU = !skyU && (skyD || abs(du - d) < abs(d - dd));
+    vec3 dx = takeR ? pr - p : (skyL ? vec3(0.0) : p - pl);
+    vec3 dy = takeU ? pu - p : (skyD ? vec3(0.0) : p - pd);
+    vec3 n = cross(dx, dy);
+    if (!(dot(n, n) > 1e-20) || any(isnan(n)) || any(isinf(n))) return -normalize(p);
+    n = normalize(n);
+    return dot(n, p) > 0.0 ? -n : n;
+}
+
 // The tracer's G-buffer texel, at trace resolution: octahedral normal in xy
 // (rebuilt from the depth), distance to the camera in z (0 for sky), and in
 // w which pixel of the 2x2 scene block it was taken from (0-3, x fastest),

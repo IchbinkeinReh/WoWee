@@ -192,7 +192,9 @@ void main() {
         float t;
         vec3 hn;
         vec4 hs;
+        rtCutoutsOpen = true;
         if (rtClosest(origin, ad, pass.params.y, rng, t, hn, hs)) ao = t / pass.params.y;
+        rtCutoutsOpen = false;
     }
 
     // The point lights: their sum, and one of them picked by weighted

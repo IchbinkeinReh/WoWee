@@ -92,12 +92,8 @@ void main() {
     // depth continues the slope best - so edges do not bend the normal.
     float dl = loadDepth(sp + ivec2(-1, 0)), dr = loadDepth(sp + ivec2(1, 0));
     float dd = loadDepth(sp + ivec2(0, -1)), du = loadDepth(sp + ivec2(0, 1));
-    vec3 dx = abs(dr - d) < abs(d - dl) ? relAt(sp + ivec2(1, 0), dr) - p
-                                        : p - relAt(sp + ivec2(-1, 0), dl);
-    vec3 dy = abs(du - d) < abs(d - dd) ? relAt(sp + ivec2(0, 1), du) - p
-                                        : p - relAt(sp + ivec2(0, -1), dd);
-    vec3 n = normalize(cross(dx, dy));
-    if (dot(n, p) > 0.0) n = -n;
+    vec3 n = rtSlopeNormal(p, d, dl, relAt(sp + ivec2(-1, 0), dl), dr, relAt(sp + ivec2(1, 0), dr),
+                           dd, relAt(sp + ivec2(0, -1), dd), du, relAt(sp + ivec2(0, 1), du));
 
     // The normal the point lights' N.L takes: the surface's own (its vertex
     // normal, a normal map's), turned to the side of the geometric face, and

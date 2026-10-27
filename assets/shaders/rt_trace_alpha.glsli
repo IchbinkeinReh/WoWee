@@ -29,6 +29,17 @@ float rtUnitReach = 1e30;
 // Set by rtOccludedByStructure for one ray in the software tracer: only the
 // ground and the buildings stop it (the hardware tracer's ray mask).
 bool rtStructureOnly = false;
+// Set by the caller for one ray: a cutout or a translucent triangle - a leaf
+// card, a fence, a banner - lets it through. The occlusion's rays
+// (rt_trace.comp): a canopy is cards standing in for a loose volume of
+// leaves, and their 64x64 masks stack four or five deep - every ray from a
+// leaf met another a few hand-widths off, the leaves' light, most of it the
+// sky's in the evening shade, was taken to half and then under the sun's
+// shade to nearly nothing: black speckles over the trees, and with the one
+// ray a pixel they flickered as the camera moved. The sky's light comes
+// through leaves; their shadow of the sun is the sun ray's, which they still
+// stop.
+bool rtCutoutsOpen = false;
 
 // Whether a ray from p passes the instances of `group` by: it starts inside
 // the group's box - on the character the group is, which never shadows or
@@ -45,6 +56,7 @@ bool rtInGroup(uint group, vec3 p) {
 bool rtSolidAt(RtTri tri, vec2 bary, inout uint rng) {
     float opacity = rtUnpackSurface(tri.v0.w).a;
     if (opacity >= 1.0) return true;
+    if (rtCutoutsOpen) return false;
     uint extra = floatBitsToUint(tri.v2.w);
     if (extra != 0u) {
         uvec4 e = rtTriExtras[extra - 1u].data;

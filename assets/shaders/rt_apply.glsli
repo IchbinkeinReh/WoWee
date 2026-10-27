@@ -144,13 +144,8 @@ vec3 relAt(ivec2 p, float depth) {
 vec3 geometricNormal(ivec2 pix, int s, float d, vec3 p) {
     float dl = depthAt(pix + ivec2(-1, 0), s), dr = depthAt(pix + ivec2(1, 0), s);
     float dd = depthAt(pix + ivec2(0, -1), s), du = depthAt(pix + ivec2(0, 1), s);
-    vec3 dx = abs(dr - d) < abs(d - dl) ? relAt(pix + ivec2(1, 0), dr) - p : p - relAt(pix + ivec2(-1, 0), dl);
-    vec3 dy = abs(du - d) < abs(d - dd) ? relAt(pix + ivec2(0, 1), du) - p : p - relAt(pix + ivec2(0, -1), dd);
-    vec3 n = cross(dx, dy);
-    // The sky on both sides: no slope to take; facing the camera.
-    if (!(dot(n, n) > 1e-20) || any(isnan(n)) || any(isinf(n))) return -normalize(p);
-    n = normalize(n);
-    return dot(n, p) > 0.0 ? -n : n;
+    return rtSlopeNormal(p, d, dl, relAt(pix + ivec2(-1, 0), dl), dr, relAt(pix + ivec2(1, 0), dr),
+                         dd, relAt(pix + ivec2(0, -1), dd), du, relAt(pix + ivec2(0, 1), du));
 }
 
 // rtEdgeOnLift (rt_lighting.glsli).
