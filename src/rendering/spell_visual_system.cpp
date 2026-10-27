@@ -731,20 +731,27 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
     return playKitModels(kit, type, renderInstanceId, position, place, castTimeMs);
 }
 
-void SpellVisualSystem::playKitSound(const KitRecord& kit, spell_kit::KitType type, uint32_t renderInstanceId,
-                                     const glm::vec3& position) {
+uint32_t SpellVisualSystem::playKitSound(const KitRecord& kit, spell_kit::KitType type, uint32_t renderInstanceId,
+                                         const glm::vec3& position, bool holds) {
     const LoadedSound* sound = kit.soundId ? soundEntry(kit.soundId) : nullptr;
-    if (!sound) return;
-    // A state kit's, a precast kit's and an area kit's own looping entry runs
-    // as long as the kit does and goes with it (0x004c5c80); nothing here
-    // stops a sound once it has started, so those stay unheard.
+    if (!sound) return 0;
     const bool loops = spell_kit::kitSoundLoops(type, sound->loops, renderInstanceId);
-    if (loops) return;
+    if (loops && !holds) return 0;  // Nothing here would stop it again with the kit.
     const bool own = spell_kit::kitSoundOwnVoice(!kit.models.empty(), loops, instanceIsListener(renderInstanceId),
                                                  instanceIsMover(renderInstanceId));
-    audio::AudioEngine::instance().playSound3D(
-        sound->data, position, sound->volume * kitSoundVolumeScale_, 1.0f, 100.0f, 1.0f, audio::Channel::Effects,
-        audio::PlayLimit::None, own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault);
+    const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
+    const float volume = sound->volume * kitSoundVolumeScale_;
+    if (!loops) {
+        audio::AudioEngine::instance().playSound3D(sound->data, position, volume, 1.0f, 100.0f, 1.0f,
+                                                   audio::Channel::Effects, audio::PlayLimit::None, priority);
+        return 0;
+    }
+    // Held for the kit's whole run (0x004c5c80 takes it back at the end). It is
+    // played where the unit was as the kit started - 0x006f7e40 asks the unit
+    // for that through its vtable +0x2c once, and nothing after moves it - and
+    // its voice only counts for the mover, never for the listener (0x00745230).
+    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, volume, 100.0f, 1.0f, 0.0f,
+                                                             audio::Channel::Effects, priority);
 }
 
 void SpellVisualSystem::playKitWeaponEffects(const std::vector<KitWeaponEffect>& effects,
@@ -1377,8 +1384,21 @@ void SpellVisualSystem::hideAuraKit(AuraKit& aura) {
     if (m2Renderer_) {
         for (const KitModelInstance& model : aura.models) m2Renderer_->removeInstance(model.instanceId);
     }
+    // The kit's looping sound goes with the kit (0x004c5c80 stops it there, and
+    // stops it no other way): a unit changing model loses it and asks it again
+    // with the kit on its new model.
+    if (aura.soundHandle != 0) audio::AudioEngine::instance().stopSound(aura.soundHandle);
+    aura.soundHandle = 0;
+    aura.soundAsked = false;
     aura.models.clear();
     aura.boundInstance = 0;
+}
+
+void SpellVisualSystem::askAuraKitSound(AuraKit& aura, const KitRecord& kit, uint32_t instance,
+                                        const glm::vec3& unitPos) {
+    if (aura.soundAsked) return;
+    aura.soundAsked = true;
+    aura.soundHandle = playKitSound(kit, spell_kit::KitType::State, instance, unitPos, /*holds=*/true);
 }
 
 void SpellVisualSystem::setUnitAuraSlot(uint64_t unitGuid, uint32_t slot, uint32_t spellId, uint64_t casterGuid) {
@@ -2069,16 +2089,22 @@ void SpellVisualSystem::applyChannelKit(uint64_t unitGuid, uint32_t spellId) {
     unitAuraKits_[unitGuid].auras.push_back(std::move(aura));
 }
 
-void SpellVisualSystem::startStateKitOnUnit(uint64_t unitGuid, const AuraKit& aura, uint64_t otherSource) {
+void SpellVisualSystem::startStateKitOnUnit(uint64_t unitGuid, AuraKit& aura, uint64_t otherSource) {
     auto kitIt = kits_.find(aura.kitId);
     if (kitIt == kits_.end()) return;
     const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(unitGuid) : 0;
     if (instance != 0) {
-        glm::vec3 unitPos;
-        if (renderer_ && renderer_->getCharacterRenderer() &&
-            renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos))
-            playKitShake(aura.kitId, unitPos);
+        glm::vec3 unitPos(0.0f);
+        const bool at = renderer_ && renderer_->getCharacterRenderer() &&
+                        renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos);
+        if (at) playKitShake(aura.kitId, unitPos);
         playKitColourFade(aura.kitId, instance, aura.spellId);
+        // 0x00745230 plays the kit's own sound as the kit goes onto the unit;
+        // no path here ever asked a state kit's, so the 428 state kits and 480
+        // channel kits of 3.3.5a's own visuals whose entry loops have been
+        // silent - Death and Decay, Killer Bees, Lightning Shield, a warlock's
+        // channel - and those run on until the aura leaves the unit.
+        if (at) askAuraKitSound(aura, kitIt->second, instance, unitPos);
     }
     startKitChains(kitIt->second, unitGuid, aura.spellId, otherSource);
     // 0x007265c0 runs for every kit type: 16 starts the mount transition
@@ -2689,7 +2715,9 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
         const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(unitIt->first) : 0;
         for (AuraKit& aura : unit.auras) {
             if (!aura.playing || aura.awaitingMissile || aura.awaitingChain) {
-                if (!aura.models.empty()) hideAuraKit(aura);
+                // Held hidden: its models are off the unit, and so is the
+                // looping sound it had - a kit of no models has only that.
+                if (!aura.models.empty() || aura.soundHandle != 0) hideAuraKit(aura);
                 continue;
             }
             // Onto the unit's model as it now is: the kit is the unit's,
@@ -2699,10 +2727,14 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
                 auto kitIt = kits_.find(aura.kitId);
                 if (instance != 0 && kitIt != kits_.end()) {
                     glm::vec3 unitPos(0.0f);
-                    if (renderer_ && renderer_->getCharacterRenderer())
-                        renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos);
+                    const bool at = renderer_ && renderer_->getCharacterRenderer() &&
+                                    renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos);
                     aura.models = playKitModels(kitIt->second, spell_kit::KitType::State, instance, unitPos, nullptr);
                     aura.boundInstance = instance;
+                    // The kit came whole onto the new model, its sound with it
+                    // - unless its start already asked for it, unseen, while the
+                    // unit was not drawn yet.
+                    if (at) askAuraKitSound(aura, kitIt->second, instance, unitPos);
                 }
                 continue;
             }
