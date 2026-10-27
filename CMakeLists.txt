@@ -613,6 +613,7 @@ set(WOWEE_SOURCES
     src/core/entity_spawner_player.cpp
     src/core/entity_spawner_blob.cpp
     src/core/entity_spawner_unit_events.cpp
+    src/core/entity_spawner_melee_sounds.cpp
     src/core/entity_spawner_corpse.cpp
     src/core/entity_spawner_vehicle.cpp
     src/core/entity_spawner_processing.cpp
@@ -676,6 +677,7 @@ set(WOWEE_SOURCES
     src/game/game_handler_corpse.cpp
     src/game/game_handler_world_state_ui.cpp
     src/game/chat_handler.cpp
+    src/game/chat_spam_filter.cpp
     src/game/interface_text.cpp
     src/game/text_tokens.cpp
     src/game/text_tokens_subject.cpp
@@ -736,6 +738,7 @@ set(WOWEE_SOURCES
     src/audio/mount_sound_manager.cpp
     src/audio/npc_voice_manager.cpp
     src/audio/player_voice_manager.cpp
+    src/audio/sound_filter.cpp
     src/audio/ambient_sound_manager.cpp
     src/audio/ui_sound_manager.cpp
     src/audio/combat_sound_manager.cpp

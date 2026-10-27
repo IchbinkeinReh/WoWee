@@ -57,10 +57,8 @@ void NpcVoiceManager::shutdown() {
     aggroLibrary_.clear();
     fleeLibrary_.clear();
     creatureAggroSoundByDisplay_.clear();
-    creatureAttackSoundByDisplay_.clear();
     lastPlayTime_.clear();
     lastAggroTime_.clear();
-    lastCombatVocalTime_.clear();
     clickCount_.clear();
     assetManager_ = nullptr;
 }
@@ -354,17 +352,12 @@ void NpcVoiceManager::loadCreatureAggroSounds() {
         const int32_t soundRow = soundDbc->findRecordById(creatureSoundId);
         if (soundRow < 0) continue;
         const uint32_t soundDataRow = static_cast<uint32_t>(soundRow);
-        const uint32_t attackSoundId = soundDbc->getUInt32(soundDataRow, 1);
         const uint32_t aggroSoundId = soundDbc->getUInt32(soundDataRow, 10);
-        if (attackSoundId != 0)
-            creatureAttackSoundByDisplay_[displayId] = attackSoundId;
         if (aggroSoundId != 0)
             creatureAggroSoundByDisplay_[displayId] = aggroSoundId;
     }
 
-    LOG_INFO("NPC voice: loaded ", creatureAggroSoundByDisplay_.size(),
-             " model-specific aggro sounds and ",
-             creatureAttackSoundByDisplay_.size(), " combat vocal banks");
+    LOG_INFO("NPC voice: loaded ", creatureAggroSoundByDisplay_.size(), " model-specific aggro sounds");
 }
 
 bool NpcVoiceManager::playSoundEntry(uint32_t soundId, const glm::vec3& position) {
@@ -524,22 +517,6 @@ void NpcVoiceManager::playAggro(uint64_t npcGuid, uint32_t displayId,
 
     lastAggroTime_[npcGuid] = now;
     playSound(npcGuid, voiceType, SoundCategory::AGGRO, position);
-}
-
-void NpcVoiceManager::playCombatAttack(uint64_t npcGuid, uint32_t displayId,
-                                       const glm::vec3& position) {
-    const auto sound = creatureAttackSoundByDisplay_.find(displayId);
-    if (sound == creatureAttackSoundByDisplay_.end()) return;
-
-    const auto now = std::chrono::steady_clock::now();
-    auto recent = lastCombatVocalTime_.find(npcGuid);
-    if (recent != lastCombatVocalTime_.end() &&
-        std::chrono::duration<float>(now - recent->second).count() < COMBAT_VOCAL_COOLDOWN) {
-        return;
-    }
-
-    if (playSoundEntry(sound->second, position))
-        lastCombatVocalTime_[npcGuid] = now;
 }
 } // namespace audio
 } // namespace wowee

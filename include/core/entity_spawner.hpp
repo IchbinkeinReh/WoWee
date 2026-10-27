@@ -6,6 +6,7 @@
 #include "game/game_services.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "rendering/blob_shadow.hpp"
+#include "rendering/melee_sound.hpp"
 #include "rendering/animation/body_yaw.hpp"
 #include "core/character_geosets.hpp"
 #include "core/weapon_attachment.hpp"
@@ -33,7 +34,7 @@ namespace wowee {
 namespace rendering { class Renderer; namespace unit_event { class FootstepTerrainSounds; } }
 namespace pipeline { class AssetManager; class DBCFile; struct M2Model; struct WMOModel; }
 namespace audio { enum class VoiceType; }
-namespace game { class GameHandler; class Entity; struct CorpseLook; }
+namespace game { class GameHandler; class Entity; class Unit; struct CorpseLook; struct AttackerStateUpdateData; }
 
 namespace core {
 
@@ -361,6 +362,17 @@ public:
     /// mount's (0x0073d5d0 hands the mount the unit's callback).
     /// `localPlayerInstance` is the renderer's own character.
     void playUnitModelEvents(uint32_t localPlayerInstance);
+    /// The race splash of each unit wading across four tenths of its height
+    /// into or out of water (rendering/unit_splash.hpp).
+    void playUnitSplashes(uint32_t localPlayerInstance);
+    /// A unit's melee hit arriving (SMSG_ATTACKERSTATEUPDATE), kept on its
+    /// attacker for its model's events; an attack stopping, which settles it
+    /// (rendering/melee_sound.hpp).
+    void onMeleeHit(const game::AttackerStateUpdateData& data);
+    void onMeleeAttackStop(uint64_t attacker);
+    /// A spell missing a target (SMSG_SPELL_GO): a parry's or block's
+    /// clash on it (0x00755850).
+    void onSpellMiss(uint64_t caster, uint64_t target, uint8_t missType, uint32_t spellId);
 
     // Mount
     void setMountDisplayId(uint32_t displayId) { pendingMountDisplayId_ = displayId; }
@@ -682,6 +694,19 @@ private:
         std::optional<uint32_t> eventMs;   ///< the "$VG"/"$VT" event for its seat
     };
     std::unordered_map<uint64_t, HeldVehicleMove> heldVehicleMoves_;
+    /// A vehicle's VehicleEnterAnim / VehicleExitAnim playing on its whole
+    /// model (key bone 0x1a), by vehicle: the instance and animation, until
+    /// it ends (0x00756f80 sets the kit's +0x58 bit 26, 0x00757280 clears
+    /// it).
+    struct WholeModelSeatAnim {
+        uint32_t instance = 0;
+        uint32_t animation = 0;
+    };
+    std::unordered_map<uint64_t, WholeModelSeatAnim> wholeModelSeatAnims_;
+    /// The vehicle kit's +0x58 bit 26: a VehicleSeat animation playing on
+    /// the vehicle's whole model - a passenger's way in or out, or a
+    /// seated one's ride loop (0x007571c0).
+    bool vehicleWholeModelAnimating(uint64_t vehicleGuid) const;
     void stepHeldVehicleMoves(uint32_t nowMs);
     void releaseSeatedPassenger(uint64_t guid, SeatedPassenger& seated, bool landing);
     /// The vehicle a unit's seats count from while it is in a passenger
@@ -1349,7 +1374,47 @@ private:
     /// When a unit's $FDX last played its Stand sound, of all units
     /// (0x00ca12d4), in steady-clock ms; and the draws the slots' chances take.
     uint32_t lastStandSoundMs_ = 0;
+    /// A unit's CreatureSoundData row, its pet row in its place where asked
+    /// (0x0071a3f0); -1 for none.
+    int32_t unitSoundRow(const game::Unit& unit, bool petRow) const;
+    /// A unit's sound slot (0x00747310): by its chance unless `always`, at
+    /// `at` or where the unit is.
+    void playUnitSlot(const game::Unit& unit, uint32_t slot, bool always, const glm::vec3* at);
     uint32_t unitEventRandom_ = 0x2545F491u;
+    /// Each unit's depth below the water at its last check while not
+    /// swimming (+0x784), by guid.
+    std::unordered_map<uint64_t, float> splashDepth_;
+    /// The melee hit each attacker keeps until its model lands it (+0xb98),
+    /// the client's swing and impact tables, and the no-wound targets'
+    /// reaction hold (0x00ca1600).
+    std::unordered_map<uint64_t, rendering::melee_sound::Hit> pendingMeleeHits_;
+    std::shared_ptr<rendering::melee_sound::Tables> meleeTables_;
+    bool meleeTablesLoaded_ = false;
+    std::unordered_map<uint32_t, uint32_t> meleeSwingSizes_;
+    std::unordered_map<uint32_t, uint32_t> meleeMaterialFlags_;
+    uint32_t meleeUnarmedSubclass_ = 13;
+    bool meleeReactionHeld_ = false;
+    uint32_t meleeReactionUntilMs_ = 0;
+    uint32_t meleeRandom_ = 0x9E3779B9u;
+    void loadMeleeSoundTables();
+    std::optional<rendering::melee_sound::Item> meleeItem(uint32_t entry) const;
+    std::optional<rendering::melee_sound::Item> heldItem(const game::Entity& entity, uint32_t hand) const;
+    bool metalMaterial(const std::optional<rendering::melee_sound::Item>& item) const;
+    std::optional<rendering::melee_sound::Item> defenderItem(const game::Entity& unit, bool block) const;
+    bool playsNoWound(const game::Entity& unit) const;
+    std::optional<glm::vec3> unitSoundPosition(uint64_t guid) const;
+    float combatVolume() const;
+    /// Whose part in a hit raises its plays' priority: the active player's
+    /// (0x00755a60's impact and miss) or the active mover's (the swing,
+    /// a parry's or block's clash).
+    enum class MeleeParty : uint8_t { ActivePlayer, ActiveMover };
+    int meleePriority(const rendering::melee_sound::Hit& hit, MeleeParty party) const;
+    uint32_t impactColumn(const game::Entity& target) const;
+    void settleKeptMeleeHit(uint64_t attacker);
+    void settleMeleeHit(const rendering::melee_sound::Hit& hit);
+    void landMeleeHit(const rendering::melee_sound::Hit& hit);
+    void meleeModelEvent(uint64_t unitGuid, uint32_t eventId, const glm::vec3& at);
+    void landWithNothingKept(uint64_t guid, const glm::vec3& at);
     /// FootstepTerrainLookup by creature footstep id and terrain type, built
     /// once its tables are read (0x004cf990).
     std::shared_ptr<const rendering::unit_event::FootstepTerrainSounds> footstepSounds_;

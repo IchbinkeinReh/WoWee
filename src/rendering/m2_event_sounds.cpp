@@ -6,6 +6,8 @@
 #include "addons/lua_api_registrations.hpp"
 #include "audio/audio_engine.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <numeric>
 #include <random>
 #include <string>
@@ -82,8 +84,27 @@ uint32_t M2EventSounds::displaySound(uint32_t displayId, uint32_t slot, pipeline
     return it != displaySounds_.end() && slot < it->second.size() ? it->second[slot] : 0u;
 }
 
+uint32_t M2EventSounds::idByName(const std::string& name, pipeline::AssetManager* assets) {
+    if (!idsByNameLoaded_ && assets) {
+        idsByNameLoaded_ = true;
+        auto dbc = assets->loadDBC("SoundEntries.dbc");
+        if (dbc && dbc->isLoaded() && dbc->getFieldCount() > 2) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                std::string n = dbc->getString(i, 2);
+                std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return std::tolower(c); });
+                idsByName_.emplace(std::move(n), dbc->getUInt32(i, 0));
+            }
+        }
+    }
+    std::string key = name;
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
+    const auto it = idsByName_.find(key);
+    return it != idsByName_.end() ? it->second : 0;
+}
+
 void M2EventSounds::playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale,
-                             pipeline::AssetManager* assets) {
+                             pipeline::AssetManager* assets, audio::PlayLimit limit, bool absolute,
+                             int priority) {
     const Kit* k = kit(soundId, assets);
     if (!k) return;
     const float maxDistance = k->cutoff > 0.0f ? k->cutoff : 100.0f;
@@ -92,8 +113,9 @@ void M2EventSounds::playOnce(uint32_t soundId, const glm::vec3* at, float volume
     auto& audio = audio::AudioEngine::instance();
     // An SFX play, as every one 0x004c5990 sets up (type 0).
     constexpr auto kSfx = audio::Channel::Effects;
-    if (!at) audio.playSound2D(*file, k->volume * volumeScale, 1.0f, kSfx);
-    else audio.playSound3D(*file, *at, k->volume * volumeScale, 1.0f, maxDistance, minDistance, kSfx);
+    const float volume = absolute ? volumeScale : k->volume * volumeScale;
+    if (!at) audio.playSound2D(*file, volume, 1.0f, kSfx, limit, priority);
+    else audio.playSound3D(*file, *at, volume, 1.0f, maxDistance, minDistance, kSfx, limit, priority);
 }
 
 void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const ShakeCamera& shakeCamera) {
@@ -120,12 +142,15 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         if (!k) continue;
         const float maxDistance = k->cutoff > 0.0f ? k->cutoff : 100.0f;
         const float minDistance = k->minDistance > 0.0f ? std::min(k->minDistance, maxDistance) : 1.0f;
-        // A spell effect on the active player, with the listener at the
-        // character (Sound_ListenerAtCharacter, default 1): at 0.65 of its
-        // volume (0x009f2818), and where the listener is (0x006f7b00).
-        const bool atListener =
-            fired.owner == m2_event::Owner::Effect && fired.ownerArg != 0 &&
-            addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0";
+        // A spell effect on the unit the active mover is (0x006f7b00 asks
+        // 0x004d43c0 as the event fires; the effect's owner arg is the unit's
+        // instance): kept over a crowd's (0x6e), and with the listener at the
+        // character (Sound_ListenerAtCharacter, default 1) at 0.65 of its
+        // volume (0x009f2818) and where the listener is.
+        const bool onMover = fired.owner == m2_event::Owner::Effect && fired.ownerArg != 0 &&
+                             moverInstanceQuery_ && fired.ownerArg == moverInstanceQuery_();
+        const int priority = onMover ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
+        const bool atListener = onMover && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0";
         const float volume = k->volume * (atListener ? 0.65f : 1.0f);
 
         bool loops = false;
@@ -141,8 +166,10 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         constexpr auto kSfx = audio::Channel::Effects;
         if (!loops) {
             const std::vector<uint8_t>* file = pickFile(*k);
-            if (atListener) audio.playSound2D(*file, volume, 1.0f, kSfx);
-            else audio.playSound3D(*file, fired.position, volume, 1.0f, maxDistance, minDistance, kSfx);
+            if (atListener) audio.playSound2D(*file, volume, 1.0f, kSfx, audio::PlayLimit::None, priority);
+            else
+                audio.playSound3D(*file, fired.position, volume, 1.0f, maxDistance, minDistance, kSfx,
+                                  audio::PlayLimit::None, priority);
             continue;
         }
         // A loop on its owner: none while the owner already plays one
@@ -160,7 +187,7 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         const auto origin = m2.getInstancePosition(fired.instanceId);
         if (!origin) continue;
         const uint32_t handle = audio.playSound3DLooping(*pickFile(*k), fired.position, volume, maxDistance,
-                                                         minDistance, plan.fadeIn, kSfx);
+                                                         minDistance, plan.fadeIn, kSfx, priority);
         if (handle != 0)
             loops_[fired.instanceId] = Loop{.handle = handle, .soundId = soundId, .offset = fired.position - *origin,
                                             .position = fired.position, .fadeOut = plan.fadeOut};

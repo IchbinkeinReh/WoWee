@@ -2270,11 +2270,8 @@ uint32_t tierAnimationFor(const pipeline::M2Model& model, uint32_t animationId, 
 // The time a sequence is sampled at: backwards from its end where it plays
 // that way (0x00826b00 negates the speed and starts it at its length).
 float sampledTime(const pipeline::M2Model& model, int sequence, float time, anim::PlayMode mode) {
-    if (mode != anim::PlayMode::Reversed || sequence < 0 ||
-        static_cast<size_t>(sequence) >= model.sequences.size()) {
-        return time;
-    }
-    return std::max(0.0f, static_cast<float>(model.sequences[static_cast<size_t>(sequence)].duration) - time);
+    if (sequence < 0 || static_cast<size_t>(sequence) >= model.sequences.size()) return time;
+    return anim::sampledSequenceTime(time, model.sequences[static_cast<size_t>(sequence)].duration, mode);
 }
 
 // Held on its first or last frame: its time does not run (0x00826b00's

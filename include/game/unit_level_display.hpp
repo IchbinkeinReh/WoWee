@@ -11,9 +11,13 @@
 /// above the player shows its level; an elite or rare does too unless it is
 /// a boss. Pure: tests/test_unit_level_display.cpp checks it.
 ///
-/// Not here: the client then lowers the level shown of a unit the player may
-/// attack by up to five, by a share it keeps in the active player's data
-/// (+0x1d / +0x2b8, through 0x004f7290); what sets that share is not known.
+/// And a drunk player sees an enemy as lower than it is: with PLAYER_BYTES_3's
+/// drunk byte (+0x1d) or PLAYER_FAKE_INEBRIATION (+0x2b8) set, a unit the
+/// player may attack (0x00729740, the player attacking) shows its level less
+/// round(share x 5 + 0.5), never below 1 - the share being how drunk, out of
+/// 100 (0x004f7290), and the rounding the x87's, to the nearest even.
+
+#include <cmath>
 
 namespace wowee::game {
 
@@ -24,15 +28,40 @@ inline constexpr int kUnitLevelSkullGap = 10;
 /// CREATURE_TYPE_FLAG_BOSS in the creature template's type flags.
 inline constexpr unsigned kCreatureTypeFlagBoss = 0x4u;
 
-/// `havePlayer` false: no active player (its level and the reaction unused).
+/// 0x004f7290: how drunk the active player is, as a share of one - the larger
+/// of the drunk byte and the fake inebriation, held to 100, over 100.
+inline float playerDrunkShare(int drunk, int fakeInebriation) {
+    const int most = drunk <= fakeInebriation ? fakeInebriation : drunk;
+    if (most >= 100) return 1.0f;
+    return static_cast<float>(static_cast<long double>(most) * 0.01L);
+}
+
+/// The levels a drunk player's view takes off an enemy: the share times five
+/// (0x0060f9e0, stored as a float), then 0x0048bcf0 - add a half and round to
+/// the nearest, ties to even, as the x87 does. Zero sober, six fully drunk.
+inline int drunkLevelReduction(int drunk, int fakeInebriation) {
+    const float scaled = static_cast<float>(static_cast<double>(playerDrunkShare(drunk, fakeInebriation)) * 5.0);
+    return static_cast<int>(std::nearbyint(static_cast<double>(scaled) + 0.5));
+}
+
+/// `havePlayer` false: no active player (its level, the reaction and the
+/// drunk state unused). `drunk` is PLAYER_BYTES_3's byte 1, `fakeInebriation`
+/// PLAYER_FAKE_INEBRIATION, and `playerMayAttack` whether the player may
+/// attack the unit.
 inline int displayedUnitLevel(int unitLevel, bool havePlayer, int playerLevel, int reactionToPlayer,
-                              unsigned creatureTypeFlags) {
+                              unsigned creatureTypeFlags, int drunk = 0, int fakeInebriation = 0,
+                              bool playerMayAttack = false) {
     if (havePlayer && reactionToPlayer <= kUnitLevelHostileReaction &&
         playerLevel <= unitLevel - kUnitLevelSkullGap) {
         return -1;
     }
     if ((creatureTypeFlags & kCreatureTypeFlagBoss) != 0u) return -1;
-    return unitLevel;
+    int level = unitLevel;
+    if (level > 0 && havePlayer && (drunk != 0 || fakeInebriation != 0) && playerMayAttack) {
+        level -= drunkLevelReduction(drunk, fakeInebriation);
+        if (level < 1) level = 1;
+    }
+    return level;
 }
 
 }  // namespace wowee::game

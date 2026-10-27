@@ -43,10 +43,14 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 #include <glm/glm.hpp>
+
+#include "audio/play_limit.hpp"
+#include "audio/voice_priority.hpp"
 
 namespace wowee::pipeline { class AssetManager; }
 
@@ -223,13 +227,27 @@ public:
     using ShakeCamera = std::function<void(uint32_t shakesId, const glm::vec3& at)>;
     /// Play this frame's events, and follow (and end) the loops they start.
     void update(M2Renderer& m2, pipeline::AssetManager* assets, const ShakeCamera& shakeCamera = {});
+    /// The render instance of the active mover (DAT_00ca1238): a spell
+    /// effect's $SND on it is heard as its own (0x006f7b00).
+    using MoverInstanceQuery = std::function<uint32_t()>;
+    void setMoverInstanceQuery(MoverInstanceQuery query) { moverInstanceQuery_ = std::move(query); }
     /// Stop every loop, as the world goes.
     void clear();
     /// A SoundEntries kit once, owned by nothing (0x004c6a40 with no sound
     /// object): where `at` is, or with none where the listener is; at its
     /// VolumeFloat times `volumeScale`. A unit's model events play this way
-    /// (unit_model_events.hpp).
-    void playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale, pipeline::AssetManager* assets);
+    /// (unit_model_events.hpp). Of a counted `limit` type, not while as many
+    /// of it as may play at once are playing (audio/play_limit.hpp).
+    /// With `absolute`, `volumeScale` is the volume itself, not a scale of
+    /// the kit's - a play whose own volume is set (0x004c6a40 takes one in
+    /// (0, 1] in place of the kit's). `priority` is its voice's
+    /// (audio/voice_priority.hpp): kActiveMover for one the active mover is
+    /// part of.
+    void playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale, pipeline::AssetManager* assets,
+                  audio::PlayLimit limit = audio::PlayLimit::None, bool absolute = false,
+                  int priority = audio::voice_priority::kDefault);
+    /// A SoundEntries row by its Name (0x004ccaa0), 0 for none.
+    uint32_t idByName(const std::string& name, pipeline::AssetManager* assets);
 
 private:
     struct Kit {
@@ -252,6 +270,9 @@ private:
         float fadeOut = 0.0f;      ///< how long a $DSE takes to end it
     };
     std::unordered_map<uint32_t, Kit> kits_;
+    MoverInstanceQuery moverInstanceQuery_;
+    std::unordered_map<std::string, uint32_t> idsByName_;
+    bool idsByNameLoaded_ = false;
     std::unordered_map<uint32_t, std::array<uint32_t, 10>> displaySounds_;
     bool displaySoundsLoaded_ = false;
     /// The loop an instance plays, by instance id: one each, as the client's

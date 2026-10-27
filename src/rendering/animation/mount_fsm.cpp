@@ -146,17 +146,39 @@ MountFSM::Output MountFSM::evaluate(const Input& in) {
     // Either one counts, so a mount configured mid-flight still flies.
     const bool onTaxi = in.taxiFlight || taxiFlight_;
 
-    // ── Procedural lean ─────────────────────────────────────────────────
-    if (!onTaxi && in.moving && dt > 0.0f) {
-        float turnRate = (in.characterYaw - prevYaw_) / dt;
-        while (turnRate > 180.0f) turnRate -= 360.0f;
-        while (turnRate < -180.0f) turnRate += 360.0f;
-        float targetLean = std::clamp(turnRate * 0.15f, -0.25f, 0.25f);
-        roll_ = roll_ + (targetLean - roll_) * (1.0f - std::exp(-6.0f * dt));
+    // ── Banking lean (client FUN_00719b80) ──────────────────────────────
+    // The client banks the mount's model only when the movement block has its
+    // flying bit set (the roll is gated on param_4 = flags & flying); a ground
+    // mount is never rolled. The target roll is the turn rate in radians a
+    // second times 0.15, eased toward by clamp(dt * pi/2 * k, 0, 1) - k is 4
+    // unless the mount is moving forward or back, when it is 1 - and clamped to
+    // a quarter turn either way. The turn is measured as the wrapped change in
+    // facing *before* the divide by dt; the old code wrapped the rate itself,
+    // and worked in degrees so any turn pinned the roll at its small cap.
+    //
+    // The magnitude and the gating are the client's; the sign is kept as this
+    // client had it, because the roll is applied through this client's own
+    // instance rotation (applyMountPositioning), whose roll axis is not the
+    // client's model matrix. The client's own coefficient is -0.15 in that
+    // matrix's convention.
+    constexpr float kPi = core::coords::TWO_PI * 0.5f;
+    float yawDeltaDeg = in.characterYaw - prevYaw_;
+    while (yawDeltaDeg > 180.0f) yawDeltaDeg -= 360.0f;
+    while (yawDeltaDeg < -180.0f) yawDeltaDeg += 360.0f;
+    prevYaw_ = in.characterYaw;
+    if (!onTaxi && in.flying && dt > 0.0f) {
+        const float yawRateRad = (yawDeltaDeg * (core::coords::TWO_PI / 360.0f)) / dt;
+        const float targetRoll = yawRateRad * 0.15f;
+        const bool fwdBack = in.movingForward || in.movingBackward;
+        const float ease = std::clamp(dt * (kPi * 0.5f) * (fwdBack ? 1.0f : 4.0f), 0.0f, 1.0f);
+        roll_ += ease * (targetRoll - roll_);
+        roll_ = std::clamp(roll_, -kPi * 0.25f, kPi * 0.25f);
     } else {
+        // Not flying: the client leaves the stored roll untouched, so on the
+        // ground it never leaves zero. Ease any residual bank from a landing
+        // back to level rather than freezing the mount mid-roll.
         roll_ = roll_ + (0.0f - roll_) * (1.0f - std::exp(-8.0f * dt));
     }
-    prevYaw_ = in.characterYaw;
     out.mountRoll = roll_;
 
     // ── Rider animation ─────────────────────────────────────────────────

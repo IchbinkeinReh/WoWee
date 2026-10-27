@@ -15,6 +15,7 @@
 #include "game/packet_parsers.hpp"
 #include "game/entity.hpp"
 #include "game/opcode_table.hpp"
+#include "game/update_field_table.hpp"
 #include "network/world_socket.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/animation_controller.hpp"
@@ -261,6 +262,69 @@ void ChatHandler::writeChatLogLine(ChatType type, const std::string& text, const
                  << *line << "\r\n";
 }
 
+void ChatHandler::handleExpectedSpamRecords(network::Packet& packet) {
+    // SMSG_EXPECTED_SPAM_RECORDS (0x00501c70): a count, then that many
+    // null-terminated regular expressions the server wants matched against chat.
+    if (!packet.hasRemaining(4)) return;
+    const uint32_t count = packet.readUInt32();
+    std::vector<std::string> patterns;
+    patterns.reserve(count);
+    for (uint32_t i = 0; i < count && packet.hasRemaining(1); ++i) {
+        patterns.push_back(packet.readString());
+    }
+    spamFilter_.setServerPatterns(patterns);
+    LOG_DEBUG("SMSG_EXPECTED_SPAM_RECORDS: ", spamFilter_.serverPatternCount(), " of ", count,
+              " spam patterns compiled");
+}
+
+bool ChatHandler::dropAsSpam(const MessageChatData& data) {
+    // 0x00509dd0: not a system line nor one the server already filtered (0x2b),
+    // not from a GM or a developer by the chat tag ("GM" for 0x04, "DEV" for
+    // 0x10, 0x0050be70), nor from a sender carrying PLAYER_FLAGS_GM (0x8), and
+    // only while spamFilter is on.
+    if (data.type == ChatType::SYSTEM || data.type == ChatType::FILTERED) return false;
+    if ((data.chatTag & 0x14u) != 0) return false;
+    if (addons::storedCVarValue("spamFilter", "1") == "0") return false;
+    if (data.senderGuid != 0) {
+        const auto sender = owner_.getEntityManager().getEntity(data.senderGuid);
+        const uint16_t flagsIdx = fieldIndex(UF::PLAYER_FLAGS);
+        if (sender && sender->getType() == ObjectType::PLAYER && flagsIdx != 0xFFFF &&
+            (sender->getField(flagsIdx) & 0x8u) != 0) {
+            return false;
+        }
+    }
+    // SpamMessages.dbc's own list, read the first time a line is asked about
+    // (0x007e2250 reads it with the other chat filters).
+    if (!spamMessagesLoaded_) {
+        auto* am = owner_.services().assetManager;
+        const auto* layouts = pipeline::getActiveDBCLayout();
+        if (am && am->isInitialized() && layouts) {
+            spamMessagesLoaded_ = true;
+            std::vector<std::string> patterns;
+            if (const auto* layout = layouts->getLayout("SpamMessages")) {
+                const uint32_t textF = layout->tryField("Text");
+                auto dbc = am->loadDBCOptional("SpamMessages.dbc");
+                if (dbc && dbc->isLoaded() && textF != 0xFFFFFFFFu && textF < dbc->getFieldCount()) {
+                    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) patterns.push_back(dbc->getString(r, textF));
+                }
+            }
+            spamFilter_.setClientPatterns(patterns);
+            LOG_INFO("Chat spam filter: ", spamFilter_.clientPatternCount(), " SpamMessages.dbc patterns");
+        }
+    }
+    if (!spamFilter_.matches(data.message)) return false;
+    // A spam whisper is reported to the server by its sender (0x331), then
+    // dropped like the rest.
+    if (data.type == ChatType::WHISPER && data.senderGuid != 0 && owner_.getSocket() &&
+        wireOpcode(Opcode::CMSG_CHAT_FILTERED) != 0xFFFF) {
+        network::Packet pkt(wireOpcode(Opcode::CMSG_CHAT_FILTERED));
+        pkt.writeUInt64(data.senderGuid);
+        owner_.getSocket()->send(pkt);
+    }
+    LOG_DEBUG("Chat line dropped by the spam filter");
+    return true;
+}
+
 void ChatHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_MESSAGECHAT] = [this](network::Packet& packet) {
         if (owner_.getState() == WorldState::IN_WORLD) handleMessageChat(packet);
@@ -294,6 +358,10 @@ void ChatHandler::registerOpcodes(DispatchTable& table) {
     };
     table[Opcode::SMSG_TEXT_EMOTE] = [this](network::Packet& packet) {
         if (owner_.getState() == WorldState::IN_WORLD) handleTextEmote(packet);
+    };
+    // The server's spam regexes, which mask gold-seller lines in player chat.
+    table[Opcode::SMSG_EXPECTED_SPAM_RECORDS] = [this](network::Packet& packet) {
+        handleExpectedSpamRecords(packet);
     };
     table[Opcode::SMSG_EMOTE] = [this](network::Packet& packet) {
         if (owner_.getState() != WorldState::IN_WORLD) return;
@@ -909,6 +977,12 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
     // Only what a player typed. A quest giver, a boss emote or a system notice
     // is not somebody spamming, and masking words in them would edit the
     // game's own writing.
+    // The spam filter (0x00509dd0 -> 0x00509bd0): a line matching
+    // SpamMessages.dbc's or the server's patterns goes no further - no bubble,
+    // no event, no log. After the whisper's reply target is kept, as the client
+    // keeps it (0x0050be70) before the line is shown.
+    if (dropAsSpam(data)) return;
+
     const bool fromAPlayer =
         data.type == ChatType::SAY || data.type == ChatType::YELL ||
         data.type == ChatType::PARTY || data.type == ChatType::RAID ||

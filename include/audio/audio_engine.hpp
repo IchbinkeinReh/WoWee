@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include "audio/play_limit.hpp"
+#include "audio/voice_priority.hpp"
 #include "audio/world_sound_hold.hpp"
 
 // Forward declare miniaudio types to avoid exposing implementation in header
@@ -75,10 +77,15 @@ public:
     [[nodiscard]] const glm::vec3& getListenerPosition() const { return listenerPosition_; }
 
     // Simple 2D sound playback (non-blocking)
+    /// A `limit` play is refused while as many of its type as the client
+    /// allows are playing (audio/play_limit.hpp). `priority` is FMOD's:
+    /// past the real voices the least important play on silent
+    /// (audio/voice_priority.hpp).
     bool playSound2D(const std::vector<uint8_t>& wavData, float volume = 1.0f, float pitch = 1.0f,
-                     Channel channel = Channel::Own);
+                     Channel channel = Channel::Own, PlayLimit limit = PlayLimit::None,
+                     int priority = voice_priority::kDefault);
     bool playSound2D(const std::string& mpqPath, float volume = 1.0f, float pitch = 1.0f,
-                     Channel channel = Channel::Own);
+                     Channel channel = Channel::Own, int priority = voice_priority::kDefault);
 
     // Stoppable 2D sound - returns a non-zero handle, or 0 on failure.
     /// `loop` plays it until stopped; it rises from silence over
@@ -94,7 +101,8 @@ public:
     /// DistanceCutoff, the client's 3D min and max (0x004c6a40 -> 0x00879390).
     bool playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                      float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f,
-                     float minDistance = 1.0f, Channel channel = Channel::Own);
+                     float minDistance = 1.0f, Channel channel = Channel::Own,
+                     PlayLimit limit = PlayLimit::None, int priority = voice_priority::kDefault);
     bool playSound3D(const std::string& mpqPath, const glm::vec3& position,
                      float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f,
                      Channel channel = Channel::Own);
@@ -106,7 +114,7 @@ public:
     uint32_t playSound3DLooping(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                                 float volume = 1.0f, float maxDistance = 100.0f,
                                 float minDistance = 1.0f, float fadeInSeconds = 0.0f,
-                                Channel channel = Channel::Own);
+                                Channel channel = Channel::Own, int priority = voice_priority::kDefault);
     /// Move a sound started with a handle (no-op once it has finished).
     void setSoundPosition(uint32_t id, const glm::vec3& position);
     /// Change the volume of a sound started with a handle (no-op once it has
@@ -115,6 +123,12 @@ public:
     /// Stop a sound started with a handle over `seconds`, after which it is
     /// cleaned up like a sound that ended (no-op once it has finished).
     void stopSoundWithFade(uint32_t id, float seconds);
+
+    /// A whole clip decoded to interleaved float samples, for a caller that
+    /// works on them before playing (audio/sound_filter.hpp). False when it
+    /// will not decode.
+    static bool decodeToFloat(const std::vector<uint8_t>& data, std::vector<float>& samples,
+                              uint32_t& channels, uint32_t& sampleRate);
 
     // Music streaming (for background music)
     // Retains shared ownership: the decoder streams directly from encoded tracks that
@@ -138,6 +152,12 @@ public:
     /// The Sound Effects volume, 0 with Sound_EnableSFX off: what the
     /// Effects channel is heard at.
     void setEffectsVolume(float volume);
+
+    /// How many sounds are heard at once - Sound_NumChannels, held to
+    /// 12..128 (0x0087c710); the rest play on silent until a voice is free,
+    /// the least important first (audio/voice_priority.hpp).
+    void setMaxRealVoices(int voices) { maxRealVoices_ = voice_priority::clampRealVoices(voices); }
+    [[nodiscard]] int getMaxRealVoices() const { return maxRealVoices_; }
     [[nodiscard]] float getEffectsVolume() const { return effectsVolume_; }
 
     /// The world's sound held while a loading screen is up. The client does
@@ -186,11 +206,32 @@ private:
         bool held = false;  // waiting, not started, for the world sound hold to end
         float cutoff = 0.0f;  // a 3D sound's DistanceCutoff: not heard past it (0: none)
         bool culled = false;  // a looping one paused out past its cutoff
+        PlayLimit limit = PlayLimit::None;  // the counted type it was played as
+        int priority = voice_priority::kDefault;  // FMOD's: lower is more important
+        float volume = 1.0f;          // what it was asked to play at
+        bool virtualVoice = false;    // playing on silent, without a real voice
+        bool spatial = false;         // a 3D sound: heard less with distance
+        float minDistance = 1.0f;     // a 3D sound's full-volume reach
+        Channel channel = Channel::Own;
+        uint64_t serial = 0;          // the order it started in
     };
     std::vector<ActiveSound> activeSounds_;
+    /// How many of a counted type are still playing - one that has ended is
+    /// not, though update() has yet to take it away (0x004c62b0 counts it
+    /// off as it ends).
+    [[nodiscard]] uint32_t playingOf(PlayLimit limit) const;
     /// Pauses what is out past its cutoff and resumes what has come back in
     /// (audio/sound_distance.hpp), once a frame.
     void cullByDistance();
+    /// Gives the real voices to the most important sounds playing and
+    /// silences the rest (audio/voice_priority.hpp), each frame and as a
+    /// sound starts.
+    void assignVoices();
+    /// The sound just tracked: its priority, volume and reach, then the
+    /// voices given out again.
+    void noteStarted(int priority, float volume, Channel channel, bool spatial, float minDistance);
+    int maxRealVoices_ = voice_priority::kDefaultRealVoices;
+    uint64_t nextSerial_ = 1;
     uint32_t nextSoundId_ = 1;
 
     // Music track state

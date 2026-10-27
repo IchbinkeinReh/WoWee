@@ -527,7 +527,19 @@ void GameHandler::playErrorSpeech(audio::PlayerErrorSpeech type) {
     const Character* ch = getActiveCharacter();
     if (!ch) return;
     voice->playError(type, static_cast<uint8_t>(ch->race),
-                     static_cast<uint8_t>(toServerGender(ch->gender)));
+                     static_cast<uint8_t>(toServerGender(ch->gender)),
+                     static_cast<uint8_t>(ch->characterClass));
+}
+
+void GameHandler::playGameErrorSound(std::string_view gameErrorKey) {
+    if (const auto speech = audio::vocal_error::forGameError(gameErrorKey)) {
+        playErrorSpeech(*speech);
+        return;
+    }
+    if (const auto sound = audio::vocal_error::namedSound(gameErrorKey)) {
+        if (auto* ac = services_.audioCoordinator)
+            if (auto* ui = ac->getUiSoundManager()) ui->playByName(std::string(*sound));
+    }
 }
 
 void GameHandler::handleCharLoginFailed(network::Packet& packet) {
@@ -849,6 +861,7 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
     currentMountDisplayId_ = 0;
     vehicleId_ = 0;
     vehicleRoster_.clear();
+    castVisuals_.clear();
     if (mountCallback_) {
         mountCallback_(0);
     }
@@ -3530,8 +3543,8 @@ void GameHandler::signPetition(uint64_t petitionGuid) {
     if (socialHandler_) socialHandler_->signPetition(petitionGuid);
 }
 
-void GameHandler::turnInPetition(uint64_t petitionGuid) {
-    if (socialHandler_) socialHandler_->turnInPetition(petitionGuid);
+void GameHandler::turnInPetition(uint64_t petitionGuid, bool blankDesign) {
+    if (socialHandler_) socialHandler_->turnInPetition(petitionGuid, blankDesign);
 }
 
 void GameHandler::offerPetition(uint64_t petitionGuid, uint64_t targetGuid) {
@@ -4237,6 +4250,16 @@ void GameHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {
     if (inventoryHandler_) inventoryHandler_->autoEquipItemBySlot(backpackIndex, confirmed);
 }
 
+void GameHandler::setAmmo(uint32_t itemId) {
+    if (inventoryHandler_) inventoryHandler_->setAmmo(itemId);
+}
+
+uint32_t GameHandler::getAmmoId() const {
+    const uint16_t idx = fieldIndex(UF::PLAYER_AMMO_ID);
+    const auto player = getEntityManager().getEntity(playerGuid);
+    return player && idx != 0xFFFF ? player->getField(idx) : 0u;
+}
+
 bool GameHandler::equipWouldBindFromBackpack(int backpackIndex) const {
     return inventoryHandler_ && inventoryHandler_->equipWouldBindFromBackpack(backpackIndex);
 }
@@ -4841,6 +4864,65 @@ uint32_t GameHandler::getSpellVisualId(uint32_t spellId) const {
         it->second.spellVisualId, it->second.spellVisualId2,
         spell_visual::violenceLevel(addons::storedCVarValue("violenceLevel",
                                                             std::to_string(spell_visual::kViolenceLevelLimit))));
+}
+
+uint64_t GameHandler::listenerObject() const {
+    auto& entities = entityController_->getEntityManager();
+    uint64_t object = 0;
+    if (const uint64_t mover = activeMover(); mover != 0) {
+        if (auto unit = entities.getEntity(mover); unit && unit->isUnit()) object = mover;
+    }
+    if (object == 0 && entities.getEntity(playerGuid)) object = playerGuid;
+    if (object == 0) return 0;
+    // 0x004f7310 answers for the active player only.
+    if (object == playerGuid && movementHandler_ && movementHandler_->farSightAnnounced()) {
+        if (auto player = entities.getEntity(playerGuid)) {
+            const uint16_t field = fieldIndex(UF::PLAYER_FARSIGHT);
+            if (field != 0xFFFF) {
+                const uint64_t farsight =
+                    (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(field + 1))) << 32) |
+                    player->getField(field);
+                if (farsight != 0 && entities.getEntity(farsight)) return farsight;
+            }
+        }
+    }
+    return object;
+}
+
+cast_visual::Spell GameHandler::castVisualSpell(uint32_t spellId) const {
+    cast_visual::Spell spell;
+    loadSpellNameCache();
+    const auto it = spellNameCache_.find(spellId);
+    if (it == spellNameCache_.end()) return spell;
+    spell.attributes = it->second.attr;
+    spell.attributesEx2 = it->second.attrEx2;
+    spell.attributesEx4 = it->second.attrEx4;
+    // 0x007fa2e0: the SpellVisual it shows (vfunc +0xbc, 0x007fa290), its
+    // PrecastKit (+0x4), the kit's StartAnimID (+0x4) or AnimID (+0x8)
+    // above 0.
+    const uint32_t visualId = getSpellVisualId(spellId);
+    if (visualId == 0) return spell;
+    const auto known = precastKitAnimates_.find(visualId);
+    if (known != precastKitAnimates_.end()) {
+        spell.precastKitAnimates = known->second;
+        return spell;
+    }
+    bool animates = false;
+    auto* am = services_.assetManager;
+    auto visuals = am && am->isInitialized() ? am->loadDBCOptional("SpellVisual.dbc") : nullptr;
+    auto kits = am && am->isInitialized() ? am->loadDBCOptional("SpellVisualKit.dbc") : nullptr;
+    const int32_t visualRow = visuals && visuals->getFieldCount() > 1 ? visuals->findRecordById(visualId) : -1;
+    if (visualRow >= 0 && kits && kits->getFieldCount() > 2) {
+        const uint32_t kitId = visuals->getUInt32(static_cast<uint32_t>(visualRow), 1);
+        const int32_t kitRow = kitId != 0 ? kits->findRecordById(kitId) : -1;
+        if (kitRow >= 0) {
+            animates = kits->getInt32(static_cast<uint32_t>(kitRow), 1) > 0 ||
+                       kits->getInt32(static_cast<uint32_t>(kitRow), 2) > 0;
+        }
+    }
+    precastKitAnimates_[visualId] = animates;
+    spell.precastKitAnimates = animates;
+    return spell;
 }
 
 bool GameHandler::isSpellMissileInFlight(uint64_t caster, uint32_t spellId, uint32_t castTime) const {

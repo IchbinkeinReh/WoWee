@@ -13,7 +13,6 @@
 #include "game/opcode_table.hpp"
 #include "rendering/renderer.hpp"
 #include "audio/audio_coordinator.hpp"
-#include "audio/combat_sound_manager.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "core/application.hpp"
@@ -743,8 +742,10 @@ void CombatHandler::handleAttackStop(network::Packet& packet) {
     AttackStopData data;
     if (!AttackStopParser::parse(packet, data)) return;
 
-    // 0x00756770: the attacker's melee target is gone.
+    // 0x00756770: the attacker's melee target is gone, and the hit it
+    // kept settled.
     unitMeleeTargets_.erase(data.attackerGuid);
+    if (owner_.attackStopCallbackRef()) owner_.attackStopCallbackRef()(data.attackerGuid);
     // Keep intent, but clear server-confirmed active state until ATTACKSTART resumes.
     if (data.attackerGuid == owner_.getPlayerGuid()) {
         autoAttacking_ = false;
@@ -774,6 +775,9 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     if (data.attackerGuid != 0 && owner_.unitAttackSwingCallbackRef()) {
         owner_.unitAttackSwingCallbackRef()(data.attackerGuid);
     }
+    // Its sounds, whoever fought: kept on the attacker for its model's
+    // swing and landing events (rendering/melee_sound.hpp).
+    if (owner_.meleeHitCallbackRef()) owner_.meleeHitCallbackRef()(data);
     if (!isPlayerAttacker && !isPlayerTarget) return;  // Not our combat
 
     if (isPlayerAttacker) {
@@ -792,39 +796,17 @@ void CombatHandler::handleAttackerStateUpdate(network::Packet& packet) {
     if (!isPlayerAttacker && owner_.npcSwingCallbackRef()) {
         owner_.npcSwingCallbackRef()(data.attackerGuid);
     }
-    if (!isPlayerAttacker) {
-        auto entity = owner_.getEntityManager().getEntity(data.attackerGuid);
-        auto* audioCoordinator = owner_.services().audioCoordinator;
-        auto* voiceManager = audioCoordinator ? audioCoordinator->getNpcVoiceManager() : nullptr;
-        if (entity && entity->getType() == ObjectType::UNIT && voiceManager) {
-            auto unit = std::static_pointer_cast<Unit>(entity);
-            const glm::vec3 canonical(unit->getLatestX(), unit->getLatestY(), unit->getLatestZ());
-            voiceManager->playCombatAttack(
-                data.attackerGuid, unit->getDisplayId(), core::coords::canonicalToRender(canonical));
-        }
-    }
+    // A creature's exertion as its hit arrives is its sound slot's, played
+    // with the swing's sounds (rendering/melee_sound.hpp).
 
     if (isPlayerTarget && data.attackerGuid != 0) {
         hostileAttackers_.insert(data.attackerGuid);
         autoTargetAttacker(data.attackerGuid);
     }
 
-    // Play combat sounds via CombatSoundManager + character vocalizations
+    // Character vocalizations (the swing's whoosh and impact are its
+    // attacker's model's, above).
     if (auto* ac = owner_.services().audioCoordinator) {
-        if (auto* csm = ac->getCombatSoundManager()) {
-            auto weaponSize = audio::CombatSoundManager::WeaponSize::MEDIUM;
-            if (data.isMiss()) {
-                csm->playWeaponMiss(false);
-            } else if (data.victimState == 2 || data.victimState == 3) {
-                // Dodge/parry - swing whoosh but no impact
-                csm->playWeaponSwing(weaponSize, false);
-            } else {
-                // Hit - swing + flesh impact
-                csm->playWeaponSwing(weaponSize, data.isCrit());
-                csm->playImpact(weaponSize, audio::CombatSoundManager::ImpactType::FLESH, data.isCrit());
-            }
-        }
-        // Character vocalizations
         if (auto* asm_ = ac->getActivitySoundManager()) {
             if (isPlayerAttacker && !data.isMiss() && data.victimState != 2 && data.victimState != 3) {
                 asm_->playAttackGrunt();
@@ -1412,10 +1394,11 @@ void CombatHandler::handlePetActionFeedback(network::Packet& packet) {
             break;
         case 2: {
             const uint32_t spellId = packet.hasRemaining(4) ? packet.readUInt32() : 0;
-            if (spellId != 0 && owner_.getSpellTargetKind(spellId) == 1)
-                owner_.addUIError(interfaceString("ERR_GENERIC_NO_VALID_TARGETS", "No valid targets."));
-            else
-                owner_.addUIError(interfaceString("ERR_NO_ATTACK_TARGET", "There is nothing to attack."));
+            const bool friendly = spellId != 0 && owner_.getSpellTargetKind(spellId) == 1;
+            const char* key = friendly ? "ERR_GENERIC_NO_VALID_TARGETS" : "ERR_NO_ATTACK_TARGET";
+            owner_.addUIError(friendly ? interfaceString(key, "No valid targets.")
+                                       : interfaceString(key, "There is nothing to attack."));
+            owner_.playGameErrorSound(key);
             // The spell's global cooldown comes off the pet's bar
             // (0x00804780 -> 0x00804720), as for a failed pet cast.
             if (auto* spells = owner_.getSpellHandler()) spells->notePetCastFailed(spellId);
@@ -1423,6 +1406,7 @@ void CombatHandler::handlePetActionFeedback(network::Packet& packet) {
         }
         case 3: {
             owner_.addUIError(interfaceString("ERR_INVALID_ATTACK_TARGET", "You cannot attack that target."));
+            owner_.playGameErrorSound("ERR_INVALID_ATTACK_TARGET");
             // The spell follows the message here too, and is let go the same way.
             const uint32_t spellId = packet.hasRemaining(4) ? packet.readUInt32() : 0;
             if (auto* spells = owner_.getSpellHandler()) spells->notePetCastFailed(spellId);
@@ -1443,8 +1427,23 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
     const bool hasCount = isActiveExpansion("wotlk");
     const size_t minSize = hasCount ? 6u : 5u;
     if (packet.hasRemaining(minSize)) {
-        if (hasCount) /*uint8_t castCount =*/ packet.readUInt8();
+        const uint8_t castCount = hasCount ? packet.readUInt8() : 0;
         uint32_t spellId   = packet.readUInt32();
+        // 0x00806c30: the cast of that count by the player's charm, else
+        // its summon, ends (0x007fecc0).
+        if (hasCount) {
+            if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+                const auto guidAt = [&](UF f) -> uint64_t {
+                    const uint16_t i = fieldIndex(f);
+                    if (i == 0xFFFF) return 0;
+                    return (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(i + 1))) << 32) |
+                           player->getField(i);
+                };
+                uint64_t pet = guidAt(UF::UNIT_FIELD_CHARM);
+                if (pet == 0) pet = guidAt(UF::UNIT_FIELD_SUMMON);
+                if (pet != 0) owner_.castVisuals().ended(pet, castCount, spellId);
+            }
+        }
         uint8_t  reason    = (packet.hasRemaining(1))
                                  ? packet.readUInt8() : 0;
         // Up to two ids after the result, read when present, as
@@ -1461,6 +1460,9 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
         if (reason != 0) {
             const std::string errMsg = petCastFailureMessage(owner_, spellId, reason, miscArg);
             if (!errMsg.empty()) owner_.addUIError(errMsg);
+            // And the player's line for it, where the game error has one.
+            if (!errMsg.empty())
+                if (auto* spells = owner_.getSpellHandler()) spells->sayPetCastFailure(spellId, reason);
         }
     }
     packet.skipAll();
@@ -2081,12 +2083,14 @@ void CombatHandler::assistTarget() {
     // (0x00525eb0) says it for /assist on its own. These were English.
     if (owner_.getTargetGuid() == 0) {
         owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
+        owner_.playGameErrorSound("ERR_GENERIC_NO_TARGET");
         return;
     }
 
     auto target = getTarget();
     if (!target) {
         owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
+        owner_.playGameErrorSound("ERR_GENERIC_NO_TARGET");
         return;
     }
 

@@ -205,6 +205,9 @@ public:
     /// 0x006dfc40: an item of class 6 is not equipped but made the ammunition,
     /// CMSG_SET_AMMO with its entry (u32). False for any other item.
     bool setAmmoInstead(uint32_t itemId);
+    /// CMSG_SET_AMMO with any entry, zero taking the ammunition off (0x268, as
+    /// the paperdoll's ammo slot sends it).
+    void setAmmo(uint32_t itemId);
 
     /// Whether equipping what is in a slot would bind it - ItemDef carries
     /// the rule; these two just find the item.
@@ -724,6 +727,9 @@ private:
     bool autoSellGrey_ = false;
     bool autoRepair_ = false;
     LootResponseData currentLoot_;
+    /// The loot the player last asked for by CMSG_LOOT (+0x18e0): a refusal
+    /// of it is shown and spoken (game/loot_error.hpp).
+    uint64_t pendingLootGuid_ = 0;
     std::vector<uint64_t> masterLootCandidates_;
 
     // Group loot roll state

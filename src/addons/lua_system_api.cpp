@@ -841,6 +841,10 @@ static void applySoundCVars(lua_State* L) {
     // has no equivalent for. They multiply whatever the settings applied.
     // Music off is the MUSIC category muted and the music stopped, the slots
     // picking nothing until it is on again (0x004d1590, 0x004c88b0).
+    // How many sounds are heard at once (0x0087c710 sets FMOD up with
+    // Sound_NumChannels real voices); the rest play on silent.
+    audio::AudioEngine::instance().setMaxRealVoices(
+        static_cast<int>(soundCVar("sound_numchannels", static_cast<float>(audio::voice_priority::kDefaultRealVoices))));
     const bool musicOn = soundCVar("sound_enablemusic", 1.0f) != 0.0f;
     if (!musicOn) {
         if (auto* music = ac->getMusicManager()) music->setVolume(0);
@@ -985,7 +989,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "spelleffectlevel") lua_pushstring(L, "9");
     // On (0x0051d9b0): UnitPower and the cast read the predicted power.
     else if (n == "predictedpower") lua_pushstring(L, "1");
-    else if (n == "sound_numchannels") lua_pushstring(L, "64");
+    // 0x004d0000's registration: "32" (0x009e21dc), the real voices the
+    // sound engine is set up with (audio/voice_priority.hpp).
+    else if (n == "sound_numchannels") lua_pushstring(L, "32");
     else if (n == "sound_outputquality") lua_pushstring(L, "2");
     else if (n == "uiscale") lua_pushstring(L, "1");
     // The tracking menu's own entry, by name; none (0x0057e070).
@@ -1005,6 +1011,8 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "nameplateshowenemies") lua_pushstring(L, "0");
     else if (n == "sound_enablesfx") lua_pushstring(L, "1");
     else if (n == "sound_enableerrorspeech") lua_pushstring(L, "1");
+    // On with two processors or more (0x004d1600 registers it by 0x0086b240).
+    else if (n == "sound_enabledspeffects") lua_pushstring(L, "1");
     // One, not zero: the slider is a multiple of the original client's limit
     // and zero is not a position on it. Answering zero pinned it at minimum.
     else if (n == "cameradistancemaxfactor") lua_pushstring(L, "1");
@@ -1385,6 +1393,27 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // everything unlisted, which is right for a flag and wrong for any setting
     // whose value is a word.
     else if (n == "showtimestamps") lua_pushstring(L, "none");
+    // The selection circle under the target and the highlight circle under the
+    // mouseover unit, both registered on (0x00740000 "ObjectSelectionCircle"
+    // &DAT_009e1464 = "1"; 0x00510000 "unitHighlights" "1") and both drawn by
+    // this client regardless: GameScreen's target circle is unconditional
+    // (0x00743ec0, "while ObjectSelectionCircle is on - its default"), and the
+    // unit highlight follows the mouseover whenever the interface is shown,
+    // which here is always. Falling through to "0" left either control reading
+    // off while the circle was on screen.
+    else if (n == "objectselectioncircle") lua_pushstring(L, "1");
+    else if (n == "unithighlights") lua_pushstring(L, "1");
+    // Helpful spells self-cast when nothing friendly is targeted, as the client
+    // registers it (0x00510000 "autoSelfCast" "1") and as this client does:
+    // GameHandler::autoSelfCast_ starts true and GetCVar answers "1" from it,
+    // so only GetCVarDefault was left on "0" - the value the Combat panel's
+    // Defaults button would have restored, turning off a feature that is on.
+    else if (n == "autoselfcast") lua_pushstring(L, "1");
+    // Offline guild members are listed, as the client registers it (0x00510000
+    // "guildShowOffline" "1") and as this client's roster shows them
+    // (guildShowOffline() starts true, and the roster it is given holds
+    // everyone); the default answered "0" against a list that shows them.
+    else if (n == "guildshowoffline") lua_pushstring(L, "1");
     else lua_pushstring(L, "0");
 }
 
@@ -3331,6 +3360,18 @@ static int& selectedDisplayChannel() { static int selected = 0; return selected;
 static std::array<bool, 4>& actionBarToggles() {
     static std::array<bool, 4> shown{};
     return shown;
+}
+
+/// SetEuropeanNumbers' switch (0x00d413b8), which the client's formatting reads.
+static bool& europeanNumbers() {
+    static bool on = false;
+    return on;
+}
+
+/// SetLayoutMode's value (frame manager +0xd08).
+static int32_t& layoutMode() {
+    static int32_t mode = 0;
+    return mode;
 }
 
 
@@ -7058,6 +7099,46 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"TurnInGuildCharter",       lua_ReturnNothing},
+                // GetMovieResolution() (0x004dd610): the width read out of
+                // gxResolution's "WxH" - which here is the window's.
+                {"GetMovieResolution", [](lua_State* L) -> int {
+            auto* svc = getLuaServices(L);
+            auto* win = svc ? svc->window : nullptr;
+            lua_pushnumber(L, win ? win->getWidth() : 1920);
+            return 1;
+        }},
+                // SetEuropeanNumbers([on]) (0x00510de0 -> 0x0084f010): on by
+                // default; the client's format and SetFormattedText then swap
+                // '.' and ',' inside numbers (0x0084f030). Kept as the client
+                // keeps it; this client's string.format is Lua's own, so the
+                // swap is not made.
+                {"SetEuropeanNumbers", [](lua_State* L) -> int {
+            europeanNumbers() = luaClientSwitchArg(L, 1, true);
+            return 0;
+        }},
+                // SetLayoutMode([mode]) (0x0050f8f0): the frame manager's layout
+                // mode, 1 when none is given. Kept; nothing here lays out by it.
+                {"SetLayoutMode", [](lua_State* L) -> int {
+            layoutMode() = lua_isnumber(L, 1) ? luaToClientInt(L, 1) : 1;
+            return 0;
+        }},
+                // SetConsoleKey(key) (0x0050f990) names the key that opens the
+                // developer console. This client has no console to open.
+                {"SetConsoleKey", lua_ReturnNothing},
+                // UploadSettings() and DownloadSettings() (0x006b9c60,
+                // 0x006b9ca0) push the account data that has changed to the
+                // server, or ask for what it holds. This client keeps its
+                // settings locally and has no server copy to sync.
+                {"UploadSettings",   lua_ReturnNothing},
+                {"DownloadSettings", lua_ReturnNothing},
+                // PlayDance(name) (0x005761f0 -> 0x00576100): a dance from the
+                // dance studio's own cache, sent as opcode 1099. That studio
+                // and its dances were never shipped, so no name finds one; the
+                // usage error is the client's.
+                {"PlayDance", [](lua_State* L) -> int {
+            if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: PlayDance(\"dance name\")");
+            return 0;
+        }},
                 // The pitch keys' control bits (0x005fc8e0 -> 0x005fa170,
                 // 0x400 and 0x800): the mover pitches up or down at its
                 // pitch rate while one is held (0x005fb1a0).
@@ -7317,6 +7398,20 @@ void registerSystemLuaAPI(lua_State* L) {
                 // than what this file last stored. The two disagreed whenever
                 // the bar was turned on from the client's own settings window.
                 {"GetActionBarToggles", [](lua_State* L) -> int {
+            // 0x005a8790: the active player's PLAYER_FIELD_BYTES byte 2, the
+            // bars the realm keeps for the character - 1 for a bar that is on,
+            // nil for one that is off, four of them.
+            if (auto* gh = getGameHandler(L)) {
+                if (const auto bars = gh->getActionBarToggles()) {
+                    for (int i = 0; i < 4; ++i) {
+                        if ((*bars & (1u << i)) != 0) lua_pushnumber(L, 1);
+                        else lua_pushnil(L);
+                    }
+                    return 4;
+                }
+            }
+            // Before the player's fields have arrived there is nothing kept to
+            // read; what this client last had stands in.
             auto shown = actionBarToggles();
             if (auto* svc = getLuaServices(L); svc && svc->getClientSetting) {
                 const auto readBool = [&svc](const char* key, bool fallback) {

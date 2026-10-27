@@ -57,6 +57,9 @@ enum class ErrTo { Chat, Info, Error };
 
 void gameError(GameHandler& gh, ErrTo to, const char* key, const char* enUS,
                const std::vector<std::string>& args = {}) {
+    // Its sound first - the character's line, or the row's named sound -
+    // as 0x005216f0 plays it before the words are made, wherever they go.
+    gh.playGameErrorSound(key);
     const std::string text = interfaceFormat(key, enUS, args);
     if (text.empty()) return;
     switch (to) {
@@ -2000,10 +2003,15 @@ void SocialHandler::signPetition(uint64_t petitionGuid) {
     owner_.getSocket()->send(pkt);
 }
 
-void SocialHandler::turnInPetition(uint64_t petitionGuid) {
+void SocialHandler::turnInPetition(uint64_t petitionGuid, bool blankDesign) {
     if (!owner_.getSocket() || owner_.getState() != WorldState::IN_WORLD) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_TURN_IN_PETITION));
     pkt.writeUInt64(petitionGuid);
+    // 0x005a2600: the vendor slot's turn-in carries the five tabard words of a
+    // team banner, all -1 - only the arena turn-in designs one.
+    if (blankDesign) {
+        for (int i = 0; i < 5; ++i) pkt.writeUInt32(0xFFFFFFFFu);
+    }
     owner_.getSocket()->send(pkt);
 }
 
@@ -3140,6 +3148,7 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
                 msg = on ? interfaceFormat("ERR_FRIEND_ONLINE_SS", "|Hplayer:%s|h[%s]|h has come online.",
                                            {data.strings[0], data.strings[0]})
                          : interfaceFormat("ERR_FRIEND_OFFLINE_S", "%s has gone offline.", {data.strings[0]});
+                owner_.playGameErrorSound(on ? "ERR_FRIEND_ONLINE_SS" : "ERR_FRIEND_OFFLINE_S");
             }
             break;
         }

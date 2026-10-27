@@ -123,23 +123,27 @@ FacialHairFields detectFacialHairFields(const DBCFile* dbc, const DBCFieldMap* f
     static FacialHairFields s_cachedResult;
     if (dbc && dbc == s_cached) return s_cachedResult;
 
+    // The client's own file, as the layout gives it: eight columns, read at
+    // +0xc to +0x1c (0x004ee460) - groups 1, 3, 2, 16 and 17.
     FacialHairFields f;
-    f.geoset100 = fhL ? (*fhL)["Geoset100"] : 6;
-    f.geoset300 = fhL ? (*fhL)["Geoset300"] : 7;
-    f.geoset200 = fhL ? (*fhL)["Geoset200"] : 8;
+    f.geoset100 = fhL ? (*fhL)["Geoset100"] : 3;
+    f.geoset300 = fhL ? (*fhL)["Geoset300"] : 4;
+    f.geoset200 = fhL ? (*fhL)["Geoset200"] : 5;
+    // Asked rather than read: only the WotLK layout names these two.
+    f.geoset1600 = fhL ? fhL->tryField("Geoset1600") : 6;
+    f.geoset1700 = fhL ? fhL->tryField("Geoset1700") : 7;
     if (!dbc || dbc->getRecordCount() == 0) return f;
 
-    // The field count decides it, and decides it exactly: the nine-column file
-    // is the only one where column 8 exists at all. Asked this way there is
-    // nothing to probe and nothing to get wrong on an unusual row.
-    if (dbc->getFieldCount() < 9) {
-        // The client's own file: eight columns, read at +0xc to +0x1c
-        // (0x004ee460) - groups 1, 3, 2, 16 and 17.
-        f.geoset100 = 3;
-        f.geoset300 = 4;
-        f.geoset200 = 5;
-        f.geoset1600 = 6;
-        f.geoset1700 = 7;
+    // A nine-column file - not the client's - keeps three unused columns after
+    // the variation, so its geosets sit at 6, 7 and 8 with nothing for groups
+    // 16 and 17. The field count decides it exactly: only that file has a
+    // column 8 at all.
+    if (dbc->getFieldCount() >= 9) {
+        f.geoset100 = 6;
+        f.geoset300 = 7;
+        f.geoset200 = 8;
+        f.geoset1600 = 0xFFFFFFFFu;
+        f.geoset1700 = 0xFFFFFFFFu;
     }
     s_cached = dbc;
     s_cachedResult = f;

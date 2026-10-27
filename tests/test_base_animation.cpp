@@ -328,9 +328,25 @@ TEST_CASE("looting, the ranged readies, a flying or falling spline, a death kit"
     hunter.rangedDrawn = true;
     hunter.autoRepeat = true;
     hunter.rangedSubClass = 2;
-    CHECK(pick(hunter).anim == 105u);
+    CHECK(pick(hunter).anim == 105u);  // no BowPull: the LoadBow nock
+    // A bow whose model has BowPull (160) draws the string with it, held into
+    // the drawn bow (HoldBow, 109) - 0x00756040.
+    Model withPull;
+    withPull.ids = {0, 160};
+    CHECK(pick(hunter, {}, {}, withPull).anim == 160u);
+    CHECK(ba::afterOneShot(table(), hunter, 160)->anim == 109u);
+    CHECK(ba::afterOneShot(table(), hunter, 160)->loop);
     hunter.rangedSubClass = 19;
     CHECK(pick(hunter).anim == 111u);
+    // A thrown weapon out: its load, which holds into HoldThrown the way the
+    // bow's and rifle's loads hold (0x0073b510 case 0x70). Without that chain
+    // the load re-fired every pass instead of settling into the hold.
+    hunter.rangedSubClass = 16;
+    CHECK(pick(hunter).anim == 112u);
+    CHECK(ba::afterOneShot(table(), hunter, 112)->anim == 111u);
+    CHECK(ba::afterOneShot(table(), hunter, 112)->loop);
+    // The bow and the rifle hold the same way.
+    CHECK(ba::afterOneShot(table(), hunter, 106)->anim == 110u);
     hunter.autoRepeat = false;
     CHECK(pick(hunter).anim == kStand);
     // A flying spline flies; a falling one, dead, starts its death falling.

@@ -3101,6 +3101,17 @@ void Application::connectWorldHooks() {
                 entitySpawner_->onUnitAttackSwing(attacker);
             }
         });
+        // A melee hit kept for its attacker's model, and an attack stopping
+        // that settles it (rendering/melee_sound.hpp).
+        gameHandler->setMeleeHitCallback([this](const game::AttackerStateUpdateData& hit) {
+            if (entitySpawner_) entitySpawner_->onMeleeHit(hit);
+        });
+        gameHandler->setAttackStopCallback([this](uint64_t attacker) {
+            if (entitySpawner_) entitySpawner_->onMeleeAttackStop(attacker);
+        });
+        gameHandler->setSpellMissCallback([this](uint64_t caster, uint64_t target, uint8_t missType, uint32_t spellId) {
+            if (entitySpawner_) entitySpawner_->onSpellMiss(caster, target, missType, spellId);
+        });
         // Which units hold a kit's weapon effects, and at what scale
         // (0x0073a6c0, 0x006f8c50).
         if (auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr) {
@@ -3251,6 +3262,20 @@ void Application::connectWorldHooks() {
             svs->setSpellVisualResolver([this](uint32_t spellId) -> uint32_t {
                 return gameHandler ? gameHandler->getSpellVisualId(spellId) : 0;
             });
+            // Whose spell sounds keep their voice: the active mover's and the
+            // listener object's (0x007022d0, 0x006f9840, 0x006f7e40).
+            svs->setActiveUnitsQuery([this]() {
+                rendering::SpellVisualSystem::ActiveUnits units;
+                if (gameHandler) {
+                    units.mover = gameHandler->activeMover();
+                    units.listener = gameHandler->listenerObject();
+                }
+                return units;
+            });
+            // 0x006f7b00: a spell effect's $SND on the active mover's unit.
+            renderer->getM2EventSounds().setMoverInstanceQuery([this]() -> uint32_t {
+                return gameHandler ? gameHandler->resolveUnitRenderInstance(gameHandler->activeMover()) : 0;
+            });
             // 0x00804cc0: a dynamic object waits on its cast's missile.
             svs->setMissileInFlightQuery([this](uint64_t caster, uint32_t spellId, uint32_t castTime) {
                 return gameHandler && gameHandler->isSpellMissileInFlight(caster, spellId, castTime);
@@ -3337,6 +3362,22 @@ void Application::connectWorldHooks() {
                 logoutToLogin();
             }
         });
+        // The extra action bars as the realm keeps them (PLAYER_FIELD_BYTES
+        // byte 2): this client's own bars follow them, so a bar switched on
+        // from another computer, or before a reinstall, comes back on. Mapped
+        // as SetActionBarToggles maps them - bottom left onto showbar2, the
+        // right bar onto showrightbar, right bar 2 onto showleftbar (page 4,
+        // drawn at the left edge). Bottom right has no bar here to drive.
+        gameHandler->setActionBarTogglesCallback([this](uint8_t bars) {
+            if (!uiManager) return;
+            auto& gs = uiManager->getGameScreen();
+            auto& panel = gs.getSettingsPanel();
+            bool changed = false;
+            changed |= panel.setSettingValue("showbar2", (bars & 0x1u) ? "1" : "0");
+            changed |= panel.setSettingValue("showrightbar", (bars & 0x4u) ? "1" : "0");
+            changed |= panel.setSettingValue("showleftbar", (bars & 0x8u) ? "1" : "0");
+            if (changed) gs.saveSettings();
+        });
         gameHandler->setMoverStopCallback([this]() {
             if (renderer && renderer->getCameraController()) renderer->getCameraController()->stopForwardBack();
         });
@@ -3352,9 +3393,12 @@ void Application::connectWorldHooks() {
             svs->playCameraShakes(shakesId, at);
             svs->playSoundAt(soundId, at);
         });
+        // 0x006da130's DruidMorph_Impact_Base: the active player's own
+        // sound - at the listener with it at the character, kept over a
+        // crowd's.
         gameHandler->setPlayerSoundCallback([this](uint32_t soundId) {
             auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
-            if (svs) svs->playSoundAt(soundId, renderer->getCharacterPosition());
+            if (svs) svs->playOwnSoundAt(soundId, renderer->getCharacterPosition());
         });
         gameHandler->setAutoFollowCallback([this](const glm::vec3* renderPos) {
             if (renderer && renderer->getCameraController()) {
@@ -5182,6 +5226,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
     if (entitySpawner_ && renderer) {
         entitySpawner_->updateBlobShadows(renderer->getCharacterInstanceId());
         entitySpawner_->playUnitModelEvents(renderer->getCharacterInstanceId());
+        entitySpawner_->playUnitSplashes(renderer->getCharacterInstanceId());
     }
 }
 

@@ -27,6 +27,8 @@
 // FootstepTerrainLookup sound - its splash where the foot is in water - see
 // FootstepTerrainSounds.
 
+#include "audio/play_limit.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
@@ -126,6 +128,29 @@ constexpr bool slotPlays(uint32_t slot, uint32_t random32) {
     return roll <= slotChance(slot);
 }
 
+/// The slots a melee hit asks for: the attacker's exertion as the hit
+/// arrives (0x00755130), the target's injury as it lands (0x00755e40).
+constexpr uint32_t kSlotExertion = 0, kSlotExertionCritical = 1, kSlotInjury = 2, kSlotInjuryCritical = 3,
+                   kSlotInjuryCrushingBlow = 9;
+
+/// The play type a slot's sound is counted as (0x00746b30): the exertions
+/// 9, the injuries 11 - 15 and 16 for a creature whose cache's type flags
+/// have 0x20, which is heard over more of them; the rest uncounted.
+constexpr uint32_t kCreatureTypeFlagMoreAudible = 0x20;
+constexpr audio::PlayLimit slotPlayType(uint32_t slot, bool moreAudible) {
+    switch (slot) {
+    case kSlotExertion:
+    case kSlotExertionCritical:
+        return moreAudible ? audio::PlayLimit::ExertionAudible : audio::PlayLimit::Exertion;
+    case kSlotInjury:
+    case kSlotInjuryCritical:
+    case kSlotInjuryCrushingBlow:
+        return moreAudible ? audio::PlayLimit::InjuryAudible : audio::PlayLimit::Injury;
+    default:
+        return audio::PlayLimit::None;
+    }
+}
+
 /// $FDX's Stand sound: at most once in this long, of every unit (0x00ca12d4).
 constexpr uint32_t kStandSoundIntervalMs = 10000;
 constexpr bool standSoundDue(uint32_t nowMs, uint32_t lastMs) {
@@ -184,11 +209,13 @@ private:
     std::unordered_map<uint64_t, Sounds> bySound_;
 };
 
-/// The terrain type a unit stands on, as its collision has it (0x007c2440):
+/// The terrain type a unit stands on, as its collision has it (0x007c2a70):
 /// a building's floor's material's ground type where the probe down from
 /// the unit meets the building first (0x007b39b0), else the terrain's
-/// (0x007a0530: GroundEffectTexture TerrainType of the quad's layer), else
-/// none (-1).
+/// (0x007a0530: GroundEffectTexture TerrainType of the quad's layer, by x
+/// and y alone - `terrainFloor` is only the terrain met on the way down, if
+/// any), else none (-1). A doodad's model is no floor to it: the probe meets
+/// buildings and the terrain only (0x007c28f0).
 inline int32_t groundTerrainType(std::optional<float> buildingFloor, int32_t buildingGroundType,
                                  std::optional<float> terrainFloor, std::optional<int32_t> terrainGroundType) {
     if (buildingFloor && (!terrainFloor || *buildingFloor >= *terrainFloor)) return buildingGroundType;
@@ -208,5 +235,21 @@ inline bool footInWater(std::optional<float> liquidLevel, float footZ, uint32_t 
 /// footfalls are silent (0x00747240).
 constexpr uint32_t kBytes1HoverFlag = 0x02u;
 constexpr bool hovers(uint32_t bytes1) { return ((bytes1 >> 16) & kBytes1HoverFlag) != 0; }
+
+/// MOVEMENTFLAG_HOVER, and PLAYER_FLAGS_GHOST.
+constexpr uint32_t kMoveFlagHover = 0x40000000u;
+constexpr uint32_t kPlayerFlagGhost = 0x10u;
+
+/// Whether a unit's footfall is silent before its sounds are looked at
+/// (0x00747240's four tests): hovering by UNIT_FIELD_BYTES_1 (its fields'
+/// +0x112 & 2) or by its movement (+0x7cc & MOVEMENTFLAG_HOVER); using a
+/// vehicle - seated, or on its way into or out of a seat (its passenger
+/// component's state, +0xf60 +0x14, UnitUsingVehicle's test); or a player's
+/// ghost (PLAYER_FLAGS & 0x10 through +0x1008, UnitIsGhost's test).
+constexpr bool footfallSilent(uint32_t bytes1, uint32_t moveFlags, uint8_t seatState, bool isPlayer,
+                              uint32_t playerFlags) {
+    return hovers(bytes1) || (moveFlags & kMoveFlagHover) != 0 || seatState != 0 ||
+           (isPlayer && (playerFlags & kPlayerFlagGhost) != 0);
+}
 
 }  // namespace wowee::rendering::unit_event

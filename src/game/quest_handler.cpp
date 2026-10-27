@@ -721,6 +721,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
         // ERR_QUEST_LOG_FULL on screen and nowhere else (0x006d7f10, case
         // 0x195). This was an English line of its own, in chat as well.
         owner_.addUIError(interfaceString("ERR_QUEST_LOG_FULL", "Your quest log is full."));
+        owner_.playGameErrorSound("ERR_QUEST_LOG_FULL");
         // Roll back the optimistic local entries the server refused; without
         // this the local log drifts past the server cap with phantom quests.
         bool removed = false;
@@ -783,8 +784,10 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             // ERR_QUEST_FAILED_S with the title, in chat (0x006d8030, case
             // 0x196); nothing for a quest whose title is not known. This was
             // English: '"X" failed!'.
-            if (!questTitle.empty())
+            if (!questTitle.empty()) {
                 owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_S", "%s failed.", questTitle));
+                owner_.playGameErrorSound("ERR_QUEST_FAILED_S");
+            }
             // Same omission as the complete handler had: a line of chat is not
             // a redraw, and a failed quest goes on looking fine in the log.
             announceQuestLogChanged(questId);
@@ -801,8 +804,10 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             // The same ERR_QUEST_FAILED_S as a failed quest: case 0x197 of
             // 0x006d8030 stops the timer and falls into 0x196. This was
             // English: '"X" has timed out.'.
-            if (!questTitle.empty())
+            if (!questTitle.empty()) {
                 owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_S", "%s failed.", questTitle));
+                owner_.playGameErrorSound("ERR_QUEST_FAILED_S");
+            }
             announceQuestLogChanged(questId);
         }
     };
@@ -827,15 +832,20 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 if (reason == 0x4a) {
                     owner_.addSystemChatMessage(interfaceFormat("ERR_QUEST_FAILED_TOO_MANY_DAILY_QUESTS_I",
                         "You have already completed %d daily quests today", {"25"}));
+                    owner_.playGameErrorSound("ERR_QUEST_FAILED_TOO_MANY_DAILY_QUESTS_I");
                 } else if (reason == 4 || reason == 0x10 || reason == 0x32) {
                     owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_BAG_FULL_S",
                                                                "%s failed: Inventory is full.", questTitle));
+                    owner_.playGameErrorSound("ERR_QUEST_FAILED_BAG_FULL_S");
                     owner_.addUIError(interfaceString("ERR_INV_FULL", "Inventory is full."));
+                    owner_.playGameErrorSound("ERR_INV_FULL");
                 } else if (reason == 0x11) {
                     owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_MAX_COUNT_S",
                                                                "%s failed: Duplicate item found.", questTitle));
+                    owner_.playGameErrorSound("ERR_QUEST_FAILED_MAX_COUNT_S");
                 } else {
                     owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FAILED_S", "%s failed.", questTitle));
+                    owner_.playGameErrorSound("ERR_QUEST_FAILED_S");
                 }
             }
         }
@@ -905,6 +915,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 ? interfaceString(key, enUS)
                 : interfaceFormat("ERR_QUEST_FAILED_TOO_MANY_DAILY_QUESTS_I",
                                   "You have already completed %d daily quests today", {"25"}));
+            owner_.playGameErrorSound(key ? key : "ERR_QUEST_FAILED_TOO_MANY_DAILY_QUESTS_I");
         }
     };
 
@@ -1690,6 +1701,7 @@ void QuestHandler::acceptQuest() {
         // (0x006d7f10, case 0x195) - the original has no check of its own here
         // and lets the server refuse. This was an English line in chat too.
         owner_.addUIError(interfaceString("ERR_QUEST_LOG_FULL", "Your quest log is full."));
+        owner_.playGameErrorSound("ERR_QUEST_LOG_FULL");
         if (auto* ac = owner_.services().audioCoordinator)
             if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
         return;

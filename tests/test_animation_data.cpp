@@ -151,3 +151,13 @@ TEST_CASE("the unit's tier picks the animation of that behaviour (0x007176f0)", 
     // No table: as asked.
     CHECK(a::unitAnimation(a::AnimationDataTable(), 5, 3, Model{{234}}) == 5);
 }
+
+TEST_CASE("a reversed sequence is sampled from its end (0x00826b00)", "[animation_data]") {
+    // Forward and held: the time as it runs.
+    CHECK(a::sampledSequenceTime(250.0f, 1000, a::PlayMode::Forward) == 250.0f);
+    CHECK(a::sampledSequenceTime(250.0f, 1000, a::PlayMode::HoldEnd) == 250.0f);
+    // Reversed: from the end backwards, never before its start.
+    CHECK(a::sampledSequenceTime(0.0f, 1000, a::PlayMode::Reversed) == 1000.0f);
+    CHECK(a::sampledSequenceTime(250.0f, 1000, a::PlayMode::Reversed) == 750.0f);
+    CHECK(a::sampledSequenceTime(1500.0f, 1000, a::PlayMode::Reversed) == 0.0f);
+}

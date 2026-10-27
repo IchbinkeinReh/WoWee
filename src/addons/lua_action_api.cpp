@@ -53,7 +53,10 @@ namespace wowee::addons {
 //
 // EQUIPMENT_SET is the client's cursor type 0xd (0x00520dc0): s_cursorId is the
 // set's id (DAT_00ac80a0), which may be 0 - a set, not nothing.
-enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET };
+/// AMMO is the ammunition lifted off the paperdoll's ammo slot (the client's
+/// cursor type 9): an item to the interface, holding an entry rather than an
+/// item, since the ammunition never left the bags.
+enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET, AMMO };
 static CursorType s_cursorType = CursorType::NONE;
 static uint32_t   s_cursorId   = 0;    // spellId, itemId, or action slot
 static int        s_cursorSlot = 0;    // source slot for placement
@@ -1184,6 +1187,9 @@ static int lua_GetCursorInfo(lua_State* L) {
         // drop is a withdrawal - and saying so here would only give the
         // interface a kind it has no branch for.
         case CursorType::GUILDBANK:
+        // And the ammunition off the ammo slot: "item" and its entry
+        // (0x00515200 cases 7, 9 and 0xb).
+        case CursorType::AMMO:
             lua_pushstring(L, "item");
             lua_pushnumber(L, s_cursorId);
             return 2;
@@ -1221,8 +1227,11 @@ static int lua_CursorHasItem(lua_State* L) {
     // A guild bank item counts. The bank frame's own OnClick tests this before
     // deciding a click is a drop, so answering no for one would have left the
     // item stuck on the cursor with nowhere that would take it.
+    // The ammunition off the ammo slot is an item too (0x00515100 answers 1
+    // for cursor type 9 as for type 1).
     lua_pushboolean(L, (s_cursorType == CursorType::ITEM ||
-                        s_cursorType == CursorType::GUILDBANK) ? 1 : 0);
+                        s_cursorType == CursorType::GUILDBANK ||
+                        s_cursorType == CursorType::AMMO) ? 1 : 0);
     return 1;
 }
 
@@ -1866,6 +1875,84 @@ static int lua_ClickSendMailItemButton(lua_State* L) {
     return 0;
 }
 
+// --- The petition vendor's turn-in slot (PetitionVendor.cpp) ---
+//
+// The client keeps one charter in a slot at the petition vendor (0x00c0f7d8):
+// ClickPetitionButton drops the cursor's charter into it, or takes the one
+// there back onto the cursor, and TurnInPetition hands it in. The slot belongs
+// to the vendor it was filled at - the vendor's showlist empties it
+// (0x005a22a0) - so it is kept beside that vendor's guid.
+namespace {
+struct PetitionSlot {
+    int bag = -1;
+    int slot = 0;
+    uint64_t guid = 0;
+    uint64_t vendor = 0;
+};
+PetitionSlot& petitionSlot() {
+    static PetitionSlot s;
+    return s;
+}
+}  // namespace
+
+// ClickPetitionButton() (0x005a2200 -> 0x005a2140): with a petition vendor
+// open, the cursor's item goes into the slot if it is a charter (item flag
+// 0x2000) and an empty cursor empties the slot; either way PETITION_VENDOR_
+// UPDATE, the cursor is cleared, and whatever the slot held before comes back
+// onto the cursor. Anything else held is not a charter and is left alone.
+static int lua_ClickPetitionButton(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const uint64_t vendor = gh->getPetitionNpcGuid();
+    if (vendor == 0) {   // 0x005a2140: no vendor open, nothing done
+        LOG_WARNING("ClickPetitionButton: no petition vendor is open");
+        return 0;
+    }
+    auto& slot = petitionSlot();
+    if (slot.vendor != vendor) slot = {};
+    const PetitionSlot old = slot;
+
+    if (s_cursorType == CursorType::ITEM) {
+        if (s_cursorBag < 0) {
+            LOG_WARNING("ClickPetitionButton: the held item is not in a bag");
+            return 0;
+        }
+        const uint64_t guid = containerSlotGuid(gh, s_cursorBag, s_cursorSlot);
+        const auto* info = gh->getItemInfo(cursorItemId());
+        if (guid == 0 || !info || (info->itemFlags & 0x2000u) == 0) {
+            LOG_WARNING("ClickPetitionButton: the held item is not a charter (item flag 0x2000)");
+            return 0;
+        }
+        slot = {s_cursorBag, s_cursorSlot, guid, vendor};
+        clearCursorItem(L);
+    } else if (s_cursorType == CursorType::NONE) {
+        slot = {};
+    } else {
+        LOG_WARNING("ClickPetitionButton: the cursor holds something that is not an item");
+        return 0;
+    }
+    gh->fireAddonEvent("PETITION_VENDOR_UPDATE", {});
+    // The charter that was in the slot, picked up again - still where it was.
+    if (old.guid != 0 && !(old.bag == slot.bag && old.slot == slot.slot) &&
+        containerSlotGuid(gh, old.bag, old.slot) == old.guid) {
+        pickupFromContainerSlot(L, gh, old.bag, old.slot);
+    }
+    return 0;
+}
+
+// TurnInPetition() (0x005a2600): with the vendor open and a charter in its
+// slot, CMSG_TURN_IN_PETITION for it, the five tabard words left at -1 - it is
+// TurnInArenaPetition that designs a banner.
+static int lua_TurnInPetition(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const auto& slot = petitionSlot();
+    const uint64_t vendor = gh->getPetitionNpcGuid();
+    if (vendor == 0 || slot.guid == 0 || slot.vendor != vendor) return 0;
+    gh->turnInPetition(slot.guid, /*blankDesign=*/true);
+    return 0;
+}
+
 // PickupBagFromSlot(inventorySlot) - pick up or put down a bank bag.
 //
 // The bank's bag buttons hand over an inventory slot rather than an index:
@@ -1968,6 +2055,51 @@ static int lua_PickupInventoryItem(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     int slot = static_cast<int>(luaL_checknumber(L, 1));
+
+    // The ammo slot, Lua slot 0 (0x005e85d0 with slot -1). The ammunition is a
+    // reference to arrows or bullets in the bags, not an item that moves:
+    // - the ammunition lifted off it goes back on (CMSG_SET_AMMO, 0x268);
+    // - a held item is auto-equipped (0x006dfc40): a projectile becomes the
+    //   ammunition, anything else goes to its own slot;
+    // - with nothing held, the ammunition comes off onto the cursor - an item
+    //   to the interface, as cursor type 9 - and CMSG_SET_AMMO 0 takes it off,
+    //   so long as the bags still carry some of it.
+    if (slot == 0) {
+        if (s_cursorType == CursorType::AMMO) {
+            gh->setAmmo(s_cursorId);
+            clearCursorItem(L);
+            return 0;
+        }
+        if (s_cursorType == CursorType::ITEM) {
+            if (s_cursorBag == 0) {
+                gh->autoEquipItemBySlot(s_cursorSlot - 1);
+            } else if (s_cursorBag >= 1 && s_cursorBag <= game::Inventory::NUM_BAG_SLOTS) {
+                gh->autoEquipItemInBag(s_cursorBag - 1, s_cursorSlot - 1);
+            } else {
+                LOG_WARNING("PickupInventoryItem(0): the held item is not in a carried bag");
+            }
+            clearCursorItem(L);
+            return 0;
+        }
+        if (s_cursorType != CursorType::NONE) {
+            LOG_WARNING("PickupInventoryItem(0): the cursor holds something that is not an item");
+            return 0;
+        }
+        const uint32_t ammo = gh->getAmmoId();
+        if (ammo == 0 || gh->countItemInBags(ammo) == 0) {
+            LOG_WARNING("PickupInventoryItem(0): no ammunition is put in, or none is carried");
+            return 0;
+        }
+        setCursorType(L, CursorType::AMMO);
+        s_cursorId = ammo;
+        s_cursorSlot = 0;
+        s_cursorBag = -1;
+        uint32_t displayId = 0;
+        if (const auto* info = gh->getItemInfo(ammo)) displayId = info->displayInfoId;
+        wowee::ui::frameXmlSetCursorItem(displayId != 0 ? gh->getItemIconPath(displayId) : std::string());
+        gh->setAmmo(0);
+        return 0;
+    }
     if (slot < 1 || slot > 23) return 0;
 
     // Before the pickup, because the paperdoll has no SpellCanTargetItem branch
@@ -2967,6 +3099,8 @@ void registerActionLuaAPI(lua_State* L) {
                 {"PickupInventoryItem", lua_PickupInventoryItem},
                 {"PickupBagFromSlot",   lua_PickupBagFromSlot},
                 {"ClickSendMailItemButton", lua_ClickSendMailItemButton},
+                {"ClickPetitionButton", lua_ClickPetitionButton},
+                {"TurnInPetition",      lua_TurnInPetition},
                 {"ClearCursor",         lua_ClearCursor},
                 {"GetCursorInfo",       lua_GetCursorInfo},
                 {"PickupPetAction",     lua_PickupPetAction},

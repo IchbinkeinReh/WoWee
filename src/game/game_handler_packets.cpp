@@ -483,7 +483,7 @@ void GameHandler::registerCoreOpcodes() {
     // Item push / logout
     // -----------------------------------------------------------------------
     registerSkipHandler(Opcode::SMSG_ADDON_INFO);
-    registerSkipHandler(Opcode::SMSG_EXPECTED_SPAM_RECORDS);
+    // SMSG_EXPECTED_SPAM_RECORDS is handled by ChatHandler::registerOpcodes now.
 
     // -----------------------------------------------------------------------
     // XP / exploration
@@ -636,6 +636,7 @@ void GameHandler::registerCoreOpcodes() {
         switch (result) {
             case 0x01:
                 addUIError(interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+                playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
                 break;
             case 0x0B:
                 fireAddonEvent("PET_STABLE_UPDATE", {});
@@ -1620,6 +1621,7 @@ void GameHandler::registerCoreOpcodes() {
     // printed English "New flight path discovered!" to chat.
     dispatchTable_[Opcode::SMSG_NEW_TAXI_PATH] = [this](network::Packet& /*packet*/) {
         addUIInfoMessage(interfaceString("ERR_NEWTAXIPATH", "New flight path discovered!"));
+        playGameErrorSound("ERR_NEWTAXIPATH");
     };
 
     // (MSG_TALENT_WIPE_CONFIRM → registered by SpellHandler, which owns the
@@ -1678,10 +1680,12 @@ void GameHandler::registerCoreOpcodes() {
         const uint32_t result = packet.readUInt32();
         if (result == 10) {
             addUIError(interfaceString("ERR_INV_FULL", "Inventory is full."));
+            playGameErrorSound("ERR_INV_FULL");
             return;
         }
         if (result == 11) {
             addUIError(interfaceString("ERR_CURRENCY_FULL", "You can't carry any more of that currency."));
+            playGameErrorSound("ERR_CURRENCY_FULL");
             return;
         }
         if (result != 0) {
@@ -1762,7 +1766,11 @@ void GameHandler::registerCoreOpcodes() {
     };
 
     // ---- Auto-repeat / auras / dispel / totem ----
-    dispatchTable_[Opcode::SMSG_CANCEL_AUTO_REPEAT] = [this](network::Packet& /*packet*/) {
+    dispatchTable_[Opcode::SMSG_CANCEL_AUTO_REPEAT] = [this](network::Packet& packet) {
+        // 0x0072d130: the unit it names loses its auto-repeat bit (+0xa38
+        // 0x200); the player's own auto-repeat stops with it (0x00807560).
+        if (isActiveExpansion("wotlk") && packet.hasRemaining(1)) castVisuals_.autoRepeatStopped(packet.readPackedGuid());
+        packet.skipAll();
         // The server saying a repeating spell has stopped. Nothing in this
         // client's own interface reads it, which is why it did nothing - but
         // the action button flashes for as long as one is running and stops on
@@ -2059,6 +2067,7 @@ void GameHandler::registerCoreOpcodes() {
                 fireAddonEvent("BARBER_SHOP_CLOSE", {});
             } else if (result == 1 || result == 3) {
                 addUIError(interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+                playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
             } else if (result == 2) {
                 addUIError(interfaceString("ERR_NOT_BARBER_SITTING", "You must be sitting in a barber chair."));
             }

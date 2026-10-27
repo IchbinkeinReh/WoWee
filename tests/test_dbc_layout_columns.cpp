@@ -104,13 +104,6 @@ TEST_CASE("no layout names a column its DBC does not have", "[dbc-layout]") {
     const std::string json = wowee::test::slurp("Data/expansions/wotlk/dbc_layouts.json");
     REQUIRE(json.size() > 100);
 
-    // CharacterFacialHairStyles is declared for the nine-column file and the
-    // shipped one has eight. detectFacialHairFields reads the field count and
-    // moves the three geoset columns to 3, 4 and 5 when it is short, so the
-    // layout's own numbers are the long-file case rather than a mistake. It is
-    // named here so the exception is visible rather than silently tolerated.
-    const std::string kKnownShortFile = "CharacterFacialHairStyles";
-
     const std::regex table(R"RX("(\w+)"\s*:\s*\{)RX");
     std::vector<std::string> problems;
     size_t checked = 0;
@@ -118,7 +111,6 @@ TEST_CASE("no layout names a column its DBC does not have", "[dbc-layout]") {
     for (std::sregex_iterator it(json.begin(), json.end(), table), end;
          it != end; ++it) {
         const std::string name = (*it)[1].str();
-        if (name == kKnownShortFile) continue;
 
         std::string key = name;
         for (char& c : key) {

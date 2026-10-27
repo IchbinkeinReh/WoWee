@@ -20,18 +20,6 @@ bool ActivitySoundManager::initialize(pipeline::AssetManager* assets) {
     // Voice profile clips (jump, swim, hardLand, combat vocals) are set at
     // character spawn via setCharacterVoiceProfile() with the correct race/gender.
 
-    preloadCandidates(splashEnterClips, {
-        "Sound\\Character\\Footsteps\\EnterWaterSplash\\EnterWaterSmallA.wav",
-        "Sound\\Character\\Footsteps\\EnterWaterSplash\\EnterWaterMediumA.wav",
-        "Sound\\Character\\Footsteps\\EnterWaterSplash\\EnterWaterGiantA.wav",
-        "Sound\\Character\\Footsteps\\WaterSplash\\FootStepsMediumWaterA.wav",
-        "Sound\\Character\\Footsteps\\WaterSplash\\FootStepsMediumWaterB.wav",
-        "Sound\\Character\\Footsteps\\WaterSplash\\FootStepsMediumWaterC.wav",
-        "Sound\\Character\\Footsteps\\WaterSplash\\FootStepsMediumWaterD.wav",
-        "Sound\\Character\\Footsteps\\WaterSplash\\FootStepsMediumWaterE.wav"
-    });
-    splashExitClips = splashEnterClips;
-
     preloadLandingSet(FootstepSurface::STONE, "Stone");
     preloadLandingSet(FootstepSurface::DIRT, "Dirt");
     preloadLandingSet(FootstepSurface::GRASS, "Grass");
@@ -40,20 +28,8 @@ bool ActivitySoundManager::initialize(pipeline::AssetManager* assets) {
     preloadLandingSet(FootstepSurface::WATER, "Water");
     preloadLandingSet(FootstepSurface::SNOW, "Snow");
 
-    preloadCandidates(meleeSwingClips, {
-        "Sound\\Item\\Weapons\\WeaponSwings\\mWooshMedium1.wav",
-        "Sound\\Item\\Weapons\\WeaponSwings\\mWooshMedium2.wav",
-        "Sound\\Item\\Weapons\\WeaponSwings\\mWooshMedium3.wav",
-        "Sound\\Item\\Weapons\\WeaponSwings\\mWooshLarge1.wav",
-        "Sound\\Item\\Weapons\\WeaponSwings\\mWooshLarge2.wav",
-        "Sound\\Item\\Weapons\\WeaponSwings\\mWooshLarge3.wav",
-        "Sound\\Item\\Weapons\\MissSwings\\MissWhoosh1Handed.wav",
-        "Sound\\Item\\Weapons\\MissSwings\\MissWhoosh2Handed.wav"
-    });
-
     initialized = true;
     core::Logger::getInstance().info("Activity SFX loaded: jump=", jumpClips.size(),
-                                     " splash=", splashEnterClips.size(),
                                      " swimLoop=", swimLoopClips.size());
     return true;
 }
@@ -64,11 +40,8 @@ void ActivitySoundManager::shutdown() {
     std::remove(loopTempPath.c_str());
     for (auto& set : landingSets) set.clips.clear();
     jumpClips.clear();
-    splashEnterClips.clear();
-    splashExitClips.clear();
     swimLoopClips.clear();
     hardLandClips.clear();
-    meleeSwingClips.clear();
     swimmingActive = false;
     swimMoving = false;
     initialized = false;
@@ -278,31 +251,6 @@ void ActivitySoundManager::playLanding(FootstepSurface surface, bool hardLanding
     }
 }
 
-void ActivitySoundManager::playMeleeSwing() {
-    if (!AudioEngine::instance().isInitialized() || meleeSwingClips.empty()) {
-        if (meleeSwingClips.empty() && !meleeSwingWarned) {
-            core::Logger::getInstance().warning("No melee swing SFX found in assets");
-            meleeSwingWarned = true;
-        }
-        return;
-    }
-
-    auto now = std::chrono::steady_clock::now();
-    if (lastMeleeSwingAt.time_since_epoch().count() != 0) {
-        if (std::chrono::duration<float>(now - lastMeleeSwingAt).count() < 0.12f) return;
-    }
-
-    std::uniform_int_distribution<size_t> dist(0, meleeSwingClips.size() - 1);
-    const Sample& sample = meleeSwingClips[dist(rng)];
-
-    std::uniform_real_distribution<float> volumeDist(0.76f, 0.84f);
-    std::uniform_real_distribution<float> pitchDist(0.96f, 1.04f);
-
-    if (AudioEngine::instance().playSound2D(sample.data, volumeDist(rng) * volumeScale, pitchDist(rng))) {
-        lastMeleeSwingAt = now;
-    }
-}
-
 void ActivitySoundManager::setSwimmingState(bool swimming, bool moving) {
     swimMoving = moving;
     if (swimming == swimmingActive) return;
@@ -385,51 +333,6 @@ void ActivitySoundManager::setCharacterVoiceProfile(const std::string& raceFolde
                                      " attackGrunt clips=", attackGruntClips.size(),
                                      " wound clips=", woundClips.size(),
                                      " death clips=", deathClips.size());
-}
-
-// Splashes go through the mixer like every other activity sound. They used to
-// spawn ffplay on a temp file, which allowed exactly one at a time - so wading
-// in and out of the shallows dropped the second sound and logged it as an error,
-// and with the landing and jump sounds suppressed on water exit that left the
-// transition silent.
-bool ActivitySoundManager::playSplash(const std::vector<Sample>& clips) {
-    if (!AudioEngine::instance().isInitialized() || clips.empty()) return false;
-    std::uniform_int_distribution<size_t> clipDist(0, clips.size() - 1);
-    const Sample& sample = clips[clipDist(rng)];
-    std::uniform_real_distribution<float> pitchDist(0.95f, 1.05f);
-    return AudioEngine::instance().playSound2D(sample.data, 0.95f * volumeScale, pitchDist(rng));
-}
-
-void ActivitySoundManager::playWaterEnter() {
-    LOG_INFO("Water entry detected - attempting to play splash sound");
-    auto now = std::chrono::steady_clock::now();
-    if (lastSplashAt.time_since_epoch().count() != 0) {
-        if (std::chrono::duration<float>(now - lastSplashAt).count() < 0.20f) {
-            LOG_DEBUG("Water splash throttled (too soon)");
-            return;
-        }
-    }
-    if (playSplash(splashEnterClips)) {
-        lastSplashAt = now;
-    } else {
-        LOG_WARNING("Water splash enter sound unavailable (", splashEnterClips.size(), " clips loaded)");
-    }
-}
-
-void ActivitySoundManager::playWaterExit() {
-    LOG_INFO("Water exit detected - attempting to play splash sound");
-    auto now = std::chrono::steady_clock::now();
-    if (lastSplashAt.time_since_epoch().count() != 0) {
-        if (std::chrono::duration<float>(now - lastSplashAt).count() < 0.20f) {
-            LOG_DEBUG("Water splash throttled (too soon)");
-            return;
-        }
-    }
-    if (playSplash(splashExitClips)) {
-        lastSplashAt = now;
-    } else {
-        LOG_WARNING("Water splash exit sound unavailable (", splashExitClips.size(), " clips loaded)");
-    }
 }
 
 void ActivitySoundManager::rebuildCombatVocalClipsForProfile(const std::string& raceFolder, const std::string& raceBase, bool male) {

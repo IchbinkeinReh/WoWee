@@ -640,8 +640,11 @@ void AppearanceComposer::playSheathSwapSound(int hand, const UnitWeaponItems& it
     if (row < 0) return;
     const uint32_t soundId =
         material->getUInt32(static_cast<uint32_t>(row), materialSheathSoundField(sound.sheathing));
-    // The unit's position, 2 higher.
-    visuals->playSoundAt(soundId, position + glm::vec3(0.0f, 0.0f, 2.0f));
+    // The unit's position, 2 higher; kept over a crowd's (0x6e) while the
+    // player is the active mover (0x00732500 hands 0x004d07b0 the test).
+    const bool mover = gameHandler_ && gameHandler_->activeMover() == gameHandler_->getPlayerGuid();
+    visuals->playSoundAt(soundId, position + glm::vec3(0.0f, 0.0f, 2.0f),
+                         mover ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault);
 }
 
 void AppearanceComposer::updateSheathReach() {

@@ -68,9 +68,11 @@
     "TitleBit": 36
   },
   "CharacterFacialHairStyles": {
-    "Geoset100": 6,
-    "Geoset200": 8,
-    "Geoset300": 7,
+    "Geoset100": 3,
+    "Geoset1600": 6,
+    "Geoset1700": 7,
+    "Geoset200": 5,
+    "Geoset300": 4,
     "RaceID": 0,
     "SexID": 1,
     "Variation": 2
@@ -124,6 +126,14 @@
     "RaceID": 1,
     "SexID": 2,
     "SkinID": 3
+  },
+  "SpamMessages": {
+    "ID": 0,
+    "Text": 1
+  },
+  "ScalingStatDistribution": {
+    "ID": 0,
+    "MaxLevel": 21
   },
   "CreatureFamily": {
     "ID": 0,
@@ -463,6 +473,7 @@
     "SpellFamilyName": 208,
     "Speed": 47,
     "SpellMissileID": 227,
+    "PowerDisplayId": 228,
     "SpellVisualID": 131,
     "StackAmount": 49,
     "TargetAuraState": 21,

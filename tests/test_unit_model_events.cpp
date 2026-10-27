@@ -3,6 +3,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "rendering/unit_model_events.hpp"
+#include "rendering/unit_splash.hpp"
 
 namespace ue = wowee::rendering::unit_event;
 
@@ -65,6 +66,15 @@ TEST_CASE("a slot's chance out of 101 draws", "[unit_model_events]") {
     CHECK(ue::slotChance(2) == 60);
 }
 
+TEST_CASE("a slot's play type", "[unit_model_events]") {
+    using wowee::audio::PlayLimit;
+    CHECK(ue::slotPlayType(ue::kSlotExertion, false) == PlayLimit::Exertion);
+    CHECK(ue::slotPlayType(ue::kSlotExertionCritical, true) == PlayLimit::ExertionAudible);
+    CHECK(ue::slotPlayType(ue::kSlotInjuryCrushingBlow, false) == PlayLimit::Injury);
+    CHECK(ue::slotPlayType(ue::kSlotInjuryCritical, true) == PlayLimit::InjuryAudible);
+    CHECK(ue::slotPlayType(ue::kSlotStand, false) == PlayLimit::None);
+}
+
 TEST_CASE("the Stand sound at most every ten seconds", "[unit_model_events]") {
     CHECK(ue::standSoundDue(10000, 0));
     CHECK_FALSE(ue::standSoundDue(19999, 10000));
@@ -112,6 +122,10 @@ TEST_CASE("the ground a unit stands on", "[unit_model_events]") {
     // not met first only if it is above the probe, which the caller drops.
     CHECK(ue::groundTerrainType(1.0f, 4, 2.0f, 7) == 7);
     CHECK(ue::groundTerrainType(std::nullopt, -1, 2.0f, 7) == 7);
+    // Under the terrain's surface with no building's floor beneath - on a
+    // doodad in a cave mouth, say: the quad's type all the same, read by x
+    // and y (0x007a0530).
+    CHECK(ue::groundTerrainType(std::nullopt, -1, std::nullopt, 7) == 7);
     // A hole, or a layer with no effect row: none.
     CHECK(ue::groundTerrainType(std::nullopt, -1, 2.0f, std::nullopt) == -1);
 }
@@ -127,4 +141,36 @@ TEST_CASE("a footfall in water, and a hovering unit", "[unit_model_events]") {
     CHECK(ue::hovers(0x00020000u));
     CHECK_FALSE(ue::hovers(0x00010000u));
     CHECK_FALSE(ue::hovers(0x00000002u));
+}
+
+TEST_CASE("the footfalls 0x00747240 silences before looking for a sound", "[unit_model_events]") {
+    // A unit walking on the ground: heard.
+    CHECK_FALSE(ue::footfallSilent(0, 0x1, 0, true, 0));
+    // Hovering, by its bytes or by its movement.
+    CHECK(ue::footfallSilent(0x00020000u, 0x1, 0, false, 0));
+    CHECK(ue::footfallSilent(0, ue::kMoveFlagHover | 0x1, 0, false, 0));
+    // Using a vehicle: in its seat (3), or on the way in or out of it.
+    CHECK(ue::footfallSilent(0, 0x1, 3, true, 0));
+    CHECK(ue::footfallSilent(0, 0x1, 1, false, 0));
+    // A player's ghost - and the same flag on a creature means nothing.
+    CHECK(ue::footfallSilent(0, 0x1, 0, true, ue::kPlayerFlagGhost));
+    CHECK_FALSE(ue::footfallSilent(0, 0x1, 0, false, ue::kPlayerFlagGhost));
+    // Other player flags do not.
+    CHECK_FALSE(ue::footfallSilent(0, 0x1, 0, true, 0x8u));
+}
+
+TEST_CASE("a unit splashes crossing four tenths of its height in water", "[unit_splash]") {
+    namespace us = wowee::rendering::unit_splash;
+    // A human: HumanMale's 2.031 at scale 1 - the mark at 0.81 deep.
+    const float h = us::collisionHeight(2.031f, 1.0f, 1.0f, 1.0f);
+    CHECK(h == Catch::Approx(2.031f));
+    CHECK(us::crossed(h, 0.9f, 0.7f));     // wading in
+    CHECK(us::crossed(h, 0.7f, 0.9f));     // and out
+    CHECK_FALSE(us::crossed(h, 0.5f, 0.2f));
+    CHECK_FALSE(us::crossed(h, 1.4f, 0.9f));
+    // A scale below 1 counts as 1; a display scale of nothing as 1.
+    CHECK(us::collisionHeight(2.0f, 0.5f, 0.0f, 1.0f) == Catch::Approx(2.0f));
+    CHECK(us::collisionHeight(1.653f, 1.0f, 1.35f, 1.0f) == Catch::Approx(1.653f * 1.35f));
+    // A creature not sized by its model is 73/36 tall.
+    CHECK(us::kDefaultCollisionHeight == Catch::Approx(2.0277778f));
 }

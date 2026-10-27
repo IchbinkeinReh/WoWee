@@ -17,6 +17,7 @@
 #include "game/opcode_table.hpp"
 #include "game/corpse_look.hpp"
 #include "game/vehicle.hpp"
+#include "game/unit_cast_visual.hpp"
 #include "game/shapeshift_forms.hpp"
 #include "game/update_field_table.hpp"
 #include "game/go_interaction_anim.hpp"
@@ -38,6 +39,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <deque>
 #include <array>
@@ -1165,7 +1167,9 @@ public:
     bool hasPetitionSignaturesUI() const;
     void clearPetitionSignaturesUI() { petitionInfo_.showUI = false; }
     void signPetition(uint64_t petitionGuid);
-    void turnInPetition(uint64_t petitionGuid);
+    /// CMSG_TURN_IN_PETITION. With blankDesign the five tabard words follow
+    /// at -1, as TurnInPetition sends them (0x005a2600).
+    void turnInPetition(uint64_t petitionGuid, bool blankDesign = false);
     void offerPetition(uint64_t petitionGuid, uint64_t targetGuid);
 
     // Guild name lookup for other players' nameplates
@@ -1533,6 +1537,12 @@ public:
     /// Which of an item's requirements the player meets (item_requirements.hpp):
     /// the tooltip's red lines and the merchant's isUsable.
     ItemRequirementVerdict judgeItemRequirements(const ItemQueryResponseData& item) const;
+    /// Whether the item teaches a spell its learner already knows - the red
+    /// "Already known" of a recipe (0x006277f0): its first spell learns one
+    /// (Effect[0] 36), the spell taught being that effect's trigger spell or
+    /// the item's learn-trigger spell, known by the pet when the effect is
+    /// aimed at the pet (implicit target 5) and by the player otherwise.
+    [[nodiscard]] bool itemSpellAlreadyKnown(const ItemQueryResponseData& item) const;
 
     // Minimap pings from party members
     struct MinimapPing {
@@ -1785,6 +1795,20 @@ public:
     /// Any unit's melee swing (SMSG_ATTACKERSTATEUPDATE, 0x00756800).
     using UnitAttackSwingCallback = std::function<void(uint64_t attackerGuid)>;
     void setUnitAttackSwingCallback(UnitAttackSwingCallback cb) { unitAttackSwingCallback_ = std::move(cb); }
+    /// Any unit's melee hit as it arrives (0x00756800 case 0x14a), to be kept
+    /// on its attacker until its model lands it; and any attack stopping
+    /// (SMSG_ATTACKSTOP, 0x00756770), which settles the one kept.
+    using MeleeHitCallback = std::function<void(const AttackerStateUpdateData& hit)>;
+    void setMeleeHitCallback(MeleeHitCallback cb) { meleeHitCallback_ = std::move(cb); }
+    using AttackStopCallback = std::function<void(uint64_t attackerGuid)>;
+    void setAttackStopCallback(AttackStopCallback cb) { attackStopCallback_ = std::move(cb); }
+    /// A spell missing a target, for each of SMSG_SPELL_GO's miss entries
+    /// (0x0080e1b0 -> 0x00755850 on the target): its caster as the client
+    /// takes it - the cast's caster where that is a unit or game object,
+    /// else its unit - and the SpellMissInfo.
+    using SpellMissCallback =
+        std::function<void(uint64_t casterGuid, uint64_t targetGuid, uint8_t missType, uint32_t spellId)>;
+    void setSpellMissCallback(SpellMissCallback cb) { spellMissCallback_ = std::move(cb); }
     /// The active player sending a text emote (0x006dd9e0): whether it is
     /// sent, refused, or refused with ERR_NOEMOTEWHILERUNNING.
     enum class TextEmoteGate : uint8_t { Send, Refuse, RefuseWhileMoving };
@@ -3333,7 +3357,15 @@ public:
         uint32_t arenaPoints = 0;
         uint32_t itemId[5] = {};
         uint32_t itemCount[5] = {};
+        /// The arena bracket (+0xc: 0 two, 1 three, 2 five) and the personal and
+        /// team rating it asks for (+0x38), which the tooltip states (0x006277f0).
+        uint32_t arenaBracket = 0;
+        uint32_t requiredArenaRating = 0;
     };
+    /// 0x005a37b0: whether one of the player's arena teams at least the
+    /// bracket's size (2, 3, 5) has both the player's personal rating and the
+    /// team's rating at `rating` or more.
+    [[nodiscard]] bool meetsArenaRating(uint32_t rating, uint32_t bracket) const;
     /// Null when the id is unknown or the DBC is not there.
     ///
     /// Lives here rather than in the window that draws vendors, because the
@@ -3676,6 +3708,11 @@ public:
     // Play the player character's spoken error response ("Not enough mana", ...)
     // using the active character's race/gender. Gated by the Character Speech setting.
     void playErrorSpeech(audio::PlayerErrorSpeech type);
+    /// What a game error sounds like, by its GlobalStrings key, as the
+    /// client's table of them says (0x005216f0): the character's line where
+    /// it gives one (0x00986d00), else the SoundEntries row it names
+    /// (0x004c74a0); nothing for the rest.
+    void playGameErrorSound(std::string_view gameErrorKey);
 
     // Reputation change toast: factionName, delta, new standing
     using RepChangeCallback = std::function<void(const std::string& factionName, int32_t delta, int32_t standing)>;
@@ -3823,6 +3860,10 @@ public:
     /// The unit the client moves (DAT_00ca1238): the player, a vehicle it
     /// drives, or none.
     uint64_t activeMover() const;
+    /// The object the listener is (0x007450b0): the active mover where it
+    /// is a unit, else the player - and for the player, with far sight on
+    /// (+0x1858 0x1), the PLAYER_FARSIGHT object where it is there.
+    uint64_t listenerObject() const;
     /// Whether a server move spline carries the unit (+0xbc): SMSG_MONSTER_MOVE
     /// moves any unit so, the player among them (0x0073c8e0).
     bool onMoveSpline(uint64_t guid);
@@ -3861,6 +3902,13 @@ public:
     void setVehicleAimPower(float power) { vehicleAimPower_ = vehicle::clampAimPower(power); }
     /// Which units are vehicles and who sits in them (game/vehicle.hpp).
     vehicle::VehicleRoster& vehicleRoster() { return vehicleRoster_; }
+    /// The cast each unit shows (+0xa5c, +0xa60, +0xa38 0x400 and 0x200,
+    /// game/unit_cast_visual.hpp).
+    cast_visual::Roster& castVisuals() { return castVisuals_; }
+    const cast_visual::Roster& castVisuals() const { return castVisuals_; }
+    /// What 0x00805330 and 0x007fa2e0 read of a spell: its attributes and
+    /// whether its SpellVisual's PrecastKit animates.
+    cast_visual::Spell castVisualSpell(uint32_t spellId) const;
     const vehicle::VehicleRoster& vehicleRoster() const { return vehicleRoster_; }
 
     // Vendor
@@ -3884,6 +3932,10 @@ public:
     /// Equip a held item into a named equipment slot. See InventoryHandler.
     void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot);
     void autoEquipItemBySlot(int backpackIndex, bool confirmed = false);
+    /// CMSG_SET_AMMO: put this entry in as the ammunition, or take it off with 0.
+    void setAmmo(uint32_t itemId);
+    /// The ammunition put in (PLAYER_AMMO_ID), zero for none.
+    [[nodiscard]] uint32_t getAmmoId() const;
     void autoEquipItemInBag(int bagIndex, int slotIndex, bool confirmed = false);
     /// Would equipping this bind it? Asked by both interfaces before they put
     /// their own prompt up.
@@ -4389,6 +4441,15 @@ public:
     auto& chosenTitleBitRef() { return chosenTitleBit_; }
     auto& cloakVisibleRef() { return cloakVisible_; }
     auto& helmVisibleRef() { return helmVisible_; }
+    /// The four extra action bars as the realm keeps them for the character:
+    /// PLAYER_FIELD_BYTES byte 2, bits 0-3 (bottom left, bottom right, right,
+    /// right 2), which GetActionBarToggles reads (0x005a8790). Empty until the
+    /// player's fields have arrived.
+    [[nodiscard]] std::optional<uint8_t> getActionBarToggles() const { return actionBarToggles_; }
+    auto& actionBarTogglesRef() { return actionBarToggles_; }
+    using ActionBarTogglesCallback = std::function<void(uint8_t)>;
+    void setActionBarTogglesCallback(ActionBarTogglesCallback cb) { actionBarTogglesCallback_ = std::move(cb); }
+    auto& actionBarTogglesCallbackRef() { return actionBarTogglesCallback_; }
     auto& currentMountDisplayIdRef() { return currentMountDisplayId_; }
     auto& mountAuraSpellIdRef() { return mountAuraSpellId_; }
     /// Spell of the aura currently keeping the player mounted, 0 when on foot.
@@ -4505,6 +4566,7 @@ public:
     auto& spellFlatModsRef() { return spellFlatMods_; }
     auto& spellPctModsRef() { return spellPctMods_; }
     auto& spellNameCacheRef() { return spellNameCache_; }
+    const auto& spellNameCacheRef() const { return spellNameCache_; }
     /// The $name=expression declarations a spell's description draws on, or
     /// empty. Keyed by SpellDescriptionVariables.dbc id.
     auto& spellDescriptionVariablesRef() { return spellDescriptionVariables_; }
@@ -4651,6 +4713,9 @@ public:
     auto& meleeSwingCallbackRef() { return meleeSwingCallback_; }
     auto& spellCastBeginCallbackRef() { return spellCastBeginCallback_; }
     auto& unitAttackSwingCallbackRef() { return unitAttackSwingCallback_; }
+    auto& meleeHitCallbackRef() { return meleeHitCallback_; }
+    auto& attackStopCallbackRef() { return attackStopCallback_; }
+    auto& spellMissCallbackRef() { return spellMissCallback_; }
     void suppressNextMeleeSwingAnim() { suppressMeleeSwingAnim_ = true; }
     bool consumeSuppressMeleeSwingAnim() {
         bool v = suppressMeleeSwingAnim_;
@@ -4896,6 +4961,10 @@ public:
         // Spell.dbc SpellMissileID: the SpellMissile row an ADJUST_MISSILE
         // cast's arc takes its gravity from (0x00700880). 0 = none.
         uint32_t spellMissileId = 0;
+        /// Spell.dbc PowerDisplayId (+0x290): the PowerDisplay row a vehicle's
+        /// spell names its power by, whose NO_POWER says nothing aloud
+        /// (0x00808200). 0 = none.
+        uint32_t powerDisplayId = 0;
         uint32_t recoveryMs = 0;
         uint32_t categoryRecoveryMs = 0;
         /// Spell.dbc Category (+0x4), StartRecoveryCategory (+0x234),
@@ -5366,6 +5435,8 @@ private:
 
     // ---- Display state ----
     bool helmVisible_ = true;
+    std::optional<uint8_t> actionBarToggles_;
+    ActionBarTogglesCallback actionBarTogglesCallback_;
     bool cloakVisible_ = true;
     uint8_t standState_ = 0;  // 0=stand, 1=sit, ..., 7=dead, 8=kneel (server-confirmed)
 
@@ -5757,6 +5828,8 @@ private:
     // Vehicle (WotLK): non-zero when player is seated in a vehicle
     uint32_t vehicleId_ = 0;
     vehicle::VehicleRoster vehicleRoster_;
+    cast_visual::Roster castVisuals_;
+    mutable std::unordered_map<uint32_t, bool> precastKitAnimates_;
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     bool petActionsOnBonusBar_ = false;
@@ -6105,6 +6178,9 @@ private:
     FaceCameraProvider faceCameraProvider_;
     SpellCastBeginCallback spellCastBeginCallback_;
     UnitAttackSwingCallback unitAttackSwingCallback_;
+    MeleeHitCallback meleeHitCallback_;
+    AttackStopCallback attackStopCallback_;
+    SpellMissCallback spellMissCallback_;
     TextEmoteGateCallback textEmoteGateCallback_;
     bool suppressMeleeSwingAnim_ = false;
     // lastMeleeSwingMs_ moved to CombatHandler

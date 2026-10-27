@@ -8516,10 +8516,18 @@ void LuaEngine::registerCoreAPI() {
         "    local link = GetLootRollItemLink and GetLootRollItemLink(rollId)\n"
         "    if link then return self:SetHyperlink(link) end\n"
         "end\n"
+        // The merchant item's index rides along while its link is drawn, so
+        // the item tooltip can say the arena rating its cost asks for.
         "function __WoweeFrameMT:SetMerchantItem(index)\n"
         "    self:ClearLines()\n"
         "    local link = GetMerchantItemLink and GetMerchantItemLink(index)\n"
-        "    if link then return self:SetHyperlink(link) end\n"
+        "    if link then\n"
+        "        __WoweeTooltipMerchantIndex = index\n"
+        "        local ok, r1, r2 = pcall(self.SetHyperlink, self, link)\n"
+        "        __WoweeTooltipMerchantIndex = nil\n"
+        "        if not ok then error(r1, 0) end\n"
+        "        return r1, r2\n"
+        "    end\n"
         "    local name = GetMerchantItemInfo(index)\n"
         "    if name then self:SetText(name, 1, 1, 1) end\n"
         "end\n"
@@ -8739,8 +8747,16 @@ void LuaEngine::registerCoreAPI() {
         // A bound item says so, whatever its template's binding: the line
         // is ITEM_SOULBOUND in its place (0x006277f0 tests the instance's
         // flag 0x1 first). A quest item stays a quest item.
-        "        local bind = ({[1]='ITEM_BIND_ON_PICKUP',[2]='ITEM_BIND_ON_EQUIP',[3]='ITEM_BIND_ON_USE',[4]='ITEM_BIND_QUEST'})[data.bindType or 0]\n"
-        "        if inst and inst.soulbound and data.bindType ~= 4 then bind = 'ITEM_SOULBOUND' end\n"
+        // Bound to the account (item flag 0x8000000): ITEM_ACCOUNTBOUND once
+        // bound, ITEM_BIND_TO_ACCOUNT before. A class 10 item says nothing.
+        "        local bind\n"
+        "        if inst and inst.soulbound then\n"
+        "            if data.bindType == 4 then bind = 'ITEM_BIND_QUEST'\n"
+        "            elseif data.itemClass ~= 10 then bind = data.accountBound and 'ITEM_ACCOUNTBOUND' or 'ITEM_SOULBOUND' end\n"
+        "        elseif (data.bindType or 0) ~= 0 and data.itemClass ~= 10 then\n"
+        "            bind = data.accountBound and 'ITEM_BIND_TO_ACCOUNT'\n"
+        "                or ({[1]='ITEM_BIND_ON_PICKUP',[2]='ITEM_BIND_ON_EQUIP',[3]='ITEM_BIND_ON_USE',[4]='ITEM_BIND_QUEST'})[data.bindType]\n"
+        "        end\n"
         "        if bind and _G[bind] then self:AddLine(_G[bind], 1, 1, 1) end\n"
         "        if data.isUnique then self:AddLine(ITEM_UNIQUE or 'Unique', 1, 1, 1)\n"
         "        elseif data.isUniqueEquipped then self:AddLine(ITEM_UNIQUE_EQUIPPABLE or 'Unique-Equipped', 1, 1, 1) end\n"
@@ -8810,7 +8826,10 @@ void LuaEngine::registerCoreAPI() {
         "        if data.classes then\n"
         "            req(format(ITEM_CLASSES_ALLOWED or 'Classes: %s', table.concat(data.classes, ', ')), data.classesOk)\n"
         "        end\n"
-        "        if data.requiredLevel and data.requiredLevel > 1 then\n"
+        // An heirloom's range in place of the plain level (0x006277f0).
+        "        if data.levelRangeMax then\n"
+        "            req(format(ITEM_LEVEL_RANGE_CURRENT or 'Requires level %d to %d (%d)', math.max(data.requiredLevel or 1, 1), data.levelRangeMax, data.levelRangeCurrent), data.levelRangeOk)\n"
+        "        elseif data.requiredLevel and data.requiredLevel > 1 then\n"
         "            req(format(ITEM_MIN_LEVEL or 'Requires Level %d', data.requiredLevel), data.levelOk)\n"
         "        end\n"
         "        if equipSlot and equipSlot ~= '' and iLevel and iLevel > 0 and GetCVar('showItemLevel') == '1' then\n"
@@ -8823,8 +8842,20 @@ void LuaEngine::registerCoreAPI() {
         "                req(format(ITEM_REQ_SKILL or 'Requires %s', data.requiredSkillName), data.skillOk)\n"
         "            end\n"
         "        end\n"
+        "        if data.spellKnown then\n"
+        "            req(ITEM_SPELL_KNOWN or 'Already known', false)\n"
+        "        end\n"
         "        if data.requiredSpellName then\n"
         "            req(format(ITEM_REQ_SKILL or 'Requires %s', data.requiredSpellName), data.spellOk)\n"
+        "        end\n"
+        // A vendor item's arena rating (0x006277f0, its extended cost's +0x38
+        // and bracket), after the honour rank and before the reputation.
+        "        if __WoweeTooltipMerchantIndex and _GetMerchantItemArenaRequirement then\n"
+        "            local rating, bracket, met = _GetMerchantItemArenaRequirement(__WoweeTooltipMerchantIndex)\n"
+        "            if rating then\n"
+        "                local key = bracket == 2 and 'ITEM_REQ_ARENA_RATING_5V5' or bracket == 1 and 'ITEM_REQ_ARENA_RATING_3V3' or 'ITEM_REQ_ARENA_RATING'\n"
+        "                req(format(_G[key] or 'Requires personal and team arena rating of %d', rating), met)\n"
+        "            end\n"
         "        end\n"
         "        if data.requiredFactionName then\n"
         "            local standing = _G['FACTION_STANDING_LABEL'..data.requiredFactionStanding] or ''\n"

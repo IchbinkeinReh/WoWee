@@ -68,6 +68,9 @@ public:
     /// player, a unit the server gave it control of - a vehicle it drives, a
     /// unit it possesses - or none (0). movementInfo is that unit's movement.
     [[nodiscard]] uint64_t activeMover() const;
+    /// Whether CMSG_FAR_SIGHT has said the player looks through its far
+    /// sight object (+0x1858 0x1).
+    [[nodiscard]] bool farSightAnnounced() const { return farSightAnnounced_; }
     /// Whether a unit's move spline from its monster move still runs (+0xbc).
     [[nodiscard]] bool onMoveSpline(uint64_t guid);
     /// The flags of a unit's move spline while it still runs.

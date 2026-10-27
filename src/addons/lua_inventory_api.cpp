@@ -77,10 +77,7 @@ static int lua_GetTabardCreationCost(lua_State* L) {
     return 1;
 }
 
-static int lua_GetSendMailPrice(lua_State* L) {
-    lua_pushnumber(L, 30.0);
-    return 1;
-}
+static int lua_GetSendMailPrice(lua_State* L);  // with the letter's state, below
 
 /// Uncommon, which is the default a fresh group starts on. Concatenated
 /// straight into a global name - "ITEM_QUALITY" .. threshold .. "_DESC" - so
@@ -393,6 +390,23 @@ static const game::GameHandler::ExtendedCostEntry* merchantCost(lua_State* L, in
     if (index > static_cast<int>(items.size())) return nullptr;
     const uint32_t costId = items[index - 1].extendedCost;
     return costId ? gh->getExtendedCost(costId) : nullptr;
+}
+
+/// _GetMerchantItemArenaRequirement(index) → rating, bracket, met - the
+/// arena rating a vendor item's extended cost asks for, its bracket (0 two,
+/// 1 three, 2 five, held to 0..3 as 0x006277f0 holds it) and whether one of
+/// the player's teams reaches it (0x005a37b0); nothing when it asks none.
+/// The tooltip's ITEM_REQ_ARENA_RATING line, for the merchant item it is
+/// built for.
+static int lua_GetMerchantItemArenaRequirement(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto* cost = merchantCost(L, static_cast<int>(luaL_optnumber(L, 1, 0)));
+    if (!gh || !cost || cost->requiredArenaRating == 0) return 0;
+    const uint32_t bracket = cost->arenaBracket > 3 ? 3u : cost->arenaBracket;
+    lua_pushnumber(L, cost->requiredArenaRating);
+    lua_pushnumber(L, bracket);
+    lua_pushboolean(L, gh->meetsArenaRating(cost->requiredArenaRating, bracket) ? 1 : 0);
+    return 3;
 }
 
 // GetMerchantItemCostInfo(index) → honorPoints, arenaPoints, itemCount
@@ -1493,6 +1507,24 @@ static int lua_AddSendMailCOD(lua_State* L) {
     return 0;
 }
 
+/// GetSendMailPrice() (0x00571b00): 30 copper a letter, 30 an attachment once
+/// there is more than one - max(30, attachments x 30) - plus the money set to
+/// go with it (SetSendMailMoney, 0x00beb1bc). A chosen stationery or package
+/// adds its own price there; this client offers neither, so neither adds.
+/// It was a flat 30 whatever was attached, so a letter with twelve items showed
+/// thirty copper of postage and cost three hundred and sixty.
+static int lua_GetSendMailPrice(lua_State* L) {
+    uint32_t attached = 0;
+    if (auto* gh = getGameHandler(L)) {
+        for (const auto& slot : gh->getMailAttachments()) {
+            if (slot.occupied()) ++attached;
+        }
+    }
+    const uint64_t postage = std::max<uint64_t>(30, uint64_t{attached} * 30);
+    lua_pushnumber(L, static_cast<double>(postage + s_sendMailMoney));
+    return 1;
+}
+
 static int lua_GetSendMailMoney(lua_State* L) {
     lua_pushnumber(L, static_cast<double>(s_sendMailMoney));
     return 1;
@@ -2478,6 +2510,34 @@ const RestrictionNameTables& restrictionNames(game::GameHandler* gh) {
     return t;
 }
 
+/// ScalingStatDistribution.dbc's MaxLevel (+0x54) by id, the top of an
+/// heirloom's level range (0x006277f0, 0x0061e740). Read once; zero for an id
+/// the file does not have, or where the layout does not say where it is.
+uint32_t scalingStatMaxLevel(game::GameHandler* gh, uint32_t ssdId) {
+    static std::unordered_map<uint32_t, uint32_t> maxLevel;
+    static bool loaded = false;
+    if (!loaded && gh) {
+        auto* am = gh->services().assetManager;
+        const auto* layouts = pipeline::getActiveDBCLayout();
+        if (am && am->isInitialized() && layouts) {
+            loaded = true;
+            if (const auto* layout = layouts->getLayout("ScalingStatDistribution")) {
+                const uint32_t idF = layout->tryField("ID");
+                const uint32_t maxF = layout->tryField("MaxLevel");
+                auto dbc = am->loadDBCOptional("ScalingStatDistribution.dbc");
+                if (dbc && dbc->isLoaded() && idF != 0xFFFFFFFFu && maxF != 0xFFFFFFFFu &&
+                    maxF < dbc->getFieldCount()) {
+                    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+                        maxLevel[dbc->getUInt32(r, idF)] = dbc->getUInt32(r, maxF);
+                    }
+                }
+            }
+        }
+    }
+    const auto it = maxLevel.find(ssdId);
+    return it != maxLevel.end() ? it->second : 0u;
+}
+
 void pushStringList(lua_State* L, const std::vector<std::string>& v) {
     lua_newtable(L);
     for (size_t i = 0; i < v.size(); ++i) {
@@ -2526,6 +2586,9 @@ void pushItemRequirements(lua_State* L, game::GameHandler* gh, const game::ItemQ
         lua_setfield(L, -2, "requiredSkillRank");
         flag("skillOk", v.skillOk);
     }
+    // A recipe whose spell is already known: "Already known" in red, after the
+    // skill line and before the required spell (0x006277f0).
+    if (gh->itemSpellAlreadyKnown(info)) flag("spellKnown", true);
     if (info.requiredSpell != 0) {
         const std::string& spell = gh->getSpellName(info.requiredSpell);
         if (!spell.empty()) {
@@ -2595,6 +2658,11 @@ static int lua_GetItemTooltipData(lua_State* L) {
     // Bind type
     lua_pushnumber(L, info->bindType);
     lua_setfield(L, -2, "bindType");
+    // Bound to the account (item flag 0x8000000), an heirloom: its bind line
+    // is ITEM_BIND_TO_ACCOUNT, and ITEM_ACCOUNTBOUND once bound (0x006277f0).
+    if (info->itemFlags & 0x8000000u) { lua_pushboolean(L, 1); lua_setfield(L, -2, "accountBound"); }
+    lua_pushnumber(L, info->itemClass);
+    lua_setfield(L, -2, "itemClass");
     // Armor
     lua_pushnumber(L, info->armor);
     lua_setfield(L, -2, "armor");
@@ -2619,6 +2687,28 @@ static int lua_GetItemTooltipData(lua_State* L) {
     // Required level
     lua_pushnumber(L, info->requiredLevel);
     lua_setfield(L, -2, "requiredLevel");
+    // An item that scales with its wearer (ScalingStatValue set, with its
+    // ScalingStatDistribution row): "Requires level %d to %d (%d)" in place
+    // of the plain level - the required level, the row's MaxLevel and the
+    // level it is shown at, which is the player's held between the two
+    // (0x0061e740); red below the range or above it (0x006277f0).
+    if (info->scalingStatValue != 0) {
+        const uint32_t ssdMax = scalingStatMaxLevel(gh, info->scalingStatDistribution);
+        if (ssdMax != 0) {
+            const int req = static_cast<int>(info->requiredLevel);
+            const int top = static_cast<int>(ssdMax);
+            const int player = static_cast<int>(gh->getPlayerLevel());
+            int shown = player < req ? req : player;
+            if (shown > top) shown = top;
+            if (shown < 1) shown = 1;
+            lua_pushnumber(L, top);
+            lua_setfield(L, -2, "levelRangeMax");
+            lua_pushnumber(L, shown);
+            lua_setfield(L, -2, "levelRangeCurrent");
+            lua_pushboolean(L, (player >= req && player <= top) ? 1 : 0);
+            lua_setfield(L, -2, "levelRangeOk");
+        }
+    }
     pushItemRequirements(L, gh, *info);
     // The type line's name: the subclass's DisplayName (0x006277f0).
     {
@@ -4044,6 +4134,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetRepairAllCost",        lua_GetRepairAllCost},
                 {"CloseMerchant",           lua_CloseMerchant},
                 {"GetMerchantItemMaxStack", lua_GetMerchantItemMaxStack},
+                {"_GetMerchantItemArenaRequirement", lua_GetMerchantItemArenaRequirement},
                 {"GetMerchantItemCostInfo", lua_GetMerchantItemCostInfo},
                 {"GetMerchantItemCostItem", lua_GetMerchantItemCostItem},
                 {"GetItemInfo",       lua_GetItemInfo},

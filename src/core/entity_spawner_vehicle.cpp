@@ -792,6 +792,7 @@ bool EntitySpawner::holdVehicleMove(uint64_t mover, uint64_t transport, uint8_t 
     // as a whole past 0x22.
     if (anim->bone == game::vehicle::kWholeModelBone) {
         cr->playAnimation(vehicleInstance, anim->animation, false);
+        wholeModelSeatAnims_[vehicle] = WholeModelSeatAnim{vehicleInstance, anim->animation};
     } else if (!cr->playVehicleKeyBoneAnimation(vehicleInstance, anim->bone, anim->animation, true)) {
         return false;
     }
@@ -824,7 +825,41 @@ bool EntitySpawner::holdVehicleMove(uint64_t mover, uint64_t transport, uint8_t 
     return true;
 }
 
+bool EntitySpawner::vehicleWholeModelAnimating(uint64_t vehicleGuid) const {
+    // A passenger's way in or out, until the animation ends - plays out or
+    // gives way (0x00757280, from the animation's end).
+    if (const auto it = wholeModelSeatAnims_.find(vehicleGuid); it != wholeModelSeatAnims_.end()) {
+        auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+        uint32_t playing = 0;
+        float time = 0.0f;
+        float duration = 0.0f;
+        if (cr && cr->getAnimationState(it->second.instance, playing, time, duration) &&
+            playing == it->second.animation && time < duration)
+            return true;
+    }
+    // A seated passenger's ride loop, held by its handler while it sits
+    // (0x00749d50 keeps it going; 0x007577e0 lets it go).
+    const uint32_t instance = vehicleInstanceFor(vehicleGuid);
+    if (instance == 0) return false;
+    for (const auto& [guid, p] : seatedPassengers_) {
+        if (p.rideLoopVehicleInstance == instance && p.rideLoopBone == game::vehicle::kWholeModelBone) return true;
+    }
+    return false;
+}
+
 void EntitySpawner::stepHeldVehicleMoves(uint32_t nowMs) {
+    // A whole-model seat animation that has ended is no longer the kit's.
+    for (auto it = wholeModelSeatAnims_.begin(); it != wholeModelSeatAnims_.end();) {
+        auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+        uint32_t playing = 0;
+        float time = 0.0f;
+        float duration = 0.0f;
+        if (!cr || !cr->getAnimationState(it->second.instance, playing, time, duration) ||
+            playing != it->second.animation || time >= duration)
+            it = wholeModelSeatAnims_.erase(it);
+        else
+            ++it;
+    }
     if (heldVehicleMoves_.empty()) return;
     auto* cr = renderer_->getCharacterRenderer();
     std::vector<uint64_t> release;

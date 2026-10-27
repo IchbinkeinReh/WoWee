@@ -60,12 +60,8 @@ void SfxStateDriver::update(float deltaTime, Renderer* renderer,
                 footstepDriver.resolveFootstepSurface(renderer), hardLanding);
         }
 
-        // Water transitions
-        if (swimming && !prevSwimming_) {
-            activitySoundManager->playWaterEnter();
-        } else if (!swimming && prevSwimming_) {
-            activitySoundManager->playWaterExit();
-        }
+        // The splash in and out of water is each unit's own, by its depth
+        // (EntitySpawner::playUnitSplashes, rendering/unit_splash.hpp).
 
         activitySoundManager->setSwimmingState(swimming, moving);
 

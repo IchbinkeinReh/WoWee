@@ -851,6 +851,42 @@ wowee_add_test(test_sound_distance
     SOURCES test_sound_distance.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_play_limit ──────────────────────────────────────────
+# How many sounds of a counted kind play at once: footfalls, error speech.
+wowee_add_test(test_play_limit
+    SOURCES test_play_limit.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_voice_priority ──────────────────────────────────────
+# Which sounds keep a voice past Sound_NumChannels: priority, then loudness.
+wowee_add_test(test_voice_priority
+    SOURCES test_voice_priority.cpp)
+
+# ── test_vocal_error ─────────────────────────────────────────
+# Which game errors the character speaks, and the line each one is.
+wowee_add_test(test_vocal_error
+    SOURCES test_vocal_error.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_cast_failure_error ──────────────────────────────────
+# The game error a refused cast goes through, and the line it speaks.
+wowee_add_test(test_cast_failure_error
+    SOURCES test_cast_failure_error.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_loot_error ──────────────────────────────────────────
+# A refused loot's game error, and the line it speaks.
+wowee_add_test(test_loot_error
+    SOURCES test_loot_error.cpp
+            ${TEST_COMMON_SOURCES})
+
+# ── test_sound_filter ────────────────────────────────────────
+# A SoundFilter chain's units over a clip: echo, pitch, low pass, bypass.
+wowee_add_test(test_sound_filter
+    SOURCES test_sound_filter.cpp
+            ${CMAKE_SOURCE_DIR}/src/audio/sound_filter.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_tile_size_agreement ─────────────────────────────────
 # The ADT tile size, which three headers each declared and two files spelled
 # with two fewer decimals. Pins the value against its own arithmetic.
@@ -3039,6 +3075,18 @@ wowee_add_test(test_mount_transition
 wowee_add_test(test_mount_seat
     SOURCES test_mount_seat.cpp)
 
+# ── test_mount_bank ──────────────────────────────────
+# A flying mount banks into the turn, a ground mount never (0x00719b80).
+wowee_add_test(test_mount_bank
+    SOURCES test_mount_bank.cpp ../src/rendering/animation/mount_fsm.cpp)
+
+# ── test_chat_spam_filter ────────────────────
+# The server's spam regexes mask matched runs in player chat (0x00501c70,
+# 0x00509dd0), skipping colour spans (0x004fcf40).
+wowee_add_test(test_chat_spam_filter
+    SOURCES test_chat_spam_filter.cpp ${CMAKE_SOURCE_DIR}/src/game/chat_spam_filter.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_rider_mount_wait ────────────────────────────
 # A rider kept out of the world until its mount is drawn (0x0073d5d0 hangs
 # it on the mount's model; 0x008251b0 -> 0x00743110 waits for both).
@@ -3232,6 +3280,16 @@ wowee_add_test(test_minimap_blips
 # What a unit's model events play: fidgets, wings, births, footfalls (rendering/unit_model_events.hpp).
 wowee_add_test(test_unit_model_events
     SOURCES test_unit_model_events.cpp)
+
+# ── test_unit_cast_visual ────────────────────────────────────
+# The cast a unit shows (+0xa60) and its animating bits (game/unit_cast_visual.hpp).
+wowee_add_test(test_unit_cast_visual
+    SOURCES test_unit_cast_visual.cpp)
+
+# ── test_melee_sound ─────────────────────────────────────────
+# What a melee swing's kept hit plays as its attacker's model lands it.
+wowee_add_test(test_melee_sound
+    SOURCES test_melee_sound.cpp)
 
 # ── test_cinematic ───────────────────────────────────────────
 # A cinematic's camera tracks and its course, fades and all (game/cinematic.hpp,

@@ -4,6 +4,7 @@
 #include "game/spell_classification.hpp"
 #include "game/glyph_socket.hpp"
 #include "game/item_text.hpp"
+#include "game/loot_error.hpp"
 #include "game/interface_text.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/player_display_flags.hpp"
@@ -16,7 +17,6 @@
 #include "rendering/renderer.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
-#include "audio/player_voice_manager.hpp"
 #include "core/application.hpp"
 #include "core/logger.hpp"
 #include "game/sell_count.hpp"
@@ -834,33 +834,14 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             msg = uiText(err.key, err.enUS);
         }
         owner_.addUIError(msg);
-        if (error == 1) {
-            owner_.playErrorSpeech(audio::PlayerErrorSpeech::CANT_EQUIP_LEVEL);
-            return;
-        }
+        // And the line the game error speaks, where the client's table
+        // gives it one (0x005216f0): a full bag's for every code that ends
+        // in ERR_BAG_FULL, a missing proficiency's own, none for a full bank.
+        owner_.playGameErrorSound(err.key);
+        if (error == 1) return;
         if (auto* ac = owner_.services().audioCoordinator) {
             if (auto* sfx = ac->getUiSoundManager())
                 sfx->playError();
-        }
-
-        // Character speech response for errors with a matching voice line
-        using audio::PlayerErrorSpeech;
-        switch (error) {
-            case 4:  owner_.playErrorSpeech(PlayerErrorSpeech::BAG_FULL); break;
-            case 7:  owner_.playErrorSpeech(PlayerErrorSpeech::AMMO_ONLY); break;
-            case 8:  owner_.playErrorSpeech(PlayerErrorSpeech::CANT_USE_ITEM); break;
-            case 10:
-            case 11: owner_.playErrorSpeech(PlayerErrorSpeech::CANT_EQUIP_EVER); break;
-            case 17: owner_.playErrorSpeech(PlayerErrorSpeech::ITEM_MAX_COUNT); break;
-            case 20: owner_.playErrorSpeech(PlayerErrorSpeech::NOT_EQUIPPABLE); break;
-            case 24: owner_.playErrorSpeech(PlayerErrorSpeech::CANT_DROP_SOULBOUND); break;
-            case 25: owner_.playErrorSpeech(PlayerErrorSpeech::OUT_OF_RANGE); break;
-            case 29: owner_.playErrorSpeech(PlayerErrorSpeech::NOT_ENOUGH_MONEY); break;
-            case 30: owner_.playErrorSpeech(PlayerErrorSpeech::NOT_A_BAG); break;
-            case 36: owner_.playErrorSpeech(PlayerErrorSpeech::ITEM_LOCKED); break;
-            case 50:
-            case 51: owner_.playErrorSpeech(PlayerErrorSpeech::INVENTORY_FULL); break;
-            default: break;
         }
     };
 
@@ -928,10 +909,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
                 if (auto* sfx = ac->getUiSoundManager())
                     sfx->playError();
             }
-            if (errCode == 2)
-                owner_.playErrorSpeech(audio::PlayerErrorSpeech::NOT_ENOUGH_MONEY);
-            else if (errCode == 8)
-                owner_.playErrorSpeech(audio::PlayerErrorSpeech::ITEM_MAX_COUNT);
+            owner_.playGameErrorSound(err.key);
         }
     };
 
@@ -1228,6 +1206,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
 void InventoryHandler::lootTarget(uint64_t targetGuid) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     currentLoot_.items.clear();
+    pendingLootGuid_ = targetGuid;
     LOG_INFO("Looting target 0x", std::hex, targetGuid, std::dec);
     auto packet = LootPacket::build(targetGuid);
     owner_.getSocket()->send(packet);
@@ -1329,7 +1308,28 @@ void InventoryHandler::lootMasterGive(uint8_t lootSlot, uint64_t targetGuid) {
 }
 
 void InventoryHandler::handleLootResponse(network::Packet& packet) {
+    // A refusal - loot type 0 and the reason after it - as 0x006d53b0 shows
+    // it: by its game error, with its sound, for the loot the player asked
+    // for; for anything else only an already picked pocket. The parse
+    // below finds nothing in it and goes no further.
+    if (const size_t start = packet.getReadPos(); packet.hasRemaining(10)) {
+        const uint64_t guid = packet.readUInt64();
+        const uint8_t lootType = packet.readUInt8();
+        if (lootType == 0) {
+            const uint8_t reason = packet.readUInt8();
+            const bool asked = guid != 0 && guid == pendingLootGuid_;
+            if (asked || reason == loot_error::kAlreadyPickpocketed) {
+                const loot_error::Line line =
+                    asked ? loot_error::forReason(reason) : loot_error::alreadyPickpocketed();
+                owner_.addUIError(uiText(line.key, line.enUS));
+                owner_.playGameErrorSound(line.key);
+            }
+            if (asked) pendingLootGuid_ = 0;
+        }
+        packet.setReadPos(start);
+    }
     if (!LootResponseParser::parse(packet, currentLoot_)) return;
+    if (currentLoot_.lootGuid == pendingLootGuid_) pendingLootGuid_ = 0;
     const bool hasLoot = !currentLoot_.items.empty() || currentLoot_.gold > 0;
     LOG_INFO("SMSG_LOOT_RESPONSE: guid=0x", std::hex, currentLoot_.lootGuid, std::dec,
              " items=", currentLoot_.items.size(), " gold=", currentLoot_.gold);
@@ -1886,6 +1886,7 @@ void InventoryHandler::repairItem(uint64_t vendorGuid, uint64_t itemGuid) {
     if (cost > 0 && owner_.getMoneyCopper() < cost) {
         // ERR_NOT_ENOUGH_MONEY, as the repair cursor checks it (0x005d8650).
         owner_.addUIError(uiText("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        owner_.playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
         return;
     }
 
@@ -1915,6 +1916,7 @@ void InventoryHandler::repairAll(uint64_t vendorGuid, bool useGuildBank) {
     if (!useGuildBank && totalCost > 0 && owner_.getMoneyCopper() < totalCost) {
         // ERR_NOT_ENOUGH_MONEY, as RepairAllItems checks it (0x00585c90).
         owner_.addUIError(uiText("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        owner_.playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
         return;
     }
 
@@ -1983,6 +1985,16 @@ void InventoryHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot) {
     pkt.writeUInt64(itemGuid);
     pkt.writeUInt8(equipSlot);
     owner_.getSocket()->send(pkt);
+}
+
+void InventoryHandler::setAmmo(uint32_t itemId) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() ||
+        wireOpcode(Opcode::CMSG_SET_AMMO) == 0xFFFF) {
+        return;
+    }
+    network::Packet packet(wireOpcode(Opcode::CMSG_SET_AMMO));
+    packet.writeUInt32(itemId);
+    owner_.getSocket()->send(packet);
 }
 
 bool InventoryHandler::setAmmoInstead(uint32_t itemId) {
@@ -3660,11 +3672,13 @@ void InventoryHandler::handleSendMailResult(network::Packet& packet) {
             ? static_cast<uint8_t>(packet.readUInt32()) : 0;
         const GameErrorText err = inventoryChangeError(equipError);
         if (err.key) owner_.addUIError(uiText(err.key, err.enUS));
+        if (err.key) owner_.playGameErrorSound(err.key);
     } else if (error != 0 && error != 20) {
         const GameErrorText err = mailError(error);
         // ERR_USER_SQUELCHED is the one the table sends to chat.
         if (error == 17) owner_.addSystemChatMessage(uiText(err.key, err.enUS));
         else owner_.addUIError(uiText(err.key, err.enUS));
+        owner_.playGameErrorSound(err.key);
     }
 
     if (action == MAIL_SEND) {
@@ -3838,6 +3852,7 @@ void InventoryHandler::handleBuyBankSlotResult(network::Packet& packet) {
     };
     if (result < 3) {
         owner_.addUIError(uiText(kBankSlotErrors[result].key, kBankSlotErrors[result].enUS));
+        owner_.playGameErrorSound(kBankSlotErrors[result].key);
     } else if (result == 3) {
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("PLAYERBANKBAGSLOTS_CHANGED", {});
     }
@@ -4321,6 +4336,7 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
             default: err = {"ERR_AUCTION_DATABASE_ERROR", "Internal auction error."}; break;
         }
         if (err.key) owner_.addUIError(uiText(err.key, err.enUS));
+        if (err.key) owner_.playGameErrorSound(err.key);
     }
 }
 
@@ -4477,6 +4493,7 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
     // you."
     auto error = [this](const char* key, const char* enUS) {
         owner_.addUIError(uiText(key, enUS));
+        owner_.playGameErrorSound(key);
     };
     switch (status) {
         // The codes are AzerothCore's TradeStatus enum, checked against
@@ -6447,13 +6464,9 @@ void InventoryHandler::handleTrainerBuyFailed(network::Packet& packet) {
     // No words for any of them: 0x006d8410 writes "Trainer service %d
     // unavailable" and the like to the developer console only. This printed
     // "Cannot learn X (not enough money)" in English, red and in chat.
+    // Nor a sound: no game error is raised (0x005216f0 is not reached), so
+    // there is neither the error's chime nor the character's line.
     LOG_INFO("SMSG_TRAINER_BUY_FAILED: spell=", spellId, " error=", errorCode);
-    if (auto* ac = owner_.services().audioCoordinator)
-        if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
-    if (errorCode == 1)
-        owner_.playErrorSpeech(audio::PlayerErrorSpeech::NOT_ENOUGH_MONEY);
-    else
-        owner_.playErrorSpeech(audio::PlayerErrorSpeech::CANT_LEARN_SPELL);
 }
 
 // ============================================================

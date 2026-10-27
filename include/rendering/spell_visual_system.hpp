@@ -12,6 +12,7 @@
 #include <memory>
 #include <glm/glm.hpp>
 
+#include "audio/voice_priority.hpp"
 #include "rendering/missile_motion.hpp"
 #include "rendering/spell_missile.hpp"
 #include "rendering/spell_kit.hpp"
@@ -300,6 +301,16 @@ public:
     /// object of that cast keeps its model hidden until then.
     using MissileInFlightQuery = std::function<bool(uint64_t caster, uint32_t spellId, uint32_t castTime)>;
     void setMissileInFlightQuery(MissileInFlightQuery query) { missileInFlightQuery_ = std::move(query); }
+    /// The active mover (DAT_00ca1238) and the object the listener is
+    /// (0x007450b0: the mover, else the player, else what the player looks
+    /// through with far sight on): whose spell sounds keep their voice over
+    /// a crowd's (audio/voice_priority.hpp).
+    struct ActiveUnits {
+        uint64_t mover = 0;
+        uint64_t listener = 0;
+    };
+    using ActiveUnitsQuery = std::function<ActiveUnits()>;
+    void setActiveUnitsQuery(ActiveUnitsQuery query) { activeUnitsQuery_ = std::move(query); }
     /// A transport's matrix, renderer coordinates (GameObject_C's +0x1a8,
     /// which 0x007132e0 hands its passengers each frame); none where it is
     /// not known.
@@ -388,8 +399,14 @@ public:
     /// A SpellEffectCameraShakes row's shakes at `origin` (0x007fa620): a
     /// kit's ShakeID, or SMSG_CAMERA_SHAKE's.
     void playCameraShakes(uint32_t spellEffectCameraShakesId, const glm::vec3& origin);
-    /// A SoundEntries sound at a place, once.
-    void playSoundAt(uint32_t soundId, const glm::vec3& position);
+    /// A SoundEntries sound at a place, once, at a voice priority.
+    void playSoundAt(uint32_t soundId, const glm::vec3& position,
+                     int priority = audio::voice_priority::kDefault);
+    /// A sound on the player that the client plays as the active player's
+    /// (0x006da130): at the listener, at 0.65 of its volume, with the
+    /// listener at the character; else where it is - kept over a crowd's
+    /// either way.
+    void playOwnSoundAt(uint32_t soundId, const glm::vec3& position);
 
     /// The cast a dynamic object carries: DYNAMICOBJECT_CASTER, SPELLID and
     /// CASTTIME (0x00804cc0).
@@ -840,6 +857,10 @@ private:
     void loadCameraShakes();
     SpellVisualResolver spellVisualResolver_;
     MissileInFlightQuery missileInFlightQuery_;
+    ActiveUnitsQuery activeUnitsQuery_;
+    /// Whether a render instance draws the active mover / the listener.
+    [[nodiscard]] bool instanceIsMover(uint32_t renderInstanceId) const;
+    [[nodiscard]] bool instanceIsListener(uint32_t renderInstanceId) const;
     TransportFrameQuery transportFrameQuery_;
     UnarmedKitsQuery unarmedKitsQuery_;
     AttachedEffectScale attachedEffectScale_;
@@ -975,7 +996,7 @@ private:
     void updateMissiles(float deltaTime);
     /// Start the missile's looping sound where it is; 0 when it has none or
     /// it cannot be played.
-    uint32_t startMissileSound(uint32_t soundId, const glm::vec3& position);
+    uint32_t startMissileSound(uint32_t soundId, const glm::vec3& position, int priority);
     struct LoadedSound;
     const LoadedSound* soundEntry(uint32_t soundId);
     /// A SpellMissile.dbc row, null when there is none (or no file).
@@ -1009,6 +1030,7 @@ private:
         float volume = 1.0f;
         float minDistance = 0.0f;  ///< MinDistance (26)
         float cutoff = 0.0f;       ///< DistanceCutoff (27)
+        bool loops = false;        ///< Flags (25) 0x200
     };
     std::unordered_map<uint32_t, LoadedSound> soundEntries_;           // SoundEntries id → its file, empty if none
     std::unordered_map<std::string, uint32_t> spellVisualModelIds_;   // M2 path → M2Renderer modelId

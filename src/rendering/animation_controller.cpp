@@ -128,11 +128,9 @@ void AnimationController::triggerMeleeSwing() {
     auto* characterRenderer = renderer_->getCharacterRenderer();
     uint32_t characterInstanceId = renderer_->getCharacterInstanceId();
     if (!characterRenderer || characterInstanceId == 0) return;
+    // Its whoosh is the animation's own $CSS (rendering/melee_sound.hpp).
     if (const uint32_t swing = resolveMeleeAnimId(); swing != 0) {
         characterRenderer->playAnimation(characterInstanceId, swing, false);
-    }
-    if (renderer_->getAudioCoordinator()->getActivitySoundManager()) {
-        renderer_->getAudioCoordinator()->getActivitySoundManager()->playMeleeSwing();
     }
 }
 
@@ -179,9 +177,6 @@ void AnimationController::triggerSpecialAttack(uint32_t /*spellId*/) {
     }
 
     characterRenderer->playAnimation(characterInstanceId, specAnim, false);
-    if (renderer_->getAudioCoordinator()->getActivitySoundManager()) {
-        renderer_->getAudioCoordinator()->getActivitySoundManager()->playMeleeSwing();
-    }
 }
 
 // ── Ranged combat ────────────────────────────────────────────────────────────
@@ -767,6 +762,7 @@ void AnimationController::updateMountedAnimation(float deltaTime) {
     // Build MountFSM input
     MountFSM::Input mountIn;
     mountIn.moving = cameraController->isMoving();
+    mountIn.movingForward = cameraController->isMovingForward();
     mountIn.movingBackward = cameraController->isMovingBackward();
     mountIn.strafeLeft = cameraController->isStrafingLeft();
     mountIn.strafeRight = cameraController->isStrafingRight();

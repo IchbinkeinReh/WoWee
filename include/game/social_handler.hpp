@@ -300,7 +300,7 @@ public:
     [[nodiscard]] bool hasPetitionSignaturesUI() const { return petitionInfo_.showUI; }
     void clearPetitionSignaturesUI() { petitionInfo_.showUI = false; }
     void signPetition(uint64_t petitionGuid);
-    void turnInPetition(uint64_t petitionGuid);
+    void turnInPetition(uint64_t petitionGuid, bool blankDesign = false);
     /// Offer the charter to another player so they can sign it.
     void offerPetition(uint64_t petitionGuid, uint64_t targetGuid);
 

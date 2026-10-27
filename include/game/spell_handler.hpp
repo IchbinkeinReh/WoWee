@@ -8,6 +8,7 @@
 #include "game/spell_history.hpp"
 #include "game/spell_missiles_in_flight.hpp"
 #include "game/cast_checks.hpp"
+#include "game/cast_failure_error.hpp"
 #include "game/spell_unit_target.hpp"
 #include "game/handler_types.hpp"
 #include "audio/spell_sound_manager.hpp"
@@ -181,6 +182,9 @@ public:
     /// its ChannelInterruptFlags has 0x8 (movement), cancelled with
     /// CMSG_CANCEL_CHANNELLING and the spell's id, u32.
     void cancelChannelOnMove();
+    /// A turn key starting a turn ends a channel that turning breaks
+    /// (ChannelInterruptFlags 0x10 with AttributesEx 0x4000, 0x0072e7e0).
+    void cancelChannelOnTurn();
     void cancelAura(uint32_t spellId);
 
     // Known spells
@@ -487,6 +491,17 @@ public:
     /// A cast the client refuses itself, shown as its failure is
     /// (0x00808200): the result's line on the error frame.
     void reportLocalCastFailure(uint32_t spellId, uint8_t result);
+    /// The character's line for the player's failed cast: its game error's
+    /// (cast_failure::gameError), where the client's table gives it one
+    /// (0x00808200 -> 0x005216f0 -> 0x00986d00).
+    void sayCastFailure(uint32_t spellId, uint8_t result) const;
+    /// And a pet's (0x00805610): its cooldown and power lines speak too, in
+    /// the player's voice.
+    void sayPetCastFailure(uint32_t spellId, uint8_t result) const;
+    /// The player's own refusal, as 0x00808200 shows it: on the error line
+    /// with the character's line, unless it repeats the last one within
+    /// three seconds (cast_failure::RepeatHold). Nothing for empty words.
+    void showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text) const;
 
 private:
     std::unordered_map<uint32_t, uint64_t> pendingPetNameQueries_;
@@ -602,6 +617,9 @@ private:
     // --- Spell state ---
     std::unordered_set<uint32_t> knownSpells_;
     uint8_t castCount_ = 0;
+    /// The cast count of the player's cast the server last started: the
+    /// running cast a cancel ends (0x00806200).
+    uint8_t runningCastCount_ = 0;
 
     struct GroundTarget {
         uint32_t spellId = 0;
@@ -625,6 +643,9 @@ private:
     uint64_t castItemGuid_ = 0;
     spell_history::History petHistory_;
     spell_history::History playerHistory_;
+    /// The last failure 0x00808200 reported, held three seconds. Mutable:
+    /// the const reach test reports through it.
+    mutable cast_failure::RepeatHold failureHold_;
     /// 0x00af5274: the casts whose missile still flies.
     spell_missiles::InFlightList missilesInFlight_;
     /// 0x0080e1b0: a cast whose spell has a missile Speed joins the list.
