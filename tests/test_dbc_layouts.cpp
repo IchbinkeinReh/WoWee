@@ -167,12 +167,14 @@ TEST_CASE("WotLK layout carries the spell missile columns", "[dbc][layout]") {
 }
 
 // CharacterFacialHairStyles drives the three facial-feature geoset channels: a
-// beard, and for races like the Draenei the face tendrils. The geoset columns
-// are not where the obvious reading of the WotLK definition puts them - in every
-// copy of the DBC shipped here, columns 3-5 hold a constant per race and the
-// variant numbers are at 6-8. Reading 3-5 yields values like 2010429269, which
-// match no geoset in any model, so every character silently lost their facial
-// features. Pin the columns against the real files.
+// beard, and for races like the Draenei the face tendrils. Which columns hold
+// them depends on the file. A nine-column copy keeps a constant per race at 3-5
+// (values like 2010429269, matching no geoset) and the variants at 6-8; the
+// 12340 client's own eight-column file has the variants at 3-5 and groups 16 and
+// 17 at 6-7 (33cc4a86; checked against G:\wowee-data's copy: 222 rows of
+// 8 fields, e.g. 1 0 1 | 1 2 1 | 0 0). The run-time detection moves the columns
+// for whichever file is present; the declared layout must at least keep the
+// three channels distinct and clear of the identity columns.
 TEST_CASE("CharacterFacialHairStyles geoset columns hold plausible variants",
           "[dbc][layout]") {
     for (const auto& expansion : expansions()) {
@@ -193,9 +195,9 @@ TEST_CASE("CharacterFacialHairStyles geoset columns hold plausible variants",
         CHECK(g100 != g200);
         CHECK(g100 != g300);
         CHECK(g200 != g300);
-        CHECK(g100 >= 6);
-        CHECK(g200 >= 6);
-        CHECK(g300 >= 6);
+        CHECK(g100 >= 3);
+        CHECK(g200 >= 3);
+        CHECK(g300 >= 3);
 
         // And they must not collide with the identity columns.
         CHECK((*fm)["RaceID"] == 0);
