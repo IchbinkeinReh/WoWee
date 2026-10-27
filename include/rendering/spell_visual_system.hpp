@@ -629,13 +629,18 @@ private:
     void startDynamicObjectKit(DynamicObjectVisual& object);
     bool missileInFlight(const DynamicObjectCast& cast) const;
     /// 0x00745230 on a unit (renderInstanceId, 0 for none) or at a place:
-    /// the kit's models, its weapon effects (precast and cast kits), its
-    /// camera shake and its colour. Returns a state kit's models.
+    /// the kit's sound, its models, its weapon effects (precast and cast
+    /// kits), its camera shake and its colour. Returns a state kit's models.
     using KitPlayExtra = SpellKitPlayExtra;
     std::vector<KitModelInstance> playKitOnUnit(uint32_t kitId, spell_kit::KitType type,
                                                uint32_t renderInstanceId, const glm::vec3& position,
                                                const glm::vec3* place, uint32_t castTimeMs = 0,
                                                uint32_t spellId = 0, const KitPlayExtra& extra = {});
+    /// The kit's SoundID (+0x3c) as 0x00745230 plays it with the kit, through
+    /// the kit's effect or the unit (spell_kit::kitSoundOwnVoice) - except a
+    /// kit whose entry it loops, which nothing here stops again.
+    void playKitSound(const KitRecord& kit, spell_kit::KitType type, uint32_t renderInstanceId,
+                      const glm::vec3& position);
     /// The unit's virtual 0x104 (0x0072af60): a kit with Flags 0x1 of a
     /// spell whose visual has a chain kit (0x00800bf0) waits on its unit
     /// (0x00728050) for a chain's pulse to reach it, ten seconds at most.

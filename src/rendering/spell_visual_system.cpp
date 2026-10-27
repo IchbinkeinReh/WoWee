@@ -613,24 +613,8 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
                                ? spell_kit::impactKitFor(onCaster, kits.impact, kits.casterImpact, kits.targetImpact)
                                : kits.cast;
     if (kitId == 0) return;
-    // The impact kit's sound plays with it, where it plays (0x00745230
-    // flags the kit to play its SoundID); for a missile that is on arrival.
-    if (useImpactKit) {
-        auto kitIt = kits_.find(kitId);
-        if (const LoadedSound* sound = kitIt != kits_.end() ? soundEntry(kitIt->second.soundId) : nullptr) {
-            // Its voice (0x6e): a kit with models sounds through its effect
-            // (0x006f9840) - the unit it plays on being the listener's
-            // object or the active mover; one without through the unit
-            // (0x0073b140 -> 0x006f7e40) - the unit being the mover, and the
-            // sound not a looping one (0x00745230 flag 0x1).
-            const bool own = !kitIt->second.models.empty()
-                                 ? instanceIsListener(attachInstanceId) || instanceIsMover(attachInstanceId)
-                                 : instanceIsMover(attachInstanceId) && !sound->loops;
-            audio::AudioEngine::instance().playSound3D(
-                sound->data, worldPosition, sound->volume, 1.0f, 100.0f, 1.0f, audio::Channel::Effects,
-                audio::PlayLimit::None, own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault);
-        }
-    }
+    // Its sound goes with it (0x00745230), where it plays; for a missile
+    // that is on arrival.
     playKitOnUnit(kitId, spell_kit::KitType::Cast, attachInstanceId, worldPosition,
                   attachInstanceId == 0 ? &worldPosition : nullptr, 0, spellId);
 }
@@ -713,6 +697,11 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
                                 .deadlineMs = colourClockMs_ + spell_kit::kWaitingKitMs});
         return {};
     }
+    // The kit's SoundID (+0x3c) plays with it, whichever of the spell's kits
+    // this is: an effect of the kit takes the sound where it has a model
+    // (0x006f9840), and where it has none the unit plays it (0x0073b140 ->
+    // 0x006f7e40).
+    playKitSound(kit, type, renderInstanceId, place ? *place : position);
     // 0x0073b140: the unit's own part - the kit's animation, the weapon
     // effects of a precast or cast kit (0x0073a6c0), the kit's colour and
     // its camera shake.
@@ -740,6 +729,21 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
     if (renderInstanceId != 0 && type != spell_kit::KitType::State && instanceUnitResolver_)
         startKitChains(kit, instanceUnitResolver_(renderInstanceId), spellId, 0);
     return playKitModels(kit, type, renderInstanceId, position, place, castTimeMs);
+}
+
+void SpellVisualSystem::playKitSound(const KitRecord& kit, spell_kit::KitType type, uint32_t renderInstanceId,
+                                     const glm::vec3& position) {
+    const LoadedSound* sound = kit.soundId ? soundEntry(kit.soundId) : nullptr;
+    if (!sound) return;
+    // A state kit's, a precast kit's and an area kit's own looping entry runs
+    // as long as the kit does and goes with it (0x004c5c80); nothing here
+    // stops a sound once it has started, so those stay unheard.
+    const bool loops = spell_kit::kitSoundLoops(type, sound->loops, renderInstanceId);
+    if (loops) return;
+    const bool own = spell_kit::kitSoundOwnVoice(!kit.models.empty(), loops, instanceIsListener(renderInstanceId),
+                                                 instanceIsMover(renderInstanceId));
+    playSoundAt(kit.soundId, position,
+                own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault);
 }
 
 void SpellVisualSystem::playKitWeaponEffects(const std::vector<KitWeaponEffect>& effects,
