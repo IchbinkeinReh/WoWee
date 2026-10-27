@@ -4764,6 +4764,17 @@ static int lua_MoveViewStop(lua_State* L) {
     return 0;
 }
 
+// WoweeSetCamera(distance, pitch, yaw): the camera as /gps reports it (its
+// "Camera:" line, ui::client_gps), at once - for scripts that put a report's
+// view back. Not the client's.
+static int lua_WoweeSetCamera(lua_State* L) {
+    const float distance = static_cast<float>(luaL_checknumber(L, 1));
+    const float pitch = static_cast<float>(luaL_checknumber(L, 2));
+    const float yaw = static_cast<float>(luaL_checknumber(L, 3));
+    if (auto* cc = luaCamera(L)) cc->goToViewPose({distance, pitch, yaw}, 0.0f);
+    return 0;
+}
+
 // FlipCameraYaw(degrees) (0x005ff2c0).
 static int lua_FlipCameraYaw(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: FlipCameraYaw(degrees)");
@@ -6759,6 +6770,7 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"NextView",                 lua_StepView<1>},
                 {"PrevView",                 lua_StepView<-1>},
                 {"FlipCameraYaw",            lua_FlipCameraYaw},
+                {"WoweeSetCamera",           lua_WoweeSetCamera},
                 {"GetFarclip",               lua_GetFarclip},
                 {"SetFarclip",               lua_SetFarclip},
                 {"GetTexLodBias",            lua_GetTexLodBias},

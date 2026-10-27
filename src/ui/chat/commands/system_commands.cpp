@@ -275,6 +275,12 @@ public:
         if (client_gps::differs(drawn.x, drawn.y, drawn.z, sent.x, sent.y, sent.z)) {
             say("Sent to the server: " + client_gps::goXyzLine(mapId, sent.x, sent.y, sent.z, facing));
         }
+        // The view, as /cam puts it back: where the camera is going - its
+        // distance, its pitch, its yaw from the facing (it orbits).
+        if (auto* cam = renderer ? renderer->getCameraController() : nullptr) {
+            const auto pose = cam->currentViewPose();
+            say(client_gps::cameraLine({pose.distance, pose.pitch, pose.yaw}));
+        }
         // On a transport: which, where the client has it, and the offset on
         // it that goes to the server with the position.
         if (ctx.gameHandler.isOnTransport()) {
@@ -303,6 +309,40 @@ public:
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"gps"}; }
     [[nodiscard]] std::string helpText() const override {
         return "The client's position as a .go xyz line (server convention)";
+    }
+};
+
+// ---------------------------------------------------------------------------
+// /cam <distance> <pitch> <yaw> - the camera as /gps reported it: its
+// distance, pitch and yaw from the facing (degrees), or the whole "Camera:"
+// line. At once, as SetView with no blend (0x00603330).
+// ---------------------------------------------------------------------------
+class CamCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        const auto say = [&](const std::string& text) {
+            ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(text));
+            LOG_INFO("/cam: ", text);
+        };
+        auto* renderer = ctx.services.renderer;
+        auto* cam = renderer ? renderer->getCameraController() : nullptr;
+        if (!cam) {
+            say("Camera: no camera to set.");
+            return {};
+        }
+        const auto pose = client_gps::parseCamera(ctx.args);
+        if (!pose) {
+            say("Usage: /cam <distance> <pitch> <yaw>, or a /gps Camera: line");
+            return {};
+        }
+        cam->goToViewPose({pose->distance, pose->pitch, pose->yaw}, 0.0f);
+        const auto now = cam->currentViewPose();
+        say(client_gps::cameraLine({now.distance, now.pitch, now.yaw}));
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"cam"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "Set the camera as /gps reported it (/cam distance pitch yaw)";
     }
 };
 
@@ -406,6 +446,7 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<ProfileCommand>());
     reg.registerCommand(std::make_unique<ClimbCommand>());
     reg.registerCommand(std::make_unique<GpsCommand>());
+    reg.registerCommand(std::make_unique<CamCommand>());
     reg.registerCommand(std::make_unique<RunCommand>());
     reg.registerCommand(std::make_unique<DumpCommand>());
     reg.registerCommand(std::make_unique<ReloadCommand>());

@@ -31,3 +31,25 @@ TEST_CASE("/gps shows the sent position only where it parts from the drawn one",
     CHECK_FALSE(differs(1.0f, 2.0f, 3.0f, 1.01f, 2.0f, 3.0f));
     CHECK(differs(1.0f, 2.0f, 3.0f, 1.0f, 2.0f, 15.5f));
 }
+
+TEST_CASE("/gps reports the camera as a line /cam takes back", "[client_gps]") {
+    const CameraPose c{12.4f, 20.0f, -35.5f};
+    CHECK(cameraLine(c) == "Camera: distance 12.40 pitch 20.00 yaw -35.50");
+    const auto back = parseCamera(cameraLine(c));
+    REQUIRE(back);
+    CHECK(back->distance == Catch::Approx(12.4f));
+    CHECK(back->pitch == Catch::Approx(20.0f));
+    CHECK(back->yaw == Catch::Approx(-35.5f));
+    // Or the three numbers alone.
+    const auto bare = parseCamera("8 -10.5 90");
+    REQUIRE(bare);
+    CHECK(bare->distance == 8.0f);
+    CHECK(bare->pitch == -10.5f);
+    CHECK(bare->yaw == 90.0f);
+    // Not a pose.
+    CHECK_FALSE(parseCamera(""));
+    CHECK_FALSE(parseCamera("8 10"));
+    CHECK_FALSE(parseCamera("8 ten 0"));
+    CHECK_FALSE(parseCamera("-1 0 0"));
+    CHECK_FALSE(parseCamera("nan 0 0"));
+}
