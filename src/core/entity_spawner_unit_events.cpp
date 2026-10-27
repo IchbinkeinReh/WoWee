@@ -139,6 +139,13 @@ void EntitySpawner::playUnitSlot(const game::Unit& unit, uint32_t slot, bool alw
     if (where) player.playOnce(sound, &*where, 1.0f, assetManager_, type, false, priority);
 }
 
+void EntitySpawner::playUnitJumpSound(const game::Unit& unit, uint32_t slot) {
+    // A jump's slots are asked outright, not by their chance: the client's
+    // four callers all pass its "no roll" parameter (0x0073ed10 cases 0xbb
+    // and 0x346, FUN_0073d2b0), and where the unit stands is where it jumps.
+    playUnitSlot(unit, slot, true, nullptr);
+}
+
 void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
     rendering::CharacterRenderer* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!cr) return;

@@ -11,6 +11,7 @@
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/animation/emote_registry.hpp"
 #include "rendering/animation/jump_landing.hpp"
+#include "rendering/unit_model_events.hpp"
 #include "game/game_handler.hpp"
 #include "game/spell_classification.hpp"
 #include "game/world_packets.hpp"
@@ -162,12 +163,26 @@ void AnimationCallbackHandler::setupCallbacks() {
         if (instanceId == 0) return;
         auto entity = gameHandler_.getEntityManager().getEntity(guid);
         if (!entity) return;
+        // Its own jump sound goes with it, asked of the unit outright as the
+        // client's movement handlers ask it (0x0073ed10 cases 0xbb and 0x346,
+        // FUN_0073d2b0): its JumpStart as it leaves the ground, its JumpEnd as
+        // it comes down. Of the 1306 sound kits 30 name either column, 25 of
+        // those the universal flying mount's (SoundEntries 10905 taking off,
+        // 10904 landing); no player's kit does, so a character jumping or
+        // landing a flying mount is as silent here as the client leaves it.
+        const auto jumpSound = [&](uint32_t slot) {
+            if (entity->isUnit())
+                entitySpawner_.playUnitJumpSound(static_cast<const game::Unit&>(*entity), slot);
+        };
         // Don't override Death animation
         uint32_t curAnim = 0; float curT = 0.0f, curDur = 0.0f;
         if (cr->getAnimationState(instanceId, curAnim, curT, curDur) && curAnim == rendering::anim::DEATH) return;
         const bool takeOff =
             jump == game::ReportedJump::TakeOff && curAnim != rendering::anim::FALL;
         if (jump == game::ReportedJump::Launch || takeOff) {
+            // The launch's sound goes first, whether or not the model has an
+            // animation for it (0x0073ed10 asks it and only then picks one).
+            jumpSound(rendering::unit_event::kSlotJumpStart);
             if (cr->hasAnimation(instanceId, rendering::anim::JUMP_START)) {
                 cr->playAnimation(instanceId, rendering::anim::JUMP_START, /*loop=*/false,
                                   rendering::anim::JUMP);
@@ -177,6 +192,7 @@ void AnimationCallbackHandler::setupCallbacks() {
             return;
         }
         if (jump == game::ReportedJump::FlightLand) {
+            jumpSound(rendering::unit_event::kSlotJumpEnd);
             if (cr->hasAnimation(instanceId, rendering::anim::JUMP_LAND_RUN)) {
                 cr->playAnimation(instanceId, rendering::anim::JUMP_LAND_RUN, /*loop=*/false);
             }
@@ -187,13 +203,19 @@ void AnimationCallbackHandler::setupCallbacks() {
         const auto& speeds = entity->getMovementSpeeds();
         const rendering::JumpLanding landing = rendering::jumpLandingForFlags(
             flags, game::Entity::speedForFlags(speeds, flags), speeds.walk);
-        if (landing == rendering::JumpLanding::End &&
-            cr->hasAnimation(instanceId, rendering::anim::JUMP_END)) {
-            cr->playAnimation(instanceId, rendering::anim::JUMP_END, /*loop=*/false);
-        } else if (landing == rendering::JumpLanding::LandRun &&
-                   cr->hasAnimation(instanceId, rendering::anim::JUMP_LAND_RUN)) {
-            cr->playAnimation(instanceId, rendering::anim::JUMP_LAND_RUN, /*loop=*/false,
-                              rendering::anim::RUN);
+        // FUN_0073d2b0 asks the landing sound in the two branches that play a
+        // landing animation, and not as the unit goes straight back to its
+        // locomotion.
+        if (landing == rendering::JumpLanding::End) {
+            jumpSound(rendering::unit_event::kSlotJumpEnd);
+            if (cr->hasAnimation(instanceId, rendering::anim::JUMP_END))
+                cr->playAnimation(instanceId, rendering::anim::JUMP_END, /*loop=*/false);
+        } else if (landing == rendering::JumpLanding::LandRun) {
+            jumpSound(rendering::unit_event::kSlotJumpEnd);
+            if (cr->hasAnimation(instanceId, rendering::anim::JUMP_LAND_RUN)) {
+                cr->playAnimation(instanceId, rendering::anim::JUMP_LAND_RUN, /*loop=*/false,
+                                  rendering::anim::RUN);
+            }
         }
     });
 

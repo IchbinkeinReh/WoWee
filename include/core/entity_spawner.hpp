@@ -365,6 +365,10 @@ public:
     /// The race splash of each unit wading across four tenths of its height
     /// into or out of water (rendering/unit_splash.hpp).
     void playUnitSplashes(uint32_t localPlayerInstance);
+    /// A unit's jump's own sound, asked of it outright as its movement
+    /// handlers ask it: kSlotJumpStart leaving the ground, kSlotJumpEnd
+    /// coming down (unit_model_events.hpp).
+    void playUnitJumpSound(const game::Unit& unit, uint32_t slot);
     /// A unit's melee hit arriving (SMSG_ATTACKERSTATEUPDATE), kept on its
     /// attacker for its model's events; an attack stopping, which settles it
     /// (rendering/melee_sound.hpp).

@@ -67,6 +67,15 @@ constexpr uint32_t kSlotStand = 5;      ///< $FDX
 constexpr uint32_t kSlotWingFlap = 7;   ///< $WNG
 constexpr uint32_t kSlotWingGlide = 10; ///< $WGG
 
+/// The slots a jump's own sound is, asked outright (0x0073ed10, 0x0073d2b0):
+/// as the unit leaves the ground, and as it comes down again - a jump, a
+/// take-off into flight and a landing out of it. Only 30 of the 1306
+/// CreatureSoundData rows name either: 25 of those the universal flying
+/// mount's (SoundEntries 10905 take-off, 10904 landing), and no player's -
+/// a character on foot and on a flying mount alike is silent here.
+constexpr uint32_t kSlotJumpStart = 11;
+constexpr uint32_t kSlotJumpEnd = 12;
+
 /// CreatureSoundData columns (3.3.5a, 38 of them).
 constexpr uint32_t kColumnFootstep = 9;  ///< +0x24, FootstepTerrainLookup's CreatureFootstepID
 constexpr uint32_t kColumnFidget0 = 14;
@@ -108,8 +117,8 @@ constexpr uint32_t slotColumn(uint32_t slot) {
     case 8: return 13;   // Alert
     case 9: return 5;    // InjuryCrushingBlow
     case 10: return 12;  // WingGlide
-    case 11: return 26;  // JumpStart
-    case 12: return 27;  // JumpEnd
+    case kSlotJumpStart: return 26;  // JumpStart
+    case kSlotJumpEnd: return 27;    // JumpEnd
     default: return 0;
     }
 }

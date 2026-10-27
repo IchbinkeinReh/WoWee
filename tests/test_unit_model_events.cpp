@@ -49,6 +49,10 @@ TEST_CASE("a slot's CreatureSoundData column", "[unit_model_events]") {
     CHECK(ue::slotColumn(2) == 3);
     CHECK(ue::slotColumn(13) == 3);
     CHECK(ue::slotColumn(6) == 0);
+    // A jump's slots, at the row's +0x68 and +0x6c: what the unit plays as
+    // it leaves the ground, and as it comes down again.
+    CHECK(ue::slotColumn(ue::kSlotJumpStart) == 26);
+    CHECK(ue::slotColumn(ue::kSlotJumpEnd) == 27);
 }
 
 TEST_CASE("a slot's chance out of 101 draws", "[unit_model_events]") {
