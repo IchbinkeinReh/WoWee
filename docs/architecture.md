@@ -333,7 +333,7 @@ FrameXML calls into, plus what the client draws in the world.
 - `MountSoundManager` - Mount-specific movement audio
 - `MusicManager` - Zone music (ZoneMusic.dbc day and night tracks pooled, plus this project's own soundtrack)
 - `CombatSoundManager`, `UiSoundManager`, `NpcVoiceManager`, `PlayerVoiceManager`
-- A spell's own sounds are no manager's business: each visual kit brings the SoundEntries row its DBC names, and `SpellVisualSystem` plays it with the kit
+- A spell's own sounds are no manager's business: each visual kit brings the SoundEntries row its DBC names, and `SpellVisualSystem` plays it with the kit. Where that row loops it runs as long as the kit does — an aura's state or channel kit holds its sound until the aura leaves the unit, a precast kit's lasts its cast's timed length — and stops with it
 
 ### 9. Warden Anti-Cheat (`src/game/`)
 

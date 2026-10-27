@@ -700,8 +700,15 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
     // The kit's SoundID (+0x3c) plays with it, whichever of the spell's kits
     // this is: an effect of the kit takes the sound where it has a model
     // (0x006f9840), and where it has none the unit plays it (0x0073b140 ->
-    // 0x006f7e40).
-    playKitSound(kit, type, renderInstanceId, place ? *place : position);
+    // 0x006f7e40). Of the kits played here only a precast kit has an end that
+    // can be timed - its cast's - so only its looping entry is held, for as
+    // long as that runs (0x007fec00 takes the kit back when the cast is over);
+    // an area kit's at a place has no end here at all and stays unheard. A
+    // state or channel kit's sound its aura holds, its own way.
+    if (const uint32_t handle = playKitSound(kit, type, renderInstanceId, place ? *place : position,
+                                             type == spell_kit::KitType::Precast);
+        handle != 0)
+        heldKitSounds_.push_back({.handle = handle, .endsMs = colourClockMs_ + castTimeMs});
     // 0x0073b140: the unit's own part - the kit's animation, the weapon
     // effects of a precast or cast kit (0x0073a6c0), the kit's colour and
     // its camera shake.
@@ -2115,6 +2122,21 @@ void SpellVisualSystem::startStateKitOnUnit(uint64_t unitGuid, AuraKit& aura, ui
     }
 }
 
+void SpellVisualSystem::expireHeldKitSounds() {
+    if (heldKitSounds_.empty()) return;
+    auto& audio = audio::AudioEngine::instance();
+    for (auto it = heldKitSounds_.begin(); it != heldKitSounds_.end();) {
+        // Its cast's time has run out, which is when the client takes the
+        // precast kit back (0x007fec00) - and its sound with it (0x004c5c80).
+        if (static_cast<int32_t>(colourClockMs_ - it->endsMs) >= 0) {
+            audio.stopSound(it->handle);
+            it = heldKitSounds_.erase(it);
+            continue;
+        }
+        ++it;
+    }
+}
+
 void SpellVisualSystem::holdStateKitForChain(AuraKit& aura) {
     // 0x00724820 and 0x0072bc70 ask 0x00745230 with counter -1, so the
     // kit waits for a pulse at either end of a bolt (0x0072af60).
@@ -2773,6 +2795,7 @@ void SpellVisualSystem::update(float deltaTime) {
     updateMountTransitions();
     expireWaitingKits();
     expireStateKitWaits();
+    expireHeldKitSounds();
     updateDynamicObjects(deltaTime);
     updateFallingModels(deltaTime);
     publishClientStrips();
@@ -3074,6 +3097,8 @@ void SpellVisualSystem::cancelAllPrecastVisuals() {
     // 0x007fec00: the cast's precast kits' effects go (0x00744bd0), a mount
     // transition's handing its unit over, which is then set to the
     // server's mount.
+    for (const HeldKitSound& held : heldKitSounds_) audio::AudioEngine::instance().stopSound(held.handle);
+    heldKitSounds_.clear();
     for (size_t i = 0; i < mountTransitions_.size();) {
         if (mountTransitions_[i].precast)
             endMountTransition(i, true);
@@ -3110,6 +3135,8 @@ void SpellVisualSystem::reset() {
         for (AuraKit& aura : unit.auras) hideAuraKit(aura);
     }
     unitAuraKits_.clear();
+    for (const HeldKitSound& held : heldKitSounds_) audio::AudioEngine::instance().stopSound(held.handle);
+    heldKitSounds_.clear();
     riderPoses_.clear();
     chains_.clear();
     if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {

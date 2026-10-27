@@ -657,6 +657,15 @@ private:
     uint32_t playKitSound(const KitRecord& kit, spell_kit::KitType type, uint32_t renderInstanceId,
                           const glm::vec3& position, bool holds = false);
     float kitSoundVolumeScale_ = 1.0f;  ///< The settings' "Spells" balance
+    /// A kit's looping sound the caller holds only for a while: a precast
+    /// kit's, for its cast's time. 3.3.5a's visuals give 1775 of them.
+    struct HeldKitSound {
+        uint32_t handle = 0;
+        uint32_t endsMs = 0;  ///< colourClockMs_ when the kit it came with goes
+    };
+    std::vector<HeldKitSound> heldKitSounds_;
+    /// Their casts are over: the sounds go with them.
+    void expireHeldKitSounds();
     /// The unit's virtual 0x104 (0x0072af60): a kit with Flags 0x1 of a
     /// spell whose visual has a chain kit (0x00800bf0) waits on its unit
     /// (0x00728050) for a chain's pulse to reach it, ten seconds at most.
