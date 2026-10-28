@@ -246,15 +246,17 @@ void GameHandler::sendChangePlayerDifficulty(uint32_t difficulty) {
 
 // The rune bar draws itself from these two events and from nothing else.
 //
-// "usable" is sent as a present argument or no argument at all rather than as
-// one and zero, because zero is true in Lua: an argument saying the rune is on
-// cooldown would read as one saying it is ready.
+// The client's shape is two arguments always: 0x0081b530(598, "%d%b", rune + 1,
+// usable) at all four sites in 0x005ee020's family, the slot counted from one,
+// the boolean true when the rune came ready and false when it went back on
+// cooldown with its ready fraction recorded. `usable` crosses here as a boolean
+// argument rather than as one and zero, because "0" would arrive as the number 0
+// and every number is true in Lua. RuneFrame_OnEvent only ever asks whether it
+// is truthy (`if (not usable and rune …)`), so nil serves for the false case.
 void GameHandler::fireRunePowerUpdates(const std::array<runes::PowerUpdate, runes::kMax>& updates, int n) {
-    for (int k = 0; k < n; ++k) {
-        const std::string oneBased = std::to_string(updates[k].rune + 1);
-        if (updates[k].usable) fireAddonEvent("RUNE_POWER_UPDATE", {oneBased, "1"});
-        else fireAddonEvent("RUNE_POWER_UPDATE", {oneBased});
-    }
+    for (int k = 0; k < n; ++k)
+        fireAddonEvent("RUNE_POWER_UPDATE",
+                       {std::to_string(updates[k].rune + 1), eventBool(updates[k].usable)});
 }
 
 std::array<float, 4> GameHandler::runeRegen() const {
@@ -606,7 +608,21 @@ void GameHandler::registerCoreOpcodes() {
         uint8_t  paused = packet.readUInt8();
         if (type < 3) {
             mirrorTimers_[type].paused = (paused != 0);
-            fireAddonEvent("MIRROR_TIMER_PAUSE", {paused ? "1" : "0"});
+            // The timer's name first, then the pause byte: SMSG_PAUSE_MIRROR_TIMER
+            // (0x1da) is a dword type plus a byte at (int)&type + 3, and the client
+            // says (0x00510000.c:8169) event(353, "%s%d", name, param >> 24) with the
+            // same name words it maps for start and stop - EXHAUSTION, BREATH,
+            // FEIGNDEATH. It used to be the pause byte alone, which the frame's own
+            // guard rejects: MirrorTimerFrame_OnEvent returns unless arg1 equals
+            // self.timer, and self.timer is the name MIRROR_TIMER_START carried.
+            //
+            // What happens next is the client's bug, and it is left alone: the
+            // shipped handler then tests `if (arg1 > 0)`, arg1 being that name
+            // string, so the comparison raises and the timer never pauses. The real
+            // 12340 client raises there too. Fixing it would be fixing FrameXML, not
+            // matching this client.
+            fireAddonEvent("MIRROR_TIMER_PAUSE",
+                           {kMirrorTimerNames[type], paused ? "1" : "0"});
         }
     };
 

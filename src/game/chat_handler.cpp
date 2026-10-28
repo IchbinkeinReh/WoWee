@@ -2090,9 +2090,13 @@ void ChatHandler::handleChannelList(network::Packet& packet) {
     const int displayIndex = getChannelIndex(chanName);
     if (displayIndex > 0) {
         const std::string idx = std::to_string(displayIndex);
-        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx});
-        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE",
-                              {idx, std::to_string(channelRosters_[chanName].size())});
+        const std::string count = std::to_string(channelRosters_[chanName].size());
+        // Both carry the count. The roster one is 0x004ffe30's
+        // event(548, "%d%d", displayIndex, members) - ChannelRoster_Update reads
+        // only the first of the two, but the client passes both from the same
+        // registers it has just stored at (&DAT_00b74464)[index*8].
+        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx, count});
+        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE", {idx, count});
     }
 }
 
@@ -2142,9 +2146,9 @@ void ChatHandler::applyUserlistChange(const std::string& chanName, uint64_t guid
     const int displayIndex = getChannelIndex(chanName);
     if (displayIndex > 0) {
         const std::string idx = std::to_string(displayIndex);
-        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx});
-        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE",
-                              {idx, std::to_string(roster.size())});
+        const std::string count = std::to_string(roster.size());
+        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx, count});
+        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE", {idx, count});
     }
 }
 
