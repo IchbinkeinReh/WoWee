@@ -29,6 +29,9 @@ struct VoiceSample {
     /// a race library. A kit's files are asked by those weights, as the client
     /// asks any kit's file (0x004cbac0).
     uint32_t frequency = 0;
+    /// The row's Flags (column 25), which is what decides whether the play swings
+    /// in pitch or in volume at all - see playSound.
+    uint32_t flags = 0;
     /// The row's VolumeFloat (column 24), 1.0 when no row names the clip. The
     /// client plays a voice line at that times the ask's own volume, and the rows
     /// behind these kits are not all 1.0: of the 527 they reach, 268 ask less -
@@ -126,6 +129,7 @@ private:
         float minDistance = 0.0f;
         float cutoff = 0.0f;
         float volume = 1.0f;
+        uint32_t flags = 0;
     };
     std::unordered_map<std::string, EntryAsk> reachByName_;
 

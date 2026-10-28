@@ -96,10 +96,11 @@ void NpcVoiceManager::indexSoundEntriesReach() {
         const float minDistance = dbc->getFloat(i, 26);
         const float cutoff = dbc->getFloat(i, 27);
         const float volume = dbc->getFloat(i, 24);
+        const uint32_t flags = dbc->getUInt32(i, 25);
         for (uint32_t f = 0; f < 10; ++f) {
             const std::string file = dbc->getString(i, 3 + f);
             if (file.empty()) continue;
-            reachByName_.try_emplace(leafLower(file), EntryAsk{minDistance, cutoff, volume});
+            reachByName_.try_emplace(leafLower(file), EntryAsk{minDistance, cutoff, volume, flags});
         }
     }
 }
@@ -420,6 +421,7 @@ bool NpcVoiceManager::loadSound(const std::string& path, VoiceSample& sample) {
         sample.minDistance = it->second.minDistance;
         sample.cutoff = it->second.cutoff;
         sample.volume = it->second.volume;
+        sample.flags = it->second.flags;
     }
     sample.data = assetManager_->readFile(path);
 
@@ -533,12 +535,33 @@ void NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, VoiceType 
     float minDistance = 1.0f, maxDistance = 60.0f;
     if (sample->cutoff > 0.0f)
         sound_distance::entryDistance(sample->minDistance, sample->cutoff, minDistance, maxDistance);
-    std::uniform_real_distribution<float> pitchDist(0.98f, 1.02f);
+    // Whether the line swings in pitch or in volume at all is the row's to say,
+    // not ours: SoundEntries Flags (column 25) bit 0x400 gives the play a pitch of
+    // 0.85 + 0.3*rand, and bit 0x800 adds -0.15 + 0.3*rand to its volume
+    // (0x004c6a40 at 004c0000.c:6013-6022, each factor built from the pair of
+    // bounds set in front of the draw). The one is applied to the sound's base
+    // pitch (0x00878760 multiplies it onto +0x70 and hands the product to the
+    // handle); the other reaches the volume setter, 0x00879710, which clamps what
+    // it is asked into [0,1] - so a swing can take a line quiet or full but never
+    // past full. Of the 12941 rows only 126 ask for a pitch and 7 for a volume,
+    // and of the 527 behind these kits **none asks either**: the pitch jitter here
+    // used to be 0.98-1.02 on every line, which was this code's own, not the
+    // client's, and it made the same clip sound different from one click to the
+    // next. A voice line now plays at the pitch it was recorded at.
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+    float pitch = 1.0f;
+    if ((sample->flags & 0x400u) != 0)
+        pitch = 0.85f + 0.3f * unit(rng_);
+    float volume = sample->volume;
+    if ((sample->flags & 0x800u) != 0)
+        volume += -0.15f + 0.3f * unit(rng_);
+    volume = std::clamp(volume * volumeScale_, 0.0f, 1.0f);
+
     bool success = AudioEngine::instance().playSound3D(
         sample->data,
         position,
-        sample->volume * volumeScale_,
-        pitchDist(rng_),
+        volume,
+        pitch,
         maxDistance,
         minDistance
     );
