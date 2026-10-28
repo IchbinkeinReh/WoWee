@@ -1432,6 +1432,10 @@ wowee_add_test(test_rt_glow
 wowee_add_test(test_shadow_sun
     SOURCES test_shadow_sun.cpp)
 
+# -- test_camera_smooth: the camera swinging back behind as the character moves.
+wowee_add_test(test_camera_smooth
+    SOURCES test_camera_smooth.cpp)
+
 # -- test_rt_lamp_wrap: the lamps' wrapped N.L and the "Softer lamp light" switch.
 wowee_add_test(test_rt_lamp_wrap
     SOURCES test_rt_lamp_wrap.cpp)

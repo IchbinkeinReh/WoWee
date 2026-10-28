@@ -3374,6 +3374,22 @@ void CameraController::update(float deltaTime) {
     if (cameraDrivesFacing && !externalFollow_) {
         facingYaw = yaw;
     }
+    // The follow smoothing, decided as the controls change (0x00602760 from
+    // 0x005fa170 / 0x005fa450): moving, strafing or turning swings the
+    // camera back behind the character, standing still leaves it be.
+    {
+        const bool move = nowForward || nowBackward || autoRunning || mouseAutorun;
+        const bool strafe = nowStrafeLeft || nowStrafeRight;
+        const bool turnKeys = nowTurnLeft || nowTurnRight;
+        const uint32_t controls = (move ? 1u : 0u) | (strafe ? 2u : 0u) | (turnKeys ? 4u : 0u) |
+                                  (leftMouseDown ? 8u : 0u) | (rightMouseDown ? 16u : 0u);
+        if (controls != followSmoothControls_) {
+            followSmoothControls_ = controls;
+            if (thirdPerson && !externalFollow_ && !yawFollowsVehicleCamera_)
+                startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown),
+                                     swimming || isFlightAirborne());
+        }
+    }
     float moveYaw = cameraDrivesFacing ? yaw : facingYaw;
     if (intoxication_ > 0.34f) {
         // Drunk and smashed characters weave while trying to walk. Keep facing
@@ -3767,6 +3783,36 @@ void CameraController::stepViewMoves() {
     }
 }
 
+void CameraController::startFollowSmoothing(camera_smooth::State state, bool pitchFree) {
+    // Under cameraSmoothStyle's default, Smarter (camera_smooth.hpp). The
+    // eases are the view's own (+0x25c..+0x26c yaw, +0x22c..+0x23c pitch), as
+    // in the client, where a view blend and this share them.
+    const float fromFacing = std::remainder(yaw - facingYaw, 360.0f);
+    const camera_smooth::Plan plan =
+        camera_smooth::plan(state, fromFacing, -pitch, leftMouseDown || rightMouseDown, pitchFree);
+    // A factor of 0 stops an ease where it is (0x005fef40, 0x005feee0).
+    if (plan.stopYaw) viewYaw_.startMs = viewYaw_.endMs;
+    if (plan.stopPitch) viewPitch_.startMs = viewPitch_.endMs;
+    const uint32_t end = cameraClockMs_ + static_cast<uint32_t>(plan.seconds * 1000.0f);
+    // One already easing to the same place is left to finish (0x00601410,
+    // 0x00601190).
+    if (plan.easeYaw && !(viewYaw_.easing() &&
+                          std::fabs(viewYaw_.to - plan.yawTo) < camera_smooth::kAtRest)) {
+        viewYaw_.startMs = viewYaw_.endMs;
+        viewYaw_.value = fromFacing;
+        viewYawApplied_ = fromFacing;
+        viewYaw_.set(plan.yawTo, cameraClockMs_, end);
+    }
+    const float pitchTo = -plan.pitchTo;
+    if (plan.easePitch && !(viewPitch_.easing() &&
+                            std::fabs(viewPitch_.to - pitchTo) < camera_smooth::kAtRest)) {
+        viewPitch_.startMs = viewPitch_.endMs;
+        viewPitch_.value = pitch;
+        viewPitch_.set(pitchTo, cameraClockMs_, end);
+    }
+    viewBlending_ = viewDistance_.easing() || viewPitch_.easing() || viewYaw_.easing();
+}
+
 void CameraController::lookBy(float yawDegrees, float pitchDegrees) {
     viewMovedByPlayer_ = true;  // 0x006020b0
     // 0x005fe5f0: the yaw being eased to turns with the camera. The ease is
@@ -3833,6 +3879,11 @@ void CameraController::updateMouseCapture() {
         SDL_GetRelativeMouseState(nullptr, nullptr);
         // Arm the rotation dead-zone fresh for this press.
         rotateArmed_ = false;
+        // Freelook begins (0x00601ff0): the yaw and pitch eases end where
+        // they are - a follow swing, or a view's blend - and the mouse has
+        // the camera.
+        viewYaw_.startMs = viewYaw_.endMs;
+        viewPitch_.startMs = viewPitch_.endMs;
         dragOffsetX_ = 0.0f;
         dragOffsetY_ = 0.0f;
     } else if (!anyDown && mouseButtonDown) {

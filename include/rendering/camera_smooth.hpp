@@ -1,0 +1,120 @@
+#pragma once
+
+// The camera's follow smoothing, cameraSmoothStyle (Interface > Camera
+// Following Style). The client's default is "4", Smarter: while the
+// character moves, strafes or turns, the camera swings back behind it and its
+// pitch back into a band; standing still, it is left where it was put.
+//
+// The client decides this when the movement controls change (0x00602760, from
+// the control starts and stops 0x005fa170 / 0x005fa450): which state the
+// controls make, that state's delay and factor for the style
+// (cameraSmooth<Style><State>Delay/Factor, 0x005fd910), and per part the
+// view's (cameraSmoothViewData<Style><Part>). A part with a factor eases to
+// its target over the angle at its smooth speed times the factor; a part
+// whose factor is 0 has its ease stopped where it is. All parts eased take
+// the longest one's time, held to cameraSmoothTimeMin..Max.
+
+#include <algorithm>
+#include <cmath>
+
+namespace wowee {
+namespace rendering {
+namespace camera_smooth {
+
+/// The states, in the client's order (its bit for each is 1 << the value; the
+/// highest bit set wins).
+enum class State { Idle = 0, Stop = 1, Track = 2, Move = 3, Strafe = 4, Turn = 5, Fear = 6 };
+
+/// What the controls make (0x00602760): moving forward, back or on autorun
+/// or with both buttons is Move; a strafe Strafe; a turn key, or the right
+/// button's mouselook, Turn. Track (a tracked target) and Fear are not ones
+/// this client tells apart and are left out.
+inline State stateFor(bool move, bool strafe, bool turnKeys, bool mouselook) {
+    if (turnKeys || mouselook) return State::Turn;
+    if (strafe) return State::Strafe;
+    if (move) return State::Move;
+    return State::Idle;
+}
+
+/// cameraSmoothSmarter<State>Delay / Factor's defaults (0x005fd910).
+struct DelayFactor {
+    float delay = 0.0f;
+    float factor = 0.0f;
+};
+inline DelayFactor smarter(State s) {
+    switch (s) {
+        case State::Track:
+        case State::Fear: return {0.4f, 10.0f};
+        case State::Move:
+        case State::Strafe:
+        case State::Turn: return {0.0f, 1.0f};
+        default: return {0.0f, 0.0f};
+    }
+}
+
+// The rest of the defaults: cameraSmoothViewDataSmarterPitch and Yaw are
+// delay 0 factor 1 (Distance factor 0, never eased); cameraYawSmoothSpeed
+// 180 and cameraPitchSmoothSpeed 45 degrees a second; cameraPitchSmoothMin
+// and Max 0 and 30, cameraYawSmoothMin and Max both 0; cameraSmoothTimeMin
+// and Max 0.1 and 2 seconds.
+constexpr float kYawSpeed = 180.0f;
+constexpr float kPitchSpeed = 45.0f;
+constexpr float kPitchMin = 0.0f;
+constexpr float kPitchMax = 30.0f;
+constexpr float kTimeMin = 0.1f;
+constexpr float kTimeMax = 2.0f;
+/// The eases' own threshold, 0.001 radians (0x00601190, 0x00601410).
+constexpr float kAtRest = 0.001f * 57.29578f;
+
+/// What to do with the camera when the controls change.
+struct Plan {
+    bool stopYaw = false;    ///< a factor of 0: the yaw ease stops where it is
+    bool stopPitch = false;
+    bool easeYaw = false;    ///< ease the yaw from the facing to yawTo
+    float yawTo = 0.0f;
+    bool easePitch = false;  ///< ease the pitch to pitchTo
+    float pitchTo = 0.0f;
+    float seconds = 0.0f;    ///< over this long, both
+};
+
+/// `yawFromFacing` the camera's yaw off the character's facing and `pitch`
+/// its pitch, both in degrees as /gps gives them (the pitch down from level).
+/// `freelook`: a mouse button holds the camera, which nothing here moves
+/// (0x00602680, 0x005ffeb0 on +0x98 1). `pitchFree`: swimming or flying,
+/// where the pitch is the mover's and is left alone (0x005ffeb0 on
+/// 0x2200000).
+inline Plan plan(State state, float yawFromFacing, float pitch, bool freelook, bool pitchFree) {
+    Plan p;
+    if (freelook) return p;
+    const float factor = smarter(state).factor;
+    // The pitch is smoothed only outside its band, and to the edge it left.
+    const bool pitchOut = !pitchFree && (pitch < kPitchMin || pitch > kPitchMax);
+    // The yaw's band is 0..0: anything off straight behind is smoothed.
+    const float yaw = std::remainder(yawFromFacing, 360.0f);
+    const bool yawOut = std::fabs(yaw) >= kAtRest;
+    float longest = 0.0f;
+    if (pitchOut) {
+        if (factor == 0.0f) {
+            p.stopPitch = true;
+        } else {
+            p.pitchTo = std::clamp(pitch, kPitchMin, kPitchMax);
+            p.easePitch = true;
+            longest = std::max(longest, std::fabs(p.pitchTo - pitch) / kPitchSpeed * factor);
+        }
+    }
+    if (yawOut) {
+        if (factor == 0.0f) {
+            p.stopYaw = true;
+        } else {
+            p.yawTo = 0.0f;
+            p.easeYaw = true;
+            longest = std::max(longest, std::fabs(yaw) / kYawSpeed * factor);
+        }
+    }
+    p.seconds = std::clamp(longest, kTimeMin, kTimeMax);
+    return p;
+}
+
+}  // namespace camera_smooth
+}  // namespace rendering
+}  // namespace wowee

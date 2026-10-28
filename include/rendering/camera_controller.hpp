@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rendering/camera_shake.hpp"
+#include "rendering/camera_smooth.hpp"
 #include "rendering/camera.hpp"
 #include "game/vehicle_camera.hpp"
 #include "core/input.hpp"
@@ -654,6 +655,11 @@ private:
     game::vehicle::EasedCameraOffset viewYaw_;
     float viewYawApplied_ = 0.0f;
     bool viewBlending_ = false;
+    /// The controls the follow smoothing last saw: move, strafe, turn keys,
+    /// left button, right button (bits 0-4).
+    uint32_t followSmoothControls_ = 0;
+    /// Start (or stop) the follow smoothing for the controls' state.
+    void startFollowSmoothing(camera_smooth::State state, bool pitchFree);
     bool viewMovedByPlayer_ = false;
     /// The six view movements (+0x160: two bits each, started and stopped).
     struct ViewMove {
