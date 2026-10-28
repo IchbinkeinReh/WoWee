@@ -5,6 +5,7 @@
 #include "pipeline/dbc_loader.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "audio/audio_engine.hpp"
+#include "audio/sound_distance.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -108,8 +109,8 @@ void M2EventSounds::playOnce(uint32_t soundId, const glm::vec3* at, float volume
     if (outHandle) *outHandle = 0;
     const Kit* k = kit(soundId, assets);
     if (!k) return;
-    const float maxDistance = k->cutoff > 0.0f ? k->cutoff : 100.0f;
-    const float minDistance = k->minDistance > 0.0f ? std::min(k->minDistance, maxDistance) : 1.0f;
+    float minDistance = 0.0f, maxDistance = 0.0f;
+    audio::sound_distance::entryDistance(k->minDistance, k->cutoff, minDistance, maxDistance);
     const std::vector<uint8_t>* file = pickFile(*k);
     auto& audio = audio::AudioEngine::instance();
     // An SFX play, as every one 0x004c5990 sets up (type 0).
@@ -141,8 +142,8 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         const uint32_t soundId = plan.slotted ? displaySound(fired.ownerArg, plan.sound, assets) : plan.sound;
         const Kit* k = kit(soundId, assets);
         if (!k) continue;
-        const float maxDistance = k->cutoff > 0.0f ? k->cutoff : 100.0f;
-        const float minDistance = k->minDistance > 0.0f ? std::min(k->minDistance, maxDistance) : 1.0f;
+        float minDistance = 0.0f, maxDistance = 0.0f;
+        audio::sound_distance::entryDistance(k->minDistance, k->cutoff, minDistance, maxDistance);
         // A spell effect on the unit the active mover is (0x006f7b00 asks
         // 0x004d43c0 as the event fires; the effect's owner arg is the unit's
         // instance): kept over a crowd's (0x6e), and with the listener at the
