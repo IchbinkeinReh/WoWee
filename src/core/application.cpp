@@ -1811,6 +1811,35 @@ void Application::run() {
     // from this thread, and OS threads inherit their creator's affinity mask
     // on Linux. Pinning here silently confined every later render worker to
     // CPU 0 and defeated all command-recording parallelism.
+    //
+    // One thing does set an affinity mask, and only when the player asks for
+    // it: the client's own processAffinityMask cvar, read once at startup
+    // before any worker exists and handed straight to the OS (0x004022e0
+    // registers it, with the screen's own warning that "changes require restart
+    // to take effect"; 0x0076fe00 is GetCurrentProcess and
+    // SetProcessAffinityMask, and nothing else). The mask is held as a plain
+    // number, as the client's own parse reads it - 3 allows the first two
+    // cores. Every thread made afterwards inherits it, which is what a player
+    // narrowing the game onto fewer cores is asking for; a mask naming cores
+    // the machine does not have is refused by the OS, which is said out loud
+    // rather than left as a game that quietly runs on all of them.
+
+    if (const unsigned long long mask =
+            std::strtoull(addons::storedCVarValue("processAffinityMask", "0").c_str(), nullptr, 10);
+        mask != 0) {
+#ifdef __linux__
+        LOG_WARNING("processAffinityMask is set; the mask is a Windows call, and this build "
+                    "leaves cores to the scheduler");
+#else
+        if (SetProcessAffinityMask(GetCurrentProcess(), static_cast<DWORD_PTR>(mask))) {
+            LOG_INFO("Process affinity set to 0x", std::hex, mask, std::dec,
+                     " by the processAffinityMask cvar");
+        } else {
+            LOG_WARNING("processAffinityMask 0x", std::hex, mask, std::dec,
+                        " was refused - it names cores this machine does not have");
+        }
+#endif
+    }
 
     frameProfileEnabled_ = core::envFlagEnabled("WOWEE_FRAME_PROFILE", false);
     if (frameProfileEnabled_) {

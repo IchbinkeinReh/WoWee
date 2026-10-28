@@ -49,6 +49,7 @@ Wowee follows a modular architecture with clear separation of concerns:
 - Owns all subsystems (renderer, game handler, asset manager, UI, addon manager, audio coordinator)
 - Manages application state (`AUTHENTICATION` → `REALM_SELECTION` → `CHARACTER_SELECTION` / `CHARACTER_CREATION` → `IN_GAME`, plus `DISCONNECTED`, and `FIRST_RUN` when nothing has been extracted and the asset builder is shown instead of the login)
 - Runs update/render loop, paced by `FramePacer` (`frame_pacer.hpp/cpp`): integer-nanosecond deltas off a monotonic clock, and a frame cap that sleeps most of the wait and spins the rest. Which cap applies is the client's rule (`capInEffect`, 0x006836d0): `maxFPS` while the window is the active one, `maxFPSBk` once it is not and only where it is at least as strict, and a limit under eight frames is lifted to eight
+- Narrows the process onto the cores the player asked for, once at startup: the client's `processAffinityMask` cvar (registered 0x004022e0, applied by 0x0076fe00 = `SetProcessAffinityMask(GetCurrentProcess(), mask)`) is read before the first worker thread exists, because every later thread inherits the mask and the client's own screen text says a change needs a restart. Nothing is pinned the other way — no worker is confined, and Linux only reports the cvar since the call is Windows-only
 - Populates `GameServices` struct and passes to `GameHandler` at construction
 
 **Window** (`window.hpp/cpp`) - SDL3 + Vulkan wrapper
