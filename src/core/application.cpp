@@ -1,3 +1,4 @@
+#include "core/stall_report.hpp"
 #include "core/application.hpp"
 #include "core/world_settle.hpp"
 #include "core/cinematic_player.hpp"
@@ -1826,6 +1827,7 @@ void Application::run() {
     FramePacer pacer;
     const SleepPrecisionScope sleepPrecision;
     beatWatchdog();
+    stall_report::initMainThread();
     std::atomic<int64_t>& watchdogHeartbeatMs = watchdogHeartbeatMs_;
     // Signal flag: watchdog sets this when a stall is detected, main loop
     // handles the actual SDL calls. SDL2 video functions must only be called
@@ -1841,6 +1843,7 @@ void Application::run() {
     std::atomic<bool> watchdogRunning{true};
     std::thread watchdogThread([&watchdogRunning, &watchdogHeartbeatMs, &watchdogRequestRelease]() {
         bool signalledForCurrentStall = false;
+        int stallReports = 0;
         while (watchdogRunning.load(std::memory_order_acquire)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
             const int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1855,8 +1858,17 @@ void Application::run() {
                                 "ms) - requesting mouse capture release");
                     signalledForCurrentStall = true;
                 }
+                // What it was doing, without the logger - which the main
+                // loop flushes, so a loop that never comes back loses the
+                // warning above (stall_report.hpp). Again at 5 and 15 s, to
+                // tell a long frame from one that is not going to end.
+                const int64_t marks[] = {1500, 5000, 15000};
+                while (stallReports < 3 && stallMs > marks[stallReports]) {
+                    stall_report::write(stallMs, ++stallReports);
+                }
             } else {
                 signalledForCurrentStall = false;
+                stallReports = 0;
             }
         }
     });
@@ -5237,6 +5249,7 @@ void Application::updateInGame(float deltaTime, const char*& updateCheckpoint) {
     auto runInGameStage = [&](const char* stageName, auto&& fn) {
         auto stageStart = std::chrono::steady_clock::now();
         const core::ProfileScope profileScope(stageName, core::ProfileKind::Cpu);
+        const stall_report::StageScope stallStage(stageName);
         try {
             fn();
         } catch (const std::bad_alloc& e) {
@@ -5725,6 +5738,7 @@ void Application::render() {
     auto runRenderStage = [this](const char* stageName, auto&& fn) {
         auto stageStart = std::chrono::steady_clock::now();
         const core::ProfileScope profileScope(stageName, core::ProfileKind::Cpu);
+        const stall_report::StageScope stallStage(stageName);
         fn();
         float stageMs = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - stageStart).count();
