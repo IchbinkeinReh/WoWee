@@ -228,6 +228,18 @@ public:
         uint8_t wireSlot = 0;   ///< where the reply sends it: an equipment slot, or a bag position
         uint64_t itemGuid = 0;  ///< the item a named-slot request named
     };
+    /// The exchange held back by the same prompt, from the other verb: dropping
+    /// what the cursor holds onto a position on the character (0x006df890). It
+    /// is the wire's own pair of positions, so they are kept that way; one
+    /// prompt can be up at a time, whichever of the two held the move back.
+    struct PendingSwap {
+        bool    active  = false;
+        uint8_t fromBag = 0;    ///< where the carried item is, as the wire counts it
+        uint8_t fromSlot = 0;
+        uint8_t toBag = 0;      ///< the position on the character it was dropped on
+        uint8_t toSlot = 0;
+        bool    applyLocally = true;  ///< the caller's own flag, kept for the reply
+    };
     // ---- Looting, and the prompt before something binds ----
     //
     // Same shape as the equip prompt above and for the same reason: neither
@@ -309,8 +321,12 @@ public:
     /// applyLocally=false sends the move without touching the model, for a
     /// caller that has already put the items where this would move them -
     /// see GameHandler::sortBags.
+    ///
+    /// `confirmed` is the answer to the bind prompt: only equipPendingItem
+    /// passes it, and only for an exchange whose other side is a position on the
+    /// character. See 0x006df890.
     void swapContainerItems(uint8_t srcBag, uint8_t srcSlot, uint8_t dstBag,
-                            uint8_t dstSlot, bool applyLocally = true);
+                            uint8_t dstSlot, bool applyLocally = true, bool confirmed = false);
     /// Read and write a model slot by the wire's flat numbering.
     bool readWireSlot(uint8_t container, uint8_t slot, game::ItemDef& out) const;
     bool writeWireSlot(uint8_t container, uint8_t slot, const game::ItemDef& item);
@@ -795,6 +811,7 @@ private:
     // ---- Mail state ----
     SocketSession socketSession_;
     PendingEquip pendingEquip_;
+    PendingSwap pendingSwap_;
     /// The use held back waiting for an answer. Kept whole rather than as a
     /// slot pair: the item may be gone from that slot by the time the player
     /// answers, and re-reading it would use whatever moved into its place.

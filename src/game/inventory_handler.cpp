@@ -2011,6 +2011,7 @@ void InventoryHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, boo
         const uint32_t entry = owner_.getItemEntryByGuid(itemGuid);
         const auto* info = entry ? owner_.getItemInfo(entry) : nullptr;
         if (info && info->bindType == 2 && !owner_.isItemSoulbound(itemGuid)) {
+            pendingSwap_ = PendingSwap{};   // only one move can be waiting
             pendingEquip_ = PendingEquip{.active = true, .fromBag = false, .toSlot = true,
                                          .wireSlot = equipSlot, .itemGuid = itemGuid};
             if (owner_.addonEventCallbackRef())
@@ -2057,6 +2058,7 @@ void InventoryHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {
 
     const uint8_t wireSlot = static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + backpackIndex);
     if (!confirmed && slot.item.wouldBindOnEquip()) {
+        pendingSwap_ = PendingSwap{};   // only one move can be waiting
         pendingEquip_ = PendingEquip{.active = true, .fromBag = false, .bag = 0, .slot = backpackIndex, .wireSlot = wireSlot};
         // The auto-equip form of the prompt: right-clicking an item rather
         // than dropping it on a slot. FrameXML hides whichever of the two is
@@ -2084,6 +2086,7 @@ void InventoryHandler::autoEquipItemInBag(int bagIndex, int slotIndex, bool conf
         return;
 
     if (!confirmed && equipWouldBindFromBag(bagIndex, slotIndex)) {
+        pendingSwap_ = PendingSwap{};   // only one move can be waiting
         pendingEquip_ = PendingEquip{.active = true, .fromBag = true, .bag = bagIndex, .slot = slotIndex,
                                      .wireSlot = static_cast<uint8_t>(slotIndex)};
         // The same queue-index argument as the backpack form above.
@@ -2100,8 +2103,20 @@ void InventoryHandler::autoEquipItemInBag(int bagIndex, int slotIndex, bool conf
 }
 
 void InventoryHandler::equipPendingItem() {
+    const PendingSwap held = pendingSwap_;
+    pendingSwap_ = PendingSwap{};
     const PendingEquip pending = pendingEquip_;
     pendingEquip_ = PendingEquip{};
+    if (held.active) {
+        // The answer to a drop onto the character: the same exchange again, with
+        // the question already asked. The client's reply reads the parked
+        // record and calls its own verb back with 1 - 0x006e0000.c:53 for an
+        // exchange, :60 for a named slot, :48 for the auto-equip one - and then
+        // zeroes the entry.
+        swapContainerItems(held.fromBag, held.fromSlot, held.toBag, held.toSlot,
+                           held.applyLocally, true);
+        return;
+    }
     if (!pending.active) return;
     // The named-slot form replays through the routine that held it back, with
     // the answer as its `confirmed`, exactly as 0x006e0000.c:60 calls
@@ -2112,7 +2127,11 @@ void InventoryHandler::equipPendingItem() {
 }
 
 void InventoryHandler::cancelPendingEquip() {
+    // The dialog cancels on OnCancel and on OnHide both, so one dismissed with
+    // Escape equips nothing; and whichever of the two forms is held, both are
+    // cleared, because only one prompt can be up at a time.
     pendingEquip_ = PendingEquip{};
+    pendingSwap_ = PendingSwap{};
 }
 
 // Dispatches CMSG_USE_ITEM for an item already located at (wowBag, wowSlot).
@@ -2863,8 +2882,44 @@ bool InventoryHandler::writeWireSlot(uint8_t container, uint8_t slot,
 
 void InventoryHandler::swapContainerItems(uint8_t srcBag, uint8_t srcSlot,
                                           uint8_t dstBag, uint8_t dstSlot,
-                                          bool applyLocally) {
+                                          bool applyLocally, bool confirmed) {
     if (!owner_.getSocket() || !owner_.getSocket()->isConnected()) return;
+
+    // Dropping something onto the character asks the same question as equipping
+    // it, and under the same name. 0x006df890 / SwapItems looks at whichever
+    // side of the exchange is *not* on the character - the item being carried -
+    // and asks two things of its record: that the bond type cached at +0x178 be
+    // 2, bind when equipped, and that 0x006dc3f0 say it is not already bound.
+    // When both hold it parks the pair of positions in the pending-equip queue
+    // and fires EQUIP_BIND_CONFIRM (0x10f) with the queue's index, and puts
+    // nothing on the wire. "On the character" is the 23 worn positions rather
+    // than the 19 equipment slots - the client tests the slot against 0x17 - so
+    // a bag bought at the merchant and dropped onto the bag bar asks as well,
+    // which is right: wearing it is what binds it.
+    //
+    // Two positions on the character are the case the client sends as
+    // CMSG_SWAP_INV_ITEM without asking, and it cannot reach this test: a worn
+    // piece binds the moment it is worn, and the bag-bar exchange has its own
+    // verb in swapBagSlots below.
+    if (!confirmed && dstBag == slots::kNoContainer &&
+        dstSlot < static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS) &&
+        !(srcBag == slots::kNoContainer &&
+          srcSlot < static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS))) {
+        ItemDef carried;
+        if (readWireSlot(srcBag, srcSlot, carried) && carried.wouldBindOnEquip()) {
+            // The client parks either verb's move in the one queue, and
+            // FrameXML hides the other dialog before showing this one; only one
+            // move can be waiting for the answer.
+            pendingEquip_ = PendingEquip{};
+            pendingSwap_ = PendingSwap{.active = true, .fromBag = srcBag, .fromSlot = srcSlot,
+                                       .toBag = dstBag, .toSlot = dstSlot,
+                                       .applyLocally = applyLocally};
+            if (owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("EQUIP_BIND_CONFIRM", {"0"});
+            return;
+        }
+    }
+
     LOG_INFO("swapContainerItems: src(bag=", (int)srcBag, " slot=", (int)srcSlot,
              ") -> dst(bag=", (int)dstBag, " slot=", (int)dstSlot, ")");
     auto packet = SwapItemPacket::build(dstBag, dstSlot, srcBag, srcSlot);

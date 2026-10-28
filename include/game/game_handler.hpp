@@ -4034,7 +4034,7 @@ public:
     void splitItemTo(uint8_t srcBag, uint8_t srcSlot,
                      uint8_t dstBag, uint8_t dstSlot, uint8_t count);
     void swapContainerItems(uint8_t srcBag, uint8_t srcSlot, uint8_t dstBag,
-                            uint8_t dstSlot, bool applyLocally = true);
+                            uint8_t dstSlot, bool applyLocally = true, bool confirmed = false);
     /// Tell every frame that draws from a bag to read it again.
     ///
     /// For a change made straight to the model rather than arriving from the

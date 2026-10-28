@@ -4288,9 +4288,10 @@ void GameHandler::unequipToBackpack(EquipSlot equipSlot) {
 }
 
 void GameHandler::swapContainerItems(uint8_t srcBag, uint8_t srcSlot, uint8_t dstBag,
-                                     uint8_t dstSlot, bool applyLocally) {
+                                     uint8_t dstSlot, bool applyLocally, bool confirmed) {
     if (inventoryHandler_) {
-        inventoryHandler_->swapContainerItems(srcBag, srcSlot, dstBag, dstSlot, applyLocally);
+        inventoryHandler_->swapContainerItems(srcBag, srcSlot, dstBag, dstSlot, applyLocally,
+                                              confirmed);
     }
 }
 
