@@ -1427,6 +1427,11 @@ wowee_add_test(test_rt_point_lights
 wowee_add_test(test_rt_glow
     SOURCES test_rt_glow.cpp)
 
+# ── test_shadow_sun ──────────────────────────────────────────
+# The shadows' sun near the horizon: handed over, not switched.
+wowee_add_test(test_shadow_sun
+    SOURCES test_shadow_sun.cpp)
+
 # ── test_rt_rays ─────────────────────────────────────────────
 # Rays a pixel of each kind: one by default, held to 1-5.
 wowee_add_test(test_rt_rays

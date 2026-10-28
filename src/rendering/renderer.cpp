@@ -1,4 +1,5 @@
 #include "rendering/renderer.hpp"
+#include "rendering/shadow_sun.hpp"
 #include "rendering/depth_convention.hpp"
 #include "rendering/shadow_pass_work.hpp"
 #include "rendering/quality_summary.hpp"
@@ -153,6 +154,9 @@ namespace {
 /// The light-space depth every cascade shares, near and far, in yards from
 /// the light: from a yard in front of it to 6.5 x the shadow distance.
 constexpr float kShadowNearPlane = 1.0f;
+/// The least height (sine of elevation) the shadows' sun is held at: the
+/// map's floor (computeLightSpaceMatrix) and the trace's alike.
+constexpr float kShadowSunMinHeight = 0.15f;
 float shadowFarPlane(float distance) { return distance * 6.5f; }
 float shadowDepthRange(float distance) { return shadowFarPlane(distance) - kShadowNearPlane; }
 }  // namespace
@@ -6549,16 +6553,11 @@ glm::vec3 Renderer::sunTravelDirection() const {
     // used to follow that one, and lay across the sun the player looked at.
     // Below the horizon there is no sun to follow, and the light's direction
     // stands in, as before.
+    // Handed over between the two across the horizon (shadow_sun.hpp),
+    // not switched: the shadows jumped at sunrise and sunset.
     if (lightingManager) {
         const auto& lp = lightingManager->getLightingParams();
-        const float sunLenSq = glm::dot(lp.sunDir, lp.sunDir);
-        if (sunLenSq > 1e-6f && lp.sunDir.z > 0.0f) {
-            return -lp.sunDir * glm::inversesqrt(sunLenSq);
-        }
-        const float ldirLenSq = glm::dot(lp.directionalDir, lp.directionalDir);
-        if (ldirLenSq > 1e-6f) {
-            return -lp.directionalDir * glm::inversesqrt(ldirLenSq);
-        }
+        return -shadow_sun::towardSun(lp.directionalDir, lp.sunDir, -2.0f);
     }
     return glm::normalize(glm::vec3(-0.3f, -0.7f, -0.6f));
 }
@@ -6617,18 +6616,13 @@ void Renderer::recordRtLighting() {
     // the light's direction, as before: the moon's light. Held at least as
     // high as the map holds it (computeLightSpaceMatrix), so the two agree
     // where both are drawn and a sun on the horizon does not lay every
-    // pebble's shadow across the whole field.
+    // pebble's shadow across the whole field. Across the horizon the one
+    // hands over to the other (shadow_sun.hpp) rather than switching:
+    // the shadows jumped at sunrise and sunset.
     in.sunDir = -glm::vec3(currentFrameData.lightDir);
     if (lightingManager) {
-        const glm::vec3 drawnSun = lightingManager->getLightingParams().sunDir;
-        if (drawnSun.z > 0.0f && glm::dot(drawnSun, drawnSun) > 1e-6f) {
-            glm::vec3 d = glm::normalize(drawnSun);
-            if (d.z < 0.15f) {
-                d.z = 0.15f;
-                d = glm::normalize(d);
-            }
-            in.sunDir = d;
-        }
+        in.sunDir = shadow_sun::towardSun(in.sunDir, lightingManager->getLightingParams().sunDir,
+                                             kShadowSunMinHeight);
     }
     in.sunColor = glm::vec3(currentFrameData.lightColor);
     in.skyColor = glm::vec3(currentFrameData.ambientColor);
