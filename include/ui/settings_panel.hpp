@@ -75,6 +75,11 @@ public:
     /// Ray traced lighting: 0 off, 1 sun, 2 + occlusion, 3 + bounce. See RtLighting.
     int pendingRtLighting = 0;
     bool pendingRtFullRes = false;  ///< trace every pixel (Ray Tracing)
+    /// Rays a pixel of each kind (Ray Tracing; rendering::RtRaysPerPixel).
+    int pendingRtSunRays = 1;
+    int pendingRtAoRays = 1;
+    int pendingRtPointRays = 1;
+    int pendingRtBounceRays = 1;
     /// Settings > Debug Graphics: the view the surfaces show instead
     /// (0-10, Renderer::setRtDebugView) and the lighting's strengths in
     /// percent (Renderer::LightingTune).

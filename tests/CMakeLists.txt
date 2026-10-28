@@ -1427,6 +1427,11 @@ wowee_add_test(test_rt_point_lights
 wowee_add_test(test_rt_glow
     SOURCES test_rt_glow.cpp)
 
+# ── test_rt_rays ─────────────────────────────────────────────
+# Rays a pixel of each kind: one by default, held to 1-5.
+wowee_add_test(test_rt_rays
+    SOURCES test_rt_rays.cpp)
+
 # ── test_eye_adaptation ──────────────────────────────────────
 # Header-only: the eye's exposure under the ray traced lighting - one in
 # daylight, part of the way elsewhere, quicker into the light than out.

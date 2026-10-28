@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/rt_rays.hpp"
 #include "rendering/day_night.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "rendering/animation/body_yaw.hpp"
@@ -728,6 +729,8 @@ public:
     /// Trace every pixel rather than half the resolution (RtLighting::
     /// setFullResolution); WOWEE_RT_FULLRES=0/1 holds it whatever this says.
     void setRtFullResolution(bool full);
+    /// Rays a pixel of each kind (Ray Tracing settings; RtLighting::FrameInputs::rays).
+    void setRtRaysPerPixel(const RtRaysPerPixel& rays) { rtRays_ = rays; }
     /// The lighting's adjustable strengths (Settings > Debug Graphics). The
     /// defaults match the settings' (settings_schema.cpp), in fractions of
     /// their percent; 1 is each part as it comes. The ray traced ones act only where
@@ -1094,6 +1097,7 @@ private:
     /// The reason last logged for holding it off, so it is said once.
     std::string rtHeldOffLogged_;
     LightingTune lightingTune_{};
+    RtRaysPerPixel rtRays_{};
     int rtDebugView_ = 0;
     float gameTimeOverride_ = -1.0f;
     /// Screenshots being converted and written on a worker (captureScreenshot);

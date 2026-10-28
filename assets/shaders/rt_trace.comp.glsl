@@ -173,28 +173,39 @@ void main() {
         // by the ground's (ground clutter); this is only whether anything
         // stands between it and the sun.
         vec3 sunOrigin = dot(n, L) > 0.0 ? origin : p - n * rtSurfaceOffset(dist);
-        vec3 sd = rtConeSample(L, pass.sunDir.w, rng);
         // Within the shadow map's reach the units' sun shadows are the map's:
         // drawn this frame in the pose on screen. Traced, they came a frame
         // late and settled over several more, and a running body trailed a
         // ghost of its staff and legs over the ground and itself.
         vec3 fromMap = p - pass.unitMap.xyz;
         rtSkipUnits = dot(fromMap, fromMap) < pass.unitMap.w * pass.unitMap.w;
-        bool byUnit;
-        sun = rtOccludedBy(sunOrigin, sd, pass.params.w, rng, byUnit) ? 0.0 : 1.0;
+        // As many rays as the settings ask, each to its own point on the
+        // sun's disc; the share that gets through.
+        uint sunRays = rtRayCount(pass.rays.x);
+        for (uint k = 0u; k < sunRays; ++k) {
+            vec3 sd = rtConeSample(L, pass.sunDir.w, rng);
+            bool byUnit;
+            sun += rtOccludedBy(sunOrigin, sd, pass.params.w, rng, byUnit) ? 0.0 : 1.0;
+            unitHit = unitHit || byUnit;
+        }
+        sun /= float(sunRays);
         rtSkipUnits = false;
-        unitHit = unitHit || byUnit;
     }
 
     float ao = 1.0;
     if (mode >= RT_MODE_AO) {
-        vec3 ad = rtCosineHemisphere(n, rng);
-        float t;
-        vec3 hn;
-        vec4 hs;
+        uint aoRays = rtRayCount(pass.rays.y);
+        float aoSum = 0.0;
         rtCutoutsOpen = true;
-        if (rtClosest(origin, ad, pass.params.y, rng, t, hn, hs)) ao = t / pass.params.y;
+        for (uint k = 0u; k < aoRays; ++k) {
+            vec3 ad = rtCosineHemisphere(n, rng);
+            float t;
+            vec3 hn;
+            vec4 hs;
+            aoSum += rtClosest(origin, ad, pass.params.y, rng, t, hn, hs) ? t / pass.params.y : 1.0;
+        }
         rtCutoutsOpen = false;
+        ao = aoSum / float(aoRays);
     }
 
     // The point lights: their sum, and one of them picked by weighted
@@ -202,7 +213,10 @@ void main() {
     vec3 pointSum = vec3(0.0);
     float bakedSum = 0.0;
     float weightSum = 0.0;
-    int picked = -1;
+    // One light picked a ray, each by its own draw in the same pass: with
+    // one ray the pick as it always was.
+    uint pointRays = rtRayCount(pass.rays.z);
+    int picked[RT_MAX_RAYS] = int[RT_MAX_RAYS](-1, -1, -1, -1, -1);
     uint lightCount = uint(pass.params.z + 0.5);
     for (uint i = 0u; i < lightCount; ++i) {
         RtPointLight light = rtPointLights[i];
@@ -228,11 +242,15 @@ void main() {
         pointSum += c;
         if (light.positionEnd.w < 0.0) bakedSum += w;
         weightSum += w;
-        if (rtRandom(rng) * weightSum < w) picked = int(i);
+        for (uint k = 0u; k < pointRays; ++k) {
+            if (rtRandom(rng) * weightSum < w) picked[k] = int(i);
+        }
     }
+    float pointVisSum = 0.0;
+    for (uint k = 0u; k < pointRays; ++k) {
     float pointVis = 1.0;
-    if (picked >= 0) {
-        RtPointLight light = rtPointLights[picked];
+    if (picked[k] >= 0) {
+        RtPointLight light = rtPointLights[picked[k]];
         float radius = rtLightRadius(abs(light.positionEnd.w));
         vec3 jitter = (vec3(rtRandom(rng), rtRandom(rng), rtRandom(rng)) * 2.0 - 1.0) * radius;
         vec3 toLight = light.positionEnd.xyz + jitter - origin;
@@ -255,6 +273,9 @@ void main() {
             }
         }
     }
+    pointVisSum += pointVis;
+    }
+    float pointVis = pointVisSum / float(pointRays);
 
     imageStore(uRaw, px, vec4(sun, ao, pointVis, unitHit ? 1.0 : 0.0));
     imageStore(uPointOut, px, vec4(pointSum, bakedSum));

@@ -30,6 +30,10 @@ layout(std430, set = 0, binding = 4) writeonly buffer GiRays { uvec2 giRays[]; }
 
 layout(local_size_x = 64) in;
 
+// The half-width of a direction's share of the sphere, as a cone's tangent:
+// 64 directions take 4 pi / 64 steradians each, a cone of some 14 degrees.
+const float RT_GI_CELL_TAN = 0.26;
+
 // The light already arriving at a hit point, from what the atlas holds. Where
 // the volume does not reach, the open field's: no better guess, and the one
 // the surfaces themselves fall back on.
@@ -56,25 +60,34 @@ void main() {
     uint rng = rtSeed(uvec2(slot, r + uint(cascade) * 64u), uint(pass.cameraPos.w));
     float tMax = cascade == 0 ? pass.giRayLength.x : pass.giRayLength.y;
 
-    vec3 radiance;
+    // The direction's own ray first, which alone says how far the probe
+    // sees that way (the visibility); any more the settings ask for (pass.rays.w)
+    // go to other points of the same direction's share of the sphere and
+    // only add to its light.
+    vec3 radianceSum = vec3(0.0);
     float dist = tMax;
+    uint giRaysEach = rtRayCount(pass.rays.w);
+    for (uint k = 0u; k < giRaysEach; ++k) {
+    vec3 rayDir = k == 0u ? dir : rtConeSample(dir, RT_GI_CELL_TAN, rng);
+    vec3 radiance;
+    float rayDist = tMax;
     float t;
     vec3 hn;
     vec4 hs;
     bool below;
-    bool hit = rtClosestEx(origin, dir, tMax, rng, t, hn, hs, below);
+    bool hit = rtClosestEx(origin, rayDir, tMax, rng, t, hn, hs, below);
     if (hit && below) {
         radiance = vec3(0.0);
-        dist = -max(t, 1e-3);
+        rayDist = -max(t, 1e-3);
     } else if (hit) {
-        dist = t;
+        rayDist = t;
         // A sliver of a triangle has no normal to speak of; facing the ray
         // back is as good as any, and better than a NaN that the bounces
         // would carry into every probe of the volume.
-        if (any(isnan(hn)) || dot(hn, hn) < 0.5) hn = -dir;
-        vec3 hp = origin + dir * t;
+        if (any(isnan(hn)) || dot(hn, hn) < 0.5) hn = -rayDir;
+        vec3 hp = origin + rayDir * t;
         vec3 L = normalize(pass.sunDir.xyz);
-        vec3 light = bounceAt(hp, hn, -dir);
+        vec3 light = bounceAt(hp, hn, -rayDir);
         float ndl = dot(hn, L);
         if (pass.sunColor.w > 0.5 && ndl > 0.0 &&
             !rtOccluded(hp + hn * rtSurfaceOffset(t), L, pass.params.w, rng)) {
@@ -82,8 +95,13 @@ void main() {
         }
         radiance = hs.rgb * light;
     } else {
-        radiance = dir.z >= 0.0 ? pass.giSky.rgb : pass.giGround.rgb;
+        radiance = rayDir.z >= 0.0 ? pass.giSky.rgb : pass.giGround.rgb;
     }
+    if (k == 0u) dist = rayDist;
+    if (any(isnan(radiance)) || any(isinf(radiance))) radiance = vec3(0.0);
+    radianceSum += min(radiance, vec3(16.0));
+    }
+    vec3 radiance = radianceSum / float(giRaysEach);
 
     if (any(isnan(radiance)) || any(isinf(radiance))) radiance = vec3(0.0);
     radiance = min(radiance, vec3(16.0));  // half floats, and no fireflies

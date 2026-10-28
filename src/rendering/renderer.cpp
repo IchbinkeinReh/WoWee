@@ -6659,6 +6659,7 @@ void Renderer::recordRtLighting() {
     in.interiorBase = currentFrameData.rtTune2.y;
     in.interiorFullAt = currentFrameData.rtTune2.z;
     in.maxLight = currentFrameData.rtTune2.w;
+    in.rays = rtRays_;
     in.occlusion = currentFrameData.lightTune.w;
     in.debugView = static_cast<int>(currentFrameData.giParams.y + 0.5f);
     {

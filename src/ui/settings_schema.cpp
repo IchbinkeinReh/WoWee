@@ -271,6 +271,27 @@ constexpr SettingDesc kSchema[] = {
      "things then get their own traced light and shadow instead of\n"
      "the look without ray tracing where the half-resolution trace\n"
      "missed them.", "", 0},
+    // Rays a pixel, one setting a kind (rt_rays.hpp): 1 is the trace as it
+    // always ran; each more is another ray of that kind a pixel, averaged.
+    {"rtsunrays", "Rays a pixel: sun shadows", SettingKind::Int, 1, 5, 1,
+     "Ray Tracing", "Rays a pixel",
+     "More rays toward the sun for each pixel: smoother sun shadows\n"
+     "and edges, less shimmer while moving. Each ray adds the cost\n"
+     "of the sun's shadows again.", "", 1, "raytracedlighting"},
+    {"rtaorays", "Rays a pixel: occlusion", SettingKind::Int, 1, 5, 1,
+     "Ray Tracing", "",
+     "More rays for the darkening in corners and crevices (ambient\n"
+     "occlusion): less grain in it. Each ray adds its cost again.", "", 1, "raytracedlighting"},
+    {"rtpointrays", "Rays a pixel: torch and lamp shadows", SettingKind::Int, 1, 5, 1,
+     "Ray Tracing", "",
+     "More rays toward the torches, lamps and glowing things near\n"
+     "each pixel: steadier shadows where several lights overlap.\n"
+     "Each ray adds the cost of those shadows again.", "", 1, "raytracedlighting"},
+    {"rtbouncerays", "Rays a direction: bounced light", SettingKind::Int, 1, 5, 1,
+     "Ray Tracing", "",
+     "More rays for each direction of the light probes that carry\n"
+     "the bounced light: less flicker in it as the view moves. Each\n"
+     "ray adds the cost of the probes' tracing again.", "", 1, "raytracedlighting"},
 
     // ------------------------------------------------------- Debug Graphics
     // The lighting's parts, to look at one at a time and to set by hand

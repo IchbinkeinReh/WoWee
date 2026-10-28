@@ -3,6 +3,7 @@
 // Owns all settings UI rendering, settings state, and
 // graphics preset logic.
 // ============================================================
+#include "rendering/rt_rays.hpp"
 #include "addons/addon_lua_snippets.hpp"
 #include "ui/graphics_choices.hpp"
 #include "ui/graphics_presets.hpp"
@@ -926,6 +927,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
     "screenglow", "raytracedlighting", "rtfullres",
+    "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
     "dbgview", "dbgtimeoverride", "dbgtime", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
     "dbgmodellightintensity", "dbgmodellightreach", "dbgfirelightintensity", "dbgfirelightreach", "dbglamplightintensity", "dbglamplightreach", "dbgbuildinglightintensity", "dbgbuildinglightreach", "dbgunitlightintensity", "dbgunitlightreach",
@@ -1122,6 +1124,10 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "lightshafts",    .asInt   = &SettingsPanel::pendingVolumetricFog},
     {.key = "raytracedlighting", .asInt = &SettingsPanel::pendingRtLighting},
     {.key = "rtfullres", .asBool = &SettingsPanel::pendingRtFullRes},
+    {.key = "rtsunrays", .asInt = &SettingsPanel::pendingRtSunRays},
+    {.key = "rtaorays", .asInt = &SettingsPanel::pendingRtAoRays},
+    {.key = "rtpointrays", .asInt = &SettingsPanel::pendingRtPointRays},
+    {.key = "rtbouncerays", .asInt = &SettingsPanel::pendingRtBounceRays},
     {.key = "dbgview", .asInt = &SettingsPanel::pendingDbgView},
     {.key = "dbgtimeoverride", .asBool = &SettingsPanel::pendingDbgTimeOverride},
     {.key = "dbgtime", .asFloat = &SettingsPanel::pendingDbgTime},
@@ -1609,6 +1615,15 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtLightingMode(pendingRtLighting);
     } else if (key == "rtfullres") {
         if (renderer) renderer->setRtFullResolution(pendingRtFullRes);
+    } else if (key == "rtsunrays" || key == "rtaorays" || key == "rtpointrays" || key == "rtbouncerays") {
+        if (renderer) {
+            rendering::RtRaysPerPixel rays;
+            rays.sun = pendingRtSunRays;
+            rays.occlusion = pendingRtAoRays;
+            rays.pointLights = pendingRtPointRays;
+            rays.bounce = pendingRtBounceRays;
+            renderer->setRtRaysPerPixel(rays);
+        }
     } else if (key == "dbgview" ||
                key == "dbgtimeoverride" ||
                key == "dbgtime" ||

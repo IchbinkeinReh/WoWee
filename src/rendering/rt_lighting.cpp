@@ -33,6 +33,7 @@ struct RtPassData {
     glm::vec4 tune;
     glm::vec4 tune2;
     glm::vec4 tune3;
+    glm::vec4 rays;
     RtGiProbes::PassData gi;
 };
 
@@ -753,6 +754,8 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
     d.tune2 = glm::vec4(in.bakedLampShadow, in.pointShadow, static_cast<float>(in.debugView),
                         hardStructure ? 1.0f : 0.0f);
     d.tune3 = glm::vec4(in.interiorBase, in.interiorFullAt, in.maxLight, 0.0f);
+    d.rays = glm::vec4(clampRtRays(in.rays.sun), clampRtRays(in.rays.occlusion),
+                       clampRtRays(in.rays.pointLights), clampRtRays(in.rays.bounce));
     const bool probes = mode_ == Mode::Full && probes_.hasResources();
     if (probes) {
         // The open field the zone's flat ambient was set for: that ambient as

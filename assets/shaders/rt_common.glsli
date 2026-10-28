@@ -36,6 +36,8 @@ layout(set = 0, binding = 0) uniform RtPassData {
                          // point light reaches; y the light where all of it
                          // does (rtInteriorShade); z the most light the
                          // traced lights add, 0 no limit (rtCapLight)
+    vec4 rays;           // rays a pixel, 1-5: x toward the sun, y occlusion,
+                         // z toward a point light; w a probe's rays a direction
     // The probe volume (rt_gi.glsli), read only by the probe passes.
     vec4 giVolume[2];        // the grid this frame's update writes
     vec4 giVolumeMod[2];
@@ -46,6 +48,12 @@ layout(set = 0, binding = 0) uniform RtPassData {
     vec4 giGround;           // rgb one that escapes downward
     vec4 giRayLength;        // x, y per cascade; z the largest lift (rt_gi_exposure)
 } pass;
+
+// How many rays of a kind (pass.rays), 1 to RT_MAX_RAYS.
+const uint RT_MAX_RAYS = 5u;
+uint rtRayCount(float setting) {
+    return clamp(uint(setting + 0.5), 1u, RT_MAX_RAYS);
+}
 
 const uint RT_MODE_SHADOWS = 1u;
 const uint RT_MODE_AO = 2u;

@@ -1,3 +1,4 @@
+#include "rendering/rt_rays.hpp"
 #include "game/group_defines.hpp"
 #include "game/difficulty_change.hpp"
 
@@ -2035,6 +2036,10 @@ void GameScreen::saveSettings() {
     out << "light_shafts=" << settingsPanel_.pendingVolumetricFog << "\n";
     out << "ray_traced_lighting=" << settingsPanel_.pendingRtLighting << "\n";
     out << "rt_full_resolution=" << (settingsPanel_.pendingRtFullRes ? 1 : 0) << "\n";
+    out << "rt_sun_rays=" << settingsPanel_.pendingRtSunRays << "\n";
+    out << "rt_ao_rays=" << settingsPanel_.pendingRtAoRays << "\n";
+    out << "rt_point_rays=" << settingsPanel_.pendingRtPointRays << "\n";
+    out << "rt_bounce_rays=" << settingsPanel_.pendingRtBounceRays << "\n";
     // No dbg_view: a debug view is for the session it is picked in. Saved,
     // the "Probe light ratio" view came back at the next start and drew the
     // whole world flat grey and white, which read as a fogged night.
@@ -2373,6 +2378,10 @@ void GameScreen::loadSettings() {
             else if (key == "light_shafts") settingsPanel_.pendingVolumetricFog = std::clamp(std::stoi(val), 0, 3);
             else if (key == "ray_traced_lighting") settingsPanel_.pendingRtLighting = std::clamp(std::stoi(val), 0, 3);
             else if (key == "rt_full_resolution") settingsPanel_.pendingRtFullRes = (std::stoi(val) != 0);
+            else if (key == "rt_sun_rays") settingsPanel_.pendingRtSunRays = rendering::clampRtRays(std::stoi(val));
+            else if (key == "rt_ao_rays") settingsPanel_.pendingRtAoRays = rendering::clampRtRays(std::stoi(val));
+            else if (key == "rt_point_rays") settingsPanel_.pendingRtPointRays = rendering::clampRtRays(std::stoi(val));
+            else if (key == "rt_bounce_rays") settingsPanel_.pendingRtBounceRays = rendering::clampRtRays(std::stoi(val));
             // dbg_view, saved by older builds, is not read: see the save.
             else if (key == "dbg_time_override") settingsPanel_.pendingDbgTimeOverride = (val == "1");
             else if (key == "dbg_time") settingsPanel_.pendingDbgTime = std::clamp(std::stof(val), 0.0f, 24.0f);

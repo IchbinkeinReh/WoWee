@@ -9,6 +9,7 @@
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
+#include "rendering/rt_rays.hpp"
 #include "rendering/generation_keyed_cache.hpp"
 #include "rendering/rt_gi_probes.hpp"
 #include "rendering/rt_point_lights.hpp"
@@ -163,6 +164,11 @@ public:
         float interiorFullAt = 1.0f;
         /// The most light the traced lights add (rtCapLight); 0 no limit.
         float maxLight = 0.0f;
+        /// Rays a pixel of each kind, 1 to kMaxRtRaysPerPixel (Ray Tracing
+        /// settings): toward the sun, for the occlusion, toward a point
+        /// light, and a probe's rays for the bounced light. One is the
+        /// trace as it always ran.
+        RtRaysPerPixel rays{};
     };
 
     /// The scene the G-buffer pass drew: its depth image, still in
