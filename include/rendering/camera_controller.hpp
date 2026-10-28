@@ -77,10 +77,20 @@ public:
     /// what holding the right mouse button means on a desktop.
     void setSteering(bool steering) { steering_ = steering; }
 
+    /// A wheel notch is CAMERAZOOMIN / CAMERAZOOMOUT, CameraZoomIn(1.0) and
+    /// CameraZoomOut(1.0) (Bindings.xml): a yard each way, as zoomStep.
     void processMouseWheel(float delta);
     /// The player's distance in by `yards` (out for less than 0), held to the
-    /// limits the wheel is: CameraZoomIn and CameraZoomOut.
+    /// limits the wheel is - at once, as a view move steps it.
     void zoomBy(float yards);
+    /// CameraZoomIn / CameraZoomOut (0x006017e0 / 0x00601840 -> 0x005ff950 /
+    /// 0x005ffa60): the view moves in (out for less than 0) at
+    /// cameraDistanceMoveSpeed for as long as `yards` takes at it, the same
+    /// either way. Another step the same way before it ends lengthens it; one
+    /// the other way stops it where it is.
+    void zoomStep(float yards, float rate = kDistanceMoveSpeed);
+    /// cameraDistanceMoveSpeed's default, yards a second (0x005fd910).
+    static constexpr float kDistanceMoveSpeed = 8.33f;
     void setFollowTarget(glm::vec3* target);
     void setDefaultSpawn(const glm::vec3& position, float yawDeg, float pitchDeg) {
         defaultPosition = position;
@@ -651,6 +661,7 @@ private:
         bool stopped = false;
         uint32_t from = 0;   ///< +0x164: moved up to
         uint32_t until = 0;  ///< +0x17c: stopped at
+        uint32_t ends = 0;   ///< +0x194: a timed one's end, 0 for none
         float speed = 1.0f;  ///< +0x1ac
         float rate = 0.0f;
     };

@@ -3719,6 +3719,7 @@ void CameraController::startViewMove(int direction, float speed, float rate) {
     }
     m.speed = speed;
     m.rate = rate;
+    m.ends = 0;  // held until its Stop (0x005fe580 with no length)
 }
 
 void CameraController::stopViewMove(int direction) {
@@ -3733,6 +3734,12 @@ void CameraController::stepViewMoves() {
     for (int d = 0; d < 6; ++d) {
         auto& m = viewMoves_[static_cast<size_t>(d)];
         if (!m.started) continue;
+        // A timed one past its end stops there (0x006000e0).
+        if (!m.stopped && m.ends != 0 &&
+            static_cast<int32_t>(cameraClockMs_ - m.ends) >= 0) {
+            m.until = m.ends;
+            m.stopped = true;
+        }
         int32_t ms = 0;
         if (!m.stopped) {
             ms = static_cast<int32_t>(cameraClockMs_ - m.from);
@@ -3742,6 +3749,7 @@ void CameraController::stepViewMoves() {
             ms = std::max(0, static_cast<int32_t>(m.until - m.from));
             m.started = false;
             m.stopped = false;
+            m.ends = 0;
         }
         const float amount = static_cast<float>(ms) * m.rate * m.speed * 0.001f;
         // In and out move where the distance goes, held to the wheel's
@@ -4167,9 +4175,39 @@ void CameraController::processMouseWheel(float delta) {
     // on top of theirs a moment later.
     collisionZoomDebt_ = 0.0f;
     collisionClearSeconds_ = 0.0f;
-    // Scale zoom speed proportionally to current distance for fine control up close
-    float zoomSpeed = glm::max(userTargetDistance * 0.15f, 0.3f);
-    zoomBy(delta * zoomSpeed);
+    // A yard a notch, in or out alike. This took a share of the distance
+    // instead - 15% of it, a step in from ten yards one and a half and the
+    // step back out from there one and a quarter - so the two ways went at
+    // different speeds, and neither at the client's.
+    zoomStep(delta);
+}
+
+void CameraController::zoomStep(float yards, float rate) {
+    if (yards == 0.0f || !(rate > 0.0f)) return;
+    const int dir = yards > 0.0f ? 0 : 1;
+    const uint32_t ms = static_cast<uint32_t>(std::lround(std::fabs(yards) / rate * 1000.0f));
+    // The other way, if it is moving, stops here (0x005ff950 on +0x160 4,
+    // 0x005ffa60 on 1).
+    auto& other = viewMoves_[static_cast<size_t>(1 - dir)];
+    if (other.started) {
+        other.until = cameraClockMs_;
+        other.stopped = true;
+    }
+    auto& m = viewMoves_[static_cast<size_t>(dir)];
+    // Still running from the last step: it runs on that much longer.
+    if (m.started && !m.stopped && m.ends != 0) {
+        m.ends += ms;
+        return;
+    }
+    // 0x005fe580: a move not yet running starts now; it ends `ms` from now.
+    if (!m.started || m.stopped) {
+        m.started = true;
+        m.stopped = false;
+        m.from = cameraClockMs_;
+    }
+    m.speed = 1.0f;
+    m.rate = rate;
+    m.ends = cameraClockMs_ + ms;
 }
 
 float CameraController::clampedZoomDistance(float distance) const {
