@@ -3069,19 +3069,27 @@ void GameHandler::registerRemainingOpcodes() {
     // These pet opcodes have incompatible formats - just consume the packet.
     // Previously they shared the unlearn handler, which misinterpreted sound IDs
     // or GUID lists as unlearn costs and could trigger a bogus unlearn dialog.
-    for (auto op : { Opcode::SMSG_PET_GUIDS, Opcode::SMSG_PET_DISMISS_SOUND }) {
-        dispatchTable_[op] = [](network::Packet& packet) { packet.skipAll(); };
-    }
+    dispatchTable_[Opcode::SMSG_PET_GUIDS] = [](network::Packet& packet) { packet.skipAll(); };
     // A pet's answer to the order it was just given. 0x00716b90 takes a guid
     // and one value out of it and resolves a unit (type mask 8) by the guid,
     // Unit_C.cpp:0x636 - value 0 asks the pet's Order line, 1 its Kill line,
-    // and any other value says nothing at all. The real client has no handler
-    // for SMSG_PET_DISMISS_SOUND, which stays swallowed above.
+    // and any other value says nothing at all.
     dispatchTable_[Opcode::SMSG_PET_ACTION_SOUND] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(12)) return;
         uint64_t guid = packet.readUInt64();
         uint32_t action = packet.readUInt32();
         if (petActionSoundCallbackRef()) petActionSoundCallbackRef()(guid, action);
+    };
+    // A pet sent off says its own line. 0x00716c00 reads one id and three floats
+    // - a model and a position, no guid - and asks the sound row that model names
+    // for its dismiss column, which only a warlock's voidpets have. The client
+    // registers this one (0x006b0b80(0x325, ...) at 0x00740000:1333); leaving it
+    // swallowed was missing the ask, not the other way round.
+    dispatchTable_[Opcode::SMSG_PET_DISMISS_SOUND] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(16)) return;
+        const uint32_t modelId = packet.readUInt32();
+        const glm::vec3 at{packet.readFloat(), packet.readFloat(), packet.readFloat()};
+        if (petDismissSoundCallbackRef()) petDismissSoundCallbackRef()(modelId, at);
     };
     // Server signals that the pet can now be named (first tame)
     dispatchTable_[Opcode::SMSG_PET_RENAMEABLE] = [this](network::Packet& packet) {

@@ -387,6 +387,10 @@ public:
     /// its Order line for a value of 0, its Kill line for 1
     /// (rendering/unit_model_events.hpp).
     void playUnitPetActionSound(const game::Unit& unit, uint32_t action);
+    /// What a pet says as it is sent off (SMSG_PET_DISMISS_SOUND): the dismiss
+    /// column of the CreatureSoundData row a given model names, said at a given
+    /// position (rendering/unit_model_events.hpp).
+    void playPetDismissSound(uint32_t modelId, const glm::vec3& at);
     /// A unit's melee hit arriving (SMSG_ATTACKERSTATEUPDATE), kept on its
     /// attacker for its model's events; an attack stopping, which settles it
     /// (rendering/melee_sound.hpp).

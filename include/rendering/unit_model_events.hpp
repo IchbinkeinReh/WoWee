@@ -104,6 +104,11 @@ constexpr uint32_t voiceColumn(uint32_t kind) {
 }
 constexpr uint32_t kColumnFootstep = 9;  ///< +0x24, FootstepTerrainLookup's CreatureFootstepID
 constexpr uint32_t kColumnFidget0 = 14;
+/// The line a pet says as it is sent off, which SMSG_PET_DISMISS_SOUND asks for
+/// outright (0x00716c00): of 1306 rows 6 name one, all a warlock's voidpets
+/// (`A_Imp_Dismiss', `A_SUCCUBUS_DISMISS', `A_DOOMGUARD_DISMISS01',
+/// `A_VOIDWALKER_DISMISS'), and the 7th - row 2257 - names a test clip.
+constexpr uint32_t kColumnPetDismiss = 30;
 constexpr uint32_t kColumnBirth = 33;
 constexpr uint32_t kColumnSpellCastDirected = 34;
 constexpr uint32_t kColumnSubmerge = 35;

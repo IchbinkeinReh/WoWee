@@ -231,6 +231,33 @@ void EntitySpawner::playUnitPetActionSound(const game::Unit& unit, uint32_t acti
     playUnitVoiceKind(unit, action == 0 ? ue::kVoiceKindOrder : ue::kVoiceKindKill);
 }
 
+void EntitySpawner::playPetDismissSound(uint32_t modelId, const glm::vec3& at) {
+    // 0x00716c00, SMSG_PET_DISMISS_SOUND: the packet names no unit but a model,
+    // and the line asked for is that model's own - the sound row of the model's
+    // CreatureModelData row (its +0x34, the fallback the display's own SoundID
+    // leaves to it), dismiss column. So a pet whose sound row only its display
+    // names says nothing here, and no unit need be known to hear it. None of the
+    // voice kinds' gates are on this ask: no pet gate, no chance, no cooldown,
+    // and the play is handed no tracker slot - so it neither waits on a line the
+    // pet is still saying nor keeps one out of its way.
+    if (!renderer_ || !assetManager_) return;
+    auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+    auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
+    if (!models || !sounds || sounds->getFieldCount() <= ue::kColumnPetDismiss) return;
+    const int32_t model = models->findRecordById(modelId);
+    if (model < 0 || models->getFieldCount() <= kModelSoundColumn) return;
+    const uint32_t soundId = models->getUInt32(static_cast<uint32_t>(model), kModelSoundColumn);
+    if (soundId == 0) return;
+    const int32_t row = sounds->findRecordById(soundId);
+    if (row < 0) return;
+    const uint32_t sound = sounds->getUInt32(static_cast<uint32_t>(row), ue::kColumnPetDismiss);
+    if (sound == 0) return;
+    // The position the packet gives, raised by 1.0 (0x009e1130) off the ground
+    // it was read at.
+    const glm::vec3 where{at.x, at.y, at.z + 1.0f};
+    renderer_->getM2EventSounds().playOnce(sound, &where, 1.0f, assetManager_);
+}
+
 void EntitySpawner::playUnitDeathSound(uint64_t guid) {
     // 0x007474b0 kind 4, asked as the unit's dead state goes up (0x0073c5d0)
     // and by the combat death handler (0x007561e0): the Death column of the

@@ -336,6 +336,13 @@ void AnimationCallbackHandler::setupCallbacks() {
         entitySpawner_.playUnitPetActionSound(static_cast<const game::Unit&>(*entity), action);
     });
 
+    // A pet sent off, saying the line the model the packet names owns. No unit is
+    // resolved for it - 0x00716c00 asks the model, not the pet, and the pet may
+    // be gone from everything but the packet by the time the line is heard.
+    gameHandler_.setPetDismissSoundCallback([this](uint32_t modelId, glm::vec3 at) {
+        entitySpawner_.playPetDismissSound(modelId, at);
+    });
+
     // Other units' stand state (UNIT_FIELD_BYTES_1 byte 0), as the client
     // takes its change (0x0073f460 -> 0x0073f060): the base animation, from
     // the state its animation was given for, sits it down, lies it down,
