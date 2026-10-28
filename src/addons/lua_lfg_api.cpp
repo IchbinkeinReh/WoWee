@@ -883,13 +883,42 @@ void registerLfgLuaAPI(lua_State* L) {
     // ---- The raid browser ----
     //
     // A separate system from the queue: it searches for groups already forming
-    // rather than building one. None of it is implemented, and the counts
-    // answer zero so every loop over results runs zero times.
-    {"SearchLFGGetNumResults",     luaReturnZero},
+    // rather than building one. None of it is implemented, and the counts answer
+    // zero so every loop over results runs zero times. What is answered here is
+    // shaped to the client's own answers rather than to "nothing", because a
+    // placeholder that answers the wrong *kind* of nothing switches the interface
+    // off somewhere else:
+    //
+    //   SearchLFGGetNumResults    two numbers (this client's returns both the
+    //                             shown count and the total, and lfrframe.lua
+    //                             names both: `numResults, totalResults`).
+    //   SearchLFGGetJoinedID      nothing at all while no list is joined - the
+    //                             client pushes its joined id (0x00beaa14) only
+    //                             when that id is non-zero (0x005529a0), and the
+    //                             browser's dropdown does `or "none"`. Zero
+    //                             would be a number, true in Lua, and the
+    //                             dropdown would select a value of nil instead
+    //                             of saying None.
+    //
+    // The list itself is a packet pair plus the two requests that ask for it:
+    // SMSG_UPDATE_LFG_LIST (0x0055b770: a joined-list id of type<<24|id that has
+    // to match the one held, a whole-or-delta byte, then entries as a guid and a
+    // mask of which fields each row carries) and SMSG_LFG_UPDATE_SEARCH (case
+    // 0x369 of 0x0055bdc0: that joined-list flag alone). The client sends
+    // CMSG_LFG_LIST_JOIN (0x35e) and CMSG_LFG_LIST_LEAVE (0x35f) with the packed
+    // id at 0x00558ed0 and 0x00558f90, and those two opcodes are not in
+    // Data/opcodes/canonical.json at all - so the list stays empty until the
+    // requests exist, and answering nil is the honest answer, not a stub hiding
+    // a feature.
+    {"SearchLFGGetNumResults",     [](lua_State* L) -> int {
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        return 2;
+    }},
     {"SearchLFGGetResults",        [](lua_State* L) -> int { return luaReturnNil(L); }},
     {"SearchLFGGetPartyResults",   [](lua_State* L) -> int { return luaReturnNil(L); }},
     {"SearchLFGGetEncounterResults", [](lua_State* L) -> int { return luaReturnNil(L); }},
-    {"SearchLFGGetJoinedID",       luaReturnZero},
+    {"SearchLFGGetJoinedID",       [](lua_State* L) -> int { return luaReturnNil(L); }},
     // Nothing behind them yet, but they ask the taint check all the same
     // (0x00559400, 0x005594e0: kind 9).
     {"SearchLFGJoin",              [](lua_State* L) -> int { taint::allowed(L, 9); return 0; }},

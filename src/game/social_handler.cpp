@@ -1164,6 +1164,20 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_LFG_PARTY_INFO] = [this](network::Packet& packet) {
         handleLfgPartyInfo(packet);
     };
+    // The raid browser's browse list, which lfrframe.lua fills through
+    // SearchLFGGetResults. Both halves are still unread, and what is read here
+    // is only the shape of each: SMSG_UPDATE_LFG_LIST is a joined-list id
+    // (type<<24 | id) that must match the one the client holds, a whole-or-delta
+    // byte, and entries as an eight-byte guid plus a mask of which fields the
+    // row carries (0x0055b770, whose records are 0x148 bytes and come from
+    // LFGInfo.cpp:0x2be); SMSG_LFG_UPDATE_SEARCH is that joined-list flag alone,
+    // and the client acts on it only to drop a list it is holding when the flag
+    // goes false (case 0x369 of the LFG family routine 0x0055bdc0). The client's
+    // own listed flag is not in either packet - it is the joined-list id the
+    // client keeps for itself (0x00beaa14), set by SearchLFGJoin and cleared by
+    // SearchLFGLeave, which ask over opcodes this client's opcode data does not
+    // even name yet. Reading the packets therefore buys nothing on its own: the
+    // list stays empty until the requests are sent, so the skipAll stays.
     for (auto op : { Opcode::SMSG_LFG_UPDATE_SEARCH, Opcode::SMSG_UPDATE_LFG_LIST }) {
         table[op] = [](network::Packet& packet) { packet.skipAll(); };
     }
