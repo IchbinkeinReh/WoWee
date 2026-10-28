@@ -1,6 +1,7 @@
 #include "audio/npc_voice_manager.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/sound_distance.hpp"
+#include "audio/sound_entry.hpp"
 #include "audio/zone_music.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
@@ -550,26 +551,16 @@ bool NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, VoiceType 
     if (sample->cutoff > 0.0f)
         sound_distance::entryDistance(sample->minDistance, sample->cutoff, minDistance, maxDistance);
     // Whether the line swings in pitch or in volume at all is the row's to say,
-    // not ours: SoundEntries Flags (column 25) bit 0x400 gives the play a pitch of
-    // 0.85 + 0.3*rand, and bit 0x800 adds -0.15 + 0.3*rand to its volume
-    // (0x004c6a40 at 004c0000.c:6013-6022, each factor built from the pair of
-    // bounds set in front of the draw). The one is applied to the sound's base
-    // pitch (0x00878760 multiplies it onto +0x70 and hands the product to the
-    // handle); the other reaches the volume setter, 0x00879710, which clamps what
-    // it is asked into [0,1] - so a swing can take a line quiet or full but never
-    // past full. Of the 12941 rows only 126 ask for a pitch and 7 for a volume,
-    // and of the 527 behind these kits **none asks either**: the pitch jitter here
-    // used to be 0.98-1.02 on every line, which was this code's own, not the
-    // client's, and it made the same clip sound different from one click to the
-    // next. A voice line now plays at the pitch it was recorded at.
+    // not ours, and what a swing costs is the same for every play of a row
+    // (audio/sound_entry.hpp). Of the 12941 rows 126 ask for a pitch and 7 of
+    // those also for a volume, and of the 527 these kits reach **none asks
+    // either** - which is why the pitch jitter this used to put on every line,
+    // 0.98-1.02, was its own invention and not the client's: it made the same clip
+    // sound different from one click to the next. A voice line plays at the pitch
+    // it was recorded at.
     std::uniform_real_distribution<float> unit(0.0f, 1.0f);
-    float pitch = 1.0f;
-    if ((sample->flags & 0x400u) != 0)
-        pitch = 0.85f + 0.3f * unit(rng_);
-    float volume = sample->volume;
-    if ((sample->flags & 0x800u) != 0)
-        volume += -0.15f + 0.3f * unit(rng_);
-    volume = std::clamp(volume * volumeScale_, 0.0f, 1.0f);
+    const float pitch = sound_entry::pitchForFlags(sample->flags, unit(rng_));
+    const float volume = sound_entry::volumeForFlags(sample->flags, sample->volume * volumeScale_, unit(rng_));
 
     // The handle the play went into is kept per unit, because that is the slot the
     // client asks about before asking for the next line - the unit's own sound

@@ -6,6 +6,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/sound_distance.hpp"
+#include "audio/sound_entry.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -19,7 +20,19 @@ namespace wowee::rendering {
 // 0x004cd4a0): 3..12 File, 13..22 Freq, 23 DirectoryBase, 24 VolumeFloat
 // (+0x34), 25 Flags (+0x3c), 26 MinDistance (+0x2c), 27 DistanceCutoff
 // (+0x30) - the last two the channel's 3D min and max (0x00879390). Null when it has no file this
-// install can read.
+// install can read. The Flags are kept whole, because the same routine that
+// reads the reach reads the pitch and volume swings out of them
+// (audio/sound_entry.hpp).
+namespace {
+std::mt19937& rng() {
+    static std::mt19937 r{std::random_device{}()};
+    return r;
+}
+/// A draw across [0,1] for a swing, as the client draws one per flag it swings
+/// (0x004c5d40, between the pair of bounds the flag sets in front of it).
+float unitDraw() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng()); }
+}  // namespace
+
 const M2EventSounds::Kit* M2EventSounds::kit(uint32_t soundId, pipeline::AssetManager* assets) {
     if (soundId == 0 || !assets) return nullptr;
     auto it = kits_.find(soundId);
@@ -40,7 +53,8 @@ const M2EventSounds::Kit* M2EventSounds::kit(uint32_t soundId, pipeline::AssetMa
             }
             const float volume = dbc->getFloat(row, 24);
             if (volume > 0.0f) loaded.volume = volume;
-            loaded.loops = (dbc->getUInt32(row, 25) & 0x200u) != 0;
+            loaded.flags = dbc->getUInt32(row, 25);
+            loaded.loops = (loaded.flags & audio::sound_entry::kFlagLoops) != 0;
             loaded.minDistance = dbc->getFloat(row, 26);
             loaded.cutoff = dbc->getFloat(row, 27);
         }
@@ -52,10 +66,9 @@ const M2EventSounds::Kit* M2EventSounds::kit(uint32_t soundId, pipeline::AssetMa
 
 // One of the kit's files, by their Freq weights (0x004cbac0).
 const std::vector<uint8_t>* M2EventSounds::pickFile(const Kit& k) {
-    static std::mt19937 rng{std::random_device{}()};
     const uint64_t total = std::accumulate(k.frequency.begin(), k.frequency.end(), uint64_t{0});
-    if (total == 0) return &k.files[std::uniform_int_distribution<size_t>(0, k.files.size() - 1)(rng)];
-    uint64_t roll = std::uniform_int_distribution<uint64_t>(0, total - 1)(rng);
+    if (total == 0) return &k.files[std::uniform_int_distribution<size_t>(0, k.files.size() - 1)(rng())];
+    uint64_t roll = std::uniform_int_distribution<uint64_t>(0, total - 1)(rng());
     for (size_t i = 0; i < k.files.size(); ++i) {
         if (roll < k.frequency[i]) return &k.files[i];
         roll -= k.frequency[i];
@@ -115,9 +128,15 @@ void M2EventSounds::playOnce(uint32_t soundId, const glm::vec3* at, float volume
     auto& audio = audio::AudioEngine::instance();
     // An SFX play, as every one 0x004c5990 sets up (type 0).
     constexpr auto kSfx = audio::Channel::Effects;
-    const float volume = absolute ? volumeScale : k->volume * volumeScale;
-    if (!at) audio.playSound2D(*file, volume, 1.0f, kSfx, limit, priority, outHandle);
-    else audio.playSound3D(*file, *at, volume, 1.0f, maxDistance, minDistance, kSfx, limit, priority, outHandle);
+    const float base = absolute ? volumeScale : k->volume * volumeScale;
+    // An `absolute` play brings its own volume in the (0,1] range, and the client
+    // draws no volume swing on that branch (004c0000.c:6005-6018); the pitch swing
+    // it draws either way (:6020).
+    const float volume = absolute ? base : audio::sound_entry::volumeForFlags(k->flags, base, unitDraw());
+    const float pitch = audio::sound_entry::pitchForFlags(k->flags, unitDraw());
+    if (!at) audio.playSound2D(*file, volume, pitch, kSfx, limit, priority, outHandle);
+    else
+        audio.playSound3D(*file, *at, volume, pitch, maxDistance, minDistance, kSfx, limit, priority, outHandle);
 }
 
 void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const ShakeCamera& shakeCamera) {
@@ -153,7 +172,12 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
                              moverInstanceQuery_ && fired.ownerArg == moverInstanceQuery_();
         const int priority = onMover ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
         const bool atListener = onMover && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0";
-        const float volume = k->volume * (atListener ? 0.65f : 1.0f);
+        // And the swings the row asks of the play (audio/sound_entry.hpp). Every
+        // one of these plays is on the client's kit-volume branch, the one it does
+        // draw the volume swing on.
+        const float base = k->volume * (atListener ? 0.65f : 1.0f);
+        const float volume = audio::sound_entry::volumeForFlags(k->flags, base, unitDraw());
+        const float pitch = audio::sound_entry::pitchForFlags(k->flags, unitDraw());
 
         bool loops = false;
         switch (plan.play) {
@@ -168,9 +192,9 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         constexpr auto kSfx = audio::Channel::Effects;
         if (!loops) {
             const std::vector<uint8_t>* file = pickFile(*k);
-            if (atListener) audio.playSound2D(*file, volume, 1.0f, kSfx, audio::PlayLimit::None, priority);
+            if (atListener) audio.playSound2D(*file, volume, pitch, kSfx, audio::PlayLimit::None, priority);
             else
-                audio.playSound3D(*file, fired.position, volume, 1.0f, maxDistance, minDistance, kSfx,
+                audio.playSound3D(*file, fired.position, volume, pitch, maxDistance, minDistance, kSfx,
                                   audio::PlayLimit::None, priority);
             continue;
         }
@@ -188,6 +212,10 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         }
         const auto origin = m2.getInstancePosition(fired.instanceId);
         if (!origin) continue;
+        // A loop carries its volume swing. Its pitch is not swung: a looping play
+        // takes no pitch argument, and exactly one row of the 12941 asks for both
+        // a pitch swing and a loop - 15582 Lightning_Fel_Precast_Low_Hand
+        // (IronCouncil), Flags 0x600.
         const uint32_t handle = audio.playSound3DLooping(*pickFile(*k), fired.position, volume, maxDistance,
                                                          minDistance, plan.fadeIn, kSfx, priority);
         if (handle != 0)
