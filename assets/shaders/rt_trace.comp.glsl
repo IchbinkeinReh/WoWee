@@ -141,6 +141,11 @@ const float RT_NORMAL_AGREE_FAR = 0.8192;   // cos 35 degrees
 // How far past the terminator the lamps' light wraps (N.L + w) / (1 + w): a
 // face turned some 15 degrees from a lamp still takes a little of it.
 const float RT_LAMP_WRAP = 0.25;
+// The sine of how far above a face a lamp must be for the surface's own
+// normal (its normal map's bumps) to light by: none below 3 degrees, all of
+// it from 20.
+const float RT_LAMP_DETAIL_LOW = 0.05;
+const float RT_LAMP_DETAIL_HIGH = 0.34;
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -260,7 +265,18 @@ void main() {
         // some of its light. Unwrapped, a crease turned from a candle went
         // from lit to black on the crease itself - the bevel of the curb
         // round the plaza in Silvermoon, a straight dark edge across the floor.
-        float ndl = d > 1e-4 ? (dot(lightN, toLight / d) + RT_LAMP_WRAP) / (1.0 + RT_LAMP_WRAP) : 1.0;
+        // A bump in a normal map turned from a lamp a few degrees above its
+        // face went dark, the next one lit: a low candle laid the bumps'
+        // shading over the floor in hard patches. The detail is faded out
+        // as the light comes down to the face - all of it from some twenty
+        // degrees above, none of it under three - so a lamp overhead still
+        // shows it, and one at the floor's level lights the floor as a floor.
+        vec3 nl = lightN;
+        if (d > 1e-4) {
+            float rise = dot(n, toLight / d);
+            nl = normalize(mix(n, lightN, smoothstep(RT_LAMP_DETAIL_LOW, RT_LAMP_DETAIL_HIGH, rise)));
+        }
+        float ndl = d > 1e-4 ? (dot(nl, toLight / d) + RT_LAMP_WRAP) / (1.0 + RT_LAMP_WRAP) : 1.0;
         if (ndl <= 0.0) continue;
         vec3 c = light.colorStart.rgb * (rtLightFalloff(d, light.colorStart.w, end) * ndl);
         float w = max(c.r, max(c.g, c.b));
