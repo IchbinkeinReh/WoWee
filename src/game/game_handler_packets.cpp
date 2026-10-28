@@ -2165,8 +2165,11 @@ void GameHandler::registerRemainingOpcodes() {
             weatherAbrupt_ = abrupt;
             ++weatherSerial_;
             LOG_INFO("Weather changed to ", wType, ", intensity ", wIntensity);
-            // Notify addons of weather change
-            fireAddonEvent("WEATHER_CHANGED", {std::to_string(wType), std::to_string(wIntensity)});
+            // And that is all the client does with it. WEATHER_CHANGED is a
+            // Classic name: this client's event-id table has no WEATHER of any
+            // spelling, and the only weather text in its interface is the
+            // graphics options' own labels. The state stays here because the
+            // renderer reads it; nothing else is told.
         }
     };
     // The real client registers no handler for SMSG_SCRIPT_MESSAGE at all, so
