@@ -118,6 +118,11 @@ private:
         uint32_t flags = 0;
     };
     std::unordered_map<uint32_t, UiRowAsk> asksById_;
+    /// The level asked of a clip, reached by leaf name, for the libraries
+    /// below: those plays name a file rather than a row, and SoundEntries'
+    /// File columns hold a leaf. Only the level is read this way, and only
+    /// where the rows naming a leaf agree on it - see ensureSoundEntriesLoaded.
+    std::unordered_map<std::string, float> volumeByLeaf_;
     /// The ids with a play still going, for a row whose 0x20 flag asks for one
     /// at a time: the id against the handle its play went into.
     std::unordered_map<uint32_t, uint32_t> playingById_;
