@@ -320,3 +320,17 @@ TEST_CASE("An edge above the feet is a step on the ground, a wall in the air", "
     // Rising past it: never.
     CHECK(50.795f > edgeFloorCeiling(false, 50.79f, 1.2f, 4.0f));
 }
+
+TEST_CASE("a jump the slope catches up with keeps rising", "[movement_limits]") {
+    using namespace wowee::rendering::movement;
+    // Left the ground and still going up, a hair under the slope: lifted.
+    REQUIRE(risesOffGround(false, 5.7f, 0.009f));
+    REQUIRE(risesOffGround(false, 5.7f, kRisingLiftMax));
+    // A ledge met on the way up is landed on.
+    REQUIRE_FALSE(risesOffGround(false, 5.7f, 0.9f));
+    // Coming down, or at the top: lands.
+    REQUIRE_FALSE(risesOffGround(false, 0.0f, 0.009f));
+    REQUIRE_FALSE(risesOffGround(false, -3.0f, 0.009f));
+    // On the ground with an upward push (out of the water): stands on it.
+    REQUIRE_FALSE(risesOffGround(true, 1.5f, 0.009f));
+}

@@ -29,6 +29,20 @@ inline bool isWalkableNormal(float normalZ) {
     return normalZ >= kMinWalkableNormalZ;
 }
 
+/// Whether a body the ground has caught up with is still rising off it: a
+/// jump on its way up, which the slope under it lifts and does not land.
+/// Running uphill the ground climbs faster in a frame than a jump's first
+/// frame does (a mount's: 0.09 yd against 0.1), so the feet came out a hair
+/// below it and were set down with the jump's speed taken away - the jump
+/// never left the ground. Only what has already left the ground rises, and
+/// only by as much as a slope climbs in a frame (`below`, how far under the
+/// ground the feet are): a ledge met on the way up is still landed on, and a
+/// body on the ground with an upward push (the boost out of water) stands.
+inline constexpr float kRisingLiftMax = 0.25f;
+inline bool risesOffGround(bool grounded, float verticalVelocity, float below) {
+    return !grounded && verticalVelocity > 0.0f && below <= kRisingLiftMax;
+}
+
 /// The upward component of the heightfield's normal at a point, from four
 /// samples around it.
 ///

@@ -1963,8 +1963,12 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
                 static constexpr float HOVER_HEIGHT = 4.0f;  // ~4 yards above ground
                 const float snapH = hoverActive_ ? (*groundH + HOVER_HEIGHT) : *groundH;
                 targetPos.z = snapH;
-                verticalVelocity = 0.0f;
-                grounded = true;
+                if (movement::risesOffGround(grounded, verticalVelocity, dz)) {
+                    // Lifted with the slope, still on its way up.
+                } else {
+                    verticalVelocity = 0.0f;
+                    grounded = true;
+                }
                 lastGroundZ = *groundH;
             } else {
                 grounded = false;
