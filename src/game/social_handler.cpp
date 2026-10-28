@@ -10,6 +10,7 @@
 #include "game/interface_text.hpp"
 #include "game/entity.hpp"
 #include "game/packet_parsers.hpp"
+#include "game/power_prediction.hpp"
 #include "game/update_field_table.hpp"
 #include "game/opcode_table.hpp"
 #include "audio/audio_coordinator.hpp"
@@ -2858,6 +2859,18 @@ void SocialHandler::handlePartyMemberStats(network::Packet& packet, bool isFull)
     // snapshot for as long as the group lasts.
     const bool wasOnline = (member->onlineStatus & 0x0001) != 0;
     bool onlineChanged = false;
+    // What the member held before this packet, so the announcements can be
+    // gated on what actually moved. The client compares the member's stats block
+    // before and after the read (0x006cba60) and works from that difference in
+    // the same bit layout as these flags, not from the flags themselves - see
+    // the events below.
+    const uint16_t prevStatus = member->onlineStatus;
+    const uint32_t prevHealth = member->curHealth;
+    const uint32_t prevMaxHealth = member->maxHealth;
+    const uint8_t prevPowerType = member->powerType;
+    const uint16_t prevPower = member->curPower;
+    const uint16_t prevMaxPower = member->maxPower;
+    const uint16_t prevLevel = member->level;
     if (updateFlags & 0x0001) {
         if (remaining() >= 2) {
             member->onlineStatus = packet.readUInt16();
@@ -2960,8 +2973,57 @@ void SocialHandler::handlePartyMemberStats(network::Packet& packet, bool isFull)
             }
         }
         if (!unitId.empty()) {
-            if (updateFlags & (0x0002 | 0x0004)) owner_.addonEventCallbackRef()("UNIT_HEALTH", {unitId});
-            if (updateFlags & (0x0010 | 0x0020)) owner_.addonEventCallbackRef()("UNIT_POWER", {unitId});
+            // Which fields moved, in the client's bit layout (0x006cba60), and
+            // the announcements 0x006cf740 raises for each - in its order, which
+            // is not the flag order: the level goes out before the health. The
+            // flags field (0x1) is what a member who went offline or into a
+            // corpse moves, and the client answers it with both the health bar
+            // and the member's power, then swallows the two bits it just paid
+            // for so the health and power flags do not announce the same thing
+            // again.
+            uint32_t moved = 0;
+            if (member->onlineStatus != prevStatus) moved |= 0x0001;
+            if (member->curHealth != prevHealth) moved |= 0x0002;
+            if (member->maxHealth != prevMaxHealth) moved |= 0x0004;
+            if (member->powerType != prevPowerType) moved |= 0x0008;
+            if (member->curPower != prevPower) moved |= 0x0010;
+            if (member->maxPower != prevMaxPower) moved |= 0x0020;
+            if (member->level != prevLevel) moved |= 0x0040;
+
+            // The power events are named for the power itself, chosen by the
+            // member's own power type byte - the one the 0x8 flag writes - and
+            // runes (5) name nothing. "UNIT_POWER", which this site used to
+            // fire for both, is not a name this client has; see the table in
+            // power_prediction.hpp.
+            const auto firePower = [&](uint32_t bit, const char* const* events) {
+                if ((moved & bit) == 0) return;
+                if (member->powerType >= 7) return;
+                if (const char* const name = events[member->powerType])
+                    owner_.addonEventCallbackRef()(name, {unitId});
+            };
+            if (moved & 0x0001) {
+                owner_.addonEventCallbackRef()("UNIT_HEALTH", {unitId});
+                firePower(0x0001, power_prediction::kPowerEvents);
+                moved &= ~0x0011u;
+            }
+            if (moved & 0x0040) owner_.addonEventCallbackRef()("UNIT_LEVEL", {unitId});
+            if (moved & 0x0002) owner_.addonEventCallbackRef()("UNIT_HEALTH", {unitId});
+            if (moved & 0x0004) owner_.addonEventCallbackRef()("UNIT_MAXHEALTH", {unitId});
+            // Which bar to show at all. A member whose power type the packet
+            // changes - a shapeshift, a hunter's pet-less form - is shown a
+            // different bar, and UNIT_DISPLAYPOWER is the only name that says so.
+            if (moved & 0x0008) owner_.addonEventCallbackRef()("UNIT_DISPLAYPOWER", {unitId});
+            firePower(0x0010, power_prediction::kPowerEvents);
+            firePower(0x0020, power_prediction::kMaxPowerEvents);
+            // A change in bits 1 or 4 of the flags byte - the only two the
+            // client tests there (0x006cf740: `^old ^new & 0x12`), and the only
+            // way this packet says a member's reaction moved.
+            if (((prevStatus ^ member->onlineStatus) & 0x12) != 0)
+                owner_.addonEventCallbackRef()("UNIT_FACTION", {unitId});
+            // Not gated on a change the way the client gates it: it compares all
+            // sixty-four aura slots of its own snapshot, while this cache is
+            // WoWee's and is dropped for the guids that are not cached. The
+            // server's mask already names only the slots that changed.
             if (updateFlags & 0x0200) {
                 owner_.addonEventCallbackRef()("UNIT_AURA", {unitId});
                 // The 1.12 name, which carries no unit.

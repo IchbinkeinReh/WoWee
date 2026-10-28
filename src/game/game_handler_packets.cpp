@@ -289,11 +289,9 @@ int32_t GameHandler::unitPower(const Unit& unit, int type) const {
 
 void GameHandler::predictedPowerSaid(const Unit& unit, uint64_t guid, int type) {
     // 0x0060bf10 0x13 + type: UNIT_MANA .. UNIT_RUNIC_POWER, none for runes.
-    static constexpr const char* kEvents[7] = {"UNIT_MANA", "UNIT_RAGE", "UNIT_FOCUS", "UNIT_ENERGY",
-                                               "UNIT_HAPPINESS", nullptr, "UNIT_RUNIC_POWER"};
     if (unit.predictedPower().value[type] == static_cast<int32_t>(unit.getMaxPowerByType(static_cast<uint8_t>(type))) &&
-        kEvents[type] != nullptr)
-        if (const auto uid = guidToUnitId(guid); !uid.empty()) fireAddonEvent(kEvents[type], {uid});
+        power_prediction::kPowerEvents[type] != nullptr)
+        if (const auto uid = guidToUnitId(guid); !uid.empty()) fireAddonEvent(power_prediction::kPowerEvents[type], {uid});
     // Then, for the player or its pet (0x004d3790, 0x005d3390), 0x0053d1b0.
     if (guid == playerGuid || (petGuid_ != 0 && guid == petGuid_)) predictedPowerUsability();
 }

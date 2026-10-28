@@ -1056,21 +1056,17 @@ bool EntityController::applyUnitFieldsOnCreate(const UpdateBlock& block,
             unit->setPowerByType(powerType, val);
             // Named per power rather than one event: FrameXML registers only
             // the one its bar shows, so a rogue's frame is not woken by every
-            // mana tick in the party.
-            static const char* kPowerEvents[7] = {
-                "UNIT_MANA", "UNIT_RAGE", "UNIT_FOCUS", "UNIT_ENERGY",
-                "UNIT_HAPPINESS", "UNIT_RUNIC_POWER", "UNIT_RUNIC_POWER"
-            };
-            if (powerType < 7) emitForUnit(kPowerEvents[powerType]);
+            // mana tick in the party. Runes (5) name nothing - the client has no
+            // event id for them, and their update is RUNE_POWER_UPDATE.
+            if (powerType < 7 && power_prediction::kPowerEvents[powerType] != nullptr)
+                emitForUnit(power_prediction::kPowerEvents[powerType]);
         } else if (key >= ufi.maxPowerBase && key < ufi.maxPowerBase + 7) {
-            unit->setMaxPowerByType(static_cast<uint8_t>(key - ufi.maxPowerBase), val);
-            // The maximum a bar is scaled against, which FrameXML redraws on.
-            static const char* kMaxPowerEvents[7] = {
-                "UNIT_MAXMANA", "UNIT_MAXRAGE", "UNIT_MAXFOCUS", "UNIT_MAXENERGY",
-                "UNIT_MAXHAPPINESS", "UNIT_MAXRUNIC_POWER", "UNIT_MAXRUNIC_POWER"
-            };
-            if (const auto t = static_cast<uint8_t>(key - ufi.maxPowerBase); t < 7)
-                emitForUnit(kMaxPowerEvents[t]);
+            const auto powerType = static_cast<uint8_t>(key - ufi.maxPowerBase);
+            unit->setMaxPowerByType(powerType, val);
+            // The maximum a bar is scaled against, which FrameXML redraws on -
+            // the client's 0x1b + type, with the same hole at runes.
+            if (power_prediction::kMaxPowerEvents[powerType] != nullptr)
+                emitForUnit(power_prediction::kMaxPowerEvents[powerType]);
         }
         else if (key == ufi.mountDisplayId) {
             if (block.guid == owner_.getPlayerGuid()) {
@@ -1454,7 +1450,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
     if (powerTypeMoved || powersMoved != 0 || maxPowersMoved != 0)
         owner_.powerFieldsChanged(*unit, block.guid, powerTypeMoved, powersMoved, maxPowersMoved);
 
-    // Fire UNIT_HEALTH / UNIT_POWER events for Lua addons
+    // Fire the health and power events the interface listens for
     if ((result.healthChanged || result.powerChanged)) {
         auto unitId = owner_.guidToUnitId(block.guid);
         if (!unitId.empty()) {
@@ -1462,27 +1458,23 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             if (result.maxHealthChanged) pendingEvents_.emit("UNIT_MAXHEALTH", {unitId});
             if (result.powerChanged) {
                 // The event a WotLK interface is listening for is named after
-                // the power itself. UNIT_POWER is the later, generic one - it
-                // arrived in Cataclysm, and every unit frame this client
-                // targets registers UNIT_MANA, UNIT_RAGE, UNIT_ENERGY or
-                // UNIT_FOCUS instead. Sending only the generic name meant the
-                // mana bar was told nothing it understood and never moved,
-                // even though the number behind it was current.
+                // the power itself: the client fires `0x13 + type` from the field
+                // setter (0x0060bf10), so UNIT_MANA, UNIT_RAGE, UNIT_ENERGY,
+                // UNIT_FOCUS, UNIT_HAPPINESS or UNIT_RUNIC_POWER, and the maxima
+                // at `0x1b + type`. Runes name nothing.
                 //
-                // The create path already names them; this is the same table.
-                static const char* kPowerEvents[7] = {
-                    "UNIT_MANA", "UNIT_RAGE", "UNIT_FOCUS", "UNIT_ENERGY",
-                    "UNIT_HAPPINESS", "UNIT_RUNIC_POWER", "UNIT_RUNIC_POWER"
-                };
-                static const char* kMaxPowerEvents[7] = {
-                    "UNIT_MAXMANA", "UNIT_MAXRAGE", "UNIT_MAXFOCUS", "UNIT_MAXENERGY",
-                    "UNIT_MAXHAPPINESS", "UNIT_MAXRUNIC_POWER", "UNIT_MAXRUNIC_POWER"
-                };
-                if (result.powerTypeChanged >= 0 && result.powerTypeChanged < 7)
-                    pendingEvents_.emit(kPowerEvents[result.powerTypeChanged], {unitId});
-                if (result.maxPowerTypeChanged >= 0 && result.maxPowerTypeChanged < 7)
-                    pendingEvents_.emit(kMaxPowerEvents[result.maxPowerTypeChanged], {unitId});
-                pendingEvents_.emit("UNIT_POWER", {unitId});
+                // "UNIT_POWER", which this branch used to fire as well, is not a
+                // name this client has at all - not in its event-id table, not
+                // once in Wow.exe where each of the named ones appears once, and
+                // not in any FrameXML listener. It was the generic Cataclysm
+                // name, and it is what the named branch above was written to
+                // work around while it kept being fired next to it.
+                if (result.powerTypeChanged >= 0 && result.powerTypeChanged < 7 &&
+                    power_prediction::kPowerEvents[result.powerTypeChanged] != nullptr)
+                    pendingEvents_.emit(power_prediction::kPowerEvents[result.powerTypeChanged], {unitId});
+                if (result.maxPowerTypeChanged >= 0 && result.maxPowerTypeChanged < 7 &&
+                    power_prediction::kMaxPowerEvents[result.maxPowerTypeChanged] != nullptr)
+                    pendingEvents_.emit(power_prediction::kMaxPowerEvents[result.maxPowerTypeChanged], {unitId});
                 // The usability events come from the prediction moving
                 // (0x00722c50 -> 0x0053d1b0), not from the field.
             }

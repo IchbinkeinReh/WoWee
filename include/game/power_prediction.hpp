@@ -25,6 +25,30 @@ inline constexpr uint32_t kTickMs = 100;
 /// 0x0071c390: how long a mana cost interrupts mana regeneration.
 inline constexpr int64_t kFiveSecondRuleMs = 5000;
 
+/// The event a power field's change is announced with, and the same for the
+/// maximum it is scaled against. The client fires these out of the field setter
+/// itself - `0x0060bf10` with `0x13 + type` (UNIT_MANA 19 .. UNIT_RUNIC_POWER
+/// 25), and `0x1b + type` for the maxima - one event per field write, which is
+/// why the party stat packet that writes a member's power (0x006cf9b0) raises no
+/// event of its own: the fields do it as they land.
+///
+/// The hole at index 5 is **runes**: this client's event-id table has no name at
+/// 0x18 or at 0x20 - there is no id there, not an unnamed one - and a rune change
+/// is RUNE_POWER_UPDATE (598), which the rune code raises by itself. Firing
+/// UNIT_RUNIC_POWER for a rune write, as two of the callers used to, tells a
+/// deathknight's runic bar that its number moved when it did not.
+///
+/// "UNIT_POWER" is not a name this client knows either - it is not in the id
+/// table and appears nowhere in Wow.exe, while each of these hits once as
+/// plaintext there. The FrameXML registers the named ones and nothing else, so
+/// the generic name wakes no bar at all.
+inline constexpr const char* const kPowerEvents[7] = {
+    "UNIT_MANA", "UNIT_RAGE", "UNIT_FOCUS", "UNIT_ENERGY",
+    "UNIT_HAPPINESS", nullptr, "UNIT_RUNIC_POWER"};
+inline constexpr const char* const kMaxPowerEvents[7] = {
+    "UNIT_MAXMANA", "UNIT_MAXRAGE", "UNIT_MAXFOCUS", "UNIT_MAXENERGY",
+    "UNIT_MAXHAPPINESS", nullptr, "UNIT_MAXRUNIC_POWER"};
+
 struct Predicted {
     std::array<int32_t, 7> value{};  ///< +0xfb4
     uint32_t carry = 0;              ///< +0xfd0: thousandths not yet a whole point
