@@ -259,6 +259,63 @@ struct LfgBrowserRow {
  */
 std::vector<LfgBrowserRow> buildLfgBrowserRows(const std::vector<LfgListRow>& rows);
 
+/**
+ * One row of DungeonEncounter.dbc — the table the raid browser's bosses come from.
+ *
+ * `0x00553830` walks it as rows of 0x1c bytes (count at 0x00ad36b8, base at
+ * 0x00ad36cc) matching two of its fields against the joined dungeon's own
+ * LFGDungeons record, `+0x1c` and `+0x20`. That pair is the instance map and the
+ * difficulty — the same two `0x005553f0` hands `0x00634950` to get a dungeon's map
+ * area, and the same two the extracted file answers at columns 23 and 24 of
+ * LFGDungeons.dbc against columns 1 and 2 of DungeonEncounter.dbc (Shadowfang
+ * Keep's eight, Naxxramas' fifteen, ToC's five, heroic's three to five). So whose
+ * bosses a row shows is decided by the **joined** list's dungeon, not by anything
+ * the row itself names.
+ */
+struct LfgEncounterRow {
+    uint32_t mapId = 0;         ///< record +0x04
+    uint32_t difficulty = 0;    ///< record +0x08
+    /// Which bit of a row's `encounterMask` says this boss is done, record +0x10.
+    /// The client masks the byte to five bits before shifting (0x00553830:3021), so
+    /// a row naming bit 32 or higher addresses a different boss rather than nothing.
+    uint32_t bit = 0;
+    /// The boss's name, record +0x14 — the first of the three values
+    /// `SearchLFGGetEncounterResults` pushes. The third of those is a texture read
+    /// from the record's last field, a SpellIcon id, and that column is zero in
+    /// every row of the copy this client reads, so the store lookup answers nothing
+    /// and the client pushes nothing for it (0x005538b0:3050-3059).
+    std::string name;
+};
+
+/// Whether one row's mask says this boss is done: the test at 0x00553830:3021.
+inline bool lfgEncounterDone(uint32_t mask, const LfgEncounterRow& row) {
+    return (mask & (1u << (row.bit & 0x1f))) != 0;
+}
+
+/// How many bosses an instance has and how many of them are done, which are
+/// `SearchLFGGetResults`' encountersTotal and encountersComplete
+/// (0x00555fd0:4907-4926 pushes both as numbers).
+struct LfgEncounterCounts {
+    uint32_t total = 0;
+    uint32_t complete = 0;
+};
+
+/// The walk `0x00553830` makes, over the rows in the order they are stored.
+LfgEncounterCounts countLfgEncounters(const std::vector<LfgEncounterRow>& rows,
+                                      uint32_t mapId, uint32_t difficulty,
+                                      uint32_t mask);
+
+/**
+ * The `before`-th boss of one instance in that same order — what
+ * `SearchLFGGetEncounterResults` answers for its second argument, which the
+/// client passes as `encounterIndex - 1` (0x00553c30:3258) and `0x005538b0` counts
+/// matches down to. Null when the instance has no that-many bosses, for which the
+/// client pushes three nils rather than nothing (0x005538b0:3069-3071).
+ */
+const LfgEncounterRow* lfgEncounterAt(const std::vector<LfgEncounterRow>& rows,
+                                      uint32_t mapId, uint32_t difficulty,
+                                      uint32_t before);
+
 /// The party lock block SMSG_LFG_PARTY_INFO carries, and SMSG_LFG_JOIN_RESULT
 /// with result 6 after its two uint32s (0x0055b080): a byte count, then per
 /// member a guid, a uint32 count and that many entry/status pairs. A member

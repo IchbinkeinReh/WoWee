@@ -2646,6 +2646,19 @@ public:
     /// Counted from DungeonEncounter.dbc, which is the only place the total
     /// lives - the server sends which are done and never how many there are.
     uint32_t getDungeonEncounterCount(uint32_t mapId, uint32_t difficulty) const;
+    /// That same table, row by row and in the order the file stores it, which is
+    /// the order the raid browser walks it for a row's boss list and its tooltip
+    /// (countLfgEncounters and lfgEncounterAt).
+    const std::vector<LfgEncounterRow>& getDungeonEncounters() const {
+        loadDungeonEncounterDbc();
+        return dungeonEncounters_;
+    }
+    /// The list the browse panel is holding, packed type<<24 | id: the id of the
+    /// last list packet actually read, which is what the rows below belong to. The
+    /// client masks its low twenty-four bits off 0x00beab20 - the id the join
+    /// request set, 0x00553c30:3228 - to name the dungeon those rows' bosses live
+    /// in; the two are the same id whenever rows are held at all. Zero when none is.
+    uint32_t getLfgSearchListId() const;
     uint32_t getLfgProposalId() const;
     uint8_t  getLfgOfferedRoles() const;
     const std::vector<LfgProposalMember>& getLfgProposalMembers() const;
@@ -6082,7 +6095,11 @@ private:
     // (mapId, difficulty) -> encounter count, and the same map with no
     // difficulty-specific rows under a difficulty of 0xFFFFFFFF.
     mutable std::unordered_map<uint64_t, uint32_t> dungeonEncounterCounts_;
+    /// The same file's rows, kept because the raid browser needs the bosses
+    /// themselves and not just how many of a map/difficulty pair there are.
+    mutable std::vector<LfgEncounterRow> dungeonEncounters_;
     mutable bool dungeonEncounterCacheLoaded_ = false;
+    void loadDungeonEncounterDbc() const;
     void loadMapNameCache() const;
 
     // LFG dungeon name cache (lazy-loaded from LFGDungeons.dbc; WotLK only)

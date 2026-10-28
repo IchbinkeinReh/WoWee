@@ -633,6 +633,12 @@ public:
         if (lfgListWindowId_ == 0 || index >= lfgBrowserRows_.size()) return nullptr;
         return &lfgBrowserRows_[index];
     }
+    /// Which list those rows are held for, packed type<<24 | id. The client masks
+    /// the low twenty-four bits off its joined browser id (0x00beab20) to name the
+    /// dungeon those rows' bosses belong to, at 0x00553c30:3228; the id here is the
+    /// one a packet actually named (0x00beaa98), which is the one the rows read
+    /// belong to and, whenever rows are held, the same id.
+    [[nodiscard]] uint32_t getLfgSearchListId() const { return lfgListWindowId_; }
     [[nodiscard]] uint32_t getLfgDungeonId()       const { return lfgDungeonId_; }
     [[nodiscard]] std::string getCurrentLfgDungeonName() const;
     [[nodiscard]] uint32_t getLfgProposalId()      const { return lfgProposalId_; }

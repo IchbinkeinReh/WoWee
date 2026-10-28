@@ -384,5 +384,36 @@ std::vector<LfgBrowserRow> buildLfgBrowserRows(const std::vector<LfgListRow>& ro
     return out;
 }
 
+LfgEncounterCounts countLfgEncounters(const std::vector<LfgEncounterRow>& rows,
+                                      uint32_t mapId, uint32_t difficulty,
+                                      uint32_t mask) {
+    // One pass over the whole table, counting the rows of one instance and among
+    // them those whose bit the mask has (0x00553830). Both numbers come out of the
+    // same walk, which is why a boss the mask names but the table does not has no
+    // count of its own.
+    LfgEncounterCounts out;
+    for (const auto& row : rows) {
+        if (row.mapId != mapId || row.difficulty != difficulty) continue;
+        ++out.total;
+        if (lfgEncounterDone(mask, row)) ++out.complete;
+    }
+    return out;
+}
+
+const LfgEncounterRow* lfgEncounterAt(const std::vector<LfgEncounterRow>& rows,
+                                      uint32_t mapId, uint32_t difficulty,
+                                      uint32_t before) {
+    // 0x005538b0 walks the same table and counts *down*: every row of the instance
+    // it passes decrements the index, and the row that reaches zero is the answer.
+    // Order is the table's own, which is id order in the file, so the bosses of one
+    // instance come out in the order they are fought.
+    for (const auto& row : rows) {
+        if (row.mapId != mapId || row.difficulty != difficulty) continue;
+        if (before == 0) return &row;
+        --before;
+    }
+    return nullptr;
+}
+
 }  // namespace game
 }  // namespace wowee

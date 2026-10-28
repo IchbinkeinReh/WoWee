@@ -3161,32 +3161,57 @@ void GameHandler::respondInstanceLock(bool accept) {
     if (socialHandler_) socialHandler_->respondInstanceLock(accept);
 }
 
-uint32_t GameHandler::getDungeonEncounterCount(uint32_t mapId, uint32_t difficulty) const {
-    if (!dungeonEncounterCacheLoaded_) {
-        auto* am = services_.assetManager;
-        // Not an attempt: the assets are not there to read yet, and a caller
-        // can reach this before they are.
-        if (!am || !am->isInitialized()) return 0;
-        dungeonEncounterCacheLoaded_ = true;
+void GameHandler::loadDungeonEncounterDbc() const {
+    if (dungeonEncounterCacheLoaded_) return;
 
-        auto dbc = am->loadDBC("DungeonEncounter.dbc");
-        if (dbc && dbc->isLoaded()) {
-            // ID, MapID, Difficulty, OrderIndex, Bit, Name[17], SpellIconID.
-            // Verified against record 0: id 464, map 33 (Shadowfang Keep),
-            // difficulty 0, order 0, bit 0.
-            constexpr uint32_t kMapField = 1, kDiffField = 2;
-            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
-                const uint64_t map = dbc->getUInt32(i, kMapField);
-                const uint64_t diff = dbc->getUInt32(i, kDiffField);
-                dungeonEncounterCounts_[(map << 32) | diff]++;
-                // Most instances list their bosses once, under difficulty 0,
-                // and apply to every difficulty. Keeping a per-map total means
-                // a heroic run still has a number to show.
-                dungeonEncounterCounts_[(map << 32) | 0xFFFFFFFFull]++;
-            }
+    auto* am = services_.assetManager;
+    // Not an attempt: the assets are not there to read yet, and a caller
+    // can reach this before they are.
+    if (!am || !am->isInitialized()) return;
+    dungeonEncounterCacheLoaded_ = true;
+
+    auto dbc = am->loadDBC("DungeonEncounter.dbc");
+    if (dbc && dbc->isLoaded()) {
+        // ID, MapID, Difficulty, OrderIndex, Bit, Name[17], SpellIconID.
+        // Verified against record 0: id 464, map 33 (Shadowfang Keep),
+        // difficulty 0, order 0, bit 0. The name is one localized text field,
+        // which is why it spans seventeen columns - the eight locales, their
+        // eight flag columns and a language id - and the loader's locale
+        // promotion is what puts the active locale's text in the first of them,
+        // so column 5 is the one that answers. Read through getString: the
+        // Shadowfang rows come out Rotkralle, Klingenklaue der Metzger, Baron
+        // Silberlein, in file order, which is the order 0x005538b0 walks them.
+        constexpr uint32_t kMapField = 1, kDiffField = 2;
+        constexpr uint32_t kBitField = 4, kNameField = 5;
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+            const uint64_t map = dbc->getUInt32(i, kMapField);
+            const uint64_t diff = dbc->getUInt32(i, kDiffField);
+            dungeonEncounterCounts_[(map << 32) | diff]++;
+            // Most instances list their bosses once, under difficulty 0,
+            // and apply to every difficulty. Keeping a per-map total means
+            // a heroic run still has a number to show.
+            dungeonEncounterCounts_[(map << 32) | 0xFFFFFFFFull]++;
+
+            LfgEncounterRow row;
+            row.mapId = static_cast<uint32_t>(map);
+            row.difficulty = static_cast<uint32_t>(diff);
+            row.bit = dbc->getUInt32(i, kBitField);
+            row.name = dbc->getString(i, kNameField);
+            dungeonEncounters_.push_back(std::move(row));
         }
-        LOG_INFO("DungeonEncounter.dbc: ", dungeonEncounterCounts_.size(), " map/difficulty pairs");
+        // The spell icon column - the file's last, and the record field
+        // 0x005538b0 reads at +0x18 - is zero in every row of this copy, so the
+        // client's own store lookup answers nothing and it pushes nothing for the
+        // texture. Nothing reads it here for the same reason, and no name has to
+        // be guessed at from the icon id.
     }
+
+    LOG_INFO("DungeonEncounter.dbc: ", dungeonEncounterCounts_.size(),
+             " map/difficulty pairs, ", dungeonEncounters_.size(), " rows");
+}
+
+uint32_t GameHandler::getDungeonEncounterCount(uint32_t mapId, uint32_t difficulty) const {
+    loadDungeonEncounterDbc();
 
     auto it = dungeonEncounterCounts_.find((static_cast<uint64_t>(mapId) << 32) | difficulty);
     if (it != dungeonEncounterCounts_.end()) return it->second;
@@ -4898,6 +4923,10 @@ uint32_t GameHandler::getLfgBrowserRowCount() const {
 
 const LfgBrowserRow* GameHandler::getLfgBrowserRow(uint32_t index) const {
     return socialHandler_ ? socialHandler_->getLfgBrowserRow(index) : nullptr;
+}
+
+uint32_t GameHandler::getLfgSearchListId() const {
+    return socialHandler_ ? socialHandler_->getLfgSearchListId() : 0;
 }
 
 std::string GameHandler::getCurrentLfgDungeonName() const {

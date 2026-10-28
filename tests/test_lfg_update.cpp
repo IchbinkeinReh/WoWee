@@ -545,3 +545,52 @@ TEST_CASE("Rows are paired into the rows the browse panel shows", "[lfg]") {
     add(0x100, false);
     CHECK(buildLfgBrowserRows(rows).empty());
 }
+
+TEST_CASE("A row's bosses are the joined instance's rows of the encounter table", "[lfg]") {
+    // 0x00553830 walks the whole table counting the rows of one (map, difficulty)
+    // pair and among them those whose bit the mask holds; 0x005538b0 walks the same
+    // table counting *down* to the encounterIndex-th. The rows below are laid out
+    // as the file stores them, which is why Shadowfang's two difficulties sit apart
+    // and the two Naxxramas rows share a pair.
+    const std::vector<LfgEncounterRow> rows = {
+        {33, 0, 0, "Rotkralle"},
+        {33, 0, 1, "Klingenklaue der Metzger"},
+        {33, 1, 0, "Anub'Rekhan"},
+        {43, 0, 0, "Dochivle"},
+        {533, 1, 0, "Grofwitwe Faerlina"},
+        {533, 1, 32, "eine Zeile, die Bit 32 nennt"},
+    };
+
+    const auto none = countLfgEncounters(rows, 33, 0, 0);
+    CHECK(none.total == 2);                     //   the pair, not the map
+    CHECK(none.complete == 0);
+
+    const auto one = countLfgEncounters(rows, 33, 0, 0b10);
+    CHECK(one.total == 2);
+    CHECK(one.complete == 1);                   //   bit 1 of the mask
+
+    // A mask naming a boss this instance does not list adds nothing: the two
+    // numbers come out of the same walk, which is why the interface's "all bosses
+    // alive" line is reachable at all (lfrframe.lua:676 asks for a total above zero
+    // and a complete of zero).
+    CHECK(countLfgEncounters(rows, 33, 0, 0b100).complete == 0);
+    CHECK(countLfgEncounters(rows, 43, 0, 0b1).complete == 1);
+    CHECK(countLfgEncounters(rows, 616, 0, 0xFFFFFFFFu).total == 0);
+
+    // The client shifts by the byte masked to five bits (0x00553830:3021), so a row
+    // naming bit 32 addresses bit 0 rather than nothing.
+    const auto masked = countLfgEncounters(rows, 533, 1, 0b1);
+    CHECK(masked.total == 2);
+    CHECK(masked.complete == 2);
+
+    // The nth boss of one instance, in the order the table stores them.
+    CHECK(lfgEncounterAt(rows, 33, 0, 0)->name == "Rotkralle");
+    CHECK(lfgEncounterAt(rows, 33, 0, 1)->name == "Klingenklaue der Metzger");
+    CHECK(lfgEncounterAt(rows, 33, 0, 2) == nullptr);      //   past the end: three nils
+    CHECK(lfgEncounterAt(rows, 33, 1, 0)->name == "Anub'Rekhan");
+    CHECK(lfgEncounterAt(rows, 0, 0, 0) == nullptr);
+
+    CHECK(lfgEncounterDone(0b1, rows[0]));                 // the mask, one bit per boss
+    CHECK_FALSE(lfgEncounterDone(0b10, rows[0]));
+    CHECK(lfgEncounterDone(0b1, rows[5]));                 // bit 32 asks as bit 0 does
+}
