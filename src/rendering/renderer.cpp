@@ -1,5 +1,6 @@
 #include "rendering/renderer.hpp"
 #include "rendering/shadow_sun.hpp"
+#include "rendering/rt_lamp_wrap.hpp"
 #include "rendering/depth_convention.hpp"
 #include "rendering/shadow_pass_work.hpp"
 #include "rendering/quality_summary.hpp"
@@ -6653,6 +6654,7 @@ void Renderer::recordRtLighting() {
     in.interiorBase = currentFrameData.rtTune2.y;
     in.interiorFullAt = currentFrameData.rtTune2.z;
     in.maxLight = currentFrameData.rtTune2.w;
+    in.lampWrap = lampWrap(rtSoftLamps_);
     in.rays = rtRays_;
     in.occlusion = currentFrameData.lightTune.w;
     in.debugView = static_cast<int>(currentFrameData.giParams.y + 0.5f);

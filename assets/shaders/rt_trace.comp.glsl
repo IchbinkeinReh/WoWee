@@ -138,9 +138,9 @@ float rtHardShadowVis(float s) {
 // 35.
 const float RT_NORMAL_AGREE_NEAR = 0.9659;  // cos 15 degrees
 const float RT_NORMAL_AGREE_FAR = 0.8192;   // cos 35 degrees
-// How far past the terminator the lamps' light wraps (N.L + w) / (1 + w): a
-// face turned some 15 degrees from a lamp still takes a little of it.
-const float RT_LAMP_WRAP = 0.25;
+// How far past the terminator the lamps' light wraps, (N.L + w) / (1 + w),
+// is pass.tune3.w: 0.25 (a face turned some 15 degrees from a lamp still
+// takes a little of it), 0.5 with "Softer lamp light" (some 30).
 // The sine of how far above a face a lamp must be for the surface's own
 // normal (its normal map's bumps) to light by: none below 3 degrees, all of
 // it from 20.
@@ -276,7 +276,7 @@ void main() {
             float rise = dot(n, toLight / d);
             nl = normalize(mix(n, lightN, smoothstep(RT_LAMP_DETAIL_LOW, RT_LAMP_DETAIL_HIGH, rise)));
         }
-        float ndl = d > 1e-4 ? (dot(nl, toLight / d) + RT_LAMP_WRAP) / (1.0 + RT_LAMP_WRAP) : 1.0;
+        float ndl = d > 1e-4 ? (dot(nl, toLight / d) + pass.tune3.w) / (1.0 + pass.tune3.w) : 1.0;
         if (ndl <= 0.0) continue;
         vec3 c = light.colorStart.rgb * (rtLightFalloff(d, light.colorStart.w, end) * ndl);
         float w = max(c.r, max(c.g, c.b));

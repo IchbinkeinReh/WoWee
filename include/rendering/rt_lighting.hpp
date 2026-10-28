@@ -164,6 +164,8 @@ public:
         float interiorFullAt = 1.0f;
         /// The most light the traced lights add (rtCapLight); 0 no limit.
         float maxLight = 0.0f;
+        /// How far past the terminator the lamps' light wraps (rt_lamp_wrap.hpp).
+        float lampWrap = 0.25f;
         /// Rays a pixel of each kind, 1 to kMaxRtRaysPerPixel (Ray Tracing
         /// settings): toward the sun, for the occlusion, toward a point
         /// light, and a probe's rays for the bounced light. One is the

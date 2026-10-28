@@ -271,6 +271,14 @@ constexpr SettingDesc kSchema[] = {
      "things then get their own traced light and shadow instead of\n"
      "the look without ray tracing where the half-resolution trace\n"
      "missed them.", "", 0},
+    // Off is the wrap the lamps have anyway (rt_lamp_wrap.hpp); on wraps them
+    // twice as far, for a flatter, softer lamp light.
+    {"rtsoftlamps", "Softer lamp light", SettingKind::Bool, 0, 0, 0,
+     "Ray Tracing", "",
+     "Torches, candles and lamps light a little further round what\n"
+     "they shine on: softer, flatter lamp light, and the faces just\n"
+     "turned away from a low candle - the bevel of a step, a curb -\n"
+     "lit a little instead of dark.", "", 0, "raytracedlighting"},
     // Rays a pixel, one setting a kind (rt_rays.hpp): 1 is the trace as it
     // always ran; each more is another ray of that kind a pixel, averaged.
     {"rtsunrays", "Rays a pixel: sun shadows", SettingKind::Int, 1, 5, 1,

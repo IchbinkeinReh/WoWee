@@ -2036,6 +2036,7 @@ void GameScreen::saveSettings() {
     out << "light_shafts=" << settingsPanel_.pendingVolumetricFog << "\n";
     out << "ray_traced_lighting=" << settingsPanel_.pendingRtLighting << "\n";
     out << "rt_full_resolution=" << (settingsPanel_.pendingRtFullRes ? 1 : 0) << "\n";
+    out << "rt_soft_lamps=" << (settingsPanel_.pendingRtSoftLamps ? 1 : 0) << "\n";
     out << "rt_sun_rays=" << settingsPanel_.pendingRtSunRays << "\n";
     out << "rt_ao_rays=" << settingsPanel_.pendingRtAoRays << "\n";
     out << "rt_point_rays=" << settingsPanel_.pendingRtPointRays << "\n";
@@ -2378,6 +2379,7 @@ void GameScreen::loadSettings() {
             else if (key == "light_shafts") settingsPanel_.pendingVolumetricFog = std::clamp(std::stoi(val), 0, 3);
             else if (key == "ray_traced_lighting") settingsPanel_.pendingRtLighting = std::clamp(std::stoi(val), 0, 3);
             else if (key == "rt_full_resolution") settingsPanel_.pendingRtFullRes = (std::stoi(val) != 0);
+            else if (key == "rt_soft_lamps") settingsPanel_.pendingRtSoftLamps = (std::stoi(val) != 0);
             else if (key == "rt_sun_rays") settingsPanel_.pendingRtSunRays = rendering::clampRtRays(std::stoi(val));
             else if (key == "rt_ao_rays") settingsPanel_.pendingRtAoRays = rendering::clampRtRays(std::stoi(val));
             else if (key == "rt_point_rays") settingsPanel_.pendingRtPointRays = rendering::clampRtRays(std::stoi(val));

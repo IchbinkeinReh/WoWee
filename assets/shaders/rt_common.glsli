@@ -35,7 +35,8 @@ layout(set = 0, binding = 0) uniform RtPassData {
     vec4 tune3;          // x inside, what of a baked colour shows where no
                          // point light reaches; y the light where all of it
                          // does (rtInteriorShade); z the most light the
-                         // traced lights add, 0 no limit (rtCapLight)
+                         // traced lights add, 0 no limit (rtCapLight);
+                         // w how far the lamps' light wraps (rt_lamp_wrap.hpp)
     vec4 rays;           // rays a pixel, 1-5: x toward the sun, y occlusion,
                          // z toward a point light; w a probe's rays a direction
     // The probe volume (rt_gi.glsli), read only by the probe passes.

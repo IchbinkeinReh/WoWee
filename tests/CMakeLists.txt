@@ -1432,6 +1432,10 @@ wowee_add_test(test_rt_glow
 wowee_add_test(test_shadow_sun
     SOURCES test_shadow_sun.cpp)
 
+# -- test_rt_lamp_wrap: the lamps' wrapped N.L and the "Softer lamp light" switch.
+wowee_add_test(test_rt_lamp_wrap
+    SOURCES test_rt_lamp_wrap.cpp)
+
 # ── test_rt_rays ─────────────────────────────────────────────
 # Rays a pixel of each kind: one by default, held to 1-5.
 wowee_add_test(test_rt_rays
