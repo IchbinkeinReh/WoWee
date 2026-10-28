@@ -18,9 +18,22 @@
 //          volume setter 0x00879710 clamps what it is asked into [0,1] - which
 //          nothing here does to a per-play volume, so the clamp goes with the
 //          swing.
-// Neither swing is drawn when the ask brings its own volume in the (0,1] range:
-// the client swings only the branch that uses the row's VolumeFloat
-// (:6005-6018), and every play of ours is on that branch.
+// Which volume is swung is decided by what the *caller* hands the play
+// (:6005-6019): a volume the caller brings in the (0,1] range is used as it
+// came, unswung, and only a caller whose volume is out of that range (or NaN)
+// falls back to the sound's own volume times the caller's scale -- and that is
+// the branch the 0x800 swing rides on. A play of ours that hands the engine a
+// level of its own is on the first branch and must not swing; one that scales
+// the row's VolumeFloat is on the second and must (m2_event_sounds' playOnce
+// `absolute` argument is exactly that choice).
+//
+// One case the decompile does not settle: the plays the server asks for go to
+// this routine with no params struct at all (0x004c6a40 with its fourth
+// argument 0, which is what the play-sound opcodes of 0x00526530 do), and the
+// struct it substitutes for them is a local Ghidra shows never written
+// (004c0000.c:5794, 5762). So the level and the reach of such a play are
+// unestablished, while the pitch swing -- which reads only the flags, past
+// that branch at :6020-6025 -- is not.
 //
 // What the swings are for is foley, not music. Of the 12941 rows 1218 loop, 126
 // ask for a pitch and 7 of those also for a volume. By their names, 61 of the 126

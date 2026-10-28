@@ -10,9 +10,22 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/music_manager.hpp"
 #include "audio/audio_engine.hpp"
+#include "audio/sound_entry.hpp"
 #include "ui/ui_manager.hpp"
 
+#include <random>
+
 namespace wowee { namespace core {
+
+namespace {
+
+// One draw per play, the way the client draws its swing (0x004c5d40).
+float swingDraw() {
+    static std::mt19937 rng{std::random_device{}()};
+    return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+}
+
+} // namespace
 
 AudioCallbackHandler::AudioCallbackHandler(
     pipeline::AssetManager& assetManager,
@@ -28,7 +41,7 @@ AudioCallbackHandler::AudioCallbackHandler(
 {
 }
 
-std::optional<std::string> AudioCallbackHandler::resolveSoundEntryPath(uint32_t soundId) const {
+std::optional<AudioCallbackHandler::SoundEntry> AudioCallbackHandler::resolveSoundEntry(uint32_t soundId) const {
     auto dbc = assetManager_.loadDBC("SoundEntries.dbc");
     if (!dbc || !dbc->isLoaded()) return std::nullopt;
 
@@ -41,7 +54,12 @@ std::optional<std::string> AudioCallbackHandler::resolveSoundEntryPath(uint32_t 
     for (uint32_t f = 3; f <= 12; ++f) {
         std::string name = dbc->getString(row, f);
         if (name.empty()) continue;
-        return dir.empty() ? name : dir + "\\" + name;
+        SoundEntry entry;
+        entry.path = dir.empty() ? name : dir + "\\" + name;
+        // Field 25 = Flags, which the play's pitch swing reads; an older
+        // client's SoundEntries stops before it.
+        if (dbc->getFieldCount() > 25) entry.flags = dbc->getUInt32(row, 25);
+        return entry;
     }
     return std::nullopt;
 }
@@ -74,16 +92,28 @@ void AudioCallbackHandler::setupCallbacks() {
     // an SFX one (0x00526530 plays it with the default type 0, "SFX"), at
     // the Sound Effects volume and not with Sound_EnableSFX off.
     gameHandler_.setPlaySoundCallback([this](uint32_t soundId) {
-        auto path = resolveSoundEntryPath(soundId);
-        if (path) {
-            audio::AudioEngine::instance().playSound2D(*path, 1.0f, 1.0f, audio::Channel::Effects);
+        // Only the pitch swing is taken from the row. The level stays the one
+        // this play used by guess: the server-asked plays reach 0x004c6a40 with
+        // no params struct, and the struct the client substitutes for it is
+        // unread in the decompile, so its level and its reach are unestablished
+        // -- but the pitch block (004c0000.c:6020-6025) sits past that branch
+        // and reads only the row's Flags.
+        auto entry = resolveSoundEntry(soundId);
+        if (entry) {
+            audio::AudioEngine::instance().playSound2D(
+                entry->path, 1.0f, audio::sound_entry::pitchForFlags(entry->flags, swingDraw()),
+                audio::Channel::Effects);
         }
     });
 
     // SMSG_PLAY_OBJECT_SOUND / SMSG_PLAY_SPELL_IMPACT: play as 3D positional sound at source entity
     gameHandler_.setPlayPositionalSoundCallback([this](uint32_t soundId, uint64_t sourceGuid) {
-        auto path = resolveSoundEntryPath(soundId);
-        if (!path) return;
+        auto entry = resolveSoundEntry(soundId);
+        if (!entry) return;
+        // A draw of its own for each play, as the client draws one per play.
+        const auto pitchOf = [&entry] {
+            return audio::sound_entry::pitchForFlags(entry->flags, swingDraw());
+        };
 
         // Play as 3D sound if source entity position is available.
         // Entity stores canonical coords; listener uses render coords (camera).
@@ -93,16 +123,16 @@ void AudioCallbackHandler::setupCallbacks() {
         // over a crowd's.
         if (entity && entity->isUnit() && sourceGuid == gameHandler_.activeMover() &&
             addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
-            audio::AudioEngine::instance().playSound2D(*path, 0.65f, 1.0f, audio::Channel::Effects,
+            audio::AudioEngine::instance().playSound2D(entry->path, 0.65f, pitchOf(), audio::Channel::Effects,
                                                        audio::voice_priority::kActiveMover);
             return;
         }
         if (entity) {
             glm::vec3 canonical{entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()};
             glm::vec3 pos = core::coords::canonicalToRender(canonical);
-            audio::AudioEngine::instance().playSound3D(*path, pos, 1.0f, 1.0f, 100.0f, audio::Channel::Effects);
+            audio::AudioEngine::instance().playSound3D(entry->path, pos, 1.0f, pitchOf(), 100.0f, audio::Channel::Effects);
         } else {
-            audio::AudioEngine::instance().playSound2D(*path, 1.0f, 1.0f, audio::Channel::Effects);
+            audio::AudioEngine::instance().playSound2D(entry->path, 1.0f, pitchOf(), audio::Channel::Effects);
         }
     });
 

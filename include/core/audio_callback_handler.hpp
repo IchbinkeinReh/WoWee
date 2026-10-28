@@ -26,8 +26,17 @@ public:
     void setupCallbacks();
 
 private:
-    /// Resolve SoundEntries.dbc → file path for a given soundId (eliminates 3x copy-paste)
-    [[nodiscard]] std::optional<std::string> resolveSoundEntryPath(uint32_t soundId) const;
+    /// Resolve SoundEntries.dbc → the file to play and the row's Flags for a
+    /// given soundId (eliminates 3x copy-paste). The row's level is deliberately
+    /// left out: these are the plays the server asks for, and what the client
+    /// levels such a play at is unestablished (see the note on 0x004c6a40 in
+    /// include/audio/sound_entry.hpp). What the row does settle is its Flags,
+    /// which swing the play's pitch whichever way the volume goes.
+    struct SoundEntry {
+        std::string path;
+        uint32_t flags = 0;
+    };
+    [[nodiscard]] std::optional<SoundEntry> resolveSoundEntry(uint32_t soundId) const;
 
     pipeline::AssetManager& assetManager_;
     audio::AudioCoordinator* audioCoordinator_;
