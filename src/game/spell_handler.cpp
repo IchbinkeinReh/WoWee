@@ -721,6 +721,19 @@ SpellHandler::SpellHandler(GameHandler& owner)
 // The cast id is the spell id here, which is what UnitCastingInfo reports, so
 // the two agree. It is not what the server calls a cast id - this client does
 // not keep the counter - but nothing compares it to anything else.
+//
+// What this client really fires for 324-335 comes from one dispatcher,
+// 0x0060bf60(token*, byte, castRecord*, baseId), called with 0x144 (START),
+// 0x145 (STOP), 0x149 (DELAYED), 0x14b (CHANNEL_START) and a computed id at
+// 007f0000.c:12174; it fires event(id, "%s%s%s%d", token, record+0x220,
+// record+0x224, b) - so (unit, spell name, rank, a byte read off the unit at
+// its guid+4, e.g. unaff_EBX+0x24 at 00800000.c:4500, and a different field for
+// other object kinds) - and when the cast record is null it does not fire the
+// four: it calls 0x0060bf10 instead and fires the token **alone**. That second
+// form is what the shipped handlers expect for a spell with no client-side
+// record - chatframe.lua:729 and :913 bail on `if (not name)` for exactly that.
+// Nothing reads a fourth argument here, and that byte's meaning stayed unread;
+// the fourth and fifth here are WoWee's own, padding for nothing.
 std::vector<std::string> SpellHandler::spellcastArgs(const std::string& unitId,
                                                      uint32_t spellId) const {
     const std::string& name = owner_.getSpellName(spellId);
