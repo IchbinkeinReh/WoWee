@@ -133,6 +133,12 @@ float rtHardShadowVis(float s) {
     return s > 1e-3 ? (s - 1.0) / s : 0.0;
 }
 
+// How far a shading normal may lean from its face before the face's is taken
+// for the lamps' light (lightN): all of it within 15 degrees, none of it past
+// 35.
+const float RT_NORMAL_AGREE_NEAR = 0.9659;  // cos 15 degrees
+const float RT_NORMAL_AGREE_FAR = 0.8192;   // cos 35 degrees
+
 layout(local_size_x = 8, local_size_y = 8) in;
 
 void main() {
@@ -210,6 +216,18 @@ void main() {
 
     // The point lights: their sum, and one of them picked by weighted
     // reservoir sampling in the same pass.
+    // The normal the lamps light by: the surface's own where it agrees with
+    // the face it is on, the face's where it does not. A building's floor
+    // has its vertex normals smoothed with the risers of the steps on it -
+    // tilted thirty and forty degrees toward them at the steps' foot - and
+    // a candle on a step lights the floor from a few degrees above it, so
+    // the triangles touching the steps came out several times brighter than
+    // the next ones, cut off along a straight triangle edge across the floor
+    // (Silvermoon, the Path of the Ancients). A character's or a pillar's
+    // smoothing stays: their normals lie within some fifteen degrees of
+    // their faces.
+    vec3 lightN = normalize(mix(n, shadingN, smoothstep(RT_NORMAL_AGREE_FAR, RT_NORMAL_AGREE_NEAR,
+                                                         dot(shadingN, n))));
     vec3 pointSum = vec3(0.0);
     float bakedSum = 0.0;
     float weightSum = 0.0;
@@ -234,7 +252,7 @@ void main() {
         // starting from the far side of the board, took that light in
         // grainy streaks.
         if (d > 1e-4 && dot(n, toLight) <= 0.0) continue;
-        float ndl = d > 1e-4 ? dot(shadingN, toLight / d) : 1.0;
+        float ndl = d > 1e-4 ? dot(lightN, toLight / d) : 1.0;
         if (ndl <= 0.0) continue;
         vec3 c = light.colorStart.rgb * (rtLightFalloff(d, light.colorStart.w, end) * ndl);
         float w = max(c.r, max(c.g, c.b));
