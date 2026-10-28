@@ -3350,6 +3350,11 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
     // whether or not it found a name — otherwise a row whose guid names nobody would
     // hold the list un-announced for as long as it is browsed.
     owner_.onLfgNameAnswered(data.guid);
+    // A channel invite whose inviter is a stranger. 0x0050e120 case 0x18 asks for
+    // the name and lets 0x004fb5c0 raise the popup with it; the wait closes here
+    // whether or not the answer found anyone, so one unanswerable invite cannot
+    // hold every later one behind it.
+    if (owner_.getChatHandler()) owner_.getChatHandler()->onChannelInviteNameKnown(data.guid);
 
     LOG_INFO("Name query response: guid=0x", std::hex, data.guid, std::dec,
              " found=", static_cast<int>(data.found), " name='", data.name, "'",
