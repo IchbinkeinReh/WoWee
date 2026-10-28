@@ -555,19 +555,25 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_GROUP_DECLINE] = [this](network::Packet& packet) { handleGroupDecline(packet); };
     table[Opcode::SMSG_GROUP_LIST] = [this](network::Packet& packet) { handleGroupList(packet); };
     table[Opcode::SMSG_GROUP_DESTROYED] = [this](network::Packet& /*packet*/) {
-        // ERR_GROUP_DISBANDED, a system line, and only to someone who was in
-        // the group (0x006cbe40). This said it twice in English, on screen and
-        // in chat.
+        // The client asks its own party slots whether the player is in a group -
+        // 0x0052bd10 counts the four guids at 0xbd1948 - and shows the line only
+        // when one of them holds someone (0x006cbe40, error 0x4b). This said
+        // ERR_GROUP_DISBANDED twice, on screen and in chat, in English.
         const bool wasInGroup = !partyData.members.empty();
+        const bool wasRaid = groupIsRaid(partyData.groupType);
         partyData.members.clear();
         partyData.memberCount = 0;
         partyData.leaderGuid = 0;
         if (wasInGroup)
             gameError(owner_, ErrTo::Chat, "ERR_GROUP_DISBANDED", "Your group has been disbanded.");
-        if (owner_.addonEventCallbackRef()) {
-            owner_.addonEventCallbackRef()("GROUP_ROSTER_UPDATE", {});
-            owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
-        }
+        firePartyClearedEvents(wasRaid);
+        // That handler then drops the pending summon (0x0055b120) and fires
+        // CANCEL_SUMMON (455) whatever was pending: a summon offer dies with the
+        // group. Both handlers that empty the party this way do it, at
+        // 0x006cbe5a-0x006cbe66 and 0x006cbe1e-0x006cbe2f; Ghidra never cut these
+        // two handlers out of the file as functions, so the disassembly of the exe
+        // at those addresses is what shows it.
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CANCEL_SUMMON", {});
     };
     table[Opcode::SMSG_GROUP_CANCEL] = [this](network::Packet& /*packet*/) {
         // PARTY_INVITE_CANCEL and nothing said (0x006cbd10 -> 0x00512560,
@@ -2265,11 +2271,13 @@ void SocialHandler::leaveGroup() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = GroupDisbandPacket::build();
     owner_.getSocket()->send(packet);
+    // The client fires nothing on the way out: it empties the group only when
+    // the server answers - SMSG_GROUP_DESTROYED for a disband, an empty roster
+    // otherwise - and the events come out of that. This clears on the spot, so
+    // the clear's events have to be fired here.
+    const bool wasRaid = groupIsRaid(partyData.groupType);
     partyData = GroupListData{};
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("GROUP_ROSTER_UPDATE", {});
-        owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
-    }
+    firePartyClearedEvents(wasRaid);
 }
 
 void SocialHandler::forgetLfgDungeonOnWorldport(uint32_t mapId) {
@@ -2571,6 +2579,38 @@ void SocialHandler::handleGroupDecline(network::Packet& packet) {
               {data.playerName});
 }
 
+/// The events that go out when the group stops existing.
+///
+/// The client's own emptier `0x0052d6e0` fires them, and every path that drops
+/// the group reaches them through it: PARTY_MEMBERS_CHANGED (181) and then
+/// PLAYER_ROLES_ASSIGNED (519), at `00520000.c:10379-10380`. Only when it is
+/// called with a non-zero argument - the roster handler empties the party on the
+/// way in with `0x0052d6e0(0)` and fires nothing for that (`006d0000.c:6902`),
+/// which is why a roster redrawing the group is not a group end.
+///
+/// RAID_ROSTER_UPDATE (435) is not one of the emptier's events - the client
+/// raises it where the raid member list is rebuilt or cleared (`0x00572e40`,
+/// `0x00572f90`, and one party-command result at `006c0000.c:10218`) - and it is
+/// the only event that reloads the raid pullouts: `raidframe.lua:35` is
+/// `RaidFrame_LoadUI(); RaidFrame_Update(); RaidPullout_RenewFrames();`, while
+/// its PARTY_MEMBERS_CHANGED branch calls the plain update alone. So a raid that
+/// ends raises it here as well, or its pullouts stay on screen.
+///
+/// None of these is GROUP_ROSTER_UPDATE, which is what this used to fire. That
+/// name belongs to a later expansion and not to this client at all: its script
+/// events are an id table (`0x00608880` writes one name per id up from
+/// `0x00c24eb0`, 646 of them) and the name is not among them; the string appears
+/// nowhere in `Wow.exe`, where RAID_ROSTER_UPDATE and PARTY_MEMBERS_CHANGED each
+/// appear once as plaintext; and the FrameXML shipped here has no listener for
+/// it. Every fire of it was into the void, and the refresh it was written to
+/// cause was taken by nobody.
+void SocialHandler::firePartyClearedEvents(bool wasRaid) {
+    if (!owner_.addonEventCallbackRef()) return;
+    owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
+    owner_.addonEventCallbackRef()("PLAYER_ROLES_ASSIGNED", {});
+    if (wasRaid) owner_.addonEventCallbackRef()("RAID_ROSTER_UPDATE", {});
+}
+
 void SocialHandler::handleGroupList(network::Packet& packet) {
     const bool hasRoles = isActiveExpansion("wotlk");
     const bool hasBattleGroupFlag = isActiveExpansion("tbc");
@@ -2584,6 +2624,17 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     // 0x006d8870 empties the party (0x0052d6e0(0), the finder dungeon with
     // it) and then sets the roster's dungeon (0x0052c0a0), which says
     // LFG_UPDATE when that changes it - for every roster of a finder group.
+    //
+    // The leader is stored the same way one line earlier (0x0052bc80 at
+    // 006d0000.c:6992), and its setter is the only thing in the client that
+    // fires PARTY_LEADER_CHANGED: it compares the guid it holds with the one
+    // coming in and says 182 only on a difference (0x00520000.c:8873-8896). The
+    // pre-clear zeroes that stored guid (`:10369-10370`), so the comparison
+    // always differs and every roster of a group re-fires it - the same trap the
+    // finder dungeon and the restriction flag above fall into. A roster with no
+    // leader guid is no group, and firing it there would be the group ending,
+    // which this event does not announce.
+    if (partyData.leaderGuid != 0) owner_.fireAddonEvent("PARTY_LEADER_CHANGED", {});
     if (partyData.lfgDungeonEntry != 0) owner_.fireAddonEvent("LFG_UPDATE", {});
     // The very next call of that same routine is 0x0052c0d0 with the type byte's
     // bit 2 (0x006d8870:6994), the group's *restriction* flag, and it fires
@@ -2681,8 +2732,13 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     if (wasInGroup && nowInGroup && partyData.lootMethod != prevLootMethod &&
         owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("PARTY_LOOT_METHOD_CHANGED", {});
+    // 0x006d0000.c:6996, the tail of the roster handler, is PARTY_MEMBERS-
+    // _CHANGED (181); 182, 501 and 518 went out of that handler a few lines
+    // earlier (:6992-:6994) - above here, with the state they read - and 519
+    // comes from the roles landing on the player object (:7142), which in the
+    // client is a field change and so can precede 181. Here it follows it, which
+    // is the one position that differs.
     if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("GROUP_ROSTER_UPDATE", {});
         owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
         // The roles came with this roster and UnitGroupRolesAssigned reads them
         // straight out of it. The player frame draws its tank or healer badge
@@ -2696,15 +2752,17 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
 
 void SocialHandler::handleGroupUninvite(network::Packet& packet) {
     (void)packet;
+    const bool wasRaid = groupIsRaid(partyData.groupType);
     partyData = GroupListData{};
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("GROUP_ROSTER_UPDATE", {});
-        owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
-        owner_.addonEventCallbackRef()("RAID_ROSTER_UPDATE", {});
-    }
+    // 0x006cbe10 empties the party first (0x0052d6e0(1), which is where the
+    // events come from), then shows ERR_UNINVITE_YOU, then drops the pending
+    // summon (0x0055b120) and fires CANCEL_SUMMON (455). The order is the
+    // handler's own; the events go out before the line, and 455 after it.
+    firePartyClearedEvents(wasRaid);
     // ERR_UNINVITE_YOU, a system line (0x006cbe10). This said it in English,
     // on screen and in chat.
     gameError(owner_, ErrTo::Chat, "ERR_UNINVITE_YOU", "You have been removed from the group.");
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CANCEL_SUMMON", {});
 }
 
 void SocialHandler::handlePartyCommandResult(network::Packet& packet) {
@@ -5919,8 +5977,19 @@ void SocialHandler::handleGroupSetLeader(network::Packet& packet) {
         else
             gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_S", "%s is now the group leader.", {leaderName});
     }
-    owner_.fireAddonEvent("PARTY_LEADER_CHANGED", {});
-    owner_.fireAddonEvent("GROUP_ROSTER_UPDATE", {});
+    // Neither event this used to fire. 0x006cbd70 shows its system line and
+    // stops - it stores nothing, so nothing is fired; the new leader arrives on
+    // the roster the server sends straight after, and that is where
+    // PARTY_LEADER_CHANGED comes from (0x0052bc80, through 006d0000.c:6992). The
+    // other name it fired is not this client's at all.
+    //
+    // What is still not matched: the client resolves the name (0x0076ea40) and
+    // picks between four message ids on the *restriction* flag and on whether the
+    // name found anyone - 0x45 and 0x47 for a leader that was found, 0x46 and 0x48
+    // for a name nobody in the group answers to (`006c0000.c:10120-10145`), always
+    // with the name as an argument. There is no you/other pair there. Settling
+    // which lines those four are needs the client's message-id table, which is a
+    // thread of its own.
 }
 
 // ============================================================

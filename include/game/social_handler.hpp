@@ -731,6 +731,12 @@ private:
     void handleGroupDecline(network::Packet& packet);
     void handleGroupList(network::Packet& packet);
     void handleGroupUninvite(network::Packet& packet);
+    /// The events that go out when the group stops existing: PARTY_MEMBERS-
+    /// _CHANGED and PLAYER_ROLES_ASSIGNED, plus RAID_ROSTER_UPDATE for a raid.
+    /// The client's own emptier 0x0052d6e0 fires the first two; the note on the
+    /// definition gives each one's site, and why none of them is the
+    /// GROUP_ROSTER_UPDATE that these sites used to fire instead.
+    void firePartyClearedEvents(bool wasRaid);
     void handlePartyCommandResult(network::Packet& packet);
     void handlePartyMemberStats(network::Packet& packet, bool isFull);
     void handleGuildInfo(network::Packet& packet);

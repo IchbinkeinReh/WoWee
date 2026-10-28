@@ -2982,33 +2982,49 @@ void GameHandler::registerRemainingOpcodes() {
         }
     };
     dispatchTable_[Opcode::SMSG_REAL_GROUP_UPDATE] = [this](network::Packet& packet) {
+        // Wire 0x397 for this client; 0x4b3 is 1.12's number for the same packet.
+        // The handler is 0x006cc300: the group-type byte, a count, and a guid -
+        // and the byte is tested as a flag, bit 1 for raid, which is the
+        // convention groupIsRaid already reads it by.
         auto rem = [&]() { return packet.getRemainingSize(); };
         if (rem() < 1) return;
-        uint8_t newGroupType = packet.readUInt8();
+        const uint8_t newGroupType = packet.readUInt8();
         if (rem() < 4) return;
-        uint32_t newMemberFlags = packet.readUInt32();
+        const uint32_t memberCount = packet.readUInt32();
         if (rem() < 8) return;
-        uint64_t newLeaderGuid = packet.readUInt64();
+        const uint64_t newLeaderGuid = packet.readUInt64();
 
         if (socialHandler_) {
             auto& pd = socialHandler_->mutablePartyData();
             pd.groupType = newGroupType;
             pd.leaderGuid = newLeaderGuid;
-
-            // Update local player's flags in the member list
-            uint64_t localGuid = playerGuid;
-            for (auto& m : pd.members) {
-                if (m.guid == localGuid) {
-                    m.flags = static_cast<uint8_t>(newMemberFlags & 0xFF);
-                    break;
-                }
-            }
+            // The middle field is a count. The party branch of the handler keeps
+            // it through 0x0052bd60 under `if (param_1 < 5)`, the raid branch
+            // through 0x00572530 as `count == 0 ? 0 : count + 1` under `if
+            // (param_1 < 0x29)`, and 0x0052c190 pushes the first of those two as
+            // a Lua number - it is GetRealNumPartyMembers, one registration off
+            // GetPartyMember (0x0052c1d0). Neither count has a home here: those
+            // two names are registered as aliases of the live getters
+            // (`lua_unit_api.cpp:3309-3310`), so both are already answered out of
+            // the member list. Reading the field is all it can be used for.
+            //
+            // What this did with it was write it over the local player's member
+            // flags, `m.flags = count & 0xFF`. Three other members set the
+            // assistant bit then, and the bits the party frames read the online
+            // state out of. The client stores no member flag in this handler at
+            // all; the guid it reads goes to 0xbd1990, a leader slot of its own
+            // beside the roster's 0xbd1968 (0x0052cd30 asks whether that one is
+            // the player), and one variable stands for both slots here.
         }
         LOG_DEBUG("SMSG_REAL_GROUP_UPDATE groupType=", static_cast<int>(newGroupType),
-                  " memberFlags=0x", std::hex, newMemberFlags, std::dec,
-                  " leaderGuid=", newLeaderGuid);
-        fireAddonEvent("PARTY_LEADER_CHANGED", {});
-        fireAddonEvent("GROUP_ROSTER_UPDATE", {});
+                  " memberCount=", memberCount, " leaderGuid=", newLeaderGuid);
+        // 006c0000.c:10309, the tail of that handler: PARTY_MEMBERS_CHANGED (181)
+        // and nothing else. PARTY_LEADER_CHANGED is not among them - that event
+        // comes only from 0x0052bc80, the party leader store the roster feeds
+        // (`006d0000.c:6992`, and it fires 182 on a difference) - and
+        // GROUP_ROSTER_UPDATE is not this client's event at all, see
+        // SocialHandler::firePartyClearedEvents.
+        fireAddonEvent("PARTY_MEMBERS_CHANGED", {});
     };
     dispatchTable_[Opcode::SMSG_PLAY_MUSIC] = [this](network::Packet& packet) {
         if (packet.hasRemaining(4)) {
