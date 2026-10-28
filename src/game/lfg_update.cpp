@@ -345,5 +345,44 @@ bool parseLfgList(network::Packet& packet, uint32_t heldListId,
     return in.ok;
 }
 
+std::vector<LfgBrowserRow> buildLfgBrowserRows(const std::vector<LfgListRow>& rows) {
+    // Which player record each listing names as its group. The client resolves the
+    // same guid through its record hash and stores what answers at listing +0x28
+    // (0x00559050:7348-7383); nothing answering is what puts a listing in the
+    // array of listings belonging to no one (0x0055b770:9940-9974). A guid naming
+    // a *listing* rather than a player record is treated the same way: the member
+    // array lives in the player record's shape (+0x138, +0x13c), so a listing has
+    // nowhere to attach and the row getter would never reach it.
+    std::vector<uint32_t> owner(rows.size(), kLfgNoRow);
+    for (uint32_t k = 0; k < rows.size(); ++k) {
+        if (!rows[k].isListing || rows[k].ownerGuid == 0) continue;
+        for (uint32_t i = 0; i < rows.size(); ++i)
+            if (!rows[i].isListing && rows[i].guid == rows[k].ownerGuid) { owner[k] = i; break; }
+    }
+
+    std::vector<LfgBrowserRow> out;
+    for (uint32_t i = 0; i < rows.size(); ++i) {
+        if (rows[i].isListing) continue;
+        LfgBrowserRow row;
+        row.player = i;
+        for (uint32_t k = 0; k < rows.size(); ++k)
+            if (owner[k] == i) row.members.push_back(k);
+        // The row's own listing is the group's first member, and the getter hands
+        // back a null listing for a player with none - which the row getter turns
+        // into no values at all (0x00555fd0:4850-4852), so there is no such row.
+        if (row.members.empty()) continue;
+        row.listing = row.members.front();
+        row.members.erase(row.members.begin());
+        out.push_back(std::move(row));
+    }
+    for (uint32_t k = 0; k < rows.size(); ++k) {
+        if (!rows[k].isListing || owner[k] != kLfgNoRow) continue;
+        LfgBrowserRow row;
+        row.listing = k;
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
 }  // namespace game
 }  // namespace wowee

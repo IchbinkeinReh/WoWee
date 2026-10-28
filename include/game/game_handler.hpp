@@ -2634,6 +2634,11 @@ public:
     /// SearchLFGGetResults; the row pointer is null past the end.
     uint32_t getLfgListRowCount() const;
     const LfgListRow* getLfgListRow(uint32_t index) const;
+    /// Those rows as the browse panel sees them: paired into a player record and
+    /// its listing (0x00553530). The count is SearchLFGGetNumResults' answer, and
+    /// the pair's index fields name rows of getLfgListRow.
+    uint32_t getLfgBrowserRowCount() const;
+    const LfgBrowserRow* getLfgBrowserRow(uint32_t index) const;
     std::string getCurrentLfgDungeonName() const;
     std::string getMapName(uint32_t mapId) const;
 

@@ -220,6 +220,45 @@ struct LfgListRow {
 bool parseLfgList(network::Packet& packet, uint32_t heldListId,
                   std::vector<LfgListRow>& rows);
 
+/// "no row" for the index fields below — the client stores a null pointer where
+/// these hold an index into the rows, and 0 is a real row.
+inline constexpr uint32_t kLfgNoRow = 0xffffffffu;
+
+/**
+ * One row the raid browser can show, as 0x00553530 resolves an index into one.
+ *
+ * A row is not one record but a pair: the player record and **the first listing
+ * attached to it** — `*param_3 = **(iVar1 + 0x13c)` (0x00553530:2836). The rest of
+ * that group's listings are its members, which is what `SearchLFGGetPartyResults`
+ * walks from `+0x13c[partyIndex + 1]` (0x00553490): the row's own listing is
+ * member[0] and is skipped there, which is why the member count the row getter
+ * pushes is one less than the array's count (0x005534c0).
+ */
+struct LfgBrowserRow {
+    uint32_t listing = kLfgNoRow;       ///< the row's own listing: member[0]
+    uint32_t player = kLfgNoRow;        ///< its group's player record, if it has one
+    std::vector<uint32_t> members;      ///< the group's other listings, member[1..]
+};
+
+/**
+ * Orders the parsed rows the way the client's row getter walks them: the player
+ * records first, each with the listings whose group guid (mask bit 0x8) names it,
+ * and then the listings that belong to no one (0x0055b770:9940-9974 puts those in
+ * an array of their own, and the getter reaches them only past the player array).
+ *
+ * A player record with no listing attached produces **no row at all**, which is
+ * what the client does with one: `FUN_00553530` hands back a null listing and the
+ * getter returns no values for that index (0x00555fd0:4850-4852), so the row is
+ * never seen by the interface.
+ *
+ * Arrival order throughout. The client qsorts both arrays before showing them
+ * (0x0055b700, with the comparators at 0x00555a70 and 0x00555cd0, neither of which
+ * has been read), and within a group a listing goes to the head of the member
+ * array when its +0x8c byte is set and to the tail otherwise (0x00556e60), which
+ * is history this layer does not keep.
+ */
+std::vector<LfgBrowserRow> buildLfgBrowserRows(const std::vector<LfgListRow>& rows);
+
 /// The party lock block SMSG_LFG_PARTY_INFO carries, and SMSG_LFG_JOIN_RESULT
 /// with result 6 after its two uint32s (0x0055b080): a byte count, then per
 /// member a guid, a uint32 count and that many entry/status pairs. A member

@@ -503,3 +503,45 @@ TEST_CASE("A cut short list keeps its header cleared and its rows half read", "[
     CHECK(rows[1].comment.empty());
     CHECK(rows[1].encounterMask == 0);
 }
+
+TEST_CASE("Rows are paired into the rows the browse panel shows", "[lfg]") {
+    // 0x00553530 resolves an index to a player record and its member[0], and puts
+    // the listings that belong to no one after the player array runs out.
+    std::vector<LfgListRow> rows;
+    auto add = [&](uint64_t guid, bool listing, uint64_t owner = 0) {
+        LfgListRow r;
+        r.guid = guid;
+        r.isListing = listing;
+        r.ownerGuid = owner;
+        rows.push_back(r);
+        return static_cast<uint32_t>(rows.size() - 1);
+    };
+    const uint32_t group = add(0x100, false);            // a group's player record
+    const uint32_t own = add(0x200, true, 0x100);        // its first listing
+    const uint32_t mate = add(0x201, true, 0x100);       // and another member
+    add(0x300, false);                                  // a player with nothing listed
+    const uint32_t solo = add(0x400, true);              // a listing in no group
+    const uint32_t orphan = add(0x500, true, 0x999);     // one whose group never came
+    const uint32_t atListing = add(0x600, true, 0x200);  // one naming a listing, which
+
+    const auto shown = buildLfgBrowserRows(rows);
+    REQUIRE(shown.size() == 4);                          //   has nowhere to attach
+
+    CHECK(shown[0].player == group);
+    CHECK(shown[0].listing == own);                      // member[0] is the row itself
+    REQUIRE(shown[0].members.size() == 1);
+    CHECK(shown[0].members[0] == mate);                  // party results start at [1]
+
+    CHECK(shown[1].listing == solo);                     // and the unowned ones come
+    CHECK(shown[1].player == kLfgNoRow);                 //   after, in arrival order
+    CHECK(shown[2].listing == orphan);
+    CHECK(shown[2].player == kLfgNoRow);
+    CHECK(shown[3].listing == atListing);
+
+    // A player record with no listing attached is no row at all: 0x00553530 hands
+    // back a null listing for it and 0x00555fd0 returns no values, so the panel
+    // never sees the index and never SetTexts a nil.
+    rows.clear();
+    add(0x100, false);
+    CHECK(buildLfgBrowserRows(rows).empty());
+}

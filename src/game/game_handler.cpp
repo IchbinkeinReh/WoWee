@@ -4892,6 +4892,14 @@ const LfgListRow* GameHandler::getLfgListRow(uint32_t index) const {
     return socialHandler_ ? socialHandler_->getLfgListRow(index) : nullptr;
 }
 
+uint32_t GameHandler::getLfgBrowserRowCount() const {
+    return socialHandler_ ? socialHandler_->getLfgBrowserRowCount() : 0;
+}
+
+const LfgBrowserRow* GameHandler::getLfgBrowserRow(uint32_t index) const {
+    return socialHandler_ ? socialHandler_->getLfgBrowserRow(index) : nullptr;
+}
+
 std::string GameHandler::getCurrentLfgDungeonName() const {
     return socialHandler_ ? socialHandler_->getCurrentLfgDungeonName() : std::string{};
 }

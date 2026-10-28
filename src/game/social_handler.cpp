@@ -4787,6 +4787,7 @@ void SocialHandler::lfgSearchLeave() {
     // the list before it sends, and 0x00558ed0 does the same when a different list
     // is asked for, so a row of the old list is never answered to the new one.
     lfgListRows_.clear();
+    lfgBrowserRows_.clear();
     lfgListWindowId_ = 0;
     lfgJoinedListId_ = 0;
 }
@@ -4806,6 +4807,7 @@ void SocialHandler::handleLfgUpdateSearch(network::Packet& packet) {
     // the window it holds, and a window kept past the list it belongs to would be
     // answered to the next list's rows.
     lfgListRows_.clear();
+    lfgBrowserRows_.clear();
     lfgListWindowId_ = 0;
     // The mode the interface derives from the id ("listed", which changes the raid
     // browser's button and blocks the Dungeon Finder beside it) is re-read on
@@ -4830,6 +4832,10 @@ void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
     }
     const uint32_t previousWindow = lfgListWindowId_;
     parseLfgList(packet, lfgJoinedListId_, lfgListRows_);
+    // The rows the packet brought are not yet the rows the panel shows: a row is a
+    // player record plus the listing attached to it, and the pairing is what
+    // 0x00553530 does when the interface asks for an index.
+    rebuildLfgBrowserRows();
     lfgListWindowId_ = lfgJoinedListId_;
     if (previousWindow != 0 && previousWindow == lfgListWindowId_) return;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});

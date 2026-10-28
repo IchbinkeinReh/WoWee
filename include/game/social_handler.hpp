@@ -619,6 +619,20 @@ public:
         if (lfgListWindowId_ == 0 || index >= lfgListRows_.size()) return nullptr;
         return &lfgListRows_[index];
     }
+    /// How many rows the browse panel can actually show, which is what
+    /// SearchLFGGetNumResults answers: the parsed rows paired up the way the
+    /// client resolves an index (0x00553530), so a player record with no listing
+    /// attached is not counted at all.
+    [[nodiscard]] uint32_t getLfgBrowserRowCount() const {
+        return lfgListWindowId_ == 0 ? 0 : static_cast<uint32_t>(lfgBrowserRows_.size());
+    }
+    /// One of those pairs by index from zero, or null past the end. Its index
+    /// fields name entries of getLfgListRow, and stay valid until the next list
+    /// packet, which rebuilds both.
+    [[nodiscard]] const LfgBrowserRow* getLfgBrowserRow(uint32_t index) const {
+        if (lfgListWindowId_ == 0 || index >= lfgBrowserRows_.size()) return nullptr;
+        return &lfgBrowserRows_[index];
+    }
     [[nodiscard]] uint32_t getLfgDungeonId()       const { return lfgDungeonId_; }
     [[nodiscard]] std::string getCurrentLfgDungeonName() const;
     [[nodiscard]] uint32_t getLfgProposalId()      const { return lfgProposalId_; }
@@ -728,6 +742,8 @@ private:
     /// longer listed drops the joined raid-browser list (case 0x369 of 0x0055bdc0).
     void handleLfgUpdateSearch(network::Packet& packet);
     void handleUpdateLfgList(network::Packet& packet);
+    /// Re-pair the held rows for the browse panel (0x00553530's index resolution).
+    void rebuildLfgBrowserRows() { lfgBrowserRows_ = buildLfgBrowserRows(lfgListRows_); }
     void applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party);
     /// Whether any of the body's dungeons is a raid, which turns the queue's
     /// lines into the raid browser's (0x00557260).
@@ -912,6 +928,11 @@ private:
     /// before showing them (0x0055b700) by comparators that are not read, so this
     /// order is arrival order, not the client's.
     std::vector<LfgListRow> lfgListRows_;
+    /// Those rows paired into the rows the browse panel can show, rebuilt whenever
+    /// the rows are (buildLfgBrowserRows). Held beside them rather than derived at
+    /// query time so that the index fields of one never outlive the vector they
+    /// name indices into.
+    std::vector<LfgBrowserRow> lfgBrowserRows_;
     /// Which list those rows belong to, the id of the last packet actually read -
     /// the client's 0x00beaa98, which is also what it tests to decide whether the
     /// rows changed enough to report. Zero when none is held.
