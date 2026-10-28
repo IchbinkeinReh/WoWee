@@ -1341,16 +1341,15 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
                      std::count_if(items.begin(), items.end(),
                                    [](uint32_t e) { return e != 0; }), "/19 slots");
             if (owner_.addonEventCallbackRef()) {
-                char guidBuf[32];
-                snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)guid);
-                owner_.addonEventCallbackRef()("INSPECT_READY", {guidBuf});
-                // INSPECT_READY is a later expansion's name and nothing in this
-                // interface listens for it. The inspect paperdoll refreshes on
-                // UNIT_INVENTORY_CHANGED for the unit it is showing, so the gear
-                // arrived and the window was never told - it kept whatever it had
-                // when it opened. Fired for the unit token this guid answers to,
-                // and only when it answers to one: an inspected player who is not
-                // the target has no token for the interface to match against.
+                // The inspect paperdoll refreshes on UNIT_INVENTORY_CHANGED for
+                // the unit it is showing. INSPECT_READY, which this used to fire,
+                // is a later expansion's name: not in this client's event-id
+                // table, not once in Wow.exe, and no frame of this interface
+                // registers it - the gear arrived and the window was never told,
+                // keeping whatever it had when it opened. Fired for the unit
+                // token this guid answers to, and only when it answers to one: an
+                // inspected player who is not the target has no token for the
+                // interface to match against.
                 const std::string inspectUnit = owner_.guidToUnitId(guid);
                 if (!inspectUnit.empty()) {
                     owner_.addonEventCallbackRef()("UNIT_INVENTORY_CHANGED", {inspectUnit});
@@ -1411,9 +1410,9 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
                  " gearCached=", (gearIt != owner_.inspectedPlayerItemEntriesRef().end() ? "yes" : "no"),
                  " payload bytes remaining=", packet.getRemainingSize());
         if (owner_.addonEventCallbackRef()) {
-            char guidBuf[32];
-            snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)guid);
-            owner_.addonEventCallbackRef()("INSPECT_READY", {guidBuf});
+            // The talents of a TBC inspect client arrive on this packet too, and
+            // the tab that shows them waits for INSPECT_TALENT_READY (556).
+            if (inspectResult_.hasTalentData) owner_.addonEventCallbackRef()("INSPECT_TALENT_READY", {});
             const std::string inspectUnit = owner_.guidToUnitId(guid);
             if (!inspectUnit.empty()) {
                 owner_.addonEventCallbackRef()("UNIT_INVENTORY_CHANGED", {inspectUnit});
@@ -1546,14 +1545,10 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
     LOG_INFO("Inspect results for ", playerName, ": ", totalTalents, " talents, ",
              unspentTalents, " unspent, ", (int)talentGroupCount, " specs");
     if (owner_.addonEventCallbackRef()) {
-        char guidBuf[32];
-        snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)guid);
-        owner_.addonEventCallbackRef()("INSPECT_READY", {guidBuf});
-        // The same packet carries the talents, and the talent tab of the
-        // inspect window redraws on this event alone. Only INSPECT_READY was
-        // fired, which is what the gear tab listens for - so inspecting anyone
-        // filled the paperdoll and left the talent tab blank, however
-        // completely the ranks above had been parsed.
+        // INSPECT_TALENT_READY (556) is the name the talent tab of the inspect
+        // window redraws on, and this packet is what carries the talents -
+        // inspecting anyone used to fill the paperdoll and leave the tab blank,
+        // however completely the ranks above had been parsed.
         owner_.addonEventCallbackRef()("INSPECT_TALENT_READY", {});
         const std::string inspectUnit = owner_.guidToUnitId(guid);
         if (!inspectUnit.empty()) {

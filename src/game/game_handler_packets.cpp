@@ -3178,16 +3178,14 @@ void GameHandler::registerRemainingOpcodes() {
                  std::count_if(items.begin(), items.end(),
                                [](uint32_t e) { return e != 0; }), "/19 slots");
         if (addonEventCallback_) {
-            char guidBuf[32];
-            snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)guid);
-            fireAddonEvent("INSPECT_READY", {guidBuf});
-            // INSPECT_READY is a later expansion's name and nothing in this
-            // interface listens for it. The inspect paperdoll refreshes on
-            // UNIT_INVENTORY_CHANGED for the unit it is showing, so the gear
-            // arrived and the window was never told - it kept whatever it had
-            // when it opened. Fired for the unit token this guid answers to,
-            // and only when it answers to one: an inspected player who is not
-            // the target has no token for the interface to match against.
+            // The inspect paperdoll refreshes on UNIT_INVENTORY_CHANGED for the
+            // unit it is showing. It used to be announced with INSPECT_READY, a
+            // later expansion's name: not in this client's event-id table, not
+            // once in Wow.exe, and no frame of this interface registers it - the
+            // gear arrived and the window was never told, keeping whatever it
+            // had when it opened. Fired for the unit token this guid answers to,
+            // and only when it answers to one: an inspected player who is not the
+            // target has no token for the interface to match against.
             const std::string inspectUnit = guidToUnitId(guid);
             if (!inspectUnit.empty()) {
                 fireAddonEvent("UNIT_INVENTORY_CHANGED", {inspectUnit});
