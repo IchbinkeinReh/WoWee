@@ -778,7 +778,7 @@ glm::vec4 Minimap::screenUvRect(int screenWidth, int screenHeight) const {
 void Minimap::render(VkCommandBuffer cmd, const Camera& playerCamera,
                      const glm::vec3& centerWorldPos,
                      int screenWidth, int screenHeight) {
-    if (!enabled || !hasCachedFrame || !displayPipeline) return;
+    if (!enabled || frameHidden_ || !hasCachedFrame || !displayPipeline) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, displayPipeline);
 

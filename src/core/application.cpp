@@ -5847,6 +5847,10 @@ void Application::render() {
                         mm = widgets.findByName("Minimap");
                         minimapWidgetId_ = mm ? mm->id : 0;
                     }
+                    // The interface owns the map: with its frame hidden (the
+                    // interface toggled off, UIParent:Hide()) nothing of the
+                    // map is drawn - not the bare disc in the corner.
+                    map->setFrameHidden(mm && !mm->visible);
                     if (mm && mm->visible && mm->rectW > 0.0f && mm->rectH > 0.0f) {
                         const float sc = widgets.uiScale();
                         map->setScreenRect(mm->left * sc,

@@ -114,6 +114,12 @@ public:
         rectX_ = x; rectY_ = y; rectW_ = w; rectH_ = h; haveRect_ = true;
     }
     void clearScreenRect() { haveRect_ = false; }
+    /// The interface that owns the map has its frame hidden - the whole
+    /// interface toggled off (UIParent:Hide()), or the Minimap frame itself.
+    /// Nothing is drawn then: without a rect the map would otherwise fall
+    /// back to the corner this client's own interface puts it in, a bare
+    /// disc over the world.
+    void setFrameHidden(bool hidden) { frameHidden_ = hidden; }
     /// Where the map is actually being drawn, when something placed it.
     ///
     /// The marker pass needs this: it used to assume the corner this client
@@ -218,6 +224,7 @@ private:
     bool squareShape = false;
     float opacity_ = 1.0f;
     bool  haveRect_ = false;
+    bool  frameHidden_ = false;
     float rectX_ = 0.0f, rectY_ = 0.0f, rectW_ = 0.0f, rectH_ = 0.0f;
 
     // Throttling
