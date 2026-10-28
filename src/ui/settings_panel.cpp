@@ -1496,7 +1496,14 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
             }
         }
     } else if (key == "framecap") {
-        if (services_.window) services_.window->setFrameCap(frameCapFpsForChoice(pendingFrameCap));
+        if (services_.window) {
+            const int fps = frameCapFpsForChoice(pendingFrameCap);
+            services_.window->setFrameCap(fps);
+            // Under the client's name too: its options write this limit into
+            // the maxFPS cvar next to a background one, and the frame's wait
+            // is worked out from both (0x006836d0).
+            addons::setStoredCVar("maxFPS", std::to_string(fps));
+        }
     } else if (key == "lensflare") {
         if (renderer) {
             if (auto* lf = renderer->getLensFlare()) lf->setIntensity(pendingLensFlare);

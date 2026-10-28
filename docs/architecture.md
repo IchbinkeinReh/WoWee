@@ -48,7 +48,7 @@ Wowee follows a modular architecture with clear separation of concerns:
 **Application** (`application.hpp/cpp`) - Main controller
 - Owns all subsystems (renderer, game handler, asset manager, UI, addon manager, audio coordinator)
 - Manages application state (`AUTHENTICATION` → `REALM_SELECTION` → `CHARACTER_SELECTION` / `CHARACTER_CREATION` → `IN_GAME`, plus `DISCONNECTED`, and `FIRST_RUN` when nothing has been extracted and the asset builder is shown instead of the login)
-- Runs update/render loop, paced by `FramePacer` (`frame_pacer.hpp/cpp`): integer-nanosecond deltas off a monotonic clock, and a frame cap that sleeps most of the wait and spins the rest
+- Runs update/render loop, paced by `FramePacer` (`frame_pacer.hpp/cpp`): integer-nanosecond deltas off a monotonic clock, and a frame cap that sleeps most of the wait and spins the rest. Which cap applies is the client's rule (`capInEffect`, 0x006836d0): `maxFPS` while the window is the active one, `maxFPSBk` once it is not and only where it is at least as strict, and a limit under eight frames is lifted to eight
 - Populates `GameServices` struct and passes to `GameHandler` at construction
 
 **Window** (`window.hpp/cpp`) - SDL3 + Vulkan wrapper

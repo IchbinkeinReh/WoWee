@@ -23,6 +23,31 @@
 
 namespace wowee::core {
 
+/// A limit of nothing, which is what a player who set none leaves behind: the
+/// client turns a 0 into 0xffffffff before comparing the two limits, so an
+/// unset background cap can never be the stricter of the pair.
+constexpr int kNoCap = 0x7fffffff;
+
+/// A frame held to fewer than this is held for over an eighth of a second,
+/// which the client refuses to do: a limit under nine is lifted to eight, both
+/// when the cvar is written (0x00769830, 0x00769860) and again where the wait
+/// is worked out (0x006836d0).
+constexpr int kLowestFrameCap = 8;
+
+/// The cap a frame is held to, out of the two the client keeps - a limit for
+/// when the window is the active one and a usually lower one for when it is
+/// not (0x006836d0). Each limit of 0 asks for no cap at all, and the
+/// background limit is only taken where the window is not active *and* its
+/// limit is at least as strict; anything under kLowestFrameCap is lifted to
+/// it. 0 comes back for "hold nothing", which is what FramePacer waits for.
+constexpr int capInEffect(int foregroundLimit, int backgroundLimit, bool windowIsActive) {
+    const int foreground = foregroundLimit > 0 ? foregroundLimit : kNoCap;
+    const int background = backgroundLimit > 0 ? backgroundLimit : kNoCap;
+    const int chosen = !windowIsActive && background <= foreground ? background : foreground;
+    if (chosen == kNoCap) return 0;
+    return chosen < kLowestFrameCap ? kLowestFrameCap : chosen;
+}
+
 class FramePacer {
 public:
     /// Nanoseconds since the last call, from a monotonic clock. The first

@@ -1903,8 +1903,23 @@ void Application::run() {
         // cap and far cheaper than spinning.
 #ifndef WOWEE_VR
         if (window) {
+            // Which of the two caps this frame is held to. The client keeps a
+            // limit for the window being the active one and a usually lower
+            // one for when it is not, and takes the background one only where
+            // it is at least as strict (0x006836d0). This project's settings
+            // row picks the foreground limit; the cvars of the client's names
+            // say the same thing the client's own options write, and a player
+            // can set those directly - and a cap under eight frames is lifted
+            // to eight either way. A window without the keyboard is not the
+            // active one; neither is an app the system has put in the
+            // background, which is the same test the sound suspension uses.
+            const int setting = window->frameCap();
+            const int cvarLimit = std::atoi(addons::storedCVarValue("maxFPS", "0").c_str());
+            const int backgroundLimit = std::atoi(addons::storedCVarValue("maxFPSBk", "0").c_str());
+            const bool inBackground = window->getVkContext() && window->getVkContext()->inBackground();
+            const bool active = !inBackground && SDL_GetKeyboardFocus() != nullptr;
             WOWEE_PROFILE_SCOPE("sleep: frame cap", Idle);
-            pacer.waitForCap(window->frameCap());
+            pacer.waitForCap(capInEffect(cvarLimit > 0 ? cvarLimit : setting, backgroundLimit, active));
         }
 #endif
 

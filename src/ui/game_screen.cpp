@@ -560,7 +560,11 @@ void GameScreen::render(game::GameHandler& gameHandler) {
     // The saved frame limit, once the window exists to take it.
     if (!settingsPanel_.frameCapApplied_) {
         if (services_.window) {
-            services_.window->setFrameCap(frameCapFpsForChoice(settingsPanel_.pendingFrameCap));
+            const int fps = frameCapFpsForChoice(settingsPanel_.pendingFrameCap);
+            services_.window->setFrameCap(fps);
+            // Stored under the client's name as well, which is the limit its
+            // own frame wait reads next to the background one (0x006836d0).
+            addons::setStoredCVar("maxFPS", std::to_string(fps));
             settingsPanel_.frameCapApplied_ = true;
         }
     }

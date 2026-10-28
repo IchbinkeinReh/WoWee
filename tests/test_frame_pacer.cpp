@@ -176,3 +176,31 @@ TEST_CASE("the cap holds a 144Hz frame to its budget", "[pacing]") {
         CHECK(bestOvershoot < 2 * plain);
     }
 }
+
+TEST_CASE("which of the two caps a frame is held to", "[frame_pacer]") {
+    using wowee::core::capInEffect;
+    // The pair, both set: a frame keeps the foreground limit while the window
+    // is the active one, and the background one once it is not.
+    CHECK(capInEffect(60, 30, true) == 60);
+    CHECK(capInEffect(60, 30, false) == 30);
+    // A background limit looser than the foreground one changes nothing,
+    // focused or not: the client asks whether it is at least as strict.
+    CHECK(capInEffect(60, 90, false) == 60);
+    CHECK(capInEffect(60, 60, false) == 60);
+    // Nothing set asks for no wait at all, on either side - and an unset
+    // background never wins the comparison against a limit that is set.
+    CHECK(capInEffect(0, 0, true) == 0);
+    CHECK(capInEffect(0, 0, false) == 0);
+    CHECK(capInEffect(0, 30, false) == 30);
+    CHECK(capInEffect(0, 30, true) == 0);
+    CHECK(capInEffect(45, 0, false) == 45);
+    CHECK(capInEffect(120, 0, false) == 120);
+    // A frame held for a quarter of a second or longer is held for an eighth
+    // instead, which the client insists on twice: writing either cvar lifts
+    // 1..7 to 8, and the wait works it out again (0x00769830, 0x006836d0).
+    CHECK(wowee::core::kLowestFrameCap == 8);
+    CHECK(capInEffect(3, 0, true) == 8);
+    CHECK(capInEffect(0, 1, false) == 8);
+    CHECK(capInEffect(8, 0, true) == 8);
+    CHECK(capInEffect(9, 0, true) == 9);
+}
