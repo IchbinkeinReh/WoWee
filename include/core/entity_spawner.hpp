@@ -374,10 +374,10 @@ public:
     /// it: EmotesTextSound by the emote text and the speaker's race and sex,
     /// under the client's two emote CVars (unit_model_events.hpp).
     void playUnitEmoteSound(const game::Unit& unit, uint32_t emotesTextId);
-    /// What a unit says as its reaction goes to HATE (SMSG_AI_REACTION 0):
-    /// its PreAggro sound slot, by that slot's own chance
-    /// (rendering/unit_model_events.hpp).
-    void playUnitAlertSound(const game::Unit& unit);
+    /// What a unit says at the reaction it was just given (SMSG_AI_REACTION):
+    /// its PreAggro sound slot for HATE, by that slot's own chance, and its
+    /// Aggro voice line for UNFRIENDLY (rendering/unit_model_events.hpp).
+    void playUnitReactionSound(const game::Unit& unit, uint32_t reaction);
     /// What a unit says as its death is noticed - its CreatureSoundData row's
     /// Death column, not a sound slot (rendering/unit_model_events.hpp). Ask
     /// it before markCreatureDead, which is what keeps a death noticed twice

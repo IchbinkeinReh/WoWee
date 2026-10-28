@@ -36,14 +36,12 @@ bool NpcVoiceManager::initialize(pipeline::AssetManager* assets) {
     LOG_INFO("===================================");
 
     loadVoiceSounds();
-    loadCreatureAggroSounds();
 
     int totalSamples = 0;
     for (const auto& [type, samples] : greetingLibrary_) totalSamples += samples.size();
     for (const auto& [type, samples] : farewellLibrary_) totalSamples += samples.size();
     for (const auto& [type, samples] : vendorLibrary_) totalSamples += samples.size();
     for (const auto& [type, samples] : pissedLibrary_) totalSamples += samples.size();
-    for (const auto& [type, samples] : aggroLibrary_) totalSamples += samples.size();
     for (const auto& [type, samples] : fleeLibrary_) totalSamples += samples.size();
     LOG_INFO("NPC voice manager initialized (", totalSamples, " voice clips)");
     return true;
@@ -54,11 +52,8 @@ void NpcVoiceManager::shutdown() {
     farewellLibrary_.clear();
     vendorLibrary_.clear();
     pissedLibrary_.clear();
-    aggroLibrary_.clear();
     fleeLibrary_.clear();
-    creatureAggroSoundByDisplay_.clear();
     lastPlayTime_.clear();
-    lastAggroTime_.clear();
     clickCount_.clear();
     assetManager_ = nullptr;
 }
@@ -227,57 +222,25 @@ void NpcVoiceManager::loadVoiceSounds() {
         }
     };
 
-    // Human combat sounds
-    loadCombatCategory(aggroLibrary_, VoiceType::HUMAN_MALE, "Human", "HumanMale", "AttackMyTarget", 2);
+    // A race's flee lines, which nothing asks for yet - kept because the
+    // library's shape is the same one the interaction lines use. What an angry
+    // unit says is not here: the client asks that out of the unit's own
+    // CreatureSoundData row (0x007474b0 kind 0, through EntitySpawner).
     loadCombatCategory(fleeLibrary_, VoiceType::HUMAN_MALE, "Human", "HumanMale", "Flee", 2);
-
-    loadCombatCategory(aggroLibrary_, VoiceType::HUMAN_FEMALE, "Human", "HumanFemale", "AttackMyTarget", 2);
     loadCombatCategory(fleeLibrary_, VoiceType::HUMAN_FEMALE, "Human", "HumanFemale", "Flee", 2);
-
-    // Dwarf combat sounds
-    loadCombatCategory(aggroLibrary_, VoiceType::DWARF_MALE, "Dwarf", "DwarfMale", "AttackMyTarget", 3);
     loadCombatCategory(fleeLibrary_, VoiceType::DWARF_MALE, "Dwarf", "DwarfMale", "Flee", 2);
-
-    // Gnome combat sounds
-    loadCombatCategory(aggroLibrary_, VoiceType::GNOME_MALE, "Gnome", "GnomeMale", "AttackMyTarget", 2);
     loadCombatCategory(fleeLibrary_, VoiceType::GNOME_MALE, "Gnome", "GnomeMale", "Flee", 2);
-
-    loadCombatCategory(aggroLibrary_, VoiceType::GNOME_FEMALE, "Gnome", "GnomeFemale", "AttackMyTarget", 2);
     loadCombatCategory(fleeLibrary_, VoiceType::GNOME_FEMALE, "Gnome", "GnomeFemale", "Flee", 2);
-
-    // Night Elf combat sounds
-    loadCombatCategory(aggroLibrary_, VoiceType::NIGHTELF_MALE, "NightElf", "NightElfMale", "AttackMyTarget", 2);
     loadCombatCategory(fleeLibrary_, VoiceType::NIGHTELF_MALE, "NightElf", "NightElfMale", "Flee", 2);
-
-    loadCombatCategory(aggroLibrary_, VoiceType::NIGHTELF_FEMALE, "NightElf", "NightElfFemale", "AttackMyTarget", 3);
     loadCombatCategory(fleeLibrary_, VoiceType::NIGHTELF_FEMALE, "NightElf", "NightElfFemale", "Flee", 2);
-
-    // Orc combat sounds
-    loadCombatCategory(aggroLibrary_, VoiceType::ORC_MALE, "Orc", "OrcMale", "AttackMyTarget", 3);
     loadCombatCategory(fleeLibrary_, VoiceType::ORC_MALE, "Orc", "OrcMale", "Flee", 2);
-
-    loadCombatCategory(aggroLibrary_, VoiceType::ORC_FEMALE, "Orc", "OrcFemale", "AttackMyTarget", 3);
     loadCombatCategory(fleeLibrary_, VoiceType::ORC_FEMALE, "Orc", "OrcFemale", "Flee", 2);
-
-    // Undead combat sounds (Scourge folder)
-    loadCombatCategory(aggroLibrary_, VoiceType::UNDEAD_MALE, "Scourge", "UndeadMale", "AttackMyTarget", 2);
+    // The Undead lines sit under a Scourge folder.
     loadCombatCategory(fleeLibrary_, VoiceType::UNDEAD_MALE, "Scourge", "UndeadMale", "Flee", 2);
-
-    loadCombatCategory(aggroLibrary_, VoiceType::UNDEAD_FEMALE, "Scourge", "UndeadFemale", "AttackMyTarget", 2);
     loadCombatCategory(fleeLibrary_, VoiceType::UNDEAD_FEMALE, "Scourge", "UndeadFemale", "Flee", 2);
-
-    // Tauren combat sounds
-    loadCombatCategory(aggroLibrary_, VoiceType::TAUREN_MALE, "Tauren", "TaurenMale", "AttackMyTarget", 3);
     loadCombatCategory(fleeLibrary_, VoiceType::TAUREN_MALE, "Tauren", "TaurenMale", "Flee", 2);
-
-    loadCombatCategory(aggroLibrary_, VoiceType::TAUREN_FEMALE, "Tauren", "TaurenFemale", "AttackMyTarget", 3);
     loadCombatCategory(fleeLibrary_, VoiceType::TAUREN_FEMALE, "Tauren", "TaurenFemale", "Flee", 2);
-
-    // Troll combat sounds
-    loadCombatCategory(aggroLibrary_, VoiceType::TROLL_MALE, "Troll", "TrollMale", "AttackMyTarget", 3);
     loadCombatCategory(fleeLibrary_, VoiceType::TROLL_MALE, "Troll", "TrollMale", "Flee", 2);
-
-    loadCombatCategory(aggroLibrary_, VoiceType::TROLL_FEMALE, "Troll", "TrollFemale", "AttackMyTarget", 3);
     loadCombatCategory(fleeLibrary_, VoiceType::TROLL_FEMALE, "Troll", "TrollFemale", "Flee", 2);
 
     // Blood Elf and Draenei combat sounds (flat folder structure, no VocalMale/Female subfolder)
@@ -298,92 +261,11 @@ void NpcVoiceManager::loadVoiceSounds() {
         }
     };
 
-    // Blood Elf combat sounds
-    loadCombatFlat(aggroLibrary_, VoiceType::BLOODELF_MALE, "BloodElf", "BloodElfMale", "AttackMyTarget", 3);
+    // Blood Elf and Draenei, whose folders have no VocalMale/VocalFemale half.
     loadCombatFlat(fleeLibrary_, VoiceType::BLOODELF_MALE, "BloodElf", "BloodElfMale", "Flee", 3);
-
-    loadCombatFlat(aggroLibrary_, VoiceType::BLOODELF_FEMALE, "BloodElf", "BloodElfFemale", "AttackMyTarget", 3);
     loadCombatFlat(fleeLibrary_, VoiceType::BLOODELF_FEMALE, "BloodElf", "BloodElfFemale", "Flee", 3);
-
-    // Draenei combat sounds
-    loadCombatFlat(aggroLibrary_, VoiceType::DRAENEI_MALE, "Draenei", "DraeneiMale", "AttackMyTarget", 3);
     loadCombatFlat(fleeLibrary_, VoiceType::DRAENEI_MALE, "Draenei", "DraeneiMale", "Flee", 3);
-
-    loadCombatFlat(aggroLibrary_, VoiceType::DRAENEI_FEMALE, "Draenei", "DraeneiFemale", "AttackMyTarget", 3);
     loadCombatFlat(fleeLibrary_, VoiceType::DRAENEI_FEMALE, "Draenei", "DraeneiFemale", "Flee", 3);
-}
-
-void NpcVoiceManager::loadCreatureAggroSounds() {
-    if (!assetManager_) return;
-
-    auto displayDbc = assetManager_->loadDBC("CreatureDisplayInfo.dbc");
-    auto modelDbc = assetManager_->loadDBC("CreatureModelData.dbc");
-    auto soundDbc = assetManager_->loadDBC("CreatureSoundData.dbc");
-    if (!displayDbc || !displayDbc->isLoaded() ||
-        !modelDbc || !modelDbc->isLoaded() ||
-        !soundDbc || !soundDbc->isLoaded()) {
-        LOG_WARNING("NPC voice: creature aggro DBC data unavailable");
-        return;
-    }
-
-    // Fixed-skin creature models (including the Defias HumanThief model) keep
-    // their sound set on CreatureModelData, while customizable displays can
-    // override it directly in CreatureDisplayInfo. These fields are stable in
-    // Classic, TBC, and WotLK.
-    std::unordered_map<uint32_t, uint32_t> soundSetByModel;
-    for (uint32_t row = 0; row < modelDbc->getRecordCount(); ++row) {
-        const uint32_t modelId = modelDbc->getUInt32(row, 0);
-        const uint32_t creatureSoundId = modelDbc->getUInt32(row, 13);
-        if (modelId != 0 && creatureSoundId != 0)
-            soundSetByModel[modelId] = creatureSoundId;
-    }
-
-    for (uint32_t row = 0; row < displayDbc->getRecordCount(); ++row) {
-        const uint32_t displayId = displayDbc->getUInt32(row, 0);
-        const uint32_t modelId = displayDbc->getUInt32(row, 1);
-        uint32_t creatureSoundId = displayDbc->getUInt32(row, 2);
-        if (creatureSoundId == 0) {
-            auto modelSound = soundSetByModel.find(modelId);
-            if (modelSound != soundSetByModel.end())
-                creatureSoundId = modelSound->second;
-        }
-        if (displayId == 0 || creatureSoundId == 0) continue;
-
-        const int32_t soundRow = soundDbc->findRecordById(creatureSoundId);
-        if (soundRow < 0) continue;
-        const uint32_t soundDataRow = static_cast<uint32_t>(soundRow);
-        const uint32_t aggroSoundId = soundDbc->getUInt32(soundDataRow, 10);
-        if (aggroSoundId != 0)
-            creatureAggroSoundByDisplay_[displayId] = aggroSoundId;
-    }
-
-    LOG_INFO("NPC voice: loaded ", creatureAggroSoundByDisplay_.size(), " model-specific aggro sounds");
-}
-
-bool NpcVoiceManager::playSoundEntry(uint32_t soundId, const glm::vec3& position) {
-    if (!assetManager_ || !AudioEngine::instance().isInitialized() || soundId == 0)
-        return false;
-
-    auto dbc = assetManager_->loadDBC("SoundEntries.dbc");
-    if (!dbc || !dbc->isLoaded()) return false;
-    const int32_t rowIndex = dbc->findRecordById(soundId);
-    if (rowIndex < 0) return false;
-
-    const uint32_t row = static_cast<uint32_t>(rowIndex);
-    const std::string directory = dbc->getString(row, 23);
-    std::vector<std::string> paths;
-    for (uint32_t field = 3; field <= 12; ++field) {
-        const std::string filename = dbc->getString(row, field);
-        if (filename.empty()) continue;
-        std::string path = directory.empty() ? filename : directory + "\\" + filename;
-        if (assetManager_->fileExists(path)) paths.push_back(std::move(path));
-    }
-    if (paths.empty()) return false;
-
-    std::uniform_int_distribution<size_t> choice(0, paths.size() - 1);
-    std::uniform_real_distribution<float> pitch(0.98f, 1.02f);
-    return AudioEngine::instance().playSound3D(
-        paths[choice(rng_)], position, volumeScale_, pitch(rng_), 60.0f);
 }
 
 bool NpcVoiceManager::loadSound(const std::string& path, VoiceSample& sample) {
@@ -409,9 +291,9 @@ void NpcVoiceManager::playSound(uint64_t npcGuid, VoiceType voiceType, SoundCate
         return;
     }
 
-    // Check cooldown (except for pissed and combat sounds which override cooldown)
+    // Check cooldown (except for the two kinds that override it)
     auto now = std::chrono::steady_clock::now();
-    if (category != SoundCategory::PISSED && category != SoundCategory::AGGRO && category != SoundCategory::FLEE) {
+    if (category != SoundCategory::PISSED && category != SoundCategory::FLEE) {
         auto it = lastPlayTime_.find(npcGuid);
         if (it != lastPlayTime_.end()) {
             float elapsed = std::chrono::duration<float>(now - it->second).count();
@@ -428,7 +310,6 @@ void NpcVoiceManager::playSound(uint64_t npcGuid, VoiceType voiceType, SoundCate
         case SoundCategory::FAREWELL: library = &farewellLibrary_; break;
         case SoundCategory::VENDOR: library = &vendorLibrary_; break;
         case SoundCategory::PISSED: library = &pissedLibrary_; break;
-        case SoundCategory::AGGRO: library = &aggroLibrary_; break;
         case SoundCategory::FLEE: library = &fleeLibrary_; break;
     }
 
@@ -498,25 +379,5 @@ void NpcVoiceManager::playPissed(uint64_t npcGuid, VoiceType voiceType, const gl
     }
 }
 
-void NpcVoiceManager::playAggro(uint64_t npcGuid, uint32_t displayId,
-                                VoiceType voiceType, const glm::vec3& position) {
-    const auto now = std::chrono::steady_clock::now();
-    auto recent = lastAggroTime_.find(npcGuid);
-    if (recent != lastAggroTime_.end() &&
-        std::chrono::duration<float>(now - recent->second).count() < AGGRO_COOLDOWN) {
-        return;
-    }
-
-    auto specific = creatureAggroSoundByDisplay_.find(displayId);
-    if (specific != creatureAggroSoundByDisplay_.end() &&
-        playSoundEntry(specific->second, position)) {
-        lastAggroTime_[npcGuid] = now;
-        lastPlayTime_[npcGuid] = now;
-        return;
-    }
-
-    lastAggroTime_[npcGuid] = now;
-    playSound(npcGuid, voiceType, SoundCategory::AGGRO, position);
-}
 } // namespace audio
 } // namespace wowee

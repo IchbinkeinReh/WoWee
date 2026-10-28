@@ -569,11 +569,11 @@ public:
     using EmoteSoundCallback = std::function<void(uint64_t, uint32_t)>;
     void setEmoteSoundCallback(EmoteSoundCallback cb) { emoteSoundCallback_ = std::move(cb); }
 
-    // A unit whose reaction went to HATE (SMSG_AI_REACTION 0), which it
-    // answers with out loud (0x00716b10 asks its sound slot 8): the guid,
-    // since the packet gives no position to speak from.
-    using UnitAlertSoundCallback = std::function<void(uint64_t)>;
-    void setUnitAlertSoundCallback(UnitAlertSoundCallback cb) { unitAlertSoundCallback_ = std::move(cb); }
+    // A unit's reaction changing (SMSG_AI_REACTION): its guid and the reaction,
+    // which is all the packet gives - 0x00716b10 asks the unit itself for the
+    // HATE slot ask and for the UNFRIENDLY line, and gives it no position.
+    using UnitReactionSoundCallback = std::function<void(uint64_t, uint32_t)>;
+    void setUnitReactionSoundCallback(UnitReactionSoundCallback cb) { unitReactionSoundCallback_ = std::move(cb); }
 
     // The order a pet was just given (SMSG_PET_ACTION_SOUND): its guid and the
     // packet's value, 0 the order asked of it and 1 its target set on it. What
@@ -1749,9 +1749,6 @@ public:
     uint32_t resolveUnitRenderInstance(uint64_t guid) const {
         return unitRenderInstanceResolver_ ? unitRenderInstanceResolver_(guid) : 0;
     }
-
-    using NpcAggroCallback = std::function<void(uint64_t guid, const glm::vec3& position)>;
-    void setNpcAggroCallback(NpcAggroCallback cb) { npcAggroCallback_ = std::move(cb); }
 
     // NPC respawn callback (health 0 → >0, resets animation to idle)
     using NpcRespawnCallback = std::function<void(uint64_t guid)>;
@@ -4711,7 +4708,7 @@ public:
     auto& creatureSpawnCallbackRef() { return creatureSpawnCallback_; }
     auto& emoteAnimCallbackRef() { return emoteAnimCallback_; }
     auto& emoteSoundCallbackRef() { return emoteSoundCallback_; }
-    auto& unitAlertSoundCallbackRef() { return unitAlertSoundCallback_; }
+    auto& unitReactionSoundCallbackRef() { return unitReactionSoundCallback_; }
     auto& petActionSoundCallbackRef() { return petActionSoundCallback_; }
     auto& unitStandStateCallbackRef() { return unitStandStateCallback_; }
     auto& gameObjectDespawnCallbackRef() { return gameObjectDespawnCallback_; }
@@ -4744,7 +4741,6 @@ public:
         return v;
     }
     auto& mountCallbackRef() { return mountCallback_; }
-    auto& npcAggroCallbackRef() { return npcAggroCallback_; }
     auto& npcDeathCallbackRef() { return npcDeathCallback_; }
     auto& npcFarewellCallbackRef() { return npcFarewellCallback_; }
     auto& npcGreetingCallbackRef() { return npcGreetingCallback_; }
@@ -5380,7 +5376,7 @@ private:
     RandomStatResolver randomStatResolver_;
     EmoteAnimCallback emoteAnimCallback_;
     EmoteSoundCallback emoteSoundCallback_;
-    UnitAlertSoundCallback unitAlertSoundCallback_;
+    UnitReactionSoundCallback unitReactionSoundCallback_;
     PetActionSoundCallback petActionSoundCallback_;
     UnitStandStateCallback unitStandStateCallback_;
 
@@ -6190,7 +6186,6 @@ private:
 
     NpcDeathCallback npcDeathCallback_;
     UnitRenderInstanceResolver unitRenderInstanceResolver_;
-    NpcAggroCallback npcAggroCallback_;
     NpcRespawnCallback npcRespawnCallback_;
     StandStateCallback standStateCallback_;
     LogoutCompleteCallback logoutCompleteCallback_;

@@ -69,6 +69,15 @@ std::shared_ptr<const ue::FootstepTerrainSounds> loadFootstepSounds(pipeline::As
     return table;
 }
 
+/// The gate every pet's own line goes through (0x007474b0's first test): a
+/// line is said while Sound_EnablePetSounds is on, or by a unit that is nobody's
+/// pet - the client asks its sound component's owner link (+0x114) whether it is
+/// empty, and who summoned the unit answers the same question of the fields.
+bool petVoiceAllowed(const game::Unit& unit) {
+    return addons::storedCVarValue("Sound_EnablePetSounds", "1") != "0" ||
+           game::unitSummonedByGuid(unit) == 0;
+}
+
 }  // namespace
 
 int32_t EntitySpawner::unitSoundRow(const game::Unit& unit, bool petRow) const {
@@ -146,12 +155,20 @@ void EntitySpawner::playUnitJumpSound(const game::Unit& unit, uint32_t slot) {
     playUnitSlot(unit, slot, true, nullptr);
 }
 
-void EntitySpawner::playUnitAlertSound(const game::Unit& unit) {
-    // 0x00716b10, SMSG_AI_REACTION's handler: a reaction of HATE asks the
-    // unit its slot 8 and nothing else. The ask is rolled like any other,
-    // though its chance is 100 of 100, and the line is said where the unit
-    // stands - the packet carries no position.
-    playUnitSlot(unit, ue::kSlotAlert, false, nullptr);
+void EntitySpawner::playUnitReactionSound(const game::Unit& unit, uint32_t reaction) {
+    // 0x00716b10, SMSG_AI_REACTION's handler: it asks one thing per reaction and
+    // nothing for the others. A reaction of HATE asks the unit its slot 8,
+    // rolled like any other though its chance is 100 of 100; an UNFRIENDLY one
+    // asks its Aggro voice line instead - a pet's kind, so the pet gate stands
+    // between it and the ear. Neither ask is given a position: the line is said
+    // where the unit stands, and the packet carries none.
+    if (!renderer_ || !gameHandler_ || !assetManager_) return;
+    if (reaction == 0) {
+        playUnitSlot(unit, ue::kSlotAlert, false, nullptr);
+        return;
+    }
+    if (reaction == 2 && petVoiceAllowed(unit))
+        playUnitVoiceKind(unit, ue::kVoiceKindAggro);
 }
 
 void EntitySpawner::playUnitVoiceLine(const game::Unit& unit, uint32_t sound) {
@@ -196,9 +213,7 @@ void EntitySpawner::playUnitPetActionSound(const game::Unit& unit, uint32_t acti
     // which the guid in the packet can still name.
     if (!renderer_ || !gameHandler_ || !assetManager_) return;
     if (action > 1) return;
-    if (addons::storedCVarValue("Sound_EnablePetSounds", "1") == "0" &&
-        game::unitSummonedByGuid(unit) != 0)
-        return;
+    if (!petVoiceAllowed(unit)) return;
     playUnitVoiceKind(unit, action == 0 ? ue::kVoiceKindOrder : ue::kVoiceKindKill);
 }
 
@@ -260,9 +275,7 @@ void EntitySpawner::playUnitEmoteSound(const game::Unit& unit, uint32_t emotesTe
     if (!renderer_ || !gameHandler_ || !assetManager_) return;
     if (addons::storedCVarValue("Sound_EnableEmoteSounds", "1") == "0") return;
     const uint64_t guid = unit.getGuid();
-    if (addons::storedCVarValue("Sound_EnablePetSounds", "1") == "0" &&
-        game::unitSummonedByGuid(unit) != 0)
-        return;
+    if (!petVoiceAllowed(unit)) return;
     // The line is the speaker's race's and sex's, which only a player has -
     // and only once its name has been answered, so a first emote from someone
     // out of sight stays unheard rather than guessed at.

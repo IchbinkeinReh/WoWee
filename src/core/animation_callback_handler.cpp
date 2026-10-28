@@ -317,14 +317,14 @@ void AnimationCallbackHandler::setupCallbacks() {
         entitySpawner_.playUnitEmoteSound(static_cast<const game::Unit&>(*entity), emotesTextId);
     });
 
-    // A reaction going to HATE, which the unit answers out loud. The client
-    // resolves the unit first (0x00716b10 asks Unit_C.cpp for one, and plays
-    // nothing where there is none or it is not a unit), then hands the slot
-    // to the unit itself.
-    gameHandler_.setUnitAlertSoundCallback([this](uint64_t guid) {
+    // A reaction, which the unit answers out loud for two of its values. The
+    // client resolves the unit first (0x00716b10 asks Unit_C.cpp for one, and
+    // plays nothing where there is none or it is not a unit), then hands the
+    // reaction to the unit itself.
+    gameHandler_.setUnitReactionSoundCallback([this](uint64_t guid, uint32_t reaction) {
         auto entity = gameHandler_.getEntityManager().getEntity(guid);
         if (!entity || !entity->isUnit()) return;
-        entitySpawner_.playUnitAlertSound(static_cast<const game::Unit&>(*entity));
+        entitySpawner_.playUnitReactionSound(static_cast<const game::Unit&>(*entity), reaction);
     });
 
     // What a pet says about the order it was just given. The client resolves a

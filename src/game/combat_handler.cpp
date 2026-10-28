@@ -249,16 +249,12 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         if (!packet.hasRemaining(12)) return;
         uint64_t guid = packet.readUInt64();
         uint32_t reaction = packet.readUInt32();
-        // The client's two branches (0x00716b10): a HATE reaction only asks
-        // the unit its PreAggro sound slot, and an UNFRIENDLY one only its
-        // Aggro voice line.
-        if (reaction == 0) {
-            if (owner_.unitAlertSoundCallbackRef()) owner_.unitAlertSoundCallbackRef()(guid);
-        } else if (reaction == 2 && owner_.npcAggroCallbackRef()) {
-            auto entity = owner_.getEntityManager().getEntity(guid);
-            if (entity)
-                owner_.npcAggroCallbackRef()(guid, glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
-        }
+        // The client's handler (0x00716b10) asks one thing per reaction and
+        // nothing else: a HATE reaction the unit's PreAggro sound slot, an
+        // UNFRIENDLY one its Aggro voice line. Both are asked of the unit, so
+        // the packet's own two values are all there is to hand on.
+        if (owner_.unitReactionSoundCallbackRef())
+            owner_.unitReactionSoundCallbackRef()(guid, reaction);
     };
     table[Opcode::SMSG_SPELLNONMELEEDAMAGELOG] = [this](network::Packet& packet) { handleSpellDamageLog(packet); };
     table[Opcode::SMSG_SPELLHEALLOG] = [this](network::Packet& packet) { handleSpellHealLog(packet); };
@@ -715,17 +711,12 @@ void CombatHandler::handleAttackStart(network::Packet& packet) {
         if (owner_.addonEventCallbackRef())
             owner_.addonEventCallbackRef()("PLAYER_ENTER_COMBAT", {});
     } else if (data.victimGuid == owner_.getPlayerGuid() && data.attackerGuid != 0) {
+        // The attacker is kept as a hostile one and auto-targeted. 0x00756800
+        // case 0x143 asks nothing to be said here - a unit reaching for the
+        // player says nothing about it; the line only a reaction change brings
+        // (SMSG_AI_REACTION) is where an angry unit speaks.
         hostileAttackers_.insert(data.attackerGuid);
         autoTargetAttacker(data.attackerGuid);
-
-        // Play aggro sound when NPC attacks player
-        if (owner_.npcAggroCallbackRef()) {
-            auto entity = owner_.getEntityManager().getEntity(data.attackerGuid);
-            if (entity && entity->getType() == ObjectType::UNIT) {
-                glm::vec3 pos(entity->getX(), entity->getY(), entity->getZ());
-                owner_.npcAggroCallbackRef()(data.attackerGuid, pos);
-            }
-        }
     }
 
     // Force both participants to face each other at combat start.
