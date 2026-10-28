@@ -4829,14 +4829,29 @@ static int lua_BindingTurn(lua_State* L) {
     return 0;
 }
 
-// HasLFGRestrictions() → whether the player is in a dungeon-finder group
+// HasLFGRestrictions() → whether the group the player is in is *restricted*
 //
-// There is a dungeon finder here - the client tracks the queue, the proposal
-// and the dungeon - so this is answered from it rather than declared false the
-// way it was when the comment here said no such thing existed.
+// Not "am I in a finder group", which is what this answered until the roster's
+// own restriction bit was read. The client has two getters side by side and the
+// FrameXML uses both: 0x0052c310 answers from 0xbd19a4, the finder dungeon the
+// roster carried, and that is IsPartyLFG (below, and used by `minimap.lua:242`
+// and `uiparent.lua:3585, :3587`); 0x0052c350 pushes the boolean of 0xbd19a8,
+// which is this one. The second byte is written only by the roster handler -
+// 0x006d8870:6994 hands it the type byte's bit 2 - and zeroed whenever the party
+// is emptied (0x0052d6e0:10375), so it says what the *server* says this group may
+// not do, which is not the same as being a finder group at all: a normal group the
+// server restricts answers here and not at IsPartyLFG.
+//
+// Answering it from the finder state cost half of uiparent/unitpopup. That pair
+// gates the leave-disband and convert-to-raid buttons, the whisper-guild and
+// unit-dissmiss lines and the raid-convert line on this one name
+// (`uiparent.lua:3562`, `unitpopup.lua:599, :603, :631, :635, :663, :1060,
+// :1068, :1096`, `raidframe.lua:70`, `partymemberframe.lua:190`,
+// `playerframe.lua:64`, `targetframe.lua:118`, `chatframe.lua:2880`), and every
+// one of them saw "restricted" for a plain finder party and hid what it gates.
 static int lua_HasLFGRestrictions(lua_State* L) {
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->isLfgInDungeon() ? 1 : 0);
+    lua_pushboolean(L, gh && gh->getPartyData().lfgRestricted ? 1 : 0);
     return 1;
 }
 

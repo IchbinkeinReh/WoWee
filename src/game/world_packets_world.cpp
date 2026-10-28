@@ -474,15 +474,24 @@ bool GroupListParser::parse(network::Packet& packet, GroupListData& data,
     // 0x54000000, a 'T' - which is what the implausible-count warning below has
     // been reporting once per group update.
     //
-    // Both bits, because the two listings of GroupType disagree about which one
-    // marks a finder group - 0x08 in one, 0x04 in the other - and servers set
-    // them together.
-    constexpr uint8_t kGroupTypeLfg = 0x0C;
-    if (hasRoles && (data.groupType & kGroupTypeLfg)) {
+    // Which of the two bits, settled off the client rather than off the two
+    // listings of GroupType that disagree (0x08 in one, 0x04 in the other).
+    // 0x006d8870 reads the type byte into one stack local that Ghidra shows
+    // pre-filled with a canary (`local_8 = 0x6d887d`, then the byte at +1), and
+    // the tests that follow are bit tests on that dword: bits 8 to 15 are the
+    // byte, so `local_8 & 0x800` (:6811) is **bit 3** - the one that opens the
+    // five bytes - and `local_8 >> 10 & 1` (:6994, handed to 0x0052c0d0) is
+    // **bit 2**, which is not a finder flag at all but the group's *restriction*
+    // flag. Bit 0 is kept apart in local_10 (:6801-6806) and bit 1 is folded to
+    // bit 24; neither is what opens the five bytes.
+    constexpr uint8_t kGroupTypeLfgFields = 0x08;
+    constexpr uint8_t kGroupTypeRestricted = 0x04;
+    if (hasRoles && (data.groupType & kGroupTypeLfgFields)) {
         if (rem() < 5) return false;
         packet.readUInt8();  // lfg state
         data.lfgDungeonEntry = packet.readUInt32();
     }
+    data.lfgRestricted = (data.groupType & kGroupTypeRestricted) != 0;
 
     if (rem() < 8) return false;
     packet.readUInt64(); // group GUID

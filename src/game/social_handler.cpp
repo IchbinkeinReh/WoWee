@@ -2585,6 +2585,14 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     // it) and then sets the roster's dungeon (0x0052c0a0), which says
     // LFG_UPDATE when that changes it - for every roster of a finder group.
     if (partyData.lfgDungeonEntry != 0) owner_.fireAddonEvent("LFG_UPDATE", {});
+    // The very next call of that same routine is 0x0052c0d0 with the type byte's
+    // bit 2 (0x006d8870:6994), the group's *restriction* flag, and it fires
+    // PARTY_LFG_RESTRICTED whenever the flag it holds and the bit differ
+    // (0x00520000.c:9104-9114). The party was emptied on the way in, which zeroes
+    // the flag and fires nothing (0x0052d6e0:10375), so the differ always does for
+    // a restricted group: every roster of one re-fires this. What listens -
+    // `raidframe.lua:18, :61`, whose roster refresh is the only FrameXML consumer.
+    if (partyData.lfgRestricted) owner_.fireAddonEvent("PARTY_LFG_RESTRICTED", {});
     // 0x006d8870: a group with members sets the party's dungeon and raid
     // difficulties and the player's (0xbd1978, 0xbd197c, 0xbd1980).
     if (partyData.hasPlayerDifficulty) {
