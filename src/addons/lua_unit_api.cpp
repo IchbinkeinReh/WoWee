@@ -2444,10 +2444,57 @@ static int lua_UnitClassification(lua_State* L) {
     return 1;
 }
 
-// GetComboPoints("player"|"vehicle", "target") → number
+// GetComboPoints(unit [, target]) → number
+/// GetComboPoints(unit [, target]) - the combo points that unit has on that
+/// target, and on that target only.
+///
+/// 0x00611670 resolves both names to guids and answers for the two units that
+/// can hold combo points: the player - gated on the class byte being 4 (rogue)
+/// or 11 (druid), the same byte class masks are shifted by, which is where the
+/// client says no for everyone else - and the player's pet (0x005d3520). The
+/// count comes back only when the unit named is the one the points are on:
+/// 0x00513920 compares against the stored combo target, having first put the
+/// player's current target in place of a zero pair, so the argument really is
+/// a question about a unit rather than about whoever is selected now. Every
+/// other unit, and any other target, answers 0.
+///
+/// WoWee answered the player's count for every call: an addon asking
+/// GetComboPoints("player", "focus") got the current target's number, and the
+/// pet's own points - which the server sends separately, and which
+/// UNIT_COMBO_POINTS("pet") already carries - were never readable here at all.
+/// A call with no unit at all answers nothing, as the client's
+/// "Usage: GetComboPoints(\"unit\"[, \"target\"]" does, rather than 0.
 static int lua_GetComboPoints(lua_State* L) {
+    const char* unit = lua_tostring(L, 1);
+    if (!unit) return 0;
     auto* gh = getGameHandler(L);
-    lua_pushnumber(L, gh ? gh->getComboPoints() : 0);
+    if (!gh) { lua_pushnumber(L, 0); return 1; }
+
+    std::string uid(unit);
+    toLowerInPlace(uid);
+    const uint64_t who = resolveUnitGuid(gh, uid);
+
+    // A target the call does not name, or names without being able to resolve,
+    // is the player's current target - 0x00513920 and 0x005d3520 both put the
+    // current target in place of a zero pair before comparing.
+    const char* named = lua_tostring(L, 2);
+    uint64_t on = 0;
+    if (named && *named) {
+        std::string targetName(named);
+        toLowerInPlace(targetName);
+        on = resolveUnitGuid(gh, targetName);
+    }
+    if (on == 0) on = gh->getTargetGuid();
+
+    uint8_t points = 0;
+    if (who == gh->getPlayerGuid()) {
+        const uint8_t cls = gh->getPlayerClass();
+        if ((cls == 4 || cls == 11) && gh->getComboTarget() == on)
+            points = gh->getComboPoints();
+    } else if (who != 0 && who == gh->getPetGuid()) {
+        points = gh->petComboPointsOn(on);
+    }
+    lua_pushnumber(L, points);
     return 1;
 }
 
