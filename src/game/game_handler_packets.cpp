@@ -1465,10 +1465,10 @@ void GameHandler::registerCoreOpcodes() {
         else if (itemClass == 4) armorProficiency_ = mask;
     };
 
-    // Loot money / misc consume
-    for (auto op : { Opcode::SMSG_LOOT_CLEAR_MONEY, Opcode::SMSG_NPC_TEXT_UPDATE }) {
-        dispatchTable_[op] = [](network::Packet& /*packet*/) {};
-    }
+    // SMSG_LOOT_CLEAR_MONEY and SMSG_NPC_TEXT_UPDATE were consumed here before
+    // their handlers moved to InventoryHandler (0x00589100 clears the purse from
+    // the loot) and QuestHandler; both register theirs after this function has
+    // run, so anything installed here would only hide that.
 
     // Play sound
     dispatchTable_[Opcode::SMSG_PLAY_SOUND] = [this](network::Packet& packet) {
