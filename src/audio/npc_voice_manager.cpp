@@ -1,6 +1,7 @@
 #include "audio/npc_voice_manager.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/sound_distance.hpp"
+#include "audio/zone_music.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
@@ -8,6 +9,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <optional>
 
 namespace wowee {
 namespace audio {
@@ -72,6 +75,11 @@ void NpcVoiceManager::shutdown() {
     lastPlayTime_.clear();
     clickCount_.clear();
     reachByName_.clear();
+    kitIdByDisplay_.clear();
+    kitRows_.clear();
+    soundEntryRowById_.clear();
+    kitSamples_.clear();
+    kitLastFile_.clear();
     assetManager_ = nullptr;
 }
 
@@ -87,17 +95,109 @@ void NpcVoiceManager::indexSoundEntriesReach() {
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
         const float minDistance = dbc->getFloat(i, 26);
         const float cutoff = dbc->getFloat(i, 27);
+        const float volume = dbc->getFloat(i, 24);
         for (uint32_t f = 0; f < 10; ++f) {
             const std::string file = dbc->getString(i, 3 + f);
             if (file.empty()) continue;
-            reachByName_.try_emplace(leafLower(file), minDistance, cutoff);
+            reachByName_.try_emplace(leafLower(file), EntryAsk{minDistance, cutoff, volume});
         }
     }
+}
+
+// Which voice kit a unit's display names.
+//
+// CreatureDisplayInfo.dbc column 12 (stride 0x40, 16 columns) names an NPCSounds
+// row: 10508 of its 24262 rows carry a value there, every one of them inside the
+// id range NPCSounds keys by (33..336, exact), and no other table in the client's
+// own data takes that id space. NPCSounds' row is five dwords - the id, three
+// SoundEntries rows, and a fifth column that is 0 in all 301 rows. Read against
+// CreatureDisplayInfoExtra's DisplayRaceID and DisplaySexID, the kit agrees with
+// what the model looks like 7913 times and differs 2033: a gnome model asks the
+// Dwarf kit, a blood elf model the NightElf kit, a troll model the Tauren kit.
+// So the kit follows the voice the unit is given, not the body it has, and a
+// race/sex guess picks a different line than the row does for one display in five.
+//
+// The three columns are, by what the kits they name go on to play: 1 the line on
+// the interaction (a greeting for most kits, a vendor's own for the 87 rows whose
+// kit is a vendor's, an attack cry for a few), 2 the farewell, 3 the irritated
+// answer. Established from the file names those SoundEntries rows carry, not from
+// client code - the routine that reads column 12 was not found, and the loader of
+// NPCSounds (asserting 5 columns and a 0x14 row size, which is this table's
+// shape) is reached only through a function-pointer run the decompile never
+// resolves. What is read here is the data's own agreement, twice over.
+void NpcVoiceManager::indexVoiceKits() {
+    if (!assetManager_) return;
+
+    // Older expansions' CreatureDisplayInfo has no column 12 at all, which is
+    // why the field count is asked before the column is.
+    if (auto cd = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
+        cd && cd->isLoaded() && cd->getFieldCount() > 12) {
+        for (uint32_t i = 0; i < cd->getRecordCount(); ++i) {
+            if (const uint32_t kitId = cd->getUInt32(i, 12); kitId != 0)
+                kitIdByDisplay_.try_emplace(cd->getUInt32(i, 0), kitId);
+        }
+    }
+
+    if (auto ns = assetManager_->loadDBCOptional("NPCSounds.dbc");
+        ns && ns->isLoaded() && ns->getFieldCount() >= 4) {
+        for (uint32_t i = 0; i < ns->getRecordCount(); ++i) {
+            kitRows_.try_emplace(ns->getUInt32(i, 0),
+                                 std::array<uint32_t, 3>{ns->getUInt32(i, 1), ns->getUInt32(i, 2),
+                                                         ns->getUInt32(i, 3)});
+        }
+    }
+
+    // Kit rows are asked by id, and SoundEntries is keyed by an id that is not
+    // its row number - 12941 rows, so a scan per click is not the answer.
+    if (auto se = assetManager_->loadDBCOptional("SoundEntries.dbc"); se && se->isLoaded()) {
+        for (uint32_t i = 0; i < se->getRecordCount(); ++i)
+            soundEntryRowById_.try_emplace(se->getUInt32(i, 0), i);
+    }
+}
+
+std::pair<const std::vector<VoiceSample>*, int32_t*> NpcVoiceManager::kitSlot(uint32_t displayId, size_t slot) {
+    if (!assetManager_ || slot >= 3) return {};
+
+    const auto display = kitIdByDisplay_.find(displayId);
+    if (display == kitIdByDisplay_.end()) return {};
+
+    // Read once per kit, however many units share the display. A slot with no
+    // clip in it stays cached empty, so it is not gone looking for again per click.
+    if (const auto loaded = kitSamples_.find(display->second); loaded != kitSamples_.end()) {
+        const auto& samples = loaded->second[slot];
+        if (samples.empty()) return {};
+        const auto last = kitLastFile_.find(display->second);
+        if (last == kitLastFile_.end()) return {&samples, nullptr};
+        return {&samples, &last->second[slot]};
+    }
+
+    auto& samples = kitSamples_[display->second][slot];
+    auto& lastFiles = kitLastFile_[display->second];
+    lastFiles.fill(-1);
+
+    const auto row = kitRows_.find(display->second);
+    if (row == kitRows_.end() || row->second[slot] == 0) return {};
+    const auto entry = soundEntryRowById_.find(row->second[slot]);
+    auto se = assetManager_->loadDBCOptional("SoundEntries.dbc");
+    if (entry == soundEntryRowById_.end() || !se || !se->isLoaded() || se->getFieldCount() <= 22)
+        return {};
+
+    for (uint32_t f = 0; f < 10; ++f) {
+        const std::string file = se->getString(entry->second, 3 + f);
+        if (file.empty()) continue;
+        VoiceSample sample;
+        if (!loadSound(file, sample)) continue;
+        sample.frequency = se->getUInt32(entry->second, 13 + f);
+        samples.push_back(std::move(sample));
+    }
+    return samples.empty() ? std::pair<const std::vector<VoiceSample>*, int32_t*>{}
+                           : std::pair{&samples, &lastFiles[slot]};
 }
 
 void NpcVoiceManager::loadVoiceSounds() {
     if (!assetManager_) return;
     indexSoundEntriesReach();
+    indexVoiceKits();
 
     // Helper to load voice category for a race/gender
     auto loadCategory = [this](
@@ -317,8 +417,9 @@ bool NpcVoiceManager::loadSound(const std::string& path, VoiceSample& sample) {
     // The reach the SoundEntries row naming this file asks for, when a row
     // names it. One that no row names keeps the reach these plays had anyway.
     if (const auto it = reachByName_.find(leafLower(path)); it != reachByName_.end()) {
-        sample.minDistance = it->second.first;
-        sample.cutoff = it->second.second;
+        sample.minDistance = it->second.minDistance;
+        sample.cutoff = it->second.cutoff;
+        sample.volume = it->second.volume;
     }
     sample.data = assetManager_->readFile(path);
 
@@ -330,7 +431,8 @@ bool NpcVoiceManager::loadSound(const std::string& path, VoiceSample& sample) {
     return true;
 }
 
-void NpcVoiceManager::playSound(uint64_t npcGuid, VoiceType voiceType, SoundCategory category, const glm::vec3& position) {
+void NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType,
+                                SoundCategory category, const glm::vec3& position) {
     if (!AudioEngine::instance().isInitialized()) {
         return;
     }
@@ -347,29 +449,81 @@ void NpcVoiceManager::playSound(uint64_t npcGuid, VoiceType voiceType, SoundCate
         }
     }
 
-    // Select library based on category
-    std::unordered_map<VoiceType, std::vector<VoiceSample>>* library = nullptr;
-    switch (category) {
-        case SoundCategory::GREETING: library = &greetingLibrary_; break;
-        case SoundCategory::FAREWELL: library = &farewellLibrary_; break;
-        case SoundCategory::VENDOR: library = &vendorLibrary_; break;
-        case SoundCategory::PISSED: library = &pissedLibrary_; break;
-        case SoundCategory::FLEE: library = &fleeLibrary_; break;
-    }
+    const VoiceSample* sample = nullptr;
 
-    // Find voice samples for this type
-    auto libIt = library->find(voiceType);
-    if (libIt == library->end() || libIt->second.empty()) {
-        // Fallback to GENERIC
-        libIt = library->find(VoiceType::GENERIC);
-        if (libIt == library->end() || libIt->second.empty()) {
-            return;
+    // The line the unit's own display names, when it names one: the client takes
+    // the interaction line, the farewell and the irritated answer out of the kit
+    // NPCSounds gives that display, and from among its files by their weights.
+    // The vendor's line is not asked of the kit. A kit's first slot holds a
+    // vendor's own clips for the 87 rows whose kit is a vendor's, which is a
+    // property of the display rather than the rule "a vendor window is open", and
+    // where the client's vendor line really comes from has not been found.
+    size_t slot = 0;
+    bool kitAsked = true;
+    switch (category) {
+        case SoundCategory::GREETING: slot = 0; break;
+        case SoundCategory::FAREWELL: slot = 1; break;
+        case SoundCategory::PISSED: slot = 2; break;
+        default: kitAsked = false; break;
+    }
+    if (kitAsked) {
+        if (const auto kit = kitSlot(displayId, slot); kit.first != nullptr) {
+            const auto& clips = *kit.first;
+            std::vector<uint32_t> frequency;
+            frequency.reserve(clips.size());
+            for (const auto& candidate : clips) frequency.push_back(candidate.frequency);
+            // Which of a kit's files, by those weights, is the client's own rule
+            // (0x004cbac0), and this repo already implements it for the music. A
+            // voice line is asked through it with the variant index left unset,
+            // which is the form that remembers the file it last gave on the
+            // SoundEntries record (+0x44) and will not give that one again while
+            // another file has weight; the same is remembered per kit slot here.
+            // A kit with no weight on any file is left to the even pick below,
+            // where the music would play none.
+            std::optional<size_t> lastFile;
+            if (kit.second != nullptr && *kit.second >= 0)
+                lastFile = static_cast<size_t>(*kit.second);
+            size_t chosen = 0;
+            const uint32_t roll = std::uniform_int_distribution<uint32_t>(0, UINT32_MAX)(rng_);
+            if (const auto picked = zone_music::pickFile(frequency, lastFile, roll);
+                picked.has_value()) {
+                chosen = *picked;
+                if (kit.second != nullptr) *kit.second = static_cast<int32_t>(chosen);
+            } else {
+                chosen = std::uniform_int_distribution<size_t>(0, clips.size() - 1)(rng_);
+            }
+            sample = &clips[chosen];
         }
     }
 
-    const auto& samples = libIt->second;
-    std::uniform_int_distribution<size_t> dist(0, samples.size() - 1);
-    const auto& sample = samples[dist(rng_)];
+    if (sample == nullptr) {
+        // No kit for the display, or nothing behind the slot it names: the race
+        // library this asked before there were kits.
+
+        // Select library based on category
+        std::unordered_map<VoiceType, std::vector<VoiceSample>>* library = nullptr;
+        switch (category) {
+            case SoundCategory::GREETING: library = &greetingLibrary_; break;
+            case SoundCategory::FAREWELL: library = &farewellLibrary_; break;
+            case SoundCategory::VENDOR: library = &vendorLibrary_; break;
+            case SoundCategory::PISSED: library = &pissedLibrary_; break;
+            case SoundCategory::FLEE: library = &fleeLibrary_; break;
+        }
+
+        // Find voice samples for this type
+        auto libIt = library->find(voiceType);
+        if (libIt == library->end() || libIt->second.empty()) {
+            // Fallback to GENERIC
+            libIt = library->find(VoiceType::GENERIC);
+            if (libIt == library->end() || libIt->second.empty()) {
+                return;
+            }
+        }
+
+        const auto& samples = libIt->second;
+        std::uniform_int_distribution<size_t> dist(0, samples.size() - 1);
+        sample = &samples[dist(rng_)];
+    }
 
     // Play sound at the reach the clip's own row asks for. A voice line is a
     // sound of the few yards round the unit saying it: 8 yards at full volume
@@ -377,13 +531,13 @@ void NpcVoiceManager::playSound(uint64_t npcGuid, VoiceType voiceType, SoundCate
     // for 60 and never named a core at all. A clip no row names keeps the 60,
     // rather than the wider reach the helper assumes of a row that named none.
     float minDistance = 1.0f, maxDistance = 60.0f;
-    if (sample.cutoff > 0.0f)
-        sound_distance::entryDistance(sample.minDistance, sample.cutoff, minDistance, maxDistance);
+    if (sample->cutoff > 0.0f)
+        sound_distance::entryDistance(sample->minDistance, sample->cutoff, minDistance, maxDistance);
     std::uniform_real_distribution<float> pitchDist(0.98f, 1.02f);
     bool success = AudioEngine::instance().playSound3D(
-        sample.data,
+        sample->data,
         position,
-        1.0f * volumeScale_,
+        sample->volume * volumeScale_,
         pitchDist(rng_),
         maxDistance,
         minDistance
@@ -394,7 +548,7 @@ void NpcVoiceManager::playSound(uint64_t npcGuid, VoiceType voiceType, SoundCate
     }
 }
 
-void NpcVoiceManager::playGreeting(uint64_t npcGuid, VoiceType voiceType, const glm::vec3& position) {
+void NpcVoiceManager::playGreeting(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
     // Check if on cooldown - if so, increment pissed counter instead
     auto now = std::chrono::steady_clock::now();
     auto it = lastPlayTime_.find(npcGuid);
@@ -402,31 +556,35 @@ void NpcVoiceManager::playGreeting(uint64_t npcGuid, VoiceType voiceType, const 
         float elapsed = std::chrono::duration<float>(now - it->second).count();
         if (elapsed < GREETING_COOLDOWN) {
             // On cooldown - increment click count and maybe play pissed sound
-            playPissed(npcGuid, voiceType, position);
+            playPissed(npcGuid, displayId, voiceType, position);
             return;
         }
     }
 
     // Reset click count on successful greeting
     clickCount_[npcGuid] = 0;
-    playSound(npcGuid, voiceType, SoundCategory::GREETING, position);
+    playSound(npcGuid, displayId, voiceType, SoundCategory::GREETING, position);
 }
 
-void NpcVoiceManager::playFarewell(uint64_t npcGuid, VoiceType voiceType, const glm::vec3& position) {
-    playSound(npcGuid, voiceType, SoundCategory::FAREWELL, position);
+void NpcVoiceManager::playFarewell(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
+    playSound(npcGuid, displayId, voiceType, SoundCategory::FAREWELL, position);
 }
 
-void NpcVoiceManager::playVendor(uint64_t npcGuid, VoiceType voiceType, const glm::vec3& position) {
-    playSound(npcGuid, voiceType, SoundCategory::VENDOR, position);
+void NpcVoiceManager::playVendor(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
+    playSound(npcGuid, displayId, voiceType, SoundCategory::VENDOR, position);
 }
 
-void NpcVoiceManager::playPissed(uint64_t npcGuid, VoiceType voiceType, const glm::vec3& position) {
+void NpcVoiceManager::playPissed(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
     // Increment click count
     clickCount_[npcGuid]++;
 
-    // Only play pissed sound after threshold
+    // Five asks before the kit's third slot is asked at all, which is the number
+    // the client counts to as well - a per-unit ask counter (DAT_00ca1190) that
+    // gives the kit's first slot five times and then walks its third slot once per
+    // alternate before starting over. It counts asks that actually started a line;
+    // this counts the clicks that got one, which is the same while a line plays.
     if (clickCount_[npcGuid] >= PISSED_CLICK_THRESHOLD) {
-        playSound(npcGuid, voiceType, SoundCategory::PISSED, position);
+        playSound(npcGuid, displayId, voiceType, SoundCategory::PISSED, position);
         clickCount_[npcGuid] = 0;  // Reset after playing
     }
 }

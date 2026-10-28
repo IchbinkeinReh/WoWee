@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 #include <glm/glm.hpp>
 #include "audio/npc_voice_manager.hpp"
 
@@ -24,8 +25,11 @@ public:
     void setupCallbacks();
 
 private:
-    /// Resolve NPC voice type from GUID (eliminates 4x copy-paste of display-ID lookup)
-    [[nodiscard]] audio::VoiceType resolveNpcVoiceType(uint64_t guid) const;
+    /// The unit's display id and the voice type guessed from it, in that order:
+    /// one lookup of the unit instead of four copies of it. The display id is what
+    /// names the voice kit the line is taken from; the guessed type is only what
+    /// the race library is asked for when the display names no kit.
+    [[nodiscard]] std::pair<uint32_t, audio::VoiceType> resolveNpcVoice(uint64_t guid) const;
 
     EntitySpawner& entitySpawner_;
     rendering::Renderer* renderer_;
