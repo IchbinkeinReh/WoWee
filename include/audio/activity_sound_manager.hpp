@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace wowee {
@@ -34,9 +35,14 @@ public:
     [[nodiscard]] float getVolumeScale() const { return volumeScale; }
 
 private:
+    // A clip here is picked by archive path, never by a SoundEntries id, so the
+    // row that names it is found by leaf file name. rowVolume < 0 means no row
+    // names this file at all and the play keeps its own invented level.
     struct Sample {
         std::string path;
         std::vector<uint8_t> data;
+        float rowVolume = -1.0f;
+        uint32_t flags = 0;
     };
 
     struct SurfaceLandingSet {
@@ -68,6 +74,16 @@ private:
     std::chrono::steady_clock::time_point lastSwimStrokeAt{};
     std::string voiceProfileKey;
     float volumeScale = 1.0f;
+
+    // What a SoundEntries row asks of a play, indexed by lowered leaf file name.
+    struct RowAsk {
+        float volume = 1.0f;
+        uint32_t flags = 0;
+    };
+    std::unordered_map<std::string, RowAsk> rowsByLeaf;
+
+    void indexRowAsks();
+    void askedByRow(const Sample& sample, float own, float& volume, float& pitch);
 
     void preloadCandidates(std::vector<Sample>& out, const std::vector<std::string>& candidates);
     void preloadLandingSet(FootstepSurface surface, const std::string& material);
