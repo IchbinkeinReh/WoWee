@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <utility>
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
@@ -16,6 +17,13 @@ namespace audio {
 struct VoiceSample {
     std::string path;
     std::vector<uint8_t> data;
+    /// What the SoundEntries row naming this clip asks of a 3D play: its
+    /// MinDistance (26) and DistanceCutoff (27), 0 when no row names it. Every
+    /// one of the 525 rows NPCSounds points at names a reach - 8 yards of full
+    /// volume inside a 45-yard carry, and none wider than that - so a line is
+    /// heard where its own row says, not at a guessed radius.
+    float minDistance = 0.0f;
+    float cutoff = 0.0f;
 };
 
 // NPC voice types (based on creature model/gender)
@@ -72,6 +80,10 @@ private:
     };
 
     void loadVoiceSounds();
+    /// Every file the SoundEntries rows name, once, with that row's MinDistance
+    /// (26) and DistanceCutoff (27) - so a clip carries the reach its own row
+    /// asks for instead of one guessed here.
+    void indexSoundEntriesReach();
     bool loadSound(const std::string& path, VoiceSample& sample);
     void playSound(uint64_t npcGuid, VoiceType voiceType, SoundCategory category, const glm::vec3& position);
 
@@ -84,6 +96,9 @@ private:
     std::unordered_map<VoiceType, std::vector<VoiceSample>> vendorLibrary_;
     std::unordered_map<VoiceType, std::vector<VoiceSample>> pissedLibrary_;
     std::unordered_map<VoiceType, std::vector<VoiceSample>> fleeLibrary_;
+
+    // A clip's reach, by the lower-case file name SoundEntries names it by.
+    std::unordered_map<std::string, std::pair<float, float>> reachByName_;
 
     // Cooldown tracking (prevent spam clicking same NPC)
     std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> lastPlayTime_;

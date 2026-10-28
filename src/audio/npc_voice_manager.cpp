@@ -1,12 +1,28 @@
 #include "audio/npc_voice_manager.hpp"
 #include "audio/audio_engine.hpp"
+#include "audio/sound_distance.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
 #include <glm/glm.hpp>
 
+#include <algorithm>
+#include <cctype>
+
 namespace wowee {
 namespace audio {
+
+namespace {
+
+std::string leafLower(const std::string& path) {
+    const auto slash = path.find_last_of("\\/");
+    std::string leaf = slash == std::string::npos ? path : path.substr(slash + 1);
+    std::transform(leaf.begin(), leaf.end(), leaf.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return leaf;
+}
+
+}  // namespace
 
 NpcVoiceManager::NpcVoiceManager() : rng_(std::random_device{}()) {}
 
@@ -55,11 +71,33 @@ void NpcVoiceManager::shutdown() {
     fleeLibrary_.clear();
     lastPlayTime_.clear();
     clickCount_.clear();
+    reachByName_.clear();
     assetManager_ = nullptr;
+}
+
+// What a voice clip's own SoundEntries row asks of a 3D play. The rows name the
+// files by name, so the reach is looked up by the file the library loaded - and
+// every row NPCSounds points at names one: of the 525 rows behind its 301
+// entries, all 525 name files, 504 ask a full-volume core of 8 yards, and none
+// carries further than 45.
+void NpcVoiceManager::indexSoundEntriesReach() {
+    if (!assetManager_) return;
+    auto dbc = assetManager_->loadDBCOptional("SoundEntries.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() <= 27) return;
+    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+        const float minDistance = dbc->getFloat(i, 26);
+        const float cutoff = dbc->getFloat(i, 27);
+        for (uint32_t f = 0; f < 10; ++f) {
+            const std::string file = dbc->getString(i, 3 + f);
+            if (file.empty()) continue;
+            reachByName_.try_emplace(leafLower(file), minDistance, cutoff);
+        }
+    }
 }
 
 void NpcVoiceManager::loadVoiceSounds() {
     if (!assetManager_) return;
+    indexSoundEntriesReach();
 
     // Helper to load voice category for a race/gender
     auto loadCategory = [this](
@@ -276,6 +314,12 @@ bool NpcVoiceManager::loadSound(const std::string& path, VoiceSample& sample) {
     }
 
     sample.path = path;
+    // The reach the SoundEntries row naming this file asks for, when a row
+    // names it. One that no row names keeps the reach these plays had anyway.
+    if (const auto it = reachByName_.find(leafLower(path)); it != reachByName_.end()) {
+        sample.minDistance = it->second.first;
+        sample.cutoff = it->second.second;
+    }
     sample.data = assetManager_->readFile(path);
 
     if (sample.data.empty()) {
@@ -327,14 +371,22 @@ void NpcVoiceManager::playSound(uint64_t npcGuid, VoiceType voiceType, SoundCate
     std::uniform_int_distribution<size_t> dist(0, samples.size() - 1);
     const auto& sample = samples[dist(rng_)];
 
-    // Play sound
+    // Play sound at the reach the clip's own row asks for. A voice line is a
+    // sound of the few yards round the unit saying it: 8 yards at full volume
+    // inside a 45-yard carry for every row behind NPCSounds, where this asked
+    // for 60 and never named a core at all. A clip no row names keeps the 60,
+    // rather than the wider reach the helper assumes of a row that named none.
+    float minDistance = 1.0f, maxDistance = 60.0f;
+    if (sample.cutoff > 0.0f)
+        sound_distance::entryDistance(sample.minDistance, sample.cutoff, minDistance, maxDistance);
     std::uniform_real_distribution<float> pitchDist(0.98f, 1.02f);
     bool success = AudioEngine::instance().playSound3D(
         sample.data,
         position,
         1.0f * volumeScale_,
         pitchDist(rng_),
-        60.0f
+        maxDistance,
+        minDistance
     );
 
     if (success) {
