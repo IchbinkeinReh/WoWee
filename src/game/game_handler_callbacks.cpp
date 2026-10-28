@@ -4241,8 +4241,8 @@ void GameHandler::sellItemBySlot(int backpackIndex) {
     if (inventoryHandler_) inventoryHandler_->sellItemBySlot(backpackIndex);
 }
 
-void GameHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot) {
-    if (inventoryHandler_) inventoryHandler_->equipItemToSlot(itemGuid, equipSlot);
+void GameHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, bool confirmed) {
+    if (inventoryHandler_) inventoryHandler_->equipItemToSlot(itemGuid, equipSlot, confirmed);
 }
 
 void GameHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {

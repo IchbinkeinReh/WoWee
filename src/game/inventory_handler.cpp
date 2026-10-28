@@ -1980,13 +1980,45 @@ bool InventoryHandler::equipWouldBindFromBag(int bagIndex, int slotIndex) const 
 // reads exactly that - and the destination is the server's own 0-based
 // equipment slot, which is what this client's EquipSlot enum counts in too.
 // The interface counts from one, so the caller takes the one off.
-void InventoryHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot) {
+void InventoryHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, bool confirmed) {
     if (itemGuid == 0) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // Refused above the equipment slots rather than sent: AzerothCore drops the
     // packet outright when the destination is not an equipment position, and a
     // dropped request is indistinguishable from one that was never built.
     if (equipSlot >= static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT)) return;
+
+    // Asked before the packet is built, so a bind-on-equip item named into a
+    // slot no longer binds itself without the player saying so. EquipItemByName
+    // (0x0051cdb0) reaches 0x006dff90 / AutoEquipItem, which holds the item's
+    // record and asks two things of it: that the bond type the record caches at
+    // +0x178 be 2 - bind when equipped - and that 0x006dc3f0 say it is not
+    // already bound. Then the request is parked in the client's queue of
+    // pending equips (DAT_00c9eb6c, 0x20 bytes an entry, at the first free
+    // index 0x006df850 hands out) and nothing goes on the wire; EQUIP_BIND_CONFIRM
+    // (0x10f) is fired with that index as its one argument, which is what
+    // FrameXML's uiparent.lua:590 turns into the EQUIP_BIND popup and hands back
+    // to EquipPendingItem / CancelPendingEquip - the client's own usage strings
+    // read "Usage: EquipPendingItem(index)", so the number is the queue index
+    // and never the slot. WoWee holds one pending equip, so its index is 0.
+    //
+    // The client gates the prompt on one more thing, 0x00708520, which says no
+    // for an item sitting in a container of its own rather than in the player's
+    // bags - a guild bank, a keyring. Nothing can name such an item here: the
+    // guid comes out of the carried-item search, which looks only in the
+    // backpack and the player's own bags.
+    if (!confirmed) {
+        const uint32_t entry = owner_.getItemEntryByGuid(itemGuid);
+        const auto* info = entry ? owner_.getItemInfo(entry) : nullptr;
+        if (info && info->bindType == 2 && !owner_.isItemSoulbound(itemGuid)) {
+            pendingEquip_ = PendingEquip{.active = true, .fromBag = false, .toSlot = true,
+                                         .wireSlot = equipSlot, .itemGuid = itemGuid};
+            if (owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("EQUIP_BIND_CONFIRM", {"0"});
+            return;
+        }
+    }
+
     const uint32_t wire = wireOpcode(Opcode::CMSG_AUTOEQUIP_ITEM_SLOT);
     if (wire == 0xFFFF) return;
     network::Packet pkt(static_cast<uint16_t>(wire));
@@ -2029,10 +2061,12 @@ void InventoryHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {
         // The auto-equip form of the prompt: right-clicking an item rather
         // than dropping it on a slot. FrameXML hides whichever of the two is
         // already up before showing the other, so firing the wrong one leaves
-        // both on screen.
+        // both on screen. The argument is the pending queue's index, as it is
+        // for EQUIP_BIND_CONFIRM - 0x006dfc40 fires 0x110 with 0x006df850's
+        // free entry, not with the slot - and one pending equip means one
+        // index, so it says 0.
         if (owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("AUTOEQUIP_BIND_CONFIRM",
-                                           {std::to_string(wireSlot)});
+            owner_.addonEventCallbackRef()("AUTOEQUIP_BIND_CONFIRM", {"0"});
         return;
     }
 
@@ -2052,9 +2086,9 @@ void InventoryHandler::autoEquipItemInBag(int bagIndex, int slotIndex, bool conf
     if (!confirmed && equipWouldBindFromBag(bagIndex, slotIndex)) {
         pendingEquip_ = PendingEquip{.active = true, .fromBag = true, .bag = bagIndex, .slot = slotIndex,
                                      .wireSlot = static_cast<uint8_t>(slotIndex)};
+        // The same queue-index argument as the backpack form above.
         if (owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("AUTOEQUIP_BIND_CONFIRM",
-                                           {std::to_string(slotIndex)});
+            owner_.addonEventCallbackRef()("AUTOEQUIP_BIND_CONFIRM", {"0"});
         return;
     }
 
@@ -2069,8 +2103,12 @@ void InventoryHandler::equipPendingItem() {
     const PendingEquip pending = pendingEquip_;
     pendingEquip_ = PendingEquip{};
     if (!pending.active) return;
-    if (pending.fromBag) autoEquipItemInBag(pending.bag, pending.slot, true);
-    else                 autoEquipItemBySlot(pending.slot, true);
+    // The named-slot form replays through the routine that held it back, with
+    // the answer as its `confirmed`, exactly as 0x006e0000.c:60 calls
+    // 0x006dff90 again with 1 for the record FrameXML's dialog accepted.
+    if (pending.toSlot)       equipItemToSlot(pending.itemGuid, pending.wireSlot, true);
+    else if (pending.fromBag) autoEquipItemInBag(pending.bag, pending.slot, true);
+    else                      autoEquipItemBySlot(pending.slot, true);
 }
 
 void InventoryHandler::cancelPendingEquip() {

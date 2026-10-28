@@ -199,7 +199,7 @@ public:
     // interfaces ask - this client's own popup and FrameXML's EQUIP_BIND - and
     // both come back through here, so without it the answer to the prompt
     // raises the prompt again.
-    void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot);
+    void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, bool confirmed = false);
     void autoEquipItemBySlot(int backpackIndex, bool confirmed = false);
     void autoEquipItemInBag(int bagIndex, int slotIndex, bool confirmed = false);
     /// 0x006dfc40: an item of class 6 is not equipped but made the ammunition,
@@ -220,9 +220,13 @@ public:
     struct PendingEquip {
         bool    active  = false;
         bool    fromBag = false;
+        /// The request named the equipment slot it wanted (`/equipslot`), so
+        /// neither a backpack index nor a bag slot identifies it - itemGuid does.
+        bool    toSlot  = false;
         int     bag     = 0;
         int     slot    = 0;
-        uint8_t wireSlot = 0;   ///< what the event carried, for the reply
+        uint8_t wireSlot = 0;   ///< where the reply sends it: an equipment slot, or a bag position
+        uint64_t itemGuid = 0;  ///< the item a named-slot request named
     };
     // ---- Looting, and the prompt before something binds ----
     //

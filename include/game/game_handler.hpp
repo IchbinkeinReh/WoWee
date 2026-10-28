@@ -3984,7 +3984,7 @@ public:
     uint32_t estimateRepairAllCost() const;
     const std::deque<BuybackItem>& getBuybackItems() const;
     /// Equip a held item into a named equipment slot. See InventoryHandler.
-    void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot);
+    void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, bool confirmed = false);
     void autoEquipItemBySlot(int backpackIndex, bool confirmed = false);
     /// CMSG_SET_AMMO: put this entry in as the ammunition, or take it off with 0.
     void setAmmo(uint32_t itemId);
