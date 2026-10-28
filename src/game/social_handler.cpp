@@ -3857,14 +3857,14 @@ void SocialHandler::handleFriendList(network::Packet& packet) {
         entry.status = status; entry.areaId = area; entry.level = level; entry.classId = classId;
         owner_.contactsRef().push_back(std::move(entry));
     }
-    // The full list arrives in reply to this client asking for it, so it is the
-    // "show" case as well as the "changed" case. SHOW additionally re-selects
-    // the tab; UPDATE only refreshes the rows. A single friend going online
-    // sends the status packet instead, and fires UPDATE alone.
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
-        owner_.addonEventCallbackRef()("FRIENDLIST_SHOW", {});
-    }
+    // FRIENDLIST_UPDATE (342) and nothing else - the client raises that name
+    // from six places around the friend list and has no "show" event at all:
+    // FRIENDLIST_SHOW is a 1.12 name, absent from the event-id table and from
+    // Wow.exe, and while this interface's frame still registers it (a leftover
+    // of the same age) nothing can fire it. The friends frame does the show-time
+    // refresh itself in FriendsFrame_OnShow (friendsframe.lua:243-252), which is
+    // where FriendsFrame_Update has always been called from.
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
 }
 
 void SocialHandler::handleContactList(network::Packet& packet) {
@@ -3897,9 +3897,11 @@ void SocialHandler::handleContactList(network::Packet& packet) {
         if (nit != owner_.getPlayerNameCache().end()) entry.name = nit->second;
         owner_.contactsRef().push_back(std::move(entry));
     }
+    // The one name the client raises for a contact list, 342 again (the ignore
+    // and mute lists have their own, 343 and 344, and the mask says which of
+    // them this list carried).
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
-        owner_.addonEventCallbackRef()("FRIENDLIST_SHOW", {});
         if (owner_.lastContactListMaskRef() & 0x2) owner_.addonEventCallbackRef()("IGNORELIST_UPDATE", {});
     }
 }
