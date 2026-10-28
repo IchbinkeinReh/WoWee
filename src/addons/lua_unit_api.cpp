@@ -1409,24 +1409,20 @@ static int lua_IsFalling(lua_State* L) {
     return 1;
 }
 
+/// IsStealthed() (0x00612610): the player's own UNIT_FIELD_BYTES_1 third byte,
+/// 0x2. The client names no spell and takes no unit argument - it asserts the
+/// local player (Player_C.h 0xa0) and asks the field, because stealth is the
+/// server's to say: 0x0073c830 watches that same bit. Reading it here rather
+/// than matching Stealth (1784), Prowl (5215) and their ranks against the
+/// player's auras also keeps the answer the server's: a stealth the server
+/// took away by the field is gone here the moment it is gone, and a spell this
+/// list did not know - any disguise the list never carried - did not have to
+/// be added to it. 1 or nil, as the client's binding returns.
 static int lua_IsStealthed(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnFalse(L); }
-    // Check for stealth auras (aura flags bit 0x40 = is harmful, stealth is a buff)
-    // WoW detects stealth via unit flags: UNIT_FLAG_IMMUNE (0x02) or specific aura IDs
-    // Simplified: check player auras for known stealth spell IDs
-    bool stealthed = false;
-    for (const auto& a : gh->getPlayerAuras()) {
-        if (a.isEmpty() || a.spellId == 0) continue;
-        // Common stealth IDs: 1784 (Stealth), 5215 (Prowl), 66 (Invisibility)
-        if (a.spellId == 1784 || a.spellId == 5215 || a.spellId == 66 ||
-            a.spellId == 1785 || a.spellId == 1786 || a.spellId == 1787 ||
-            a.spellId == 11305 || a.spellId == 11306) {
-            stealthed = true;
-            break;
-        }
-    }
-    lua_pushboolean(L, stealthed);
+    const game::Unit* player = gh ? gh->getUnitByGuid(gh->getPlayerGuid()) : nullptr;
+    const uint8_t visibility = player ? player->getVisibilityFlags() : 0;
+    if ((visibility & 0x2) != 0) lua_pushnumber(L, 1); else lua_pushnil(L);
     return 1;
 }
 

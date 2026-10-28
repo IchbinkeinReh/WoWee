@@ -1240,6 +1240,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             unit->setAuraState(val);
         }
         else if (ufi.bytes1 != 0xFFFF && key == ufi.bytes1) {
+            const uint8_t oldVisibilityFlags = unit->getVisibilityFlags();
             const uint8_t newVisibilityFlags = static_cast<uint8_t>((val >> 16) & 0xFF);
             unit->setVisibilityFlags(newVisibilityFlags);
 
@@ -1251,6 +1252,29 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             if (newStandState != oldStandState && block.guid != owner_.getPlayerGuid() &&
                 owner_.unitStandStateCallbackRef()) {
                 owner_.unitStandStateCallbackRef()(block.guid, oldStandState, newStandState);
+            }
+
+            // The client watches this one byte (0x004d5ba0(3,0x112,1,...), so
+            // byte 2 of the field) and its watcher 0x0073c830 looks only at
+            // what changed. Stealth (0x2) flipping restates the unit's model
+            // and, when the unit is the player, names itself UPDATE_STEALTH
+            // (0x20a) and runs the whole action usability rescan (0x0053cf10),
+            // which ends by firing SPELL_UPDATE_USABLE (0xf5) whatever it
+            // found. The byte's other bit that watcher reads, 0x1, restates the
+            // model and says nothing. Restating the model is what WoWee does
+            // anyway - the byte is read every frame for the animation and the
+            // shimmer - so what was missing was the two names. UPDATE_STEALTH
+            // is not decoration either: securestatedriver.lua:178 registers it
+            // as one of the events that make a state-driven macro rescan, so a
+            // rogue's macro bar kept its old answers across going into or out
+            // of stealth. SPELL_UPDATE_USABLE is what the client's rescan
+            // leaves behind; FrameXML's buttons re-ask on the numbered
+            // ACTIONBAR_UPDATE_USABLE instead, which WoWee fires with the power
+            // half of that rescan (0x0053d1b0) from predictedPowerUsability.
+            if (((oldVisibilityFlags ^ newVisibilityFlags) & 0x2) != 0 &&
+                block.guid == owner_.getPlayerGuid()) {
+                pendingEvents_.emit("UPDATE_STEALTH", {});
+                pendingEvents_.emit("SPELL_UPDATE_USABLE", {});
             }
 
             if (block.guid == owner_.getPlayerGuid()) {
