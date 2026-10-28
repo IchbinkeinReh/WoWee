@@ -1066,6 +1066,9 @@ private:
         float volume = 1.0f;
         float minDistance = 0.0f;  ///< MinDistance (26)
         float cutoff = 0.0f;       ///< DistanceCutoff (27)
+        /// Flags (25) whole: 0x200 loops, and 0x400/0x800 ask the play for a
+        /// pitch or a volume swing (audio/sound_entry.hpp).
+        uint32_t flags = 0;
         bool loops = false;        ///< Flags (25) 0x200
     };
     std::unordered_map<uint32_t, LoadedSound> soundEntries_;           // SoundEntries id → its file, empty if none

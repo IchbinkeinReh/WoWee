@@ -21,6 +21,7 @@
 #include "core/weapon_attachment.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/sound_distance.hpp"
+#include "audio/sound_entry.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include <algorithm>
 #include <array>
@@ -416,6 +417,15 @@ void SpellVisualSystem::loadSpellVisualDbc() {
 
 namespace {
 
+/// A draw across [0,1] for a swing the row asks of its play
+/// (audio/sound_entry.hpp): the client draws one per flag it swings
+/// (0x004c5d40, between the pair of bounds the flag sets in front of it).
+float swingDraw() {
+    static std::mt19937 rng{std::random_device{}()};
+    return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+}
+
+
 /// An effect model made ready off the main thread: everything but the upload.
 struct PreparedEffectModel {
     bool ok = false;
@@ -748,14 +758,19 @@ uint32_t SpellVisualSystem::playKitSound(const KitRecord& kit, spell_kit::KitTyp
     const bool own = spell_kit::kitSoundOwnVoice(!kit.models.empty(), loops, instanceIsListener(renderInstanceId),
                                                  instanceIsMover(renderInstanceId));
     const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
-    const float volume = sound->volume * kitSoundVolumeScale_;
+    const float base = sound->volume * kitSoundVolumeScale_;
+    // And what the row asks the play to swing (audio/sound_entry.hpp) - the
+    // impact and encounter one-offs of those Flags are spell sounds as often as
+    // not (ShadowmoonMeteor*, XT-002 FistImpacts, BoneGolem_Cleave_Impact_*).
+    const float volume = audio::sound_entry::volumeForFlags(sound->flags, base, swingDraw());
+    const float pitch = audio::sound_entry::pitchForFlags(sound->flags, swingDraw());
     // The row's own reach, not a guess: a kit's SoundEntries row says how far
     // it carries (MinDistance 26, DistanceCutoff 27), and the flying mount's
     // takeoff and landing pair is a row of 8 and 45 yards.
     float minDistance = 0.0f, maxDistance = 0.0f;
     audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
     if (!loops) {
-        audio::AudioEngine::instance().playSound3D(sound->data, position, volume, 1.0f, maxDistance, minDistance,
+        audio::AudioEngine::instance().playSound3D(sound->data, position, volume, pitch, maxDistance, minDistance,
                                                    audio::Channel::Effects, audio::PlayLimit::None, priority);
         return 0;
     }
@@ -1126,7 +1141,9 @@ const spell_missile::SpellMissileRow* SpellVisualSystem::spellMissileRow(uint32_
 }
 
 // A SoundEntries row as a spell's sounds play it: the row's file at its
-// VolumeFloat. Null when it has none this install can read.
+// VolumeFloat, with the reach and the Flags its play is held to (the loop bit and
+// the pitch and volume swings, audio/sound_entry.hpp). Null when it has none this
+// install can read.
 const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t soundId) {
     if (soundId == 0 || !cachedAssetManager_) return nullptr;
     auto it = soundEntries_.find(soundId);
@@ -1144,7 +1161,8 @@ const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t sou
             const float volume = dbc->getFloat(row, 24);
             if (volume > 0.0f) loaded.volume = volume;
             if (dbc->getFieldCount() > 27) {
-                loaded.loops = (dbc->getUInt32(row, 25) & 0x200u) != 0;
+                loaded.flags = dbc->getUInt32(row, 25);
+                loaded.loops = (loaded.flags & audio::sound_entry::kFlagLoops) != 0;
                 loaded.minDistance = dbc->getFloat(row, 26);
                 loaded.cutoff = dbc->getFloat(row, 27);
             }
@@ -1162,7 +1180,11 @@ uint32_t SpellVisualSystem::startMissileSound(uint32_t soundId, const glm::vec3&
     if (!sound) return 0;
     float minDistance = 0.0f, maxDistance = 0.0f;
     audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
-    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, sound->volume, maxDistance,
+    // The loop carries the row's volume swing. Its pitch is not swung: a looping
+    // play takes no pitch argument, and one row of the 12941 asks both
+    // (audio/sound_entry.hpp).
+    const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
+    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, volume, maxDistance,
                                                              minDistance, 0.0f, audio::Channel::Effects, priority);
 }
 
@@ -2693,7 +2715,9 @@ void SpellVisualSystem::playSoundAt(uint32_t soundId, const glm::vec3& position,
     if (!sound) return;
     float minDistance = 0.0f, maxDistance = 0.0f;
     audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
-    audio::AudioEngine::instance().playSound3D(sound->data, position, sound->volume, 1.0f, maxDistance, minDistance,
+    const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
+    const float pitch = audio::sound_entry::pitchForFlags(sound->flags, swingDraw());
+    audio::AudioEngine::instance().playSound3D(sound->data, position, volume, pitch, maxDistance, minDistance,
                                                audio::Channel::Effects, audio::PlayLimit::None, priority);
 }
 
@@ -2702,13 +2726,19 @@ void SpellVisualSystem::playOwnSoundAt(uint32_t soundId, const glm::vec3& positi
     if (!sound) return;
     auto& audio = audio::AudioEngine::instance();
     constexpr int kOwn = audio::voice_priority::kActiveMover;
+    // The swings the row asks of the play, on either branch; the 0.65 of the
+    // listener-at-character case is a scale of the row's volume, which is the
+    // branch the client draws the volume swing on.
+    const float pitch = audio::sound_entry::pitchForFlags(sound->flags, swingDraw());
     if (addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
-        audio.playSound2D(sound->data, sound->volume * 0.65f, 1.0f, audio::Channel::Effects, audio::PlayLimit::None,
-                          kOwn);
+        const float base = sound->volume * 0.65f;
+        const float volume = audio::sound_entry::volumeForFlags(sound->flags, base, swingDraw());
+        audio.playSound2D(sound->data, volume, pitch, audio::Channel::Effects, audio::PlayLimit::None, kOwn);
     } else {
         float minDistance = 0.0f, maxDistance = 0.0f;
         audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
-        audio.playSound3D(sound->data, position, sound->volume, 1.0f, maxDistance, minDistance,
+        const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
+        audio.playSound3D(sound->data, position, volume, pitch, maxDistance, minDistance,
                           audio::Channel::Effects, audio::PlayLimit::None, kOwn);
     }
 }
@@ -2913,8 +2943,9 @@ void SpellVisualSystem::startDynamicObjectKit(DynamicObjectVisual& object) {
     if (const LoadedSound* sound = soundEntry(object.area.soundId)) {
         float minDistance = 0.0f, maxDistance = 0.0f;
         audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
+        const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
         object.soundHandle = audio::AudioEngine::instance().playSound3DLooping(
-            sound->data, object.position, sound->volume, maxDistance, minDistance,
+            sound->data, object.position, volume, maxDistance, minDistance,
             dynamic_object::kSoundFadeInSeconds, audio::Channel::Effects);
     }
 }
