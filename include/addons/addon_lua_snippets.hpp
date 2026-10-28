@@ -117,6 +117,14 @@ local kCategoryHost = {
     ["Ray Tracing"]  = "video",
     ["Upscaling"]    = "video",
     ["Display"]      = "video",
+    -- The lighting's parts, by hand: graphics settings like the rest, so on
+    -- the Video frame, and last - after Display - since they are for looking
+    -- at the picture rather than for choosing it (kLastOnVideo).
+    ["Debug Graphics"] = "video",
+    ["Debug Time"]     = "video",
+    ["Debug Lights"]   = "video",
+    ["Debug Glow"]     = "video",
+    ["Debug Shadows"]  = "video",
     ["Sound"]        = "audio",
     ["Sound Effects"] = "audio",
 }
@@ -507,6 +515,24 @@ for _, setting in ipairs(list) do
         table.insert(order, setting.category)
     end
     table.insert(byCategory[setting.category], setting)
+end
+-- The Debug pages after every other one on the Video frame, in their own
+-- order. The schema lists them beside the graphics rows they tune, which put
+-- them between Detail and Upscaling in the frame's list.
+local kLastOnVideo = {
+    "Debug Graphics", "Debug Time", "Debug Lights", "Debug Glow", "Debug Shadows",
+}
+do
+    local isLast = {}
+    for _, name in ipairs(kLastOnVideo) do isLast[name] = true end
+    local kept = {}
+    for _, name in ipairs(order) do
+        if not isLast[name] then table.insert(kept, name) end
+    end
+    for _, name in ipairs(kLastOnVideo) do
+        if byCategory[name] then table.insert(kept, name) end
+    end
+    order = kept
 end
 
 -- Every panel registered, and every heading they nest under, so both can be

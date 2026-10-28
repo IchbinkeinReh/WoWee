@@ -645,6 +645,37 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                     saveCallback();
                 }
 
+                // The lighting's parts, one at a time and by hand: what the
+                // surfaces show instead (the WOWEE_GI_DEBUG views) and each
+                // light's and shadow's strength (Renderer::LightingTune). Last
+                // on the tab, as the options panels put them after Display.
+                ImGui::Spacing();
+                ImGui::SeparatorText("Debug Graphics");
+                ImGui::TextWrapped("For looking at the lighting's parts. Every default is the "
+                                   "picture as it is; the ray traced ones change nothing with "
+                                   "ray tracing off.");
+                ImGui::Spacing();
+                drawSchemaCategory("Debug Graphics", saveCallback);
+                ImGui::Spacing();
+                ImGui::SeparatorText("Debug: Time of day");
+                drawSchemaCategory("Debug Time", saveCallback);
+                ImGui::Spacing();
+                ImGui::SeparatorText("Debug: Light sources");
+                drawSchemaCategory("Debug Lights", saveCallback);
+                drawSchemaCategory("Debug Glow", saveCallback);
+                ImGui::Spacing();
+                ImGui::SeparatorText("Debug: Shadows");
+                drawSchemaCategory("Debug Shadows", saveCallback);
+                ImGui::Spacing();
+                if (ImGui::Button("Restore Debug Graphics Defaults", ImVec2(-1, 0))) {
+                    restoreSchemaDefaults("Debug Graphics");
+                    restoreSchemaDefaults("Debug Lights");
+                    restoreSchemaDefaults("Debug Glow");
+                    restoreSchemaDefaults("Debug Time");
+                    restoreSchemaDefaults("Debug Shadows");
+                    saveCallback();
+                }
+
                 ImGui::EndTabItem();
             }
 
@@ -682,43 +713,6 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
             // ============================================================
             if (ImGui::BeginTabItem("Chat", nullptr, tabFlagFor("Chat"))) {
                 chatPanel.renderSettingsTab(saveCallback);
-                ImGui::EndTabItem();
-            }
-
-            // ============================================================
-            // DEBUG GRAPHICS TAB
-            // ============================================================
-            // The lighting's parts, one at a time and by hand: what the
-            // surfaces show instead (the WOWEE_GI_DEBUG views) and each
-            // light's and shadow's strength (Renderer::LightingTune). Two
-            // schema pages, as the options panels have them.
-            if (ImGui::BeginTabItem("Debug Graphics", nullptr, tabFlagFor("Debug Graphics"))) {
-                ImGui::TextWrapped("For looking at the lighting's parts. Every default is the "
-                                   "picture as it is; the ray traced ones change nothing with "
-                                   "ray tracing off.");
-                ImGui::Spacing();
-                drawSchemaCategory("Debug Graphics", saveCallback);
-                ImGui::Spacing();
-                ImGui::SeparatorText("Time of day");
-                drawSchemaCategory("Debug Time", saveCallback);
-                ImGui::Spacing();
-                ImGui::SeparatorText("Light sources");
-                drawSchemaCategory("Debug Lights", saveCallback);
-                drawSchemaCategory("Debug Glow", saveCallback);
-                ImGui::Spacing();
-                ImGui::SeparatorText("Shadows");
-                drawSchemaCategory("Debug Shadows", saveCallback);
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-                if (ImGui::Button("Restore Debug Graphics Defaults", ImVec2(-1, 0))) {
-                    restoreSchemaDefaults("Debug Graphics");
-                    restoreSchemaDefaults("Debug Lights");
-                    restoreSchemaDefaults("Debug Glow");
-                    restoreSchemaDefaults("Debug Time");
-                    restoreSchemaDefaults("Debug Shadows");
-                    saveCallback();
-                }
                 ImGui::EndTabItem();
             }
 
