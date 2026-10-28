@@ -138,6 +138,9 @@ float rtHardShadowVis(float s) {
 // 35.
 const float RT_NORMAL_AGREE_NEAR = 0.9659;  // cos 15 degrees
 const float RT_NORMAL_AGREE_FAR = 0.8192;   // cos 35 degrees
+// How far past the terminator the lamps' light wraps (N.L + w) / (1 + w): a
+// face turned some 15 degrees from a lamp still takes a little of it.
+const float RT_LAMP_WRAP = 0.25;
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -252,7 +255,12 @@ void main() {
         // starting from the far side of the board, took that light in
         // grainy streaks.
         if (d > 1e-4 && dot(n, toLight) <= 0.0) continue;
-        float ndl = d > 1e-4 ? dot(lightN, toLight / d) : 1.0;
+        // Wrapped a little past the terminator: a lamp is a flame, a glass, a
+        // glow, not a point, and a face turned just past one still takes
+        // some of its light. Unwrapped, a crease turned from a candle went
+        // from lit to black on the crease itself - the bevel of the curb
+        // round the plaza in Silvermoon, a straight dark edge across the floor.
+        float ndl = d > 1e-4 ? (dot(lightN, toLight / d) + RT_LAMP_WRAP) / (1.0 + RT_LAMP_WRAP) : 1.0;
         if (ndl <= 0.0) continue;
         vec3 c = light.colorStart.rgb * (rtLightFalloff(d, light.colorStart.w, end) * ndl);
         float w = max(c.r, max(c.g, c.b));
