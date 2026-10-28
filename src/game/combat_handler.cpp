@@ -1125,13 +1125,19 @@ void CombatHandler::handleUpdateComboPoints(network::Packet& packet) {
     // in the shipped interface registers it - the combo points only ever lit up
     // when the target changed, which is the other event ComboFrame listens for.
     //
-    // What this does not answer is the rescan itself. WoWee's action flags hold
-    // only whether the slot is short of power (0x0053d1b0, the power-only
-    // variant), so a finisher becoming usable as the points arrive is not a
-    // flip it can see; the client's 0x0053cf10 runs the full cast check over
-    // every slot and takes the sound and UPDATE_SHAPESHIFT_USABLE from the
-    // flips. Its own announcement there, SPELL_UPDATE_USABLE (0xf5), reaches no
-    // frame in this interface - the buttons watch ACTIONBAR_UPDATE_USABLE.
+    // The rescan that comes with the store is a thread still open. 0x0053cf10
+    // walks the action list (DAT_00be8e58 of them, DAT_00be8e5c holding each
+    // slot's two flags) and the form list (DAT_00be8e28) through the whole cast
+    // check; the first thing it calls, 0x005aa470, rewrites the 144 per-slot
+    // pairs the buttons are drawn from (DAT_00c1ded8, DAT_00c1dc98) and
+    // announces a change with ACTIONBAR_UPDATE_USABLE (0xb2). A form flipping is
+    // UPDATE_SHAPESHIFT_USABLE (0x17a), a button going unusable is a sound
+    // (0x0074d520 0x23), and the rescan's own name SPELL_UPDATE_USABLE (0xf5)
+    // reaches no frame of this interface. WoWee's action flags hold the power
+    // half only (0x0053d1b0, the power-only variant) and IsUsableAction never
+    // looks at the points at all, so a finisher has no way here to be grey for
+    // want of a combo point - and announcing ACTIONBAR_UPDATE_USABLE from this
+    // packet would change nothing until that answer depends on the points.
     owner_.fireAddonEvent("UNIT_COMBO_POINTS", {"player"});
 }
 
