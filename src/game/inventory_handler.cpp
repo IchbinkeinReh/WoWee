@@ -1349,8 +1349,16 @@ void InventoryHandler::handleLootResponse(network::Packet& packet) {
         // closes with CloseLoot(autoLoot == 0) - so an absent argument
         // compares false and tells the server the window opened when it did
         // not.
+        // The argument is a number, not text: the client fires LOOT_OPENED
+        // (249) with "%d" and a 1 or a 0 (00580000.c:6466, :6710;
+        // 006e0000.c:2674), and LootFrame_OnEvent's `autoLoot == 0` compares it
+        // as one (lootframe.lua:15-21).
+        //
+        // LOOT_READY, which this used to add, is not a name this client has -
+        // 249 LOOT_OPENED, 250 LOOT_SLOT_CLEARED, 251 LOOT_SLOT_CHANGED and 252
+        // LOOT_CLOSED are the whole of its loot events, and the loot window
+        // registers exactly those four (lootframe.lua:6-9).
         owner_.addonEventCallbackRef()("LOOT_OPENED", {autoLoot_ ? "1" : "0"});
-        owner_.addonEventCallbackRef()("LOOT_READY", {});
     }
     if (currentLoot_.lootGuid == lastInteractedGoGuid) {
         lastInteractedGoGuid = 0;
