@@ -1946,14 +1946,15 @@ end
 /// roll with a blank icon and "Item #43102" where the name goes, which is what
 /// a need-or-greed on an unfamiliar drop looked like every time.
 ///
-/// GET_ITEM_INFO_RECEIVED is the client's own event for exactly this, and
-/// OnShow is the interface's own fill: re-running it is a redraw, not a rewrite
+/// WOWEE_ITEM_INFO_RECEIVED is WoWee's own name for exactly this (this client
+/// has no such event - its tooltips read local DBC and never wait on a query),
+/// and OnShow is the interface's own fill: re-running it is a redraw, not a rewrite
 /// of what the window says. Only the windows that are up, and only while a roll
 /// is on screen - the query answers hundreds of times over a login and this is
 /// nothing to do with any of them.
 inline constexpr const char* kLootRollRefreshLua = R"LUA(
 local watcher = CreateFrame("Frame")
-watcher:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+watcher:RegisterEvent("WOWEE_ITEM_INFO_RECEIVED")
 watcher:SetScript("OnEvent", function()
     if type(GroupLootFrame_OnShow) ~= "function" then return end
     for i = 1, (NUM_GROUP_LOOT_FRAMES or 4) do
@@ -2243,7 +2244,7 @@ end)
 /// comparison is up and the arrival may be the worn item it is showing.
 inline constexpr const char* kTooltipItemDataRefreshLua = R"LUA(
 local watcher = CreateFrame("Frame")
-watcher:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+watcher:RegisterEvent("WOWEE_ITEM_INFO_RECEIVED")
 watcher:SetScript("OnEvent", function(self, event, a1)
     if not GameTooltip or not GameTooltip.IsShown or not GameTooltip:IsShown() then
         return

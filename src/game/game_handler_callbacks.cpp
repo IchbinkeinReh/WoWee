@@ -2397,8 +2397,8 @@ void GameHandler::detectInventorySlotBases(const FlatFieldMap& fields) {
     if (inventoryHandler_) inventoryHandler_->detectInventorySlotBases(fields);
 }
 
-bool GameHandler::applyInventoryFields(const FlatFieldMap& fields) {
-    return inventoryHandler_ ? inventoryHandler_->applyInventoryFields(fields) : false;
+bool GameHandler::applyInventoryFields(const FlatFieldMap& fields, bool initial) {
+    return inventoryHandler_ ? inventoryHandler_->applyInventoryFields(fields, initial) : false;
 }
 
 uint64_t GameHandler::getInteractNpcGuid() const {

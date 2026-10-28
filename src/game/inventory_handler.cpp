@@ -5035,8 +5035,14 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         //
         // Named so a listener can tell whether the item it is showing is the
         // one that just arrived, rather than rebuilding on every reply.
+        //
+        // WoWee's own name, not the client's. This client has no such event:
+        // its tooltips are built from local DBC and never wait on a query, so
+        // there is no name here to borrow - and borrowing a later expansion's
+        // would hand a 4.x add-on a WotLK-shaped argument list under a name it
+        // already has handlers for.
         if (owner_.addonEventCallbackRef()) {
-            owner_.addonEventCallbackRef()("GET_ITEM_INFO_RECEIVED",
+            owner_.addonEventCallbackRef()("WOWEE_ITEM_INFO_RECEIVED",
                                            {std::to_string(data.entry)});
         }
 
@@ -5337,7 +5343,7 @@ void InventoryHandler::detectInventorySlotBases(const FlatFieldMap& fields) {
     }
 }
 
-bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields) {
+bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields, bool initial) {
     bool slotsChanged = false;
     bool buybackSlotsChanged = false;
     int equipBase = (owner_.invSlotBaseRef() >= 0) ? owner_.invSlotBaseRef() : static_cast<int>(fieldIndex(UF::PLAYER_FIELD_INV_SLOT_HEAD));
@@ -5372,15 +5378,24 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields) {
     // field gap, so it is taken from there rather than written out again.
     const int kBankGeneralSlotCount = effectiveBankSlots_;
     std::set<int> changedBankSlots;
+    // Which of the nineteen equipment slots moved, by the same reckoning the
+    // interface uses: the wire order is the order the paperdoll's slot buttons
+    // are numbered in, so the Lua slot number is this index plus one.
+    std::set<int> changedEquipSlots;
     for (const auto& [key, val] : fields) {
         if (key >= equipBase && key <= equipBase + (game::Inventory::NUM_EQUIP_SLOTS * 2 - 1)) {
             int slotIndex = (key - equipBase) / 2;
             bool isLow = ((key - equipBase) % 2 == 0);
             if (slotIndex < static_cast<int>(owner_.equipSlotGuidsRef().size())) {
                 uint64_t& guid = owner_.equipSlotGuidsRef()[slotIndex];
+                const uint64_t before = guid;
                 if (isLow) guid = (guid & 0xFFFFFFFF00000000ULL) | val;
                 else guid = (guid & 0x00000000FFFFFFFFULL) | (uint64_t(val) << 32);
                 slotsChanged = true;
+                // Only the nineteen worn slots, not the four bag slots that
+                // share this region of the field block.
+                if (guid != before && slotIndex < game::Inventory::FIRST_BAG_EQUIP_SLOT)
+                    changedEquipSlots.insert(slotIndex);
             }
         } else if (key >= packBase && key <= packBase + (game::Inventory::BACKPACK_SLOTS * 2 - 1)) {
             int slotIndex = (key - packBase) / 2;
@@ -5458,7 +5473,10 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields) {
     // stayed on screen until the bank was closed and opened.
     pendingBankSlotEvents_.insert(pendingBankSlotEvents_.end(),
                                   changedBankSlots.begin(), changedBankSlots.end());
-
+    if (!initial) {
+        pendingEquipSlotEvents_.insert(pendingEquipSlotEvents_.end(),
+                                       changedEquipSlots.begin(), changedEquipSlots.end());
+    }
 
     return slotsChanged;
 }
@@ -5871,6 +5889,50 @@ void InventoryHandler::rebuildOnlineInventory() {
     owner_.reconcileQuestItemObjectives(carriedCounts);
     // Last, with the slots holding what they now hold.
     fireBankSlotEvents();
+    fireEquipSlotEvents();
+}
+
+void InventoryHandler::fireEquipSlotEvents() {
+    if (pendingEquipSlotEvents_.empty()) return;
+    // Moved out first, as the bank slots are: a frame redrawing from inside
+    // this can move a slot again, and that must queue rather than be dropped.
+    std::vector<int> slots;
+    slots.swap(pendingEquipSlotEvents_);
+    std::sort(slots.begin(), slots.end());
+    slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+    if (!owner_.addonEventCallbackRef()) return;
+    for (int slot : slots) {
+        // Which numbers the change moves, in the client's own split. It watches
+        // its equipment fields (0x006dedd0): for the two hands it calls the
+        // routine that fires UNIT_ATTACK, for the ranged slot the one that
+        // fires UNIT_RANGED_ATTACK_POWER.
+        //
+        // Those two are the only names the character sheet acts on for an equip
+        // change - it has no handler for the equipment event at all, and its
+        // damage, attack-speed and ranged lines are recomputed from the branch
+        // these two land in (paperdollframe.lua:187), each reading the weapon
+        // now in the slot. So this is both when the client fires them and why
+        // the number moves.
+        if (slot == static_cast<int>(EquipSlot::MAIN_HAND) ||
+            slot == static_cast<int>(EquipSlot::OFF_HAND)) {
+            owner_.addonEventCallbackRef()("UNIT_ATTACK", {"player"});
+        } else if (slot == static_cast<int>(EquipSlot::RANGED)) {
+            owner_.addonEventCallbackRef()("UNIT_RANGED_ATTACK_POWER", {"player"});
+        }
+        // Then the slot itself, by its Lua number: the wire order is the button
+        // order, so index + 1 is what GetInventoryItemLink takes, which is what
+        // the client sends (0x006dedd0, `uVar2 + 1`).
+        //
+        // Filled or emptied is part of the message - "%d%d" with a 1 for the
+        // item that went on, "%d" alone for the one that came off.
+        if (owner_.equipSlotGuidsRef()[slot] != 0) {
+            owner_.addonEventCallbackRef()("PLAYER_EQUIPMENT_CHANGED",
+                                           {std::to_string(slot + 1), "1"});
+        } else {
+            owner_.addonEventCallbackRef()("PLAYER_EQUIPMENT_CHANGED",
+                                           {std::to_string(slot + 1)});
+        }
+    }
 }
 
 void InventoryHandler::fireBankSlotEvents() {

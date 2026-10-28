@@ -574,13 +574,27 @@ public:
     void queryItemInfo(uint32_t entry, uint64_t guid);
     uint64_t resolveOnlineItemGuid(uint32_t itemId) const;
     void detectInventorySlotBases(const FlatFieldMap& fields);
-    bool applyInventoryFields(const FlatFieldMap& fields);
+    /// Read the inventory fields off an update block.
+    ///
+    /// initial = true for the create block, and for any re-read of fields
+    /// already held: those slots did not just move, so they announce nothing.
+    /// The client's equipment watchers are put on the object after it is
+    /// created, so a create block never reaches them.
+    bool applyInventoryFields(const FlatFieldMap& fields, bool initial = false);
     void extractContainerFields(uint64_t containerGuid, const FlatFieldMap& fields);
     ItemDef buildItemDef(uint32_t entry, uint32_t stackCount, uint32_t curDur, uint32_t maxDur, uint64_t guid,
                          uint32_t flags = 0, int32_t randomPropertyId = 0, uint32_t suffixFactor = 0);
     void rebuildOnlineInventory();
     /// Announce the bank slots that moved, once their items are current.
     void fireBankSlotEvents();
+    /// Announce the equipment slots that moved, once their items are current.
+    ///
+    /// The 12340 client watches its own equipment fields (0x006dedd0) and fires
+    /// per slot: PLAYER_EQUIPMENT_CHANGED carrying that slot's Lua number, and
+    /// for the two weapon hands and the ranged slot the name whose numbers the
+    /// character sheet prints. A single argument-less event for the whole block
+    /// reached none of them.
+    void fireEquipSlotEvents();
     void maybeDetectVisibleItemLayout();
     void updateOtherPlayerVisibleItems(uint64_t guid, const FlatFieldMap& fields);
     void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries);
@@ -823,6 +837,9 @@ private:
     /// written the items the bank frame reads. Announcing earlier redraws the
     /// slot from what it held before the move.
     std::vector<int> pendingBankSlotEvents_;
+    /// Equipment slots whose guid changed, held for the same reason and drained
+    /// in the same place. Wire index, so the Lua slot number is index + 1.
+    std::vector<int> pendingEquipSlotEvents_;
     int effectiveBankSlots_ = 28;
     int effectiveBankBagSlots_ = 7;
 

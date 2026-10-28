@@ -4851,7 +4851,7 @@ public:
     void updateOtherPlayerVisibleItems(uint64_t guid, const FlatFieldMap& fields);
     void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries);
     void detectInventorySlotBases(const FlatFieldMap& fields);
-    bool applyInventoryFields(const FlatFieldMap& fields);
+    bool applyInventoryFields(const FlatFieldMap& fields, bool initial = false);
     void extractContainerFields(uint64_t containerGuid, const FlatFieldMap& fields);
     void extractSkillFields(const FlatFieldMap& fields);
     void extractExploredZoneFields(const FlatFieldMap& fields);

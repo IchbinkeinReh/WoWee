@@ -1277,6 +1277,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             uint32_t oldDyn = unit->getDynamicFlags();
             unit->setDynamicFlags(val);
             if (block.guid == owner_.getPlayerGuid()) {
+                if (oldDyn != val) pendingEvents_.emit("UNIT_DYNAMIC_FLAGS", {"player"});
                 bool wasDead = (oldDyn & UNIT_DYNFLAG_DEAD) != 0;
                 bool nowDead = (val & UNIT_DYNFLAG_DEAD) != 0;
                 if (!wasDead && nowDead) {
@@ -1797,7 +1798,7 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
         // Slot layouts differ on some classic-family realms and can produce
         // phantom "already accepted" quests that block quest acceptance.
     }
-    if (owner_.applyInventoryFields(fields)) slotsChanged = true;
+    if (owner_.applyInventoryFields(fields, isCreate)) slotsChanged = true;
 
     // Announced only on an update, never on the create block: at create the
     // sheet has not been built yet, and every field looks like a change.
@@ -2788,8 +2789,11 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         PlayerFieldIndices pfi = PlayerFieldIndices::resolve();
         bool slotsChanged = applyPlayerStatFields(block.fields, pfi, false);
         if (slotsChanged) {
+            // The rebuild is what announces the equipment slots that moved, each
+            // with its own Lua slot number - the client's own equipment watcher
+            // fires per slot (0x006dedd0), and an event naming no slot reached
+            // the frames that redraw one slot.
             owner_.rebuildOnlineInventory();
-            pendingEvents_.emit("PLAYER_EQUIPMENT_CHANGED", {});
         }
         owner_.extractSkillFields(owner_.lastPlayerFieldsRef());
         owner_.extractExploredZoneFields(owner_.lastPlayerFieldsRef());
@@ -3121,7 +3125,8 @@ void EntityController::finalizeUpdateObjectBatch(bool newItemCreated) {
     if (owner_.getPlayerGuid() != 0 && owner_.invSlotBaseRef() < 0 && !owner_.lastPlayerFieldsRef().empty() && !owner_.onlineItemsRef().empty()) {
         owner_.detectInventorySlotBases(owner_.lastPlayerFieldsRef());
         if (owner_.invSlotBaseRef() >= 0) {
-            if (owner_.applyInventoryFields(owner_.lastPlayerFieldsRef())) {
+            // A first read of fields already held, not a change: nothing moves.
+            if (owner_.applyInventoryFields(owner_.lastPlayerFieldsRef(), true)) {
                 owner_.rebuildOnlineInventory();
             }
         }
