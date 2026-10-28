@@ -1115,7 +1115,24 @@ void CombatHandler::handleUpdateComboPoints(network::Packet& packet) {
     owner_.comboTargetRef() = target;
     LOG_DEBUG("SMSG_UPDATE_COMBO_POINTS: target=0x", std::hex, target,
               std::dec, " points=", static_cast<int>(owner_.comboPointsRef()));
-    owner_.fireAddonEvent("PLAYER_COMBO_POINTS", {});
+    // 0x00519780: the count and its unit are stored, every action and form is
+    // re-checked through the whole cast check (0x0053cf10), and
+    // UNIT_COMBO_POINTS (149) goes out with the player's own token as its one
+    // argument. ComboFrame_OnEvent ignores the event unless that token is the
+    // one PlayerFrame is showing, so the argument is not decoration:
+    // "PLAYER_COMBO_POINTS" carried none, is not a name this client has at all
+    // (zero times in Wow.exe, against once for UNIT_COMBO_POINTS), and nothing
+    // in the shipped interface registers it - the combo points only ever lit up
+    // when the target changed, which is the other event ComboFrame listens for.
+    //
+    // What this does not answer is the rescan itself. WoWee's action flags hold
+    // only whether the slot is short of power (0x0053d1b0, the power-only
+    // variant), so a finisher becoming usable as the points arrive is not a
+    // flip it can see; the client's 0x0053cf10 runs the full cast check over
+    // every slot and takes the sound and UPDATE_SHAPESHIFT_USABLE from the
+    // flips. Its own announcement there, SPELL_UPDATE_USABLE (0xf5), reaches no
+    // frame in this interface - the buttons watch ACTIONBAR_UPDATE_USABLE.
+    owner_.fireAddonEvent("UNIT_COMBO_POINTS", {"player"});
 }
 
 void CombatHandler::handlePetUpdateComboPoints(network::Packet& packet) {
@@ -1130,6 +1147,14 @@ void CombatHandler::handlePetUpdateComboPoints(network::Packet& packet) {
     if (pet != owner_.getPetGuid()) return;
     owner_.petComboTargetRef() = target;
     owner_.petComboPointsRef() = points;
+    // 0x005d34b0: the same store for the pet, the same rescan, then
+    // UNIT_COMBO_POINTS (149) with the pet's token and PET_BAR_UPDATE_USABLE
+    // (0x15e). The second is what the pet bar waits for - the buttons it holds
+    // re-read their state on that name alone (petactionbarframe.lua:26, :47),
+    // and this site used to announce neither, so a pet working its combo points
+    // up left its bar untouched.
+    owner_.fireAddonEvent("UNIT_COMBO_POINTS", {"pet"});
+    owner_.fireAddonEvent("PET_BAR_UPDATE_USABLE", {});
 }
 
 void CombatHandler::handlePvpCredit(network::Packet& packet) {
