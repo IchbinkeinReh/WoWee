@@ -329,7 +329,7 @@ FrameXML calls into, plus what the client draws in the world.
 **Sound Managers:**
 - `AmbientSoundManager` - Wind, water, fire, birds, crickets, city ambience, bell tolls
 - `ActivitySoundManager` - Swimming strokes, jumping, landing
-- `FootstepManager` - Footsteps (terrain-aware), mount footsteps
+- `FootstepManager` - Footsteps (terrain-aware), mount footsteps; the prints they leave are gated by `showfootprints`, which the client keeps as a bit in a flag word (setter 0x0078d8f0, tested at 0x00723a50) rather than as a value of its own
 - `MovementSoundManager` - Water entry and wading splashes
 - `MountSoundManager` - Mount-specific movement audio
 - `MusicManager` - Zone music (ZoneMusic.dbc day and night tracks pooled, plus this project's own soundtrack)
