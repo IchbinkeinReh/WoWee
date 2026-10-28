@@ -224,9 +224,45 @@ struct LfgListRow {
  * A row whose guid is already held updates it in place, as the client's guid hash
  * does; a whole-list packet clears first. False when the packet is cut short, with
  * the rows read whole kept, which is what the client leaves behind too.
+ *
+ * `wholeList`, when given, says whether the packet was that whole list — the client
+ * clears its window then (0x00558af0), which is the same place it unregisters the
+ * name callbacks its rows registered, so the count of `lfgNameAnswerClosesGate`
+ * above has to be dropped with it.
  */
 bool parseLfgList(network::Packet& packet, uint32_t heldListId,
-                  std::vector<LfgListRow>& rows);
+                  std::vector<LfgListRow>& rows, bool* wholeList = nullptr);
+
+/**
+ * The client's gate on the names its list rows are waiting for (0x005528a0).
+ *
+ * A listing row that had to be allocated asks for its guid's name and registers
+ * this callback with the request (`0x0055b770:9931-9937`), bumping a counter when
+ * the record was new; the callback itself is a bare "an answer arrived" notice — it
+ * names no guid, it only closes one request:
+ *
+ *   cmp dword [0xbeaaac],0 / je ret       nothing outstanding: say nothing at all
+ *   sub dword [0xbeaaac],1  / jne ret     still waiting on the others
+ *   push 0 / push 0x1d5 / call 0x81b530   event 469, the list-changed event
+ *
+ * So the panel is re-announced exactly once, by the answer that lands last — by
+ * which time every row has its name, and with it the class the name query brought
+ * along with it. Those names are why the counter exists: the row getter resolves a
+ * row's guid through the name cache and answers "UNKNOWN" when nothing is there
+ * (0x00555fd0:4856-4861), and the class name and token are read off the same
+ * resolved record at +0x144 and +0x148 (0x00555fd0:4873, :4901 through 0x0072aab0).
+ *
+ * The count's semantics are the client's own, including the hole in them: the
+ * callback has no guid to match an answer to, and clearing the window unregisters
+ * the callback of every row it drops (0x00558af0:6967) without closing its request.
+ * A count left standing across a clear therefore never reaches zero again, which is
+ * why the holder below drops it where the client drops the callbacks.
+ */
+inline bool lfgNameAnswerClosesGate(uint32_t& outstanding) {
+    if (outstanding == 0) return false;
+    --outstanding;
+    return outstanding == 0;
+}
 
 /// "no row" for the index fields below — the client stores a null pointer where
 /// these hold an index into the rows, and 0 is a real row.

@@ -651,6 +651,17 @@ public:
      * thing here that a header click sends to the interface.
      */
     void sortLfgBrowser(std::string_view word);
+    /**
+     * A name answer landed, and one of the raid browser's rows may be waiting on it.
+     *
+     * The client's callback matches no guid at all — it is a bare "an answer arrived"
+     * notice closing one request off a counter (0x005528a0) — so this is called for
+     * every answer and closes one only while a row is outstanding. The list is
+     * re-announced when the last request closes, which is what fills a row's name in
+     * and, off the same answer, its class: `SearchLFGGetResults` reads both from the
+     * record its row's guid resolves to (0x00555fd0:4856-4873).
+     */
+    void onLfgNameAnswered(uint64_t guid);
     [[nodiscard]] uint32_t getLfgDungeonId()       const { return lfgDungeonId_; }
     [[nodiscard]] std::string getCurrentLfgDungeonName() const;
     [[nodiscard]] uint32_t getLfgProposalId()      const { return lfgProposalId_; }
@@ -764,6 +775,10 @@ private:
     /// order them as the client orders its two arrays before the getter walks them
     /// (0x0055b700:9646-9653, which resorts and then rebuilds the same way).
     void rebuildLfgBrowserRows();
+    /// Ask for the names the held rows have none for, as the client does for each
+    /// listing record it has to allocate (0x0055b770:9931-9937), and count the
+    /// requests it made: the last answer to arrive re-announces the list.
+    void requestLfgRowNames();
     void applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party);
     /// Whether any of the body's dungeons is a raid, which turns the queue's
     /// lines into the raid browser's (0x00557260).
@@ -964,6 +979,16 @@ private:
     /// the client's 0x00beaa98, which is also what it tests to decide whether the
     /// rows changed enough to report. Zero when none is held.
     uint32_t lfgListWindowId_ = 0;
+    /// The names the browser's rows are waiting for. A listing row that had to be
+    /// allocated asks for its guid's name and registers a callback with the request
+    /// (0x0055b770:9931-9937); a row whose name record already exists does not ask
+    /// again, which is what `lfgNamesAsked_` stands in for, and `lfgPendingNames_` is
+    /// the client's 0x00beaaac. The answer that closes the last of them re-announces
+    /// the list (0x005528a0, `lfgNameAnswerClosesGate`), which is how a row the panel
+    /// had already drawn gets its name - and with it the class the same answer
+    /// carries, since the row getter reads both off the record the guid resolves to.
+    std::unordered_set<uint64_t> lfgNamesAsked_;
+    uint32_t lfgPendingNames_ = 0;
     LfgCompletionReward lfgCompletionReward_;
     uint32_t lfgDungeonId_    = 0;
     uint32_t lfgProposalId_   = 0;

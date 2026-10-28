@@ -3347,6 +3347,12 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
     pendingNameQueries.erase(data.guid);
     // Combat log entries waiting for it, found or not (0x0074fe90).
     owner_.combatLogFeed().playerNameAnswered(data.guid, data.name, data.realmName, data.isValid());
+    // And a raid browser row that was asked about at the list arriving. The client's
+    // callback for those counts answers rather than matching them (0x005528a0), and
+    // re-announces the list when the count runs out, so a wait is closed by an answer
+    // whether or not it found a name — otherwise a row whose guid names nobody would
+    // hold the list un-announced for as long as it is browsed.
+    owner_.onLfgNameAnswered(data.guid);
 
     LOG_INFO("Name query response: guid=0x", std::hex, data.guid, std::dec,
              " found=", static_cast<int>(data.found), " name='", data.name, "'",

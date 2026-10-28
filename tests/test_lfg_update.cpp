@@ -391,19 +391,26 @@ TEST_CASE("A list the client is not in is dropped, and its rows kept", "[lfg]") 
     writeComment(whole, "still here");
     whole.writeUInt32(0);
     whole.writeUInt32(0);
-    REQUIRE(parseLfgList(whole, kLfrList, rows));
+    // Whether the packet was a whole list is the caller's question to ask: the client
+    // clears its window then, which is also where it unregisters the name callbacks
+    // its rows registered (0x00558af0:6967).
+    bool wholeList = false;
+    REQUIRE(parseLfgList(whole, kLfrList, rows, &wholeList));
+    CHECK(wholeList);
     CHECK(whole.getRemainingSize() == 0);
     REQUIRE(rows.size() == 1);
 
     // An update naming another list arrives after the client left it; the client
-    // returns at 0x0055b770:9691-9694 without reading the rest of it.
+    // returns at 0x0055b770:9691-9694 without reading the rest of it — so none of it
+    // is a whole list, because none of it is read.
     Packet other(0x360);
     other.writeUInt32(6);
     other.writeUInt32(1032);
     other.writeUInt8(1);
     other.writeUInt32(1);
     other.writeUInt64(0x100);      // a removal of the row that is held
-    CHECK(parseLfgList(other, kLfrList, rows));
+    CHECK(parseLfgList(other, kLfrList, rows, &wholeList));
+    CHECK_FALSE(wholeList);
     CHECK(other.getRemainingSize() == 0);
     REQUIRE(rows.size() == 1);
     CHECK(rows[0].comment == "still here");
@@ -684,6 +691,21 @@ TEST_CASE("The two arrays are sorted by their own comparators", "[lfg]") {
         return std::string(r.guid == 0x400 ? "Zara" : r.guid == 0x500 ? "arthur" : "");
     };
     CHECK(compareLfgBrowserRows(withBit, withoutBit, rows, nameKey, false, named) < 0);
+}
+
+TEST_CASE("The last name the list asked for is the one that re-announces it", "[lfg]") {
+    // 0x005528a0, read off the binary — Ghidra left those 48 bytes as a label, and the
+    // two sites that register it pass no guid to it: it closes one request off a count
+    // and fires the list event only when that count runs out.
+    uint32_t outstanding = 2;
+    CHECK_FALSE(lfgNameAnswerClosesGate(outstanding));
+    CHECK(outstanding == 1);
+    CHECK(lfgNameAnswerClosesGate(outstanding));
+    CHECK(outstanding == 0);
+    // Nothing outstanding: an answer no row is waiting on says nothing, and the count
+    // does not run below zero into a gate that closes again on some later answer.
+    CHECK_FALSE(lfgNameAnswerClosesGate(outstanding));
+    CHECK(outstanding == 0);
 }
 
 TEST_CASE("A row's bosses are the joined instance's rows of the encounter table", "[lfg]") {

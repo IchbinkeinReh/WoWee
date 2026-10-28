@@ -18,9 +18,11 @@
 //     player has answered - the victim arrives as a guid, not a name.
 //   * The role check knows which dungeons it is for and how many are
 //     answering it.
-//   * The proposal's per-member detail, party backfill and the raid browser's
-//     search are NOT modelled. They answer empty, and each says why where it
-//     is bound.
+//   * The proposal's per-member detail and party backfill are NOT modelled. They
+//     answer empty, and each says why where it is bound. The raid browser's search
+//     is modelled — the rows, how they pair up, how they sort, the bosses they count
+//     and the class column — and the block above the bindings says what of it still
+//     answers nothing, and why.
 //
 // That list is worth keeping honest. It read "locks, rewards, the boot vote's
 // detail ... are NOT modelled" for some time after all three had been written,
@@ -947,14 +949,23 @@ void registerLfgLuaAPI(lua_State* L) {
     //                             otherwise (+0x24 against +0x91), partyMembers as
     //                             the client counts it — one under the members held,
     //                             the row's own listing excluded (0x005534c0).
-    //                             areaName and className stay "UNKNOWN": each is
-    //                             read out of a store record whose store the
-    //                             decompile lost the pointer for (0x0065c290 is the
-    //                             generic store getter, called here with its `this`
-    //                             gone), and the class name at 0x0072aab0 takes the
-    //                             same lost argument. Which table answers is not
-    //                             established, and the class token is nothing for
-    //                             the same reason. The two boss counts are the rows
+    //                             areaName stays "UNKNOWN": 0x0065c290 is the generic
+    //                             store getter, and the call that fetches this record
+    //                             lost both its store and its key in the decompile
+    //                             (:4865, :4901). What its records hold can be read off
+    //                             how they are used — a name at +0x10 that the "class"
+    //                             sort key collates (:4628), a male and a female form
+    //                             at +0x14 and +0x18 that 0x007159e0 picks between by
+    //                             gender, and a string at +0x1c pushed as this
+    //                             getter's eighth value — which adds up to a class
+    //                             table record, so the local lfrframe.lua:539 calls
+    //                             `areaName` is named for a value this client's getter
+    //                             does not answer an area with. It is never read, so
+    //                             the fallback costs nothing visible and nothing is
+    //                             claimed about which store it is. The class column is
+    //                             not that store's: it comes from the row's guid, and
+    //                             see the two notes in the binding for what a row with
+    //                             no name known answers. The two boss counts are the rows
     //                             DungeonEncounter.dbc holds for the joined
     //                             dungeon's instance — the client walks that table
     //                             by the map id and difficulty its own LFGDungeons
@@ -1017,15 +1028,31 @@ void registerLfgLuaAPI(lua_State* L) {
                                        dungeon->difficulty, mask)
             : game::LfgEncounterCounts{};
         std::string name = gh->lookupName(listing->guid);
+        const bool nameKnown = !name.empty();
         if (name.empty()) name = "UNKNOWN";
         lua_pushstring(L, name.c_str());                             // name
         lua_pushinteger(L, listing->level);                          // level
         lua_pushstring(L, "UNKNOWN");                                // areaName
-        lua_pushstring(L, "UNKNOWN");                                // className
+        // The class is not in the list at all. The getter resolves the row's guid
+        // through the name cache and reads the class and the gender off the record
+        // that answer brought — +0x148 and +0x144 past the name pointer the lookup
+        // hands back (0x00555fd0:4873 through 0x0072aab0, and the same read behind the
+        // "class" sort key at 0x00555a70:4618-4630). A row whose name is not known
+        // therefore has no class either, and the two fall back differently: the class
+        // column gets the client's "UNKNOWN" (0x00819d40 at :4874) and the token gets
+        // nothing at all (0x0084e280 at :4902), which is the guard lfrframe.lua:553
+        // is written around. Where a class is known the name is the store record's,
+        // which the client picks between a male and a female form by that gender
+        // (0x007159e0: +0x18 then +0x14, falling back to +0x10); this answers the one
+        // class name it has, as UnitClass does.
+        const uint8_t classId = nameKnown ? gh->lookupPlayerClass(listing->guid) : 0;
+        const char* token = luaClassToken(classId);
+        if (token) lua_pushstring(L, kLuaClasses[classId]);
+        else       lua_pushstring(L, "UNKNOWN");                     // className
         lua_pushstring(L, (group ? group->comment : listing->comment).c_str());
         lua_pushinteger(L, static_cast<lua_Integer>(pair->members.size()));  // partyMembers
         lua_pushboolean(L, listing->listed ? 1 : 0);                 // status
-        lua_pushnil(L);                                              // class
+        if (token) lua_pushstring(L, token); else lua_pushnil(L);     // class
         lua_pushinteger(L, bosses.total);                            // encountersTotal
         lua_pushinteger(L, bosses.complete);                         // encountersComplete
         lua_pushboolean(L, 0);                                       // isLeader
@@ -1065,7 +1092,15 @@ void registerLfgLuaAPI(lua_State* L) {
         lua_pushstring(L, name.c_str());
         lua_pushinteger(L, member->level);
         if (relationship) lua_pushstring(L, relationship); else lua_pushnil(L);
-        lua_pushstring(L, "");                                       // className, whose
+        // The member's class comes from the same place the row's does — the record its
+        // guid resolves to, +0x148 — and its fallback is the empty string the client
+        // answers with here (DAT_009e14ff at 0x00556280:4990), not the "UNKNOWN" the
+        // row getter uses. Not a name the panel shows for a member: lfrframe.lua:628
+        // keeps six values and reads the name, the level, the relationship and the
+        // comment.
+        const uint8_t memberClass = gh->lookupPlayerClass(member->guid);
+        if (luaClassToken(memberClass)) lua_pushstring(L, kLuaClasses[memberClass]);
+        else                            lua_pushstring(L, "");       // className
         lua_pushstring(L, "UNKNOWN");                                // areaName
         lua_pushstring(L, member->comment.c_str());
         return 6;

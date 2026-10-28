@@ -4785,9 +4785,14 @@ void SocialHandler::lfgSearchLeave() {
     }
     // Leaving drops the rows with the id: 0x00558f90 clears the results held for
     // the list before it sends, and 0x00558ed0 does the same when a different list
-    // is asked for, so a row of the old list is never answered to the new one.
+    // is asked for, so a row of the old list is never answered to the new one. The
+    // names those rows were waiting for go with them — the client unregisters their
+    // callbacks as it clears (0x00558af0:6967), so an answer to an old list would no
+    // longer reach the callback that re-announces it either.
     lfgListRows_.clear();
     lfgBrowserRows_.clear();
+    lfgNamesAsked_.clear();
+    lfgPendingNames_ = 0;
     lfgListWindowId_ = 0;
     lfgJoinedListId_ = 0;
 }
@@ -4805,9 +4810,12 @@ void SocialHandler::handleLfgUpdateSearch(network::Packet& packet) {
     lfgJoinedListId_ = 0;
     // The rows go with the list. The client's clearing routine (0x00558af0) drops
     // the window it holds, and a window kept past the list it belongs to would be
-    // answered to the next list's rows.
+    // answered to the next list's rows. Its outstanding name requests are dropped by
+    // the same routine, which unregisters their callbacks.
     lfgListRows_.clear();
     lfgBrowserRows_.clear();
+    lfgNamesAsked_.clear();
+    lfgPendingNames_ = 0;
     lfgListWindowId_ = 0;
     // The mode the interface derives from the id ("listed", which changes the raid
     // browser's button and blocks the Dungeon Finder beside it) is re-read on
@@ -4831,11 +4839,27 @@ void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
         return;
     }
     const uint32_t previousWindow = lfgListWindowId_;
-    parseLfgList(packet, lfgJoinedListId_, lfgListRows_);
+    bool wholeList = false;
+    parseLfgList(packet, lfgJoinedListId_, lfgListRows_, &wholeList);
+    // A whole-list packet opens by clearing the window, and that clearing routine is
+    // where the client unregisters the name callbacks its rows had registered
+    // (0x00558af0:6967). Those answers reach no callback now, so the count of them
+    // goes with the window: the client leaves its own count behind there, because
+    // unregistering closes no request, and a count left standing would stop the list
+    // ever being re-announced for as long as this list is held.
+    if (wholeList) {
+        lfgNamesAsked_.clear();
+        lfgPendingNames_ = 0;
+    }
     // The rows the packet brought are not yet the rows the panel shows: a row is a
     // player record plus the listing attached to it, and the pairing is what
     // 0x00553530 does when the interface asks for an index.
     rebuildLfgBrowserRows();
+    // Then the names the new rows are missing, which the client asks for row by row
+    // as it allocates them (0x0055b770:9931-9937). Nothing is answered from them yet,
+    // but the answers are what put a name — and a class — on a row the panel has
+    // already drawn.
+    requestLfgRowNames();
     lfgListWindowId_ = lfgJoinedListId_;
     if (previousWindow != 0 && previousWindow == lfgListWindowId_) return;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
@@ -4859,6 +4883,42 @@ void SocialHandler::rebuildLfgBrowserRows() {
 void SocialHandler::sortLfgBrowser(std::string_view word) {
     applyLfgSortHeaderClick(lfgSortKeys_, lfgListingsFirst_, word);
     rebuildLfgBrowserRows();
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
+}
+
+// The names the list's rows are missing. A listing record the client has to allocate
+// asks for its guid's name and registers a callback with that request
+// (0x0055b770:9931-9937), and it bumps its count of outstanding names only when the
+// record was new — a row arriving again over a record that already exists asks twice
+// in no case. So the test here is the same one the client's is: a row with no name
+// record and no request already out. Only listings are asked for: that request is the
+// only one the list handler makes, and the row the panel shows is named by its
+// listing, not by its group (0x00553530 takes the group's member[0]).
+void SocialHandler::requestLfgRowNames() {
+    for (const auto& row : lfgListRows_) {
+        if (!row.isListing) continue;
+        if (lfgNamesAsked_.count(row.guid)) continue;
+        if (!owner_.lookupName(row.guid).empty()) continue;
+        lfgNamesAsked_.insert(row.guid);
+        ++lfgPendingNames_;
+        owner_.queryPlayerName(row.guid);
+    }
+}
+
+// One name answer arrived for a guid the browser asked about. The client's callback
+// (0x005528a0) has no guid to match on — it closes one request off a counter and says
+// anything at all only when that count reaches zero — so the panel is re-announced
+// once, by the last answer of the batch. It matters that the answer is late rather
+// than early: a row drawn before its name arrives answers "UNKNOWN" for the name,
+// nothing for the class token, and no class name at all (0x00555fd0:4856-4873), and
+// the name is one of the sort keys, so the order changes with it too.
+void SocialHandler::onLfgNameAnswered(uint64_t guid) {
+    if (!lfgNamesAsked_.erase(guid)) return;
+    if (!lfgNameAnswerClosesGate(lfgPendingNames_)) return;
+    rebuildLfgBrowserRows();
+    // 469 is the client's list-changed event, fired from that callback; the name this
+    // client raises it under is the one every consumer of this list already listens
+    // to (see handleUpdateLfgList for why the name of 469 is still not established).
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
 }
 

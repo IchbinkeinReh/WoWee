@@ -190,17 +190,20 @@ bool parseLfgPartyLocks(network::Packet& packet, std::vector<LfgMemberLocks>& ou
 }
 
 bool parseLfgList(network::Packet& packet, uint32_t heldListId,
-                  std::vector<LfgListRow>& rows) {
+                  std::vector<LfgListRow>& rows, bool* wholeList) {
     if (!packet.hasRemaining(4 + 4 + 1)) return false;
     const uint32_t typeId = packet.readUInt32();
     const uint32_t listId = (typeId << 24) | (packet.readUInt32() & 0x00FFFFFFu);
     const bool deltas = packet.readUInt8() != 0;
     if (listId != heldListId) {
         // Not the list this client is in. The client returns without reading the
-        // rest (0x0055b770:9691-9694) — an update for a list already left.
+        // rest (0x0055b770:9691-9694) — an update for a list already left. Nothing
+        // of this packet's is a whole list, because none of it is read at all.
+        if (wholeList) *wholeList = false;
         packet.skipAll();
         return true;
     }
+    if (wholeList) *wholeList = !deltas;
     // The byte being clear is what makes the packet a whole list rather than a
     // delta: the client clears its window (0x00558af0) and reads no removals.
     if (!deltas) rows.clear();

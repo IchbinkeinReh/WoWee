@@ -2662,6 +2662,9 @@ public:
     /// A browse-panel column header click, by the word that header carries
     /// (SearchLFGSort) — see SocialHandler::sortLfgBrowser for what it does.
     void sortLfgBrowser(std::string_view word);
+    /// A name answer landed for that guid, and a raid browser row may have been
+    /// waiting on it — see SocialHandler::onLfgNameAnswered for what it does.
+    void onLfgNameAnswered(uint64_t guid);
     uint32_t getLfgProposalId() const;
     uint8_t  getLfgOfferedRoles() const;
     const std::vector<LfgProposalMember>& getLfgProposalMembers() const;
