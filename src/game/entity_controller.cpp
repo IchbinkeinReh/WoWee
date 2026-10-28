@@ -3138,6 +3138,27 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
         updateNonPlayerTransportAttachment(block, entity, entity->getType());
     }
 
+    // Who the unit had selected, taken before this block overwrites it. Event id
+    // 12 is UNIT_TARGET, and ids up to 141 are field numbers: the client watches
+    // the unit field block at offset id*4 (0x00614190) - eight bytes wide for 12,
+    // because it is a guid - and answers UNIT_TARGET("token") through the unit
+    // token helper (0x0060bf10) whenever it moves. PLAYER_TARGET_CHANGED is only
+    // the player's own selection, so a mob turning to face somebody else said
+    // nothing at all here: a target-of-target frame, a tank cooldown warning and
+    // anything else that reads a unit's target had to wait for the unit frame to
+    // be rebuilt for another reason. The entity's own field map is the previous
+    // value, so this needs no bookkeeping of its own - but it does have to be read
+    // before the merge below. A create block never reaches it, as the client's
+    // watchers are installed only once the object is live (0x007158c0).
+    const uint16_t targetLo = fieldIndex(UF::UNIT_FIELD_TARGET_LO);
+    const uint16_t targetHi = fieldIndex(UF::UNIT_FIELD_TARGET_HI);
+    const bool watchesTarget = (entity->getType() == ObjectType::UNIT ||
+                                entity->getType() == ObjectType::PLAYER) &&
+                               (targetLo != 0xFFFF) &&
+                               (block.fields.find(targetLo) != block.fields.end() ||
+                                block.fields.find(targetHi) != block.fields.end());
+    const uint64_t oldTarget = watchesTarget ? unitTargetGuid(*entity) : 0;
+
     // Set fields (common)
     for (const auto& field : block.fields) {
         entity->setField(field.first, field.second);
@@ -3146,6 +3167,14 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     // Dispatch to type-specific handler
     auto* handler = getTypeHandler(entity->getType());
     if (handler) handler->onValuesUpdate(block, entity);
+
+    if (watchesTarget && unitTargetGuid(*entity) != oldTarget) {
+        // The token is not decoration: the interface ignores a unit event whose
+        // argument is not the unit it is showing, so a change said about nobody
+        // reaches nothing.
+        if (const auto uid = owner_.guidToUnitId(block.guid); !uid.empty())
+            pendingEvents_.emit("UNIT_TARGET", {uid});
+    }
 
     flushPendingEvents();
     LOG_DEBUG("Updated entity fields: 0x", std::hex, block.guid, std::dec);
