@@ -374,6 +374,10 @@ public:
     /// it: EmotesTextSound by the emote text and the speaker's race and sex,
     /// under the client's two emote CVars (unit_model_events.hpp).
     void playUnitEmoteSound(const game::Unit& unit, uint32_t emotesTextId);
+    /// What a unit says as its reaction goes to HATE (SMSG_AI_REACTION 0):
+    /// its PreAggro sound slot, by that slot's own chance
+    /// (rendering/unit_model_events.hpp).
+    void playUnitAlertSound(const game::Unit& unit);
     /// A unit's melee hit arriving (SMSG_ATTACKERSTATEUPDATE), kept on its
     /// attacker for its model's events; an attack stopping, which settles it
     /// (rendering/melee_sound.hpp).

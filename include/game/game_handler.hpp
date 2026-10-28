@@ -569,6 +569,12 @@ public:
     using EmoteSoundCallback = std::function<void(uint64_t, uint32_t)>;
     void setEmoteSoundCallback(EmoteSoundCallback cb) { emoteSoundCallback_ = std::move(cb); }
 
+    // A unit whose reaction went to HATE (SMSG_AI_REACTION 0), which it
+    // answers with out loud (0x00716b10 asks its sound slot 8): the guid,
+    // since the packet gives no position to speak from.
+    using UnitAlertSoundCallback = std::function<void(uint64_t)>;
+    void setUnitAlertSoundCallback(UnitAlertSoundCallback cb) { unitAlertSoundCallback_ = std::move(cb); }
+
     // Another unit's stand state changed (UNIT_FIELD_BYTES_1 byte 0):
     // guid, old state, new state. The local player uses StandStateCallback.
     using UnitStandStateCallback = std::function<void(uint64_t, uint8_t, uint8_t)>;
@@ -4699,6 +4705,7 @@ public:
     auto& creatureSpawnCallbackRef() { return creatureSpawnCallback_; }
     auto& emoteAnimCallbackRef() { return emoteAnimCallback_; }
     auto& emoteSoundCallbackRef() { return emoteSoundCallback_; }
+    auto& unitAlertSoundCallbackRef() { return unitAlertSoundCallback_; }
     auto& unitStandStateCallbackRef() { return unitStandStateCallback_; }
     auto& gameObjectDespawnCallbackRef() { return gameObjectDespawnCallback_; }
     /// The destroy callback, or the despawn one where there is none.
@@ -5366,6 +5373,7 @@ private:
     RandomStatResolver randomStatResolver_;
     EmoteAnimCallback emoteAnimCallback_;
     EmoteSoundCallback emoteSoundCallback_;
+    UnitAlertSoundCallback unitAlertSoundCallback_;
     UnitStandStateCallback unitStandStateCallback_;
 
     // Targeting

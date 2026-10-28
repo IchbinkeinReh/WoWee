@@ -76,6 +76,14 @@ constexpr uint32_t kSlotWingGlide = 10; ///< $WGG
 constexpr uint32_t kSlotJumpStart = 11;
 constexpr uint32_t kSlotJumpEnd = 12;
 
+/// The slot a unit's reaction asks of it, rather than one of its model's
+/// events: SMSG_AI_REACTION with a reaction of HATE (0) asks slot 8, and the
+/// table names the column it reads PreAggro (`GhostWolfPreAggro1', the same
+/// line an aggro would answer with). Only the ask is this slot's own - the
+/// UNFRIENDLY reaction (2) is a voice line, not a sound slot, and 0x00716b10
+/// takes it elsewhere.
+constexpr uint32_t kSlotAlert = 8;
+
 /// CreatureSoundData columns (3.3.5a, 38 of them).
 constexpr uint32_t kColumnFootstep = 9;  ///< +0x24, FootstepTerrainLookup's CreatureFootstepID
 constexpr uint32_t kColumnFidget0 = 14;

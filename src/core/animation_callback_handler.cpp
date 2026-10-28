@@ -313,6 +313,16 @@ void AnimationCallbackHandler::setupCallbacks() {
         entitySpawner_.playUnitEmoteSound(static_cast<const game::Unit&>(*entity), emotesTextId);
     });
 
+    // A reaction going to HATE, which the unit answers out loud. The client
+    // resolves the unit first (0x00716b10 asks Unit_C.cpp for one, and plays
+    // nothing where there is none or it is not a unit), then hands the slot
+    // to the unit itself.
+    gameHandler_.setUnitAlertSoundCallback([this](uint64_t guid) {
+        auto entity = gameHandler_.getEntityManager().getEntity(guid);
+        if (!entity || !entity->isUnit()) return;
+        entitySpawner_.playUnitAlertSound(static_cast<const game::Unit&>(*entity));
+    });
+
     // Other units' stand state (UNIT_FIELD_BYTES_1 byte 0), as the client
     // takes its change (0x0073f460 -> 0x0073f060): the base animation, from
     // the state its animation was given for, sits it down, lies it down,

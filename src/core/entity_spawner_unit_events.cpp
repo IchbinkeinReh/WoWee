@@ -146,6 +146,14 @@ void EntitySpawner::playUnitJumpSound(const game::Unit& unit, uint32_t slot) {
     playUnitSlot(unit, slot, true, nullptr);
 }
 
+void EntitySpawner::playUnitAlertSound(const game::Unit& unit) {
+    // 0x00716b10, SMSG_AI_REACTION's handler: a reaction of HATE asks the
+    // unit its slot 8 and nothing else. The ask is rolled like any other,
+    // though its chance is 100 of 100, and the line is said where the unit
+    // stands - the packet carries no position.
+    playUnitSlot(unit, ue::kSlotAlert, false, nullptr);
+}
+
 const std::vector<ue::EmoteSoundRow>& EntitySpawner::emoteSoundRows() {
     if (emoteSoundRowsLoaded_ || !assetManager_) return emoteSoundRows_;
     emoteSoundRowsLoaded_ = true;

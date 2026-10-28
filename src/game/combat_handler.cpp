@@ -249,7 +249,12 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         if (!packet.hasRemaining(12)) return;
         uint64_t guid = packet.readUInt64();
         uint32_t reaction = packet.readUInt32();
-        if (reaction == 2 && owner_.npcAggroCallbackRef()) {
+        // The client's two branches (0x00716b10): a HATE reaction only asks
+        // the unit its PreAggro sound slot, and an UNFRIENDLY one only its
+        // Aggro voice line.
+        if (reaction == 0) {
+            if (owner_.unitAlertSoundCallbackRef()) owner_.unitAlertSoundCallbackRef()(guid);
+        } else if (reaction == 2 && owner_.npcAggroCallbackRef()) {
             auto entity = owner_.getEntityManager().getEntity(guid);
             if (entity)
                 owner_.npcAggroCallbackRef()(guid, glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
