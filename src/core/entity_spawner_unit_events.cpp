@@ -171,7 +171,7 @@ void EntitySpawner::playUnitReactionSound(const game::Unit& unit, uint32_t react
         playUnitVoiceKind(unit, ue::kVoiceKindAggro);
 }
 
-void EntitySpawner::playUnitVoiceLine(const game::Unit& unit, uint32_t sound) {
+void EntitySpawner::playUnitVoiceLine(const game::Unit& unit, uint32_t sound, uint32_t* outHandle) {
     // How every line of 0x007474b0 reaches the ear: heard as that unit's own
     // voice, the active player's own - and the mover it drives - kept over a
     // crowd's (0x6e) and, with the listener at the character, at the listener
@@ -183,11 +183,11 @@ void EntitySpawner::playUnitVoiceLine(const game::Unit& unit, uint32_t sound) {
     rendering::M2EventSounds& player = renderer_->getM2EventSounds();
     if (own && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
         player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_,
-                        audio::PlayLimit::None, false, priority);
+                        audio::PlayLimit::None, false, priority, outHandle);
         return;
     }
     if (const auto where = unitSoundPosition(guid))
-        player.playOnce(sound, &*where, 1.0f, assetManager_, audio::PlayLimit::None, false, priority);
+        player.playOnce(sound, &*where, 1.0f, assetManager_, audio::PlayLimit::None, false, priority, outHandle);
 }
 
 void EntitySpawner::playUnitVoiceKind(const game::Unit& unit, uint32_t kind) {
@@ -202,7 +202,21 @@ void EntitySpawner::playUnitVoiceKind(const game::Unit& unit, uint32_t kind) {
     if (!sounds || sounds->getFieldCount() <= column) return;
     const uint32_t sound = sounds->getUInt32(static_cast<uint32_t>(row), column);
     if (sound == 0) return;
-    playUnitVoiceLine(unit, sound);
+    // A unit says one line at a time (0x007474b0): the play it is saying is
+    // held in its tracker slot, and while that runs a kind only gets through
+    // when it outranks the kind already playing. Death outranks a Kill, an
+    // Order outranks an Aggro, and an Aggro outranks nothing at all.
+    const uint64_t guid = unit.getGuid();
+    if (auto playing = unitVoiceLines_.find(guid); playing != unitVoiceLines_.end()) {
+        if (!audio::AudioEngine::instance().isSoundPlaying(playing->second.first))
+            unitVoiceLines_.erase(playing);
+        else if (static_cast<int32_t>(kind) <= playing->second.second)
+            return;
+    }
+    uint32_t handle = 0;
+    playUnitVoiceLine(unit, sound, &handle);
+    if (handle == 0) return;  // nothing started: no line to be in the way
+    unitVoiceLines_[guid] = {handle, static_cast<int32_t>(kind)};
 }
 
 void EntitySpawner::playUnitPetActionSound(const game::Unit& unit, uint32_t action) {

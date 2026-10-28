@@ -1406,12 +1406,18 @@ private:
     /// from the CreatureSoundData row its display gives it.
     void playUnitVoiceKind(const game::Unit& unit, uint32_t kind);
     /// How a voice line reaches the ear - the unit's own, wherever it stands.
-    void playUnitVoiceLine(const game::Unit& unit, uint32_t sound);
+    /// `outHandle`, where given, takes the play's handle.
+    void playUnitVoiceLine(const game::Unit& unit, uint32_t sound, uint32_t* outHandle = nullptr);
     /// EmotesTextSound's rows, read once when an emote first asks (0x0063e4f0,
     /// which will not load the table twice).
     const std::vector<rendering::unit_event::EmoteSoundRow>& emoteSoundRows();
     std::vector<rendering::unit_event::EmoteSoundRow> emoteSoundRows_;
     bool emoteSoundRowsLoaded_ = false;
+    /// The line each unit is saying: the handle its play went into and the
+    /// kind it was asked as (0x007474b0's tracker at unit+0x908 and its kind at
+    /// +0x930). A unit says one line at a time; a new kind is heard only where
+    /// it outranks the kind still playing.
+    std::unordered_map<uint64_t, std::pair<uint32_t, int32_t>> unitVoiceLines_;
     uint32_t unitEventRandom_ = 0x2545F491u;
     /// Each unit's depth below the water at its last check while not
     /// swimming (+0x784), by guid.

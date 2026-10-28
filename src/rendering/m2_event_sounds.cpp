@@ -104,7 +104,8 @@ uint32_t M2EventSounds::idByName(const std::string& name, pipeline::AssetManager
 
 void M2EventSounds::playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale,
                              pipeline::AssetManager* assets, audio::PlayLimit limit, bool absolute,
-                             int priority) {
+                             int priority, uint32_t* outHandle) {
+    if (outHandle) *outHandle = 0;
     const Kit* k = kit(soundId, assets);
     if (!k) return;
     const float maxDistance = k->cutoff > 0.0f ? k->cutoff : 100.0f;
@@ -114,8 +115,8 @@ void M2EventSounds::playOnce(uint32_t soundId, const glm::vec3* at, float volume
     // An SFX play, as every one 0x004c5990 sets up (type 0).
     constexpr auto kSfx = audio::Channel::Effects;
     const float volume = absolute ? volumeScale : k->volume * volumeScale;
-    if (!at) audio.playSound2D(*file, volume, 1.0f, kSfx, limit, priority);
-    else audio.playSound3D(*file, *at, volume, 1.0f, maxDistance, minDistance, kSfx, limit, priority);
+    if (!at) audio.playSound2D(*file, volume, 1.0f, kSfx, limit, priority, outHandle);
+    else audio.playSound3D(*file, *at, volume, 1.0f, maxDistance, minDistance, kSfx, limit, priority, outHandle);
 }
 
 void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const ShakeCamera& shakeCamera) {

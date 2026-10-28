@@ -242,10 +242,12 @@ public:
     /// the kit's - a play whose own volume is set (0x004c6a40 takes one in
     /// (0, 1] in place of the kit's). `priority` is its voice's
     /// (audio/voice_priority.hpp): kActiveMover for one the active mover is
-    /// part of.
+    /// part of. `outHandle`, where given, takes the play's handle to ask
+    /// about with AudioEngine::isSoundPlaying - what the client holds in the
+    /// slot the play was handed (0x004c6a40's third argument); 0 for no play.
     void playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale, pipeline::AssetManager* assets,
                   audio::PlayLimit limit = audio::PlayLimit::None, bool absolute = false,
-                  int priority = audio::voice_priority::kDefault);
+                  int priority = audio::voice_priority::kDefault, uint32_t* outHandle = nullptr);
     /// A SoundEntries row by its Name (0x004ccaa0), 0 for none.
     uint32_t idByName(const std::string& name, pipeline::AssetManager* assets);
 
