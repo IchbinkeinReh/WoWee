@@ -529,6 +529,11 @@ void M2Renderer::setModelParticlesOnly(uint32_t modelId) {
     // invisible trap, and the particle passes do not.
     it->second.isInvisibleTrap = true;
     it->second.disableAnimation = true;
+    // The traced scene too: loadModel gave it a mesh to cast with before it
+    // was known to be only particles, and each twin cast a second shadow of
+    // the unit it follows - posed by the same bones, so never seen, but
+    // traced every frame.
+    releaseRtModel(it->second);
 }
 
 void M2Renderer::setInstanceExternalPose(uint32_t instanceId, const glm::mat4& model,
