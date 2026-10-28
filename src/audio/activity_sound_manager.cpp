@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include <algorithm>
 #include <cctype>
+#include <unordered_set>
 
 namespace wowee {
 namespace audio {
@@ -128,29 +129,33 @@ static std::vector<std::string> exertionPrefixes(const std::string& raceBase, bo
 // plays, but from rows addressed by id. Joining the two by leaf file name is
 // what lets the row's own ask (VolumeFloat 24, Flags 25) reach the play.
 //
-// The join is safe for the sets this manager builds, and it is not safe in
-// general, so the caveat belongs here: of the 574 candidate paths the rebuild*
-// sets and the landing sets offer, 74 leaf files are named by a row, and no
-// leaf named twice disagrees about its ask. Other leaf names in the same table
-// do -- "mfoothugegiant*" is named by row 732 (CharacterGiant<Surface>) and by
-// 12126 ("Giant Stomp") with different asks, and "mdeathimpactgiantwatera.wav"
-// by 1268 and 8461 -- so reaching those families by leaf would need the row id
-// rather than a first-wins lookup.
+// A leaf can be named by more than one row, and then the ask is not this
+// clip's ask but whichever row was read first -- which is a guess, not the
+// data. So a leaf whose rows disagree about volume or flags is dropped: it
+// keeps the level this manager would have used anyway. "mfoothugegiantdirta"
+// (rows 732 CharacterGiantDirt and 12126 Giant Stomp) and
+// "mdeathimpactgiantwatera" (1268 DeathThudWaterGiant and 8461 Pagle's Point
+// Cast Impact) are the leaves that land in that pile; the splash sets are
+// named by nine rows apiece that all ask the same thing, so they stay.
 void ActivitySoundManager::indexRowAsks() {
     if (!assetManager) return;
     rowsByLeaf.clear();
     auto dbc = assetManager->loadDBCOptional("SoundEntries.dbc");
     // Older clients' SoundEntries stops before the volume/flags pair.
     if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() <= 25) return;
+    std::unordered_set<std::string> disagreeing;
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
         const float volume = dbc->getFloat(i, 24);
         const uint32_t flags = dbc->getUInt32(i, 25);
         for (uint32_t f = 0; f < 10; ++f) {
             const std::string file = dbc->getString(i, 3 + f);
             if (file.empty()) continue;
-            rowsByLeaf.try_emplace(leafLower(file), RowAsk{volume, flags});
+            const auto [ask, inserted] = rowsByLeaf.try_emplace(leafLower(file), RowAsk{volume, flags});
+            if (!inserted && (ask->second.volume != volume || ask->second.flags != flags))
+                disagreeing.insert(ask->first);
         }
     }
+    for (const auto& leaf : disagreeing) rowsByLeaf.erase(leaf);
 }
 
 // The level and pitch this clip's own row asks for, swung as its Flags ask.
