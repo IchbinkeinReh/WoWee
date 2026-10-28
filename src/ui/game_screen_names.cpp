@@ -255,16 +255,22 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     glm::vec3 playerCanonical(0.0f);
     if (auto player = gameHandler.getEntityManager().getEntity(playerGuid))
         playerCanonical = glm::vec3(player->getX(), player->getY(), player->getZ());
-    gameHandler.getEntityManager().getEntitiesNear(playerCanonical.x, playerCanonical.y, 150.0f, nearby);
+    {
+        WOWEE_PROFILE_SCOPE("names: gather", Cpu);
+        gameHandler.getEntityManager().getEntitiesNear(playerCanonical.x, playerCanonical.y, 150.0f, nearby);
+    }
     const glm::vec3 playerRenderPos = core::coords::canonicalToRender(playerCanonical);
 
     // Nearest first, so with overlap off the plate that moves is the farther.
+    {
+        WOWEE_PROFILE_SCOPE("names: sort", Cpu);
     std::sort(nearby.begin(), nearby.end(), [&](const auto& a, const auto& b) {
         if (!a || !b) return a != nullptr;
         const glm::vec3 da(a->getX() - playerCanonical.x, a->getY() - playerCanonical.y, a->getZ() - playerCanonical.z);
         const glm::vec3 db(b->getX() - playerCanonical.x, b->getY() - playerCanonical.y, b->getZ() - playerCanonical.z);
         return glm::dot(da, da) < glm::dot(db, db);
     });
+    }
     static thread_local std::vector<ui::PlateBox> placed;
     placed.clear();
 
@@ -452,6 +458,8 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     const double now = ImGui::GetTime();
     const float fw = 0.1f * ui, fh = 0.025f * ui;
 
+    {
+    WOWEE_PROFILE_SCOPE("names: units", Cpu);
     for (const auto& entityPtr : nearby) {
         if (!entityPtr || !entityPtr->isUnit()) continue;
         const uint64_t guid = entityPtr->getGuid();
@@ -513,45 +521,93 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         plateRecs.push_back({.entity = entityPtr.get(), .unit = unit, .guid = guid, .isPlayer = isPlayer,
                              .isTarget = isTarget, .left = left, .bottom = bottom, .depth = clipW});
     }
+    }
 
     // Every name of this frame, laid out and handed to the scene with the
     // texture its glyphs were packed in. All were measured above, so their
     // glyphs are baked and laying them out adds none; should the atlas be
     // repacked all the same, they are laid out again on the new packing.
     if (worldText) {
+        WOWEE_PROFILE_SCOPE("names: layout", Cpu);
         const ImFontAtlas* atlas = font->OwnerAtlas;
+        // A name's glyphs, laid out once at the size they are baked at: its
+        // triangles in pixels from the anchor, and their texture coordinates.
+        // A name changes rarely and its baked size in steps (nameBakeSize),
+        // and laying every name out again through the interface's text
+        // drawing - five times over, for the outline - was a third of a
+        // millisecond a frame on a street in Silvermoon. The outline is the
+        // same triangles shifted a screen pixel each way, so the shift is
+        // applied here rather than kept in the key: it follows the distance.
+        // Forgotten whenever the atlas is packed again, which moves glyphs.
+        struct NameGlyphs {
+            std::vector<glm::vec2> pos;
+            std::vector<glm::vec2> uv;
+        };
+        static std::unordered_map<std::string, NameGlyphs> glyphCache;
+        static const ImTextureData* glyphsPackedIn = nullptr;
+        constexpr size_t kMaxCachedNames = 1024;
         for (int attempt = 0; attempt < 3; ++attempt) {
             const ImTextureData* packedIn = atlas->TexData;
+            if (glyphsPackedIn != packedIn || glyphCache.size() > kMaxCachedNames) {
+                glyphCache.clear();
+                glyphsPackedIn = packedIn;
+            }
             nameTriangles.clear();
+            std::string key;
             for (const NameJob& job : nameJobs) {
-                // One name at a time, so its indices are its own.
-                nameList->_ResetForNewFrame();
-                nameList->PushTexture(atlas->TexRef);
-                nameList->PushClipRectFullScreen();
-                // Lines centred, the block's bottom on the anchor; in pixels
-                // of the baked size, the outline one pixel on screen.
-                const ImVec2 size = font->CalcTextSizeA(job.bake, FLT_MAX, 0.0f, job.text.c_str());
-                float y = job.anchorPx.y - size.y;
-                size_t start = 0;
-                while (start <= job.text.size()) {
-                    const size_t end = job.text.find('\n', start);
-                    const std::string line =
-                        job.text.substr(start, end == std::string::npos ? std::string::npos : end - start);
-                    const ImVec2 ls = font->CalcTextSizeA(job.bake, FLT_MAX, 0.0f, line.c_str());
-                    outlinedText(nameList, font, job.bake, ImVec2(job.anchorPx.x - ls.x * 0.5f, y), job.color,
-                                 line.c_str(), job.spread);
-                    y += ls.y;
-                    if (end == std::string::npos) break;
-                    start = end + 1;
+                key.assign(std::to_string(static_cast<int>(job.bake)));
+                key.push_back('\x1f');
+                key.append(job.text);
+                auto it = glyphCache.find(key);
+                if (it == glyphCache.end()) {
+                    // One name at a time, so its indices are its own. Lines
+                    // centred, the block's bottom on the anchor.
+                    // Laid out about the origin, half of it at negative x: the
+                    // clip rectangle has to take it all in, or the interface
+                    // drops the glyphs left of the screen's edge.
+                    nameList->_ResetForNewFrame();
+                    nameList->PushTexture(atlas->TexRef);
+                    nameList->PushClipRect(ImVec2(-65536.0f, -65536.0f), ImVec2(65536.0f, 65536.0f), false);
+                    const ImVec2 size = font->CalcTextSizeA(job.bake, FLT_MAX, 0.0f, job.text.c_str());
+                    float y = -size.y;
+                    size_t start = 0;
+                    while (start <= job.text.size()) {
+                        const size_t end = job.text.find('\n', start);
+                        const std::string line =
+                            job.text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                        const ImVec2 ls = font->CalcTextSizeA(job.bake, FLT_MAX, 0.0f, line.c_str());
+                        nameList->AddText(font, job.bake, ImVec2(-ls.x * 0.5f, y), IM_COL32_WHITE, line.c_str());
+                        y += ls.y;
+                        if (end == std::string::npos) break;
+                        start = end + 1;
+                    }
+                    NameGlyphs glyphs;
+                    glyphs.pos.reserve(nameList->IdxBuffer.Size);
+                    glyphs.uv.reserve(nameList->IdxBuffer.Size);
+                    for (const ImDrawIdx i : nameList->IdxBuffer) {
+                        const ImDrawVert& v = nameList->VtxBuffer[i];
+                        glyphs.pos.emplace_back(v.pos.x, v.pos.y);
+                        glyphs.uv.emplace_back(v.uv.x, v.uv.y);
+                    }
+                    it = glyphCache.emplace(key, std::move(glyphs)).first;
                 }
-                for (const ImDrawIdx i : nameList->IdxBuffer) {
-                    const ImDrawVert& v = nameList->VtxBuffer[i];
-                    nameTriangles.push_back(
-                        {.anchor = job.anchor,
-                         .offset = rendering::unit_name_anchor::billboardOffset(glm::vec2(v.pos.x, v.pos.y),
-                                                                                job.anchorPx, job.bakePerYard),
-                         .uv = glm::vec2(v.uv.x, v.uv.y),
-                         .colour = v.col});
+                // The outline a screen pixel each way under the name, as
+                // outlinedText draws it, then the name.
+                const NameGlyphs& glyphs = it->second;
+                const ImU32 shadow = IM_COL32(0, 0, 0, (job.color >> IM_COL32_A_SHIFT) & 0xFF);
+                const float s = job.spread;
+                const glm::vec2 shifts[5] = {{-s, 0.0f}, {s, 0.0f}, {0.0f, -s}, {0.0f, s}, {0.0f, 0.0f}};
+                for (int pass = 0; pass < 5; ++pass) {
+                    const ImU32 colour = pass < 4 ? shadow : job.color;
+                    for (size_t k = 0; k < glyphs.pos.size(); ++k) {
+                        const glm::vec2 px = job.anchorPx + glyphs.pos[k] + shifts[pass];
+                        nameTriangles.push_back(
+                            {.anchor = job.anchor,
+                             .offset = rendering::unit_name_anchor::billboardOffset(px, job.anchorPx,
+                                                                                    job.bakePerYard),
+                             .uv = glyphs.uv[k],
+                             .colour = colour});
+                    }
                 }
             }
             if (atlas->TexData == packedIn) break;
@@ -635,6 +691,9 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         }
         if (end) castBarEndSerial = end->serial;
     }
+
+    // To the end of the function: the plates drawn.
+    WOWEE_PROFILE_SCOPE("names: plates", Cpu);
 
     // ---- The plates (0x0098f790, laid out by 0x0098f390, each frame
     // 0x0098e9f0); the target's on top, at frame level 20 to the others' 10.

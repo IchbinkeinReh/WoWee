@@ -11,6 +11,7 @@
 #include "ui/display_modes.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "ui/scene_pick.hpp"
+#include "core/frame_profiler.hpp"
 #include "ui/ui_colors.hpp"
 #include "ui/ui_helpers.hpp"
 #include "ui/ui_texture_load.hpp"
@@ -2101,8 +2102,10 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             // The same picker the click uses, so the cursor affordance cannot
             // disagree with what clicking would actually select - including the
             // tighter sphere critters get, which this copy did not have.
-            const ui::ScenePick hoverPick =
-                ui::pickScene(gameHandler, ray, ui::ScenePickParams{});
+            const ui::ScenePick hoverPick = [&] {
+                WOWEE_PROFILE_SCOPE("interface: hover pick", Cpu);
+                return ui::pickScene(gameHandler, ray, ui::ScenePickParams{});
+            }();
             if (gameHandler.isUnitTargeting()) {
                 // A spell waiting for a unit (0x004f8190): Cast over one it
                 // would take within its reach (0x00803a50), else UnableCast.
