@@ -138,6 +138,72 @@ struct LfgMemberLocks {
     std::vector<std::pair<uint32_t, uint32_t>> locks;   ///< entry, status
 };
 
+/**
+ * One row of a raid browser list — SMSG_UPDATE_LFG_LIST (0x360), read by
+ * 0x0055b770. The packet carries rows of two kinds, and the client keeps them as
+ * two record shapes: the 0x148-byte one from `LFGInfo.cpp:0x2be` (its field
+ * reader is 0x00553620) and the 0x1a8-byte one from `LFGInfo.cpp:0x2d1` (its
+ * reader is 0x00559050). Which fields the reader's own getters read is what is
+ * kept here; the field runs whose meaning the getters never show are skipped and
+ * named as such below.
+ */
+struct LfgListRow {
+    uint64_t guid = 0;          ///< the entry guid: a player's, or a listing's
+    bool     isListing = false; ///< true for the 0x1a8 rows, false for the 0x148 ones
+
+    /// The row's comment: a fixed 256-byte field in both shapes (record +0x24 for
+    /// a player row, +0x91 for a listing row), trimmed at the first NUL.
+    std::string comment;
+
+    /// Only a listing row carries a level — the first byte of its field run at
+    /// +0x2c, which `SearchLFGGetResults` pushes as the row's second value.
+    uint8_t level = 0;
+    bool      hasLevel = false;
+
+    /// The byte at listing +0x88, mask bit 0x40. lfrframe.lua greys a row out
+    /// when this is set, and its own name for it in the row fill is `status`.
+    bool listed = false;
+
+    /// Which bosses of the list's dungeon this row has done: the dword that
+    /// follows the eight-byte link in both shapes (+0x130 and +0x1a0), which
+    /// 0x00553830 tests a bit at a time against the dungeon's encounter rows.
+    uint32_t encounterMask = 0;
+
+    /// The eight-byte link that precedes that dword (+0x128 in a player row,
+    /// +0x198 in a listing row). Kept because re-deriving it costs a read of the
+    /// linking code; what it links to has not been established, so nothing
+    /// reads it yet.
+    uint64_t linkGuid = 0;
+
+    /// The three bytes a player row carries at mask bit 0x10 (+0x124..0x126).
+    /// The last four values `SearchLFGGetResults` pushes come out of
+    /// 0x005529e0, a thousand bytes of record-walker that has not been read, so
+    /// whether these three are exactly the tank / healer / damage flags is not
+    /// established and no binding answers from them.
+    uint8_t rawBytes[3] = {0, 0, 0};
+    bool      hasRawBytes = false;
+};
+
+/**
+ * Reads a whole SMSG_UPDATE_LFG_LIST into `rows`, replacing nothing outside it.
+ *
+ * The packet opens with the list it describes as two separate uint32s — a type
+ * and an id — which the client repacks as `type<<24 | id & 0xffffff` and drops
+ * the packet unless that equals the list it holds (0x0055b770:9690-9694). Then
+ * one byte: when it is 0 the client clears what it holds and reads no removal
+ * block, so the rows that follow are the whole list; when it is set, a counted
+ * block of removals comes first. Then two counted blocks — the player rows, then
+ * the listing rows — each row an eight-byte guid followed by a uint32 saying
+ * which fields that row carries. The reads are plain bytes: 0x0047b340/3c0/400
+ * are one, four and eight, and 0x0047b480 is a fixed-width string.
+ *
+ * A row whose guid is already held updates it in place, as the client's guid hash
+ * does; a whole-list packet clears first. False when the packet is cut short, with
+ * the rows read whole kept, which is what the client leaves behind too.
+ */
+bool parseLfgList(network::Packet& packet, uint32_t heldListId,
+                  std::vector<LfgListRow>& rows);
+
 /// The party lock block SMSG_LFG_PARTY_INFO carries, and SMSG_LFG_JOIN_RESULT
 /// with result 6 after its two uint32s (0x0055b080): a byte count, then per
 /// member a guid, a uint32 count and that many entry/status pairs. A member

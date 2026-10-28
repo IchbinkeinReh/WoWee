@@ -187,5 +187,137 @@ bool parseLfgPartyLocks(network::Packet& packet, std::vector<LfgMemberLocks>& ou
     return true;
 }
 
+bool parseLfgList(network::Packet& packet, uint32_t heldListId,
+                  std::vector<LfgListRow>& rows) {
+    if (!packet.hasRemaining(4 + 4 + 1)) return false;
+    const uint32_t typeId = packet.readUInt32();
+    const uint32_t listId = (typeId << 24) | (packet.readUInt32() & 0x00FFFFFFu);
+    const bool deltas = packet.readUInt8() != 0;
+    if (listId != heldListId) {
+        // Not the list this client is in. The client returns without reading the
+        // rest (0x0055b770:9691-9694) — an update for a list already left.
+        packet.skipAll();
+        return true;
+    }
+    // The byte being clear is what makes the packet a whole list rather than a
+    // delta: the client clears its window (0x00558af0) and reads no removals.
+    if (!deltas) rows.clear();
+
+    // Every field goes through this, so a packet that runs out is noticed once and
+    // the rows already read are kept — the same bounds check the client's readers
+    // make (0x0047b290) before each of theirs.
+    struct Reader {
+        network::Packet& p;
+        bool ok = true;
+        uint8_t u8() {
+            if (!ok || !p.hasRemaining(1)) { ok = false; return 0; }
+            return p.readUInt8();
+        }
+        uint32_t u32() {
+            if (!ok || !p.hasRemaining(4)) { ok = false; return 0; }
+            return p.readUInt32();
+        }
+        uint64_t u64() {
+            if (!ok || !p.hasRemaining(8)) { ok = false; return 0; }
+            return p.readUInt64();
+        }
+        /// A fixed-width string field: the client reads the whole width
+        /// (0x0047b480(dst, 0x100)) whatever the terminator does, so the width is
+        /// consumed even where the text stops early.
+        std::string fixed(size_t width) {
+            std::string s;
+            for (size_t i = 0; i < width; ++i) {
+                const char c = static_cast<char>(u8());
+                if (c != '\0') s.push_back(c);
+            }
+            return s;
+        }
+    } in{packet};
+
+    auto findRow = [&](uint64_t g, bool listing) -> LfgListRow* {
+        for (auto& r : rows)
+            if (r.guid == g && r.isListing == listing) return &r;
+        return nullptr;
+    };
+    // Rows are keyed by their guid, as the client's guid hash keys its records
+    // (0x006792e0): a row that arrives again updates the one held rather than
+    // adding a second.
+    auto rowFor = [&](uint64_t g, bool listing) -> LfgListRow& {
+        if (LfgListRow* found = findRow(g, listing)) return *found;
+        rows.push_back(LfgListRow{});
+        LfgListRow& r = rows.back();
+        r.guid = g;
+        r.isListing = listing;
+        return r;
+    };
+
+    if (deltas) {
+        const uint32_t count = in.u32();
+        for (uint32_t i = 0; i < count && in.ok; ++i) {
+            const uint64_t g = in.u64();
+            // This block carries nothing but the guid, and the test the client
+            // makes on it is a guid test, not a field mask: high dword clear and
+            // the guid not zero names rows to drop, and a zero guid or a high bit
+            // in the top nibble is a row touched without being changed (0x0055b770
+            // :9709). Both record kinds share one guid space, so both go.
+            const bool removal = ((g >> 32) & 0xf0000000u) == 0 && g != 0;
+            if (removal) std::erase_if(rows, [&](const LfgListRow& r) { return r.guid == g; });
+        }
+    }
+
+    const auto readFields = [&](LfgListRow& row, bool listing) {
+        const uint32_t mask = in.u32();
+        if (!listing) {
+            // 0x00553620: the comment, three bytes the getters have no shown
+            // meaning for, and the link/encounter pair.
+            if (mask & 0x2) row.comment = in.fixed(0x100);
+            if (mask & 0x10) {
+                for (uint8_t& b : row.rawBytes) b = in.u8();
+                row.hasRawBytes = true;
+            }
+            if (mask & 0x80) {
+                row.linkGuid = in.u64();
+                row.encounterMask = in.u32();
+            }
+            return;
+        }
+        // 0x00559050. Bit 1 is a run of six bytes then twenty uint32s, at record
+        // +0x2c through +0x80; the getters show a meaning for exactly one of
+        // those, the byte at +0x2c, which SearchLFGGetResults pushes as the row's
+        // level, so only that is kept and the rest is stepped over.
+        if (mask & 0x1) {
+            row.level = in.u8();
+            row.hasLevel = true;
+            for (int k = 0; k < 5; ++k) in.u8();
+            for (int k = 0; k < 20; ++k) in.u32();
+        }
+        if (mask & 0x2) row.comment = in.fixed(0x100);
+        if (mask & 0x4) in.u8();   // +0x8c: a change relinks the row (0x00556ef0,
+        if (mask & 0x8) in.u64();  // 0x00556e60); what the pair at +0x90 / +0x84
+        if (mask & 0x10) in.u8();  // and the guid at +0x28 decide has not been
+        if (mask & 0x20) in.u32(); // read, so they are stepped over too.
+        if (mask & 0x40) row.listed = in.u8() != 0;
+        if (mask & 0x80) {
+            row.linkGuid = in.u64();
+            row.encounterMask = in.u32();
+        }
+    };
+
+    // Two counted blocks, the players first and then the listings, which is the
+    // order the client's row getter walks them in unless the byte at 0x00acd660
+    // says otherwise; nothing here applies that swap.
+    const uint32_t playerCount = in.u32();
+    for (uint32_t i = 0; i < playerCount && in.ok; ++i) {
+        const uint64_t g = in.u64();
+        readFields(rowFor(g, false), false);
+    }
+    const uint32_t listingCount = in.u32();
+    for (uint32_t i = 0; i < listingCount && in.ok; ++i) {
+        const uint64_t g = in.u64();
+        readFields(rowFor(g, true), true);
+    }
+    return in.ok;
+}
+
 }  // namespace game
 }  // namespace wowee

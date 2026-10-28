@@ -1165,16 +1165,15 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         handleLfgPartyInfo(packet);
     };
     // The raid browser's browse list, which lfrframe.lua fills through
-    // SearchLFGGetResults. The rows themselves are still unread:
-    // SMSG_UPDATE_LFG_LIST (0x0055b770) is a joined-list id of type<<24|id that
-    // has to match the one held, a whole-or-delta byte, and then entries as an
-    // eight-byte guid plus a mask of which fields that row carries, into records
-    // of 0x148 bytes (LFGInfo.cpp:0x2be). What is read here is the search
-    // update, which is the joined-list flag alone.
+    // SearchLFGGetResults. The packet names the list it describes as a type and
+    // an id, and is dropped unless those repack to the list this client asked to
+    // join; parseLfgList reads the rest (0x0055b770).
     table[Opcode::SMSG_LFG_UPDATE_SEARCH] = [this](network::Packet& packet) {
         handleLfgUpdateSearch(packet);
     };
-    table[Opcode::SMSG_UPDATE_LFG_LIST] = [](network::Packet& packet) { packet.skipAll(); };
+    table[Opcode::SMSG_UPDATE_LFG_LIST] = [this](network::Packet& packet) {
+        handleUpdateLfgList(packet);
+    };
     table[Opcode::SMSG_OPEN_LFG_DUNGEON_FINDER] = [this](network::Packet& packet) {
         packet.skipAll();
         if (owner_.openLfgCallbackRef()) owner_.openLfgCallbackRef()();
@@ -4784,6 +4783,11 @@ void SocialHandler::lfgSearchLeave() {
             owner_.getSocket()->send(packet);
         }
     }
+    // Leaving drops the rows with the id: 0x00558f90 clears the results held for
+    // the list before it sends, and 0x00558ed0 does the same when a different list
+    // is asked for, so a row of the old list is never answered to the new one.
+    lfgListRows_.clear();
+    lfgListWindowId_ = 0;
     lfgJoinedListId_ = 0;
 }
 
@@ -4798,14 +4802,36 @@ void SocialHandler::handleLfgUpdateSearch(network::Packet& packet) {
     packet.skipAll();
     if (listed || lfgJoinedListId_ == 0) return;
     lfgJoinedListId_ = 0;
-    // The list this clears is the one on SMSG_UPDATE_LFG_LIST, which is not read
-    // here at all; what is left to clear is the id, and the mode the interface
-    // derives from it ("listed", which changes the raid browser's button and
-    // blocks the Dungeon Finder beside it) is re-read on LFG_UPDATE. The client
-    // reports this change through its own list-clearing routine (0x00558c30);
-    // what that routine fires was not read, so the event named here is this
-    // client's, chosen because it is the one every GetLFGMode consumer listens
-    // to, not a translation of that call.
+    // The rows go with the list. The client's clearing routine (0x00558af0) drops
+    // the window it holds, and a window kept past the list it belongs to would be
+    // answered to the next list's rows.
+    lfgListRows_.clear();
+    lfgListWindowId_ = 0;
+    // The mode the interface derives from the id ("listed", which changes the raid
+    // browser's button and blocks the Dungeon Finder beside it) is re-read on
+    // LFG_UPDATE. The client reports this change through 0x00558c30; what that
+    // routine fires was not read, so the event named here is this client's, chosen
+    // because it is the one every GetLFGMode consumer listens to, not a translation
+    // of that call.
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
+}
+
+// SMSG_UPDATE_LFG_LIST (0x360), the rows of the raid browser's list. The packet is
+// dropped whole unless it names the list this client joined (parseLfgList), and the
+// client raises its own event only when the packet names a *different* list than
+// the window already held - the id is compared before the rows are read
+// (0x0055b770:9695-9697) and the event fires at the end (:9978-9981). Same rule
+// here: the rows are stored either way, and LFG_UPDATE is what makes lfrframe.lua
+// rebuild the panel (lfrframe.lua:21, :35).
+void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
+    if (lfgJoinedListId_ == 0) {
+        packet.skipAll();
+        return;
+    }
+    const uint32_t previousWindow = lfgListWindowId_;
+    parseLfgList(packet, lfgJoinedListId_, lfgListRows_);
+    lfgListWindowId_ = lfgJoinedListId_;
+    if (previousWindow != 0 && previousWindow == lfgListWindowId_) return;
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
 }
 

@@ -608,6 +608,17 @@ public:
     /// (SearchLFGJoin / SearchLFGLeave, 0x00559400 and 0x00558f90).
     void lfgSearchJoin(uint32_t typeId, uint32_t lfgId);
     void lfgSearchLeave();
+    /// How many rows the raid browser's browse panel has, which is
+    /// SearchLFGGetNumResults' first number (0x00553ba0) and answers zero while no
+    /// list is held - the client's own guard on its held list id.
+    [[nodiscard]] uint32_t getLfgListRowCount() const {
+        return lfgListWindowId_ == 0 ? 0 : static_cast<uint32_t>(lfgListRows_.size());
+    }
+    /// One of those rows by index from zero, or null past the end.
+    [[nodiscard]] const LfgListRow* getLfgListRow(uint32_t index) const {
+        if (lfgListWindowId_ == 0 || index >= lfgListRows_.size()) return nullptr;
+        return &lfgListRows_[index];
+    }
     [[nodiscard]] uint32_t getLfgDungeonId()       const { return lfgDungeonId_; }
     [[nodiscard]] std::string getCurrentLfgDungeonName() const;
     [[nodiscard]] uint32_t getLfgProposalId()      const { return lfgProposalId_; }
@@ -716,6 +727,7 @@ private:
     /// SMSG_LFG_UPDATE_SEARCH, one byte: the server saying this player is no
     /// longer listed drops the joined raid-browser list (case 0x369 of 0x0055bdc0).
     void handleLfgUpdateSearch(network::Packet& packet);
+    void handleUpdateLfgList(network::Packet& packet);
     void applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party);
     /// Whether any of the body's dungeons is a raid, which turns the queue's
     /// lines into the raid browser's (0x00557260).
@@ -895,6 +907,15 @@ private:
     /// not listed. This client's own 0x00beaa14 - it is set by the request, not
     /// by any packet, which is why IsListedInLFR can only be as right as this.
     uint32_t lfgJoinedListId_ = 0;
+    /// The rows of the list held, in the order the packet brought them: the
+    /// player rows first, then the listings. The client sorts its own two arrays
+    /// before showing them (0x0055b700) by comparators that are not read, so this
+    /// order is arrival order, not the client's.
+    std::vector<LfgListRow> lfgListRows_;
+    /// Which list those rows belong to, the id of the last packet actually read -
+    /// the client's 0x00beaa98, which is also what it tests to decide whether the
+    /// rows changed enough to report. Zero when none is held.
+    uint32_t lfgListWindowId_ = 0;
     LfgCompletionReward lfgCompletionReward_;
     uint32_t lfgDungeonId_    = 0;
     uint32_t lfgProposalId_   = 0;

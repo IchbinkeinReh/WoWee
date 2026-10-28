@@ -4884,6 +4884,14 @@ void GameHandler::lfgSearchLeave() {
     if (socialHandler_) socialHandler_->lfgSearchLeave();
 }
 
+uint32_t GameHandler::getLfgListRowCount() const {
+    return socialHandler_ ? socialHandler_->getLfgListRowCount() : 0;
+}
+
+const LfgListRow* GameHandler::getLfgListRow(uint32_t index) const {
+    return socialHandler_ ? socialHandler_->getLfgListRow(index) : nullptr;
+}
+
 std::string GameHandler::getCurrentLfgDungeonName() const {
     return socialHandler_ ? socialHandler_->getCurrentLfgDungeonName() : std::string{};
 }
