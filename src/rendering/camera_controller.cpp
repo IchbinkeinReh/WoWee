@@ -2251,6 +2251,10 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         };
 
         float rawLimit = wmoLimitAlong(camDir);
+        // Nothing in the way: the sweep answers as far as it looked, which is
+        // where the zoom is going. Not a limit to recover toward - see below.
+        constexpr float kClearEps = 1e-3f;
+        bool sweepClear = rawLimit >= probeDistance - kClearEps;
 
         // Only pulled in along the line it looks down, never turned aside:
         // the client's sweep (Camera.cpp 0x00605d60 -> 0x0077f310) shortens
@@ -2270,6 +2274,11 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
             const float terrainTau = (terrainLimit < smoothedTerrainDist_) ? 0.18f : 0.45f;
             const float terrainAlpha = 1.0f - std::exp(-deltaTime / terrainTau);
             smoothedTerrainDist_ += (terrainLimit - smoothedTerrainDist_) * terrainAlpha;
+            if (terrainLimit >= probeDistance - kClearEps) {
+                smoothedTerrainDist_ = std::max(smoothedTerrainDist_, terrainLimit);
+            } else {
+                sweepClear = false;
+            }
             rawLimit = std::min(rawLimit, smoothedTerrainDist_);
         } else {
             smoothedTerrainDist_ = -1.0f;
@@ -2292,6 +2301,14 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
             float alpha = 1.0f - std::exp(-deltaTime / tau);
             smoothedCollisionDist_ += (rawLimit - smoothedCollisionDist_) * alpha;
         }
+        // The slow recovery is for coming out from behind something. With
+        // nothing in the way it trailed the zoom itself: the wheel zoomed out
+        // as fast as the limit let it, the pull below took the gap between
+        // the two for a wall and drew the zoom back in, and zooming out was
+        // slower than zooming in. Clear, the camera eases out as it eases in
+        // (ZOOM_SMOOTH_SPEED); coming out from behind a pillar stays smooth,
+        // the pull having taken the zoom in with it and giving it back slowly.
+        if (sweepClear) smoothedCollisionDist_ = std::max(smoothedCollisionDist_, rawLimit);
 
         collisionDistance = std::min(collisionDistance, smoothedCollisionDist_);
 
@@ -4187,8 +4204,20 @@ void CameraController::goToViewPose(const ViewPose& pose, float seconds) {
     if (seconds <= 0.0f) {
         viewBlending_ = false;
         for (auto* part : {&viewDistance_, &viewPitch_, &viewYaw_}) part->startMs = part->endMs;
+        timedZoomElapsed_ = -1.0f;
         userTargetDistance = distance;
         currentDistance = distance;
+        // At once means at once: what the collision sweep last allowed goes
+        // to the new distance too. It recovers outward over 0.4 s, so after
+        // a zoom out it still held the old, nearer distance; the pull below
+        // (a collision takes the zoom in with it) took that gap for a wall,
+        // took the zoom back in and booked the difference, and handed it
+        // back over the next seconds - /cam stepped out instead of jumping.
+        // Something really in the way still pulls it in, within 60 ms.
+        smoothedCollisionDist_ = distance;
+        collisionDistance = distance;
+        collisionZoomDebt_ = 0.0f;
+        collisionClearSeconds_ = 0.0f;
         pitch = toPitch;
         yaw += pose.yaw - fromYaw;
         if (camera) camera->setRotation(yaw, pitch);
