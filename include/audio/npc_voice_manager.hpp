@@ -111,7 +111,16 @@ private:
     /// asks for instead of one guessed here.
     void indexSoundEntriesReach();
     bool loadSound(const std::string& path, VoiceSample& sample);
-    void playSound(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, SoundCategory category, const glm::vec3& position);
+    /// Whether a line this manager started for that unit is still going.
+    [[nodiscard]] bool linePlaying(uint64_t npcGuid) const;
+    /// Ask one category's line and play it at the unit. `variant` is the client's
+    /// variant index: a kit alternate picked by position rather than by weight,
+    /// which is how its third slot is walked once each; -1 leaves the choice to the
+    /// kit's weights. False when nothing started, which is also the client's own
+    /// answer for a display that names no kit - 0x00746900 returns -1 there and no
+    /// line is asked at all.
+    bool playSound(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, SoundCategory category,
+                   int32_t variant, const glm::vec3& position);
 
     pipeline::AssetManager* assetManager_ = nullptr;
     float volumeScale_ = 1.0f;
@@ -146,11 +155,18 @@ private:
     // because a kit's slot is what is picked from.
     std::unordered_map<uint32_t, std::array<int32_t, 3>> kitLastFile_;
 
-    // Cooldown tracking (prevent spam clicking same NPC)
-    std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> lastPlayTime_;
-    std::unordered_map<uint64_t, int> clickCount_;  // Track clicks for pissed sounds
-    static constexpr float GREETING_COOLDOWN = 2.0f;  // seconds
-    static constexpr int PISSED_CLICK_THRESHOLD = 5;  // clicks before pissed
+    // One line per unit at a time, and how many asks that unit has had. The
+    // client keeps no timer and no click count: it refuses an ask outright while
+    // the unit's own sound slot is still busy (0x004c5be0 asked at
+    // 00720000.c:8066, and the same test at :382 on the farewell path), and it
+    // counts asks per unit in a counter that moves only when a line actually
+    // started (DAT_00ca1190, with the unit it belongs to in DAT_00ca1198/119c) -
+    // which is what the lastPlayTime_ wall-clock here stood in for.
+    std::unordered_map<uint64_t, uint32_t> lineHandle_;
+    std::unordered_map<uint64_t, int> askCount_;
+    /// How many times a unit's kit gives its first slot before the third is
+    /// walked at all (0x00746900; the 5 is hardcoded, with no cvar behind it).
+    static constexpr int kAsksFromFirstSlot = 5;
 
     std::mt19937 rng_;
 };

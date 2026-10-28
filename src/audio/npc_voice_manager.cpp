@@ -72,8 +72,8 @@ void NpcVoiceManager::shutdown() {
     vendorLibrary_.clear();
     pissedLibrary_.clear();
     fleeLibrary_.clear();
-    lastPlayTime_.clear();
-    clickCount_.clear();
+    lineHandle_.clear();
+    askCount_.clear();
     reachByName_.clear();
     kitIdByDisplay_.clear();
     kitRows_.clear();
@@ -433,24 +433,15 @@ bool NpcVoiceManager::loadSound(const std::string& path, VoiceSample& sample) {
     return true;
 }
 
-void NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType,
-                                SoundCategory category, const glm::vec3& position) {
-    if (!AudioEngine::instance().isInitialized()) {
-        return;
-    }
+bool NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType,
+                                SoundCategory category, int32_t variant, const glm::vec3& position) {
+    if (!AudioEngine::instance().isInitialized())
+        return false;
 
-    // Check cooldown (except for the two kinds that override it)
-    auto now = std::chrono::steady_clock::now();
-    if (category != SoundCategory::PISSED && category != SoundCategory::FLEE) {
-        auto it = lastPlayTime_.find(npcGuid);
-        if (it != lastPlayTime_.end()) {
-            float elapsed = std::chrono::duration<float>(now - it->second).count();
-            if (elapsed < GREETING_COOLDOWN) {
-                return;
-            }
-        }
-    }
-
+    // Whether a line is already going for this unit is asked by the callers, at
+    // the same points the client asks it - on the interaction (00720000.c:8066)
+    // and on the farewell (:382) - not here, so that a refused ask leaves the
+    // unit's ask counter where it was, which is what the client's does too.
     const VoiceSample* sample = nullptr;
 
     // The line the unit's own display names, when it names one: the client takes
@@ -471,36 +462,59 @@ void NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, VoiceType 
     if (kitAsked) {
         if (const auto kit = kitSlot(displayId, slot); kit.first != nullptr) {
             const auto& clips = *kit.first;
-            std::vector<uint32_t> frequency;
-            frequency.reserve(clips.size());
-            for (const auto& candidate : clips) frequency.push_back(candidate.frequency);
-            // Which of a kit's files, by those weights, is the client's own rule
-            // (0x004cbac0), and this repo already implements it for the music. A
-            // voice line is asked through it with the variant index left unset,
-            // which is the form that remembers the file it last gave on the
-            // SoundEntries record (+0x44) and will not give that one again while
-            // another file has weight; the same is remembered per kit slot here.
-            // A kit with no weight on any file is left to the even pick below,
-            // where the music would play none.
-            std::optional<size_t> lastFile;
-            if (kit.second != nullptr && *kit.second >= 0)
-                lastFile = static_cast<size_t>(*kit.second);
             size_t chosen = 0;
-            const uint32_t roll = std::uniform_int_distribution<uint32_t>(0, UINT32_MAX)(rng_);
-            if (const auto picked = zone_music::pickFile(frequency, lastFile, roll);
-                picked.has_value()) {
-                chosen = *picked;
-                if (kit.second != nullptr) *kit.second = static_cast<int32_t>(chosen);
+            if (variant >= 0) {
+                // Picked by position rather than by weight: once the unit's counter
+                // is past the first slot's five asks, 0x00746900 walks the kit's
+                // alternates in order and hands back the position as the variant
+                // index. The caller only asks a position it has just counted, so a
+                // position that is not in the kit means it changed under the ask -
+                // refuse it, which is the answer the client's counter turns into a
+                // reset and a first-slot line.
+                if (static_cast<size_t>(variant) >= clips.size()) return false;
+                chosen = static_cast<size_t>(variant);
             } else {
-                chosen = std::uniform_int_distribution<size_t>(0, clips.size() - 1)(rng_);
+                std::vector<uint32_t> frequency;
+                frequency.reserve(clips.size());
+                for (const auto& candidate : clips) frequency.push_back(candidate.frequency);
+                // Which of a kit's files, by those weights, is the client's own
+                // rule (0x004cbac0), and this repo already implements it for the
+                // music. A voice line is asked through it with the variant index
+                // left unset, which is the form that remembers the file it last
+                // gave on the SoundEntries record (+0x44) and will not give that
+                // one again while another file has weight; the same is remembered
+                // per kit slot here. A kit with no weight on any file is left to
+                // the even pick below, where the music would play none.
+                std::optional<size_t> lastFile;
+                if (kit.second != nullptr && *kit.second >= 0)
+                    lastFile = static_cast<size_t>(*kit.second);
+                const uint32_t roll = std::uniform_int_distribution<uint32_t>(0, UINT32_MAX)(rng_);
+                if (const auto picked = zone_music::pickFile(frequency, lastFile, roll);
+                    picked.has_value()) {
+                    chosen = *picked;
+                    if (kit.second != nullptr) *kit.second = static_cast<int32_t>(chosen);
+                } else {
+                    chosen = std::uniform_int_distribution<size_t>(0, clips.size() - 1)(rng_);
+                }
             }
             sample = &clips[chosen];
+        } else {
+            // The display names no kit, or none behind the slot asked for, and the
+            // client asks for no line at that point at all: 0x00746900 returns -1
+            // when the row is missing or its first column is 0, and 0x00720860
+            // refuses when the row cannot be found. Most displays are in that
+            // group - 13754 of CreatureDisplayInfo's 24262 rows name no kit - and
+            // that is the client's "the wolf says nothing". Falling back to a race
+            // library here was this code's own, and it put a guard's line in a
+            // wolf's mouth.
+            return false;
         }
     }
 
     if (sample == nullptr) {
-        // No kit for the display, or nothing behind the slot it names: the race
-        // library this asked before there were kits.
+        // Only the vendor's line (and a flee, which has no slot in these kits
+        // either) is still taken from the race library, because where the client's
+        // vendor line comes from has not been found.
 
         // Select library based on category
         std::unordered_map<VoiceType, std::vector<VoiceSample>>* library = nullptr;
@@ -518,7 +532,7 @@ void NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, VoiceType 
             // Fallback to GENERIC
             libIt = library->find(VoiceType::GENERIC);
             if (libIt == library->end() || libIt->second.empty()) {
-                return;
+                return false;
             }
         }
 
@@ -557,59 +571,93 @@ void NpcVoiceManager::playSound(uint64_t npcGuid, uint32_t displayId, VoiceType 
         volume += -0.15f + 0.3f * unit(rng_);
     volume = std::clamp(volume * volumeScale_, 0.0f, 1.0f);
 
-    bool success = AudioEngine::instance().playSound3D(
+    // The handle the play went into is kept per unit, because that is the slot the
+    // client asks about before asking for the next line - the unit's own sound
+    // handle, unit + 0x8f4, tested by 0x004c5be0 at 00720000.c:8066 and :382.
+    uint32_t handle = 0;
+    const bool success = AudioEngine::instance().playSound3D(
         sample->data,
         position,
         volume,
         pitch,
         maxDistance,
-        minDistance
+        minDistance,
+        Channel::Own,
+        PlayLimit::None,
+        voice_priority::kDefault,
+        &handle
     );
 
-    if (success) {
-        lastPlayTime_[npcGuid] = now;
-    }
+    if (success)
+        lineHandle_[npcGuid] = handle;
+    return success;
+}
+
+bool NpcVoiceManager::linePlaying(uint64_t npcGuid) const {
+    const auto it = lineHandle_.find(npcGuid);
+    return it != lineHandle_.end() && it->second != 0 &&
+           AudioEngine::instance().isSoundPlaying(it->second);
 }
 
 void NpcVoiceManager::playGreeting(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
-    // Check if on cooldown - if so, increment pissed counter instead
-    auto now = std::chrono::steady_clock::now();
-    auto it = lastPlayTime_.find(npcGuid);
-    if (it != lastPlayTime_.end()) {
-        float elapsed = std::chrono::duration<float>(now - it->second).count();
-        if (elapsed < GREETING_COOLDOWN) {
-            // On cooldown - increment click count and maybe play pissed sound
-            playPissed(npcGuid, displayId, voiceType, position);
-            return;
+    // One line at a time. While this unit's line is still going the ask is refused
+    // outright and its counter does not move - 0x0072a680 asks the same question of
+    // the unit's sound handle at 00720000.c:8066, and there is no timer anywhere in
+    // that path. The wall-clock cooldown this used to keep refused the second click
+    // for two seconds and then answered the cooldown with the irritated line, which
+    // is not what a second click does in the client: it is simply not asked.
+    if (linePlaying(npcGuid))
+        return;
+
+    // Which slot serves, and which alternate of it, is the counter rule of
+    // 0x00746900: five asks answered from the kit's first slot, then its third
+    // slot walked once per alternate, then the counter resets and the first slot
+    // serves again. The counter moves only when a line actually started (:8087).
+    int& counter = askCount_[npcGuid];
+    SoundCategory category = SoundCategory::GREETING;
+    int32_t variant = -1;
+    if (counter >= kAsksFromFirstSlot) {
+        const int extra = counter - kAsksFromFirstSlot;
+        const auto walked = kitSlot(displayId, 2);
+        if (walked.first == nullptr || static_cast<size_t>(extra) >= walked.first->size()) {
+            counter = 0;  // walked out of the third slot: the first serves again
+        } else {
+            category = SoundCategory::PISSED;
+            variant = extra;
         }
     }
 
-    // Reset click count on successful greeting
-    clickCount_[npcGuid] = 0;
-    playSound(npcGuid, displayId, voiceType, SoundCategory::GREETING, position);
+    if (playSound(npcGuid, displayId, voiceType, category, variant, position))
+        ++counter;
 }
 
 void NpcVoiceManager::playFarewell(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
-    playSound(npcGuid, displayId, voiceType, SoundCategory::FAREWELL, position);
+    // The ask count starts over on a hello or a goodbye, before anything else the
+    // routine does (00720000.c:376-377 clears the counter and the unit it belongs
+    // to, ahead of the busy test at :382).
+    askCount_.erase(npcGuid);
+    if (linePlaying(npcGuid))
+        return;
+    playSound(npcGuid, displayId, voiceType, SoundCategory::FAREWELL, -1, position);
 }
 
 void NpcVoiceManager::playVendor(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
-    playSound(npcGuid, displayId, voiceType, SoundCategory::VENDOR, position);
+    // Still the race library, and still not asked of the kit: where the client's
+    // vendor line comes from has not been found. Nor is it known whether that path
+    // is one line at a time, so no busy test is applied that the client has not
+    // been seen to apply.
+    playSound(npcGuid, displayId, voiceType, SoundCategory::VENDOR, -1, position);
 }
 
 void NpcVoiceManager::playPissed(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
-    // Increment click count
-    clickCount_[npcGuid]++;
-
-    // Five asks before the kit's third slot is asked at all, which is the number
-    // the client counts to as well - a per-unit ask counter (DAT_00ca1190) that
-    // gives the kit's first slot five times and then walks its third slot once per
-    // alternate before starting over. It counts asks that actually started a line;
-    // this counts the clicks that got one, which is the same while a line plays.
-    if (clickCount_[npcGuid] >= PISSED_CLICK_THRESHOLD) {
-        playSound(npcGuid, displayId, voiceType, SoundCategory::PISSED, position);
-        clickCount_[npcGuid] = 0;  // Reset after playing
-    }
+    // The repeat-click path reaches the kit's third slot through playGreeting's
+    // counter now, which is how the client walks it. This stays for a caller that
+    // wants the irritated line directly - and an angry unit's line is in fact
+    // asked of the unit's own reaction change (SMSG_AI_REACTION), which is where
+    // the client really asks for it.
+    if (linePlaying(npcGuid))
+        return;
+    playSound(npcGuid, displayId, voiceType, SoundCategory::PISSED, -1, position);
 }
 
 } // namespace audio
