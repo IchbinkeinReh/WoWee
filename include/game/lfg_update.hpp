@@ -243,7 +243,7 @@ bool parseLfgList(network::Packet& packet, uint32_t heldListId,
  *
  *   cmp dword [0xbeaaac],0 / je ret       nothing outstanding: say nothing at all
  *   sub dword [0xbeaaac],1  / jne ret     still waiting on the others
- *   push 0 / push 0x1d5 / call 0x81b530   event 469, the list-changed event
+ *   push 0 / push 0x1d5 / call 0x81b530   script event 469, UPDATE_LFG_LIST
  *
  * So the panel is re-announced exactly once, by the answer that lands last — by
  * which time every row has its name, and with it the class the name query brought
@@ -263,6 +263,26 @@ inline bool lfgNameAnswerClosesGate(uint32_t& outstanding) {
     --outstanding;
     return outstanding == 0;
 }
+
+/**
+ * The name this client's script event 469 (0x1d5) goes by.
+ *
+ * The client keeps the name of every script event in a table indexed by the event id:
+ * `FUN_00608880` (0x00608880, 6290 bytes) writes the names one slot per id up from
+ * `0x00c24eb0`, and `FUN_0081ac90` looks an event up in the registry built from it by the
+ * same arithmetic (`DAT_00d3f7d8 + id*4`, 0x00810000.c:9546). So 469 is the slot at
+ * `0x00c24eb0 + 469*4 = 0x00c25604`, which holds **"UPDATE_LFG_LIST"** — with
+ * `UPDATE_LFG_TYPES` at 468 and `UPDATE_LFG_LIST_INCREMENTAL` at 470 beside it, neither of
+ * which any code here fires. `LFG_UPDATE` is a different event, 501, and the LFG module
+ * fires it with a boolean through the "%b" format at `0x00a02e38`: true from 0x00559310
+ * (0x00550000.c:7410) and false from :10509 and :10619.
+ *
+ * The arithmetic is the client's own, and it lands right where it can be checked against
+ * what the code around it says: 613 = "GLYPH_UPDATED" is fired with a glyph slot number off
+ * a change to the player field at +0x1248 (0x006d0000.c:8175, `PLAYER_C.cpp:0x17a0`), and
+ * 476 = "RAID_TARGET_UPDATE" from `.\RaidInfo.cpp:0x1e9` (0x00570000.c:2221).
+ */
+inline constexpr std::string_view kLfgListChangedEvent = "UPDATE_LFG_LIST";
 
 /// "no row" for the index fields below — the client stores a null pointer where
 /// these hold an index into the rows, and 0 is a real row.

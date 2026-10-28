@@ -696,7 +696,7 @@ TEST_CASE("The two arrays are sorted by their own comparators", "[lfg]") {
 TEST_CASE("The last name the list asked for is the one that re-announces it", "[lfg]") {
     // 0x005528a0, read off the binary — Ghidra left those 48 bytes as a label, and the
     // two sites that register it pass no guid to it: it closes one request off a count
-    // and fires the list event only when that count runs out.
+    // and fires 469 only when that count runs out.
     uint32_t outstanding = 2;
     CHECK_FALSE(lfgNameAnswerClosesGate(outstanding));
     CHECK(outstanding == 1);
@@ -706,6 +706,23 @@ TEST_CASE("The last name the list asked for is the one that re-announces it", "[
     // does not run below zero into a gate that closes again on some later answer.
     CHECK_FALSE(lfgNameAnswerClosesGate(outstanding));
     CHECK(outstanding == 0);
+}
+
+TEST_CASE("What the browser raises is the event its id names, not the queue's", "[lfg]") {
+    // The client keeps the name of every script event in a table indexed by the event id:
+    // FUN_00608880 (0x00608880) writes one name per id up from 0x00c24eb0, and FUN_0081ac90
+    // looks an event up in the registry built from it by the same arithmetic
+    // (DAT_00d3f7d8 + id*4). So the id the browser's six sites fire — 469 — is the name at
+    // 0x00c24eb0 + 469*4 = 0x00c25604, which the same function writes as "UPDATE_LFG_LIST",
+    // between "UPDATE_LFG_TYPES" (468) and "UPDATE_LFG_LIST_INCREMENTAL" (470) — the last
+    // two never fired anywhere in this client.
+    CHECK(0x00c24eb0u + 469u * 4u == 0x00c25604u);
+    CHECK(kLfgListChangedEvent == "UPDATE_LFG_LIST");
+    // LFG_UPDATE is event 501, a different one, and the LFG module fires it with a boolean
+    // ("%b" at 0x00a02e38 — true from 0x00559310, false from :10509 and :10619). The name
+    // matters because lfrframe.lua's handlers differ: UPDATE_LFG_LIST refills the browse
+    // list (:31-34), LFG_UPDATE only the comment box (:35-55).
+    CHECK(kLfgListChangedEvent != "LFG_UPDATE");
 }
 
 TEST_CASE("A row's bosses are the joined instance's rows of the encounter table", "[lfg]") {

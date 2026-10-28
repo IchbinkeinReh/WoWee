@@ -646,7 +646,7 @@ public:
      * reversing it if it already was. The client's guard against no word at all (a
      * usage line and no change, :10638-10642) is the binding's, not this one's.
      *
-     * Both paths end with the client raising its list event (0x0055b700:9654, and
+     * Both paths end with the client raising UPDATE_LFG_LIST (0x0055b700:9654, and
      * :10710 for the swap), which is what the panel refills itself on; that is the one
      * thing here that a header click sends to the interface.
      */
@@ -779,6 +779,24 @@ private:
     /// listing record it has to allocate (0x0055b770:9931-9937), and count the
     /// requests it made: the last answer to arrive re-announces the list.
     void requestLfgRowNames();
+    /// The window the list is held in, dropped: its rows, its paired rows and the
+    /// names those rows waited on. That is what 0x00558af0 does, unregistering the
+    /// name callback of every row it drops on the way (:6967) — which is also why it
+    /// closes no request and the count outlives the rows it belongs to.
+    void clearLfgListWindow();
+    /**
+     * Raise UPDATE_LFG_LIST: script event 469, named by the client's own id-to-name
+     * table (`kLfgListChangedEvent`). Six sites fire it and every one of them is the
+     * raid browser's — when the joined list id changes (0x00558ed0:7231) and when it is
+     * cleared (0x00558f90:7278), from the one branch of the SMSG_LFG_UPDATE_SEARCH case
+     * (through 0x00558c30:7019), at the tail of the SMSG_UPDATE_LFG_LIST handler (:9980),
+     * after a resort (:9654) and after the "group" swap (:10710). It carries no arguments,
+     * and its only consumer in FrameXML is lfrframe.lua:31-34, which refills the browse
+     * list while that frame is visible: this is the event the panel's rows ride on, and
+     * `LFG_UPDATE` — which those lines use for the comment box alone, and which this file
+     * used to raise from all of these sites — is event 501 and something else.
+     */
+    void fireLfgListChanged();
     void applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party);
     /// Whether any of the body's dungeons is a raid, which turns the queue's
     /// lines into the raid browser's (0x00557260).

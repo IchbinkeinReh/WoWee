@@ -4758,19 +4758,24 @@ void SocialHandler::handleLfgUpdateParty(network::Packet& packet) {
 // it is kept here rather than as another LfgState: the client holds it beside
 // the queue flags, and FrameXML's GetLFGMode tests the queue before it.
 //
-// Nothing is fired from here on purpose. The server answers the request with a
-// join result and a queue update, and the update is what fires LFG_UPDATE -
-// which is how the join result itself stays silent (see handleLfgJoinResult).
+// What is fired from here belongs to the list, not to the queue: the client drops the
+// window held for whatever list came before it (twice around storing the new id,
+// 0x00558ed0:7223-7231), raises UPDATE_LFG_LIST, and only then sends the request — so the
+// panel is redrawn empty rather than over the previous list's rows. The join *result* the
+// server answers with stays silent on purpose: it is the queue update that follows it that
+// reports the queue (see handleLfgJoinResult).
 void SocialHandler::lfgSearchJoin(uint32_t typeId, uint32_t lfgId) {
     const uint32_t packed = (typeId << 24) | (lfgId & 0x00FFFFFFu);
     if (packed == lfgJoinedListId_) return;
     if (!owner_.getSocket()) return;
     const uint16_t wire = wireOpcode(Opcode::CMSG_SEARCH_LFG_JOIN);
     if (wire == 0xFFFF) return;
+    clearLfgListWindow();
+    lfgJoinedListId_ = packed;
+    fireLfgListChanged();
     network::Packet packet(wire);
     packet.writeUInt32(packed);
     owner_.getSocket()->send(packet);
-    lfgJoinedListId_ = packed;
 }
 
 void SocialHandler::lfgSearchLeave() {
@@ -4783,18 +4788,13 @@ void SocialHandler::lfgSearchLeave() {
             owner_.getSocket()->send(packet);
         }
     }
-    // Leaving drops the rows with the id: 0x00558f90 clears the results held for
-    // the list before it sends, and 0x00558ed0 does the same when a different list
-    // is asked for, so a row of the old list is never answered to the new one. The
-    // names those rows were waiting for go with them — the client unregisters their
-    // callbacks as it clears (0x00558af0:6967), so an answer to an old list would no
-    // longer reach the callback that re-announces it either.
-    lfgListRows_.clear();
-    lfgBrowserRows_.clear();
-    lfgNamesAsked_.clear();
-    lfgPendingNames_ = 0;
-    lfgListWindowId_ = 0;
+    // Leaving drops the rows with the id: 0x00558f90 clears the results held for the list
+    // before it sends and again as it clears the id, then raises UPDATE_LFG_LIST
+    // (:7271-7278), so a row of the old list is never answered to the new one — and so the
+    // panel notices the list went away.
+    clearLfgListWindow();
     lfgJoinedListId_ = 0;
+    fireLfgListChanged();
 }
 
 // SMSG_LFG_UPDATE_SEARCH, case 0x369 of the LFG family routine (0x0055bdc0):
@@ -4808,22 +4808,19 @@ void SocialHandler::handleLfgUpdateSearch(network::Packet& packet) {
     packet.skipAll();
     if (listed || lfgJoinedListId_ == 0) return;
     lfgJoinedListId_ = 0;
-    // The rows go with the list. The client's clearing routine (0x00558af0) drops
-    // the window it holds, and a window kept past the list it belongs to would be
-    // answered to the next list's rows. Its outstanding name requests are dropped by
-    // the same routine, which unregisters their callbacks.
-    lfgListRows_.clear();
-    lfgBrowserRows_.clear();
-    lfgNamesAsked_.clear();
-    lfgPendingNames_ = 0;
-    lfgListWindowId_ = 0;
-    // The mode the interface derives from the id ("listed", which changes the raid
-    // browser's button and blocks the Dungeon Finder beside it) is re-read on
-    // LFG_UPDATE. The client reports this change through 0x00558c30; what that
-    // routine fires was not read, so the event named here is this client's, chosen
-    // because it is the one every GetLFGMode consumer listens to, not a translation
-    // of that call.
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
+    // The rows go with the list: the client clears the window it holds, resets the id and
+    // clears it once more through 0x00558c30, which is the whole of that branch. The
+    // window it leaves in place past the list it belongs to would be answered to the next
+    // list's rows, and the name requests its rows registered are unregistered by the same
+    // routine (:6967), so those go too.
+    clearLfgListWindow();
+    // The one event fired is 469: `FUN_00558c30` is a clearing call and a fire, and that
+    // fire is what the whole LFG module raises 469 with (:7019). Nothing else is raised,
+    // which leaves the queue-side displays that read the "listed" mode through GetLFGMode
+    // — and listen to LFG_UPDATE, event 501 — answering the old mode until something else
+    // fires it. That is the client's own behaviour at this site, reproduced rather than
+    // improved on: it fires no 501 here.
+    fireLfgListChanged();
 }
 
 // SMSG_UPDATE_LFG_LIST (0x360), the rows of the raid browser's list. The packet is
@@ -4831,8 +4828,9 @@ void SocialHandler::handleLfgUpdateSearch(network::Packet& packet) {
 // client raises its own event only when the packet names a *different* list than
 // the window already held - the id is compared before the rows are read
 // (0x0055b770:9695-9697) and the event fires at the end (:9978-9981). Same rule
-// here: the rows are stored either way, and LFG_UPDATE is what makes lfrframe.lua
-// rebuild the panel (lfrframe.lua:21, :35).
+// here: the rows are stored either way, and UPDATE_LFG_LIST is what makes lfrframe.lua
+// rebuild the panel (lfrframe.lua:20, :31-34 — the event that runs
+// `LFRBrowseFrameList_Update()` while the browse frame is shown).
 void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
     if (lfgJoinedListId_ == 0) {
         packet.skipAll();
@@ -4862,7 +4860,7 @@ void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
     requestLfgRowNames();
     lfgListWindowId_ = lfgJoinedListId_;
     if (previousWindow != 0 && previousWindow == lfgListWindowId_) return;
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
+    fireLfgListChanged();
 }
 
 // The rows the browse panel shows, re-paired and then ordered. The name each row
@@ -4877,13 +4875,15 @@ void SocialHandler::rebuildLfgBrowserRows() {
 
 // A browse-panel column header click (SearchLFGSort, 0x0055d2b0). The client's own
 // state is the seven-key list at 0x00bea820 and the array-swap byte at 0x00acd660;
-// both live here, and either path ends with it resorting and raising its list event
-// (0x0055b700:9646-9654 for a key, :10709-10710 for the swap). No guard on whether a
-// list is held: the client has none either, and resorting nothing costs nothing.
+// both live here, and either path ends with it resorting and raising UPDATE_LFG_LIST
+// (0x0055b700:9646-9654 for a key, :10709-10710 for the swap) — which is how a header
+// click reaches the panel at all: lfrframe.lua:31-34 refills the browse list on that
+// event alone. No guard on whether a list is held: the client has none either, and
+// resorting nothing costs nothing.
 void SocialHandler::sortLfgBrowser(std::string_view word) {
     applyLfgSortHeaderClick(lfgSortKeys_, lfgListingsFirst_, word);
     rebuildLfgBrowserRows();
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
+    fireLfgListChanged();
 }
 
 // The names the list's rows are missing. A listing record the client has to allocate
@@ -4916,10 +4916,29 @@ void SocialHandler::onLfgNameAnswered(uint64_t guid) {
     if (!lfgNamesAsked_.erase(guid)) return;
     if (!lfgNameAnswerClosesGate(lfgPendingNames_)) return;
     rebuildLfgBrowserRows();
-    // 469 is the client's list-changed event, fired from that callback; the name this
-    // client raises it under is the one every consumer of this list already listens
-    // to (see handleUpdateLfgList for why the name of 469 is still not established).
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
+    // That callback's event is 469 — UPDATE_LFG_LIST, named by the client's own
+    // id-to-name table (`kLfgListChangedEvent`), and the one lfrframe.lua refills the
+    // browse list on.
+    fireLfgListChanged();
+}
+
+// The window dropped, as 0x00558af0 drops it: the player rows, the listings and the
+// window's own id go with it, and the name callbacks the rows had registered are
+// unregistered (:6967) — which is the client's one leak here, since unregistering closes
+// no request and its count of them (0x00beaaac) is left standing. WoWee drops the count
+// too, because a count that outlives the callbacks answering it can never reach zero and
+// the list would never be re-announced again while that list is held.
+void SocialHandler::clearLfgListWindow() {
+    lfgListRows_.clear();
+    lfgBrowserRows_.clear();
+    lfgNamesAsked_.clear();
+    lfgPendingNames_ = 0;
+    lfgListWindowId_ = 0;
+}
+
+void SocialHandler::fireLfgListChanged() {
+    if (owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()(std::string(kLfgListChangedEvent), {});
 }
 
 void SocialHandler::applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party) {
