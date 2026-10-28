@@ -3258,15 +3258,32 @@ void CameraController::update(float deltaTime) {
                                          : WOW_TURN_SPEED;
     // A driver's keys turn the vehicle alone; its camera follows the vehicle
     // camera's chased facing (0x00604490, 0x0075a1c0).
-    float& keyTurned = yawFollowsVehicleCamera_ ? facingYaw : yaw;
+    //
+    // Otherwise the keys turn the character, and the camera only as it is
+    // held to the character. The client keeps the camera's yaw relative to
+    // the facing (0x005fe5f0 on +0x11c) except while a mouse button holds it
+    // in freelook: pressing one adds the facing to make it a world yaw
+    // (0x006019b0, from 0x00601ff0), letting go takes it off again
+    // (0x00601a70, from 0x00601f70). So with no button down a turn carries
+    // the camera round with the character, keeping whatever angle the left
+    // button left it at; with the left button down the camera stays where
+    // it was put and the character turns under it. Setting the facing to the
+    // camera's yaw here snapped the character round to wherever the camera
+    // had been orbited the moment a turn key was touched - that is what the
+    // right button does (0x006023d0, only under 0x005fa110's mouselook test),
+    // not the keys.
+    float turnDeg = 0.0f;
     if (nowTurnLeft && !nowTurnRight) {
-        keyTurned += activeTurnSpeedDeg * deltaTime;
+        turnDeg = activeTurnSpeedDeg * deltaTime;
     } else if (nowTurnRight && !nowTurnLeft) {
-        keyTurned -= activeTurnSpeedDeg * deltaTime;
+        turnDeg = -activeTurnSpeedDeg * deltaTime;
     }
-    if ((nowTurnLeft || nowTurnRight) && !yawFollowsVehicleCamera_) {
+    if (yawFollowsVehicleCamera_) {
+        facingYaw += turnDeg;
+    } else if (nowTurnLeft || nowTurnRight) {
+        facingYaw += turnDeg;
+        if (!leftMouseDown && !rightMouseDown) yaw += turnDeg;
         camera->setRotation(yaw, pitch);
-        facingYaw = yaw;
     }
     // PitchUpStart / PitchDownStart hold 0x400 / 0x800 (0x005fc8e0,
     // 0x005fc920). They pitch a swimming or flying mover (0x2200000) that may
