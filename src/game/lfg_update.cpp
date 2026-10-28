@@ -256,11 +256,16 @@ bool parseLfgList(network::Packet& packet, uint32_t heldListId,
         for (uint32_t i = 0; i < count && in.ok; ++i) {
             const uint64_t g = in.u64();
             // This block carries nothing but the guid, and the test the client
-            // makes on it is a guid test, not a field mask: high dword clear and
-            // the guid not zero names rows to drop, and a zero guid or a high bit
-            // in the top nibble is a row touched without being changed (0x0055b770
-            // :9709). Both record kinds share one guid space, so both go.
-            const bool removal = ((g >> 32) & 0xf0000000u) == 0 && g != 0;
+            // makes on it (0x0055b770:9709) is a guid test, not a field mask: the
+            // top nibble of the high dword clear, and either the low dword set or
+            // a bit set below it — 0xf07fffff, which leaves out bits 23 to 27. An
+            // entry passing it is a row deleted; one failing it names a row that
+            // is only unlinked from its group (0x005589d0 → 0x00556f90), and since
+            // no group membership is held here that half does nothing yet.
+            const uint32_t low = static_cast<uint32_t>(g);
+            const uint32_t high = static_cast<uint32_t>(g >> 32);
+            const bool removal = (high & 0xf0000000u) == 0 &&
+                                 (low != 0 || (high & 0xf07fffffu) != 0);
             if (removal) std::erase_if(rows, [&](const LfgListRow& r) { return r.guid == g; });
         }
     }
@@ -269,14 +274,15 @@ bool parseLfgList(network::Packet& packet, uint32_t heldListId,
         const uint32_t mask = in.u32();
         if (!listing) {
             // 0x00553620: the comment, three bytes the getters have no shown
-            // meaning for, and the link/encounter pair.
+            // meaning for, and the encounter mask at +0x130 — whose leading eight
+            // bytes at +0x128 no getter ever reads, so they are stepped over.
             if (mask & 0x2) row.comment = in.fixed(0x100);
             if (mask & 0x10) {
                 for (uint8_t& b : row.rawBytes) b = in.u8();
                 row.hasRawBytes = true;
             }
             if (mask & 0x80) {
-                row.linkGuid = in.u64();
+                in.u64();
                 row.encounterMask = in.u32();
             }
             return;
@@ -292,26 +298,46 @@ bool parseLfgList(network::Packet& packet, uint32_t heldListId,
             for (int k = 0; k < 20; ++k) in.u32();
         }
         if (mask & 0x2) row.comment = in.fixed(0x100);
-        if (mask & 0x4) in.u8();   // +0x8c: a change relinks the row (0x00556ef0,
-        if (mask & 0x8) in.u64();  // 0x00556e60); what the pair at +0x90 / +0x84
-        if (mask & 0x10) in.u8();  // and the guid at +0x28 decide has not been
-        if (mask & 0x20) in.u32(); // read, so they are stepped over too.
+        if (mask & 0x4) {
+            // +0x8c. The reader compares the old value to the new (0x00559050:
+            // 7338-7347): a flip for a row that already has a group detaches it
+            // and re-inserts it, and the insert puts a set byte at the head of
+            // the member array (0x00556e60). That is where a row's place in its
+            // group comes from; nothing here orders groups, so the byte itself
+            // is stepped over.
+            in.u8();
+        }
+        if (mask & 0x8) {
+            // The row's group, resolved to a record by the guid hash and stored
+            // at +0x28 (0x00559050:7348-7383): the row is then a member of it.
+            row.ownerGuid = in.u64();
+        }
+        // +0x90 and +0x84, and the eight bytes ahead of the encounter mask at
+        // +0x1a0: read by this decoder, read by no getter.
+        if (mask & 0x10) in.u8();
+        if (mask & 0x20) in.u32();
         if (mask & 0x40) row.listed = in.u8() != 0;
         if (mask & 0x80) {
-            row.linkGuid = in.u64();
+            in.u64();
             row.encounterMask = in.u32();
         }
     };
 
     // Two counted blocks, the players first and then the listings, which is the
     // order the client's row getter walks them in unless the byte at 0x00acd660
-    // says otherwise; nothing here applies that swap.
+    // says otherwise; nothing here applies that swap. Each block's count is
+    // followed by one more uint32 — the client keeps it at 0x00beaaa4 and
+    // 0x00beaaa0 (0x0055b770:9733, 9847), and grepping every read of those two
+    // globals in the whole decompile turns up nothing: written, never read. It
+    // still occupies its four bytes on the wire, so it goes here.
     const uint32_t playerCount = in.u32();
+    in.u32();
     for (uint32_t i = 0; i < playerCount && in.ok; ++i) {
         const uint64_t g = in.u64();
         readFields(rowFor(g, false), false);
     }
     const uint32_t listingCount = in.u32();
+    in.u32();
     for (uint32_t i = 0; i < listingCount && in.ok; ++i) {
         const uint64_t g = in.u64();
         readFields(rowFor(g, true), true);

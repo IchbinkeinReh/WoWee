@@ -335,20 +335,23 @@ TEST_CASE("A whole raid browser list reads both record kinds", "[lfg]") {
     p.writeUInt32(1031);
     p.writeUInt8(0);
     p.writeUInt32(1);              // one player row
-    p.writeUInt64(0x100);
+    p.writeUInt32(7);              // and the uint32 after it: kept at 0x00beaaa4,
+    p.writeUInt64(0x100);          //   written by the client and never read
     p.writeUInt32(0x2 | 0x10 | 0x80);
     writeComment(p, "need ranged");
     p.writeUInt8(1); p.writeUInt8(0); p.writeUInt8(1);  // +0x124..0x126
-    p.writeUInt64(0x200);          // +0x128: the listing this player is in
-    p.writeUInt32(0b101);          // +0x130
+    p.writeUInt64(0x200);          // +0x128: eight bytes no getter reads
+    p.writeUInt32(0b101);          // +0x130: the encounter mask
     p.writeUInt32(1);              // one listing row
+    p.writeUInt32(9);              // ditto, at 0x00beaaa0
     p.writeUInt64(0x200);
-    p.writeUInt32(0x1 | 0x2 | 0x40 | 0x80);
+    p.writeUInt32(0x1 | 0x2 | 0x8 | 0x40 | 0x80);
     writeListingRun(p, 80);
     writeComment(p, "ToC, 25 man");
+    p.writeUInt64(0x100);          // +0x28: this listing's group, by guid
     p.writeUInt8(1);               // +0x88: the status the getter pushes 7th
-    p.writeUInt64(0x100);          // +0x198
-    p.writeUInt32(0b11);           // +0x1a0
+    p.writeUInt64(0x100);          // +0x198: eight bytes no getter reads
+    p.writeUInt32(0b11);           // +0x1a0: the encounter mask
 
     std::vector<LfgListRow> rows;
     REQUIRE(parseLfgList(p, kLfrList, rows));
@@ -361,7 +364,7 @@ TEST_CASE("A whole raid browser list reads both record kinds", "[lfg]") {
     CHECK(rows[0].hasRawBytes);
     CHECK(rows[0].rawBytes[0] == 1);
     CHECK(rows[0].rawBytes[2] == 1);
-    CHECK(rows[0].linkGuid == 0x200);
+    CHECK(rows[0].ownerGuid == 0);  // a player row carries no group link
     CHECK(rows[0].encounterMask == 0b101);
     CHECK_FALSE(rows[0].hasLevel);  // only a listing row carries one
 
@@ -371,7 +374,7 @@ TEST_CASE("A whole raid browser list reads both record kinds", "[lfg]") {
     CHECK(rows[1].level == 80);
     CHECK(rows[1].comment == "ToC, 25 man");
     CHECK(rows[1].listed);
-    CHECK(rows[1].linkGuid == 0x100);
+    CHECK(rows[1].ownerGuid == 0x100);   // the listing belongs to that player row
     CHECK(rows[1].encounterMask == 0b11);
 }
 
@@ -382,11 +385,14 @@ TEST_CASE("A list the client is not in is dropped, and its rows kept", "[lfg]") 
     whole.writeUInt32(1031);
     whole.writeUInt8(0);
     whole.writeUInt32(1);
+    whole.writeUInt32(0);
     whole.writeUInt64(0x100);
     whole.writeUInt32(0x2);
     writeComment(whole, "still here");
     whole.writeUInt32(0);
+    whole.writeUInt32(0);
     REQUIRE(parseLfgList(whole, kLfrList, rows));
+    CHECK(whole.getRemainingSize() == 0);
     REQUIRE(rows.size() == 1);
 
     // An update naming another list arrives after the client left it; the client
@@ -409,43 +415,51 @@ TEST_CASE("A delta drops the guids it names and fills the rows it repeats", "[lf
     whole.writeUInt32(6);
     whole.writeUInt32(1031);
     whole.writeUInt8(0);
-    whole.writeUInt32(1);
+    whole.writeUInt32(2);          // two player rows: a plain one, and one whose
+    whole.writeUInt32(0);          //   guid carries a flag bit of its own
     whole.writeUInt64(0x100);
     whole.writeUInt32(0x2 | 0x80);
     writeComment(whole, "10 man");
     whole.writeUInt64(0x200);
     whole.writeUInt32(0b101);
-    whole.writeUInt32(1);
+    whole.writeUInt64(0x0400000000000000ull);
+    whole.writeUInt32(0);          // a row that carries no fields at all
+    whole.writeUInt32(1);          // one listing row
+    whole.writeUInt32(0);
     whole.writeUInt64(0x200);
     whole.writeUInt32(0x1 | 0x40);
     writeListingRun(whole, 80);
     whole.writeUInt8(1);
     REQUIRE(parseLfgList(whole, kLfrList, rows));
     CHECK(whole.getRemainingSize() == 0);
-    REQUIRE(rows.size() == 2);
+    REQUIRE(rows.size() == 3);
 
     Packet delta(0x360);
     delta.writeUInt32(6);
     delta.writeUInt32(1031);
     delta.writeUInt8(1);           // a delta: what is held stays held
-    delta.writeUInt32(2);          // the block of guids the client names
+    delta.writeUInt32(3);          // the block of guids the client names
     delta.writeUInt64(0x200);      // gone
-    delta.writeUInt64(0);          // a zero guid is "touched", not removed (0x0055b770:9709)
-    delta.writeUInt32(1);          // the player row again, with a new comment
-    delta.writeUInt64(0x100);
-    delta.writeUInt32(0x2);
+    delta.writeUInt64(0);          // a zero guid is "touched", not removed
+    delta.writeUInt64(0x0400000000000000ull);  // and a guid whose only set bit is
+    delta.writeUInt32(1);          //   bit 26 of its high dword is not one either:
+    delta.writeUInt32(0);          //   the test at 0x0055b770:9709 is 0xf07fffff,
+    delta.writeUInt64(0x100);      //   and such a row is only unlinked from its
+    delta.writeUInt32(0x2);        //   group, so it stays
     writeComment(delta, "25 man");
+    delta.writeUInt32(0);
     delta.writeUInt32(0);
     REQUIRE(parseLfgList(delta, kLfrList, rows));
     CHECK(delta.getRemainingSize() == 0);
 
     // The row is updated where it is held rather than added again, and a mask
     // that leaves a field out leaves the value that was held for it.
-    REQUIRE(rows.size() == 1);
+    REQUIRE(rows.size() == 2);
     CHECK(rows[0].guid == 0x100);
     CHECK(rows[0].comment == "25 man");
     CHECK(rows[0].encounterMask == 0b101);
-    CHECK(rows[0].linkGuid == 0x200);
+    CHECK(rows[0].ownerGuid == 0);  // a player row's eight bytes were stepped over
+    CHECK(rows[1].guid == 0x0400000000000000ull);
 }
 
 TEST_CASE("A cut short list keeps its header cleared and its rows half read", "[lfg]") {
@@ -455,7 +469,9 @@ TEST_CASE("A cut short list keeps its header cleared and its rows half read", "[
     whole.writeUInt32(1031);
     whole.writeUInt8(0);
     whole.writeUInt32(0);
+    whole.writeUInt32(0);
     whole.writeUInt32(1);
+    whole.writeUInt32(0);
     whole.writeUInt64(0x200);
     whole.writeUInt32(0x40);
     whole.writeUInt8(1);
@@ -474,6 +490,7 @@ TEST_CASE("A cut short list keeps its header cleared and its rows half read", "[
     cut.writeUInt32(1031);
     cut.writeUInt8(0);
     cut.writeUInt32(2);
+    cut.writeUInt32(0);
     cut.writeUInt64(0x100);
     cut.writeUInt32(0x2);
     writeComment(cut, "read whole");

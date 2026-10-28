@@ -169,17 +169,24 @@ struct LfgListRow {
     /// 0x00553830 tests a bit at a time against the dungeon's encounter rows.
     uint32_t encounterMask = 0;
 
-    /// The eight-byte link that precedes that dword (+0x128 in a player row,
-    /// +0x198 in a listing row). Kept because re-deriving it costs a read of the
-    /// linking code; what it links to has not been established, so nothing
-    /// reads it yet.
-    uint64_t linkGuid = 0;
+    /// The listing row's own group: the guid its mask bit 0x8 carries, which the
+    /// reader (0x00559050:7348-7383) looks up in the same guid hash its rows live
+    /// in (0x006792e0) and stores as the record's owner at +0x28. Found, the row
+    /// is inserted into that record's member array (0x00556e60); not found, it
+    /// joins the array of listings that belong to no one (0x0055b770:9940-9974).
+    /// A player row has no such field — the eight bytes at its mask bit 0x80
+    /// (+0x128) and at a listing's mask bit 0x80 (+0x198) are read and dropped,
+    /// because no getter anywhere reads them.
+    uint64_t ownerGuid = 0;
 
     /// The three bytes a player row carries at mask bit 0x10 (+0x124..0x126).
-    /// The last four values `SearchLFGGetResults` pushes come out of
-    /// 0x005529e0, a thousand bytes of record-walker that has not been read, so
-    /// whether these three are exactly the tank / healer / damage flags is not
-    /// established and no binding answers from them.
+    /// Nothing reads them. The tail of the row getter is 0x005529e0, which pushes
+    /// 28 values — four booleans then 24 numbers, or 28 nils when its record
+    /// pointer is null — and every one of those pushes lost its arguments in the
+    /// decompile, so which record field answers `isLeader`, `isTank`, `isHealer`
+    /// and `isDamage` (lfrframe.lua:539 keeps only the first fourteen of the
+    /// getter's 38 values) is not established, and these three bytes are not
+    /// claimed as those flags.
     uint8_t rawBytes[3] = {0, 0, 0};
     bool      hasRawBytes = false;
 };
@@ -193,9 +200,18 @@ struct LfgListRow {
  * one byte: when it is 0 the client clears what it holds and reads no removal
  * block, so the rows that follow are the whole list; when it is set, a counted
  * block of removals comes first. Then two counted blocks — the player rows, then
- * the listing rows — each row an eight-byte guid followed by a uint32 saying
- * which fields that row carries. The reads are plain bytes: 0x0047b340/3c0/400
- * are one, four and eight, and 0x0047b480 is a fixed-width string.
+ * the listing rows — and each block opens with its count followed by one more
+ * uint32 that the client stores at 0x00beaaa4 and 0x00beaaa0 and never reads
+ * anywhere, so it is stepped over. Each row is an eight-byte guid followed by a
+ * uint32 saying which fields that row carries. The reads are plain bytes:
+ * 0x0047b340/3c0/400 are one, four and eight, and 0x0047b480 is a fixed-width
+ * string.
+ *
+ * A removal entry is named by guid alone, and the client's test on it
+ * (0x0055b770:9709) is narrower than "nonzero": the top nibble of the high dword
+ * clear and either the low dword set or a bit set below it (0xf07fffff). An entry
+ * that fails that test names a row that is unlinked from its group but kept
+ * (0x005589d0), which is not something the rows here model yet.
  *
  * A row whose guid is already held updates it in place, as the client's guid hash
  * does; a whole-list packet clears first. False when the packet is cut short, with
