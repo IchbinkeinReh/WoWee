@@ -378,6 +378,11 @@ public:
     /// its PreAggro sound slot, by that slot's own chance
     /// (rendering/unit_model_events.hpp).
     void playUnitAlertSound(const game::Unit& unit);
+    /// What a unit says as its death is noticed - its CreatureSoundData row's
+    /// Death column, not a sound slot (rendering/unit_model_events.hpp). Ask
+    /// it before markCreatureDead, which is what keeps a death noticed twice
+    /// from being said twice.
+    void playUnitDeathSound(uint64_t guid);
     /// A unit's melee hit arriving (SMSG_ATTACKERSTATEUPDATE), kept on its
     /// attacker for its model's events; an attack stopping, which settles it
     /// (rendering/melee_sound.hpp).

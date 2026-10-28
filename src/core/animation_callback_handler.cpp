@@ -47,6 +47,10 @@ void AnimationCallbackHandler::setupCallbacks() {
 
     // NPC/player death callback (online mode) - play death animation
     gameHandler_.setNpcDeathCallback([this](uint64_t guid) {
+        // What it says as it dies, before anything else - the same branch of
+        // 0x0073c5d0 that takes up the dead state asks the line, and the ask
+        // has to come first for a unit this notices twice to say it once.
+        entitySpawner_.playUnitDeathSound(guid);
         entitySpawner_.markCreatureDead(guid);
         if (!renderer_.getCharacterRenderer()) return;
         uint32_t instanceId = entitySpawner_.getCreatureInstanceId(guid);

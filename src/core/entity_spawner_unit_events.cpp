@@ -154,6 +154,43 @@ void EntitySpawner::playUnitAlertSound(const game::Unit& unit) {
     playUnitSlot(unit, ue::kSlotAlert, false, nullptr);
 }
 
+void EntitySpawner::playUnitDeathSound(uint64_t guid) {
+    // 0x007474b0 kind 4, asked as the unit's dead state goes up (0x0073c5d0)
+    // and by the combat death handler (0x007561e0): the Death column of the
+    // CreatureSoundData row its display gives it. Not a slot - so no chance is
+    // rolled, and not the pet row either, which only the slot asks substitute
+    // (0x0071a3f0); and of the four voice kinds this is the one a pet is asked
+    // for regardless of Sound_EnablePetSounds. The client refuses one display
+    // outright - the record it keeps for a player only (0x0072d940 gives a
+    // +0x964 to type 9 alone) when that record's own flags have 0x1000000 -
+    // and a creature never has such a record to refuse.
+    if (!renderer_ || !gameHandler_ || !assetManager_) return;
+    if (deadCreatureGuids_.count(guid)) return;  // the same death, noticed twice
+    auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    if (!entity || !entity->isUnit()) return;
+    const auto& unit = static_cast<const game::Unit&>(*entity);
+    const int32_t row = unitSoundRow(unit, false);
+    if (row < 0) return;
+    auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
+    if (!sounds || sounds->getFieldCount() <= ue::kColumnDeath) return;
+    const uint32_t sound = sounds->getUInt32(static_cast<uint32_t>(row), ue::kColumnDeath);
+    if (sound == 0) return;
+    // Said where it falls, heard as its own voice like any other line of
+    // 0x007474b0, and counted by no kind - the client gives the line a tracker
+    // of the unit's own (its +0x908) to stop with the death animation, which
+    // outlives the clip.
+    const bool own = guid == gameHandler_->getPlayerGuid() || guid == gameHandler_->activeMover();
+    const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
+    rendering::M2EventSounds& player = renderer_->getM2EventSounds();
+    if (own && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
+        player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_,
+                        audio::PlayLimit::None, false, priority);
+        return;
+    }
+    if (const auto where = unitSoundPosition(guid))
+        player.playOnce(sound, &*where, 1.0f, assetManager_, audio::PlayLimit::None, false, priority);
+}
+
 const std::vector<ue::EmoteSoundRow>& EntitySpawner::emoteSoundRows() {
     if (emoteSoundRowsLoaded_ || !assetManager_) return emoteSoundRows_;
     emoteSoundRowsLoaded_ = true;

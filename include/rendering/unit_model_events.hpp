@@ -85,6 +85,12 @@ constexpr uint32_t kSlotJumpEnd = 12;
 constexpr uint32_t kSlotAlert = 8;
 
 /// CreatureSoundData columns (3.3.5a, 38 of them).
+/// What a unit says as it dies, asked of the row itself and not of a slot
+/// (0x007474b0 kind 4 reads +0x18). The other kinds that function answers
+/// read column 10 (+0x28) as it aggros, 28 (+0x70) as it kills and 29 (+0x74)
+/// as it is ordered about; a death asks those of a pet as much as of its
+/// owner, where the others need Sound_EnablePetSounds.
+constexpr uint32_t kColumnDeath = 6;
 constexpr uint32_t kColumnFootstep = 9;  ///< +0x24, FootstepTerrainLookup's CreatureFootstepID
 constexpr uint32_t kColumnFidget0 = 14;
 constexpr uint32_t kColumnBirth = 33;
