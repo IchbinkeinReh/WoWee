@@ -4,6 +4,7 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "addons/lua_api_registrations.hpp"
+#include "audio/advanced_kit.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/sound_distance.hpp"
 #include "audio/sound_entry.hpp"
@@ -122,6 +123,12 @@ void M2EventSounds::playOnce(uint32_t soundId, const glm::vec3* at, float volume
     if (outHandle) *outHandle = 0;
     const Kit* k = kit(soundId, assets);
     if (!k) return;
+    // A row naming an advanced kit is not sounded again while one of that kit is
+    // still going within sqrt(6) yards of where this ask would put it - 0x004c6a40
+    // hands such a play to 0x004cb580, which asks 0x004ca130 and returns 0xf on a
+    // match (audio/advanced_kit.hpp). A play with no position is never asked about.
+    const uint32_t kitId = at ? audio::advanced_kit::kitIdFor(soundId, assets) : 0u;
+    if (at && audio::advanced_kit::refusedNear(kitId, *at)) return;
     float minDistance = 0.0f, maxDistance = 0.0f;
     audio::sound_distance::entryDistance(k->minDistance, k->cutoff, minDistance, maxDistance);
     const std::vector<uint8_t>* file = pickFile(*k);
@@ -134,9 +141,15 @@ void M2EventSounds::playOnce(uint32_t soundId, const glm::vec3* at, float volume
     // it draws either way (:6020).
     const float volume = absolute ? base : audio::sound_entry::volumeForFlags(k->flags, base, unitDraw());
     const float pitch = audio::sound_entry::pitchForFlags(k->flags, unitDraw());
-    if (!at) audio.playSound2D(*file, volume, pitch, kSfx, limit, priority, outHandle);
-    else
-        audio.playSound3D(*file, *at, volume, pitch, maxDistance, minDistance, kSfx, limit, priority, outHandle);
+    // The handle goes to the caller where it asked for one, and always to a local,
+    // so that a positional play can be remembered as one of the kit's own.
+    uint32_t startedInto = 0;
+    uint32_t* handleOut = outHandle ? outHandle : &startedInto;
+    if (!at) audio.playSound2D(*file, volume, pitch, kSfx, limit, priority, handleOut);
+    else {
+        audio.playSound3D(*file, *at, volume, pitch, maxDistance, minDistance, kSfx, limit, priority, handleOut);
+        audio::advanced_kit::notePlay(kitId, *at, *handleOut);
+    }
 }
 
 void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const ShakeCamera& shakeCamera) {
@@ -190,12 +203,23 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         // "SFX"): heard at the Sound Effects volume, and not with
         // Sound_EnableSFX off (0x004c6a40).
         constexpr auto kSfx = audio::Channel::Effects;
+        // The kit this row names, if it names one (audio/advanced_kit.hpp): 1617 of
+        // the 12941 rows do, and every play of one of them goes through 0x004cb580,
+        // which turns the ask away while another play of that kit is still going
+        // within sqrt(6) yards of the position asked for (0x004ca130).
+        const uint32_t kitId = audio::advanced_kit::kitIdFor(soundId, assets);
         if (!loops) {
             const std::vector<uint8_t>* file = pickFile(*k);
             if (atListener) audio.playSound2D(*file, volume, pitch, kSfx, audio::PlayLimit::None, priority);
-            else
+            else {
+                // A play at the listener has no position, and the client asks nothing
+                // of one without a position.
+                if (audio::advanced_kit::refusedNear(kitId, fired.position)) continue;
+                uint32_t handle = 0;
                 audio.playSound3D(*file, fired.position, volume, pitch, maxDistance, minDistance, kSfx,
-                                  audio::PlayLimit::None, priority);
+                                  audio::PlayLimit::None, priority, &handle);
+                audio::advanced_kit::notePlay(kitId, fired.position, handle);
+            }
             continue;
         }
         // A loop on its owner: none while the owner already plays one
@@ -210,6 +234,10 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
             }
             if (loopNear) continue;
         }
+        // A loop is asked the same way as any other play of an advanced kit: the
+        // client passes its loop flag on to 0x004cb580, which still asks 0x004ca130
+        // first, so a loop of a kit already sounding nearby never starts.
+        if (audio::advanced_kit::refusedNear(kitId, fired.position)) continue;
         const auto origin = m2.getInstancePosition(fired.instanceId);
         if (!origin) continue;
         // A loop carries its volume swing. Its pitch is not swung: a looping play
@@ -218,9 +246,11 @@ void M2EventSounds::update(M2Renderer& m2, pipeline::AssetManager* assets, const
         // (IronCouncil), Flags 0x600.
         const uint32_t handle = audio.playSound3DLooping(*pickFile(*k), fired.position, volume, maxDistance,
                                                          minDistance, plan.fadeIn, kSfx, priority);
-        if (handle != 0)
+        if (handle != 0) {
             loops_[fired.instanceId] = Loop{.handle = handle, .soundId = soundId, .offset = fired.position - *origin,
                                             .position = fired.position, .fadeOut = plan.fadeOut};
+            audio::advanced_kit::notePlay(kitId, fired.position, handle);
+        }
     }
 
     // A loop goes with its owner, and ends when it does: the owner's sound
