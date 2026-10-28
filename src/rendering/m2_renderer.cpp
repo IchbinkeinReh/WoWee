@@ -2709,7 +2709,8 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                 }
                 const glm::mat4 carried = rtSteadyCarried(*model, inst, patch.bone);
                 rt_lights::PointLight l = rt_lights::glowLight(glm::vec3(carried * glm::vec4(patch.centre, 1.0f)), color,
-                                                               patch.area * scale2, rt_lights::Source::Emissive);
+                                                               patch.area * scale2, rt_lights::Source::Emissive,
+                                                               std::sqrt(scale2));
                 // Inside, the glow is in the baked colours as a lamp's is -
                 // a doodad's, not a game object's.
                 l.baked = inst.interiorLit && !inst.isGameObject;

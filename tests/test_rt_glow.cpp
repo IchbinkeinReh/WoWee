@@ -226,3 +226,21 @@ TEST_CASE("A flat glow's light stands off the side it shows", "[rt_glow]") {
     REQUIRE(both.size() == 1);
     CHECK(glm::length(glowStandOff(both[0]) - both[0].centre) == Catch::Approx(0.0f));
 }
+
+TEST_CASE("a glow placed larger than its model reaches farther", "[rt_glow]") {
+    const glm::vec3 green(0.4f, 1.0f, 0.1f);
+    // A crystal's patch at its authored size stops at the ceiling...
+    const PointLight one = glowLight(glm::vec3(0.0f), green, 400.0f, Source::Emissive);
+    CHECK(one.attenuationEnd == Catch::Approx(kGlowMaxReach));
+    // ...and placed at seven times its size reaches farther, by the root.
+    const PointLight seven = glowLight(glm::vec3(0.0f), green, 400.0f * 49.0f, Source::Emissive, 7.0f);
+    CHECK(seven.attenuationEnd == Catch::Approx(std::sqrt(7.0f) * kGlowMaxReach));
+    CHECK(seven.attenuationStart == Catch::Approx(0.15f * seven.attenuationEnd));
+    // The strength keeps its ceiling; a smaller instance keeps the authored one.
+    CHECK(std::max(seven.color.r, std::max(seven.color.g, seven.color.b)) ==
+          Catch::Approx(std::max(one.color.r, std::max(one.color.g, one.color.b))));
+    CHECK(glowLight(glm::vec3(0.0f), green, 400.0f, Source::Emissive, 0.5f).attenuationEnd ==
+          Catch::Approx(kGlowMaxReach));
+    CHECK(glowLight(glm::vec3(0.0f), green, 400.0f, Source::Emissive, NAN).attenuationEnd ==
+          Catch::Approx(kGlowMaxReach));
+}

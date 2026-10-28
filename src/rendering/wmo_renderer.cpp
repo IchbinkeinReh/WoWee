@@ -5621,9 +5621,10 @@ void WMORenderer::collectRtLights(const glm::vec3& eye, float range,
         const float scale2 = glm::dot(glm::vec3(inst.modelMatrix[0]), glm::vec3(inst.modelMatrix[0]));
         auto place = [&](const rt_lights::GlowPatch& patch, const glm::vec3& color, bool baked) {
             const glm::vec3 position = glm::vec3(inst.modelMatrix * glm::vec4(rt_lights::glowStandOff(patch), 1.0f));
-            if (glm::length(position - eye) - rt_lights::kGlowMaxReach > range) return;
+            const float scale = std::sqrt(scale2);
+            if (glm::length(position - eye) - rt_lights::kGlowMaxReach * std::sqrt(std::max(scale, 1.0f)) > range) return;
             rt_lights::PointLight l =
-                rt_lights::glowLight(position, color, patch.area * scale2, rt_lights::Source::Emissive);
+                rt_lights::glowLight(position, color, patch.area * scale2, rt_lights::Source::Emissive, scale);
             l.baked = baked;
             out.push_back(l);
         };

@@ -407,11 +407,14 @@ void M2Renderer::prepareM2Particles() {
         // One light per emitter for the ray traced lighting (rt_lights::
         // ParticleGlow), summed as its particles are written below: for the
         // instances near the camera whose model gives no light otherwise (an
-        // M2 light, a fire's, a lamp's, its glowing batches).
+        // M2 light, a fire's, a lamp's - each of those the light of its
+        // flame, which the flame's particles are). A model whose batches glow
+        // still lights with its particles: they are another glow, flying off
+        // it - the motes about Sunstrider Isle's demon crystals gave none,
+        // their crystal's glow standing for them.
         constexpr float kParticleLightRange = 100.0f;
         const bool glowLights = rtScene_ && particleDrawOrder_[instOrder].first < kParticleLightRange * kParticleLightRange &&
-                                gpu.lights.empty() && !gpu.isBrazierOrFire && !gpu.isTorch && !gpu.isLamp &&
-                                gpu.glowPatches.empty();
+                                gpu.lights.empty() && !gpu.isBrazierOrFire && !gpu.isTorch && !gpu.isLamp;
         if (glowLights) rtEmitterGlowScratch_.assign(gpu.particleEmitters.size(), rt_lights::ParticleGlow{});
         float emitterGlowWeight = 0.0f;
         glm::vec3 emitterGlowTexel(1.0f);

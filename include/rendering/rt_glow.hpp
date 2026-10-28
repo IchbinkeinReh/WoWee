@@ -224,7 +224,15 @@ inline constexpr float kGlowMaxReach = 16.0f;
 /// `color` (its mean over the glow, 0..1 a channel) over `area` square yards
 /// (world): of the glow's hue, as strong and reaching as far as its power
 /// says. Zero colour for one that gives none (selectLights drops it).
-inline PointLight glowLight(const glm::vec3& position, const glm::vec3& color, float area, Source source) {
+///
+/// `scale`: the instance's size over its model's. The ceiling on the reach is
+/// set for a model as authored; one placed at seven times its size - the
+/// demon crystals over Sunstrider Isle, their glow a dozen yards up -
+/// reaches farther, by the square root of its size, or its light gave out
+/// before it reached the ground under it. By the size itself, seven of the
+/// ceiling's reach, a crystal lit the isle green for a hundred yards.
+inline PointLight glowLight(const glm::vec3& position, const glm::vec3& color, float area, Source source,
+                            float scale = 1.0f) {
     PointLight out;
     out.position = position;
     out.source = source;
@@ -232,7 +240,8 @@ inline PointLight glowLight(const glm::vec3& position, const glm::vec3& color, f
     const float bright = std::max(c.r, std::max(c.g, c.b));
     if (!(bright > 0.0f) || !(area > 0.0f) || !std::isfinite(area)) return out;
     const float root = std::sqrt(bright * area);
-    out.attenuationEnd = std::clamp(kGlowReachPerRootPower * root, kGlowMinReach, kGlowMaxReach);
+    const float ceiling = kGlowMaxReach * std::sqrt(std::isfinite(scale) ? std::max(scale, 1.0f) : 1.0f);
+    out.attenuationEnd = std::clamp(kGlowReachPerRootPower * root, kGlowMinReach, ceiling);
     out.attenuationStart = 0.15f * out.attenuationEnd;
     out.color = c / bright * std::min(kGlowStrengthPerRootPower * root, kGlowMaxStrength);
     return out;
