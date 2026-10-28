@@ -156,3 +156,21 @@ TEST_CASE("the charmer and the maker sit either side of the summoner",
     // The pet a unit summoned follows what it charms (0x0052d310: +0, else +8).
     CHECK(declaredFields("wotlk").at("UNIT_FIELD_SUMMON") == declaredFields("wotlk").at("UNIT_FIELD_CHARM") + 2);
 }
+
+TEST_CASE("the glyph run and the pet's spell power are consecutive dwords",
+          "[update-fields]") {
+    // The client's player field array lays these end to end: six GlyphSlot.dbc
+    // ids at +0x1230, the six GlyphProperties ids scribed in them at +0x1248, the
+    // bitmask of unlocked sockets at +0x1260, and the pet's spell power at
+    // +0x1264 - which is what GetPetSpellBonusDamage reads (0x0060e410) and what
+    // the watcher that raises PET_SPELL_POWER_UPDATE is registered on
+    // (0x006d1cb0). The glyph watcher names a socket as (offset - 0x1248) >> 2,
+    // so the six id slots have to be consecutive and in order; a table one dword
+    // off fires GLYPH_ADDED about a socket that never changed.
+    const auto wotlk = declaredFields("wotlk");
+    REQUIRE(wotlk.count("PLAYER_FIELD_GLYPH_SLOTS_1") == 1);
+    REQUIRE(wotlk.count("PLAYER_FIELD_PET_SPELL_POWER") == 1);
+    CHECK(wotlk.at("PLAYER_FIELD_GLYPHS_1") == wotlk.at("PLAYER_FIELD_GLYPH_SLOTS_1") + 6);
+    CHECK(wotlk.at("PLAYER_GLYPHS_ENABLED") == wotlk.at("PLAYER_FIELD_GLYPHS_1") + 6);
+    CHECK(wotlk.at("PLAYER_FIELD_PET_SPELL_POWER") == wotlk.at("PLAYER_GLYPHS_ENABLED") + 1);
+}

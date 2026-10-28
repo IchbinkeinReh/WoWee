@@ -2837,6 +2837,23 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                 }
             }
         }
+        // The spell power the realm hands the pet, the dword straight after the
+        // unlocked mask (+0x1008 +0x1264). The client watches that one dword too
+        // (0x006d1cb0) and answers PET_SPELL_POWER_UPDATE (0x2a2) with no
+        // arguments at all; petpaperdollframe.lua:30,184 takes it straight to
+        // PetPaperDollFrame_SetSpellBonusDamage, whose number comes back from
+        // GetPetSpellBonusDamage (0x0060e410) reading this same field. So the pet
+        // sheet's Spell Bonus Damage line is the server's figure, and it only
+        // moves when this says it moved.
+        if (const uint16_t petPowerIdx = fieldIndex(UF::PLAYER_FIELD_PET_SPELL_POWER);
+            petPowerIdx != 0xFFFF) {
+            const auto now = block.fields.find(petPowerIdx);
+            if (now != block.fields.end()) {
+                const auto was = lastFields.find(petPowerIdx);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                    pendingEvents_.emit("PET_SPELL_POWER_UPDATE", {});
+            }
+        }
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.
         for (const auto& [key, val] : block.fields) {

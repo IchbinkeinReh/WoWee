@@ -112,6 +112,7 @@ static const UFNameEntry kUFNames[] = {
     {.name = "PLAYER_FIELD_GLYPH_SLOTS_1", .field = UF::PLAYER_FIELD_GLYPH_SLOTS_1},
     {.name = "PLAYER_FIELD_GLYPHS_1", .field = UF::PLAYER_FIELD_GLYPHS_1},
     {.name = "PLAYER_GLYPHS_ENABLED", .field = UF::PLAYER_GLYPHS_ENABLED},
+    {.name = "PLAYER_FIELD_PET_SPELL_POWER", .field = UF::PLAYER_FIELD_PET_SPELL_POWER},
     {.name = "GAMEOBJECT_FLAGS", .field = UF::GAMEOBJECT_FLAGS},
     {.name = "GAMEOBJECT_BYTES_1", .field = UF::GAMEOBJECT_BYTES_1},
     {.name = "GAMEOBJECT_DYNAMIC", .field = UF::GAMEOBJECT_DYNAMIC},

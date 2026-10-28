@@ -3576,6 +3576,11 @@ public:
     /// PLAYER_GLYPHS_ENABLED). False without a player entity.
     bool getGlyphSocketFields(std::array<uint32_t, 6>& slotIds, std::array<uint32_t, 6>& glyphs,
                               uint32_t& enabledMask) const;
+    /// The spell power the realm says the pet has, straight out of
+    /// PLAYER_FIELD_PET_SPELL_POWER (+0x1008 +0x1264). GetPetSpellBonusDamage
+    /// reads that one dword and nothing else (0x0060e410), signed - a negative
+    /// bonus is shown in red - and answers 0 when there is no player object.
+    int32_t getPetSpellBonusDamage() const;
     void ensureAchievementCriteriaLoaded();
     /// Category ids in the order the panel shows them. The two tabs are
     /// disjoint sets, not one list filtered at the call site: GetCategoryList

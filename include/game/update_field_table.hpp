@@ -227,6 +227,11 @@ enum class UF : uint16_t {
     PLAYER_FIELD_GLYPH_SLOTS_1,
     PLAYER_FIELD_GLYPHS_1,
     PLAYER_GLYPHS_ENABLED,
+    /// WotLK: the spell power the pet is given, the dword straight after the
+    /// unlocked glyph mask (+0x1264). GetPetSpellBonusDamage reads exactly this
+    /// (0x0060e410), and the watcher on it (0x006d1cb0) is what the pet sheet's
+    /// Spell Bonus Damage line waits for.
+    PLAYER_FIELD_PET_SPELL_POWER,
     GAMEOBJECT_FLAGS,
     GAMEOBJECT_BYTES_1,
     // MO_TRANSPORT route clock. LEVEL carries the route's period in ms; the high

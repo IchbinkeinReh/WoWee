@@ -2356,6 +2356,20 @@ bool GameHandler::getGlyphSocketFields(std::array<uint32_t, 6>& slotIds,
     return true;
 }
 
+// The pet's spell power is not something this client works out: 0x0060e410 hands
+// back the int at PLAYER_FIELD_PET_SPELL_POWER as a number, or 0 when the player
+// object is missing. Which is why the pet sheet's Spell Bonus Damage line can be
+// wrong here in only one way - the realm never wrote the field - and why a
+// pre-WotLK realm, which has no such field, answers 0 rather than guessing.
+int32_t GameHandler::getPetSpellBonusDamage() const {
+    const uint16_t idx = fieldIndex(UF::PLAYER_FIELD_PET_SPELL_POWER);
+    if (idx == 0xFFFF) return 0;
+    const auto player = entityController_ ? entityController_->getEntityManager().getEntity(playerGuid)
+                                          : nullptr;
+    if (!player) return 0;
+    return static_cast<int32_t>(player->getField(idx));
+}
+
 bool GameHandler::isStatisticCriteria(uint32_t criteriaId) {
     ensureAchievementCriteriaLoaded();
     ensureAchievementCategoriesLoaded();

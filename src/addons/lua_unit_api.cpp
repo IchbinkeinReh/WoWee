@@ -2081,10 +2081,14 @@ static int lua_UnitAffectingCombat(lua_State* L) {
 //
 // The pet tab formats this with %d before testing it, and %d against nil raises
 // on the spot - on a tab of the character frame, which is drawn by default.
-// Nothing here works out what a pet inherits, and zero is the honest figure
-// rather than a guess at a scaling rule.
+// It is not worked out here any more than it is in the client: the accessor at
+// 0x0060e410 returns the player's PLAYER_FIELD_PET_SPELL_POWER dword as a signed
+// number, so a pet that loses spell damage reads negative and
+// petpaperdollframe.lua:619 puts it in red. Zero stays the answer for a realm
+// that has no such field to write.
 static int lua_GetPetSpellBonusDamage(lua_State* L) {
-    lua_pushnumber(L, 0);
+    auto* gh = getGameHandler(L);
+    lua_pushnumber(L, gh ? gh->getPetSpellBonusDamage() : 0);
     return 1;
 }
 
