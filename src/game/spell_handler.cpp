@@ -1913,11 +1913,25 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
     LOG_INFO("Casting spell: ", spellId, " on 0x", std::hex, item != 0 ? item : target, std::dec);
     castSent(spellId, owner_.getPlayerGuid());
 
-    // Fire UNIT_SPELLCAST_SENT for cast bar addons
+    // The cast routine (0x0080ac90) ends a cast with UNIT_SPELLCAST_SENT (323),
+    // and its shape is four strings: the literal "player", the spell's name, its
+    // rank, and the name the cast was aimed at - the empty string when the guid
+    // names nothing (0x0074d750 answers the name through the name cache, and
+    // DAT_009e14ff is the empty one). No spell id: that is a later expansion's
+    // argument. It is fired only when the cast's caster is the local player
+    // (0x004cee50 compares the two), so a pet's cast sends none.
+    //
+    // The one reader of this in the shipped interface is the cast-sequence
+    // manager (chatframe.lua:723-748): it takes unit, name, rank and matches the
+    // spell name - lower-cased, with "()" and "(rank)" variants - against every
+    // sequence's own list. With a target name where the spell name belongs and
+    // a number where the rank belongs, nothing ever matched and no sequence
+    // could start.
     if (owner_.addonEventCallbackRef()) {
         std::string targetName;
         if (target != 0) targetName = owner_.lookupName(target);
-        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT", {"player", targetName, std::to_string(spellId)});
+        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT",
+            {"player", owner_.getSpellName(spellId), owner_.getSpellRank(spellId), targetName});
     }
 }
 
@@ -2824,8 +2838,16 @@ void SpellHandler::castAtLocation(uint32_t spellId, const ground_target::Place& 
     castSent(spellId, caster != 0 ? caster : owner_.getPlayerGuid());
     LOG_INFO("Casting spell: ", spellId, " at (", wire.x, ", ", wire.y, ", ", wire.z, ") transport 0x", std::hex,
              transportGuid, std::dec);
-    if (owner_.addonEventCallbackRef())
-        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT", {"player", "", std::to_string(spellId)});
+    // The same UNIT_SPELLCAST_SENT as an aimed cast, from the same routine
+    // (0x0080ac90 handles both), and with the same two rules: it is gated on the
+    // caster being the local player (0x004cee50), so a pet's cast at a place
+    // announces nothing; and the fourth argument is the *name* the cast is aimed
+    // at, which a place has none of - the empty string, as DAT_009e14ff is for
+    // the client when the guid it is shown names nothing.
+    if (caster == 0 && owner_.addonEventCallbackRef()) {
+        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT",
+            {"player", owner_.getSpellName(spellId), owner_.getSpellRank(spellId), std::string()});
+    }
 }
 
 void SpellHandler::cancelChannelOnMove() {
