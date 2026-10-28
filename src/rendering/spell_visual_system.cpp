@@ -20,6 +20,7 @@
 #include "core/logger.hpp"
 #include "core/weapon_attachment.hpp"
 #include "audio/audio_engine.hpp"
+#include "audio/sound_distance.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include <algorithm>
 #include <array>
@@ -748,8 +749,13 @@ uint32_t SpellVisualSystem::playKitSound(const KitRecord& kit, spell_kit::KitTyp
                                                  instanceIsMover(renderInstanceId));
     const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
     const float volume = sound->volume * kitSoundVolumeScale_;
+    // The row's own reach, not a guess: a kit's SoundEntries row says how far
+    // it carries (MinDistance 26, DistanceCutoff 27), and the flying mount's
+    // takeoff and landing pair is a row of 8 and 45 yards.
+    float minDistance = 0.0f, maxDistance = 0.0f;
+    audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
     if (!loops) {
-        audio::AudioEngine::instance().playSound3D(sound->data, position, volume, 1.0f, 100.0f, 1.0f,
+        audio::AudioEngine::instance().playSound3D(sound->data, position, volume, 1.0f, maxDistance, minDistance,
                                                    audio::Channel::Effects, audio::PlayLimit::None, priority);
         return 0;
     }
@@ -757,8 +763,8 @@ uint32_t SpellVisualSystem::playKitSound(const KitRecord& kit, spell_kit::KitTyp
     // played where the unit was as the kit started - 0x006f7e40 asks the unit
     // for that through its vtable +0x2c once, and nothing after moves it - and
     // its voice only counts for the mover, never for the listener (0x00745230).
-    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, volume, 100.0f, 1.0f, 0.0f,
-                                                             audio::Channel::Effects, priority);
+    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, volume, maxDistance, minDistance,
+                                                             0.0f, audio::Channel::Effects, priority);
 }
 
 void SpellVisualSystem::playKitWeaponEffects(const std::vector<KitWeaponEffect>& effects,
@@ -1154,8 +1160,10 @@ const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t sou
 uint32_t SpellVisualSystem::startMissileSound(uint32_t soundId, const glm::vec3& position, int priority) {
     const LoadedSound* sound = soundEntry(soundId);
     if (!sound) return 0;
-    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, sound->volume, 100.0f, 1.0f,
-                                                             0.0f, audio::Channel::Effects, priority);
+    float minDistance = 0.0f, maxDistance = 0.0f;
+    audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
+    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, sound->volume, maxDistance,
+                                                             minDistance, 0.0f, audio::Channel::Effects, priority);
 }
 
 bool SpellVisualSystem::instanceIsMover(uint32_t renderInstanceId) const {
@@ -2681,9 +2689,12 @@ void SpellVisualSystem::loadCameraShakes() {
 }
 
 void SpellVisualSystem::playSoundAt(uint32_t soundId, const glm::vec3& position, int priority) {
-    if (const LoadedSound* sound = soundId ? soundEntry(soundId) : nullptr)
-        audio::AudioEngine::instance().playSound3D(sound->data, position, sound->volume, 1.0f, 100.0f, 1.0f,
-                                                   audio::Channel::Effects, audio::PlayLimit::None, priority);
+    const LoadedSound* sound = soundId ? soundEntry(soundId) : nullptr;
+    if (!sound) return;
+    float minDistance = 0.0f, maxDistance = 0.0f;
+    audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
+    audio::AudioEngine::instance().playSound3D(sound->data, position, sound->volume, 1.0f, maxDistance, minDistance,
+                                               audio::Channel::Effects, audio::PlayLimit::None, priority);
 }
 
 void SpellVisualSystem::playOwnSoundAt(uint32_t soundId, const glm::vec3& position) {
@@ -2695,8 +2706,10 @@ void SpellVisualSystem::playOwnSoundAt(uint32_t soundId, const glm::vec3& positi
         audio.playSound2D(sound->data, sound->volume * 0.65f, 1.0f, audio::Channel::Effects, audio::PlayLimit::None,
                           kOwn);
     } else {
-        audio.playSound3D(sound->data, position, sound->volume, 1.0f, 100.0f, 1.0f, audio::Channel::Effects,
-                          audio::PlayLimit::None, kOwn);
+        float minDistance = 0.0f, maxDistance = 0.0f;
+        audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
+        audio.playSound3D(sound->data, position, sound->volume, 1.0f, maxDistance, minDistance,
+                          audio::Channel::Effects, audio::PlayLimit::None, kOwn);
     }
 }
 
@@ -2898,8 +2911,8 @@ void SpellVisualSystem::startDynamicObjectKit(DynamicObjectVisual& object) {
     // 0x00704f60: the kit's sound on the object, looping, rising over two
     // seconds.
     if (const LoadedSound* sound = soundEntry(object.area.soundId)) {
-        const float maxDistance = sound->cutoff > 0.0f ? sound->cutoff : 100.0f;
-        const float minDistance = sound->minDistance > 0.0f ? std::min(sound->minDistance, maxDistance) : 1.0f;
+        float minDistance = 0.0f, maxDistance = 0.0f;
+        audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
         object.soundHandle = audio::AudioEngine::instance().playSound3DLooping(
             sound->data, object.position, sound->volume, maxDistance, minDistance,
             dynamic_object::kSoundFadeInSeconds, audio::Channel::Effects);
