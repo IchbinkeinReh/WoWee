@@ -892,24 +892,21 @@ void registerLfgLuaAPI(lua_State* L) {
     //   SearchLFGGetNumResults    two numbers (this client's returns both the
     //                             shown count and the total, and lfrframe.lua
     //                             names both: `numResults, totalResults`).
-    //   SearchLFGGetJoinedID      nothing at all while no list is joined - the
-    //                             client pushes its joined id (0x00beaa14) only
-    //                             when that id is non-zero (0x005529a0), and the
-    //                             browser's dropdown does `or "none"`. Zero
-    //                             would be a number, true in Lua, and the
-    //                             dropdown would select a value of nil instead
-    //                             of saying None.
+    //   SearchLFGGetJoinedID      the joined id, or nothing while none is joined
+    //                             - see the binding itself for why zero will not
+    //                             do.
     //
-    // The list itself is a packet pair plus the two requests that ask for it:
-    // SMSG_UPDATE_LFG_LIST (0x0055b770: a joined-list id of type<<24|id that has
-    // to match the one held, a whole-or-delta byte, then entries as a guid and a
-    // mask of which fields each row carries) and SMSG_LFG_UPDATE_SEARCH (case
-    // 0x369 of 0x0055bdc0: that joined-list flag alone). The client sends
-    // CMSG_LFG_LIST_JOIN (0x35e) and CMSG_LFG_LIST_LEAVE (0x35f) with the packed
-    // id at 0x00558ed0 and 0x00558f90, and those two opcodes are not in
-    // Data/opcodes/canonical.json at all - so the list stays empty until the
-    // requests exist, and answering nil is the honest answer, not a stub hiding
-    // a feature.
+    // The requests are not missing after all: this client sends
+    // CMSG_SEARCH_LFG_JOIN (0x35E) and CMSG_SEARCH_LFG_LEAVE (0x35F) at
+    // 0x00558ed0 and 0x00558f90, each with the joined id packed as type<<24|id,
+    // and both names are in Data/opcodes/canonical.json - under SEARCH, not the
+    // LIST spelling the packet handler comments use. The rows are what is
+    // missing: SMSG_UPDATE_LFG_LIST (0x0055b770) is a joined-list id that has to
+    // match the one held, a whole-or-delta byte, then entries as a guid plus a
+    // mask of which fields that row carries, into 0x148-byte records
+    // (LFGInfo.cpp:0x2be). So the requests are wired below and the rows still
+    // answer as if there were none, which is now a real answer rather than a
+    // placeholder: the server has been asked and has sent nothing read.
     {"SearchLFGGetNumResults",     [](lua_State* L) -> int {
         lua_pushinteger(L, 0);
         lua_pushinteger(L, 0);
@@ -918,11 +915,41 @@ void registerLfgLuaAPI(lua_State* L) {
     {"SearchLFGGetResults",        [](lua_State* L) -> int { return luaReturnNil(L); }},
     {"SearchLFGGetPartyResults",   [](lua_State* L) -> int { return luaReturnNil(L); }},
     {"SearchLFGGetEncounterResults", [](lua_State* L) -> int { return luaReturnNil(L); }},
-    {"SearchLFGGetJoinedID",       [](lua_State* L) -> int { return luaReturnNil(L); }},
-    // Nothing behind them yet, but they ask the taint check all the same
-    // (0x00559400, 0x005594e0: kind 9).
-    {"SearchLFGJoin",              [](lua_State* L) -> int { taint::allowed(L, 9); return 0; }},
-    {"SearchLFGLeave",             [](lua_State* L) -> int { taint::allowed(L, 9); return 0; }},
+    // The joined id, low twenty-four bits only, and nothing at all when no list
+    // is joined - this client pushes it only when that id is non-zero
+    // (0x005529a0 reading 0x00beaa14), and the browser's dropdown does
+    // `SearchLFGGetJoinedID() or "none"`, so a zero would be a number true in
+    // Lua and the dropdown would select a value matching no button.
+    {"SearchLFGGetJoinedID",       [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        const uint32_t id = gh ? gh->getLfgJoinedListId() & 0x00FFFFFFu : 0;
+        if (id == 0) return 0;
+        lua_pushinteger(L, id);
+        return 1;
+    }},
+    // The two requests, checked the way 0x00559400 checks them: two numbers, a
+    // type under the seven this client knows, and an id that names an
+    // LFGDungeonData row (its FUN_0065c290 refuses one that does not). Both ask
+    // the taint check first (kind 9).
+    {"SearchLFGJoin",              [](lua_State* L) -> int {
+        taint::allowed(L, 9);
+        if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return 0;
+        const uint32_t typeId = static_cast<uint32_t>(lua_tointeger(L, 1));
+        const uint32_t lfgId  = static_cast<uint32_t>(lua_tointeger(L, 2));
+        auto* gh = getGameHandler(L);
+        if (!gh || typeId >= 7) return 0;
+        bool knownRow = false;
+        for (const auto& d : gh->getLfgDungeons())
+            if (d.id == (lfgId & 0x00FFFFFFu)) { knownRow = true; break; }
+        if (!knownRow) return 0;
+        gh->lfgSearchJoin(typeId, lfgId);
+        return 0;
+    }},
+    {"SearchLFGLeave",             [](lua_State* L) -> int {
+        taint::allowed(L, 9);
+        if (auto* gh = getGameHandler(L)) gh->lfgSearchLeave();
+        return 0;
+    }},
     };
 
     for (const auto& [name, func] : api) {

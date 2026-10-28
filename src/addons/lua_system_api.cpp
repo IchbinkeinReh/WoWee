@@ -5136,8 +5136,16 @@ static int lua_GetLFGRoleUpdateMember(lua_State* L) {
 }
 
 static int lua_IsListedInLFR(lua_State* L) {
+    // The listed state is the joined raid-browser list, and this client sets it
+    // when the browser's dropdown asks (0x00beaa14, written by 0x00558ed0 and
+    // cleared by 0x00558f90 and by the search update's false byte) - it is not
+    // one of the queue states, and no packet on its own ever said "listed".
+    // LfgState::RaidBrowser was the answer here and nothing ever set it, which
+    // is why FrameXML's GetLFGMode could not return "listed" at all: its
+    // precedence tests the queue first and this flag after.
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->getLfgState() == game::LfgState::RaidBrowser ? 1 : 0);
+    const bool listed = gh != nullptr && gh->getLfgJoinedListId() != 0;
+    lua_pushboolean(L, listed ? 1 : 0);
     return 1;
 }
 

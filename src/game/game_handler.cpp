@@ -4872,6 +4872,18 @@ uint32_t GameHandler::getLfgDungeonId() const {
     return socialHandler_ ? socialHandler_->getLfgDungeonId() : 0;
 }
 
+uint32_t GameHandler::getLfgJoinedListId() const {
+    return socialHandler_ ? socialHandler_->getLfgJoinedListId() : 0;
+}
+
+void GameHandler::lfgSearchJoin(uint32_t typeId, uint32_t lfgId) {
+    if (socialHandler_) socialHandler_->lfgSearchJoin(typeId, lfgId);
+}
+
+void GameHandler::lfgSearchLeave() {
+    if (socialHandler_) socialHandler_->lfgSearchLeave();
+}
+
 std::string GameHandler::getCurrentLfgDungeonName() const {
     return socialHandler_ ? socialHandler_->getCurrentLfgDungeonName() : std::string{};
 }

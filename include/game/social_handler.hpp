@@ -600,6 +600,14 @@ public:
     [[nodiscard]] const LfgCompletionReward& getLfgCompletionReward() const { return lfgCompletionReward_; }
     [[nodiscard]] bool isLfgQueued()               const { return lfgState_ == LfgState::Queued; }
     [[nodiscard]] bool isLfgInDungeon()            const { return lfgState_ == LfgState::InDungeon; }
+    /// The raid browser's joined-list id, packed the way this client packs it:
+    /// the type in the top eight bits, the LFGDungeonData id in the low
+    /// twenty-four (its 0x00beaa14). Zero means not listed.
+    [[nodiscard]] uint32_t getLfgJoinedListId()    const { return lfgJoinedListId_; }
+    /// Ask to be listed in the raid browser for one raid, or stop being listed
+    /// (SearchLFGJoin / SearchLFGLeave, 0x00559400 and 0x00558f90).
+    void lfgSearchJoin(uint32_t typeId, uint32_t lfgId);
+    void lfgSearchLeave();
     [[nodiscard]] uint32_t getLfgDungeonId()       const { return lfgDungeonId_; }
     [[nodiscard]] std::string getCurrentLfgDungeonName() const;
     [[nodiscard]] uint32_t getLfgProposalId()      const { return lfgProposalId_; }
@@ -705,6 +713,9 @@ private:
     void handleLfgRoleCheckUpdate(network::Packet& packet);
     void handleLfgUpdatePlayer(network::Packet& packet);
     void handleLfgUpdateParty(network::Packet& packet);
+    /// SMSG_LFG_UPDATE_SEARCH, one byte: the server saying this player is no
+    /// longer listed drops the joined raid-browser list (case 0x369 of 0x0055bdc0).
+    void handleLfgUpdateSearch(network::Packet& packet);
     void applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party);
     /// Whether any of the body's dungeons is a raid, which turns the queue's
     /// lines into the raid browser's (0x00557260).
@@ -880,6 +891,10 @@ private:
 
     // LFG / Dungeon Finder
     LfgState lfgState_        = LfgState::None;
+    /// The raid browser list this player joined, packed type<<24 | id; zero when
+    /// not listed. This client's own 0x00beaa14 - it is set by the request, not
+    /// by any packet, which is why IsListedInLFR can only be as right as this.
+    uint32_t lfgJoinedListId_ = 0;
     LfgCompletionReward lfgCompletionReward_;
     uint32_t lfgDungeonId_    = 0;
     uint32_t lfgProposalId_   = 0;

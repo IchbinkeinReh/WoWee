@@ -1165,22 +1165,16 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         handleLfgPartyInfo(packet);
     };
     // The raid browser's browse list, which lfrframe.lua fills through
-    // SearchLFGGetResults. Both halves are still unread, and what is read here
-    // is only the shape of each: SMSG_UPDATE_LFG_LIST is a joined-list id
-    // (type<<24 | id) that must match the one the client holds, a whole-or-delta
-    // byte, and entries as an eight-byte guid plus a mask of which fields the
-    // row carries (0x0055b770, whose records are 0x148 bytes and come from
-    // LFGInfo.cpp:0x2be); SMSG_LFG_UPDATE_SEARCH is that joined-list flag alone,
-    // and the client acts on it only to drop a list it is holding when the flag
-    // goes false (case 0x369 of the LFG family routine 0x0055bdc0). The client's
-    // own listed flag is not in either packet - it is the joined-list id the
-    // client keeps for itself (0x00beaa14), set by SearchLFGJoin and cleared by
-    // SearchLFGLeave, which ask over opcodes this client's opcode data does not
-    // even name yet. Reading the packets therefore buys nothing on its own: the
-    // list stays empty until the requests are sent, so the skipAll stays.
-    for (auto op : { Opcode::SMSG_LFG_UPDATE_SEARCH, Opcode::SMSG_UPDATE_LFG_LIST }) {
-        table[op] = [](network::Packet& packet) { packet.skipAll(); };
-    }
+    // SearchLFGGetResults. The rows themselves are still unread:
+    // SMSG_UPDATE_LFG_LIST (0x0055b770) is a joined-list id of type<<24|id that
+    // has to match the one held, a whole-or-delta byte, and then entries as an
+    // eight-byte guid plus a mask of which fields that row carries, into records
+    // of 0x148 bytes (LFGInfo.cpp:0x2be). What is read here is the search
+    // update, which is the joined-list flag alone.
+    table[Opcode::SMSG_LFG_UPDATE_SEARCH] = [this](network::Packet& packet) {
+        handleLfgUpdateSearch(packet);
+    };
+    table[Opcode::SMSG_UPDATE_LFG_LIST] = [](network::Packet& packet) { packet.skipAll(); };
     table[Opcode::SMSG_OPEN_LFG_DUNGEON_FINDER] = [this](network::Packet& packet) {
         packet.skipAll();
         if (owner_.openLfgCallbackRef()) owner_.openLfgCallbackRef()();
@@ -4752,6 +4746,67 @@ void SocialHandler::handleLfgUpdateParty(network::Packet& packet) {
     LfgUpdateBody body;
     if (!parseLfgUpdate(packet, /*party=*/true, updateType, body)) return;
     applyLfgUpdate(updateType, body, /*party=*/true);
+}
+
+// The raid browser's two requests. Nothing the server sends asks for them -
+// SearchLFGJoin (0x00559400) checks that the type is one of the seven this
+// client knows and that the id names an LFGDungeonData row, packs
+// type<<24 | id&0xffffff, and hands it to 0x00558ed0, which records it as the
+// joined list (0x00beaa14), drops the results held for whatever list came
+// before, and sends CMSG_SEARCH_LFG_JOIN (0x35E) with the packed value.
+// SearchLFGLeave (0x00558f90) sends CMSG_SEARCH_LFG_LEAVE (0x35F) with the same
+// value and clears it. That id is the whole of this client's "listed" state, so
+// it is kept here rather than as another LfgState: the client holds it beside
+// the queue flags, and FrameXML's GetLFGMode tests the queue before it.
+//
+// Nothing is fired from here on purpose. The server answers the request with a
+// join result and a queue update, and the update is what fires LFG_UPDATE -
+// which is how the join result itself stays silent (see handleLfgJoinResult).
+void SocialHandler::lfgSearchJoin(uint32_t typeId, uint32_t lfgId) {
+    const uint32_t packed = (typeId << 24) | (lfgId & 0x00FFFFFFu);
+    if (packed == lfgJoinedListId_) return;
+    if (!owner_.getSocket()) return;
+    const uint16_t wire = wireOpcode(Opcode::CMSG_SEARCH_LFG_JOIN);
+    if (wire == 0xFFFF) return;
+    network::Packet packet(wire);
+    packet.writeUInt32(packed);
+    owner_.getSocket()->send(packet);
+    lfgJoinedListId_ = packed;
+}
+
+void SocialHandler::lfgSearchLeave() {
+    if (lfgJoinedListId_ == 0) return;
+    if (owner_.getSocket()) {
+        const uint16_t wire = wireOpcode(Opcode::CMSG_SEARCH_LFG_LEAVE);
+        if (wire != 0xFFFF) {
+            network::Packet packet(wire);
+            packet.writeUInt32(lfgJoinedListId_);
+            owner_.getSocket()->send(packet);
+        }
+    }
+    lfgJoinedListId_ = 0;
+}
+
+// SMSG_LFG_UPDATE_SEARCH, case 0x369 of the LFG family routine (0x0055bdc0):
+// one byte, and the only thing the client does with it is negative - the byte
+// false while a joined list is held drops that list, resets the joined id
+// (0x00beaa14) and reports the change; the byte true leaves everything alone,
+// because the id it would confirm is the one the client set for itself.
+void SocialHandler::handleLfgUpdateSearch(network::Packet& packet) {
+    if (!packet.hasRemaining(1)) return;
+    const bool listed = packet.readUInt8() != 0;
+    packet.skipAll();
+    if (listed || lfgJoinedListId_ == 0) return;
+    lfgJoinedListId_ = 0;
+    // The list this clears is the one on SMSG_UPDATE_LFG_LIST, which is not read
+    // here at all; what is left to clear is the id, and the mode the interface
+    // derives from it ("listed", which changes the raid browser's button and
+    // blocks the Dungeon Finder beside it) is re-read on LFG_UPDATE. The client
+    // reports this change through its own list-clearing routine (0x00558c30);
+    // what that routine fires was not read, so the event named here is this
+    // client's, chosen because it is the one every GetLFGMode consumer listens
+    // to, not a translation of that call.
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
 }
 
 void SocialHandler::applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party) {

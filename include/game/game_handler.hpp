@@ -2625,6 +2625,11 @@ public:
     bool isLfgQueued() const;
     bool isLfgInDungeon() const;
     uint32_t getLfgDungeonId() const;
+    /// The raid browser: the list joined (type<<24 | id, zero when not listed)
+    /// and the two requests that change it.
+    uint32_t getLfgJoinedListId() const;
+    void lfgSearchJoin(uint32_t typeId, uint32_t lfgId);
+    void lfgSearchLeave();
     std::string getCurrentLfgDungeonName() const;
     std::string getMapName(uint32_t mapId) const;
 
