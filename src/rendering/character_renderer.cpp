@@ -2546,7 +2546,7 @@ base_animation::Pick CharacterRenderer::pickBaseAnimation(CharacterInstance& ins
     upper_body::Unit unit = instance.unit;
     unit.speed = instance.locomotionSpeed;
     if (instance.standStateSeen >= 0) unit.standStateSeen = static_cast<uint8_t>(instance.standStateSeen);
-    // 0x007224d0: no cast loop while a PlayImpact kit's animation plays
+    // 0x007224d0: no cast loop while a visual kit's animation (type 0) plays
     // (+0xfa4); the PrecastKit's StartAnimID until it has ended (+0xa38
     // 0x10000), its AnimID after.
     if (instance.kitAnimationHeld >= 0) {
@@ -2926,8 +2926,8 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                         continue;
                     }
                     k.time = duration;
-                    // 0x0073bbd0: the precast's start, or a PlayImpact
-                    // kit's animation, is over.
+                    // 0x0073bbd0: the precast's start, or a visual kit's
+                    // animation (type 0), is over.
                     if (static_cast<int32_t>(k.animationId) == inst.precastStart) inst.precastStart = -1;
                     if (static_cast<int32_t>(k.animationId) == inst.kitAnimationHeld) inst.kitAnimationHeld = -1;
                     if (unitUpperBone >= 0 && k.keyBoneId == unitUpperBone && !k.vehicle) {
@@ -3027,8 +3027,8 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
                         if (inst.seatStandsWhole) inst.seatUpperStartPlayed = true;
                         const bool unitDriven = inst.unitAnimation && !inst.seatAnimationHeld &&
                                                 !inst.seatStandsWhole && !inst.mirrorsSeatParent;
-                        // 0x0073bbd0: the precast's start, or a PlayImpact
-                        // kit's animation, is over.
+                        // 0x0073bbd0: the precast's start, or a visual kit's
+                        // animation (type 0), is over.
                         if (static_cast<int32_t>(inst.currentAnimationId) == inst.precastStart) inst.precastStart = -1;
                         if (static_cast<int32_t>(inst.currentAnimationId) == inst.kitAnimationHeld)
                             inst.kitAnimationHeld = -1;

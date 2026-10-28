@@ -58,8 +58,8 @@ TEST_CASE("a cast or impact kit's animation, once; the wounds as wounds", "[kit_
     CHECK_FALSE(act.critical);
     act = ka::onKitPlayed(data, {.type = 1, .anim = kCombatCritical}, 0);
     CHECK(act.critical);
-    // A PlayImpact kit's holds the cast loop while it plays.
-    CHECK(ka::onKitPlayed(data, {.type = ka::kTypePlayImpact, .anim = kSpellCastDirected}, 0).holdsCastLoop);
+    // A visual kit's (type 0) holds the cast loop while it plays.
+    CHECK(ka::onKitPlayed(data, {.type = ka::kTypeVisual, .anim = kSpellCastDirected}, 0).holdsCastLoop);
     // None without an AnimID, and none for a state kit.
     CHECK(ka::onKitPlayed(data, {.type = 1}, 0).kind == Kind::None);
     CHECK(ka::onKitPlayed(data, {.type = ka::kTypeState, .anim = kSpellCastDirected}, 0).kind == Kind::None);

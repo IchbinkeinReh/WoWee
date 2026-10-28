@@ -206,7 +206,7 @@ TEST_CASE("0x00745230 sounds every kit it plays, looping only for some", "[spell
     CHECK(sk::kitSoundLoops(sk::KitType::Area, true, 0));
     CHECK_FALSE(sk::kitSoundLoops(sk::KitType::Area, true, 7));
     CHECK_FALSE(sk::kitSoundLoops(sk::KitType::Cast, true, 7));
-    CHECK_FALSE(sk::kitSoundLoops(sk::KitType::PlayImpact, true, 0));
+    CHECK_FALSE(sk::kitSoundLoops(sk::KitType::Visual, true, 0));
     CHECK_FALSE(sk::kitSoundLoops(sk::KitType::StateDone, true, 7));
     CHECK_FALSE(sk::kitSoundLoops(sk::KitType::State, false, 7));
     // A kit with a model sounds through its effect (0x006f9840): the unit it
@@ -224,7 +224,7 @@ TEST_CASE("0x00745230 sounds every kit it plays, looping only for some", "[spell
 TEST_CASE("a kit's models play once, repeat for the cast, or hold for the aura", "[spell_kit]") {
     CHECK(sk::kitModelLife(sk::KitType::Precast) == sk::KitModelLife::Repeat);
     CHECK(sk::kitModelLife(sk::KitType::State) == sk::KitModelLife::Hold);
-    for (auto type : {sk::KitType::PlayImpact, sk::KitType::Cast, sk::KitType::Area, sk::KitType::StateDone})
+    for (auto type : {sk::KitType::Visual, sk::KitType::Cast, sk::KitType::Area, sk::KitType::StateDone})
         CHECK(sk::kitModelLife(type) == sk::KitModelLife::Once);
     // 0x00744870: the Stand runs once, then the Decay where there is one.
     const auto timing = sk::onceTiming(1500.0f, true);

@@ -3029,8 +3029,9 @@ void GameHandler::registerRemainingOpcodes() {
             if (playSoundCallback_) playSoundCallback_(soundId);
         }
     };
-    // uint64 unit + uint32 SpellVisualKit id: the kit on the unit, type 0
-    // (0x00800610).
+    // uint64 unit + uint32 SpellVisualKit id: the kit on the unit, type 1
+    // (0x008006c0) - the same ask a cast's impact kit makes, so the kit's
+    // weapon effects go in the unit's hands.
     dispatchTable_[Opcode::SMSG_PLAY_SPELL_IMPACT] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(12)) {
             packet.skipAll(); return;
@@ -3050,7 +3051,7 @@ void GameHandler::registerRemainingOpcodes() {
             spawnPos = core::coords::canonicalToRender(canonical);
         }
         if (auto* sv = renderer->getSpellVisualSystem())
-            sv->playKit(kitId, rendering::spell_kit::KitType::PlayImpact, spawnPos,
+            sv->playKit(kitId, rendering::spell_kit::KitType::Cast, spawnPos,
                         resolveUnitRenderInstance(impTargetGuid));
     };
     // SMSG_READ_ITEM_OK - moved to InventoryHandler::registerOpcodes

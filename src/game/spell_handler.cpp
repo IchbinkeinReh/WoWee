@@ -6332,8 +6332,8 @@ void SpellHandler::handleModifyCooldown(network::Packet& packet) {
 void SpellHandler::handlePlaySpellVisual(network::Packet& packet) {
     if (!packet.hasRemaining(12)) return;
     uint64_t casterGuid = packet.readUInt64();
-    uint32_t visualId   = packet.readUInt32();
-    if (visualId == 0) return;
+    uint32_t kitId      = packet.readUInt32();
+    if (kitId == 0) return;
     auto* renderer = owner_.services().renderer;
     if (!renderer) return;
     glm::vec3 spawnPos;
@@ -6345,10 +6345,11 @@ void SpellHandler::handlePlaySpellVisual(network::Packet& packet) {
         glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
         spawnPos = core::coords::canonicalToRender(canonical);
     }
-    // The packet names a SpellVisualKit, played on the unit as type 1
-    // (0x008006c0).
+    // The packet names a SpellVisualKit, played on the unit as type 0
+    // (0x00800610) - the ask that holds the unit's cast loop off while the
+    // kit's animation plays, and hangs no weapon effects.
     if (auto* sv = renderer->getSpellVisualSystem())
-        sv->playKit(visualId, rendering::spell_kit::KitType::Cast, spawnPos,
+        sv->playKit(kitId, rendering::spell_kit::KitType::Visual, spawnPos,
                     owner_.resolveUnitRenderInstance(casterGuid));
 }
 

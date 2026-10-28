@@ -22,9 +22,12 @@ namespace wowee::rendering::spell_kit {
 
 /// The kinds 0x00745230 switches on (the request's +8), by who asks.
 enum class KitType : uint32_t {
-    PlayImpact = 0,  ///< SMSG_PLAY_SPELL_IMPACT's kit (0x00800610)
+    /// SMSG_PLAY_SPELL_VISUAL's kit on the unit (0x00800610). Its animation
+    /// holds the unit's cast loop while it plays (0x007224d0), and its kit
+    /// hangs no weapon effects.
+    Visual = 0,
     /// A cast kit (0x0080e1b0), a unit's impact kit (0x00801f10, 0x00700e20)
-    /// and SMSG_PLAY_SPELL_VISUAL's kit (0x008006c0).
+    /// and SMSG_PLAY_SPELL_IMPACT's kit (0x008006c0).
     Cast = 1,
     State = 2,       ///< an aura's StateKit (0x00724820)
     Area = 3,        ///< an area kit at a place (0x0080e1b0, 0x00700e20)
