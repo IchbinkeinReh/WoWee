@@ -275,5 +275,55 @@ inline size_t replaceSelection(std::string& text, size_t cursor,
     return sel.start;
 }
 
+/// The caret a word to the left, as Ctrl+Left moves it: back over the spaces,
+/// then over the word to its first character. A link is one step, as
+/// everywhere the caret goes.
+inline size_t caretWordLeft(const std::string& s, size_t at) {
+    size_t p = (at < s.size()) ? at : s.size();
+    while (p > 0) {
+        const size_t q = caretStepLeft(s, p);
+        if (s[q] != ' ') break;
+        p = q;
+    }
+    while (p > 0) {
+        const size_t q = caretStepLeft(s, p);
+        if (s[q] == ' ') break;
+        p = q;
+    }
+    return p;
+}
+
+/// The caret a word to the right, as Ctrl+Right moves it: over the rest of
+/// the word and the spaces after it, to the start of the next.
+inline size_t caretWordRight(const std::string& s, size_t at) {
+    size_t p = (at < s.size()) ? at : s.size();
+    while (p < s.size() && s[p] != ' ') p = caretStepRight(s, p);
+    while (p < s.size() && s[p] == ' ') p = caretStepRight(s, p);
+    return p;
+}
+
+/// Where the caret and the selection stand after the caret goes to `target`.
+/// With `extend` (Shift held) the selection runs from its anchor - the end
+/// the caret is not at, or the caret itself when nothing is selected - to the
+/// target; without it the selection is let go. Kept in order, start before
+/// stop, as replaceSelection takes it.
+struct EditCaret {
+    size_t caret = 0;
+    EditSelection sel;
+};
+inline EditCaret moveCaret(size_t caret, const EditSelection& sel, size_t target, bool extend) {
+    EditCaret out;
+    out.caret = target;
+    if (!extend) return out;
+    const bool selected = sel.active && sel.stop > sel.start;
+    const size_t anchor = selected ? (caret == sel.start ? sel.stop : sel.start) : caret;
+    if (anchor != target) {
+        out.sel.active = true;
+        out.sel.start = (anchor < target) ? anchor : target;
+        out.sel.stop = (anchor < target) ? target : anchor;
+    }
+    return out;
+}
+
 }  // namespace ui
 }  // namespace wowee

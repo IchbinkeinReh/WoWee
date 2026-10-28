@@ -2806,6 +2806,23 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 const float boxBottom = y1 - w->textInsetBottom * s;
                 const float ty = boxTop + ((boxBottom - boxTop) - size) * 0.5f;
                 const float pad = w->textInsetLeft * s;
+                // The highlighted run, under the words: Shift with the arrows,
+                // Ctrl+A, or HighlightText from the interface. Measured against
+                // what is drawn, as the caret is below. Only while the box has
+                // focus, which is the only time the run means anything.
+                if (w->editFocused && w->hasSelection && w->selEnd > w->selStart &&
+                    font && w->selEnd <= w->editText.size()) {
+                    const std::string before = strippedText(w->editText.substr(0, w->selStart));
+                    const std::string upTo = strippedText(w->editText.substr(0, w->selEnd));
+                    const float sa = font->CalcTextSizeA(size, FLT_MAX, 0.0f, before.c_str()).x;
+                    const float sb = font->CalcTextSizeA(size, FLT_MAX, 0.0f, upTo.c_str()).x;
+                    if (sb > sa) {
+                        dl->AddRectFilled(ImVec2(x0 + pad + sa, ty),
+                                          ImVec2(x0 + pad + sb, ty + size),
+                                          IM_COL32(110, 140, 220,
+                                                   static_cast<int>(140.0f * w->alpha)));
+                    }
+                }
                 if (!w->editText.empty()) {
                     // The shadow first, under the words, as a font string's
                     // is. ChatFontNormal declares one and every edit box in

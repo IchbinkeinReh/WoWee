@@ -387,3 +387,59 @@ TEST_CASE("the plural escape picks its word by the number before it", "[markup]"
     REQUIRE(drawn("11 |4hour:hours;") == "11 hours");
     REQUIRE(drawn("|4one:many;") == "many");
 }
+
+// Ctrl+Left and Ctrl+Right in an edit box step a word; a link is one word's
+// worth of step, never entered.
+TEST_CASE("the caret steps a word at a time with Ctrl", "[markup][edit]") {
+    using wowee::ui::caretWordLeft;
+    using wowee::ui::caretWordRight;
+    const std::string line = "say hello  there";
+    CHECK(caretWordRight(line, 0) == 4);
+    CHECK(caretWordRight(line, 4) == 11);
+    CHECK(caretWordRight(line, 11) == line.size());
+    CHECK(caretWordRight(line, line.size()) == line.size());
+    CHECK(caretWordLeft(line, line.size()) == 11);
+    CHECK(caretWordLeft(line, 11) == 4);
+    CHECK(caretWordLeft(line, 6) == 4);
+    CHECK(caretWordLeft(line, 4) == 0);
+    CHECK(caretWordLeft(line, 0) == 0);
+
+    const std::string link = "|Hitem:3299|h[Fractured Canine]|h";
+    const std::string withLink = "see " + link + " now";
+    // The space inside the link's name is not a word break: the link is one step.
+    CHECK(caretWordRight(withLink, 4) == 4 + link.size() + 1);
+    CHECK(caretWordLeft(withLink, 4 + link.size()) == 4);
+}
+
+// Shift with a caret key carries the highlight from where it was anchored.
+TEST_CASE("Shift extends the selection from its anchor", "[markup][edit]") {
+    using wowee::ui::EditSelection;
+    using wowee::ui::moveCaret;
+    // Nothing selected: the caret is the anchor.
+    auto m = moveCaret(5, EditSelection{}, 6, true);
+    CHECK(m.caret == 6);
+    CHECK(m.sel.active);
+    CHECK(m.sel.start == 5);
+    CHECK(m.sel.stop == 6);
+    // Further right, the same anchor.
+    m = moveCaret(6, m.sel, 8, true);
+    CHECK(m.sel.start == 5);
+    CHECK(m.sel.stop == 8);
+    // Back across the anchor: the run flips to the other side, still in order.
+    m = moveCaret(8, m.sel, 3, true);
+    CHECK(m.caret == 3);
+    CHECK(m.sel.start == 3);
+    CHECK(m.sel.stop == 5);
+    // Back onto the anchor: nothing left highlighted.
+    m = moveCaret(3, m.sel, 5, true);
+    CHECK_FALSE(m.sel.active);
+    // Without Shift the highlight is let go.
+    m = moveCaret(5, EditSelection{true, 2, 5}, 4, false);
+    CHECK(m.caret == 4);
+    CHECK_FALSE(m.sel.active);
+    // Ctrl+A leaves the caret at the end, anchored at the start: Shift+Left
+    // gives back the last character.
+    m = moveCaret(10, EditSelection{true, 0, 10}, 9, true);
+    CHECK(m.sel.start == 0);
+    CHECK(m.sel.stop == 9);
+}

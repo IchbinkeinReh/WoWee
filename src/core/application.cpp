@@ -2243,7 +2243,8 @@ void Application::run() {
                                 break;
                             default: break;
                         }
-                        engine->dispatchKey(event.key.key, ctrl);
+                        const bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+                        engine->dispatchKey(event.key.key, ctrl, shift);
                         continue;
                     }
                     // No edit box, but a dialog may still be listening -

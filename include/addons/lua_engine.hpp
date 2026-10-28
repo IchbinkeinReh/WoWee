@@ -186,7 +186,8 @@ public:
     /// Typed text, one UTF-8 chunk as the platform reports it.
     void dispatchText(const char* utf8);
     /// A key that is not text: backspace, the arrows, enter, escape.
-    void dispatchKey(int sdlKeycode, bool ctrlHeld);
+    /// Shift extends the selection with the caret keys.
+    void dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld = false);
     /// A key for a frame rather than an edit box. Returns true when a frame
     /// took it, so the caller knows not to also treat it as a movement key or
     /// a binding - which is the whole reason a dialog can be typed into.

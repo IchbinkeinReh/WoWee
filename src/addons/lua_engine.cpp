@@ -10783,7 +10783,7 @@ bool LuaEngine::dispatchFrameKey(int sdlKeycode, bool down) {
     return !best->propagateKeys;
 }
 
-void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld) {
+void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld, bool shiftHeld) {
     taint::Quiet quiet;   // as dispatchText
     if (!L_ || focusedWid_ == 0) return;
     auto* w = widgets_.get(focusedWid_);
@@ -10811,16 +10811,38 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld) {
         }
         return;
     }
-    if (ctrlHeld && (sdlKeycode == 'c' || sdlKeycode == 'C')) {
+    if (ctrlHeld && (sdlKeycode == 'c' || sdlKeycode == 'C' ||
+                     sdlKeycode == 'x' || sdlKeycode == 'X')) {
         // The highlighted run, or the whole line when nothing is highlighted -
         // which is what a player copying a link out of chat wants.
         std::string text = w->editText;
+        const bool selected = w->hasSelection && w->selEnd > w->selStart &&
+                              w->selEnd <= w->editText.size();
         if (w->hasSelection) {
             const size_t from = std::min(w->selStart, w->selEnd);
             const size_t to   = std::min(std::max(w->selStart, w->selEnd), text.size());
             text = (from < to) ? text.substr(from, to - from) : std::string();
         }
         if (!text.empty()) SDL_SetClipboardText(text.c_str());
+        // Ctrl+X cuts, the highlighted run only - as the edit box's own key
+        // handler does (0x00967760): with nothing highlighted it copies and
+        // leaves the line alone.
+        if (selected && (sdlKeycode == 'x' || sdlKeycode == 'X')) {
+            w->cursorPos = ui::replaceSelection(w->editText, w->cursorPos,
+                                                {true, w->selStart, w->selEnd});
+            w->hasSelection = false;
+            fireCursorChanged(focusedWid_);
+            callFrameScript(focusedWid_, "OnTextChanged");
+        }
+        return;
+    }
+    // Ctrl+A highlights the whole line, the caret at its end (0x00967760).
+    if (ctrlHeld && (sdlKeycode == 'a' || sdlKeycode == 'A')) {
+        w->selStart = 0;
+        w->selEnd = w->editText.size();
+        w->hasSelection = w->selEnd > 0;
+        w->cursorPos = w->editText.size();
+        fireCursorChanged(focusedWid_);
         return;
     }
 
@@ -10870,6 +10892,16 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld) {
             }
             break;
         case kDelete:
+            // A highlighted run goes whole, as with backspace.
+            if (w->hasSelection && w->selEnd > w->selStart && w->selEnd <= len) {
+                w->cursorPos = ui::replaceSelection(w->editText, w->cursorPos,
+                                                    {true, w->selStart, w->selEnd});
+                w->hasSelection = false;
+                fireCursorChanged(focusedWid_);
+                callFrameScript(focusedWid_, "OnTextChanged");
+                break;
+            }
+            w->hasSelection = false;
             if (w->cursorPos < len) {
                 const size_t to = ui::caretStepRight(w->editText, w->cursorPos);
                 w->editText.erase(w->cursorPos, to - w->cursorPos);
@@ -10882,6 +10914,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld) {
         // line, which is what leaving the history means.
         case kUp:
             if (!w->editHistory.empty()) {
+                w->hasSelection = false;
                 const int last = static_cast<int>(w->editHistory.size()) - 1;
                 w->editHistoryPos = (w->editHistoryPos < 0)
                     ? last : std::max(0, w->editHistoryPos - 1);
@@ -10893,6 +10926,7 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld) {
             break;
         case kDown:
             if (w->editHistoryPos >= 0) {
+                w->hasSelection = false;
                 const int last = static_cast<int>(w->editHistory.size()) - 1;
                 if (w->editHistoryPos >= last) {
                     w->editHistoryPos = -1;
@@ -10906,21 +10940,51 @@ void LuaEngine::dispatchKey(int sdlKeycode, bool ctrlHeld) {
                 callFrameScript(focusedWid_, "OnTextChanged");
             }
             break;
-        // Declared ignoreArrows means these belong to the game rather than to
-        // the cursor, which is how someone turns while the chat box is open.
-        // A step is one drawn character, not one byte. An item link is fifty
-        // bytes and eighteen characters, and stepping through it a byte at a
-        // time leaves the caret apparently stuck.
+        // The caret keys. A step is one drawn character, not one byte: an
+        // item link is fifty bytes and eighteen characters, and stepping
+        // through it a byte at a time leaves the caret apparently stuck. Ctrl
+        // steps a word, Shift carries the highlight along, and without Shift
+        // a highlighted run is let go - the caret first going to its near
+        // edge, as in any text field.
+        //
+        // The chat box declares ignoreArrows, which in the real client hands
+        // the plain arrows to the game so a player can turn while typing and
+        // keeps Alt+arrows for the caret. Here the game takes no keys at all
+        // while a box has focus, so the flag would leave the arrows doing
+        // nothing; they move the caret, with or without Alt.
         case kLeft:
-            if (!w->editIgnoreArrows && w->cursorPos > 0)
-                w->cursorPos = ui::caretStepLeft(w->editText, w->cursorPos);
-            break;
         case kRight:
-            if (!w->editIgnoreArrows && w->cursorPos < len)
-                w->cursorPos = ui::caretStepRight(w->editText, w->cursorPos);
+        case kHome:
+        case kEnd: {
+            const size_t caret = std::min(w->cursorPos, len);
+            const ui::EditSelection sel{w->hasSelection, w->selStart, w->selEnd};
+            const bool selected = sel.active && sel.stop > sel.start && sel.stop <= len;
+            size_t target = caret;
+            if (sdlKeycode == kHome) target = 0;
+            else if (sdlKeycode == kEnd) target = len;
+            else if (selected && !shiftHeld && !ctrlHeld)
+                target = (sdlKeycode == kLeft) ? sel.start : sel.stop;
+            else if (sdlKeycode == kLeft)
+                target = ctrlHeld ? ui::caretWordLeft(w->editText, caret)
+                                  : ui::caretStepLeft(w->editText, caret);
+            else
+                target = ctrlHeld ? ui::caretWordRight(w->editText, caret)
+                                  : ui::caretStepRight(w->editText, caret);
+            const ui::EditCaret moved = ui::moveCaret(
+                caret, selected ? sel : ui::EditSelection{}, target, shiftHeld);
+            const bool changed = moved.caret != w->cursorPos ||
+                                 moved.sel.active != w->hasSelection ||
+                                 (moved.sel.active && (moved.sel.start != w->selStart ||
+                                                       moved.sel.stop != w->selEnd));
+            w->cursorPos = moved.caret;
+            w->hasSelection = moved.sel.active;
+            if (moved.sel.active) {
+                w->selStart = moved.sel.start;
+                w->selEnd = moved.sel.stop;
+            }
+            if (changed) fireCursorChanged(focusedWid_);
             break;
-        case kHome:  w->cursorPos = 0; break;
-        case kEnd:   w->cursorPos = len; break;
+        }
         case kReturn:
             // A box declared multiLine takes the return as a line break rather
             // than as "done". The mail body says multiLine="true" and letters
