@@ -154,6 +154,54 @@ void EntitySpawner::playUnitAlertSound(const game::Unit& unit) {
     playUnitSlot(unit, ue::kSlotAlert, false, nullptr);
 }
 
+void EntitySpawner::playUnitVoiceLine(const game::Unit& unit, uint32_t sound) {
+    // How every line of 0x007474b0 reaches the ear: heard as that unit's own
+    // voice, the active player's own - and the mover it drives - kept over a
+    // crowd's (0x6e) and, with the listener at the character, at the listener
+    // and fainter. None of these lines is counted by a kind, so nothing caps
+    // how many of them are going at once.
+    const uint64_t guid = unit.getGuid();
+    const bool own = guid == gameHandler_->getPlayerGuid() || guid == gameHandler_->activeMover();
+    const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
+    rendering::M2EventSounds& player = renderer_->getM2EventSounds();
+    if (own && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
+        player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_,
+                        audio::PlayLimit::None, false, priority);
+        return;
+    }
+    if (const auto where = unitSoundPosition(guid))
+        player.playOnce(sound, &*where, 1.0f, assetManager_, audio::PlayLimit::None, false, priority);
+}
+
+void EntitySpawner::playUnitVoiceKind(const game::Unit& unit, uint32_t kind) {
+    // The row the unit's display gives it (0x0072d940's +0x974), asked plain:
+    // the pet row that stands in for a sound slot does not stand in for a
+    // voice line, and no chance is rolled for one either.
+    const uint32_t column = ue::voiceColumn(kind);
+    if (column == ue::kVoiceColumnNone) return;
+    const int32_t row = unitSoundRow(unit, false);
+    if (row < 0) return;
+    auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
+    if (!sounds || sounds->getFieldCount() <= column) return;
+    const uint32_t sound = sounds->getUInt32(static_cast<uint32_t>(row), column);
+    if (sound == 0) return;
+    playUnitVoiceLine(unit, sound);
+}
+
+void EntitySpawner::playUnitPetActionSound(const game::Unit& unit, uint32_t action) {
+    // 0x00716b90, SMSG_PET_ACTION_SOUND: a value of 0 asks the pet to say what
+    // it waits on, 1 says it has been set on something. Nothing else the value
+    // can hold says anything. Both are a pet's lines, so the client asks them
+    // while Sound_EnablePetSounds is on - or of a unit that is nobody's pet,
+    // which the guid in the packet can still name.
+    if (!renderer_ || !gameHandler_ || !assetManager_) return;
+    if (action > 1) return;
+    if (addons::storedCVarValue("Sound_EnablePetSounds", "1") == "0" &&
+        game::unitSummonedByGuid(unit) != 0)
+        return;
+    playUnitVoiceKind(unit, action == 0 ? ue::kVoiceKindOrder : ue::kVoiceKindKill);
+}
+
 void EntitySpawner::playUnitDeathSound(uint64_t guid) {
     // 0x007474b0 kind 4, asked as the unit's dead state goes up (0x0073c5d0)
     // and by the combat death handler (0x007561e0): the Death column of the
@@ -168,27 +216,7 @@ void EntitySpawner::playUnitDeathSound(uint64_t guid) {
     if (deadCreatureGuids_.count(guid)) return;  // the same death, noticed twice
     auto entity = gameHandler_->getEntityManager().getEntity(guid);
     if (!entity || !entity->isUnit()) return;
-    const auto& unit = static_cast<const game::Unit&>(*entity);
-    const int32_t row = unitSoundRow(unit, false);
-    if (row < 0) return;
-    auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
-    if (!sounds || sounds->getFieldCount() <= ue::kColumnDeath) return;
-    const uint32_t sound = sounds->getUInt32(static_cast<uint32_t>(row), ue::kColumnDeath);
-    if (sound == 0) return;
-    // Said where it falls, heard as its own voice like any other line of
-    // 0x007474b0, and counted by no kind - the client gives the line a tracker
-    // of the unit's own (its +0x908) to stop with the death animation, which
-    // outlives the clip.
-    const bool own = guid == gameHandler_->getPlayerGuid() || guid == gameHandler_->activeMover();
-    const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
-    rendering::M2EventSounds& player = renderer_->getM2EventSounds();
-    if (own && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
-        player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_,
-                        audio::PlayLimit::None, false, priority);
-        return;
-    }
-    if (const auto where = unitSoundPosition(guid))
-        player.playOnce(sound, &*where, 1.0f, assetManager_, audio::PlayLimit::None, false, priority);
+    playUnitVoiceKind(static_cast<const game::Unit&>(*entity), ue::kVoiceKindDeath);
 }
 
 const std::vector<ue::EmoteSoundRow>& EntitySpawner::emoteSoundRows() {
@@ -242,21 +270,8 @@ void EntitySpawner::playUnitEmoteSound(const game::Unit& unit, uint32_t emotesTe
                                             gameHandler_->lookupPlayerRace(guid),
                                             gameHandler_->lookupPlayerGender(guid));
     if (sound == 0) return;
-    // Heard as that unit's own voice, by the rule its slots are heard by: the
-    // active player's own, and the mover it drives, are kept over a crowd's
-    // (0x6e) and, with the listener at the character, at the listener and
-    // fainter. The client counts an emote's line by no kind at all, so nothing
-    // here caps how many of them are going at once.
-    const bool own = guid == gameHandler_->getPlayerGuid() || guid == gameHandler_->activeMover();
-    const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
-    rendering::M2EventSounds& player = renderer_->getM2EventSounds();
-    if (own && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
-        player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_,
-                        audio::PlayLimit::None, false, priority);
-        return;
-    }
-    if (const auto where = unitSoundPosition(guid))
-        player.playOnce(sound, &*where, 1.0f, assetManager_, audio::PlayLimit::None, false, priority);
+    // Heard by the same rule as every other line a unit says.
+    playUnitVoiceLine(unit, sound);
 }
 
 void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {

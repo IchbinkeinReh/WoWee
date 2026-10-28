@@ -85,12 +85,23 @@ constexpr uint32_t kSlotJumpEnd = 12;
 constexpr uint32_t kSlotAlert = 8;
 
 /// CreatureSoundData columns (3.3.5a, 38 of them).
-/// What a unit says as it dies, asked of the row itself and not of a slot
-/// (0x007474b0 kind 4 reads +0x18). The other kinds that function answers
-/// read column 10 (+0x28) as it aggros, 28 (+0x70) as it kills and 29 (+0x74)
-/// as it is ordered about; a death asks those of a pet as much as of its
-/// owner, where the others need Sound_EnablePetSounds.
-constexpr uint32_t kColumnDeath = 6;
+/// The voice lines a unit says, by the kind they are asked as (0x007474b0),
+/// and the column of the unit's own CreatureSoundData row each reads. None of
+/// them is a sound slot: no chance is rolled, and the pet row that stands in
+/// for the slots (0x0071a3f0) does not stand in here. Kind 3 is asked by
+/// nothing and says nothing, and kind 4 is the only kind asked of a pet while
+/// Sound_EnablePetSounds is off.
+constexpr uint32_t kVoiceKindAggro = 0, kVoiceKindOrder = 1, kVoiceKindKill = 2, kVoiceKindDeath = 4;
+constexpr uint32_t kVoiceColumnNone = 0xFFFFFFFF;
+constexpr uint32_t voiceColumn(uint32_t kind) {
+    switch (kind) {
+    case kVoiceKindAggro: return 10;  ///< +0x28, as it takes a dislike
+    case kVoiceKindOrder: return 29;  ///< +0x74, as a pet awaits its order
+    case kVoiceKindKill:  return 28;  ///< +0x70, as a pet is set on its target
+    case kVoiceKindDeath: return 6;   ///< +0x18, as it dies
+    default: return kVoiceColumnNone;
+    }
+}
 constexpr uint32_t kColumnFootstep = 9;  ///< +0x24, FootstepTerrainLookup's CreatureFootstepID
 constexpr uint32_t kColumnFidget0 = 14;
 constexpr uint32_t kColumnBirth = 33;

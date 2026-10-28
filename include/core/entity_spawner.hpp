@@ -383,6 +383,10 @@ public:
     /// it before markCreatureDead, which is what keeps a death noticed twice
     /// from being said twice.
     void playUnitDeathSound(uint64_t guid);
+    /// What a pet says about the order it was just given (SMSG_PET_ACTION_SOUND):
+    /// its Order line for a value of 0, its Kill line for 1
+    /// (rendering/unit_model_events.hpp).
+    void playUnitPetActionSound(const game::Unit& unit, uint32_t action);
     /// A unit's melee hit arriving (SMSG_ATTACKERSTATEUPDATE), kept on its
     /// attacker for its model's events; an attack stopping, which settles it
     /// (rendering/melee_sound.hpp).
@@ -1398,6 +1402,11 @@ private:
     /// A unit's sound slot (0x00747310): by its chance unless `always`, at
     /// `at` or where the unit is.
     void playUnitSlot(const game::Unit& unit, uint32_t slot, bool always, const glm::vec3* at);
+    /// A unit's voice line of some kind (0x007474b0): the column its kind reads
+    /// from the CreatureSoundData row its display gives it.
+    void playUnitVoiceKind(const game::Unit& unit, uint32_t kind);
+    /// How a voice line reaches the ear - the unit's own, wherever it stands.
+    void playUnitVoiceLine(const game::Unit& unit, uint32_t sound);
     /// EmotesTextSound's rows, read once when an emote first asks (0x0063e4f0,
     /// which will not load the table twice).
     const std::vector<rendering::unit_event::EmoteSoundRow>& emoteSoundRows();

@@ -327,6 +327,15 @@ void AnimationCallbackHandler::setupCallbacks() {
         entitySpawner_.playUnitAlertSound(static_cast<const game::Unit&>(*entity));
     });
 
+    // What a pet says about the order it was just given. The client resolves a
+    // unit by the guid first (0x00716b90, Unit_C.cpp:0x636) and asks nothing
+    // where there is none.
+    gameHandler_.setPetActionSoundCallback([this](uint64_t guid, uint32_t action) {
+        auto entity = gameHandler_.getEntityManager().getEntity(guid);
+        if (!entity || !entity->isUnit()) return;
+        entitySpawner_.playUnitPetActionSound(static_cast<const game::Unit&>(*entity), action);
+    });
+
     // Other units' stand state (UNIT_FIELD_BYTES_1 byte 0), as the client
     // takes its change (0x0073f460 -> 0x0073f060): the base animation, from
     // the state its animation was given for, sits it down, lies it down,

@@ -575,6 +575,12 @@ public:
     using UnitAlertSoundCallback = std::function<void(uint64_t)>;
     void setUnitAlertSoundCallback(UnitAlertSoundCallback cb) { unitAlertSoundCallback_ = std::move(cb); }
 
+    // The order a pet was just given (SMSG_PET_ACTION_SOUND): its guid and the
+    // packet's value, 0 the order asked of it and 1 its target set on it. What
+    // it says back is its own, which is why only the ask comes here.
+    using PetActionSoundCallback = std::function<void(uint64_t, uint32_t)>;
+    void setPetActionSoundCallback(PetActionSoundCallback cb) { petActionSoundCallback_ = std::move(cb); }
+
     // Another unit's stand state changed (UNIT_FIELD_BYTES_1 byte 0):
     // guid, old state, new state. The local player uses StandStateCallback.
     using UnitStandStateCallback = std::function<void(uint64_t, uint8_t, uint8_t)>;
@@ -4706,6 +4712,7 @@ public:
     auto& emoteAnimCallbackRef() { return emoteAnimCallback_; }
     auto& emoteSoundCallbackRef() { return emoteSoundCallback_; }
     auto& unitAlertSoundCallbackRef() { return unitAlertSoundCallback_; }
+    auto& petActionSoundCallbackRef() { return petActionSoundCallback_; }
     auto& unitStandStateCallbackRef() { return unitStandStateCallback_; }
     auto& gameObjectDespawnCallbackRef() { return gameObjectDespawnCallback_; }
     /// The destroy callback, or the despawn one where there is none.
@@ -5374,6 +5381,7 @@ private:
     EmoteAnimCallback emoteAnimCallback_;
     EmoteSoundCallback emoteSoundCallback_;
     UnitAlertSoundCallback unitAlertSoundCallback_;
+    PetActionSoundCallback petActionSoundCallback_;
     UnitStandStateCallback unitStandStateCallback_;
 
     // Targeting
