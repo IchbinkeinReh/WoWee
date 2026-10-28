@@ -396,7 +396,11 @@ static int lua_PlaySound(lua_State* L) {
     std::string sound;
     if (lua_isnumber(L, 1)) {
         const auto id = static_cast<int32_t>(lua_tonumber(L, 1));
-        if (id > 0 && sfx->playById(static_cast<uint32_t>(id))) return 0;
+        // A row that asked for one instance at a time and is still playing is
+        // answered with silence by the client, so Refused stops here too - only
+        // a row this install cannot play at all falls through to a stand-in.
+        if (id > 0 && sfx->playById(static_cast<uint32_t>(id)) != audio::UiSoundManager::UiPlayResult::Unavailable)
+            return 0;
         // Without the row: the ids that have a stand-in here.
         switch (id) {
             case 856: case 1115: sfx->playButtonClick(); return 0; // igMainMenuOption
@@ -419,7 +423,9 @@ static int lua_PlaySound(lua_State* L) {
         // The table below stays as the fallback: an install without the sound,
         // or without the dbc, still gets something for the names it can be
         // approximated for.
-        if (sfx->playByName(name)) return 0;
+        // As above: the client answers a refused one-at-a-time ask with silence,
+        // so only an unresolvable name reaches the hand-mapped fallback.
+        if (sfx->playByName(name) != audio::UiSoundManager::UiPlayResult::Unavailable) return 0;
 
         sound = name;
         for (char& c : sound) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));

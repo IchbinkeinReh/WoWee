@@ -1,11 +1,23 @@
 #include "audio/ui_sound_manager.hpp"
 #include "audio/sample_load.hpp"
 #include "audio/audio_engine.hpp"
+#include "audio/sound_entry.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "core/logger.hpp"
+#include <random>
 
 namespace wowee {
 namespace audio {
+
+namespace {
+
+// One draw per play, the way the client draws its swing (0x004c5d40).
+float swingDraw() {
+    static std::mt19937 rng{std::random_device{}()};
+    return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+}
+
+} // namespace
 
 bool UiSoundManager::initialize(pipeline::AssetManager* assets) {
     if (!assets) {
@@ -206,13 +218,18 @@ void UiSoundManager::ensureSoundEntriesLoaded() {
         const uint32_t id = dbc->getUInt32(row, 0);
         soundIdByName_.emplace(name, id);
         soundPathsById_.emplace(id, std::move(paths));
+        // What the row asks of a play of it: the level it names (the ig* rows
+        // want 0.75, igMainMenuOpen/Close 0.5, the loot coin 0.7) and its
+        // Flags. An older client's SoundEntries stops before that pair.
+        if (dbc->getFieldCount() > 25)
+            asksById_.try_emplace(id, UiRowAsk{dbc->getFloat(row, 24), dbc->getUInt32(row, 25)});
     }
     LOG_INFO("UISoundManager: ", soundIdByName_.size(),
              " sound names from SoundEntries.dbc");
 }
 
-bool UiSoundManager::playByName(const std::string& soundName) {
-    if (!initialized_ || soundName.empty()) return false;
+UiSoundManager::UiPlayResult UiSoundManager::playByName(const std::string& soundName) {
+    if (!initialized_ || soundName.empty()) return UiPlayResult::Unavailable;
     ensureSoundEntriesLoaded();
 
     std::string key = soundName;
@@ -221,18 +238,18 @@ bool UiSoundManager::playByName(const std::string& soundName) {
     }
     // 0x004ccaa0: the name is the row's, and the row's id is what plays.
     auto it = soundIdByName_.find(key);
-    if (it == soundIdByName_.end()) return false;
+    if (it == soundIdByName_.end()) return UiPlayResult::Unavailable;
     return playById(it->second);
 }
 
-bool UiSoundManager::playById(uint32_t soundId) {
-    if (!initialized_ || soundId == 0) return false;
+UiSoundManager::UiPlayResult UiSoundManager::playById(uint32_t soundId) {
+    if (!initialized_ || soundId == 0) return UiPlayResult::Unavailable;
     ensureSoundEntriesLoaded();
 
     auto cached = idSamples_.find(soundId);
     if (cached == idSamples_.end()) {
         auto it = soundPathsById_.find(soundId);
-        if (it == soundPathsById_.end()) return false;
+        if (it == soundPathsById_.end()) return UiPlayResult::Unavailable;
         UISample sample;
         sample.loaded = false;
         for (const std::string& path : it->second) {
@@ -242,14 +259,44 @@ bool UiSoundManager::playById(uint32_t soundId) {
         // install does not have is looked for once rather than on every click.
         cached = idSamples_.emplace(soundId, std::move(sample)).first;
     }
-    if (!cached->second.loaded) return false;
+    if (!cached->second.loaded) return UiPlayResult::Unavailable;
+
+    UiRowAsk ask;
+    if (const auto a = asksById_.find(soundId); a != asksById_.end()) ask = a->second;
+
+    // A row flagged 0x20 is asked for one instance at a time: the client keeps
+    // the ids it has started, turns a flagged ask away while the id is in that
+    // list (004c0000.c:5882-5888), and frees the slot when the sound ends
+    // (:5351-5361) or is stopped (:5401-5413). The engine's answer about the
+    // handle asks the same question; it is put here rather than at the end of
+    // the play, so a finished click is freed on the next attempt rather than at
+    // the moment it stops.
+    if ((ask.flags & sound_entry::kFlagOneAtATime) != 0) {
+        for (auto it = playingById_.begin(); it != playingById_.end();) {
+            if (AudioEngine::instance().isSoundPlaying(it->second)) ++it;
+            else it = playingById_.erase(it);
+        }
+        if (playingById_.find(soundId) != playingById_.end()) return UiPlayResult::Refused;
+    }
 
     // What happened, not what was attempted. playSound2D decodes WAV and
     // answers false for anything else, and SoundEntries lists a couple of
     // thousand mp3s among its wavs - claiming success for one of those would
     // skip the fallback below this and play nothing at all.
-    return AudioEngine::instance().playSound2D(cached->second.data,
-                                               0.7f * volumeScale_, 1.0f);
+    //
+    // The level is the row's own where it names one; the 0.7 this manager used
+    // by guess stays for a row that names none (the ig* rows want 0.75,
+    // igMainMenuOpen/Close 0.5), and the pitch moves only if the row asks it to.
+    const float base = (ask.volume > 0.0f ? ask.volume : 0.7f) * volumeScale_;
+    const float draw = swingDraw();
+    uint32_t handle = 0;
+    const bool played = AudioEngine::instance().playSound2D(
+        cached->second.data, sound_entry::volumeForFlags(ask.flags, base, draw),
+        sound_entry::pitchForFlags(ask.flags, draw), Channel::Own, PlayLimit::None,
+        voice_priority::kDefault, &handle);
+    if (played && (ask.flags & sound_entry::kFlagOneAtATime) != 0 && handle != 0)
+        playingById_.emplace(soundId, handle);
+    return played ? UiPlayResult::Played : UiPlayResult::Unavailable;
 }
 
 bool UiSoundManager::playFile(const std::string& path) {

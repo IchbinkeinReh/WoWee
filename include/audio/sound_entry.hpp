@@ -9,6 +9,16 @@
 // a row and skips part of this is playing less than the row asked for.
 //
 // The record's Flags (column 25, the record's +0x3c):
+//   0x20   one instance at a time: the play is refused while another play of
+//          the same sound id is still going. The client keeps a list of the ids
+//          it has started and turns a flagged ask away while the id is in it
+//          (004c0000.c:5882-5888, returning 0xf); the slot is freed when the
+//          sound ends (:5351-5361) or is stopped (:5401-5413). A caller can
+//          force either way through the ninth field of its play struct (:5876-
+//          5881). 76 of the 12941 rows carry it, and they are the sounds asked
+//          for in bursts: LOOTWINDOWCOINSOUND, the igAbility*/igBackPack* page
+//          turns, WriteQuest, zone ambience (Zone-ShadowmoonValley,
+//          Darkmoon_Faire_Music) and dungeon one-offs;
 //   0x200  the kit loops;
 //   0x400  the play's pitch is drawn across 0.85..1.15 (004c0000.c:6020-6025, the
 //          bounds set in front of the draw; 0x00878760 multiplies the draw onto
@@ -55,6 +65,7 @@
 
 namespace wowee::audio::sound_entry {
 
+inline constexpr uint32_t kFlagOneAtATime = 0x20;
 inline constexpr uint32_t kFlagLoops = 0x200;
 inline constexpr uint32_t kFlagPitchSwing = 0x400;
 inline constexpr uint32_t kFlagVolumeSwing = 0x800;
