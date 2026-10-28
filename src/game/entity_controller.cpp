@@ -2785,6 +2785,58 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             // 0x006e1bb0 -> 0x006df7a0: TABARD_CANSAVE_CHANGED (event 0x16e).
             if (guildIdMoved) owner_.fireAddonEvent("TABARD_CANSAVE_CHANGED", {});
         }
+        // The glyph sockets, watched one dword each exactly as the client watches
+        // them: 0x004d5a80(kind 4, +0x1248 .. +0x125c, 4, 0x006daa80) for the six
+        // GlyphProperties ids and (+0x1260, 4, 0x006dab80) for the unlocked
+        // bitmask. What a socket field says when it moves depends on what it held
+        // before and what it holds now, and the client asks both questions the same
+        // way - is the value an id GlyphProperties.dbc has a row for (the range and
+        // lookup test at 0x006daa80) - and answers GLYPH_UPDATED (0x265) for
+        // glyph->glyph, GLYPH_REMOVED (0x264) for glyph->nothing, GLYPH_ADDED
+        // (0x263) for nothing->glyph, and nothing at all when neither side is a
+        // glyph. Every one carries the socket's Lua-facing number (index + 1),
+        // which is what blizzard_glyphui.lua:337-365 uses to find the
+        // GlyphFrameGlyph<index> to redraw, which sound to play and which animation
+        // to stop; a glyph event naming no slot reaches no slot. A socket bit
+        // gained or lost in the unlocked mask is GLYPH_ENABLED (0x266) /
+        // GLYPH_DISABLED (0x267) with the same number, per bit (0x006dab80).
+        // Nothing here runs for a create block: the client installs these watchers
+        // only once the object is live (0x007158c0), so logging in with glyphs
+        // already scribed announces nothing either.
+        owner_.ensureGlyphPropertiesLoaded();
+        const auto& lastFields = owner_.lastPlayerFieldsRef();
+        if (const uint16_t glyphsIdx = fieldIndex(UF::PLAYER_FIELD_GLYPHS_1);
+            glyphsIdx != 0xFFFF) {
+            for (uint16_t i = 0; i < GameHandler::MAX_GLYPH_SLOTS; ++i) {
+                const uint16_t key = static_cast<uint16_t>(glyphsIdx + i);
+                const auto now = block.fields.find(key);
+                if (now == block.fields.end()) continue;      // this socket did not move
+                const auto was = lastFields.find(key);
+                const uint32_t oldId = was == lastFields.end() ? 0u : was->second;
+                if (oldId == now->second) continue;           // the watcher fires on a change
+                uint32_t unused = 0;
+                const bool hadGlyph = owner_.getGlyphPropertiesType(oldId, unused);
+                const bool hasGlyph = owner_.getGlyphPropertiesType(now->second, unused);
+                if (!hadGlyph && !hasGlyph) continue;
+                pendingEvents_.emit(hadGlyph ? (hasGlyph ? "GLYPH_UPDATED" : "GLYPH_REMOVED")
+                                             : "GLYPH_ADDED",
+                                    {std::to_string(i + 1)});
+            }
+        }
+        if (const uint16_t enabledIdx = fieldIndex(UF::PLAYER_GLYPHS_ENABLED);
+            enabledIdx != 0xFFFF) {
+            const auto now = block.fields.find(enabledIdx);
+            if (now != block.fields.end()) {
+                const auto was = lastFields.find(enabledIdx);
+                const uint32_t oldMask = was == lastFields.end() ? 0u : was->second;
+                for (uint32_t bit = 0; bit < GameHandler::MAX_GLYPH_SLOTS; ++bit) {
+                    const uint32_t mask = 1u << bit;
+                    if (((oldMask ^ now->second) & mask) == 0) continue;
+                    pendingEvents_.emit((now->second & mask) ? "GLYPH_ENABLED" : "GLYPH_DISABLED",
+                                        {std::to_string(bit + 1)});
+                }
+            }
+        }
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.
         for (const auto& [key, val] : block.fields) {
