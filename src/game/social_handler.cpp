@@ -4841,6 +4841,27 @@ void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
 }
 
+// The rows the browse panel shows, re-paired and then ordered. The name each row
+// sorts by is resolved the way the client resolves it for its own name key: the row's
+// guid through its name cache (0x0067d770 feeding the strncmp at 0x0076e760), and an
+// empty answer is what makes that key say nothing and the walk move on.
+void SocialHandler::rebuildLfgBrowserRows() {
+    lfgBrowserRows_ = buildLfgBrowserRows(lfgListRows_, lfgListingsFirst_);
+    sortLfgBrowserRows(lfgBrowserRows_, lfgListRows_, lfgSortKeys_,
+                       [this](const LfgListRow& r) { return owner_.lookupName(r.guid); });
+}
+
+// A browse-panel column header click (SearchLFGSort, 0x0055d2b0). The client's own
+// state is the seven-key list at 0x00bea820 and the array-swap byte at 0x00acd660;
+// both live here, and either path ends with it resorting and raising its list event
+// (0x0055b700:9646-9654 for a key, :10709-10710 for the swap). No guard on whether a
+// list is held: the client has none either, and resorting nothing costs nothing.
+void SocialHandler::sortLfgBrowser(std::string_view word) {
+    applyLfgSortHeaderClick(lfgSortKeys_, lfgListingsFirst_, word);
+    rebuildLfgBrowserRows();
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("LFG_UPDATE", {});
+}
+
 void SocialHandler::applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party) {
     using namespace lfg_update_type;
     LfgUpdateBody& stored = party ? lfgPartyUpdate_ : lfgPlayerUpdate_;

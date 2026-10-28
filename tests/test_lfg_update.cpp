@@ -505,8 +505,10 @@ TEST_CASE("A cut short list keeps its header cleared and its rows half read", "[
 }
 
 TEST_CASE("Rows are paired into the rows the browse panel shows", "[lfg]") {
-    // 0x00553530 resolves an index to a player record and its member[0], and puts
-    // the listings that belong to no one after the player array runs out.
+    // 0x00553530 resolves an index to one of two arrays: the listings that belong to
+    // no one, then the player records and their member[0] — which of the two comes
+    // first is the byte at 0x00acd660, and the LFG module's init sets it
+    // (0x0055d440:10772), so the listings come first from the start.
     std::vector<LfgListRow> rows;
     auto add = [&](uint64_t guid, bool listing, uint64_t owner = 0) {
         LfgListRow r;
@@ -524,26 +526,164 @@ TEST_CASE("Rows are paired into the rows the browse panel shows", "[lfg]") {
     const uint32_t orphan = add(0x500, true, 0x999);     // one whose group never came
     const uint32_t atListing = add(0x600, true, 0x200);  // one naming a listing, which
 
-    const auto shown = buildLfgBrowserRows(rows);
+    const auto shown = buildLfgBrowserRows(rows, true);
     REQUIRE(shown.size() == 4);                          //   has nowhere to attach
 
-    CHECK(shown[0].player == group);
-    CHECK(shown[0].listing == own);                      // member[0] is the row itself
-    REQUIRE(shown[0].members.size() == 1);
-    CHECK(shown[0].members[0] == mate);                  // party results start at [1]
+    CHECK(shown[0].listing == solo);                     // the array of listings that
+    CHECK(shown[0].player == kLfgNoRow);                 //   belong to no one comes
+    CHECK(shown[1].listing == orphan);                   //   first, in the order the
+    CHECK(shown[2].listing == atListing);                //   packet brought them
 
-    CHECK(shown[1].listing == solo);                     // and the unowned ones come
-    CHECK(shown[1].player == kLfgNoRow);                 //   after, in arrival order
-    CHECK(shown[2].listing == orphan);
-    CHECK(shown[2].player == kLfgNoRow);
-    CHECK(shown[3].listing == atListing);
+    CHECK(shown[3].player == group);                     // then a group's row, whose
+    CHECK(shown[3].listing == own);                      // listing is member[0] itself
+    REQUIRE(shown[3].members.size() == 1);
+    CHECK(shown[3].members[0] == mate);                  // party results start at [1]
+
+    // Clearing that byte walks the player array first instead (0x00553530:2831),
+    // which is what a "group" header click flips to.
+    const auto swapped = buildLfgBrowserRows(rows, false);
+    REQUIRE(swapped.size() == 4);
+    CHECK(swapped[0].player == group);
+    CHECK(swapped[1].listing == solo);
+    CHECK(swapped[2].listing == orphan);
+    CHECK(swapped[3].listing == atListing);
 
     // A player record with no listing attached is no row at all: 0x00553530 hands
     // back a null listing for it and 0x00555fd0 returns no values, so the panel
     // never sees the index and never SetTexts a nil.
     rows.clear();
     add(0x100, false);
-    CHECK(buildLfgBrowserRows(rows).empty());
+    CHECK(buildLfgBrowserRows(rows, true).empty());
+}
+
+TEST_CASE("A column header makes its key primary, and a second click reverses it", "[lfg]") {
+    auto keys = defaultLfgSortKeys();
+    CHECK(keys.size() == lfg_sort_key::kCount);
+    CHECK(keys[0].key == lfg_sort_key::kZone);           // the init's order, 0x0055d440
+    CHECK_FALSE(keys[0].descending);                     //   and none of them reversed
+
+    // The words the browse panel's headers carry (lfrframe.xml:697-805), read without
+    // regard to case (0x0076e780 is strnicmp), and a word the client does not name
+    // falls to key 3 — the same key "name" gives (0x0055d2b0:10643).
+    CHECK(lfgSortKeyForName("level")  == lfg_sort_key::kLevel);
+    CHECK(lfgSortKeyForName("Healer") == lfg_sort_key::kHealer);
+    CHECK(lfgSortKeyForName("class")  == lfg_sort_key::kClass);
+    CHECK(lfgSortKeyForName("zone")   == lfg_sort_key::kZone);
+    CHECK(lfgSortKeyForName("name")   == lfg_sort_key::kName);
+    CHECK(lfgSortKeyForName("nonsense") == lfg_sort_key::kName);
+
+    // The key moves to slot 0 keeping its direction, the others shifting down one
+    // (:10691-10699). "tank" is key 4, three slots ahead of the level already at the
+    // front once the zone key says nothing.
+    applyLfgSortKey(keys, lfg_sort_key::kLevel);
+    CHECK(keys[0].key == lfg_sort_key::kLevel);
+    CHECK(keys[1].key == lfg_sort_key::kZone);
+    CHECK(keys[2].key == lfg_sort_key::kClass);
+    applyLfgSortKey(keys, lfg_sort_key::kTank);
+    CHECK(keys[0].key == lfg_sort_key::kTank);
+    CHECK(keys[1].key == lfg_sort_key::kLevel);
+    CHECK(keys[2].key == lfg_sort_key::kZone);
+
+    // A second click on the same header is the only thing that reverses it (:10688).
+    applyLfgSortKey(keys, lfg_sort_key::kTank);
+    CHECK(keys[0].key == lfg_sort_key::kTank);
+    CHECK(keys[0].descending);
+    CHECK_FALSE(keys[1].descending);
+    applyLfgSortKey(keys, lfg_sort_key::kTank);
+    CHECK_FALSE(keys[0].descending);
+
+    // "group" never reaches the key list at all: the client tests it first and swaps
+    // the two arrays of rows instead, sorting nothing (:10645, :10709-10711).
+    auto before = keys;
+    bool listingsFirst = true;
+    CHECK(applyLfgSortHeaderClick(keys, listingsFirst, "GROUP"));
+    CHECK_FALSE(listingsFirst);
+    CHECK(keys == before);                               //   the list untouched
+    CHECK_FALSE(applyLfgSortHeaderClick(keys, listingsFirst, "level"));
+    CHECK_FALSE(listingsFirst);                          //   the swap untouched
+    CHECK(keys[0].key == lfg_sort_key::kLevel);
+    CHECK_FALSE(applyLfgSortHeaderClick(keys, listingsFirst, "tank"));
+    CHECK(keys[0].key == lfg_sort_key::kTank);
+}
+
+TEST_CASE("The two arrays are sorted by their own comparators", "[lfg]") {
+    // Three listings belonging to no one and one group's row, with the level at
+    // listing +0x2c and the role bits at +0x90 the keys read.
+    std::vector<LfgListRow> rows;
+    auto add = [&](uint64_t guid, bool listing, uint64_t owner, uint8_t level, uint8_t roles) {
+        LfgListRow r;
+        r.guid = guid;
+        r.isListing = listing;
+        r.ownerGuid = owner;
+        r.level = level;
+        r.hasLevel = true;
+        r.roles = roles;
+        rows.push_back(r);
+        return static_cast<uint32_t>(rows.size() - 1);
+    };
+    const uint32_t leader = add(0x100, false, 0, 80, 0);      // a group's player record
+    const uint32_t head   = add(0x200, true, 0x100, 70, 0x2); // its member[0]
+    add(0x300, true, 0, 85, 0x8);                             // damage, no group
+    add(0x400, true, 0, 85, 0x4);                             // healer, no group
+    add(0x500, true, 0, 81, 0);                               // and one by level alone
+
+    auto shown = buildLfgBrowserRows(rows, true);
+    REQUIRE(shown.size() == 4);
+    CHECK(shown[0].listing == 2);        // arrival order until the sort runs
+    CHECK(shown[3].player == leader);
+
+    auto keys = defaultLfgSortKeys();
+    applyLfgSortKey(keys, lfg_sort_key::kLevel);
+    const auto nameOf = [](const LfgListRow&) { return std::string{}; };
+
+    // The two arrays, sorted separately: the array of listings by all seven keys and
+    // the group row by the player comparator, which handles four of them at most
+    // (0x00555a70's switch stops at case 3, 0x00555cd0's runs to case 6).
+    sortLfgBrowserRows(shown, rows, keys, nameOf);
+    CHECK(shown[0].listing == 4);        //   level 81 first, ascending
+    CHECK(shown[1].listing == 3);        //   the two level-85 rows then go to the
+    CHECK(shown[2].listing == 2);        //   healer key still in the list
+    CHECK(shown[3].player == leader);    //   the group row keeps its own array's place
+
+    // The role keys decide nothing for a group's row and everything for the other
+    // array: sorting by healer moves the healer listing to the front.
+    applyLfgSortKey(keys, lfg_sort_key::kHealer);
+    sortLfgBrowserRows(shown, rows, keys, nameOf);
+    CHECK(shown[0].listing == 3);        //   a row that has the bit comes first
+    CHECK(shown[1].listing == 4);        //   (:4741-4752 subtracts the far row's bit)
+    CHECK(shown[2].listing == 2);
+    CHECK(shown[3].player == leader);
+
+    // A second click on that header reverses only it, and the rows without the bit
+    // fall back on the level key behind it.
+    applyLfgSortKey(keys, lfg_sort_key::kHealer);
+    sortLfgBrowserRows(shown, rows, keys, nameOf);
+    CHECK(shown[0].listing == 4);
+    CHECK(shown[1].listing == 2);
+    CHECK(shown[2].listing == 3);
+
+    // Two rows read by each comparator, with nothing else in the key list. The role
+    // key is what tells them apart for the listings and says nothing at all for a
+    // player row.
+    const std::vector<LfgSortEntry> roleOnly{LfgSortEntry{lfg_sort_key::kHealer, false}};
+    LfgBrowserRow withBit, withoutBit;
+    withBit.listing = 3;
+    withoutBit.listing = 4;
+    CHECK(compareLfgBrowserRows(withBit, withoutBit, rows, roleOnly, false, nameOf) < 0);
+    CHECK(compareLfgBrowserRows(withoutBit, withBit, rows, roleOnly, false, nameOf) > 0);
+    CHECK(compareLfgBrowserRows(withBit, withoutBit, rows, roleOnly, true, nameOf) == 0);
+
+    // The name key, compared as strncmp of whatever the guids resolve to; nothing
+    // resolving says nothing, which is the client's own answer for an empty lookup
+    // (:4727-4740).
+    const std::vector<LfgSortEntry> nameKey{LfgSortEntry{lfg_sort_key::kName, false}};
+    CHECK(compareLfgBrowserRows(withoutBit, withBit, rows, nameKey, false, nameOf) == 0);
+    // strncmp, not stricmp: an upper case letter sorts before a lower case one, which
+    // is what 0x0076e760 is and not what the header words' compare is.
+    const auto named = [](const LfgListRow& r) {
+        return std::string(r.guid == 0x400 ? "Zara" : r.guid == 0x500 ? "arthur" : "");
+    };
+    CHECK(compareLfgBrowserRows(withBit, withoutBit, rows, nameKey, false, named) < 0);
 }
 
 TEST_CASE("A row's bosses are the joined instance's rows of the encounter table", "[lfg]") {

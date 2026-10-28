@@ -1,6 +1,8 @@
 #include "game/lfg_update.hpp"
 
 #include <algorithm>
+#include <string>
+#include <string_view>
 
 #include "network/packet.hpp"
 
@@ -312,9 +314,11 @@ bool parseLfgList(network::Packet& packet, uint32_t heldListId,
             // at +0x28 (0x00559050:7348-7383): the row is then a member of it.
             row.ownerGuid = in.u64();
         }
-        // +0x90 and +0x84, and the eight bytes ahead of the encounter mask at
-        // +0x1a0: read by this decoder, read by no getter.
-        if (mask & 0x10) in.u8();
+        // +0x90 is the byte the browse panel's three role columns sort on (bits 0x2,
+        // 0x4 and 0x8 at 0x00555cd0:4741-4752), so it is kept. +0x84 is the key the
+        // "zone" column resolves through a store record (:4682-4697) whose table is
+        // unidentified, so it is stepped over: nothing here can answer what it names.
+        if (mask & 0x10) row.roles = in.u8();
         if (mask & 0x20) in.u32();
         if (mask & 0x40) row.listed = in.u8() != 0;
         if (mask & 0x80) {
@@ -323,9 +327,11 @@ bool parseLfgList(network::Packet& packet, uint32_t heldListId,
         }
     };
 
-    // Two counted blocks, the players first and then the listings, which is the
-    // order the client's row getter walks them in unless the byte at 0x00acd660
-    // says otherwise; nothing here applies that swap. Each block's count is
+    // Two counted blocks, the players first and then the listings — which is the
+    // order they arrive in, not the order they are shown in: 0x00553530 walks the
+    // array of listings that belong to no one first unless the byte at 0x00acd660 is
+    // clear, and the LFG module's init sets it (0x0055d440:10772). That swap is
+    // `buildLfgBrowserRows`' `listingsFirst`. Each block's count is
     // followed by one more uint32 — the client keeps it at 0x00beaaa4 and
     // 0x00beaaa0 (0x0055b770:9733, 9847), and grepping every read of those two
     // globals in the whole decompile turns up nothing: written, never read. It
@@ -345,7 +351,8 @@ bool parseLfgList(network::Packet& packet, uint32_t heldListId,
     return in.ok;
 }
 
-std::vector<LfgBrowserRow> buildLfgBrowserRows(const std::vector<LfgListRow>& rows) {
+std::vector<LfgBrowserRow> buildLfgBrowserRows(const std::vector<LfgListRow>& rows,
+                                               bool listingsFirst) {
     // Which player record each listing names as its group. The client resolves the
     // same guid through its record hash and stores what answers at listing +0x28
     // (0x00559050:7348-7383); nothing answering is what puts a listing in the
@@ -360,28 +367,209 @@ std::vector<LfgBrowserRow> buildLfgBrowserRows(const std::vector<LfgListRow>& ro
             if (!rows[i].isListing && rows[i].guid == rows[k].ownerGuid) { owner[k] = i; break; }
     }
 
-    std::vector<LfgBrowserRow> out;
+    // The player array: one row per group, its own listing the group's first member.
+    std::vector<LfgBrowserRow> players;
     for (uint32_t i = 0; i < rows.size(); ++i) {
         if (rows[i].isListing) continue;
         LfgBrowserRow row;
         row.player = i;
         for (uint32_t k = 0; k < rows.size(); ++k)
             if (owner[k] == i) row.members.push_back(k);
-        // The row's own listing is the group's first member, and the getter hands
-        // back a null listing for a player with none - which the row getter turns
-        // into no values at all (0x00555fd0:4850-4852), so there is no such row.
+        // The getter hands back a null listing for a player with none - which the row
+        // getter turns into no values at all (0x00555fd0:4850-4852), so there is no
+        // such row.
         if (row.members.empty()) continue;
         row.listing = row.members.front();
         row.members.erase(row.members.begin());
-        out.push_back(std::move(row));
+        players.push_back(std::move(row));
     }
+    // The array of listings belonging to no one, which is where a listing whose
+    // group guid named nothing went on the wire (0x0055b770:9940-9974).
+    std::vector<LfgBrowserRow> unowned;
     for (uint32_t k = 0; k < rows.size(); ++k) {
         if (!rows[k].isListing || owner[k] != kLfgNoRow) continue;
         LfgBrowserRow row;
         row.listing = k;
-        out.push_back(std::move(row));
+        unowned.push_back(std::move(row));
     }
+
+    // One array and then the other, and which comes first is the byte at 0x00acd660
+    // (0x00553530:2831-2864): clear walks the players first, set the listings. The
+    // init sets it, so listings come first until a "group" header click flips it.
+    std::vector<LfgBrowserRow> out;
+    out.reserve(players.size() + unowned.size());
+    const auto& first = listingsFirst ? unowned : players;
+    const auto& second = listingsFirst ? players : unowned;
+    out.insert(out.end(), first.begin(), first.end());
+    out.insert(out.end(), second.begin(), second.end());
     return out;
+}
+
+namespace {
+
+/// Two words compared without regard to ASCII case, which is how the client reads a
+/// header's word (0x0076e780 is _strnicmp). The seven words the browse panel's
+/// headers carry are all ASCII, so nothing else about a locale's collation matters.
+bool equalsNoCase(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const char x = (a[i] >= 'A' && a[i] <= 'Z') ? static_cast<char>(a[i] + 32) : a[i];
+        const char y = (b[i] >= 'A' && b[i] <= 'Z') ? static_cast<char>(b[i] + 32) : b[i];
+        if (x != y) return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+uint32_t lfgSortKeyForName(std::string_view word) {
+    // 0x0055d2b0:10643 initialises the key to 3 and only overwrites it on a match,
+    // so anything unrecognised - and "group", which the caller takes aside - sorts by
+    // the name. The compares are strnicmp, so the case of the header's word is the
+    // locale's business and not this one's.
+    if (equalsNoCase(word, "level"))  return lfg_sort_key::kLevel;
+    if (equalsNoCase(word, "class"))  return lfg_sort_key::kClass;
+    if (equalsNoCase(word, "zone"))   return lfg_sort_key::kZone;
+    if (equalsNoCase(word, "tank"))   return lfg_sort_key::kTank;
+    if (equalsNoCase(word, "healer")) return lfg_sort_key::kHealer;
+    if (equalsNoCase(word, "damage")) return lfg_sort_key::kDamage;
+    return lfg_sort_key::kName;      // "name", "group", or nothing the client names
+}
+
+void applyLfgSortKey(std::vector<LfgSortEntry>& keys, uint32_t key) {
+    // 0x0055d2b0:10684-10705. The key is looked for in the list, which always holds
+    // all seven; found at slot 0 it flips direction, found later it is moved to slot
+    // 0 keeping the direction it had and the slots ahead of it shift down one. The
+    // client's loop runs to slot 6 and, finding nothing, resorts unchanged - the same
+    // outcome as a list already holding the key, so the search below is allowed to
+    // fall through.
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (keys[i].key != key) continue;
+        const bool descending = keys[i].descending;
+        if (i == 0) {
+            keys[0].descending = !descending;
+            return;
+        }
+        for (size_t k = i; k > 0; --k) keys[k] = keys[k - 1];
+        keys[0] = LfgSortEntry{key, descending};
+        return;
+    }
+}
+
+bool applyLfgSortHeaderClick(std::vector<LfgSortEntry>& keys, bool& listingsFirst,
+                             std::string_view word) {
+    // The first thing 0x0055d2b0 does with the word is compare it to "group", and on
+    // that word it flips which array of rows is walked first and leaves without
+    // touching the key list or resorting anything (:10645, :10709-10711). The compare
+    // is strnicmp like the rest, so the header's case is not the word's meaning.
+    if (equalsNoCase(word, "group")) {
+        listingsFirst = !listingsFirst;
+        return true;
+    }
+    applyLfgSortKey(keys, lfgSortKeyForName(word));
+    return false;
+}
+
+int compareLfgBrowserRows(const LfgBrowserRow& a, const LfgBrowserRow& b,
+                          const std::vector<LfgListRow>& rows,
+                          const std::vector<LfgSortEntry>& keys,
+                          bool playerArray, const LfgRowName& nameOf) {
+    auto rowAt = [&](uint32_t index) -> const LfgListRow* {
+        return index < rows.size() ? &rows[index] : nullptr;
+    };
+    // The side each comparator actually reads: a player row is read through its
+    // listing, member[0] (0x00555a70:4560-4571 resolves it the way the getter does),
+    // and a row of the other array *is* its listing. A row whose listing is missing
+    // sorts ahead of one that has it, which is the client's -1 / 0 at :4572-4577;
+    // buildLfgBrowserRows never makes such a row.
+    const LfgListRow* left = rowAt(a.listing);
+    const LfgListRow* right = rowAt(b.listing);
+    if (!left) return right ? -1 : 0;
+    if (!right) return 1;
+
+    // First key that says anything decides, reversed when its direction byte is set
+    // (0x00555cd0:4753-4758, and the same shape at :4600-4605).
+    for (const auto& entry : keys) {
+        int cmp = 0;
+        bool decided = false;
+        switch (entry.key) {
+            case lfg_sort_key::kZone:
+            case lfg_sort_key::kClass:
+                // Store lookups with no answer here; see the header. The client
+                // breaks to the next key when its lookup comes back empty too.
+                break;
+            case lfg_sort_key::kLevel: {
+                // The byte at +0x2c of each side's listing; a difference of one is
+                // what the client returns, and ascending is the lower level first
+                // (0x00555a70:4609-4613, 0x00555cd0:4703-4706).
+                if (left->level != right->level) {
+                    cmp = left->level < right->level ? -1 : 1;
+                    decided = true;
+                }
+                break;
+            }
+            case lfg_sort_key::kName: {
+                // strncmp of the two names the guids resolve to, and a side nothing
+                // resolves means the key says nothing (:4727-4740).
+                const std::string first = nameOf(*left);
+                const std::string second = nameOf(*right);
+                if (!first.empty() && !second.empty() && first != second) {
+                    cmp = first < second ? -1 : 1;
+                    decided = true;
+                }
+                break;
+            }
+            case lfg_sort_key::kTank:
+            case lfg_sort_key::kHealer:
+            case lfg_sort_key::kDamage: {
+                // The player comparator's switch stops at case 3, so these decide
+                // nothing for a player row.
+                if (playerArray) break;
+                const uint8_t bit = entry.key == lfg_sort_key::kTank ? lfg_role_flag::kTank
+                              : entry.key == lfg_sort_key::kHealer ? lfg_role_flag::kHealer
+                                                                   : lfg_role_flag::kDamage;
+                // The subtraction at :4741-4752 is the far row's bit off the near
+                // one's, so a row that *has* the bit comes first when ascending.
+                const bool mine = (left->roles & bit) != 0;
+                const bool theirs = (right->roles & bit) != 0;
+                if (mine != theirs) {
+                    cmp = mine ? -1 : 1;
+                    decided = true;
+                }
+                break;
+            }
+        }
+        if (!decided) continue;
+        return entry.descending ? -cmp : cmp;
+    }
+    return 0;
+}
+
+void sortLfgBrowserRows(std::vector<LfgBrowserRow>& out, const std::vector<LfgListRow>& rows,
+                        const std::vector<LfgSortEntry>& keys, const LfgRowName& nameOf) {
+    // Two arrays, two comparators, one qsort each (0x0055b700:9646-9651). The two
+    // ranges are the ones buildLfgBrowserRows laid out end to end, so which of them a
+    // row belongs to is decided by whether it has a player record at all.
+    const bool playersFirst = !out.empty() && out.front().player != kLfgNoRow;
+    auto begins = [&](bool wantPlayers) {
+        return std::find_if(out.begin(), out.end(), [&](const LfgBrowserRow& r) {
+            return (r.player != kLfgNoRow) == wantPlayers;
+        });
+    };
+    const auto compare = [&](bool playerArray) {
+        return [&](const LfgBrowserRow& x, const LfgBrowserRow& y) {
+            return compareLfgBrowserRows(x, y, rows, keys, playerArray, nameOf) < 0;
+        };
+    };
+    if (playersFirst) {
+        const auto split = begins(false);
+        std::sort(out.begin(), split, compare(true));
+        std::sort(split, out.end(), compare(false));
+    } else {
+        const auto split = begins(true);
+        std::sort(out.begin(), split, compare(false));
+        std::sort(split, out.end(), compare(true));
+    }
 }
 
 LfgEncounterCounts countLfgEncounters(const std::vector<LfgEncounterRow>& rows,

@@ -4929,6 +4929,10 @@ uint32_t GameHandler::getLfgSearchListId() const {
     return socialHandler_ ? socialHandler_->getLfgSearchListId() : 0;
 }
 
+void GameHandler::sortLfgBrowser(std::string_view word) {
+    if (socialHandler_) socialHandler_->sortLfgBrowser(word);
+}
+
 std::string GameHandler::getCurrentLfgDungeonName() const {
     return socialHandler_ ? socialHandler_->getCurrentLfgDungeonName() : std::string{};
 }

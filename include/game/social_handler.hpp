@@ -639,6 +639,18 @@ public:
     /// one a packet actually named (0x00beaa98), which is the one the rows read
     /// belong to and, whenever rows are held, the same id.
     [[nodiscard]] uint32_t getLfgSearchListId() const { return lfgListWindowId_; }
+    /**
+     * What one of the browse panel's column headers does (`SearchLFGSort`,
+     * 0x0055d2b0), by the word that header carries: "group" swaps which array of rows
+     * is walked first and sorts nothing, and any other word makes that key primary —
+     * reversing it if it already was. The client's guard against no word at all (a
+     * usage line and no change, :10638-10642) is the binding's, not this one's.
+     *
+     * Both paths end with the client raising its list event (0x0055b700:9654, and
+     * :10710 for the swap), which is what the panel refills itself on; that is the one
+     * thing here that a header click sends to the interface.
+     */
+    void sortLfgBrowser(std::string_view word);
     [[nodiscard]] uint32_t getLfgDungeonId()       const { return lfgDungeonId_; }
     [[nodiscard]] std::string getCurrentLfgDungeonName() const;
     [[nodiscard]] uint32_t getLfgProposalId()      const { return lfgProposalId_; }
@@ -748,8 +760,10 @@ private:
     /// longer listed drops the joined raid-browser list (case 0x369 of 0x0055bdc0).
     void handleLfgUpdateSearch(network::Packet& packet);
     void handleUpdateLfgList(network::Packet& packet);
-    /// Re-pair the held rows for the browse panel (0x00553530's index resolution).
-    void rebuildLfgBrowserRows() { lfgBrowserRows_ = buildLfgBrowserRows(lfgListRows_); }
+    /// Re-pair the held rows for the browse panel (0x00553530's index resolution) and
+    /// order them as the client orders its two arrays before the getter walks them
+    /// (0x0055b700:9646-9653, which resorts and then rebuilds the same way).
+    void rebuildLfgBrowserRows();
     void applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party);
     /// Whether any of the body's dungeons is a raid, which turns the queue's
     /// lines into the raid browser's (0x00557260).
@@ -930,15 +944,22 @@ private:
     /// by any packet, which is why IsListedInLFR can only be as right as this.
     uint32_t lfgJoinedListId_ = 0;
     /// The rows of the list held, in the order the packet brought them: the
-    /// player rows first, then the listings. The client sorts its own two arrays
-    /// before showing them (0x0055b700) by comparators that are not read, so this
-    /// order is arrival order, not the client's.
+    /// player rows first, then the listings. The client shows them in neither of
+    /// those orders — it qsorts its two arrays separately (0x0055b700) and then
+    /// walks the array of listings that belong to no one before the player array
+    /// unless the swap byte says otherwise (0x00553530:2831-2864).
     std::vector<LfgListRow> lfgListRows_;
     /// Those rows paired into the rows the browse panel can show, rebuilt whenever
-    /// the rows are (buildLfgBrowserRows). Held beside them rather than derived at
-    /// query time so that the index fields of one never outlive the vector they
-    /// name indices into.
+    /// the rows are (buildLfgBrowserRows, then sortLfgBrowserRows). Held beside them
+    /// rather than derived at query time so that the index fields of one never
+    /// outlive the vector they name indices into.
     std::vector<LfgBrowserRow> lfgBrowserRows_;
+    /// The browse panel's sort state: the client's seven {key, direction} slots at
+    /// 0x00bea820, and the byte at 0x00acd660 that says which of the two arrays of
+    /// rows is walked first. The LFG module's init fills the list with all seven keys
+    /// ascending and sets that byte to listings-first (0x0055d440:10766-10772).
+    std::vector<LfgSortEntry> lfgSortKeys_ = defaultLfgSortKeys();
+    bool lfgListingsFirst_ = true;
     /// Which list those rows belong to, the id of the last packet actually read -
     /// the client's 0x00beaa98, which is also what it tests to decide whether the
     /// rows changed enough to report. Zero when none is held.

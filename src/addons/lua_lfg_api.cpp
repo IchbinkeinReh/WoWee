@@ -695,13 +695,20 @@ void registerLfgLuaAPI(lua_State* L) {
     // handlers - a hidden frame still runs them - so with LFG_PROPOSAL_SHOW
     // fired, forming a group raised on a nil global whether or not this
     // element had been handed over.
-    // Sorting the raid browser's result list by a column. The rows are read and
-    // their getters answer (see the raid browser section below), but the ordering
-    // the client's own qsort gives is not reproduced - the two comparators,
-    // 0x00555a70 and 0x00555cd0, have not been read - so this stays a no-op. It is
-    // an OnClick on a column header, though, so leaving it unbound meant clicking a
-    // header raised instead of doing nothing.
-    {"SearchLFGSort", [](lua_State* L) -> int { (void)L; return 0; }},
+    // SearchLFGSort("type") - 0x0055d2b0, an OnClick on one of the browse panel's
+    // seven column headers (lfrframe.xml:697-805 gives each its `sortType` word).
+    // "group" swaps which of the two arrays of rows is walked first and sorts nothing
+    // (0x0055d2b0:10645, 10709-10711); any other word moves that key to the front of
+    // the seven, and reverses it if it was already front (:10684-10705). With no word
+    // at all the client answers `Usage: SearchLFGSort("type")` and changes nothing
+    // (:10638-10642), which is what happens here too - the printer being the one thing
+    // still missing.
+    {"SearchLFGSort", [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        if (!gh || !lua_isstring(L, 1)) return 0;
+        gh->sortLfgBrowser(lua_tostring(L, 1));
+        return 0;
+    }},
     // LeaveLFG() (0x00554160 -> 0x00553ab0).
     {"LeaveLFG", [](lua_State* L) -> int {
         if (auto* gh = getGameHandler(L)) gh->lfgLeaveLocal();

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -179,6 +180,13 @@ struct LfgListRow {
     /// because no getter anywhere reads them.
     uint64_t ownerGuid = 0;
 
+    /// The byte a listing row carries at mask bit 0x10 (record +0x90). Three of the
+    /// sort keys read it: the browse panel's tank, healer and damage columns test
+    /// bits 0x2, 0x4 and 0x8 of it (0x00555cd0:4741-4752). The panel's fourth role
+    /// column is not a bit at all — its header swaps the two arrays the rows are
+    /// walked in, which is the byte at 0x00acd660 below.
+    uint8_t roles = 0;
+
     /// The three bytes a player row carries at mask bit 0x10 (+0x124..0x126).
     /// Nothing reads them. The tail of the row getter is 0x005529e0, which pushes
     /// 28 values — four booleans then 24 numbers, or 28 nils when its record
@@ -241,23 +249,142 @@ struct LfgBrowserRow {
 };
 
 /**
- * Orders the parsed rows the way the client's row getter walks them: the player
- * records first, each with the listings whose group guid (mask bit 0x8) names it,
- * and then the listings that belong to no one (0x0055b770:9940-9974 puts those in
- * an array of their own, and the getter reaches them only past the player array).
+ * Orders the parsed rows the way the client's row getter walks them: one array of
+ * player records, each with the listings whose group guid (mask bit 0x8) names it,
+ * and one array of the listings that belong to no one (0x0055b770:9940-9974 puts
+ * those in an array of their own).
+ *
+ * **Which array comes first is the byte at 0x00acd660**, which is what `listingsFirst`
+ * is: with it clear the getter walks the player array and then the listings
+ * (0x00553530:2831-2847), and with it set the listings come first (:2849-2864). The
+ * LFG module's init sets it (`0x0055d440:10772`), and grepping the whole decompile
+ * turns up exactly three sites for it — that init, that read, and the swap below —
+ * so listings come first until a header says otherwise.
  *
  * A player record with no listing attached produces **no row at all**, which is
  * what the client does with one: `FUN_00553530` hands back a null listing and the
  * getter returns no values for that index (0x00555fd0:4850-4852), so the row is
  * never seen by the interface.
  *
- * Arrival order throughout. The client qsorts both arrays before showing them
- * (0x0055b700, with the comparators at 0x00555a70 and 0x00555cd0, neither of which
- * has been read), and within a group a listing goes to the head of the member
- * array when its +0x8c byte is set and to the tail otherwise (0x00556e60), which
- * is history this layer does not keep.
+ * Arrival order within each array, which `sortLfgBrowserRows` below then replaces.
+ * Within a group a listing goes to the head of the member array when its +0x8c byte
+ * is set and to the tail otherwise (0x00556e60), which is history this layer does
+ * not keep.
  */
-std::vector<LfgBrowserRow> buildLfgBrowserRows(const std::vector<LfgListRow>& rows);
+std::vector<LfgBrowserRow> buildLfgBrowserRows(const std::vector<LfgListRow>& rows,
+                                               bool listingsFirst);
+
+/**
+ * The seven keys the two comparators switch on, numbered as the client numbers them
+ * in its key list at 0x00bea820 — an array of seven {key, direction} pairs, read
+ * from slot 0 down, first key that says anything deciding the order (0x00555a70:4579
+ * and 0x00555cd0:4679; both stop past slot 6).
+ *
+ * The browse panel's seven column headers name six of them (`lfrframe.xml:697-805`
+ * gives each header its `sortType`, and its OnClick passes that to `SearchLFGSort`):
+ * "name", "level", "class", "tank", "healer", "damage", and "group" for the last,
+ * which the client takes as **swap the two arrays** rather than as a key
+ * (0x0055d2b0:10645-10711) — the byte above.
+ */
+namespace lfg_sort_key {
+constexpr uint32_t kZone   = 0;   ///< the listing's +0x84 through a store record's name
+constexpr uint32_t kLevel  = 1;   ///< the byte at listing +0x2c
+constexpr uint32_t kClass  = 2;   ///< the row's class through a store record's name
+constexpr uint32_t kName   = 3;   ///< "name": the two rows' names, compared by strncmp
+constexpr uint32_t kTank   = 4;   ///< listing +0x90 bit 0x2
+constexpr uint32_t kHealer = 5;   ///< listing +0x90 bit 0x4
+constexpr uint32_t kDamage = 6;   ///< listing +0x90 bit 0x8
+constexpr uint32_t kCount  = 7;
+}  // namespace lfg_sort_key
+
+/// The role bits the three role keys test in a listing row's +0x90 byte.
+namespace lfg_role_flag {
+constexpr uint8_t kTank = 0x2, kHealer = 0x4, kDamage = 0x8;
+}
+
+/// One slot of the client's key list: a key and whether it is read reversed. The
+/// comparator negates its result when the direction byte is set (0x00555cd0:4754-4758),
+/// so clear means ascending.
+struct LfgSortEntry {
+    uint32_t key = 0;
+    bool descending = false;
+
+    [[nodiscard]] friend bool operator==(const LfgSortEntry&, const LfgSortEntry&) = default;
+};
+
+/// How the LFG module's init leaves the list: all seven keys in key order, none
+/// reversed (0x0055d440:10766-10771). So the order the panel opens in is the zone
+/// first, then level, class, name and the three roles.
+inline std::vector<LfgSortEntry> defaultLfgSortKeys() {
+    std::vector<LfgSortEntry> keys;
+    for (uint32_t k = 0; k < lfg_sort_key::kCount; ++k) keys.push_back(LfgSortEntry{k, false});
+    return keys;
+}
+
+/**
+ * A column header's word to a key, read the way 0x0055d2b0:10645-10683 reads it:
+ * case-insensitively (0x0076e780 is strnicmp), and the chain's default is **key 3**,
+ * which is what an unrecognised word sorts by. "group" never gets here: the client
+ * tests that word first and swaps the arrays instead (:10709-10711), so
+ * `lfgSortKeyForName` leaves it as the default and the caller decides.
+ */
+uint32_t lfgSortKeyForName(std::string_view name);
+
+/**
+ * One header click, over both pieces of state at once. The word **"group" never
+ * reaches the key list**: the client tests it first (0x0055d2b0:10645) and, on it,
+ * swaps the two arrays the rows are walked in and returns without sorting anything
+ * (:10709-10711) — `listingsFirst` flips and this returns true. Any other word goes
+ * through `lfgSortKeyForName` into `applyLfgSortKey`, and returns false. Every word
+ * is read without regard to case, that first test included.
+ */
+bool applyLfgSortHeaderClick(std::vector<LfgSortEntry>& keys, bool& listingsFirst,
+                             std::string_view word);
+
+/**
+ * What clicking a column header does to the key list (0x0055d2b0:10684-10705). The
+ * key is found in the list — it is always there, since init put all seven in — and
+ * moved to slot 0 keeping the direction it had, shifting the slots ahead of it down
+ * one. If it was **already** in slot 0 its direction flips instead, which is the
+ * only way a column ever reverses: a second click on the same header.
+ */
+void applyLfgSortKey(std::vector<LfgSortEntry>& keys, uint32_t key);
+
+/// The name a row sorts by: the client resolves the row's listing guid to a player
+/// and compares what answers (0x0067d770, then 0x0076e760, which is strncmp). An
+/// empty answer is its own answer for "nothing there", and the comparator moves on.
+using LfgRowName = std::function<std::string(const LfgListRow& listing)>;
+
+/**
+ * The comparison one of the two arrays makes: 0x00555a70 for the player array and
+ * 0x00555cd0 for the array of listings that belong to no one. They differ in one
+ * way that shows: **the player comparator handles only the first four keys**, so the
+ * three role keys decide nothing for a player row and everything for the other
+ * array (0x00555a70's switch stops at case 3). Both read the level and the name
+ * through the row's **listing** — for a player row that is member[0], which is what
+ * the getter hands the interface anyway (:4560-4571).
+ *
+ * Keys 0 and 2 are read out of store records this client has no answer for — the
+ * zone key takes the listing's +0x84 as a key into a store whose record's `+0x2c`
+ * is a string (0x00555cd0:4682-4697: the range at 0x00ad3144 and 0x00ad3140 and the
+ * record array at 0x00ad3154), and the class key takes a `+0x148` of the resolved
+ * player through the same store getter the row getters lost their `this` for, whose
+ * record's `+0x10` is a string (:4711-4724). Neither table has been identified, so
+ * both keys say nothing here and the walk moves to the next one, which is also what
+ * the client does when its lookup comes back empty.
+ */
+int compareLfgBrowserRows(const LfgBrowserRow& a, const LfgBrowserRow& b,
+                          const std::vector<LfgListRow>& rows,
+                          const std::vector<LfgSortEntry>& keys,
+                          bool playerArray, const LfgRowName& nameOf);
+
+/**
+ * The sort 0x0055b700 does before the getter walks anything: **each array on its
+ * own comparator** (:9646-9651), the arrays being the two `buildLfgBrowserRows`
+ * lays out end to end. Neither qsort is stable, and this one is not either.
+ */
+void sortLfgBrowserRows(std::vector<LfgBrowserRow>& out, const std::vector<LfgListRow>& rows,
+                        const std::vector<LfgSortEntry>& keys, const LfgRowName& nameOf);
 
 /**
  * One row of DungeonEncounter.dbc — the table the raid browser's bosses come from.
@@ -308,9 +435,9 @@ LfgEncounterCounts countLfgEncounters(const std::vector<LfgEncounterRow>& rows,
 /**
  * The `before`-th boss of one instance in that same order — what
  * `SearchLFGGetEncounterResults` answers for its second argument, which the
-/// client passes as `encounterIndex - 1` (0x00553c30:3258) and `0x005538b0` counts
-/// matches down to. Null when the instance has no that-many bosses, for which the
-/// client pushes three nils rather than nothing (0x005538b0:3069-3071).
+ * client passes as `encounterIndex - 1` (0x00553c30:3258) and `0x005538b0` counts
+ * matches down to. Null when the instance has no that-many bosses, for which the
+ * client pushes three nils rather than nothing (0x005538b0:3069-3071).
  */
 const LfgEncounterRow* lfgEncounterAt(const std::vector<LfgEncounterRow>& rows,
                                       uint32_t mapId, uint32_t difficulty,

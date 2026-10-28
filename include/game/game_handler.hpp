@@ -2659,6 +2659,9 @@ public:
     /// request set, 0x00553c30:3228 - to name the dungeon those rows' bosses live
     /// in; the two are the same id whenever rows are held at all. Zero when none is.
     uint32_t getLfgSearchListId() const;
+    /// A browse-panel column header click, by the word that header carries
+    /// (SearchLFGSort) — see SocialHandler::sortLfgBrowser for what it does.
+    void sortLfgBrowser(std::string_view word);
     uint32_t getLfgProposalId() const;
     uint8_t  getLfgOfferedRoles() const;
     const std::vector<LfgProposalMember>& getLfgProposalMembers() const;
