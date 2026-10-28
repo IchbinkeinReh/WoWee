@@ -19,6 +19,7 @@
 #include "core/application.hpp"
 #include "core/logger.hpp"
 #include "core/weapon_attachment.hpp"
+#include "audio/advanced_kit.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/sound_distance.hpp"
 #include "audio/sound_entry.hpp"
@@ -769,17 +770,30 @@ uint32_t SpellVisualSystem::playKitSound(const KitRecord& kit, spell_kit::KitTyp
     // takeoff and landing pair is a row of 8 and 45 yards.
     float minDistance = 0.0f, maxDistance = 0.0f;
     audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
+    // The kit the row names, if it names one: 0x004c6a40 sends such a play to
+    // 0x004cb580, which turns it away while another play of that kit is still going
+    // within sqrt(6) yards of the position asked for (audio/advanced_kit.hpp). Only a
+    // few of the kit rows spell visuals pick name one, and those are encounter
+    // speech, so this is seldom seen on a spell.
+    const uint32_t kitId = audio::advanced_kit::kitIdFor(kit.soundId, cachedAssetManager_);
+    if (audio::advanced_kit::refusedNear(kitId, position)) return 0;
     if (!loops) {
+        uint32_t handle = 0;
         audio::AudioEngine::instance().playSound3D(sound->data, position, volume, pitch, maxDistance, minDistance,
-                                                   audio::Channel::Effects, audio::PlayLimit::None, priority);
+                                                   audio::Channel::Effects, audio::PlayLimit::None, priority,
+                                                   &handle);
+        audio::advanced_kit::notePlay(kitId, position, handle);
         return 0;
     }
     // Held for the kit's whole run (0x004c5c80 takes it back at the end). It is
     // played where the unit was as the kit started - 0x006f7e40 asks the unit
     // for that through its vtable +0x2c once, and nothing after moves it - and
     // its voice only counts for the mover, never for the listener (0x00745230).
-    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, volume, maxDistance, minDistance,
-                                                             0.0f, audio::Channel::Effects, priority);
+    const uint32_t handle =
+        audio::AudioEngine::instance().playSound3DLooping(sound->data, position, volume, maxDistance, minDistance,
+                                                          0.0f, audio::Channel::Effects, priority);
+    audio::advanced_kit::notePlay(kitId, position, handle);
+    return handle;
 }
 
 void SpellVisualSystem::playKitWeaponEffects(const std::vector<KitWeaponEffect>& effects,
@@ -1184,8 +1198,16 @@ uint32_t SpellVisualSystem::startMissileSound(uint32_t soundId, const glm::vec3&
     // play takes no pitch argument, and one row of the 12941 asks both
     // (audio/sound_entry.hpp).
     const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
-    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, volume, maxDistance,
-                                                             minDistance, 0.0f, audio::Channel::Effects, priority);
+    // The same kit rule as any other play of a row (audio/advanced_kit.hpp): a
+    // missile's loop is asked of 0x004cb580 too, and refused while that kit is
+    // already sounding within sqrt(6) yards.
+    const uint32_t kitId = audio::advanced_kit::kitIdFor(soundId, cachedAssetManager_);
+    if (audio::advanced_kit::refusedNear(kitId, position)) return 0;
+    const uint32_t handle =
+        audio::AudioEngine::instance().playSound3DLooping(sound->data, position, volume, maxDistance,
+                                                          minDistance, 0.0f, audio::Channel::Effects, priority);
+    audio::advanced_kit::notePlay(kitId, position, handle);
+    return handle;
 }
 
 bool SpellVisualSystem::instanceIsMover(uint32_t renderInstanceId) const {
@@ -2717,8 +2739,12 @@ void SpellVisualSystem::playSoundAt(uint32_t soundId, const glm::vec3& position,
     audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
     const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
     const float pitch = audio::sound_entry::pitchForFlags(sound->flags, swingDraw());
+    const uint32_t kitId = audio::advanced_kit::kitIdFor(soundId, cachedAssetManager_);
+    if (audio::advanced_kit::refusedNear(kitId, position)) return;
+    uint32_t handle = 0;
     audio::AudioEngine::instance().playSound3D(sound->data, position, volume, pitch, maxDistance, minDistance,
-                                               audio::Channel::Effects, audio::PlayLimit::None, priority);
+                                               audio::Channel::Effects, audio::PlayLimit::None, priority, &handle);
+    audio::advanced_kit::notePlay(kitId, position, handle);
 }
 
 void SpellVisualSystem::playOwnSoundAt(uint32_t soundId, const glm::vec3& position) {
@@ -2738,8 +2764,16 @@ void SpellVisualSystem::playOwnSoundAt(uint32_t soundId, const glm::vec3& positi
         float minDistance = 0.0f, maxDistance = 0.0f;
         audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
         const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
-        audio.playSound3D(sound->data, position, volume, pitch, maxDistance, minDistance,
-                          audio::Channel::Effects, audio::PlayLimit::None, kOwn);
+        // Only the positional branch is asked about (audio/advanced_kit.hpp): the
+        // listener-at-character play above has no position, and the client asks
+        // nothing of one that has none.
+        const uint32_t kitId = audio::advanced_kit::kitIdFor(soundId, cachedAssetManager_);
+        if (!audio::advanced_kit::refusedNear(kitId, position)) {
+            uint32_t handle = 0;
+            audio.playSound3D(sound->data, position, volume, pitch, maxDistance, minDistance,
+                              audio::Channel::Effects, audio::PlayLimit::None, kOwn, &handle);
+            audio::advanced_kit::notePlay(kitId, position, handle);
+        }
     }
 }
 
@@ -2944,9 +2978,13 @@ void SpellVisualSystem::startDynamicObjectKit(DynamicObjectVisual& object) {
         float minDistance = 0.0f, maxDistance = 0.0f;
         audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
         const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
-        object.soundHandle = audio::AudioEngine::instance().playSound3DLooping(
-            sound->data, object.position, volume, maxDistance, minDistance,
-            dynamic_object::kSoundFadeInSeconds, audio::Channel::Effects);
+        const uint32_t kitId = audio::advanced_kit::kitIdFor(object.area.soundId, cachedAssetManager_);
+        if (!audio::advanced_kit::refusedNear(kitId, object.position)) {
+            object.soundHandle = audio::AudioEngine::instance().playSound3DLooping(
+                sound->data, object.position, volume, maxDistance, minDistance,
+                dynamic_object::kSoundFadeInSeconds, audio::Channel::Effects);
+            audio::advanced_kit::notePlay(kitId, object.position, object.soundHandle);
+        }
     }
 }
 

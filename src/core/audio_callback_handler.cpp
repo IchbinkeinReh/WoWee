@@ -9,6 +9,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/music_manager.hpp"
+#include "audio/advanced_kit.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/sound_entry.hpp"
 #include "ui/ui_manager.hpp"
@@ -130,7 +131,29 @@ void AudioCallbackHandler::setupCallbacks() {
         if (entity) {
             glm::vec3 canonical{entity->getLatestX(), entity->getLatestY(), entity->getLatestZ()};
             glm::vec3 pos = core::coords::canonicalToRender(canonical);
-            audio::AudioEngine::instance().playSound3D(entry->path, pos, 1.0f, pitchOf(), 100.0f, audio::Channel::Effects);
+            // A row naming an advanced kit is turned away while another play of that
+            // kit is still going within sqrt(6) yards of here (audio/advanced_kit.hpp:
+            // 0x004cb580 -> 0x004ca130). Scripted speech is what that rule holds down:
+            // 1395 of the 1617 rows with a kit are dialogue lines
+            // (A_GRULLAIR_Kazzak_Intro01, A_FelendrenTakeHeart), and a script that
+            // repeats a line would otherwise stack it on itself.
+            const uint32_t kitId = audio::advanced_kit::kitIdFor(soundId, &assetManager_);
+            if (audio::advanced_kit::refusedNear(kitId, pos)) return;
+            // The clip is read here rather than named to the engine, so that the play
+            // reports the handle the kit rule then asks about. Everything else is as
+            // the engine's own path play had it: its reach is the default, because a
+            // play the server asks for reaches 0x004c6a40 with no params struct at all
+            // and the client sets no reach of its own on one (audio/sound_entry.hpp).
+            auto data = assetManager_.readFile(entry->path);
+            if (data.empty()) {
+                LOG_WARNING("AudioCallbackHandler: no clip behind SoundEntries ", soundId, " (", entry->path, ")");
+                return;
+            }
+            uint32_t handle = 0;
+            audio::AudioEngine::instance().playSound3D(data, pos, 1.0f, pitchOf(), 100.0f, 1.0f,
+                                                       audio::Channel::Effects, audio::PlayLimit::None,
+                                                       audio::voice_priority::kDefault, &handle);
+            audio::advanced_kit::notePlay(kitId, pos, handle);
         } else {
             audio::AudioEngine::instance().playSound2D(entry->path, 1.0f, pitchOf(), audio::Channel::Effects);
         }
