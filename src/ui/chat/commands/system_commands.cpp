@@ -13,6 +13,7 @@
 #include "core/coordinates.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/lighting_manager.hpp"
 #include "core/frame_profiler.hpp"
 #include "core/logger.hpp"
 #include "game/transport_manager.hpp"
@@ -281,6 +282,11 @@ public:
             const auto pose = cam->currentViewPose();
             say(client_gps::cameraLine({pose.distance, pose.pitch, pose.yaw}));
         }
+        // The time of day the light is drawn for, and the Debug Time
+        // override when one is on - what /daytime takes back.
+        if (auto* lighting = renderer ? renderer->getLightingManager() : nullptr) {
+            say(client_gps::timeLine(lighting->getTimeOfDayHours(), renderer->getGameTimeOverride()));
+        }
         // On a transport: which, where the client has it, and the offset on
         // it that goes to the server with the position.
         if (ctx.gameHandler.isOnTransport()) {
@@ -343,6 +349,48 @@ public:
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"cam"}; }
     [[nodiscard]] std::string helpText() const override {
         return "Set the camera as /gps reported it (/cam distance pitch yaw)";
+    }
+};
+
+// ---------------------------------------------------------------------------
+// /daytime <hours|hh:mm|off> - the time of day the light is drawn for, as
+// /gps reported it: hours, a clock, or the whole "Time:" line (its Debug Time
+// when it names one). Sets the Debug Time override through the settings, as
+// its controls do; "off" gives the server's time back. Not /time, which the
+// interface already answers (the server's clock).
+// ---------------------------------------------------------------------------
+class DaytimeCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        const auto say = [&](const std::string& text) {
+            ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(text));
+            LOG_INFO("/daytime: ", text);
+        };
+        const auto arg = client_gps::parseTime(ctx.args);
+        if (!arg) {
+            say("Usage: /daytime <hours> | <hh:mm> | off, or a /gps Time: line");
+            return {};
+        }
+        char script[128];
+        if (arg->off) {
+            std::snprintf(script, sizeof(script), "WoweeSetSetting('dbgtimeoverride', false)");
+        } else {
+            std::snprintf(script, sizeof(script),
+                          "WoweeSetSetting('dbgtime', %.4f) WoweeSetSetting('dbgtimeoverride', true)",
+                          static_cast<double>(arg->hours));
+        }
+        if (auto* am = ctx.services.addonManager; am && am->isInitialized()) {
+            am->runScript(script);
+        } else if (auto* renderer = ctx.services.renderer) {
+            renderer->setGameTimeOverride(arg->off ? -1.0f : arg->hours);
+        }
+        say(arg->off ? std::string("Debug Time: off - the server's time of day again.")
+                     : "Debug Time: " + client_gps::clockText(arg->hours));
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"daytime"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "Draw the light at a time of day as /gps reported it (/daytime 19:30 | off)";
     }
 };
 
@@ -447,6 +495,7 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<ClimbCommand>());
     reg.registerCommand(std::make_unique<GpsCommand>());
     reg.registerCommand(std::make_unique<CamCommand>());
+    reg.registerCommand(std::make_unique<DaytimeCommand>());
     reg.registerCommand(std::make_unique<RunCommand>());
     reg.registerCommand(std::make_unique<DumpCommand>());
     reg.registerCommand(std::make_unique<ReloadCommand>());

@@ -10,6 +10,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace wowee::ui::client_gps {
 
@@ -88,6 +89,88 @@ inline std::optional<CameraPose> parseCamera(const std::string& text) {
     }
     if (got != 3 || c.distance < 0.0f) return std::nullopt;
     return c;
+}
+
+/// The time of day as a clock reads it, "19:30", from hours (wrapped into
+/// 0-24 and rounded to the minute).
+inline std::string clockText(float hours) {
+    float h = std::fmod(hours, 24.0f);
+    if (h < 0.0f) h += 24.0f;
+    int minutes = static_cast<int>(std::lround(h * 60.0f)) % (24 * 60);
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%02d:%02d", minutes / 60, minutes % 60);
+    return buf;
+}
+
+/// "Time: 19:30" - the time of day the lighting is drawn for - and, with the
+/// Debug Time override on (`overrideHours` at or over 0), "(Debug Time
+/// 19.50)" after it: what /daytime takes back to draw the same light again.
+inline std::string timeLine(float lightHours, float overrideHours) {
+    std::string out = "Time: " + clockText(lightHours);
+    if (overrideHours >= 0.0f) {
+        char buf[48];
+        std::snprintf(buf, sizeof(buf), " (Debug Time %.2f)", static_cast<double>(overrideHours));
+        out += buf;
+    }
+    return out;
+}
+
+/// /daytime's argument: hours ("19.5"), a clock ("19:30"),
+/// "off" for the server's time again, or a /gps "Time:" line - its Debug
+/// Time when it names one, its clock otherwise.
+struct TimeArg {
+    bool off = false;
+    float hours = 0.0f;
+};
+inline std::optional<TimeArg> parseTime(const std::string& text) {
+    auto number = [](const std::string& w, float& out) {
+        try {
+            size_t used = 0;
+            const float v = std::stof(w, &used);
+            if (used != w.size() || !std::isfinite(v)) return false;
+            out = v;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    };
+    auto clock = [&](const std::string& w, float& out) {
+        const size_t colon = w.find(':');
+        if (colon == std::string::npos || colon == 0 || colon + 1 >= w.size()) return false;
+        float h = 0.0f, m = 0.0f;
+        if (!number(w.substr(0, colon), h) || !number(w.substr(colon + 1), m)) return false;
+        if (m < 0.0f || m >= 60.0f) return false;
+        out = h + m / 60.0f;
+        return true;
+    };
+    std::istringstream in(text);
+    std::vector<std::string> words;
+    for (std::string w; in >> w;) {
+        while (!w.empty() && (w.back() == ')' || w.back() == ',')) w.pop_back();
+        while (!w.empty() && w.front() == '(') w.erase(w.begin());
+        if (!w.empty()) words.push_back(w);
+    }
+    if (words.empty()) return std::nullopt;
+    if (words.size() == 1 && (words[0] == "off" || words[0] == "server")) return TimeArg{true, 0.0f};
+    std::optional<float> clockHours, debugHours, plain;
+    for (size_t i = 0; i < words.size(); ++i) {
+        const std::string& w = words[i];
+        if (w == "Time:" || w == "Debug") continue;
+        float v = 0.0f;
+        if (w == "Time" && i > 0 && words[i - 1] == "Debug") continue;
+        if (i > 0 && words[i - 1] == "Time" && i > 1 && words[i - 2] == "Debug" && number(w, v)) {
+            debugHours = v;
+        } else if (clock(w, v)) {
+            clockHours = v;
+        } else if (number(w, v)) {
+            plain = v;
+        } else {
+            return std::nullopt;
+        }
+    }
+    const std::optional<float> h = debugHours ? debugHours : clockHours ? clockHours : plain;
+    if (!h || *h < 0.0f || *h > 24.0f) return std::nullopt;
+    return TimeArg{false, *h};
 }
 
 } // namespace wowee::ui::client_gps

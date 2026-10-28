@@ -53,3 +53,36 @@ TEST_CASE("/gps reports the camera as a line /cam takes back", "[client_gps]") {
     CHECK_FALSE(parseCamera("-1 0 0"));
     CHECK_FALSE(parseCamera("nan 0 0"));
 }
+
+TEST_CASE("/gps reports the time of day the light is drawn for", "[client_gps]") {
+    CHECK(clockText(19.5f) == "19:30");
+    CHECK(clockText(4.72f) == "04:43");
+    CHECK(clockText(23.999f) == "00:00");
+    CHECK(clockText(-0.5f) == "23:30");
+    CHECK(timeLine(14.08f, -1.0f) == "Time: 14:05");
+    // The Debug Time override, with the value /daytime takes back.
+    CHECK(timeLine(19.5f, 19.5f) == "Time: 19:30 (Debug Time 19.50)");
+}
+
+TEST_CASE("/daytime takes hours, a clock, off, or the /gps line", "[client_gps]") {
+    auto hours = [](const std::string& s) {
+        const auto t = parseTime(s);
+        REQUIRE(t);
+        CHECK_FALSE(t->off);
+        return t->hours;
+    };
+    CHECK(hours("19.5") == Catch::Approx(19.5f));
+    CHECK(hours("19:30") == Catch::Approx(19.5f));
+    CHECK(hours("4:43") == Catch::Approx(4.0f + 43.0f / 60.0f));
+    CHECK(hours("Time: 14:05") == Catch::Approx(14.0f + 5.0f / 60.0f));
+    // The override's own value wins over the rounded clock.
+    CHECK(hours("Time: 04:43 (Debug Time 4.72)") == Catch::Approx(4.72f));
+    const auto off = parseTime("off");
+    REQUIRE(off);
+    CHECK(off->off);
+    CHECK_FALSE(parseTime(""));
+    CHECK_FALSE(parseTime("noon"));
+    CHECK_FALSE(parseTime("25"));
+    CHECK_FALSE(parseTime("12:75"));
+    CHECK_FALSE(parseTime("-1"));
+}

@@ -779,6 +779,8 @@ public:
     /// server's; negative for the server's own (Settings > Debug Graphics,
     /// WOWEE_GAME_TIME). Only what is drawn: the server's clock is left alone.
     void setGameTimeOverride(float hours) { gameTimeOverride_ = hours; }
+    /// The Debug Time override in hours, or below 0 with none (/gps).
+    [[nodiscard]] float getGameTimeOverride() const { return gameTimeOverride_; }
     /// A multiplier on how thick that air is; 1 is the default mist.
     void setVolumetricFogDensity(float density) { volumetricFogDensity_ = glm::clamp(density, 0.0f, 3.0f); }
     /// Rays streaming from the sun across the finished picture. See SunShafts.
