@@ -1626,7 +1626,16 @@ void SpellHandler::noteGlobalCooldown(uint32_t spellId, uint64_t caster, spell_h
 }
 
 void SpellHandler::notePetCastFailed(uint32_t spellId) {
-    petHistory_.dropGlobalCooldown(spellId, historyNowMs());
+    // 0x00804720 zeroes the global cooldown of every record for the spell,
+    // prunes, and - only for a list it changed - runs 0x0053bac0. Its callers
+    // then close with 0x005d3090 whatever matched (0x00804780, and the same leg
+    // at the end of 0x00806c30): the pet bar asking the cooldown of every slot.
+    // A pet action refused by the realm - no target, an invalid target - left
+    // the swipe of its global cooldown cut into the button until the bar was
+    // next rebuilt.
+    if (petHistory_.dropGlobalCooldown(spellId, historyNowMs())) playerCooldownsChanged();
+    if (owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("PET_BAR_UPDATE_COOLDOWN", {});
 }
 
 void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
@@ -3657,14 +3666,22 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // leaves the history, unless refused as NOT_READY (0x00802970).
     {
         const int64_t now = historyNowMs();
+        bool heldLetGo = false;
         if (data.result != kSpellFailedNotReady) {
             loadSpellNameCache();
             const auto it = owner_.spellNameCacheRef().find(data.spellId);
-            if (it != owner_.spellNameCacheRef().end() && (it->second.attr & 0x2000000u) != 0)
+            if (it != owner_.spellNameCacheRef().end() && (it->second.attr & 0x2000000u) != 0) {
                 playerHistory_.event(data.spellId, now, true);
+                heldLetGo = true;
+            }
         }
-        playerHistory_.dropGlobalCooldown(data.spellId, now);
-        playerCooldownsChanged();
+        // The two legs are separate in 0x00809af0: 0x00804720 runs 0x0053bac0
+        // only over a list it changed, and the held-spell branch closes with
+        // the display leg on its own - 0x0053bac0, 0x0053cf10 for the on-hold
+        // sweep, then 0x005d6f10. WoWee fired 0x0053bac0 once for every reason
+        // and never had the bags' part at all.
+        if (playerHistory_.dropGlobalCooldown(data.spellId, now)) playerCooldownsChanged();
+        if (heldLetGo) cooldownHistoryChanged(false);
     }
     // Totem failures name tool item ids; request their info so a retry of the
     // craft can show the tool's name even if it wasn't cached yet.
@@ -3963,7 +3980,11 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                 h.categoryDuration = categoryCooldown(data.spellId, false);
                 h.onHold = (it->second.attr & 0x2000000u) != 0;  // 0x00801220
                 playerHistory_.add(h);
-                playerCooldownsChanged();
+                // 0x0080e1b0's player legs both close with the bags' leg, the
+                // same one the pet legs answer with 0x005d3090: a spell the
+                // character cast shared its cooldown with the bag slot that
+                // runs the same item, and that swirl only moves on this name.
+                cooldownHistoryChanged(false);
             }
         }
         // Cast from an item of the player's whose use spell it is: the item
