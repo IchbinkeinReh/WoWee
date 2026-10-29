@@ -28,7 +28,7 @@ namespace wowee::game {
 /// fills the visible list, and 0x005b04f0/0x005b0590 set and clear the watched
 /// pair - each of those computes the bit as 1 << (v - 1) or 1 << (v - 0x21) from
 /// the field at +0xc. The item the amount is counted from is +4 (0x005b0a90
-/// compares it against 43339 and 43340, and 0x005affd0 finds a table row by
+/// compares it against 43307 and 43308 (0xa92b, 0xa92c), and 0x005affd0 finds a table row by
 /// matching it against the row's item), and the category the row is filed under is
 /// +8 (0x005afe30 compares it against the category store's first field).
 ///

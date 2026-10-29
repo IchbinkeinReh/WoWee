@@ -162,7 +162,7 @@ TEST_CASE("The watched pair sets one currency at a time", "[updatefields][curren
 // through currencyTokensBackpack1/2, and the unused pair - on the record's fourth
 // field (0x005afe30, 0x005b0030 and 0x005b04f0/0x005b0590 each compute the bit from
 // it), takes the item the amount comes from out of the second (0x005b0a90 compares
-// it against 43339 and 43340, and 0x005affd0 finds a table row by matching it), and
+// it against 43307 and 43308 (0xa92b, 0xa92c), and 0x005affd0 finds a table row by matching it), and
 // files the row by the third (0x005afe30 against the category store's first field).
 // The record's first field is read by none of them, and it cannot be the id: the
 // masks are two dwords wide, so every id one of them addresses is inside 1..64.

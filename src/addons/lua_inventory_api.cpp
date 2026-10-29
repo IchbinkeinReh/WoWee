@@ -1122,13 +1122,14 @@ struct CurrencyRow {
 /// The two currencies this client does not count out of the bags.
 ///
 /// Both bindings stop and ask the player object for these two item ids before they
-/// count anything: 43339 is answered from PLAYER_FIELD_ARENA_CURRENCY and marked
-/// 1, and 43340 from PLAYER_FIELD_HONOR_CURRENCY and marked 2 (0x005b0680 and
+/// count anything: 43307 is answered from PLAYER_FIELD_ARENA_CURRENCY and marked
+/// 1, and 43308 from PLAYER_FIELD_HONOR_CURRENCY and marked 2 (0x005b0680 and
 /// 0x005b0a90 each compare the row's item against those two entries, and each
 /// reads the field at blob +0x11a8 / +0x11a4 - the pair the currency watchers were
 /// built on). Everything else is counted.
-constexpr uint32_t kArenaPointsItem = 43339;   // 0xa92b
-constexpr uint32_t kHonorPointsItem = 43340;   // 0xa92c
+constexpr uint32_t kArenaPointsItem = 43307;   // 0xa92b
+constexpr uint32_t kHonorPointsItem = 43308;   // 0xa92c
+static_assert(kArenaPointsItem == 0xa92b && kHonorPointsItem == 0xa92c, "the items 0x005b0680 compares against");
 
 uint32_t countItemInBags(game::GameHandler* gh, uint32_t itemId) {
     return gh->getInventory().countItem(itemId);
