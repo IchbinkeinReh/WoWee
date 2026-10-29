@@ -3049,7 +3049,7 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         // whatever they showed when they were opened, however many kills the
         // realm reports afterwards.
         bool pvpKillsChanged = false;
-        for (const std::pair<uint16_t, uint32_t> probe :
+        for (const std::pair<uint16_t, uint32_t>& probe :
              {std::pair<uint16_t, uint32_t>{fieldIndex(UF::PLAYER_FIELD_KILLS), 0xFFFFu},
               std::pair<uint16_t, uint32_t>{fieldIndex(UF::PLAYER_FIELD_TODAY_CONTRIBUTION), 0xFFFFFFFFu},
               std::pair<uint16_t, uint32_t>{fieldIndex(UF::PLAYER_FIELD_LIFETIME_HONORBALE_KILLS), 0xFFFFFFFFu}}) {

@@ -569,8 +569,11 @@ void sortLfgBrowserRows(std::vector<LfgBrowserRow>& out, const std::vector<LfgLi
             return (r.player != kLfgNoRow) == wantPlayers;
         });
     };
+    // playerArray by value: the comparator outlives this call, and a reference
+    // to its parameter left std::sort reading a dead stack slot for every
+    // comparison - which array's rules applied was whatever was there.
     const auto compare = [&](bool playerArray) {
-        return [&](const LfgBrowserRow& x, const LfgBrowserRow& y) {
+        return [&rows, &keys, &nameOf, playerArray](const LfgBrowserRow& x, const LfgBrowserRow& y) {
             return compareLfgBrowserRows(x, y, rows, keys, playerArray, nameOf) < 0;
         };
     };
