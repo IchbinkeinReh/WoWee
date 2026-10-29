@@ -2151,7 +2151,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
     float zoomLerp = 1.0f - std::exp(-ZOOM_SMOOTH_SPEED * deltaTime);
     currentDistance += (userTargetDistance - currentDistance) * zoomLerp;
 
-    // Limit max zoom when inside a WMO with a ceiling (building interior)
+    // The active WMO group for the collision below.
     // Throttle: only recheck every 10 frames or when position changes >2 units.
     if (wmoRenderer) {
         glm::vec3 wmoCheckDelta = targetPos - lastInsideWMOCheckPos;
@@ -2162,36 +2162,11 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
             lastInsideWMOCheckPos = targetPos;
         }
 
-        // Pulled in indoors, and let back out again.
-        //
-        // This is the same containment test IsIndoors answers with - the one a
-        // macro's [indoors] reads and the one that says a mount is not allowed
-        // here - asked at the player rather than at the camera. Indoors the
-        // camera is forever being pushed off a wall and let back out, and that
-        // is what turns a corridor into a bout of motion sickness.
-        // Interior groups only: cachedInsideWMO is any group's box, outdoor
-        // ones included, so every city street and the space under every
-        // archway capped the zoom at six yards with nothing in the way.
-        if (cachedInsideInteriorWMO) {
-            if (!indoorZoomHeld_) {
-                indoorZoomHeld_ = true;
-                outdoorTargetDistance_ = userTargetDistance;
-            }
-            if (userTargetDistance > MAX_DISTANCE_INTERIOR) {
-                userTargetDistance = MAX_DISTANCE_INTERIOR;
-            }
-        } else if (indoorZoomHeld_) {
-            indoorZoomHeld_ = false;
-            // Given back only if they have not chosen something closer while
-            // they were inside: their own wheel outranks the restore.
-            // Plus what the collision took: a zoom the sweep pulled in is not
-            // a zoom the player chose, and without this a walk down one
-            // corridor meant never getting the outdoor distance back.
-            if (userTargetDistance + collisionZoomDebt_ >= MAX_DISTANCE_INTERIOR - 0.01f &&
-                outdoorTargetDistance_ > userTargetDistance) {
-                userTargetDistance = outdoorTargetDistance_;
-            }
-        }
+        // No limit on the zoom indoors: the client's only limits are
+        // cameraDistanceMax times its factor, held to 50 (0x006000e0), and the
+        // collision. A six-yard cap here held the camera in every interior
+        // group - Silvermoon's covered streets among them - however far out
+        // the player had zoomed.
     }
 
     // ===== Camera collision (WMO raycast + terrain heightfield march) =====
@@ -4266,7 +4241,6 @@ float CameraController::clampedZoomDistance(float distance) const {
     // two numbers, so the game's own Max Camera Distance slider means something
     // at every position instead of only at its ends.
     float maxDist = MAX_DISTANCE_NORMAL * maxDistanceFactor_;
-    if (cachedInsideInteriorWMO) maxDist = std::min(maxDist, MAX_DISTANCE_INTERIOR);
     float minDist = MIN_DISTANCE;
     // A seat's limits hold the wheel too (0x0074c0e0).
     // The vehicle distance mode lets it out to 50 (0x006000e0).

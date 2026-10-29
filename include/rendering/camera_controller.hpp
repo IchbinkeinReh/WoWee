@@ -692,24 +692,6 @@ public:
     static constexpr float kMaxDistanceFactorLimit =
         MAX_DISTANCE_EXTENDED / MAX_DISTANCE_NORMAL;
 private:
-    /// Max zoom indoors.
-    ///
-    /// Twelve still reached the walls of an ordinary room, so the collision
-    /// sweep pulled the camera in and let it back out with every step and every
-    /// turn - and that in-and-out is the motion that makes people ill. Eight
-    /// sat inside most rooms but still met the walls of a corridor, which is
-    /// most of what an interior is: Undercity is corridors, and so are the inns
-    /// and barracks a player spends time in.
-    ///
-    /// A camera that never reaches a wall is never pushed off one, so the only
-    /// way to stop the sweep firing is to keep the camera inside the room. Six
-    /// clears the corridors. It is closer than the game's own default and that
-    /// is the trade: the alternative is a view that swims.
-    ///
-    /// Chosen rather than computed, because the room's own clearance is what
-    /// the sweep already measures and feeding that back would let a doorway set
-    /// the cap for the hall beyond it.
-    static constexpr float MAX_DISTANCE_INTERIOR = 6.0f;
     bool extendedZoom_ = false;
     static constexpr float ZOOM_SMOOTH_SPEED = 15.0f;  // How fast zoom eases
 public:
@@ -846,11 +828,6 @@ private:
     // Cached isInsideWMO result (throttled to avoid per-frame cost)
     bool cachedInsideWMO = false;
     bool cachedInsideInteriorWMO = false;
-    /// The zoom the player chose outdoors, kept while the indoor limit holds
-    /// them closer and given back on the way out - a limit that quietly keeps
-    /// their zoom is a setting changed behind their back.
-    float outdoorTargetDistance_ = 0.0f;
-    bool indoorZoomHeld_ = false;
     /// How much of the zoom the collision sweep has taken, and how long
     /// nothing has been in the way. See the pull in updateOrbitCamera.
     float collisionZoomDebt_ = 0.0f;
