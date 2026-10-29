@@ -209,6 +209,10 @@ private:
     void handleUserlistRemove(network::Packet& packet);
     void applyUserlistChange(const std::string& chanName, uint64_t guid,
                              uint8_t memberFlags, bool removing);
+    /// The channel's own flag byte, as every packet that carries one writes it
+    /// (the slot's +0x90), and CHANNEL_FLAGS_UPDATED (552) for it - raised only
+    /// when the byte moved and the channel is in the list to be told about.
+    void noteChannelFlags(const std::string& chanName, uint8_t chanFlags);
     void initializeChatLog();
     void logChatMessage(const MessageChatData& msg, const char* source);
     /// SMSG_EXPECTED_SPAM_RECORDS (0x00501c70): the server's spam regexes.

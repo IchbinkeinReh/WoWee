@@ -2082,6 +2082,38 @@ void ChatHandler::replyToLastWhisper(const std::string& message) {
 // Moved opcode handlers (from GameHandler::registerOpcodeHandlers)
 // ============================================================
 
+/// The channel's own flag byte, which three packet bodies carry and all three
+/// write the same way (0x00503990 with the roster, 0x00500380 beside a
+/// member's own flags, and 0x00504130/0x005042f0 doing the same compare and
+/// write): it
+/// lands on the slot's +0x90, the very byte YOU_JOINED left, and the channel
+/// is looked up in the display list *first* - a channel that is not listed
+/// keeps the byte it had rather than quietly absorbing the new one, so the
+/// next answer still knows it moved once it is listed. Only then, and only
+/// when the byte actually changed, is CHANNEL_FLAGS_UPDATED (552) raised, with
+/// nothing but that display index.
+///
+/// The panel listens for it (channelframe.lua:13) and answers by re-showing the
+/// channel's dropdown, but only for the channel whose menu is open (:25,
+/// `arg1 == ChannelListDropDown.clicked`) - which is how a player sees that the
+/// channel they right-clicked turned moderated, passworded or voiced while that
+/// menu sat open.
+///
+/// The client raises it a second time when a roster fill reaches the row that
+/// is the player's own, because the voice bits it folded into that row (0x20,
+/// 0x40, 0x80) come from its own voice session rather than from the wire and
+/// may have moved a moment ago. Nothing here keeps voice state, so that row
+/// would answer exactly as it did the first time; the second fire is not here.
+void ChatHandler::noteChannelFlags(const std::string& chanName, uint8_t chanFlags) {
+    if (chanName.empty()) return;
+    chat_channels::Slot* slot = channelSlots_.byName(chanName);
+    if (slot == nullptr) return;
+    const int idx = getChannelIndex(chanName);
+    if (idx <= 0 || slot->flags == chanFlags) return;
+    slot->flags = chanFlags;
+    owner_.fireAddonEvent("CHANNEL_FLAGS_UPDATED", {std::to_string(idx)});
+}
+
 void ChatHandler::handleChannelList(network::Packet& packet) {
     // A channel type byte comes first - Channel::List writes `uint8(1)` before
     // the name - and this read the name straight from it. The stray byte does
@@ -2106,9 +2138,11 @@ void ChatHandler::handleChannelList(network::Packet& packet) {
     }
     std::string chanName = packet.readString();
     if (!packet.hasRemaining(5)) return;
-    /*uint8_t chanFlags =*/ packet.readUInt8();
+    const uint8_t chanFlags = packet.readUInt8();
     uint32_t memberCount = packet.readUInt32();
     memberCount = std::min(memberCount, 200u);
+
+    noteChannelFlags(chanName, chanFlags);   // before a single member is read
 
     // The server's own member flags. What was here read 0x01 as moderator and
     // 0x02 as muted, so the channel's owner was announced as its moderator and
@@ -2247,17 +2281,24 @@ void ChatHandler::handleUserlistAdd(network::Packet& packet) {
     if (!packet.hasRemaining(14)) return;
     const uint64_t guid = packet.readUInt64();
     const uint8_t memberFlags = packet.readUInt8();
-    packet.readUInt8();    // the channel's own flags
+    const uint8_t chanFlags = packet.readUInt8();  // the channel's own flags
     packet.readUInt32();   // how many are in it now
-    applyUserlistChange(packet.readString(), guid, memberFlags, /*removing=*/false);
+    const std::string chanName = packet.readString();
+    // The channel's byte goes onto the slot before the member row is touched,
+    // which is the order 0x00500380 reads them in - and it is what a menu that
+    // is already open is waiting to hear about.
+    noteChannelFlags(chanName, chanFlags);
+    applyUserlistChange(chanName, guid, memberFlags, /*removing=*/false);
 }
 
 void ChatHandler::handleUserlistRemove(network::Packet& packet) {
     if (!packet.hasRemaining(13)) return;
     const uint64_t guid = packet.readUInt64();
-    packet.readUInt8();    // the channel's own flags
+    const uint8_t chanFlags = packet.readUInt8();  // the channel's own flags
     packet.readUInt32();   // how many are in it now
-    applyUserlistChange(packet.readString(), guid, 0, /*removing=*/true);
+    const std::string chanName = packet.readString();
+    noteChannelFlags(chanName, chanFlags);         // same order as the add
+    applyUserlistChange(chanName, guid, 0, /*removing=*/true);
 }
 
 // ============================================================
