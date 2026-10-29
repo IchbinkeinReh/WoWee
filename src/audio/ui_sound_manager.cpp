@@ -421,7 +421,10 @@ void UiSoundManager::playQuestUpdate() { playSound(questUpdateSounds_); }
 /// one-at-a-time bit, which is what keeps the coin of a fast multi-loot from
 /// stacking on itself. Asked by name rather than through the clip index above
 /// because PickUpCoin (15034) names the same file at 0.8 without that bit, so a
-/// leaf cannot say which of the two is playing; this site is the first.
+/// leaf cannot say which of the two is playing.  The loot window asked this
+/// first; the honour and arena counters ask it the same way when either of them
+/// comes up (0x006da3c0 and 0x006da430 each call 0x004c74a0 with this exact
+/// string), the row and not a clip index being what they both ask for.
 void UiSoundManager::playLootCoinSmall() {
     if (playByName("LOOTWINDOWCOINSOUND") != UiPlayResult::Unavailable) return;
     playSound(lootCoinSmallSounds_);   // no table: the clip preloaded at startup

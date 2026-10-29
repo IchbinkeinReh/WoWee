@@ -17,6 +17,8 @@
 #include "game/movement_handler.hpp"
 #include "game/combat_handler.hpp"
 #include "game/spell_unit_target.hpp"
+#include "audio/audio_coordinator.hpp"
+#include "audio/ui_sound_manager.hpp"
 #include "core/logger.hpp"
 #include "game/interface_text.hpp"
 #include "core/coordinates.hpp"
@@ -3038,6 +3040,11 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         // the PvP panel kept the points it had when it opened, however much the
         // realm paid out afterwards, and the row stayed empty however much was
         // held.
+        //
+        // The counters are probed one after the other rather than tested as a
+        // pair because the client watches them one after the other, and each
+        // watcher gets its own callback: two counters moving in one block is two
+        // coin sounds asked for, not one.
         bool currencyChanged = false;
         for (const uint16_t probe : {fieldIndex(UF::PLAYER_FIELD_HONOR_CURRENCY),
                                      fieldIndex(UF::PLAYER_FIELD_ARENA_CURRENCY)}) {
@@ -3045,7 +3052,26 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             const auto now = block.fields.find(probe);
             if (now == block.fields.end()) continue;
             const auto was = lastFields.find(probe);
-            if ((was == lastFields.end() ? 0u : was->second) != now->second) currencyChanged = true;
+            const uint32_t oldVal = (was == lastFields.end()) ? 0u : was->second;
+            if (oldVal == now->second) continue;
+            currencyChanged = true;
+            // Both callbacks play the loot window's coin, and only when the
+            // counter came up (0x006da3c0, 0x006da430): each compares the field
+            // as stored against what the watcher was handed, and stores it only
+            // in the direction that means an increase.  Which side is which can
+            // be read off the watcher mechanism itself - the notify driver
+            // (0x004d5550) writes no field storage at all, the comparison inside
+            // it (0x004d5150) reads the watcher's own copy at +0x1c against
+            // another at +0x20, and the copy at +0x1c is what the commit
+            // (0x004d52b0) memcpys into the object afterwards.  So at the moment
+            // the callback runs, object storage holds the previous number and the
+            // pointer it receives the new one, which is the same pairing this
+            // loop has: the snapshot against block.fields.
+            if (oldVal < now->second) {
+                if (auto* ac = owner_.services().audioCoordinator) {
+                    if (auto* sfx = ac->getUiSoundManager()) sfx->playLootCoinSmall();
+                }
+            }
         }
         if (currencyChanged) {
             pendingEvents_.emit("HONOR_CURRENCY_UPDATE", {});
