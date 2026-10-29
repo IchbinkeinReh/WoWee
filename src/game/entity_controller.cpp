@@ -806,7 +806,8 @@ EntityController::UnitFieldIndices EntityController::UnitFieldIndices::resolve()
         .minDamage = fieldIndex(UF::UNIT_FIELD_MINDAMAGE),
         .maxDamage = fieldIndex(UF::UNIT_FIELD_MAXDAMAGE),
         .rangedDamage = fieldIndex(UF::UNIT_FIELD_MINRANGEDDAMAGE),
-        .attackTime = fieldIndex(UF::UNIT_FIELD_BASEATTACKTIME)
+        .attackTime = fieldIndex(UF::UNIT_FIELD_BASEATTACKTIME),
+        .rangedAttackPower = fieldIndex(UF::UNIT_FIELD_RANGED_ATTACK_POWER)
     };
 }
 
@@ -1144,6 +1145,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
     bool petDamageChanged = false;
     bool petAttackPowerChanged = false;
     bool petRangedDamageChanged = false;
+    bool petRangedPowerChanged = false;
     bool petAttackSpeedChanged = false;
     bool powerTypeMoved = false;
     uint8_t powersMoved = 0, maxPowersMoved = 0;
@@ -1401,10 +1403,22 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 owner_.otherPlayerMountCallbackRef()(block.guid, val);
             }
             unit->setMountDisplayId(val);
-        } else if (ufi.attackPower != 0xFFFF && key == ufi.attackPower &&
-                   block.guid == owner_.petGuidRef()) {
-            owner_.petAttackPowerRef() = static_cast<int32_t>(val);
+        } else if (ufi.attackPower != 0xFFFF && key >= ufi.attackPower &&
+                   key < ufi.attackPower + 3 && block.guid == owner_.petGuidRef()) {
+            // One run of three - the base, the mods dword (a positive and a
+            // negative signed half) and the float multiplier the client scales
+            // every attack-power answer by (0x00610b60). The cache keeps the
+            // base, because that is the figure the rest of WoWee quotes; the
+            // other two still have to fire, because an aura that writes the
+            // multiplier moves the number the sheet prints.
+            if (key == ufi.attackPower) owner_.petAttackPowerRef() = static_cast<int32_t>(val);
             petAttackPowerChanged = true;
+        } else if (ufi.rangedAttackPower != 0xFFFF &&
+                   key >= ufi.rangedAttackPower && key < ufi.rangedAttackPower + 3 &&
+                   block.guid == owner_.petGuidRef()) {
+            // The ranged twin, 126 through 128. Nothing caches it:
+            // UnitRangedAttackPower reads the pet's own fields.
+            petRangedPowerChanged = true;
         } else if (ufi.minDamage != 0xFFFF && key == ufi.minDamage &&
                    block.guid == owner_.petGuidRef()) {
             // A float, sent as its bits like every other float field.
@@ -1541,8 +1555,9 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         owner_.addonEventCallbackRef()("UNIT_RESISTANCES", {"pet"});
     }
     // ...and the same for the rest of the damage family that tab registers: the
-    // pet sheet listens for UNIT_DAMAGE, UNIT_RANGEDDAMAGE, UNIT_ATTACK_SPEED
-    // and UNIT_ATTACK_POWER, and unlike the player's sheet it has no combined
+    // pet sheet listens for UNIT_DAMAGE, UNIT_RANGEDDAMAGE, UNIT_ATTACK_SPEED,
+    // UNIT_ATTACK_POWER and UNIT_RANGED_ATTACK_POWER, and unlike the player's
+    // sheet it has no combined
     // branch to fall back on - PaperDollFrame recomputes its damage row on any
     // of the power or stat names, which is the only reason the player's numbers
     // ever moved here. PetPaperDollFrame_OnEvent ends in
@@ -1550,14 +1565,15 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
     // has to be "pet" for the frame to take any of them at all; that is also
     // why this fires for the owner's pet and for no other unit - the shipped
     // frames answer nothing else, and firing a name at a unit no frame resolves
-    // would be volume without effect. The values themselves were already right:
-    // UnitDamage and UnitRangedDamage read the pet's own fields. What was
-    // missing was the redraw, which is the whole of these four.
+    // would be volume without effect. The values came to be right when the
+    // bindings started reading the pet's own fields; what was missing was the
+    // redraw, which is the whole of these five.
     if (auto& fire = owner_.addonEventCallbackRef()) {
         if (petDamageChanged) fire("UNIT_DAMAGE", {"pet"});
         if (petRangedDamageChanged) fire("UNIT_RANGEDDAMAGE", {"pet"});
         if (petAttackSpeedChanged) fire("UNIT_ATTACK_SPEED", {"pet"});
         if (petAttackPowerChanged) fire("UNIT_ATTACK_POWER", {"pet"});
+        if (petRangedPowerChanged) fire("UNIT_RANGED_ATTACK_POWER", {"pet"});
     }
 
     return result;
@@ -1793,16 +1809,32 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             if (!isCreate) pendingEvents_.emit("PLAYER_FLAGS_CHANGED", {"player"});
           }
         }
-        else if (pfi.meleeAP  != 0xFFFF && key == pfi.meleeAP)  {
-            const int32_t ap = static_cast<int32_t>(val);
-            if (owner_.playerMeleeAPRef() != ap) powerChanged = true;
-            owner_.playerMeleeAPRef() = ap;
+        else if (pfi.meleeAP  != 0xFFFF && key >= pfi.meleeAP && key < pfi.meleeAP + 3)  {
+            // Three fields, not one: the base, the mods dword (a positive and a
+            // negative signed half) and the float multiplier that every
+            // attack-power answer is scaled by (0x00610b60). The cache holds the
+            // base because that is the figure the rest of WoWee quotes, but the
+            // two mod fields move the number on the sheet as surely as the base
+            // does - an aura like the fractional attack-power kind writes one of
+            // them and nothing else - so they raise the same event.
+            if (key == pfi.meleeAP) {
+                const int32_t ap = static_cast<int32_t>(val);
+                if (owner_.playerMeleeAPRef() != ap) powerChanged = true;
+                owner_.playerMeleeAPRef() = ap;
+            } else {
+                powerChanged = true;
+            }
         }
-        else if (pfi.rangedAP != 0xFFFF && key == pfi.rangedAP) {
-            const int32_t ap = static_cast<int32_t>(val);
-            // Its own flag, because its own event is the one that lands.
-            if (owner_.playerRangedAPRef() != ap) rangedPowerChanged = true;
-            owner_.playerRangedAPRef() = ap;
+        else if (pfi.rangedAP != 0xFFFF && key >= pfi.rangedAP && key < pfi.rangedAP + 3) {
+            // Its own flag, because its own event is the one that lands; and the
+            // same three-field run as the melee one, 127 and 128.
+            if (key == pfi.rangedAP) {
+                const int32_t ap = static_cast<int32_t>(val);
+                if (owner_.playerRangedAPRef() != ap) rangedPowerChanged = true;
+                owner_.playerRangedAPRef() = ap;
+            } else {
+                rangedPowerChanged = true;
+            }
         }
         else if (pfi.spDmg1   != 0xFFFF && key >= pfi.spDmg1 && key < pfi.spDmg1 + 7) {
             const int32_t dmgVal = static_cast<int32_t>(val);

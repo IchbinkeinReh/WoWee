@@ -300,6 +300,22 @@ enum class UF : uint16_t {
     UNIT_FIELD_MINRANGEDDAMAGE,
     UNIT_FIELD_MAXRANGEDDAMAGE,
 
+    /// WotLK: the two attack-power mod fields beside each base. UnitAttackPower
+    /// (0x00610b60) reads three dwords of the blob - +0x1d4 the base (WoWee's
+    /// ATTACK_POWER, 123), +0x1d8 the mods, +0x1dc a float multiplier - and
+    /// multiplies every answer it pushes by (multiplier + 1). The mods dword is
+    /// two signed halves: +0x1d8 low for the positive buff, +0x1da high for the
+    /// negative one, which is why one field carries both. UnitRangedAttackPower
+    /// (0x00610ca0) does the same with +0x1e0/+0x1e4/+0x1e8, bases 126, mods
+    /// 127, multiplier 128. Each pair is wedged between two fields this table
+    /// already has - 123 and 126 on one side, 126 and MINRANGEDDAMAGE's 129 on
+    /// the other - and the client's field-name table lists them in that order
+    /// (ATTACK_POWER_MODS at 0x009f8b74, …MULTIPLIER at 0x009f8b50).
+    UNIT_FIELD_ATTACK_POWER_MODS,
+    UNIT_FIELD_ATTACK_POWER_MULTIPLIER,
+    UNIT_FIELD_RANGED_ATTACK_POWER_MODS,
+    UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER,
+
     COUNT
 };
 

@@ -233,3 +233,34 @@ TEST_CASE("the two damage pairs sit where the client reads them",
     CHECK(wotlk.at("UNIT_FIELD_MAXRANGEDDAMAGE") + 1 ==
           wotlk.at("UNIT_FIELD_POWER_COST_MODIFIER"));
 }
+
+TEST_CASE("each attack-power base is followed by its mods and its multiplier",
+          "[update-fields]") {
+    // UnitAttackPower (0x00610b60) reads three consecutive dwords of the field
+    // blob - +0x1d4, +0x1d8, +0x1dc - and multiplies every answer by the float
+    // at the end of the run; UnitRangedAttackPower (0x00610ca0) reads the run
+    // again three dwords later at +0x1e0, +0x1e4, +0x1e8. The bases are 123 and
+    // 126, which this table has always had, so each mods/multiplier pair is
+    // pinned between the base before it and the next one after it - and the
+    // ranged pair has MINRANGEDDAMAGE's 129 as its upper neighbour too.
+    //
+    // The multiplier is a float, which makes a wrong index here the quiet kind
+    // of wrong: the ranged attack power base read as a multiplier scales every
+    // attack-power number on the sheet by roughly two hundred million.
+    const auto wotlk = declaredFields("wotlk");
+    for (const char* name : {"UNIT_FIELD_ATTACK_POWER_MODS", "UNIT_FIELD_ATTACK_POWER_MULTIPLIER",
+                             "UNIT_FIELD_RANGED_ATTACK_POWER_MODS",
+                             "UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER"})
+        REQUIRE(wotlk.count(name) == 1);
+    CHECK(wotlk.at("UNIT_FIELD_ATTACK_POWER") + 1 == wotlk.at("UNIT_FIELD_ATTACK_POWER_MODS"));
+    CHECK(wotlk.at("UNIT_FIELD_ATTACK_POWER_MODS") + 1 ==
+          wotlk.at("UNIT_FIELD_ATTACK_POWER_MULTIPLIER"));
+    CHECK(wotlk.at("UNIT_FIELD_ATTACK_POWER_MULTIPLIER") + 1 ==
+          wotlk.at("UNIT_FIELD_RANGED_ATTACK_POWER"));
+    CHECK(wotlk.at("UNIT_FIELD_RANGED_ATTACK_POWER") + 1 ==
+          wotlk.at("UNIT_FIELD_RANGED_ATTACK_POWER_MODS"));
+    CHECK(wotlk.at("UNIT_FIELD_RANGED_ATTACK_POWER_MODS") + 1 ==
+          wotlk.at("UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER"));
+    CHECK(wotlk.at("UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER") + 1 ==
+          wotlk.at("UNIT_FIELD_MINRANGEDDAMAGE"));
+}

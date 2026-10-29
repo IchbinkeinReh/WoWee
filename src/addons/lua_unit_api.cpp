@@ -10,6 +10,7 @@
 #include "game/power_prediction.hpp"
 #include "game/unit_level_display.hpp"
 #include <cstdlib>
+#include <cmath>
 #include <bit>
 #include "game/interface_text.hpp"
 
@@ -1570,37 +1571,94 @@ static int lua_GetTimeToWellRested(lua_State* L) {
 // The server sends most of what these want; where it does not, the honest
 // answer is a zero of the right shape rather than nothing.
 
-/// UnitAttackPower(unit) → base, positive buff, negative buff.
-///
-/// The server sends one effective number, not the three parts, so it is
-/// reported as all base and no buffs. The sheet adds them together, which
-/// gives the right total either way.
-static int lua_UnitAttackPower(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    // Whose. PaperDollFrame_SetAttackPower is shared and the pet tab calls it
-    // with "Pet", so the pet's line showed the hunter's attack power.
-    std::string who(luaL_optstring(L, 1, "player"));
-    toLowerInPlace(who);
-    if (who == "pet") {
-        const int32_t petAp = gh ? gh->getPetAttackPower() : 0;
-        lua_pushnumber(L, petAp > 0 ? petAp : 0);
-        lua_pushnumber(L, 0);
-        lua_pushnumber(L, 0);
-        return 3;
-    }
-    const int32_t ap = gh ? gh->getMeleeAttackPower() : -1;
-    lua_pushnumber(L, ap > 0 ? ap : 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
+/// The three attack-power answers the client works out for itself (0x00610b60
+/// melee, 0x00610ca0 ranged): each one is (multiplier + 1) times a field, with
+/// the mods dword split into its two signed halves for the positive and the
+/// negative buff. Rounded to a whole number, because that is what the client
+/// casts to before pushing. A mod or multiplier field the expansion does not
+/// name reads as no mod, which leaves the base alone.
+struct AttackPowerAnswer {
+    long long base = 0, positive = 0, negative = 0;
+};
+static AttackPowerAnswer attackPowerAnswer(game::Unit* unit, game::UF baseField,
+                                           game::UF modsField, game::UF multField) {
+    const uint16_t baseIdx = game::fieldIndex(baseField);
+    const uint16_t modsIdx = game::fieldIndex(modsField);
+    const uint16_t multIdx = game::fieldIndex(multField);
+    if (!unit || baseIdx == 0xFFFF) return {};
+    const uint32_t mods = (modsIdx == 0xFFFF) ? 0u : unit->getField(modsIdx);
+    const double scale = (multIdx == 0xFFFF)
+                             ? 1.0
+                             : static_cast<double>(std::bit_cast<float>(unit->getField(multIdx))) + 1.0;
+    return {
+        std::llround(scale * static_cast<int32_t>(unit->getField(baseIdx))),
+        std::llround(scale * static_cast<int16_t>(mods & 0xFFFF)),
+        std::llround(scale * static_cast<int16_t>(mods >> 16)),
+    };
+}
+static int pushAttackPower(lua_State* L, const AttackPowerAnswer& a) {
+    lua_pushnumber(L, static_cast<double>(a.base));
+    lua_pushnumber(L, static_cast<double>(a.positive));
+    lua_pushnumber(L, static_cast<double>(a.negative));
     return 3;
 }
+
+/// UnitAttackPower(unit) → base, positive buff, negative buff.
+///
+/// Three fields answer this and the client does the arithmetic itself:
+/// 0x00610b60 takes the attack power at 123, the mods dword at 124 - one field
+/// holding two signed halves, positive low and negative high - and a float
+/// multiplier at 125, then multiplies all three answers by (1 + multiplier).
+/// WoWee had the base alone, so it claimed there were no buffs when the realm
+/// had just named them, and an aura that writes the multiplier field - the
+/// fraction-of-attack-power kind rather than the flat kind - left the sheet
+/// quoting the unscaled figure.
+///
+/// The client answers 0, 0, 0 for a unit whose guid's high dword has bit 3
+/// clear, the bit the realm sets in UNIT_FIELD_FLAGS as
+/// UNIT_FLAG_PLAYER_CONTROLLED: the player and its own pet both carry it, a
+/// guardian, a totem or a creature does not. PaperDollFrame_SetAttackPower is
+/// shared and the pet tab calls it with "pet", which is how the pet's line came
+/// to print its owner's attack power - the binding knew only the player's
+/// number and the handler's cached pet figure, and the cache is left here as
+/// the answer for a pet whose entity this cannot reach.
+static int lua_UnitAttackPower(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    std::string who(luaL_optstring(L, 1, "player"));
+    toLowerInPlace(who);
+    auto* unit = resolveUnit(L, who.c_str());
+    if (unit) {
+        if (!(unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED))
+            return pushAttackPower(L, {});
+        return pushAttackPower(L, attackPowerAnswer(unit, game::UF::UNIT_FIELD_ATTACK_POWER,
+                                                    game::UF::UNIT_FIELD_ATTACK_POWER_MODS,
+                                                    game::UF::UNIT_FIELD_ATTACK_POWER_MULTIPLIER));
+    }
+    const int32_t ap = who == "pet" ? (gh ? gh->getPetAttackPower() : 0)
+                                    : (gh ? gh->getMeleeAttackPower() : 0);
+    return pushAttackPower(L, {ap > 0 ? ap : 0, 0, 0});
+}
+
+/// UnitRangedAttackPower(unit) → base, positive buff, negative buff. The ranged
+/// twin (0x00610ca0), reading 126, 127 and 128 the same way. It used to ignore
+/// its argument altogether and answer the player's ranged attack power for
+/// whoever asked, including the pet - the pet sheet registers
+/// UNIT_RANGED_ATTACK_POWER and asks for "pet".
 static int lua_UnitRangedAttackPower(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int32_t ap = gh ? gh->getRangedAttackPower() : -1;
-    lua_pushnumber(L, ap > 0 ? ap : 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    return 3;
+    std::string who(luaL_optstring(L, 1, "player"));
+    toLowerInPlace(who);
+    auto* unit = resolveUnit(L, who.c_str());
+    if (unit) {
+        if (!(unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED))
+            return pushAttackPower(L, {});
+        return pushAttackPower(L, attackPowerAnswer(
+                                      unit, game::UF::UNIT_FIELD_RANGED_ATTACK_POWER,
+                                      game::UF::UNIT_FIELD_RANGED_ATTACK_POWER_MODS,
+                                      game::UF::UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER));
+    }
+    const int32_t ap = gh ? gh->getRangedAttackPower() : 0;
+    return pushAttackPower(L, {ap > 0 ? ap : 0, 0, 0});
 }
 
 /// UnitDefense(unit) → base, modifier. Base defense skill is five per level -
@@ -1714,8 +1772,11 @@ static double fieldAsFloat(game::Unit* unit, game::UF field) {
 /// the pet - showing bare hands.
 ///
 /// The last three are the physical-school bonuses. The client answers them only
-/// for a unit whose guid's high dword has bit 4 set, the player-controlled
-/// flag, and then from 0x00578210, 0x00578250 and 0x00578290 - accessors of a
+/// for a unit whose guid's high dword has bit 4 set - the one that lets it
+/// reach into the unit's player extension, since the branch dereferences
+/// `unit + 0x1008` and then checks the unit really is the local player before
+/// using what it finds there - and from 0x00578210, 0x00578250 and
+/// 0x00578290, accessors of a
 /// figure the client keeps for its own character sheet rather than of an update
 /// field, and one WoWee does not build. Everyone else gets 0, 0 and 1, which is
 /// also what the client gives them; the cost of not answering them for the
