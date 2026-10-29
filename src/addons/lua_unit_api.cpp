@@ -1618,33 +1618,77 @@ static int lua_UnitPlayerOrPetInRaid(lua_State* L) {
     return lua_UnitPlayerOrPetInParty(L);
 }
 
-/// Talent points, and the two the interface actually reads: unspent points and
-/// the total spent. The micro button flashes on the first.
-// UnitCharacterPoints(unit) → talent points, primary professions still learnable
+// UnitCharacterPoints(unit) → the two points fields, talent points then skill points
 //
-// Two values. The trainer's confirmation reads the second bare -
-// `if ( cp2 < MAX_LEARNABLE_PROFESSIONS )` - to decide whether it is offering a
-// first profession or a second, so returning one value made confirming a
-// profession an error rather than a question.
-//
-// Two is the limit, and a primary profession is category 11 in SkillLine.dbc,
-// which is the same test isProfessionSpell uses rather than a second opinion
-// about what counts.
+/// 0x00610fb0 answers nothing but two dwords of the player's own field blob:
+/// 0xda0 and 0xda4, the pair the client's descriptor table names
+/// PLAYER_CHARACTER_POINTS1 and PLAYER_CHARACTER_POINTS2 and 0x005e8470 puts
+/// one eight-byte watch over (see the watcher in entity_controller, which is
+/// the only thing in the client that raises CHARACTER_POINTS_CHANGED). Both are
+/// read through the extended-field pointer at object+0x1008 as **signed** ints -
+/// `*(int *)` - and pushed as numbers, and the loop runs `0xda0 → < 0xda8`, so
+/// there are always exactly two values once the argument test is passed.
+///
+/// Two tests decide whether either is anything but 0: the unit has to be
+/// player-typed - `*(object+8 dword 2) >> 4 & 1`, OBJECT_FIELD_TYPE's 0x10 bit,
+/// the same test 0x005ce540 makes through Player_C.h directly - and its guid,
+/// the qword at the head of that same object blob, has to be the local player's.
+/// A player who is not the local player fails the second test and reads 0 for
+/// each value on its own; anything else fails the first and skips the loop, and
+/// both answers are the same two zeroes.
+///
+/// With no argument at all the client prints "Usage: UnitCharacterPoints(
+/// \"unit\")" and leaves **no** values on the stack, as with the other unit
+/// calls that have no default.
+///
+/// WoWee answered this from two of its own tallies: the talent store the talent
+/// packet fills, and a count of primary professions still learnable (SkillLine
+/// .category 11 against a limit of two). The second is not a field at all, and
+/// the first is the wrong one of two stores the client keeps apart - the packet
+/// feeds its talent frame, the fields feed this call. Both readers of the
+/// second value inside WoWee already disagreed with each other:
+/// GameHandler::getSkillPoints() (game_handler_skill_ups.cpp:22) answers that
+/// same 0xda4 dword, and GetAdjustedSkillPoints - 0x005ce540, which reads the
+/// field here and subtracts the pending trainer cost - subtracts the pending
+/// cost from *that*, so the skill window's bar and the number beside it came
+/// from the field while the call above them came from a tally. What the
+/// profession limit was wanted for is blizzard_trainerui.lua:29,
+/// `if ( cp2 < MAX_LEARNABLE_PROFESSIONS )` picking between
+/// PROFESSION_CONFIRMATION1 and 2; MAX_LEARNABLE_PROFESSIONS is 2, and the
+/// tally sat in the same range as a field the realm sends, which is why the
+/// confirmation never looked wrong. chatframe.lua:2607 is the other reader of
+/// the second value, printing LEVEL_UP_SKILL_POINTS with it after the event
+/// says points were gained - the field again, and the same one the watcher
+/// named in its second argument.
 static int lua_UnitCharacterPoints(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "player");
+    const char* name = lua_tostring(L, 1);
+    if (!name) return 0;  // the client's usage line: no values at all
     auto* gh = getGameHandler(L);
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    if (!gh || uidStr != "player") { lua_pushinteger(L, 0); lua_pushinteger(L, 0); return 2; }
 
-    constexpr int kMaxPrimaryProfessions = 2;
-    int known = 0;
-    for (const auto& [skillId, skill] : gh->getPlayerSkills()) {
-        (void)skill;
-        if (gh->getSkillCategory(skillId) == 11) ++known;
+    uint32_t talentPoints = 0;
+    uint32_t skillPoints = 0;
+    if (gh) {
+        std::string uid(name);
+        toLowerInPlace(uid);
+        const uint64_t who = resolveUnitGuid(gh, uid);
+        // The local player, and player-typed: both tests, one answer.  A name
+        // that resolves to another player gets past the first and fails the
+        // second, which is the same pair of zeroes either way.
+        if (who != 0 && who == gh->getPlayerGuid()) {
+            if (auto* unit = resolveUnit(L, name)) {
+                if (const uint16_t idx = game::fieldIndex(game::UF::PLAYER_CHARACTER_POINTS1);
+                    idx != 0xFFFF)
+                    talentPoints = unit->getField(idx);
+                if (const uint16_t idx = game::fieldIndex(game::UF::PLAYER_CHARACTER_POINTS2);
+                    idx != 0xFFFF)
+                    skillPoints = unit->getField(idx);
+            }
+        }
     }
-    lua_pushinteger(L, static_cast<lua_Integer>(gh->getUnspentTalentPoints()));
-    lua_pushinteger(L, std::max(0, kMaxPrimaryProfessions - known));
+    // Signed, as the client reads them: a negative points value is a real
+    // number there, not a wrapped one.
+    lua_pushinteger(L, static_cast<lua_Integer>(static_cast<int32_t>(talentPoints)));
+    lua_pushinteger(L, static_cast<lua_Integer>(static_cast<int32_t>(skillPoints)));
     return 2;
 }
 
