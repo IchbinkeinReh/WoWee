@@ -3458,10 +3458,31 @@ void registerUnitLuaAPI(lua_State* L) {
             lua_pushboolean(L, (g1 != 0 && g2 != 0 && gh->unitMayAssist(g1, g2)) ? 1 : 0);
             return 1;
         }},
+                // GetPVPRankInfo(rank [, unit]) - 0x00611cb0.  The two answers
+                // come or go together, and the number is not the rank.  The name
+                // is a token lookup, "PVP_RANK_%d_%d" of the rank and of the
+                // side 0x006d6e90 answers from the unit's display race: the race
+                // row's faction template, whose flags give 1 Alliance, 2 Horde
+                // and 0 for neither.  The unit has to carry the guid's player
+                // extension bit or the lookup is skipped, and the name itself
+                // comes from 0x00819d40 - the client's own string store, not a
+                // table the realm sends, so there is none to give here.  With no
+                // name the client pushes nil and a plain 0; with one it pushes
+                // rank-4, or rank-5 for the four leader ranks below 5.  Handing
+                // back an empty string and the rank unchanged was wrong twice:
+                // both callers test `if (not rankName) rankName = NONE`
+                // (honorframe.lua:44-46, inspecthonorframe.lua:43-45) and "" is
+                // truthy in Lua, so those lines printed a blank where the
+                // original prints NONE; and the number goes into
+                // honorframe.lua:60's Interface\PvPRankBadges\PvPRankNN, so the
+                // unshifted rank asks that line for a badge the client never
+                // numbered.  Against a 3.3.5 realm the rank reaching this is 0
+                // anyway - its source is a byte clamped to zero below 5, see
+                // GetPVPLifetimeStats - so nil and 0 are what the original
+                // answers in practice, not only in the no-name case.
                 {"GetPVPRankInfo", [](lua_State* L) -> int {
-            const int rank = static_cast<int>(luaL_optnumber(L, 1, 0));
-            lua_pushstring(L, "");          // rank name
-            lua_pushnumber(L, rank > 0 ? rank : 0);
+            lua_pushnil(L);
+            lua_pushnumber(L, 0);
             return 2;
         }},
                 // Honour and arena totals, in the shapes their panels expect.
