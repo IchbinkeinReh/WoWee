@@ -2999,7 +2999,7 @@ void SocialHandler::handlePartyMemberStats(network::Packet& packet, bool isFull)
             if (moved & 0x0001) {
                 owner_.addonEventCallbackRef()("UNIT_HEALTH", {unitId});
                 firePower(0x0001, power_prediction::kPowerEvents);
-                moved &= ~0x0011u;
+                moved &= ~0x0012u;  // 0x006cf740: & 0xffffffed, the health and power flags
             }
             if (moved & 0x0040) owner_.addonEventCallbackRef()("UNIT_LEVEL", {unitId});
             if (moved & 0x0002) owner_.addonEventCallbackRef()("UNIT_HEALTH", {unitId});
