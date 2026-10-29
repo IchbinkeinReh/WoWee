@@ -958,6 +958,17 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     if (const char* view = cameraViewCVarDefault(n)) { lua_pushstring(L, view); return; }
     if (n == "cameraview") { lua_pushstring(L, "2"); return; }
     if (n == "cameraviewblendstyle") { lua_pushstring(L, "1"); return; }
+    // The frame caps as the client registers them (maxFPS "200", maxFPSBk
+    // "30") - the defaults the frame loop reads them with.
+    if (n == "maxfps") { lua_pushstring(L, "200"); return; }
+    if (n == "maxfpsbk") { lua_pushstring(L, "30"); return; }
+    // And the others the client reads where it uses them: no core mask, the
+    // footprints on (00780000.c:10440 registers "1"), and a pet's and an
+    // emote's sounds on - which the sound_enable rule below answers too, said
+    // here by name so the two sides can be checked against each other.
+    if (n == "processaffinitymask") { lua_pushstring(L, "0"); return; }
+    if (n == "showfootprints") { lua_pushstring(L, "1"); return; }
+    if (n == "sound_enableemotesounds" || n == "sound_enablepetsounds") { lua_pushstring(L, "1"); return; }
     // Return sensible defaults for commonly queried CVars
     // The sound ones read back as on and at full, which is what this client
     // starts as. Volume up/down step from whatever is read here, so answering
