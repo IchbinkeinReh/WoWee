@@ -4130,6 +4130,32 @@ Unit* GameHandler::getUnitByGuid(uint64_t guid) {
     return static_cast<Unit*>(entity.get());
 }
 
+std::vector<std::string> GameHandler::unitTokensForGuid(uint64_t guid) const {
+    std::vector<std::string> out;
+    if (guid == 0) return out;
+    if (guid == playerGuid) out.emplace_back("player");
+    if (guid == petGuid_) out.emplace_back("pet");
+    if (isInGroup()) {
+        const auto& group = getPartyData();
+        for (int slot = 1; slot <= 4; ++slot)
+            if (partySlotGuid(group, playerGuid, slot) == guid) out.push_back("party" + std::to_string(slot));
+        if (groupIsRaid(group.groupType)) {
+            for (size_t i = 0; i < group.members.size() && i < 40; ++i)
+                if (group.members[i].guid == guid) out.push_back("raid" + std::to_string(i + 1));
+        }
+    }
+    if (guid == targetGuid) out.emplace_back("target");
+    if (guid == focusGuid) out.emplace_back("focus");
+    if (guid == mouseoverGuid_) out.emplace_back("mouseover");
+    for (size_t i = 0; i < arena::Roster::kSlots; ++i) {
+        if (arenaRoster_.opponent(i) == guid) out.push_back("arena" + std::to_string(i + 1));
+        if (arenaRoster_.pet(i) == guid) out.push_back("arenapet" + std::to_string(i + 1));
+    }
+    for (uint32_t i = 0; i < kMaxEncounterSlots; ++i)
+        if (getEncounterUnitGuid(i) == guid) out.push_back("boss" + std::to_string(i + 1));
+    return out;
+}
+
 std::string GameHandler::guidToUnitId(uint64_t guid) const {
     if (guid == playerGuid)      return "player";
     if (guid == targetGuid)      return "target";

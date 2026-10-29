@@ -3611,8 +3611,10 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     if (watchesTarget && unitTargetGuid(*entity) != oldTarget) {
         // The token is not decoration: the interface ignores a unit event whose
         // argument is not the unit it is showing, so a change said about nobody
-        // reaches nothing.
-        if (const auto uid = owner_.guidToUnitId(block.guid); !uid.empty())
+        // reaches nothing. Once for every token naming the unit, as 0x0060bf10
+        // raises it for each 0x0060bb70 finds - a party member's target frame
+        // and a raid frame both hear of it.
+        for (const auto& uid : owner_.unitTokensForGuid(block.guid))
             pendingEvents_.emit("UNIT_TARGET", {uid});
     }
 

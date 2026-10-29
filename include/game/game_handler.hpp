@@ -4917,6 +4917,10 @@ public:
                                 bool offsetNeedsTransportResolution = false);
     void clearTransportAttachment(uint64_t childGuid);
     std::string guidToUnitId(uint64_t guid) const;
+    /// Every unit token that names this guid (0x0060bb70's walk): player, pet,
+    /// party1-4, raid1-40, target, focus, mouseover, arena1-5, arenapet1-5,
+    /// boss1-5 - a unit event the client raises per unit goes once to each.
+    std::vector<std::string> unitTokensForGuid(uint64_t guid) const;
     Unit* getUnitByGuid(uint64_t guid);
     uint64_t resolveOnlineItemGuid(uint32_t itemId) const;
     void rebuildOnlineInventory();
