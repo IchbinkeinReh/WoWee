@@ -1,6 +1,7 @@
 #include "game/mirror_image.hpp"
 #include "game/quest_status_requery.hpp"
 #include "game/entity_controller.hpp"
+#include "core/app_clock.hpp"
 #include "core/env_flag.hpp"
 #include "game/game_handler.hpp"
 #include "game/protocol_constants.hpp"
@@ -1841,6 +1842,26 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             if ((prev ^ val) & PLAYER_FLAGS_LOW_LEVEL_RAID)
                 pendingEvents_.emit((val & PLAYER_FLAGS_LOW_LEVEL_RAID) ? "ENABLE_LOW_LEVEL_RAID"
                                                                        : "DISABLE_LOW_LEVEL_RAID", {});
+            // The same watcher's one non-event leg: 0x006e0fd0 hands the value it
+            // is replacing to 0x006de750 whenever 0x100, 0x200 or 0x40000 moved,
+            // and that routine is the only writer of the deadline object+0x1940.
+            // The realm never sends how long a PvP flag has left; the client makes
+            // up five minutes from the moment it sees the flag, and GetPVPTimer
+            // counts that down for the text under the player portrait. Two rules,
+            // in the client's order: the deadline is cleared while the PvP toggle
+            // bit is on, and otherwise armed only when the 0x40000 bit is not set
+            // or has only just become set - so a toggle going off without the flag
+            // bit moving leaves the countdown exactly where it was, which is the
+            // five-minutes-of-quiet-action the toggle-off message promises.
+            constexpr uint32_t PLAYER_FLAGS_PVP_TIMER_BITS = 0x00040300;  // 0x100 | 0x200 | 0x40000
+            constexpr uint32_t PLAYER_FLAGS_PVP_FLAG       = 0x00040000;  // the decaying flag
+            if ((prev ^ val) & PLAYER_FLAGS_PVP_TIMER_BITS) {
+                int64_t& deadline = owner_.pvpFlagDeadlineMsRef();
+                if (val & PLAYER_FLAGS_IN_PVP)
+                    deadline = 0;
+                else if ((val & PLAYER_FLAGS_PVP_FLAG) == 0 || (prev & PLAYER_FLAGS_PVP_FLAG) == 0)
+                    deadline = static_cast<int64_t>(core::appTimeSeconds() * 1000.0) + 300000;
+            }
             // .gm on / .gm off: the server answers quest status for the
             // player as they are now, and an enemy gets none - so a GM who
             // arrived among the other faction's questgivers before turning

@@ -4726,6 +4726,9 @@ public:
     /// response carried one.
     auto& accountStateRef() { return accountState_; }
     const AccountState& accountState() const { return accountState_; }
+    /// The PvP flag's decay deadline (0 = none), the client's object+0x1940.
+    auto& pvpFlagDeadlineMsRef() { return pvpFlagDeadlineMs_; }
+    int64_t pvpFlagDeadlineMs() const { return pvpFlagDeadlineMs_; }
     auto& playerArenaPointsRef() { return playerArenaPoints_; }
     auto& playerArmorRatingRef() { return playerArmorRating_; }
     auto& playerBlockPctRef() { return playerBlockPct_; }
@@ -6348,6 +6351,11 @@ private:
     /// The account block SMSG_AUTH_RESPONSE sent with the result, which is
     /// what the billing bindings answer from - see AccountState.
     AccountState accountState_;
+    /// When the realm's PvP flag stops decaying, in app-clock milliseconds, or
+    /// zero for "no timer running" - the client keeps this per object at
+    /// object+0x1940 and only the local player's is ever read. See the write in
+    /// the PLAYER_FLAGS watch (0x006de750) and the answer in GetPVPTimer.
+    int64_t pvpFlagDeadlineMs_ = 0;
     uint32_t serverPlayerLevel_ = 1;
 
     // ---- Server time tracking (for deterministic celestial/sky systems) ----

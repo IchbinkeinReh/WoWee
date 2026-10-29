@@ -5229,14 +5229,37 @@ static int lua_GetTrackedAchievements(lua_State* L) {
     return static_cast<int>(tracked.size());
 }
 
-// The PvP flag's countdown. The client knows whether the flag is set but not
-// how long it has left, so the timer is reported as not running and the player
-// frame hides the text rather than showing a number it cannot compute.
-static int lua_IsPVPTimerRunning(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+// IsPVPTimerRunning() - 0x0051bd60. Not the countdown: the test is the realm's
+// PvP flag bit in PLAYER_FLAGS (0x40000) and nothing else, so a player who is
+// flagged answers 1 even after their time is up and GetPVPTimer has started
+// answering 999. Without a local player it is the usual nil, not false.
+static int lua_IsPVPTimerRunning(lua_State* L) { return pushPlayerFlagBit(L, 0x00040000); }
 
-// Never reached while the above answers false, but playerframe reads it on the
-// line after and a missing global there would raise before the branch is taken.
-static int lua_GetPVPTimer(lua_State* L) { lua_pushnumber(L, 0); return 1; }
+// GetPVPTimer() - 0x0051bd00, which is 0x006de7a0's remaining time plus a second.
+// The realm never sends the remaining time; the client works it out from a
+// deadline it arms itself when the flag bit arrives (0x006de750, five minutes
+// from the moment the flag is seen), which is what the PLAYER_FLAGS watch keeps
+// in pvpFlagDeadlineMs_. So the answer is the full five minutes whenever the
+// flag bit is clear, whatever is left of it while it runs, and 999 once the
+// deadline has passed - and 0 with no local player, where the client skips the
+// extra second because it never calls the countdown at all.
+static int lua_GetPVPTimer(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto flags = playerFlagsOf(gh);
+    double ms = 0;
+    if (flags) {
+        if ((*flags & 0x00040000) == 0) {
+            ms = 300000;
+        } else {
+            const int64_t deadline = gh->pvpFlagDeadlineMs();
+            const auto now = static_cast<int64_t>(core::appTimeSeconds() * 1000.0);
+            ms = (deadline != 0 && now < deadline) ? static_cast<double>(deadline - now) : -1.0;
+        }
+        ms += 1000;
+    }
+    lua_pushnumber(L, ms);
+    return 1;
+}
 
 // GetCurrentArenaSeason() → the season number, or NO_ARENA_SEASON.
 //
