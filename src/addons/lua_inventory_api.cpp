@@ -357,19 +357,60 @@ static int lua_GetBuybackItemInfo(lua_State* L) {
     return 6;
 }
 
-/// GetBuybackItemLink(index) - the same row list, and the client resolves the
-/// row to its ring slot exactly as GetBuybackItemInfo does (0x005852c0 reads
-/// the published list, then the item standing in that slot of the player's
-/// store), so an index past the rows answers nothing there rather than a link.
+// GetBuybackItemLink(index) → the row's item link, or **no values at all**
+/// 0x005852c0 reads the published (timestamp-sorted) row list exactly as
+/// GetBuybackItemInfo does - `(&DAT_00bf90f8)[index-1]` behind a count test
+/// against DAT_00bfa3f4 - and then asks the player's own store for the item
+/// standing in that ring slot: the slot has to be below the item count at
+/// object+0x18f0 and one half of the guid pair at +0x18f4 + slot*8 non-zero,
+/// which is what makes a row here a row at all.  The link is the item
+/// **object**'s (0x00754390 → 0x0061e3a0), pushed by FUN_0084e350.
+///
+/// Every other path out of that function **returns without pushing**, and so
+/// does its argument test: FUN_0084df20 failing leaves "Usage:
+/// GetBuybackItemLink(slot)" printed and no values on the stack.  WoWee
+/// answered nil instead, which is a value - and inside another call the two
+/// are not the same thing: `f(GetBuybackItemLink(i))` passes nil, or passes no
+/// argument, and `select('#', ...)` counts one or zero.  merchantframe.lua:432
+/// is the only reader in the shipped interface
+/// (`HandleModifiedItemClick(GetBuybackItemLink(self:GetID()))`, the click
+/// path that links the item in chat), where nil and nothing behave alike, but
+/// an addon testing `if GetBuybackItemLink(i) then` or counting the returns
+/// reads WoWee's nil as an answer the client never gave.  Its sibling
+/// GetBuybackItemInfo *does* answer - six values, the failure tail 0x00585070
+/// pushes - so the two are not interchangeable in either client.
+///
+/// The index conversion is truncation toward zero, not nearest: what
+/// `ROUND((float10)FUN_0084e030(...))` in the decompile really is is an
+/// `fnstcw / or $0xc00 / fldcw / fistpll` sequence at 0x00585311 - control-word
+/// bits 10-11 set to 11, the x87 chop mode - which is luaToClientInt's
+/// `_ftol2` semantics spelled out inline.  Do not read Ghidra's `ROUND` as
+/// round-to-nearest; look for the control-word write in front of it.
 static int lua_GetBuybackItemLink(lua_State* L) {
+    // FUN_0084df20 first: no number, the usage line, and no values.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBuybackItemLink(slot)");
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || index < 1) { return luaReturnNil(L); }
+    const int index = luaToClientInt(L, 1);
+    if (!gh || index < 1) { return 0; }
     const auto* row = gh->buybackRowAt(static_cast<uint32_t>(index - 1));
-    if (!row) { return luaReturnNil(L); }
+    if (!row) { return 0; }
     const auto& bi = *row;
     const int q = static_cast<int>(bi.item.quality);
-    const std::string link = game::itemChatLink(bi.item.itemId, static_cast<uint32_t>(q), bi.item.name);
+    // The ring slot holds a real item object, and the client's link for it is
+    // the same one GetInventoryItemLink answers: 0x00754390(slot) →
+    // 0x0061e3a0, the object builder, so the enchant and the rolled property
+    // are part of what the row is called - and the property goes into the
+    // link's text through ITEM_SUFFIX_TEMPLATE, for the reason written out by
+    // GetInventoryItemLink's own tail.
+    std::string name = bi.item.name;
+    const int32_t property = bi.item.randomPropertyId;
+    if (property != 0) {
+        const std::string propertyName = gh->getRandomPropertyName(property);
+        if (!propertyName.empty()) name += " " + propertyName;
+    }
+    const uint32_t enchant = bi.item.guid != 0 ? gh->getItemEnchantIds(bi.item.guid).first : 0u;
+    const std::string link = game::itemChatLink(bi.item.itemId, static_cast<uint32_t>(q),
+                                                name, enchant, property);
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -3594,6 +3635,22 @@ static int lua_GetInventoryItemLink(lua_State* L) {
     uint32_t itemId = 0;
     std::string name;
     uint32_t q = 1;
+    // What the link says the item is wearing, which the client takes off the
+    // item **object** rather than off its template: FUN_0061e3a0 hands the
+    // builder entry = OBJECT_FIELD_ENTRY, the record's quality, then
+    // 0x0061e290's format "%s|Hitem:%d:%d:%d:%d:%d:%d:%d:%d:%d|h[%s]|h%s" -
+    // entry, one number, three gems, a hard zero, two more, and a player-field
+    // number at unit blob +0xc0.  The three gems come from item blob +0x58,
+    // +0x64 and +0x70, one per 0xc-spaced triple; the number before them comes
+    // from item blob +0x40 and the one after the zero from +0xd4, both read
+    // only while bit 3 of blob +0x3c is clear, and both zero when the object's
+    // own type test fails.  Those two are where WoWee puts its enchant and its
+    // rolled property - the same pair GetContainerItemLink already writes, and
+    // a signed word in the inspected path's record, which is what a random
+    // property id is - though which item field each really is is not pinned
+    // yet.  The gems are the part WoWee has no data for, so they stay zero.
+    int32_t randomPropertyId = 0;
+    uint32_t enchantId = 0;
     if (uidStr == "player") {
         const auto& inv = gh->getInventory();
         const game::ItemSlot* sp = inventorySlotItem(inv, slotId);
@@ -3604,6 +3661,12 @@ static int lua_GetInventoryItemLink(lua_State* L) {
         const auto* info = gh->getItemInfo(itemId);
         name = info ? info->name : slot.item.name;
         q = info ? info->quality : static_cast<uint32_t>(slot.item.quality);
+        randomPropertyId = slot.item.randomPropertyId;
+        if (slot.item.guid != 0)
+            enchantId = gh->getItemEnchantIds(slot.item.guid).first;
+            // The temporary half is deliberately out: an oil or a sharpening
+            // stone is not a property of the item, and GetContainerItemLink
+            // (which already carries both of these) drops it the same way.
     } else {
         itemId = inspectedItemEntry(gh, uidStr, slotId);
         if (!itemId) { return luaReturnNil(L); }
@@ -3611,10 +3674,29 @@ static int lua_GetInventoryItemLink(lua_State* L) {
         if (!info) { return luaReturnNil(L); }
         name = info->name;
         q = info->quality;
+        // The other units' leg is the six-argument builder 0x0061e290, which
+        // reads all of it out of the visible-item record: entry +0x8, ilvl
+        // +0xc, three gems at +0x14/+0x18/+0x1c, and the two trailing numbers
+        // at +0x3c (a word) and +0x40.  The inspection packet gives WoWee the
+        // entry only, so a link here cannot name what that character's gear is
+        // wearing; it reads as the plain item does, and that is a data gap on
+        // the inspection side rather than a choice about the link.
+    }
+
+    // The link's *text* is the record's name put through ITEM_SUFFIX_TEMPLATE:
+    // 0x00706d70(out, size, entry, randomPropertyId) takes the localized name
+    // at record+0x1f4, looks the property up - a positive id in the row range
+    // DAT_00ad3ec4..DAT_00ad3ec0 reading column +0x1c, a negative one in
+    // -DAT_00ad3ee4..DAT_00ad3ee8 reading +0x4 - and formats
+    // "%1$s %2$s".  So the property string goes second, with a space, whether
+    // the DBC calls it a prefix or a suffix; an empty row leaves the bare name.
+    if (randomPropertyId != 0) {
+        const std::string property = gh->getRandomPropertyName(randomPropertyId);
+        if (!property.empty()) name += " " + property;
     }
 
     uint32_t qi = q < 8 ? q : 1u;
-    const std::string link = game::itemChatLink(itemId, qi, name);
+    const std::string link = game::itemChatLink(itemId, qi, name, enchantId, randomPropertyId);
     lua_pushstring(L, link.c_str());
     return 1;
 }
