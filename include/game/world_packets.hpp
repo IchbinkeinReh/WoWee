@@ -123,10 +123,34 @@ enum class AuthResult : uint8_t {
 };
 
 /**
+ * The account block SMSG_AUTH_RESPONSE sends with the two codes that carry it.
+ *
+ * 0x00464640 - the client's own handler for this message - reads the response
+ * byte and then, only for 0x0C and 0x1B and only with the bytes there to read,
+ * a dword, a byte, a dword and a byte more, into the connection object's
+ * +0x2f24, +0x2f2c, +0x2f28 and +0x2f2d in that read order.  Nothing else in
+ * the client writes those four, which is what makes them the source for
+ * GetBillingTimeRemaining (+0x2f24, 0x004ddbd0), GetBillingPlan (+0x2f2c,
+ * 0x004ddc60), GetBillingTimeRested (+0x2f28, 0x00511c40) and
+ * GetAccountExpansionLevel (+0x2f2d, 0x004ddc20).
+ *
+ * Kept rather than decoded: the gates belong to the bindings, so the plan's
+ * bits and the remaining time's zeroing are applied where they are asked for.
+ */
+struct AccountState {
+    bool present = false;              ///< the response carried the block
+    uint32_t billingTimeRemaining = 0; ///< +0x2f24
+    uint32_t billingTimeRested = 0;    ///< +0x2f28
+    uint8_t billingPlan = 0;           ///< +0x2f2c
+    uint8_t accountExpansion = 0;      ///< +0x2f2d
+};
+
+/**
  * SMSG_AUTH_RESPONSE data (from server)
  */
 struct AuthResponseData {
     AuthResult result;
+    AccountState account;
 
     [[nodiscard]] bool isSuccess() const { return result == AuthResult::OK; }
 };

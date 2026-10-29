@@ -4720,6 +4720,12 @@ public:
         return unit == petComboTarget_ ? petComboPoints_ : 0;
     }
     auto& isRestingRef() { return isResting_; }
+    /// The account block of the last SMSG_AUTH_RESPONSE, for the three
+    /// bindings that read it (GetBillingTimeRemaining, GetBillingPlan and
+    /// GetBillingTimeRested). Empty - all zero, `present` false - until a
+    /// response carried one.
+    auto& accountStateRef() { return accountState_; }
+    const AccountState& accountState() const { return accountState_; }
     auto& playerArenaPointsRef() { return playerArenaPoints_; }
     auto& playerArmorRatingRef() { return playerArmorRating_; }
     auto& playerBlockPctRef() { return playerBlockPct_; }
@@ -6339,6 +6345,9 @@ private:
     uint32_t playerNextLevelXp_ = 0;
     uint32_t playerRestedXp_ = 0;
     bool isResting_ = false;
+    /// The account block SMSG_AUTH_RESPONSE sent with the result, which is
+    /// what the billing bindings answer from - see AccountState.
+    AccountState accountState_;
     uint32_t serverPlayerLevel_ = 1;
 
     // ---- Server time tracking (for deterministic celestial/sky systems) ----

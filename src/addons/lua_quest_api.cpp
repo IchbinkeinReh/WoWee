@@ -40,6 +40,13 @@ static uint32_t questFrameFlags(game::GameHandler* gh) {
     return qh ? qh->getQuestFrameFlags() : 0;
 }
 
+/// What the realm said beside the auth response, or an empty block before one
+/// has ever arrived. The billing bindings below answer from this.
+static const game::AccountState& accountStateOf(game::GameHandler* gh) {
+    static const game::AccountState none;
+    return gh ? gh->accountState() : none;
+}
+
 // ── The quest log is a list of headers with quests under them ───────────────
 //
 // WoW's quest log is grouped: a zone header, the quests in that zone, the next
@@ -4390,15 +4397,45 @@ void registerQuestLuaAPI(lua_State* L) {
                 // have already been rested.
                 {"NoPlayTime",                [](lua_State* L) -> int { return pushPlayerFlagBit(L, 0x2000); }},
                 {"PartialPlayTime",           [](lua_State* L) -> int { return pushPlayerFlagBit(L, 0x1000); }},
-                // That tooltip's hours. The client answers a dword out of
-                // SMSG_AUTH_RESPONSE's success payload - FUN_00511c40 reads the
-                // connection's +0x2f28, written beside the billing plan, the
-                // remaining time and the account's expansion, and only for the
-                // two response codes that carry them. This client stops at the
-                // payload's first byte, so there is nothing here to answer with
-                // beyond zero, which is what a realm without a play-time
-                // system sends anyway.
-                {"GetBillingTimeRested",      [](lua_State* L) -> int { lua_pushnumber(L, 0); return 1; }},
+                // That tooltip's hours, and the two figures beside it that only
+                // the login interface asks for here. All three answer the block
+                // the realm sent with the auth response (see AccountState), and
+                // the client renders them straight out of it:
+                //
+                //   GetBillingTimeRested (0x00511c40) - the dword, unsigned.
+                //   GetBillingTimeRemaining (0x004ddbd0) - the dword before it,
+                //     unsigned, and *zeroed* when the plan byte carries bit 1
+                //     (0x004ddbd0 tests it and answers 0 for the whole thing).
+                //   GetBillingPlan (0x004ddc60) - not the byte: the byte masked
+                //     with 0x16, and that mapping turned into one of five
+                //     numbers, with 3 for "none of those bits".
+                //
+                // Each answers a number even with nothing to answer from, which
+                // is what the client does when its connection has never seen
+                // the block - it reads zeroed memory.
+                {"GetBillingTimeRested", [](lua_State* L) -> int {
+            lua_pushnumber(L, static_cast<double>(accountStateOf(getGameHandler(L)).billingTimeRested));
+            return 1;
+        }},
+                {"GetBillingTimeRemaining", [](lua_State* L) -> int {
+            const auto& a = accountStateOf(getGameHandler(L));
+            const uint32_t remaining = (a.billingPlan & 0x02) ? 0u : a.billingTimeRemaining;
+            lua_pushnumber(L, static_cast<double>(remaining));
+            return 1;
+        }},
+                {"GetBillingPlan", [](lua_State* L) -> int {
+            const uint8_t plan = accountStateOf(getGameHandler(L)).billingPlan;
+            int answer = 0;
+            switch (plan & 0x16) {
+                case 0x00: answer = 3; break;
+                case 0x02: answer = 1; break;
+                case 0x04: answer = 2; break;
+                case 0x10: answer = 4; break;
+                default: break;   // a combination of them, which answers 0
+            }
+            lua_pushnumber(L, answer);
+            return 1;
+        }},
                 // Filters and sub-classes: panel state, kept so it reads back.
                 // The trade skill window's two filter dropdowns. Both answered
                 // nothing and both are spread straight into a vararg call -

@@ -300,6 +300,11 @@ void GameHandler::handleAuthResponse(network::Packet& packet) {
         return;
     }
 
+    // Kept for the whole session, as the client keeps it: 0x00464640 stores
+    // the block on the connection object and the billing bindings read it back
+    // there long after the response itself has been dealt with.
+    accountStateRef() = response.account;
+
     if (!response.isSuccess()) {
         std::string reason = std::string("Authentication failed: ") +
                            getAuthResultString(response.result);
