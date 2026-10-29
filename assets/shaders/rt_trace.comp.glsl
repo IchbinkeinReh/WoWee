@@ -53,8 +53,27 @@ layout(set = 0, binding = 11, rgba16f) uniform image2D uPointOut;
 struct RtPointLight {
     vec4 positionEnd;  // xyz, w = where its light ends (yards), negative for a baked one
     vec4 colorStart;   // rgb, w = where its falloff starts
-    vec4 storey;       // a baked one's floor and ceiling (world z), z = 1 when it has them
+    vec4 storey;       // a baked one's floor and ceiling (world z), z = 1 when it has them;
+                       // w what gave it (rt_lights::Source)
 };
+
+// The Debug Graphics view "Kind of each light" (rt_light_kinds.hpp): what
+// each light gives, drawn as its brightness in the colour of what gave it.
+const int RT_LIGHT_KIND_VIEW = 14;
+// By rt_lights::Source. Must match rt_light_kinds::kKinds, index for index
+// (tests/test_rt_light_kinds.cpp reads this list).
+vec3 rtLightKindColour(int kind) {
+    const vec3 kKinds[7] = vec3[7](
+        vec3(1.0, 1.0, 1.0),    // model light: white
+        vec3(1.0, 0.12, 0.05),  // fire: red
+        vec3(1.0, 0.85, 0.1),   // lamp: yellow
+        vec3(0.15, 0.35, 1.0),  // building light: blue
+        vec3(0.1, 1.0, 0.2),    // unit light: green
+        vec3(0.1, 0.95, 1.0),   // glow: cyan
+        vec3(1.0, 0.15, 0.85)   // particles: magenta
+    );
+    return kKinds[clamp(kind, 0, 6)];
+}
 layout(std430, set = 0, binding = 12) readonly buffer RtPointLights { RtPointLight rtPointLights[]; };
 
 // rt_lights::attenuation: all within the start, none past the end, a
@@ -281,6 +300,12 @@ void main() {
         vec3 c = light.colorStart.rgb * (rtLightFalloff(d, light.colorStart.w, end) * ndl);
         float w = max(c.r, max(c.g, c.b));
         if (w <= 0.0) continue;
+        // The view of the lights' kinds: the same light, its brightness in
+        // its kind's colour (rt_light_kinds::tinted). The shadow ray is
+        // picked by the light as it is, so the shadows do not change.
+        if (int(pass.tune2.z + 0.5) == RT_LIGHT_KIND_VIEW) {
+            c = rtLightKindColour(int(light.storey.w + 0.5)) * dot(c, vec3(0.2126, 0.7152, 0.0722));
+        }
         pointSum += c;
         if (light.positionEnd.w < 0.0) bakedSum += w;
         weightSum += w;

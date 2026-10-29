@@ -62,7 +62,8 @@ struct PointLight {
 };
 
 /// What the shader reads per light (std430): position and end, colour and
-/// start, and the storey (floor, ceiling, 1 when it has one). Must match
+/// start, and the storey (floor, ceiling, 1 when it has one) with in w what
+/// gave the light (Source, for the view of the lights' kinds). Must match
 /// RtPointLight in rt_trace.comp.glsl. A baked light's end goes negative; an
 /// end is never zero (selectLights drops those). An open ceiling goes up as
 /// a large finite height, which the shader's comparison takes alike.
@@ -78,8 +79,9 @@ inline constexpr float kOpenCeiling = 1e30f;
 inline PointLightGPU toGpu(const PointLight& l) {
     return {glm::vec4(l.position, l.baked ? -l.attenuationEnd : l.attenuationEnd),
             glm::vec4(l.color, l.attenuationStart),
-            l.hasStorey ? glm::vec4(l.storeyFloor, std::min(l.storeyCeiling, kOpenCeiling), 1.0f, 0.0f)
-                        : glm::vec4(0.0f)};
+            l.hasStorey ? glm::vec4(l.storeyFloor, std::min(l.storeyCeiling, kOpenCeiling), 1.0f,
+                                    static_cast<float>(l.source))
+                        : glm::vec4(0.0f, 0.0f, 0.0f, static_cast<float>(l.source))};
 }
 
 /// How much of a light reaches `distance` yards: all of it within the start,

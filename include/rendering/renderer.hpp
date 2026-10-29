@@ -787,6 +787,15 @@ public:
     /// traced occlusion, 8 the length of the traced history, 9 how well each
     /// pixel found its own surface in the trace. WOWEE_GI_DEBUG, when set, wins.
     void setRtDebugView(int view) { rtDebugView_ = view; }
+    /// The view of the lights' kinds (rt_light_kinds.hpp): whether it is
+    /// shown, and this frame's traced lights - where each is and what gave
+    /// it (rt_lights::Source) - for the interface's dots and legend.
+    struct RtLightMarker {
+        glm::vec3 position{0.0f};
+        uint8_t source = 0;
+    };
+    [[nodiscard]] bool rtLightKindViewShown() const { return rtLightKindView_; }
+    [[nodiscard]] const std::vector<RtLightMarker>& rtLightMarkers() const { return rtLightMarkers_; }
     /// The time of day the world is lit at, in hours (0-24), instead of the
     /// server's; negative for the server's own (Settings > Debug Graphics,
     /// WOWEE_GAME_TIME). Only what is drawn: the server's clock is left alone.
@@ -1111,6 +1120,8 @@ private:
     float eyeAdaptSeconds_ = 2.5f;
     RtRaysPerPixel rtRays_{};
     int rtDebugView_ = 0;
+    bool rtLightKindView_ = false;
+    std::vector<RtLightMarker> rtLightMarkers_;
     float gameTimeOverride_ = -1.0f;
     /// Screenshots being converted and written on a worker (captureScreenshot);
     /// waited for at shutdown so none is cut off half written.

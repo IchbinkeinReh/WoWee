@@ -1,6 +1,7 @@
 #include "rendering/renderer.hpp"
 #include "rendering/shadow_sun.hpp"
 #include "rendering/rt_lamp_wrap.hpp"
+#include "rendering/rt_light_kinds.hpp"
 #include "rendering/depth_convention.hpp"
 #include "rendering/shadow_pass_work.hpp"
 #include "rendering/quality_summary.hpp"
@@ -6715,6 +6716,17 @@ void Renderer::recordRtLighting() {
             }
         }
         rtLighting_->setPointLights(lightScratch);
+        // The view of the lights' kinds: where the traced lights are and
+        // what gave each, for the interface's dots and legend. The ones the
+        // pass holds, in the order it takes them.
+        rtLightKindView_ = in.debugView == rt_light_kinds::kDebugView;
+        rtLightMarkers_.clear();
+        if (rtLightKindView_) {
+            const size_t n = std::min(lightScratch.size(), static_cast<size_t>(RtLighting::kMaxPointLights));
+            for (size_t i = 0; i < n; ++i) {
+                rtLightMarkers_.push_back({lightScratch[i].position, static_cast<uint8_t>(lightScratch[i].source)});
+            }
+        }
         // WOWEE_RT_LIGHT_DIAG=1: every five seconds, the lights kept by kind
         // and the nearest of them, and the doodads near the camera with what
         // each gives of light - to tell a fire that has none from one too

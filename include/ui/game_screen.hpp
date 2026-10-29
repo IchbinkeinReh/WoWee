@@ -370,6 +370,9 @@ private:
                              float centerY, float mapRadius);
     void refreshQuestObjectiveCache(game::GameHandler& gameHandler);
     void renderNameplates(game::GameHandler& gameHandler);
+    /// The Debug Graphics view of the lights' kinds: a dot at each traced
+    /// light and the legend of their colours (rt_light_kinds.hpp).
+    void renderLightKindOverlay();
 
     /**
      * Inventory screen

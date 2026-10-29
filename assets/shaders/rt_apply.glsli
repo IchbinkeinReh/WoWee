@@ -258,8 +258,10 @@ void main() {
     // factor its baked colour is scaled by - the lamps' shadows and the
     // room's shade together, grey, white as painted - red where it is no
     // baked colour.
-    if (view == 12 || view == 13) {
-        vec3 c = view == 12 ? pointIn : (baked ? vec3(rIn) : vec3(1.0, 0.0, 0.0));
+    // 14 the kind of each light (rt_light_kinds.hpp): every light's light,
+    // a building's too, each tinted by the trace in its kind's colour.
+    if (view == 12 || view == 13 || view == 14) {
+        vec3 c = view == 12 ? pointIn : view == 14 ? r.point : (baked ? vec3(rIn) : vec3(1.0, 0.0, 0.0));
         outMul = vec4(0.0);
         outAdd = vec4(c, 0.0);
         return;

@@ -1421,6 +1421,16 @@ wowee_add_test(test_rt_point_lights
             ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_rt_light_kinds ──────────────────────────────────────
+# The Debug Graphics view of the lights' kinds: a name and a colour of its
+# own for each, the trace shader's list the same, the kind in the GPU record.
+wowee_add_test(test_rt_light_kinds
+    SOURCES test_rt_light_kinds.cpp
+            ${CMAKE_SOURCE_DIR}/src/pipeline/m2_loader.cpp
+            ${TEST_COMMON_SOURCES})
+target_compile_definitions(test_rt_light_kinds PRIVATE
+    WOWEE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # ── test_rt_glow ─────────────────────────────────────────────
 # Header-only: what glows gathered into patches at load, their lights, an
 # emitter's particles summed into one, and the lamps' light by day.

@@ -22,6 +22,7 @@
 #include "rendering/camera.hpp"
 #include "rendering/imgui_blend.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/rt_light_kinds.hpp"
 #include "rendering/unit_name_anchor.hpp"
 #include "rendering/world_text_renderer.hpp"
 #include "ui/interface_fonts.hpp"
@@ -34,6 +35,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -989,3 +991,76 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
 
 }  // namespace ui
 }  // namespace wowee
+
+namespace wowee::ui {
+
+// The Debug Graphics view "Kind of each light" (rt_light_kinds.hpp): the
+// trace draws each light's light in its kind's colour; this puts a dot of
+// that colour at each traced light and a legend at the left edge, clear of
+// the middle of the view, naming the colours with how many of each the
+// frame traces. Every kind is listed, the ones the view has none of dimmed,
+// so the legend holds still as the camera turns.
+void GameScreen::renderLightKindOverlay() {
+    namespace kinds = rendering::rt_light_kinds;
+    auto* appRenderer = services_.renderer;
+    if (!appRenderer || !appRenderer->rtLightKindViewShown()) return;
+    rendering::Camera* camera = appRenderer->getCamera();
+    auto* window = services_.window;
+    if (!camera || !window) return;
+    const float screenW = static_cast<float>(window->getWidth());
+    const float screenH = static_cast<float>(window->getHeight());
+    const glm::mat4 viewProj = camera->getProjectionMatrix() * camera->getViewMatrix();
+    auto toU32 = [](const glm::vec3& c, int alpha) {
+        return IM_COL32(static_cast<int>(c.r * 255.0f + 0.5f), static_cast<int>(c.g * 255.0f + 0.5f),
+                        static_cast<int>(c.b * 255.0f + 0.5f), alpha);
+    };
+
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const float scale = std::max(screenH / 1080.0f, 0.5f);
+    std::array<int, rendering::rt_lights::kSourceCount> counts{};
+    for (const auto& m : appRenderer->rtLightMarkers()) {
+        const auto source = static_cast<rendering::rt_lights::Source>(m.source);
+        const auto& kind = kinds::kindOf(source);
+        ++counts[std::min<size_t>(m.source, counts.size() - 1)];
+        const auto at = project(viewProj, m.position, screenW, screenH);
+        if (!at || at->x < 0.0f || at->y < 0.0f || at->x > screenW || at->y > screenH) continue;
+        const float r = 5.0f * scale;
+        dl->AddCircleFilled(*at, r + 1.5f * scale, IM_COL32(0, 0, 0, 220));
+        dl->AddCircleFilled(*at, r, toU32(kind.colour, 255));
+    }
+
+    ImFont* font = ImGui::GetFont();
+    const float px = 17.0f * scale;
+    const float line = px * 1.35f;
+    const float swatch = px * 0.9f;
+    float width = 0.0f;
+    for (const auto& k : kinds::kKinds) {
+        const ImVec2 sz = font->CalcTextSizeA(px, FLT_MAX, 0.0f, k.name);
+        width = std::max(width, sz.x);
+    }
+    const float pad = 8.0f * scale;
+    const float countW = font->CalcTextSizeA(px, FLT_MAX, 0.0f, "000").x;
+    const float boxW = pad * 3.0f + swatch + width + countW + pad;
+    const float boxH = pad * 2.0f + line * static_cast<float>(kinds::kKinds.size() + 1);
+    const ImVec2 corner(12.0f * scale, screenH * 0.28f);
+    dl->AddRectFilled(corner, ImVec2(corner.x + boxW, corner.y + boxH), IM_COL32(0, 0, 0, 185), 4.0f * scale);
+    float y = corner.y + pad;
+    dl->AddText(font, px, ImVec2(corner.x + pad, y), IM_COL32(255, 255, 255, 255), "Light kinds (traced this frame)");
+    y += line;
+    for (size_t i = 0; i < kinds::kKinds.size(); ++i) {
+        const auto& k = kinds::kKinds[i];
+        const bool present = counts[i] > 0;
+        const int alpha = present ? 255 : 110;
+        const float sy = y + (line - swatch) * 0.5f - px * 0.1f;
+        dl->AddRectFilled(ImVec2(corner.x + pad, sy), ImVec2(corner.x + pad + swatch, sy + swatch),
+                          toU32(k.colour, alpha));
+        dl->AddText(font, px, ImVec2(corner.x + pad * 2.0f + swatch, y), IM_COL32(255, 255, 255, alpha), k.name);
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%d", counts[i]);
+        const float cw = font->CalcTextSizeA(px, FLT_MAX, 0.0f, buf).x;
+        dl->AddText(font, px, ImVec2(corner.x + boxW - pad - cw, y), IM_COL32(255, 255, 255, alpha), buf);
+        y += line;
+    }
+}
+
+}  // namespace wowee::ui

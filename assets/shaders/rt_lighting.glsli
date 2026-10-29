@@ -114,7 +114,8 @@ RtLight rtLightDebug(RtLight r) {
     if (debugView == 5) {
         rtGiDebugSet = true;
         rtGiDebugColour = r.weight > 0.0 ? vec3(r.sun) : vec3(1.0, 0.0, 0.0);
-    } else if (debugView == 6) {
+    } else if (debugView == 6 || debugView == 14) {
+        // 14, the kind of each light: the trace tinted r.point already.
         rtGiDebugSet = true;
         rtGiDebugColour = r.point;
     } else if (debugView == 7) {
