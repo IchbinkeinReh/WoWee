@@ -3541,7 +3541,14 @@ void registerActionLuaAPI(lua_State* L) {
             // A boolean there raised on every breath bar shown on entering
             // the world.
             lua_pushnumber(L, t.paused ? 1 : 0);
-            lua_pushstring(L, kLabels[index]);
+            // Worded by the interface, as the event's label is: "Atem" on a
+            // German client, the English only without that string.
+            const char* key = game::GameHandler::kMirrorTimerLabelKeys[index];
+            if (key) lua_getglobal(L, key);
+            if (!key || !lua_isstring(L, -1)) {
+                if (key) lua_pop(L, 1);
+                lua_pushstring(L, kLabels[index]);
+            }
             return 6;
         }},
                 // GetPetHappiness() → happiness 1..3, and what it does to damage

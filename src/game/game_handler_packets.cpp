@@ -571,7 +571,9 @@ void GameHandler::registerCoreOpcodes() {
             // The names WoW passes, not the wire's own ordering words - see
             // kMirrorTimerNames, which every path that names a timer shares.
             const char* timerName = (type < 3) ? kMirrorTimerNames[type] : "BREATH";
-            const char* timerLabel = (type < 3) ? kMirrorTimerLabels[type] : "Breath";
+            const std::string timerLabel =
+                kMirrorTimerLabelKeys[type] ? interfaceString(kMirrorTimerLabelKeys[type], kMirrorTimerLabels[type])
+                                            : std::string(kMirrorTimerLabels[type]);
             // Said once per timer, because nothing on this side decides any of
             // it. The length of a breath is the server's: three minutes plus
             // whatever SPELL_AURA_MOD_WATER_BREATHING adds, which for a

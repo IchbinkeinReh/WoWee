@@ -2884,6 +2884,12 @@ public:
         {"EXHAUSTION", "BREATH", "FEIGNDEATH"};
     static constexpr const char* kMirrorTimerLabels[3] =
         {"Exhaustion", "Breath", "Feign Death"};
+    /// The interface's own wording of those labels (GlobalStrings
+    /// EXHAUSTION_LABEL, BREATH_LABEL - "Erschöpfung", "Atem" on a German
+    /// client); the English above is only what is left without one. Feign
+    /// death has no string of its own there.
+    static constexpr const char* kMirrorTimerLabelKeys[3] =
+        {"EXHAUSTION_LABEL", "BREATH_LABEL", nullptr};
 
     struct MirrorTimer {
         int32_t value    = 0;
