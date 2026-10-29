@@ -3015,6 +3015,42 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             if ((oldVal & probe.second) != (now->second & probe.second)) pvpKillsChanged = true;
         }
         if (pvpKillsChanged) pendingEvents_.emit("PLAYER_PVP_KILLS_CHANGED", {});
+        // The two currency counters.  The client watches both dwords whole -
+        // "4, 0x11a4, 4" and "4, 0x11a8, 4" in the registration block at
+        // 0x006e5180, which its own descriptor table names
+        // PLAYER_FIELD_HONOR_CURRENCY (index 1277) and
+        // PLAYER_FIELD_ARENA_CURRENCY (1278), both of which this layout already
+        // decodes.  The two callbacks it puts on them are one body written twice
+        // and aimed at each other's field (0x006da3c0, 0x006da430): whichever of
+        // the two moved, it raises HONOR_CURRENCY_UPDATE (497) and
+        // CURRENCY_DISPLAY_UPDATE (605) together, naming no arguments.  Those
+        // are the client's only two raises of 497, and the only two raises of
+        // 605 that come from the player at all - its one other raise
+        // (0x005b0660) goes through a rebuild of the token list, which reads the
+        // known-currency mask at +0x790 / +0x794 and has no counterpart here.
+        //
+        // pvpframe.lua:17,42 answers 497 with PVPHonor_Update, whose honor and
+        // arena lines are GetHonorCurrency and GetArenaCurrency
+        // (pvpframe.lua:515-516) - the two numbers applyPlayerStatFields above
+        // stores from exactly these fields - and mainmenubar.lua:177,193 answers
+        // 605 by rebuilding the token row, and by turning showTokenFrame on the
+        // first time a token is counted at all.  Neither notice was ever sent, so
+        // the PvP panel kept the points it had when it opened, however much the
+        // realm paid out afterwards, and the row stayed empty however much was
+        // held.
+        bool currencyChanged = false;
+        for (const uint16_t probe : {fieldIndex(UF::PLAYER_FIELD_HONOR_CURRENCY),
+                                     fieldIndex(UF::PLAYER_FIELD_ARENA_CURRENCY)}) {
+            if (probe == 0xFFFF) continue;  // a layout naming no such counter
+            const auto now = block.fields.find(probe);
+            if (now == block.fields.end()) continue;
+            const auto was = lastFields.find(probe);
+            if ((was == lastFields.end() ? 0u : was->second) != now->second) currencyChanged = true;
+        }
+        if (currencyChanged) {
+            pendingEvents_.emit("HONOR_CURRENCY_UPDATE", {});
+            pendingEvents_.emit("CURRENCY_DISPLAY_UPDATE", {});
+        }
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.
         for (const auto& [key, val] : block.fields) {
