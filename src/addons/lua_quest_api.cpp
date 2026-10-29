@@ -4379,8 +4379,25 @@ void registerQuestLuaAPI(lua_State* L) {
         }},
                 {"GetTradeSkillListLink",     [](lua_State* L) -> int { return luaReturnNil(L); }},
                 {"IsTradeSkillLinked",        [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                {"NoPlayTime",                [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                {"PartialPlayTime",           [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                // The play-time limits, which are the realm's, not this
+                // client's to decide: 0x0051cb30 PartialPlayTime answers
+                // PLAYER_FLAGS 0x1000 and 0x0051cba0 NoPlayTime answers 0x2000,
+                // each of them as the number 1 or as nothing - the client
+                // pushes nil both for a clear bit and for no local player. Both
+                // are one test deep in PlayerFrame_UpdatePlaytime, which puts up
+                // the tired or the unhealthy icon accordingly, and the tooltip
+                // either one builds asks GetBillingTimeRested how many hours
+                // have already been rested.
+                {"NoPlayTime",                [](lua_State* L) -> int { return pushPlayerFlagBit(L, 0x2000); }},
+                {"PartialPlayTime",           [](lua_State* L) -> int { return pushPlayerFlagBit(L, 0x1000); }},
+                // That tooltip's hours. The client answers a dword out of
+                // SMSG_AUTH_RESPONSE's success payload - FUN_00511c40 reads the
+                // connection's +0x2f28, written beside the billing plan, the
+                // remaining time and the account's expansion, and only for the
+                // two response codes that carry them. This client stops at the
+                // payload's first byte, so there is nothing here to answer with
+                // beyond zero, which is what a realm without a play-time
+                // system sends anyway.
                 {"GetBillingTimeRested",      [](lua_State* L) -> int { lua_pushnumber(L, 0); return 1; }},
                 // Filters and sub-classes: panel state, kept so it reads back.
                 // The trade skill window's two filter dropdowns. Both answered

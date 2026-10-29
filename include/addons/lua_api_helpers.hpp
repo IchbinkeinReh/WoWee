@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <string>
+#include <optional>
 #include <chrono>
 #include <cstring>
 #include <cmath>
@@ -415,6 +416,35 @@ inline game::GameHandler* getGameHandler(lua_State* L) {
     auto* gh = static_cast<game::GameHandler*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
     return gh;
+}
+
+/// The player's PLAYER_FLAGS dword, or none when there is no player to read.
+///
+/// The client reaches the same dword from its own player object
+/// (`*(object + 0x1008) + 8`), and a whole family of bindings answer a single
+/// bit of it - resting, PvP, ghost, taxi benchmark, low-level raid, and the two
+/// play-time limits. They are all one question, so they share this one answer:
+/// a second copy of it is how these drift, and two copies of this already
+/// existed when the third was wanted.
+inline std::optional<uint32_t> playerFlagsOf(game::GameHandler* gh) {
+    const auto player = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+    if (!player) return std::nullopt;
+    const uint16_t i = game::fieldIndex(game::UF::PLAYER_FLAGS);
+    return i != 0xFFFF ? player->getField(i) : 0u;
+}
+
+/// 1 when the player's PLAYER_FLAGS carry `bit`, nil otherwise.
+///
+/// Not false, and not 0: the client's flag-bit bindings push the number 1 when
+/// the bit is set and pushnil when it is not - the same answer whether the
+/// player is missing or the bit is simply clear (FUN_0051cb30 PartialPlayTime,
+/// FUN_0051cba0 NoPlayTime, FUN_0051d5a0 GetAllowLowLevelRaid, FUN_0051d100
+/// GetTaxiBenchmarkMode). FrameXML tests these as truthy, so nil and false read
+/// the same there; what matters is that a clear bit is not an answer of 0.
+inline int pushPlayerFlagBit(lua_State* L, uint32_t bit) {
+    const auto flags = playerFlagsOf(getGameHandler(L));
+    if (flags && (*flags & bit)) lua_pushnumber(L, 1); else lua_pushnil(L);
+    return 1;
 }
 
 // ---- Retrieve the widget tree that backs CreateFrame/CreateTexture ----

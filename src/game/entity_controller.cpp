@@ -1788,6 +1788,17 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                     : interfaceString("PVP_TOGGLE_OFF_VERBOSE",
                                       "You will be unflagged for PvP combat after five minutes of non-PvP action in friendly territory."));
             }
+            // The play-time limits, the next pair of bits the same watcher
+            // reads: PLAYER_FLAGS 0x1000 (the tired icon PartialPlayTime puts
+            // up) and 0x2000 (the unhealthy one NoPlayTime puts up). 0x006e0fd0
+            // fires PLAYTIME_CHANGED for either, with no arguments, and
+            // PlayerFrame.lua answers it by re-reading both bindings and
+            // switching the icon - so the event is only what tells the frame
+            // the realm has moved them, and the answer itself comes from the
+            // fields PartialPlayTime and NoPlayTime read.
+            constexpr uint32_t PLAYER_FLAGS_PLAYTIME = 0x00003000;
+            if (!isCreate && last.known && ((last.value ^ val) & PLAYER_FLAGS_PLAYTIME) != 0)
+                pendingEvents_.emit("PLAYTIME_CHANGED", {});
             // .gm on / .gm off: the server answers quest status for the
             // player as they are now, and an enemy gets none - so a GM who
             // arrived among the other faction's questgivers before turning

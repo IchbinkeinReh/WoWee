@@ -5002,26 +5002,11 @@ static int lua_GetLFGRoleUpdate(lua_State* L) {
     return 3;
 }
 
-/// The player's PLAYER_FLAGS, or none without a player.
-static std::optional<uint32_t> playerFlagsOf(game::GameHandler* gh) {
-    const auto player = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
-    if (!player) return std::nullopt;
-    const uint16_t i = game::fieldIndex(game::UF::PLAYER_FLAGS);
-    return i != 0xFFFF ? player->getField(i) : 0u;
-}
-
-/// 1 when the player's PLAYER_FLAGS carry the bit, nil otherwise.
-static int pushPlayerFlag(lua_State* L, uint32_t bit) {
-    const auto flags = playerFlagsOf(getGameHandler(L));
-    if (flags && (*flags & bit)) lua_pushnumber(L, 1); else lua_pushnil(L);
-    return 1;
-}
-
 // GetAllowLowLevelRaid() (0x0051d5a0): PLAYER_FLAGS 0x10000.
-static int lua_GetAllowLowLevelRaid(lua_State* L) { return pushPlayerFlag(L, 0x10000); }
+static int lua_GetAllowLowLevelRaid(lua_State* L) { return pushPlayerFlagBit(L, 0x10000); }
 
 // GetTaxiBenchmarkMode() (0x0051d100): PLAYER_FLAGS 0x20000.
-static int lua_GetTaxiBenchmarkMode(lua_State* L) { return pushPlayerFlag(L, 0x20000); }
+static int lua_GetTaxiBenchmarkMode(lua_State* L) { return pushPlayerFlagBit(L, 0x20000); }
 
 /// A request of one opcode and one byte, the way the client's setters build
 /// them.
