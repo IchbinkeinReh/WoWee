@@ -561,6 +561,17 @@ const Check kChecks[] = {
         {UiElement::Social,       "FriendsFrame FriendsFrameTitleText"},
         {UiElement::Trade,        "TradeFrame TradeFrameRecipientNameText"},
         {UiElement::ReadyCheck,   "ReadyCheckFrame ReadyCheckFrameText"},
+        // Only the top frame, for the reason BuffButton1 is left out: the two
+        // slot FontStrings RaidNotice_AddMessage writes into are in the xml and
+        // correctly hidden until a warning is on screen, so naming one says
+        // nothing the frame itself does not already say. RaidWarning had no row
+        // while this client still drew its own banner, and the missing row
+        // outlived the banner: CHAT_MSG_RAID_WARNING is fired for every raid
+        // warning line (chat_handler.cpp), so FrameXML's is the only raid
+        // warning on screen - and an element handed over with no row is one
+        // reportUncheckedElements warns about and
+        // frameXmlReleaseUnbuiltElements cannot hand back.
+        {UiElement::RaidWarning,  "RaidWarningFrame"},
         {UiElement::Taxi,         "TaxiFrame TaxiRouteMap"},
         {UiElement::Stable,       "PetStableFrame"},
         {UiElement::Book,         "ItemTextFrame ItemTextPageText"},
