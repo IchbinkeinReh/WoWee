@@ -655,6 +655,11 @@ private:
     /// 0x0053bac0: the player's history changed - ACTIONBAR_UPDATE_COOLDOWN
     /// (0x005a7cc0), then SPELL_UPDATE_COOLDOWN.
     void playerCooldownsChanged();
+    /// That, plus the display leg every cooldown write ends with: whosever
+    /// history moved decides which bar redraws its swirls - 0x005d6f10 fires
+    /// BAG_UPDATE_COOLDOWN for the player's, 0x005d3090 PET_BAR_UPDATE_COOLDOWN
+    /// for the pet's. The client fires one or the other, never both.
+    void cooldownHistoryChanged(bool forPet);
     /// SpellCategory.dbc's Flags (0x00ad478c), 0 for none.
     uint32_t spellCategoryFlags(uint32_t category) const;
     mutable std::unordered_map<uint32_t, uint32_t> spellCategoryFlags_;

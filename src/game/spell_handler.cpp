@@ -860,12 +860,16 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_CLEAR_COOLDOWN] = [this](network::Packet& p) { handleClearCooldown(p); };
     table[Opcode::SMSG_MODIFY_COOLDOWN] = [this](network::Packet& p) { handleModifyCooldown(p); };
     // 0x00804110: the player's history, or the pet's, emptied (0x00802a50).
+    // A guid that is neither is answered without a word: the client returns
+    // before 0x0053bac0, so nothing redraws at all.
     table[Opcode::SMSG_COOLDOWN_CHEAT] = [this](network::Packet& p) {
         if (!p.hasRemaining(8)) return;
         const uint64_t guid = p.readUInt64();
-        if (guid == owner_.getPlayerGuid()) playerHistory_.clear();
-        else if (guid != 0 && guid == owner_.getPetGuid()) petHistory_.clear();
-        playerCooldownsChanged();
+        const bool forPlayer = guid == owner_.getPlayerGuid();
+        const bool forPet = !forPlayer && guid != 0 && guid == owner_.getPetGuid();
+        if (forPlayer) playerHistory_.clear();
+        else if (forPet) petHistory_.clear();
+        if (forPlayer || forPet) cooldownHistoryChanged(forPet);
     };
     table[Opcode::SMSG_PLAY_SPELL_VISUAL] = [this](network::Packet& p) { handlePlaySpellVisual(p); };
     table[Opcode::SMSG_SET_FLAT_SPELL_MODIFIER] = [this](network::Packet& p) { handleSpellModifier(p, true); };
@@ -1463,6 +1467,22 @@ void SpellHandler::playerCooldownsChanged() {
     if (!owner_.addonEventCallbackRef()) return;
     owner_.addonEventCallbackRef()("ACTIONBAR_UPDATE_COOLDOWN", {});
     owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
+}
+
+// 0x0053bac0 first (the action bar's 0x005a7cc0, then SPELL_UPDATE_COOLDOWN),
+// and then one of a pair the cooldown store itself decides: 0x005d6f10 for the
+// player's records, 0x005d3090 for the pet's. Both are one-argument calls with
+// no event arguments, and the client always `return`s after the one it picked -
+// BAG_UPDATE_COOLDOWN is fired from 0x005d6f10 and nowhere else in the whole
+// client, so a pet record never redraws the bags and nothing else ever redrew
+// the pet bar. Its listener, petactionbarframe.lua:53, answers by calling
+// PetActionBar_UpdateCooldowns (172), which asks GetPetActionCooldown for every
+// slot - the call WoWee already answers from its pet history, so the numbers
+// were there and only the word about them was missing.
+void SpellHandler::cooldownHistoryChanged(bool forPet) {
+    if (!owner_.addonEventCallbackRef()) return;
+    playerCooldownsChanged();
+    owner_.addonEventCallbackRef()(forPet ? "PET_BAR_UPDATE_COOLDOWN" : "BAG_UPDATE_COOLDOWN", {});
 }
 
 const std::array<uint32_t, 3>* SpellHandler::runeCostRow(uint32_t id) const {
@@ -3906,6 +3926,15 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                     static_cast<int32_t>(e.startRecoveryMs), e.dmgClass, e.attr,
                     castSpeedOf(*caster));
                 petHistory_.add(h);
+                // 0x00805d70 refreshed the displays the moment it wrote the
+                // record: 0x0053bac0 for a caster the character owns, and
+                // 0x005d3090 when that caster is the pet - the bags' leg never
+                // runs from here. WoWee wrote the number and said nothing, so
+                // the pet bar's swirls came only from whatever else happened
+                // to redraw them.
+                playerCooldownsChanged();
+                if (data.casterUnit == owner_.getPetGuid() && owner_.addonEventCallbackRef())
+                    owner_.addonEventCallbackRef()("PET_BAR_UPDATE_COOLDOWN", {});
             }
         }
         // The player's own cast, not from an item: its cooldown and its
@@ -4249,11 +4278,12 @@ void SpellHandler::handleSpellCooldown(network::Packet& packet) {
 
     LOG_DEBUG("handleSpellCooldown: parsed for ",
               isClassicFormat ? "Classic" : "TBC/WotLK", " format");
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
-        owner_.addonEventCallbackRef()("BAG_UPDATE_COOLDOWN", {});
-        owner_.addonEventCallbackRef()("ACTIONBAR_UPDATE_COOLDOWN", {});
-    }
+    // 0x00806dd0 reads the guid before anything else and drops the packet
+    // whole when it is neither the player's nor the pet's - no record written
+    // and no display told to look again, so a cooldown for anyone else used to
+    // set off every cooldown frame the character has.
+    if (cooldownGuid != 0 && (forPlayer || cooldownGuid == owner_.getPetGuid()))
+        cooldownHistoryChanged(!forPlayer);
 }
 
 void SpellHandler::handleCooldownEvent(network::Packet& packet) {
@@ -4263,14 +4293,12 @@ void SpellHandler::handleCooldownEvent(network::Packet& packet) {
     if (packet.hasRemaining(8))
         eventGuid = packet.readUInt64();
     // 0x00804010: the held cooldown begins now (0x00802970) - the pet's,
-    // else the player's.
-    (eventGuid != 0 && eventGuid == owner_.getPetGuid() ? petHistory_ : playerHistory_)
-        .event(spellId, historyNowMs(), false);
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
-        owner_.addonEventCallbackRef()("BAG_UPDATE_COOLDOWN", {});
-        owner_.addonEventCallbackRef()("ACTIONBAR_UPDATE_COOLDOWN", {});
-    }
+    // else the player's. The guid the packet names is what decides the store,
+    // and with it the display leg that closes 0x00802ba0: a pet cooldown
+    // redraws the pet bar, and the bags stay out of it.
+    const bool forPet = eventGuid != 0 && eventGuid == owner_.getPetGuid();
+    (forPet ? petHistory_ : playerHistory_).event(spellId, historyNowMs(), false);
+    cooldownHistoryChanged(forPet);
 }
 
 /// Keep the by-guid copy of a unit's auras in step with the target view.
@@ -6341,11 +6369,13 @@ void SpellHandler::handleClearCooldown(network::Packet& packet) {
     if (packet.hasRemaining(4)) {
         uint32_t spellId = packet.readUInt32();
         // 0x00804010: the entries for it go (0x00802970) - the pet's, else
-        // the player's.
+        // the player's. Clearing one is a change like any other, so the
+        // display leg closes it too; stopping at 0x0053bac0 left the swirl of
+        // a cooldown the realm cleared drawn until something else refreshed.
         const uint64_t guid = packet.hasRemaining(8) ? packet.readUInt64() : 0;
-        (guid != 0 && guid == owner_.getPetGuid() ? petHistory_ : playerHistory_)
-            .event(spellId, historyNowMs(), true);
-        playerCooldownsChanged();
+        const bool forPet = guid != 0 && guid == owner_.getPetGuid();
+        (forPet ? petHistory_ : playerHistory_).event(spellId, historyNowMs(), true);
+        cooldownHistoryChanged(forPet);
     }
 }
 
@@ -6358,9 +6388,11 @@ void SpellHandler::handleModifyCooldown(network::Packet& packet) {
         const uint64_t guid = packet.readUInt64();
         int32_t  diffMs  = static_cast<int32_t>(packet.readUInt32());
         // 0x00804010: the starts move (0x00802a10) - the pet's, else the
-        // player's.
-        (guid != 0 && guid == owner_.getPetGuid() ? petHistory_ : playerHistory_).modify(spellId, diffMs);
-        playerCooldownsChanged();
+        // player's - and 0x00802bf0 closes the same way as every other write,
+        // with the pet's bar or the bags'.
+        const bool forPet = guid != 0 && guid == owner_.getPetGuid();
+        (forPet ? petHistory_ : playerHistory_).modify(spellId, diffMs);
+        cooldownHistoryChanged(forPet);
     }
 }
 
