@@ -24,13 +24,40 @@ std::vector<uint8_t> generateNormalMap(const uint8_t* pixels,
         heightMap[i] = h;
     }
 
-    // Step 2: Sobel 3x3 -> normal map
+    const int w = static_cast<int>(width);
+    const int h = static_cast<int>(height);
+    auto wrapX = [w](int x) { return ((x % w) + w) % w; };
+    auto wrapY = [h](int y) { return ((y % h) + h) % h; };
+
+    // Step 2: smooth the height before taking its slope. Taken texel by
+    // texel, the luminance of a painted texture is full of single-texel
+    // speckle, and a Sobel over it turns every speckle into a normal that
+    // flips over one texel - hard-edged, grainy bumps that a low light picks
+    // out as sharp patches. A 5-tap binomial (1 4 6 4 1)/16, run across and
+    // then down and wrapping as the texture tiles, keeps the shapes the
+    // painting has and drops the texel noise.
+    constexpr float kTap[5] = {1.0f / 16.0f, 4.0f / 16.0f, 6.0f / 16.0f, 4.0f / 16.0f, 1.0f / 16.0f};
+    std::vector<float> pass(totalPixels);
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            float sum = 0.0f;
+            for (int k = -2; k <= 2; k++) sum += kTap[k + 2] * heightMap[y * w + wrapX(x + k)];
+            pass[y * w + x] = sum;
+        }
+    }
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            float sum = 0.0f;
+            for (int k = -2; k <= 2; k++) sum += kTap[k + 2] * pass[wrapY(y + k) * w + x];
+            heightMap[y * w + x] = sum;
+        }
+    }
+
+    // Step 3: Sobel 3x3 -> normal map
     std::vector<uint8_t> output(totalPixels * 4);
 
     auto sampleH = [&](int x, int y) -> float {
-        x = ((x % static_cast<int>(width)) + static_cast<int>(width)) % static_cast<int>(width);
-        y = ((y % static_cast<int>(height)) + static_cast<int>(height)) % static_cast<int>(height);
-        return heightMap[y * width + x];
+        return heightMap[wrapY(y) * w + wrapX(x)];
     };
 
     for (uint32_t y = 0; y < height; y++) {

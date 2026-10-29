@@ -120,6 +120,27 @@ TEST_CASE("sampling wraps rather than clamping at the edges", "[normalmap]") {
     CHECK(out[lastColumn * 4 + 0] != 127);
 }
 
+TEST_CASE("the height is smoothed before its slope is taken", "[normalmap]") {
+    // One bright texel on flat grey, on a texture wide enough not to wrap
+    // into itself. Taken texel by texel, the slope would stop one texel past
+    // the speckle; smoothed first, the bump fades out over its neighbours, so
+    // a texel two away still leans, and the leaning is gentler than a raw
+    // Sobel's flip right beside it.
+    constexpr int kSize = 16;
+    std::vector<uint8_t> lum(kSize * kSize, 128);
+    lum[8 * kSize + 8] = 255;
+    const std::vector<uint8_t> src = grey(lum);
+    const auto out = generateNormalMap(src.data(), kSize, kSize, 5.0f);
+
+    const int twoLeft = 8 * kSize + 6;
+    const int threeLeft = 8 * kSize + 5;
+    CHECK(out[twoLeft * 4 + 0] != 127);
+    CHECK(out[threeLeft * 4 + 0] != 127);
+    // Right beside the speckle the tilt stays well short of lying flat.
+    const int oneLeft = 8 * kSize + 7;
+    CHECK(out[oneLeft * 4 + 2] > 200);
+}
+
 TEST_CASE("nothing to read answers nothing", "[normalmap]") {
     CHECK(generateNormalMap(nullptr, 4, 4, 5.0f).empty());
 

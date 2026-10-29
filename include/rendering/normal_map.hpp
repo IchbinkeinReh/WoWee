@@ -4,7 +4,7 @@
  * normal_map.hpp - a normal map derived from a diffuse texture.
  *
  * The character renderer and the WMO renderer both build one the same way:
- * luminance to height, then a Sobel pass for the normals. Their two copies
+ * luminance to height, smoothed, then a Sobel pass for the normals. Their two copies
  * differed in exactly one value, the Sobel strength, which is now the
  * parameter it always was.
  *
