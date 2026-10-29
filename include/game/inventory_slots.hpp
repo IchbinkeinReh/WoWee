@@ -140,4 +140,11 @@ inline constexpr bool cursorSourceIsInventory(int cursorBag) {
     return cursorBag >= -1;
 }
 
+/// A position "on the character" for the bind-on-equip ask of a swap
+/// (0x006df890): one of the player's own slots below 0x17 - the 19 equipment
+/// slots and the 4 bag-bar slots - or a bank bag slot, 0x43..0x49.
+inline constexpr bool isCharacterPosition(uint8_t bag, uint8_t slot) {
+    return bag == kNoContainer && (slot < 0x17 || (slot >= 0x43 && slot <= 0x49));
+}
+
 } // namespace wowee::game::slots

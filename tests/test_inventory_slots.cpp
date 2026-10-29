@@ -168,3 +168,16 @@ TEST_CASE("The no-source marker is not a container number", "[cursor][slots]") {
         REQUIRE(kCursorNoSource != bag);
     }
 }
+
+TEST_CASE("the character's positions for a swap's bind ask", "[inventory][slots]") {
+    using wowee::game::slots::isCharacterPosition;
+    using wowee::game::slots::kNoContainer;
+    CHECK(isCharacterPosition(kNoContainer, 0));    // head
+    CHECK(isCharacterPosition(kNoContainer, 18));   // tabard
+    CHECK(isCharacterPosition(kNoContainer, 22));   // the last bag-bar slot
+    CHECK_FALSE(isCharacterPosition(kNoContainer, 23));  // the backpack's first
+    CHECK(isCharacterPosition(kNoContainer, 0x43));      // bank bags
+    CHECK(isCharacterPosition(kNoContainer, 0x49));
+    CHECK_FALSE(isCharacterPosition(kNoContainer, 0x4a));
+    CHECK_FALSE(isCharacterPosition(19, 0));             // a slot inside a bag
+}

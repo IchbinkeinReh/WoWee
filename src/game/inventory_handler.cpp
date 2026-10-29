@@ -3056,21 +3056,20 @@ void InventoryHandler::swapContainerItems(uint8_t srcBag, uint8_t srcSlot,
     // 2, bind when equipped, and that 0x006dc3f0 say it is not already bound.
     // When both hold it parks the pair of positions in the pending-equip queue
     // and fires EQUIP_BIND_CONFIRM (0x10f) with the queue's index, and puts
-    // nothing on the wire. "On the character" is the 23 worn positions rather
-    // than the 19 equipment slots - the client tests the slot against 0x17 - so
-    // a bag bought at the merchant and dropped onto the bag bar asks as well,
-    // which is right: wearing it is what binds it.
+    // nothing on the wire.
     //
-    // Two positions on the character are the case the client sends as
-    // CMSG_SWAP_INV_ITEM without asking, and it cannot reach this test: a worn
-    // piece binds the moment it is worn, and the bag-bar exchange has its own
-    // verb in swapBagSlots below.
-    if (!confirmed && dstBag == slots::kNoContainer &&
-        dstSlot < static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS) &&
-        !(srcBag == slots::kNoContainer &&
-          srcSlot < static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS))) {
+    // "On the character" is a slot of the player's own below 0x17 - the 19
+    // equipment slots and the 4 bag-bar slots - or a bank bag slot, 0x43..0x49,
+    // and the client tests both sides: an equipped piece dragged onto a bag slot
+    // holding a bind-on-equip item equips that item just as surely as the other
+    // way round, and asks about it. Both on the character, or neither, asks
+    // nothing.
+    const bool srcWorn = slots::isCharacterPosition(srcBag, srcSlot);
+    const bool dstWorn = slots::isCharacterPosition(dstBag, dstSlot);
+    if (!confirmed && srcWorn != dstWorn) {
         ItemDef carried;
-        if (readWireSlot(srcBag, srcSlot, carried) && carried.wouldBindOnEquip()) {
+        const bool read = dstWorn ? readWireSlot(srcBag, srcSlot, carried) : readWireSlot(dstBag, dstSlot, carried);
+        if (read && carried.wouldBindOnEquip()) {
             // The client parks either verb's move in the one queue, and
             // FrameXML hides the other dialog before showing this one; only one
             // move can be waiting for the answer.
