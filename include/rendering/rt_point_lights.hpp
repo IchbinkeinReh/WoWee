@@ -259,6 +259,36 @@ inline PointLight fireLight(const glm::vec3& boxMin, const glm::vec3& boxMax, co
     return out;
 }
 
+/// Whether an emitter's particles are a flame's: added to what is behind
+/// them (blending 3 and 4), where smoke and ash are blended over it.
+inline bool isFlameEmitter(const pipeline::M2ParticleEmitter& emitter) {
+    return emitter.blendingType == 3 || emitter.blendingType == 4;
+}
+
+/// Where a fire's flame is in the world: the middle of its flame emitters,
+/// each carried into the world by `carried(bone)` (the model's matrix times
+/// the bone's), or of all its emitters where none is a flame's. None without
+/// emitters. The top of the box fireLight takes is no place for it on many
+/// fires: the box the file gives takes in how far the particles climb, and
+/// the geometry can reach far above the flame - Orgrimmar's bonfire's box
+/// goes up 23 of its yards where the flames burn one up, so its light hung
+/// forty yards over the Valley of Strength, out of the view, and was culled.
+template <class Carried>
+std::optional<glm::vec3> flameCentre(const std::vector<pipeline::M2ParticleEmitter>& emitters,
+                                     Carried&& carried) {
+    const bool anyFlame = std::any_of(emitters.begin(), emitters.end(), isFlameEmitter);
+    glm::vec3 sum(0.0f);
+    int count = 0;
+    for (const pipeline::M2ParticleEmitter& e : emitters) {
+        if (anyFlame && !isFlameEmitter(e)) continue;
+        const glm::mat4 toWorld = carried(e.bone);
+        sum += glm::vec3(toWorld * glm::vec4(e.position, 1.0f));
+        ++count;
+    }
+    if (count == 0) return std::nullopt;
+    return sum / static_cast<float>(count);
+}
+
 /// The light of a lamp that carries none of its own: a street lamp, a
 /// hanging lantern, a sconce (the classifier's isLanternLike). None of the
 /// human lamps and lanterns has an M2 light (their files list none); the

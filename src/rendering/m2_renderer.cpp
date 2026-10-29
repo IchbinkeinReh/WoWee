@@ -2228,6 +2228,16 @@ void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
                  model->isLamp ? " lamp" : "", " glow ", model->glowPatches.size(), " emitters ",
                  model->particleEmitters.size(), " live ", inst.particles.size(),
                  inst.interiorLit ? " interior" : "", listed ? " listed" : "", " lampBone ", model->lampBone, " bones ", inst.boneMatrices.size());
+        if (model->lights.empty() && (model->isBrazierOrFire || model->isTorch)) {
+            const glm::vec3 bmin = model->hasVertexBox ? model->vertexBoxMin : model->boundMin;
+            const glm::vec3 bmax = model->hasVertexBox ? model->vertexBoxMax : model->boundMax;
+            const rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch, 0.0f, 0.0f);
+            const auto flame = rt_lights::flameCentre(
+                model->particleEmitters, [&](uint32_t bone) { return rtSteadyCarried(*model, inst, bone); });
+            const glm::vec3 at = flame ? *flame : l.position;
+            LOG_WARNING("RT doodad fire light at (", at.x, ", ", at.y, ", ", at.z, ")", flame ? " flames" : " box top",
+                        " reach ", l.attenuationEnd, " fade ", inst.fade);
+        }
     }
 }
 
@@ -2690,6 +2700,12 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
             rt_lights::PointLight l = rt_lights::fireLight(bmin, bmax, inst.modelMatrix, model->isTorch,
                                                            inst.globalSequenceTime,
                                                            static_cast<float>(inst.id % 97u));
+            // At its flames where it has any (rt_lights::flameCentre).
+            if (const auto flame = rt_lights::flameCentre(
+                    model->particleEmitters,
+                    [&](uint32_t bone) { return rtSteadyCarried(*model, inst, bone); })) {
+                l.position = *flame;
+            }
             l.color *= fade;
             out.push_back(l);
             continue;

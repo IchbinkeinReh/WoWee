@@ -332,6 +332,41 @@ TEST_CASE("a fire without a light of its own is lit from the top of its box", "[
     }
 }
 
+TEST_CASE("a fire's light comes from its flames, not from the top of its box", "[rt][lights]") {
+    // Orgrimmar's bonfire: the flames a yard up, smoke over them, a box to
+    // 23 yards.
+    auto emitter = [](glm::vec3 position, uint16_t bone, uint8_t blending) {
+        pipeline::M2ParticleEmitter e{};
+        e.position = position;
+        e.bone = bone;
+        e.blendingType = blending;
+        return e;
+    };
+    glm::mat4 model(1.0f);
+    model[3] = glm::vec4(100.0f, 200.0f, 10.0f, 1.0f);
+    const auto carried = [&](uint32_t bone) {
+        glm::mat4 m = model;
+        if (bone == 1) m[3].z += 0.5f;  // a bone that lifts its flame half a yard
+        return m;
+    };
+    const std::vector<pipeline::M2ParticleEmitter> bonfire = {
+        emitter({0.0f, 0.0f, 1.0f}, 0, 4), emitter({2.0f, 0.0f, 1.5f}, 1, 4),
+        emitter({0.0f, 0.0f, 9.0f}, 0, 2)};  // the smoke
+    const auto flame = flameCentre(bonfire, carried);
+    REQUIRE(flame);
+    CHECK(flame->x == Catch::Approx(101.0f));
+    CHECK(flame->y == Catch::Approx(200.0f));
+    CHECK(flame->z == Catch::Approx(11.5f));
+    // Where none is additive, all of them.
+    const std::vector<pipeline::M2ParticleEmitter> smoky = {emitter({0.0f, 0.0f, 2.0f}, 0, 2),
+                                                            emitter({0.0f, 0.0f, 4.0f}, 0, 1)};
+    const auto smoke = flameCentre(smoky, carried);
+    REQUIRE(smoke);
+    CHECK(smoke->z == Catch::Approx(13.0f));
+    // None without emitters: the box's top, as fireLight puts it.
+    CHECK_FALSE(flameCentre({}, carried));
+}
+
 TEST_CASE("a lamp without a light of its own is lit at its glass, at night", "[rt][lights]") {
     // A street lamp: a post up the middle, the lantern out on an arm. Only
     // the lantern's glass glows.
