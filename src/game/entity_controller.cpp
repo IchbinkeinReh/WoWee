@@ -3117,30 +3117,41 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         // registered with the fields as they already stand, so a character who
         // logs in holding points and slots hears nothing at all; raising the
         // event on the first block seen would print the whole total as a gain.
-        // So the first sight of either field only sets the baseline, and a
-        // field a block leaves out keeps the value the snapshot has rather than
-        // counting as a change to zero - which is what an eight-byte watch over
-        // a pair does when only half of it arrives.
+        // So the create block only sets the baseline - the snapshot is seeded
+        // from it before any update block is read - and a field a block leaves
+        // out keeps the value the snapshot has rather than counting as a change.
+        // A field the snapshot does not hold was never sent, and the realms send
+        // a create block's fields only where they are not zero: it is zero, so
+        // the usual 0 -> 1 at a level-up is a change like any other.
+        //
+        // The differences are the object's value less the one the watcher was
+        // handed (0x005e8330: +0xda0 - handed[0], +0xda4 - handed[1]). The
+        // watcher runs before its copy is committed into the object (0x004d52b0
+        // memcpys it there afterwards, the same mechanism the currency
+        // watchers above are read by), so the object still holds the previous
+        // number and the watcher the new: old less new. So chatframe.lua's
+        // `arg2 > 0` is a free profession slot taken, and the line it prints
+        // ("you now have %d professions free") follows learning one.
         if (const uint16_t talentIdx = fieldIndex(UF::PLAYER_CHARACTER_POINTS1);
-            talentIdx != 0xFFFF) {
+            talentIdx != 0xFFFF && !lastFields.empty()) {
             if (const uint16_t skillIdx = fieldIndex(UF::PLAYER_CHARACTER_POINTS2);
                 skillIdx != 0xFFFF) {
-                const auto wasTalents = lastFields.find(talentIdx);
-                const auto wasSkills = lastFields.find(skillIdx);
-                if (wasTalents != lastFields.end() && wasSkills != lastFields.end()) {
-                    auto current = [&](uint16_t idx, uint32_t previous) {
-                        const auto now = block.fields.find(idx);
-                        return now == block.fields.end() ? previous : now->second;
-                    };
-                    const auto talents = static_cast<int32_t>(current(talentIdx, wasTalents->second));
-                    const auto skills = static_cast<int32_t>(current(skillIdx, wasSkills->second));
-                    const auto oldTalents = static_cast<int32_t>(wasTalents->second);
-                    const auto oldSkills = static_cast<int32_t>(wasSkills->second);
-                    if (talents != oldTalents || skills != oldSkills)
-                        pendingEvents_.emit("CHARACTER_POINTS_CHANGED",
-                                            {std::to_string(talents - oldTalents),
-                                             std::to_string(skills - oldSkills)});
-                }
+                auto was = [&](uint16_t idx) {
+                    const auto it = lastFields.find(idx);
+                    return it == lastFields.end() ? 0u : it->second;
+                };
+                auto current = [&](uint16_t idx) {
+                    const auto now = block.fields.find(idx);
+                    return now == block.fields.end() ? was(idx) : now->second;
+                };
+                const auto oldTalents = static_cast<int32_t>(was(talentIdx));
+                const auto oldSkills = static_cast<int32_t>(was(skillIdx));
+                const auto talents = static_cast<int32_t>(current(talentIdx));
+                const auto skills = static_cast<int32_t>(current(skillIdx));
+                if (talents != oldTalents || skills != oldSkills)
+                    pendingEvents_.emit("CHARACTER_POINTS_CHANGED",
+                                        {std::to_string(oldTalents - talents),
+                                         std::to_string(oldSkills - skills)});
             }
         }
         // The ammunition the realm says is loaded, watched on its own just as the
