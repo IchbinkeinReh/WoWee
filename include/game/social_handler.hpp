@@ -515,6 +515,21 @@ public:
     void updateLogoutCountdown(float deltaTime);
     void resetTransferState();
     GroupListData& mutablePartyData() { return partyData; }
+    /// The player's own group as it stands outside a battleground - the "real"
+    /// group the client keeps beside the roster (0xbd1990 its leader, 0xbd1998
+    /// the party count, 0xbeb60c the raid's): what IsRealPartyLeader,
+    /// GetRealNumPartyMembers and GetRealNumRaidMembers read. The roster of a
+    /// group that is not a battleground's writes it (0x006d8870 under
+    /// `(type & 1) == 0`), and SMSG_REAL_GROUP_UPDATE while one is
+    /// (0x006cc300) - not the roster itself, which stays the battleground's.
+    struct RealGroup {
+        uint64_t leader = 0;
+        uint32_t partyCount = 0;
+        uint32_t raidCount = 0;
+    };
+    [[nodiscard]] const RealGroup& realGroup() const { return realGroup_; }
+    /// SMSG_REAL_GROUP_UPDATE's three fields, as 0x006cc300 stores them.
+    void applyRealGroupUpdate(uint8_t groupType, uint32_t count, uint64_t leader);
     InspectResult& mutableInspectResult() { return inspectResult_; }
     void setRaidTargetGuid(uint8_t icon, uint64_t guid) {
         if (icon < kRaidMarkCount) raidTargetGuids_[icon] = guid;
@@ -997,6 +1012,7 @@ private:
     /// 0x00bea820, and the byte at 0x00acd660 that says which of the two arrays of
     /// rows is walked first. The LFG module's init fills the list with all seven keys
     /// ascending and sets that byte to listings-first (0x0055d440:10766-10772).
+    RealGroup realGroup_;
     std::vector<LfgSortEntry> lfgSortKeys_ = defaultLfgSortKeys();
     bool lfgListingsFirst_ = true;
     /// Which list those rows belong to, the id of the last packet actually read -

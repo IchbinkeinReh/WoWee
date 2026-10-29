@@ -2632,6 +2632,21 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     // which this event does not announce.
     if (partyData.leaderGuid != 0) owner_.fireAddonEvent("PARTY_LEADER_CHANGED", {});
     if (partyData.lfgDungeonEntry != 0) owner_.fireAddonEvent("LFG_UPDATE", {});
+    // The real group, from a roster that is not a battleground's (0x006d8870
+    // :6968-6990, `(type & 1) == 0`): a raid's count is its members and the
+    // player, a party's the members of the player's own party; and the leader.
+    if ((partyData.groupType & 0x1) == 0) {
+        const bool raid = groupIsRaid(partyData.groupType);
+        const uint32_t members = static_cast<uint32_t>(partyData.members.size());
+        realGroup_.raidCount = raid ? (members == 0 ? 0u : members + 1u) : 0u;
+        uint32_t party = members;
+        if (raid) {
+            party = 0;
+            for (const auto& m : partyData.members) if (m.subGroup == partyData.subGroup) ++party;
+        }
+        if (party < 5) realGroup_.partyCount = party;
+        realGroup_.leader = partyData.leaderGuid;
+    }
     // The very next call of that same routine is 0x0052c0d0 with the type byte's
     // bit 2 (0x006d8870:6994), the group's *restriction* flag, and it fires
     // PARTY_LFG_RESTRICTED whenever the flag it holds and the bit differ
@@ -5872,8 +5887,24 @@ void SocialHandler::resetForWorldEntry() {
     // keys and the listings-first order back as they start.
     clearLfgListWindow();
     lfgJoinedListId_ = 0;
+    realGroup_ = RealGroup{};
     lfgSortKeys_ = defaultLfgSortKeys();
     lfgListingsFirst_ = true;
+}
+
+void SocialHandler::applyRealGroupUpdate(uint8_t groupType, uint32_t count, uint64_t leader) {
+    // 0x006cc300: bit 1 of the byte is a raid. Not a raid: the raid count is
+    // dropped if there was one and the party count kept (under 5); a raid: its
+    // count is the members and the player, 0 for none (under 41). The leader
+    // goes with either (0x0052bd60, 0x00572530).
+    if ((groupType & 0x2) == 0) {
+        realGroup_.raidCount = 0;
+        if (count < 5) realGroup_.partyCount = count;
+    } else {
+        const uint32_t raid = count == 0 ? 0u : count + 1u;
+        if (raid < 0x29) realGroup_.raidCount = raid;
+    }
+    realGroup_.leader = leader;
 }
 
 void SocialHandler::resetTransferState() {

@@ -3200,7 +3200,7 @@ static int lua_UnitIsPVPSanctuary(lua_State* L) {
 /// group's leader (DAT_00bd1990) is the player. 1 or nil.
 static int lua_IsRealGroupLeader(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint64_t leader = gh ? gh->getPartyData().leaderGuid : 0;
+    const uint64_t leader = gh ? gh->realGroupLeader() : 0;
     if (leader != 0 && leader == gh->getPlayerGuid()) lua_pushnumber(L, 1); else lua_pushnil(L);
     return 1;
 }
@@ -3864,8 +3864,18 @@ void registerUnitLuaAPI(lua_State* L) {
                 // no dungeon finder here, so they are the same number - and
                 // UIParent does arithmetic on them, where absent is an error
                 // rather than a zero.
-                {"GetRealNumRaidMembers",  lua_GetNumRaidMembers},
-                {"GetRealNumPartyMembers", lua_GetNumPartyMembers},
+                // The real group's counts (0x00573xxx / 0x0052c190): the
+                // player's own group's, beside a battleground's roster.
+                {"GetRealNumRaidMembers",  [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? gh->realGroupRaidCount() : 0);
+            return 1;
+        }},
+                {"GetRealNumPartyMembers", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? gh->realGroupPartyCount() : 0);
+            return 1;
+        }},
                 {"HasFullControl",      lua_HasFullControl},
                 {"GetPetSpellBonusDamage", lua_GetPetSpellBonusDamage},
                 {"RetrieveCorpse",      lua_RetrieveCorpse},

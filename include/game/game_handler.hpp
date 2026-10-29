@@ -2502,6 +2502,11 @@ public:
     void sendSetLootMethod(uint32_t method, uint32_t threshold, uint64_t masterLooterGuid);
     bool isInGroup() const;
     const GroupListData& getPartyData() const;
+    /// The player's own group outside a battleground (SocialHandler::RealGroup);
+    /// a default one before the social handler exists.
+    uint64_t realGroupLeader() const;
+    uint32_t realGroupPartyCount() const;
+    uint32_t realGroupRaidCount() const;
     const std::vector<ContactEntry>& getContacts() const override { return contacts_; }
     bool hasPendingGroupInvite() const;
     const std::string& getPendingInviterName() const;

@@ -3034,10 +3034,12 @@ void GameHandler::registerRemainingOpcodes() {
         if (rem() < 8) return;
         const uint64_t newLeaderGuid = packet.readUInt64();
 
+        // Into the real group's own slot (SocialHandler::RealGroup), not the
+        // roster's: inside a battleground the roster is the battleground's raid
+        // and this the player's own group, and writing the roster's type and
+        // leader from it clobbered the battleground raid's.
         if (socialHandler_) {
-            auto& pd = socialHandler_->mutablePartyData();
-            pd.groupType = newGroupType;
-            pd.leaderGuid = newLeaderGuid;
+            socialHandler_->applyRealGroupUpdate(newGroupType, memberCount, newLeaderGuid);
             // The middle field is a count. The party branch of the handler keeps
             // it through 0x0052bd60 under `if (param_1 < 5)`, the raid branch
             // through 0x00572530 as `count == 0 ? 0 : count + 1` under `if
@@ -3054,7 +3056,7 @@ void GameHandler::registerRemainingOpcodes() {
             // state out of. The client stores no member flag in this handler at
             // all; the guid it reads goes to 0xbd1990, a leader slot of its own
             // beside the roster's 0xbd1968 (0x0052cd30 asks whether that one is
-            // the player), and one variable stands for both slots here.
+            // the player).
         }
         LOG_DEBUG("SMSG_REAL_GROUP_UPDATE groupType=", static_cast<int>(newGroupType),
                   " memberCount=", memberCount, " leaderGuid=", newLeaderGuid);

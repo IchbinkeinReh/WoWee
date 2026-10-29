@@ -4515,6 +4515,16 @@ bool GameHandler::isInGroup() const {
     return socialHandler_ ? socialHandler_->isInGroup() : !partyData.isEmpty();
 }
 
+uint64_t GameHandler::realGroupLeader() const {
+    return socialHandler_ ? socialHandler_->realGroup().leader : 0;
+}
+uint32_t GameHandler::realGroupPartyCount() const {
+    return socialHandler_ ? socialHandler_->realGroup().partyCount : 0;
+}
+uint32_t GameHandler::realGroupRaidCount() const {
+    return socialHandler_ ? socialHandler_->realGroup().raidCount : 0;
+}
+
 const GroupListData& GameHandler::getPartyData() const {
     if (socialHandler_) return socialHandler_->getPartyData();
     return partyData;
