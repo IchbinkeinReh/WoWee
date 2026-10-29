@@ -9,12 +9,12 @@ namespace se = wowee::audio::sound_entry;
 TEST_CASE("a row's file is its folder and its name", "[audio][sound_entry]") {
     // NPCSounds row 33 -> SoundEntries 5916: the name alone in column 3, the
     // folder in column 23.
-    CHECK(se::filePath("Sound\Creature\DwarfFemaleGuardNPC", "DwarfFemaleGuardNPCGreeting01.wav") ==
-          "Sound\Creature\DwarfFemaleGuardNPC\DwarfFemaleGuardNPCGreeting01.wav");
+    CHECK(se::filePath(R"(Sound\Creature\DwarfFemaleGuardNPC)", "DwarfFemaleGuardNPCGreeting01.wav") ==
+          R"(Sound\Creature\DwarfFemaleGuardNPC\DwarfFemaleGuardNPCGreeting01.wav)");
     // A folder that already ends in a separator is not given a second.
-    CHECK(se::filePath("Sound\Spells\\", "Fire.wav") == "Sound\Spells\Fire.wav");
+    CHECK(se::filePath(R"(Sound\Spells\)", "Fire.wav") == R"(Sound\Spells\Fire.wav)");
     // No folder: the name is the path.
-    CHECK(se::filePath("", "Sound\Interface\iMiniMapOpen.wav") == "Sound\Interface\iMiniMapOpen.wav");
+    CHECK(se::filePath("", R"(Sound\Interface\iMiniMapOpen.wav)") == R"(Sound\Interface\iMiniMapOpen.wav)");
 }
 
 TEST_CASE("the swings follow the row's flags", "[audio][sound_entry]") {
