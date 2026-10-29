@@ -215,6 +215,33 @@ TEST_CASE("the resistance a target loses is three past the healing bonus",
     CHECK(wotlk.at("PLAYER_FIELD_MOD_TARGET_RESISTANCE") == 1195);
 }
 
+TEST_CASE("the honour counters are four dwords in a row",
+          "[update-fields]") {
+    // The PvP panel and the honour frame read these straight out of the fields
+    // (0x00611a20, 0x00611ad0, 0x00611b80 - +0x10d4 to +0x10e0 into the field
+    // blob the player object keeps at +0x1008), and the client's own per-field
+    // descriptor table names all four in that order.  They matter more than
+    // most because they are counters: read the wrong slot and the panel shows a
+    // plausible number of kills rather than an error, and the contribution
+    // column reads whatever rating or flag happens to neighbour it.
+    const auto wotlk = declaredFields("wotlk");
+    REQUIRE(wotlk.count("PLAYER_FIELD_KILLS") == 1);
+    CHECK(wotlk.at("PLAYER_FIELD_TODAY_CONTRIBUTION") == wotlk.at("PLAYER_FIELD_KILLS") + 1);
+    CHECK(wotlk.at("PLAYER_FIELD_YESTERDAY_CONTRIBUTION") == wotlk.at("PLAYER_FIELD_KILLS") + 2);
+    CHECK(wotlk.at("PLAYER_FIELD_LIFETIME_HONORBALE_KILLS") == wotlk.at("PLAYER_FIELD_KILLS") + 3);
+    // Blob dwords 1077..1080, and the run ends where WoWee's own numbering
+    // already agrees it ends: PLAYER_FIELD_BYTES2 at 1229, the combat ratings
+    // two past that.
+    CHECK(wotlk.at("PLAYER_FIELD_KILLS") == 1225);
+    CHECK(wotlk.at("PLAYER_FIELD_KILLS") + 4 == wotlk.at("PLAYER_FIELD_BYTES2"));
+    CHECK(wotlk.at("PLAYER_FIELD_LIFETIME_HONORBALE_KILLS") + 3 ==
+          wotlk.at("PLAYER_FIELD_COMBAT_RATING_1"));
+    // And PLAYER_FIELD_KILLS stays one slot, not two: GetPVPSessionStats and
+    // GetPVPYesterdayStats read it twice over, as the low and high halfwords of
+    // the same dword (+0x10d4 and +0x10d6), so giving it two slots would put
+    // every counter in this run one field out.
+}
+
 TEST_CASE("the unit's three attack times are one run of fields",
           "[update-fields]") {
     // The client's UnitAttackSpeed (0x00610a00) and UnitRangedDamage

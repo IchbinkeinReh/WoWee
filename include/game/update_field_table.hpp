@@ -90,6 +90,20 @@ enum class UF : uint16_t {
     // (0x004f88b0 reads +0x10e7). WotLK only here.
     PLAYER_FIELD_BYTES2,
 
+    // The honour counters the PvP and honour panels print.  All four are read
+    // straight out of the fields, unsigned: 0x00611a20 (GetPVPSessionStats)
+    // takes the low halfword of PLAYER_FIELD_KILLS and
+    // PLAYER_FIELD_TODAY_CONTRIBUTION, 0x00611ad0 (GetPVPYesterdayStats) the
+    // high halfword of the same dword and PLAYER_FIELD_YESTERDAY_CONTRIBUTION,
+    // and 0x00611b80 (GetPVPLifetimeStats) PLAYER_FIELD_LIFETIME_HONORBALE_
+    // KILLS - the client's own spelling of it, missing an O like its own header
+    // does.  The lifetime dishonourable count is byte 3 of PLAYER_FIELD_BYTES
+    // (+0x1067), and reads as zero below 5.  WotLK only here.
+    PLAYER_FIELD_KILLS,
+    PLAYER_FIELD_TODAY_CONTRIBUTION,
+    PLAYER_FIELD_YESTERDAY_CONTRIBUTION,
+    PLAYER_FIELD_LIFETIME_HONORBALE_KILLS,
+
     // Player spell power / healing bonus (WotLK: PRIVATE - int32 per school)
     PLAYER_FIELD_MOD_DAMAGE_DONE_POS,  // Spell damage bonus (first of 7 schools)
     PLAYER_FIELD_MOD_HEALING_DONE_POS, // Healing bonus

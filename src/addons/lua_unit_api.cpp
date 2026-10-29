@@ -1066,12 +1066,20 @@ static int lua_GetBlockChance(lua_State* L) {
 // and it reads the dword unsigned - it adds 2^32 back when the int comes out
 // negative - so a block value the server sent above 2^31 reads as the size of
 // it, not as a negative.  Was a hardcoded zero here.
-static int lua_GetShieldBlock(lua_State* L) {
+// The local player's object - what a client binding means by "the player":
+// 0x004d3790's guid, asked for as a player (0x004d4db0 with type 0x10), which
+// answers nothing when there is none and the binding then pushes zero.  The
+// second half of the guard is ours, not the client's: an expansion whose layout
+// does not name the field cannot be asked for it.
+static std::shared_ptr<game::Entity> localPlayerObject(lua_State* L, uint16_t index) {
+    if (index == 0xFFFF) return nullptr;
     auto* gh = getGameHandler(L);
+    return gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+}
+
+static int lua_GetShieldBlock(lua_State* L) {
     const uint16_t index = game::fieldIndex(game::UF::PLAYER_SHIELD_BLOCK);
-    const auto player = (gh && index != 0xFFFF)
-                            ? gh->getEntityManager().getEntity(gh->getPlayerGuid())
-                            : nullptr;
+    const auto player = localPlayerObject(L, index);
     lua_pushnumber(L, player ? player->getField(index) : 0);
     return 1;
 }
@@ -1085,13 +1093,59 @@ static int lua_GetShieldBlock(lua_State* L) {
 // (paperdollframe.lua:342).  Negated in double, so the field's most negative
 // value cannot wrap the way the client's own int negation would.
 static int lua_GetSpellPenetration(lua_State* L) {
-    auto* gh = getGameHandler(L);
     const uint16_t index = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_TARGET_RESISTANCE);
-    const auto player = (gh && index != 0xFFFF)
-                            ? gh->getEntityManager().getEntity(gh->getPlayerGuid())
-                            : nullptr;
+    const auto player = localPlayerObject(L, index);
     lua_pushnumber(L, player ? -static_cast<double>(static_cast<int32_t>(player->getField(index))) : 0.0);
     return 1;
+}
+
+// The honour counters the PvP panel and the honour frame read (pvpframe.lua:508
+// and honourframe.lua:21-41), each a player field the server sends already
+// summed: GetPVPSessionStats (0x00611a20), GetPVPYesterdayStats (0x00611ad0)
+// and GetPVPLifetimeStats (0x00611b80) all take the local player's player
+// object and read it, and push zeros when there is no player at all.
+//
+// PLAYER_FIELD_KILLS is one dword carrying two 16-bit counters - this session's
+// kills in the low half, yesterday's in the high - which is why the client
+// reads it as a ushort twice, at +0x10d4 and at +0x10d6.  The contributions are
+// whole dwords, unsigned: the client adds 2^32 back when the int it loaded came
+// out negative, so the counters go past two billion rather than wrapping.
+static int lua_GetPVPSessionStats(lua_State* L) {
+    const uint16_t killsIndex = game::fieldIndex(game::UF::PLAYER_FIELD_KILLS);
+    const auto player = localPlayerObject(L, killsIndex);
+    const uint32_t kills = player ? player->getField(killsIndex) : 0;
+    const uint16_t contributionIndex = game::fieldIndex(game::UF::PLAYER_FIELD_TODAY_CONTRIBUTION);
+    const auto withContribution = localPlayerObject(L, contributionIndex);
+    lua_pushnumber(L, kills & 0xFFFFu);
+    lua_pushnumber(L, withContribution ? withContribution->getField(contributionIndex) : 0);
+    return 2;
+}
+
+static int lua_GetPVPYesterdayStats(lua_State* L) {
+    const uint16_t killsIndex = game::fieldIndex(game::UF::PLAYER_FIELD_KILLS);
+    const auto player = localPlayerObject(L, killsIndex);
+    const uint32_t kills = player ? player->getField(killsIndex) : 0;
+    const uint16_t contributionIndex = game::fieldIndex(game::UF::PLAYER_FIELD_YESTERDAY_CONTRIBUTION);
+    const auto withContribution = localPlayerObject(L, contributionIndex);
+    lua_pushnumber(L, kills >> 16);
+    lua_pushnumber(L, withContribution ? withContribution->getField(contributionIndex) : 0);
+    return 2;
+}
+
+// GetPVPLifetimeStats answers two values, not three - honorable, then
+// dishonorable - and the second is a byte, not a dword: byte 3 of
+// PLAYER_FIELD_BYTES (+0x1067), read as zero below 5.  That floor is the
+// client's, and it is what the honour frame's "Rank" line depends on: the byte
+// doubles as the lifetime dishonourable count only once it reaches 5.
+static int lua_GetPVPLifetimeStats(lua_State* L) {
+    const uint16_t killsIndex = game::fieldIndex(game::UF::PLAYER_FIELD_LIFETIME_HONORBALE_KILLS);
+    const auto player = localPlayerObject(L, killsIndex);
+    lua_pushnumber(L, player ? player->getField(killsIndex) : 0);
+    const uint16_t bytesIndex = game::fieldIndex(game::UF::PLAYER_FIELD_BYTES);
+    const auto withBytes = localPlayerObject(L, bytesIndex);
+    const uint32_t dishonorable = withBytes ? (withBytes->getField(bytesIndex) >> 24) & 0xFFu : 0;
+    lua_pushnumber(L, dishonorable < 5 ? 0 : dishonorable);
+    return 2;
 }
 
 // GetCritChance() → percent (melee crit)
@@ -3338,20 +3392,12 @@ void registerUnitLuaAPI(lua_State* L) {
             return 2;
         }},
                 // Honour and arena totals, in the shapes their panels expect.
-                // Zeroes rather than nothing: every one of these is read
-                // straight into arithmetic or a format string.
-                {"GetPVPLifetimeStats", [](lua_State* L) -> int {
-            lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0);
-            return 3;
-        }},
-                {"GetPVPSessionStats", [](lua_State* L) -> int {
-            lua_pushnumber(L, 0); lua_pushnumber(L, 0);
-            return 2;
-        }},
-                {"GetPVPYesterdayStats", [](lua_State* L) -> int {
-            lua_pushnumber(L, 0); lua_pushnumber(L, 0);
-            return 2;
-        }},
+                // These three are fields the server already sends; the arena
+                // and honour *currencies* below are too, and the ones that stay
+                // zero are the ones no field carries.
+                {"GetPVPLifetimeStats",   lua_GetPVPLifetimeStats},
+                {"GetPVPSessionStats",    lua_GetPVPSessionStats},
+                {"GetPVPYesterdayStats",  lua_GetPVPYesterdayStats},
                 // Seven returns, as the battleground panel reads them:
                 // status, map, instance, level range, team size, registered.
                 // Stopping at three left teamSize nil and the panel formatted
