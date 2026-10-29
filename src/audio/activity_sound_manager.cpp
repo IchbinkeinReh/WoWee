@@ -17,13 +17,7 @@ namespace {
 // SoundEntries names its files by leaf (no folder), while this manager reaches
 // its clips by full archive path, so joining the two needs the same lowered
 // leaf the voice manager joins on.
-std::string leafLower(const std::string& path) {
-    const auto slash = path.find_last_of("\\/");
-    std::string leaf = slash == std::string::npos ? path : path.substr(slash + 1);
-    std::transform(leaf.begin(), leaf.end(), leaf.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return leaf;
-}
+using sound_entry::leafLower;
 
 } // namespace
 

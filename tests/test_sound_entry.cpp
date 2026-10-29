@@ -17,6 +17,12 @@ TEST_CASE("a row's file is its folder and its name", "[audio][sound_entry]") {
     CHECK(se::filePath("", R"(Sound\Interface\iMiniMapOpen.wav)") == R"(Sound\Interface\iMiniMapOpen.wav)");
 }
 
+TEST_CASE("a path's leaf, lowered, is what a row is found by", "[audio][sound_entry]") {
+    CHECK(se::leafLower(R"(Sound\Creature\Kodo\KodoAggro.WAV)") == "kodoaggro.wav");
+    CHECK(se::leafLower("Sound/Interface/iMiniMapOpen.wav") == "iminimapopen.wav");
+    CHECK(se::leafLower("Bare.wav") == "bare.wav");
+}
+
 TEST_CASE("the swings follow the row's flags", "[audio][sound_entry]") {
     CHECK(se::pitchForFlags(0, 0.0f) == 1.0f);
     CHECK(se::pitchForFlags(se::kFlagPitchSwing, 0.0f) == Catch::Approx(0.85f));

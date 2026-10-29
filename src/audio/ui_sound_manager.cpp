@@ -21,14 +21,7 @@ float swingDraw() {
 // The last element of a sound path, lower-cased. SoundEntries' File columns
 // give a leaf ("LootCoinSmall.wav") and no folder, so this is what a play
 // that knows only a path can look a row up by.
-std::string leafLower(const std::string& path) {
-    const auto pos = path.find_last_of("\\/");
-    std::string leaf = (pos == std::string::npos) ? path : path.substr(pos + 1);
-    for (char& ch : leaf) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return leaf;
-}
+using sound_entry::leafLower;
 
 } // namespace
 

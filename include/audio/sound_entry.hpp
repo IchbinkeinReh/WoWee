@@ -94,4 +94,13 @@ inline std::string filePath(const std::string& directory, const std::string& nam
     return directory + "\\" + name;
 }
 
+/// A file's own name, lowered: how a clip offered by its archive path is
+/// matched to the SoundEntries rows, which name their files by leaf alone.
+inline std::string leafLower(const std::string& path) {
+    const auto slash = path.find_last_of("\\/");
+    std::string leaf = slash == std::string::npos ? path : path.substr(slash + 1);
+    for (char& c : leaf) c = static_cast<char>((c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c);
+    return leaf;
+}
+
 }  // namespace wowee::audio::sound_entry
