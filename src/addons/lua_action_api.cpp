@@ -2514,7 +2514,8 @@ static int pushTradeLink(lua_State* L, game::GameHandler* gh,
                          const game::GameHandler::TradeSlot& slot) {
     const auto* info = (gh && slot.occupied) ? gh->getItemInfo(slot.itemId) : nullptr;
     if (!info || info->name.empty()) { return luaReturnNil(L); }
-    const std::string link = game::itemChatLink(slot.itemId, static_cast<uint32_t>(info->quality), info->name);
+    const std::string link = game::itemChatLink(slot.itemId, static_cast<uint32_t>(info->quality), info->name,
+                           {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -3229,7 +3230,8 @@ void registerActionLuaAPI(lua_State* L) {
                 return 0;
             }
             lua_pushstring(L, info->name.c_str());
-            lua_pushstring(L, game::buildItemLink(m->result.item, info->quality, info->name).c_str());
+            lua_pushstring(L, game::buildItemLink(m->result.item, info->quality, info->name,
+                                                  gh->getPlayerLevel()).c_str());
             return 2;
         }},
                 // SetMacroSpell(index or name, spell [, unit]) (0x00567320) and

@@ -883,7 +883,8 @@ void GameHandler::registerCoreOpcodes() {
                 if (!self) args.push_back(lookupName(guid));
                 if (item && item->valid) {
                     key = std::string(self ? "DRUNK_MESSAGE_ITEM_SELF" : "DRUNK_MESSAGE_ITEM_OTHER") + n;
-                    args.push_back(buildItemLink(itemId, item->quality, item->name));
+                    args.push_back(buildItemLink(itemId, item->quality, item->name,
+                                                 getPlayerLevel()));
                 } else {
                     key = std::string(self ? "DRUNK_MESSAGE_SELF" : "DRUNK_MESSAGE_OTHER") + n;
                 }

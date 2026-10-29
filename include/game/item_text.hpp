@@ -10,6 +10,7 @@
  * until the copies were found to disagree.
  */
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -190,8 +191,8 @@ inline const char* itemQualityColorHexRGB(uint32_t quality) {
 
 /// A chat hyperlink for an item, as 3.3.5a writes one.
 ///
-/// Nine fields after "item:": the id, then enchant, four gems, suffix, unique
-/// id and level. Six places built this by hand and they did not agree - the
+/// Nine numbers after "item:", each named below by the item field the client
+/// reads it from. Six places built this by hand and they did not agree - the
 /// three on the Lua side wrote eight, one short, so a link handed to an addon
 /// by GetContainerItemLink had a different shape from one produced by
 /// shift-clicking a quest reward.
@@ -199,19 +200,79 @@ inline const char* itemQualityColorHexRGB(uint32_t quality) {
 /// Nothing visibly breaks today: this client's own two parsers read the id and
 /// stop at the first colon, and FrameXML hands the whole link back to
 /// SetHyperlink rather than splitting it. It is a difference waiting for the
-/// first thing that does split it.
-/// `enchantId` and `randomPropertyId` are the second and seventh fields. They
-/// default to none, which is what every caller but the guild bank wants: a
-/// link written with an enchant is what a bank slot's contents actually are,
-/// and dropping it would show an enchanted weapon as a plain one.
+/// first thing that does split it - which is also why the zeros this used to
+/// write for the gems, the seed and the viewer's level were not noticed: they
+/// are only read by something that splits.
+
+/// The numbers a link carries for one **instance** of an item, in the order the
+/// client writes them.
+///
+/// `0x0061e3a0` reads them off the item object's own field block and hands them
+/// to `0x0061e290`, which formats
+///
+///     "%s|Hitem:%d:%d:%d:%d:%d:%d:%d:%d:%d|h[%s]|h%s"      (0xa24f04)
+///
+/// Reading the pushes back from that call settles the order: colour, entry,
+/// enchant, gem, gem, gem, a hard zero, property, seed, **the viewer's level**,
+/// then the name and the colour reset.
+///
+/// The block `0x0061e3a0` reads is `*(item+0xd4)`, so the offsets in it are the
+/// client's own item-field offsets - and the descriptor records the client keeps
+/// for those fields (a walk of the table at `0x00ac4800` names them all, one per
+/// field, with the field's name, its offset and how many dwords it covers)
+/// identify each one:
+///
+///     +0x40  blob 16  ITEM_FIELD_ENCHANTMENT_1_1   the enchant
+///     +0x58  blob 22  ITEM_FIELD_ENCHANTMENT_3_1   the first gem
+///     +0x64  blob 25  ITEM_FIELD_ENCHANTMENT_4_1   the second
+///     +0x70  blob 28  ITEM_FIELD_ENCHANTMENT_5_1   the third
+///     +0xd4  blob 53  ITEM_FIELD_RANDOM_PROPERTIES_ID
+///     +0xd0  blob 52  ITEM_FIELD_PROPERTY_SEED
+///
+/// Those blobs are the same fields WoWee already reads for an item it has seen,
+/// just numbered from the head of the object rather than of the item block: the
+/// same walk puts ITEM_FIELD_STACK_COUNT at blob 8 where this client's table
+/// says 14, so six object dwords come before the item's own - which is exactly
+/// where `entity_controller.cpp` lands when it derives `itemEnchBase =
+/// STACK_COUNT + 8` (flat 22 = blob 16, the enchant) and reads the sockets at
+/// +6, +9 and +12 from it (flat 28/31/34 = blobs 22/25/28, the gems).  So the
+/// three numbers this client used to hard-code as zero are three numbers it was
+/// already storing and not writing.
+///
+/// Two of the client's tests can put zeros in these slots, and only one of them
+/// is visible here.  Bit 3 of the item's flags (blob 15, WoWee's flat 21) makes
+/// every one of the six numbers zero - `GameHandler::itemLinkInstance` applies
+/// that test.  The other is a virtual call, `(**(int **)(item+0xd0))(0)`, whose
+/// result suppresses the enchant and the gems while its bit 0xd is set; that
+/// mask is not something WoWee reads, and it governs the enchant this client has
+/// always written ungated, so nothing here waits on it.
+struct ItemLinkInstance {
+    uint32_t enchantId = 0;
+    std::array<uint32_t, 3> gems{};
+    int32_t  randomPropertyId = 0;
+    uint32_t seed = 0;
+};
+
+/// The last number is not the item's at all.  `0x0061e290` asks
+/// `FUN_004d3790()`/`FUN_004d4db0` for **its own** player object, reads its unit
+/// block at `+0xd0` and takes `+0xc0` from it - blob dword 48, which the same
+/// descriptor walk names UNIT_FIELD_LEVEL - and it does that for every link it
+/// formats, whoever is wearing the item, writing 0 only while there is no player
+/// object to read.  `GameHandler::getPlayerLevel()` is WoWee's copy of that same
+/// field: `entity_controller.cpp:1675` writes it from the `UNIT_FIELD_LEVEL`
+/// watcher.
 inline std::string itemChatLink(uint32_t itemId, uint32_t quality,
                                 const std::string& name,
-                                uint32_t enchantId = 0,
-                                int32_t randomPropertyId = 0) {
+                                const ItemLinkInstance& instance = {},
+                                uint32_t viewerLevel = 0) {
     return std::string("|c") + itemQualityColorHex(quality) + "|Hitem:" +
-           std::to_string(itemId) + ":" + std::to_string(enchantId) +
-           ":0:0:0:0:" + std::to_string(randomPropertyId) + ":0:0|h[" + name +
-           "]|h|r";
+           std::to_string(itemId) + ":" + std::to_string(instance.enchantId) +
+           ":" + std::to_string(instance.gems[0]) +
+           ":" + std::to_string(instance.gems[1]) +
+           ":" + std::to_string(instance.gems[2]) +
+           ":0:" + std::to_string(instance.randomPropertyId) +
+           ":" + std::to_string(instance.seed) +
+           ":" + std::to_string(viewerLevel) + "|h[" + name + "]|h|r";
 }
 
 

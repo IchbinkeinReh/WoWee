@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/item_text.hpp"   // ItemLinkInstance - the numbers an item link carries
 #include "game/mirror_image.hpp"
 #include "game/rune_state.hpp"
 #include "game/spell_history.hpp"
@@ -4486,6 +4487,31 @@ public:
         auto it = onlineItems_.find(guid);
         if (it == onlineItems_.end()) return {};
         return it->second.socketEnchantIds;
+    }
+    /// The six instance numbers a link for this item carries, as the client
+    /// reads them off the item **object** (0x0061e3a0; the offsets and the field
+    /// names are written out beside itemChatLink).  Empty for an item WoWee has
+    /// never had a field block for - a template link, which is what the client
+    /// builds through 0x0061e360 for its ammo square and for a unit it is
+    /// looking at rather than its own character.
+    ///
+    /// The realm's flag bit 3 is the client's own test, applied here rather than
+    /// in the formatter so that a link built from a record which never carried
+    /// flags - a guild bank slot, a mail attachment - is not gated on a bit it
+    /// was never sent.  What that flag means is not pinned; what it does is:
+    /// with it set the client writes zero for the enchant, all three gems, the
+    /// property and the seed.
+    ItemLinkInstance itemLinkInstance(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        if (it == onlineItems_.end()) return {};
+        const auto& item = it->second;
+        if (item.flags & 0x8u) return {};
+        ItemLinkInstance inst;
+        inst.enchantId        = item.permanentEnchantId;
+        inst.gems             = item.socketEnchantIds;
+        inst.randomPropertyId = item.randomPropertyId;
+        inst.seed             = item.suffixFactor;   // ITEM_FIELD_PROPERTY_SEED
+        return inst;
     }
     uint64_t getVendorGuid() const;
 

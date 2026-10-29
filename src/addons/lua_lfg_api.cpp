@@ -740,7 +740,7 @@ void registerLfgLuaAPI(lua_State* L) {
             const auto* info = gh->getItemInfo(item.itemId);
             if (!info || !info->valid) return luaReturnNil(L);
             lua_pushstring(L, game::buildItemLink(item.itemId, info->quality,
-                                                  info->name).c_str());
+                                                  info->name, gh->getPlayerLevel()).c_str());
             return 1;
         }
         return luaReturnNil(L);

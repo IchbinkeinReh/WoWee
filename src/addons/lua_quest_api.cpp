@@ -1199,7 +1199,7 @@ static int lua_GetQuestLogSpecialItemInfo(lua_State* L) {
     if (!info || info->name.empty()) { return luaReturnNil(L); }
 
     const uint32_t quality = info->quality < 8 ? info->quality : 1u;
-    const std::string link = game::itemChatLink(item.itemId, quality, info->name);
+    const std::string link = game::itemChatLink(item.itemId, quality, info->name, {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());                                        // 1: link
 
     // A nil texture is an empty slot to the interface, and the button draws
@@ -3058,7 +3058,7 @@ static int lua_GetQuestLogItemLink(lua_State* L) {
             if (name.empty()) break;
             lua_pushstring(L, game::buildItemLink(r.itemId,
                                                   info ? info->quality : 1u,
-                                                  name).c_str());
+                                                  name, gh->getPlayerLevel()).c_str());
             return 1;
         }
         return luaReturnNil(L);
@@ -3355,7 +3355,7 @@ static int lua_GetQuestItemLink(lua_State* L) {
         if (name.empty()) { return luaReturnNil(L); }
         lua_pushstring(L, game::buildItemLink(r.itemId,
                                               info ? info->quality : 1u,
-                                              name).c_str());
+                                              name, gh->getPlayerLevel()).c_str());
         return 1;
     }
     return luaReturnNil(L);
@@ -4328,7 +4328,7 @@ void registerQuestLuaAPI(lua_State* L) {
             gh->ensureItemInfo(made);
             const auto* info = gh->getItemInfo(made);
             if (!info || !info->valid) return luaReturnNil(L);
-            lua_pushstring(L, game::buildItemLink(made, info->quality, info->name).c_str());
+            lua_pushstring(L, game::buildItemLink(made, info->quality, info->name, gh->getPlayerLevel()).c_str());
             return 1;
         }},
                 // A recipe link is an |Htrade: hyperlink carrying the whole
@@ -4352,7 +4352,7 @@ void registerQuestLuaAPI(lua_State* L) {
                 const auto* info = gh->getItemInfo(r.itemId);
                 if (!info || !info->valid) return luaReturnNil(L);
                 lua_pushstring(L,
-                    game::buildItemLink(r.itemId, info->quality, info->name).c_str());
+                    game::buildItemLink(r.itemId, info->quality, info->name, gh->getPlayerLevel()).c_str());
                 return 1;
             }
             return luaReturnNil(L);
@@ -4802,7 +4802,7 @@ void registerQuestLuaAPI(lua_State* L) {
             gh->ensureItemInfo(item);
             const auto* info = gh->getItemInfo(item);
             if (!info || !info->valid) return luaReturnNil(L);
-            lua_pushstring(L, game::buildItemLink(item, info->quality, info->name).c_str());
+            lua_pushstring(L, game::buildItemLink(item, info->quality, info->name, gh->getPlayerLevel()).c_str());
             return 1;
         }},
                 {"GetTrainerGreetingText", [](lua_State* L) -> int {

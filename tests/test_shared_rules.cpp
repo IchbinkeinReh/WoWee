@@ -379,20 +379,27 @@ TEST_CASE("an item's colour by quality", "[item]") {
 }
 
 TEST_CASE("an item hyperlink as 3.3.5a writes one", "[item]") {
-    // Nine fields after "item:": id, enchant, four gems, suffix, unique id and
-    // level. Sixteen places built this by hand; the ones that wrote eight gave
-    // an addon a differently shaped link from the one a shift-click produced.
+    // Nine numbers after "item:", each one named for the field 0x0061e3a0 reads
+    // it out of the item object's field block: the entry, ITEM_FIELD_ENCHANTMENT_
+    // 1_1, the three socket triples (ENCHANTMENT_3_1, _4_1 and _5_1), a hard
+    // zero, ITEM_FIELD_RANDOM_PROPERTIES_ID, ITEM_FIELD_PROPERTY_SEED, and then
+    // a level that is not the item's at all - 0x0061e290 reads UNIT_FIELD_LEVEL
+    // off its own player object and appends it to every link it formats, record
+    // links included.  Sixteen places built this by hand; the ones that wrote
+    // eight gave an addon a differently shaped link from the one a shift-click
+    // produced.
     CHECK(game::itemChatLink(3299, 0, "Fractured Canine") ==
           "|cff9d9d9d|Hitem:3299:0:0:0:0:0:0:0:0|h[Fractured Canine]|h|r");
     CHECK(game::itemChatLink(19019, 4, "Thunderfury") ==
           "|cffa335ee|Hitem:19019:0:0:0:0:0:0:0:0|h[Thunderfury]|h|r");
 
-    SECTION("an enchant and a suffix keep the field count") {
+    SECTION("an enchant, gems and a seed keep the field count") {
         // The guild bank wrote eight fields where everything else wrote nine,
         // dropping the level, so a link from a bank slot had a different shape
         // from the same item linked out of a bag.
-        const std::string link = game::itemChatLink(19019, 4, "Thunderfury", 2504, -37);
-        CHECK(link == "|cffa335ee|Hitem:19019:2504:0:0:0:0:-37:0:0"
+        const game::ItemLinkInstance forged{2504, {3149, 3149, 0}, -37, 12};
+        const std::string link = game::itemChatLink(19019, 4, "Thunderfury", forged, 80);
+        CHECK(link == "|cffa335ee|Hitem:19019:2504:3149:3149:0:0:-37:12:80"
                       "|h[Thunderfury]|h|r");
         const std::string plain = game::itemChatLink(19019, 4, "Thunderfury");
         auto fields = [](const std::string& s) {

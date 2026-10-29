@@ -30,8 +30,14 @@ inline bool isPreWotlk() {
 // handlers. It is a second name for itemChatLink and not a second copy: this
 // one carried its own quality table, which is how the colours came to be
 // written out in six places for one set of eight values.
-inline std::string buildItemLink(uint32_t itemId, uint32_t quality, const std::string& name) {
-    return itemChatLink(itemId, quality, name);
+/// `viewerLevel` has no default on purpose.  The client appends its own
+/// player's level to every item link it formats - 0x0061e290 reads UNIT_FIELD_LEVEL
+/// off its own player object for links it builds from a record just as much as
+/// for ones it builds from an item object - so a link builder that did not
+/// answer that number is not writing the link the client writes.
+inline std::string buildItemLink(uint32_t itemId, uint32_t quality, const std::string& name,
+                                 uint32_t viewerLevel) {
+    return itemChatLink(itemId, quality, name, {}, viewerLevel);
 }
 
 /// Whether a map 0 position is the corrupted one rather than real ground.

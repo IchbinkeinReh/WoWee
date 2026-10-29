@@ -611,7 +611,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         uint32_t allPassQuality = allPassInfo ? allPassInfo->quality : 1u;
         // LOOT_ROLL_ALL_PASSED as CHAT_MSG_LOOT (0x006fb470).
         owner_.addLocalChatLine(ChatType::LOOT, interfaceFormat("LOOT_ROLL_ALL_PASSED", "Everyone passed on: %s",
-            {buildItemLink(itemId, allPassQuality, allPassName)}));
+            {buildItemLink(itemId, allPassQuality, allPassName,
+                           owner_.getPlayerLevel())}));
         endLootRoll(passedGuid, passedSlot);
     };
 
@@ -689,7 +690,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             if (!suffix.empty()) itemName += " " + suffix;
         }
         uint32_t quality = info->quality;
-        std::string link = buildItemLink(itemId, quality, itemName);
+        std::string link = buildItemLink(itemId, quality, itemName, owner_.getPlayerLevel());
         // LOOT_ITEM_SELF, LOOT_ITEM_PUSHED_SELF or LOOT_ITEM_CREATED_SELF (and
         // their _MULTIPLE) as CHAT_MSG_LOOT, as 0x00523900 picks them from the
         // packet's flags - and none when the server says not to show it. This
@@ -1652,7 +1653,7 @@ std::string InventoryHandler::rollItemLink(uint32_t itemId, int32_t randomProp) 
         std::string suffix = owner_.getRandomPropertyName(randomProp);
         if (!suffix.empty()) itemName += " " + suffix;
     }
-    return buildItemLink(itemId, info ? info->quality : 1u, itemName);
+    return buildItemLink(itemId, info ? info->quality : 1u, itemName, owner_.getPlayerLevel());
 }
 
 void InventoryHandler::handleLootRollWon(network::Packet& packet) {
@@ -3735,10 +3736,21 @@ void InventoryHandler::noteMailAttachRefundable(int attachIndex) {
     if (refund->playedSincePurchase >= kRefundWindow) return;   // window is over
     if (!owner_.addonEventCallbackRef()) return;
     const auto* info = owner_.getItemInfo(att.item.itemId);
+    // The attachment is an item this client has fields for, so its link is the
+    // instance link - and the property in the numbers is the same one the words
+    // carry, which is how 0x0061e290 feeds its position-seven value to
+    // 0x00706d70 rather than letting the two disagree.
+    const game::ItemLinkInstance inst = owner_.itemLinkInstance(att.itemGuid);
+    std::string linkName = info ? info->name : att.item.name;
+    if (inst.randomPropertyId != 0) {
+        const std::string suffix = owner_.getRandomPropertyName(inst.randomPropertyId);
+        if (!suffix.empty()) linkName += " " + suffix;
+    }
     owner_.addonEventCallbackRef()(
         "MAIL_LOCK_SEND_ITEMS",
         {std::to_string(attachIndex + 1),
-         info ? game::buildItemLink(att.item.itemId, info->quality, info->name)
+         info ? game::itemChatLink(att.item.itemId, info->quality, linkName, inst,
+                                   owner_.getPlayerLevel())
               : att.item.name});
 }
 
@@ -5452,7 +5464,8 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                     std::string suffix = owner_.getRandomPropertyName(it->randomProp);
                     if (!suffix.empty()) itemName += " " + suffix;
                 }
-                std::string link = buildItemLink(data.entry, data.quality, itemName);
+                std::string link = buildItemLink(data.entry, data.quality, itemName,
+                                                 owner_.getPlayerLevel());
                 // The same line the immediate path prints (0x00523900).
                 const interface_text::ItemPush push{.self = it->self, .received = it->received,
                     .created = it->created, .showInChat = it->showInChat, .count = it->count};

@@ -402,15 +402,22 @@ static int lua_GetBuybackItemLink(lua_State* L) {
     // are part of what the row is called - and the property goes into the
     // link's text through ITEM_SUFFIX_TEMPLATE, for the reason written out by
     // GetInventoryItemLink's own tail.
+    // One value feeds both the number and the words beside it: 0x0061e290 hands
+    // the property it puts at position seven straight to 0x00706d70, which is
+    // what builds the name.  The object's own fields are what the client's link
+    // is made of - gems and seed included - and the row's copy is only a
+    // fallback, for a ring slot whose item object never arrived.
+    game::ItemLinkInstance inst = gh->itemLinkInstance(bi.item.guid);
+    const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
+                                                        : bi.item.randomPropertyId;
+    inst.randomPropertyId = property;
     std::string name = bi.item.name;
-    const int32_t property = bi.item.randomPropertyId;
     if (property != 0) {
         const std::string propertyName = gh->getRandomPropertyName(property);
         if (!propertyName.empty()) name += " " + propertyName;
     }
-    const uint32_t enchant = bi.item.guid != 0 ? gh->getItemEnchantIds(bi.item.guid).first : 0u;
     const std::string link = game::itemChatLink(bi.item.itemId, static_cast<uint32_t>(q),
-                                                name, enchant, property);
+                                                name, inst, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -533,7 +540,8 @@ static int lua_GetMerchantItemCostItem(lua_State* L) {
         lua_pushstring(L, info ? gh->getItemIconPath(info->displayInfoId).c_str() : "");
         lua_pushnumber(L, cost->itemCount[j]);
         if (info && !info->name.empty()) {
-    const std::string link = game::itemChatLink(cost->itemId[j], static_cast<uint32_t>(info->quality), info->name);
+    const std::string link = game::itemChatLink(cost->itemId[j], static_cast<uint32_t>(info->quality), info->name,
+                                 {}, gh->getPlayerLevel());
             lua_pushstring(L, link.c_str());
         } else {
             lua_pushnil(L);
@@ -600,7 +608,8 @@ static int lua_GetMerchantItemLink(lua_State* L) {
     const auto* info = gh->getItemInfo(vi.itemId);
     if (!info) { return luaReturnNil(L); }
 
-    const std::string link = game::itemChatLink(vi.itemId, static_cast<uint32_t>(info->quality), info->name);
+    const std::string link = game::itemChatLink(vi.itemId, static_cast<uint32_t>(info->quality), info->name,
+                                 {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -801,7 +810,8 @@ static int lua_GetItemInfo(lua_State* L) {
 
     lua_pushstring(L, info->name.c_str());          // 1: name
     // Build item link with quality-colored text
-    const std::string link = game::itemChatLink(itemId, static_cast<uint32_t>(info->quality), info->name);
+    const std::string link = game::itemChatLink(itemId, static_cast<uint32_t>(info->quality), info->name,
+                                 {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());                         // 2: link
     lua_pushnumber(L, info->quality);                // 3: quality
     lua_pushnumber(L, info->itemLevel);              // 4: iLevel
@@ -1070,7 +1080,7 @@ static int lua_GetContainerItemPurchaseItem(lua_State* L) {
     }
     lua_pushstring(L, gh->getItemIconPath(item->displayInfoId).c_str());
     lua_pushnumber(L, info->items[static_cast<size_t>(index)].second);
-    lua_pushstring(L, game::buildItemLink(itemId, item->quality, item->name).c_str());
+    lua_pushstring(L, game::buildItemLink(itemId, item->quality, item->name, gh->getPlayerLevel()).c_str());
     lua_pushstring(L, item->name.c_str());
     return 4;
 }
@@ -1419,7 +1429,7 @@ void pushItemLinkOrNil(lua_State* L, game::GameHandler* gh, uint32_t itemId) {
     const auto* info = itemId ? gh->getItemInfo(itemId) : nullptr;
     if (!info || info->name.empty()) { lua_pushnil(L); return; }
     const uint32_t quality = info->quality < 8 ? info->quality : 1u;
-    const std::string link = game::itemChatLink(itemId, quality, info->name);
+    const std::string link = game::itemChatLink(itemId, quality, info->name, {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
 }
 
@@ -1561,7 +1571,8 @@ static int lua_GetInboxItemLink(lua_State* L) {
     const auto* att = attachmentAt(mail, static_cast<int>(luaL_optnumber(L, 2, 1)));
     const auto* info = att ? gh->getItemInfo(att->itemId) : nullptr;
     if (!info || info->name.empty()) { return luaReturnNil(L); }
-    const std::string link = game::itemChatLink(att->itemId, static_cast<uint32_t>(info->quality), info->name);
+    const std::string link = game::itemChatLink(att->itemId, static_cast<uint32_t>(info->quality), info->name,
+                                 {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -1664,14 +1675,21 @@ static int lua_GetSendMailItemLink(lua_State* L) {
     if (!att.occupied()) return 0;
     const auto* info = gh->getItemInfo(att.item.itemId);
     std::string name = info ? info->name : ("Item #" + std::to_string(att.item.itemId));
-    if (att.item.randomPropertyId != 0) {
-        const std::string suffix = gh->getRandomPropertyName(att.item.randomPropertyId);
+    // The attachment is a real item object, so its link is the object builder's
+    // answer and carries what the object says - enchant, gems, property, seed -
+    // with the mail record's property as the fallback for an attachment whose
+    // fields never arrived.  One property feeds the number and the words, the
+    // way 0x0061e290 hands its position-seven value to 0x00706d70.
+    game::ItemLinkInstance inst = gh->itemLinkInstance(att.itemGuid);
+    const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
+                                                        : att.item.randomPropertyId;
+    inst.randomPropertyId = property;
+    if (property != 0) {
+        const std::string suffix = gh->getRandomPropertyName(property);
         if (!suffix.empty()) name += " " + suffix;
     }
-    const auto [permanentId, temporaryId] = gh->getItemEnchantIds(att.itemGuid);
-    (void)temporaryId;
     const std::string link = game::itemChatLink(att.item.itemId, info ? info->quality : 0, name,
-                                                permanentId, att.item.randomPropertyId);
+                                                inst, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -3322,7 +3340,7 @@ static int lua_GetContainerItemInfo(lua_State* L) {
     uint32_t q = info ? info->quality : 0;
 
     uint32_t qi = q < 8 ? q : 1u;
-    const std::string link = game::itemChatLink(itemSlot->item.itemId, qi, name);
+    const std::string link = game::itemChatLink(itemSlot->item.itemId, qi, name, {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());  // link
     return 7;
 }
@@ -3349,18 +3367,23 @@ static int lua_GetContainerItemLink(lua_State* L) {
     // Protection" named plain bracers and carried a random-property id of zero,
     // so anything reading the link back - a shift-click into chat, a comparison
     // tooltip - described a different item from the one in the slot.
-    if (itemSlot->item.randomPropertyId != 0) {
-        const std::string suffix = gh->getRandomPropertyName(itemSlot->item.randomPropertyId);
-        if (!suffix.empty()) name += " " + suffix;
-    }
     // The enchant on it goes in the link too, for the same reason the guild
     // bank's does: a link written without one shows an enchanted item as plain.
-    const auto [permanentId, temporaryId] =
-        gh->getItemEnchantIds(gh->getBagItemGuid(container, slot - 1));
-    (void)temporaryId;   // not part of a link; it is not a property of the item
+    // And it comes from the item object now, along with the gems in its sockets
+    // and the seed of its rolled property - the same block 0x0061e3a0 reads.
+    // The temporary enchant is deliberately out: an oil or a sharpening stone is
+    // not a property of the item, and the client has no slot for it in a link.
+    game::ItemLinkInstance inst =
+        gh->itemLinkInstance(gh->getBagItemGuid(container, slot - 1));
+    const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
+                                                        : itemSlot->item.randomPropertyId;
+    inst.randomPropertyId = property;
+    if (property != 0) {
+        const std::string suffix = gh->getRandomPropertyName(property);
+        if (!suffix.empty()) name += " " + suffix;
+    }
     const std::string link = game::itemChatLink(itemSlot->item.itemId, q, name,
-                                                permanentId,
-                                                itemSlot->item.randomPropertyId);
+                                                inst, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -3629,7 +3652,12 @@ static int lua_GetInventoryItemLink(lua_State* L) {
         const auto* info = gh->getItemInfo(ammo);
         if (!info) return luaReturnNil(L);
         const uint32_t qi = info->quality < 8 ? info->quality : 1u;
-        lua_pushstring(L, game::itemChatLink(ammo, qi, info->name).c_str());
+        // No instance numbers - this is the link the client builds from the
+        // record, through 0x0061e360, which is handed zeros for all six - but
+        // the level at the end is not the item's, and 0x0061e290 appends its own
+        // player's level to that link just as much as to an instance one.
+        lua_pushstring(L, game::itemChatLink(ammo, qi, info->name, {},
+                                             gh->getPlayerLevel()).c_str());
         return 1;
     }
     uint32_t itemId = 0;
@@ -3639,18 +3667,20 @@ static int lua_GetInventoryItemLink(lua_State* L) {
     // item **object** rather than off its template: FUN_0061e3a0 hands the
     // builder entry = OBJECT_FIELD_ENTRY, the record's quality, then
     // 0x0061e290's format "%s|Hitem:%d:%d:%d:%d:%d:%d:%d:%d:%d|h[%s]|h%s" -
-    // entry, one number, three gems, a hard zero, two more, and a player-field
-    // number at unit blob +0xc0.  The three gems come from item blob +0x58,
-    // +0x64 and +0x70, one per 0xc-spaced triple; the number before them comes
-    // from item blob +0x40 and the one after the zero from +0xd4, both read
-    // only while bit 3 of blob +0x3c is clear, and both zero when the object's
-    // own type test fails.  Those two are where WoWee puts its enchant and its
-    // rolled property - the same pair GetContainerItemLink already writes, and
-    // a signed word in the inspected path's record, which is what a random
-    // property id is - though which item field each really is is not pinned
-    // yet.  The gems are the part WoWee has no data for, so they stay zero.
-    int32_t randomPropertyId = 0;
-    uint32_t enchantId = 0;
+    // entry, enchant, three gems, a hard zero, property, seed, and a level.  The
+    // enchant is item blob +0x40, ITEM_FIELD_ENCHANTMENT_1_1; the three gems are
+    // +0x58/+0x64/+0x70, one per 0xc-spaced triple, which the descriptor records
+    // at 0x00ac4800 name ENCHANTMENT_3_1, _4_1 and _5_1 - the very three sockets
+    // entity_controller already reads, three triples past the enchant; the two
+    // numbers after the zero are +0xd4 RANDOM_PROPERTIES_ID and +0xd0
+    // PROPERTY_SEED, which WoWee keeps as randomPropertyId and suffixFactor.  All
+    // six are read only while bit 3 of the flags at blob +0x3c is clear, and the
+    // level is the viewer's own (0x0061e290 reads it off its own player object,
+    // at unit blob +0xc0 = UNIT_FIELD_LEVEL).  GameHandler::itemLinkInstance
+    // collects the six from the fields WoWee was sent; the record's property is
+    // kept as a fallback for a slot whose item object never arrived.
+    int32_t recordPropertyId = 0;
+    uint64_t itemGuid = 0;
     if (uidStr == "player") {
         const auto& inv = gh->getInventory();
         const game::ItemSlot* sp = inventorySlotItem(inv, slotId);
@@ -3661,12 +3691,11 @@ static int lua_GetInventoryItemLink(lua_State* L) {
         const auto* info = gh->getItemInfo(itemId);
         name = info ? info->name : slot.item.name;
         q = info ? info->quality : static_cast<uint32_t>(slot.item.quality);
-        randomPropertyId = slot.item.randomPropertyId;
-        if (slot.item.guid != 0)
-            enchantId = gh->getItemEnchantIds(slot.item.guid).first;
-            // The temporary half is deliberately out: an oil or a sharpening
-            // stone is not a property of the item, and GetContainerItemLink
-            // (which already carries both of these) drops it the same way.
+        recordPropertyId = slot.item.randomPropertyId;
+        itemGuid = slot.item.guid;
+        // The temporary enchant is deliberately out of all of this: an oil or a
+        // sharpening stone is not a property of the item, and the client's link
+        // has no slot for it.
     } else {
         itemId = inspectedItemEntry(gh, uidStr, slotId);
         if (!itemId) { return luaReturnNil(L); }
@@ -3690,13 +3719,21 @@ static int lua_GetInventoryItemLink(lua_State* L) {
     // -DAT_00ad3ee4..DAT_00ad3ee8 reading +0x4 - and formats
     // "%1$s %2$s".  So the property string goes second, with a space, whether
     // the DBC calls it a prefix or a suffix; an empty row leaves the bare name.
-    if (randomPropertyId != 0) {
-        const std::string property = gh->getRandomPropertyName(randomPropertyId);
-        if (!property.empty()) name += " " + property;
+    // One property value feeds both the number and the words: 0x0061e290 passes
+    // the position-seven value straight to 0x00706d70, so a link cannot name one
+    // roll of an item and carry another in its numbers.
+    game::ItemLinkInstance inst = gh->itemLinkInstance(itemGuid);
+    const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
+                                                        : recordPropertyId;
+    inst.randomPropertyId = property;
+    if (property != 0) {
+        const std::string propertyName = gh->getRandomPropertyName(property);
+        if (!propertyName.empty()) name += " " + propertyName;
     }
 
     uint32_t qi = q < 8 ? q : 1u;
-    const std::string link = game::itemChatLink(itemId, qi, name, enchantId, randomPropertyId);
+    const std::string link = game::itemChatLink(itemId, qi, name, inst,
+                                                gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -4223,7 +4260,7 @@ static int lua_GetLootSlotLink(lua_State* L) {
     if (!info || info->name.empty()) { return luaReturnNil(L); }
 
     uint32_t qi = info->quality < 8 ? info->quality : 1u;
-    const std::string link = game::itemChatLink(item.itemId, qi, info->name);
+    const std::string link = game::itemChatLink(item.itemId, qi, info->name, {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -4327,7 +4364,7 @@ static int lua_GetLootRollItemLink(lua_State* L) {
     const auto* roll = rollFor(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (!roll) { return luaReturnNil(L); }
     lua_pushstring(L, game::buildItemLink(roll->itemId, roll->itemQuality,
-                                          roll->itemName).c_str());
+                                          roll->itemName, gh->getPlayerLevel()).c_str());
     return 1;
 }
 
@@ -5275,8 +5312,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             // the guild bank behaves like one from a bag everywhere it is
             // handed on to.
             const std::string link = game::itemChatLink(
-                it.itemEntry, info->quality, info->name, it.enchantId,
-                static_cast<int32_t>(it.randomPropertyId));
+                it.itemEntry, info->quality, info->name, game::ItemLinkInstance{
+                    it.enchantId, {}, static_cast<int32_t>(it.randomPropertyId), 0},
+                gh->getPlayerLevel());
             lua_pushstring(L, link.c_str());
             return 1;
         }},
@@ -6124,7 +6162,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             const auto* info = gh->getItemInfo(itemId);
             if (!info) { return luaReturnNil(L); }
         
-    const std::string link = game::itemChatLink(itemId, static_cast<uint32_t>(info->quality), info->name);
+    const std::string link = game::itemChatLink(itemId, static_cast<uint32_t>(info->quality), info->name,
+                                 {}, gh->getPlayerLevel());
             lua_pushstring(L, link.c_str());
             return 1;
         }},
