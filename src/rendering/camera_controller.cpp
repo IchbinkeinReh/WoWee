@@ -410,6 +410,18 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
                 if (terrainManager) terrainH = terrainManager->getHeightAt(targetPos.x, targetPos.y);
                 if (wmoRenderer) wmoH = wmoRenderer->getFloorHeight(targetPos.x, targetPos.y, targetPos.z + 2.0f);
                 if (m2Renderer) m2H = m2Renderer->getFloorHeight(targetPos.x, targetPos.y, targetPos.z + 1.0f);
+                // A building's liquid under the ground - the Undercity's
+                // slime, Ironforge's magma, the Pools of Vision under
+                // Thunder Bluff - has the hill's terrain far over the head:
+                // taken as the floor, the water was "below" it and the
+                // character walked the bottom, out of breath, instead of
+                // swimming. The terrain counts only where it is under the
+                // feet; for the ground's own water it still keeps a dry cave
+                // under a lake's plane from swimming.
+                if (terrainH && *terrainH > targetPos.z + 2.0f && waterRenderer &&
+                    waterRenderer->isWmoWaterAt(targetPos.x, targetPos.y)) {
+                    terrainH.reset();
+                }
                 auto floorH = selectHighestFloor(terrainH, wmoH, m2H);
 
                 // Prefer measured depth from floor; if floor sample is missing,
