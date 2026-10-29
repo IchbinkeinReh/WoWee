@@ -1,0 +1,69 @@
+#pragma once
+
+#include <cstdint>
+
+// What a quest's reward panel prints for experience (GetQuestLogRewardXP,
+// 0x005e49b0). The amount is in no packet: the client reads QuestXP.dbc itself -
+// the row for a level, the column the quest names - and then shapes the number in
+// three steps, none of which the table does.
+//
+// The row is keyed on the **quest's** level, or on the player's own level when the
+// quest carries -1 for "scale to me" (record +8 in 0x005e0420). A level with no row
+// answers nothing, before any of the rest is considered.
+//
+// The damping is the WotLK rule that a quest far above or below the character pays
+// less: the factor is 20 + 2*(questLevel - playerLevel), over ten tenths, clamped to
+// [1, 10]. So five levels above the quest's own level is still full pay, each level
+// past that costs a fifth, and ten levels past it still pays a tenth rather than
+// nothing. (0x005e0420's own chain is three comparisons against 0xb and 1 that
+// amount to exactly that clamp; it re-derives the same "quest level, or the
+// player's" value twice, which is why the decompile looks redundant.)
+//
+// The rounding is the client's, not the table's: to the nearest 5 under 100, the
+// nearest 10 under 500, the nearest 25 under 999, and the nearest 50 from there
+// (0x005e49b0's tail: 0x65, 0x1f5, 0x3e9). It runs on the damped number.
+//
+// What is left out on purpose: 0x005e49b0 also walks five quest-log slots whose
+// predicate multiplies the answer by three below level 60, and multiplies it by
+// whatever 0x007246a0 reads off the player's auras. Both are pinned only as far as
+// "they exist"; neither is reproduced here, so a boosted or group-scaled quest can
+// still read low. Related: the reward panel itself zeroes the XP line at the level
+// cap (0x0058dd50 writes its XP global as zero unless the level is below
+// PLAYER_FIELD_MAX_LEVEL), which is the same gate as the first rule below.
+
+namespace wowee::game {
+
+/// Which QuestXP.dbc row a quest reads: its own level, or the player's when the
+/// quest says it scales (-1).
+inline int32_t questXpRowLevel(int32_t questLevel, uint32_t playerLevel) {
+    return questLevel == -1 ? static_cast<int32_t>(playerLevel) : questLevel;
+}
+
+/// The damping as tenths of the table's number: 10 is full pay.
+inline int questXpDampFactor(int32_t rowLevel, uint32_t playerLevel) {
+    int factor = 2 * (rowLevel - static_cast<int>(playerLevel)) + 20;
+    if (factor > 10) factor = 10;
+    if (factor < 1) factor = 1;
+    return factor;
+}
+
+/// The client's own rounding of the reward number, after damping.
+inline uint32_t questXpRound(uint32_t xp) {
+    if (xp < 100) return (xp + 2) / 5 * 5;
+    if (xp < 500) return (xp + 5) / 10 * 10;
+    if (xp < 999) return (xp + 12) / 25 * 25;
+    return (xp + 25) / 50 * 50;
+}
+
+/// The whole answer. `base` is the table's number for the row `rowLevel` gives and
+/// the quest's difficulty column; `maxLevel` is PLAYER_FIELD_MAX_LEVEL, and zero
+/// means the layout names no such field - the cap is then not applied, which keeps
+/// the old answer for a realm whose field list was never read, rather than
+/// pretending every character is at level 0.
+inline uint32_t questRewardXp(uint32_t base, int32_t rowLevel,
+                              uint32_t playerLevel, uint32_t maxLevel) {
+    if (maxLevel != 0 && playerLevel >= maxLevel) return 0;
+    return questXpRound(base * static_cast<uint32_t>(questXpDampFactor(rowLevel, playerLevel)) / 10u);
+}
+
+} // namespace wowee::game

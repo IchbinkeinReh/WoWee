@@ -2976,6 +2976,22 @@ uint32_t GameHandler::getWatchedFactionId() const {
     return getFactionIdByRepListId(static_cast<uint32_t>(repListId));
 }
 
+uint32_t GameHandler::getPlayerMaxLevel() const {
+    // The level the character stops at is the realm's to say. It sits at blob
+    // dword 1131 of the player's field array (+0x11ac, next to the honour and
+    // arena counters at 1129/1130, which is where 0x0054e5b0 reads it from), and
+    // every reader of it asks the same question against UNIT_FIELD_LEVEL: whether
+    // this character still advances. A quest's reward XP is one of them
+    // (0x005e49b0 answers none at all at the cap), and the reward panel zeroes its
+    // XP line the same way (0x0058dd50), so a client that never reads this field
+    // offers experience to a character that cannot take any.
+    const uint16_t field = fieldIndex(UF::PLAYER_FIELD_MAX_LEVEL);
+    if (field == 0xFFFF) return 0;
+    const auto player = getEntityManager().getEntity(getPlayerGuid());
+    if (!player) return 0;
+    return player->getField(field);
+}
+
 uint32_t GameHandler::getSelfResSpellId() const {
     // The soulstone is a field, not a message.  HasSoulstone (0x0051acd0) takes
     // the local player and reads +0x106c of its field blob - blob dword 1051,

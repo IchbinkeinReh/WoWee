@@ -4283,13 +4283,12 @@ void SocialHandler::requestBattlefieldList(uint32_t bgTypeId) {
         // 0x0054e5b0: below PLAYER_FIELD_MAX_LEVEL, the player's
         // PLAYER_FLAGS bit 25 (experience turned off); at it, 0.
         uint8_t noXp = 0;
-        const uint16_t unitEnd = fieldIndex(UF::UNIT_END);
         const uint16_t levelField = fieldIndex(UF::UNIT_FIELD_LEVEL);
         const uint16_t flagsField = fieldIndex(UF::PLAYER_FLAGS);
+        const uint32_t maxLevel = owner_.getPlayerMaxLevel();
         if (const auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
-            self && unitEnd != 0xFFFF && levelField != 0xFFFF && flagsField != 0xFFFF) {
-            constexpr uint16_t kMaxLevelFromUnitEnd = 0x46B;  // PLAYER_FIELD_MAX_LEVEL
-            if (self->getField(levelField) < self->getField(static_cast<uint16_t>(unitEnd + kMaxLevelFromUnitEnd)))
+            self && maxLevel != 0 && levelField != 0xFFFF && flagsField != 0xFFFF) {
+            if (self->getField(levelField) < maxLevel)
                 noXp = static_cast<uint8_t>((self->getField(flagsField) >> 25) & 1u);
         }
         packet.writeUInt8(noXp);

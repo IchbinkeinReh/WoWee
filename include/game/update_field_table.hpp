@@ -184,6 +184,16 @@ enum class UF : uint16_t {
     // Player PvP currency (TBC/WotLK only - Classic uses the old weekly honor system)
     PLAYER_FIELD_HONOR_CURRENCY,     // Accumulated honor points (uint32)
     PLAYER_FIELD_ARENA_CURRENCY,     // Accumulated arena points (uint32)
+    // The level this character stops at, which the realm sends rather than the
+    // client deciding. Blob dword 1131 of the player's field array (its +0x11ac,
+    // next to the honour and arena counters at 1129/1130), which the descriptor
+    // table names PLAYER_FIELD_MAX_LEVEL; 1131 past UNIT_END's 148 is wire 1279.
+    // Four readers all compare it against UNIT_FIELD_LEVEL: 0x005e49b0
+    // (GetQuestLogRewardXP) answers no reward XP at all at the cap, 0x005e48f0
+    // (GetQuestLogRewardMoney) switches to the quest's other money amount there,
+    // 0x0058dd50 zeroes the reward panel's XP line the same way, and 0x0054e5b0
+    // sends the "no more XP" byte with it.
+    PLAYER_FIELD_MAX_LEVEL,
     // Which currencies the realm says this character has met. WotLK only: no
     // earlier layout this client's tables were read from names it, so on those
     // layouts fieldIndex answers 0xFFFF and the token tab falls back to

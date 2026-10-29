@@ -14,6 +14,7 @@
 #include "game/quest_progress.hpp"
 #include "game/quest_objectives.hpp"
 #include "game/quest_poi_icons.hpp"
+#include "game/quest_xp.hpp"
 #include "game/glyph_socket.hpp"
 #include "game/spell_mods.hpp"
 #include "game/trainer_service_list.hpp"
@@ -673,15 +674,38 @@ static int lua_GetQuestLogPushable(lua_State* L) {
 }
 
 // GetQuestLogRewardXP() → the experience the reward panel shows for the
-// selected quest. It is in no packet - the client derives it from QuestXP.dbc
-// at the quest's level and the XP-difficulty index the query carried, which is
-// what this now does. Zero (the old hard-coded answer) hid the reward line on
-// every quest; a real value restores "You will receive N experience."
+// selected quest. It is in no packet: the client reads QuestXP.dbc itself, at the
+// row a level gives and the difficulty column the query carried (0x005e0420), and
+// then shapes that number before answering (0x005e49b0). Zero - the old hard-coded
+// answer - hid the reward line on every quest, since questinfo.lua:420 only shows
+// the frame when the value is nonzero; but the raw table value was wrong in three
+// other ways, all of them visible.
+//
+// The row is the quest's own level, or the character's when the quest says it
+// scales to the player (-1) - so a scaling quest used to answer nothing at all.
+// The damping is the WotLK rule: 20 + 2*(questLevel - playerLevel) tenths, clamped
+// to [1,10], which costs a fifth per level more than five above the quest instead
+// of paying full for every quest in the book. The rounding is the client's (5/10/
+// 25/50 by size), and the whole answer is zero once the character is at
+// PLAYER_FIELD_MAX_LEVEL - the same gate 0x0058dd50 applies to the panel's XP line
+// and 0x005e48f0 to the money, and what 0x0054e5b0 sends the realm as "no more XP".
+// A layout that names no such field keeps the ungated answer.
+//
+// Not reproduced, and pinned no further than "it exists": 0x005e49b0's five-slot
+// loop that can triple the number below level 60, and the aura multiplier
+// 0x007246a0 folds in. Those read low; see game/quest_xp.hpp.
 static int lua_GetQuestLogRewardXP(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* q = gh ? selectedQuest(gh) : nullptr;
     auto* qh = gh ? gh->getQuestHandler() : nullptr;
-    lua_pushnumber(L, (q && qh) ? qh->getQuestRewardXP(q->level, q->rewardXPId) : 0.0);
+    if (!q || !qh) {
+        lua_pushnumber(L, 0.0);
+        return 1;
+    }
+    const uint32_t level = gh->getPlayerLevel();
+    const int32_t rowLevel = game::questXpRowLevel(q->level, level);
+    const uint32_t base = qh->getQuestRewardXP(rowLevel, q->rewardXPId);
+    lua_pushnumber(L, game::questRewardXp(base, rowLevel, level, gh->getPlayerMaxLevel()));
     return 1;
 }
 

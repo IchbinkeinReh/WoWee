@@ -1902,6 +1902,11 @@ public:
     uint32_t getPlayerRestedXp() const { return playerRestedXp_; }
     bool isPlayerResting() const { return isResting_; }
     uint32_t getPlayerLevel() const { return serverPlayerLevel_; }
+    /// The level the realm says this character stops gaining experience at - a
+    /// field the realm sends, not a constant this client gets to pick. Zero when no
+    /// layout names it, which is every layout before this one was read off a
+    /// serializer; callers then have to decide for themselves what "no cap" means.
+    uint32_t getPlayerMaxLevel() const;
     const std::vector<uint32_t>& getPlayerExploredZoneMasks() const { return playerExploredZones_; }
     bool hasPlayerExploredZoneMasks() const { return hasPlayerExploredZones_; }
     static uint32_t killXp(uint32_t playerLevel, uint32_t victimLevel);

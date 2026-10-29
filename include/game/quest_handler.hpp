@@ -197,10 +197,13 @@ public:
     // ZoneOrSort values; empty if unknown
     const std::string& getQuestSortName(uint32_t sortId);
 
-    /// The reward experience a quest shows: QuestXP.dbc read at the quest's
-    /// level, in the column its XP-difficulty index selects. Zero when the
-    /// level or index is unknown (index 0 is genuinely no XP), so the reward
-    /// panel simply omits the line, as it does for a quest that gives none.
+    /// The table's number for a quest: QuestXP.dbc read at a level row, in the
+    /// column its XP-difficulty index selects. Zero when the level or index is
+    /// unknown (index 0 is genuinely no XP), so the reward panel simply omits the
+    /// line, as it does for a quest that gives none. This is the raw row value -
+    /// the level damping, the rounding and the level-cap gate that decide what the
+    /// panel finally prints are in game/quest_xp.hpp, because they are the same
+    /// rules the client's own binding runs (0x005e0420 then 0x005e49b0).
     uint32_t getQuestRewardXP(int32_t level, uint32_t xpDifficulty);
 
     /// The reputation a quest reward shows for one faction entry: the override

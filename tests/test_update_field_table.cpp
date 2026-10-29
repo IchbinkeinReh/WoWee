@@ -4,6 +4,7 @@
 #include "game/known_currencies.hpp"
 #include "game/currency_categories.hpp"
 #include "game/known_titles.hpp"
+#include "game/quest_xp.hpp"
 
 #include <filesystem>
 #include <string>
@@ -354,4 +355,91 @@ TEST_CASE("A title id is one bit in one of three groups", "[updatefields][titles
     CHECK_FALSE(titleIsKnown({~0u, ~0u, ~0u, ~0u, ~0u, ~0u}, 0));
     CHECK_FALSE(titleIsKnown({~0u, ~0u, ~0u, ~0u, ~0u, ~0u}, 192));
     CHECK_FALSE(titleIsKnown({~0u, ~0u, ~0u, ~0u, ~0u, ~0u}, 193));
+}
+
+// The level the realm says the character stops at. Every one of the client's four
+// readers asks it the same way - against UNIT_FIELD_LEVEL - and the answer decides
+// whether a quest pays experience at all, so an index that lands in a neighbouring
+// field reads another character's cap and the panel keeps or drops the line at the
+// wrong moment. The index came from the client's own blob position: +0x11ac of the
+// player's field array, blob dword 1131, and this layout puts a blob dword 148
+// further along on the wire - the same arithmetic as the honour counter (blob
+// 1129 → 1277) and the arena counter (1130 → 1278) on either side of it.
+TEST_CASE("The level the realm sets as this character's cap",
+          "[updatefields][questxp]") {
+    UpdateFieldTable table;
+    REQUIRE(table.loadFromJson(fieldsPath("wotlk")));
+
+    const uint16_t maxLevel = table.index(UF::PLAYER_FIELD_MAX_LEVEL);
+    REQUIRE(maxLevel != 0xFFFF);
+    REQUIRE(maxLevel == 1279);
+    CHECK(table.index(UF::PLAYER_FIELD_ARENA_CURRENCY) + 1 == maxLevel);
+    CHECK(table.index(UF::PLAYER_FIELD_HONOR_CURRENCY) + 2 == maxLevel);
+
+    // No earlier layout names it. The absence has to stay an absence: a caller
+    // that reads 0xFFFF has to answer "no cap to apply", and a nearby index would
+    // instead hand it some other field's value as a cap - which for a quest's
+    // reward XP means no experience line for a character that has plenty to earn.
+    for (const auto* expansion : {"classic", "tbc", "turtle"}) {
+        INFO("expansion: " << expansion);
+        UpdateFieldTable other;
+        REQUIRE(other.loadFromJson(fieldsPath(expansion)));
+        REQUIRE(other.index(UF::PLAYER_FIELD_MAX_LEVEL) == 0xFFFF);
+    }
+}
+
+// What QuestXP.dbc's number becomes on the way to the panel. The table's value is
+// only a starting point: the client damps it by how far the quest sits from the
+// character, rounds it by size, and answers nothing at all once the character is
+// at its cap. Skipping any of the three leaves a number that is plausibly the
+// table's and visibly wrong next to the quest's own level.
+TEST_CASE("A quest pays experience damped, rounded, and not at the cap",
+          "[updatefields][questxp]") {
+    using namespace wowee::game;
+
+    // A quest with no level of its own (-1) is read at the character's level,
+    // which is also what the damping then measures - zero difference, full pay.
+    CHECK(questXpRowLevel(-1, 80) == 80);
+    CHECK(questXpRowLevel(75, 80) == 75);
+    CHECK(questXpRowLevel(0, 80) == 0);   // a quest with no level has no row
+
+    // Full pay for a quest at or above the character, and for one up to five
+    // levels below; then a fifth of it per level past that, to a tenth at the
+    // floor rather than to nothing.
+    CHECK(questXpDampFactor(80, 80) == 10);
+    CHECK(questXpDampFactor(85, 80) == 10);
+    CHECK(questXpDampFactor(75, 80) == 10);
+    CHECK(questXpDampFactor(74, 80) == 8);
+    CHECK(questXpDampFactor(70, 80) == 1);
+    CHECK(questXpDampFactor(40, 80) == 1);
+
+    // The client's own rounding buckets, at their edges.
+    CHECK(questXpRound(0) == 0);
+    CHECK(questXpRound(1) == 0);   // the buckets truncate: 3 becomes 5, 1 does not
+    CHECK(questXpRound(3) == 5);
+    CHECK(questXpRound(99) == 100);
+    CHECK(questXpRound(100) == 100);
+    CHECK(questXpRound(499) == 500);
+    CHECK(questXpRound(500) == 500);
+    CHECK(questXpRound(998) == 1000);
+    CHECK(questXpRound(999) == 1000);
+
+    // Damping first, rounding second. 232 at eight tenths is 185.6, which the
+    // client's integer divide takes as 185 and whose rounding bucket lifts to
+    // 190 - whereas rounding the table's number first (232 → 230) and damping
+    // afterwards would answer 184. The pair keeps that order stated. A level-75
+    // character on a quest of 69 is six above it, which is where the eighths come
+    // from; below the cap, so the gate below does not swallow the number.
+    CHECK(questRewardXp(245, 69, 75, 80) == 200);
+    CHECK(questRewardXp(232, 69, 75, 80) == 190);
+    CHECK(questRewardXp(1000, 69, 75, 80) == 800);
+
+    // At the cap the answer is nothing whatever the table says - and a layout that
+    // names no cap field leaves the gate closed rather than open at level zero.
+    CHECK(questRewardXp(1000, 80, 80, 80) == 0);
+    CHECK(questRewardXp(1000, 80, 79, 80) == 1000);
+    CHECK(questRewardXp(1000, 80, 80, 0) == 1000);
+
+    // A scaling quest answers at the character's own level, so it never damps.
+    CHECK(questRewardXp(1234, questXpRowLevel(-1, 75), 75, 80) == 1250);
 }
