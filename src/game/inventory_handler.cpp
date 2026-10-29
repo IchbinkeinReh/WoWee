@@ -4515,6 +4515,21 @@ void InventoryHandler::handleAuctionHello(network::Packet& packet) {
     // needed the same expansion difference written a second time to.
     AuctionHelloData data;
     if (!AuctionHelloParser::parse(packet, data)) return;
+    if (data.enabled == 0) {
+        // That byte is the house's answer and not a formality: 0x0059ff40 opens
+        // the window only when it is non-zero. A zero never reaches 0x0059f000,
+        // so the client takes no interaction object (that is 0x0051fce0, called
+        // from inside 0x0059f000 - which is also why the gossip window stays
+        // standing, its close being part of that), keeps no house id, and raises
+        // no AUCTION_HOUSE_SHOW (415). What it raises instead is
+        // AUCTION_HOUSE_DISABLED (670) with no argument at all, and
+        // uiparent.lua:955 answers that with StaticPopup_Show
+        // ("AUCTION_HOUSE_DISABLED"): the house is closed at the moment, try
+        // again later. A realm that would not open the house showed it open here
+        // with nothing in it, over a gossip window the real client never closed.
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_HOUSE_DISABLED", {});
+        return;
+    }
     openAuctionHouse(data.auctioneerGuid);
     auctionHouseId_ = data.auctionHouseId;
     if (owner_.isGossipWindowOpen()) owner_.closeGossip();   // if 0x00512e60 has not already

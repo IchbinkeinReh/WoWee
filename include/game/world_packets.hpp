@@ -3915,6 +3915,11 @@ struct AuctionHelloData {
     uint64_t auctioneerGuid = 0;
     /// The house's row in AuctionHouse.dbc (0x0059f000 keeps it at 0x00c0f3f0).
     uint32_t auctionHouseId = 0;
+    /// The house's answer, and the last byte of the packet. 0x0059ff40 opens
+    /// the window only when it is non-zero: a zero raises AUCTION_HOUSE_DISABLED
+    /// (670) and reaches neither 0x0059f000 nor the interaction object behind it,
+    /// so no id is kept and no AUCTION_HOUSE_SHOW is raised. Classic and TBC end
+    /// the packet before this byte, which is why the default is the open answer.
     uint8_t enabled = 1;
 };
 
