@@ -117,6 +117,13 @@ struct ContactEntry {
 
     [[nodiscard]] bool isFriend() const { return (flags & 0x1) != 0; }
     [[nodiscard]] bool isIgnored() const { return (flags & 0x2) != 0; }
+    /// The third list that mask carries. The client keeps it as its own array
+    /// (FriendList +0xd7c0, fifty rows) beside the friend and ignore arrays, and
+    /// the mute tab of the friends panel, IsMuted and the raid UI's speaker icon
+    /// all read it. It is the voice mute list - the wire asks for it by name and
+    /// takes it back by GUID - which is why text chat keeps going through the
+    /// ignore list and never looks at this bit.
+    [[nodiscard]] bool isMuted() const { return (flags & 0x4) != 0; }
     [[nodiscard]] bool isOnline()  const { return (status & 0x01) != 0; }
 };
 
@@ -798,6 +805,10 @@ public:
     void addIgnore(const std::string& playerName) override;
     void removeIgnore(const std::string& playerName) override;
     const std::unordered_map<std::string, uint64_t>& getIgnoreCache() const override { return ignoreCache; }
+    // The voice mute list, which the wire names "voice ignore" (CMSG 0x3DB and
+    // 0x3DC) while the interface calls every binding around it Mute.
+    void addVoiceIgnore(const std::string& playerName);
+    void removeVoiceIgnore(const std::string& playerName);
 
     // Random roll
     void randomRoll(uint32_t minRoll = 1, uint32_t maxRoll = 100);

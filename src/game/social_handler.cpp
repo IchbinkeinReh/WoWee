@@ -1727,6 +1727,59 @@ void SocialHandler::removeIgnore(const std::string& playerName) {
     LOG_INFO("Sent remove ignore request for: ", playerName);
 }
 
+/// A name as the contact lists match one. Both mute walks compare with
+/// 0x0076ea40 - case-blind, against the "%s-%s" display name the record cache
+/// holds - so the row a player typed differs from the row the realm sent only in
+/// case. Rows whose name was never resolved are not compared at all: the walk
+/// skips them when the record lookup answers nothing.
+static bool sameMuteName(const std::string& a, const std::string& b) {
+    if (a.empty() || b.empty()) return false;
+    return a.size() == b.size() &&
+           std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+               return std::tolower(static_cast<unsigned char>(x)) ==
+                      std::tolower(static_cast<unsigned char>(y));
+           });
+}
+
+// AddMute (0x006b6c30 → 0x006b62c0). The walk over the client's own mute array
+// decides the whole thing: a name it finds gets ERR_VOICE_IGNORE_ALREADY_S
+// naming that row (0x005216f0(0x239, record) → ERR_VOICE_IGNORE_ALREADY_S, the
+// 569th row of the error table) and the request is never sent; only a walk that
+// runs past all fifty rows sends, and it sends the NAME (0x3db).
+void SocialHandler::addVoiceIgnore(const std::string& playerName) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (playerName.empty()) return;
+    for (const auto& c : owner_.contactsRef()) {
+        if (!c.isMuted()) continue;
+        if (!sameMuteName(c.name, playerName)) continue;
+        gameError(owner_, ErrTo::Chat, "ERR_VOICE_IGNORE_ALREADY_S",
+                  "%s is already muted.", {c.name});
+        return;
+    }
+    auto packet = AddVoiceIgnorePacket::build(playerName);
+    owner_.getSocket()->send(packet);
+    LOG_INFO("Sent mute request for: ", playerName);
+}
+
+// DelMute (0x006b7da0 → 0x006b7120) is the same walk the other way: found, and
+// that row's GUID goes out as 0x3dc - the client has no name to send, because
+// the row is the only place a GUID for that player was ever given to it. Not
+// found, and ERR_VOICE_IGNORE_NOT_FOUND (0x005216f0(0x238)) with no packet.
+// Neither path touches the array: the mute list is the realm's, and it changes
+// when the next SMSG_CONTACT_LIST says it did.
+void SocialHandler::removeVoiceIgnore(const std::string& playerName) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (playerName.empty()) return;
+    for (const auto& c : owner_.contactsRef()) {
+        if (!c.isMuted() || !sameMuteName(c.name, playerName)) continue;
+        auto packet = DelVoiceIgnorePacket::build(c.guid);
+        owner_.getSocket()->send(packet);
+        LOG_INFO("Sent unmute request for: ", playerName);
+        return;
+    }
+    gameError(owner_, ErrTo::Chat, "ERR_VOICE_IGNORE_NOT_FOUND", "Player not found.");
+}
+
 void SocialHandler::randomRoll(uint32_t minRoll, uint32_t maxRoll) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     if (minRoll > maxRoll) std::swap(minRoll, maxRoll);
@@ -3909,6 +3962,18 @@ void SocialHandler::handleContactList(network::Packet& packet) {
             auto nit = owner_.getPlayerNameCache().find(guid);
             if (nit != owner_.getPlayerNameCache().end()) owner_.friendsCacheRef()[nit->second] = guid;
             else owner_.queryPlayerName(guid);
+        } else if (owner_.getPlayerNameCache().find(guid) == owner_.getPlayerNameCache().end()) {
+            // The ignore and mute branches of that same loop ask for the name
+            // too (FUN_007df6f0(hi, lo, 0) in front of every row's record
+            // lookup, 0x006b7dd0). Not asking left both lists holding rows with
+            // nothing to print, for any player this client had not already met -
+            // and the mute list's own comparator counts a row with no name as
+            // one it cannot place, so it sorts last and answers UNKNOWN. The
+            // client defers the row's EVENT to the name-query callback; this
+            // fires the event for the list as it stands and the name is in the
+            // cache for the next one, which the friends panel asks for every
+            // time it redraws.
+            owner_.queryPlayerName(guid);
         }
         ContactEntry entry;
         entry.guid = guid; entry.flags = flags; entry.note = std::move(note);
@@ -3919,10 +3984,15 @@ void SocialHandler::handleContactList(network::Packet& packet) {
     }
     // The one name the client raises for a contact list, 342 again (the ignore
     // and mute lists have their own, 343 and 344, and the mask says which of
-    // them this list carried).
+    // them this list carried). All three are the tail of the same handler: it
+    // qsorts each list the mask named and raises that list's event behind it
+    // (0x156, 0x157, 0x158 at 0x006b7dd0's end), and skips the raise for a list
+    // whose rows still had a name query outstanding - the row's own query
+    // callback raises it once the word arrives instead.
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
         if (owner_.lastContactListMaskRef() & 0x2) owner_.addonEventCallbackRef()("IGNORELIST_UPDATE", {});
+        if (owner_.lastContactListMaskRef() & 0x4) owner_.addonEventCallbackRef()("MUTELIST_UPDATE", {});
     }
 }
 

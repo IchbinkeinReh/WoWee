@@ -7041,10 +7041,12 @@ void registerSystemLuaAPI(lua_State* L) {
                     lua_pushnumber(L, 1);
                     return 1;
                 }},
-                // Voice mutes, which this client has no voice chat to keep.
-                // Read while the ignore list is drawn, so a nil global took
-                // the whole ignore tab with it.
-                {"GetNumMutes",              lua_ReturnZero},
+                // GetNumMutes used to answer zero here, because the ignore tab's
+                // update reads it on a line of its own with nothing guarding it
+                // and an unbound global took the whole tab with it. The real
+                // count is bound in the social table, where the rest of the mute
+                // list is - and this table registers after that one, so leaving
+                // the stub here would have hidden it again.
                 {"IsInLFGDungeon",           lua_IsInLFGDungeon},
                 {"LFGTeleport",              lua_LFGTeleport},
                 {"IsBattlefieldArena",       lua_IsBattlefieldArena},

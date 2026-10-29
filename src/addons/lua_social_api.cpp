@@ -585,31 +585,72 @@ static int lua_GetGuildRosterMOTD(lua_State* L) {
     return 1;
 }
 
+/// The rows of one contact list, in the order the client's own array holds them.
+///
+/// The client keeps a separate fifty-row array per list in its contact store -
+/// ignore at +0xd490, mute at +0xd7c0 - and every change to either ends in the
+/// same qsort with the same comparator: 0x006b3a30 for the ignore array,
+/// 0x006b3b60 for the mute array, both handing the rows to 0x006b3a60. That
+/// comparator resolves each row's name record and compares the "%s-%s" display
+/// names, putting a row whose record cannot be found after the rows that have
+/// one and the empty slots after those. It is a byte compare (strncmp at
+/// 0x006b3b0d, whose two arguments the decompile prints the wrong way round -
+/// the machine code pushes the first row's name first, which is the order the
+/// friends list's own comparator uses too); folding the case here cannot
+/// disagree with it for the capitalised names a realm hands out.
+///
+/// The order is not decorative. GetIgnoreName and GetMuteName index it,
+/// GetSelectedIgnore and GetSelectedMute answer a position in it, and
+/// IgnoreList_Update draws a row from one and unmutes the player named by the
+/// other - so the index and the name have to come out of one order, or the
+/// button takes a different player off the list than the row it was clicked on.
+static std::vector<const game::ContactEntry*> contactRows(game::GameHandler* gh, uint32_t listMask) {
+    std::vector<const game::ContactEntry*> rows;
+    if (!gh) return rows;
+    for (const auto& c : gh->getContacts())
+        if (c.flags & listMask) rows.push_back(&c);
+    std::stable_sort(rows.begin(), rows.end(),
+                     [](const game::ContactEntry* a, const game::ContactEntry* b) {
+        // A row with no name yet sorts last, and two of them keep the order the
+        // realm sent them in - which is what stable_sort is for here.
+        if (a->name.empty() != b->name.empty()) return !a->name.empty();
+        std::string la = a->name, lb = b->name;
+        toLowerInPlace(la); toLowerInPlace(lb);
+        return la < lb;
+    });
+    return rows;
+}
+
+static std::vector<const game::ContactEntry*> ignoredRows(game::GameHandler* gh) {
+    return contactRows(gh, 0x2);
+}
+static std::vector<const game::ContactEntry*> mutedRows(game::GameHandler* gh) {
+    return contactRows(gh, 0x4);
+}
+
 // GetNumIgnores() → count
 static int lua_GetNumIgnores(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnZero(L); }
-    int count = 0;
-    for (const auto& c : gh->getContacts())
-        if (c.isIgnored()) count++;
-    lua_pushnumber(L, count);
+    lua_pushnumber(L, static_cast<lua_Number>(ignoredRows(getGameHandler(L)).size()));
     return 1;
 }
 
-// GetIgnoreName(index) → name
+// GetIgnoreName(index) → name, one-based into that sorted array.
+//
+// "UNKNOWN" rather than nil for what cannot be answered: 0x006b4620 checks the
+// index against the array, and an index outside it, a row with nothing in it,
+// and a row whose name record the client never got an answer for all reach the
+// same tail - FUN_00819d40("UNKNOWN", -1, 0) and a push. GetMuteName's function
+// ends the same way. A missing argument is the one thing that answers nothing:
+// the client prints "Usage: GetIgnoreName(index)" and returns no values.
 static int lua_GetIgnoreName(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || index < 1) { return luaReturnNil(L); }
-    int found = 0;
-    for (const auto& c : gh->getContacts()) {
-        if (!c.isIgnored()) continue;
-        if (++found == index) {
-            lua_pushstring(L, c.name.c_str());
-            return 1;
-        }
+    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+    const auto rows = ignoredRows(getGameHandler(L));
+    if (index >= 1 && index <= static_cast<int>(rows.size()) && !rows[index - 1]->name.empty()) {
+        const auto& name = rows[index - 1]->name;
+        lua_pushlstring(L, name.data(), name.size());
+    } else {
+        lua_pushstring(L, "UNKNOWN");
     }
-    lua_pushnil(L);
     return 1;
 }
 
@@ -1303,6 +1344,42 @@ static int lua_IsIgnoredContact(lua_State* L) {
     return 1;
 }
 
+/// GetMuteName(index) (0x006b4760), one-based into mutedRows - the mute half of
+/// contactRows, the same sorted array the ignore list is drawn from. Both ways of
+/// missing answer the same thing: an index outside the array, and a row whose name
+/// has not arrived yet, both fall through to one push in the client -
+/// FUN_00819d40("UNKNOWN", -1, 0) - so the answer is the string "UNKNOWN" and
+/// never nil. GetIgnoreName's function ends the same way for the same reason.
+static int lua_GetMuteName(lua_State* L) {
+    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+    const auto rows = mutedRows(getGameHandler(L));
+    if (index >= 1 && index <= static_cast<int>(rows.size()) && !rows[index - 1]->name.empty()) {
+        const auto& name = rows[index - 1]->name;
+        lua_pushlstring(L, name.data(), name.size());
+    } else {
+        lua_pushstring(L, "UNKNOWN");
+    }
+    return 1;
+}
+
+/// The row the mute list has selected. The client stores that row's GUID (its
+/// contact store +0xdae8/+0xdaec) rather than its position, and GetSelectedMute
+/// (0x006b4a40) answers the position the GUID has in the sorted array - 0 when
+/// nothing is selected or the row is gone. GetSelectedFriend and
+/// GetSelectedIgnore keep a position here instead, which those two panels never
+/// notice; the mute list is the one drawn from a sorted array, so holding the
+/// GUID is what keeps a selection across the list being reordered underneath it.
+static uint64_t& selectedMuteGuid() { static uint64_t v = 0; return v; }
+
+/// Whether a name is on the mute list, read the way the client's own walks read
+/// it: case-blind against the row's name, and a row with no name never matches.
+static bool muteRowNamed(const game::ContactEntry& c, const std::string& name) {
+    if (!c.isMuted() || c.name.empty() || name.empty()) return false;
+    std::string a = c.name, b = name;
+    toLowerInPlace(a); toLowerInPlace(b);
+    return a == b;
+}
+
 void registerSocialLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"BNGetNumFriends",     lua_BNGetNumFriends},
@@ -1614,7 +1691,19 @@ void registerSocialLuaAPI(lua_State* L) {
                 // presence, and picking which voice channel is live.
                 {"GetAutoCompletePresenceID", [](lua_State* L) -> int { return luaReturnNil(L); }},
                 {"SetActiveVoiceChannelBySessionID", [](lua_State* L) -> int { (void)L; return 0; }},
-                {"AddMute",         [](lua_State* L) -> int { (void)L; return 0; }},
+                // AddMute(name) - 0x006b6c30, which hands the argument to
+                // 0x006b62c0. That walks the client's mute array and asks the
+                // realm by NAME (CMSG_ADD_VOICE_IGNORE, 0x3db) only for a name
+                // the walk ran past; a name already on the list gets
+                // ERR_VOICE_IGNORE_ALREADY_S and no request at all. The list
+                // itself changes on the next contact list, so nothing here
+                // answers and nothing here changes.
+                {"AddMute", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const char* name = luaL_optstring(L, 1, "");
+            if (gh && name) gh->addVoiceIgnore(name);
+            return 0;
+        }},
                 {"MutedList_Update", [](lua_State* L) -> int { (void)L; return 0; }},
 
                 // ---- Guild rank permissions ----
@@ -1666,11 +1755,60 @@ void registerSocialLuaAPI(lua_State* L) {
                 // Recruit-a-Friend summoning, which needs a linked account.
                 {"CanSummonFriend", luaReturnFalse},
                 {"SummonFriend",    [](lua_State* L) -> int { (void)L; return 0; }},
-                // The voice mute list, which cannot have entries without voice.
-                {"GetSelectedMute", [](lua_State* L) -> int { return luaReturnNil(L); }},
-                {"SetSelectedMute", [](lua_State* L) -> int { (void)L; return 0; }},
-                {"GetMuteName",     [](lua_State* L) -> int { return luaReturnNil(L); }},
-                {"DelMute",         [](lua_State* L) -> int { (void)L; return 0; }},
+                // The voice mute list, which is the third list SMSG_CONTACT_LIST
+                // fills (mask bit 0x4) and which the friends panel's mute tab
+                // reads exactly like the ignore tab.
+                //
+                // GetSelectedMute (0x006b4a40) answers the selected row's
+                // position in the sorted list, or 0 - the client's lookup answers
+                // -1 for "no GUID stored, or that GUID is no longer a row" and
+                // the binding adds one to whatever it gets.
+                {"GetSelectedMute", [](lua_State* L) -> int {
+            const uint64_t want = selectedMuteGuid();
+            int answer = 0;
+            if (want != 0) {
+                const auto rows = mutedRows(getGameHandler(L));
+                for (size_t i = 0; i < rows.size(); ++i) {
+                    if (rows[i]->guid != want) continue;
+                    answer = static_cast<int>(i) + 1;
+                    break;
+                }
+            }
+            lua_pushnumber(L, answer);
+            return 1;
+        }},
+                // SetSelectedMute(index) (0x006b4950) stores that row's GUID, and
+                // an index off either end of the array stores nothing at all -
+                // which is why the next GetSelectedMute reads 0 rather than
+                // keeping the row that was selected before.
+                {"SetSelectedMute", [](lua_State* L) -> int {
+            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+            selectedMuteGuid() = 0;
+            if (index >= 1 && index <= 50) {
+                const auto rows = mutedRows(getGameHandler(L));
+                if (index - 1 < static_cast<int>(rows.size()))
+                    selectedMuteGuid() = rows[index - 1]->guid;
+            }
+            return 0;
+        }},
+                // GetNumMutes (0x006b45c0) - however many rows the client's mute
+                // array holds, and always a number: the row count is what an
+                // empty store answers too. The mute tab's own update opens with
+                // it, next to GetNumIgnores and the Battle.net blocked count.
+                {"GetNumMutes", [](lua_State* L) -> int {
+            lua_pushnumber(L, static_cast<lua_Number>(mutedRows(getGameHandler(L)).size()));
+            return 1;
+        }},
+                {"GetMuteName",     lua_GetMuteName},
+                // DelMute(name) - 0x006b7da0 → 0x006b7120, the same walk in the
+                // other direction. It can only ask by GUID (0x3dc), because the
+                // row it found is the only place this client ever had one.
+                {"DelMute", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const char* name = luaL_optstring(L, 1, "");
+            if (gh && name) gh->removeVoiceIgnore(name);
+            return 0;
+        }},
                 // GetGuildBankTabPermissions(tab) → canView, canDeposit,
                 //   canUpdateText, withdrawPerDay, for the rank being edited
                 // (0x005cb560): 1 or nil for the bits view 0x01, deposit 0x02,
@@ -2333,11 +2471,41 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushnumber(L, index);
             return 1;
         }},
-                // Voice chat again: there is none, so nobody is muted or
-                // silenced and asking to mute them does nothing.
-                {"IsMuted",             luaReturnFalse},
+                // IsMuted(name) - 0x006b6cf0: the name is turned into a player
+                // record (0x004fb580, name cache first and a unit token second),
+                // and that player is looked for in the mute array (0x006b5350).
+                // One or nil, never false - the same shape as IsIgnored, which
+                // is the same function over the other array.
+                {"IsMuted",             lua_IsIgnoredContact<0x4>},
+                // UnitIsSilenced and ChannelSilenceVoice stay where they were:
+                // those are voice-chat silencing, a different thing from the mute
+                // list, which is what the wire calls a "voice ignore".
                 {"UnitIsSilenced",      luaReturnFalse},
-                {"AddOrDelMute",        [](lua_State* L) -> int { (void)L; return 0; }},
+                // AddOrDelMute(name) - 0x006b6bd0 → 0x006b6130, the toggle the
+                // raid panels' speaker icon uses. One walk over the mute rows
+                // decides which request to send: found, and that row's GUID goes
+                // out as the unmute; run past the end of the array and the name
+                // goes out as the mute. Neither answer is an error the way
+                // AddMute's and DelMute's are, which is the point of a toggle.
+                //
+                // The argument is read as a name, not as a unit token, because
+                // that is what the client does with it: 0x006b6130 compares the
+                // string it was handed against each row. blizzard_raidui.lua
+                // hands it `unit` (1366) while showing the state from
+                // IsMuted(UnitName(unit)) (1359), and the real client's mute
+                // button sends the literal token out; that stays as it is.
+                {"AddOrDelMute", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const std::string name = luaL_optstring(L, 1, "");
+            if (!gh || name.empty()) return 0;
+            for (const auto& c : gh->getContacts()) {
+                if (!muteRowNamed(c, name)) continue;
+                gh->removeVoiceIgnore(name);
+                return 0;
+            }
+            gh->addVoiceIgnore(name);
+            return 0;
+        }},
                 {"ChannelSilenceVoice", [](lua_State* L) -> int { (void)L; return 0; }},
                 // ChannelSilenceAll / ChannelUnSilenceAll("channel", "name")
                 // (0x00501250, 0x00501400) - see ChatHandler::channelSilenceAll.

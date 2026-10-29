@@ -707,6 +707,24 @@ network::Packet DelIgnorePacket::build(uint64_t ignoreGuid) {
     return packet;
 }
 
+// The name goes out as the client writes it (0x006b62c0 → 0x3db): one string,
+// nothing in front of it.
+network::Packet AddVoiceIgnorePacket::build(const std::string& playerName) {
+    network::Packet packet(wireOpcode(Opcode::CMSG_ADD_VOICE_IGNORE));
+    packet.writeString(playerName);
+    LOG_DEBUG("Built CMSG_ADD_VOICE_IGNORE: player=", playerName);
+    return packet;
+}
+
+// And the GUID as a pair of dwords (0x006b7120 → FUN_006b6410 → 0x3dc), which
+// is how the client's mute array holds it.
+network::Packet DelVoiceIgnorePacket::build(uint64_t muteGuid) {
+    network::Packet packet(wireOpcode(Opcode::CMSG_DEL_VOICE_IGNORE));
+    packet.writeUInt64(muteGuid);
+    LOG_DEBUG("Built CMSG_DEL_VOICE_IGNORE: guid=0x", std::hex, muteGuid, std::dec);
+    return packet;
+}
+
 network::Packet ComplainPacket::build(uint64_t targetGuid, const std::string& reason) {
     network::Packet packet(wireOpcode(Opcode::CMSG_COMPLAIN));
     packet.writeUInt8(1);               // complaintType: 1 = spam

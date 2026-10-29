@@ -1119,6 +1119,24 @@ public:
     static network::Packet build(uint64_t ignoreGuid);
 };
 
+/**
+ * CMSG_ADD_VOICE_IGNORE / CMSG_DEL_VOICE_IGNORE - the two ends of the voice
+ * mute list, which is what the interface's AddMute and DelMute drive. The pair
+ * is deliberately asymmetric: the client asks to add by NAME (0x006b62c0 hands
+ * the string straight to 0x3db) and to remove by GUID (0x006b7120 finds the row
+ * in its own mute array and hands that row's GUID to 0x3dc), because the row it
+ * already has is the only place the GUID came from.
+ */
+class AddVoiceIgnorePacket {
+public:
+    static network::Packet build(const std::string& playerName);
+};
+
+class DelVoiceIgnorePacket {
+public:
+    static network::Packet build(uint64_t muteGuid);
+};
+
 /** CMSG_COMPLAIN packet builder (player report) */
 class ComplainPacket {
 public:

@@ -2052,6 +2052,14 @@ void GameHandler::removeIgnore(const std::string& playerName) {
     if (socialHandler_) socialHandler_->removeIgnore(playerName);
 }
 
+void GameHandler::addVoiceIgnore(const std::string& playerName) {
+    if (socialHandler_) socialHandler_->addVoiceIgnore(playerName);
+}
+
+void GameHandler::removeVoiceIgnore(const std::string& playerName) {
+    if (socialHandler_) socialHandler_->removeVoiceIgnore(playerName);
+}
+
 void GameHandler::faceCanonicalYaw(float canonicalYaw) {
     movementInfo.orientation = canonicalYaw;
 
