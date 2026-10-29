@@ -1058,6 +1058,24 @@ static int lua_GetBlockChance(lua_State* L) {
     return 1;
 }
 
+// GetShieldBlock() → the damage a block takes off (0x0060dff0).  Straight out
+// of PLAYER_SHIELD_BLOCK, +0xdec into the field blob the player object keeps at
+// +0x1008; the sheet prints it as the last number of the block tooltip
+// (paperdollframe.lua:479, next to GetBlockChance).  The client asks for the
+// *player* object by the local player's guid and answers 0 when there is none,
+// and it reads the dword unsigned - it adds 2^32 back when the int comes out
+// negative - so a block value the server sent above 2^31 reads as the size of
+// it, not as a negative.  Was a hardcoded zero here.
+static int lua_GetShieldBlock(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint16_t index = game::fieldIndex(game::UF::PLAYER_SHIELD_BLOCK);
+    const auto player = (gh && index != 0xFFFF)
+                            ? gh->getEntityManager().getEntity(gh->getPlayerGuid())
+                            : nullptr;
+    lua_pushnumber(L, player ? player->getField(index) : 0);
+    return 1;
+}
+
 // GetCritChance() → percent (melee crit)
 static int lua_GetCritChance(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -3981,12 +3999,16 @@ void registerUnitLuaAPI(lua_State* L) {
             return 2;
         }},
                 {"GetArmorPenetration",     lua_GetArmorPenetration},
-                // Spell penetration and shield block value are summed from equipped-item
-                // stat mods (ITEM_MOD_SPELL_PENETRATION, the shield's block value), not
-                // any player field the server sends - the inventory does not yet total
-                // item stat mods, so these stay a genuine zero rather than a stale stub.
+                // Spell penetration: the client reads a player field, not the
+                // inventory.  0x0060e470 answers minus PLAYER_FIELD_MOD_TARGET_
+                // RESISTANCE (+0x105c into the player's field blob, dword 1047
+                // of it in the client's own per-field descriptor table), which
+                // is what the server sends once it has summed the item mods
+                // itself - the sign is because the field carries a resistance
+                // reduction.  Still a zero here until that field is asked for;
+                // the earlier note that no player field carries it was wrong.
                 {"GetSpellPenetration",     lua_ZeroPercent},
-                {"GetShieldBlock",          lua_ZeroPercent},
+                {"GetShieldBlock",          lua_GetShieldBlock},
                 {"GetUnitHealthRegenRateFromSpirit", lua_GetUnitHealthRegenRateFromSpirit},
                 {"GetUnitManaRegenRateFromSpirit",   lua_GetUnitManaRegenRateFromSpirit},
                 {"GetWatchedFactionInfo",   lua_GetWatchedFactionInfo},

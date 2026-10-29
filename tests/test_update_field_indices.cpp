@@ -175,6 +175,27 @@ TEST_CASE("the glyph run and the pet's spell power are consecutive dwords",
     CHECK(wotlk.at("PLAYER_FIELD_PET_SPELL_POWER") == wotlk.at("PLAYER_GLYPHS_ENABLED") + 1);
 }
 
+TEST_CASE("the shield block value is the dword after the spell crit floats",
+          "[update-fields]") {
+    // GetShieldBlock (0x0060dff0) reads +0xdec into the field blob the player
+    // object keeps at +0x1008 - dword 891 of it - and the client's own
+    // per-field descriptor table in .data names that dword
+    // PLAYER_SHIELD_BLOCK.  It comes straight after the seven spell-crit
+    // percentages, which is the check worth having: the sheet's block tooltip
+    // (paperdollframe.lua:479) prints the number with no range to it, so a
+    // column off by one answers with a crit percentage or with the explored
+    // zones' first byte, and both read as a plausible figure.
+    const auto wotlk = declaredFields("wotlk");
+    REQUIRE(wotlk.count("PLAYER_SHIELD_BLOCK") == 1);
+    CHECK(wotlk.at("PLAYER_SHIELD_BLOCK") ==
+          wotlk.at("PLAYER_SPELL_CRIT_PERCENTAGE1") + 7);
+    CHECK(wotlk.at("PLAYER_SHIELD_BLOCK") + 2 ==
+          wotlk.at("PLAYER_EXPLORED_ZONES_START"));
+    // 891 dwords into the player's own blob, and WoWee numbers the player
+    // fields from UNIT_END (148): 891 + 148.
+    CHECK(wotlk.at("PLAYER_SHIELD_BLOCK") == 1039);
+}
+
 TEST_CASE("the unit's three attack times are one run of fields",
           "[update-fields]") {
     // The client's UnitAttackSpeed (0x00610a00) and UnitRangedDamage

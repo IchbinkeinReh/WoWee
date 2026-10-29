@@ -101,6 +101,15 @@ enum class UF : uint16_t {
     PLAYER_CRIT_PERCENTAGE,          // Melee crit chance %
     PLAYER_RANGED_CRIT_PERCENTAGE,   // Ranged crit chance %
     PLAYER_SPELL_CRIT_PERCENTAGE1,   // Spell crit chance % (first school; 7 consecutive float fields)
+    // How much a block takes off, which GetShieldBlock() answers with straight
+    // out of the field: 0x0060dff0 reads +0xdec into the field blob the player
+    // object keeps at +0x1008 - dword 891 of it, the dword the client's own
+    // per-field descriptor table names PLAYER_SHIELD_BLOCK - and hands the
+    // character sheet's block tooltip that number as the damage blocked.  An
+    // int, not one of the percent floats either side of it, and the client
+    // reads it unsigned: it adds 2^32 when the int comes out negative.  WotLK
+    // only here.
+    PLAYER_SHIELD_BLOCK,
     PLAYER_FIELD_COMBAT_RATING_1,    // First of 25 int32 combat rating slots (CR_* indices)
     // What the player's tracking finds, as bit masks: creature types from
     // 1, and LockType ids from 1 (herbs, minerals, treasure, fish). The
