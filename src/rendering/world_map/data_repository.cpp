@@ -302,16 +302,34 @@ void DataRepository::loadZones(const std::string& mapName,
             }
         }
 
-        // A dungeon map has no rectangle of its own in WorldMapArea - all four
-        // edges are zero - and takes it from the floor it opens on. The same
-        // edges in WorldMapArea's terms are left = max Y, right = min Y,
-        // top = max X, bottom = min X.
+        // An area with no rectangle of its own in WorldMapArea - all four edges
+        // zero - is a map that is only ever drawn by floor, and its art carries
+        // the floor in the file name ("Naxxramas1_1.blp"). An area that names no
+        // default floor kept the floor at zero, which asked for
+        // "Naxxramas1.blp" - a file no client build has - and drew nothing at
+        // all, rectangle included. Such a map opens on the lowest floor it has.
+        //
+        // Only the areas with no rectangle take this: the rows beside them on
+        // the same map are outdoor zones with art of their own, and giving them
+        // a floor would both mis-suffix their tiles and make them look like
+        // dungeons to everything that reads a floor as one.
+        const auto noRectangle = [](const Zone& z) {
+            return std::abs(z.bounds.locLeft - z.bounds.locRight) < 0.001f &&
+                   std::abs(z.bounds.locTop - z.bounds.locBottom) < 0.001f;
+        };
         for (auto& z : zones_) {
-            if (z.areaID == 0 || z.dungeonFloor == 0) continue;
-            if (std::abs(z.bounds.locLeft - z.bounds.locRight) > 0.001f ||
-                std::abs(z.bounds.locTop - z.bounds.locBottom) > 0.001f) {
+            if (z.dungeonFloor != 0 || z.areaID == 0 || z.dungeonFloors.empty() ||
+                !noRectangle(z)) {
                 continue;
             }
+            z.dungeonFloor = z.dungeonFloors.front().floorIndex;
+        }
+
+        // The rectangle comes from the same floor row, in WorldMapArea's terms:
+        // left = max Y, right = min Y, top = max X, bottom = min X.
+        for (auto& z : zones_) {
+            if (z.areaID == 0 || z.dungeonFloor == 0) continue;
+            if (!noRectangle(z)) continue;
             for (uint32_t i = 0; i < dungeonDbc->getRecordCount(); ++i) {
                 if (dungeonDbc->getUInt32(i, 1) != z.mapID ||
                     dungeonDbc->getUInt32(i, 2) != z.dungeonFloor) {

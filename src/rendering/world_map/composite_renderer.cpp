@@ -278,26 +278,38 @@ void CompositeRenderer::loadZoneTextures(int zoneIdx, std::vector<Zone>& zones,
              "' areaID=", zone.areaID, " mapName='", mapName, "'");
 
     VkDevice device = vkCtx->getDevice();
-    int loaded = 0;
 
-    for (int i = 0; i < 12; i++) {
-        const std::string path = worldMapTilePath(folder, zone.dungeonFloor, i + 1);
-        auto blpImage = assetManager->loadTexture(path);
-        if (!blpImage.isValid()) {
-            slots.tileTextures[i] = nullptr;
-            continue;
+    // One floor's twelve tiles into this slot, and how many of them arrived.
+    auto loadTiles = [&](uint32_t floor) {
+        int arrived = 0;
+        for (int i = 0; i < 12; i++) {
+            const std::string path = worldMapTilePath(folder, floor, i + 1);
+            auto blpImage = assetManager->loadTexture(path);
+            if (!blpImage.isValid()) {
+                slots.tileTextures[i] = nullptr;
+                continue;
+            }
+
+            auto tex = std::make_unique<VkTexture>();
+            tex->upload(*vkCtx, blpImage.data.data(), blpImage.width, blpImage.height,
+                        VK_FORMAT_R8G8B8A8_UNORM, false);
+            tex->createSampler(device, VK_FILTER_LINEAR, VK_FILTER_LINEAR,
+                               VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, 1.0f);
+
+            slots.tileTextures[i] = tex.get();
+            zoneTextures.push_back(std::move(tex));
+            arrived++;
         }
+        return arrived;
+    };
 
-        auto tex = std::make_unique<VkTexture>();
-        tex->upload(*vkCtx, blpImage.data.data(), blpImage.width, blpImage.height,
-                    VK_FORMAT_R8G8B8A8_UNORM, false);
-        tex->createSampler(device, VK_FILTER_LINEAR, VK_FILTER_LINEAR,
-                           VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, 1.0f);
-
-        slots.tileTextures[i] = tex.get();
-        zoneTextures.push_back(std::move(tex));
-        loaded++;
-    }
+    int loaded = loadTiles(zone.dungeonFloor);
+    // A floor number is not proof that the map's art is split by floor. An
+    // outdoor zone inherits its map's floors - Northrend's zones carry the two
+    // rows of the map beside them - and its art has no suffix at all. Nothing
+    // in the DBCs says which case a folder is; the files do, so an area that
+    // answered none with a floor asked falls back to the unsuffixed names.
+    if (loaded == 0 && zone.dungeonFloor > 0) loaded = loadTiles(0);
 
     LOG_INFO("CompositeRenderer: loaded ", loaded, "/12 tiles for '", folder, "'");
 }
