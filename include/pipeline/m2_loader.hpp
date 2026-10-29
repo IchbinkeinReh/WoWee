@@ -59,11 +59,11 @@ struct M2AnimationTrack {
 
 // Bone data for skeletal animation
 struct M2Bone {
-    int32_t keyBoneId;              // Bone ID (-1 = not key bone)
-    uint32_t flags;                 // Bone flags
-    int16_t parentBone;             // Parent bone index (-1 = root)
-    uint16_t submeshId;             // Submesh ID
-    glm::vec3 pivot;                // Pivot point
+    int32_t keyBoneId = 0;          // Bone ID (-1 = not key bone)
+    uint32_t flags = 0;             // Bone flags
+    int16_t parentBone = 0;         // Parent bone index (-1 = root)
+    uint16_t submeshId = 0;         // Submesh ID
+    glm::vec3 pivot{0.0f};          // Pivot point
 
     M2AnimationTrack translation;   // Position keyframes per sequence
     M2AnimationTrack rotation;      // Rotation keyframes per sequence

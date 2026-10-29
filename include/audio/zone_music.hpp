@@ -257,18 +257,22 @@ inline std::optional<size_t> pickFile(const std::vector<uint32_t>& freq, std::op
                                       uint32_t random) {
     if (freq.empty()) return std::nullopt;
     if (freq.size() == 1) return size_t{0};
-    const auto total = [&](std::optional<size_t> skip) {
+    // The file to leave out as an index, none past the end: an optional
+    // reset() here reads as "maybe uninitialized" to GCC at -O2.
+    constexpr size_t kNone = ~size_t{0};
+    const auto total = [&](size_t skip) {
         uint64_t sum = 0;
         for (size_t i = 0; i < freq.size(); ++i)
-            if (!skip || i != *skip) sum += freq[i];
+            if (i != skip) sum += freq[i];
         return sum;
     };
-    if (total(last) == 0) last.reset();
-    const uint64_t sum = total(last);
+    size_t skip = last.value_or(kNone);
+    if (total(skip) == 0) skip = kNone;
+    const uint64_t sum = total(skip);
     if (sum == 0) return std::nullopt;
     uint64_t roll = (static_cast<uint64_t>(random) * sum) >> 32;
     for (size_t i = 0; i < freq.size(); ++i) {
-        if (last && i == *last) continue;
+        if (i == skip) continue;
         if (roll < freq[i]) return i;
         roll -= freq[i];
     }
