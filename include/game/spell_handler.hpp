@@ -132,6 +132,12 @@ public:
     void notePetActionCast(uint32_t spellId, uint64_t pet);
     /// SMSG_PET_CAST_FAILED (0x00806c30 -> 0x00804720).
     void notePetCastFailed(uint32_t spellId);
+    /// 0x007fecc0: a cast ending raises for `unitId` the one event its reason
+    /// names - FAILED_QUIET, INTERRUPTED, plain FAILED - and the stop that
+    /// follows only for `firingStop`, the cast this packet named being the one
+    /// shown (see cast_failure::castEvent).
+    void raiseCastFailureEvents(const std::string& unitId, uint32_t spellId,
+                                uint8_t reason, bool firingStop) const;
     /// A click on the world at this place, canonical: fills the location the
     /// spell wants (0x0080c340) and casts once nothing more is wanted.
     void placeGroundTarget(const ground_target::Place& place);

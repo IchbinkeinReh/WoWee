@@ -1461,19 +1461,23 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
         const uint8_t castCount = hasCount ? packet.readUInt8() : 0;
         uint32_t spellId   = packet.readUInt32();
         // 0x00806c30: the cast of that count by the player's charm, else
-        // its summon, ends (0x007fecc0).
-        if (hasCount) {
-            if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
-                const auto guidAt = [&](UF f) -> uint64_t {
-                    const uint16_t i = fieldIndex(f);
-                    if (i == 0xFFFF) return 0;
-                    return (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(i + 1))) << 32) |
-                           player->getField(i);
-                };
-                uint64_t pet = guidAt(UF::UNIT_FIELD_CHARM);
-                if (pet == 0) pet = guidAt(UF::UNIT_FIELD_SUMMON);
-                if (pet != 0) owner_.castVisuals().ended(pet, castCount, spellId);
-            }
+        // its summon, ends (0x007fecc0).  That routine is also what raises
+        // the events, and it names the pet - whose own cast bar is bound to
+        // the "pet" token (petframe.lua:182, CastingBarFrame_OnLoad(self,
+        // "pet", false, false)).  Nothing here told that bar anything: a pet
+        // cast the realm refused left its bar running to the end of its own
+        // clock, and the frames listening for a failure saw nothing at all.
+        uint64_t pet = 0;
+        if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+            const auto guidAt = [&](UF f) -> uint64_t {
+                const uint16_t i = fieldIndex(f);
+                if (i == 0xFFFF) return 0;
+                return (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(i + 1))) << 32) |
+                       player->getField(i);
+            };
+            pet = guidAt(UF::UNIT_FIELD_CHARM);
+            if (pet == 0) pet = guidAt(UF::UNIT_FIELD_SUMMON);
+            if (pet != 0 && hasCount) owner_.castVisuals().ended(pet, castCount, spellId);
         }
         uint8_t  reason    = (packet.hasRemaining(1))
                                  ? packet.readUInt8() : 0;
@@ -1494,6 +1498,16 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
             // And the player's line for it, where the game error has one.
             if (!errMsg.empty())
                 if (auto* spells = owner_.getSpellHandler()) spells->sayPetCastFailure(spellId, reason);
+        }
+        // The event that same routine raises, which is the reason's choice:
+        // FAILED_QUIET for the three refusals that leave a cast running,
+        // INTERRUPTED for 0x28/0x29, plain FAILED for everything else - and
+        // the stop after it, this being the cast that was shown.
+        if (pet != 0) {
+            const std::string unitId = owner_.guidToUnitId(pet);
+            if (!unitId.empty())
+                if (auto* spells = owner_.getSpellHandler())
+                    spells->raiseCastFailureEvents(unitId, spellId, reason, true);
         }
     }
     packet.skipAll();
