@@ -426,21 +426,23 @@ void SwimEffects::update(const Camera& camera, const CameraController& cc,
         charPos = *followTarget;
     }
 
-    // Check water at character position (for ripples) and camera position (for bubbles)
-    auto charWaterH = water.getWaterHeightAt(charPos.x, charPos.y);
-    auto camWaterH = water.getWaterHeightAt(camPos.x, camPos.y);
+    // Check water at character position (for ripples) and camera position (for bubbles).
+    // Ripples, spray and bubbles are water's: in lava or slime (a magma
+    // material) the client throws none of them, and blue rings and rising
+    // bubbles read as swimming in water. Decided as each is made, not reset
+    // after: GCC 16 loses track of a reset optional and warns it may be read
+    // uninitialised.
+    const bool charInMagma =
+        water.getLiquidKindAt(charPos.x, charPos.y) == client_liquid::MaterialKind::Magma;
+    const bool camInMagma =
+        water.getLiquidKindAt(camPos.x, camPos.y) == client_liquid::MaterialKind::Magma;
+    const std::optional<float> charWaterH =
+        charInMagma ? std::nullopt : water.getWaterHeightAt(charPos.x, charPos.y);
+    const std::optional<float> camWaterH =
+        camInMagma ? std::nullopt : water.getWaterHeightAt(camPos.x, camPos.y);
 
     bool swimming = cc.isSwimming();
     bool moving = cc.isMoving();
-    // Ripples, spray and bubbles are water's: in lava or slime (a magma
-    // material) the client throws none of them, and blue rings and rising
-    // bubbles read as swimming in water.
-    if (water.getLiquidKindAt(charPos.x, charPos.y) == client_liquid::MaterialKind::Magma) {
-        charWaterH.reset();
-    }
-    if (water.getLiquidKindAt(camPos.x, camPos.y) == client_liquid::MaterialKind::Magma) {
-        camWaterH.reset();
-    }
 
     // --- Ripple/splash spawning ---
     if (swimming && charWaterH) {

@@ -2329,7 +2329,6 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // Nothing in the way: the sweep answers as far as it looked, which is
         // where the zoom is going. Not a limit to recover toward - see below.
         constexpr float kClearEps = 1e-3f;
-        bool sweepClear = rawLimit >= probeDistance - kClearEps;
 
         // Only pulled in along the line it looks down, never turned aside:
         // the client's sweep (Camera.cpp 0x00605d60 -> 0x0077f310) shortens
@@ -2351,8 +2350,6 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
             smoothedTerrainDist_ += (terrainLimit - smoothedTerrainDist_) * terrainAlpha;
             if (terrainLimit >= probeDistance - kClearEps) {
                 smoothedTerrainDist_ = std::max(smoothedTerrainDist_, terrainLimit);
-            } else {
-                sweepClear = false;
             }
             rawLimit = std::min(rawLimit, smoothedTerrainDist_);
         } else {

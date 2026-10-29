@@ -3533,6 +3533,15 @@ void registerActionLuaAPI(lua_State* L) {
                 return 6;
             }
             const auto& t = gh->getMirrorTimer(index);
+            // Worded by the interface, as the event's label is: "Atem" on a
+            // German client, the English only without that string. Read
+            // before the answers are built, so nothing is popped among them.
+            std::string label = kLabels[index];
+            if (const char* key = game::GameHandler::kMirrorTimerLabelKeys[index]) {
+                lua_getglobal(L, key);
+                if (lua_isstring(L, -1)) label = lua_tostring(L, -1);
+                lua_pop(L, 1);
+            }
             lua_pushstring(L, kNames[index]);
             lua_pushnumber(L, t.value);
             lua_pushnumber(L, t.maxValue);
@@ -3541,14 +3550,7 @@ void registerActionLuaAPI(lua_State* L) {
             // A boolean there raised on every breath bar shown on entering
             // the world.
             lua_pushnumber(L, t.paused ? 1 : 0);
-            // Worded by the interface, as the event's label is: "Atem" on a
-            // German client, the English only without that string.
-            const char* key = game::GameHandler::kMirrorTimerLabelKeys[index];
-            if (key) lua_getglobal(L, key);
-            if (!key || !lua_isstring(L, -1)) {
-                if (key) lua_pop(L, 1);
-                lua_pushstring(L, kLabels[index]);
-            }
+            lua_pushstring(L, label.c_str());
             return 6;
         }},
                 // GetPetHappiness() → happiness 1..3, and what it does to damage

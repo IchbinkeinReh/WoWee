@@ -254,8 +254,11 @@ std::vector<uint8_t> AuthSessionPacket::computeAuthHash(
     std::vector<uint8_t> hashInput;
     hashInput.reserve(accountName.size() + 4 + 4 + 4 + sessionKey.size());
 
-    // Account name (as bytes)
-    hashInput.insert(hashInput.end(), accountName.begin(), accountName.end());
+    // Account name (as bytes). A byte at a time rather than a range insert:
+    // GCC 16 sizes the insert's memcpy from a reserve it cannot see through
+    // and reports an overlap of nine exabytes (-Wrestrict), which -Werror makes
+    // a failed build. An account name is a handful of bytes.
+    for (const char c : accountName) hashInput.push_back(static_cast<uint8_t>(c));
 
     auto appendLE32 = [&hashInput](uint32_t value) {
         for (int shift = 0; shift < 32; shift += 8)

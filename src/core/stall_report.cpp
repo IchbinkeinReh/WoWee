@@ -19,7 +19,10 @@ namespace wowee::core::stall_report {
 namespace {
 
 std::atomic<const char*> gStage{"(outside any stage)"};
+#ifdef _WIN32
+// Only the Windows stack walk marks the main thread; elsewhere nothing reads it.
 std::atomic<uint32_t> gMainThreadId{0};
+#endif
 
 const char* reportPath() {
     const char* p = std::getenv("WOWEE_STALL_REPORT");

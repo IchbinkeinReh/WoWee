@@ -1,3 +1,12 @@
+// GCC 13's -Wmaybe-uninitialized misfires inside libstdc++'s <regex> (the
+// std::function a compiled pattern's states hold) when the sanitizers are on,
+// and -Werror turns it into the sanitizer CI job failing. It is the library's
+// code instantiated here, not this file's; the instantiations are emitted at
+// the end of the unit, so the pragma has to hold for the whole file.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+
 #include "game/chat_spam_filter.hpp"
 
 #include "core/logger.hpp"

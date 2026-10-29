@@ -1596,7 +1596,7 @@ bool WardenModule::initializeModule() {
     #elif defined(_WIN32)
         // Native Windows execution (dangerous without sandboxing)
         typedef void* (*ModuleEntryPoint)(ClientCallbacks*);
-        ModuleEntryPoint entryPoint = reinterpret_cast<ModuleEntryPoint>(moduleMemory_);
+        [[maybe_unused]] ModuleEntryPoint entryPoint = reinterpret_cast<ModuleEntryPoint>(moduleMemory_);
 
         LOG_INFO("WardenModule: Calling module entry point at ", moduleMemory_);
 

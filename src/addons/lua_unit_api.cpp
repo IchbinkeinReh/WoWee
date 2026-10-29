@@ -2256,17 +2256,6 @@ static int lua_GetManaRegen(lua_State* L) {
     return 2;
 }
 
-/// The several figures the sheet works out from a rating or a stat. None of
-/// the conversion formulae are modelled - they are level-dependent tables the
-/// server does not send - and the percentages that matter are reported
-/// directly by GetCritChance, GetDodgeChance and their kind, which do come
-/// from the server. Zero here loses a tooltip breakdown, not a number anyone
-/// plays by.
-static int lua_ZeroPercent(lua_State* L) {
-    lua_pushnumber(L, 0);
-    return 1;
-}
-
 // GetCritChanceFromAgility([unit]) → the melee crit percent the player's Agility
 // gives, from the combat game tables. Was a flat zero, so the crit stat's
 // flyout read "0.00% from Agility" for every character.

@@ -204,17 +204,6 @@ ImU32 toU32(const glm::vec4& c, int alpha) {
                     static_cast<int>(c.b * 255.0f + 0.5f), alpha);
 }
 
-/// Text with the outline UNIT_NAME_FONT is made with (flags 4, 0x007e64d0),
-/// `spread` layout pixels wide - one pixel on screen.
-void outlinedText(ImDrawList* dl, ImFont* font, float size, ImVec2 at, ImU32 color, const char* text,
-                  float spread = 1.0f) {
-    const ImU32 shadow = IM_COL32(0, 0, 0, (color >> IM_COL32_A_SHIFT) & 0xFF);
-    for (const ImVec2 d : {ImVec2(-1, 0), ImVec2(1, 0), ImVec2(0, -1), ImVec2(0, 1)}) {
-        dl->AddText(font, size, ImVec2(at.x + d.x * spread, at.y + d.y * spread), shadow, text);
-    }
-    dl->AddText(font, size, at, color, text);
-}
-
 /// One interface texture, loaded once; a failed load is not retried.
 VkDescriptorSet plateTexture(pipeline::AssetManager* assets, const char* path) {
     static std::unordered_map<std::string, VkDescriptorSet> cache;
@@ -649,8 +638,9 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
                     }
                     it = glyphCache.emplace(key, std::move(glyphs)).first;
                 }
-                // The outline a screen pixel each way under the name, as
-                // outlinedText draws it, then the name.
+                // The outline UNIT_NAME_FONT is made with (flags 4,
+                // 0x007e64d0): a screen pixel each way under the name, then
+                // the name.
                 const NameGlyphs& glyphs = it->second;
                 const ImU32 shadow = IM_COL32(0, 0, 0, (job.color >> IM_COL32_A_SHIFT) & 0xFF);
                 const float s = job.spread;
