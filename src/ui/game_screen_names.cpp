@@ -37,6 +37,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -108,10 +109,26 @@ un::UnitFacts unitFacts(game::GameHandler& gh, const game::Entity& e, const game
 
 /// One of the interface's global strings (FrameScript_GetText, 0x00819d40),
 /// empty without an interface or such a string.
-std::string interfaceText(const char* name) {
+///
+/// Kept between frames: the names ask for the same few every frame, for
+/// every pet and every other server's player. GlobalStrings sets them once,
+/// at load; a reload makes a new state and they are asked again. An empty
+/// answer is not kept, as the strings may not be loaded yet.
+const std::string& interfaceText(const char* name) {
+    static const std::string kNone;
+    static std::unordered_map<std::string, std::string> kept;
+    static uint32_t keptFor = 0;
     auto* addons = core::Application::getInstance().getAddonManager();
     auto* engine = addons ? addons->getLuaEngine() : nullptr;
-    return engine && engine->isInitialized() ? engine->globalText(name) : std::string{};
+    if (!engine || !engine->isInitialized()) return kNone;
+    if (engine->stateGeneration() != keptFor) {
+        kept.clear();
+        keptFor = engine->stateGeneration();
+    }
+    if (auto it = kept.find(name); it != kept.end()) return it->second;
+    std::string text = engine->globalText(name);
+    if (text.empty()) return kNone;
+    return kept.emplace(name, std::move(text)).first->second;
 }
 
 /// 0x0061e830: the "<Owner's Pet>" line under a unit something made, empty
@@ -127,18 +144,32 @@ std::string summonTitleLine(game::GameHandler& gh, const game::Entity& e, const 
         if (const uint64_t up = ownerOf(*o)) owner = up;
     }
     // The creating spell's first SUMMON effect's SummonProperties Title.
+    // Kept by spell between frames, once the spell is known: neither the
+    // spell's effects nor SummonProperties change.
+    static std::unordered_map<uint32_t, std::optional<int32_t>> titleBySpell;
     std::optional<int32_t> propertiesTitle;
     const uint16_t bySpell = game::fieldIndex(game::UF::UNIT_CREATED_BY_SPELL);
     if (const uint32_t spellId = bySpell != 0xFFFF ? e.getField(bySpell) : 0) {
-        gh.getSpellName(spellId);  // fills the cache
-        auto it = gh.spellNameCacheRef().find(spellId);
-        for (int k = 0; it != gh.spellNameCacheRef().end() && k < 3; ++k) {
-            if (it->second.effectIds[k] != un::kEffectSummon) continue;
-            auto* am = core::Application::getInstance().getAssetManager();
-            auto props = am ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
-            const int32_t row = props && props->getFieldCount() > 3 ? props->findRecordById(it->second.effectMiscValuesB[k]) : -1;
-            if (row >= 0) propertiesTitle = static_cast<int32_t>(props->getUInt32(static_cast<uint32_t>(row), 3));
-            break;
+        if (auto kept = titleBySpell.find(spellId); kept != titleBySpell.end()) {
+            propertiesTitle = kept->second;
+        } else {
+            gh.getSpellName(spellId);  // fills the cache
+            auto it = gh.spellNameCacheRef().find(spellId);
+            if (it != gh.spellNameCacheRef().end()) {
+                for (int k = 0; k < 3; ++k) {
+                    if (it->second.effectIds[k] != un::kEffectSummon) continue;
+                    auto* am = core::Application::getInstance().getAssetManager();
+                    auto props = am ? am->loadDBCOptional("SummonProperties.dbc") : nullptr;
+                    const int32_t row = props && props->getFieldCount() > 3
+                                            ? props->findRecordById(it->second.effectMiscValuesB[k])
+                                            : -1;
+                    if (row >= 0)
+                        propertiesTitle = static_cast<int32_t>(props->getUInt32(static_cast<uint32_t>(row), 3));
+                    break;
+                }
+                if (titleBySpell.size() > 4096) titleBySpell.clear();
+                titleBySpell.emplace(spellId, propertiesTitle);
+            }
         }
     }
     const int title = un::summonTitle(propertiesTitle, gh.getCreatureType(unit.getEntry()));
@@ -304,20 +335,46 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
     static thread_local std::vector<NameJob> nameJobs;
     nameJobs.clear();
 
+    // Where a unit is drawn and where its name stands, each asked of the
+    // scene once a frame however many of the plate, the name and its sizing
+    // want it.
+    struct Placement {
+        uint64_t guid = 0;
+        const game::Entity* entity = nullptr;
+        bool baseAsked = false, baseFound = false;
+        glm::vec3 base{0.0f};
+        bool anchorAsked = false;
+        glm::vec3 anchor{0.0f};
+    };
+    // The model's render position; null when the scene has none.
+    auto modelBase = [&](Placement& pl) -> const glm::vec3* {
+        if (!pl.baseAsked) {
+            pl.baseAsked = true;
+            pl.baseFound = app.getRenderPositionForGuid(pl.guid, pl.base);
+        }
+        return pl.baseFound ? &pl.base : nullptr;
+    };
+    // The render position, else the unit's own.
+    auto unitPosition = [&](Placement& pl) {
+        if (const glm::vec3* b = modelBase(pl)) return *b;
+        return core::coords::canonicalToRender(glm::vec3(pl.entity->getX(), pl.entity->getY(), pl.entity->getZ()));
+    };
     // The name's anchor: the PlayerName attachment, else over the model
     // (0x0071fef0).
-    auto namePoint = [&](uint64_t guid, const game::Entity& e) {
-        if (auto p = app.getUnitNamePosition(guid)) return *p;
-        glm::vec3 base;
-        if (!app.getRenderPositionForGuid(guid, base))
-            base = core::coords::canonicalToRender(glm::vec3(e.getX(), e.getY(), e.getZ()));
-        return base + glm::vec3(0.0f, 0.0f, 2.3f);
+    auto namePoint = [&](Placement& pl) {
+        if (!pl.anchorAsked) {
+            pl.anchorAsked = true;
+            if (auto p = app.getUnitNamePosition(pl.guid)) pl.anchor = *p;
+            else pl.anchor = unitPosition(pl) + glm::vec3(0.0f, 0.0f, 2.3f);
+        }
+        return pl.anchor;
     };
 
     // A name over a head: world-size text whose block stands on the anchor
     // (0x007e5640), depth tested in the world - a wall in front hides it.
-    auto drawOverheadName = [&](uint64_t guid, const game::Entity& e, const game::Unit& unit, bool isPlayer) {
-        const glm::vec3 anchor = namePoint(guid, e);
+    auto drawOverheadName = [&](Placement& place, const game::Entity& e, const game::Unit& unit, bool isPlayer) {
+        const uint64_t guid = place.guid;
+        const glm::vec3 anchor = namePoint(place);
         float clipW = 0.0f;
         const auto at = project(viewProj, anchor, screenW, screenH, &clipW);
         if (!at) return;
@@ -371,7 +428,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
                 }
                 // Another server's player, as the name query named a realm.
                 if (g != playerGuid && !gameHandler.getCachedPlayerRealm(g).empty()) {
-                    const std::string label = interfaceText("FOREIGN_SERVER_LABEL");
+                    const std::string& label = interfaceText("FOREIGN_SERVER_LABEL");
                     out += label.empty() ? un::kForeignServerLabelEnUS : label;
                 }
             } else {
@@ -392,7 +449,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // 0x007e5420: a fifth of a yard tall, more for a big model, measured
         // on screen through the projection at the anchor's depth.
         float modelHeight = 0.0f;
-        if (glm::vec3 base; app.getRenderPositionForGuid(guid, base)) modelHeight = anchor.z - base.z;
+        if (const glm::vec3* base = modelBase(place)) modelHeight = anchor.z - base->z;
         const float yards = un::textHeight(modelHeight);
         // Sized for no nearer than nameSizingDepth, then laid into the world
         // at the anchor's true depth, so up close it holds that size on screen.
@@ -465,9 +522,10 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         const uint64_t guid = entityPtr->getGuid();
         auto* unit = static_cast<game::Unit*>(entityPtr.get());
         const bool isPlayer = entityPtr->getType() == game::ObjectType::PLAYER;
+        Placement place{.guid = guid, .entity = entityPtr.get()};
 
         if (guid == playerGuid) {
-            if (un::ownNameShown(nameMask)) drawOverheadName(guid, *entityPtr, *unit, true);
+            if (un::ownNameShown(nameMask)) drawOverheadName(place, *entityPtr, *unit, true);
             continue;
         }
 
@@ -480,13 +538,11 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         // The plate, if this unit has one: the cvars (0x0072b060), within 41
         // yards of the player, and on screen two thirds of a yard over the
         // name (0x00715720).
-        glm::vec3 unitPos;
-        if (!app.getRenderPositionForGuid(guid, unitPos))
-            unitPos = core::coords::canonicalToRender(glm::vec3(unit->getX(), unit->getY(), unit->getZ()));
+        const glm::vec3 unitPos = unitPosition(place);
         std::optional<ImVec2> plateAt;
         if (un::plateShown(facts, plates) &&
             rendering::unit_name_anchor::plateInRange(playerRenderPos, unitPos)) {
-            const glm::vec3 p = namePoint(guid, *entityPtr) +
+            const glm::vec3 p = namePoint(place) +
                                 glm::vec3(0.0f, 0.0f, rendering::unit_name_anchor::kPlateLift);
             plateAt = project(viewProj, p, screenW, screenH);
             if (plateAt && (plateAt->x < 0.0f || plateAt->x > screenW || plateAt->y < 0.0f ||
@@ -496,7 +552,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         }
 
         if (!plateAt) {
-            if (un::nameShown(facts, nameMask, isTarget, false)) drawOverheadName(guid, *entityPtr, *unit, isPlayer);
+            if (un::nameShown(facts, nameMask, isTarget, false)) drawOverheadName(place, *entityPtr, *unit, isPlayer);
             continue;
         }
 

@@ -6466,6 +6466,7 @@ bool LuaEngine::initialize() {
     // reload must not inherit what the last interface left running.
     taint::reset();
     L_ = luaL_newstate();
+    ++stateGeneration_;
     if (!L_) {
         LOG_ERROR("LuaEngine: failed to create Lua state");
         return false;

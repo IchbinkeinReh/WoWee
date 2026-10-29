@@ -274,6 +274,9 @@ public:
     /// up. Empty when there is no such string or no interface.
     [[nodiscard]] std::string globalText(const char* name) const;
     [[nodiscard]] bool isInitialized() const { return L_ != nullptr; }
+    /// Counts the states this engine has made: a reload makes a new one, so
+    /// what was read out of the last (a globalText, say) can be told stale.
+    [[nodiscard]] uint32_t stateGeneration() const { return stateGeneration_; }
 
     /// Abort a chunk that runs longer than this many milliseconds, naming the
     /// Lua source and line it was on. Zero disables it.
@@ -316,6 +319,7 @@ public:
 
 private:
     lua_State* L_ = nullptr;
+    uint32_t stateGeneration_ = 0;
     ui::WidgetTree widgets_;
     game::GameHandler* gameHandler_ = nullptr;
     LuaServices luaServices_;
