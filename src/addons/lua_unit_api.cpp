@@ -835,6 +835,54 @@ static int lua_UnitSex(lua_State* L) {
 
 // --- Player/Game API ---
 
+/// One of the stat fields, as the realm wrote it. A field this expansion's
+/// table does not name reads as nothing, which sends the caller to its cache.
+static int32_t statField(game::Unit* unit, game::UF field) {
+    const uint16_t idx = game::fieldIndex(field);
+    if (!unit || idx == 0xFFFF) return 0;
+    return static_cast<int32_t>(unit->getField(idx));
+}
+
+/// The three runs UnitStat reads, in the order the API's index counts them.
+///
+/// Spelled out rather than derived from UNIT_FIELD_STAT0 plus an offset,
+/// because the runs are consecutive only in the WotLK layout: the other three
+/// put the stats at 150 and 159, where 89 through 98 are some other field
+/// entirely and an offset would read it with no complaint.
+static constexpr game::UF kStatFields[5] = {game::UF::UNIT_FIELD_STAT0,
+                                            game::UF::UNIT_FIELD_STAT1,
+                                            game::UF::UNIT_FIELD_STAT2,
+                                            game::UF::UNIT_FIELD_STAT3,
+                                            game::UF::UNIT_FIELD_STAT4};
+static constexpr game::UF kPosStatFields[5] = {game::UF::UNIT_FIELD_POSSTAT0,
+                                               game::UF::UNIT_FIELD_POSSTAT1,
+                                               game::UF::UNIT_FIELD_POSSTAT2,
+                                               game::UF::UNIT_FIELD_POSSTAT3,
+                                               game::UF::UNIT_FIELD_POSSTAT4};
+static constexpr game::UF kNegStatFields[5] = {game::UF::UNIT_FIELD_NEGSTAT0,
+                                               game::UF::UNIT_FIELD_NEGSTAT1,
+                                               game::UF::UNIT_FIELD_NEGSTAT2,
+                                               game::UF::UNIT_FIELD_NEGSTAT3,
+                                               game::UF::UNIT_FIELD_NEGSTAT4};
+
+/// UnitStat(unit, statIndex) → stat, effectiveStat, posBuff, negBuff.
+///
+/// The client answers the last three from the unit's own fields (0x00610300):
+/// STAT0..4 as the realm wrote them, POSSTAT0..4 (89-93) and NEGSTAT0..4
+/// (94-98). The second answer is the same stat dword with a negative clamped
+/// away - 0x005774b0 is the `x & ((int)x < 0) - 1` mask, and it is the figure
+/// the sheet prints while the first stays raw. WoWee had neither buff run, so it
+/// pushed its total four times and the tooltip was the loser: paperdollframe.lua
+/// builds "total (base +x -y)" by subtracting both halves out of the first
+/// answer, colours the number red when a debuff is in play, and here always
+/// found no halves to find. So STAT is the total, not the base.
+///
+/// The same gate as the attack-power bindings - the realm's
+/// UNIT_FLAG_PLAYER_CONTROLLED, which the client tests as bit 3 of the guid -
+/// and four zeros for anyone without it, since a creature's stats are not sent
+/// to be read. WoWee keeps its cached total for the two tokens it has one for
+/// when the unit itself cannot be reached, which is what answers a pet whose
+/// entity is out of hand; the cache holds only the total, so no buff shows.
 static int lua_UnitStat(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 4; }
@@ -843,18 +891,32 @@ static int lua_UnitStat(lua_State* L) {
     // paperdoll's pet tab listed the hunter's own Strength as the pet's.
     std::string who(luaL_optstring(L, 1, "player"));
     toLowerInPlace(who);
-    int32_t val = 0;
-    if (who == "pet") {
-        if (statIdx >= 0 && statIdx < 5) val = gh->getPetStats()[static_cast<size_t>(statIdx)];
-    } else if (who == "player") {
-        val = gh->getPlayerStat(statIdx);
+
+    int32_t stat = 0, positive = 0, negative = 0;
+    bool fromUnit = false;
+    if (statIdx >= 0 && statIdx < 5) {
+        auto* unit = resolveUnit(L, who.c_str());
+        if (unit && (unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED)) {
+            stat = statField(unit, kStatFields[static_cast<size_t>(statIdx)]);
+            positive = statField(unit, kPosStatFields[static_cast<size_t>(statIdx)]);
+            negative = statField(unit, kNegStatFields[static_cast<size_t>(statIdx)]);
+            fromUnit = true;
+        }
     }
-    if (val < 0) val = 0;
-    // We only have the effective value from the server; report base=effective, no buffs
-    lua_pushnumber(L, val); // base (approximate - server only sends effective)
-    lua_pushnumber(L, val); // effective
-    lua_pushnumber(L, 0);   // positive buff
-    lua_pushnumber(L, 0);   // negative buff
+    if (!fromUnit) {
+        if (who == "pet") {
+            if (statIdx >= 0 && statIdx < 5) stat = gh->getPetStats()[static_cast<size_t>(statIdx)];
+        } else if (who == "player") {
+            stat = gh->getPlayerStat(statIdx);
+        }
+        // The cache is -1 until the realm says otherwise, and a stat the client
+        // has no value for shows as nothing rather than as minus one.
+        if (stat < 0) stat = 0;
+    }
+    lua_pushnumber(L, stat);      // raw, debuff and all
+    lua_pushnumber(L, stat < 0 ? 0 : stat); // what the sheet prints
+    lua_pushnumber(L, positive);  // the buff's positive half
+    lua_pushnumber(L, negative);  // and its negative one
     return 4;
 }
 

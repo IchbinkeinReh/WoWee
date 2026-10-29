@@ -264,3 +264,52 @@ TEST_CASE("each attack-power base is followed by its mods and its multiplier",
     CHECK(wotlk.at("UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER") + 1 ==
           wotlk.at("UNIT_FIELD_MINRANGEDDAMAGE"));
 }
+
+TEST_CASE("each stat carries its two buff halves above it", "[update-fields]") {
+    // UnitStat (0x00610300) takes three dwords per stat out of the field blob -
+    // +0x138, +0x14c and +0x160 - which with the blob running six dwords behind
+    // the wire index is 84, 89 and 94: STAT0..4 as the total, then POSSTAT0..4
+    // and NEGSTAT0..4, the halves paperdollframe.lua:246 subtracts back out of
+    // the first to print the unbuffed figure beside the buffed one.
+    //
+    // The client names all fifteen itself. Its field-name table steps down from
+    // RESISTANCES at 0x009f8c40 through NEGSTAT4..0, POSSTAT4..0 to STAT0 at
+    // 0x009f8d70, so one name per element here, and both ends of that run are
+    // keys this table has always had - STAT0's 84 under it, RESISTANCES' 99
+    // over. The buff runs are pinned by the reads and by the count between two
+    // names already in the table, which is what makes the middle link safe.
+    //
+    // A slipped index is the convincing kind again: one low and POSSTAT0 reads
+    // STAT4, a perfectly plausible Stamina, and the tooltip goes on showing a
+    // breakdown that adds up to neither number.
+    const auto wotlk = declaredFields("wotlk");
+    for (int i = 0; i < 5; ++i) {
+        INFO(i);
+        const std::string suffix = std::to_string(i);
+        REQUIRE(wotlk.count("UNIT_FIELD_STAT" + suffix) == 1);
+        REQUIRE(wotlk.count("UNIT_FIELD_POSSTAT" + suffix) == 1);
+        REQUIRE(wotlk.count("UNIT_FIELD_NEGSTAT" + suffix) == 1);
+        if (i > 0) {
+            CHECK(wotlk.at("UNIT_FIELD_STAT" + suffix) ==
+                  wotlk.at("UNIT_FIELD_STAT" + std::to_string(i - 1)) + 1);
+            CHECK(wotlk.at("UNIT_FIELD_POSSTAT" + suffix) ==
+                  wotlk.at("UNIT_FIELD_POSSTAT" + std::to_string(i - 1)) + 1);
+            CHECK(wotlk.at("UNIT_FIELD_NEGSTAT" + suffix) ==
+                  wotlk.at("UNIT_FIELD_NEGSTAT" + std::to_string(i - 1)) + 1);
+        }
+    }
+    CHECK(wotlk.at("UNIT_FIELD_STAT4") + 1 == wotlk.at("UNIT_FIELD_POSSTAT0"));
+    CHECK(wotlk.at("UNIT_FIELD_POSSTAT4") + 1 == wotlk.at("UNIT_FIELD_NEGSTAT0"));
+    CHECK(wotlk.at("UNIT_FIELD_NEGSTAT4") + 1 == wotlk.at("UNIT_FIELD_RESISTANCES"));
+
+    // And why the binding spells the three runs out instead of offsetting from
+    // UNIT_FIELD_STAT0: the other layouts put the stats somewhere else entirely,
+    // so their 89 through 98 belong to unrelated fields. Absent from those
+    // tables is what keeps a WotLK-only field from reading field zero there.
+    for (const char* expansion : {"classic", "tbc", "turtle"}) {
+        const auto fields = declaredFields(expansion);
+        INFO(expansion);
+        CHECK(fields.count("UNIT_FIELD_POSSTAT0") == 0);
+        CHECK(fields.count("UNIT_FIELD_NEGSTAT4") == 0);
+    }
+}

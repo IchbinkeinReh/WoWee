@@ -316,6 +316,33 @@ enum class UF : uint16_t {
     UNIT_FIELD_RANGED_ATTACK_POWER_MODS,
     UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER,
 
+    /// WotLK: the buff halves of the five primary stats. UnitStat (0x00610300)
+    /// answers four values, three of them straight out of the field blob and all
+    /// four gated on the unit being player-controlled: STAT0..4 (84-88, blob
+    /// +0x138) as it stands, that same dword clamped at zero (0x005774b0, the
+    /// `uVar & ((int)uVar < 0) - 1` trick) as the figure the sheet prints, then
+    /// POSSTAT0..4 (89-93, blob +0x14c) and NEGSTAT0..4 (94-98, blob +0x160).
+    /// So STAT is the *total*, not the base: paperdollframe.lua:246 gets the
+    /// unbuffed number by subtracting both halves back out of it, and colours
+    /// the line red when a negative half is in play.
+    ///
+    /// The client names all fifteen of these itself. Its field-name table holds
+    /// UNIT_FIELD_NEGSTAT4 at 0x009f8c58 stepping up through NEGSTAT0,
+    /// POSSTAT4..0, STAT4..0 to UNIT_FIELD_STAT0 at 0x009f8d70 - one name per
+    /// element, in descending index order, with WoWee's own RESISTANCES 99
+    /// directly above and STAT0 84 directly below. The blob reads agree
+    /// dword for dword with that count, drift rule included.
+    UNIT_FIELD_POSSTAT0,
+    UNIT_FIELD_POSSTAT1,
+    UNIT_FIELD_POSSTAT2,
+    UNIT_FIELD_POSSTAT3,
+    UNIT_FIELD_POSSTAT4,
+    UNIT_FIELD_NEGSTAT0,
+    UNIT_FIELD_NEGSTAT1,
+    UNIT_FIELD_NEGSTAT2,
+    UNIT_FIELD_NEGSTAT3,
+    UNIT_FIELD_NEGSTAT4,
+
     COUNT
 };
 
