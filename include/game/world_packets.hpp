@@ -3141,7 +3141,9 @@ struct QuestDetailsData {
     /// TBC and Classic offers have no flags field at all, so it stays zero
     /// there rather than being guessed at.
     uint32_t questFlags = 0;
-    uint32_t rewardMoney = 0;
+    /// Signed, as in QuestOfferRewardData: the word is one field for a payout or a
+    /// cost and the client splits it by sign (0x0058dd50).
+    int32_t  rewardMoney = 0;
     uint32_t rewardXp = 0;
     std::vector<QuestRewardItem> rewardChoiceItems;  // Player picks one of these
     std::vector<QuestRewardItem> rewardItems;         // These are always given
@@ -3190,7 +3192,11 @@ struct QuestOfferRewardData {
     std::string title;
     std::string rewardText;
     uint32_t questFlags = 0;    // QUEST_FLAGS_*, 3.x only
-    uint32_t rewardMoney = 0;
+    /// Signed: the offer packet writes one word for both "pays" and "charges", and
+    /// the client splits it by its sign (0x0058dd50) - a negative amount is the
+    /// cost, and the reward answer is zero. Read unsigned, a charging quest paid
+    /// out four billion copper.
+    int32_t  rewardMoney = 0;
     uint32_t rewardXp = 0;
     uint32_t rewardHonor = 0;   // honor points (the packet's ×10 value, unscaled)
     uint32_t rewardTalents = 0;

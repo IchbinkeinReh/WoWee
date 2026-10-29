@@ -3110,7 +3110,10 @@ struct QuestSource {
     const std::string* title = nullptr;
     const std::vector<game::QuestRewardItem>* rewards = nullptr;
     const std::vector<game::QuestRewardItem>* choices = nullptr;
-    uint32_t money = 0;
+    /// Signed, because the packet's money word is one field for a payout or a
+    /// cost and the sign says which (0x0058dd50 splits it the same way the quest
+    /// log does).
+    int32_t money = 0;
     uint32_t xp = 0;
     uint32_t honor = 0;
     uint32_t talents = 0;
@@ -3188,15 +3191,29 @@ static int lua_GetGossipText(lua_State* L) {
     return pushQuestText(L, &gh->getNpcText(gh->getCurrentGossip().titleTextId));
 }
 
-// GetRewardMoney() → coin the quest pays out
+// GetRewardMoney() → coin the quest pays out.
+//
+// Read off the offer packet as one word, and the client's handler splits it by
+// sign: a negative amount is the quest charging the player, and the reward answer
+// is zero (0x0058dd50, writing the global GetRewardMoney reads back). Unsigned, a
+// quest that charges answered four billion copper.
 static int lua_GetRewardMoney(lua_State* L) {
-    lua_pushnumber(L, currentQuestSource(getGameHandler(L)).money);
+    lua_pushnumber(L, game::questDialogMoney(currentQuestSource(getGameHandler(L)).money));
     return 1;
 }
 
-// GetRewardXP() → experience the quest pays out
+// GetRewardXP() → experience the quest pays out.
+//
+// The packet sends the number the panel shows - none of the quest-log work of
+// looking a row up, damping it and rounding it happens here - but the same level
+// cap still shuts the line off: 0x0058dd50 writes its XP global only for a player
+// below PLAYER_FIELD_MAX_LEVEL, and at the cap the global stays zero.
 static int lua_GetRewardXP(lua_State* L) {
-    lua_pushnumber(L, currentQuestSource(getGameHandler(L)).xp);
+    auto* gh = getGameHandler(L);
+    const uint32_t xp = currentQuestSource(gh).xp;
+    lua_pushnumber(L, gh ? game::questDialogXp(xp, gh->getPlayerLevel(),
+                                               gh->getPlayerMaxLevel())
+                         : 0u);
     return 1;
 }
 // The offer panel's honour, talents and arena points - the quest-giver twins of

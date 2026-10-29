@@ -481,3 +481,28 @@ TEST_CASE("A quest at the cap pays at least its max-level amount",
     CHECK(questRewardMoney(0, 19800, 79, 80) == 0);
     CHECK(questRewardMoney(0, 19800, 80, 0) == 0);
 }
+
+TEST_CASE("The quest giver's dialog copies its numbers and shuts the XP at the cap",
+          "[updatefields][questxp]") {
+    using namespace wowee::game;
+
+    // The cap test the client spells identically in both of its places: the level
+    // is not below the field. A layout that names no cap is never at one.
+    CHECK_FALSE(atLevelCap(79, 80));
+    CHECK(atLevelCap(80, 80));
+    CHECK(atLevelCap(81, 80));
+    CHECK_FALSE(atLevelCap(0, 0));
+
+    // The offer packet's money word is one field for a payout or a cost, and the
+    // sign says which; the charge belongs to GetQuestMoneyToGet, not here. Read
+    // unsigned, a charging quest answered four billion copper.
+    CHECK(questDialogMoney(47400) == 47400);
+    CHECK(questDialogMoney(0) == 0);
+    CHECK(questDialogMoney(-5000) == 0);
+
+    // The experience is the packet's own number - no row lookup, no damping, no
+    // rounding - and the cap alone takes it away.
+    CHECK(questDialogXp(12345, 79, 80) == 12345);
+    CHECK(questDialogXp(12345, 80, 80) == 0);
+    CHECK(questDialogXp(12345, 80, 0) == 12345);
+}

@@ -908,9 +908,10 @@ bool QuestDetailsParser::parse(network::Packet& packet, QuestDetailsData& data) 
         }
     }
 
-    // Money and XP rewards
+    // Money and XP rewards. The money word keeps its sign - see
+    // QuestDetailsData::rewardMoney.
     if (packet.hasRemaining(4))
-        data.rewardMoney = packet.readUInt32();
+        data.rewardMoney = static_cast<int32_t>(packet.readUInt32());
     if (packet.hasRemaining(4))
         data.rewardXp = packet.readUInt32();
 
@@ -1309,8 +1310,9 @@ bool QuestOfferRewardParser::parse(network::Packet& packet, QuestOfferRewardData
                 data.fixedRewards.push_back(item);
         }
 
+        // Signed: one word for a payout or a cost, split by the client's sign test.
         if (packet.hasRemaining(4))
-            data.rewardMoney = packet.readUInt32();
+            data.rewardMoney = static_cast<int32_t>(packet.readUInt32());
         if (packet.hasRemaining(4))
             data.rewardXp = packet.readUInt32();
         // The trailing block, in the wire's order (GossipDef.cpp): honour,
@@ -1494,7 +1496,7 @@ bool QuestOfferRewardParser::parse(network::Packet& packet, QuestOfferRewardData
     if (best) {
         data.choiceRewards = best->choiceRewards;
         data.fixedRewards  = best->fixedRewards;
-        data.rewardMoney   = best->rewardMoney;
+        data.rewardMoney   = static_cast<int32_t>(best->rewardMoney);
         // Pre-WotLK servers do not send an XP field here; parseTail's trailing
         // read lands on flags (Classic) or honor (TBC). Never surface it as XP.
         data.rewardXp      = 0;

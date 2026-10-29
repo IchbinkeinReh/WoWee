@@ -53,8 +53,28 @@
 // beside the first - WoWee's own count of AzerothCore's quest query block spells
 // the run money(13), maxLevel(14), rewSpell(15), and the reward spell's offset
 // was already checked against the panel.)
+//
+// The quest giver's own dialog answers the same two lines from different packets,
+// and there the client works out nothing at all: the offer-reward handler
+// (0x0058dd50) writes the packet's money and experience words straight into the
+// globals that GetRewardMoney, GetRewardXP and GetQuestMoneyToGet read back. Two
+// rules survive that copy. The money word is split by its sign exactly as in the
+// quest log - a negative amount goes to GetQuestMoneyToGet's global and the
+// reward global is set to zero. And the experience word, taken as sent (undamped,
+// unrounded), is written only when the player's level is below
+// PLAYER_FIELD_MAX_LEVEL; at the cap the global stays zero and the XP line drops
+// out of the panel. The cap touches nothing else in that handler, money included.
 
 namespace wowee::game {
+
+/// Whether the character is at the level the realm set as the cap. Both places
+/// that use it spell the test the same way - `!(level < PLAYER_FIELD_MAX_LEVEL)`,
+/// at 0x005e48f0 and at 0x0058dd50 - so one level off the cap answers normally. A
+/// `maxLevel` of zero means the layout names no such field, which is never at the
+/// cap rather than at it at level zero.
+inline bool atLevelCap(uint32_t playerLevel, uint32_t maxLevel) {
+    return maxLevel != 0 && playerLevel >= maxLevel;
+}
 
 /// Which QuestXP.dbc row a quest reads: its own level, or the player's when the
 /// quest says it scales (-1).
@@ -87,7 +107,7 @@ inline uint32_t questXpRound(uint32_t xp) {
 /// pretending every character is at level 0.
 inline uint32_t questRewardXp(uint32_t base, int32_t rowLevel,
                               uint32_t playerLevel, uint32_t maxLevel) {
-    if (maxLevel != 0 && playerLevel >= maxLevel) return 0;
+    if (atLevelCap(playerLevel, maxLevel)) return 0;
     return questXpRound(base * static_cast<uint32_t>(questXpDampFactor(rowLevel, playerLevel)) / 10u);
 }
 
@@ -103,9 +123,25 @@ inline uint32_t questRewardXp(uint32_t base, int32_t rowLevel,
 inline int32_t questRewardMoney(int32_t rewardMoney, int32_t maxLevelAmount,
                                 uint32_t playerLevel, uint32_t maxLevel) {
     int32_t money = rewardMoney > 0 ? rewardMoney : 0;
-    if (maxLevel != 0 && playerLevel >= maxLevel && money <= maxLevelAmount)
+    if (atLevelCap(playerLevel, maxLevel) && money <= maxLevelAmount)
         money = maxLevelAmount;
     return money;
+}
+
+/// The quest giver's dialog money line (GetRewardMoney, whose global 0x0058dd50
+/// writes from the offer packet's money word). The same word, positive half only -
+/// the negative half goes to GetQuestMoneyToGet's global instead, and this one is
+/// zeroed. No cap rule: the handler's cap gate takes in the experience alone.
+inline int32_t questDialogMoney(int32_t rewardMoney) {
+    return rewardMoney > 0 ? rewardMoney : 0;
+}
+
+/// ...and its experience line (GetRewardXP). The packet sends the number the
+/// panel shows - no table, no damping, no rounding - and the handler writes the
+/// global only for a player below the cap, leaving it zero at the cap.
+inline uint32_t questDialogXp(uint32_t rewardXp, uint32_t playerLevel,
+                              uint32_t maxLevel) {
+    return atLevelCap(playerLevel, maxLevel) ? 0u : rewardXp;
 }
 
 } // namespace wowee::game
