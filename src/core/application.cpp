@@ -1956,9 +1956,22 @@ void Application::run() {
             // to eight either way. A window without the keyboard is not the
             // active one; neither is an app the system has put in the
             // background, which is the same test the sound suspension uses.
+            //
+            // The client registers maxFPS "200" and maxFPSBk "30" (0x00760000
+            // registration, defaults at 0x00a38bd0 / 0x00a2d568): an install
+            // that never set the background cap still drops to 30 behind
+            // another window. Read twice a second rather than every frame -
+            // two store lookups and a parse per frame for numbers that change
+            // when a player types a command.
             const int setting = window->frameCap();
-            const int cvarLimit = std::atoi(addons::storedCVarValue("maxFPS", "0").c_str());
-            const int backgroundLimit = std::atoi(addons::storedCVarValue("maxFPSBk", "0").c_str());
+            static int cvarLimit = 0;
+            static int backgroundLimit = 30;
+            static std::chrono::steady_clock::time_point capsReadAt{};
+            if (const auto now = std::chrono::steady_clock::now(); now - capsReadAt > std::chrono::milliseconds(500)) {
+                capsReadAt = now;
+                cvarLimit = std::atoi(addons::storedCVarValue("maxFPS", "200").c_str());
+                backgroundLimit = std::atoi(addons::storedCVarValue("maxFPSBk", "30").c_str());
+            }
             const bool inBackground = window->getVkContext() && window->getVkContext()->inBackground();
             const bool active = !inBackground && SDL_GetKeyboardFocus() != nullptr;
             WOWEE_PROFILE_SCOPE("sleep: frame cap", Idle);
