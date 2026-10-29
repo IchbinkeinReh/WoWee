@@ -3260,11 +3260,13 @@ static int lua_GetPowerRegen(lua_State* L) {
 /// six its own watchers are installed on - three pairs of four bytes, each
 /// watched eight wide).
 ///
-/// False is the answer when there is no run to trust: either the layout names
-/// no such field, or this character's block has never carried all six. That is
-/// what keeps the titles earned in this session as the answer instead of a
-/// dropdown listing nothing - the layouts before WotLK have no such field at
-/// all, and a realm that has never sent the mask cannot be asked what it holds.
+/// False only when there is no run at all - the layouts before WotLK name no
+/// such field - or no player object yet; then the titles earned this session
+/// are the answer. Otherwise the run is the answer, and a dword the block did
+/// not carry is zero: the realms send a create block's fields only where they
+/// are not zero, so a character with an empty title group never carries that
+/// group's dwords, and asking for all six left most characters on the session
+/// set - every title they arrived with missing.
 static bool knownTitleWords(game::GameHandler* gh, game::KnownTitleWords& words) {
     words.fill(0);
     if (!gh) return false;
@@ -3272,13 +3274,8 @@ static bool knownTitleWords(game::GameHandler* gh, game::KnownTitleWords& words)
     if (idx == 0xFFFF) return false;
     const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
     if (!player) return false;
-    for (uint32_t i = 0; i < game::kKnownTitleWords; ++i) {
-        // All six or none. Half a run is not half an answer: an absent dword
-        // reads as zero and would hide every title in that 64-wide group.
-        const uint16_t key = static_cast<uint16_t>(idx + i);
-        if (!player->hasField(key)) return false;
-        words[i] = player->getField(key);
-    }
+    for (uint32_t i = 0; i < game::kKnownTitleWords; ++i)
+        words[i] = player->getField(static_cast<uint16_t>(idx + i));
     return true;
 }
 
