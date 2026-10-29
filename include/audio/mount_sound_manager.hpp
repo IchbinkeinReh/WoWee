@@ -101,6 +101,8 @@ private:
     /// used before any row was read, and it survives only for a clip no row
     /// names: with no row there is no level to take and no flag to swing by.
     void askedByRow(const MountSample& sample, float own, float& volume, float& pitch) const;
+    /// The ambient loop's level: its own, not the row's (no such loop in the client).
+    void askedAmbient(const MountSample& sample, float own, float& volume, float& pitch) const;
 
     pipeline::AssetManager* assetManager_ = nullptr;
     bool mounted_ = false;

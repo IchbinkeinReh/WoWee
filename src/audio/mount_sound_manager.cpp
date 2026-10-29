@@ -133,6 +133,17 @@ void MountSoundManager::askedByRow(const MountSample& sample, float own, float& 
     pitch = sound_entry::pitchForFlags(sample.flags, draw);
 }
 
+// The ambient barks of updateMountSounds - a move or idle clip every few
+// seconds - are this client's own: the original has no such loop, its mount
+// clips come only from the model's events (and the alerts above), at the row's
+// level. A row's VolumeFloat is for that alert, so these keep the quiet level
+// they were written with; the row's flags still swing the pitch.
+void MountSoundManager::askedAmbient(const MountSample& sample, float own, float& volume, float& pitch) const {
+    const float draw = swingDraw();
+    volume = own * volumeScale_;
+    pitch = sound_entry::pitchForFlags(sample.flags, draw);
+}
+
 static void loadSoundList(pipeline::AssetManager* assets,
                           const std::vector<std::string>& paths,
                           std::vector<MountSample>& out) {
@@ -721,7 +732,7 @@ void MountSoundManager::updateMountSounds() {
                 std::uniform_int_distribution<size_t> dist(0, wingFlapSounds_.size() - 1);
                 const auto& sample = wingFlapSounds_[dist(rng)];
                 float volume = 0.0f, pitch = 1.0f;
-                askedByRow(sample, 0.45f, volume, pitch);
+                askedAmbient(sample, 0.45f, volume, pitch);
                 AudioEngine::instance().playSound2D(sample.data, volume, pitch);
                 soundLoopTimer_ = 0.0f;
             }
@@ -730,7 +741,7 @@ void MountSoundManager::updateMountSounds() {
                 std::uniform_int_distribution<size_t> dist(0, wingIdleSounds_.size() - 1);
                 const auto& sample = wingIdleSounds_[dist(rng)];
                 float volume = 0.0f, pitch = 1.0f;
-                askedByRow(sample, 0.35f, volume, pitch);
+                askedAmbient(sample, 0.35f, volume, pitch);
                 AudioEngine::instance().playSound2D(sample.data, volume, pitch);
                 soundLoopTimer_ = 0.0f;
             }
@@ -752,7 +763,7 @@ void MountSoundManager::updateMountSounds() {
                 std::uniform_int_distribution<size_t> dist(0, sounds.move.size() - 1);
                 const auto& sample = sounds.move[dist(rng)];
                 float volume = 0.0f, pitch = 1.0f;
-                askedByRow(sample, 0.4f, volume, pitch);
+                askedAmbient(sample, 0.4f, volume, pitch);
                 AudioEngine::instance().playSound2D(sample.data, volume, pitch);
                 soundLoopTimer_ = 0.0f;
             }
@@ -761,7 +772,7 @@ void MountSoundManager::updateMountSounds() {
                 std::uniform_int_distribution<size_t> dist(0, sounds.idle.size() - 1);
                 const auto& sample = sounds.idle[dist(rng)];
                 float volume = 0.0f, pitch = 1.0f;
-                askedByRow(sample, 0.3f, volume, pitch);
+                askedAmbient(sample, 0.3f, volume, pitch);
                 AudioEngine::instance().playSound2D(sample.data, volume, pitch);
                 soundLoopTimer_ = 0.0f;
             }
