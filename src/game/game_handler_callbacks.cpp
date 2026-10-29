@@ -1030,10 +1030,21 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         // inventory. The main bar builds its token frame on this and had no
         // reason to, so the frame stayed empty however much was held.
         //
-        // One event, not two: KNOWN_CURRENCY_TYPES_UPDATE and
-        // CURRENCY_DISPLAY_UPDATE share a branch there, and the branch rebuilds
-        // the whole row either way.
-        fireAddonEvent("KNOWN_CURRENCY_TYPES_UPDATE", {});
+        // CURRENCY_DISPLAY_UPDATE (605) is the event the client raises here,
+        // from the pass it runs once the player object is live: 0x006e6150
+        // installs the player's field watchers (0x006e5180) and then calls
+        // 0x00528010, a refresh list guarded to run once per player object,
+        // whose currency entry is a call to 0x005b0660 - rebuild the list
+        // (0x005b0030), raise 605. KNOWN_CURRENCY_TYPES_UPDATE (604) is not
+        // raised on the way in at all: it has exactly one site, the callback
+        // watching the known-currency pair (+0x790, eight bytes), and that
+        // belongs to a mask that moves rather than to a character arriving.
+        //
+        // The main bar answers 604 and 605 with one branch
+        // (mainmenubar.lua:176-177,193), so either event fills the row - which
+        // is why this is a matter of which name is right, not of whether the
+        // frame comes up.
+        fireAddonEvent("CURRENCY_DISPLAY_UPDATE", {});
         // PLAYER_LOGIN fires only on initial login (not teleports)
         if (initialWorldEntry) {
             fireAddonEvent("PLAYER_LOGIN", {});

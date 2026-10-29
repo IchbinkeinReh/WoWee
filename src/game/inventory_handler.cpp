@@ -2857,6 +2857,17 @@ void InventoryHandler::fireBagUpdates() {
     // The character sheet redraws from this one rather than from BAG_UPDATE, so
     // both go out together - equipping something changes a bag and a slot.
     fire("UNIT_INVENTORY_CHANGED", {"player"});
+    // ...and the token counters beside the bags, which no bag event reaches:
+    // MainMenuBar registers BAG_UPDATE but its branch for it only handles the
+    // keyring, and the branch that calls TokenFrame_Update and
+    // BackpackTokenFrame_Update at all answers KNOWN_CURRENCY_TYPES_UPDATE or
+    // CURRENCY_DISPLAY_UPDATE (mainmenubar.lua:193,225-234). The client raises
+    // 605 alongside the slot repaint from its container-slot handler (0x005d9790
+    // calling 0x005b0660, which rebuilds the currency list at 0x005b0030 first),
+    // so a stack spent or looted moves the number beside the bags in the same
+    // breath. The same raise goes out from the field path, where a container's
+    // slots changed on their own; this is the path where the model did.
+    fire("CURRENCY_DISPLAY_UPDATE", {});
     // An open trade skill window is looking at the bags too, and it does not
     // watch them: TradeSkillFrame_OnLoad registers TRADE_SKILL_UPDATE,
     // TRADE_SKILL_FILTER_UPDATE, UNIT_PORTRAIT_UPDATE and

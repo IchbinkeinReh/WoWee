@@ -2264,6 +2264,23 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
                 break;
             }
         }
+        // And the token row beside the bags. It counts item stacks out of the
+        // bags, and no bag event is what redraws it: MainMenuBar registers
+        // BAG_UPDATE, but its branch for that event (mainmenubar.lua:242) only
+        // handles the keyring.  The branch that calls TokenFrame_Update and
+        // BackpackTokenFrame_Update at all - at 225-227 and 232-234 - is the one
+        // answering KNOWN_CURRENCY_TYPES_UPDATE or CURRENCY_DISPLAY_UPDATE
+        // (193), which is why a bag whose contents moved has to be said in those
+        // terms.  The client says it from the same place this is: its
+        // container-slot handler (0x005d9790, asserting against
+        // "ContainerFrame.cpp") ends by calling 0x005b0660, and that thunk
+        // rebuilds the currency list (0x005b0030) and raises
+        // CURRENCY_DISPLAY_UPDATE (605) with no arguments - the very same thunk
+        // the list registers as its item-interest callback when a row's item is
+        // not loaded yet (0x005b0000.c:92,113).  Without it the number beside
+        // the bags stayed whatever the row was drawn with, however much of that
+        // currency was looted afterwards.
+        pendingEvents_.emit("CURRENCY_DISPLAY_UPDATE", {});
     }
     if (durabilityChanged) {
         // The armour indicator is DurabilityFrame, which listens for
@@ -3077,6 +3094,31 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         if (currencyChanged) {
             pendingEvents_.emit("HONOR_CURRENCY_UPDATE", {});
             pendingEvents_.emit("CURRENCY_DISPLAY_UPDATE", {});
+        }
+        // Which currencies the character has met, the pair of masks
+        // PLAYER_FIELD_KNOWN_CURRENCIES is read as (blob +0x790 and +0x794).  The
+        // client puts one eight-byte watch over the pair (0x006e5180 registers
+        // `4, 0x790, 8` with the callback at 0x005b0640), and that callback is
+        // three instructions of substance: it rebuilds the token list
+        // (0x005b0030) and raises KNOWN_CURRENCY_TYPES_UPDATE (604) naming no
+        // arguments.  That is the event's only raise in the whole client, and
+        // this is where it belongs: the rows the tab draws are the currencies
+        // whose bit stands, so a mask that moves is the token window changing
+        // underneath itself - which is what the window's own OnEvent re-asks
+        // about.  The pair is watched as one range, so both halves moving in one
+        // block is one raise, and a callback that returns 1 is what a watcher
+        // keeping itself installed looks like.
+        if (const uint16_t knownIdx = fieldIndex(UF::PLAYER_FIELD_KNOWN_CURRENCIES);
+            knownIdx != 0xFFFF) {
+            bool maskMoved = false;
+            for (uint16_t half = 0; half < 2; ++half) {
+                const uint16_t key = static_cast<uint16_t>(knownIdx + half);
+                const auto now = block.fields.find(key);
+                if (now == block.fields.end()) continue;   // this half did not move
+                const auto was = lastFields.find(key);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second) maskMoved = true;
+            }
+            if (maskMoved) pendingEvents_.emit("KNOWN_CURRENCY_TYPES_UPDATE", {});
         }
         // The titles the character has earned, which the realm hands over as six
         // dwords - PLAYER_FIELD_KNOWN_TITLES and the five after it, blob +0x778
