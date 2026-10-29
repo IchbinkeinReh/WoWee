@@ -2304,19 +2304,54 @@ static uint32_t carriedItemMatching(game::GameHandler* gh, lua_State* L, int arg
     return 0;
 }
 
-// GetInventoryItemDurability(slot) → current, maximum
+// The pair both durability bindings answer, and the one gate the client puts in
+// front of it (0x00584ac0 current, 0x00584ae0 maximum - one test each, and the
+// container binding 0x005d7ef0 inlines the same two reads at item+0xd4 blob
+// +0x3c/+0xd8/+0xdc instead of calling them):
 //
-// Absent for an item that cannot be damaged, which is what the durability
-// frame reads to decide whether the slot is worth drawing at all.
+//   bit 3 of ITEM_FIELD_FLAGS answers *zero for both*, and a maximum of zero
+//   makes both bindings return **no values at all** - not nil, not two nils.
+//   So an item carrying that bit reports no durability however full the server
+//   says it is, which is the shape the durability frame keys on when it decides
+//   a slot is not worth drawing. This is the same gate the hyperlink applies to
+//   the six instance numbers and the property (GameHandler::itemLinkInstance) -
+//   what the bit is called is still not pinned, but two independent readers
+//   treat it as "this item has no durability and no rolled detail".
+//
+// Both legs read the item's own fields, worn or carried alike, so the answer is
+// the same either way - the pair is parsed for every tracked item object
+// (entity_controller.cpp:2102), not only the equipped ones.
+//
+// A predicate, and deliberately not a push-and-return helper: a binding whose
+// own body never says `return 2` reads to tools/framexml_short_returns.py as
+// answering nothing against a call site unpacking two.
+static bool answersDurability(game::GameHandler* gh, const game::ItemSlot* sp) {
+    if (sp->empty()) return false;
+    if ((gh->getItemFieldFlags(sp->item.guid) & 0x8u) != 0) return false;
+    return sp->item.maxDurability != 0;
+}
+
+// GetInventoryItemDurability(slot) → current, maximum (0x005ea170)
+//
+// Absent for an item that cannot be damaged, and the client answers that by
+// returning no values rather than a nil, so a caller's `local a, b = ...` sees
+// the same either way but a count of returns does not.
+//
+// It is not the equipment array alone: 0x005e7c00 accepts the same slot lists
+// GetInventoryItemGems gets (see below), which is how the bank's slots reach
+// this. And slot 0 is refused outright - unlike the count and texture bindings,
+// which answer that one out of PLAYER_AMMO_ID - because 0x005e7c00's -1 is
+// tested before the player is even fetched.
 static int lua_GetInventoryItemDurability(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int slotId = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || slotId < 1 || slotId > kEquipSlots) { return luaReturnNil(L); }
-    const auto& sl = gh->getInventory().getEquipSlot(
-        static_cast<game::EquipSlot>(slotId - 1));
-    if (sl.empty() || sl.item.maxDurability == 0) { return luaReturnNil(L); }
-    lua_pushnumber(L, sl.item.curDurability);
-    lua_pushnumber(L, sl.item.maxDurability);
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInventoryItemDurability(slot)");
+    const int slotId = static_cast<int>(lua_tonumber(L, 1));
+    if (slotId == 0) return 0;
+    if (!gh) return 0;
+    const game::ItemSlot* sp = inventorySlotItem(gh->getInventory(), slotId);
+    if (!sp || !answersDurability(gh, sp)) return 0;
+    lua_pushnumber(L, sp->item.curDurability);
+    lua_pushnumber(L, sp->item.maxDurability);
     return 2;
 }
 
@@ -3215,20 +3250,29 @@ static int lua_GetLatestThreeSenders(lua_State* L) {
     return 3;
 }
 
-// What this client does not keep per bag slot: its durability.
+// GetContainerItemDurability(bag, slot) → current, maximum (0x005d7ef0)
 //
-// Read straight into locals and guarded before use - paperdollframe writes
-// `local broken = ( maxDurability and durability == 0 )` - so absent is both
-// safe and true, and answering a full bar would be a claim about an item
-// nobody inspected.
+// Answered nil, nil for as long as the durability pair was blamed on the
+// equipment-only parse - but entity_controller.cpp:2102 fills the pair from the
+// field block of *every* tracked item object, and inventory_handler.cpp:5924
+// maps that same block into the backpack, bag, keyring and bank slots. So the
+// pair was sitting on the slot all along and only the binding was missing.
 //
-// It is a binding rather than parser work, which is worth saying because it
-// was called the other way once: the wire carries this detail and this client
-// parses it only for equipped items, so it looked like a data gap until the
-// caller was read.
+// The client's own bag resolve (0x005d7380) and item lookup (0x00754390) both
+// failing means *no values*, which is not how this binding's gems neighbour
+// behaves - GetContainerItemGems answers three nils for the same missing item.
+// That asymmetry is in the original, and both halves are kept.
 static int lua_GetContainerItemDurability(lua_State* L) {
-    lua_pushnil(L);   // durability
-    lua_pushnil(L);   // maxDurability
+    auto* gh = getGameHandler(L);
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetContainerItemDurability(index, slot)");
+    if (!gh) return 0;
+    const game::ItemSlot* sp = containerItemSlot(gh->getInventory(),
+                                                 static_cast<int>(lua_tonumber(L, 1)),
+                                                 static_cast<int>(lua_tonumber(L, 2)));
+    if (!sp || !answersDurability(gh, sp)) return 0;
+    lua_pushnumber(L, sp->item.curDurability);
+    lua_pushnumber(L, sp->item.maxDurability);
     return 2;
 }
 
