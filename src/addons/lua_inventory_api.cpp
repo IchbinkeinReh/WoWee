@@ -8,6 +8,7 @@
 #include "game/inventory_slots.hpp"
 #include "game/equip_slot_fit.hpp"
 #include "game/known_currencies.hpp"
+#include "game/currency_categories.hpp"
 #include "game/update_field_table.hpp"
 #include "game/game_utils.hpp"
 #include "game/stationery.hpp"
@@ -1024,6 +1025,15 @@ static int lua_GetContainerItemPurchaseItem(lua_State* L) {
 // happens to be sitting in the bags. A layout or a realm that has never named
 // that pair leaves the held currencies as the only answer that can be given, and
 // that fallback is what the tab had before - it beat an empty tab, not the pair.
+//
+// The rows are not a flat list: they are filed under categories (CurrencyCategory
+// .dbc), and the client's list is a walk of those categories in its store's own
+// order - a header for each one some known currency reaches, then that category's
+// rows sorted by name, with the last category reserved for the currencies marked
+// unused. The order and the two membership rules are in currency_categories.hpp;
+// what is kept here is the state that walk reads - which categories are collapsed,
+// and which currencies are marked unused - neither of which the client keeps any
+// more persistently than its own store does.
 namespace {
 /// The guild bank item sitting in a tab and slot, or nullptr for an empty one.
 ///
@@ -1054,6 +1064,17 @@ struct CurrencyRow {
     std::string name;
     uint32_t    itemId = 0;
     uint32_t    currencyId = 0;
+    // A header row - the category's own name, no item behind it, and the only row
+    // whose expanded flag means anything: 0x005b0030 writes the store's flag into
+    // the header it emits and leaves every row's at zero, which is why
+    // GetCurrencyListInfo answers false for isExpanded below the headers and
+    // ExpandCurrencyList (0x005afcb0) refuses to touch a row that is not one.
+    bool        isHeader = false;
+    bool        expanded = false;
+    // A header's own category, which is what the collapsed set is keyed by. A row
+    // carries the category its record names, and nothing asks: the header above it
+    // is what the interface knows the group by.
+    uint32_t    categoryId = 0;
     uint32_t    count = 0;
     // 0 for an ordinary currency, 1 for arena points, 2 for honor points - the
     // third of what GetBackpackCurrencyInfo returns and the seventh of what
@@ -1061,6 +1082,11 @@ struct CurrencyRow {
     // with the PvP art instead of the item's (blizzard_tokenui.lua:183-195).
     uint32_t    extraType = 0;
     std::string icon;
+    // Whether there is an item entry behind the row at all. The client's row
+    // comparator (0x005aff10) resolves both rows' names out of their items first
+    // and sends a row it cannot resolve last, rather than sorting it by a name it
+    // would have to invent.
+    bool        unresolved = false;
 };
 
 /// The two currencies this client does not count out of the bags.
@@ -1130,9 +1156,37 @@ game::CurrencyWatch& currencyWatched() {
     return watched;
 }
 
+/// The currencies the character has marked as not wanting to see.
+///
+/// The third pair of masks over the same ids: 0x005b0440 sets or clears one bit of
+/// DAT_00bd09f4/0x00bd09f8 (+0x30) for the row's currency, and the client writes it
+/// through its settings store (currencyTokensUnused1/2), so the choice outlives the
+/// session there and not here. Marking a currency is not deleting it: it moves the
+/// row out of the category it is filed under and into the last one, which is the
+/// bucket the client reserves for exactly that flag (currency_categories.hpp), and
+/// GetCurrencyListInfo reads the bit back as its fourth answer.
+game::CurrencyWatch& currencyUnusedSet() {
+    static game::CurrencyWatch unused;
+    return unused;
+}
+
+/// Which categories the character has collapsed.
+///
+/// Expanded is the starting state - the client's store loader initialises the flag
+/// to 1 for every category (0x005afd90) - and ExpandCurrencyList is what changes it
+/// (0x005afcb0 writes the store's fourth dword, and only for a header row). Like
+/// the watched pair it is kept for the session here: the client's flag lives in the
+/// store and is reset by the same loader on the next login, so this matches it.
+std::set<uint32_t>& currencyCollapsed() {
+    static std::set<uint32_t> collapsed;
+    return collapsed;
+}
+
 // Rebuilt per call rather than cached: the tab is opened rarely and the counts
 // change with every loot, so a cache here would be one more thing to
-// invalidate.
+// invalidate. The client works the same way - 0x005b0030 fills its row store from
+// scratch on every change that could move a row, which is what the raises added at
+// those change sites announce.
 std::vector<CurrencyRow> buildCurrencyList(lua_State* L) {
     std::vector<CurrencyRow> rows;
     auto* gh = getGameHandler(L);
@@ -1140,29 +1194,77 @@ std::vector<CurrencyRow> buildCurrencyList(lua_State* L) {
 
     uint32_t knownLow = 0, knownHigh = 0;
     const bool named = knownCurrencyPair(gh, knownLow, knownHigh);
+    const game::CurrencyWatch& unused = currencyUnusedSet();
+    const auto& currencies = gh->getCurrencyTypes();
+    const auto& categories = gh->getCurrencyCategories();
 
-    for (const auto& c : gh->getCurrencyTypes()) {
-        const auto [count, extraType] = currencyAmount(gh, c.itemId);
-        if (named) {
-            // The row belongs to the tab while the currency's bit stands,
-            // whatever the count beside it says - zero included.
-            if (!game::currencyIsKnown(knownLow, knownHigh, c.id)) continue;
-        } else if (count == 0) {
-            continue;
+    // Whether the realm counts this currency as one the character has met. Where no
+    // pair is named at all, the item being carried is the only answer left to give.
+    auto knownHere = [&](const game::GameHandler::CurrencyType& c) {
+        return named ? game::currencyIsKnown(knownLow, knownHigh, c.id)
+                     : currencyAmount(gh, c.itemId).first != 0;
+    };
+
+    // Category by category, in the store's order (0x005b0030). Two things the flat
+    // list could not say: a currency whose category names no category is reached by
+    // nothing, so it has no row at all; and a category no known currency reaches
+    // gets no header, which is the same question 0x005afe30 asks before a header is
+    // emitted.
+    for (size_t ci = 0; ci < categories.size(); ++ci) {
+        const auto& cat = categories[ci];
+        const bool last = ci + 1 == categories.size();
+        const bool expanded = currencyCollapsed().count(cat.id) == 0;
+
+        bool drawn = false;
+        for (const auto& c : currencies) {
+            if (game::categoryIsDrawn(c.categoryId == cat.id, knownHere(c), last, unused.has(c.id))) {
+                drawn = true;
+                break;
+            }
         }
-        CurrencyRow r;
-        r.currencyId = c.id;
-        r.itemId     = c.itemId;
-        r.count      = count;
-        r.extraType  = extraType;
-        if (const auto* info = gh->getItemInfo(c.itemId)) r.name = info->name;
-        if (r.name.empty()) r.name = "Item #" + std::to_string(c.itemId);
-        rows.push_back(std::move(r));
+        if (!drawn) continue;
+
+        rows.push_back(CurrencyRow{.name = cat.name,
+                                   .isHeader = true,
+                                   .expanded = expanded,
+                                   .categoryId = cat.id});
+        // The header goes out either way; the rows under it only while the flag
+        // says open. A collapsed category keeps its heading and shows nothing below.
+        if (!expanded) continue;
+
+        std::vector<CurrencyRow> group;
+        for (const auto& c : currencies) {
+            const auto [count, extraType] = currencyAmount(gh, c.itemId);
+            const bool here = named ? game::currencyIsKnown(knownLow, knownHigh, c.id)
+                                    : count != 0;
+            if (!here) continue;
+            if (!game::currencyBelongsHere(last, c.categoryId, cat.id, unused.has(c.id))) continue;
+
+            CurrencyRow r;
+            r.currencyId = c.id;
+            r.itemId     = c.itemId;
+            r.categoryId = c.categoryId;
+            r.count      = count;
+            r.extraType  = extraType;
+            if (const auto* info = gh->getItemInfo(c.itemId)) r.name = info->name;
+            else r.unresolved = true;
+            if (r.name.empty()) r.name = "Item #" + std::to_string(c.itemId);
+            group.push_back(std::move(r));
+        }
+        std::sort(group.begin(), group.end(), [](const CurrencyRow& a, const CurrencyRow& b) {
+            // 0x005aff10 resolves both names out of the items behind the rows and
+            // puts a row with nothing behind it last; the comparison it then makes
+            // is the client's locale collation (0x0076ec80), and a byte compare
+            // here gives the same order for names that differ in their first
+            // letters. Sorting only inside the category is what the client does
+            // too: the qsort is per category, after the header.
+            if (a.unresolved != b.unresolved) return !a.unresolved;
+            return a.name < b.name;
+        });
+        rows.insert(rows.end(),
+                    std::make_move_iterator(group.begin()),
+                    std::make_move_iterator(group.end()));
     }
-    std::sort(rows.begin(), rows.end(), [](const CurrencyRow& a, const CurrencyRow& b) {
-        if (a.name != b.name) return a.name < b.name;
-        return a.currencyId < b.currencyId;   // a total order, not just a tie-break
-    });
     return rows;
 }
 
@@ -4324,16 +4426,28 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (idx < 1 || idx > static_cast<int>(rows.size())) return luaReturnNil(L);
             const auto& r = rows[static_cast<size_t>(idx) - 1];
             lua_pushstring(L, r.name.c_str());   // 1: name
-            lua_pushboolean(L, 0);               // 2: isHeader - the list is flat
-            lua_pushboolean(L, 0);               // 3: isExpanded
-            // The client computes this one per row (0x005b04f0) out of a second
-            // pair of masks, and uses it to hide whole categories - which this
-            // list, having no categories, has nothing to do with.
-            lua_pushboolean(L, 0);               // 4: isUnused
+            lua_pushboolean(L, r.isHeader ? 1 : 0);               // 2: isHeader
+            // A header answers its category's flag; a row answers false, because
+            // the client's builder writes the expanded flag into the header alone
+            // and leaves every row's dword at zero (0x005b0030).
+            lua_pushboolean(L, r.expanded ? 1 : 0);               // 3: isExpanded
+            // 0x005b04f0 asks two different questions depending on the row. For a
+            // header it compares the row's category against the last category in
+            // the store, so a header is "unused" exactly when it is the bucket that
+            // flag defines. For a row it reads the row's own bit out of the unused
+            // pair, which is the pair SetCurrencyUnused writes.
+            const bool unusedBucket =
+                r.isHeader && gh && !gh->getCurrencyCategories().empty() &&
+                gh->getCurrencyCategories().back().id == r.categoryId;
+            lua_pushboolean(L, (unusedBucket ||
+                                (!r.isHeader && currencyUnusedSet().has(r.currencyId))) ? 1 : 0);  // 4: isUnused
             // This is the flag the token window's "Show in your bag" tick reads
             // back, so answering false left the box unticked however many times
             // it was clicked - and blizzard_tokenui.lua keeps its own count of
-            // what is watched (GetNumWatchedTokens) to refuse a fourth.
+            // what is watched (GetNumWatchedTokens) to refuse a fourth. The client
+            // bakes it into the row when it builds the list (row +0x14) rather than
+            // asking the mask here; the list is rebuilt whenever the mask changes,
+            // which is what makes the two answers the same.
             lua_pushboolean(L, currencyWatched().has(r.currencyId) ? 1 : 0);  // 5: isWatched
             lua_pushnumber(L, r.count);          // 6: count
             lua_pushnumber(L, r.extraType);      // 7: extraCurrencyType
@@ -4341,12 +4455,24 @@ void registerInventoryLuaAPI(lua_State* L) {
             // TokenFrame_Update draws the row's icon from this - so every
             // currency was listed with a blank square beside its name. The
             // icon is the item's, which is where a currency's art lives.
-            const auto* info = gh ? gh->getItemInfo(r.itemId) : nullptr;
-            const std::string icon = (info && info->displayInfoId)
-                ? gh->getItemIconPath(info->displayInfoId) : std::string();
-            if (icon.empty()) lua_pushstring(L, "Interface\\Icons\\INV_Misc_QuestionMark");
-            else              lua_pushstring(L, icon.c_str());   // 8: icon
-            lua_pushnumber(L, r.itemId);         // 9: itemID
+            //
+            // A row with no item entry behind it at all answers nil, not a
+            // fallback: 0x005b0680 asks for the item's handle before it builds the
+            // path, and when that lookup fails it pushes nil and then the item id.
+            // A header is such a row - it carries no item - which is why the
+            // interface draws a heading with no art beside it. The question-mark
+            // path stays for an item that exists but names no icon, which is where
+            // the client's own path-building ends up.
+            const auto* info = (!r.unresolved && r.itemId && gh)
+                ? gh->getItemInfo(r.itemId) : nullptr;
+            if (!info) lua_pushnil(L);
+            else {
+                const std::string icon = info->displayInfoId
+                    ? gh->getItemIconPath(info->displayInfoId) : std::string();
+                if (icon.empty()) lua_pushstring(L, "Interface\\Icons\\INV_Misc_QuestionMark");
+                else              lua_pushstring(L, icon.c_str());
+            }                                                        // 8: icon
+            lua_pushnumber(L, r.itemId);         // 9: itemID (0 for a header)
             return 9;
         }},
                 // GetBackpackCurrencyInfo(index) → name, count, extraCurrencyType,
@@ -4429,8 +4555,40 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // here is flat, so there is no category to expand and no category to
                 // hide behind the client's second pair of masks; both are accepted
                 // and dropped rather than left to raise an error in the interface.
-                {"ExpandCurrencyList",  [](lua_State* L) -> int { (void)L; return 0; }},
-                {"SetCurrencyUnused",   [](lua_State* L) -> int { (void)L; return 0; }},
+                // ExpandCurrencyList(index, expand) - the index is a row of the
+                // visible list, and 0x005afcb0 ignores it unless that row is a
+                // header: it looks the header's category up in the store by the id
+                // the header carries and writes the flag into that record. The
+                // default is open, which is what the store loader initialises (it
+                // puts 1 in the flag for every category), and a collapsed category
+                // keeps its header while its rows stop being walked.
+                {"ExpandCurrencyList", [](lua_State* L) -> int {
+            const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const bool on = luaL_optnumber(L, 2, 0) != 0;
+            const auto rows = buildCurrencyList(L);
+            if (idx < 1 || idx > static_cast<int>(rows.size())) return 0;
+            const auto& r = rows[static_cast<size_t>(idx) - 1];
+            if (!r.isHeader) return 0;
+            auto& collapsed = currencyCollapsed();
+            if (on) collapsed.erase(r.categoryId);
+            else    collapsed.insert(r.categoryId);
+            return 0;
+        }},
+                // SetCurrencyUnused(index, unused) - a row, never a header, which
+                // is the same guard 0x005b0440 runs before it touches the mask. The
+                // bit is the row's currency in the third pair; marking a currency
+                // moves its row out of the category its record names and into the
+                // bucket, and unmarking it puts it back where it came from.
+                {"SetCurrencyUnused", [](lua_State* L) -> int {
+            const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const bool on = luaL_optnumber(L, 2, 0) != 0;
+            const auto rows = buildCurrencyList(L);
+            if (idx < 1 || idx > static_cast<int>(rows.size())) return 0;
+            const auto& r = rows[static_cast<size_t>(idx) - 1];
+            if (r.isHeader) return 0;
+            currencyUnusedSet().set(r.currencyId, on);
+            return 0;
+        }},
                 {"GetItemCount",      lua_GetItemCount},
                 {"GetItemFamily",     lua_GetItemFamily},
                 {"UseContainerItem",  lua_UseContainerItem},

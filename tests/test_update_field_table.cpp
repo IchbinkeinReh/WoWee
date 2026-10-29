@@ -2,6 +2,7 @@
 
 #include "game/update_field_table.hpp"
 #include "game/known_currencies.hpp"
+#include "game/currency_categories.hpp"
 #include "game/known_titles.hpp"
 
 #include <filesystem>
@@ -188,6 +189,92 @@ TEST_CASE("A CurrencyTypes row is keyed by its fourth field", "[updatefields][cu
     CHECK_FALSE(currencyBitOf(65).valid);
     CHECK_FALSE(currencyBitOf(341).valid);
     CHECK_FALSE(currencyBitOf(0).valid);
+}
+
+// The token tab's list is a walk of the categories, not a flat list, and two of
+// its rules are position rules rather than name rules: the category carrying flag
+// bit 0 is the one the client files the unused currencies under, and it is found by
+// being last (0x005afe30 tests param_1 == count - 1). So the store's order is what
+// decides which category plays that role, and 0x005afc40 puts a flagged category
+// after every unflagged one and compares the rest by name.
+TEST_CASE("The category that sorts last is the unused bucket", "[updatefields][currency]") {
+    using wowee::game::categorySortsLast;
+    using wowee::game::CurrencyCategory;
+    using wowee::game::currencyCategoryLess;
+    using wowee::game::currencyBelongsHere;
+    using wowee::game::categoryIsDrawn;
+
+    CHECK_FALSE(categorySortsLast(0));
+    CHECK(categorySortsLast(1));
+    CHECK(categorySortsLast(3));   // the value this build's table actually carries
+
+    // Names first, the flagged one after them whatever its name would sort to.
+    const CurrencyCategory classic{.id = 4,  .flags = 0, .name = "Classic"};
+    const CurrencyCategory burning{.id = 41, .flags = 0, .name = "Burning Crusade"};
+    const CurrencyCategory unused{.id = 3,  .flags = 3, .name = "Aardvark"};
+    CHECK(currencyCategoryLess(burning, classic));
+    CHECK(currencyCategoryLess(classic, unused));
+    CHECK(currencyCategoryLess(burning, unused));
+    CHECK_FALSE(currencyCategoryLess(unused, classic));
+
+    // Which category a currency lands in (0x005b0030's two legs). An ordinary
+    // category takes its own id with the unused bit clear; the bucket takes the
+    // unused bit and nothing else. A currency filed under the bucket's own id but
+    // not marked unused belongs to neither leg, which is what the client does too -
+    // it has no row.
+    CHECK(currencyBelongsHere(false, 4, 4, false));
+    CHECK_FALSE(currencyBelongsHere(false, 4, 4, true));    // marked: not here any more
+    CHECK_FALSE(currencyBelongsHere(false, 22, 4, false));  // someone else's
+    CHECK(currencyBelongsHere(true, 4, 3, true));           // the bucket takes any id
+    CHECK_FALSE(currencyBelongsHere(true, 3, 3, false));
+
+    // And whether a header is drawn at all (0x005afe30, which returns as soon as
+    // one row answers). A category draws for a known currency filed under it; the
+    // bucket draws for a known currency marked unused; an unknown currency draws
+    // nothing anywhere.
+    CHECK(categoryIsDrawn(true, true, false, false));
+    CHECK_FALSE(categoryIsDrawn(true, false, false, false));
+    CHECK_FALSE(categoryIsDrawn(false, true, false, true));   // marked, but not this one
+    CHECK(categoryIsDrawn(false, true, true, true));
+    CHECK_FALSE(categoryIsDrawn(false, true, true, false));   // known, unmarked: not the bucket
+    // The bucket's leg never looks at the known pair at all (0x005afe30 asks
+    // `bVar7 && (unused & bit)` on its own), so a currency marked unused draws the
+    // bucket's header even if the realm says nothing about it. The rows under it
+    // are a different test - the builder requires the known bit there - which is
+    // why the client can draw a heading with nothing below it.
+    CHECK(categoryIsDrawn(false, false, true, true));
+}
+
+// Which columns of CurrencyCategory.dbc the loader reads, pinned because two of
+// them are not the obvious ones: the flags are their own column, and the name is
+// the locale block's first column only after pipeline/dbc_loader.cpp has promoted
+// the active locale's offset into it. Verified through that loader against this
+// build's table - the promoted name lands at 2 and the flags column keeps its
+// value, which only one row of eight has.
+TEST_CASE("CurrencyCategory's flags and promoted name columns", "[updatefields][currency]") {
+    using wowee::game::kCurrencyCategoryFieldFlag;
+    using wowee::game::kCurrencyCategoryFieldId;
+    using wowee::game::kCurrencyCategoryFieldName;
+    using wowee::game::kCurrencyCategoryFields;
+
+    CHECK(kCurrencyCategoryFieldId == 0);
+    CHECK(kCurrencyCategoryFieldFlag == 1);
+    // Not 1: the block starts after the flags, so promotion lands on 2. Reading 1
+    // would hand back the flags word as a name and the name as nothing.
+    CHECK(kCurrencyCategoryFieldName == 2);
+    static_assert(kCurrencyCategoryFields == 3);
+
+    // The unused pair is a pair of the same masks as the watched one, keyed by the
+    // same ids - so marking a currency must not disturb what is watched, or the
+    // token row beside the bags would move when a currency is hidden.
+    wowee::game::CurrencyWatch watched, unusedSet;
+    watched.set(7, true);
+    unusedSet.set(7, true);
+    CHECK(watched.has(7));
+    CHECK(unusedSet.has(7));
+    unusedSet.set(7, false);
+    CHECK(watched.has(7));
+    CHECK_FALSE(unusedSet.has(7));
 }
 
 // The character sheet's title dropdown is built by walking 1..GetNumTitles() and

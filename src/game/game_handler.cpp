@@ -2310,13 +2310,48 @@ const std::vector<GameHandler::CurrencyType>& GameHandler::getCurrencyTypes() {
     }
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
         CurrencyType c;
-        c.id     = dbc->getUInt32(i, kCurrencyTypeFieldId);
-        c.itemId = dbc->getUInt32(i, kCurrencyTypeFieldItem);
+        c.id         = dbc->getUInt32(i, kCurrencyTypeFieldId);
+        c.itemId     = dbc->getUInt32(i, kCurrencyTypeFieldItem);
+        c.categoryId = dbc->getUInt32(i, kCurrencyTypeFieldCategory);
         if (c.id == 0 || c.itemId == 0) continue;
         currencyTypes_.push_back(c);
     }
     LOG_INFO("Currency: ", currencyTypes_.size(), " types from CurrencyTypes.dbc");
     return currencyTypes_;
+}
+
+// CurrencyCategory.dbc: the groups the token tab draws a header for. The order
+// back from here is the store's own - currency_categories.hpp spells out that the
+// last category is a role, not a name, and that a category no known currency
+// reaches draws nothing at all.
+const std::vector<CurrencyCategory>& GameHandler::getCurrencyCategories() {
+    if (currencyCategoriesLoaded_) return currencyCategories_;
+    auto* am = services_.assetManager;
+    // Same rule as the currencies above: an early ask must not latch an empty list.
+    if (!am || !am->isInitialized()) return currencyCategories_;
+    currencyCategoriesLoaded_ = true;
+
+    auto dbc = am->loadDBC("CurrencyCategory.dbc");
+    if (!dbc || !dbc->isLoaded()) return currencyCategories_;
+    if (dbc->getFieldCount() < kCurrencyCategoryFields) {
+        LOG_WARNING("Currency: CurrencyCategory.dbc has ", dbc->getFieldCount(),
+                    " fields, need ", kCurrencyCategoryFields);
+        return currencyCategories_;
+    }
+    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+        CurrencyCategory c;
+        c.id    = dbc->getUInt32(i, kCurrencyCategoryFieldId);
+        c.flags = dbc->getUInt32(i, kCurrencyCategoryFieldFlag);
+        // The locale block's first column, which this build's loader has already
+        // filled with the active locale's offset - the way SkillLineCategory.dbc
+        // is read for the skills tab's headings.
+        c.name  = dbc->getString(i, kCurrencyCategoryFieldName);
+        if (c.id == 0) continue;
+        currencyCategories_.push_back(std::move(c));
+    }
+    std::sort(currencyCategories_.begin(), currencyCategories_.end(), currencyCategoryLess);
+    LOG_INFO("Currency: ", currencyCategories_.size(), " categories from CurrencyCategory.dbc");
+    return currencyCategories_;
 }
 
 // Achievement.dbc field 38 is the category. It is not in the layout file, but

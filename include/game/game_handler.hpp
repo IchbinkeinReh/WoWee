@@ -9,6 +9,7 @@
 #include "game/unit_reaction.hpp"
 #include "game/item_requirements.hpp"
 #include "game/calendar_data.hpp"
+#include "game/currency_categories.hpp"
 #include "game/lfg_update.hpp"
 #include "game/latest_criteria.hpp"
 #include "game/game_interfaces.hpp"
@@ -3545,7 +3546,7 @@ public:
     /// are kept in the queue list.
     bool isArenaMap(uint32_t mapId);
 
-    // ---- Currencies (CurrencyTypes.dbc) ----
+    // ---- Currencies (CurrencyTypes.dbc, CurrencyCategory.dbc) ----
     // In 3.3.5a a currency is a row pointing at an item, and the amount held is
     // that item's stack count in the bags - there is no separate store to read.
     struct CurrencyType {
@@ -3554,12 +3555,17 @@ public:
         // which field and for why the record's first field is not it.
         uint32_t id = 0;
         uint32_t itemId = 0;
-        // The record's category field is not read. Nothing files rows by category
-        // yet, which is also what drops a row whose category names no category -
-        // the client's list walk goes category by category, so such a row is never
-        // reached there.
+        // Which category the row is filed under - and a row whose category names no
+        // CurrencyCategory.dbc record has no row at all, because the client's list
+        // walk goes category by category and never reaches it.
+        uint32_t categoryId = 0;
     };
     const std::vector<CurrencyType>& getCurrencyTypes();
+
+    /// The categories themselves, in the order the client's store comparator puts
+    /// them in - name order, with the unused bucket last. See
+    /// currency_categories.hpp for what that order decides.
+    const std::vector<CurrencyCategory>& getCurrencyCategories();
 
     // ---- Achievement categories and criteria (Achievement_Category.dbc,
     // Achievement_Criteria.dbc). The panel is a tree of categories, so it needs
@@ -6072,6 +6078,8 @@ private:
     PendingGuildRank pendingGuildRank_;
     std::vector<CurrencyType> currencyTypes_;
     bool currencyTypesLoaded_ = false;
+    std::vector<CurrencyCategory> currencyCategories_;
+    bool currencyCategoriesLoaded_ = false;
     std::unordered_map<uint32_t, BattlemasterEntry> battlemasterList_;
     std::vector<BattlemasterEntry> battlegroundTypes_;  // arenas filtered out, id-ordered
     bool battlemasterListLoaded_ = false;
