@@ -343,6 +343,28 @@ enum class UF : uint16_t {
     UNIT_FIELD_NEGSTAT3,
     UNIT_FIELD_NEGSTAT4,
 
+    /// WotLK: the buff halves of armour and the six schools, seven each in the
+    /// same school order as RESISTANCES (99-105). 0x004f54d0 is the whole of it:
+    /// effective = RESISTANCES[i], positive = this +i, negative = the other +i,
+    /// and the base is effective - positive - negative, with the effective pair
+    /// - and only those - clamped away when negative. UnitArmor (0x00610ec0)
+    /// calls it for any player-controlled unit and pushes five values;
+    /// UnitResistance (0x006101a0) calls it only for the local player and takes
+    /// four, answering the pet from RESISTANCES alone with no parts. The two
+    /// bindings disagree with each other about the pet; that is the client's own
+    /// behaviour, mirrored here rather than tidied up, because it is what the
+    /// shipped interface shows for a hunter's pet.
+    ///
+    /// Bases rather than one name per element: the client's field-name table has
+    /// a single string for each run (RESISTANCEBUFFMODSNEGATIVE at 0x009f8bf0,
+    /// POSITIVE at 0x009f8c18, RESISTANCES at 0x009f8c40 - descending index
+    /// order, so NEGATIVE is the 113 end and POSITIVE the 106 end, which
+    /// 0x004f54d0's own blob reads at +0x190 and +0x1ac confirm). Each run is
+    /// then pinned between two keys this table has always had: RESISTANCES' 99
+    /// and BASE_MANA's 120.
+    UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE,
+    UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE,
+
     COUNT
 };
 

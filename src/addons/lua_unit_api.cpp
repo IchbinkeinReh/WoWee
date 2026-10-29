@@ -920,6 +920,120 @@ static int lua_UnitStat(lua_State* L) {
     return 4;
 }
 
+/// Armour and the six schools are one array of seven, and each school has two
+/// more arrays beside it: the positive part at RESISTANCEBUFFMODSPOSITIVE, the
+/// negative at …NEGATIVE. 0x004f54d0 is the whole of the arithmetic both
+/// bindings use - effective = RESISTANCES as the realm wrote it, base = that
+/// minus both parts, and only the two effective copies are clamped when the
+/// total goes negative.
+///
+/// `withMods` is false for the one path that reads no parts at all:
+/// UnitResistance (0x006101a0) asks 0x004f54d0 only about the local player, and
+/// for any other player-controlled unit - a hunter's pet - it takes the
+/// resistance dword, clamps it, and pushes it twice with two zeros beside it.
+/// UnitArmor (0x00610ec0) has no such branch and takes the breakdown for
+/// whoever asks. The two bindings disagree about the pet; that is the client's
+/// own behaviour, so it is mirrored rather than tidied up.
+struct ResistAnswer {
+    int32_t base = 0, effective = 0, positive = 0, negative = 0;
+};
+
+static ResistAnswer resistanceAnswer(game::Unit* unit, int school, bool withMods) {
+    const uint16_t resIdx = game::fieldIndex(game::UF::UNIT_FIELD_RESISTANCES);
+    if (!unit || resIdx == 0xFFFF || school < 0 || school > 6) return {};
+    const int32_t raw =
+        static_cast<int32_t>(unit->getField(resIdx + static_cast<uint16_t>(school)));
+    ResistAnswer a;
+    if (!withMods) {
+        a.base = a.effective = (raw < 0) ? 0 : raw;
+        return a;
+    }
+    // A run read by offset rather than by fifteen names, because the client
+    // names each run once; the table test pins both ends of it.
+    const uint16_t posIdx = game::fieldIndex(game::UF::UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE);
+    const uint16_t negIdx = game::fieldIndex(game::UF::UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE);
+    if (posIdx != 0xFFFF) a.positive = static_cast<int32_t>(unit->getField(posIdx + static_cast<uint16_t>(school)));
+    if (negIdx != 0xFFFF) a.negative = static_cast<int32_t>(unit->getField(negIdx + static_cast<uint16_t>(school)));
+    a.base = raw - a.positive - a.negative;
+    a.effective = (raw < 0) ? 0 : raw;
+    return a;
+}
+
+/// UnitArmor(unit) → baseArmor, effectiveArmor, armor, posBuff, negBuff.
+///
+/// School zero of the block above, taken in full: the client gates on the
+/// realm's UNIT_FLAG_PLAYER_CONTROLLED and then lets 0x004f54d0 work out the
+/// three arrays at index zero. paperdollframe.lua:430 hands all five answers to
+/// PaperDollFormatStat, which colours the number by the parts and builds the
+/// "base +pos -neg" tooltip beside it - WoWee pushed the effective figure three
+/// times with no parts, so a geared character's armour line sat there white
+/// with no breakdown, and the same went for the pet sheet's armour.
+static int lua_UnitArmor(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    // PaperDollFrame_SetArmor is shared between the sheets and the pet tab
+    // calls it with "Pet" - capitalised, which is why this compares lowered.
+    std::string who(luaL_optstring(L, 1, "player"));
+    toLowerInPlace(who);
+    ResistAnswer a;
+    auto* unit = resolveUnit(L, who.c_str());
+    if (unit) {
+        if (!(unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED)) {
+            lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0);
+            lua_pushnumber(L, 0); lua_pushnumber(L, 0);
+            return 5;
+        }
+        a = resistanceAnswer(unit, 0, true);
+    } else if (gh) {
+        const int32_t armor = (who == "pet") ? gh->getPetResistances()[0] : gh->getArmorRating();
+        a.base = a.effective = (armor < 0) ? 0 : armor;
+    }
+    lua_pushnumber(L, a.base);
+    lua_pushnumber(L, a.effective);
+    lua_pushnumber(L, a.effective);   // the compat slot, same figure again
+    lua_pushnumber(L, a.positive);
+    lua_pushnumber(L, a.negative);
+    return 5;
+}
+
+/// UnitResistance(unit, school) → base, resistance, positive, negative.
+///
+/// The school is 0-based here, unlike UnitStat: the client checks
+/// `if (6 < index)` with no subtraction, and armour is school zero of the same
+/// array. Only the local player gets the parts (see resistanceAnswer); the pet
+/// and anyone else player-controlled get the clamped dword twice with two zeros
+/// after it, and anyone without the realm's player-controlled flag gets four
+/// zeros, because the realm does not send a creature's resistances to read.
+static int lua_UnitResistance(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const int school = static_cast<int>(luaL_optnumber(L, 2, 0));
+    std::string who(luaL_optstring(L, 1, "player"));
+    toLowerInPlace(who);
+
+    ResistAnswer a;
+    bool answered = false;
+    if (auto* unit = resolveUnit(L, who.c_str());
+        unit && (unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED)) {
+        const bool self = gh && unit->getGuid() == gh->getPlayerGuid();
+        a = resistanceAnswer(unit, school, self);
+        answered = true;
+    }
+    if (!answered && gh && school >= 0 && school <= 6) {
+        // The cached figures, for a unit this cannot reach: the pet's own
+        // block, or the player's - where the realm's armour dword is school
+        // zero and the six schools follow it. Either way the cache holds only
+        // the total, so no parts show.
+        int32_t val = 0;
+        if (who == "pet") val = gh->getPetResistances()[static_cast<size_t>(school)];
+        else if (who == "player") val = (school == 0) ? gh->getArmorRating() : gh->getResistance(school);
+        a.base = a.effective = (val < 0) ? 0 : val;
+    }
+    lua_pushnumber(L, a.base);
+    lua_pushnumber(L, a.effective);
+    lua_pushnumber(L, a.positive);
+    lua_pushnumber(L, a.negative);
+    return 4;
+}
+
 // GetDodgeChance() → percent
 static int lua_GetDodgeChance(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -3024,48 +3138,8 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"UnitDetailedThreatSituation", lua_UnitDetailedThreatSituation},
                 {"UnitSex",       lua_UnitSex},
                 {"UnitClass",     lua_UnitClass},
-                {"UnitArmor",     [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            // Whose armour. PaperDollFrame_SetArmor is shared between the two
-            // sheets and the pet tab calls it with "Pet" - capitalised, which
-            // is why this compares lowered.
-            std::string who(luaL_optstring(L, 1, "player"));
-            toLowerInPlace(who);
-            int32_t armor = 0;
-            if (gh) {
-                armor = (who == "pet") ? gh->getPetResistances()[0]
-                      : (who == "player") ? gh->getArmorRating() : 0;
-            }
-            if (armor < 0) armor = 0;
-            lua_pushnumber(L, armor); // base
-            lua_pushnumber(L, armor); // effective
-            lua_pushnumber(L, armor); // armor (again for compat)
-            lua_pushnumber(L, 0);     // posBuff
-            lua_pushnumber(L, 0);     // negBuff
-            return 5;
-        }},
-                {"UnitResistance", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            int school = static_cast<int>(luaL_optnumber(L, 2, 0));
-            int32_t val = 0;
-            // Whose resistance, for the same reason as UnitStat above.
-            std::string who(luaL_optstring(L, 1, "player"));
-            toLowerInPlace(who);
-            if (gh && school >= 0 && school <= 6) {
-                if (who == "pet") {
-                    val = gh->getPetResistances()[static_cast<size_t>(school)];
-                } else if (who == "player") {
-                    // Physical is armor, and it is index zero of the same block.
-                    val = (school == 0) ? gh->getArmorRating() : gh->getResistance(school);
-                }
-            }
-            if (val < 0) val = 0;
-            lua_pushnumber(L, val); // base
-            lua_pushnumber(L, val); // effective
-            lua_pushnumber(L, 0);   // posBuff
-            lua_pushnumber(L, 0);   // negBuff
-            return 4;
-        }},
+                {"UnitArmor",     lua_UnitArmor},
+                {"UnitResistance", lua_UnitResistance},
                 {"UnitStat",      lua_UnitStat},
                 {"GetDodgeChance",    lua_GetDodgeChance},
                 {"GetParryChance",    lua_GetParryChance},

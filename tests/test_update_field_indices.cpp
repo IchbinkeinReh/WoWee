@@ -313,3 +313,40 @@ TEST_CASE("each stat carries its two buff halves above it", "[update-fields]") {
         CHECK(fields.count("UNIT_FIELD_NEGSTAT4") == 0);
     }
 }
+
+TEST_CASE("the resistance block is three seven-wide runs in a row",
+          "[update-fields]") {
+    // 0x004f54d0 answers UnitArmor and UnitResistance from three arrays read at
+    // one school index: the figure itself at blob +0x174 - WoWee's RESISTANCES,
+    // 99 - then the positive part at +0x190 and the negative part at +0x1ac.
+    // With the blob six dwords behind the wire index those are 106 and 113,
+    // which is also where the client's field-name table puts them: it lists
+    // RESISTANCEBUFFMODSNEGATIVE at 0x009f8bf0, above POSITIVE at 0x009f8c18,
+    // above RESISTANCES at 0x009f8c40 - one string per run of seven elements,
+    // in descending index order, so the negative run is the 113 end and the
+    // positive one the 106 end. Both ends of the whole block are keys this
+    // table has always carried: RESISTANCES' 99 below, BASE_MANA's 120 above.
+    //
+    // Two bases pinned this way rather than fourteen names, and a base one off
+    // is the convincing kind of wrong: 105 reads the fire resistance as an
+    // armour buff, and the tooltip formula still adds up.
+    const auto wotlk = declaredFields("wotlk");
+    REQUIRE(wotlk.count("UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE") == 1);
+    REQUIRE(wotlk.count("UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE") == 1);
+    CHECK(wotlk.at("UNIT_FIELD_RESISTANCES") + 7 ==
+          wotlk.at("UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE"));
+    CHECK(wotlk.at("UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE") + 7 ==
+          wotlk.at("UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE"));
+    CHECK(wotlk.at("UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE") + 7 ==
+          wotlk.at("UNIT_FIELD_BASE_MANA"));
+
+    // And the two runs are WotLK's alone: the other layouts put the resistance
+    // block somewhere else, so the bindings' guards, not an index, are what
+    // keep them from reading field zero there.
+    for (const char* expansion : {"classic", "tbc", "turtle"}) {
+        const auto fields = declaredFields(expansion);
+        INFO(expansion);
+        CHECK(fields.count("UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE") == 0);
+        CHECK(fields.count("UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE") == 0);
+    }
+}
