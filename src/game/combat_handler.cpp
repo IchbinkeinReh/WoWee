@@ -1134,10 +1134,14 @@ void CombatHandler::handleUpdateComboPoints(network::Packet& packet) {
     // UPDATE_SHAPESHIFT_USABLE (0x17a), a button going unusable is a sound
     // (0x0074d520 0x23), and the rescan's own name SPELL_UPDATE_USABLE (0xf5)
     // reaches no frame of this interface. WoWee's action flags hold the power
-    // half only (0x0053d1b0, the power-only variant) and IsUsableAction never
-    // looks at the points at all, so a finisher has no way here to be grey for
-    // want of a combo point - and announcing ACTIONBAR_UPDATE_USABLE from this
-    // packet would change nothing until that answer depends on the points.
+    // half only (0x0053d1b0, the power-only variant), which is the half the
+    // buttons actually read: IsUsableAction (0x005a7e60) reads nothing else
+    // either, and a finisher wanting a combo point stays bright on the client's
+    // bar too - the points gate the *cast* (0x0080b5d0, through the per-target
+    // store 0x00513920), which WoWee already checks. What the rescan would add
+    // is the cast-check walk over the slots behind those pairs, so a button can
+    // go grey for the other reasons; announcing ACTIONBAR_UPDATE_USABLE from
+    // this packet only pays once that walk exists.
     owner_.fireAddonEvent("UNIT_COMBO_POINTS", {"player"});
 }
 
