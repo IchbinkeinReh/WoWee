@@ -1,13 +1,31 @@
 #include "audio/activity_sound_manager.hpp"
 #include "audio/footstep_paths.hpp"
 #include "audio/audio_engine.hpp"
+#include "audio/sound_entry.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
 #include <algorithm>
 #include <cctype>
+#include <unordered_set>
 
 namespace wowee {
 namespace audio {
+
+namespace {
+
+// SoundEntries names its files by leaf (no folder), while this manager reaches
+// its clips by full archive path, so joining the two needs the same lowered
+// leaf the voice manager joins on.
+std::string leafLower(const std::string& path) {
+    const auto slash = path.find_last_of("\\/");
+    std::string leaf = slash == std::string::npos ? path : path.substr(slash + 1);
+    std::transform(leaf.begin(), leaf.end(), leaf.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return leaf;
+}
+
+} // namespace
 
 ActivitySoundManager::ActivitySoundManager() : rng(std::random_device{}()) {}
 ActivitySoundManager::~ActivitySoundManager() { shutdown(); }
@@ -19,6 +37,9 @@ bool ActivitySoundManager::initialize(pipeline::AssetManager* assets) {
 
     // Voice profile clips (jump, swim, hardLand, combat vocals) are set at
     // character spawn via setCharacterVoiceProfile() with the correct race/gender.
+
+    // Read before any clip is preloaded: every candidate looks its ask up here.
+    indexRowAsks();
 
     preloadLandingSet(FootstepSurface::STONE, "Stone");
     preloadLandingSet(FootstepSurface::DIRT, "Dirt");
@@ -42,6 +63,7 @@ void ActivitySoundManager::shutdown() {
     jumpClips.clear();
     swimLoopClips.clear();
     hardLandClips.clear();
+    rowsByLeaf.clear();
     swimmingActive = false;
     swimMoving = false;
     initialized = false;
@@ -61,9 +83,12 @@ void ActivitySoundManager::update([[maybe_unused]] float deltaTime) {
             std::uniform_int_distribution<size_t> clipDist(0, swimLoopClips.size() - 1);
             const Sample& sample = swimLoopClips[clipDist(rng)];
 
-            // Play as one-shot 2D sound
-            float volume = 0.6f * volumeScale;
-            AudioEngine::instance().playSound2D(sample.data, volume, false);
+            // Play as one-shot 2D sound. The water rows name these files: 0.6
+            // for the medium set (which is the level this play used by guess)
+            // and 1.0 for the small one, both with no swing asked.
+            float volume = 0.0f, pitch = 1.0f;
+            askedByRow(sample, 0.6f, volume, pitch);
+            AudioEngine::instance().playSound2D(sample.data, volume, pitch);
 
             lastSwimStrokeAt = now;
         }
@@ -99,13 +124,65 @@ static std::vector<std::string> exertionPrefixes(const std::string& raceBase, bo
     return prefixes;
 }
 
+// Every clip here is chosen by archive path, never by a SoundEntries id --
+// these are the exertions and the footstep/foley files, which the client also
+// plays, but from rows addressed by id. Joining the two by leaf file name is
+// what lets the row's own ask (VolumeFloat 24, Flags 25) reach the play.
+//
+// A leaf can be named by more than one row, and then the ask is not this
+// clip's ask but whichever row was read first -- which is a guess, not the
+// data. So a leaf whose rows disagree about volume or flags is dropped: it
+// keeps the level this manager would have used anyway. "mfoothugegiantdirta"
+// (rows 732 CharacterGiantDirt and 12126 Giant Stomp) and
+// "mdeathimpactgiantwatera" (1268 DeathThudWaterGiant and 8461 Pagle's Point
+// Cast Impact) are the leaves that land in that pile; the splash sets are
+// named by nine rows apiece that all ask the same thing, so they stay.
+void ActivitySoundManager::indexRowAsks() {
+    if (!assetManager) return;
+    rowsByLeaf.clear();
+    auto dbc = assetManager->loadDBCOptional("SoundEntries.dbc");
+    // Older clients' SoundEntries stops before the volume/flags pair.
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() <= 25) return;
+    std::unordered_set<std::string> disagreeing;
+    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+        const float volume = dbc->getFloat(i, 24);
+        const uint32_t flags = dbc->getUInt32(i, 25);
+        for (uint32_t f = 0; f < 10; ++f) {
+            const std::string file = dbc->getString(i, 3 + f);
+            if (file.empty()) continue;
+            const auto [ask, inserted] = rowsByLeaf.try_emplace(leafLower(file), RowAsk{volume, flags});
+            if (!inserted && (ask->second.volume != volume || ask->second.flags != flags))
+                disagreeing.insert(ask->first);
+        }
+    }
+    for (const auto& leaf : disagreeing) rowsByLeaf.erase(leaf);
+}
+
+// The level and pitch this clip's own row asks for, swung as its Flags ask.
+// `own` is the level this manager used before any row was read, and it survives
+// only for a clip no row names: without a row there is no ask to honour and no
+// flag to swing by, so such a play keeps its level and stays at pitch 1.
+void ActivitySoundManager::askedByRow(const Sample& sample, float own, float& volume, float& pitch) {
+    const float unitDraw = std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+    const float base = (sample.rowVolume >= 0.0f ? sample.rowVolume : own) * volumeScale;
+    volume = sound_entry::volumeForFlags(sample.flags, base, unitDraw);
+    pitch = sound_entry::pitchForFlags(sample.flags, unitDraw);
+}
+
 void ActivitySoundManager::preloadCandidates(std::vector<Sample>& out, const std::vector<std::string>& candidates) {
     if (!assetManager) return;
     for (const auto& path : candidates) {
         if (!assetManager->fileExists(path)) continue;
         auto data = assetManager->readFile(path);
         if (data.empty()) continue;
-        out.push_back({path, std::move(data)});
+        Sample sample;
+        sample.path = path;
+        sample.data = std::move(data);
+        if (const auto ask = rowsByLeaf.find(leafLower(path)); ask != rowsByLeaf.end()) {
+            sample.rowVolume = ask->second.volume;
+            sample.flags = ask->second.flags;
+        }
+        out.push_back(std::move(sample));
     }
 }
 
@@ -208,11 +285,11 @@ void ActivitySoundManager::playJump() {
     std::uniform_int_distribution<size_t> dist(0, jumpClips.size() - 1);
     const Sample& sample = jumpClips[dist(rng)];
 
-    // Play with slight volume/pitch variation
-    std::uniform_real_distribution<float> volumeDist(0.65f, 0.75f);
-    std::uniform_real_distribution<float> pitchDist(0.98f, 1.04f);
-    float volume = volumeDist(rng) * volumeScale;
-    float pitch = pitchDist(rng);
+    // The exertion rows that name these clips ask one level for all of them --
+    // 0.69, with no swing -- so the jitter this play used to invent is gone
+    // wherever a row names the clip it picked.
+    float volume = 0.0f, pitch = 1.0f;
+    askedByRow(sample, 0.7f, volume, pitch);
 
     if (AudioEngine::instance().playSound2D(sample.data, volume, pitch)) {
         lastJumpAt = now;
@@ -234,20 +311,24 @@ void ActivitySoundManager::playLanding(FootstepSurface surface, bool hardLanding
         std::uniform_int_distribution<size_t> dist(0, clips.size() - 1);
         const Sample& sample = clips[dist(rng)];
 
-        float baseVolume = hardLanding ? 1.00f : 0.82f;
-        std::uniform_real_distribution<float> volumeDist(baseVolume * 0.95f, baseVolume * 1.05f);
-        std::uniform_real_distribution<float> pitchDist(0.95f, 1.03f);
-
-        AudioEngine::instance().playSound2D(sample.data, volumeDist(rng) * volumeScale, pitchDist(rng));
+        // These are the client's own footstep clips, and their rows ask levels
+        // of 0.5 (dirt, wood), 0.7 (grass, snow) and 0.8 (stone), every one of
+        // them with a pitch swing (flags 0x400) -- quieter and more varied than
+        // this play's invented 0.82/1.00 and +-5%. No row names the metal set,
+        // and the hard/soft difference is ours alone, so both of those keep
+        // this play's own level.
+        float volume = 0.0f, pitch = 1.0f;
+        askedByRow(sample, hardLanding ? 1.00f : 0.82f, volume, pitch);
+        AudioEngine::instance().playSound2D(sample.data, volume, pitch);
         lastLandAt = now;
     }
 
     if (hardLanding && !hardLandClips.empty()) {
         std::uniform_int_distribution<size_t> dist(0, hardLandClips.size() - 1);
         const Sample& sample = hardLandClips[dist(rng)];
-        std::uniform_real_distribution<float> volumeDist(0.80f, 0.88f);
-        std::uniform_real_distribution<float> pitchDist(0.97f, 1.03f);
-        AudioEngine::instance().playSound2D(sample.data, volumeDist(rng) * volumeScale, pitchDist(rng));
+        float volume = 0.0f, pitch = 1.0f;
+        askedByRow(sample, 0.84f, volume, pitch);
+        AudioEngine::instance().playSound2D(sample.data, volume, pitch);
     }
 }
 
@@ -440,9 +521,9 @@ void ActivitySoundManager::playAttackGrunt() {
 
     std::uniform_int_distribution<size_t> dist(0, attackGruntClips.size() - 1);
     const Sample& sample = attackGruntClips[dist(rng)];
-    std::uniform_real_distribution<float> volDist(0.55f, 0.70f);
-    std::uniform_real_distribution<float> pitchDist(0.96f, 1.04f);
-    if (AudioEngine::instance().playSound2D(sample.data, volDist(rng) * volumeScale, pitchDist(rng))) {
+    float volume = 0.0f, pitch = 1.0f;
+    askedByRow(sample, 0.62f, volume, pitch);
+    if (AudioEngine::instance().playSound2D(sample.data, volume, pitch)) {
         lastAttackGruntAt = now;
     }
 }
@@ -457,9 +538,9 @@ void ActivitySoundManager::playWound(bool isCrit) {
     }
     std::uniform_int_distribution<size_t> dist(0, clips.size() - 1);
     const Sample& sample = clips[dist(rng)];
-    float vol = isCrit ? 0.80f : 0.65f;
-    std::uniform_real_distribution<float> pitchDist(0.96f, 1.04f);
-    if (AudioEngine::instance().playSound2D(sample.data, vol * volumeScale, pitchDist(rng))) {
+    float volume = 0.0f, pitch = 1.0f;
+    askedByRow(sample, isCrit ? 0.80f : 0.65f, volume, pitch);
+    if (AudioEngine::instance().playSound2D(sample.data, volume, pitch)) {
         lastWoundAt = now;
     }
 }

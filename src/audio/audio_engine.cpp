@@ -387,7 +387,8 @@ void AudioEngine::setListenerOrientation(const glm::vec3& forward, const glm::ve
 }
 
 bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume, float pitch, Channel channel,
-                              PlayLimit limit, int priority) {
+                              PlayLimit limit, int priority, uint32_t* outHandle) {
+    if (outHandle) *outHandle = 0;
     // Size and volume, because this overload is handed decoded bytes and has
     // no name to report. The sample managers all cache their clips and call
     // this one, so the path-named log above never fires for them - and a sound
@@ -455,8 +456,16 @@ bool AudioEngine::playSound2D(const std::vector<uint8_t>& wavData, float volume,
         return false;
     }
 
-    // Track this sound for cleanup (decoded PCM shared across plays)
-    activeSounds_.push_back({sound.release(), audioBuffer.release(), decoded.pcmData, 0u, false, 0.0f, false, limit});
+    // Track this sound for cleanup (decoded PCM shared across plays). Asked
+    // for a handle, the play is no longer anonymous.
+    uint32_t handle = 0;
+    if (outHandle) {
+        handle = nextSoundId_++;
+        if (nextSoundId_ == 0) nextSoundId_ = 1;  // Skip 0 (sentinel)
+        *outHandle = handle;
+    }
+    activeSounds_.push_back(
+        {sound.release(), audioBuffer.release(), decoded.pcmData, handle, false, 0.0f, false, limit});
     noteStarted(priority, volume, channel, false, 0.0f);
 
     return true;
@@ -510,6 +519,14 @@ uint32_t AudioEngine::playSound2DStoppable(const std::vector<uint8_t>& wavData, 
     return id;
 }
 
+bool AudioEngine::isSoundPlaying(uint32_t handle) const {
+    if (handle == 0) return false;
+    for (const auto& active : activeSounds_)
+        if (active.id == handle) return active.held || ma_sound_is_playing(active.sound) == MA_TRUE;
+    // Taken away by update(), so it ended.
+    return false;
+}
+
 void AudioEngine::stopSound(uint32_t id) {
     if (id == 0) return;
     for (auto it = activeSounds_.begin(); it != activeSounds_.end(); ++it) {
@@ -548,7 +565,8 @@ bool AudioEngine::playSound2D(const std::string& mpqPath, float volume, float pi
 
 bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                               float volume, float pitch, float maxDistance, float minDistance, Channel channel,
-                              PlayLimit limit, int priority) {
+                              PlayLimit limit, int priority, uint32_t* outHandle) {
+    if (outHandle) *outHandle = 0;
     if (!initialized_ || !engine_ || wavData.empty()) return false;
     if (masterVolume_ <= 0.0f) return false;
     // Past its cutoff it is not heard, so not played (audio/sound_distance.hpp).
@@ -620,9 +638,15 @@ bool AudioEngine::playSound3D(const std::vector<uint8_t>& wavData, const glm::ve
         return false;
     }
 
-    // Track for cleanup
+    // Track for cleanup. Asked for a handle, the play is no longer anonymous.
+    uint32_t handle = 0;
+    if (outHandle) {
+        handle = nextSoundId_++;
+        if (nextSoundId_ == 0) nextSoundId_ = 1;  // Skip 0 (sentinel)
+        *outHandle = handle;
+    }
     activeSounds_.push_back(
-        {sound.release(), audioBuffer.release(), decoded.pcmData, 0u, false, maxDistance, false, limit});
+        {sound.release(), audioBuffer.release(), decoded.pcmData, handle, false, maxDistance, false, limit});
     noteStarted(priority, volume, channel, true, std::max(minDistance, 0.0f));
 
     return true;

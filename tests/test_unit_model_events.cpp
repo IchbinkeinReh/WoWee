@@ -49,6 +49,10 @@ TEST_CASE("a slot's CreatureSoundData column", "[unit_model_events]") {
     CHECK(ue::slotColumn(2) == 3);
     CHECK(ue::slotColumn(13) == 3);
     CHECK(ue::slotColumn(6) == 0);
+    // A jump's slots, at the row's +0x68 and +0x6c: what the unit plays as
+    // it leaves the ground, and as it comes down again.
+    CHECK(ue::slotColumn(ue::kSlotJumpStart) == 26);
+    CHECK(ue::slotColumn(ue::kSlotJumpEnd) == 27);
 }
 
 TEST_CASE("a slot's chance out of 101 draws", "[unit_model_events]") {
@@ -157,6 +161,33 @@ TEST_CASE("the footfalls 0x00747240 silences before looking for a sound", "[unit
     CHECK_FALSE(ue::footfallSilent(0, 0x1, 0, false, ue::kPlayerFlagGhost));
     // Other player flags do not.
     CHECK_FALSE(ue::footfallSilent(0, 0x1, 0, true, 0x8u));
+}
+
+TEST_CASE("an emote's voice line by emote text, race and sex", "[unit_model_events]") {
+    // 3.3.5a's own rows. /bye is EmotesText 19 and names a clip for every
+    // playable race and both sexes; /sigh is 85, whose rows are sparser.
+    const std::vector<ue::EmoteSoundRow> rows = {
+        {19, 1, 0, 6163}, {19, 1, 1, 6135}, {19, 2, 0, 6361}, {19, 2, 1, 6352},
+        {85, 1, 1, 7894}, {85, 1, 0, 7914},
+    };
+    CHECK(ue::emoteSoundId(rows, 19, 1, 0) == 6163);
+    CHECK(ue::emoteSoundId(rows, 19, 1, 1) == 6135);
+    CHECK(ue::emoteSoundId(rows, 19, 2, 0) == 6361);
+    CHECK(ue::emoteSoundId(rows, 85, 1, 1) == 7894);
+    CHECK(ue::emoteSoundId(rows, 85, 1, 0) == 7914);
+    // A race or a sex no row names asks for nothing - which is how a speaker
+    // whose race and sex are not answered yet (0, 0xFF) stays quiet, and a
+    // creature with it: every row names a playable race and one of two sexes.
+    CHECK(ue::emoteSoundId(rows, 19, 9, 0) == 0);
+    CHECK(ue::emoteSoundId(rows, 19, 1, 2) == 0);
+    CHECK(ue::emoteSoundId(rows, 19, 0, 0) == 0);
+    CHECK(ue::emoteSoundId(rows, 19, 1, 0xFF) == 0);
+    // An emote the table says nothing about, and a table not read at all.
+    CHECK(ue::emoteSoundId(rows, 7, 1, 0) == 0);
+    CHECK(ue::emoteSoundId({}, 19, 1, 0) == 0);
+    // The columns are the five the client insists the table has.
+    static_assert(ue::kEmoteSoundColumnEmotesText == 1 && ue::kEmoteSoundColumnSound == 4);
+    static_assert(ue::kEmoteSoundColumnCount == 5);
 }
 
 TEST_CASE("a unit splashes crossing four tenths of its height in water", "[unit_splash]") {

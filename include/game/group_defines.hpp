@@ -90,7 +90,9 @@ inline const char* raidMarkName(uint8_t mark) {
 ///
 /// The field changed meaning between expansions and the client tested it as a
 /// number. 1.12 writes 0 for a party and 1 for a raid; 3.3.5 writes a set of
-/// flags - 0x01 battleground, 0x02 raid, 0x04 and 0x08 for the dungeon finder -
+/// flags - 0x01 battleground, 0x02 raid, and above those two the dungeon
+/// finder's pair, 0x04 for the group's restriction and 0x08 for the five extra
+/// bytes its roster carries (see GroupListData::lfgRestricted) -
 /// so `== 1` read a WotLK raid as no raid at all, and every test for a party
 /// written as `== 0` read a finder group (0x0C) as no party either. A dungeon
 /// group had neither kind of frame.
@@ -123,6 +125,16 @@ struct GroupListData {
     /// whether there is one (0x0052c310). 0 for any other group, and for
     /// none - leaving or losing the group forgets it (0x0052d6e0).
     uint32_t lfgDungeonEntry = 0;
+    /// WotLK: bit 2 of the same type byte, and **not** a finder flag — it is the
+    /// group's restriction. The client hands it to 0x0052c0d0, which keeps it in
+    /// 0xbd19a8 and fires PARTY_LFG_RESTRICTED whenever the stored state and the
+    /// incoming bit differ (:9104-9114). The roster handler empties the party
+    /// through 0x0052d6e0 first, which zeroes that byte (:10375), so a restricted
+    /// group's every roster re-fires it. What reads the flag: `raidframe.lua:18,
+    /// :61` (its roster refresh), the name-taking group command at
+    /// 0x006c0000.c:10131/10138 (which picks between errors 0x45/0x46 and
+    /// 0x47/0x48 on it), and 0x0052c350 -> 0x0084e4d0.
+    bool lfgRestricted = false;
 
     [[nodiscard]] bool isValid() const { return true; }
     [[nodiscard]] bool isEmpty() const { return memberCount == 0; }

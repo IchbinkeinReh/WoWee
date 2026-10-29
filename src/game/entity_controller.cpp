@@ -17,6 +17,9 @@
 #include "game/movement_handler.hpp"
 #include "game/combat_handler.hpp"
 #include "game/spell_unit_target.hpp"
+#include "game/known_titles.hpp"
+#include "audio/audio_coordinator.hpp"
+#include "audio/ui_sound_manager.hpp"
 #include "core/logger.hpp"
 #include "game/interface_text.hpp"
 #include "core/coordinates.hpp"
@@ -804,7 +807,10 @@ EntityController::UnitFieldIndices EntityController::UnitFieldIndices::resolve()
         .resistances = fieldIndex(UF::UNIT_FIELD_RESISTANCES),
         .attackPower = fieldIndex(UF::UNIT_FIELD_ATTACK_POWER),
         .minDamage = fieldIndex(UF::UNIT_FIELD_MINDAMAGE),
-        .maxDamage = fieldIndex(UF::UNIT_FIELD_MAXDAMAGE)
+        .maxDamage = fieldIndex(UF::UNIT_FIELD_MAXDAMAGE),
+        .rangedDamage = fieldIndex(UF::UNIT_FIELD_MINRANGEDDAMAGE),
+        .attackTime = fieldIndex(UF::UNIT_FIELD_BASEATTACKTIME),
+        .rangedAttackPower = fieldIndex(UF::UNIT_FIELD_RANGED_ATTACK_POWER)
     };
 }
 
@@ -1056,21 +1062,17 @@ bool EntityController::applyUnitFieldsOnCreate(const UpdateBlock& block,
             unit->setPowerByType(powerType, val);
             // Named per power rather than one event: FrameXML registers only
             // the one its bar shows, so a rogue's frame is not woken by every
-            // mana tick in the party.
-            static const char* kPowerEvents[7] = {
-                "UNIT_MANA", "UNIT_RAGE", "UNIT_FOCUS", "UNIT_ENERGY",
-                "UNIT_HAPPINESS", "UNIT_RUNIC_POWER", "UNIT_RUNIC_POWER"
-            };
-            if (powerType < 7) emitForUnit(kPowerEvents[powerType]);
+            // mana tick in the party. Runes (5) name nothing - the client has no
+            // event id for them, and their update is RUNE_POWER_UPDATE.
+            if (powerType < 7 && power_prediction::kPowerEvents[powerType] != nullptr)
+                emitForUnit(power_prediction::kPowerEvents[powerType]);
         } else if (key >= ufi.maxPowerBase && key < ufi.maxPowerBase + 7) {
-            unit->setMaxPowerByType(static_cast<uint8_t>(key - ufi.maxPowerBase), val);
-            // The maximum a bar is scaled against, which FrameXML redraws on.
-            static const char* kMaxPowerEvents[7] = {
-                "UNIT_MAXMANA", "UNIT_MAXRAGE", "UNIT_MAXFOCUS", "UNIT_MAXENERGY",
-                "UNIT_MAXHAPPINESS", "UNIT_MAXRUNIC_POWER", "UNIT_MAXRUNIC_POWER"
-            };
-            if (const auto t = static_cast<uint8_t>(key - ufi.maxPowerBase); t < 7)
-                emitForUnit(kMaxPowerEvents[t]);
+            const auto powerType = static_cast<uint8_t>(key - ufi.maxPowerBase);
+            unit->setMaxPowerByType(powerType, val);
+            // The maximum a bar is scaled against, which FrameXML redraws on -
+            // the client's 0x1b + type, with the same hole at runes.
+            if (power_prediction::kMaxPowerEvents[powerType] != nullptr)
+                emitForUnit(power_prediction::kMaxPowerEvents[powerType]);
         }
         else if (key == ufi.mountDisplayId) {
             if (block.guid == owner_.getPlayerGuid()) {
@@ -1139,6 +1141,15 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
     uint32_t oldHealth = unit->getHealth();
     bool petExperienceChanged = false;
     bool petStatsChanged = false;
+    // The rest of the damage family, one flag per name the pet tab registers,
+    // because that is how the client raises them - a field moving says so under
+    // its own name rather than under whichever group of lines the tab happens
+    // to draw.
+    bool petDamageChanged = false;
+    bool petAttackPowerChanged = false;
+    bool petRangedDamageChanged = false;
+    bool petRangedPowerChanged = false;
+    bool petAttackSpeedChanged = false;
     bool powerTypeMoved = false;
     uint8_t powersMoved = 0, maxPowersMoved = 0;
     for (const auto& [key, val] : block.fields) {
@@ -1241,9 +1252,44 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             }
         }
         else if (ufi.auraState != 0xFFFF && key == ufi.auraState) {
+            const uint32_t oldAuraState = unit->getAuraState();
             unit->setAuraState(val);
+            // The client watches this dword - 0x004d5ba0(3,0xdc,4,FUN_00716810,…),
+            // and 0xdc is field 61 with the blob running six dwords behind the
+            // wire index - and its watcher answers for two units only: the
+            // player, and whoever is targeted now (DAT_00bd07b0's pair, the one
+            // a new target pushes up into DAT_00bd07b8 as target-of-target).
+            // Either way it runs the action usability rescan 0x0053cf10, which
+            // leaves SPELL_UPDATE_USABLE (0xf5) behind whatever it found, and
+            // then names PET_BAR_UPDATE_USABLE (0x15e). The second is the one
+            // with a listener in the shipped interface - petactionbarframe.lua
+            // :47 redraws the pet bar's grey on it, and has no other route from
+            // a mount or a stance - while the first is one FrameXML ignores and
+            // addons do not, so both are fired as the watcher fires them.
+            //
+            // The dword is the mount / stealth / dead / charm / shape mask, so
+            // these are the changes that grey and ungrey a whole action bar
+            // without the realm ever touching the spells on it: mounting,
+            // dying, a druid's or rogue's stance, a charm landing. WoWee's
+            // usability answers already read the state as it is asked
+            // (0x0053cf10's equivalent recomputes nothing), so what was missing
+            // was the asking - the buttons kept their old answers until some
+            // other event happened to walk them.
+            if (val != oldAuraState &&
+                (block.guid == owner_.getPlayerGuid() || block.guid == owner_.getTargetGuid())) {
+                // The rescan goes first, and inside it the stance bar: the
+                // client's 0x0053cf10 sets one flag across its whole form loop,
+                // names UPDATE_SHAPESHIFT_USABLE (0x17a) if any button changed
+                // its mind, and only then SPELL_UPDATE_USABLE (0xf5). The
+                // watcher's own 0x15e comes last, after the rescan returns.
+                if (owner_.shapeshiftCastabilityChanged())
+                    pendingEvents_.emit("UPDATE_SHAPESHIFT_USABLE", {});
+                pendingEvents_.emit("SPELL_UPDATE_USABLE", {});
+                pendingEvents_.emit("PET_BAR_UPDATE_USABLE", {});
+            }
         }
         else if (ufi.bytes1 != 0xFFFF && key == ufi.bytes1) {
+            const uint8_t oldVisibilityFlags = unit->getVisibilityFlags();
             const uint8_t newVisibilityFlags = static_cast<uint8_t>((val >> 16) & 0xFF);
             unit->setVisibilityFlags(newVisibilityFlags);
 
@@ -1255,6 +1301,35 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             if (newStandState != oldStandState && block.guid != owner_.getPlayerGuid() &&
                 owner_.unitStandStateCallbackRef()) {
                 owner_.unitStandStateCallbackRef()(block.guid, oldStandState, newStandState);
+            }
+
+            // The client watches this one byte (0x004d5ba0(3,0x112,1,...), so
+            // byte 2 of the field) and its watcher 0x0073c830 looks only at
+            // what changed. Stealth (0x2) flipping restates the unit's model
+            // and, when the unit is the player, names itself UPDATE_STEALTH
+            // (0x20a) and runs the whole action usability rescan (0x0053cf10),
+            // which ends by firing SPELL_UPDATE_USABLE (0xf5) whatever it
+            // found. The byte's other bit that watcher reads, 0x1, restates the
+            // model and says nothing. Restating the model is what WoWee does
+            // anyway - the byte is read every frame for the animation and the
+            // shimmer - so what was missing was the two names. UPDATE_STEALTH
+            // is not decoration either: securestatedriver.lua:178 registers it
+            // as one of the events that make a state-driven macro rescan, so a
+            // rogue's macro bar kept its old answers across going into or out
+            // of stealth. SPELL_UPDATE_USABLE is what the client's rescan
+            // leaves behind; FrameXML's buttons re-ask on the numbered
+            // ACTIONBAR_UPDATE_USABLE instead, which WoWee fires with the power
+            // half of that rescan (0x0053d1b0) from predictedPowerUsability.
+            if (((oldVisibilityFlags ^ newVisibilityFlags) & 0x2) != 0 &&
+                block.guid == owner_.getPlayerGuid()) {
+                pendingEvents_.emit("UPDATE_STEALTH", {});
+                // Going quiet or loud changes what the stance bar can cast -
+                // the rescan the client runs answers that too, and names the
+                // bar when it changes. Same order as the watcher: the bar
+                // first, then SPELL_UPDATE_USABLE.
+                if (owner_.shapeshiftCastabilityChanged())
+                    pendingEvents_.emit("UPDATE_SHAPESHIFT_USABLE", {});
+                pendingEvents_.emit("SPELL_UPDATE_USABLE", {});
             }
 
             if (block.guid == owner_.getPlayerGuid()) {
@@ -1281,6 +1356,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             uint32_t oldDyn = unit->getDynamicFlags();
             unit->setDynamicFlags(val);
             if (block.guid == owner_.getPlayerGuid()) {
+                if (oldDyn != val) pendingEvents_.emit("UNIT_DYNAMIC_FLAGS", {"player"});
                 bool wasDead = (oldDyn & UNIT_DYNFLAG_DEAD) != 0;
                 bool nowDead = (val & UNIT_DYNFLAG_DEAD) != 0;
                 if (!wasDead && nowDead) {
@@ -1370,19 +1446,43 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 owner_.otherPlayerMountCallbackRef()(block.guid, val);
             }
             unit->setMountDisplayId(val);
-        } else if (ufi.attackPower != 0xFFFF && key == ufi.attackPower &&
+        } else if (ufi.attackPower != 0xFFFF && key >= ufi.attackPower &&
+                   key < ufi.attackPower + 3 && block.guid == owner_.petGuidRef()) {
+            // One run of three - the base, the mods dword (a positive and a
+            // negative signed half) and the float multiplier the client scales
+            // every attack-power answer by (0x00610b60). The cache keeps the
+            // base, because that is the figure the rest of WoWee quotes; the
+            // other two still have to fire, because an aura that writes the
+            // multiplier moves the number the sheet prints.
+            if (key == ufi.attackPower) owner_.petAttackPowerRef() = static_cast<int32_t>(val);
+            petAttackPowerChanged = true;
+        } else if (ufi.rangedAttackPower != 0xFFFF &&
+                   key >= ufi.rangedAttackPower && key < ufi.rangedAttackPower + 3 &&
                    block.guid == owner_.petGuidRef()) {
-            owner_.petAttackPowerRef() = static_cast<int32_t>(val);
-            petStatsChanged = true;
+            // The ranged twin, 126 through 128. Nothing caches it:
+            // UnitRangedAttackPower reads the pet's own fields.
+            petRangedPowerChanged = true;
         } else if (ufi.minDamage != 0xFFFF && key == ufi.minDamage &&
                    block.guid == owner_.petGuidRef()) {
             // A float, sent as its bits like every other float field.
             owner_.petMinDamageRef() = bitsToFloat(val);
-            petStatsChanged = true;
+            petDamageChanged = true;
         } else if (ufi.maxDamage != 0xFFFF && key == ufi.maxDamage &&
                    block.guid == owner_.petGuidRef()) {
             owner_.petMaxDamageRef() = bitsToFloat(val);
-            petStatsChanged = true;
+            petDamageChanged = true;
+        } else if (ufi.rangedDamage != 0xFFFF &&
+                   (key == ufi.rangedDamage || key == ufi.rangedDamage + 1) &&
+                   block.guid == owner_.petGuidRef()) {
+            // Nothing to keep: UnitRangedDamage reads the pet's own pair off
+            // the entity. What the change is worth is the name the tab waits
+            // for, and the pair is consecutive, like every run of fields.
+            petRangedDamageChanged = true;
+        } else if (ufi.attackTime != 0xFFFF &&
+                   (key == ufi.attackTime || key == ufi.attackTime + 1) &&
+                   block.guid == owner_.petGuidRef()) {
+            // The same for the swing times UnitAttackSpeed answers from.
+            petAttackSpeedChanged = true;
         } else if (ufi.stat0 != 0xFFFF && key >= ufi.stat0 && key < ufi.stat0 + 5 &&
                    block.guid == owner_.petGuidRef()) {
             // The pet's own five, not the player's. The paperdoll's pet tab
@@ -1411,11 +1511,17 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 petExperienceChanged = true;
             }
         } else if (key == ufi.npcFlags) {
+            const uint32_t oldNpcFlags = unit->getNpcFlags();
             // A questgiver is asked for its status when it is created; one
             // that becomes a questgiver later - a seasonal NPC whose event
             // has begun - has to be asked then.
-            const bool gained = quest_status_requery::becameQuestGiver(unit->getNpcFlags(), val);
+            const bool gained = quest_status_requery::becameQuestGiver(oldNpcFlags, val);
             unit->setNpcFlags(val);
+            // 0x0071a0b0: the flags are also what keeps an open window open.
+            // A unit that stops being a gossip, a quest giver, a flight master,
+            // a trainer, a banker, a guild banker or a postmaster closes the
+            // window it had opened, when the window is open with it.
+            owner_.npcFlagsChanged(block.guid, oldNpcFlags, val);
             if (gained && owner_.getSocket()) {
                 network::Packet qsPkt(wireOpcode(Opcode::CMSG_QUESTGIVER_STATUS_QUERY));
                 qsPkt.writeUInt64(block.guid);
@@ -1454,7 +1560,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
     if (powerTypeMoved || powersMoved != 0 || maxPowersMoved != 0)
         owner_.powerFieldsChanged(*unit, block.guid, powerTypeMoved, powersMoved, maxPowersMoved);
 
-    // Fire UNIT_HEALTH / UNIT_POWER events for Lua addons
+    // Fire the health and power events the interface listens for
     if ((result.healthChanged || result.powerChanged)) {
         auto unitId = owner_.guidToUnitId(block.guid);
         if (!unitId.empty()) {
@@ -1462,27 +1568,23 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             if (result.maxHealthChanged) pendingEvents_.emit("UNIT_MAXHEALTH", {unitId});
             if (result.powerChanged) {
                 // The event a WotLK interface is listening for is named after
-                // the power itself. UNIT_POWER is the later, generic one - it
-                // arrived in Cataclysm, and every unit frame this client
-                // targets registers UNIT_MANA, UNIT_RAGE, UNIT_ENERGY or
-                // UNIT_FOCUS instead. Sending only the generic name meant the
-                // mana bar was told nothing it understood and never moved,
-                // even though the number behind it was current.
+                // the power itself: the client fires `0x13 + type` from the field
+                // setter (0x0060bf10), so UNIT_MANA, UNIT_RAGE, UNIT_ENERGY,
+                // UNIT_FOCUS, UNIT_HAPPINESS or UNIT_RUNIC_POWER, and the maxima
+                // at `0x1b + type`. Runes name nothing.
                 //
-                // The create path already names them; this is the same table.
-                static const char* kPowerEvents[7] = {
-                    "UNIT_MANA", "UNIT_RAGE", "UNIT_FOCUS", "UNIT_ENERGY",
-                    "UNIT_HAPPINESS", "UNIT_RUNIC_POWER", "UNIT_RUNIC_POWER"
-                };
-                static const char* kMaxPowerEvents[7] = {
-                    "UNIT_MAXMANA", "UNIT_MAXRAGE", "UNIT_MAXFOCUS", "UNIT_MAXENERGY",
-                    "UNIT_MAXHAPPINESS", "UNIT_MAXRUNIC_POWER", "UNIT_MAXRUNIC_POWER"
-                };
-                if (result.powerTypeChanged >= 0 && result.powerTypeChanged < 7)
-                    pendingEvents_.emit(kPowerEvents[result.powerTypeChanged], {unitId});
-                if (result.maxPowerTypeChanged >= 0 && result.maxPowerTypeChanged < 7)
-                    pendingEvents_.emit(kMaxPowerEvents[result.maxPowerTypeChanged], {unitId});
-                pendingEvents_.emit("UNIT_POWER", {unitId});
+                // "UNIT_POWER", which this branch used to fire as well, is not a
+                // name this client has at all - not in its event-id table, not
+                // once in Wow.exe where each of the named ones appears once, and
+                // not in any FrameXML listener. It was the generic Cataclysm
+                // name, and it is what the named branch above was written to
+                // work around while it kept being fired next to it.
+                if (result.powerTypeChanged >= 0 && result.powerTypeChanged < 7 &&
+                    power_prediction::kPowerEvents[result.powerTypeChanged] != nullptr)
+                    pendingEvents_.emit(power_prediction::kPowerEvents[result.powerTypeChanged], {unitId});
+                if (result.maxPowerTypeChanged >= 0 && result.maxPowerTypeChanged < 7 &&
+                    power_prediction::kMaxPowerEvents[result.maxPowerTypeChanged] != nullptr)
+                    pendingEvents_.emit(power_prediction::kMaxPowerEvents[result.maxPowerTypeChanged], {unitId});
                 // The usability events come from the prediction moving
                 // (0x00722c50 -> 0x0053d1b0), not from the field.
             }
@@ -1500,6 +1602,27 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
     if (petStatsChanged && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("UNIT_STATS", {"pet"});
         owner_.addonEventCallbackRef()("UNIT_RESISTANCES", {"pet"});
+    }
+    // ...and the same for the rest of the damage family that tab registers: the
+    // pet sheet listens for UNIT_DAMAGE, UNIT_RANGEDDAMAGE, UNIT_ATTACK_SPEED,
+    // UNIT_ATTACK_POWER and UNIT_RANGED_ATTACK_POWER, and unlike the player's
+    // sheet it has no combined
+    // branch to fall back on - PaperDollFrame recomputes its damage row on any
+    // of the power or stat names, which is the only reason the player's numbers
+    // ever moved here. PetPaperDollFrame_OnEvent ends in
+    // `elseif ( arg1 == "pet" ) then PetPaperDollFrame_Update()`, so the name
+    // has to be "pet" for the frame to take any of them at all; that is also
+    // why this fires for the owner's pet and for no other unit - the shipped
+    // frames answer nothing else, and firing a name at a unit no frame resolves
+    // would be volume without effect. The values came to be right when the
+    // bindings started reading the pet's own fields; what was missing was the
+    // redraw, which is the whole of these five.
+    if (auto& fire = owner_.addonEventCallbackRef()) {
+        if (petDamageChanged) fire("UNIT_DAMAGE", {"pet"});
+        if (petRangedDamageChanged) fire("UNIT_RANGEDDAMAGE", {"pet"});
+        if (petAttackSpeedChanged) fire("UNIT_ATTACK_SPEED", {"pet"});
+        if (petAttackPowerChanged) fire("UNIT_ATTACK_POWER", {"pet"});
+        if (petRangedPowerChanged) fire("UNIT_RANGED_ATTACK_POWER", {"pet"});
     }
 
     return result;
@@ -1735,16 +1858,32 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             if (!isCreate) pendingEvents_.emit("PLAYER_FLAGS_CHANGED", {"player"});
           }
         }
-        else if (pfi.meleeAP  != 0xFFFF && key == pfi.meleeAP)  {
-            const int32_t ap = static_cast<int32_t>(val);
-            if (owner_.playerMeleeAPRef() != ap) powerChanged = true;
-            owner_.playerMeleeAPRef() = ap;
+        else if (pfi.meleeAP  != 0xFFFF && key >= pfi.meleeAP && key < pfi.meleeAP + 3)  {
+            // Three fields, not one: the base, the mods dword (a positive and a
+            // negative signed half) and the float multiplier that every
+            // attack-power answer is scaled by (0x00610b60). The cache holds the
+            // base because that is the figure the rest of WoWee quotes, but the
+            // two mod fields move the number on the sheet as surely as the base
+            // does - an aura like the fractional attack-power kind writes one of
+            // them and nothing else - so they raise the same event.
+            if (key == pfi.meleeAP) {
+                const int32_t ap = static_cast<int32_t>(val);
+                if (owner_.playerMeleeAPRef() != ap) powerChanged = true;
+                owner_.playerMeleeAPRef() = ap;
+            } else {
+                powerChanged = true;
+            }
         }
-        else if (pfi.rangedAP != 0xFFFF && key == pfi.rangedAP) {
-            const int32_t ap = static_cast<int32_t>(val);
-            // Its own flag, because its own event is the one that lands.
-            if (owner_.playerRangedAPRef() != ap) rangedPowerChanged = true;
-            owner_.playerRangedAPRef() = ap;
+        else if (pfi.rangedAP != 0xFFFF && key >= pfi.rangedAP && key < pfi.rangedAP + 3) {
+            // Its own flag, because its own event is the one that lands; and the
+            // same three-field run as the melee one, 127 and 128.
+            if (key == pfi.rangedAP) {
+                const int32_t ap = static_cast<int32_t>(val);
+                if (owner_.playerRangedAPRef() != ap) rangedPowerChanged = true;
+                owner_.playerRangedAPRef() = ap;
+            } else {
+                rangedPowerChanged = true;
+            }
         }
         else if (pfi.spDmg1   != 0xFFFF && key >= pfi.spDmg1 && key < pfi.spDmg1 + 7) {
             const int32_t dmgVal = static_cast<int32_t>(val);
@@ -1805,7 +1944,7 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
         // Slot layouts differ on some classic-family realms and can produce
         // phantom "already accepted" quests that block quest acceptance.
     }
-    if (owner_.applyInventoryFields(fields)) slotsChanged = true;
+    if (owner_.applyInventoryFields(fields, isCreate)) slotsChanged = true;
 
     // Announced only on an update, never on the create block: at create the
     // sheet has not been built yet, and every field looks like a change.
@@ -2125,6 +2264,23 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
                 break;
             }
         }
+        // And the token row beside the bags. It counts item stacks out of the
+        // bags, and no bag event is what redraws it: MainMenuBar registers
+        // BAG_UPDATE, but its branch for that event (mainmenubar.lua:242) only
+        // handles the keyring.  The branch that calls TokenFrame_Update and
+        // BackpackTokenFrame_Update at all - at 225-227 and 232-234 - is the one
+        // answering KNOWN_CURRENCY_TYPES_UPDATE or CURRENCY_DISPLAY_UPDATE
+        // (193), which is why a bag whose contents moved has to be said in those
+        // terms.  The client says it from the same place this is: its
+        // container-slot handler (0x005d9790, asserting against
+        // "ContainerFrame.cpp") ends by calling 0x005b0660, and that thunk
+        // rebuilds the currency list (0x005b0030) and raises
+        // CURRENCY_DISPLAY_UPDATE (605) with no arguments - the very same thunk
+        // the list registers as its item-interest callback when a row's item is
+        // not loaded yet (0x005b0000.c:92,113).  Without it the number beside
+        // the bags stayed whatever the row was drawn with, however much of that
+        // currency was looted afterwards.
+        pendingEvents_.emit("CURRENCY_DISPLAY_UPDATE", {});
     }
     if (durabilityChanged) {
         // The armour indicator is DurabilityFrame, which listens for
@@ -2768,6 +2924,363 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             // 0x006e1bb0 -> 0x006df7a0: TABARD_CANSAVE_CHANGED (event 0x16e).
             if (guildIdMoved) owner_.fireAddonEvent("TABARD_CANSAVE_CHANGED", {});
         }
+        // The glyph sockets, watched one dword each exactly as the client watches
+        // them: 0x004d5a80(kind 4, +0x1248 .. +0x125c, 4, 0x006daa80) for the six
+        // GlyphProperties ids and (+0x1260, 4, 0x006dab80) for the unlocked
+        // bitmask. What a socket field says when it moves depends on what it held
+        // before and what it holds now, and the client asks both questions the same
+        // way - is the value an id GlyphProperties.dbc has a row for (the range and
+        // lookup test at 0x006daa80) - and answers GLYPH_UPDATED (0x265) for
+        // glyph->glyph, GLYPH_REMOVED (0x264) for glyph->nothing, GLYPH_ADDED
+        // (0x263) for nothing->glyph, and nothing at all when neither side is a
+        // glyph. Every one carries the socket's Lua-facing number (index + 1),
+        // which is what blizzard_glyphui.lua:337-365 uses to find the
+        // GlyphFrameGlyph<index> to redraw, which sound to play and which animation
+        // to stop; a glyph event naming no slot reaches no slot. A socket bit
+        // gained or lost in the unlocked mask is GLYPH_ENABLED (0x266) /
+        // GLYPH_DISABLED (0x267) with the same number, per bit (0x006dab80).
+        // Nothing here runs for a create block: the client installs these watchers
+        // only once the object is live (0x007158c0), so logging in with glyphs
+        // already scribed announces nothing either.
+        owner_.ensureGlyphPropertiesLoaded();
+        const auto& lastFields = owner_.lastPlayerFieldsRef();
+        if (const uint16_t glyphsIdx = fieldIndex(UF::PLAYER_FIELD_GLYPHS_1);
+            glyphsIdx != 0xFFFF) {
+            for (uint16_t i = 0; i < GameHandler::MAX_GLYPH_SLOTS; ++i) {
+                const uint16_t key = static_cast<uint16_t>(glyphsIdx + i);
+                const auto now = block.fields.find(key);
+                if (now == block.fields.end()) continue;      // this socket did not move
+                const auto was = lastFields.find(key);
+                const uint32_t oldId = was == lastFields.end() ? 0u : was->second;
+                if (oldId == now->second) continue;           // the watcher fires on a change
+                uint32_t unused = 0;
+                const bool hadGlyph = owner_.getGlyphPropertiesType(oldId, unused);
+                const bool hasGlyph = owner_.getGlyphPropertiesType(now->second, unused);
+                if (!hadGlyph && !hasGlyph) continue;
+                pendingEvents_.emit(hadGlyph ? (hasGlyph ? "GLYPH_UPDATED" : "GLYPH_REMOVED")
+                                             : "GLYPH_ADDED",
+                                    {std::to_string(i + 1)});
+            }
+        }
+        if (const uint16_t enabledIdx = fieldIndex(UF::PLAYER_GLYPHS_ENABLED);
+            enabledIdx != 0xFFFF) {
+            const auto now = block.fields.find(enabledIdx);
+            if (now != block.fields.end()) {
+                const auto was = lastFields.find(enabledIdx);
+                const uint32_t oldMask = was == lastFields.end() ? 0u : was->second;
+                for (uint32_t bit = 0; bit < GameHandler::MAX_GLYPH_SLOTS; ++bit) {
+                    const uint32_t mask = 1u << bit;
+                    if (((oldMask ^ now->second) & mask) == 0) continue;
+                    pendingEvents_.emit((now->second & mask) ? "GLYPH_ENABLED" : "GLYPH_DISABLED",
+                                        {std::to_string(bit + 1)});
+                }
+            }
+        }
+        // The spell power the realm hands the pet, the dword straight after the
+        // unlocked mask (+0x1008 +0x1264). The client watches that one dword too
+        // (0x006d1cb0) and answers PET_SPELL_POWER_UPDATE (0x2a2) with no
+        // arguments at all; petpaperdollframe.lua:30,184 takes it straight to
+        // PetPaperDollFrame_SetSpellBonusDamage, whose number comes back from
+        // GetPetSpellBonusDamage (0x0060e410) reading this same field. So the pet
+        // sheet's Spell Bonus Damage line is the server's figure, and it only
+        // moves when this says it moved.
+        if (const uint16_t petPowerIdx = fieldIndex(UF::PLAYER_FIELD_PET_SPELL_POWER);
+            petPowerIdx != 0xFFFF) {
+            const auto now = block.fields.find(petPowerIdx);
+            if (now != block.fields.end()) {
+                const auto was = lastFields.find(petPowerIdx);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                    pendingEvents_.emit("PET_SPELL_POWER_UPDATE", {});
+            }
+        }
+        // The faction drawn under the experience bar, which is the realm's
+        // choice and not this client's: PLAYER_FIELD_WATCHED_FACTION_INDEX holds
+        // a reputation list index, and GetWatchedFactionInfo (0x005d1240) reads
+        // that field rather than any local selection.  The client has a watch on
+        // the same dword - blob 0x10e8, four bytes, event 362 = UPDATE_FACTION
+        // (0x006e5180) - so a faction the realm restores at login, or one set
+        // from another client, redraws the reputation bar here too, and not only
+        // the click that asked for it.
+        if (const uint16_t watchedIdx = fieldIndex(UF::PLAYER_FIELD_WATCHED_FACTION_INDEX);
+            watchedIdx != 0xFFFF) {
+            const auto now = block.fields.find(watchedIdx);
+            if (now != block.fields.end()) {
+                const auto was = lastFields.find(watchedIdx);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                    pendingEvents_.emit("UPDATE_FACTION", {});
+            }
+        }
+        // The honour counters, which raise PLAYER_PVP_KILLS_CHANGED (461).  Of
+        // the four fields the panels read, the client watches three: +0x10d4
+        // **two bytes** wide - the low halfword of PLAYER_FIELD_KILLS, this
+        // session's count, and not the yesterday halfword above it - plus
+        // today's contribution (+0x10d8) and the lifetime count (+0x10e0)
+        // (0x006e5180).  Yesterday's contribution is not watched at all, so the
+        // daily reset announces nothing.  honorframe.lua:2 and pvpframe.lua:15
+        // refresh from the event, and the numbers they set come through
+        // GetPVPSessionStats / GetPVPYesterdayStats / GetPVPLifetimeStats, which
+        // answer from these fields - so without the event both panels keep
+        // whatever they showed when they were opened, however many kills the
+        // realm reports afterwards.
+        bool pvpKillsChanged = false;
+        for (const std::pair<uint16_t, uint32_t> probe :
+             {std::pair<uint16_t, uint32_t>{fieldIndex(UF::PLAYER_FIELD_KILLS), 0xFFFFu},
+              std::pair<uint16_t, uint32_t>{fieldIndex(UF::PLAYER_FIELD_TODAY_CONTRIBUTION), 0xFFFFFFFFu},
+              std::pair<uint16_t, uint32_t>{fieldIndex(UF::PLAYER_FIELD_LIFETIME_HONORBALE_KILLS), 0xFFFFFFFFu}}) {
+            if (probe.first == 0xFFFF) continue;
+            const auto now = block.fields.find(probe.first);
+            if (now == block.fields.end()) continue;
+            const auto was = lastFields.find(probe.first);
+            const uint32_t oldVal = (was == lastFields.end()) ? 0u : was->second;
+            if ((oldVal & probe.second) != (now->second & probe.second)) pvpKillsChanged = true;
+        }
+        if (pvpKillsChanged) pendingEvents_.emit("PLAYER_PVP_KILLS_CHANGED", {});
+        // The two currency counters.  The client watches both dwords whole -
+        // "4, 0x11a4, 4" and "4, 0x11a8, 4" in the registration block at
+        // 0x006e5180, which its own descriptor table names
+        // PLAYER_FIELD_HONOR_CURRENCY (index 1277) and
+        // PLAYER_FIELD_ARENA_CURRENCY (1278), both of which this layout already
+        // decodes.  The two callbacks it puts on them are one body written twice
+        // and aimed at each other's field (0x006da3c0, 0x006da430): whichever of
+        // the two moved, it raises HONOR_CURRENCY_UPDATE (497) and
+        // CURRENCY_DISPLAY_UPDATE (605) together, naming no arguments.  Those
+        // are the client's only two raises of 497, and the only two raises of
+        // 605 that come from the player at all - its one other raise
+        // (0x005b0660) goes through a rebuild of the token list, which reads the
+        // known-currency mask at +0x790 / +0x794 and has no counterpart here.
+        //
+        // pvpframe.lua:17,42 answers 497 with PVPHonor_Update, whose honor and
+        // arena lines are GetHonorCurrency and GetArenaCurrency
+        // (pvpframe.lua:515-516) - the two numbers applyPlayerStatFields above
+        // stores from exactly these fields - and mainmenubar.lua:177,193 answers
+        // 605 by rebuilding the token row, and by turning showTokenFrame on the
+        // first time a token is counted at all.  Neither notice was ever sent, so
+        // the PvP panel kept the points it had when it opened, however much the
+        // realm paid out afterwards, and the row stayed empty however much was
+        // held.
+        //
+        // The counters are probed one after the other rather than tested as a
+        // pair because the client watches them one after the other, and each
+        // watcher gets its own callback: two counters moving in one block is two
+        // coin sounds asked for, not one.
+        bool currencyChanged = false;
+        for (const uint16_t probe : {fieldIndex(UF::PLAYER_FIELD_HONOR_CURRENCY),
+                                     fieldIndex(UF::PLAYER_FIELD_ARENA_CURRENCY)}) {
+            if (probe == 0xFFFF) continue;  // a layout naming no such counter
+            const auto now = block.fields.find(probe);
+            if (now == block.fields.end()) continue;
+            const auto was = lastFields.find(probe);
+            const uint32_t oldVal = (was == lastFields.end()) ? 0u : was->second;
+            if (oldVal == now->second) continue;
+            currencyChanged = true;
+            // Both callbacks play the loot window's coin, and only when the
+            // counter came up (0x006da3c0, 0x006da430): each compares the field
+            // as stored against what the watcher was handed, and stores it only
+            // in the direction that means an increase.  Which side is which can
+            // be read off the watcher mechanism itself - the notify driver
+            // (0x004d5550) writes no field storage at all, the comparison inside
+            // it (0x004d5150) reads the watcher's own copy at +0x1c against
+            // another at +0x20, and the copy at +0x1c is what the commit
+            // (0x004d52b0) memcpys into the object afterwards.  So at the moment
+            // the callback runs, object storage holds the previous number and the
+            // pointer it receives the new one, which is the same pairing this
+            // loop has: the snapshot against block.fields.
+            if (oldVal < now->second) {
+                if (auto* ac = owner_.services().audioCoordinator) {
+                    if (auto* sfx = ac->getUiSoundManager()) sfx->playLootCoinSmall();
+                }
+            }
+        }
+        if (currencyChanged) {
+            pendingEvents_.emit("HONOR_CURRENCY_UPDATE", {});
+            pendingEvents_.emit("CURRENCY_DISPLAY_UPDATE", {});
+        }
+        // The two points fields, which the client puts **one** watch over
+        // rather than two: 0x005e8470 registers `4, 0xda0, 8` over
+        // PLAYER_CHARACTER_POINTS1 and PLAYER_CHARACTER_POINTS2 together, with
+        // the callback at 0x005e8330, and 0x005eaf70 re-puts the same pair
+        // when the player frame is torn down and rebuilt.  That callback is
+        // the only raise of CHARACTER_POINTS_CHANGED (246) anywhere in the
+        // client, and it names both fields - each current dword minus the one
+        // the watcher was handed - through a "%d%d", whichever of the two
+        // moved: the other difference is simply 0.  Both listeners care about
+        // the second one: chatframe.lua:2603 prints LEVEL_UP_SKILL_POINTS with
+        // `UnitCharacterPoints("player")`'s second value - which 0x00610fb0
+        // answers out of this very pair of dwords - and only when the second
+        // difference is above 0, and skillframe.lua:10 and paperdollframe.lua:
+        // 119 refresh on the event alone.  It was raised with two zeroes, so
+        // the line was never printed no matter how many points the realm gave.
+        //
+        // The watcher's own baseline is what keeps this honest.  The watch is
+        // registered with the fields as they already stand, so a character who
+        // logs in holding points and slots hears nothing at all; raising the
+        // event on the first block seen would print the whole total as a gain.
+        // So the first sight of either field only sets the baseline, and a
+        // field a block leaves out keeps the value the snapshot has rather than
+        // counting as a change to zero - which is what an eight-byte watch over
+        // a pair does when only half of it arrives.
+        if (const uint16_t talentIdx = fieldIndex(UF::PLAYER_CHARACTER_POINTS1);
+            talentIdx != 0xFFFF) {
+            if (const uint16_t skillIdx = fieldIndex(UF::PLAYER_CHARACTER_POINTS2);
+                skillIdx != 0xFFFF) {
+                const auto wasTalents = lastFields.find(talentIdx);
+                const auto wasSkills = lastFields.find(skillIdx);
+                if (wasTalents != lastFields.end() && wasSkills != lastFields.end()) {
+                    auto current = [&](uint16_t idx, uint32_t previous) {
+                        const auto now = block.fields.find(idx);
+                        return now == block.fields.end() ? previous : now->second;
+                    };
+                    const auto talents = static_cast<int32_t>(current(talentIdx, wasTalents->second));
+                    const auto skills = static_cast<int32_t>(current(skillIdx, wasSkills->second));
+                    const auto oldTalents = static_cast<int32_t>(wasTalents->second);
+                    const auto oldSkills = static_cast<int32_t>(wasSkills->second);
+                    if (talents != oldTalents || skills != oldSkills)
+                        pendingEvents_.emit("CHARACTER_POINTS_CHANGED",
+                                            {std::to_string(talents - oldTalents),
+                                             std::to_string(skills - oldSkills)});
+                }
+            }
+        }
+        // The ammunition the realm says is loaded, watched on its own just as the
+        // client watches it.  The registration block at 0x005e8470 puts a second
+        // watch right after the points pair - `4, 0x1068, 4`, blob dword 1050,
+        // which the client's own descriptor table names PLAYER_AMMO_ID (index
+        // 1198) - and 0x005eaf70 re-puts the same watch when the player frame is
+        // rebuilt.  Its callback at 0x005e83e0 is the client's only raise of
+        // UNIT_INVENTORY_CHANGED (147) that comes from that field, and it names
+        // "player": before the raise it touches the loaded entry among the item
+        // records - 0x006de7e0 finds the record and answers its +0x14, the same
+        // dword GetInventoryItemQuality (0x005ea040) answers with - so the notice
+        // goes out with the record already in hand and the sheet re-reads the
+        // slot.
+        //
+        // That re-read is the whole point of the event.  paperdollframe.lua:1191
+        // refreshes a paperdoll button on UNIT_INVENTORY_CHANGED only when the
+        // first argument is "player", and the ammo button is one of those buttons:
+        // paperdollframe.xml:1044 defines CharacterAmmoSlot with no id of its own,
+        // which leaves GetID() at 0 = INVSLOT_AMMO.  Nothing here ever mentioned
+        // the field, so a hunter who walked into a vendor and bought arrows, or
+        // whose realm changed what was loaded from anywhere else, kept the square
+        // as it was drawn when the sheet was opened.
+        //
+        // The event carries no arguments other than the unit, so unlike the points
+        // pair above there is no baseline to keep: a first block whose field is not
+        // zero asks for a redraw, which costs nothing and says nothing false.
+        if (const uint16_t ammoIdx = fieldIndex(UF::PLAYER_AMMO_ID); ammoIdx != 0xFFFF) {
+            const auto now = block.fields.find(ammoIdx);
+            if (now != block.fields.end()) {
+                const auto was = lastFields.find(ammoIdx);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                    pendingEvents_.emit("UNIT_INVENTORY_CHANGED", {"player"});
+            }
+        }
+        // What it costs to take the ring back, and when each piece of it was
+        // sold, watched as one block: 0x00585f80 puts `4, 0x1074, 0x60` -
+        // twenty-four dwords, which the client's own descriptor table names
+        // PLAYER_FIELD_BUYBACK_PRICE_1 (1201, covering twelve) and
+        // PLAYER_FIELD_BUYBACK_TIMESTAMP_1 (1213, twelve more) - and 0x00585fe0
+        // takes it away again; the two are called from the pair of routines at
+        // 0x00528010 and 0x00528c30 that set the local player object up and tear
+        // it down.  The callback at 0x00585f60 is three moves: rebuild the
+        // merchant window's list (0x00584bb0, which walks the twelve ring slots of
+        // the player's own item store - the ring's items are ordinary instances
+        // there, which is why 1213 is a timestamp and not an item id; the routine
+        // counts them from 75 and stores the zero-based 74..85 this file already
+        // uses, by subtracting one from its loop variable - keeps the rows in
+        // DAT_00bf90f8 and the count in DAT_00bfa3f4, and drops a slot whose
+        // price dword is zero), then `FUN_0081b530(0x12f, 0)` -
+        // MERCHANT_UPDATE (303) with no arguments at all.
+        //
+        // This is the only way a ring the realm rewrote on its own ever reaches
+        // the window.  WoWee mirrors the ring from its own sell and buyback
+        // packets and notifies from that mirror alone, so a login block that
+        // arrives with a ring still in it - the realm keeps the twelve slots across
+        // a reconnect - or a sale made on another client said nothing, and the tab
+        // kept drawing whatever it had listed when it was opened.  The client asks
+        // its fields instead: 0x00584b00 answers `+0x1074 + idx*4` with the index
+        // bounded at 0xb, and GetBuybackItemInfo (0x00585070) calls it for the
+        // third value, so the price printed is the realm's number.
+        //
+        // The watch is raised unconditionally, as the client's is: a closed
+        // merchant window ignores the event, because merchantframe.lua:19-21
+        // updates only `if (self:IsVisible())`.  It is worth saying so, because
+        // the mirror path in the inventory handler (notifyBuybackChanged) does
+        // gate on the window being open, and for its own reason: that one reports
+        // an action this client took, while this one reports the realm's own state
+        // moving, which has to be recorded whether or not anything is drawing it.
+        bool buybackMoved = false;
+        for (const uint16_t probe : {fieldIndex(UF::PLAYER_FIELD_BUYBACK_PRICE_1),
+                                     fieldIndex(UF::PLAYER_FIELD_BUYBACK_TIMESTAMP_1)}) {
+            if (probe == 0xFFFF) continue;   // a layout naming no such array
+            for (uint16_t i = 0; i < 12; ++i) {
+                const uint16_t key = static_cast<uint16_t>(probe + i);
+                const auto now = block.fields.find(key);
+                if (now == block.fields.end()) continue;   // this slot did not move
+                const auto was = lastFields.find(key);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                    buybackMoved = true;
+            }
+        }
+        if (buybackMoved) pendingEvents_.emit("MERCHANT_UPDATE", {});
+        // Which currencies the character has met, the pair of masks
+        // PLAYER_FIELD_KNOWN_CURRENCIES is read as (blob +0x790 and +0x794).  The
+        // client puts one eight-byte watch over the pair (0x006e5180 registers
+        // `4, 0x790, 8` with the callback at 0x005b0640), and that callback is
+        // three instructions of substance: it rebuilds the token list
+        // (0x005b0030) and raises KNOWN_CURRENCY_TYPES_UPDATE (604) naming no
+        // arguments.  That is the event's only raise in the whole client, and
+        // this is where it belongs: the rows the tab draws are the currencies
+        // whose bit stands, so a mask that moves is the token window changing
+        // underneath itself - which is what the window's own OnEvent re-asks
+        // about.  The pair is watched as one range, so both halves moving in one
+        // block is one raise, and a callback that returns 1 is what a watcher
+        // keeping itself installed looks like.
+        if (const uint16_t knownIdx = fieldIndex(UF::PLAYER_FIELD_KNOWN_CURRENCIES);
+            knownIdx != 0xFFFF) {
+            bool maskMoved = false;
+            for (uint16_t half = 0; half < 2; ++half) {
+                const uint16_t key = static_cast<uint16_t>(knownIdx + half);
+                const auto now = block.fields.find(key);
+                if (now == block.fields.end()) continue;   // this half did not move
+                const auto was = lastFields.find(key);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second) maskMoved = true;
+            }
+            if (maskMoved) pendingEvents_.emit("KNOWN_CURRENCY_TYPES_UPDATE", {});
+        }
+        // The titles the character has earned, which the realm hands over as six
+        // dwords - PLAYER_FIELD_KNOWN_TITLES and the five after it, blob +0x778
+        // through +0x78f, named three times in the client's own field table as
+        // pairs (PLAYER__FIELD_KNOWN_TITLES at 626, _TITLES1 at 628, _TITLES2 at
+        // 630).  The client watches those pairs, three watchers eight bytes wide
+        // stepping from +0x778 to +0x788 (0x006e5180), and each callback raises
+        // KNOWN_TITLES_UPDATE (498) naming no arguments.  That is the event the
+        // character sheet's title dropdown is rebuilt from, and the mask itself
+        // is what the dropdown asks about - IsTitleKnown (0x0051b410) reads these
+        // same six dwords off the player object - so a character arriving with
+        // titles already earned had nothing to show: the create block carries the
+        // mask, no watcher is installed yet for it to move, and the only raise
+        // this client ever made came from SMSG_TITLE_EARNED, which is not a
+        // message for a title the character already had.
+        //
+        // One raise per pair that moved, because the client's watchers are one
+        // pair apiece and their callbacks do not coalesce.  A watcher is asked
+        // about its eight bytes at once, so a change in either dword of a pair
+        // raises once for that pair; a pair the block did not carry at all moved
+        // no bytes and raises nothing.
+        if (const uint16_t titlesIdx = fieldIndex(UF::PLAYER_FIELD_KNOWN_TITLES);
+            titlesIdx != 0xFFFF) {
+            for (uint32_t group = 0; group < kKnownTitleGroups; ++group) {
+                bool moved = false;
+                for (uint32_t half = 0; half < 2; ++half) {
+                    const uint16_t key = static_cast<uint16_t>(titlesIdx + group * 2 + half);
+                    const auto now = block.fields.find(key);
+                    if (now == block.fields.end()) continue;   // this dword did not move
+                    const auto was = lastFields.find(key);
+                    if ((was == lastFields.end() ? 0u : was->second) != now->second) moved = true;
+                }
+                if (moved) pendingEvents_.emit("KNOWN_TITLES_UPDATE", {});
+            }
+        }
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.
         for (const auto& [key, val] : block.fields) {
@@ -2796,8 +3309,11 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         PlayerFieldIndices pfi = PlayerFieldIndices::resolve();
         bool slotsChanged = applyPlayerStatFields(block.fields, pfi, false);
         if (slotsChanged) {
+            // The rebuild is what announces the equipment slots that moved, each
+            // with its own Lua slot number - the client's own equipment watcher
+            // fires per slot (0x006dedd0), and an event naming no slot reached
+            // the frames that redraw one slot.
             owner_.rebuildOnlineInventory();
-            pendingEvents_.emit("PLAYER_EQUIPMENT_CHANGED", {});
         }
         owner_.extractSkillFields(owner_.lastPlayerFieldsRef());
         owner_.extractExploredZoneFields(owner_.lastPlayerFieldsRef());
@@ -3049,6 +3565,27 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
         updateNonPlayerTransportAttachment(block, entity, entity->getType());
     }
 
+    // Who the unit had selected, taken before this block overwrites it. Event id
+    // 12 is UNIT_TARGET, and ids up to 141 are field numbers: the client watches
+    // the unit field block at offset id*4 (0x00614190) - eight bytes wide for 12,
+    // because it is a guid - and answers UNIT_TARGET("token") through the unit
+    // token helper (0x0060bf10) whenever it moves. PLAYER_TARGET_CHANGED is only
+    // the player's own selection, so a mob turning to face somebody else said
+    // nothing at all here: a target-of-target frame, a tank cooldown warning and
+    // anything else that reads a unit's target had to wait for the unit frame to
+    // be rebuilt for another reason. The entity's own field map is the previous
+    // value, so this needs no bookkeeping of its own - but it does have to be read
+    // before the merge below. A create block never reaches it, as the client's
+    // watchers are installed only once the object is live (0x007158c0).
+    const uint16_t targetLo = fieldIndex(UF::UNIT_FIELD_TARGET_LO);
+    const uint16_t targetHi = fieldIndex(UF::UNIT_FIELD_TARGET_HI);
+    const bool watchesTarget = (entity->getType() == ObjectType::UNIT ||
+                                entity->getType() == ObjectType::PLAYER) &&
+                               (targetLo != 0xFFFF) &&
+                               (block.fields.find(targetLo) != block.fields.end() ||
+                                block.fields.find(targetHi) != block.fields.end());
+    const uint64_t oldTarget = watchesTarget ? unitTargetGuid(*entity) : 0;
+
     // Set fields (common)
     for (const auto& field : block.fields) {
         entity->setField(field.first, field.second);
@@ -3057,6 +3594,14 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     // Dispatch to type-specific handler
     auto* handler = getTypeHandler(entity->getType());
     if (handler) handler->onValuesUpdate(block, entity);
+
+    if (watchesTarget && unitTargetGuid(*entity) != oldTarget) {
+        // The token is not decoration: the interface ignores a unit event whose
+        // argument is not the unit it is showing, so a change said about nobody
+        // reaches nothing.
+        if (const auto uid = owner_.guidToUnitId(block.guid); !uid.empty())
+            pendingEvents_.emit("UNIT_TARGET", {uid});
+    }
 
     flushPendingEvents();
     LOG_DEBUG("Updated entity fields: 0x", std::hex, block.guid, std::dec);
@@ -3129,7 +3674,8 @@ void EntityController::finalizeUpdateObjectBatch(bool newItemCreated) {
     if (owner_.getPlayerGuid() != 0 && owner_.invSlotBaseRef() < 0 && !owner_.lastPlayerFieldsRef().empty() && !owner_.onlineItemsRef().empty()) {
         owner_.detectInventorySlotBases(owner_.lastPlayerFieldsRef());
         if (owner_.invSlotBaseRef() >= 0) {
-            if (owner_.applyInventoryFields(owner_.lastPlayerFieldsRef())) {
+            // A first read of fields already held, not a change: nothing moves.
+            if (owner_.applyInventoryFields(owner_.lastPlayerFieldsRef(), true)) {
                 owner_.rebuildOnlineInventory();
             }
         }
@@ -3347,6 +3893,17 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
     pendingNameQueries.erase(data.guid);
     // Combat log entries waiting for it, found or not (0x0074fe90).
     owner_.combatLogFeed().playerNameAnswered(data.guid, data.name, data.realmName, data.isValid());
+    // And a raid browser row that was asked about at the list arriving. The client's
+    // callback for those counts answers rather than matching them (0x005528a0), and
+    // re-announces the list when the count runs out, so a wait is closed by an answer
+    // whether or not it found a name — otherwise a row whose guid names nobody would
+    // hold the list un-announced for as long as it is browsed.
+    owner_.onLfgNameAnswered(data.guid);
+    // A channel invite whose inviter is a stranger. 0x0050e120 case 0x18 asks for
+    // the name and lets 0x004fb5c0 raise the popup with it; the wait closes here
+    // whether or not the answer found anyone, so one unanswerable invite cannot
+    // hold every later one behind it.
+    if (owner_.getChatHandler()) owner_.getChatHandler()->onChannelInviteNameKnown(data.guid);
 
     LOG_INFO("Name query response: guid=0x", std::hex, data.guid, std::dec,
              " found=", static_cast<int>(data.found), " name='", data.name, "'",

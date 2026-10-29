@@ -747,8 +747,9 @@ bool TbcPacketParsers::parseQuestDetailsPreWotlk(network::Packet& packet, QuestD
         }
     }
 
+    // Signed: the same word pays or charges, depending on its sign.
     if (packet.hasRemaining(4))
-        data.rewardMoney = packet.readUInt32();
+        data.rewardMoney = static_cast<int32_t>(packet.readUInt32());
     // Remaining bytes are spell/honor/title trailing fields plus the emote
     // block - no XP field exists pre-WotLK.
     data.rewardXp = 0;

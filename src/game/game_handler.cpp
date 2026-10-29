@@ -25,6 +25,7 @@
 #include "game/transport_boarding.hpp"
 #include "game/opcodes.hpp"
 #include "game/update_field_table.hpp"
+#include "game/known_currencies.hpp"
 #include "game/pvp_flags.hpp"
 #include "game/expansion_profile.hpp"
 #include "rendering/renderer.hpp"
@@ -32,7 +33,6 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "network/world_socket.hpp"
@@ -2283,9 +2283,13 @@ const std::vector<GameHandler::BattlemasterEntry>& GameHandler::getBattlegroundT
     return battlegroundTypes_;
 }
 
-// CurrencyTypes.dbc: id, then the item that carries the amount. Everything the
-// currency tab shows about a currency - name, icon, how many - comes from that
-// item, so the row itself needs nothing else.
+// CurrencyTypes.dbc: the id the realm's masks are keyed by, then the item that
+// carries the amount. Everything the currency tab shows about a currency - name,
+// icon, how many - comes from that item, so the row itself needs nothing else.
+// The id is the record's fourth field, not its first: known_currencies.hpp spells
+// out which client routine reads which offset, and the short version is that the
+// three currency masks are all keyed on the fourth, while nothing in the client's
+// currency code reads the first.
 const std::vector<GameHandler::CurrencyType>& GameHandler::getCurrencyTypes() {
     if (currencyTypesLoaded_) return currencyTypes_;
     auto* am = services_.assetManager;
@@ -2295,16 +2299,59 @@ const std::vector<GameHandler::CurrencyType>& GameHandler::getCurrencyTypes() {
     currencyTypesLoaded_ = true;
 
     auto dbc = am->loadDBC("CurrencyTypes.dbc");
-    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 2) return currencyTypes_;
+    if (!dbc || !dbc->isLoaded()) return currencyTypes_;
+    // The id has to be there to be asked about at all. A narrower table cannot be
+    // read at all rather than read partly: the field the masks key on is the one
+    // that would be missing, so every row would be looked up by the wrong id.
+    if (dbc->getFieldCount() < kCurrencyTypeFields) {
+        LOG_WARNING("Currency: CurrencyTypes.dbc has ", dbc->getFieldCount(),
+                 " fields, need ", kCurrencyTypeFields);
+        return currencyTypes_;
+    }
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
         CurrencyType c;
-        c.id     = dbc->getUInt32(i, 0);
-        c.itemId = dbc->getUInt32(i, 1);
+        c.id         = dbc->getUInt32(i, kCurrencyTypeFieldId);
+        c.itemId     = dbc->getUInt32(i, kCurrencyTypeFieldItem);
+        c.categoryId = dbc->getUInt32(i, kCurrencyTypeFieldCategory);
         if (c.id == 0 || c.itemId == 0) continue;
         currencyTypes_.push_back(c);
     }
     LOG_INFO("Currency: ", currencyTypes_.size(), " types from CurrencyTypes.dbc");
     return currencyTypes_;
+}
+
+// CurrencyCategory.dbc: the groups the token tab draws a header for. The order
+// back from here is the store's own - currency_categories.hpp spells out that the
+// last category is a role, not a name, and that a category no known currency
+// reaches draws nothing at all.
+const std::vector<CurrencyCategory>& GameHandler::getCurrencyCategories() {
+    if (currencyCategoriesLoaded_) return currencyCategories_;
+    auto* am = services_.assetManager;
+    // Same rule as the currencies above: an early ask must not latch an empty list.
+    if (!am || !am->isInitialized()) return currencyCategories_;
+    currencyCategoriesLoaded_ = true;
+
+    auto dbc = am->loadDBC("CurrencyCategory.dbc");
+    if (!dbc || !dbc->isLoaded()) return currencyCategories_;
+    if (dbc->getFieldCount() < kCurrencyCategoryFields) {
+        LOG_WARNING("Currency: CurrencyCategory.dbc has ", dbc->getFieldCount(),
+                    " fields, need ", kCurrencyCategoryFields);
+        return currencyCategories_;
+    }
+    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+        CurrencyCategory c;
+        c.id    = dbc->getUInt32(i, kCurrencyCategoryFieldId);
+        c.flags = dbc->getUInt32(i, kCurrencyCategoryFieldFlag);
+        // The locale block's first column, which this build's loader has already
+        // filled with the active locale's offset - the way SkillLineCategory.dbc
+        // is read for the skills tab's headings.
+        c.name  = dbc->getString(i, kCurrencyCategoryFieldName);
+        if (c.id == 0) continue;
+        currencyCategories_.push_back(std::move(c));
+    }
+    std::sort(currencyCategories_.begin(), currencyCategories_.end(), currencyCategoryLess);
+    LOG_INFO("Currency: ", currencyCategories_.size(), " categories from CurrencyCategory.dbc");
+    return currencyCategories_;
 }
 
 // Achievement.dbc field 38 is the category. It is not in the layout file, but
@@ -2355,6 +2402,20 @@ bool GameHandler::getGlyphSocketFields(std::array<uint32_t, 6>& slotIds,
     }
     enabledMask = enabledIdx != 0xFFFF ? player->getField(enabledIdx) : 0u;
     return true;
+}
+
+// The pet's spell power is not something this client works out: 0x0060e410 hands
+// back the int at PLAYER_FIELD_PET_SPELL_POWER as a number, or 0 when the player
+// object is missing. Which is why the pet sheet's Spell Bonus Damage line can be
+// wrong here in only one way - the realm never wrote the field - and why a
+// pre-WotLK realm, which has no such field, answers 0 rather than guessing.
+int32_t GameHandler::getPetSpellBonusDamage() const {
+    const uint16_t idx = fieldIndex(UF::PLAYER_FIELD_PET_SPELL_POWER);
+    if (idx == 0xFFFF) return 0;
+    const auto player = entityController_ ? entityController_->getEntityManager().getEntity(playerGuid)
+                                          : nullptr;
+    if (!player) return 0;
+    return static_cast<int32_t>(player->getField(idx));
 }
 
 bool GameHandler::isStatisticCriteria(uint32_t criteriaId) {
@@ -2900,7 +2961,55 @@ uint32_t GameHandler::getRepListIdByFactionId(uint32_t factionId) const {
     return (it != factionIdToRepList_.end()) ? it->second : 0xFFFFFFFFu;
 }
 
+uint32_t GameHandler::getWatchedFactionId() const {
+    // GetWatchedFactionInfo (0x005d1240) asks the realm, not itself: +0x10e8 of
+    // the field blob the player object keeps at +0x1008 is the reputation list
+    // index of the faction to watch, rejected below 0 or above 0x7f and turned
+    // into a faction through the reputation list.  Nothing here watches a faction
+    // on its own, which is what the original client does not do either.
+    const uint16_t field = fieldIndex(UF::PLAYER_FIELD_WATCHED_FACTION_INDEX);
+    if (field == 0xFFFF) return watchedFactionId_;
+    const auto player = getEntityManager().getEntity(getPlayerGuid());
+    if (!player) return 0;
+    const int32_t repListId = static_cast<int32_t>(player->getField(field));
+    if (repListId < 0 || repListId > 0x7f) return 0;
+    return getFactionIdByRepListId(static_cast<uint32_t>(repListId));
+}
+
+uint32_t GameHandler::getPlayerMaxLevel() const {
+    // The level the character stops at is the realm's to say. It sits at blob
+    // dword 1131 of the player's field array (+0x11ac, next to the honour and
+    // arena counters at 1129/1130, which is where 0x0054e5b0 reads it from), and
+    // every reader of it asks the same question against UNIT_FIELD_LEVEL: whether
+    // this character still advances. A quest's reward XP is one of them
+    // (0x005e49b0 answers none at all at the cap), and the reward panel zeroes its
+    // XP line the same way (0x0058dd50), so a client that never reads this field
+    // offers experience to a character that cannot take any.
+    const uint16_t field = fieldIndex(UF::PLAYER_FIELD_MAX_LEVEL);
+    if (field == 0xFFFF) return 0;
+    const auto player = getEntityManager().getEntity(getPlayerGuid());
+    if (!player) return 0;
+    return player->getField(field);
+}
+
+uint32_t GameHandler::getSelfResSpellId() const {
+    // The soulstone is a field, not a message.  HasSoulstone (0x0051acd0) takes
+    // the local player and reads +0x106c of its field blob - blob dword 1051,
+    // which the client's own descriptor table names PLAYER_SELF_RES_SPELL - and
+    // answers the spell's *name* when that dword is not zero; the two other
+    // readers of it (0x0051add0, 0x00727860) ask the same question to decide
+    // whether the death UI has a second thing to do at all.  No packet announces
+    // a soulstone, so a client that does not read this field never learns of one.
+    const uint16_t field = fieldIndex(UF::PLAYER_SELF_RES_SPELL);
+    if (field == 0xFFFF) return 0;
+    const auto player = getEntityManager().getEntity(getPlayerGuid());
+    if (!player) return 0;
+    return player->getField(field);
+}
+
 void GameHandler::setWatchedFactionId(uint32_t factionId) {
+    // Kept for the case getWatchedFactionId has no field to read; once the realm
+    // answers, the field it sends is what the interface sees.
     watchedFactionId_ = factionId;
     if (!isInWorld()) return;
     // CMSG_SET_WATCHED_FACTION: int32 repListId (-1 = unwatch)
@@ -3162,32 +3271,57 @@ void GameHandler::respondInstanceLock(bool accept) {
     if (socialHandler_) socialHandler_->respondInstanceLock(accept);
 }
 
-uint32_t GameHandler::getDungeonEncounterCount(uint32_t mapId, uint32_t difficulty) const {
-    if (!dungeonEncounterCacheLoaded_) {
-        auto* am = services_.assetManager;
-        // Not an attempt: the assets are not there to read yet, and a caller
-        // can reach this before they are.
-        if (!am || !am->isInitialized()) return 0;
-        dungeonEncounterCacheLoaded_ = true;
+void GameHandler::loadDungeonEncounterDbc() const {
+    if (dungeonEncounterCacheLoaded_) return;
 
-        auto dbc = am->loadDBC("DungeonEncounter.dbc");
-        if (dbc && dbc->isLoaded()) {
-            // ID, MapID, Difficulty, OrderIndex, Bit, Name[17], SpellIconID.
-            // Verified against record 0: id 464, map 33 (Shadowfang Keep),
-            // difficulty 0, order 0, bit 0.
-            constexpr uint32_t kMapField = 1, kDiffField = 2;
-            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
-                const uint64_t map = dbc->getUInt32(i, kMapField);
-                const uint64_t diff = dbc->getUInt32(i, kDiffField);
-                dungeonEncounterCounts_[(map << 32) | diff]++;
-                // Most instances list their bosses once, under difficulty 0,
-                // and apply to every difficulty. Keeping a per-map total means
-                // a heroic run still has a number to show.
-                dungeonEncounterCounts_[(map << 32) | 0xFFFFFFFFull]++;
-            }
+    auto* am = services_.assetManager;
+    // Not an attempt: the assets are not there to read yet, and a caller
+    // can reach this before they are.
+    if (!am || !am->isInitialized()) return;
+    dungeonEncounterCacheLoaded_ = true;
+
+    auto dbc = am->loadDBC("DungeonEncounter.dbc");
+    if (dbc && dbc->isLoaded()) {
+        // ID, MapID, Difficulty, OrderIndex, Bit, Name[17], SpellIconID.
+        // Verified against record 0: id 464, map 33 (Shadowfang Keep),
+        // difficulty 0, order 0, bit 0. The name is one localized text field,
+        // which is why it spans seventeen columns - the eight locales, their
+        // eight flag columns and a language id - and the loader's locale
+        // promotion is what puts the active locale's text in the first of them,
+        // so column 5 is the one that answers. Read through getString: the
+        // Shadowfang rows come out Rotkralle, Klingenklaue der Metzger, Baron
+        // Silberlein, in file order, which is the order 0x005538b0 walks them.
+        constexpr uint32_t kMapField = 1, kDiffField = 2;
+        constexpr uint32_t kBitField = 4, kNameField = 5;
+        for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+            const uint64_t map = dbc->getUInt32(i, kMapField);
+            const uint64_t diff = dbc->getUInt32(i, kDiffField);
+            dungeonEncounterCounts_[(map << 32) | diff]++;
+            // Most instances list their bosses once, under difficulty 0,
+            // and apply to every difficulty. Keeping a per-map total means
+            // a heroic run still has a number to show.
+            dungeonEncounterCounts_[(map << 32) | 0xFFFFFFFFull]++;
+
+            LfgEncounterRow row;
+            row.mapId = static_cast<uint32_t>(map);
+            row.difficulty = static_cast<uint32_t>(diff);
+            row.bit = dbc->getUInt32(i, kBitField);
+            row.name = dbc->getString(i, kNameField);
+            dungeonEncounters_.push_back(std::move(row));
         }
-        LOG_INFO("DungeonEncounter.dbc: ", dungeonEncounterCounts_.size(), " map/difficulty pairs");
+        // The spell icon column - the file's last, and the record field
+        // 0x005538b0 reads at +0x18 - is zero in every row of this copy, so the
+        // client's own store lookup answers nothing and it pushes nothing for the
+        // texture. Nothing reads it here for the same reason, and no name has to
+        // be guessed at from the icon id.
     }
+
+    LOG_INFO("DungeonEncounter.dbc: ", dungeonEncounterCounts_.size(),
+             " map/difficulty pairs, ", dungeonEncounters_.size(), " rows");
+}
+
+uint32_t GameHandler::getDungeonEncounterCount(uint32_t mapId, uint32_t difficulty) const {
+    loadDungeonEncounterDbc();
 
     auto it = dungeonEncounterCounts_.find((static_cast<uint64_t>(mapId) << 32) | difficulty);
     if (it != dungeonEncounterCounts_.end()) return it->second;
@@ -3612,6 +3746,15 @@ void GameHandler::closeInteractionWindow(go_interaction::Window window) {
         case Window::Tabard:       closeTabardVendor(); break;
         case Window::Count:        break;
     }
+}
+
+void GameHandler::npcFlagsChanged(uint64_t guid, uint32_t before, uint32_t after) {
+    // 0x0071a0b0 asks each flag in its own order and closes everything that
+    // matches, so more than one window can go with one update - a quest giver
+    // who stops being a gossip loses the gossip frame and then the quest frame.
+    const auto with = interactionWindowObjects();
+    for (auto window : go_interaction::npcFlagWindowsLost(before, after, guid, with))
+        closeInteractionWindow(window);
 }
 
 void GameHandler::closeNpcInteraction() {
@@ -4871,6 +5014,46 @@ bool GameHandler::isLfgInDungeon() const {
 
 uint32_t GameHandler::getLfgDungeonId() const {
     return socialHandler_ ? socialHandler_->getLfgDungeonId() : 0;
+}
+
+uint32_t GameHandler::getLfgJoinedListId() const {
+    return socialHandler_ ? socialHandler_->getLfgJoinedListId() : 0;
+}
+
+void GameHandler::lfgSearchJoin(uint32_t typeId, uint32_t lfgId) {
+    if (socialHandler_) socialHandler_->lfgSearchJoin(typeId, lfgId);
+}
+
+void GameHandler::lfgSearchLeave() {
+    if (socialHandler_) socialHandler_->lfgSearchLeave();
+}
+
+uint32_t GameHandler::getLfgListRowCount() const {
+    return socialHandler_ ? socialHandler_->getLfgListRowCount() : 0;
+}
+
+const LfgListRow* GameHandler::getLfgListRow(uint32_t index) const {
+    return socialHandler_ ? socialHandler_->getLfgListRow(index) : nullptr;
+}
+
+uint32_t GameHandler::getLfgBrowserRowCount() const {
+    return socialHandler_ ? socialHandler_->getLfgBrowserRowCount() : 0;
+}
+
+const LfgBrowserRow* GameHandler::getLfgBrowserRow(uint32_t index) const {
+    return socialHandler_ ? socialHandler_->getLfgBrowserRow(index) : nullptr;
+}
+
+uint32_t GameHandler::getLfgSearchListId() const {
+    return socialHandler_ ? socialHandler_->getLfgSearchListId() : 0;
+}
+
+void GameHandler::sortLfgBrowser(std::string_view word) {
+    if (socialHandler_) socialHandler_->sortLfgBrowser(word);
+}
+
+void GameHandler::onLfgNameAnswered(uint64_t guid) {
+    if (socialHandler_) socialHandler_->onLfgNameAnswered(guid);
 }
 
 std::string GameHandler::getCurrentLfgDungeonName() const {

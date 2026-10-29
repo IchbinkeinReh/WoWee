@@ -47,8 +47,10 @@ public:
         });
     }
     /// 0x00804720 (SMSG_PET_CAST_FAILED): the spell's global cooldown is
-    /// taken off, and with one so, the list pruned.
-    void dropGlobalCooldown(uint32_t spellId, int64_t now) {
+    /// taken off, and with one so, the list pruned. Whether a record matched
+    /// is the answer the client acts on - 0x00804720 refreshes the cooldown
+    /// displays only for a list it actually changed.
+    bool dropGlobalCooldown(uint32_t spellId, int64_t now) {
         bool any = false;
         for (auto& e : entries_) {
             if (e.spellId != spellId) continue;
@@ -57,6 +59,7 @@ public:
             any = true;
         }
         if (any) prune(now);
+        return any;
     }
     /// 0x00802970: SMSG_CLEAR_COOLDOWN (`remove`) takes the spell's entries
     /// off; SMSG_COOLDOWN_EVENT starts a held one's cooldown now.

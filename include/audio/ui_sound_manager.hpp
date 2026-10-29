@@ -22,6 +22,12 @@ public:
     bool initialize(pipeline::AssetManager* assets);
     void shutdown();
 
+    /// Refused is its own answer: the row asked for one instance at a time and
+    /// another of the same id is still playing, which is where the client goes
+    /// silent (0x004c6a40 returns 0xf) rather than starting a second one. A
+    /// caller's hand-mapped fallback belongs on Unavailable only.
+    enum class UiPlayResult { Played, Refused, Unavailable };
+
     /// Play a sound by the name FrameXML asks for - PlaySound("igQuestFailed")
     /// and its sixty-seven siblings.
     ///
@@ -31,12 +37,13 @@ public:
     /// loaded, and it covers every name rather than the forty-four somebody
     /// mapped by hand.
     ///
-    /// False when the name is not in the table or its file will not load, so
-    /// the caller can fall back rather than going silent.
-    bool playByName(const std::string& soundName);
+    /// Unavailable when the name is not in the table or its file will not
+    /// load, so the caller can fall back rather than going silent.
+    UiPlayResult playByName(const std::string& soundName);
     /// Play a SoundEntries row by its id - PlaySound(856) (0x009858b0 ->
-    /// 0x004c8fc0). False as playByName is.
-    bool playById(uint32_t soundId);
+    /// 0x004c8fc0). As playByName, and Refused when the row asks for one at a
+    /// time and this id is already playing.
+    UiPlayResult playById(uint32_t soundId);
 
     /// Play a sound by path, which is what PlaySoundFile takes (0x009859b0 ->
     /// 0x004c9110 on the SCRIPTSOUND channel, once, at full volume). Cached
@@ -104,6 +111,22 @@ public:
     void playMinimapPing();
 
 private:
+    /// What the row a PlaySound id names asks of its play: the level the row
+    /// names (VolumeFloat) and its Flags. See audio/sound_entry.hpp.
+    struct UiRowAsk {
+        float volume = 1.0f;
+        uint32_t flags = 0;
+    };
+    std::unordered_map<uint32_t, UiRowAsk> asksById_;
+    /// The level asked of a clip, reached by leaf name, for the libraries
+    /// below: those plays name a file rather than a row, and SoundEntries'
+    /// File columns hold a leaf. Only the level is read this way, and only
+    /// where the rows naming a leaf agree on it - see ensureSoundEntriesLoaded.
+    std::unordered_map<std::string, float> volumeByLeaf_;
+    /// The ids with a play still going, for a row whose 0x20 flag asks for one
+    /// at a time: the id against the handle its play went into.
+    std::unordered_map<uint32_t, uint32_t> playingById_;
+
     struct UISample {
         std::string path;
         std::vector<uint8_t> data;

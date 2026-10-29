@@ -1812,6 +1812,35 @@ void Application::run() {
     // from this thread, and OS threads inherit their creator's affinity mask
     // on Linux. Pinning here silently confined every later render worker to
     // CPU 0 and defeated all command-recording parallelism.
+    //
+    // One thing does set an affinity mask, and only when the player asks for
+    // it: the client's own processAffinityMask cvar, read once at startup
+    // before any worker exists and handed straight to the OS (0x004022e0
+    // registers it, with the screen's own warning that "changes require restart
+    // to take effect"; 0x0076fe00 is GetCurrentProcess and
+    // SetProcessAffinityMask, and nothing else). The mask is held as a plain
+    // number, as the client's own parse reads it - 3 allows the first two
+    // cores. Every thread made afterwards inherits it, which is what a player
+    // narrowing the game onto fewer cores is asking for; a mask naming cores
+    // the machine does not have is refused by the OS, which is said out loud
+    // rather than left as a game that quietly runs on all of them.
+
+    if (const unsigned long long mask =
+            std::strtoull(addons::storedCVarValue("processAffinityMask", "0").c_str(), nullptr, 10);
+        mask != 0) {
+#ifdef __linux__
+        LOG_WARNING("processAffinityMask is set; the mask is a Windows call, and this build "
+                    "leaves cores to the scheduler");
+#else
+        if (SetProcessAffinityMask(GetCurrentProcess(), static_cast<DWORD_PTR>(mask))) {
+            LOG_INFO("Process affinity set to 0x", std::hex, mask, std::dec,
+                     " by the processAffinityMask cvar");
+        } else {
+            LOG_WARNING("processAffinityMask 0x", std::hex, mask, std::dec,
+                        " was refused - it names cores this machine does not have");
+        }
+#endif
+    }
 
     frameProfileEnabled_ = core::envFlagEnabled("WOWEE_FRAME_PROFILE", false);
     if (frameProfileEnabled_) {
@@ -1915,8 +1944,23 @@ void Application::run() {
         // cap and far cheaper than spinning.
 #ifndef WOWEE_VR
         if (window) {
+            // Which of the two caps this frame is held to. The client keeps a
+            // limit for the window being the active one and a usually lower
+            // one for when it is not, and takes the background one only where
+            // it is at least as strict (0x006836d0). This project's settings
+            // row picks the foreground limit; the cvars of the client's names
+            // say the same thing the client's own options write, and a player
+            // can set those directly - and a cap under eight frames is lifted
+            // to eight either way. A window without the keyboard is not the
+            // active one; neither is an app the system has put in the
+            // background, which is the same test the sound suspension uses.
+            const int setting = window->frameCap();
+            const int cvarLimit = std::atoi(addons::storedCVarValue("maxFPS", "0").c_str());
+            const int backgroundLimit = std::atoi(addons::storedCVarValue("maxFPSBk", "0").c_str());
+            const bool inBackground = window->getVkContext() && window->getVkContext()->inBackground();
+            const bool active = !inBackground && SDL_GetKeyboardFocus() != nullptr;
             WOWEE_PROFILE_SCOPE("sleep: frame cap", Idle);
-            pacer.waitForCap(window->frameCap());
+            pacer.waitForCap(capInEffect(cvarLimit > 0 ? cvarLimit : setting, backgroundLimit, active));
         }
 #endif
 

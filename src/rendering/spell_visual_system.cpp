@@ -19,7 +19,10 @@
 #include "core/application.hpp"
 #include "core/logger.hpp"
 #include "core/weapon_attachment.hpp"
+#include "audio/advanced_kit.hpp"
 #include "audio/audio_engine.hpp"
+#include "audio/sound_distance.hpp"
+#include "audio/sound_entry.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include <algorithm>
 #include <array>
@@ -415,6 +418,15 @@ void SpellVisualSystem::loadSpellVisualDbc() {
 
 namespace {
 
+/// A draw across [0,1] for a swing the row asks of its play
+/// (audio/sound_entry.hpp): the client draws one per flag it swings
+/// (0x004c5d40, between the pair of bounds the flag sets in front of it).
+float swingDraw() {
+    static std::mt19937 rng{std::random_device{}()};
+    return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+}
+
+
 /// An effect model made ready off the main thread: everything but the upload.
 struct PreparedEffectModel {
     bool ok = false;
@@ -613,24 +625,8 @@ void SpellVisualSystem::playSpellVisual(uint32_t visualId, const glm::vec3& worl
                                ? spell_kit::impactKitFor(onCaster, kits.impact, kits.casterImpact, kits.targetImpact)
                                : kits.cast;
     if (kitId == 0) return;
-    // The impact kit's sound plays with it, where it plays (0x00745230
-    // flags the kit to play its SoundID); for a missile that is on arrival.
-    if (useImpactKit) {
-        auto kitIt = kits_.find(kitId);
-        if (const LoadedSound* sound = kitIt != kits_.end() ? soundEntry(kitIt->second.soundId) : nullptr) {
-            // Its voice (0x6e): a kit with models sounds through its effect
-            // (0x006f9840) - the unit it plays on being the listener's
-            // object or the active mover; one without through the unit
-            // (0x0073b140 -> 0x006f7e40) - the unit being the mover, and the
-            // sound not a looping one (0x00745230 flag 0x1).
-            const bool own = !kitIt->second.models.empty()
-                                 ? instanceIsListener(attachInstanceId) || instanceIsMover(attachInstanceId)
-                                 : instanceIsMover(attachInstanceId) && !sound->loops;
-            audio::AudioEngine::instance().playSound3D(
-                sound->data, worldPosition, sound->volume, 1.0f, 100.0f, 1.0f, audio::Channel::Effects,
-                audio::PlayLimit::None, own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault);
-        }
-    }
+    // Its sound goes with it (0x00745230), where it plays; for a missile
+    // that is on arrival.
     playKitOnUnit(kitId, spell_kit::KitType::Cast, attachInstanceId, worldPosition,
                   attachInstanceId == 0 ? &worldPosition : nullptr, 0, spellId);
 }
@@ -713,6 +709,18 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
                                 .deadlineMs = colourClockMs_ + spell_kit::kWaitingKitMs});
         return {};
     }
+    // The kit's SoundID (+0x3c) plays with it, whichever of the spell's kits
+    // this is: an effect of the kit takes the sound where it has a model
+    // (0x006f9840), and where it has none the unit plays it (0x0073b140 ->
+    // 0x006f7e40). Of the kits played here only a precast kit has an end that
+    // can be timed - its cast's - so only its looping entry is held, for as
+    // long as that runs (0x007fec00 takes the kit back when the cast is over);
+    // an area kit's at a place has no end here at all and stays unheard. A
+    // state or channel kit's sound its aura holds, its own way.
+    if (const uint32_t handle = playKitSound(kit, type, renderInstanceId, place ? *place : position,
+                                             type == spell_kit::KitType::Precast);
+        handle != 0)
+        heldKitSounds_.push_back({.handle = handle, .endsMs = colourClockMs_ + castTimeMs});
     // 0x0073b140: the unit's own part - the kit's animation, the weapon
     // effects of a precast or cast kit (0x0073a6c0), the kit's colour and
     // its camera shake.
@@ -740,6 +748,52 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
     if (renderInstanceId != 0 && type != spell_kit::KitType::State && instanceUnitResolver_)
         startKitChains(kit, instanceUnitResolver_(renderInstanceId), spellId, 0);
     return playKitModels(kit, type, renderInstanceId, position, place, castTimeMs);
+}
+
+uint32_t SpellVisualSystem::playKitSound(const KitRecord& kit, spell_kit::KitType type, uint32_t renderInstanceId,
+                                         const glm::vec3& position, bool holds) {
+    const LoadedSound* sound = kit.soundId ? soundEntry(kit.soundId) : nullptr;
+    if (!sound) return 0;
+    const bool loops = spell_kit::kitSoundLoops(type, sound->loops, renderInstanceId);
+    if (loops && !holds) return 0;  // Nothing here would stop it again with the kit.
+    const bool own = spell_kit::kitSoundOwnVoice(!kit.models.empty(), loops, instanceIsListener(renderInstanceId),
+                                                 instanceIsMover(renderInstanceId));
+    const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
+    const float base = sound->volume * kitSoundVolumeScale_;
+    // And what the row asks the play to swing (audio/sound_entry.hpp) - the
+    // impact and encounter one-offs of those Flags are spell sounds as often as
+    // not (ShadowmoonMeteor*, XT-002 FistImpacts, BoneGolem_Cleave_Impact_*).
+    const float volume = audio::sound_entry::volumeForFlags(sound->flags, base, swingDraw());
+    const float pitch = audio::sound_entry::pitchForFlags(sound->flags, swingDraw());
+    // The row's own reach, not a guess: a kit's SoundEntries row says how far
+    // it carries (MinDistance 26, DistanceCutoff 27), and the flying mount's
+    // takeoff and landing pair is a row of 8 and 45 yards.
+    float minDistance = 0.0f, maxDistance = 0.0f;
+    audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
+    // The kit the row names, if it names one: 0x004c6a40 sends such a play to
+    // 0x004cb580, which turns it away while another play of that kit is still going
+    // within sqrt(6) yards of the position asked for (audio/advanced_kit.hpp). Only a
+    // few of the kit rows spell visuals pick name one, and those are encounter
+    // speech, so this is seldom seen on a spell.
+    const uint32_t kitId = audio::advanced_kit::kitIdFor(kit.soundId, cachedAssetManager_);
+    if (audio::advanced_kit::refusedNear(kitId, position)) return 0;
+    if (!loops) {
+        uint32_t handle = 0;
+        audio::AudioEngine::instance().playSound3D(sound->data, position, volume, pitch, maxDistance, minDistance,
+                                                   audio::Channel::Effects, audio::PlayLimit::None, priority,
+                                                   &handle);
+        audio::advanced_kit::notePlay(kitId, position, handle);
+        return 0;
+    }
+    // Held for the kit's whole run (0x004c5c80 takes it back at the end). It is
+    // played where the unit was as the kit started - 0x006f7e40 asks the unit
+    // for that through its vtable +0x2c once, and nothing after moves it - and
+    // its voice only counts for the mover, never for the listener (0x00745230).
+    const uint32_t handle =
+        audio::AudioEngine::instance().playSound3DLooping(sound->data, position, volume, maxDistance, minDistance,
+                                                          0.0f, audio::Channel::Effects, priority);
+    audio::advanced_kit::notePlay(kitId, position, handle);
+    return handle;
 }
 
 void SpellVisualSystem::playKitWeaponEffects(const std::vector<KitWeaponEffect>& effects,
@@ -1101,7 +1155,9 @@ const spell_missile::SpellMissileRow* SpellVisualSystem::spellMissileRow(uint32_
 }
 
 // A SoundEntries row as a spell's sounds play it: the row's file at its
-// VolumeFloat. Null when it has none this install can read.
+// VolumeFloat, with the reach and the Flags its play is held to (the loop bit and
+// the pitch and volume swings, audio/sound_entry.hpp). Null when it has none this
+// install can read.
 const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t soundId) {
     if (soundId == 0 || !cachedAssetManager_) return nullptr;
     auto it = soundEntries_.find(soundId);
@@ -1119,7 +1175,8 @@ const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t sou
             const float volume = dbc->getFloat(row, 24);
             if (volume > 0.0f) loaded.volume = volume;
             if (dbc->getFieldCount() > 27) {
-                loaded.loops = (dbc->getUInt32(row, 25) & 0x200u) != 0;
+                loaded.flags = dbc->getUInt32(row, 25);
+                loaded.loops = (loaded.flags & audio::sound_entry::kFlagLoops) != 0;
                 loaded.minDistance = dbc->getFloat(row, 26);
                 loaded.cutoff = dbc->getFloat(row, 27);
             }
@@ -1135,8 +1192,22 @@ const SpellVisualSystem::LoadedSound* SpellVisualSystem::soundEntry(uint32_t sou
 uint32_t SpellVisualSystem::startMissileSound(uint32_t soundId, const glm::vec3& position, int priority) {
     const LoadedSound* sound = soundEntry(soundId);
     if (!sound) return 0;
-    return audio::AudioEngine::instance().playSound3DLooping(sound->data, position, sound->volume, 100.0f, 1.0f,
-                                                             0.0f, audio::Channel::Effects, priority);
+    float minDistance = 0.0f, maxDistance = 0.0f;
+    audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
+    // The loop carries the row's volume swing. Its pitch is not swung: a looping
+    // play takes no pitch argument, and one row of the 12941 asks both
+    // (audio/sound_entry.hpp).
+    const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
+    // The same kit rule as any other play of a row (audio/advanced_kit.hpp): a
+    // missile's loop is asked of 0x004cb580 too, and refused while that kit is
+    // already sounding within sqrt(6) yards.
+    const uint32_t kitId = audio::advanced_kit::kitIdFor(soundId, cachedAssetManager_);
+    if (audio::advanced_kit::refusedNear(kitId, position)) return 0;
+    const uint32_t handle =
+        audio::AudioEngine::instance().playSound3DLooping(sound->data, position, volume, maxDistance,
+                                                          minDistance, 0.0f, audio::Channel::Effects, priority);
+    audio::advanced_kit::notePlay(kitId, position, handle);
+    return handle;
 }
 
 bool SpellVisualSystem::instanceIsMover(uint32_t renderInstanceId) const {
@@ -1372,8 +1443,21 @@ void SpellVisualSystem::hideAuraKit(AuraKit& aura) {
     if (m2Renderer_) {
         for (const KitModelInstance& model : aura.models) m2Renderer_->removeInstance(model.instanceId);
     }
+    // The kit's looping sound goes with the kit (0x004c5c80 stops it there, and
+    // stops it no other way): a unit changing model loses it and asks it again
+    // with the kit on its new model.
+    if (aura.soundHandle != 0) audio::AudioEngine::instance().stopSound(aura.soundHandle);
+    aura.soundHandle = 0;
+    aura.soundAsked = false;
     aura.models.clear();
     aura.boundInstance = 0;
+}
+
+void SpellVisualSystem::askAuraKitSound(AuraKit& aura, const KitRecord& kit, uint32_t instance,
+                                        const glm::vec3& unitPos) {
+    if (aura.soundAsked) return;
+    aura.soundAsked = true;
+    aura.soundHandle = playKitSound(kit, spell_kit::KitType::State, instance, unitPos, /*holds=*/true);
 }
 
 void SpellVisualSystem::setUnitAuraSlot(uint64_t unitGuid, uint32_t slot, uint32_t spellId, uint64_t casterGuid) {
@@ -2064,16 +2148,22 @@ void SpellVisualSystem::applyChannelKit(uint64_t unitGuid, uint32_t spellId) {
     unitAuraKits_[unitGuid].auras.push_back(std::move(aura));
 }
 
-void SpellVisualSystem::startStateKitOnUnit(uint64_t unitGuid, const AuraKit& aura, uint64_t otherSource) {
+void SpellVisualSystem::startStateKitOnUnit(uint64_t unitGuid, AuraKit& aura, uint64_t otherSource) {
     auto kitIt = kits_.find(aura.kitId);
     if (kitIt == kits_.end()) return;
     const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(unitGuid) : 0;
     if (instance != 0) {
-        glm::vec3 unitPos;
-        if (renderer_ && renderer_->getCharacterRenderer() &&
-            renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos))
-            playKitShake(aura.kitId, unitPos);
+        glm::vec3 unitPos(0.0f);
+        const bool at = renderer_ && renderer_->getCharacterRenderer() &&
+                        renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos);
+        if (at) playKitShake(aura.kitId, unitPos);
         playKitColourFade(aura.kitId, instance, aura.spellId);
+        // 0x00745230 plays the kit's own sound as the kit goes onto the unit;
+        // no path here ever asked a state kit's, so the 428 state kits and 480
+        // channel kits of 3.3.5a's own visuals whose entry loops have been
+        // silent - Death and Decay, Killer Bees, Lightning Shield, a warlock's
+        // channel - and those run on until the aura leaves the unit.
+        if (at) askAuraKitSound(aura, kitIt->second, instance, unitPos);
     }
     startKitChains(kitIt->second, unitGuid, aura.spellId, otherSource);
     // 0x007265c0 runs for every kit type: 16 starts the mount transition
@@ -2081,6 +2171,21 @@ void SpellVisualSystem::startStateKitOnUnit(uint64_t unitGuid, const AuraKit& au
     for (uint32_t k = 0; k < 4 && instance != 0; ++k) {
         if (kitIt->second.charProc[k] == spell_kit::kCharProcMountTransition)
             startMountTransition(instance, aura.spellId, spell_kit::KitType::State, 0);
+    }
+}
+
+void SpellVisualSystem::expireHeldKitSounds() {
+    if (heldKitSounds_.empty()) return;
+    auto& audio = audio::AudioEngine::instance();
+    for (auto it = heldKitSounds_.begin(); it != heldKitSounds_.end();) {
+        // Its cast's time has run out, which is when the client takes the
+        // precast kit back (0x007fec00) - and its sound with it (0x004c5c80).
+        if (static_cast<int32_t>(colourClockMs_ - it->endsMs) >= 0) {
+            audio.stopSound(it->handle);
+            it = heldKitSounds_.erase(it);
+            continue;
+        }
+        ++it;
     }
 }
 
@@ -2628,9 +2733,18 @@ void SpellVisualSystem::loadCameraShakes() {
 }
 
 void SpellVisualSystem::playSoundAt(uint32_t soundId, const glm::vec3& position, int priority) {
-    if (const LoadedSound* sound = soundId ? soundEntry(soundId) : nullptr)
-        audio::AudioEngine::instance().playSound3D(sound->data, position, sound->volume, 1.0f, 100.0f, 1.0f,
-                                                   audio::Channel::Effects, audio::PlayLimit::None, priority);
+    const LoadedSound* sound = soundId ? soundEntry(soundId) : nullptr;
+    if (!sound) return;
+    float minDistance = 0.0f, maxDistance = 0.0f;
+    audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
+    const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
+    const float pitch = audio::sound_entry::pitchForFlags(sound->flags, swingDraw());
+    const uint32_t kitId = audio::advanced_kit::kitIdFor(soundId, cachedAssetManager_);
+    if (audio::advanced_kit::refusedNear(kitId, position)) return;
+    uint32_t handle = 0;
+    audio::AudioEngine::instance().playSound3D(sound->data, position, volume, pitch, maxDistance, minDistance,
+                                               audio::Channel::Effects, audio::PlayLimit::None, priority, &handle);
+    audio::advanced_kit::notePlay(kitId, position, handle);
 }
 
 void SpellVisualSystem::playOwnSoundAt(uint32_t soundId, const glm::vec3& position) {
@@ -2638,12 +2752,28 @@ void SpellVisualSystem::playOwnSoundAt(uint32_t soundId, const glm::vec3& positi
     if (!sound) return;
     auto& audio = audio::AudioEngine::instance();
     constexpr int kOwn = audio::voice_priority::kActiveMover;
+    // The swings the row asks of the play, on either branch; the 0.65 of the
+    // listener-at-character case is a scale of the row's volume, which is the
+    // branch the client draws the volume swing on.
+    const float pitch = audio::sound_entry::pitchForFlags(sound->flags, swingDraw());
     if (addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
-        audio.playSound2D(sound->data, sound->volume * 0.65f, 1.0f, audio::Channel::Effects, audio::PlayLimit::None,
-                          kOwn);
+        const float base = sound->volume * 0.65f;
+        const float volume = audio::sound_entry::volumeForFlags(sound->flags, base, swingDraw());
+        audio.playSound2D(sound->data, volume, pitch, audio::Channel::Effects, audio::PlayLimit::None, kOwn);
     } else {
-        audio.playSound3D(sound->data, position, sound->volume, 1.0f, 100.0f, 1.0f, audio::Channel::Effects,
-                          audio::PlayLimit::None, kOwn);
+        float minDistance = 0.0f, maxDistance = 0.0f;
+        audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
+        const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
+        // Only the positional branch is asked about (audio/advanced_kit.hpp): the
+        // listener-at-character play above has no position, and the client asks
+        // nothing of one that has none.
+        const uint32_t kitId = audio::advanced_kit::kitIdFor(soundId, cachedAssetManager_);
+        if (!audio::advanced_kit::refusedNear(kitId, position)) {
+            uint32_t handle = 0;
+            audio.playSound3D(sound->data, position, volume, pitch, maxDistance, minDistance,
+                              audio::Channel::Effects, audio::PlayLimit::None, kOwn, &handle);
+            audio::advanced_kit::notePlay(kitId, position, handle);
+        }
     }
 }
 
@@ -2684,7 +2814,9 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
         const uint32_t instance = unitInstanceResolver_ ? unitInstanceResolver_(unitIt->first) : 0;
         for (AuraKit& aura : unit.auras) {
             if (!aura.playing || aura.awaitingMissile || aura.awaitingChain) {
-                if (!aura.models.empty()) hideAuraKit(aura);
+                // Held hidden: its models are off the unit, and so is the
+                // looping sound it had - a kit of no models has only that.
+                if (!aura.models.empty() || aura.soundHandle != 0) hideAuraKit(aura);
                 continue;
             }
             // Onto the unit's model as it now is: the kit is the unit's,
@@ -2694,10 +2826,14 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
                 auto kitIt = kits_.find(aura.kitId);
                 if (instance != 0 && kitIt != kits_.end()) {
                     glm::vec3 unitPos(0.0f);
-                    if (renderer_ && renderer_->getCharacterRenderer())
-                        renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos);
+                    const bool at = renderer_ && renderer_->getCharacterRenderer() &&
+                                    renderer_->getCharacterRenderer()->getInstancePosition(instance, unitPos);
                     aura.models = playKitModels(kitIt->second, spell_kit::KitType::State, instance, unitPos, nullptr);
                     aura.boundInstance = instance;
+                    // The kit came whole onto the new model, its sound with it
+                    // - unless its start already asked for it, unseen, while the
+                    // unit was not drawn yet.
+                    if (at) askAuraKitSound(aura, kitIt->second, instance, unitPos);
                 }
                 continue;
             }
@@ -2736,6 +2872,7 @@ void SpellVisualSystem::update(float deltaTime) {
     updateMountTransitions();
     expireWaitingKits();
     expireStateKitWaits();
+    expireHeldKitSounds();
     updateDynamicObjects(deltaTime);
     updateFallingModels(deltaTime);
     publishClientStrips();
@@ -2838,11 +2975,16 @@ void SpellVisualSystem::startDynamicObjectKit(DynamicObjectVisual& object) {
     // 0x00704f60: the kit's sound on the object, looping, rising over two
     // seconds.
     if (const LoadedSound* sound = soundEntry(object.area.soundId)) {
-        const float maxDistance = sound->cutoff > 0.0f ? sound->cutoff : 100.0f;
-        const float minDistance = sound->minDistance > 0.0f ? std::min(sound->minDistance, maxDistance) : 1.0f;
-        object.soundHandle = audio::AudioEngine::instance().playSound3DLooping(
-            sound->data, object.position, sound->volume, maxDistance, minDistance,
-            dynamic_object::kSoundFadeInSeconds, audio::Channel::Effects);
+        float minDistance = 0.0f, maxDistance = 0.0f;
+        audio::sound_distance::entryDistance(sound->minDistance, sound->cutoff, minDistance, maxDistance);
+        const float volume = audio::sound_entry::volumeForFlags(sound->flags, sound->volume, swingDraw());
+        const uint32_t kitId = audio::advanced_kit::kitIdFor(object.area.soundId, cachedAssetManager_);
+        if (!audio::advanced_kit::refusedNear(kitId, object.position)) {
+            object.soundHandle = audio::AudioEngine::instance().playSound3DLooping(
+                sound->data, object.position, volume, maxDistance, minDistance,
+                dynamic_object::kSoundFadeInSeconds, audio::Channel::Effects);
+            audio::advanced_kit::notePlay(kitId, object.position, object.soundHandle);
+        }
     }
 }
 
@@ -3037,6 +3179,8 @@ void SpellVisualSystem::cancelAllPrecastVisuals() {
     // 0x007fec00: the cast's precast kits' effects go (0x00744bd0), a mount
     // transition's handing its unit over, which is then set to the
     // server's mount.
+    for (const HeldKitSound& held : heldKitSounds_) audio::AudioEngine::instance().stopSound(held.handle);
+    heldKitSounds_.clear();
     for (size_t i = 0; i < mountTransitions_.size();) {
         if (mountTransitions_[i].precast)
             endMountTransition(i, true);
@@ -3073,6 +3217,8 @@ void SpellVisualSystem::reset() {
         for (AuraKit& aura : unit.auras) hideAuraKit(aura);
     }
     unitAuraKits_.clear();
+    for (const HeldKitSound& held : heldKitSounds_) audio::AudioEngine::instance().stopSound(held.handle);
+    heldKitSounds_.clear();
     riderPoses_.clear();
     chains_.clear();
     if (CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr) {

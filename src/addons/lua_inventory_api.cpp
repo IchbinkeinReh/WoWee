@@ -7,6 +7,9 @@
 #include "addons/lua_engine.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/equip_slot_fit.hpp"
+#include "game/known_currencies.hpp"
+#include "game/currency_categories.hpp"
+#include "game/update_field_table.hpp"
 #include "game/game_utils.hpp"
 #include "game/stationery.hpp"
 #include "game/auction_filters.hpp"
@@ -302,37 +305,67 @@ static int lua_SpellCanTargetItem(lua_State* L) {
 /// GetBuybackItemInfo(index) → name, texture, price, quantity, numAvailable,
 /// isUsable. Oldest first, as WoW numbers it: the most recent sale is at
 /// GetNumBuybackItems(), which is the index merchantframe.lua reads for the
-/// "buy back the last thing you sold" slot on the merchant tab.
+/// "buy back the last thing you sold" slot on the merchant tab. The client
+/// gets that order by sorting the ring slots by their own timestamp fields
+/// (0x00584bb0), which is what reconcileBuybackSlots now does to the mirror.
 static int lua_GetBuybackItemInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || index < 1) { return luaReturnNil(L); }
-    const auto& items = gh->getBuybackItems();
-    if (index > static_cast<int>(items.size())) { return luaReturnNil(L); }
-    const auto& bi = items[index - 1];
+    if (!gh) { return luaReturnNil(L); }
+    const auto* row = index < 1 ? nullptr : gh->buybackRowAt(static_cast<uint32_t>(index - 1));
+    if (!row) {
+        // Out of range answers, rather than returning nil: nil, nil, 0, 1, 0,
+        // true is what 0x00585070's failure tail pushes - no name, no icon,
+        // nothing to pay, one of them, none in stock, usable.  merchantframe.lua
+        // only asks for rows it counted, so this is what a row number that went
+        // stale leaves in the button; clicking it sends nothing, because
+        // BuybackItem (0x005855c0) looks the row up in the same list and sends
+        // no packet when it finds no ring slot there.
+        lua_pushnil(L);
+        lua_pushnil(L);
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, 1);
+        lua_pushnumber(L, 0);
+        lua_pushboolean(L, 1);
+        return 6;
+    }
+    const auto& bi = *row;
 
     lua_pushstring(L, bi.item.name.c_str());
     std::string iconPath;
     if (bi.item.displayInfoId != 0) iconPath = gh->getItemIconPath(bi.item.displayInfoId);
     if (!iconPath.empty()) lua_pushstring(L, iconPath.c_str());
     else lua_pushnil(L);
-    // What it costs to take back is what it sold for, times the stack.
-    lua_pushnumber(L, static_cast<double>(bi.item.sellPrice) * bi.count);
+    // The realm's price for that ring slot, which is the number the client
+    // shows: 0x00584b00 reads PLAYER_FIELD_BUYBACK_PRICE_1 + (slot - 74) and
+    // 0x00585070 pushes that, never the item record's sell price.  What the
+    // sale was worth is only what a layout naming no such field has to show -
+    // the client would have no row at all there, a zero price keeping the ring
+    // slot out of its list.
+    const uint32_t fieldPrice = gh->buybackFieldPrice(bi.wireSlot);
+    lua_pushnumber(L, fieldPrice ? static_cast<double>(fieldPrice)
+                                 : static_cast<double>(bi.item.sellPrice) * bi.count);
     lua_pushnumber(L, bi.count);
-    lua_pushnumber(L, 1);
+    // numAvailable: the client pushes a hard zero (0x00585070). A buyback row
+    // is not the merchant's stock, so there is no stock figure for it.
+    lua_pushnumber(L, 0);
     // isUsable, as for a merchant's own items (0x00585070 asks 0x006dc3f0).
     const auto* binfo = gh->getItemInfo(bi.item.itemId);
     lua_pushboolean(L, !binfo || gh->judgeItemRequirements(*binfo).usable());
     return 6;
 }
 
+/// GetBuybackItemLink(index) - the same row list, and the client resolves the
+/// row to its ring slot exactly as GetBuybackItemInfo does (0x005852c0 reads
+/// the published list, then the item standing in that slot of the player's
+/// store), so an index past the rows answers nothing there rather than a link.
 static int lua_GetBuybackItemLink(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) { return luaReturnNil(L); }
-    const auto& items = gh->getBuybackItems();
-    if (index > static_cast<int>(items.size())) { return luaReturnNil(L); }
-    const auto& bi = items[index - 1];
+    const auto* row = gh->buybackRowAt(static_cast<uint32_t>(index - 1));
+    if (!row) { return luaReturnNil(L); }
+    const auto& bi = *row;
     const int q = static_cast<int>(bi.item.quality);
     const std::string link = game::itemChatLink(bi.item.itemId, static_cast<uint32_t>(q), bi.item.name);
     lua_pushstring(L, link.c_str());
@@ -1002,14 +1035,35 @@ static int lua_GetContainerItemPurchaseItem(lua_State* L) {
 // ---- Currency tab (Blizzard_TokenUI) ----
 //
 // In 3.3.5a a currency is a CurrencyTypes.dbc row pointing at an item, and the
-// amount held is that item's stack count in the bags. There is no separate
-// currency store to read, which is why this is assembled here rather than
-// tracked in the handler.
+// amount held is that item counted among what the character carries - which is how
+// the client works it out too, apart from the two it stops and takes from the
+// player object instead (see kArenaPointsItem below, for what 0x005b0680 and
+// 0x005b0a90 compare before they count anything). There is no separate store of
+// amounts to read, which is why this is assembled here rather than tracked in the
+// handler.
 //
-// Only currencies the player actually holds are listed. The real client lists
-// every one ever earned, from PLAYER_FIELD_KNOWN_CURRENCIES, which is not
-// parsed here - showing what is held is the subset that can be stated
-// truthfully, and the tab was completely empty before.
+// The interface also asks which of those currencies the character chose to watch,
+// and takes back a name, an amount, an extra type, an icon and an item id for each
+// one it can place beside the bags. Both halves of that are here: the choice is
+// stored as the pair of masks the client stores it as, and read back in the order
+// the client walks the DBC in.
+//
+// What the realm sends is which currencies the character has met, as a pair
+// of bitmasks in PLAYER_FIELD_KNOWN_CURRENCIES, and that is what decides which
+// rows the tab draws: a currency once earned keeps its row at a count of zero
+// after it has been spent down, and one never earned has no row even if its item
+// happens to be sitting in the bags. A layout or a realm that has never named
+// that pair leaves the held currencies as the only answer that can be given, and
+// that fallback is what the tab had before - it beat an empty tab, not the pair.
+//
+// The rows are not a flat list: they are filed under categories (CurrencyCategory
+// .dbc), and the client's list is a walk of those categories in its store's own
+// order - a header for each one some known currency reaches, then that category's
+// rows sorted by name, with the last category reserved for the currencies marked
+// unused. The order and the two membership rules are in currency_categories.hpp;
+// what is kept here is the state that walk reads - which categories are collapsed,
+// and which currencies are marked unused - neither of which the client keeps any
+// more persistently than its own store does.
 namespace {
 /// The guild bank item sitting in a tab and slot, or nullptr for an empty one.
 ///
@@ -1040,36 +1094,215 @@ struct CurrencyRow {
     std::string name;
     uint32_t    itemId = 0;
     uint32_t    currencyId = 0;
+    // A header row - the category's own name, no item behind it, and the only row
+    // whose expanded flag means anything: 0x005b0030 writes the store's flag into
+    // the header it emits and leaves every row's at zero, which is why
+    // GetCurrencyListInfo answers false for isExpanded below the headers and
+    // ExpandCurrencyList (0x005afcb0) refuses to touch a row that is not one.
+    bool        isHeader = false;
+    bool        expanded = false;
+    // A header's own category, which is what the collapsed set is keyed by. A row
+    // carries the category its record names, and nothing asks: the header above it
+    // is what the interface knows the group by.
+    uint32_t    categoryId = 0;
     uint32_t    count = 0;
+    // 0 for an ordinary currency, 1 for arena points, 2 for honor points - the
+    // third of what GetBackpackCurrencyInfo returns and the seventh of what
+    // GetCurrencyListInfo returns, and the reason TokenFrame draws those two rows
+    // with the PvP art instead of the item's (blizzard_tokenui.lua:183-195).
+    uint32_t    extraType = 0;
     std::string icon;
+    // Whether there is an item entry behind the row at all. The client's row
+    // comparator (0x005aff10) resolves both rows' names out of their items first
+    // and sends a row it cannot resolve last, rather than sorting it by a name it
+    // would have to invent.
+    bool        unresolved = false;
 };
+
+/// The two currencies this client does not count out of the bags.
+///
+/// Both bindings stop and ask the player object for these two item ids before they
+/// count anything: 43339 is answered from PLAYER_FIELD_ARENA_CURRENCY and marked
+/// 1, and 43340 from PLAYER_FIELD_HONOR_CURRENCY and marked 2 (0x005b0680 and
+/// 0x005b0a90 each compare the row's item against those two entries, and each
+/// reads the field at blob +0x11a8 / +0x11a4 - the pair the currency watchers were
+/// built on). Everything else is counted.
+constexpr uint32_t kArenaPointsItem = 43339;   // 0xa92b
+constexpr uint32_t kHonorPointsItem = 43340;   // 0xa92c
 
 uint32_t countItemInBags(game::GameHandler* gh, uint32_t itemId) {
     return gh->getInventory().countItem(itemId);
 }
 
+/// A row's amount and its extra currency type.
+///
+/// Counting here adds up every stack of the item; the client stops at the first
+/// instance it finds and reads that stack alone. The two only part company if a
+/// realm splits one currency across stacks. A layout that names no PvP counter
+/// falls back to the item, which is the only figure left.
+std::pair<uint32_t, uint32_t> currencyAmount(game::GameHandler* gh, uint32_t itemId) {
+    const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    if (itemId == kArenaPointsItem) {
+        const uint16_t idx = fieldIndex(game::UF::PLAYER_FIELD_ARENA_CURRENCY);
+        return {(player && idx != 0xFFFF) ? player->getField(idx)
+                                          : countItemInBags(gh, itemId), 1};
+    }
+    if (itemId == kHonorPointsItem) {
+        const uint16_t idx = fieldIndex(game::UF::PLAYER_FIELD_HONOR_CURRENCY);
+        return {(player && idx != 0xFFFF) ? player->getField(idx)
+                                          : countItemInBags(gh, itemId), 2};
+    }
+    return {countItemInBags(gh, itemId), 0};
+}
+
+/// The realm's known-currency pair, when it has named one.
+///
+/// False means there is no mask to trust - either the layout names no such field
+/// or the player's block has never carried it - which is what keeps the currencies
+/// held as the answer instead of an empty tab.
+bool knownCurrencyPair(game::GameHandler* gh, uint32_t& low, uint32_t& high) {
+    low = high = 0;
+    const uint16_t idx = fieldIndex(game::UF::PLAYER_FIELD_KNOWN_CURRENCIES);
+    if (idx == 0xFFFF) return false;
+    const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    if (!player || !player->hasField(idx)) return false;
+    low  = player->getField(idx);
+    // The pair's other half is the next dword, which is how the client reads it
+    // as well (blob +0x790 then +0x794).
+    high = player->getField(static_cast<uint16_t>(idx + 1));
+    return true;
+}
+
+/// The currencies the character has asked to see beside its bags.
+///
+/// The client keeps these as a second pair of masks over the same ids
+/// (0x005b0590 sets and clears one bit) and writes it through its settings store,
+/// so the choice survives a session there; here it lives for the session. The
+/// interface counts these itself - GetNumWatchedTokens is a Lua helper counting
+/// what GetBackpackCurrencyInfo answers, and MAX_WATCHED_TOKENS is its cap, three
+/// in this interface - so nothing here enforces a limit the client does not.
+game::CurrencyWatch& currencyWatched() {
+    static game::CurrencyWatch watched;
+    return watched;
+}
+
+/// The currencies the character has marked as not wanting to see.
+///
+/// The third pair of masks over the same ids: 0x005b0440 sets or clears one bit of
+/// DAT_00bd09f4/0x00bd09f8 (+0x30) for the row's currency, and the client writes it
+/// through its settings store (currencyTokensUnused1/2), so the choice outlives the
+/// session there and not here. Marking a currency is not deleting it: it moves the
+/// row out of the category it is filed under and into the last one, which is the
+/// bucket the client reserves for exactly that flag (currency_categories.hpp), and
+/// GetCurrencyListInfo reads the bit back as its fourth answer.
+game::CurrencyWatch& currencyUnusedSet() {
+    static game::CurrencyWatch unused;
+    return unused;
+}
+
+/// Which categories the character has collapsed.
+///
+/// Expanded is the starting state - the client's store loader initialises the flag
+/// to 1 for every category (0x005afd90) - and ExpandCurrencyList is what changes it
+/// (0x005afcb0 writes the store's fourth dword, and only for a header row). Like
+/// the watched pair it is kept for the session here: the client's flag lives in the
+/// store and is reset by the same loader on the next login, so this matches it.
+std::set<uint32_t>& currencyCollapsed() {
+    static std::set<uint32_t> collapsed;
+    return collapsed;
+}
+
 // Rebuilt per call rather than cached: the tab is opened rarely and the counts
 // change with every loot, so a cache here would be one more thing to
-// invalidate.
+// invalidate. The client works the same way - 0x005b0030 fills its row store from
+// scratch on every change that could move a row, which is what the raises added at
+// those change sites announce.
 std::vector<CurrencyRow> buildCurrencyList(lua_State* L) {
     std::vector<CurrencyRow> rows;
     auto* gh = getGameHandler(L);
     if (!gh) return rows;
-    for (const auto& c : gh->getCurrencyTypes()) {
-        const uint32_t count = countItemInBags(gh, c.itemId);
-        if (count == 0) continue;
-        CurrencyRow r;
-        r.currencyId = c.id;
-        r.itemId     = c.itemId;
-        r.count      = count;
-        if (const auto* info = gh->getItemInfo(c.itemId)) r.name = info->name;
-        if (r.name.empty()) r.name = "Item #" + std::to_string(c.itemId);
-        rows.push_back(std::move(r));
+
+    uint32_t knownLow = 0, knownHigh = 0;
+    const bool named = knownCurrencyPair(gh, knownLow, knownHigh);
+    const game::CurrencyWatch& unused = currencyUnusedSet();
+    const auto& currencies = gh->getCurrencyTypes();
+    const auto& categories = gh->getCurrencyCategories();
+
+    // Whether the realm counts this currency as one the character has met. Where no
+    // pair is named at all, the item being carried is the only answer left to give.
+    auto knownHere = [&](const game::GameHandler::CurrencyType& c) {
+        return named ? game::currencyIsKnown(knownLow, knownHigh, c.id)
+                     : currencyAmount(gh, c.itemId).first != 0;
+    };
+
+    // Category by category, in the store's order (0x005b0030). Two things the flat
+    // list could not say: a currency whose category names no category is reached by
+    // nothing, so it has no row at all; and a category no known currency reaches
+    // gets no header, which is the same question 0x005afe30 asks before a header is
+    // emitted.
+    for (size_t ci = 0; ci < categories.size(); ++ci) {
+        const auto& cat = categories[ci];
+        const bool last = ci + 1 == categories.size();
+        const bool expanded = currencyCollapsed().count(cat.id) == 0;
+
+        bool drawn = false;
+        for (const auto& c : currencies) {
+            if (game::categoryIsDrawn(c.categoryId == cat.id, knownHere(c), last, unused.has(c.id))) {
+                drawn = true;
+                break;
+            }
+        }
+        if (!drawn) continue;
+
+        rows.push_back(CurrencyRow{.name = cat.name,
+                                   .isHeader = true,
+                                   .expanded = expanded,
+                                   .categoryId = cat.id});
+        // The header goes out either way; the rows under it only while the flag
+        // says open. A collapsed category keeps its heading and shows nothing below.
+        if (!expanded) continue;
+
+        std::vector<CurrencyRow> group;
+        for (const auto& c : currencies) {
+            const auto [count, extraType] = currencyAmount(gh, c.itemId);
+            const bool here = named ? game::currencyIsKnown(knownLow, knownHigh, c.id)
+                                    : count != 0;
+            if (!here) continue;
+            if (!game::currencyBelongsHere(last, c.categoryId, cat.id, unused.has(c.id))) continue;
+
+            CurrencyRow r;
+            r.currencyId = c.id;
+            r.itemId     = c.itemId;
+            r.categoryId = c.categoryId;
+            r.count      = count;
+            r.extraType  = extraType;
+            // The name is the item's own, with no stand-in behind it: the client's
+            // builder stores the localized name pointer itself (0x004fd200 hands
+            // back obj + 0x1f4 plus the locale index, falling back to the enUS
+            // slot), so a row whose item is missing or nameless carries a null name
+            // and GetCurrencyListInfo answers nil for it. Inventing "Item #12345"
+            // kept such a row in the list where the client shows an empty one.
+            if (const auto* info = gh->getItemInfo(c.itemId)) r.name = info->name;
+            else r.unresolved = true;
+            group.push_back(std::move(r));
+        }
+        std::sort(group.begin(), group.end(), [](const CurrencyRow& a, const CurrencyRow& b) {
+            // 0x005aff10 resolves the name of each row out of the item behind it
+            // and sends a row it cannot - no entry at all, or an entry whose name
+            // slot is empty - to the end. The comparison it then makes is the
+            // client's locale collation (0x0076ec80), and a byte compare here gives
+            // the same order for names that differ in their first letters. Sorting
+            // happens inside the category, after the header, which is what the
+            // client's qsort does too.
+            const bool aLast = a.unresolved || a.name.empty();
+            const bool bLast = b.unresolved || b.name.empty();
+            if (aLast != bLast) return !aLast;
+            return a.name < b.name;
+        });
+        rows.insert(rows.end(),
+                    std::make_move_iterator(group.begin()),
+                    std::make_move_iterator(group.end()));
     }
-    std::sort(rows.begin(), rows.end(), [](const CurrencyRow& a, const CurrencyRow& b) {
-        if (a.name != b.name) return a.name < b.name;
-        return a.currencyId < b.currencyId;   // a total order, not just a tie-break
-    });
     return rows;
 }
 
@@ -3197,9 +3430,10 @@ static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
 
 /// GetInventoryItemCount(unit, slot) → how many are in that equipped slot.
 ///
-/// Stackable equipped things - ammo, thrown weapons - and the bank window's
-/// own bag buttons, which print the count on the button face. Answering
-/// nothing left every one of those blank.
+/// Stackable equipped things - thrown weapons - and the bank window's own bag
+/// buttons, which print the count on the button face. Answering nothing left
+/// every one of those blank. The ammunition is counted differently; see the
+/// slot 0 branch below.
 static int lua_GetInventoryItemCount(lua_State* L) {
     auto* gh = getGameHandler(L);
     const char* uid = luaL_optstring(L, 1, "player");
@@ -3212,6 +3446,27 @@ static int lua_GetInventoryItemCount(lua_State* L) {
     const int slotId = static_cast<int>(luaL_optnumber(L, 2, 0));
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
+    // Slot 0 is the ammunition, and its number is not a stack sitting in a slot.
+    //
+    // 0x005e7c00 reads the slot argument and hands back the number **less one**,
+    // which is what makes INVSLOT_AMMO = 0 arrive as the client's own index -1 -
+    // the one index its range test waves through as valid, and the one every
+    // GetInventoryItem* binding answers out of PLAYER_AMMO_ID instead of out of
+    // the equipment array (which has no ammo slot in this layout at all).  Here
+    // 0x005e9e40 takes that field's entry to 0x00754d00, whose accumulator
+    // (0x00754560) adds each instance's stack count as the bag walk at
+    // 0x007546f0 hands it items - the mask its caller forces on that walk is
+    // 0x247, and 0x00753a50 reads it as the equipment, the four worn bags and
+    // what they and the backpack hold, but never the bank's 0x8.  So the number
+    // printed on the ammo square is how much of the loaded entry is still
+    // carried to be consumed, and Inventory::countCarried is that walk.  Nothing
+    // loaded counts as nothing carried, which is what the client answers for a
+    // unit it is not the local player.
+    if (slotId == 0) {
+        const uint32_t entry = (gh && uidStr == "player") ? gh->getAmmoId() : 0u;
+        lua_pushnumber(L, entry ? gh->getInventory().countCarried(entry) : 0u);
+        return 1;
+    }
     // Not 1..19: the bank is addressed through this too - bankframe.lua asks
     // GetInventoryItemCount("player", BankButtonIDToInvSlotID(id)) for every
     // one of its twenty-eight slots, and those ids start at forty.
@@ -3271,6 +3526,23 @@ static int lua_GetInventoryItemLink(lua_State* L) {
     if (!gh) { return luaReturnNil(L); }
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
+    // Slot 0 again, this time through 0x005ea270: the loaded entry goes to the
+    // item record for the **entry** (0x0067ca30 asked with no guid), and the link
+    // builder it then calls - 0x0061e360(entry, record+0x14, 0, 0, 0) - is handed
+    // no guid either.  So the ammo square's link names an item the character is
+    // not holding as a particular instance, which is what a link the sheet
+    // rebuilds from a field has to look like, and it is nil when the records have
+    // never seen the entry.
+    if (slotId == 0) {
+        const uint32_t ammo = uidStr == "player" ? gh->getAmmoId() : 0u;
+        if (ammo == 0) return luaReturnNil(L);
+        gh->ensureItemInfo(ammo);
+        const auto* info = gh->getItemInfo(ammo);
+        if (!info) return luaReturnNil(L);
+        const uint32_t qi = info->quality < 8 ? info->quality : 1u;
+        lua_pushstring(L, game::itemChatLink(ammo, qi, info->name).c_str());
+        return 1;
+    }
     uint32_t itemId = 0;
     std::string name;
     uint32_t q = 1;
@@ -3311,6 +3583,19 @@ static int lua_GetInventoryItemID(lua_State* L) {
         const uint32_t entry = inspectedItemEntry(gh, uidStr, slotId);
         if (!entry) { return luaReturnNil(L); }
         lua_pushnumber(L, entry);
+        return 1;
+    }
+
+    // Slot 0 of the local player is the ammunition, and 0x005ea3e0 answers it
+    // with nothing more than the field: internal slot -1 (see the note at
+    // lua_GetInventoryItemCount) goes to 0x005e8300 - the blob's PLAYER_AMMO_ID
+    // dword - and the entry it holds is the answer, with no item query in front
+    // of it and no record behind it.  Zero in the field is nil, which is how the
+    // sheet reads an empty square.
+    if (slotId == 0) {
+        const uint32_t ammo = gh->getAmmoId();
+        if (ammo == 0) { return luaReturnNil(L); }
+        lua_pushnumber(L, ammo);
         return 1;
     }
 
@@ -3374,9 +3659,31 @@ static int lua_GetInventoryItemTexture(lua_State* L) {
     // with GetInventoryItemTexture("player", BankButtonIDToInvSlotID(id)), and
     // those ids land at forty and up - so a bound of NUM_SLOTS answered nil for
     // every one and the bank read as empty while bankSlots_ held the items.
-    if (!gh || !inventorySlotItem(gh->getInventory(), slotId)) { return luaReturnNil(L); }
+    if (!gh) { return luaReturnNil(L); }
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
+    // Slot 0 is the ammunition, and 0x005e9bc0 needs three things before it
+    // answers with an icon: the field non-zero, the entry **carried** non-zero -
+    // the same 0x00754d00 walk the count binding does, so a hunter who has run
+    // out of arrows gets a blank square even with the entry still loaded - and a
+    // record for the entry, whose icon is then formatted under the icon prefix.
+    // No record answers nil, which is also how PaperDollItemSlotButton_Update
+    // reads "no item"; an unresolved icon texture falls back to the question mark
+    // the rest of this family uses, because the client's own tail still returns a
+    // string there and the square counts as holding something either way.
+    if (slotId == 0) {
+        const uint32_t ammo = uidStr == "player" ? gh->getAmmoId() : 0u;
+        if (ammo == 0 || gh->getInventory().countCarried(ammo) == 0) return luaReturnNil(L);
+        gh->ensureItemInfo(ammo);
+        const auto* info = gh->getItemInfo(ammo);
+        if (!info) return luaReturnNil(L);
+        const std::string path = info->displayInfoId ? gh->getItemIconPath(info->displayInfoId)
+                                                     : std::string();
+        lua_pushstring(L, path.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark"
+                                       : path.c_str());
+        return 1;
+    }
+    if (!inventorySlotItem(gh->getInventory(), slotId)) { return luaReturnNil(L); }
     if (uidStr != "player") {
         const uint32_t entry = inspectedItemEntry(gh, uidStr, slotId);
         const auto* info = entry ? gh->getItemInfo(entry) : nullptr;
@@ -4230,37 +4537,179 @@ void registerInventoryLuaAPI(lua_State* L) {
             const auto rows = buildCurrencyList(L);
             if (idx < 1 || idx > static_cast<int>(rows.size())) return luaReturnNil(L);
             const auto& r = rows[static_cast<size_t>(idx) - 1];
-            lua_pushstring(L, r.name.c_str());   // 1: name
-            lua_pushboolean(L, 0);               // 2: isHeader - the list is flat
-            lua_pushboolean(L, 0);               // 3: isExpanded
-            lua_pushboolean(L, 0);               // 4: isUnused
-            lua_pushboolean(L, 0);               // 5: isWatched
+            // 1: name. The row carries the item's name (or the category's), and the
+            // client stores that name as a pointer which is null when there is
+            // none - so an entry with no name and a category with an empty column
+            // both answer nil, and the interface draws the row with no text.
+            if (r.name.empty()) lua_pushnil(L);
+            else lua_pushstring(L, r.name.c_str());   // 1: name
+            lua_pushboolean(L, r.isHeader ? 1 : 0);               // 2: isHeader
+            // A header answers its category's flag; a row answers false, because
+            // the client's builder writes the expanded flag into the header alone
+            // and leaves every row's dword at zero (0x005b0030).
+            lua_pushboolean(L, r.expanded ? 1 : 0);               // 3: isExpanded
+            // 0x005b04f0 asks two different questions depending on the row. For a
+            // header it compares the row's category against the last category in
+            // the store, so a header is "unused" exactly when it is the bucket that
+            // flag defines. For a row it reads the row's own bit out of the unused
+            // pair, which is the pair SetCurrencyUnused writes.
+            const bool unusedBucket =
+                r.isHeader && gh && !gh->getCurrencyCategories().empty() &&
+                gh->getCurrencyCategories().back().id == r.categoryId;
+            lua_pushboolean(L, (unusedBucket ||
+                                (!r.isHeader && currencyUnusedSet().has(r.currencyId))) ? 1 : 0);  // 4: isUnused
+            // This is the flag the token window's "Show in your bag" tick reads
+            // back, so answering false left the box unticked however many times
+            // it was clicked - and blizzard_tokenui.lua keeps its own count of
+            // what is watched (GetNumWatchedTokens) to refuse a fourth. The client
+            // bakes it into the row when it builds the list (row +0x14) rather than
+            // asking the mask here; the list is rebuilt whenever the mask changes,
+            // which is what makes the two answers the same.
+            lua_pushboolean(L, currencyWatched().has(r.currencyId) ? 1 : 0);  // 5: isWatched
             lua_pushnumber(L, r.count);          // 6: count
-            lua_pushnumber(L, 0);                // 7: extraCurrencyType
+            lua_pushnumber(L, r.extraType);      // 7: extraCurrencyType
             // A nil texture is an empty slot to the interface, and
             // TokenFrame_Update draws the row's icon from this - so every
             // currency was listed with a blank square beside its name. The
             // icon is the item's, which is where a currency's art lives.
-            const auto* info = gh ? gh->getItemInfo(r.itemId) : nullptr;
-            const std::string icon = (info && info->displayInfoId)
-                ? gh->getItemIconPath(info->displayInfoId) : std::string();
-            if (icon.empty()) lua_pushstring(L, "Interface\\Icons\\INV_Misc_QuestionMark");
-            else              lua_pushstring(L, icon.c_str());   // 8: icon
-            lua_pushnumber(L, r.itemId);         // 9: itemID
+            //
+            // A row with no item entry behind it at all answers nil, not a
+            // fallback: 0x005b0680 asks for the item's handle before it builds the
+            // path, and when that lookup fails it pushes nil and then the item id.
+            // A header is such a row - it carries no item - which is why the
+            // interface draws a heading with no art beside it. The question-mark
+            // path stays for an item that exists but names no icon, which is where
+            // the client's own path-building ends up.
+            const auto* info = (!r.unresolved && r.itemId && gh)
+                ? gh->getItemInfo(r.itemId) : nullptr;
+            if (!info) lua_pushnil(L);
+            else {
+                const std::string icon = info->displayInfoId
+                    ? gh->getItemIconPath(info->displayInfoId) : std::string();
+                if (icon.empty()) lua_pushstring(L, "Interface\\Icons\\INV_Misc_QuestionMark");
+                else              lua_pushstring(L, icon.c_str());
+            }                                                        // 8: icon
+            lua_pushnumber(L, r.itemId);         // 9: itemID (0 for a header)
             return 9;
         }},
-                // GetBackpackCurrencyInfo(index) → name, count, icon, currencyTypesID
+                // GetBackpackCurrencyInfo(index) → name, count, extraCurrencyType,
+                //   icon, itemID
                 //
-                // Nothing is pinned to the backpack: that is a saved choice the
-                // client does not keep, and answering with the whole list would
-                // put every currency under the bags.
-                {"GetBackpackCurrencyInfo", [](lua_State* L) -> int { return luaReturnNil(L); }},
-                // The three that change how the list is displayed. Each is a
-                // saved preference with nowhere to be saved, so they are
-                // accepted and forgotten rather than left to raise.
-                {"ExpandCurrencyList",  [](lua_State* L) -> int { (void)L; return 0; }},
-                {"SetCurrencyBackpack", [](lua_State* L) -> int { (void)L; return 0; }},
-                {"SetCurrencyUnused",   [](lua_State* L) -> int { (void)L; return 0; }},
+                // The interface calls this once per slot up to MAX_WATCHED_TOKENS
+                // (three in this one) and drops a slot whose name comes back nil,
+                // which is the whole of how the row of currencies beside the bags
+                // gets filled. Answering nil for every slot left that row empty
+                // however many currencies were picked out in the token window.
+                //
+                // The client takes the index-th row that is both known and watched
+                // out of CurrencyTypes.dbc in the DBC's own order (0x005b0340) - not
+                // in the order the currencies were chosen - and then reads the
+                // amount, the PvP marker and the icon (0x005b0a90), including the
+                // two counters it takes from the player object instead of the bags.
+                // Its name comes back nil only when the item behind the row has no
+                // name string (see the +0x1f4 test below), with the other four still
+                // answered; when there is no item entry at all nothing is answered
+                // for the row, and all five are nil.
+                {"GetBackpackCurrencyInfo", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const int asked = static_cast<int>(luaL_optnumber(L, 1, 0));
+            auto answerNil = [](lua_State* L) {
+                for (int i = 0; i < 5; ++i) lua_pushnil(L);
+                return 5;
+            };
+            if (!gh || asked < 1) return answerNil(L);
+
+            uint32_t knownLow = 0, knownHigh = 0;
+            const bool named = knownCurrencyPair(gh, knownLow, knownHigh);
+            const game::CurrencyWatch& watch = currencyWatched();
+            for (int seen = 0; const auto& c : gh->getCurrencyTypes()) {
+                if (named && !game::currencyIsKnown(knownLow, knownHigh, c.id)) continue;
+                if (!watch.has(c.id)) continue;
+                if (++seen != asked) continue;
+
+                const auto* info = gh->getItemInfo(c.itemId);
+                if (!info) return answerNil(L);
+                const auto [shown, extraType] = currencyAmount(gh, c.itemId);
+                // The name is not gated on whether the character is holding the
+                // item. The client asks for the item's handle and then tests the
+                // dword at handle +0x1f4, which is the first slot of that item's
+                // localized name array: 0x004fd200 returns obj + 0x1f4 + index*4
+                // and falls back to +0x1f4 when the asked-for slot is null or
+                // empty. So the name is nil only for an item with no name string
+                // at all. A watched currency spent down therefore keeps its name
+                // beside the bags with a zero beside it, which is what gating on
+                // the count undid - the slot drew a number with nothing next to it,
+                // and the two PvP counters never had one at all.
+                if (!info->name.empty()) lua_pushstring(L, info->name.c_str());
+                else                     lua_pushnil(L);
+                lua_pushnumber(L, shown);              // 2: count
+                lua_pushnumber(L, extraType);          // 3: extraCurrencyType
+                const std::string icon = info->displayInfoId
+                    ? gh->getItemIconPath(info->displayInfoId) : std::string();
+                if (icon.empty()) lua_pushstring(L, "Interface\\Icons\\INV_Misc_QuestionMark");
+                else              lua_pushstring(L, icon.c_str());   // 4: icon
+                lua_pushnumber(L, c.itemId);           // 5: itemID
+                return 5;
+            }
+            return answerNil(L);
+        }},
+                // The three that change how the list is displayed.
+                //
+                // The index here is a position in the visible list, not a currency
+                // id: blizzard_tokenui.lua:136 keeps the row's index as
+                // TokenFrame.selectedID and hands that over, and 0x005b0590 checks
+                // it against the visible row count, takes that row's currency id
+                // out, and flips that id's bit in the watched pair. The client hands
+                // the pair to its settings store, which is why the choice survives a
+                // session there; here it lasts as long as the client does.
+                {"SetCurrencyBackpack", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const bool on = lua_toboolean(L, 2) != 0;
+            if (!gh) return 0;
+            const auto rows = buildCurrencyList(L);
+            if (idx < 1 || idx > static_cast<int>(rows.size())) return 0;
+            currencyWatched().set(rows[static_cast<size_t>(idx) - 1].currencyId, on);
+            return 0;
+        }},
+                // Two that have nothing in this client for them to change. The list
+                // here is flat, so there is no category to expand and no category to
+                // hide behind the client's second pair of masks; both are accepted
+                // and dropped rather than left to raise an error in the interface.
+                // ExpandCurrencyList(index, expand) - the index is a row of the
+                // visible list, and 0x005afcb0 ignores it unless that row is a
+                // header: it looks the header's category up in the store by the id
+                // the header carries and writes the flag into that record. The
+                // default is open, which is what the store loader initialises (it
+                // puts 1 in the flag for every category), and a collapsed category
+                // keeps its header while its rows stop being walked.
+                {"ExpandCurrencyList", [](lua_State* L) -> int {
+            const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const bool on = luaL_optnumber(L, 2, 0) != 0;
+            const auto rows = buildCurrencyList(L);
+            if (idx < 1 || idx > static_cast<int>(rows.size())) return 0;
+            const auto& r = rows[static_cast<size_t>(idx) - 1];
+            if (!r.isHeader) return 0;
+            auto& collapsed = currencyCollapsed();
+            if (on) collapsed.erase(r.categoryId);
+            else    collapsed.insert(r.categoryId);
+            return 0;
+        }},
+                // SetCurrencyUnused(index, unused) - a row, never a header, which
+                // is the same guard 0x005b0440 runs before it touches the mask. The
+                // bit is the row's currency in the third pair; marking a currency
+                // moves its row out of the category its record names and into the
+                // bucket, and unmarking it puts it back where it came from.
+                {"SetCurrencyUnused", [](lua_State* L) -> int {
+            const int idx = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const bool on = luaL_optnumber(L, 2, 0) != 0;
+            const auto rows = buildCurrencyList(L);
+            if (idx < 1 || idx > static_cast<int>(rows.size())) return 0;
+            const auto& r = rows[static_cast<size_t>(idx) - 1];
+            if (r.isHeader) return 0;
+            currencyUnusedSet().set(r.currencyId, on);
+            return 0;
+        }},
                 {"GetItemCount",      lua_GetItemCount},
                 {"GetItemFamily",     lua_GetItemFamily},
                 {"UseContainerItem",  lua_UseContainerItem},
@@ -4314,9 +4763,13 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // How many rows the buyback tab has. The merchant window walks
                 // this to build the tab, and without it the tab was empty even
                 // with items sitting in the buyback ring the client tracks.
+                // The rows, not the sale mirror: 0x005843f0 counts the list the
+                // other three bindings read from, and answers none unless a
+                // merchant is open.  merchantframe.lua iterates 1..this, so a
+                // row counted here is a row it draws.
                 {"GetNumBuybackItems", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, gh ? static_cast<lua_Number>(gh->getBuybackItems().size()) : 0);
+            lua_pushnumber(L, gh ? static_cast<lua_Number>(gh->buybackRowCount()) : 0);
             return 1;
         }},
                 {"GetInventoryItemID",      lua_GetInventoryItemID},

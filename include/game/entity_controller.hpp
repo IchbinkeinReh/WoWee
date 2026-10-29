@@ -250,6 +250,15 @@ private:
         /// ...and what it hits for, which the pet tab's damage and
         /// attack-power lines read.
         uint16_t attackPower, minDamage, maxDamage;
+        /// The rest of the family that tab registers for: the ranged damage
+        /// pair, consecutive like every run here, and the unit's own swing
+        /// times, which are two wide. Only the WotLK table places either, so
+        /// the guards around their uses are what keeps the other three layouts
+        /// from reading field zero.
+        uint16_t rangedDamage, attackTime;
+        /// ...and the ranged attack power, whose three-field run the pet sheet
+        /// waits on under UNIT_RANGED_ATTACK_POWER.
+        uint16_t rangedAttackPower;
         static UnitFieldIndices resolve();
     };
     struct PlayerFieldIndices {

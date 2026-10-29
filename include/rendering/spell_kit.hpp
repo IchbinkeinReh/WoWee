@@ -22,9 +22,12 @@ namespace wowee::rendering::spell_kit {
 
 /// The kinds 0x00745230 switches on (the request's +8), by who asks.
 enum class KitType : uint32_t {
-    PlayImpact = 0,  ///< SMSG_PLAY_SPELL_IMPACT's kit (0x00800610)
+    /// SMSG_PLAY_SPELL_VISUAL's kit on the unit (0x00800610). Its animation
+    /// holds the unit's cast loop while it plays (0x007224d0), and its kit
+    /// hangs no weapon effects.
+    Visual = 0,
     /// A cast kit (0x0080e1b0), a unit's impact kit (0x00801f10, 0x00700e20)
-    /// and SMSG_PLAY_SPELL_VISUAL's kit (0x008006c0).
+    /// and SMSG_PLAY_SPELL_IMPACT's kit (0x008006c0).
     Cast = 1,
     State = 2,       ///< an aura's StateKit (0x00724820)
     Area = 3,        ///< an area kit at a place (0x0080e1b0, 0x00700e20)
@@ -119,6 +122,31 @@ inline glm::mat4 worldKitModelMatrix(const glm::vec3& position, float facing, co
 constexpr uint32_t impactKitFor(bool onCaster, uint32_t impactKit, uint32_t casterImpactKit, uint32_t targetImpactKit) {
     const uint32_t kit = onCaster ? casterImpactKit : targetImpactKit;
     return kit != 0 ? kit : impactKit;
+}
+
+/// 0x00745230 plays a kit's SoundID (+0x3c) whatever kit of the spell it is -
+/// its flag 0x1 says whether that entry loops. The flag goes for a state kit,
+/// a precast kit and an area kit at a place; a one-shot kit (0, 1, 5, 6 and 8)
+/// has it cleared there, so a looping entry plays once like any other, and an
+/// area kit on a unit takes that branch rather than the one at a place.
+constexpr bool kitSoundLoops(KitType type, bool entryLoops, uint32_t renderInstanceId) {
+    if (!entryLoops) return false;
+    switch (type) {
+        case KitType::State:
+        case KitType::Precast: return true;
+        case KitType::Area:    return renderInstanceId == 0;
+        default:               return false;
+    }
+}
+
+/// Whose voice a kit's sound plays in. Where the kit has a model its effect
+/// takes the sound (0x006f9840) and the unit it hangs on gives its voice - the
+/// listener's own object or the active mover. Where the kit has none the unit
+/// plays it itself (0x0073b140 -> 0x006f7e40), and there only the active
+/// mover's own counts - a looping entry keeps the ordinary voice (0x00745230
+/// flag 0x1, which 0x006f7e40 reads for a priority only for the mover).
+constexpr bool kitSoundOwnVoice(bool kitHasModels, bool soundLoops, bool onListener, bool onMover) {
+    return kitHasModels ? (onListener || onMover) : (onMover && !soundLoops);
 }
 
 /// One-shot timing (0x00744870): when a model's Stand has run once it plays

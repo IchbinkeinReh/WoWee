@@ -11,7 +11,6 @@
 #include "game/cast_failure_error.hpp"
 #include "game/spell_unit_target.hpp"
 #include "game/handler_types.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "network/packet.hpp"
 #include <glm/glm.hpp>
 #include <array>
@@ -564,13 +563,6 @@ private:
 
     // --- Internal helpers ---
 
-    // Resolve the magic school for a spell (for audio playback).
-    // Returns MagicSchool from the spell name cache, defaulting to ARCANE.
-    audio::SpellSoundManager::MagicSchool resolveSpellSchool(uint32_t spellId);
-
-    // Play a spell cast sound via audioCoordinator, if available.
-    void playSpellCastSound(uint32_t spellId);
-
     // Resolve SpellVisualID from Spell.dbc cache for a given spellId.
     uint32_t resolveSpellVisualId(uint32_t spellId);
     // Resolve render-space position for a unit GUID (player or entity).
@@ -661,8 +653,14 @@ private:
     /// unless AttributesEx6 0x80000000.
     int32_t categoryCooldown(uint32_t spellId, bool pet) const;
     /// 0x0053bac0: the player's history changed - ACTIONBAR_UPDATE_COOLDOWN
-    /// (0x005a7cc0), then SPELL_UPDATE_COOLDOWN.
+    /// (0x005a7cc0), UPDATE_SHAPESHIFT_COOLDOWN for a character with forms,
+    /// then SPELL_UPDATE_COOLDOWN.
     void playerCooldownsChanged();
+    /// That, plus the display leg every cooldown write ends with: whosever
+    /// history moved decides which bar redraws its swirls - 0x005d6f10 fires
+    /// BAG_UPDATE_COOLDOWN for the player's, 0x005d3090 PET_BAR_UPDATE_COOLDOWN
+    /// for the pet's. The client fires one or the other, never both.
+    void cooldownHistoryChanged(bool forPet);
     /// SpellCategory.dbc's Flags (0x00ad478c), 0 for none.
     uint32_t spellCategoryFlags(uint32_t category) const;
     mutable std::unordered_map<uint32_t, uint32_t> spellCategoryFlags_;

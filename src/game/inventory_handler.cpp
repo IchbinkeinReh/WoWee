@@ -719,11 +719,54 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
     };
 
     // ---- Open container ----
-    table[Opcode::SMSG_OPEN_CONTAINER] = [](network::Packet& packet) {
-        if (packet.hasRemaining(8)) {
-            uint64_t containerGuid = packet.readUInt64();
-            LOG_DEBUG("SMSG_OPEN_CONTAINER: guid=0x", std::hex, containerGuid, std::dec);
+    //
+    // The realm names a container, never a slot, and 0x005d7110 is what turns
+    // that name into a window: if the guid is the local player's own it raises
+    // BAG_OPEN with 0, because the player object *is* the backpack's container;
+    // otherwise it walks the eleven containers the player carries and raises
+    // BAG_OPEN with that container's number for each one the guid matches.  The
+    // number is the interface's own - worn bags from one, the purchased bank bags
+    // straight after them, the same numbering fireBagUpdates below uses for
+    // BAG_UPDATE - and ContainerFrame_OnEvent answers it with `self:Show()` when
+    // it is the frame's own GetID.  That is how a bag the realm has just put on
+    // the character opens a window by itself, and how each bank bag opens with
+    // the bank.
+    //
+    // WoWee read the guid and logged it, so no window ever came from this
+    // packet: bags had to be asked for by hand, one click at a time, and a bag
+    // bought at a vendor stayed windowless until the bag key was pressed.  The
+    // counterpart notice, BAG_CLOSED, has been sent since the bag-swap fix -
+    // which made the gap worse than it looks, because a swap hides two windows
+    // and nothing here brings either back.
+    table[Opcode::SMSG_OPEN_CONTAINER] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(8)) return;
+        const uint64_t containerGuid = packet.readUInt64();
+        LOG_DEBUG("SMSG_OPEN_CONTAINER: guid=0x", std::hex, containerGuid, std::dec);
+
+        int bagId = -1;
+        if (containerGuid == owner_.getPlayerGuid()) {
+            bagId = 0;  // the player object is the backpack's container
+        } else {
+            for (int i = 0; i < game::Inventory::NUM_BAG_SLOTS; ++i) {
+                const uint64_t worn =
+                    owner_.equipSlotGuidsRef()[game::Inventory::FIRST_BAG_EQUIP_SLOT + i];
+                if (worn != 0 && worn == containerGuid) { bagId = i + 1; break; }
+            }
+            if (bagId < 0) {
+                for (int i = 0; i < effectiveBankBagSlots_; ++i) {
+                    const uint64_t bankBag = bankBagSlotGuids_[static_cast<size_t>(i)];
+                    if (bankBag != 0 && bankBag == containerGuid) {
+                        bagId = game::Inventory::NUM_BAG_SLOTS + 1 + i;
+                        break;
+                    }
+                }
+            }
         }
+        // A guid matching no container of ours asks for a window nothing here
+        // can number - a bag the client has not been told about yet, which the
+        // client itself leaves unopened.
+        if (bagId < 0) return;
+        if (auto& fire = owner_.addonEventCallbackRef()) fire("BAG_OPEN", {std::to_string(bagId)});
     };
 
     // ---- Sell / Buy / Inventory ----
@@ -1349,8 +1392,16 @@ void InventoryHandler::handleLootResponse(network::Packet& packet) {
         // closes with CloseLoot(autoLoot == 0) - so an absent argument
         // compares false and tells the server the window opened when it did
         // not.
+        // The argument is a number, not text: the client fires LOOT_OPENED
+        // (249) with "%d" and a 1 or a 0 (00580000.c:6466, :6710;
+        // 006e0000.c:2674), and LootFrame_OnEvent's `autoLoot == 0` compares it
+        // as one (lootframe.lua:15-21).
+        //
+        // LOOT_READY, which this used to add, is not a name this client has -
+        // 249 LOOT_OPENED, 250 LOOT_SLOT_CLEARED, 251 LOOT_SLOT_CHANGED and 252
+        // LOOT_CLOSED are the whole of its loot events, and the loot window
+        // registers exactly those four (lootframe.lua:6-9).
         owner_.addonEventCallbackRef()("LOOT_OPENED", {autoLoot_ ? "1" : "0"});
-        owner_.addonEventCallbackRef()("LOOT_READY", {});
     }
     if (currentLoot_.lootGuid == lastInteractedGoGuid) {
         lastInteractedGoGuid = 0;
@@ -1660,6 +1711,10 @@ void InventoryHandler::clearBuybackState() {
     buybackItems_.clear();
     pendingSellToBuyback_.clear();
     buybackSlotGuids_.fill(0);
+    // The ring's prices and timestamps go with it: they describe that ring, and
+    // the next character's block fills them in again from its own first update.
+    buybackPrices_.fill(0);
+    buybackTimestamps_.fill(0);
     pendingBuybackSlot_ = -1;
     pendingBuybackWireSlot_ = 0;
 }
@@ -1671,6 +1726,16 @@ void InventoryHandler::notifyBuybackChanged() {
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("MERCHANT_UPDATE", {});
     }
+}
+
+// Whether a mirror row is one of the interface's rows at all: its ring slot has
+// to be known, which is the server having said that slot holds the item.  The
+// original client tests that slot's price as well when it admits a row
+// (0x00584bb0); this does not, because the layouts naming no
+// PLAYER_FIELD_BUYBACK_PRICE_1 have no prices to test, and their sales are real
+// rows priced from the mirror instead.
+bool inBuybackRing(uint32_t wireSlot) {
+    return wireSlot >= kBuybackWireSlotStart && wireSlot < kBuybackWireSlotEnd;
 }
 
 void InventoryHandler::reconcileBuybackSlots() {
@@ -1701,6 +1766,45 @@ void InventoryHandler::reconcileBuybackSlots() {
         }
     }
 
+    // A ring slot the realm filled that this session never sold.  The client
+    // builds its rows out of the ring - the guid pairs, the prices and the
+    // timestamps - and never out of a memory of the sale, so it shows what a
+    // previous session sold: clearBuybackState drops the mirror on world entry
+    // and the realm's ring does not.  What stands behind such a guid is an item
+    // object the client already has, which is where the entry, the stack and the
+    // durability come from - the same table the tooltips answer from.
+    {
+        const auto& online = owner_.onlineItemsRef();
+        for (size_t i = 0; i < buybackSlotGuids_.size(); ++i) {
+            const uint64_t guid = buybackSlotGuids_[i];
+            if (guid == 0) continue;
+            const uint32_t wire = kBuybackWireSlotStart + static_cast<uint32_t>(i);
+            const bool taken = std::any_of(buybackItems_.begin(), buybackItems_.end(),
+                                           [guid, wire](const BuybackItem& row) {
+                return row.itemGuid == guid || row.wireSlot == wire;
+            });
+            if (taken) continue;
+            const auto found = online.find(guid);
+            if (found == online.end()) continue;   // the instance itself is not known yet
+            const auto& oi = found->second;
+            if (!owner_.getItemInfo(oi.entry)) {
+                // Nothing to name the row with.  Ask, and let the answer run
+                // this scan again (handleItemQueryResponse) - the client's row
+                // has no name either until its own query comes back, but it has
+                // asked long before the tab is drawn.
+                owner_.ensureItemInfo(oi.entry);
+                continue;
+            }
+            BuybackItem row;
+            row.itemGuid = guid;
+            row.wireSlot = wire;
+            row.count = oi.stackCount ? oi.stackCount : 1u;
+            row.item = buildItemDef(oi.entry, row.count, oi.curDurability, oi.maxDurability,
+                                    guid, oi.flags, oi.randomPropertyId, oi.suffixFactor);
+            buybackItems_.push_back(row);
+        }
+    }
+
     // A ring slot can only identify one entry. Remove any stale duplicate that
     // may remain after a replacement update.
     for (uint32_t wire = kBuybackWireSlotStart; wire < kBuybackWireSlotEnd; ++wire) {
@@ -1719,10 +1823,61 @@ void InventoryHandler::reconcileBuybackSlots() {
         }
     }
 
+    // Row order, as the client publishes it.  The row builder sorts the ring
+    // slots ascending by their timestamp field (see the members above), so the
+    // oldest sale is row 1 and the newest is the one merchantframe.lua's
+    // "sell your last sale" button reaches by asking for
+    // GetNumBuybackItems().  This mirror is appended in sale order, which
+    // matches for one continuous session - the point at which it did not was a
+    // reconnect, where the ring survives and the mirror does not.  Stable, so
+    // a realm that sent no timestamps keeps the order rows were appended in.
+    std::stable_sort(buybackItems_.begin(), buybackItems_.end(),
+                     [this](const BuybackItem& a, const BuybackItem& b) {
+        // A row whose ring slot is not known yet has nothing to sort on - and
+        // the client has no row for it at all - so it stays behind the real
+        // ones rather than drifting among them.
+        const bool aMapped = inBuybackRing(a.wireSlot), bMapped = inBuybackRing(b.wireSlot);
+        if (aMapped != bMapped) return aMapped;
+        if (!aMapped) return false;
+        return buybackTimestamps_[a.wireSlot - kBuybackWireSlotStart] <
+               buybackTimestamps_[b.wireSlot - kBuybackWireSlotStart];
+    });
+
     std::vector<std::pair<uint64_t, uint32_t>> after;
     after.reserve(buybackItems_.size());
     for (const auto& item : buybackItems_) after.emplace_back(item.itemGuid, item.wireSlot);
     if (after != before) notifyBuybackChanged();
+}
+
+uint32_t InventoryHandler::buybackFieldPrice(uint32_t wireSlot) const {
+    // 0x00584b00 answers 0 for an index past eleven; the same here, so a row
+    // that never had a ring slot reads as free rather than as someone else's
+    // price.
+    if (!inBuybackRing(wireSlot)) return 0u;
+    return buybackPrices_[wireSlot - kBuybackWireSlotStart];
+}
+
+uint32_t InventoryHandler::buybackRowCount() const {
+    // The merchant guid pair the client tests is simply "a merchant is open"
+    // (0x005843f0 reads it before its count; MerchantFrame.cpp's repair cost
+    // reads the same globals).  Nothing is drawing the tab otherwise.
+    if (!vendorWindowOpen_) return 0;
+    uint32_t rows = 0;
+    for (const auto& item : buybackItems_)
+        if (inBuybackRing(item.wireSlot)) ++rows;
+    return rows;
+}
+
+const InventoryHandler::BuybackItem* InventoryHandler::buybackRow(uint32_t row) const {
+    // The rows are the confirmed ones in publish order, which is the order
+    // reconcileBuybackSlots left the mirror in - so this walks the mirror and
+    // skips what never made it into the ring.
+    for (const auto& item : buybackItems_) {
+        if (!inBuybackRing(item.wireSlot)) continue;
+        if (row == 0) return &item;
+        --row;
+    }
+    return nullptr;
 }
 
 void InventoryHandler::buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, uint32_t count) {
@@ -1851,20 +2006,26 @@ void InventoryHandler::sellItemInBag(int bagIndex, int slotIndex) {
     }
 }
 
-void InventoryHandler::buyBackItem(uint32_t buybackSlot) {
+void InventoryHandler::buyBackItem(uint32_t row) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || currentVendorItems_.vendorGuid == 0) return;
-    if (buybackSlot >= buybackItems_.size()) return;
-    const uint32_t wireSlot = buybackItems_[buybackSlot].wireSlot;
-    if (wireSlot < kBuybackWireSlotStart || wireSlot >= kBuybackWireSlotEnd) {
-        LOG_WARNING("Buyback request rejected: row ", buybackSlot,
-                    " has invalid wire slot ", wireSlot);
+    // The row the interface numbered, not a slot in the mirror: 0x005855c0
+    // looks its slot up in the published list too, and sends the ring slot it
+    // found there - so a row that is not in the ring cannot be clicked here
+    // any more than it can be clicked there.
+    const BuybackItem* item = buybackRow(row);
+    if (!item) {
+        LOG_WARNING("Buyback request rejected: no row ", row);
         return;
     }
+    const uint32_t wireSlot = item->wireSlot;
     pendingBuyItemId_ = 0;
     pendingBuyItemSlot_ = 0;
     LOG_INFO("Buyback request: vendorGuid=0x", std::hex, currentVendorItems_.vendorGuid,
-             std::dec, " uiSlot=", buybackSlot, " wireSlot=", wireSlot);
-    pendingBuybackSlot_ = static_cast<int>(buybackSlot);
+             std::dec, " uiRow=", row, " wireSlot=", wireSlot);
+    // The row number, kept only as "a buyback is waiting" plus the log: both
+    // replies find the row by its wire slot, so a row number that moved under
+    // it - which the publish order can do - costs nothing.
+    pendingBuybackSlot_ = static_cast<int>(row);
     pendingBuybackWireSlot_ = wireSlot;
     // Use the expansion-agnostic packet builder so the opcode resolves from
     // the active expansion's JSON mapping rather than a hardcoded WotLK value.
@@ -1972,13 +2133,46 @@ bool InventoryHandler::equipWouldBindFromBag(int bagIndex, int slotIndex) const 
 // reads exactly that - and the destination is the server's own 0-based
 // equipment slot, which is what this client's EquipSlot enum counts in too.
 // The interface counts from one, so the caller takes the one off.
-void InventoryHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot) {
+void InventoryHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, bool confirmed) {
     if (itemGuid == 0) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // Refused above the equipment slots rather than sent: AzerothCore drops the
     // packet outright when the destination is not an equipment position, and a
     // dropped request is indistinguishable from one that was never built.
     if (equipSlot >= static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT)) return;
+
+    // Asked before the packet is built, so a bind-on-equip item named into a
+    // slot no longer binds itself without the player saying so. EquipItemByName
+    // (0x0051cdb0) reaches 0x006dff90 / AutoEquipItem, which holds the item's
+    // record and asks two things of it: that the bond type the record caches at
+    // +0x178 be 2 - bind when equipped - and that 0x006dc3f0 say it is not
+    // already bound. Then the request is parked in the client's queue of
+    // pending equips (DAT_00c9eb6c, 0x20 bytes an entry, at the first free
+    // index 0x006df850 hands out) and nothing goes on the wire; EQUIP_BIND_CONFIRM
+    // (0x10f) is fired with that index as its one argument, which is what
+    // FrameXML's uiparent.lua:590 turns into the EQUIP_BIND popup and hands back
+    // to EquipPendingItem / CancelPendingEquip - the client's own usage strings
+    // read "Usage: EquipPendingItem(index)", so the number is the queue index
+    // and never the slot. WoWee holds one pending equip, so its index is 0.
+    //
+    // The client gates the prompt on one more thing, 0x00708520, which says no
+    // for an item sitting in a container of its own rather than in the player's
+    // bags - a guild bank, a keyring. Nothing can name such an item here: the
+    // guid comes out of the carried-item search, which looks only in the
+    // backpack and the player's own bags.
+    if (!confirmed) {
+        const uint32_t entry = owner_.getItemEntryByGuid(itemGuid);
+        const auto* info = entry ? owner_.getItemInfo(entry) : nullptr;
+        if (info && info->bindType == 2 && !owner_.isItemSoulbound(itemGuid)) {
+            pendingSwap_ = PendingSwap{};   // only one move can be waiting
+            pendingEquip_ = PendingEquip{.active = true, .fromBag = false, .toSlot = true,
+                                         .wireSlot = equipSlot, .itemGuid = itemGuid};
+            if (owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("EQUIP_BIND_CONFIRM", {"0"});
+            return;
+        }
+    }
+
     const uint32_t wire = wireOpcode(Opcode::CMSG_AUTOEQUIP_ITEM_SLOT);
     if (wire == 0xFFFF) return;
     network::Packet pkt(static_cast<uint16_t>(wire));
@@ -2017,14 +2211,17 @@ void InventoryHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {
 
     const uint8_t wireSlot = static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + backpackIndex);
     if (!confirmed && slot.item.wouldBindOnEquip()) {
+        pendingSwap_ = PendingSwap{};   // only one move can be waiting
         pendingEquip_ = PendingEquip{.active = true, .fromBag = false, .bag = 0, .slot = backpackIndex, .wireSlot = wireSlot};
         // The auto-equip form of the prompt: right-clicking an item rather
         // than dropping it on a slot. FrameXML hides whichever of the two is
         // already up before showing the other, so firing the wrong one leaves
-        // both on screen.
+        // both on screen. The argument is the pending queue's index, as it is
+        // for EQUIP_BIND_CONFIRM - 0x006dfc40 fires 0x110 with 0x006df850's
+        // free entry, not with the slot - and one pending equip means one
+        // index, so it says 0.
         if (owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("AUTOEQUIP_BIND_CONFIRM",
-                                           {std::to_string(wireSlot)});
+            owner_.addonEventCallbackRef()("AUTOEQUIP_BIND_CONFIRM", {"0"});
         return;
     }
 
@@ -2042,11 +2239,12 @@ void InventoryHandler::autoEquipItemInBag(int bagIndex, int slotIndex, bool conf
         return;
 
     if (!confirmed && equipWouldBindFromBag(bagIndex, slotIndex)) {
+        pendingSwap_ = PendingSwap{};   // only one move can be waiting
         pendingEquip_ = PendingEquip{.active = true, .fromBag = true, .bag = bagIndex, .slot = slotIndex,
                                      .wireSlot = static_cast<uint8_t>(slotIndex)};
+        // The same queue-index argument as the backpack form above.
         if (owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("AUTOEQUIP_BIND_CONFIRM",
-                                           {std::to_string(slotIndex)});
+            owner_.addonEventCallbackRef()("AUTOEQUIP_BIND_CONFIRM", {"0"});
         return;
     }
 
@@ -2058,15 +2256,35 @@ void InventoryHandler::autoEquipItemInBag(int bagIndex, int slotIndex, bool conf
 }
 
 void InventoryHandler::equipPendingItem() {
+    const PendingSwap held = pendingSwap_;
+    pendingSwap_ = PendingSwap{};
     const PendingEquip pending = pendingEquip_;
     pendingEquip_ = PendingEquip{};
+    if (held.active) {
+        // The answer to a drop onto the character: the same exchange again, with
+        // the question already asked. The client's reply reads the parked
+        // record and calls its own verb back with 1 - 0x006e0000.c:53 for an
+        // exchange, :60 for a named slot, :48 for the auto-equip one - and then
+        // zeroes the entry.
+        swapContainerItems(held.fromBag, held.fromSlot, held.toBag, held.toSlot,
+                           held.applyLocally, true);
+        return;
+    }
     if (!pending.active) return;
-    if (pending.fromBag) autoEquipItemInBag(pending.bag, pending.slot, true);
-    else                 autoEquipItemBySlot(pending.slot, true);
+    // The named-slot form replays through the routine that held it back, with
+    // the answer as its `confirmed`, exactly as 0x006e0000.c:60 calls
+    // 0x006dff90 again with 1 for the record FrameXML's dialog accepted.
+    if (pending.toSlot)       equipItemToSlot(pending.itemGuid, pending.wireSlot, true);
+    else if (pending.fromBag) autoEquipItemInBag(pending.bag, pending.slot, true);
+    else                      autoEquipItemBySlot(pending.slot, true);
 }
 
 void InventoryHandler::cancelPendingEquip() {
+    // The dialog cancels on OnCancel and on OnHide both, so one dismissed with
+    // Escape equips nothing; and whichever of the two forms is held, both are
+    // cleared, because only one prompt can be up at a time.
     pendingEquip_ = PendingEquip{};
+    pendingSwap_ = PendingSwap{};
 }
 
 // Dispatches CMSG_USE_ITEM for an item already located at (wowBag, wowSlot).
@@ -2749,6 +2967,17 @@ void InventoryHandler::fireBagUpdates() {
     // The character sheet redraws from this one rather than from BAG_UPDATE, so
     // both go out together - equipping something changes a bag and a slot.
     fire("UNIT_INVENTORY_CHANGED", {"player"});
+    // ...and the token counters beside the bags, which no bag event reaches:
+    // MainMenuBar registers BAG_UPDATE but its branch for it only handles the
+    // keyring, and the branch that calls TokenFrame_Update and
+    // BackpackTokenFrame_Update at all answers KNOWN_CURRENCY_TYPES_UPDATE or
+    // CURRENCY_DISPLAY_UPDATE (mainmenubar.lua:193,225-234). The client raises
+    // 605 alongside the slot repaint from its container-slot handler (0x005d9790
+    // calling 0x005b0660, which rebuilds the currency list at 0x005b0030 first),
+    // so a stack spent or looted moves the number beside the bags in the same
+    // breath. The same raise goes out from the field path, where a container's
+    // slots changed on their own; this is the path where the model did.
+    fire("CURRENCY_DISPLAY_UPDATE", {});
     // An open trade skill window is looking at the bags too, and it does not
     // watch them: TradeSkillFrame_OnLoad registers TRADE_SKILL_UPDATE,
     // TRADE_SKILL_FILTER_UPDATE, UNIT_PORTRAIT_UPDATE and
@@ -2817,8 +3046,44 @@ bool InventoryHandler::writeWireSlot(uint8_t container, uint8_t slot,
 
 void InventoryHandler::swapContainerItems(uint8_t srcBag, uint8_t srcSlot,
                                           uint8_t dstBag, uint8_t dstSlot,
-                                          bool applyLocally) {
+                                          bool applyLocally, bool confirmed) {
     if (!owner_.getSocket() || !owner_.getSocket()->isConnected()) return;
+
+    // Dropping something onto the character asks the same question as equipping
+    // it, and under the same name. 0x006df890 / SwapItems looks at whichever
+    // side of the exchange is *not* on the character - the item being carried -
+    // and asks two things of its record: that the bond type cached at +0x178 be
+    // 2, bind when equipped, and that 0x006dc3f0 say it is not already bound.
+    // When both hold it parks the pair of positions in the pending-equip queue
+    // and fires EQUIP_BIND_CONFIRM (0x10f) with the queue's index, and puts
+    // nothing on the wire. "On the character" is the 23 worn positions rather
+    // than the 19 equipment slots - the client tests the slot against 0x17 - so
+    // a bag bought at the merchant and dropped onto the bag bar asks as well,
+    // which is right: wearing it is what binds it.
+    //
+    // Two positions on the character are the case the client sends as
+    // CMSG_SWAP_INV_ITEM without asking, and it cannot reach this test: a worn
+    // piece binds the moment it is worn, and the bag-bar exchange has its own
+    // verb in swapBagSlots below.
+    if (!confirmed && dstBag == slots::kNoContainer &&
+        dstSlot < static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS) &&
+        !(srcBag == slots::kNoContainer &&
+          srcSlot < static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS))) {
+        ItemDef carried;
+        if (readWireSlot(srcBag, srcSlot, carried) && carried.wouldBindOnEquip()) {
+            // The client parks either verb's move in the one queue, and
+            // FrameXML hides the other dialog before showing this one; only one
+            // move can be waiting for the answer.
+            pendingEquip_ = PendingEquip{};
+            pendingSwap_ = PendingSwap{.active = true, .fromBag = srcBag, .fromSlot = srcSlot,
+                                       .toBag = dstBag, .toSlot = dstSlot,
+                                       .applyLocally = applyLocally};
+            if (owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("EQUIP_BIND_CONFIRM", {"0"});
+            return;
+        }
+    }
+
     LOG_INFO("swapContainerItems: src(bag=", (int)srcBag, " slot=", (int)srcSlot,
              ") -> dst(bag=", (int)dstBag, " slot=", (int)dstSlot, ")");
     auto packet = SwapItemPacket::build(dstBag, dstSlot, srcBag, srcSlot);
@@ -5027,8 +5292,14 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         //
         // Named so a listener can tell whether the item it is showing is the
         // one that just arrived, rather than rebuilding on every reply.
+        //
+        // WoWee's own name, not the client's. This client has no such event:
+        // its tooltips are built from local DBC and never wait on a query, so
+        // there is no name here to borrow - and borrowing a later expansion's
+        // would hand a 4.x add-on a WotLK-shaped argument list under a name it
+        // already has handlers for.
         if (owner_.addonEventCallbackRef()) {
-            owner_.addonEventCallbackRef()("GET_ITEM_INFO_RECEIVED",
+            owner_.addonEventCallbackRef()("WOWEE_ITEM_INFO_RECEIVED",
                                            {std::to_string(data.entry)});
         }
 
@@ -5329,7 +5600,7 @@ void InventoryHandler::detectInventorySlotBases(const FlatFieldMap& fields) {
     }
 }
 
-bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields) {
+bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields, bool initial) {
     bool slotsChanged = false;
     bool buybackSlotsChanged = false;
     int equipBase = (owner_.invSlotBaseRef() >= 0) ? owner_.invSlotBaseRef() : static_cast<int>(fieldIndex(UF::PLAYER_FIELD_INV_SLOT_HEAD));
@@ -5342,6 +5613,14 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields) {
         effectiveBankSlots_ = std::min((bankBagBase - bankBase) / 2, 28);
         effectiveBankBagSlots_ = (effectiveBankSlots_ <= 24) ? 6 : 7;
     }
+
+    // The realm's own buyback arrays.  These are not next to the ring in the
+    // block - in the client's blob they sit above the coinage, at 0x1074 and
+    // 0x10a4 - so they are read by their own names, and a layout that names
+    // neither leaves the rows priced from the mirror instead (see
+    // buybackFieldPrice and the GetBuybackItemInfo note).
+    const int buybackPriceBase = static_cast<int>(fieldIndex(UF::PLAYER_FIELD_BUYBACK_PRICE_1));
+    const int buybackTimeBase = static_cast<int>(fieldIndex(UF::PLAYER_FIELD_BUYBACK_TIMESTAMP_1));
 
     int keyringBase = static_cast<int>(fieldIndex(UF::PLAYER_FIELD_KEYRING_SLOT_1));
     const int buybackBase = bankBagBase != 0xFFFF
@@ -5364,15 +5643,24 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields) {
     // field gap, so it is taken from there rather than written out again.
     const int kBankGeneralSlotCount = effectiveBankSlots_;
     std::set<int> changedBankSlots;
+    // Which of the nineteen equipment slots moved, by the same reckoning the
+    // interface uses: the wire order is the order the paperdoll's slot buttons
+    // are numbered in, so the Lua slot number is this index plus one.
+    std::set<int> changedEquipSlots;
     for (const auto& [key, val] : fields) {
         if (key >= equipBase && key <= equipBase + (game::Inventory::NUM_EQUIP_SLOTS * 2 - 1)) {
             int slotIndex = (key - equipBase) / 2;
             bool isLow = ((key - equipBase) % 2 == 0);
             if (slotIndex < static_cast<int>(owner_.equipSlotGuidsRef().size())) {
                 uint64_t& guid = owner_.equipSlotGuidsRef()[slotIndex];
+                const uint64_t before = guid;
                 if (isLow) guid = (guid & 0xFFFFFFFF00000000ULL) | val;
                 else guid = (guid & 0x00000000FFFFFFFFULL) | (uint64_t(val) << 32);
                 slotsChanged = true;
+                // Only the nineteen worn slots, not the four bag slots that
+                // share this region of the field block.
+                if (guid != before && slotIndex < game::Inventory::FIRST_BAG_EQUIP_SLOT)
+                    changedEquipSlots.insert(slotIndex);
             }
         } else if (key >= packBase && key <= packBase + (game::Inventory::BACKPACK_SLOTS * 2 - 1)) {
             int slotIndex = (key - packBase) / 2;
@@ -5428,6 +5716,19 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields) {
             }
         }
 
+        // Twelve prices then twelve timestamps, position k of each belonging to
+        // ring slot 74+k.  Both halves of the client's one 0x60 watch: what it
+        // builds rows from is exactly these, and the price it then shows for a
+        // row is price[ring slot - 74] (0x00584b00), which is why the row's
+        // price cannot be read off the item's own record.
+        if (buybackPriceBase != 0xFFFF && key >= buybackPriceBase &&
+            key <= buybackPriceBase + (static_cast<int>(kBuybackWireSlotCount) - 1)) {
+            buybackPrices_[key - buybackPriceBase] = val;
+        } else if (buybackTimeBase != 0xFFFF && key >= buybackTimeBase &&
+                   key <= buybackTimeBase + (static_cast<int>(kBuybackWireSlotCount) - 1)) {
+            buybackTimestamps_[key - buybackTimeBase] = val;
+        }
+
         // The server owns the buyback ring. Bind local item metadata to these
         // GUID fields rather than assuming displayed row N means wire slot 74+N.
         if (buybackBase != 0xFFFF && key >= static_cast<uint16_t>(buybackBase) &&
@@ -5450,7 +5751,10 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields) {
     // stayed on screen until the bank was closed and opened.
     pendingBankSlotEvents_.insert(pendingBankSlotEvents_.end(),
                                   changedBankSlots.begin(), changedBankSlots.end());
-
+    if (!initial) {
+        pendingEquipSlotEvents_.insert(pendingEquipSlotEvents_.end(),
+                                       changedEquipSlots.begin(), changedEquipSlots.end());
+    }
 
     return slotsChanged;
 }
@@ -5831,6 +6135,19 @@ void InventoryHandler::rebuildOnlineInventory() {
         fireBagUpdates();
     }
 
+    // The buyback ring, once the items behind it are current.
+    //
+    // The client builds its buyback rows out of the ring fields alone, so a row
+    // is owed for every ring slot the realm filled - including what a previous
+    // session sold, whose sale this client never saw.  What stands behind such a
+    // guid is one of the player's item objects and its item query, and either
+    // can still be on its way when the player's fields land: the instance is
+    // what tells this that the slot holds an item at all, and the query answer
+    // is what gives the row a name.  Both paths end here, so the row is made
+    // when the last of them arrives rather than never; reconcileBuybackSlots
+    // only says so when the list actually changed.
+    reconcileBuybackSlots();
+
     LOG_DEBUG("Rebuilt online inventory: equip=", [&](){
         int c = 0; for (auto g : owner_.equipSlotGuidsRef()) if (g) c++; return c;
     }(), " backpack=", [&](){
@@ -5863,6 +6180,50 @@ void InventoryHandler::rebuildOnlineInventory() {
     owner_.reconcileQuestItemObjectives(carriedCounts);
     // Last, with the slots holding what they now hold.
     fireBankSlotEvents();
+    fireEquipSlotEvents();
+}
+
+void InventoryHandler::fireEquipSlotEvents() {
+    if (pendingEquipSlotEvents_.empty()) return;
+    // Moved out first, as the bank slots are: a frame redrawing from inside
+    // this can move a slot again, and that must queue rather than be dropped.
+    std::vector<int> slots;
+    slots.swap(pendingEquipSlotEvents_);
+    std::sort(slots.begin(), slots.end());
+    slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+    if (!owner_.addonEventCallbackRef()) return;
+    for (int slot : slots) {
+        // Which numbers the change moves, in the client's own split. It watches
+        // its equipment fields (0x006dedd0): for the two hands it calls the
+        // routine that fires UNIT_ATTACK, for the ranged slot the one that
+        // fires UNIT_RANGED_ATTACK_POWER.
+        //
+        // Those two are the only names the character sheet acts on for an equip
+        // change - it has no handler for the equipment event at all, and its
+        // damage, attack-speed and ranged lines are recomputed from the branch
+        // these two land in (paperdollframe.lua:187), each reading the weapon
+        // now in the slot. So this is both when the client fires them and why
+        // the number moves.
+        if (slot == static_cast<int>(EquipSlot::MAIN_HAND) ||
+            slot == static_cast<int>(EquipSlot::OFF_HAND)) {
+            owner_.addonEventCallbackRef()("UNIT_ATTACK", {"player"});
+        } else if (slot == static_cast<int>(EquipSlot::RANGED)) {
+            owner_.addonEventCallbackRef()("UNIT_RANGED_ATTACK_POWER", {"player"});
+        }
+        // Then the slot itself, by its Lua number: the wire order is the button
+        // order, so index + 1 is what GetInventoryItemLink takes, which is what
+        // the client sends (0x006dedd0, `uVar2 + 1`).
+        //
+        // Filled or emptied is part of the message - "%d%d" with a 1 for the
+        // item that went on, "%d" alone for the one that came off.
+        if (owner_.equipSlotGuidsRef()[slot] != 0) {
+            owner_.addonEventCallbackRef()("PLAYER_EQUIPMENT_CHANGED",
+                                           {std::to_string(slot + 1), "1"});
+        } else {
+            owner_.addonEventCallbackRef()("PLAYER_EQUIPMENT_CHANGED",
+                                           {std::to_string(slot + 1)});
+        }
+    }
 }
 
 void InventoryHandler::fireBankSlotEvents() {

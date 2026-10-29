@@ -14,6 +14,7 @@
 #include "game/quest_progress.hpp"
 #include "game/quest_objectives.hpp"
 #include "game/quest_poi_icons.hpp"
+#include "game/quest_rewards.hpp"
 #include "game/glyph_socket.hpp"
 #include "game/spell_mods.hpp"
 #include "game/trainer_service_list.hpp"
@@ -673,15 +674,38 @@ static int lua_GetQuestLogPushable(lua_State* L) {
 }
 
 // GetQuestLogRewardXP() → the experience the reward panel shows for the
-// selected quest. It is in no packet - the client derives it from QuestXP.dbc
-// at the quest's level and the XP-difficulty index the query carried, which is
-// what this now does. Zero (the old hard-coded answer) hid the reward line on
-// every quest; a real value restores "You will receive N experience."
+// selected quest. It is in no packet: the client reads QuestXP.dbc itself, at the
+// row a level gives and the difficulty column the query carried (0x005e0420), and
+// then shapes that number before answering (0x005e49b0). Zero - the old hard-coded
+// answer - hid the reward line on every quest, since questinfo.lua:420 only shows
+// the frame when the value is nonzero; but the raw table value was wrong in three
+// other ways, all of them visible.
+//
+// The row is the quest's own level, or the character's when the quest says it
+// scales to the player (-1) - so a scaling quest used to answer nothing at all.
+// The damping is the WotLK rule: 20 + 2*(questLevel - playerLevel) tenths, clamped
+// to [1,10], which costs a fifth per level more than five above the quest instead
+// of paying full for every quest in the book. The rounding is the client's (5/10/
+// 25/50 by size), and the whole answer is zero once the character is at
+// PLAYER_FIELD_MAX_LEVEL - the same gate 0x0058dd50 applies to the panel's XP line
+// and 0x005e48f0 to the money, and what 0x0054e5b0 sends the realm as "no more XP".
+// A layout that names no such field keeps the ungated answer.
+//
+// Not reproduced, and pinned no further than "it exists": 0x005e49b0's five-slot
+// loop that can triple the number below level 60, and the aura multiplier
+// 0x007246a0 folds in. Those read low; see game/quest_rewards.hpp.
 static int lua_GetQuestLogRewardXP(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* q = gh ? selectedQuest(gh) : nullptr;
     auto* qh = gh ? gh->getQuestHandler() : nullptr;
-    lua_pushnumber(L, (q && qh) ? qh->getQuestRewardXP(q->level, q->rewardXPId) : 0.0);
+    if (!q || !qh) {
+        lua_pushnumber(L, 0.0);
+        return 1;
+    }
+    const uint32_t level = gh->getPlayerLevel();
+    const int32_t rowLevel = game::questXpRowLevel(q->level, level);
+    const uint32_t base = qh->getQuestRewardXP(rowLevel, q->rewardXPId);
+    lua_pushnumber(L, game::questRewardXp(base, rowLevel, level, gh->getPlayerMaxLevel()));
     return 1;
 }
 
@@ -689,9 +713,17 @@ static int lua_GetQuestLogRewardXP(lua_State* L) {
 // query response carries, and hard zeros before, on a stale "not in any quest
 // packet" comment. WotLK-only, so classic/TBC keep zero until their layout is
 // read off a serializer.
+//
+// Honor is not quite the packet's number: 0x005e4b70 answers the flat addition
+// plus the quest's multiplier converted by the constant 0.1, having called a
+// level-keyed table lookup and dropped its result. The rule is in
+// game/quest_rewards.hpp; a multiplier below 5.0 changes nothing, which is most
+// of them.
 static int lua_GetQuestLogRewardHonor(lua_State* L) {
     const auto* q = selectedQuest(getGameHandler(L));
-    lua_pushnumber(L, q ? q->rewardHonor : 0.0);
+    lua_pushnumber(L, q ? game::questRewardHonor(static_cast<int32_t>(q->rewardHonor),
+                                                 q->rewardHonorMultiplier)
+                        : 0.0);
     return 1;
 }
 static int lua_GetQuestLogRewardTalents(lua_State* L) {
@@ -3036,10 +3068,21 @@ static int lua_GetQuestLogSpellLink(lua_State* L) {
 // it is negative, and the quest query serializer writes that single int32. So a
 // quest that charges the player was answering this with a negative reward, and
 // the reward panel drew a money frame with a negative amount in it.
+//
+// The level cap then raises that amount rather than cutting it, which is the
+// other half of the client's answer (0x005e48f0): the quest carries a second
+// money amount in the word beside the first, and a player whose level is not
+// below PLAYER_FIELD_MAX_LEVEL is paid that one whenever it is at least as large.
+// A quest that already pays well keeps its amount; one that pays nothing - a grey
+// quest, at the cap - pays the max-level figure. The rule itself is in
+// game/quest_rewards.hpp, beside the XP rule that keys on the same field.
 static int lua_GetQuestLogRewardMoney(lua_State* L) {
-    const auto* q = selectedLogEntry(getGameHandler(L));
-    const int32_t money = q ? q->rewardMoney : 0;
-    lua_pushnumber(L, money > 0 ? money : 0);
+    auto* gh = getGameHandler(L);
+    const auto* q = selectedLogEntry(gh);
+    lua_pushnumber(L, game::questRewardMoney(q ? q->rewardMoney : 0,
+                                             q ? q->rewardMoneyMaxLevel : 0,
+                                             gh ? gh->getPlayerLevel() : 0u,
+                                             gh ? gh->getPlayerMaxLevel() : 0u));
     return 1;
 }
 
@@ -3075,7 +3118,10 @@ struct QuestSource {
     const std::string* title = nullptr;
     const std::vector<game::QuestRewardItem>* rewards = nullptr;
     const std::vector<game::QuestRewardItem>* choices = nullptr;
-    uint32_t money = 0;
+    /// Signed, because the packet's money word is one field for a payout or a
+    /// cost and the sign says which (0x0058dd50 splits it the same way the quest
+    /// log does).
+    int32_t money = 0;
     uint32_t xp = 0;
     uint32_t honor = 0;
     uint32_t talents = 0;
@@ -3153,15 +3199,29 @@ static int lua_GetGossipText(lua_State* L) {
     return pushQuestText(L, &gh->getNpcText(gh->getCurrentGossip().titleTextId));
 }
 
-// GetRewardMoney() → coin the quest pays out
+// GetRewardMoney() → coin the quest pays out.
+//
+// Read off the offer packet as one word, and the client's handler splits it by
+// sign: a negative amount is the quest charging the player, and the reward answer
+// is zero (0x0058dd50, writing the global GetRewardMoney reads back). Unsigned, a
+// quest that charges answered four billion copper.
 static int lua_GetRewardMoney(lua_State* L) {
-    lua_pushnumber(L, currentQuestSource(getGameHandler(L)).money);
+    lua_pushnumber(L, game::questDialogMoney(currentQuestSource(getGameHandler(L)).money));
     return 1;
 }
 
-// GetRewardXP() → experience the quest pays out
+// GetRewardXP() → experience the quest pays out.
+//
+// The packet sends the number the panel shows - none of the quest-log work of
+// looking a row up, damping it and rounding it happens here - but the same level
+// cap still shuts the line off: 0x0058dd50 writes its XP global only for a player
+// below PLAYER_FIELD_MAX_LEVEL, and at the cap the global stays zero.
 static int lua_GetRewardXP(lua_State* L) {
-    lua_pushnumber(L, currentQuestSource(getGameHandler(L)).xp);
+    auto* gh = getGameHandler(L);
+    const uint32_t xp = currentQuestSource(gh).xp;
+    lua_pushnumber(L, gh ? game::questDialogXp(xp, gh->getPlayerLevel(),
+                                               gh->getPlayerMaxLevel())
+                         : 0u);
     return 1;
 }
 // The offer panel's honour, talents and arena points - the quest-giver twins of

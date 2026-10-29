@@ -9,7 +9,10 @@
 #include "addons/lua_taint.hpp"
 #include "game/power_prediction.hpp"
 #include "game/unit_level_display.hpp"
+#include "game/known_titles.hpp"
 #include <cstdlib>
+#include <cmath>
+#include <bit>
 #include "game/interface_text.hpp"
 
 namespace wowee::addons {
@@ -833,6 +836,54 @@ static int lua_UnitSex(lua_State* L) {
 
 // --- Player/Game API ---
 
+/// One of the stat fields, as the realm wrote it. A field this expansion's
+/// table does not name reads as nothing, which sends the caller to its cache.
+static int32_t statField(game::Unit* unit, game::UF field) {
+    const uint16_t idx = game::fieldIndex(field);
+    if (!unit || idx == 0xFFFF) return 0;
+    return static_cast<int32_t>(unit->getField(idx));
+}
+
+/// The three runs UnitStat reads, in the order the API's index counts them.
+///
+/// Spelled out rather than derived from UNIT_FIELD_STAT0 plus an offset,
+/// because the runs are consecutive only in the WotLK layout: the other three
+/// put the stats at 150 and 159, where 89 through 98 are some other field
+/// entirely and an offset would read it with no complaint.
+static constexpr game::UF kStatFields[5] = {game::UF::UNIT_FIELD_STAT0,
+                                            game::UF::UNIT_FIELD_STAT1,
+                                            game::UF::UNIT_FIELD_STAT2,
+                                            game::UF::UNIT_FIELD_STAT3,
+                                            game::UF::UNIT_FIELD_STAT4};
+static constexpr game::UF kPosStatFields[5] = {game::UF::UNIT_FIELD_POSSTAT0,
+                                               game::UF::UNIT_FIELD_POSSTAT1,
+                                               game::UF::UNIT_FIELD_POSSTAT2,
+                                               game::UF::UNIT_FIELD_POSSTAT3,
+                                               game::UF::UNIT_FIELD_POSSTAT4};
+static constexpr game::UF kNegStatFields[5] = {game::UF::UNIT_FIELD_NEGSTAT0,
+                                               game::UF::UNIT_FIELD_NEGSTAT1,
+                                               game::UF::UNIT_FIELD_NEGSTAT2,
+                                               game::UF::UNIT_FIELD_NEGSTAT3,
+                                               game::UF::UNIT_FIELD_NEGSTAT4};
+
+/// UnitStat(unit, statIndex) → stat, effectiveStat, posBuff, negBuff.
+///
+/// The client answers the last three from the unit's own fields (0x00610300):
+/// STAT0..4 as the realm wrote them, POSSTAT0..4 (89-93) and NEGSTAT0..4
+/// (94-98). The second answer is the same stat dword with a negative clamped
+/// away - 0x005774b0 is the `x & ((int)x < 0) - 1` mask, and it is the figure
+/// the sheet prints while the first stays raw. WoWee had neither buff run, so it
+/// pushed its total four times and the tooltip was the loser: paperdollframe.lua
+/// builds "total (base +x -y)" by subtracting both halves out of the first
+/// answer, colours the number red when a debuff is in play, and here always
+/// found no halves to find. So STAT is the total, not the base.
+///
+/// The same gate as the attack-power bindings - the realm's
+/// UNIT_FLAG_PLAYER_CONTROLLED, which the client tests as bit 3 of the guid -
+/// and four zeros for anyone without it, since a creature's stats are not sent
+/// to be read. WoWee keeps its cached total for the two tokens it has one for
+/// when the unit itself cannot be reached, which is what answers a pet whose
+/// entity is out of hand; the cache holds only the total, so no buff shows.
 static int lua_UnitStat(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 4; }
@@ -841,18 +892,146 @@ static int lua_UnitStat(lua_State* L) {
     // paperdoll's pet tab listed the hunter's own Strength as the pet's.
     std::string who(luaL_optstring(L, 1, "player"));
     toLowerInPlace(who);
-    int32_t val = 0;
-    if (who == "pet") {
-        if (statIdx >= 0 && statIdx < 5) val = gh->getPetStats()[static_cast<size_t>(statIdx)];
-    } else if (who == "player") {
-        val = gh->getPlayerStat(statIdx);
+
+    int32_t stat = 0, positive = 0, negative = 0;
+    bool fromUnit = false;
+    if (statIdx >= 0 && statIdx < 5) {
+        auto* unit = resolveUnit(L, who.c_str());
+        if (unit && (unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED)) {
+            stat = statField(unit, kStatFields[static_cast<size_t>(statIdx)]);
+            positive = statField(unit, kPosStatFields[static_cast<size_t>(statIdx)]);
+            negative = statField(unit, kNegStatFields[static_cast<size_t>(statIdx)]);
+            fromUnit = true;
+        }
     }
-    if (val < 0) val = 0;
-    // We only have the effective value from the server; report base=effective, no buffs
-    lua_pushnumber(L, val); // base (approximate - server only sends effective)
-    lua_pushnumber(L, val); // effective
-    lua_pushnumber(L, 0);   // positive buff
-    lua_pushnumber(L, 0);   // negative buff
+    if (!fromUnit) {
+        if (who == "pet") {
+            if (statIdx >= 0 && statIdx < 5) stat = gh->getPetStats()[static_cast<size_t>(statIdx)];
+        } else if (who == "player") {
+            stat = gh->getPlayerStat(statIdx);
+        }
+        // The cache is -1 until the realm says otherwise, and a stat the client
+        // has no value for shows as nothing rather than as minus one.
+        if (stat < 0) stat = 0;
+    }
+    lua_pushnumber(L, stat);      // raw, debuff and all
+    lua_pushnumber(L, stat < 0 ? 0 : stat); // what the sheet prints
+    lua_pushnumber(L, positive);  // the buff's positive half
+    lua_pushnumber(L, negative);  // and its negative one
+    return 4;
+}
+
+/// Armour and the six schools are one array of seven, and each school has two
+/// more arrays beside it: the positive part at RESISTANCEBUFFMODSPOSITIVE, the
+/// negative at …NEGATIVE. 0x004f54d0 is the whole of the arithmetic both
+/// bindings use - effective = RESISTANCES as the realm wrote it, base = that
+/// minus both parts, and only the two effective copies are clamped when the
+/// total goes negative.
+///
+/// `withMods` is false for the one path that reads no parts at all:
+/// UnitResistance (0x006101a0) asks 0x004f54d0 only about the local player, and
+/// for any other player-controlled unit - a hunter's pet - it takes the
+/// resistance dword, clamps it, and pushes it twice with two zeros beside it.
+/// UnitArmor (0x00610ec0) has no such branch and takes the breakdown for
+/// whoever asks. The two bindings disagree about the pet; that is the client's
+/// own behaviour, so it is mirrored rather than tidied up.
+struct ResistAnswer {
+    int32_t base = 0, effective = 0, positive = 0, negative = 0;
+};
+
+static ResistAnswer resistanceAnswer(game::Unit* unit, int school, bool withMods) {
+    const uint16_t resIdx = game::fieldIndex(game::UF::UNIT_FIELD_RESISTANCES);
+    if (!unit || resIdx == 0xFFFF || school < 0 || school > 6) return {};
+    const int32_t raw =
+        static_cast<int32_t>(unit->getField(resIdx + static_cast<uint16_t>(school)));
+    ResistAnswer a;
+    if (!withMods) {
+        a.base = a.effective = (raw < 0) ? 0 : raw;
+        return a;
+    }
+    // A run read by offset rather than by fifteen names, because the client
+    // names each run once; the table test pins both ends of it.
+    const uint16_t posIdx = game::fieldIndex(game::UF::UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE);
+    const uint16_t negIdx = game::fieldIndex(game::UF::UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE);
+    if (posIdx != 0xFFFF) a.positive = static_cast<int32_t>(unit->getField(posIdx + static_cast<uint16_t>(school)));
+    if (negIdx != 0xFFFF) a.negative = static_cast<int32_t>(unit->getField(negIdx + static_cast<uint16_t>(school)));
+    a.base = raw - a.positive - a.negative;
+    a.effective = (raw < 0) ? 0 : raw;
+    return a;
+}
+
+/// UnitArmor(unit) → baseArmor, effectiveArmor, armor, posBuff, negBuff.
+///
+/// School zero of the block above, taken in full: the client gates on the
+/// realm's UNIT_FLAG_PLAYER_CONTROLLED and then lets 0x004f54d0 work out the
+/// three arrays at index zero. paperdollframe.lua:430 hands all five answers to
+/// PaperDollFormatStat, which colours the number by the parts and builds the
+/// "base +pos -neg" tooltip beside it - WoWee pushed the effective figure three
+/// times with no parts, so a geared character's armour line sat there white
+/// with no breakdown, and the same went for the pet sheet's armour.
+static int lua_UnitArmor(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    // PaperDollFrame_SetArmor is shared between the sheets and the pet tab
+    // calls it with "Pet" - capitalised, which is why this compares lowered.
+    std::string who(luaL_optstring(L, 1, "player"));
+    toLowerInPlace(who);
+    ResistAnswer a;
+    auto* unit = resolveUnit(L, who.c_str());
+    if (unit) {
+        if (!(unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED)) {
+            lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0);
+            lua_pushnumber(L, 0); lua_pushnumber(L, 0);
+            return 5;
+        }
+        a = resistanceAnswer(unit, 0, true);
+    } else if (gh) {
+        const int32_t armor = (who == "pet") ? gh->getPetResistances()[0] : gh->getArmorRating();
+        a.base = a.effective = (armor < 0) ? 0 : armor;
+    }
+    lua_pushnumber(L, a.base);
+    lua_pushnumber(L, a.effective);
+    lua_pushnumber(L, a.effective);   // the compat slot, same figure again
+    lua_pushnumber(L, a.positive);
+    lua_pushnumber(L, a.negative);
+    return 5;
+}
+
+/// UnitResistance(unit, school) → base, resistance, positive, negative.
+///
+/// The school is 0-based here, unlike UnitStat: the client checks
+/// `if (6 < index)` with no subtraction, and armour is school zero of the same
+/// array. Only the local player gets the parts (see resistanceAnswer); the pet
+/// and anyone else player-controlled get the clamped dword twice with two zeros
+/// after it, and anyone without the realm's player-controlled flag gets four
+/// zeros, because the realm does not send a creature's resistances to read.
+static int lua_UnitResistance(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const int school = static_cast<int>(luaL_optnumber(L, 2, 0));
+    std::string who(luaL_optstring(L, 1, "player"));
+    toLowerInPlace(who);
+
+    ResistAnswer a;
+    bool answered = false;
+    if (auto* unit = resolveUnit(L, who.c_str());
+        unit && (unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED)) {
+        const bool self = gh && unit->getGuid() == gh->getPlayerGuid();
+        a = resistanceAnswer(unit, school, self);
+        answered = true;
+    }
+    if (!answered && gh && school >= 0 && school <= 6) {
+        // The cached figures, for a unit this cannot reach: the pet's own
+        // block, or the player's - where the realm's armour dword is school
+        // zero and the six schools follow it. Either way the cache holds only
+        // the total, so no parts show.
+        int32_t val = 0;
+        if (who == "pet") val = gh->getPetResistances()[static_cast<size_t>(school)];
+        else if (who == "player") val = (school == 0) ? gh->getArmorRating() : gh->getResistance(school);
+        a.base = a.effective = (val < 0) ? 0 : val;
+    }
+    lua_pushnumber(L, a.base);
+    lua_pushnumber(L, a.effective);
+    lua_pushnumber(L, a.positive);
+    lua_pushnumber(L, a.negative);
     return 4;
 }
 
@@ -878,6 +1057,97 @@ static int lua_GetBlockChance(lua_State* L) {
     float v = gh ? gh->getBlockPct() : 0.0f;
     lua_pushnumber(L, v >= 0 ? v : 0.0);
     return 1;
+}
+
+// GetShieldBlock() → the damage a block takes off (0x0060dff0).  Straight out
+// of PLAYER_SHIELD_BLOCK, +0xdec into the field blob the player object keeps at
+// +0x1008; the sheet prints it as the last number of the block tooltip
+// (paperdollframe.lua:479, next to GetBlockChance).  The client asks for the
+// *player* object by the local player's guid and answers 0 when there is none,
+// and it reads the dword unsigned - it adds 2^32 back when the int comes out
+// negative - so a block value the server sent above 2^31 reads as the size of
+// it, not as a negative.  Was a hardcoded zero here.
+// The local player's object - what a client binding means by "the player":
+// 0x004d3790's guid, asked for as a player (0x004d4db0 with type 0x10), which
+// answers nothing when there is none and the binding then pushes zero.  The
+// second half of the guard is ours, not the client's: an expansion whose layout
+// does not name the field cannot be asked for it.
+static std::shared_ptr<game::Entity> localPlayerObject(lua_State* L, uint16_t first,
+                                                       uint16_t second = 0xFFFF) {
+    if (first == 0xFFFF && second == 0xFFFF) return nullptr;
+    auto* gh = getGameHandler(L);
+    return gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+}
+
+static int lua_GetShieldBlock(lua_State* L) {
+    const uint16_t index = game::fieldIndex(game::UF::PLAYER_SHIELD_BLOCK);
+    const auto player = localPlayerObject(L, index);
+    lua_pushnumber(L, player ? player->getField(index) : 0);
+    return 1;
+}
+
+// GetSpellPenetration() → what the player's gear takes off the target's
+// resistances (0x0060e470).  Also a field, also summed by the server: the same
+// player object's blob at +0x105c - dword 1047, PLAYER_FIELD_MOD_TARGET_
+// RESISTANCE - pushed as its negation, because the field holds the resistance
+// *change* and penetration is a decrease.  The sheet prints it as its own stat
+// (paperdollframe.lua:988) and twice inside the spell-hit rating's tooltip
+// (paperdollframe.lua:342).  Negated in double, so the field's most negative
+// value cannot wrap the way the client's own int negation would.
+static int lua_GetSpellPenetration(lua_State* L) {
+    const uint16_t index = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_TARGET_RESISTANCE);
+    const auto player = localPlayerObject(L, index);
+    lua_pushnumber(L, player ? -static_cast<double>(static_cast<int32_t>(player->getField(index))) : 0.0);
+    return 1;
+}
+
+// The honour counters the PvP panel and the honour frame read (pvpframe.lua:508
+// and honourframe.lua:21-41), each a player field the server sends already
+// summed: GetPVPSessionStats (0x00611a20), GetPVPYesterdayStats (0x00611ad0)
+// and GetPVPLifetimeStats (0x00611b80) all take the local player's player
+// object and read it, and push zeros when there is no player at all.
+//
+// PLAYER_FIELD_KILLS is one dword carrying two 16-bit counters - this session's
+// kills in the low half, yesterday's in the high - which is why the client
+// reads it as a ushort twice, at +0x10d4 and at +0x10d6.  The contributions are
+// whole dwords, unsigned: the client adds 2^32 back when the int it loaded came
+// out negative, so the counters go past two billion rather than wrapping.
+static int lua_GetPVPSessionStats(lua_State* L) {
+    const uint16_t killsIndex = game::fieldIndex(game::UF::PLAYER_FIELD_KILLS);
+    const auto player = localPlayerObject(L, killsIndex);
+    const uint32_t kills = player ? player->getField(killsIndex) : 0;
+    const uint16_t contributionIndex = game::fieldIndex(game::UF::PLAYER_FIELD_TODAY_CONTRIBUTION);
+    const auto withContribution = localPlayerObject(L, contributionIndex);
+    lua_pushnumber(L, kills & 0xFFFFu);
+    lua_pushnumber(L, withContribution ? withContribution->getField(contributionIndex) : 0);
+    return 2;
+}
+
+static int lua_GetPVPYesterdayStats(lua_State* L) {
+    const uint16_t killsIndex = game::fieldIndex(game::UF::PLAYER_FIELD_KILLS);
+    const auto player = localPlayerObject(L, killsIndex);
+    const uint32_t kills = player ? player->getField(killsIndex) : 0;
+    const uint16_t contributionIndex = game::fieldIndex(game::UF::PLAYER_FIELD_YESTERDAY_CONTRIBUTION);
+    const auto withContribution = localPlayerObject(L, contributionIndex);
+    lua_pushnumber(L, kills >> 16);
+    lua_pushnumber(L, withContribution ? withContribution->getField(contributionIndex) : 0);
+    return 2;
+}
+
+// GetPVPLifetimeStats answers two values, not three - honorable, then
+// dishonorable - and the second is a byte, not a dword: byte 3 of
+// PLAYER_FIELD_BYTES (+0x1067), read as zero below 5.  That floor is the
+// client's, and it is what the honour frame's "Rank" line depends on: the byte
+// doubles as the lifetime dishonourable count only once it reaches 5.
+static int lua_GetPVPLifetimeStats(lua_State* L) {
+    const uint16_t killsIndex = game::fieldIndex(game::UF::PLAYER_FIELD_LIFETIME_HONORBALE_KILLS);
+    const auto player = localPlayerObject(L, killsIndex);
+    lua_pushnumber(L, player ? player->getField(killsIndex) : 0);
+    const uint16_t bytesIndex = game::fieldIndex(game::UF::PLAYER_FIELD_BYTES);
+    const auto withBytes = localPlayerObject(L, bytesIndex);
+    const uint32_t dishonorable = withBytes ? (withBytes->getField(bytesIndex) >> 24) & 0xFFu : 0;
+    lua_pushnumber(L, dishonorable < 5 ? 0 : dishonorable);
+    return 2;
 }
 
 // GetCritChance() → percent (melee crit)
@@ -918,21 +1188,49 @@ static int lua_GetCombatRating(lua_State* L) {
     return 1;
 }
 
-// GetSpellBonusDamage(school) → value  (1-6 magic schools)
+// GetSpellBonusDamage(school) → that school's spell damage bonus (0x0060e310).
+// It is not one number, and the school is the index: the client checks the
+// argument lands in 1..7 - the field run is seven wide, schools 1..7 in the
+// order Holy, Fire, Nature, Frost, Shadow, Arcane and the all-schools one the
+// sheet does not show - and raises otherwise, returning nothing.  Then it adds
+// **two** arrays read off the local player's player object (0x00578210 and
+// 0x00578250): PLAYER_FIELD_MOD_DAMAGE_DONE_POS at +0xffc into the field blob
+// the object keeps at +0x1008, and PLAYER_FIELD_MOD_DAMAGE_DONE_NEG at +0x1018.
+// The second is a damage *reduction* and comes from the server already
+// negative, so the sum goes below zero for a cursed or debuffed caster, and the
+// client does not clamp that away.  wowee answered its cached maximum across the
+// six magic schools, clamped at zero, whatever school was asked for - which is
+// the same number for every row of the sheet's spell damage list.
 static int lua_GetSpellBonusDamage(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnZero(L); }
-    int32_t sp = gh->getSpellPower();
-    lua_pushnumber(L, sp >= 0 ? sp : 0);
+    const int school = static_cast<int>(luaL_checkinteger(L, 1));
+    if (school < 1 || school > 7)
+        return luaL_error(L, "bad argument #1 to 'GetSpellBonusDamage' (number expected, got %s)",
+                          lua_typename(L, lua_type(L, 1)));
+    const uint16_t posIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_POS);
+    const uint16_t negIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_NEG);
+    const auto player = localPlayerObject(L, posIndex, negIndex);
+    int32_t total = 0;
+    if (player) {
+        if (posIndex != 0xFFFF)
+            total += static_cast<int32_t>(player->getField(static_cast<uint16_t>(posIndex + school - 1)));
+        if (negIndex != 0xFFFF)
+            total += static_cast<int32_t>(player->getField(static_cast<uint16_t>(negIndex + school - 1)));
+    }
+    lua_pushnumber(L, total);
     return 1;
 }
 
-// GetSpellBonusHealing() → value
+// GetSpellBonusHealing() → value (0x0060e3b0).  One dword, no school: the client
+// reads PLAYER_FIELD_MOD_HEALING_DONE_POS straight out of the player object at
+// +0x1050 - blob dword 1044 - with no second run to add the way the damage side
+// has, and pushes it as a signed int, so a healing reduction shows as a negative
+// row on the sheet (paperdollframe.lua:978).  The server has already summed the
+// item mods into it; the only thing missing here was the clamp that turned a
+// negative into a zero.
 static int lua_GetSpellBonusHealing(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnZero(L); }
-    int32_t v = gh->getHealingPower();
-    lua_pushnumber(L, v >= 0 ? v : 0);
+    const uint16_t index = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_HEALING_DONE_POS);
+    const auto player = localPlayerObject(L, index);
+    lua_pushnumber(L, player ? static_cast<int32_t>(player->getField(index)) : 0);
     return 1;
 }
 
@@ -1409,24 +1707,20 @@ static int lua_IsFalling(lua_State* L) {
     return 1;
 }
 
+/// IsStealthed() (0x00612610): the player's own UNIT_FIELD_BYTES_1 third byte,
+/// 0x2. The client names no spell and takes no unit argument - it asserts the
+/// local player (Player_C.h 0xa0) and asks the field, because stealth is the
+/// server's to say: 0x0073c830 watches that same bit. Reading it here rather
+/// than matching Stealth (1784), Prowl (5215) and their ranks against the
+/// player's auras also keeps the answer the server's: a stealth the server
+/// took away by the field is gone here the moment it is gone, and a spell this
+/// list did not know - any disguise the list never carried - did not have to
+/// be added to it. 1 or nil, as the client's binding returns.
 static int lua_IsStealthed(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnFalse(L); }
-    // Check for stealth auras (aura flags bit 0x40 = is harmful, stealth is a buff)
-    // WoW detects stealth via unit flags: UNIT_FLAG_IMMUNE (0x02) or specific aura IDs
-    // Simplified: check player auras for known stealth spell IDs
-    bool stealthed = false;
-    for (const auto& a : gh->getPlayerAuras()) {
-        if (a.isEmpty() || a.spellId == 0) continue;
-        // Common stealth IDs: 1784 (Stealth), 5215 (Prowl), 66 (Invisibility)
-        if (a.spellId == 1784 || a.spellId == 5215 || a.spellId == 66 ||
-            a.spellId == 1785 || a.spellId == 1786 || a.spellId == 1787 ||
-            a.spellId == 11305 || a.spellId == 11306) {
-            stealthed = true;
-            break;
-        }
-    }
-    lua_pushboolean(L, stealthed);
+    const game::Unit* player = gh ? gh->getUnitByGuid(gh->getPlayerGuid()) : nullptr;
+    const uint8_t visibility = player ? player->getVisibilityFlags() : 0;
+    if ((visibility & 0x2) != 0) lua_pushnumber(L, 1); else lua_pushnil(L);
     return 1;
 }
 
@@ -1484,21 +1778,39 @@ static int lua_GetXPExhaustion(lua_State* L) {
 /// GetWatchedFactionInfo() → name, standingID, barMin, barMax, barValue.
 ///
 /// The reputation bar under the experience bar, which draws nothing at all
-/// without this. Returns nothing when no faction is being watched, which is
-/// what MainMenuBar_UpdateExperienceBars checks for before showing the bar.
+/// without this.
+///
+/// Five answers, and nil plus four zeros when nothing is watched: that is what
+/// 0x005d1240 pushes on both paths, and reputationframe.lua:324 names five.
+///
+/// Which faction that is comes from the realm - PLAYER_FIELD_WATCHED_FACTION
+/// INDEX holds a reputation list index, which the client bounds to 0..0x7f and
+/// turns into a faction, so the choice survives a relog and travels with the
+/// character.  It is not a local selection, and nothing here picks one.
 ///
 /// The bounds are the rank's own, not the whole scale: WoW's bar fills from
 /// the bottom of the current rank to the top of it, so a character halfway
 /// through Honored shows a half-full bar rather than one two-thirds along.
+/// Those bounds are the client's own nine at 0x00a2d2fc - -42000, -6000, -3000,
+/// 0, 3000, 9000, 21000, 42000, 43000 - read as min[i] and max[i] of one array,
+/// which is why the two look four bytes apart.
 static int lua_GetWatchedFactionInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) return 0;
-    const uint32_t factionId = gh->getWatchedFactionId();
-    if (factionId == 0) return 0;
-    const auto& standings = gh->getFactionStandings();
-    auto it = standings.find(factionId);
-    if (it == standings.end()) return 0;
-    const int32_t standing = it->second;
+    const uint32_t factionId = gh ? gh->getWatchedFactionId() : 0u;
+    int32_t standing = 0;
+    bool watched = false;
+    if (gh && factionId != 0) {
+        const auto& standings = gh->getFactionStandings();
+        if (auto it = standings.find(factionId); it != standings.end()) {
+            standing = it->second;
+            watched = true;
+        }
+    }
+    if (!watched) {
+        lua_pushnil(L);
+        for (int i = 0; i < 4; ++i) lua_pushnumber(L, 0);
+        return 5;
+    }
 
     // Blizzard's own thresholds, and the standing id that goes with each. Hated
     // is 1 and Exalted is 8, which is what the interface indexes FACTION_BAR_
@@ -1517,8 +1829,9 @@ static int lua_GetWatchedFactionInfo(lua_State* L) {
     lua_pushnumber(L, kRanks[rank].min);
     lua_pushnumber(L, kRanks[rank].max);
     lua_pushnumber(L, standing);
-    lua_pushnumber(L, factionId);
-    return 6;
+    // Five, as the client's are: the faction id is not one of its answers, and
+    // the interface gets the id it asked for back from GetSelectedFaction.
+    return 5;
 }
 
 /// GetNumBagSlots() → the four bags beside the backpack. A constant in every
@@ -1573,37 +1886,94 @@ static int lua_GetTimeToWellRested(lua_State* L) {
 // The server sends most of what these want; where it does not, the honest
 // answer is a zero of the right shape rather than nothing.
 
-/// UnitAttackPower(unit) → base, positive buff, negative buff.
-///
-/// The server sends one effective number, not the three parts, so it is
-/// reported as all base and no buffs. The sheet adds them together, which
-/// gives the right total either way.
-static int lua_UnitAttackPower(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    // Whose. PaperDollFrame_SetAttackPower is shared and the pet tab calls it
-    // with "Pet", so the pet's line showed the hunter's attack power.
-    std::string who(luaL_optstring(L, 1, "player"));
-    toLowerInPlace(who);
-    if (who == "pet") {
-        const int32_t petAp = gh ? gh->getPetAttackPower() : 0;
-        lua_pushnumber(L, petAp > 0 ? petAp : 0);
-        lua_pushnumber(L, 0);
-        lua_pushnumber(L, 0);
-        return 3;
-    }
-    const int32_t ap = gh ? gh->getMeleeAttackPower() : -1;
-    lua_pushnumber(L, ap > 0 ? ap : 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
+/// The three attack-power answers the client works out for itself (0x00610b60
+/// melee, 0x00610ca0 ranged): each one is (multiplier + 1) times a field, with
+/// the mods dword split into its two signed halves for the positive and the
+/// negative buff. Rounded to a whole number, because that is what the client
+/// casts to before pushing. A mod or multiplier field the expansion does not
+/// name reads as no mod, which leaves the base alone.
+struct AttackPowerAnswer {
+    long long base = 0, positive = 0, negative = 0;
+};
+static AttackPowerAnswer attackPowerAnswer(game::Unit* unit, game::UF baseField,
+                                           game::UF modsField, game::UF multField) {
+    const uint16_t baseIdx = game::fieldIndex(baseField);
+    const uint16_t modsIdx = game::fieldIndex(modsField);
+    const uint16_t multIdx = game::fieldIndex(multField);
+    if (!unit || baseIdx == 0xFFFF) return {};
+    const uint32_t mods = (modsIdx == 0xFFFF) ? 0u : unit->getField(modsIdx);
+    const double scale = (multIdx == 0xFFFF)
+                             ? 1.0
+                             : static_cast<double>(std::bit_cast<float>(unit->getField(multIdx))) + 1.0;
+    return {
+        std::llround(scale * static_cast<int32_t>(unit->getField(baseIdx))),
+        std::llround(scale * static_cast<int16_t>(mods & 0xFFFF)),
+        std::llround(scale * static_cast<int16_t>(mods >> 16)),
+    };
+}
+static int pushAttackPower(lua_State* L, const AttackPowerAnswer& a) {
+    lua_pushnumber(L, static_cast<double>(a.base));
+    lua_pushnumber(L, static_cast<double>(a.positive));
+    lua_pushnumber(L, static_cast<double>(a.negative));
     return 3;
 }
+
+/// UnitAttackPower(unit) → base, positive buff, negative buff.
+///
+/// Three fields answer this and the client does the arithmetic itself:
+/// 0x00610b60 takes the attack power at 123, the mods dword at 124 - one field
+/// holding two signed halves, positive low and negative high - and a float
+/// multiplier at 125, then multiplies all three answers by (1 + multiplier).
+/// WoWee had the base alone, so it claimed there were no buffs when the realm
+/// had just named them, and an aura that writes the multiplier field - the
+/// fraction-of-attack-power kind rather than the flat kind - left the sheet
+/// quoting the unscaled figure.
+///
+/// The client answers 0, 0, 0 for a unit whose guid's high dword has bit 3
+/// clear, the bit the realm sets in UNIT_FIELD_FLAGS as
+/// UNIT_FLAG_PLAYER_CONTROLLED: the player and its own pet both carry it, a
+/// guardian, a totem or a creature does not. PaperDollFrame_SetAttackPower is
+/// shared and the pet tab calls it with "pet", which is how the pet's line came
+/// to print its owner's attack power - the binding knew only the player's
+/// number and the handler's cached pet figure, and the cache is left here as
+/// the answer for a pet whose entity this cannot reach.
+static int lua_UnitAttackPower(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    std::string who(luaL_optstring(L, 1, "player"));
+    toLowerInPlace(who);
+    auto* unit = resolveUnit(L, who.c_str());
+    if (unit) {
+        if (!(unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED))
+            return pushAttackPower(L, {});
+        return pushAttackPower(L, attackPowerAnswer(unit, game::UF::UNIT_FIELD_ATTACK_POWER,
+                                                    game::UF::UNIT_FIELD_ATTACK_POWER_MODS,
+                                                    game::UF::UNIT_FIELD_ATTACK_POWER_MULTIPLIER));
+    }
+    const int32_t ap = who == "pet" ? (gh ? gh->getPetAttackPower() : 0)
+                                    : (gh ? gh->getMeleeAttackPower() : 0);
+    return pushAttackPower(L, {ap > 0 ? ap : 0, 0, 0});
+}
+
+/// UnitRangedAttackPower(unit) → base, positive buff, negative buff. The ranged
+/// twin (0x00610ca0), reading 126, 127 and 128 the same way. It used to ignore
+/// its argument altogether and answer the player's ranged attack power for
+/// whoever asked, including the pet - the pet sheet registers
+/// UNIT_RANGED_ATTACK_POWER and asks for "pet".
 static int lua_UnitRangedAttackPower(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int32_t ap = gh ? gh->getRangedAttackPower() : -1;
-    lua_pushnumber(L, ap > 0 ? ap : 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    return 3;
+    std::string who(luaL_optstring(L, 1, "player"));
+    toLowerInPlace(who);
+    auto* unit = resolveUnit(L, who.c_str());
+    if (unit) {
+        if (!(unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED))
+            return pushAttackPower(L, {});
+        return pushAttackPower(L, attackPowerAnswer(
+                                      unit, game::UF::UNIT_FIELD_RANGED_ATTACK_POWER,
+                                      game::UF::UNIT_FIELD_RANGED_ATTACK_POWER_MODS,
+                                      game::UF::UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER));
+    }
+    const int32_t ap = gh ? gh->getRangedAttackPower() : 0;
+    return pushAttackPower(L, {ap > 0 ? ap : 0, 0, 0});
 }
 
 /// UnitDefense(unit) → base, modifier. Base defense skill is five per level -
@@ -1623,35 +1993,66 @@ static int lua_UnitDefense(lua_State* L) {
     return 2;
 }
 
-/// UnitAttackSpeed(unit) → main hand, off hand, in seconds. Nothing here
-/// tracks weapon speed yet; two seconds is a one-handed weapon and keeps the
-/// damage-per-second division that follows from dividing by zero.
-/// UnitAttackSpeed(unit) → mainHandSpeed, offHandSpeed.
+/// UnitAttackSpeed(unit) → mainHandSpeed, offHandSpeed, both in seconds.
 ///
-/// The off-hand speed is nil when nothing is in that hand, and that is what
-/// the character sheet branches on: PaperDollFrame_SetAttackSpeed does
-/// `if ( offhandSpeed )` and then prints a two-handed line. Answering a speed
-/// unconditionally claimed an off-hand weapon for everyone, and the line it
-/// then built concatenated a value nothing had filled in.
+/// The client answers this from the unit's own attack-time fields, not from a
+/// weapon it may not be carrying: 0x00610a00 reads the blob's speed trio -
+/// main hand +0xe0, off hand +0xe4, ranged +0xe8 - each a millisecond count it
+/// divides by 1000, and the ranged one is UNIT_FIELD_RANGEDATTACKTIME, which
+/// WoWee already reads at 64 for a ranged spell's category cooldown. Across
+/// the unit fields the blob runs six dwords behind the wire index (UnitLevel
+/// is 0x0060f9e0 reading +0xc0 for LEVEL's 54; MINDAMAGE's 70 and MAXDAMAGE's
+/// 71 sit at +0x100 and +0x104), so the pair asked for here is fields 62 and
+/// 63. Every unit carries them, which is what a cat form's 1.0 s and a pet's
+/// own swing time look like; a weapon's delay is only the number the realm
+/// wrote the field from, and answering from the weapon left every unit but the
+/// player - the pet row of the pet sheet above all - on a bare-handed 2.0 s.
+///
+/// The off-hand speed is nil when nothing is in that hand (the client's own
+/// gate at ScriptEvents.cpp:0xb42: the equipped item is two-handed and no
+/// off-hand weapon comes back), and that is what the character sheet branches
+/// on: PaperDollFrame_SetAttackSpeed does `if ( offhandSpeed )` and then prints
+/// a two-handed line. Answering a speed unconditionally claimed an off-hand
+/// weapon for everyone, and the line it then built concatenated a value nothing
+/// had filled in. A hand whose field never arrived reads as no off-hand, and a
+/// main hand whose field never arrived falls back to the weapon's delay rather
+/// than the client's 0.0: the three earlier layouts do not place this pair in
+/// their tables, and a 0.0 there would divide every damage-per-second figure
+/// on the sheet by nothing.
 static int lua_UnitAttackSpeed(lua_State* L) {
     auto* gh = getGameHandler(L);
     const char* uid = luaL_optstring(L, 1, "player");
-    std::string u(uid);
-    toLowerInPlace(u);
-    // The comment above used to say nothing tracked weapon speed. The equipped
-    // item carries delayMs and always has, so both hands answer from the
-    // weapon rather than from a flat two seconds - which every damage-per-
-    // second figure on the sheet is divided by.
-    double mainSpeed = 2.0;      // unarmed, which is what WoW uses bare-handed
+    auto* unit = resolveUnit(L, uid);
+    const uint16_t mainIdx = game::fieldIndex(game::UF::UNIT_FIELD_BASEATTACKTIME);
+    const uint16_t offIdx = game::fieldIndex(game::UF::UNIT_FIELD_OFFHANDATTACKTIME);
+    double mainSpeed = 0.0;
     double offSpeed = 0.0;
     bool hasOffHand = false;
-    if (gh && u == "player") {
-        const auto& inv = gh->getInventory();
-        const auto& mh = inv.getEquipSlot(game::EquipSlot::MAIN_HAND);
-        if (!mh.empty() && mh.item.delayMs > 0) mainSpeed = mh.item.delayMs / 1000.0;
-        const auto& oh = inv.getEquipSlot(game::EquipSlot::OFF_HAND);
-        hasOffHand = !oh.empty();
-        if (hasOffHand) offSpeed = oh.item.delayMs > 0 ? oh.item.delayMs / 1000.0 : 2.0;
+    if (unit) {
+        if (mainIdx != 0xFFFF) mainSpeed = unit->getField(mainIdx) / 1000.0;
+        if (offIdx != 0xFFFF) {
+            offSpeed = unit->getField(offIdx) / 1000.0;
+            hasOffHand = offSpeed > 0.0;
+        }
+    }
+    if (mainSpeed == 0.0) {
+        // Nothing wrote the field: the equipped item's delay, and bare hands
+        // when there is no item. Always the player's own - no other unit has
+        // an inventory here - which is what this binding did before the
+        // fields were named.
+        std::string u(uid);
+        toLowerInPlace(u);
+        mainSpeed = 2.0;
+        if (gh && u == "player") {
+            const auto& inv = gh->getInventory();
+            const auto& mh = inv.getEquipSlot(game::EquipSlot::MAIN_HAND);
+            if (!mh.empty() && mh.item.delayMs > 0) mainSpeed = mh.item.delayMs / 1000.0;
+            const auto& oh = inv.getEquipSlot(game::EquipSlot::OFF_HAND);
+            if (!hasOffHand && !oh.empty()) {
+                offSpeed = oh.item.delayMs > 0 ? oh.item.delayMs / 1000.0 : 2.0;
+                hasOffHand = true;
+            }
+        }
     }
     lua_pushnumber(L, mainSpeed);
     if (hasOffHand) lua_pushnumber(L, offSpeed);
@@ -1659,71 +2060,167 @@ static int lua_UnitAttackSpeed(lua_State* L) {
     return 2;
 }
 
+/// A damage field is float bits, and the client pushes them with no conversion
+/// at all (0x00610860 takes +0x100 of the field blob and hands it straight to
+/// Lua), so decode them here rather than giving the number a second home. A
+/// field this expansion's table does not name reads as no damage, which is what
+/// sends the callers below to their fallbacks.
+static double fieldAsFloat(game::Unit* unit, game::UF field) {
+    const uint16_t idx = game::fieldIndex(field);
+    if (!unit || idx == 0xFFFF) return 0.0;
+    return static_cast<double>(std::bit_cast<float>(unit->getField(idx)));
+}
+
 /// UnitDamage(unit) → min, max, off-hand min, off-hand max, positive bonus,
 /// negative bonus, percent.
 ///
-/// The comment here used to say weapon damage was not tracked, so it reported
-/// the attack-power contribution alone against a two-second swing. The
-/// equipped weapon carries its damage range and its speed, so the figure is
-/// the weapon's own damage plus what attack power adds over one swing -
-/// attack power divided by fourteen is damage per second, times the speed.
+/// The client pushes the unit's own four damage fields and adds nothing to
+/// them: 0x00610860 reads the blob's +0x100 through +0x10c - MINDAMAGE's 70
+/// and MAXDAMAGE's 71, then the off-hand pair at 72 and 73 - and passes them
+/// to Lua as float bits. The realm has already folded the weapon's damage and
+/// the unit's attack power into that pair, which is why a hunter's pet, a cat
+/// form and a geared warrior all answer from the same four reads. Working the
+/// figure out of the equipment instead, as this did, could only ever be right
+/// for the player: it modelled attack power as damage per second divided by
+/// fourteen times the swing, took half of it for the off hand, and left every
+/// other unit on the sheet - the pet tab above all, which asks for nothing but
+/// the pet - showing bare hands.
+///
+/// The last three are the physical-school bonuses. The client answers them only
+/// for a unit whose guid's high dword has bit 4 set - the one that lets it
+/// reach into the unit's player extension, since the branch dereferences
+/// `unit + 0x1008` and then checks the unit really is the local player before
+/// using what it finds there - and from 0x00578210, 0x00578250 and
+/// 0x00578290, accessors of a
+/// figure the client keeps for its own character sheet rather than of an update
+/// field, and one WoWee does not build. Everyone else gets 0, 0 and 1, which is
+/// also what the client gives them; the cost of not answering them for the
+/// player is a tooltip breakdown line, not the range itself, since the range
+/// already carries whatever the realm folded in.
 static int lua_UnitDamage(lua_State* L) {
     auto* gh = getGameHandler(L);
-    // The pet's damage comes off its own fields rather than from a weapon it
-    // does not carry, so it is answered before any of the equipment below.
     std::string who(luaL_optstring(L, 1, "player"));
     toLowerInPlace(who);
-    if (who == "pet") {
-        const double lo = gh ? gh->getPetMinDamage() : 0.0;
-        const double hi = gh ? gh->getPetMaxDamage() : 0.0;
-        lua_pushnumber(L, lo);   // minDamage
-        lua_pushnumber(L, hi);   // maxDamage
-        lua_pushnumber(L, 0.0);  // minOffHand
-        lua_pushnumber(L, 0.0);  // maxOffHand
-        lua_pushnumber(L, 0.0);  // physical bonus, positive
-        lua_pushnumber(L, 0.0);  // ...and negative
-        lua_pushnumber(L, 1.0);  // damage percent
-        return 7;
-    }
-    const int32_t ap = gh ? gh->getMeleeAttackPower() : -1;
-    double baseMin = 1.0, baseMax = 2.0;   // bare hands
-    double speed = 2.0;
-    double offMin = 0.0, offMax = 0.0;
-    if (gh) {
-        const auto& inv = gh->getInventory();
-        const auto& mh = inv.getEquipSlot(game::EquipSlot::MAIN_HAND);
-        if (!mh.empty() && mh.item.damageMax > 0.0f) {
-            baseMin = mh.item.damageMin;
-            baseMax = mh.item.damageMax;
-            if (mh.item.delayMs > 0) speed = mh.item.delayMs / 1000.0;
+    auto* unit = resolveUnit(L, who.c_str());
+    double lo = fieldAsFloat(unit, game::UF::UNIT_FIELD_MINDAMAGE);
+    double hi = fieldAsFloat(unit, game::UF::UNIT_FIELD_MAXDAMAGE);
+    double offLo = fieldAsFloat(unit, game::UF::UNIT_FIELD_MINOFFHANDDAMAGE);
+    double offHi = fieldAsFloat(unit, game::UF::UNIT_FIELD_MAXOFFHANDDAMAGE);
+    if (lo == 0.0 && hi == 0.0) {
+        // Nothing wrote the pair. What this answered with before the fields
+        // were named: the pet's own pair, which entity_controller keeps from
+        // the realm's block even when the pet's entity is not one this can
+        // reach, and otherwise the player's weapon plus the attack power the
+        // realm would have folded in.
+        if (who == "pet" && gh) {
+            lo = gh->getPetMinDamage();
+            hi = gh->getPetMaxDamage();
+        } else {
+            const int32_t ap = gh ? gh->getMeleeAttackPower() : -1;
+            lo = 1.0;
+            hi = 2.0;              // bare hands
+            double speed = 2.0;
+            if (gh && who == "player") {
+                const auto& inv = gh->getInventory();
+                const auto& mh = inv.getEquipSlot(game::EquipSlot::MAIN_HAND);
+                if (!mh.empty() && mh.item.damageMax > 0.0f) {
+                    lo = mh.item.damageMin;
+                    hi = mh.item.damageMax;
+                    if (mh.item.delayMs > 0) speed = mh.item.delayMs / 1000.0;
+                }
+                const auto& oh = inv.getEquipSlot(game::EquipSlot::OFF_HAND);
+                if (!oh.empty() && oh.item.damageMax > 0.0f) {
+                    offLo = oh.item.damageMin;
+                    offHi = oh.item.damageMax;
+                }
+            }
+            const double apSwing = (ap > 0) ? (ap / 14.0) * speed : 0.0;
+            lo += apSwing;
+            hi += apSwing;
+            offLo = offLo > 0.0 ? offLo + apSwing / 2.0 : 0.0;
+            offHi = offHi > 0.0 ? offHi + apSwing / 2.0 : 0.0;
         }
-        const auto& oh = inv.getEquipSlot(game::EquipSlot::OFF_HAND);
-        if (!oh.empty() && oh.item.damageMax > 0.0f) {
-            offMin = oh.item.damageMin;
-            offMax = oh.item.damageMax;
-        }
     }
-    const double apSwing = (ap > 0) ? (ap / 14.0) * speed : 0.0;
-    lua_pushnumber(L, baseMin + apSwing);
-    lua_pushnumber(L, baseMax + apSwing);
-    lua_pushnumber(L, offMin > 0.0 ? offMin + apSwing / 2.0 : 0.0);
-    lua_pushnumber(L, offMax > 0.0 ? offMax + apSwing / 2.0 : 0.0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 1.0);
+    // The last three answers are fields as well, for the one unit the server
+    // sends them for.  0x00610860 branches on the guid's player-extension bit and
+    // then reads PLAYER_FIELD_MOD_DAMAGE_DONE_POS, _NEG and _PCT at index 0 - the
+    // school pushed is a literal 0, `6a 00` in the code bytes, which is what
+    // Ghidra's output drops from those three calls - through 0x00578210,
+    // 0x00578250 and 0x00578290, each of which answers zero unless the unit it
+    // runs on is the local player.  So the player gets its own three fields and
+    // every other unit the no-bonus answers, which is what wowee answered for the
+    // player too.  The one place the two differ is a player-controlled pet that
+    // carries that guid bit: its fields are private and never sent, so the client
+    // hands back a percent of 0.0 and the sheet then divides the damage bounds by
+    // it (paperdollframe.lua:544).  wowee keeps 1.0 there rather than reproducing
+    // a divide by zero for a pet the realm has never sent a damage modifier for.
+    double pos = 0.0, neg = 0.0, percent = 1.0;
+    if (gh && unit && unit->getGuid() == gh->getPlayerGuid()) {
+        const uint16_t posIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_POS);
+        const uint16_t negIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_NEG);
+        if (posIndex != 0xFFFF) pos = static_cast<int32_t>(unit->getField(posIndex));
+        if (negIndex != 0xFFFF) neg = static_cast<int32_t>(unit->getField(negIndex));
+        // A layout that does not name the multiplier keeps the sheet's 1.0; one
+        // that names it and has not been sent the field yet gives the 0.0 the
+        // client would show.
+        const uint16_t pctIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_PCT);
+        if (pctIndex != 0xFFFF) percent = fieldAsFloat(unit, game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_PCT);
+    }
+    lua_pushnumber(L, lo);      // minDamage
+    lua_pushnumber(L, hi);      // maxDamage
+    lua_pushnumber(L, offLo);   // off-hand min
+    lua_pushnumber(L, offHi);   // off-hand max
+    lua_pushnumber(L, pos);     // physical bonus, positive
+    lua_pushnumber(L, neg);     // ...and negative
+    lua_pushnumber(L, percent); // ...and the multiplier the sheet divides by
     return 7;
 }
 
 /// UnitRangedDamage(unit) → speed, min, max, positive, negative, percent.
+///
+/// The same shape as UnitDamage one field group along: 0x00610550 pushes the
+/// blob's ranged attack time at +0xe8 - UNIT_FIELD_RANGEDATTACKTIME, which
+/// WoWee already reads at 64 for a ranged spell's category cooldown - divided
+/// by 1000, then the ranged damage pair at +0x1ec and +0x1f0, fields 129 and
+/// 130, as float bits. So the bow's own damage and the shot's speed both come
+/// from the realm, and this answered neither: it named a bow's nominal 2.8 s
+/// for every unit that asked and built the range out of attack power alone, so
+/// a hunter's ranged row showed no weapon damage at all and a pet that asked
+/// was handed a swing speed it never had.
+///
+/// The three bonuses are the per-school PLAYER_FIELD_MOD_DAMAGE_DONE_* run
+/// again, indexed by the school of the shot's spell - which is the part of the
+/// client's answer that needs the shot itself, and is not modelled here. They
+/// stay the client's own no-bonus answers, 0, 0 and 1, as they are for every
+/// unit it does not treat as player-controlled.
 static int lua_UnitRangedDamage(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int32_t ap = gh ? gh->getRangedAttackPower() : -1;
-    const double swing = (ap > 0) ? (ap / 14.0) * 2.8 : 0.0;
-    lua_pushnumber(L, 2.8);
-    lua_pushnumber(L, swing);
-    lua_pushnumber(L, swing);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
+    std::string who(luaL_optstring(L, 1, "player"));
+    toLowerInPlace(who);
+    auto* unit = resolveUnit(L, who.c_str());
+    const uint16_t speedIdx = game::fieldIndex(game::UF::UNIT_FIELD_RANGEDATTACKTIME);
+    const double speed = (unit && speedIdx != 0xFFFF)
+                             ? unit->getField(speedIdx) / 1000.0
+                             : 0.0;
+    double lo = fieldAsFloat(unit, game::UF::UNIT_FIELD_MINRANGEDDAMAGE);
+    double hi = fieldAsFloat(unit, game::UF::UNIT_FIELD_MAXRANGEDDAMAGE);
+    if (lo == 0.0 && hi == 0.0) {
+        // Nothing wrote the pair, so fall back to what this did before the
+        // fields were named - attack power over a bow's nominal speed. The
+        // speed goes with the range rather than the realm's field because the
+        // two are read together everywhere the sheet uses them, and a range
+        // invented from a 2.8 s swing against a field speed would print a
+        // damage-per-second figure matching neither.
+        const double swingSpeed = speed > 0.0 ? speed : 2.8;
+        const int32_t ap = gh ? gh->getRangedAttackPower() : -1;
+        const double swing = (ap > 0) ? (ap / 14.0) * swingSpeed : 0.0;
+        lo = hi = swing;
+    }
+    lua_pushnumber(L, speed);
+    lua_pushnumber(L, lo);
+    lua_pushnumber(L, hi);
+    lua_pushnumber(L, 0.0);
+    lua_pushnumber(L, 0.0);
     lua_pushnumber(L, 1.0);
     return 6;
 }
@@ -2085,10 +2582,14 @@ static int lua_UnitAffectingCombat(lua_State* L) {
 //
 // The pet tab formats this with %d before testing it, and %d against nil raises
 // on the spot - on a tab of the character frame, which is drawn by default.
-// Nothing here works out what a pet inherits, and zero is the honest figure
-// rather than a guess at a scaling rule.
+// It is not worked out here any more than it is in the client: the accessor at
+// 0x0060e410 returns the player's PLAYER_FIELD_PET_SPELL_POWER dword as a signed
+// number, so a pet that loses spell damage reads negative and
+// petpaperdollframe.lua:619 puts it in red. Zero stays the answer for a realm
+// that has no such field to write.
 static int lua_GetPetSpellBonusDamage(lua_State* L) {
-    lua_pushnumber(L, 0);
+    auto* gh = getGameHandler(L);
+    lua_pushnumber(L, gh ? gh->getPetSpellBonusDamage() : 0);
     return 1;
 }
 
@@ -2448,10 +2949,57 @@ static int lua_UnitClassification(lua_State* L) {
     return 1;
 }
 
-// GetComboPoints("player"|"vehicle", "target") → number
+// GetComboPoints(unit [, target]) → number
+/// GetComboPoints(unit [, target]) - the combo points that unit has on that
+/// target, and on that target only.
+///
+/// 0x00611670 resolves both names to guids and answers for the two units that
+/// can hold combo points: the player - gated on the class byte being 4 (rogue)
+/// or 11 (druid), the same byte class masks are shifted by, which is where the
+/// client says no for everyone else - and the player's pet (0x005d3520). The
+/// count comes back only when the unit named is the one the points are on:
+/// 0x00513920 compares against the stored combo target, having first put the
+/// player's current target in place of a zero pair, so the argument really is
+/// a question about a unit rather than about whoever is selected now. Every
+/// other unit, and any other target, answers 0.
+///
+/// WoWee answered the player's count for every call: an addon asking
+/// GetComboPoints("player", "focus") got the current target's number, and the
+/// pet's own points - which the server sends separately, and which
+/// UNIT_COMBO_POINTS("pet") already carries - were never readable here at all.
+/// A call with no unit at all answers nothing, as the client's
+/// "Usage: GetComboPoints(\"unit\"[, \"target\"]" does, rather than 0.
 static int lua_GetComboPoints(lua_State* L) {
+    const char* unit = lua_tostring(L, 1);
+    if (!unit) return 0;
     auto* gh = getGameHandler(L);
-    lua_pushnumber(L, gh ? gh->getComboPoints() : 0);
+    if (!gh) { lua_pushnumber(L, 0); return 1; }
+
+    std::string uid(unit);
+    toLowerInPlace(uid);
+    const uint64_t who = resolveUnitGuid(gh, uid);
+
+    // A target the call does not name, or names without being able to resolve,
+    // is the player's current target - 0x00513920 and 0x005d3520 both put the
+    // current target in place of a zero pair before comparing.
+    const char* named = lua_tostring(L, 2);
+    uint64_t on = 0;
+    if (named && *named) {
+        std::string targetName(named);
+        toLowerInPlace(targetName);
+        on = resolveUnitGuid(gh, targetName);
+    }
+    if (on == 0) on = gh->getTargetGuid();
+
+    uint8_t points = 0;
+    if (who == gh->getPlayerGuid()) {
+        const uint8_t cls = gh->getPlayerClass();
+        if ((cls == 4 || cls == 11) && gh->getComboTarget() == on)
+            points = gh->getComboPoints();
+    } else if (who != 0 && who == gh->getPetGuid()) {
+        points = gh->petComboPointsOn(on);
+    }
+    lua_pushnumber(L, points);
     return 1;
 }
 
@@ -2703,6 +3251,36 @@ static int lua_GetPowerRegen(lua_State* L) {
     return 2;
 }
 
+/// The realm's known-titles run, when the character's block has carried one.
+///
+/// Six dwords, read one after the other from the field the layout names: the
+/// client names the run's first dword and reads the other five beside it
+/// (IsTitleKnown, 0x0051b410, at blob +0x778 through +0x78f, which is the same
+/// six its own watchers are installed on - three pairs of four bytes, each
+/// watched eight wide).
+///
+/// False is the answer when there is no run to trust: either the layout names
+/// no such field, or this character's block has never carried all six. That is
+/// what keeps the titles earned in this session as the answer instead of a
+/// dropdown listing nothing - the layouts before WotLK have no such field at
+/// all, and a realm that has never sent the mask cannot be asked what it holds.
+static bool knownTitleWords(game::GameHandler* gh, game::KnownTitleWords& words) {
+    words.fill(0);
+    if (!gh) return false;
+    const uint16_t idx = game::fieldIndex(game::UF::PLAYER_FIELD_KNOWN_TITLES);
+    if (idx == 0xFFFF) return false;
+    const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    if (!player) return false;
+    for (uint32_t i = 0; i < game::kKnownTitleWords; ++i) {
+        // All six or none. Half a run is not half an answer: an absent dword
+        // reads as zero and would hide every title in that 64-wide group.
+        const uint16_t key = static_cast<uint16_t>(idx + i);
+        if (!player->hasField(key)) return false;
+        words[i] = player->getField(key);
+    }
+    return true;
+}
+
 void registerUnitLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"GetUnitPitch",  lua_GetUnitPitch},
@@ -2754,48 +3332,8 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"UnitDetailedThreatSituation", lua_UnitDetailedThreatSituation},
                 {"UnitSex",       lua_UnitSex},
                 {"UnitClass",     lua_UnitClass},
-                {"UnitArmor",     [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            // Whose armour. PaperDollFrame_SetArmor is shared between the two
-            // sheets and the pet tab calls it with "Pet" - capitalised, which
-            // is why this compares lowered.
-            std::string who(luaL_optstring(L, 1, "player"));
-            toLowerInPlace(who);
-            int32_t armor = 0;
-            if (gh) {
-                armor = (who == "pet") ? gh->getPetResistances()[0]
-                      : (who == "player") ? gh->getArmorRating() : 0;
-            }
-            if (armor < 0) armor = 0;
-            lua_pushnumber(L, armor); // base
-            lua_pushnumber(L, armor); // effective
-            lua_pushnumber(L, armor); // armor (again for compat)
-            lua_pushnumber(L, 0);     // posBuff
-            lua_pushnumber(L, 0);     // negBuff
-            return 5;
-        }},
-                {"UnitResistance", [](lua_State* L) -> int {
-            auto* gh = getGameHandler(L);
-            int school = static_cast<int>(luaL_optnumber(L, 2, 0));
-            int32_t val = 0;
-            // Whose resistance, for the same reason as UnitStat above.
-            std::string who(luaL_optstring(L, 1, "player"));
-            toLowerInPlace(who);
-            if (gh && school >= 0 && school <= 6) {
-                if (who == "pet") {
-                    val = gh->getPetResistances()[static_cast<size_t>(school)];
-                } else if (who == "player") {
-                    // Physical is armor, and it is index zero of the same block.
-                    val = (school == 0) ? gh->getArmorRating() : gh->getResistance(school);
-                }
-            }
-            if (val < 0) val = 0;
-            lua_pushnumber(L, val); // base
-            lua_pushnumber(L, val); // effective
-            lua_pushnumber(L, 0);   // posBuff
-            lua_pushnumber(L, 0);   // negBuff
-            return 4;
-        }},
+                {"UnitArmor",     lua_UnitArmor},
+                {"UnitResistance", lua_UnitResistance},
                 {"UnitStat",      lua_UnitStat},
                 {"GetDodgeChance",    lua_GetDodgeChance},
                 {"GetParryChance",    lua_GetParryChance},
@@ -2951,27 +3489,40 @@ void registerUnitLuaAPI(lua_State* L) {
             lua_pushboolean(L, (g1 != 0 && g2 != 0 && gh->unitMayAssist(g1, g2)) ? 1 : 0);
             return 1;
         }},
+                // GetPVPRankInfo(rank [, unit]) - 0x00611cb0.  The two answers
+                // come or go together, and the number is not the rank.  The name
+                // is a token lookup, "PVP_RANK_%d_%d" of the rank and of the
+                // side 0x006d6e90 answers from the unit's display race: the race
+                // row's faction template, whose flags give 1 Alliance, 2 Horde
+                // and 0 for neither.  The unit has to carry the guid's player
+                // extension bit or the lookup is skipped, and the name itself
+                // comes from 0x00819d40 - the client's own string store, not a
+                // table the realm sends, so there is none to give here.  With no
+                // name the client pushes nil and a plain 0; with one it pushes
+                // rank-4, or rank-5 for the four leader ranks below 5.  Handing
+                // back an empty string and the rank unchanged was wrong twice:
+                // both callers test `if (not rankName) rankName = NONE`
+                // (honorframe.lua:44-46, inspecthonorframe.lua:43-45) and "" is
+                // truthy in Lua, so those lines printed a blank where the
+                // original prints NONE; and the number goes into
+                // honorframe.lua:60's Interface\PvPRankBadges\PvPRankNN, so the
+                // unshifted rank asks that line for a badge the client never
+                // numbered.  Against a 3.3.5 realm the rank reaching this is 0
+                // anyway - its source is a byte clamped to zero below 5, see
+                // GetPVPLifetimeStats - so nil and 0 are what the original
+                // answers in practice, not only in the no-name case.
                 {"GetPVPRankInfo", [](lua_State* L) -> int {
-            const int rank = static_cast<int>(luaL_optnumber(L, 1, 0));
-            lua_pushstring(L, "");          // rank name
-            lua_pushnumber(L, rank > 0 ? rank : 0);
+            lua_pushnil(L);
+            lua_pushnumber(L, 0);
             return 2;
         }},
                 // Honour and arena totals, in the shapes their panels expect.
-                // Zeroes rather than nothing: every one of these is read
-                // straight into arithmetic or a format string.
-                {"GetPVPLifetimeStats", [](lua_State* L) -> int {
-            lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0);
-            return 3;
-        }},
-                {"GetPVPSessionStats", [](lua_State* L) -> int {
-            lua_pushnumber(L, 0); lua_pushnumber(L, 0);
-            return 2;
-        }},
-                {"GetPVPYesterdayStats", [](lua_State* L) -> int {
-            lua_pushnumber(L, 0); lua_pushnumber(L, 0);
-            return 2;
-        }},
+                // These three are fields the server already sends; the arena
+                // and honour *currencies* below are too, and the ones that stay
+                // zero are the ones no field carries.
+                {"GetPVPLifetimeStats",   lua_GetPVPLifetimeStats},
+                {"GetPVPSessionStats",    lua_GetPVPSessionStats},
+                {"GetPVPYesterdayStats",  lua_GetPVPYesterdayStats},
                 // Seven returns, as the battleground panel reads them:
                 // status, map, instance, level range, team size, registered.
                 // Stopping at three left teamSize nil and the panel formatted
@@ -3497,21 +4048,6 @@ void registerUnitLuaAPI(lua_State* L) {
             lua_pushboolean(L, fits);
             return 1;
         }},
-                // Zero rather than false: paperdollframe.lua asks
-                // `IsTitleKnown(i) ~= 0`, and `false ~= 0` compares two
-                // different types and is therefore true - so every title would
-                // have counted as known. This matters live, not just in
-                // theory: GetNumTitles answers 192, so the 1..GetNumTitles
-                // loop does run and reads this on every title.
-                // IsTitleKnown(bit) - the client tracks these already, as a
-                // set of bits off the player's known-titles mask. Answering a
-                // constant zero meant the paperdoll's title dropdown listed
-                // nothing however many the character had earned.
-                //
-                // A number rather than a boolean, because paperdollframe.lua
-                // asks `IsTitleKnown(i) ~= 0` and false compares unequal to
-                // zero - which is the trap that made this a zero rather than a
-                // false in the first place.
                 // The pet tab of the character sheet, which is handed over -
                 // PetPaperDollFrame_SetStats and PetExpBar_Update run whenever
                 // it is shown, so with a pet out these raised on opening it.
@@ -3593,9 +4129,37 @@ void registerUnitLuaAPI(lua_State* L) {
             }
             return 0;
         }},
+                // IsTitleKnown(bit), answered from the mask the realm sends
+                // wherever it sends one: that is the client's own source
+                // (0x0051b410 reads the six dwords of
+                // PLAYER_FIELD_KNOWN_TITLES off the player object and nothing
+                // else), and it is why titles earned before this session -
+                // every title a character arrives with - were missing here.
+                // knownTitleWords above says when there is a mask to read, and
+                // known_titles.hpp which bit of which dword a title id is.
+                //
+                // Where the layout names no run, the titles earned in this
+                // session stay the answer: SMSG_TITLE_EARNED is the only title
+                // news those realms send, and an earned title that is not
+                // listed is a title the character cannot put on.
+                //
+                // A number rather than a boolean, because paperdollframe.lua
+                // asks `IsTitleKnown(i) ~= 0` and false compares unequal to
+                // zero - which is the trap that made this a zero rather than a
+                // false in the first place. The loop asking it runs
+                // 1..GetNumTitles, and GetNumTitles answers 192, which is the
+                // whole space the six dwords cover (kKnownTitleCount), so every
+                // title id the mask can name comes through here.
                 {"IsTitleKnown",            [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int bit = static_cast<int>(luaL_optnumber(L, 1, -1));
+            game::KnownTitleWords words{};
+            if (knownTitleWords(gh, words)) {
+                // An id of nothing at all - a negative number, or 0, which the
+                // client rejects outright - asks for no bit and is not known.
+                lua_pushnumber(L, game::titleIsKnown(words, static_cast<uint32_t>(bit)) ? 1 : 0);
+                return 1;
+            }
             const bool known = gh && bit >= 0 &&
                                gh->getKnownTitleBits().count(static_cast<uint32_t>(bit)) > 0;
             lua_pushnumber(L, known ? 1 : 0);
@@ -3637,12 +4201,12 @@ void registerUnitLuaAPI(lua_State* L) {
             return 2;
         }},
                 {"GetArmorPenetration",     lua_GetArmorPenetration},
-                // Spell penetration and shield block value are summed from equipped-item
-                // stat mods (ITEM_MOD_SPELL_PENETRATION, the shield's block value), not
-                // any player field the server sends - the inventory does not yet total
-                // item stat mods, so these stay a genuine zero rather than a stale stub.
-                {"GetSpellPenetration",     lua_ZeroPercent},
-                {"GetShieldBlock",          lua_ZeroPercent},
+                // Both of these are player fields the server has already summed
+                // from the item mods, not figures the client works out from the
+                // bags - the note here used to say the latter, and the client
+                // reads a field in both cases (see the two bindings).
+                {"GetSpellPenetration",     lua_GetSpellPenetration},
+                {"GetShieldBlock",          lua_GetShieldBlock},
                 {"GetUnitHealthRegenRateFromSpirit", lua_GetUnitHealthRegenRateFromSpirit},
                 {"GetUnitManaRegenRateFromSpirit",   lua_GetUnitManaRegenRateFromSpirit},
                 {"GetWatchedFactionInfo",   lua_GetWatchedFactionInfo},

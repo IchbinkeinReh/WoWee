@@ -1,11 +1,36 @@
 #include "audio/mount_sound_manager.hpp"
 #include "audio/audio_engine.hpp"
+#include "audio/sound_entry.hpp"
 #include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
+#include <algorithm>
+#include <cctype>
 #include <random>
+#include <unordered_set>
 
 namespace wowee {
 namespace audio {
+
+namespace {
+
+// SoundEntries names its files by leaf (no folder) while these clips are
+// offered by full archive path, so the two are joined on the lowered leaf.
+std::string leafLower(const std::string& path) {
+    const auto slash = path.find_last_of("\\/");
+    std::string leaf = slash == std::string::npos ? path : path.substr(slash + 1);
+    std::transform(leaf.begin(), leaf.end(), leaf.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return leaf;
+}
+
+// One draw per play, the way the client draws its swing (0x004c5d40).
+float swingDraw() {
+    static std::mt19937 rng{std::random_device{}()};
+    return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
+}
+
+} // namespace
 
 MountSoundManager::MountSoundManager() {
 }
@@ -21,7 +46,9 @@ bool MountSoundManager::initialize(pipeline::AssetManager* assets) {
         return false;
     }
 
+    indexRowAsks();
     loadMountSounds();
+    applyRowAsks();
 
     int totalSamples = wingFlapSounds_.size() + wingIdleSounds_.size();
     for (const auto& [family, sounds] : familySounds_) {
@@ -39,7 +66,71 @@ void MountSoundManager::shutdown() {
     wingFlapSounds_.clear();
     wingIdleSounds_.clear();
     familySounds_.clear();
+    rowsByLeaf.clear();
     assetManager_ = nullptr;
+}
+
+// The SoundEntries rows that name these clips. Joined by leaf file name, and a
+// leaf whose rows disagree about level or flags is dropped rather than keeping
+// whichever row was read first -- the same rule activity_sound_manager uses.
+//
+// What the join gives here, counted over this file's own candidate paths: 34 of
+// the 80 distinct leaves are named, and **not one of those rows asks a swing**
+// (flags 0), so the invented pitch shifts below are wrong wherever a row names
+// the clip it picked. The asks are one level per family: 0.9 for the kodo, ram,
+// mechastrider and undead-horse alerts and wounds (17 clips), 0.7 for
+// mHorseAggro/Wound/Stand3A and mTigerWound/Stand2A (8), 0.69 for DragonHawk
+// and tallstrider (5), 0.5 for mRaptorAggro/Wound (4), all of them reached
+// 8/45 -- which is nothing to a play this manager makes without a position.
+// The other 46 leaves -- the wing flaps, DragonPreAggro, mHorseAttack* -- are
+// named by no row at all and keep this manager's own level and pitch.
+void MountSoundManager::indexRowAsks() {
+    if (!assetManager_) return;
+    rowsByLeaf.clear();
+    auto dbc = assetManager_->loadDBCOptional("SoundEntries.dbc");
+    // Older clients' SoundEntries stops before the volume/flags pair.
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() <= 25) return;
+    std::unordered_set<std::string> disagreeing;
+    for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+        const float volume = dbc->getFloat(i, 24);
+        const uint32_t flags = dbc->getUInt32(i, 25);
+        for (uint32_t f = 0; f < 10; ++f) {
+            const std::string file = dbc->getString(i, 3 + f);
+            if (file.empty()) continue;
+            const auto [ask, inserted] = rowsByLeaf.try_emplace(leafLower(file), MountRowAsk{volume, flags});
+            if (!inserted && (ask->second.volume != volume || ask->second.flags != flags))
+                disagreeing.insert(ask->first);
+        }
+    }
+    for (const auto& leaf : disagreeing) rowsByLeaf.erase(leaf);
+}
+
+// The 36 loadSoundList calls and loadSound() know only the path, so the ask is
+// put on the samples once they are all loaded rather than at every site.
+void MountSoundManager::applyRowAsks() {
+    const auto fill = [this](std::vector<MountSample>& clips) {
+        for (auto& sample : clips) {
+            if (const auto ask = rowsByLeaf.find(leafLower(sample.path)); ask != rowsByLeaf.end()) {
+                sample.rowVolume = ask->second.volume;
+                sample.flags = ask->second.flags;
+            }
+        }
+    };
+    fill(wingFlapSounds_);
+    fill(wingIdleSounds_);
+    for (auto& [family, sounds] : familySounds_) {
+        fill(sounds.move);
+        fill(sounds.jump);
+        fill(sounds.land);
+        fill(sounds.idle);
+    }
+}
+
+void MountSoundManager::askedByRow(const MountSample& sample, float own, float& volume, float& pitch) const {
+    const float base = (sample.rowVolume >= 0.0f ? sample.rowVolume : own) * volumeScale_;
+    const float draw = swingDraw();
+    volume = sound_entry::volumeForFlags(sample.flags, base, draw);
+    pitch = sound_entry::pitchForFlags(sample.flags, draw);
 }
 
 static void loadSoundList(pipeline::AssetManager* assets,
@@ -400,7 +491,9 @@ void MountSoundManager::playRearUpSound() {
             std::uniform_int_distribution<size_t> dist(0, sounds.move.size() - 1);
             const auto& sample = sounds.move[dist(rng)];
             if (!sample.data.empty()) {
-                AudioEngine::instance().playSound2D(sample.data, 0.7f * volumeScale_, 1.0f);
+                float volume = 0.0f, pitch = 1.0f;
+                askedByRow(sample, 0.7f, volume, pitch);
+                AudioEngine::instance().playSound2D(sample.data, volume, pitch);
             }
         }
     } else if (currentMountType_ == MountType::FLYING && !wingIdleSounds_.empty()) {
@@ -408,7 +501,14 @@ void MountSoundManager::playRearUpSound() {
         std::uniform_int_distribution<size_t> dist(0, wingIdleSounds_.size() - 1);
         const auto& sample = wingIdleSounds_[dist(rng)];
         if (!sample.data.empty()) {
-            AudioEngine::instance().playSound2D(sample.data, 0.6f * volumeScale_, 1.1f);
+            // The pitch these plays used to shift by (1.1 here, 0.85 on a
+            // landing, 0.95 idle) is nowhere in the data: a row asks for a
+            // pitch only through its 0x400 bit, and none of the rows naming
+            // these clips asks for one. So a clip no row names plays at its
+            // own pitch rather than at a made-up one.
+            float volume = 0.0f, pitch = 1.0f;
+            askedByRow(sample, 0.6f, volume, pitch);
+            AudioEngine::instance().playSound2D(sample.data, volume, pitch);
         }
     }
 }
@@ -428,7 +528,9 @@ void MountSoundManager::playJumpSound() {
             std::uniform_int_distribution<size_t> dist(0, sounds.jump.size() - 1);
             const auto& sample = sounds.jump[dist(rng)];
             if (!sample.data.empty()) {
-                AudioEngine::instance().playSound2D(sample.data, 0.5f * volumeScale_, 1.1f);
+                float volume = 0.0f, pitch = 1.0f;
+                askedByRow(sample, 0.5f, volume, pitch);
+                AudioEngine::instance().playSound2D(sample.data, volume, pitch);
             }
         }
     } else if (currentMountType_ == MountType::FLYING && !wingFlapSounds_.empty()) {
@@ -436,7 +538,9 @@ void MountSoundManager::playJumpSound() {
         std::uniform_int_distribution<size_t> dist(0, wingFlapSounds_.size() - 1);
         const auto& sample = wingFlapSounds_[dist(rng)];
         if (!sample.data.empty()) {
-            AudioEngine::instance().playSound2D(sample.data, 0.4f * volumeScale_, 1.0f);
+            float volume = 0.0f, pitch = 1.0f;
+            askedByRow(sample, 0.4f, volume, pitch);
+            AudioEngine::instance().playSound2D(sample.data, volume, pitch);
         }
     }
 }
@@ -456,7 +560,9 @@ void MountSoundManager::playLandSound() {
             std::uniform_int_distribution<size_t> dist(0, sounds.land.size() - 1);
             const auto& sample = sounds.land[dist(rng)];
             if (!sample.data.empty()) {
-                AudioEngine::instance().playSound2D(sample.data, 0.6f * volumeScale_, 0.85f);
+                float volume = 0.0f, pitch = 1.0f;
+                askedByRow(sample, 0.6f, volume, pitch);
+                AudioEngine::instance().playSound2D(sample.data, volume, pitch);
             }
         }
     }
@@ -472,7 +578,9 @@ void MountSoundManager::playIdleSound() {
             std::uniform_int_distribution<size_t> dist(0, sounds.idle.size() - 1);
             const auto& sample = sounds.idle[dist(rng)];
             if (!sample.data.empty()) {
-                AudioEngine::instance().playSound2D(sample.data, 0.35f * volumeScale_, 0.95f);
+                float volume = 0.0f, pitch = 1.0f;
+                askedByRow(sample, 0.35f, volume, pitch);
+                AudioEngine::instance().playSound2D(sample.data, volume, pitch);
             }
         }
     }
@@ -612,20 +720,18 @@ void MountSoundManager::updateMountSounds() {
             if (soundLoopTimer_ >= 1.2f) {
                 std::uniform_int_distribution<size_t> dist(0, wingFlapSounds_.size() - 1);
                 const auto& sample = wingFlapSounds_[dist(rng)];
-                std::uniform_real_distribution<float> volumeDist(0.4f, 0.5f);
-                std::uniform_real_distribution<float> pitchDist(0.95f, 1.05f);
-                AudioEngine::instance().playSound2D(
-                    sample.data, volumeDist(rng) * volumeScale_, pitchDist(rng));
+                float volume = 0.0f, pitch = 1.0f;
+                askedByRow(sample, 0.45f, volume, pitch);
+                AudioEngine::instance().playSound2D(sample.data, volume, pitch);
                 soundLoopTimer_ = 0.0f;
             }
         } else if (!moving_ && !wingIdleSounds_.empty()) {
             if (soundLoopTimer_ >= 3.5f) {
                 std::uniform_int_distribution<size_t> dist(0, wingIdleSounds_.size() - 1);
                 const auto& sample = wingIdleSounds_[dist(rng)];
-                std::uniform_real_distribution<float> volumeDist(0.3f, 0.4f);
-                std::uniform_real_distribution<float> pitchDist(0.98f, 1.02f);
-                AudioEngine::instance().playSound2D(
-                    sample.data, volumeDist(rng) * volumeScale_, pitchDist(rng));
+                float volume = 0.0f, pitch = 1.0f;
+                askedByRow(sample, 0.35f, volume, pitch);
+                AudioEngine::instance().playSound2D(sample.data, volume, pitch);
                 soundLoopTimer_ = 0.0f;
             }
         }
@@ -645,20 +751,18 @@ void MountSoundManager::updateMountSounds() {
             if (soundLoopTimer_ >= 8.0f) {
                 std::uniform_int_distribution<size_t> dist(0, sounds.move.size() - 1);
                 const auto& sample = sounds.move[dist(rng)];
-                std::uniform_real_distribution<float> volumeDist(0.35f, 0.45f);
-                std::uniform_real_distribution<float> pitchDist(0.97f, 1.03f);
-                AudioEngine::instance().playSound2D(
-                    sample.data, volumeDist(rng) * volumeScale_, pitchDist(rng));
+                float volume = 0.0f, pitch = 1.0f;
+                askedByRow(sample, 0.4f, volume, pitch);
+                AudioEngine::instance().playSound2D(sample.data, volume, pitch);
                 soundLoopTimer_ = 0.0f;
             }
         } else if (!moving_ && !sounds.idle.empty()) {
             if (soundLoopTimer_ >= 4.5f) {
                 std::uniform_int_distribution<size_t> dist(0, sounds.idle.size() - 1);
                 const auto& sample = sounds.idle[dist(rng)];
-                std::uniform_real_distribution<float> volumeDist(0.25f, 0.35f);
-                std::uniform_real_distribution<float> pitchDist(0.98f, 1.02f);
-                AudioEngine::instance().playSound2D(
-                    sample.data, volumeDist(rng) * volumeScale_, pitchDist(rng));
+                float volume = 0.0f, pitch = 1.0f;
+                askedByRow(sample, 0.3f, volume, pitch);
+                AudioEngine::instance().playSound2D(sample.data, volume, pitch);
                 soundLoopTimer_ = 0.0f;
             }
         }

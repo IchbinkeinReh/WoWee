@@ -38,7 +38,6 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "network/world_socket.hpp"
@@ -247,15 +246,17 @@ void GameHandler::sendChangePlayerDifficulty(uint32_t difficulty) {
 
 // The rune bar draws itself from these two events and from nothing else.
 //
-// "usable" is sent as a present argument or no argument at all rather than as
-// one and zero, because zero is true in Lua: an argument saying the rune is on
-// cooldown would read as one saying it is ready.
+// The client's shape is two arguments always: 0x0081b530(598, "%d%b", rune + 1,
+// usable) at all four sites in 0x005ee020's family, the slot counted from one,
+// the boolean true when the rune came ready and false when it went back on
+// cooldown with its ready fraction recorded. `usable` crosses here as a boolean
+// argument rather than as one and zero, because "0" would arrive as the number 0
+// and every number is true in Lua. RuneFrame_OnEvent only ever asks whether it
+// is truthy (`if (not usable and rune …)`), so nil serves for the false case.
 void GameHandler::fireRunePowerUpdates(const std::array<runes::PowerUpdate, runes::kMax>& updates, int n) {
-    for (int k = 0; k < n; ++k) {
-        const std::string oneBased = std::to_string(updates[k].rune + 1);
-        if (updates[k].usable) fireAddonEvent("RUNE_POWER_UPDATE", {oneBased, "1"});
-        else fireAddonEvent("RUNE_POWER_UPDATE", {oneBased});
-    }
+    for (int k = 0; k < n; ++k)
+        fireAddonEvent("RUNE_POWER_UPDATE",
+                       {std::to_string(updates[k].rune + 1), eventBool(updates[k].usable)});
 }
 
 std::array<float, 4> GameHandler::runeRegen() const {
@@ -290,11 +291,9 @@ int32_t GameHandler::unitPower(const Unit& unit, int type) const {
 
 void GameHandler::predictedPowerSaid(const Unit& unit, uint64_t guid, int type) {
     // 0x0060bf10 0x13 + type: UNIT_MANA .. UNIT_RUNIC_POWER, none for runes.
-    static constexpr const char* kEvents[7] = {"UNIT_MANA", "UNIT_RAGE", "UNIT_FOCUS", "UNIT_ENERGY",
-                                               "UNIT_HAPPINESS", nullptr, "UNIT_RUNIC_POWER"};
     if (unit.predictedPower().value[type] == static_cast<int32_t>(unit.getMaxPowerByType(static_cast<uint8_t>(type))) &&
-        kEvents[type] != nullptr)
-        if (const auto uid = guidToUnitId(guid); !uid.empty()) fireAddonEvent(kEvents[type], {uid});
+        power_prediction::kPowerEvents[type] != nullptr)
+        if (const auto uid = guidToUnitId(guid); !uid.empty()) fireAddonEvent(power_prediction::kPowerEvents[type], {uid});
     // Then, for the player or its pet (0x004d3790, 0x005d3390), 0x0053d1b0.
     if (guid == playerGuid || (petGuid_ != 0 && guid == petGuid_)) predictedPowerUsability();
 }
@@ -318,6 +317,22 @@ void GameHandler::predictedPowerUsability() {
         forms |= power_prediction::noteShort(formShortOfPower_[form.spellId],
                                              !spellHandler_->enoughPower(form.spellId, *player));
     if (forms) fireAddonEvent("UPDATE_SHAPESHIFT_USABLE", {});
+}
+
+bool GameHandler::shapeshiftCastabilityChanged() {
+    if (!spellHandler_) return false;
+    // The rescan 0x0053cf10 walks the player's forms (DAT_00be8e28 is how many)
+    // and re-asks each one through the same question the spellbook answers
+    // IsUsableSpell with (0x00541680): the caster's aura state, its powers,
+    // whether it is dead or ghosted, what its target carries. One answer
+    // changed is enough - the client names UPDATE_SHAPESHIFT_USABLE once for
+    // the bar, not once per button (0x0053cf10 sets one flag over the whole loop
+    // and fires after it).
+    bool changed = false;
+    for (const auto& form : knownShapeshiftForms(getPlayerClass(), getKnownSpells()))
+        changed |= power_prediction::noteShort(formCastable_[form.spellId],
+                                               spellHandler_->spellUsable(form.spellId, nullptr));
+    return changed;
 }
 
 void GameHandler::setPredictedPower(Unit& unit, int type, int32_t value) {
@@ -609,7 +624,21 @@ void GameHandler::registerCoreOpcodes() {
         uint8_t  paused = packet.readUInt8();
         if (type < 3) {
             mirrorTimers_[type].paused = (paused != 0);
-            fireAddonEvent("MIRROR_TIMER_PAUSE", {paused ? "1" : "0"});
+            // The timer's name first, then the pause byte: SMSG_PAUSE_MIRROR_TIMER
+            // (0x1da) is a dword type plus a byte at (int)&type + 3, and the client
+            // says (0x00510000.c:8169) event(353, "%s%d", name, param >> 24) with the
+            // same name words it maps for start and stop - EXHAUSTION, BREATH,
+            // FEIGNDEATH. It used to be the pause byte alone, which the frame's own
+            // guard rejects: MirrorTimerFrame_OnEvent returns unless arg1 equals
+            // self.timer, and self.timer is the name MIRROR_TIMER_START carried.
+            //
+            // What happens next is the client's bug, and it is left alone: the
+            // shipped handler then tests `if (arg1 > 0)`, arg1 being that name
+            // string, so the comparison raises and the timer never pauses. The real
+            // 12340 client raises there too. Fixing it would be fixing FrameXML, not
+            // matching this client.
+            fireAddonEvent("MIRROR_TIMER_PAUSE",
+                           {kMirrorTimerNames[type], paused ? "1" : "0"});
         }
     };
 
@@ -688,11 +717,18 @@ void GameHandler::registerCoreOpcodes() {
         }
         if (isLost) knownTitleBits_.erase(titleBit);
         else        knownTitleBits_.insert(titleBit);
-        // And announce it. The set is read by IsTitleKnown, which the character
-        // sheet's title dropdown builds itself from - but only when told to
-        // rebuild, and this is what tells it. Without it a title earned mid
-        // session did not appear in the list until the sheet was reopened.
-        fireAddonEvent("KNOWN_TITLES_UPDATE", {});
+        // And announce it - unless the realm keeps a known-titles mask and this
+        // layout can read one. The client raises KNOWN_TITLES_UPDATE (498) from
+        // watchers installed on the mask's three pairs of dwords, and from
+        // nowhere else: its handler for this message (0x0050c520) prints the
+        // sentence and touches no mask at all, so a title earned mid-session
+        // reaches the character sheet as an update block carrying the new bit.
+        // Raising here as well would refresh the dropdown twice for one title,
+        // so the mask's own watcher is left to say it wherever there is one.
+        // Where the layout names no run - every layout before WotLK - this
+        // packet is the only title news the realm sends, and this is the raise.
+        if (fieldIndex(UF::PLAYER_FIELD_KNOWN_TITLES) == 0xFFFF)
+            fireAddonEvent("KNOWN_TITLES_UPDATE", {});
         addSystemChatMessage(msg);
         LOG_INFO("SMSG_TITLE_EARNED: bit=", titleBit, " lost=", isLost, " title='", titleStr, "'");
     };
@@ -1466,10 +1502,10 @@ void GameHandler::registerCoreOpcodes() {
         else if (itemClass == 4) armorProficiency_ = mask;
     };
 
-    // Loot money / misc consume
-    for (auto op : { Opcode::SMSG_LOOT_CLEAR_MONEY, Opcode::SMSG_NPC_TEXT_UPDATE }) {
-        dispatchTable_[op] = [](network::Packet& /*packet*/) {};
-    }
+    // SMSG_LOOT_CLEAR_MONEY and SMSG_NPC_TEXT_UPDATE were consumed here before
+    // their handlers moved to InventoryHandler (0x00589100 clears the purse from
+    // the loot) and QuestHandler; both register theirs after this function has
+    // run, so anything installed here would only hide that.
 
     // Play sound
     dispatchTable_[Opcode::SMSG_PLAY_SOUND] = [this](network::Packet& packet) {
@@ -2168,8 +2204,11 @@ void GameHandler::registerRemainingOpcodes() {
             weatherAbrupt_ = abrupt;
             ++weatherSerial_;
             LOG_INFO("Weather changed to ", wType, ", intensity ", wIntensity);
-            // Notify addons of weather change
-            fireAddonEvent("WEATHER_CHANGED", {std::to_string(wType), std::to_string(wIntensity)});
+            // And that is all the client does with it. WEATHER_CHANGED is a
+            // Classic name: this client's event-id table has no WEATHER of any
+            // spelling, and the only weather text in its interface is the
+            // graphics options' own labels. The state stays here because the
+            // renderer reads it; nothing else is told.
         }
     };
     // The real client registers no handler for SMSG_SCRIPT_MESSAGE at all, so
@@ -2983,33 +3022,49 @@ void GameHandler::registerRemainingOpcodes() {
         }
     };
     dispatchTable_[Opcode::SMSG_REAL_GROUP_UPDATE] = [this](network::Packet& packet) {
+        // Wire 0x397 for this client; 0x4b3 is 1.12's number for the same packet.
+        // The handler is 0x006cc300: the group-type byte, a count, and a guid -
+        // and the byte is tested as a flag, bit 1 for raid, which is the
+        // convention groupIsRaid already reads it by.
         auto rem = [&]() { return packet.getRemainingSize(); };
         if (rem() < 1) return;
-        uint8_t newGroupType = packet.readUInt8();
+        const uint8_t newGroupType = packet.readUInt8();
         if (rem() < 4) return;
-        uint32_t newMemberFlags = packet.readUInt32();
+        const uint32_t memberCount = packet.readUInt32();
         if (rem() < 8) return;
-        uint64_t newLeaderGuid = packet.readUInt64();
+        const uint64_t newLeaderGuid = packet.readUInt64();
 
         if (socialHandler_) {
             auto& pd = socialHandler_->mutablePartyData();
             pd.groupType = newGroupType;
             pd.leaderGuid = newLeaderGuid;
-
-            // Update local player's flags in the member list
-            uint64_t localGuid = playerGuid;
-            for (auto& m : pd.members) {
-                if (m.guid == localGuid) {
-                    m.flags = static_cast<uint8_t>(newMemberFlags & 0xFF);
-                    break;
-                }
-            }
+            // The middle field is a count. The party branch of the handler keeps
+            // it through 0x0052bd60 under `if (param_1 < 5)`, the raid branch
+            // through 0x00572530 as `count == 0 ? 0 : count + 1` under `if
+            // (param_1 < 0x29)`, and 0x0052c190 pushes the first of those two as
+            // a Lua number - it is GetRealNumPartyMembers, one registration off
+            // GetPartyMember (0x0052c1d0). Neither count has a home here: those
+            // two names are registered as aliases of the live getters
+            // (`lua_unit_api.cpp:3309-3310`), so both are already answered out of
+            // the member list. Reading the field is all it can be used for.
+            //
+            // What this did with it was write it over the local player's member
+            // flags, `m.flags = count & 0xFF`. Three other members set the
+            // assistant bit then, and the bits the party frames read the online
+            // state out of. The client stores no member flag in this handler at
+            // all; the guid it reads goes to 0xbd1990, a leader slot of its own
+            // beside the roster's 0xbd1968 (0x0052cd30 asks whether that one is
+            // the player), and one variable stands for both slots here.
         }
         LOG_DEBUG("SMSG_REAL_GROUP_UPDATE groupType=", static_cast<int>(newGroupType),
-                  " memberFlags=0x", std::hex, newMemberFlags, std::dec,
-                  " leaderGuid=", newLeaderGuid);
-        fireAddonEvent("PARTY_LEADER_CHANGED", {});
-        fireAddonEvent("GROUP_ROSTER_UPDATE", {});
+                  " memberCount=", memberCount, " leaderGuid=", newLeaderGuid);
+        // 006c0000.c:10309, the tail of that handler: PARTY_MEMBERS_CHANGED (181)
+        // and nothing else. PARTY_LEADER_CHANGED is not among them - that event
+        // comes only from 0x0052bc80, the party leader store the roster feeds
+        // (`006d0000.c:6992`, and it fires 182 on a difference) - and
+        // GROUP_ROSTER_UPDATE is not this client's event at all, see
+        // SocialHandler::firePartyClearedEvents.
+        fireAddonEvent("PARTY_MEMBERS_CHANGED", {});
     };
     dispatchTable_[Opcode::SMSG_PLAY_MUSIC] = [this](network::Packet& packet) {
         if (packet.hasRemaining(4)) {
@@ -3030,8 +3085,9 @@ void GameHandler::registerRemainingOpcodes() {
             if (playSoundCallback_) playSoundCallback_(soundId);
         }
     };
-    // uint64 unit + uint32 SpellVisualKit id: the kit on the unit, type 0
-    // (0x00800610).
+    // uint64 unit + uint32 SpellVisualKit id: the kit on the unit, type 1
+    // (0x008006c0) - the same ask a cast's impact kit makes, so the kit's
+    // weapon effects go in the unit's hands.
     dispatchTable_[Opcode::SMSG_PLAY_SPELL_IMPACT] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(12)) {
             packet.skipAll(); return;
@@ -3051,7 +3107,7 @@ void GameHandler::registerRemainingOpcodes() {
             spawnPos = core::coords::canonicalToRender(canonical);
         }
         if (auto* sv = renderer->getSpellVisualSystem())
-            sv->playKit(kitId, rendering::spell_kit::KitType::PlayImpact, spawnPos,
+            sv->playKit(kitId, rendering::spell_kit::KitType::Cast, spawnPos,
                         resolveUnitRenderInstance(impTargetGuid));
     };
     // SMSG_READ_ITEM_OK - moved to InventoryHandler::registerOpcodes
@@ -3070,10 +3126,28 @@ void GameHandler::registerRemainingOpcodes() {
     // These pet opcodes have incompatible formats - just consume the packet.
     // Previously they shared the unlearn handler, which misinterpreted sound IDs
     // or GUID lists as unlearn costs and could trigger a bogus unlearn dialog.
-    for (auto op : { Opcode::SMSG_PET_GUIDS, Opcode::SMSG_PET_DISMISS_SOUND,
-                     Opcode::SMSG_PET_ACTION_SOUND }) {
-        dispatchTable_[op] = [](network::Packet& packet) { packet.skipAll(); };
-    }
+    dispatchTable_[Opcode::SMSG_PET_GUIDS] = [](network::Packet& packet) { packet.skipAll(); };
+    // A pet's answer to the order it was just given. 0x00716b90 takes a guid
+    // and one value out of it and resolves a unit (type mask 8) by the guid,
+    // Unit_C.cpp:0x636 - value 0 asks the pet's Order line, 1 its Kill line,
+    // and any other value says nothing at all.
+    dispatchTable_[Opcode::SMSG_PET_ACTION_SOUND] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(12)) return;
+        uint64_t guid = packet.readUInt64();
+        uint32_t action = packet.readUInt32();
+        if (petActionSoundCallbackRef()) petActionSoundCallbackRef()(guid, action);
+    };
+    // A pet sent off says its own line. 0x00716c00 reads one id and three floats
+    // - a model and a position, no guid - and asks the sound row that model names
+    // for its dismiss column, which only a warlock's voidpets have. The client
+    // registers this one (0x006b0b80(0x325, ...) at 0x00740000:1333); leaving it
+    // swallowed was missing the ask, not the other way round.
+    dispatchTable_[Opcode::SMSG_PET_DISMISS_SOUND] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(16)) return;
+        const uint32_t modelId = packet.readUInt32();
+        const glm::vec3 at{packet.readFloat(), packet.readFloat(), packet.readFloat()};
+        if (petDismissSoundCallbackRef()) petDismissSoundCallbackRef()(modelId, at);
+    };
     // Server signals that the pet can now be named (first tame)
     dispatchTable_[Opcode::SMSG_PET_RENAMEABLE] = [this](network::Packet& packet) {
         // Server signals that the pet can now be named (first tame)
@@ -3143,16 +3217,14 @@ void GameHandler::registerRemainingOpcodes() {
                  std::count_if(items.begin(), items.end(),
                                [](uint32_t e) { return e != 0; }), "/19 slots");
         if (addonEventCallback_) {
-            char guidBuf[32];
-            snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)guid);
-            fireAddonEvent("INSPECT_READY", {guidBuf});
-            // INSPECT_READY is a later expansion's name and nothing in this
-            // interface listens for it. The inspect paperdoll refreshes on
-            // UNIT_INVENTORY_CHANGED for the unit it is showing, so the gear
-            // arrived and the window was never told - it kept whatever it had
-            // when it opened. Fired for the unit token this guid answers to,
-            // and only when it answers to one: an inspected player who is not
-            // the target has no token for the interface to match against.
+            // The inspect paperdoll refreshes on UNIT_INVENTORY_CHANGED for the
+            // unit it is showing. It used to be announced with INSPECT_READY, a
+            // later expansion's name: not in this client's event-id table, not
+            // once in Wow.exe, and no frame of this interface registers it - the
+            // gear arrived and the window was never told, keeping whatever it
+            // had when it opened. Fired for the unit token this guid answers to,
+            // and only when it answers to one: an inspected player who is not the
+            // target has no token for the interface to match against.
             const std::string inspectUnit = guidToUnitId(guid);
             if (!inspectUnit.empty()) {
                 fireAddonEvent("UNIT_INVENTORY_CHANGED", {inspectUnit});

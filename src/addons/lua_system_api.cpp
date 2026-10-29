@@ -19,6 +19,7 @@
 #include "game/group_defines.hpp"
 #include "game/battleground_flag.hpp"
 #include "game/minimap_tracking.hpp"
+#include "game/known_titles.hpp"
 #include "core/open_url.hpp"
 #include "core/version.hpp"
 #include "core/config_paths.hpp"
@@ -52,7 +53,6 @@
 #include "audio/music_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "audio/player_voice_manager.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "core/app_clock.hpp"
 #include "core/window.hpp"
@@ -397,7 +397,11 @@ static int lua_PlaySound(lua_State* L) {
     std::string sound;
     if (lua_isnumber(L, 1)) {
         const auto id = static_cast<int32_t>(lua_tonumber(L, 1));
-        if (id > 0 && sfx->playById(static_cast<uint32_t>(id))) return 0;
+        // A row that asked for one instance at a time and is still playing is
+        // answered with silence by the client, so Refused stops here too - only
+        // a row this install cannot play at all falls through to a stand-in.
+        if (id > 0 && sfx->playById(static_cast<uint32_t>(id)) != audio::UiSoundManager::UiPlayResult::Unavailable)
+            return 0;
         // Without the row: the ids that have a stand-in here.
         switch (id) {
             case 856: case 1115: sfx->playButtonClick(); return 0; // igMainMenuOption
@@ -420,7 +424,9 @@ static int lua_PlaySound(lua_State* L) {
         // The table below stays as the fallback: an install without the sound,
         // or without the dbc, still gets something for the names it can be
         // approximated for.
-        if (sfx->playByName(name)) return 0;
+        // As above: the client answers a refused one-at-a-time ask with silence,
+        // so only an unresolvable name reaches the hand-mapped fallback.
+        if (sfx->playByName(name) != audio::UiSoundManager::UiPlayResult::Unavailable) return 0;
 
         sound = name;
         for (char& c : sound) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -876,7 +882,6 @@ static void applySoundCVars(lua_State* L) {
     if (!sfxOn) {
         if (auto* m = ac->getUiSoundManager())        m->setVolumeScale(0.0f);
         if (auto* m = ac->getCombatSoundManager())    m->setVolumeScale(0.0f);
-        if (auto* m = ac->getSpellSoundManager())     m->setVolumeScale(0.0f);
         if (auto* m = ac->getMovementSoundManager())  m->setVolumeScale(0.0f);
         if (auto* m = ac->getFootstepManager())       m->setVolumeScale(0.0f);
         if (auto* m = ac->getActivitySoundManager())  m->setVolumeScale(0.0f);
@@ -4860,14 +4865,29 @@ static int lua_BindingTurn(lua_State* L) {
     return 0;
 }
 
-// HasLFGRestrictions() → whether the player is in a dungeon-finder group
+// HasLFGRestrictions() → whether the group the player is in is *restricted*
 //
-// There is a dungeon finder here - the client tracks the queue, the proposal
-// and the dungeon - so this is answered from it rather than declared false the
-// way it was when the comment here said no such thing existed.
+// Not "am I in a finder group", which is what this answered until the roster's
+// own restriction bit was read. The client has two getters side by side and the
+// FrameXML uses both: 0x0052c310 answers from 0xbd19a4, the finder dungeon the
+// roster carried, and that is IsPartyLFG (below, and used by `minimap.lua:242`
+// and `uiparent.lua:3585, :3587`); 0x0052c350 pushes the boolean of 0xbd19a8,
+// which is this one. The second byte is written only by the roster handler -
+// 0x006d8870:6994 hands it the type byte's bit 2 - and zeroed whenever the party
+// is emptied (0x0052d6e0:10375), so it says what the *server* says this group may
+// not do, which is not the same as being a finder group at all: a normal group the
+// server restricts answers here and not at IsPartyLFG.
+//
+// Answering it from the finder state cost half of uiparent/unitpopup. That pair
+// gates the leave-disband and convert-to-raid buttons, the whisper-guild and
+// unit-dissmiss lines and the raid-convert line on this one name
+// (`uiparent.lua:3562`, `unitpopup.lua:599, :603, :631, :635, :663, :1060,
+// :1068, :1096`, `raidframe.lua:70`, `partymemberframe.lua:190`,
+// `playerframe.lua:64`, `targetframe.lua:118`, `chatframe.lua:2880`), and every
+// one of them saw "restricted" for a plain finder party and hid what it gates.
 static int lua_HasLFGRestrictions(lua_State* L) {
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->isLfgInDungeon() ? 1 : 0);
+    lua_pushboolean(L, gh && gh->getPartyData().lfgRestricted ? 1 : 0);
     return 1;
 }
 
@@ -5167,8 +5187,16 @@ static int lua_GetLFGRoleUpdateMember(lua_State* L) {
 }
 
 static int lua_IsListedInLFR(lua_State* L) {
+    // The listed state is the joined raid-browser list, and this client sets it
+    // when the browser's dropdown asks (0x00beaa14, written by 0x00558ed0 and
+    // cleared by 0x00558f90 and by the search update's false byte) - it is not
+    // one of the queue states, and no packet on its own ever said "listed".
+    // LfgState::RaidBrowser was the answer here and nothing ever set it, which
+    // is why FrameXML's GetLFGMode could not return "listed" at all: its
+    // precedence tests the queue first and this flag after.
     auto* gh = getGameHandler(L);
-    lua_pushboolean(L, gh && gh->getLfgState() == game::LfgState::RaidBrowser ? 1 : 0);
+    const bool listed = gh != nullptr && gh->getLfgJoinedListId() != 0;
+    lua_pushboolean(L, listed ? 1 : 0);
     return 1;
 }
 
@@ -7524,18 +7552,16 @@ void registerSystemLuaAPI(lua_State* L) {
                 // list, the companion tab and the token frame each raised
                 // rather than showing nothing.
                 //
-                // Zero is the honest answer, not a placeholder: no known-title
-                // bitmask, companion list or currency list is tracked here, so
-                // there is genuinely nothing to count. They stop being zero
-                // when something starts reading that data, and the frames
-                // above will fill themselves in when it does.
                 // GetNumTitles() - how many title *bits* there are to ask
                 // about, not how many are owned. paperdollframe.lua walks
                 // 1..GetNumTitles() calling IsTitleKnown on each, so this is
-                // the size of the space: KNOWN_TITLES_SIZE * 64 in
-                // AzerothCore's Player.h, three uint64 fields.
+                // the size of the space: the three 64-bit groups of
+                // PLAYER_FIELD_KNOWN_TITLES, which is AzerothCore's
+                // KNOWN_TITLES_SIZE * 64 in Player.h as well. It comes from the
+                // same constant the mask is read with, so the loop asking
+                // cannot be sized past the bits there are to ask about.
                 {"GetNumTitles", [](lua_State* L) -> int {
-            lua_pushnumber(L, 192); return 1;
+            lua_pushnumber(L, game::kKnownTitleCount); return 1;
         }},
                 {"GetNumCompanions", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);

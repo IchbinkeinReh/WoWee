@@ -249,11 +249,12 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
         if (!packet.hasRemaining(12)) return;
         uint64_t guid = packet.readUInt64();
         uint32_t reaction = packet.readUInt32();
-        if (reaction == 2 && owner_.npcAggroCallbackRef()) {
-            auto entity = owner_.getEntityManager().getEntity(guid);
-            if (entity)
-                owner_.npcAggroCallbackRef()(guid, glm::vec3(entity->getX(), entity->getY(), entity->getZ()));
-        }
+        // The client's handler (0x00716b10) asks one thing per reaction and
+        // nothing else: a HATE reaction the unit's PreAggro sound slot, an
+        // UNFRIENDLY one its Aggro voice line. Both are asked of the unit, so
+        // the packet's own two values are all there is to hand on.
+        if (owner_.unitReactionSoundCallbackRef())
+            owner_.unitReactionSoundCallbackRef()(guid, reaction);
     };
     table[Opcode::SMSG_SPELLNONMELEEDAMAGELOG] = [this](network::Packet& packet) { handleSpellDamageLog(packet); };
     table[Opcode::SMSG_SPELLHEALLOG] = [this](network::Packet& packet) { handleSpellHealLog(packet); };
@@ -710,17 +711,12 @@ void CombatHandler::handleAttackStart(network::Packet& packet) {
         if (owner_.addonEventCallbackRef())
             owner_.addonEventCallbackRef()("PLAYER_ENTER_COMBAT", {});
     } else if (data.victimGuid == owner_.getPlayerGuid() && data.attackerGuid != 0) {
+        // The attacker is kept as a hostile one and auto-targeted. 0x00756800
+        // case 0x143 asks nothing to be said here - a unit reaching for the
+        // player says nothing about it; the line only a reaction change brings
+        // (SMSG_AI_REACTION) is where an angry unit speaks.
         hostileAttackers_.insert(data.attackerGuid);
         autoTargetAttacker(data.attackerGuid);
-
-        // Play aggro sound when NPC attacks player
-        if (owner_.npcAggroCallbackRef()) {
-            auto entity = owner_.getEntityManager().getEntity(data.attackerGuid);
-            if (entity && entity->getType() == ObjectType::UNIT) {
-                glm::vec3 pos(entity->getX(), entity->getY(), entity->getZ());
-                owner_.npcAggroCallbackRef()(data.attackerGuid, pos);
-            }
-        }
     }
 
     // Force both participants to face each other at combat start.
@@ -1119,7 +1115,30 @@ void CombatHandler::handleUpdateComboPoints(network::Packet& packet) {
     owner_.comboTargetRef() = target;
     LOG_DEBUG("SMSG_UPDATE_COMBO_POINTS: target=0x", std::hex, target,
               std::dec, " points=", static_cast<int>(owner_.comboPointsRef()));
-    owner_.fireAddonEvent("PLAYER_COMBO_POINTS", {});
+    // 0x00519780: the count and its unit are stored, every action and form is
+    // re-checked through the whole cast check (0x0053cf10), and
+    // UNIT_COMBO_POINTS (149) goes out with the player's own token as its one
+    // argument. ComboFrame_OnEvent ignores the event unless that token is the
+    // one PlayerFrame is showing, so the argument is not decoration:
+    // "PLAYER_COMBO_POINTS" carried none, is not a name this client has at all
+    // (zero times in Wow.exe, against once for UNIT_COMBO_POINTS), and nothing
+    // in the shipped interface registers it - the combo points only ever lit up
+    // when the target changed, which is the other event ComboFrame listens for.
+    //
+    // The rescan that comes with the store is a thread still open. 0x0053cf10
+    // walks the action list (DAT_00be8e58 of them, DAT_00be8e5c holding each
+    // slot's two flags) and the form list (DAT_00be8e28) through the whole cast
+    // check; the first thing it calls, 0x005aa470, rewrites the 144 per-slot
+    // pairs the buttons are drawn from (DAT_00c1ded8, DAT_00c1dc98) and
+    // announces a change with ACTIONBAR_UPDATE_USABLE (0xb2). A form flipping is
+    // UPDATE_SHAPESHIFT_USABLE (0x17a), a button going unusable is a sound
+    // (0x0074d520 0x23), and the rescan's own name SPELL_UPDATE_USABLE (0xf5)
+    // reaches no frame of this interface. WoWee's action flags hold the power
+    // half only (0x0053d1b0, the power-only variant) and IsUsableAction never
+    // looks at the points at all, so a finisher has no way here to be grey for
+    // want of a combo point - and announcing ACTIONBAR_UPDATE_USABLE from this
+    // packet would change nothing until that answer depends on the points.
+    owner_.fireAddonEvent("UNIT_COMBO_POINTS", {"player"});
 }
 
 void CombatHandler::handlePetUpdateComboPoints(network::Packet& packet) {
@@ -1134,6 +1153,14 @@ void CombatHandler::handlePetUpdateComboPoints(network::Packet& packet) {
     if (pet != owner_.getPetGuid()) return;
     owner_.petComboTargetRef() = target;
     owner_.petComboPointsRef() = points;
+    // 0x005d34b0: the same store for the pet, the same rescan, then
+    // UNIT_COMBO_POINTS (149) with the pet's token and PET_BAR_UPDATE_USABLE
+    // (0x15e). The second is what the pet bar waits for - the buttons it holds
+    // re-read their state on that name alone (petactionbarframe.lua:26, :47),
+    // and this site used to announce neither, so a pet working its combo points
+    // up left its bar untouched.
+    owner_.fireAddonEvent("UNIT_COMBO_POINTS", {"pet"});
+    owner_.fireAddonEvent("PET_BAR_UPDATE_USABLE", {});
 }
 
 void CombatHandler::handlePvpCredit(network::Packet& packet) {
@@ -2198,7 +2225,12 @@ void CombatHandler::reclaimCorpse() {
 }
 
 void CombatHandler::useSelfRes() {
-    if (!owner_.selfResAvailableRef() || !owner_.getSocket()) return;
+    // canSelfRes rather than the packet flag alone: the soulstone half of the
+    // answer is PLAYER_SELF_RES_SPELL, which arrives as a field and is never
+    // announced.  What is cleared here is the SMSG_PRE_RESURRECT flag; the realm
+    // clears its own field when the resurrection is spent, and a death popup is
+    // gone once its button has been pressed, so there is nothing here to latch.
+    if (!owner_.canSelfRes() || !owner_.getSocket()) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_SELF_RES));
     owner_.getSocket()->send(pkt);
     owner_.selfResAvailableRef() = false;

@@ -1,5 +1,6 @@
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/audio_engine.hpp"
+#include "audio/sound_distance.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "core/logger.hpp"
@@ -206,8 +207,8 @@ void AmbientSoundManager::updateLiquid(float deltaTime, const glm::vec3& player,
     }
     if (liquid_.handle == 0) {
         if (const Kit* k = kit(liquid_.sound)) {
-            const float maxDistance = k->cutoff > 0.0f ? k->cutoff : 100.0f;
-            const float minDistance = k->minDistance > 0.0f ? std::min(k->minDistance, maxDistance) : 1.0f;
+            float minDistance = 0.0f, maxDistance = 0.0f;
+            sound_distance::entryDistance(k->minDistance, k->cutoff, minDistance, maxDistance);
             liquid_.volume = k->volume;
             liquid_.handle = engine.playSound3DLooping(pickFile(*k), liquid_.at, k->volume * volumeScale_,
                                                        maxDistance, minDistance, za::kLiquidFadeSeconds);

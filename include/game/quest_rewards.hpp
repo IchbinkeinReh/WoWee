@@ -1,0 +1,177 @@
+#pragma once
+
+#include <cfenv>
+#include <cmath>
+#include <cstdint>
+
+// The reward-panel numbers the client works out for itself rather than simply
+// being sent: experience, money and honour - each below in the order the panel
+// draws them. The first two hang on the same level cap; the third is its own
+// small piece of arithmetic, and a strange one.
+//
+// What a quest's reward panel prints for experience (GetQuestLogRewardXP,
+// 0x005e49b0). The amount is in no packet: the client reads QuestXP.dbc itself -
+// the row for a level, the column the quest names - and then shapes the number in
+// three steps, none of which the table does.
+//
+// The row is keyed on the **quest's** level, or on the player's own level when the
+// quest carries -1 for "scale to me" (record +8 in 0x005e0420). A level with no row
+// answers nothing, before any of the rest is considered.
+//
+// The damping is the WotLK rule that a quest far above or below the character pays
+// less: the factor is 20 + 2*(questLevel - playerLevel), over ten tenths, clamped to
+// [1, 10]. So five levels above the quest's own level is still full pay, each level
+// past that costs a fifth, and ten levels past it still pays a tenth rather than
+// nothing. (0x005e0420's own chain is three comparisons against 0xb and 1 that
+// amount to exactly that clamp; it re-derives the same "quest level, or the
+// player's" value three times, which is why the decompile looks redundant.)
+//
+// The rounding is the client's, not the table's. Its three tests are `< 0x65`,
+// `< 0x1f5` and `< 0x3e9` - that is 101, 501 and 1001, so a hundred takes the
+// nearest-5 bucket, five hundred the nearest-10 and a thousand the nearest-25 -
+// and from 1001 up the nearest 50. It runs on the damped number, which is why 232
+// at eight tenths answers 190: 232*8/10 is 185, and 185 rounds up. (The buckets
+// happen to agree with each other at the three boundary values, so reading those
+// constants as 100/500/1000 costs nothing; they are transcribed here as written.)
+//
+// What is left out on purpose: 0x005e49b0 also walks five quest-log slots whose
+// predicate multiplies the answer by three below level 60, and multiplies it by
+// whatever 0x007246a0 reads off the player's auras. Both are pinned only as far as
+// "they exist"; neither is reproduced here, so a boosted or group-scaled quest can
+// still read low. Related: the reward panel itself zeroes the XP line at the level
+// cap (0x0058dd50 writes its XP global as zero unless the level is below
+// PLAYER_FIELD_MAX_LEVEL), which is the same gate as the first rule below.
+//
+// Money (GetQuestLogRewardMoney, 0x005e48f0) is in the packet after all, but the
+// cap changes it, and there the cap *raises* the number instead of zeroing it.
+// The client takes the quest's reward amount - never the negative half of that
+// field, which is a cost and belongs to GetQuestLogRequiredMoney - and when the
+// player's level is not below PLAYER_FIELD_MAX_LEVEL it substitutes the quest's
+// **second** money amount (record +0x38, the word right after the reward amount
+// at +0x34) whenever that is at least as large as the first. Read that way the
+// compare's direction makes sense: a quest that already pays well keeps its
+// amount at the cap, and one that pays nothing - a grey quest, whose reward
+// amount is 0 - still pays the max-level figure. At the cap a quest pays *at
+// least* that much. (The second amount is what the server serializers write
+// beside the first - WoWee's own count of AzerothCore's quest query block spells
+// the run money(13), maxLevel(14), rewSpell(15), and the reward spell's offset
+// was already checked against the panel.)
+//
+// The quest giver's own dialog answers the same two lines from different packets,
+// and there the client works out nothing at all: the offer-reward handler
+// (0x0058dd50) writes the packet's money and experience words straight into the
+// globals that GetRewardMoney, GetRewardXP and GetQuestMoneyToGet read back. Two
+// rules survive that copy. The money word is split by its sign exactly as in the
+// quest log - a negative amount goes to GetQuestMoneyToGet's global and the
+// reward global is set to zero. And the experience word, taken as sent (undamped,
+// unrounded), is written only when the player's level is below
+// PLAYER_FIELD_MAX_LEVEL; at the cap the global stays zero and the XP line drops
+// out of the panel. The cap touches nothing else in that handler, money included.
+
+namespace wowee::game {
+
+/// Whether the character is at the level the realm set as the cap. Both places
+/// that use it spell the test the same way - `!(level < PLAYER_FIELD_MAX_LEVEL)`,
+/// at 0x005e48f0 and at 0x0058dd50 - so one level off the cap answers normally. A
+/// `maxLevel` of zero means the layout names no such field, which is never at the
+/// cap rather than at it at level zero.
+inline bool atLevelCap(uint32_t playerLevel, uint32_t maxLevel) {
+    return maxLevel != 0 && playerLevel >= maxLevel;
+}
+
+/// Which QuestXP.dbc row a quest reads: its own level, or the player's when the
+/// quest says it scales (-1).
+inline int32_t questXpRowLevel(int32_t questLevel, uint32_t playerLevel) {
+    return questLevel == -1 ? static_cast<int32_t>(playerLevel) : questLevel;
+}
+
+/// The damping as tenths of the table's number: 10 is full pay.
+inline int questXpDampFactor(int32_t rowLevel, uint32_t playerLevel) {
+    int factor = 2 * (rowLevel - static_cast<int>(playerLevel)) + 20;
+    if (factor > 10) factor = 10;
+    if (factor < 1) factor = 1;
+    return factor;
+}
+
+/// The client's own rounding of the reward number, after damping. It truncates
+/// rather than rounding half up, which is why a number of 1 answers nothing while
+/// 3 answers 5. The three thresholds are the client's own 0x65, 0x1f5 and 0x3e9.
+inline uint32_t questXpRound(uint32_t xp) {
+    if (xp < 101) return (xp + 2) / 5 * 5;
+    if (xp < 501) return (xp + 5) / 10 * 10;
+    if (xp < 1001) return (xp + 12) / 25 * 25;
+    return (xp + 25) / 50 * 50;
+}
+
+/// The whole answer. `base` is the table's number for the row `rowLevel` gives and
+/// the quest's difficulty column; `maxLevel` is PLAYER_FIELD_MAX_LEVEL, and zero
+/// means the layout names no such field - the cap is then not applied, which keeps
+/// the old answer for a realm whose field list was never read, rather than
+/// pretending every character is at level 0.
+inline uint32_t questRewardXp(uint32_t base, int32_t rowLevel,
+                              uint32_t playerLevel, uint32_t maxLevel) {
+    if (atLevelCap(playerLevel, maxLevel)) return 0;
+    return questXpRound(base * static_cast<uint32_t>(questXpDampFactor(rowLevel, playerLevel)) / 10u);
+}
+
+/// The money line: the quest's reward amount, or nothing when that field is a
+/// cost (the negative half is GetQuestLogRequiredMoney's answer, not this one).
+/// At the level cap the quest's max-level amount takes over whenever it is at
+/// least as large, which is the client's `<=` - so the cap floors the payout at
+/// that figure instead of replacing it. `maxLevel` is PLAYER_FIELD_MAX_LEVEL, and
+/// as above zero means the layout names no cap, in which case the floor is not
+/// applied; `maxLevelAmount` stays 0 for the classic and TBC layouts, whose field
+/// order beside the money was never counted off a serializer, and a 0 floor can
+/// only ever raise a zero payout to zero.
+inline int32_t questRewardMoney(int32_t rewardMoney, int32_t maxLevelAmount,
+                                uint32_t playerLevel, uint32_t maxLevel) {
+    int32_t money = rewardMoney > 0 ? rewardMoney : 0;
+    if (atLevelCap(playerLevel, maxLevel) && money <= maxLevelAmount)
+        money = maxLevelAmount;
+    return money;
+}
+
+/// The quest giver's dialog money line (GetRewardMoney, whose global 0x0058dd50
+/// writes from the offer packet's money word). The same word, positive half only -
+/// the negative half goes to GetQuestMoneyToGet's global instead, and this one is
+/// zeroed. No cap rule: the handler's cap gate takes in the experience alone.
+inline int32_t questDialogMoney(int32_t rewardMoney) {
+    return rewardMoney > 0 ? rewardMoney : 0;
+}
+
+/// ...and its experience line (GetRewardXP). The packet sends the number the
+/// panel shows - no table, no damping, no rounding - and the handler writes the
+/// global only for a player below the cap, leaving it zero at the cap.
+inline uint32_t questDialogXp(uint32_t rewardXp, uint32_t playerLevel,
+                              uint32_t maxLevel) {
+    return atLevelCap(playerLevel, maxLevel) ? 0u : rewardXp;
+}
+
+/// The quest log's honour line (GetQuestLogRewardHonor, 0x005e4b70): the flat
+/// addition the packet sends, plus the quest's honour **multiplier** - and the
+/// conversion the client performs on that multiplier is by the constant 0.1
+/// (0x009e3004), not by anything read off the player or a table. It still *calls*
+/// 0x007554f0 first, which reads the player's level out of its unit block and
+/// returns a row of a level-keyed table at 0x00ad4c2c, and then never uses the
+/// answer: the multiplication's other operand is on the FPU stack from before the
+/// call, and %eax is dropped on the floor. So a multiplier below 5.0 adds nothing
+/// whatever, and matching the panel means matching that oddity rather than the
+/// formula the call hints at.
+///
+/// The conversion is the client's `fistpl` under the default x87 rounding mode -
+/// nearest - which is what nearbyint does with the default C mode. The width of
+/// the product is not a detail: the client multiplies in FPU registers, which hold
+/// more than a float, and the constant is the float just *above* a tenth
+/// (0x3dcccccd), so a multiplier of 5.0 really does give 0.50000000745 and rounds
+/// up. Multiply in float32 instead and that product collapses back onto exactly
+/// 0.5 - a float cannot tell it from a half - and the tie then rounds the other
+/// way, answering 250 where the panel prints 251. Same at 15.0, 25.0 and the rest.
+/// Doubles hold the product of two float operands exactly, which is why the
+/// multiply happens in one.
+inline int32_t questRewardHonor(int32_t addition, float multiplier) {
+    if (addition <= 0 && !(multiplier > 0.0f)) return 0;
+    return addition + static_cast<int32_t>(
+        std::nearbyint(static_cast<double>(multiplier) * static_cast<double>(0.1f)));
+}
+
+} // namespace wowee::game

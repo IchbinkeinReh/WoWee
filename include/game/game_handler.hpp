@@ -9,6 +9,7 @@
 #include "game/unit_reaction.hpp"
 #include "game/item_requirements.hpp"
 #include "game/calendar_data.hpp"
+#include "game/currency_categories.hpp"
 #include "game/lfg_update.hpp"
 #include "game/latest_criteria.hpp"
 #include "game/game_interfaces.hpp"
@@ -562,6 +563,30 @@ public:
     // one-shots play once and return to the prior state.
     using EmoteAnimCallback = std::function<void(uint64_t, uint32_t, bool)>;
     void setEmoteAnimCallback(EmoteAnimCallback cb) { emoteAnimCallback_ = std::move(cb); }
+
+    // An emote's voice line (SMSG_TEXT_EMOTE): (senderGuid, EmotesText id).
+    // Which clip, if any, the emote asks for is EmotesTextSound's answer, and
+    // it is asked of the unit - which is why this only hands the ask along.
+    using EmoteSoundCallback = std::function<void(uint64_t, uint32_t)>;
+    void setEmoteSoundCallback(EmoteSoundCallback cb) { emoteSoundCallback_ = std::move(cb); }
+
+    // A unit's reaction changing (SMSG_AI_REACTION): its guid and the reaction,
+    // which is all the packet gives - 0x00716b10 asks the unit itself for the
+    // HATE slot ask and for the UNFRIENDLY line, and gives it no position.
+    using UnitReactionSoundCallback = std::function<void(uint64_t, uint32_t)>;
+    void setUnitReactionSoundCallback(UnitReactionSoundCallback cb) { unitReactionSoundCallback_ = std::move(cb); }
+
+    // The order a pet was just given (SMSG_PET_ACTION_SOUND): its guid and the
+    // packet's value, 0 the order asked of it and 1 its target set on it. What
+    // it says back is its own, which is why only the ask comes here.
+    using PetActionSoundCallback = std::function<void(uint64_t, uint32_t)>;
+    void setPetActionSoundCallback(PetActionSoundCallback cb) { petActionSoundCallback_ = std::move(cb); }
+
+    // A pet being sent off (SMSG_PET_DISMISS_SOUND): a model and a position,
+    // which is all 0x00716c00 reads - the line is that model's own, so no unit
+    // of the pet's is asked for it.
+    using PetDismissSoundCallback = std::function<void(uint32_t, glm::vec3)>;
+    void setPetDismissSoundCallback(PetDismissSoundCallback cb) { petDismissSoundCallback_ = std::move(cb); }
 
     // Another unit's stand state changed (UNIT_FIELD_BYTES_1 byte 0):
     // guid, old state, new state. The local player uses StandStateCallback.
@@ -1732,9 +1757,6 @@ public:
         return unitRenderInstanceResolver_ ? unitRenderInstanceResolver_(guid) : 0;
     }
 
-    using NpcAggroCallback = std::function<void(uint64_t guid, const glm::vec3& position)>;
-    void setNpcAggroCallback(NpcAggroCallback cb) { npcAggroCallback_ = std::move(cb); }
-
     // NPC respawn callback (health 0 → >0, resets animation to idle)
     using NpcRespawnCallback = std::function<void(uint64_t guid)>;
     void setNpcRespawnCallback(NpcRespawnCallback cb) { npcRespawnCallback_ = std::move(cb); }
@@ -1880,6 +1902,11 @@ public:
     uint32_t getPlayerRestedXp() const { return playerRestedXp_; }
     bool isPlayerResting() const { return isResting_; }
     uint32_t getPlayerLevel() const { return serverPlayerLevel_; }
+    /// The level the realm says this character stops gaining experience at - a
+    /// field the realm sends, not a constant this client gets to pick. Zero when no
+    /// layout names it, which is every layout before this one was read off a
+    /// serializer; callers then have to decide for themselves what "no cap" means.
+    uint32_t getPlayerMaxLevel() const;
     const std::vector<uint32_t>& getPlayerExploredZoneMasks() const { return playerExploredZones_; }
     bool hasPlayerExploredZoneMasks() const { return hasPlayerExploredZones_; }
     static uint32_t killXp(uint32_t playerLevel, uint32_t victimLevel);
@@ -2346,8 +2373,13 @@ public:
         return true;
     }
     bool showResurrectDialog() const { return resurrectRequestPending_; }
-    /** True when SMSG_PRE_RESURRECT arrived - Reincarnation/Twisting Nether available. */
-    bool canSelfRes() const { return selfResAvailable_; }
+    /// True when this client can pick its own body back up: either the realm has
+    /// put a self-resurrect spell on it - a soulstone, which arrives as
+    /// PLAYER_SELF_RES_SPELL and is announced by nothing else - or
+    /// SMSG_PRE_RESURRECT said a Reincarnation / Twisting Nether is ready.
+    bool canSelfRes() const { return selfResAvailable_ || getSelfResSpellId() != 0; }
+    /// The spell the realm would resurrect this client with, 0 for none.
+    uint32_t getSelfResSpellId() const;
     /** Send CMSG_SELF_RES to use Reincarnation / Twisting Nether. */
     void useSelfRes();
     const std::string& getResurrectCasterName() const { return resurrectCasterName_; }
@@ -2604,6 +2636,20 @@ public:
     bool isLfgQueued() const;
     bool isLfgInDungeon() const;
     uint32_t getLfgDungeonId() const;
+    /// The raid browser: the list joined (type<<24 | id, zero when not listed)
+    /// and the two requests that change it.
+    uint32_t getLfgJoinedListId() const;
+    void lfgSearchJoin(uint32_t typeId, uint32_t lfgId);
+    void lfgSearchLeave();
+    /// The rows of the raid browser's list, for SearchLFGGetNumResults and
+    /// SearchLFGGetResults; the row pointer is null past the end.
+    uint32_t getLfgListRowCount() const;
+    const LfgListRow* getLfgListRow(uint32_t index) const;
+    /// Those rows as the browse panel sees them: paired into a player record and
+    /// its listing (0x00553530). The count is SearchLFGGetNumResults' answer, and
+    /// the pair's index fields name rows of getLfgListRow.
+    uint32_t getLfgBrowserRowCount() const;
+    const LfgBrowserRow* getLfgBrowserRow(uint32_t index) const;
     std::string getCurrentLfgDungeonName() const;
     std::string getMapName(uint32_t mapId) const;
 
@@ -2611,6 +2657,25 @@ public:
     /// Counted from DungeonEncounter.dbc, which is the only place the total
     /// lives - the server sends which are done and never how many there are.
     uint32_t getDungeonEncounterCount(uint32_t mapId, uint32_t difficulty) const;
+    /// That same table, row by row and in the order the file stores it, which is
+    /// the order the raid browser walks it for a row's boss list and its tooltip
+    /// (countLfgEncounters and lfgEncounterAt).
+    const std::vector<LfgEncounterRow>& getDungeonEncounters() const {
+        loadDungeonEncounterDbc();
+        return dungeonEncounters_;
+    }
+    /// The list the browse panel is holding, packed type<<24 | id: the id of the
+    /// last list packet actually read, which is what the rows below belong to. The
+    /// client masks its low twenty-four bits off 0x00beab20 - the id the join
+    /// request set, 0x00553c30:3228 - to name the dungeon those rows' bosses live
+    /// in; the two are the same id whenever rows are held at all. Zero when none is.
+    uint32_t getLfgSearchListId() const;
+    /// A browse-panel column header click, by the word that header carries
+    /// (SearchLFGSort) — see SocialHandler::sortLfgBrowser for what it does.
+    void sortLfgBrowser(std::string_view word);
+    /// A name answer landed for that guid, and a raid browser row may have been
+    /// waiting on it — see SocialHandler::onLfgNameAnswered for what it does.
+    void onLfgNameAnswered(uint64_t guid);
     uint32_t getLfgProposalId() const;
     uint8_t  getLfgOfferedRoles() const;
     const std::vector<LfgProposalMember>& getLfgProposalMembers() const;
@@ -2975,6 +3040,16 @@ public:
     /// (0xbd07a8): a living creature says farewell (0x00720860), then its
     /// window closes (0x00512e60).
     void closeNpcInteraction();
+    /// A unit's UNIT_NPC_FLAGS went from `before` to `after` (0x0071a0b0).  Each
+    /// flag that opened a window keeps it open, so a flag going away closes the
+    /// window it opened - and only the one open with this very unit: the gossip
+    /// frame, the quest windows, the flight map, the trainer, the bank, the guild
+    /// bank and the mailbox.  Each of those closes names its own event
+    /// (GOSSIP_CLOSED, QUEST_FINISHED, TAXIMAP_CLOSED, TRAINER_CLOSED,
+    /// BANKFRAME_CLOSED, GUILDBANKFRAME_CLOSED, MAIL_CLOSED); a merchant, an
+    /// auction house, a stable, a registrar or a tabard vendor keeps its window
+    /// open, because the client leaves those alone.
+    void npcFlagsChanged(uint64_t guid, uint32_t before, uint32_t after);
     /// Leaving the world (0x00528c30), on every worldport and at logout: the
     /// mirror timers stop, loot is released, every window the player had
     /// open with an object closes, the trade is cancelled, and the target,
@@ -3230,7 +3305,11 @@ public:
     }
 
     const std::string& getFactionNamePublic(uint32_t factionId) const;
-    uint32_t getWatchedFactionId() const { return watchedFactionId_; }
+    // Which faction the interface draws under the experience bar.  The realm
+    // owns that answer: it comes out of PLAYER_FIELD_WATCHED_FACTION_INDEX, and
+    // the last one this client asked for is only a fallback for a layout that
+    // has no such field to read.
+    uint32_t getWatchedFactionId() const;
     void setWatchedFactionId(uint32_t factionId);
     // Declare war / make peace with a faction (CMSG_SET_FACTION_ATWAR). No-op on
     // peace-forced factions. Updates the local flag optimistically.
@@ -3472,14 +3551,26 @@ public:
     /// are kept in the queue list.
     bool isArenaMap(uint32_t mapId);
 
-    // ---- Currencies (CurrencyTypes.dbc) ----
+    // ---- Currencies (CurrencyTypes.dbc, CurrencyCategory.dbc) ----
     // In 3.3.5a a currency is a row pointing at an item, and the amount held is
     // that item's stack count in the bags - there is no separate store to read.
     struct CurrencyType {
+        // The id the known/watched/unused masks are keyed by, which is the record's
+        // fourth field; see known_currencies.hpp for which client routine reads
+        // which field and for why the record's first field is not it.
         uint32_t id = 0;
         uint32_t itemId = 0;
+        // Which category the row is filed under - and a row whose category names no
+        // CurrencyCategory.dbc record has no row at all, because the client's list
+        // walk goes category by category and never reaches it.
+        uint32_t categoryId = 0;
     };
     const std::vector<CurrencyType>& getCurrencyTypes();
+
+    /// The categories themselves, in the order the client's store comparator puts
+    /// them in - name order, with the unused bucket last. See
+    /// currency_categories.hpp for what that order decides.
+    const std::vector<CurrencyCategory>& getCurrencyCategories();
 
     // ---- Achievement categories and criteria (Achievement_Category.dbc,
     // Achievement_Criteria.dbc). The panel is a tree of categories, so it needs
@@ -3522,6 +3613,11 @@ public:
     /// PLAYER_GLYPHS_ENABLED). False without a player entity.
     bool getGlyphSocketFields(std::array<uint32_t, 6>& slotIds, std::array<uint32_t, 6>& glyphs,
                               uint32_t& enabledMask) const;
+    /// The spell power the realm says the pet has, straight out of
+    /// PLAYER_FIELD_PET_SPELL_POWER (+0x1008 +0x1264). GetPetSpellBonusDamage
+    /// reads that one dword and nothing else (0x0060e410), signed - a negative
+    /// bonus is shown in red - and answers 0 when there is no player object.
+    int32_t getPetSpellBonusDamage() const;
     void ensureAchievementCriteriaLoaded();
     /// Category ids in the order the panel shows them. The two tabs are
     /// disjoint sets, not one list filtered at the call site: GetCategoryList
@@ -3924,13 +4020,25 @@ public:
         uint32_t count = 1;
         uint32_t wireSlot = 0;
     };
-    void buyBackItem(uint32_t buybackSlot);
+    /// `row` is the row number the buyback tab used.
+    void buyBackItem(uint32_t row);
     void repairItem(uint64_t vendorGuid, uint64_t itemGuid);
     void repairAll(uint64_t vendorGuid, bool useGuildBank = false);
     uint32_t estimateRepairAllCost() const;
+    /// The sale mirror, ring slots and all.  The interface's list is
+    /// buybackRowCount / buybackRowAt - a row the realm has not confirmed into
+    /// the ring is in this one and not in that.
     const std::deque<BuybackItem>& getBuybackItems() const;
+    /// The realm's price for a buyback ring slot (74..85), from
+    /// PLAYER_FIELD_BUYBACK_PRICE_1.  What the buyback row shows.  0 for a slot
+    /// outside the ring, as the client answers 0 for an index past its twelve.
+    uint32_t buybackFieldPrice(uint32_t wireSlot) const;
+    /// The rows the buyback tab numbers, and the row it numbered - ring slots
+    /// the realm confirmed, in publish order.  See InventoryHandler.
+    uint32_t buybackRowCount() const;
+    const BuybackItem* buybackRowAt(uint32_t row) const;
     /// Equip a held item into a named equipment slot. See InventoryHandler.
-    void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot);
+    void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, bool confirmed = false);
     void autoEquipItemBySlot(int backpackIndex, bool confirmed = false);
     /// CMSG_SET_AMMO: put this entry in as the ammunition, or take it off with 0.
     void setAmmo(uint32_t itemId);
@@ -3980,7 +4088,7 @@ public:
     void splitItemTo(uint8_t srcBag, uint8_t srcSlot,
                      uint8_t dstBag, uint8_t dstSlot, uint8_t count);
     void swapContainerItems(uint8_t srcBag, uint8_t srcSlot, uint8_t dstBag,
-                            uint8_t dstSlot, bool applyLocally = true);
+                            uint8_t dstSlot, bool applyLocally = true, bool confirmed = false);
     /// Tell every frame that draws from a bag to read it again.
     ///
     /// For a change made straight to the model rather than arriving from the
@@ -4545,6 +4653,14 @@ public:
     auto& playerStatsArr() { return playerStats_; }
     auto& playerXpRef() { return playerXp_; }
 
+    /// 0x0053cf10's usability rescan, the half the stealth and aura-state
+    /// watchers run: every form the player knows asked again whether it can be
+    /// cast at all. Not the question predictedPowerUsability asks - that one is
+    /// only whether there is the power for the form. True when one of the bar's
+    /// buttons changed its mind, which is when the client names
+    /// UPDATE_SHAPESHIFT_USABLE - once for the bar, not once per button.
+    bool shapeshiftCastabilityChanged();
+
     // ── Skills ───────────────────────────────────────────────────────
     auto& playerSkillsRef() { return playerSkills_; }
     auto& skillLineAbilityLoadedRef() { return skillLineAbilityLoaded_; }
@@ -4609,7 +4725,6 @@ public:
     auto& hasPlayerExploredZonesRef() { return hasPlayerExploredZones_; }
     auto& factionStandingsRef() { return factionStandings_; }
     auto& initialFactionsRef() { return initialFactions_; }
-    auto& watchedFactionIdRef() { return watchedFactionId_; }
 
     // ── Corpse & Home Bind ───────────────────────────────────────────
     auto& corpseGuidRef() { return corpseGuid_; }
@@ -4692,6 +4807,10 @@ public:
     auto& creatureMoveCallbackRef() { return creatureMoveCallback_; }
     auto& creatureSpawnCallbackRef() { return creatureSpawnCallback_; }
     auto& emoteAnimCallbackRef() { return emoteAnimCallback_; }
+    auto& emoteSoundCallbackRef() { return emoteSoundCallback_; }
+    auto& unitReactionSoundCallbackRef() { return unitReactionSoundCallback_; }
+    auto& petActionSoundCallbackRef() { return petActionSoundCallback_; }
+    auto& petDismissSoundCallbackRef() { return petDismissSoundCallback_; }
     auto& unitStandStateCallbackRef() { return unitStandStateCallback_; }
     auto& gameObjectDespawnCallbackRef() { return gameObjectDespawnCallback_; }
     /// The destroy callback, or the despawn one where there is none.
@@ -4723,7 +4842,6 @@ public:
         return v;
     }
     auto& mountCallbackRef() { return mountCallback_; }
-    auto& npcAggroCallbackRef() { return npcAggroCallback_; }
     auto& npcDeathCallbackRef() { return npcDeathCallback_; }
     auto& npcFarewellCallbackRef() { return npcFarewellCallback_; }
     auto& npcGreetingCallbackRef() { return npcGreetingCallback_; }
@@ -4794,7 +4912,7 @@ public:
     void updateOtherPlayerVisibleItems(uint64_t guid, const FlatFieldMap& fields);
     void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries);
     void detectInventorySlotBases(const FlatFieldMap& fields);
-    bool applyInventoryFields(const FlatFieldMap& fields);
+    bool applyInventoryFields(const FlatFieldMap& fields, bool initial = false);
     void extractContainerFields(uint64_t containerGuid, const FlatFieldMap& fields);
     void extractSkillFields(const FlatFieldMap& fields);
     void extractExploredZoneFields(const FlatFieldMap& fields);
@@ -5358,6 +5476,10 @@ private:
     RandomPropertyNameResolver randomPropertyNameResolver_;
     RandomStatResolver randomStatResolver_;
     EmoteAnimCallback emoteAnimCallback_;
+    EmoteSoundCallback emoteSoundCallback_;
+    UnitReactionSoundCallback unitReactionSoundCallback_;
+    PetActionSoundCallback petActionSoundCallback_;
+    PetDismissSoundCallback petDismissSoundCallback_;
     UnitStandStateCallback unitStandStateCallback_;
 
     // Targeting
@@ -5973,6 +6095,8 @@ private:
     PendingGuildRank pendingGuildRank_;
     std::vector<CurrencyType> currencyTypes_;
     bool currencyTypesLoaded_ = false;
+    std::vector<CurrencyCategory> currencyCategories_;
+    bool currencyCategoriesLoaded_ = false;
     std::unordered_map<uint32_t, BattlemasterEntry> battlemasterList_;
     std::vector<BattlemasterEntry> battlegroundTypes_;  // arenas filtered out, id-ordered
     bool battlemasterListLoaded_ = false;
@@ -6040,7 +6164,11 @@ private:
     // (mapId, difficulty) -> encounter count, and the same map with no
     // difficulty-specific rows under a difficulty of 0xFFFFFFFF.
     mutable std::unordered_map<uint64_t, uint32_t> dungeonEncounterCounts_;
+    /// The same file's rows, kept because the raid browser needs the bosses
+    /// themselves and not just how many of a map/difficulty pair there are.
+    mutable std::vector<LfgEncounterRow> dungeonEncounters_;
     mutable bool dungeonEncounterCacheLoaded_ = false;
+    void loadDungeonEncounterDbc() const;
     void loadMapNameCache() const;
 
     // LFG dungeon name cache (lazy-loaded from LFGDungeons.dbc; WotLK only)
@@ -6166,7 +6294,6 @@ private:
 
     NpcDeathCallback npcDeathCallback_;
     UnitRenderInstanceResolver unitRenderInstanceResolver_;
-    NpcAggroCallback npcAggroCallback_;
     NpcRespawnCallback npcRespawnCallback_;
     StandStateCallback standStateCallback_;
     LogoutCompleteCallback logoutCompleteCallback_;
@@ -6285,6 +6412,8 @@ private:
     void predictedPowerUsability();
     std::array<bool, 144> actionShortOfPower_{};             ///< 0x00c1dc98
     std::unordered_map<uint32_t, bool> formShortOfPower_;   ///< 0x00be8e2c's +5
+    /// The same stance-bar buttons, as the castability rescan last saw them.
+    std::unordered_map<uint32_t, bool> formCastable_;       ///< 0x00be8e2c's +4
     uint64_t pendingSpiritHealerGuid_ = 0;
     bool resurrectPending_ = false;
     bool resurrectRequestPending_ = false;
@@ -6324,7 +6453,10 @@ private:
 
     // ---- Reputation change callback ----
     RepChangeCallback repChangeCallback_;
-    uint32_t watchedFactionId_ = 0; // auto-set to most recently changed faction
+    // The last faction this client asked the realm to watch, kept only for a
+    // layout with no PLAYER_FIELD_WATCHED_FACTION_INDEX to read: the field is
+    // the answer everywhere else.
+    uint32_t watchedFactionId_ = 0;
 
     // ---- PvP honor credit callback ----
     PvpHonorCallback pvpHonorCallback_;

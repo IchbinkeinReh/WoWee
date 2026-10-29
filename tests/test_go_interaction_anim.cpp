@@ -6,8 +6,11 @@
 #include "network/packet.hpp"
 #include "rendering/animation/animation_ids.hpp"
 
+#include <array>
+#include <iterator>
 #include <vector>
 
+using namespace wowee::game;
 using namespace wowee::game::go_interaction;
 
 TEST_CASE("A book or text object opens and closes", "[go_interaction]") {
@@ -269,5 +272,86 @@ TEST_CASE("A window opened again with its object closes first", "[go_interaction
         std::array<uint64_t, kWindowCount> one{};
         one[static_cast<size_t>(w)] = vendor;
         CHECK(windowClosedWith(one, vendor) == std::optional<Window>(w));
+    }
+}
+
+TEST_CASE("A unit that stops being what opened its window closes it", "[go_interaction]") {
+    // 0x0071a0b0 on UNIT_NPC_FLAGS.  The flag is not only what lets a window be
+    // opened: it is what keeps it open, and the client takes the window away
+    // when the flag goes - never the other way round, and never a window open
+    // with a different unit.
+    const uint64_t npc = 0xF130000001000002ull;
+    const uint64_t other = 0xF130000001000003ull;
+
+    struct Rule { uint32_t flag; Window window; };
+    const Rule rules[] = {
+        {NPC_FLAG_GOSSIP,        Window::Gossip},
+        {NPC_FLAG_QUESTGIVER,    Window::Quest},
+        {NPC_FLAG_FLIGHT_MASTER, Window::Taxi},
+        {NPC_FLAG_TRAINER,       Window::Trainer},
+        {NPC_FLAG_BANKER,        Window::Bank},
+        {NPC_FLAG_GUILD_BANKER,  Window::GuildBank},
+        {NPC_FLAG_POSTMASTER,    Window::Mailbox},
+    };
+    CHECK(std::size(rules) == std::size(kWindowKeptByNpcFlag));
+    for (size_t i = 0; i < std::size(rules); ++i) {
+        CHECK(kWindowKeptByNpcFlag[i].first == rules[i].flag);
+        CHECK(kWindowKeptByNpcFlag[i].second == rules[i].window);
+    }
+
+    // The flag going away, with the window open with this unit.
+    for (const auto& [flag, window] : rules) {
+        std::array<uint64_t, kWindowCount> with{};
+        with[static_cast<size_t>(window)] = npc;
+        CHECK(npcFlagWindowsLost(flag, 0, npc, with) == std::vector<Window>{window});
+        // The same flag on a unit no window is open with, and on the unit the
+        // window is *not* open with: nothing to close.
+        CHECK(npcFlagWindowsLost(flag, 0, npc, {}).empty());
+        CHECK(npcFlagWindowsLost(flag, 0, other, with).empty());
+        // And the flag arriving opens nothing.
+        CHECK(npcFlagWindowsLost(0, flag, npc, with).empty());
+        // Both bits of the pair changing at once, the one that stayed set
+        // holding its window.
+        CHECK(npcFlagWindowsLost(flag, flag, npc, with).empty());
+    }
+
+    // Two rules answering at once, in the client's order: the gossip frame
+    // first, then the quest windows.
+    {
+        std::array<uint64_t, kWindowCount> with{};
+        with[static_cast<size_t>(Window::Gossip)] = npc;
+        with[static_cast<size_t>(Window::Quest)] = npc;
+        CHECK(npcFlagWindowsLost(NPC_FLAG_GOSSIP | NPC_FLAG_QUESTGIVER, 0, npc, with) ==
+              std::vector<Window>{Window::Gossip, Window::Quest});
+    }
+    // Here the flight master is asked before the trainer, where the letting-go
+    // order (windowClosedWith) has them the other way round.
+    {
+        std::array<uint64_t, kWindowCount> with{};
+        with[static_cast<size_t>(Window::Taxi)] = npc;
+        with[static_cast<size_t>(Window::Trainer)] = npc;
+        CHECK(npcFlagWindowsLost(NPC_FLAG_FLIGHT_MASTER | NPC_FLAG_TRAINER, 0, npc, with) ==
+              std::vector<Window>{Window::Taxi, Window::Trainer});
+    }
+
+    // The windows the client leaves alone: no flag of a merchant, an auction
+    // house, a stable, a registrar or a tabard vendor closes anything.
+    for (uint32_t flag : {NPC_FLAG_VENDOR, NPC_FLAG_VENDOR_AMMO, NPC_FLAG_VENDOR_FOOD,
+                          NPC_FLAG_VENDOR_POISON, NPC_FLAG_VENDOR_REAGENT, NPC_FLAG_REPAIR,
+                          NPC_FLAG_AUCTIONEER, NPC_FLAG_INNKEEPER, NPC_FLAG_SPIRIT_HEALER,
+                          NPC_FLAG_SPIRIT_GUIDE}) {
+        for (Window w : {Window::Merchant, Window::AuctionHouse, Window::Stable,
+                         Window::Registrar, Window::Tabard, Window::Trade, Window::Book}) {
+            std::array<uint64_t, kWindowCount> with{};
+            with[static_cast<size_t>(w)] = npc;
+            CHECK(npcFlagWindowsLost(flag, 0, npc, with).empty());
+        }
+    }
+
+    // A unit no window can be open with.
+    {
+        std::array<uint64_t, kWindowCount> with{};
+        with[static_cast<size_t>(Window::Gossip)] = 0;
+        CHECK(npcFlagWindowsLost(NPC_FLAG_GOSSIP, 0, 0, with).empty());
     }
 }

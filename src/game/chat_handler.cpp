@@ -1316,6 +1316,12 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
 
     addLocalChatMessage(chatMsg);
 
+    // And the emote's own voice line, which the client asks of the sender at
+    // the same moment it narrates it: EmotesTextSound picks the clip by the
+    // emote text and the sender's race and sex, and the sender's own sound
+    // path plays it - gates for emote and pet sounds included.
+    if (owner_.emoteSoundCallbackRef()) owner_.emoteSoundCallbackRef()(data.senderGuid, data.textEmoteId);
+
     LOG_INFO("TEXT_EMOTE from ", senderName, " (emoteId=", data.textEmoteId, ")");
 }
 
@@ -1691,6 +1697,35 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
             break;
     }
 
+    // 0x0050e120 case 0x18: an invite is a name request before it is a popup.
+    // Its guid is resolved first, and the whole notice is dropped - the line
+    // with it - on any of three tests: the inviter is on the ignore list
+    // (0x006b52e0), the guid names no player, or an invite is already waiting
+    // on a name (the client keeps one pending channel in the 0x80 bytes at
+    // DAT_00b75950, and its own test for that is the first byte of it).
+    if (data.notifyType == ChannelNotifyType::INVITE) {
+        const uint64_t inviter = data.senderGuid;
+        if (inviter == 0 || (inviter >> 32) & 0xF0000000ULL ||
+            owner_.ignoreListGuidsRef().count(inviter) || !pendingInviteChannel_.empty())
+            return;
+        if (const std::string who = knownPlayerName(inviter); !who.empty()) {
+            // Known already, so the popup goes up inside the case - which is
+            // before the handler writes its line, the line being delivered
+            // after the switch. CHANNEL_INVITE_REQUEST carries the channel then
+            // the inviter (0x009e1ad0 is "%s%s"), and staticpopup.lua's
+            // CHAT_CHANNEL_INVITE hands its arg1 straight to
+            // JoinPermanentChannel, so the channel is the joinable name.
+            if (owner_.addonEventCallbackRef())
+                owner_.addonEventCallbackRef()("CHANNEL_INVITE_REQUEST", {data.channelName, who});
+        } else {
+            // The request carries the callback (0x004fb5c0), so this waits for
+            // the answer that asked for it and not for whichever name lands.
+            pendingInviteGuid_ = inviter;
+            pendingInviteChannel_ = data.channelName;
+            owner_.queryPlayerName(inviter);
+        }
+    }
+
     cc::Notice notice;
     uint32_t slotId = 0;  // the id a freed slot is found by: YOU_JOINED's and YOU_LEFT's only
     if (data.notifyType == ChannelNotifyType::YOU_JOINED) {
@@ -1728,6 +1763,15 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
         LOG_DEBUG("Channel notify type ", static_cast<int>(type), " for channel ", data.channelName);
         return;
     }
+    // The wrong-password notice is also an order to ask again: case 0x04 fires
+    // CHANNEL_PASSWORD_REQUEST with the channel name (0x009e0e50 is "%s") from
+    // the same case that prints WRONG_PASSWORD, and uiparent.lua answers that
+    // name with StaticPopup_Show("CHAT_CHANNEL_PASSWORD"), whose OK button runs
+    // ChatChannelPasswordHandler -> JoinPermanentChannel(name, password, ...).
+    // Without the name the player is told the password was wrong and given no
+    // way to enter another, because nothing else shows that dialog.
+    if (data.notifyType == ChannelNotifyType::WRONG_PASSWORD && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("CHANNEL_PASSWORD_REQUEST", {data.channelName});
     const std::string player = !data.playerName.empty() ? data.playerName : nameOf(data.senderGuid);
     fireChannelNotice(notice.user ? ChatType::CHANNEL_NOTICE_USER : ChatType::CHANNEL_NOTICE,
                       notice.word, data.channelName, player, nameOf(data.targetGuid), data.senderGuid);
@@ -1738,6 +1782,22 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
     }
 }
 
+void ChatHandler::onChannelInviteNameKnown(uint64_t guid) {
+    // The callback 0x0050e120 case 0x18 registers with the name request is
+    // 0x004fb5c0, and the request answers it with the guid it asked for - so an
+    // answer about somebody else cannot be the answer this invite was waiting
+    // for, and an answer that found no name leaves the invite pending exactly as
+    // the client's does (its 0x00b75950 is cleared only on the way out here).
+    if (pendingInviteChannel_.empty() || pendingInviteGuid_ != guid) return;
+    const std::string who = knownPlayerName(guid);
+    if (who.empty()) return;
+    const std::string channel = pendingInviteChannel_;
+    pendingInviteChannel_.clear();
+    pendingInviteGuid_ = 0;
+    if (owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("CHANNEL_INVITE_REQUEST", {channel, who});
+}
+
 void ChatHandler::autoJoinDefaultChannels() {
     // A new world: no channels yet, and the zone channels to be asked for
     // once the player has a zone (0x0050edd0 clears the state at login and
@@ -1745,6 +1805,10 @@ void ChatHandler::autoJoinDefaultChannels() {
     channelSlots_.reset();
     joinedChannels_.clear();
     ownedChannels_.clear();
+    // An invite waiting on a name asked for in the old world is never answered
+    // in this one, and holding it would drop every invite of the new one.
+    pendingInviteChannel_.clear();
+    pendingInviteGuid_ = 0;
     zoneChannelMask_ = 0;
     loginChannelJoinArmed_ = true;
     loginChannelJoinDone_ = false;
@@ -2084,9 +2148,13 @@ void ChatHandler::handleChannelList(network::Packet& packet) {
     const int displayIndex = getChannelIndex(chanName);
     if (displayIndex > 0) {
         const std::string idx = std::to_string(displayIndex);
-        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx});
-        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE",
-                              {idx, std::to_string(channelRosters_[chanName].size())});
+        const std::string count = std::to_string(channelRosters_[chanName].size());
+        // Both carry the count. The roster one is 0x004ffe30's
+        // event(548, "%d%d", displayIndex, members) - ChannelRoster_Update reads
+        // only the first of the two, but the client passes both from the same
+        // registers it has just stored at (&DAT_00b74464)[index*8].
+        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx, count});
+        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE", {idx, count});
     }
 }
 
@@ -2136,9 +2204,9 @@ void ChatHandler::applyUserlistChange(const std::string& chanName, uint64_t guid
     const int displayIndex = getChannelIndex(chanName);
     if (displayIndex > 0) {
         const std::string idx = std::to_string(displayIndex);
-        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx});
-        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE",
-                              {idx, std::to_string(roster.size())});
+        const std::string count = std::to_string(roster.size());
+        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx, count});
+        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE", {idx, count});
     }
 }
 

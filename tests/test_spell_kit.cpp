@@ -197,10 +197,34 @@ TEST_CASE("0x00745230 places a kit's models by the kit's type", "[spell_kit]") {
     CHECK(sk::kitModelPlace(KitType::Area, KitModelKind::Column, 21, true) == KitModelPlace::None);
 }
 
+TEST_CASE("0x00745230 sounds every kit it plays, looping only for some", "[spell_kit]") {
+    // Its flag 0x1 - the entry loops - is kept for a state kit, a precast
+    // kit and an area kit at a place, and cleared for the one-shot kits,
+    // whose looping entry then plays once like any other.
+    CHECK(sk::kitSoundLoops(sk::KitType::State, true, 7));
+    CHECK(sk::kitSoundLoops(sk::KitType::Precast, true, 7));
+    CHECK(sk::kitSoundLoops(sk::KitType::Area, true, 0));
+    CHECK_FALSE(sk::kitSoundLoops(sk::KitType::Area, true, 7));
+    CHECK_FALSE(sk::kitSoundLoops(sk::KitType::Cast, true, 7));
+    CHECK_FALSE(sk::kitSoundLoops(sk::KitType::Visual, true, 0));
+    CHECK_FALSE(sk::kitSoundLoops(sk::KitType::StateDone, true, 7));
+    CHECK_FALSE(sk::kitSoundLoops(sk::KitType::State, false, 7));
+    // A kit with a model sounds through its effect (0x006f9840): the unit it
+    // hangs on being the listener's object or the active mover gives it its
+    // voice. One without plays through the unit (0x0073b140 -> 0x006f7e40),
+    // where only the active mover does, and not a looping entry.
+    CHECK(sk::kitSoundOwnVoice(true, false, true, false));
+    CHECK(sk::kitSoundOwnVoice(true, false, false, true));
+    CHECK(sk::kitSoundOwnVoice(false, false, false, true));
+    CHECK_FALSE(sk::kitSoundOwnVoice(true, false, false, false));
+    CHECK_FALSE(sk::kitSoundOwnVoice(false, false, true, false));
+    CHECK_FALSE(sk::kitSoundOwnVoice(false, true, false, true));
+}
+
 TEST_CASE("a kit's models play once, repeat for the cast, or hold for the aura", "[spell_kit]") {
     CHECK(sk::kitModelLife(sk::KitType::Precast) == sk::KitModelLife::Repeat);
     CHECK(sk::kitModelLife(sk::KitType::State) == sk::KitModelLife::Hold);
-    for (auto type : {sk::KitType::PlayImpact, sk::KitType::Cast, sk::KitType::Area, sk::KitType::StateDone})
+    for (auto type : {sk::KitType::Visual, sk::KitType::Cast, sk::KitType::Area, sk::KitType::StateDone})
         CHECK(sk::kitModelLife(type) == sk::KitModelLife::Once);
     // 0x00744870: the Stand runs once, then the Decay where there is one.
     const auto timing = sk::onceTiming(1500.0f, true);
