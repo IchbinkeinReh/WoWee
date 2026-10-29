@@ -2264,26 +2264,14 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
             smoothedCollisionDist_ = rawLimit;
         }
 
-        // Asymmetric smoothing:
-        //   • Pull-in: τ ≈ 60 ms  - react quickly to prevent clipping
-        //     (instant while actively rotating, matching the 1:1 drag snap)
-        //   • Recover: τ ≈ 400 ms - zoom out slowly after leaving geometry
-        bool rotatingNow = mouseButtonDown || f.nowTurnLeft || f.nowTurnRight;
-        if (rawLimit < smoothedCollisionDist_ && rotatingNow) {
-            smoothedCollisionDist_ = rawLimit;
-        } else {
-            const float tau = (rawLimit < smoothedCollisionDist_) ? 0.06f : 0.40f;
-            float alpha = 1.0f - std::exp(-deltaTime / tau);
-            smoothedCollisionDist_ += (rawLimit - smoothedCollisionDist_) * alpha;
-        }
-        // The slow recovery is for coming out from behind something. With
-        // nothing in the way it trailed the zoom itself: the wheel zoomed out
-        // as fast as the limit let it, the pull below took the gap between
-        // the two for a wall and drew the zoom back in, and zooming out was
-        // slower than zooming in. Clear, the camera eases out as it eases in
-        // (ZOOM_SMOOTH_SPEED); coming out from behind a pillar stays smooth,
-        // the pull having taken the zoom in with it and giving it back slowly.
-        if (sweepClear) smoothedCollisionDist_ = std::max(smoothedCollisionDist_, rawLimit);
+        // Taken as it is, in and out, each frame (0x00605d60): the client
+        // places the camera at the line's hit less a ninth of a yard, no
+        // nearer than its eased distance allows and no farther, with nothing
+        // eased in between. Eased here - in over 60 ms, out over 400 - the
+        // camera crept back out after every pillar and doorway and met the
+        // next wall on its way: along a corridor or an inn's tables it pumped
+        // in and out the whole walk.
+        smoothedCollisionDist_ = rawLimit;
 
         collisionDistance = std::min(collisionDistance, smoothedCollisionDist_);
 
@@ -2304,8 +2292,12 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // slow breathe in and out at close range, which from the chair reads as
         // the view bobbing - reported as exactly that. A scripted view is not a
         // player deciding how far back to stand.
-        const float bite = barberView_ ? 0.0f
-                                       : userTargetDistance - smoothedCollisionDist_;
+        // Not any more: the client leaves the zoom where the player put it
+        // and moves only the camera (0x00605d60 writes the frame's distance,
+        // not +0x1e8). Taking the zoom in behind the camera and handing it
+        // back over seconds was the other half of the pumping.
+        const float bite = 0.0f;
+        (void)barberView_;
         if (bite > 0.1f) {
             collisionClearSeconds_ = 0.0f;
             // Toward what the sweep is asking for and no further, over about a
