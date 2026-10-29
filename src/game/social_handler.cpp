@@ -5866,6 +5866,14 @@ void SocialHandler::resetForWorldEntry() {
     lfgBootInProgress_ = lfgBootDidVote_ = lfgBootMyVote_ = false;
     lfgBootTargetName_.clear();
     lfgBootReason_.clear();
+    // The raid browser, as the client's LFG init leaves it (0x0055d440): no
+    // list joined and the window empty - else IsListedInLFR held over from
+    // the last character and blocked the Dungeon Finder - and the seven sort
+    // keys and the listings-first order back as they start.
+    clearLfgListWindow();
+    lfgJoinedListId_ = 0;
+    lfgSortKeys_ = defaultLfgSortKeys();
+    lfgListingsFirst_ = true;
 }
 
 void SocialHandler::resetTransferState() {
