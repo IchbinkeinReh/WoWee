@@ -3184,6 +3184,45 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             if ((oldVal & probe.second) != (now->second & probe.second)) pvpKillsChanged = true;
         }
         if (pvpKillsChanged) pendingEvents_.emit("PLAYER_PVP_KILLS_CHANGED", {});
+        // The rank dword, watched fourth by the very same block: `4, 0x1c, 4`
+        // straight after the three honour counters above, and 0x006e5960 puts the
+        // identical watch on the identical offset again.  Blob dword 7 of a
+        // player's fields is what the client's own descriptor table calls
+        // PLAYER_BYTES_3 (the record at 0x00ac6750), and that table numbers the
+        // player block from blob dword 0 = the first field past UNIT_END, so dword
+        // 7 is wire 155 - the same dword the inebriation code already takes a byte
+        // out of at +0x1d.  The callback is the block's shared raiser rather than
+        // a body of its own: 0x006cddd0 loads the event number out of its own
+        // registration frame ([ebp+0x1c]) and hands it to 0x0081b530 with "%s",
+        // "player", so the notice names its unit and nothing else - exactly how
+        // the XP (0x97), exhaustion (0x18e) and spell-bonus (0xa4) watches in this
+        // block come out, and how PLAYER_DAMAGE_DONE_MODS is raised above.  The
+        // number here is 0x1ce = 462 PLAYER_PVP_RANK_CHANGED, and no other place
+        // in the client names it - the whole event is left over from the expansion
+        // whose realm kept a character's PvP rank in these four bytes.
+        //
+        // Nothing recomputes a rank because of it, and that part is faithful
+        // rather than missing: UnitPVPRank (0x00611c40) resolves its unit token
+        // and then pushes 0 whatever it resolved, GetPVPRankProgress (0x00608560)
+        // is a bare push of 0, and 12340 has no GetMaxPVPRank at all.  What the
+        // three listeners do with the notice is redraw what they can already read:
+        // characterframe.lua:80 sets the character name back through
+        // UnitPVPName("player"), and honorframe.lua:8 and pvpframe.lua:27 call
+        // HonorFrame_Update / PVPHonor_Update, which take their numbers from
+        // GetPVPSessionStats, GetPVPYesterdayStats and GetPVPLifetimeStats - so
+        // the same panel refresh the kills watch already gives this one gives too,
+        // and a realm that moves any of the four bytes - the inebriation byte
+        // being the one WotLK really writes - no longer leaves them showing what
+        // they did when the panel was opened.
+        if (const uint16_t bytes3Idx = fieldIndex(UF::PLAYER_BYTES_3);
+            bytes3Idx != 0xFFFF) {
+            const auto now = block.fields.find(bytes3Idx);
+            if (now != block.fields.end()) {
+                const auto was = lastFields.find(bytes3Idx);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                    pendingEvents_.emit("PLAYER_PVP_RANK_CHANGED", {"player"});
+            }
+        }
         // The two currency counters.  The client watches both dwords whole -
         // "4, 0x11a4, 4" and "4, 0x11a8, 4" in the registration block at
         // 0x006e5180, which its own descriptor table names
