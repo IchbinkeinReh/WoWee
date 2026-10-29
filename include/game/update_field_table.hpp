@@ -327,6 +327,20 @@ enum class UF : uint16_t {
     /// announces a soulstone: the death popup asks this field directly
     /// (0x0051acd0), and its own second button comes and goes with it.
     PLAYER_SELF_RES_SPELL,
+    /// WotLK: what it costs to take back the twelve things the realm is holding
+    /// for the player, and when each was sold - twelve dwords at (+0x1008
+    /// +0x1074) and twelve at (+0x10a4), which the client's descriptor table
+    /// names PLAYER_FIELD_BUYBACK_PRICE_1 (1201, covering 12) and
+    /// PLAYER_FIELD_BUYBACK_TIMESTAMP_1 (1213, covering 12).  The price the
+    /// merchant window prints is the field, not a local figure: 0x00584b00
+    /// answers `+0x1074 + idx*4` with the index bounded at 0xb, and
+    /// GetBuybackItemInfo (0x00585070) calls it for the third value.  The item
+    /// itself is not in these - it is an ordinary item instance in the player's
+    /// own item store at slots 74..85 (the guid pairs the ring is read out of),
+    /// which is why 1213 is a timestamp and not an item id.  One watch covers the
+    /// pair of arrays: see the buyback block in the player-field watcher.
+    PLAYER_FIELD_BUYBACK_PRICE_1,
+    PLAYER_FIELD_BUYBACK_TIMESTAMP_1,
     PLAYER_NO_REAGENT_COST_1,
     /// The six glyph sockets' GlyphSlot.dbc ids (+0x1008 +0x1230), the
     /// GlyphProperties ids in them (+0x1248), and the bitmask of the sockets

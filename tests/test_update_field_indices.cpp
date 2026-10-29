@@ -492,3 +492,22 @@ TEST_CASE("the soulstone is the dword above the ammunition", "[update-fields]") 
     CHECK(wotlk.at("PLAYER_AMMO_ID") + 1 == wotlk.at("PLAYER_SELF_RES_SPELL"));
     CHECK(wotlk.at("PLAYER_FIELD_BYTES") + 2 == wotlk.at("PLAYER_SELF_RES_SPELL"));
 }
+
+TEST_CASE("the buyback arrays are two runs of twelve, next to each other",
+          "[update-fields][buyback]") {
+    // The client watches them as one block - 0x00585f80 puts `4, 0x1074, 0x60`,
+    // twenty-four dwords - and that only holds if the twelve prices and the
+    // twelve timestamps are one run.  Its descriptor table says they are
+    // (PLAYER_FIELD_BUYBACK_PRICE_1 at 1201 covering 12, and
+    // PLAYER_FIELD_BUYBACK_TIMESTAMP_1 at 1213 covering 12), and the timestamps
+    // are the second half: the ring's items are ordinary instances in the
+    // player's item store, so nothing here holds an item id.
+    const auto wotlk = declaredFields("wotlk");
+    REQUIRE(wotlk.count("PLAYER_FIELD_BUYBACK_PRICE_1") == 1);
+    REQUIRE(wotlk.count("PLAYER_FIELD_BUYBACK_TIMESTAMP_1") == 1);
+    CHECK(wotlk.at("PLAYER_FIELD_BUYBACK_PRICE_1") == 1201);
+    CHECK(wotlk.at("PLAYER_FIELD_BUYBACK_PRICE_1") + 12 ==
+          wotlk.at("PLAYER_FIELD_BUYBACK_TIMESTAMP_1"));
+    CHECK(wotlk.at("PLAYER_FIELD_BUYBACK_TIMESTAMP_1") + 12 ==
+          wotlk.at("PLAYER_FIELD_KILLS"));
+}

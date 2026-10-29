@@ -3148,12 +3148,11 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         // 1198) - and 0x005eaf70 re-puts the same watch when the player frame is
         // rebuilt.  Its callback at 0x005e83e0 is the client's only raise of
         // UNIT_INVENTORY_CHANGED (147) that comes from that field, and it names
-        // "player": before the raise it looks the loaded entry up in the item
-        // records (0x006de7e0, which answers the record's quality), so the notice
-        // goes out with the record already in hand - 0x006de7e0 finds the loaded
-        // entry among the item records and answers its +0x14, the same dword
-        // GetInventoryItemQuality (0x005ea040) answers with - and the sheet then
-        // re-reads the slot.
+        // "player": before the raise it touches the loaded entry among the item
+        // records - 0x006de7e0 finds the record and answers its +0x14, the same
+        // dword GetInventoryItemQuality (0x005ea040) answers with - so the notice
+        // goes out with the record already in hand and the sheet re-reads the
+        // slot.
         //
         // That re-read is the whole point of the event.  paperdollframe.lua:1191
         // refreshes a paperdoll button on UNIT_INVENTORY_CHANGED only when the
@@ -3175,6 +3174,54 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                     pendingEvents_.emit("UNIT_INVENTORY_CHANGED", {"player"});
             }
         }
+        // What it costs to take the ring back, and when each piece of it was
+        // sold, watched as one block: 0x00585f80 puts `4, 0x1074, 0x60` -
+        // twenty-four dwords, which the client's own descriptor table names
+        // PLAYER_FIELD_BUYBACK_PRICE_1 (1201, covering twelve) and
+        // PLAYER_FIELD_BUYBACK_TIMESTAMP_1 (1213, twelve more) - and 0x00585fe0
+        // takes it away again; the two are called from the pair of routines at
+        // 0x00528010 and 0x00528c30 that set the local player object up and tear
+        // it down.  The callback at 0x00585f60 is three moves: rebuild the
+        // merchant window's list (0x00584bb0, which walks the twelve ring slots of
+        // the player's own item store - the ring's items are ordinary instances
+        // there, which is why 1213 is a timestamp and not an item id; the routine
+        // counts them from 75 and stores the zero-based 74..85 this file already
+        // uses, by subtracting one from its loop variable - keeps the rows in
+        // DAT_00bf90f8 and the count in DAT_00bfa3f4, and drops a slot whose
+        // price dword is zero), then `FUN_0081b530(0x12f, 0)` -
+        // MERCHANT_UPDATE (303) with no arguments at all.
+        //
+        // This is the only way a ring the realm rewrote on its own ever reaches
+        // the window.  WoWee mirrors the ring from its own sell and buyback
+        // packets and notifies from that mirror alone, so a login block that
+        // arrives with a ring still in it - the realm keeps the twelve slots across
+        // a reconnect - or a sale made on another client said nothing, and the tab
+        // kept drawing whatever it had listed when it was opened.  The client asks
+        // its fields instead: 0x00584b00 answers `+0x1074 + idx*4` with the index
+        // bounded at 0xb, and GetBuybackItemInfo (0x00585070) calls it for the
+        // third value, so the price printed is the realm's number.
+        //
+        // The watch is raised unconditionally, as the client's is: a closed
+        // merchant window ignores the event, because merchantframe.lua:19-21
+        // updates only `if (self:IsVisible())`.  It is worth saying so, because
+        // the mirror path in the inventory handler (notifyBuybackChanged) does
+        // gate on the window being open, and for its own reason: that one reports
+        // an action this client took, while this one reports the realm's own state
+        // moving, which has to be recorded whether or not anything is drawing it.
+        bool buybackMoved = false;
+        for (const uint16_t probe : {fieldIndex(UF::PLAYER_FIELD_BUYBACK_PRICE_1),
+                                     fieldIndex(UF::PLAYER_FIELD_BUYBACK_TIMESTAMP_1)}) {
+            if (probe == 0xFFFF) continue;   // a layout naming no such array
+            for (uint16_t i = 0; i < 12; ++i) {
+                const uint16_t key = static_cast<uint16_t>(probe + i);
+                const auto now = block.fields.find(key);
+                if (now == block.fields.end()) continue;   // this slot did not move
+                const auto was = lastFields.find(key);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                    buybackMoved = true;
+            }
+        }
+        if (buybackMoved) pendingEvents_.emit("MERCHANT_UPDATE", {});
         // Which currencies the character has met, the pair of masks
         // PLAYER_FIELD_KNOWN_CURRENCIES is read as (blob +0x790 and +0x794).  The
         // client puts one eight-byte watch over the pair (0x006e5180 registers

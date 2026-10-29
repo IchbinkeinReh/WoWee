@@ -131,6 +131,8 @@ static const UFNameEntry kUFNames[] = {
     {.name = "PLAYER_FARSIGHT", .field = UF::PLAYER_FARSIGHT},
     {.name = "PLAYER_AMMO_ID", .field = UF::PLAYER_AMMO_ID},
     {.name = "PLAYER_SELF_RES_SPELL", .field = UF::PLAYER_SELF_RES_SPELL},
+    {.name = "PLAYER_FIELD_BUYBACK_PRICE_1", .field = UF::PLAYER_FIELD_BUYBACK_PRICE_1},
+    {.name = "PLAYER_FIELD_BUYBACK_TIMESTAMP_1", .field = UF::PLAYER_FIELD_BUYBACK_TIMESTAMP_1},
     {.name = "PLAYER_NO_REAGENT_COST_1", .field = UF::PLAYER_NO_REAGENT_COST_1},
     {.name = "PLAYER_FIELD_GLYPH_SLOTS_1", .field = UF::PLAYER_FIELD_GLYPH_SLOTS_1},
     {.name = "PLAYER_FIELD_GLYPHS_1", .field = UF::PLAYER_FIELD_GLYPHS_1},
