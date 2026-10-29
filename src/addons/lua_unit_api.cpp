@@ -2008,17 +2008,20 @@ static int lua_UnitDefense(lua_State* L) {
 /// wrote the field from, and answering from the weapon left every unit but the
 /// player - the pet row of the pet sheet above all - on a bare-handed 2.0 s.
 ///
-/// The off-hand speed is nil when nothing is in that hand (the client's own
-/// gate at ScriptEvents.cpp:0xb42: the equipped item is two-handed and no
-/// off-hand weapon comes back), and that is what the character sheet branches
-/// on: PaperDollFrame_SetAttackSpeed does `if ( offhandSpeed )` and then prints
-/// a two-handed line. Answering a speed unconditionally claimed an off-hand
-/// weapon for everyone, and the line it then built concatenated a value nothing
-/// had filled in. A hand whose field never arrived reads as no off-hand, and a
-/// main hand whose field never arrived falls back to the weapon's delay rather
-/// than the client's 0.0: the three earlier layouts do not place this pair in
-/// their tables, and a 0.0 there would divide every damage-per-second figure
-/// on the sheet by nothing.
+/// The off-hand speed (0x00610a00, ScriptEvents.cpp:0xb42) is answered only
+/// for a player whose inventory has an item in the off-hand slot (its 17th,
+/// +0x18f4 + 0x80) of item class 2, a weapon (0x00707220) - and for the active
+/// player only once it knows the Dual Wield spell (0x006ceb00 tests
+/// DAT_00c9eac8, which learning a spell with effect 40 sets, 0x006e7d24).
+/// Another player's inventory is not this client's to read, so it answers nil
+/// for them, and for every creature and pet. The field alone is no answer:
+/// the realms write OFFHANDATTACKTIME for every unit (2000 for a player with
+/// nothing in that hand), and answering from it gave every character a
+/// "x.xx / 2.00" speed and an off-hand damage line. PaperDollFrame branches on
+/// `if ( offhandSpeed )`. A main hand whose field never arrived falls back to
+/// the weapon's delay rather than the client's 0.0: the three earlier layouts
+/// do not place this pair in their tables, and a 0.0 there would divide every
+/// damage-per-second figure on the sheet by nothing.
 static int lua_UnitAttackSpeed(lua_State* L) {
     auto* gh = getGameHandler(L);
     const char* uid = luaL_optstring(L, 1, "player");
@@ -2026,32 +2029,30 @@ static int lua_UnitAttackSpeed(lua_State* L) {
     const uint16_t mainIdx = game::fieldIndex(game::UF::UNIT_FIELD_BASEATTACKTIME);
     const uint16_t offIdx = game::fieldIndex(game::UF::UNIT_FIELD_OFFHANDATTACKTIME);
     double mainSpeed = 0.0;
-    double offSpeed = 0.0;
+    if (unit && mainIdx != 0xFFFF) mainSpeed = unit->getField(mainIdx) / 1000.0;
+
+    // The off hand: the active player's, with a weapon there and Dual Wield.
+    const bool activePlayer = gh && unit && unit->getGuid() == gh->getPlayerGuid();
     bool hasOffHand = false;
-    if (unit) {
-        if (mainIdx != 0xFFFF) mainSpeed = unit->getField(mainIdx) / 1000.0;
-        if (offIdx != 0xFFFF) {
-            offSpeed = unit->getField(offIdx) / 1000.0;
-            hasOffHand = offSpeed > 0.0;
+    double offSpeed = 0.0;
+    if (activePlayer && gh->playerCanDualWield()) {
+        const auto& oh = gh->getInventory().getEquipSlot(game::EquipSlot::OFF_HAND);
+        constexpr uint32_t kItemClassWeapon = 2;
+        const auto* info = oh.empty() ? nullptr : gh->getItemInfo(oh.item.itemId);
+        if (info && info->itemClass == kItemClassWeapon) {
+            hasOffHand = true;
+            if (offIdx != 0xFFFF) offSpeed = unit->getField(offIdx) / 1000.0;
+            if (offSpeed == 0.0) offSpeed = oh.item.delayMs > 0 ? oh.item.delayMs / 1000.0 : 2.0;
         }
     }
     if (mainSpeed == 0.0) {
         // Nothing wrote the field: the equipped item's delay, and bare hands
         // when there is no item. Always the player's own - no other unit has
-        // an inventory here - which is what this binding did before the
-        // fields were named.
-        std::string u(uid);
-        toLowerInPlace(u);
+        // an inventory here.
         mainSpeed = 2.0;
-        if (gh && u == "player") {
-            const auto& inv = gh->getInventory();
-            const auto& mh = inv.getEquipSlot(game::EquipSlot::MAIN_HAND);
+        if (activePlayer) {
+            const auto& mh = gh->getInventory().getEquipSlot(game::EquipSlot::MAIN_HAND);
             if (!mh.empty() && mh.item.delayMs > 0) mainSpeed = mh.item.delayMs / 1000.0;
-            const auto& oh = inv.getEquipSlot(game::EquipSlot::OFF_HAND);
-            if (!hasOffHand && !oh.empty()) {
-                offSpeed = oh.item.delayMs > 0 ? oh.item.delayMs / 1000.0 : 2.0;
-                hasOffHand = true;
-            }
         }
     }
     lua_pushnumber(L, mainSpeed);
