@@ -242,7 +242,7 @@ TEST_CASE("the honour counters are four dwords in a row",
     // every counter in this run one field out.
 }
 
-TEST_CASE("the spell damage run is seven schools, twice over",
+TEST_CASE("the spell damage run is three arrays of seven schools",
           "[update-fields]") {
     // GetSpellBonusDamage (0x0060e310) answers one school as POS[school] +
     // NEG[school], reading both off the local player's object: +0xffc and
@@ -256,12 +256,18 @@ TEST_CASE("the spell damage run is seven schools, twice over",
     REQUIRE(wotlk.count("PLAYER_FIELD_MOD_DAMAGE_DONE_NEG") == 1);
     CHECK(wotlk.at("PLAYER_FIELD_MOD_DAMAGE_DONE_NEG") ==
           wotlk.at("PLAYER_FIELD_MOD_DAMAGE_DONE_POS") + 7);
-    // Past the negative run comes MOD_DAMAGE_DONE_PCT (1037, another seven), and
-    // the healing bonus follows at 1044 - fourteen dwords on from the negative
-    // run's start, which WoWee already names.
+    // A third run of seven follows - MOD_DAMAGE_DONE_PCT, floats, blob 1037 -
+    // and UnitDamage reads one dword out of each of the three at the same index,
+    // so all three have to be seven apart from each other or the sheet pairs a
+    // school's bonus with another school's multiplier.  The healing bonus then
+    // follows at blob 1044, which WoWee already names: fourteen dwords on from
+    // the negative run, seven on from the percent run.
+    CHECK(wotlk.at("PLAYER_FIELD_MOD_DAMAGE_DONE_PCT") ==
+          wotlk.at("PLAYER_FIELD_MOD_DAMAGE_DONE_NEG") + 7);
     CHECK(wotlk.at("PLAYER_FIELD_MOD_DAMAGE_DONE_NEG") + 14 ==
           wotlk.at("PLAYER_FIELD_MOD_HEALING_DONE_POS"));
     CHECK(wotlk.at("PLAYER_FIELD_MOD_DAMAGE_DONE_NEG") == 1178);
+    CHECK(wotlk.at("PLAYER_FIELD_MOD_DAMAGE_DONE_PCT") == 1185);
 }
 
 TEST_CASE("the unit's three attack times are one run of fields",

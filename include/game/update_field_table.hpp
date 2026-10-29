@@ -115,6 +115,15 @@ enum class UF : uint16_t {
     // table names both runs seven dwords wide, POS at blob 1023 and NEG at 1030,
     // with MOD_DAMAGE_DONE_PCT (float) after that at 1037.  WotLK only here.
     PLAYER_FIELD_MOD_DAMAGE_DONE_NEG,
+    // The third seven-school run, a float: UnitDamage (0x00610860) pushes it as
+    // its seventh answer and the character sheet **divides** the damage bounds
+    // by it (paperdollframe.lua:544-545), so it is a multiplier rather than a
+    // percentage.  Read with the pair above through 0x00578290 (+0x1034 into the
+    // field blob the player object keeps at +0x1008 - blob dword 1037), always at
+    // index 0: the call sites push 0, visible in the code bytes as `6a 00` before
+    // each of the three helper calls, which is the argument Ghidra drops.  WotLK
+    // only here.
+    PLAYER_FIELD_MOD_DAMAGE_DONE_PCT,
     PLAYER_FIELD_MOD_HEALING_DONE_POS, // Healing bonus
     // What the player's gear takes off the target's resistances, sent already
     // summed: 0x0060e470 reads +0x105c into the field blob the player object

@@ -2116,13 +2116,38 @@ static int lua_UnitDamage(lua_State* L) {
             offHi = offHi > 0.0 ? offHi + apSwing / 2.0 : 0.0;
         }
     }
-    lua_pushnumber(L, lo);   // minDamage
-    lua_pushnumber(L, hi);   // maxDamage
-    lua_pushnumber(L, offLo);
-    lua_pushnumber(L, offHi);
-    lua_pushnumber(L, 0.0);  // physical bonus, positive
-    lua_pushnumber(L, 0.0);  // ...and negative
-    lua_pushnumber(L, 1.0);  // damage percent
+    // The last three answers are fields as well, for the one unit the server
+    // sends them for.  0x00610860 branches on the guid's player-extension bit and
+    // then reads PLAYER_FIELD_MOD_DAMAGE_DONE_POS, _NEG and _PCT at index 0 - the
+    // school pushed is a literal 0, `6a 00` in the code bytes, which is what
+    // Ghidra's output drops from those three calls - through 0x00578210,
+    // 0x00578250 and 0x00578290, each of which answers zero unless the unit it
+    // runs on is the local player.  So the player gets its own three fields and
+    // every other unit the no-bonus answers, which is what wowee answered for the
+    // player too.  The one place the two differ is a player-controlled pet that
+    // carries that guid bit: its fields are private and never sent, so the client
+    // hands back a percent of 0.0 and the sheet then divides the damage bounds by
+    // it (paperdollframe.lua:544).  wowee keeps 1.0 there rather than reproducing
+    // a divide by zero for a pet the realm has never sent a damage modifier for.
+    double pos = 0.0, neg = 0.0, percent = 1.0;
+    if (gh && unit && unit->getGuid() == gh->getPlayerGuid()) {
+        const uint16_t posIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_POS);
+        const uint16_t negIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_NEG);
+        if (posIndex != 0xFFFF) pos = static_cast<int32_t>(unit->getField(posIndex));
+        if (negIndex != 0xFFFF) neg = static_cast<int32_t>(unit->getField(negIndex));
+        // A layout that does not name the multiplier keeps the sheet's 1.0; one
+        // that names it and has not been sent the field yet gives the 0.0 the
+        // client would show.
+        const uint16_t pctIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_PCT);
+        if (pctIndex != 0xFFFF) percent = fieldAsFloat(unit, game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_PCT);
+    }
+    lua_pushnumber(L, lo);      // minDamage
+    lua_pushnumber(L, hi);      // maxDamage
+    lua_pushnumber(L, offLo);   // off-hand min
+    lua_pushnumber(L, offHi);   // off-hand max
+    lua_pushnumber(L, pos);     // physical bonus, positive
+    lua_pushnumber(L, neg);     // ...and negative
+    lua_pushnumber(L, percent); // ...and the multiplier the sheet divides by
     return 7;
 }
 
