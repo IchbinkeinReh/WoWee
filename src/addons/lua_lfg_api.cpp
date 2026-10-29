@@ -1159,10 +1159,11 @@ void registerLfgLuaAPI(lua_State* L) {
     // The two requests, checked the way 0x00559400 checks them: two numbers, a
     // type under the seven this client knows, and an id that names an
     // LFGDungeonData row (its FUN_0065c290 refuses one that does not). Both ask
-    // the taint check first (kind 9).
+    // the taint check (kind 9) - and a refused one does nothing at all.
     {"SearchLFGJoin",              [](lua_State* L) -> int {
-        taint::allowed(L, 9);
-        if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return 0;
+        if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+            return luaL_error(L, "Usage: SearchLFGJoin(typeID, lfgID)");
+        if (!taint::allowed(L, 9)) return 0;
         const uint32_t typeId = static_cast<uint32_t>(lua_tointeger(L, 1));
         const uint32_t lfgId  = static_cast<uint32_t>(lua_tointeger(L, 2));
         auto* gh = getGameHandler(L);
@@ -1175,7 +1176,7 @@ void registerLfgLuaAPI(lua_State* L) {
         return 0;
     }},
     {"SearchLFGLeave",             [](lua_State* L) -> int {
-        taint::allowed(L, 9);
+        if (!taint::allowed(L, 9)) return 0;
         if (auto* gh = getGameHandler(L)) gh->lfgSearchLeave();
         return 0;
     }},
