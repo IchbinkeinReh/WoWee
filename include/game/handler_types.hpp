@@ -146,6 +146,11 @@ struct ChannelMember {
     bool owner = false;
     bool moderator = false;
     bool muted = false;
+    /// Whether a name was found for that guid at all. The client sorts a
+    /// channel's roster by the names it resolves rather than by the order the
+    /// roster arrived (0x004fb0f0), and a row it could not resolve sorts after
+    /// every named one rather than among them.
+    bool nameKnown = true;
 };
 
 // ---- Who ----

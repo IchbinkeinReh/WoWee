@@ -2082,6 +2082,41 @@ void ChatHandler::replyToLastWhisper(const std::string& message) {
 // Moved opcode handlers (from GameHandler::registerOpcodeHandlers)
 // ============================================================
 
+namespace {
+/// Order the panel's member list is drawn in. 0x00503990 ends its roster fill
+/// with `_qsort(rows, count, 0x18, 0x004fb0f0)` - before the count and roster
+/// events are raised - and that comparator never looks at a row's position: it
+/// resolves each row's guid to the client's player record and compares the
+/// *names*, answering that a row with no record goes after every named one
+/// rather than among them. So the list is alphabetical with the unresolved at
+/// the bottom, not in the order the server sent.
+///
+/// The client's compare is the locale one at 0x0076ec80, which folds case and
+/// collates a German name the way the client's own list shows it; only ASCII is
+/// folded here, which sorts an umlaut elsewhere. Stable, so members whose names
+/// do not sort apart stay in the order the roster arrived.
+///
+/// Holding the unresolved rows back is the half that is not here: the client
+/// counts them (DAT_00b743d8), raises no count or roster event while the count
+/// stands, and asks the name store for each guid - when the last answer comes
+/// back its callback (0x004ffe30) sorts and raises both then. Nothing here is
+/// waiting on a name that has not arrived, so both events go out either way.
+void sortChannelRoster(std::vector<ChannelMember>& roster) {
+    const auto folded = [](const std::string& s) {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s)
+            out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        return out;
+    };
+    std::stable_sort(roster.begin(), roster.end(),
+                     [&](const ChannelMember& a, const ChannelMember& b) {
+        if (a.nameKnown != b.nameKnown) return a.nameKnown;
+        return folded(a.name) < folded(b.name);
+    });
+}
+} // namespace
+
 /// The channel's own flag byte, which three packet bodies carry and all three
 /// write the same way (0x00503990 with the roster, 0x00500380 beside a
 /// member's own flags, and 0x00504130/0x005042f0 doing the same compare and
@@ -2184,7 +2219,7 @@ void ChatHandler::handleChannelList(network::Packet& packet) {
             if (player && !player->getName().empty()) m.name = player->getName();
         }
         if (m.name.empty()) m.name = owner_.lookupName(m.guid);
-        if (m.name.empty()) m.name = "(unknown)";
+        if (m.name.empty()) { m.name = "(unknown)"; m.nameKnown = false; }
 
         if (forChat) {
             const char* mark = (memberFlags & 0x01) ? "*" : (memberFlags & 0x02) ? "@"
@@ -2201,6 +2236,10 @@ void ChatHandler::handleChannelList(network::Packet& packet) {
         roster.push_back(std::move(m));
     }
     flushListLine();
+    // Sorted after the chat lines were written, which is where the client's
+    // sort sits too: /chatwho prints the server's order, the panel draws the
+    // sorted one.
+    sortChannelRoster(roster);
 
     channelRosters_[chanName] = std::move(roster);
     // Both, because the panel redraws its member list on the first and its
@@ -2257,7 +2296,7 @@ void ChatHandler::applyUserlistChange(const std::string& chanName, uint64_t guid
             ChannelMember m;
             m.guid = guid;
             m.name = owner_.lookupName(guid);
-            if (m.name.empty()) m.name = "(unknown)";
+            if (m.name.empty()) { m.name = "(unknown)"; m.nameKnown = false; }
             roster.push_back(std::move(m));
             it = roster.end() - 1;
         }
@@ -2265,6 +2304,11 @@ void ChatHandler::applyUserlistChange(const std::string& chanName, uint64_t guid
         it->moderator = (memberFlags & kModerator) != 0;
         it->muted     = (memberFlags & kMuted) != 0;
     }
+
+    // One order for the panel's rows: a joiner lands at the end of the wire's
+    // list while the rows around it are the sorted ones from the last full
+    // roster, and the panel asks for a member by position.
+    sortChannelRoster(roster);
 
     // By display index, for the reason spelled out in handleChannelList: both
     // of these take a position in the channel list, not a name.
