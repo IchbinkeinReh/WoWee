@@ -1058,14 +1058,16 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
     const int gridHeight = static_cast<int>(surface.height) + 1;
     const int vertexCount = gridWidth * gridHeight;
 
-    // WMO liquid base heights sit ~2 units above the visual waterline.
-    constexpr float WMO_WATER_Z_OFFSET = -1.0f;
-    float adjustedZ = surface.origin.z + WMO_WATER_Z_OFFSET;
-    surface.heights.assign(vertexCount, adjustedZ);
-    surface.minHeight = adjustedZ;
-    surface.maxHeight = adjustedZ;
-    surface.origin.z = adjustedZ;
-    surface.position.z = adjustedZ;
+    // The surface every query asks of - swimming, the camera under it, the
+    // fog, the enhanced draw - is the one the client draws (below): each
+    // vertex at the file's height. It used to be the base height a yard
+    // lower ("WMO liquid base heights sit ~2 units above the visual
+    // waterline", from the code this repository started from) while the
+    // client's own draw kept the file's, so in the Stormwind canals a
+    // swimmer floated a yard under the surface drawn over him, head and all.
+    surface.heights.assign(vertexCount, surface.origin.z);
+    surface.minHeight = surface.origin.z;
+    surface.maxHeight = surface.origin.z;
 
     if (surface.origin.z > 2000.0f || surface.origin.z < -500.0f) return;
 
@@ -1098,6 +1100,14 @@ void WaterRenderer::loadFromWMO(const pipeline::WMOLiquid& liquid,
                 const glm::vec3 local = localBase + localStepX * static_cast<float>(gx) +
                                         localStepY * static_cast<float>(gy);
                 surface.clientPositions[i] = glm::vec3(modelMatrix * glm::vec4(local.x, local.y, h, 1.0f));
+                // A height far off the base is a vertex no tile uses; the
+                // queries keep the base there.
+                const float z = surface.clientPositions[i].z;
+                if (std::isfinite(z) && std::abs(z - surface.origin.z) <= 8.0f) {
+                    surface.heights[i] = z;
+                    surface.minHeight = std::min(surface.minHeight, z);
+                    surface.maxHeight = std::max(surface.maxHeight, z);
+                }
                 if (haveInfo) {
                     const uint32_t info = liquid.vertexInfo[i];
                     surface.depths[i] = static_cast<uint8_t>(info & 0xff);
