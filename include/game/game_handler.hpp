@@ -2367,8 +2367,13 @@ public:
         return true;
     }
     bool showResurrectDialog() const { return resurrectRequestPending_; }
-    /** True when SMSG_PRE_RESURRECT arrived - Reincarnation/Twisting Nether available. */
-    bool canSelfRes() const { return selfResAvailable_; }
+    /// True when this client can pick its own body back up: either the realm has
+    /// put a self-resurrect spell on it - a soulstone, which arrives as
+    /// PLAYER_SELF_RES_SPELL and is announced by nothing else - or
+    /// SMSG_PRE_RESURRECT said a Reincarnation / Twisting Nether is ready.
+    bool canSelfRes() const { return selfResAvailable_ || getSelfResSpellId() != 0; }
+    /// The spell the realm would resurrect this client with, 0 for none.
+    uint32_t getSelfResSpellId() const;
     /** Send CMSG_SELF_RES to use Reincarnation / Twisting Nether. */
     void useSelfRes();
     const std::string& getResurrectCasterName() const { return resurrectCasterName_; }

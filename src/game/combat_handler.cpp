@@ -2225,7 +2225,12 @@ void CombatHandler::reclaimCorpse() {
 }
 
 void CombatHandler::useSelfRes() {
-    if (!owner_.selfResAvailableRef() || !owner_.getSocket()) return;
+    // canSelfRes rather than the packet flag alone: the soulstone half of the
+    // answer is PLAYER_SELF_RES_SPELL, which arrives as a field and is never
+    // announced.  What is cleared here is the SMSG_PRE_RESURRECT flag; the realm
+    // clears its own field when the resurrection is spent, and a death popup is
+    // gone once its button has been pressed, so there is nothing here to latch.
+    if (!owner_.canSelfRes() || !owner_.getSocket()) return;
     network::Packet pkt(wireOpcode(Opcode::CMSG_SELF_RES));
     owner_.getSocket()->send(pkt);
     owner_.selfResAvailableRef() = false;

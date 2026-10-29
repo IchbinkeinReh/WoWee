@@ -282,6 +282,11 @@ enum class UF : uint16_t {
     /// 0x005e8300) and the class spells it needs no reagents for, three
     /// mask words (+0x1008 +0x1224, 0x00800d60).
     PLAYER_AMMO_ID,
+    /// WotLK: the spell the realm means to resurrect this client with while a
+    /// soulstone is on it (+0x1008 +0x106c, blob dword 1051).  Nothing else
+    /// announces a soulstone: the death popup asks this field directly
+    /// (0x0051acd0), and its own second button comes and goes with it.
+    PLAYER_SELF_RES_SPELL,
     PLAYER_NO_REAGENT_COST_1,
     /// The six glyph sockets' GlyphSlot.dbc ids (+0x1008 +0x1230), the
     /// GlyphProperties ids in them (+0x1248), and the bitmask of the sockets

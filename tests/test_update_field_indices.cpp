@@ -471,3 +471,24 @@ TEST_CASE("the resistance block is three seven-wide runs in a row",
         CHECK(fields.count("UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE") == 0);
     }
 }
+
+TEST_CASE("the soulstone is the dword above the ammunition", "[update-fields]") {
+    // PLAYER_SELF_RES_SPELL is what a soulstone looks like to the client.  It
+    // asks no packet about one: HasSoulstone (0x0051acd0) reads the field at
+    // blob +0x106c and answers that spell's name, and 0x0051add0 and 0x00727860
+    // ask the same dword nonzero-or-not to decide whether the death UI has a
+    // second button at all.  The client's field-name table puts the name at
+    // blob dword 1051, which is +0x106c with the blob six dwords behind the wire
+    // index and 148 further still - and the field under it is the ammunition in
+    // the gun, which the same table puts at +0x1068 and WoWee has always named.
+    //
+    // One dword of gap between two fields this table has carried, which is how
+    // it went unread: nothing else in the layout moves when it is added, and the
+    // value in it is a spell id that reads as zero for everyone who has never
+    // had a stone put on them.
+    const auto wotlk = declaredFields("wotlk");
+    REQUIRE(wotlk.count("PLAYER_SELF_RES_SPELL") == 1);
+    CHECK(wotlk.at("PLAYER_SELF_RES_SPELL") == 1199);
+    CHECK(wotlk.at("PLAYER_AMMO_ID") + 1 == wotlk.at("PLAYER_SELF_RES_SPELL"));
+    CHECK(wotlk.at("PLAYER_FIELD_BYTES") + 2 == wotlk.at("PLAYER_SELF_RES_SPELL"));
+}

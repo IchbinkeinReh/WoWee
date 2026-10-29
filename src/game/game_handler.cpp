@@ -2928,6 +2928,21 @@ uint32_t GameHandler::getWatchedFactionId() const {
     return getFactionIdByRepListId(static_cast<uint32_t>(repListId));
 }
 
+uint32_t GameHandler::getSelfResSpellId() const {
+    // The soulstone is a field, not a message.  HasSoulstone (0x0051acd0) takes
+    // the local player and reads +0x106c of its field blob - blob dword 1051,
+    // which the client's own descriptor table names PLAYER_SELF_RES_SPELL - and
+    // answers the spell's *name* when that dword is not zero; the two other
+    // readers of it (0x0051add0, 0x00727860) ask the same question to decide
+    // whether the death UI has a second thing to do at all.  No packet announces
+    // a soulstone, so a client that does not read this field never learns of one.
+    const uint16_t field = fieldIndex(UF::PLAYER_SELF_RES_SPELL);
+    if (field == 0xFFFF) return 0;
+    const auto player = getEntityManager().getEntity(getPlayerGuid());
+    if (!player) return 0;
+    return player->getField(field);
+}
+
 void GameHandler::setWatchedFactionId(uint32_t factionId) {
     // Kept for the case getWatchedFactionId has no field to read; once the realm
     // answers, the field it sends is what the interface sees.
