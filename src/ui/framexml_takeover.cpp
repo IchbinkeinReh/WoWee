@@ -577,6 +577,21 @@ const Check kChecks[] = {
         {UiElement::Book,         "ItemTextFrame ItemTextPageText"},
         {UiElement::GameMenu,     "GameMenuFrame GameMenuButtonLogout"},
         {UiElement::Help,         "HelpFrame TicketStatusFrame"},
+        // Both halves of one element: the objective bar that sits on screen
+        // during a battleground and the final scoreboard that replaces it. They
+        // come from the same file, WorldStateFrame.xml, which framexml.toc
+        // loads at line 122 - so neither is load-on-demand, and a row here is
+        // what says whether that file arrived at all. No row existed while this
+        // client still drew its own scoreboard; the scoreboard bindings are all
+        // answered now, out of the parsed log (social_handler.cpp's
+        // PvpLogDataParser, which UPDATE_BATTLEFIELD_SCORE was added to tell),
+        // and FrameXML's is the only one there is.
+        //
+        // The player rows are not named: they are per-battleground and filled
+        // from that store, which is a question for the bindings, not for the
+        // frame tree.
+        {UiElement::BattlegroundScore,
+                                  "WorldStateScoreFrame WorldStateAlwaysUpFrame"},
         {UiElement::Totems,       "TotemFrame MultiCastActionBarFrame"},
         {UiElement::UiErrors,     "UIErrorsFrame"},
 
