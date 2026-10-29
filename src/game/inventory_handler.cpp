@@ -2977,7 +2977,22 @@ void InventoryHandler::fireBagUpdates() {
     // so a stack spent or looted moves the number beside the bags in the same
     // breath. The same raise goes out from the field path, where a container's
     // slots changed on their own; this is the path where the model did.
-    fire("CURRENCY_DISPLAY_UPDATE", {});
+    //
+    // Only when a currency moved, as the client asks only when an item of
+    // class 10 is on either side of the change (0x005d9790): every bag refresh
+    // raising it rebuilt the currency list several times over for a potion
+    // drunk. What the player holds of class-10 items is summed into one
+    // signature, and the event goes out when that changes.
+    uint64_t signature = 0;
+    for (const auto& [guid, item] : owner_.onlineItemsRef()) {
+        const auto* info = owner_.getItemInfo(item.entry);
+        if (!info || info->itemClass != 10) continue;
+        signature = signature * 1099511628211ull ^ (guid + (uint64_t(item.entry) << 32) + item.stackCount);
+    }
+    if (signature != currencySignature_) {
+        currencySignature_ = signature;
+        fire("CURRENCY_DISPLAY_UPDATE", {});
+    }
     // An open trade skill window is looking at the bags too, and it does not
     // watch them: TradeSkillFrame_OnLoad registers TRADE_SKILL_UPDATE,
     // TRADE_SKILL_FILTER_UPDATE, UNIT_PORTRAIT_UPDATE and
@@ -5300,6 +5315,11 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("WOWEE_ITEM_INFO_RECEIVED",
                                            {std::to_string(data.entry)});
+            // A currency's item answered: the currency list's item callback
+            // (0x005b0660) rebuilds it and raises CURRENCY_DISPLAY_UPDATE, so
+            // a row drawn nameless gets its name.
+            if (data.itemClass == 10)
+                owner_.addonEventCallbackRef()("CURRENCY_DISPLAY_UPDATE", {});
         }
 
         // The loot window's row for this item, which was drawn before the

@@ -666,6 +666,9 @@ public:
     void handleItemQueryResponse(network::Packet& packet);
 
 private:
+    /// What the currency items the player holds summed to at the last
+    /// CURRENCY_DISPLAY_UPDATE fireBagUpdates raised (~0: none raised yet).
+    uint64_t currencySignature_ = ~uint64_t{0};
     /// Each other player's PLAYER_FLAGS hide-helm and hide-cloak bits.
     std::unordered_map<uint64_t, uint32_t> otherPlayerHideBits_;
     uint32_t hiddenFor(uint64_t guid) const;

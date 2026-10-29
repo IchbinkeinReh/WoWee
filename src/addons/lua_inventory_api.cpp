@@ -1288,8 +1288,15 @@ std::vector<CurrencyRow> buildCurrencyList(lua_State* L) {
             // slot), so a row whose item is missing or nameless carries a null name
             // and GetCurrencyListInfo answers nil for it. Inventing "Item #12345"
             // kept such a row in the list where the client shows an empty one.
-            if (const auto* info = gh->getItemInfo(c.itemId)) r.name = info->name;
-            else r.unresolved = true;
+            if (const auto* info = gh->getItemInfo(c.itemId)) {
+                r.name = info->name;
+            } else {
+                r.unresolved = true;
+                // And asked for, as the client asks for it (0x0067ca30 with
+                // 0x005b0660 as the callback): the answer raises
+                // CURRENCY_DISPLAY_UPDATE, and the row is drawn named.
+                gh->ensureItemInfo(c.itemId);
+            }
             group.push_back(std::move(r));
         }
         std::sort(group.begin(), group.end(), [](const CurrencyRow& a, const CurrencyRow& b) {

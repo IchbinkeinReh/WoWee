@@ -2231,6 +2231,18 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
             }
         }
     }
+    // Whether what changed touches a currency: an item of class 10, the one the
+    // client's container-slot handler asks about on either side of a slot
+    // change (0x005d9790, before it calls 0x005b0660).
+    auto isCurrencyItem = [&](uint64_t itemGuid) {
+        if (itemGuid == 0) return false;
+        const auto found = owner_.onlineItemsRef().find(itemGuid);
+        if (found == owner_.onlineItemsRef().end()) return false;
+        const auto* info = owner_.getItemInfo(found->second.entry);
+        constexpr uint32_t kItemClassCurrency = 10;
+        return info && info->itemClass == kItemClassCurrency;
+    };
+    bool currencyTouched = inventoryChanged && isItemInInventory && isCurrencyItem(block.guid);
     // Update container slot GUIDs on bag content changes
     if (entity && entity->getType() == ObjectType::CONTAINER) {
         for (const auto& [key, _] : block.fields) {
@@ -2240,7 +2252,17 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
                 break;
             }
         }
+        const auto before = owner_.containerContentsRef().find(block.guid);
+        std::array<uint64_t, 36> was{};
+        if (before != owner_.containerContentsRef().end()) was = before->second.slotGuids;
         owner_.extractContainerFields(block.guid, block.fields);
+        const auto after = owner_.containerContentsRef().find(block.guid);
+        if (after != owner_.containerContentsRef().end()) {
+            for (size_t i = 0; i < was.size() && !currencyTouched; ++i) {
+                const uint64_t now = after->second.slotGuids[i];
+                if (now != was[i] && (isCurrencyItem(was[i]) || isCurrencyItem(now))) currencyTouched = true;
+            }
+        }
     }
     if (inventoryChanged) {
         owner_.rebuildOnlineInventory();
@@ -2281,8 +2303,10 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
         // the list registers as its item-interest callback when a row's item is
         // not loaded yet (0x005b0000.c:92,113).  Without it the number beside
         // the bags stayed whatever the row was drawn with, however much of that
-        // currency was looted afterwards.
-        pendingEvents_.emit("CURRENCY_DISPLAY_UPDATE", {});
+        // currency was looted afterwards. As there, only when the change
+        // touched a currency item: every stack, durability or enchant change
+        // raising it rebuilt the whole list several times over.
+        if (currencyTouched) pendingEvents_.emit("CURRENCY_DISPLAY_UPDATE", {});
     }
     if (durabilityChanged) {
         // The armour indicator is DurabilityFrame, which listens for
