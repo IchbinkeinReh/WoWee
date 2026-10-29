@@ -3215,15 +3215,14 @@ static int lua_GetLatestThreeSenders(lua_State* L) {
     return 3;
 }
 
-// What this client does not keep per bag slot: durability and gem sockets.
+// What this client does not keep per bag slot: its durability.
 //
-// Both are read straight into locals and guarded before use - paperdollframe
-// writes `local broken = ( maxDurability and durability == 0 )`, and the gems
-// are not even unpacked there - so absent is both safe and true. Answering a
-// full bar or three empty sockets would be a claim about an item nobody
-// inspected.
+// Read straight into locals and guarded before use - paperdollframe writes
+// `local broken = ( maxDurability and durability == 0 )` - so absent is both
+// safe and true, and answering a full bar would be a claim about an item
+// nobody inspected.
 //
-// They are bindings rather than parser work, which is worth saying because it
+// It is a binding rather than parser work, which is worth saying because it
 // was called the other way once: the wire carries this detail and this client
 // parses it only for equipped items, so it looked like a data gap until the
 // caller was read.
@@ -3232,9 +3231,90 @@ static int lua_GetContainerItemDurability(lua_State* L) {
     lua_pushnil(L);   // maxDurability
     return 2;
 }
-static int lua_ItemGemsNone(lua_State* L) {
-    lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);   // gem1, gem2, gem3
+
+// GetInventoryItemGems(slot) (0x005ea4f0) and GetContainerItemGems(bag, slot)
+// (0x005d9300) - the gems in an item's three sockets, as item entries.
+//
+// EquipmentManager_GetItemInfoByLocation reads them into gem1, gem2 and gem3
+// (equipmentmanager.lua:280/290) and returns them after the twelve values
+// paperdollframe.lua:1970 unpacks - so nothing on screen draws them today, and
+// what they are had to come from the binding. The socket fields hold no entry;
+// what one holds is an enchantment id, in the same 0xc-spaced triples the
+// hyperlink reads its gems out of (item blob +0x58/+0x64/+0x70). Both bindings
+// put that id through one lookup before pushing anything: the store at
+// DAT_00ad48c0..DAT_00ad48bc indexed by DAT_00ad48d0 - min id, max id and the
+// id-to-row pointer array of one of the client's DBC stores - and then take
+// row+0x44 of whatever it names. That row is the SpellItemEnchantment row this
+// client already reaches for the socketing panel: its +0x38 is a localized
+// name, which 0x005198a0 formats into a two-name message, and its +0x44 is the
+// Src_ItemID column detectEnchantmentGemItemField finds, which getEnchantGemItem
+// already answers GetExistingSocketInfo from. That column is an item entry and
+// not merely a number because other readers of the same row hand it to the item
+// record cache at 0x0067ca30 (0x006de4d0). Three sockets, one number each, nil
+// for a socket whose id is out of that store or whose row names no item - an
+// empty socket has no id at all.
+//
+// The shapes are the client's, and the two differ:
+//
+//   * GetInventoryItemGems prints "Usage: GetInventoryItemGems(slot)" and
+//     returns *no values* when the argument is not a number. 0x005e7c00 then
+//     stores the argument minus one and accepts internal 0..0x16, 0x27..0x42,
+//     0x43..0x49 and 0x56..0x75 besides that -1, which is why the bank is named
+//     at forty and up; a slot outside those lists takes the same usage path.
+//     The list is not copied here: what the two top ranges name is not pinned,
+//     and they are wider than the slots this client resolves through
+//     GetInventoryItem* at all. An unresolvable slot therefore falls to the
+//     empty-slot answer below - the same number of values the refusal gives,
+//     differing only in the printed line.
+//   * Slot 0 arrives as the -1 the client refuses before its player check, with
+//     nothing at all.
+//   * A slot that is named but empty is refused the same way: 0x00754400
+//     (Bag::GetItem, .\Bag_C.cpp:0x2da) answers nothing and the binding returns
+//     nothing. Only when there is no local player at all does it answer three
+//     without looking.
+//   * GetContainerItemGems wants two numbers or it prints its own usage line,
+//     and a bag or slot that names no item still returns three nils rather than
+//     nothing.
+//
+// The inventory leg reaches its three ids through 0x00518b30, which walks
+// 0x0040-anchored triples off the object's block, and the container leg reads
+// +0x58/+0x64/+0x70 of the item's own block directly - the same three the link
+// is built from. Why those two bases are twelve dwords apart is not pinned
+// here; that both hand an enchantment id to the same lookup is what the code
+// rests on, and it is what WoWee's own socket panel already assumes.
+static int pushSocketGems(lua_State* L, game::GameHandler* gh, uint64_t itemGuid) {
+    const auto enchants = gh->getItemSocketEnchantIds(itemGuid);
+    for (int i = 0; i < 3; ++i) {
+        const uint32_t gem = gh->getEnchantGemItem(enchants[static_cast<size_t>(i)]);
+        if (gem == 0) lua_pushnil(L);
+        else lua_pushnumber(L, gem);
+    }
     return 3;
+}
+
+static int lua_GetInventoryItemGems(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInventoryItemGems(slot)");
+    const int slotId = static_cast<int>(lua_tonumber(L, 1));
+    // Lua's slot 0, the -1 the client stores and then refuses before its
+    // player check: no values, not three nils.
+    if (slotId == 0) return 0;
+    if (!gh) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
+    const game::ItemSlot* sp = inventorySlotItem(gh->getInventory(), slotId);
+    if (!sp || sp->empty()) return 0;
+    return pushSocketGems(L, gh, sp->item.guid);
+}
+
+static int lua_GetContainerItemGems(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetContainerItemGems(bag, slot)");
+    if (!gh) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
+    const game::ItemSlot* sp = containerItemSlot(gh->getInventory(),
+                                                 static_cast<int>(lua_tonumber(L, 1)),
+                                                 static_cast<int>(lua_tonumber(L, 2)));
+    if (!sp || sp->empty()) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
+    return pushSocketGems(L, gh, sp->item.guid);
 }
 
 // GetContainerFreeSlots(container [, table]) → the empty slots in that bag.
@@ -4944,8 +5024,16 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetContainerFreeSlots", lua_GetContainerFreeSlots},
                 {"GetLatestThreeSenders", lua_GetLatestThreeSenders},
                 {"GetContainerItemDurability", lua_GetContainerItemDurability},
-                {"GetContainerItemGems",  lua_ItemGemsNone},
-                {"GetInventoryItemGems",  lua_ItemGemsNone},
+                // The sockets of a worn or carried item, three item entries.
+                // Both were registered against one stub that answered three
+                // nils, which is why equipmentmanager.lua's
+                // EquipmentManager_GetItemInfo has been passing nothing to
+                // GetItemInfo for gems: the ids the fields hold are
+                // enchantments, and one SpellItemEnchantment hop stands
+                // between them and an entry - the same hop the socketing panel
+                // was built on.
+                {"GetContainerItemGems",  lua_GetContainerItemGems},
+                {"GetInventoryItemGems",  lua_GetInventoryItemGems},
                 {"GetContainerItemInfo",    lua_GetContainerItemInfo},
                 {"GetContainerItemLink",    lua_GetContainerItemLink},
                 {"GetContainerNumFreeSlots", lua_GetContainerNumFreeSlots},
