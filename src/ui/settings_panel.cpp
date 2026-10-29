@@ -1875,9 +1875,12 @@ void SettingsPanel::applyAudioVolumes(audio::AudioCoordinator* ac) {
     if (auto* combat = ac->getCombatSoundManager())
         combat->setVolumeScale(fx * pendingCombatVolume / 100.0f);
     // The spells' own balance is over what the kits already bring - a kit's
-    // sound comes in with its SoundEntries volume.
+    // sound comes in with its SoundEntries volume. Not times the effects
+    // volume: a kit plays on the engine's Effects channel, whose group
+    // setEffectsVolume above already sets to it, and taking it twice played
+    // spell sounds at its square (a quarter at half).
     if (auto* svs = services_.renderer ? services_.renderer->getSpellVisualSystem() : nullptr)
-        svs->setKitSoundVolumeScale(fx * static_cast<float>(pendingSpellVolume) / 100.0f);
+        svs->setKitSoundVolumeScale(static_cast<float>(pendingSpellVolume) / 100.0f);
     if (auto* movement = ac->getMovementSoundManager())
         movement->setVolumeScale(fx * pendingMovementVolume / 100.0f);
     if (auto* footstep = ac->getFootstepManager())
