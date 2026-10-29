@@ -1711,6 +1711,10 @@ void InventoryHandler::clearBuybackState() {
     buybackItems_.clear();
     pendingSellToBuyback_.clear();
     buybackSlotGuids_.fill(0);
+    // The ring's prices and timestamps go with it: they describe that ring, and
+    // the next character's block fills them in again from its own first update.
+    buybackPrices_.fill(0);
+    buybackTimestamps_.fill(0);
     pendingBuybackSlot_ = -1;
     pendingBuybackWireSlot_ = 0;
 }
@@ -1722,6 +1726,16 @@ void InventoryHandler::notifyBuybackChanged() {
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("MERCHANT_UPDATE", {});
     }
+}
+
+// Whether a mirror row is one of the interface's rows at all: its ring slot has
+// to be known, which is the server having said that slot holds the item.  The
+// original client tests that slot's price as well when it admits a row
+// (0x00584bb0); this does not, because the layouts naming no
+// PLAYER_FIELD_BUYBACK_PRICE_1 have no prices to test, and their sales are real
+// rows priced from the mirror instead.
+bool inBuybackRing(uint32_t wireSlot) {
+    return wireSlot >= kBuybackWireSlotStart && wireSlot < kBuybackWireSlotEnd;
 }
 
 void InventoryHandler::reconcileBuybackSlots() {
@@ -1770,10 +1784,61 @@ void InventoryHandler::reconcileBuybackSlots() {
         }
     }
 
+    // Row order, as the client publishes it.  The row builder sorts the ring
+    // slots ascending by their timestamp field (see the members above), so the
+    // oldest sale is row 1 and the newest is the one merchantframe.lua's
+    // "sell your last sale" button reaches by asking for
+    // GetNumBuybackItems().  This mirror is appended in sale order, which
+    // matches for one continuous session - the point at which it did not was a
+    // reconnect, where the ring survives and the mirror does not.  Stable, so
+    // a realm that sent no timestamps keeps the order rows were appended in.
+    std::stable_sort(buybackItems_.begin(), buybackItems_.end(),
+                     [this](const BuybackItem& a, const BuybackItem& b) {
+        // A row whose ring slot is not known yet has nothing to sort on - and
+        // the client has no row for it at all - so it stays behind the real
+        // ones rather than drifting among them.
+        const bool aMapped = inBuybackRing(a.wireSlot), bMapped = inBuybackRing(b.wireSlot);
+        if (aMapped != bMapped) return aMapped;
+        if (!aMapped) return false;
+        return buybackTimestamps_[a.wireSlot - kBuybackWireSlotStart] <
+               buybackTimestamps_[b.wireSlot - kBuybackWireSlotStart];
+    });
+
     std::vector<std::pair<uint64_t, uint32_t>> after;
     after.reserve(buybackItems_.size());
     for (const auto& item : buybackItems_) after.emplace_back(item.itemGuid, item.wireSlot);
     if (after != before) notifyBuybackChanged();
+}
+
+uint32_t InventoryHandler::buybackFieldPrice(uint32_t wireSlot) const {
+    // 0x00584b00 answers 0 for an index past eleven; the same here, so a row
+    // that never had a ring slot reads as free rather than as someone else's
+    // price.
+    if (!inBuybackRing(wireSlot)) return 0u;
+    return buybackPrices_[wireSlot - kBuybackWireSlotStart];
+}
+
+uint32_t InventoryHandler::buybackRowCount() const {
+    // The merchant guid pair the client tests is simply "a merchant is open"
+    // (0x005843f0 reads it before its count; MerchantFrame.cpp's repair cost
+    // reads the same globals).  Nothing is drawing the tab otherwise.
+    if (!vendorWindowOpen_) return 0;
+    uint32_t rows = 0;
+    for (const auto& item : buybackItems_)
+        if (inBuybackRing(item.wireSlot)) ++rows;
+    return rows;
+}
+
+const InventoryHandler::BuybackItem* InventoryHandler::buybackRow(uint32_t row) const {
+    // The rows are the confirmed ones in publish order, which is the order
+    // reconcileBuybackSlots left the mirror in - so this walks the mirror and
+    // skips what never made it into the ring.
+    for (const auto& item : buybackItems_) {
+        if (!inBuybackRing(item.wireSlot)) continue;
+        if (row == 0) return &item;
+        --row;
+    }
+    return nullptr;
 }
 
 void InventoryHandler::buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, uint32_t count) {
@@ -1902,20 +1967,26 @@ void InventoryHandler::sellItemInBag(int bagIndex, int slotIndex) {
     }
 }
 
-void InventoryHandler::buyBackItem(uint32_t buybackSlot) {
+void InventoryHandler::buyBackItem(uint32_t row) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || currentVendorItems_.vendorGuid == 0) return;
-    if (buybackSlot >= buybackItems_.size()) return;
-    const uint32_t wireSlot = buybackItems_[buybackSlot].wireSlot;
-    if (wireSlot < kBuybackWireSlotStart || wireSlot >= kBuybackWireSlotEnd) {
-        LOG_WARNING("Buyback request rejected: row ", buybackSlot,
-                    " has invalid wire slot ", wireSlot);
+    // The row the interface numbered, not a slot in the mirror: 0x005855c0
+    // looks its slot up in the published list too, and sends the ring slot it
+    // found there - so a row that is not in the ring cannot be clicked here
+    // any more than it can be clicked there.
+    const BuybackItem* item = buybackRow(row);
+    if (!item) {
+        LOG_WARNING("Buyback request rejected: no row ", row);
         return;
     }
+    const uint32_t wireSlot = item->wireSlot;
     pendingBuyItemId_ = 0;
     pendingBuyItemSlot_ = 0;
     LOG_INFO("Buyback request: vendorGuid=0x", std::hex, currentVendorItems_.vendorGuid,
-             std::dec, " uiSlot=", buybackSlot, " wireSlot=", wireSlot);
-    pendingBuybackSlot_ = static_cast<int>(buybackSlot);
+             std::dec, " uiRow=", row, " wireSlot=", wireSlot);
+    // The row number, kept only as "a buyback is waiting" plus the log: both
+    // replies find the row by its wire slot, so a row number that moved under
+    // it - which the publish order can do - costs nothing.
+    pendingBuybackSlot_ = static_cast<int>(row);
     pendingBuybackWireSlot_ = wireSlot;
     // Use the expansion-agnostic packet builder so the opcode resolves from
     // the active expansion's JSON mapping rather than a hardcoded WotLK value.
@@ -5504,6 +5575,14 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields, bool ini
         effectiveBankBagSlots_ = (effectiveBankSlots_ <= 24) ? 6 : 7;
     }
 
+    // The realm's own buyback arrays.  These are not next to the ring in the
+    // block - in the client's blob they sit above the coinage, at 0x1074 and
+    // 0x10a4 - so they are read by their own names, and a layout that names
+    // neither leaves the rows priced from the mirror instead (see
+    // buybackFieldPrice and the GetBuybackItemInfo note).
+    const int buybackPriceBase = static_cast<int>(fieldIndex(UF::PLAYER_FIELD_BUYBACK_PRICE_1));
+    const int buybackTimeBase = static_cast<int>(fieldIndex(UF::PLAYER_FIELD_BUYBACK_TIMESTAMP_1));
+
     int keyringBase = static_cast<int>(fieldIndex(UF::PLAYER_FIELD_KEYRING_SLOT_1));
     const int buybackBase = bankBagBase != 0xFFFF
         ? bankBagBase + (effectiveBankBagSlots_ * 2) : 0xFFFF;
@@ -5596,6 +5675,19 @@ bool InventoryHandler::applyInventoryFields(const FlatFieldMap& fields, bool ini
                 // general ones - which is how bankframe.lua splits them again.
                 if (guid != before) changedBankSlots.insert(kBankGeneralSlotCount + slotIndex + 1);
             }
+        }
+
+        // Twelve prices then twelve timestamps, position k of each belonging to
+        // ring slot 74+k.  Both halves of the client's one 0x60 watch: what it
+        // builds rows from is exactly these, and the price it then shows for a
+        // row is price[ring slot - 74] (0x00584b00), which is why the row's
+        // price cannot be read off the item's own record.
+        if (buybackPriceBase != 0xFFFF && key >= buybackPriceBase &&
+            key <= buybackPriceBase + (static_cast<int>(kBuybackWireSlotCount) - 1)) {
+            buybackPrices_[key - buybackPriceBase] = val;
+        } else if (buybackTimeBase != 0xFFFF && key >= buybackTimeBase &&
+                   key <= buybackTimeBase + (static_cast<int>(kBuybackWireSlotCount) - 1)) {
+            buybackTimestamps_[key - buybackTimeBase] = val;
         }
 
         // The server owns the buyback ring. Bind local item metadata to these

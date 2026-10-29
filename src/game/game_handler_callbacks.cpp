@@ -1532,6 +1532,23 @@ uint64_t GameHandler::getVendorGuid() const {
     if (inventoryHandler_) return inventoryHandler_->getVendorGuid();
     return currentVendorItems.vendorGuid;
 }
+uint32_t GameHandler::buybackFieldPrice(uint32_t wireSlot) const {
+    return inventoryHandler_ ? inventoryHandler_->buybackFieldPrice(wireSlot) : 0u;
+}
+uint32_t GameHandler::buybackRowCount() const {
+    if (inventoryHandler_) return inventoryHandler_->buybackRowCount();
+    // No handler of its own: this deque is a leftover of the time the vendor
+    // state lived here, and nothing ever filled ring slots into it.
+    return static_cast<uint32_t>(buybackItems_.size());
+}
+const GameHandler::BuybackItem* GameHandler::buybackRowAt(uint32_t row) const {
+    if (inventoryHandler_) {
+        // Layout-identical structs; see getBuybackItems.  nullptr stays nullptr.
+        return reinterpret_cast<const BuybackItem*>(inventoryHandler_->buybackRow(row));
+    }
+    if (row >= buybackItems_.size()) return nullptr;
+    return &buybackItems_[row];
+}
 
 // Mail
 bool GameHandler::isSocketingOpen() const {
@@ -4227,8 +4244,8 @@ void GameHandler::buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, u
     if (inventoryHandler_) inventoryHandler_->buyItem(vendorGuid, itemId, slot, count);
 }
 
-void GameHandler::buyBackItem(uint32_t buybackSlot) {
-    if (inventoryHandler_) inventoryHandler_->buyBackItem(buybackSlot);
+void GameHandler::buyBackItem(uint32_t row) {
+    if (inventoryHandler_) inventoryHandler_->buyBackItem(row);
 }
 
 void GameHandler::repairItem(uint64_t vendorGuid, uint64_t itemGuid) {

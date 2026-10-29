@@ -305,37 +305,67 @@ static int lua_SpellCanTargetItem(lua_State* L) {
 /// GetBuybackItemInfo(index) → name, texture, price, quantity, numAvailable,
 /// isUsable. Oldest first, as WoW numbers it: the most recent sale is at
 /// GetNumBuybackItems(), which is the index merchantframe.lua reads for the
-/// "buy back the last thing you sold" slot on the merchant tab.
+/// "buy back the last thing you sold" slot on the merchant tab. The client
+/// gets that order by sorting the ring slots by their own timestamp fields
+/// (0x00584bb0), which is what reconcileBuybackSlots now does to the mirror.
 static int lua_GetBuybackItemInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || index < 1) { return luaReturnNil(L); }
-    const auto& items = gh->getBuybackItems();
-    if (index > static_cast<int>(items.size())) { return luaReturnNil(L); }
-    const auto& bi = items[index - 1];
+    if (!gh) { return luaReturnNil(L); }
+    const auto* row = index < 1 ? nullptr : gh->buybackRowAt(static_cast<uint32_t>(index - 1));
+    if (!row) {
+        // Out of range answers, rather than returning nil: nil, nil, 0, 1, 0,
+        // true is what 0x00585070's failure tail pushes - no name, no icon,
+        // nothing to pay, one of them, none in stock, usable.  merchantframe.lua
+        // only asks for rows it counted, so this is what a row number that went
+        // stale leaves in the button; clicking it sends nothing, because
+        // BuybackItem (0x005855c0) looks the row up in the same list and sends
+        // no packet when it finds no ring slot there.
+        lua_pushnil(L);
+        lua_pushnil(L);
+        lua_pushnumber(L, 0);
+        lua_pushnumber(L, 1);
+        lua_pushnumber(L, 0);
+        lua_pushboolean(L, 1);
+        return 6;
+    }
+    const auto& bi = *row;
 
     lua_pushstring(L, bi.item.name.c_str());
     std::string iconPath;
     if (bi.item.displayInfoId != 0) iconPath = gh->getItemIconPath(bi.item.displayInfoId);
     if (!iconPath.empty()) lua_pushstring(L, iconPath.c_str());
     else lua_pushnil(L);
-    // What it costs to take back is what it sold for, times the stack.
-    lua_pushnumber(L, static_cast<double>(bi.item.sellPrice) * bi.count);
+    // The realm's price for that ring slot, which is the number the client
+    // shows: 0x00584b00 reads PLAYER_FIELD_BUYBACK_PRICE_1 + (slot - 74) and
+    // 0x00585070 pushes that, never the item record's sell price.  What the
+    // sale was worth is only what a layout naming no such field has to show -
+    // the client would have no row at all there, a zero price keeping the ring
+    // slot out of its list.
+    const uint32_t fieldPrice = gh->buybackFieldPrice(bi.wireSlot);
+    lua_pushnumber(L, fieldPrice ? static_cast<double>(fieldPrice)
+                                 : static_cast<double>(bi.item.sellPrice) * bi.count);
     lua_pushnumber(L, bi.count);
-    lua_pushnumber(L, 1);
+    // numAvailable: the client pushes a hard zero (0x00585070). A buyback row
+    // is not the merchant's stock, so there is no stock figure for it.
+    lua_pushnumber(L, 0);
     // isUsable, as for a merchant's own items (0x00585070 asks 0x006dc3f0).
     const auto* binfo = gh->getItemInfo(bi.item.itemId);
     lua_pushboolean(L, !binfo || gh->judgeItemRequirements(*binfo).usable());
     return 6;
 }
 
+/// GetBuybackItemLink(index) - the same row list, and the client resolves the
+/// row to its ring slot exactly as GetBuybackItemInfo does (0x005852c0 reads
+/// the published list, then the item standing in that slot of the player's
+/// store), so an index past the rows answers nothing there rather than a link.
 static int lua_GetBuybackItemLink(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) { return luaReturnNil(L); }
-    const auto& items = gh->getBuybackItems();
-    if (index > static_cast<int>(items.size())) { return luaReturnNil(L); }
-    const auto& bi = items[index - 1];
+    const auto* row = gh->buybackRowAt(static_cast<uint32_t>(index - 1));
+    if (!row) { return luaReturnNil(L); }
+    const auto& bi = *row;
     const int q = static_cast<int>(bi.item.quality);
     const std::string link = game::itemChatLink(bi.item.itemId, static_cast<uint32_t>(q), bi.item.name);
     lua_pushstring(L, link.c_str());
@@ -4733,9 +4763,13 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // How many rows the buyback tab has. The merchant window walks
                 // this to build the tab, and without it the tab was empty even
                 // with items sitting in the buyback ring the client tracks.
+                // The rows, not the sale mirror: 0x005843f0 counts the list the
+                // other three bindings read from, and answers none unless a
+                // merchant is open.  merchantframe.lua iterates 1..this, so a
+                // row counted here is a row it draws.
                 {"GetNumBuybackItems", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, gh ? static_cast<lua_Number>(gh->getBuybackItems().size()) : 0);
+            lua_pushnumber(L, gh ? static_cast<lua_Number>(gh->buybackRowCount()) : 0);
             return 1;
         }},
                 {"GetInventoryItemID",      lua_GetInventoryItemID},

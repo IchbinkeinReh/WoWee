@@ -4020,11 +4020,23 @@ public:
         uint32_t count = 1;
         uint32_t wireSlot = 0;
     };
-    void buyBackItem(uint32_t buybackSlot);
+    /// `row` is the row number the buyback tab used.
+    void buyBackItem(uint32_t row);
     void repairItem(uint64_t vendorGuid, uint64_t itemGuid);
     void repairAll(uint64_t vendorGuid, bool useGuildBank = false);
     uint32_t estimateRepairAllCost() const;
+    /// The sale mirror, ring slots and all.  The interface's list is
+    /// buybackRowCount / buybackRowAt - a row the realm has not confirmed into
+    /// the ring is in this one and not in that.
     const std::deque<BuybackItem>& getBuybackItems() const;
+    /// The realm's price for a buyback ring slot (74..85), from
+    /// PLAYER_FIELD_BUYBACK_PRICE_1.  What the buyback row shows.  0 for a slot
+    /// outside the ring, as the client answers 0 for an index past its twelve.
+    uint32_t buybackFieldPrice(uint32_t wireSlot) const;
+    /// The rows the buyback tab numbers, and the row it numbered - ring slots
+    /// the realm confirmed, in publish order.  See InventoryHandler.
+    uint32_t buybackRowCount() const;
+    const BuybackItem* buybackRowAt(uint32_t row) const;
     /// Equip a held item into a named equipment slot. See InventoryHandler.
     void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, bool confirmed = false);
     void autoEquipItemBySlot(int backpackIndex, bool confirmed = false);

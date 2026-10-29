@@ -185,14 +185,41 @@ public:
     void sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count);
     void sellItemBySlot(int backpackIndex);
     void sellItemInBag(int bagIndex, int slotIndex);
-    void buyBackItem(uint32_t buybackSlot);
+    /// `row` is the number the buyback tab gave the row (BuybackItem(i) in
+    /// FrameXML), resolved through buybackRow to the ring slot it stands for.
+    void buyBackItem(uint32_t row);
     /// Tell the interface durability moved - the armour indicator redraws
     /// from an event, not by polling.
     void announceDurabilityChange();
     void repairItem(uint64_t vendorGuid, uint64_t itemGuid);
     void repairAll(uint64_t vendorGuid, bool useGuildBank = false);
     uint32_t estimateRepairAllCost() const;
+    /// The sale mirror, in the order the sales happened.  What the interface
+    /// sees is buybackRowCount / buybackRow.
     const std::deque<BuybackItem>& getBuybackItems() const { return buybackItems_; }
+    /// What taking a ring slot back costs, straight out of the player fields.
+    ///
+    /// The realm sets this, not the item's record: 0x00584b00 reads
+    /// PLAYER_FIELD_BUYBACK_PRICE_1 + (wireSlot - 74) - bounds the index at 11
+    /// and answers 0 past it - and 0x00585070 pushes exactly that as the row's
+    /// third value, never the DBC sell price.  So a row can carry a price the
+    /// item's own record does not mention, and the client shows the realm's.
+    uint32_t buybackFieldPrice(uint32_t wireSlot) const;
+    /// The buyback rows as the interface numbers them: ring slots the server has
+    /// confirmed, in the order it publishes them, and nothing else.
+    ///
+    /// merchantframe.lua walks rows 1..GetNumBuybackItems() and asks each one
+    /// for its item, so whatever is counted is whatever gets drawn and clicked.
+    /// The original client's list holds only ring slots that actually hold an
+    /// item and a price (0x00584bb0 admits a row on both tests, and 0x00585070,
+    /// 0x005852c0 and 0x005855c0 all re-check the item), and GetNumBuybackItems (0x005843f0)
+    /// answers no rows at all unless a merchant is open - it reads the merchant
+    /// guid pair, the same globals MerchantFrame.cpp's repair cost reads.  So a
+    /// sale not confirmed into the ring yet has no row here either, rather than
+    /// a row the window would draw and a click could take.
+    uint32_t buybackRowCount() const;
+    /// The row's item, or nullptr past the end of the list.
+    const BuybackItem* buybackRow(uint32_t row) const;
     // ---- Equipping, and the prompt before something binds ----
     //
     // `confirmed` is how a caller says the player has already been asked. Both
@@ -793,6 +820,19 @@ private:
     std::deque<BuybackItem> buybackItems_;
     std::unordered_map<uint64_t, BuybackItem> pendingSellToBuyback_;
     std::array<uint64_t, 12> buybackSlotGuids_{};
+    // The realm's two buyback arrays, read off the player block.  Position k of
+    // each belongs to ring slot 74+k, and one watch covers all twenty-four
+    // dwords (0x00585f80 registers 4, 0x1074, 0x60): PLAYER_FIELD_BUYBACK_PRICE_1
+    // at blob 0x1074 and PLAYER_FIELD_BUYBACK_TIMESTAMP_1 at 0x10a4.  What the
+    // row builder at 0x00584bb0 does with them says what they are for: a row is
+    // admitted only when that ring slot holds an item *and* price[k] is non-zero,
+    // and the admitted ring slots are published sorted ascending by timestamp[k]
+    // (_qsort over (timestamp, ring slot) pairs with the comparator at
+    // 0x005841a0, and only the ring-slot half kept).  Hence the buyback list is
+    // in sell order - row 1 the oldest, the newest at GetNumBuybackItems() - and
+    // the price asked for a row is price[ring slot - 74], not price[row].
+    std::array<uint32_t, 12> buybackPrices_{};
+    std::array<uint32_t, 12> buybackTimestamps_{};
     int pendingBuybackSlot_ = -1;
     uint32_t pendingBuybackWireSlot_ = 0;
     uint32_t pendingBuyItemId_ = 0;
