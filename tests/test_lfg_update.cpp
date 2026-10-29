@@ -409,8 +409,10 @@ TEST_CASE("A list the client is not in is dropped, and its rows kept", "[lfg]") 
     other.writeUInt8(1);
     other.writeUInt32(1);
     other.writeUInt64(0x100);      // a removal of the row that is held
-    CHECK(parseLfgList(other, kLfrList, rows, &wholeList));
+    bool matched = true;
+    CHECK(parseLfgList(other, kLfrList, rows, &wholeList, &matched));
     CHECK_FALSE(wholeList);
+    CHECK_FALSE(matched);
     CHECK(other.getRemainingSize() == 0);
     REQUIRE(rows.size() == 1);
     CHECK(rows[0].comment == "still here");

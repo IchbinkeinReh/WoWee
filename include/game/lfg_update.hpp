@@ -230,9 +230,12 @@ struct LfgListRow {
  * clears its window then (0x00558af0), which is the same place it unregisters the
  * name callbacks its rows registered, so the count of `lfgNameAnswerClosesGate`
  * above has to be dropped with it.
+ *
+ * `matched`, when given, says whether the packet was for the held list at all:
+ * one that is not is read no further, and the client touches nothing for it.
  */
 bool parseLfgList(network::Packet& packet, uint32_t heldListId,
-                  std::vector<LfgListRow>& rows, bool* wholeList = nullptr);
+                  std::vector<LfgListRow>& rows, bool* wholeList = nullptr, bool* matched = nullptr);
 
 /**
  * The client's gate on the names its list rows are waiting for (0x005528a0).

@@ -4962,7 +4962,13 @@ void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
     }
     const uint32_t previousWindow = lfgListWindowId_;
     bool wholeList = false;
-    parseLfgList(packet, lfgJoinedListId_, lfgListRows_, &wholeList);
+    bool matched = false;
+    parseLfgList(packet, lfgJoinedListId_, lfgListRows_, &wholeList, &matched);
+    // An update for a list other than the one held - one already left: the
+    // client returns before it touches the window (0x0055b770:9691-9694), and
+    // marking the window current here kept the first real packet of the new
+    // list from announcing it.
+    if (!matched) return;
     // A whole-list packet opens by clearing the window, and that clearing routine is
     // where the client unregisters the name callbacks its rows had registered
     // (0x00558af0:6967). Those answers reach no callback now, so the count of them
