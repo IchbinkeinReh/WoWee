@@ -804,7 +804,9 @@ EntityController::UnitFieldIndices EntityController::UnitFieldIndices::resolve()
         .resistances = fieldIndex(UF::UNIT_FIELD_RESISTANCES),
         .attackPower = fieldIndex(UF::UNIT_FIELD_ATTACK_POWER),
         .minDamage = fieldIndex(UF::UNIT_FIELD_MINDAMAGE),
-        .maxDamage = fieldIndex(UF::UNIT_FIELD_MAXDAMAGE)
+        .maxDamage = fieldIndex(UF::UNIT_FIELD_MAXDAMAGE),
+        .rangedDamage = fieldIndex(UF::UNIT_FIELD_MINRANGEDDAMAGE),
+        .attackTime = fieldIndex(UF::UNIT_FIELD_BASEATTACKTIME)
     };
 }
 
@@ -1135,6 +1137,14 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
     uint32_t oldHealth = unit->getHealth();
     bool petExperienceChanged = false;
     bool petStatsChanged = false;
+    // The rest of the damage family, one flag per name the pet tab registers,
+    // because that is how the client raises them - a field moving says so under
+    // its own name rather than under whichever group of lines the tab happens
+    // to draw.
+    bool petDamageChanged = false;
+    bool petAttackPowerChanged = false;
+    bool petRangedDamageChanged = false;
+    bool petAttackSpeedChanged = false;
     bool powerTypeMoved = false;
     uint8_t powersMoved = 0, maxPowersMoved = 0;
     for (const auto& [key, val] : block.fields) {
@@ -1394,16 +1404,28 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         } else if (ufi.attackPower != 0xFFFF && key == ufi.attackPower &&
                    block.guid == owner_.petGuidRef()) {
             owner_.petAttackPowerRef() = static_cast<int32_t>(val);
-            petStatsChanged = true;
+            petAttackPowerChanged = true;
         } else if (ufi.minDamage != 0xFFFF && key == ufi.minDamage &&
                    block.guid == owner_.petGuidRef()) {
             // A float, sent as its bits like every other float field.
             owner_.petMinDamageRef() = bitsToFloat(val);
-            petStatsChanged = true;
+            petDamageChanged = true;
         } else if (ufi.maxDamage != 0xFFFF && key == ufi.maxDamage &&
                    block.guid == owner_.petGuidRef()) {
             owner_.petMaxDamageRef() = bitsToFloat(val);
-            petStatsChanged = true;
+            petDamageChanged = true;
+        } else if (ufi.rangedDamage != 0xFFFF &&
+                   (key == ufi.rangedDamage || key == ufi.rangedDamage + 1) &&
+                   block.guid == owner_.petGuidRef()) {
+            // Nothing to keep: UnitRangedDamage reads the pet's own pair off
+            // the entity. What the change is worth is the name the tab waits
+            // for, and the pair is consecutive, like every run of fields.
+            petRangedDamageChanged = true;
+        } else if (ufi.attackTime != 0xFFFF &&
+                   (key == ufi.attackTime || key == ufi.attackTime + 1) &&
+                   block.guid == owner_.petGuidRef()) {
+            // The same for the swing times UnitAttackSpeed answers from.
+            petAttackSpeedChanged = true;
         } else if (ufi.stat0 != 0xFFFF && key >= ufi.stat0 && key < ufi.stat0 + 5 &&
                    block.guid == owner_.petGuidRef()) {
             // The pet's own five, not the player's. The paperdoll's pet tab
@@ -1517,6 +1539,25 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
     if (petStatsChanged && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("UNIT_STATS", {"pet"});
         owner_.addonEventCallbackRef()("UNIT_RESISTANCES", {"pet"});
+    }
+    // ...and the same for the rest of the damage family that tab registers: the
+    // pet sheet listens for UNIT_DAMAGE, UNIT_RANGEDDAMAGE, UNIT_ATTACK_SPEED
+    // and UNIT_ATTACK_POWER, and unlike the player's sheet it has no combined
+    // branch to fall back on - PaperDollFrame recomputes its damage row on any
+    // of the power or stat names, which is the only reason the player's numbers
+    // ever moved here. PetPaperDollFrame_OnEvent ends in
+    // `elseif ( arg1 == "pet" ) then PetPaperDollFrame_Update()`, so the name
+    // has to be "pet" for the frame to take any of them at all; that is also
+    // why this fires for the owner's pet and for no other unit - the shipped
+    // frames answer nothing else, and firing a name at a unit no frame resolves
+    // would be volume without effect. The values themselves were already right:
+    // UnitDamage and UnitRangedDamage read the pet's own fields. What was
+    // missing was the redraw, which is the whole of these four.
+    if (auto& fire = owner_.addonEventCallbackRef()) {
+        if (petDamageChanged) fire("UNIT_DAMAGE", {"pet"});
+        if (petRangedDamageChanged) fire("UNIT_RANGEDDAMAGE", {"pet"});
+        if (petAttackSpeedChanged) fire("UNIT_ATTACK_SPEED", {"pet"});
+        if (petAttackPowerChanged) fire("UNIT_ATTACK_POWER", {"pet"});
     }
 
     return result;
