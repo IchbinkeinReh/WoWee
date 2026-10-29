@@ -7552,14 +7552,13 @@ void registerSystemLuaAPI(lua_State* L) {
                 // list, the companion tab and the token frame each raised
                 // rather than showing nothing.
                 //
-                // GetNumTitles() - how many title *bits* there are to ask
-                // about, not how many are owned. paperdollframe.lua walks
-                // 1..GetNumTitles() calling IsTitleKnown on each, so this is
-                // the size of the space: the three 64-bit groups of
-                // PLAYER_FIELD_KNOWN_TITLES, which is AzerothCore's
-                // KNOWN_TITLES_SIZE * 64 in Player.h as well. It comes from the
-                // same constant the mask is read with, so the loop asking
-                // cannot be sized past the bits there are to ask about.
+                // GetNumTitles() - how many title ids there are to ask about,
+                // not how many are owned. paperdollframe.lua walks
+                // 1..GetNumTitles() calling IsTitleKnown on each. The client
+                // answers its CharTitles table's bound plus one (0x005165e0,
+                // DAT_00ad337c + 1); this answers the three 64-bit groups of
+                // PLAYER_FIELD_KNOWN_TITLES, which covers every bit the mask
+                // has - a few ids more to ask about, every one answered.
                 {"GetNumTitles", [](lua_State* L) -> int {
             lua_pushnumber(L, game::kKnownTitleCount); return 1;
         }},

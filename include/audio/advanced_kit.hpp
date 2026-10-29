@@ -5,7 +5,8 @@
 // A row's column 29 names one of the 1641 SoundEntriesAdvanced rows, by that
 // table's own column 0 (its column 1 is the SoundEntries id back, and 1615 of the
 // 1617 rows that name a kit agree the two ways round). 1617 of the 12941 rows name
-// one - 1395 of them spell sounds (SoundType 10), and all 7 liquid ambience loops -
+// one - 1395 of them scripted speech (SoundType 10: boss and quest dialogue), and all 7
+// liquid ambience loops -
 // and the client plays those differently: 0x004c6a40 hands the play to 0x004cb580
 // (SoundInterface2AdvancedKitProperties.cpp) and returns from there, *before* it
 // sets the reach from the row's MinDistance and DistanceCutoff (004c0000.c:5954-5957

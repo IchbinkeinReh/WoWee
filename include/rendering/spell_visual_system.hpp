@@ -64,9 +64,9 @@ public:
     void playSpellVisualPrecast(uint32_t visualId, const glm::vec3& worldPosition,
                                 uint32_t castTimeMs = 0, uint32_t attachInstanceId = 0, uint32_t spellId = 0);
 
-    /// A SpellVisualKit by its id, as SMSG_PLAY_SPELL_VISUAL (type 1,
-    /// 0x008006c0) and SMSG_PLAY_SPELL_IMPACT (type 0, 0x00800610) play one
-    /// on a unit.
+    /// A SpellVisualKit by its id, as SMSG_PLAY_SPELL_VISUAL (0x1F3, kit
+    /// type 0 through 0x00800610) and SMSG_PLAY_SPELL_IMPACT (0x1F7, type 1
+    /// through 0x008006c0) play one on a unit.
     void playKit(uint32_t kitId, spell_kit::KitType type, const glm::vec3& worldPosition, uint32_t renderInstanceId);
 
     /// A ground-aimed cast's area kits at its destination (0x0080e1b0): the

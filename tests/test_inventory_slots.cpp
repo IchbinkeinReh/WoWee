@@ -118,10 +118,8 @@ TEST_CASE("The containers a realm can name are the bags this layout carries",
     // And the id space is that list with the backpack's zero in front, so the
     // highest id either layout can ask a frame to show is the last bank bag's -
     // eleven - inside the thirteen frames containerframe.lua:1 counts out.
-    for (bool classicLike : {false, true}) {
-        INFO("classicLike=" << classicLike);
-        REQUIRE(kWornBagCount + bankBagCount() < NUM_CONTAINER_FRAMES);
-    }
+    REQUIRE(kWornBagCount + bankLayoutFor(false).bagCount < NUM_CONTAINER_FRAMES);
+    REQUIRE(kWornBagCount + bankLayoutFor(true).bagCount < NUM_CONTAINER_FRAMES);
 }
 
 TEST_CASE("No two regions inside the no-container overlap", "[bank][slots]") {

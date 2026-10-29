@@ -3509,9 +3509,9 @@ void registerSocialLuaAPI(lua_State* L) {
                 // button is there, :1174 whether it is enabled).
                 //
                 // 0x0051acd0 answers only while the local player is dead - the
-                // test on the display blob's +0x48, whose meaning the sibling site
-                // at 0x00520000:707 pins, firing PLAYER_DEAD for the below-one side
-                // and PLAYER_ALIVE for the other - and what it answers is a spell
+                // test is health below one, the field blob's +0x48 being
+                // UNIT_FIELD_HEALTH (blob dword 18, wire 24; a ghost has 1, and
+                // the client answers nil for it) - and what it answers is a spell
                 // name, not a phrase: the id sitting in PLAYER_SELF_RES_SPELL,
                 // queried through the spell store, or "UNKNOWN" when that query
                 // fails.  A soulstone is therefore its own button, with no packet

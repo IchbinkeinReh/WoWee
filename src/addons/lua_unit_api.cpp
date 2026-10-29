@@ -1130,11 +1130,11 @@ static int lua_GetPVPYesterdayStats(lua_State* L) {
     return 2;
 }
 
-// GetPVPLifetimeStats answers two values, not three - honorable, then
-// dishonorable - and the second is a byte, not a dword: byte 3 of
-// PLAYER_FIELD_BYTES (+0x1067), read as zero below 5.  That floor is the
-// client's, and it is what the honour frame's "Rank" line depends on: the byte
-// doubles as the lifetime dishonourable count only once it reaches 5.
+// GetPVPLifetimeStats answers two values, not three - the lifetime honorable
+// kills, then the highest PvP rank (honorframe.lua:41 `hk, highestRank`) - and
+// the second is a byte, not a dword: byte 3 of PLAYER_FIELD_BYTES (+0x1067),
+// read as zero below 5. That floor is the client's, and it is what the honour
+// frame's "Rank" line depends on.
 static int lua_GetPVPLifetimeStats(lua_State* L) {
     const uint16_t killsIndex = game::fieldIndex(game::UF::PLAYER_FIELD_LIFETIME_HONORBALE_KILLS);
     const auto player = localPlayerObject(L, killsIndex);
@@ -1186,9 +1186,10 @@ static int lua_GetCombatRating(lua_State* L) {
 
 // GetSpellBonusDamage(school) → that school's spell damage bonus (0x0060e310).
 // It is not one number, and the school is the index: the client checks the
-// argument lands in 1..7 - the field run is seven wide, schools 1..7 in the
-// order Holy, Fire, Nature, Frost, Shadow, Arcane and the all-schools one the
-// sheet does not show - and raises otherwise, returning nothing.  Then it adds
+// argument lands in 1..7 - the field run is seven wide, one per school in the
+// order Physical, Holy, Fire, Nature, Frost, Shadow and Arcane, the argument
+// less one indexing it (FrameXML's holySchool is 2) - and raises otherwise,
+// returning nothing.  Then it adds
 // **two** arrays read off the local player's player object (0x00578210 and
 // 0x00578250): PLAYER_FIELD_MOD_DAMAGE_DONE_POS at +0xffc into the field blob
 // the object keeps at +0x1008, and PLAYER_FIELD_MOD_DAMAGE_DONE_NEG at +0x1018.
@@ -2152,11 +2153,15 @@ static int lua_UnitDamage(lua_State* L) {
         const uint16_t negIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_NEG);
         if (posIndex != 0xFFFF) pos = static_cast<int32_t>(unit->getField(posIndex));
         if (negIndex != 0xFFFF) neg = static_cast<int32_t>(unit->getField(negIndex));
-        // A layout that does not name the multiplier keeps the sheet's 1.0; one
-        // that names it and has not been sent the field yet gives the 0.0 the
-        // client would show.
+        // A layout that does not name the multiplier keeps the sheet's 1.0, and
+        // so does a field not yet sent: the client would hand back 0.0 there,
+        // and PaperDollFrame_SetDamage divides the bounds by it
+        // (paperdollframe.lua:544-545) - an inf on the sheet for nothing the
+        // realm said. Every realm sends 1.0 for it.
         const uint16_t pctIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_PCT);
-        if (pctIndex != 0xFFFF) percent = fieldAsFloat(unit, game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_PCT);
+        if (pctIndex != 0xFFFF && unit->hasField(pctIndex))
+            percent = fieldAsFloat(unit, game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_PCT);
+        if (!(percent > 0.0)) percent = 1.0;
     }
     lua_pushnumber(L, lo);      // minDamage
     lua_pushnumber(L, hi);      // maxDamage

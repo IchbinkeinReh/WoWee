@@ -700,8 +700,8 @@ void SpellHandler::handleNotifyDestLocSpellCast(network::Packet& packet) {
 SpellHandler::SpellHandler(GameHandler& owner)
     : owner_(owner) {}
 
-// The five values FrameXML unpacks from any UNIT_SPELLCAST_* event:
-//   unit, spell name, rank, cast id, spell id
+// The four values the client raises any UNIT_SPELLCAST_* event with:
+//   unit, spell name, rank, cast id
 //
 // Every one of these was fired as the unit and the spell id alone, which put
 // the id where the name belongs and left the cast id absent. Two things went
@@ -732,15 +732,17 @@ SpellHandler::SpellHandler(GameHandler& owner)
 // four: it calls 0x0060bf10 instead and fires the token **alone**. That second
 // form is what the shipped handlers expect for a spell with no client-side
 // record - chatframe.lua:729 and :913 bail on `if (not name)` for exactly that.
-// Nothing reads a fourth argument here, and that byte's meaning stayed unread;
-// the fourth and fifth here are WoWee's own, padding for nothing.
+// That byte is the unit's cast counter; the fourth here is the spell id
+// instead, which is what UnitCastingInfo answers as the cast id, so the cast
+// bar's comparison of the two holds. A fifth (the spell id) is a later
+// expansion's, and the "%s%s%s%d" has none.
 std::vector<std::string> SpellHandler::spellcastArgs(const std::string& unitId,
                                                      uint32_t spellId) const {
     const std::string& name = owner_.getSpellName(spellId);
     const std::string& rank = owner_.getSpellRank(spellId);
     // A name that is not cached yet would be empty, and an empty string is a
     // string - which is what the readers want. Nil would raise in strlower.
-    return {unitId, name, rank, std::to_string(spellId), std::to_string(spellId)};
+    return {unitId, name, rank, std::to_string(spellId)};
 }
 
 void SpellHandler::requestPetName(uint64_t petGuid) {

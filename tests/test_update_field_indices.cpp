@@ -308,9 +308,10 @@ TEST_CASE("the unit's three attack times are one run of fields",
     // and 71) both show.
     //
     // Worth pinning because a slipped index reads a convincing number rather
-    // than an obviously wrong one: the neighbours here are a faction template
-    // and a mount's display id, and 2050 divided by 1000 is a perfectly
-    // plausible weapon speed.
+    // than an obviously wrong one: the neighbours here are AURASTATE (61) and
+    // BOUNDINGRADIUS (65), and 2050 divided by 1000 is a perfectly plausible
+    // weapon speed. OFFHANDATTACKTIME is this client's name for the second
+    // dword of the client's one two-wide BASEATTACKTIME entry.
     const auto wotlk = declaredFields("wotlk");
     REQUIRE(wotlk.count("UNIT_FIELD_BASEATTACKTIME") == 1);
     REQUIRE(wotlk.count("UNIT_FIELD_OFFHANDATTACKTIME") == 1);
@@ -318,6 +319,7 @@ TEST_CASE("the unit's three attack times are one run of fields",
           wotlk.at("UNIT_FIELD_OFFHANDATTACKTIME"));
     CHECK(wotlk.at("UNIT_FIELD_OFFHANDATTACKTIME") + 1 ==
           wotlk.at("UNIT_FIELD_RANGEDATTACKTIME"));
+    CHECK(wotlk.at("UNIT_FIELD_BASEATTACKTIME") == 62);
 }
 
 TEST_CASE("the two damage pairs sit where the client reads them",
