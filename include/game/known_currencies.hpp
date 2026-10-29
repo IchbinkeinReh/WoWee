@@ -20,14 +20,61 @@
 
 namespace wowee::game {
 
+/// Which half, and which bit of it, a currency id addresses.
+///
+/// `half` is 0 for the ids 1..0x20 and 1 for the ids after that; `valid` is false
+/// for an id outside the pair, which is the case the client leaves unbounded.
+struct CurrencyBit {
+    bool     valid = false;
+    uint32_t half  = 0;
+    uint32_t mask  = 0;
+};
+
+inline constexpr CurrencyBit currencyBitOf(uint32_t currencyId) {
+    if (currencyId >= 1 && currencyId <= 32)  return {.valid = true, .half = 0, .mask = 1u << (currencyId - 1)};
+    if (currencyId >= 33 && currencyId <= 64) return {.valid = true, .half = 1, .mask = 1u << (currencyId - 33)};
+    return {};
+}
+
 /// Whether a currency's bit is set in the known-currency pair.
 inline constexpr bool currencyIsKnown(uint32_t knownLow, uint32_t knownHigh,
                                       uint32_t currencyId) {
-    if (currencyId >= 1 && currencyId <= 32)
-        return ((knownLow >> (currencyId - 1)) & 1u) != 0;
-    if (currencyId >= 33 && currencyId <= 64)
-        return ((knownHigh >> (currencyId - 33)) & 1u) != 0;
-    return false;
+    const CurrencyBit bit = currencyBitOf(currencyId);
+    if (!bit.valid) return false;
+    return ((bit.half ? knownHigh : knownLow) & bit.mask) != 0;
 }
+
+/// A pair of masks over currency ids, which is how the client keeps more than one
+/// set of currencies.
+///
+/// The watched set - the currencies shown beside the bags - is kept exactly like
+/// the known pair, keyed by the same ids into the same two halves: 0x005b0590
+/// computes the bit the way `currencyBitOf` does and sets or clears it, and hands
+/// the result to the client's settings store, which is why the choice outlives a
+/// session there. A mask kept here lives for the session only: this client has no
+/// settings store for it to go through.
+struct CurrencyWatch {
+    uint32_t low  = 0;   ///< ids 1..0x20
+    uint32_t high = 0;   ///< ids 0x21..0x40
+
+    [[nodiscard]] bool has(uint32_t currencyId) const {
+        const CurrencyBit bit = currencyBitOf(currencyId);
+        return bit.valid && ((bit.half ? high : low) & bit.mask) != 0;
+    }
+
+    /// Setting an id outside the pair does nothing: there is no bit for it.
+    ///
+    /// There is no count here on purpose. The client sets and clears one bit
+    /// however many are already set (0x005b0590 asks nothing of the rest of the
+    /// pair), and the limit on how many are drawn is the interface's own:
+    /// blizzard_tokenui.lua counts what GetBackpackCurrencyInfo answers and stops
+    /// at MAX_WATCHED_TOKENS.
+    void set(uint32_t currencyId, bool on) {
+        const CurrencyBit bit = currencyBitOf(currencyId);
+        if (!bit.valid) return;
+        uint32_t& half = bit.half ? high : low;
+        half = on ? (half | bit.mask) : (half & ~bit.mask);
+    }
+};
 
 } // namespace wowee::game

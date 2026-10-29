@@ -106,3 +106,49 @@ TEST_CASE("The known-currency bits are one-based across a 64-wide pair",
     CHECK_FALSE(currencyIsKnown(0xFFFFFFFFu, 0xFFFFFFFFu, 0));
     CHECK_FALSE(currencyIsKnown(0xFFFFFFFFu, 0xFFFFFFFFu, 65));
 }
+
+// The currencies watched beside the bags are a second pair of the same masks, and
+// they are the only thing deciding which currency stands beside the bags: the
+// token window reads the flag back to tick its own box, and
+// blizzard_tokenui.lua counts what GetBackpackCurrencyInfo answers for the slots
+// it draws. A bit landing in the wrong half names a different currency for that
+// slot, and a set that clears the half instead of the bit empties the other rows.
+TEST_CASE("The watched pair sets one currency at a time", "[updatefields][currency]") {
+    using wowee::game::CurrencyWatch;
+
+    CurrencyWatch watch;
+    CHECK(watch.low == 0);
+    CHECK(watch.high == 0);
+
+    // The ends of both halves, addressed as the known pair addresses them - which
+    // is how one currency's bit means the same row in either mask.
+    watch.set(1, true);
+    watch.set(32, true);
+    watch.set(33, true);
+    watch.set(64, true);
+    CHECK(watch.low == 0x80000001u);   // id 1 opens the low half, id 32 closes it
+    CHECK(watch.high == 0x80000001u);  // id 33 opens the other half, id 64 closes it
+    CHECK(watch.has(1));
+    CHECK(watch.has(32));
+    CHECK(watch.has(33));
+    CHECK(watch.has(64));
+    CHECK_FALSE(watch.has(2));
+    CHECK_FALSE(watch.has(63));
+
+    // Clearing one leaves its neighbours standing.
+    watch.set(32, false);
+    CHECK(watch.low == 0x00000001u);
+    CHECK(watch.high == 0x80000001u);
+    CHECK(watch.has(64));
+
+    // Setting an id twice is still one row; an id outside the pair has no bit to
+    // set and must not disturb what is already there; and clearing an id that was
+    // never watched changes nothing. The client enforces no cap of its own
+    // (0x005b0590 asks nothing of the rest of the pair), so nothing here either.
+    watch.set(64, true);
+    watch.set(0, true);
+    watch.set(65, true);
+    CHECK(watch.high == 0x80000001u);
+    watch.set(7, false);
+    CHECK(watch.low == 0x00000001u);
+}
