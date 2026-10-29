@@ -73,7 +73,7 @@ void gatherTexel(ivec2 q, vec2 pixf, vec3 rel, vec3 np, float expected, inout Fo
     if (l.a <= 0.0) return;
     vec4 tg = texelFetch(uTraceGbuf, q, 0);
     vec2 tp = vec2(rtGbufPixel(tg, q)) + 0.5;  // the scene pixel it was traced from
-    vec3 trel = normalize(rtRelFromDepth(tp * pass.sceneExtent.zw, 0.5)) * l.a;
+    vec3 trel = rtViewDir(tp * pass.sceneExtent.zw) * l.a;
     vec3 tn = rtGbufNormal(tg);
     float match = max(rtDistanceMatch(l.a, expected), rtPlaneMatch(rel, trel, tn, expected, l.a));
     vec2 o = (tp - pixf) / float(rtBlockSize());

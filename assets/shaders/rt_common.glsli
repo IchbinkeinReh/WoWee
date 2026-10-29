@@ -127,6 +127,24 @@ vec3 rtRelFromDepth(vec2 uv, float depth) {
     return w.xyz / w.w;
 }
 
+// The reversed depth the view's direction through a pixel is taken at:
+// a hundred yards out (near clip 0.2 over 0.002).
+//
+// It was taken at 0.5, which is under half a yard from the eye. There the
+// point is a few tenths of a yard long and the inverse's rounding is not: the
+// direction came out some two thousandths of a radian off, a tenth of a yard
+// at fifty, and off by another amount for every position of the camera - the
+// trace started every ray from ground shifted by it, and under an evening sun
+// every shadow's edge moved ten pixels and more between /cam 50.00 and 49.99
+// (the Sunstrider Isle), while the picture stood still. At this depth the
+// error is the world's own float step.
+const float RT_DIRECTION_DEPTH = 0.002;
+
+// The unit direction from the camera through uv.
+vec3 rtViewDir(vec2 uv) {
+    return normalize(rtRelFromDepth(uv, RT_DIRECTION_DEPTH));
+}
+
 // The geometric normal at a pixel p (camera-relative, reversed depth d) from
 // its neighbours, left and right, down and up - their depths and their
 // positions: on each axis the one that continues the slope best. rt_prepare
@@ -185,7 +203,7 @@ ivec2 rtGbufPixel(vec4 g, ivec2 px) {
 // World position a G-buffer texel stands for.
 vec3 rtGbufWorld(vec4 g, ivec2 px) {
     vec2 uv = (vec2(rtGbufPixel(g, px)) + 0.5) * pass.sceneExtent.zw;
-    vec3 dir = normalize(rtRelFromDepth(uv, 0.5));
+    vec3 dir = rtViewDir(uv);
     return pass.cameraPos.xyz + dir * g.z;
 }
 

@@ -33,4 +33,18 @@ inline glm::vec3 relativeFromDepth(const glm::mat4& invRel, const glm::vec2& uv,
     return glm::vec3(w) / w.w;
 }
 
+/// The reversed depth a view direction is taken at (rt_common.glsli's
+/// RT_DIRECTION_DEPTH): a hundred yards out at the client's near clip of
+/// 0.2. At 0.5 - under half a yard from the eye - the inverse's rounding was
+/// two thousandths of a radian of it, and different for every place the
+/// camera stood.
+inline constexpr float kDirectionDepth = 0.002f;
+
+/// The unit direction from the camera through uv, as the tracer takes it
+/// (rtViewDir) to place a surface at its stored distance (rtGbufWorld).
+inline glm::vec3 viewDirection(const glm::mat4& invRel, const glm::vec2& uv,
+                               float depth = kDirectionDepth) {
+    return glm::normalize(relativeFromDepth(invRel, uv, depth));
+}
+
 }  // namespace wowee::rendering::rt_reconstruct
