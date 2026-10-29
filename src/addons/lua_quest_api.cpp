@@ -3553,10 +3553,30 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushstring(L, title.c_str());
             return 1;
         }},
-                // A page really has no author on this wire -
-                // SMSG_ITEM_TEXT_QUERY_RESPONSE is an id and the words - and
-                // the frame drops the "from" line on a nil, which is honest
-                // where an invented name would not be.
+                // Nil today, and the frame drops the "from" line on a nil -
+                // which is honest where an invented name would not be. What is
+                // *not* honest is the reason this used to carry ("a page has no
+                // author on this wire, SMSG_ITEM_TEXT_QUERY_RESPONSE is an id
+                // and the words"). True of that response, wrong as an answer:
+                // the client (0x0058a480) never reads the page-text reply here.
+                // It keeps the *item the page was opened from* in two globals
+                // (DAT_00bfc948/DAT_00bfc94c), type-checks it as an item
+                // (".\ItemTextFrame.cpp", 243), refuses when the two dwords at
+                // its field blob +0x10/+0x14 are both zero, and resolves the
+                // name out of a record cache at 0xc5d938 whose reader callback
+                // is 0x0058a450. So the author is an instance fact, sitting in
+                // the item's own fields.
+                //
+                // Which two dwords feed that cache is the open half: with the
+                // established rule (blob dword 8 = ITEM_FIELD_STACK_COUNT, 15 =
+                // the flags whose bit 3 gates durability), +0x10/+0x14 are the
+                // pair *ahead* of the entry fields - the owner and what holds
+                // it - and the cache that answers a name for them is not the
+                // item record cache at 0xc5d828. Either way the piece WoWee is
+                // missing is upstream of the binding: no create-packet string
+                // block is parsed at all (nothing reads ITEM_FIELD_CREATOR), so
+                // no name is available to push, and the book's source is kept
+                // as a title string rather than as an item to ask.
                 {"ItemTextGetCreator",  [](lua_State* L) -> int { return luaReturnNil(L); }},
                 // The material is carried, and the claim that it was not stood
                 // beside the line discarding it: the item query's four
