@@ -17,6 +17,7 @@
 #include "game/movement_handler.hpp"
 #include "game/combat_handler.hpp"
 #include "game/spell_unit_target.hpp"
+#include "game/known_titles.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "core/logger.hpp"
@@ -3076,6 +3077,40 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
         if (currencyChanged) {
             pendingEvents_.emit("HONOR_CURRENCY_UPDATE", {});
             pendingEvents_.emit("CURRENCY_DISPLAY_UPDATE", {});
+        }
+        // The titles the character has earned, which the realm hands over as six
+        // dwords - PLAYER_FIELD_KNOWN_TITLES and the five after it, blob +0x778
+        // through +0x78f, named three times in the client's own field table as
+        // pairs (PLAYER__FIELD_KNOWN_TITLES at 626, _TITLES1 at 628, _TITLES2 at
+        // 630).  The client watches those pairs, three watchers eight bytes wide
+        // stepping from +0x778 to +0x788 (0x006e5180), and each callback raises
+        // KNOWN_TITLES_UPDATE (498) naming no arguments.  That is the event the
+        // character sheet's title dropdown is rebuilt from, and the mask itself
+        // is what the dropdown asks about - IsTitleKnown (0x0051b410) reads these
+        // same six dwords off the player object - so a character arriving with
+        // titles already earned had nothing to show: the create block carries the
+        // mask, no watcher is installed yet for it to move, and the only raise
+        // this client ever made came from SMSG_TITLE_EARNED, which is not a
+        // message for a title the character already had.
+        //
+        // One raise per pair that moved, because the client's watchers are one
+        // pair apiece and their callbacks do not coalesce.  A watcher is asked
+        // about its eight bytes at once, so a change in either dword of a pair
+        // raises once for that pair; a pair the block did not carry at all moved
+        // no bytes and raises nothing.
+        if (const uint16_t titlesIdx = fieldIndex(UF::PLAYER_FIELD_KNOWN_TITLES);
+            titlesIdx != 0xFFFF) {
+            for (uint32_t group = 0; group < kKnownTitleGroups; ++group) {
+                bool moved = false;
+                for (uint32_t half = 0; half < 2; ++half) {
+                    const uint16_t key = static_cast<uint16_t>(titlesIdx + group * 2 + half);
+                    const auto now = block.fields.find(key);
+                    if (now == block.fields.end()) continue;   // this dword did not move
+                    const auto was = lastFields.find(key);
+                    if ((was == lastFields.end() ? 0u : was->second) != now->second) moved = true;
+                }
+                if (moved) pendingEvents_.emit("KNOWN_TITLES_UPDATE", {});
+            }
         }
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.

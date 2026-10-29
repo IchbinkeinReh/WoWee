@@ -9,6 +9,7 @@
 #include "addons/lua_taint.hpp"
 #include "game/power_prediction.hpp"
 #include "game/unit_level_display.hpp"
+#include "game/known_titles.hpp"
 #include <cstdlib>
 #include <cmath>
 #include <bit>
@@ -3250,6 +3251,36 @@ static int lua_GetPowerRegen(lua_State* L) {
     return 2;
 }
 
+/// The realm's known-titles run, when the character's block has carried one.
+///
+/// Six dwords, read one after the other from the field the layout names: the
+/// client names the run's first dword and reads the other five beside it
+/// (IsTitleKnown, 0x0051b410, at blob +0x778 through +0x78f, which is the same
+/// six its own watchers are installed on - three pairs of four bytes, each
+/// watched eight wide).
+///
+/// False is the answer when there is no run to trust: either the layout names
+/// no such field, or this character's block has never carried all six. That is
+/// what keeps the titles earned in this session as the answer instead of a
+/// dropdown listing nothing - the layouts before WotLK have no such field at
+/// all, and a realm that has never sent the mask cannot be asked what it holds.
+static bool knownTitleWords(game::GameHandler* gh, game::KnownTitleWords& words) {
+    words.fill(0);
+    if (!gh) return false;
+    const uint16_t idx = game::fieldIndex(game::UF::PLAYER_FIELD_KNOWN_TITLES);
+    if (idx == 0xFFFF) return false;
+    const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    if (!player) return false;
+    for (uint32_t i = 0; i < game::kKnownTitleWords; ++i) {
+        // All six or none. Half a run is not half an answer: an absent dword
+        // reads as zero and would hide every title in that 64-wide group.
+        const uint16_t key = static_cast<uint16_t>(idx + i);
+        if (!player->hasField(key)) return false;
+        words[i] = player->getField(key);
+    }
+    return true;
+}
+
 void registerUnitLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"GetUnitPitch",  lua_GetUnitPitch},
@@ -4017,21 +4048,6 @@ void registerUnitLuaAPI(lua_State* L) {
             lua_pushboolean(L, fits);
             return 1;
         }},
-                // Zero rather than false: paperdollframe.lua asks
-                // `IsTitleKnown(i) ~= 0`, and `false ~= 0` compares two
-                // different types and is therefore true - so every title would
-                // have counted as known. This matters live, not just in
-                // theory: GetNumTitles answers 192, so the 1..GetNumTitles
-                // loop does run and reads this on every title.
-                // IsTitleKnown(bit) - the client tracks these already, as a
-                // set of bits off the player's known-titles mask. Answering a
-                // constant zero meant the paperdoll's title dropdown listed
-                // nothing however many the character had earned.
-                //
-                // A number rather than a boolean, because paperdollframe.lua
-                // asks `IsTitleKnown(i) ~= 0` and false compares unequal to
-                // zero - which is the trap that made this a zero rather than a
-                // false in the first place.
                 // The pet tab of the character sheet, which is handed over -
                 // PetPaperDollFrame_SetStats and PetExpBar_Update run whenever
                 // it is shown, so with a pet out these raised on opening it.
@@ -4113,9 +4129,37 @@ void registerUnitLuaAPI(lua_State* L) {
             }
             return 0;
         }},
+                // IsTitleKnown(bit), answered from the mask the realm sends
+                // wherever it sends one: that is the client's own source
+                // (0x0051b410 reads the six dwords of
+                // PLAYER_FIELD_KNOWN_TITLES off the player object and nothing
+                // else), and it is why titles earned before this session -
+                // every title a character arrives with - were missing here.
+                // knownTitleWords above says when there is a mask to read, and
+                // known_titles.hpp which bit of which dword a title id is.
+                //
+                // Where the layout names no run, the titles earned in this
+                // session stay the answer: SMSG_TITLE_EARNED is the only title
+                // news those realms send, and an earned title that is not
+                // listed is a title the character cannot put on.
+                //
+                // A number rather than a boolean, because paperdollframe.lua
+                // asks `IsTitleKnown(i) ~= 0` and false compares unequal to
+                // zero - which is the trap that made this a zero rather than a
+                // false in the first place. The loop asking it runs
+                // 1..GetNumTitles, and GetNumTitles answers 192, which is the
+                // whole space the six dwords cover (kKnownTitleCount), so every
+                // title id the mask can name comes through here.
                 {"IsTitleKnown",            [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int bit = static_cast<int>(luaL_optnumber(L, 1, -1));
+            game::KnownTitleWords words{};
+            if (knownTitleWords(gh, words)) {
+                // An id of nothing at all - a negative number, or 0, which the
+                // client rejects outright - asks for no bit and is not known.
+                lua_pushnumber(L, game::titleIsKnown(words, static_cast<uint32_t>(bit)) ? 1 : 0);
+                return 1;
+            }
             const bool known = gh && bit >= 0 &&
                                gh->getKnownTitleBits().count(static_cast<uint32_t>(bit)) > 0;
             lua_pushnumber(L, known ? 1 : 0);

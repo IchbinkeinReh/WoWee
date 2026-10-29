@@ -19,6 +19,7 @@
 #include "game/group_defines.hpp"
 #include "game/battleground_flag.hpp"
 #include "game/minimap_tracking.hpp"
+#include "game/known_titles.hpp"
 #include "core/open_url.hpp"
 #include "core/version.hpp"
 #include "core/config_paths.hpp"
@@ -7515,18 +7516,16 @@ void registerSystemLuaAPI(lua_State* L) {
                 // list, the companion tab and the token frame each raised
                 // rather than showing nothing.
                 //
-                // Zero is the honest answer, not a placeholder: no known-title
-                // bitmask, companion list or currency list is tracked here, so
-                // there is genuinely nothing to count. They stop being zero
-                // when something starts reading that data, and the frames
-                // above will fill themselves in when it does.
                 // GetNumTitles() - how many title *bits* there are to ask
                 // about, not how many are owned. paperdollframe.lua walks
                 // 1..GetNumTitles() calling IsTitleKnown on each, so this is
-                // the size of the space: KNOWN_TITLES_SIZE * 64 in
-                // AzerothCore's Player.h, three uint64 fields.
+                // the size of the space: the three 64-bit groups of
+                // PLAYER_FIELD_KNOWN_TITLES, which is AzerothCore's
+                // KNOWN_TITLES_SIZE * 64 in Player.h as well. It comes from the
+                // same constant the mask is read with, so the loop asking
+                // cannot be sized past the bits there are to ask about.
                 {"GetNumTitles", [](lua_State* L) -> int {
-            lua_pushnumber(L, 192); return 1;
+            lua_pushnumber(L, game::kKnownTitleCount); return 1;
         }},
                 {"GetNumCompanions", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);

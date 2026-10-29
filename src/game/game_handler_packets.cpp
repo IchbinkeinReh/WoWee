@@ -717,11 +717,18 @@ void GameHandler::registerCoreOpcodes() {
         }
         if (isLost) knownTitleBits_.erase(titleBit);
         else        knownTitleBits_.insert(titleBit);
-        // And announce it. The set is read by IsTitleKnown, which the character
-        // sheet's title dropdown builds itself from - but only when told to
-        // rebuild, and this is what tells it. Without it a title earned mid
-        // session did not appear in the list until the sheet was reopened.
-        fireAddonEvent("KNOWN_TITLES_UPDATE", {});
+        // And announce it - unless the realm keeps a known-titles mask and this
+        // layout can read one. The client raises KNOWN_TITLES_UPDATE (498) from
+        // watchers installed on the mask's three pairs of dwords, and from
+        // nowhere else: its handler for this message (0x0050c520) prints the
+        // sentence and touches no mask at all, so a title earned mid-session
+        // reaches the character sheet as an update block carrying the new bit.
+        // Raising here as well would refresh the dropdown twice for one title,
+        // so the mask's own watcher is left to say it wherever there is one.
+        // Where the layout names no run - every layout before WotLK - this
+        // packet is the only title news the realm sends, and this is the raise.
+        if (fieldIndex(UF::PLAYER_FIELD_KNOWN_TITLES) == 0xFFFF)
+            fireAddonEvent("KNOWN_TITLES_UPDATE", {});
         addSystemChatMessage(msg);
         LOG_INFO("SMSG_TITLE_EARNED: bit=", titleBit, " lost=", isLost, " title='", titleStr, "'");
     };

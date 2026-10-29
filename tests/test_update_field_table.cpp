@@ -2,6 +2,7 @@
 
 #include "game/update_field_table.hpp"
 #include "game/known_currencies.hpp"
+#include "game/known_titles.hpp"
 
 #include <filesystem>
 #include <string>
@@ -151,4 +152,83 @@ TEST_CASE("The watched pair sets one currency at a time", "[updatefields][curren
     CHECK(watch.high == 0x80000001u);
     watch.set(7, false);
     CHECK(watch.low == 0x00000001u);
+}
+
+// The character sheet's title dropdown is built by walking 1..GetNumTitles() and
+// asking IsTitleKnown about each, and that answers out of
+// PLAYER_FIELD_KNOWN_TITLES: six dwords holding three 64-bit groups, at blob
+// +0x778 through +0x78f - the run ends exactly where the known-currency pair
+// above begins. A wrong offset fails quietly in both directions: the field reads
+// as absent and the dropdown lists no title however many were earned, or it
+// reads inside some other field and the list is full of titles the character
+// never had. Blob dword 478 is wire 626 in this layout; the two dwords before
+// the run are the farsight unit, and the currency pair is the two after it.
+TEST_CASE("The known-titles run is six dwords before the known-currency pair",
+          "[updatefields][titles]") {
+    // The size the sheet sizes its loop to (GetNumTitles) and the size the
+    // addressing below divides the run into are one number.
+    static_assert(wowee::game::kKnownTitleCount == 192);
+
+    UpdateFieldTable table;
+    REQUIRE(table.loadFromJson(fieldsPath("wotlk")));
+
+    const uint16_t titles = table.index(UF::PLAYER_FIELD_KNOWN_TITLES);
+    REQUIRE(titles != 0xFFFF);
+    REQUIRE(titles == 626);
+
+    // The run's own ends, which is the check worth having: the client's field
+    // table names the run's three pairs separately (PLAYER__FIELD_KNOWN_TITLES,
+    // _TITLES1 and _TITLES2, at 626, 628 and 630), while this layout names only
+    // its first dword - so the five after it belong to nothing here and have to
+    // stay free rather than resolve into a neighbouring field.
+    CHECK(table.index(UF::PLAYER_FARSIGHT) == titles - 2);
+    CHECK(table.index(UF::PLAYER_FIELD_KNOWN_CURRENCIES) == titles + 6);
+
+    // No earlier layout names the run, and on those the titles earned in this
+    // session stay the answer. As with the currency pair, that fallback stays
+    // reachable only while the name stays absent: a nearby name would resolve,
+    // and the mask would be read out of some other field's bits.
+    for (const auto* expansion : {"classic", "tbc", "turtle"}) {
+        INFO("expansion: " << expansion);
+        UpdateFieldTable other;
+        REQUIRE(other.loadFromJson(fieldsPath(expansion)));
+        REQUIRE(other.index(UF::PLAYER_FIELD_KNOWN_TITLES) == 0xFFFF);
+    }
+}
+
+// Which bit of which dword a title id is decides one row of the dropdown at a
+// time. A group off by one moves every title in the list by 64 places, and the
+// list still looks like a list of titles - which is why the ends are pinned
+// rather than a handful of ids in the middle.
+TEST_CASE("A title id is one bit in one of three groups", "[updatefields][titles]") {
+    using wowee::game::KnownTitleWords;
+    using wowee::game::titleIsKnown;
+
+    // The first group's low dword carries ids 1..31, and its high dword the
+    // ids 32..63 after them - which is what the client's second read, at +0x77c
+    // rather than +0x778, is for.
+    CHECK(titleIsKnown({0x00000002u, 0u, 0u, 0u, 0u, 0u}, 1));
+    CHECK(titleIsKnown({0x80000000u, 0u, 0u, 0u, 0u, 0u}, 31));
+    CHECK(titleIsKnown({0u, 0x00000001u, 0u, 0u, 0u, 0u}, 32));
+    CHECK(titleIsKnown({0u, 0x80000000u, 0u, 0u, 0u, 0u}, 63));
+    // The second group begins at id 64, in the third dword, and the third ends
+    // at id 191, in the last bit of the sixth: the run is six dwords and no
+    // further.
+    CHECK(titleIsKnown({0u, 0u, 0x00000001u, 0u, 0u, 0u}, 64));
+    CHECK(titleIsKnown({0u, 0u, 0u, 0u, 0u, 0x80000000u}, 191));
+
+    // A word of another group answers nothing, and so does the neighbour of the
+    // bit that is set.
+    CHECK_FALSE(titleIsKnown({0x00000002u, 0u, 0u, 0u, 0u, 0u}, 33));
+    CHECK_FALSE(titleIsKnown({0u, 0u, 0x00000001u, 0u, 0u, 0u}, 63));
+    CHECK_FALSE(titleIsKnown({0x00000004u, 0u, 0u, 0u, 0u, 0u}, 1));
+
+    // Id 0 is the client's own rejection (its guard reads `id == 0` and answers
+    // not-known), and an id past the run is answered not-known rather than read.
+    // The client does stride on past its own six dwords, into the known-currency
+    // pair that follows them: an id of 192 there is a currency's bit, and 193 the
+    // next currency's. Those ids are outside what GetNumTitles names.
+    CHECK_FALSE(titleIsKnown({~0u, ~0u, ~0u, ~0u, ~0u, ~0u}, 0));
+    CHECK_FALSE(titleIsKnown({~0u, ~0u, ~0u, ~0u, ~0u, ~0u}, 192));
+    CHECK_FALSE(titleIsKnown({~0u, ~0u, ~0u, ~0u, ~0u, ~0u}, 193));
 }

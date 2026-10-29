@@ -192,6 +192,17 @@ enum class UF : uint16_t {
     // says which bit of which half a currency id uses, and 0x005b0030 is the
     // client's own token-list builder reading both.
     PLAYER_FIELD_KNOWN_CURRENCIES,
+    // The titles the realm says this character has earned, six dwords holding
+    // three 64-bit groups (wire 626..631, blob +0x778..+0x78f - the run ends
+    // exactly where the currency pair above begins). The client's own field-name
+    // table names the run three times, two dwords each
+    // (PLAYER__FIELD_KNOWN_TITLES, _TITLES1, _TITLES2, with its own doubled
+    // underscore), and it installs one eight-byte watcher per pair, all three of
+    // which raise KNOWN_TITLES_UPDATE (498) with no arguments (0x006e5180). This
+    // layout names the run once, at its first dword; known_titles.hpp says which
+    // group and which bit a title id addresses, and IsTitleKnown (0x0051b410) is
+    // the client's reader.
+    PLAYER_FIELD_KNOWN_TITLES,
     // The three arena teams, seven fields each with the team id first
     // (0x1150 past UNIT_END's player block, 0x005bc240). WotLK only.
     PLAYER_FIELD_ARENA_TEAM_INFO_1_1,
