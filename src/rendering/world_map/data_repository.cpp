@@ -185,10 +185,14 @@ void DataRepository::loadZones(const std::string& mapName,
         zone.parentWorldMapID = wmaDbc->getUInt32(i, wmaL ? (*wmaL)["ParentWorldMapID"] : 10);
         // -1 is no parent, as zero is; every reader asks "is there one" with != 0.
         if (zone.parentWorldMapID == UINT32_MAX) zone.parentWorldMapID = 0;
-        if (const uint32_t floor = wmaDbc->getUInt32(i, floorField);
-            floor != UINT32_MAX && floor < 64) {
-            zone.dungeonFloor = floor;
-        }
+        // Read as written this column looked like a floor number, and only
+        // Dalaran's row has a value that is not zero or -1 - which is why no
+        // map ever took its floor from it. It names a DungeonMap **row**
+        // instead, and the client keeps it as one (0x00546310 stores it where
+        // 0x00544fc0 later looks a floor row up by id). Resolved below, once
+        // the rows are known.
+        zone.defaultDungeonFloorRowId =
+            static_cast<int32_t>(wmaDbc->getUInt32(i, floorField));
         if (recMapID != static_cast<uint32_t>(mapID) && displayMapID == static_cast<uint32_t>(mapID)) {
             const float centerX = (zone.bounds.locLeft + zone.bounds.locRight) * 0.5f;
             const float centerY = (zone.bounds.locTop + zone.bounds.locBottom) * 0.5f;
@@ -265,13 +269,43 @@ void DataRepository::loadZones(const std::string& mapName,
         }
     }
 
-    // A dungeon map has no rectangle of its own in WorldMapArea - all four
-    // edges are zero - and takes it from DungeonMap.dbc, one row per floor:
-    // ID, MapID, FloorIndex, MinX, MaxX, MinY, MaxY. The same edges in
-    // WorldMapArea's terms are left = max Y, right = min Y, top = max X,
-    // bottom = min X.
+    // DungeonMap.dbc is one row per floor of a map: ID, MapID, FloorIndex,
+    // MinX, MaxX, MinY, MaxY. The rows belong to the map rather than to the
+    // area, and the client's floor count matches them on the WorldMapArea
+    // row's own map id (0x00546190) - which is what answers two floors for
+    // every Northrend zone, one for the Eastern Kingdoms, and none at all for
+    // a Kalimdor one. Both rows of a duplicated floor are kept: the floor the
+    // area names as its default is picked by id, and the count the interface
+    // gets dedupes the floors itself the way the client's bitmask does.
     auto dungeonDbc = assetManager.loadDBC("DungeonMap.dbc");
     if (dungeonDbc && dungeonDbc->isLoaded() && dungeonDbc->getFieldCount() >= 7) {
+        // Field seven is the WorldMapArea the floor belongs to, which is what
+        // the client's ZoomOut shows when it is called from a floor. Older
+        // layouts end at the rectangle.
+        const uint32_t areaField = dungeonDbc->getFieldCount() > 7 ? 7u : 0u;
+        for (auto& z : zones_) {
+            for (uint32_t i = 0; i < dungeonDbc->getRecordCount(); ++i) {
+                if (dungeonDbc->getUInt32(i, 1) != z.mapID) continue;
+                z.dungeonFloors.push_back({dungeonDbc->getUInt32(i, 0),
+                                           dungeonDbc->getUInt32(i, 2),
+                                           areaField ? dungeonDbc->getUInt32(i, areaField) : 0u});
+            }
+            std::sort(z.dungeonFloors.begin(), z.dungeonFloors.end(),
+                      [](const DungeonFloor& a, const DungeonFloor& b) {
+                          return a.floorIndex < b.floorIndex;
+                      });
+            for (const auto& f : z.dungeonFloors) {
+                if (static_cast<int32_t>(f.rowId) == z.defaultDungeonFloorRowId) {
+                    z.dungeonFloor = f.floorIndex;
+                    break;
+                }
+            }
+        }
+
+        // A dungeon map has no rectangle of its own in WorldMapArea - all four
+        // edges are zero - and takes it from the floor it opens on. The same
+        // edges in WorldMapArea's terms are left = max Y, right = min Y,
+        // top = max X, bottom = min X.
         for (auto& z : zones_) {
             if (z.areaID == 0 || z.dungeonFloor == 0) continue;
             if (std::abs(z.bounds.locLeft - z.bounds.locRight) > 0.001f ||

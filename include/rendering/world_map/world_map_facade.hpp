@@ -215,6 +215,32 @@ public:
     /// False when it is not a zone of the map now loaded.
     bool showAreaZone(uint32_t areaTableId);
 
+    // ── The floors of the map being shown ────────────────────────────
+    //
+    // The world map's level dropdown, its up/down arrows, the minimap's floor
+    // indicator and the quest log's "open this map" all drive these three. The
+    // levels are one-based, and the two areas whose default floor is the -1
+    // carry a surface level above their floors: there their level one is no
+    // floor at all, and every answer is one higher than the floor itself.
+
+    /// How many levels the area being shown has, the client's
+    /// GetNumDungeonMapLevels (0x00546190). Zero is what hides the dropdown.
+    [[nodiscard]] int dungeonLevelCount();
+
+    /// Which of them is showing, or zero for none - 0x00544fc0.
+    [[nodiscard]] int currentDungeonLevel();
+
+    /// Choose one, as the dropdown and the arrows do: 0x00547b80 then
+    /// 0x00547a70. False when no floor row answers that level, which is also
+    /// what the client does - it leaves the floor that was showing alone.
+    bool selectDungeonLevel(int level);
+
+    /// Whether the area being shown is one of the two whose floors sit below a
+    /// surface level - the same -1 that adds the extra level above. The client
+    /// answers DungeonUsesTerrainMap with exactly this (0x00544c40), and the
+    /// dropdown counts its floor names from it.
+    [[nodiscard]] bool dungeonUsesTerrainMap() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

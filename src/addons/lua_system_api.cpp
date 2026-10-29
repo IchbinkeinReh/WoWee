@@ -8299,7 +8299,23 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetBattlefieldFlagPosition",     lua_GetBattlefieldFlagPosition},
                 // Time left on a loot roll that is not running, which
                 // GroupLootFrame compares against a bar range at once.
-                {"GetNumDungeonMapLevels",   lua_ReturnZero},
+                // How many levels the map being shown has, which is all that
+                // shows or hides the world map's level dropdown and its two
+                // arrows (WorldMapLevelDropDown_Update). Answering none had both
+                // hidden everywhere - including on Northrend, whose map has two.
+                //
+                // 0x00546190 counts the distinct floor numbers of every
+                // DungeonMap.dbc row on the shown area's *map* - the floors
+                // belong to the map, not to the area, so every Northrend zone
+                // answers two and a Kalimdor zone none - and adds a level of its
+                // own for the areas whose WorldMapArea default floor is the -1
+                // that means "a surface sits above these floors".
+                {"GetNumDungeonMapLevels", [](lua_State* L) -> int {
+            auto* svc = getLuaServices(L);
+            lua_pushnumber(L, svc && svc->getMapDungeonLevelCount
+                                 ? svc->getMapDungeonLevelCount() : 0);
+            return 1;
+        }},
                 // Bar offsets, added to a page number the line they
                 // are read on. No bonus or multi-cast bar is showing,
                 // and that is zero rather than nothing.
@@ -8320,7 +8336,20 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetNumBattlegroundTypes",  lua_GetNumBattlegroundTypes},
                 {"GetBattlegroundInfo",      lua_GetBattlegroundInfo},
                 {"RequestBattlegroundInstanceInfo", lua_RequestBattlegroundInstanceInfo},
-                {"GetCurrentMapDungeonLevel", lua_ReturnZero},
+                // Which of those levels is showing, one-based, or zero for
+                // none - the number the dropdown lights, the quest log passes on
+                // to open a map (questlogframe.lua) and the battlefield minimap
+                // picks its art with. 0x00544fc0 reads the DungeonMap row the
+                // map has selected and answers its floor, shifted up by one for
+                // the areas that carry a surface level - where no selection
+                // answers one rather than none, which is what the arrows count
+                // on: they step from one to two and never back off the bottom.
+                {"GetCurrentMapDungeonLevel", [](lua_State* L) -> int {
+            auto* svc = getLuaServices(L);
+            lua_pushnumber(L, svc && svc->getMapDungeonLevel
+                                 ? svc->getMapDungeonLevel() : 0);
+            return 1;
+        }},
                 {"Sound_GameSystem_GetNumOutputDrivers", lua_Sound_GetNumOutputDrivers},
                 {"Sound_ChatSystem_GetNumInputDrivers",  lua_ReturnZero},
                 {"Sound_ChatSystem_GetNumOutputDrivers", lua_ReturnZero},
@@ -8339,7 +8368,22 @@ void registerSystemLuaAPI(lua_State* L) {
                 // ever looked selected however many times it was clicked.
                 {"GetSelectedSkill", [](lua_State* L) -> int {
             lua_pushnumber(L, selectedSkill()); return 1; }},
-                {"DungeonUsesTerrainMap",    lua_ReturnFalse},
+                // Whether the floors being named sit under a surface level,
+                // which decides whether the level dropdown names its entries by
+                // the floor or by one below it (WorldMapLevelDropDown_Initialize
+                // looks the label up as DUNGEON_FLOOR_<map><n> either way).
+                // 0x00544c40 asks one question of the area being shown: is its
+                // default floor the -1 that also adds a level above the floors.
+                // Two maps in 3.3.5 answer it, and the rest answer nothing - not
+                // false, which is what a flat answer here said for all of them.
+                {"DungeonUsesTerrainMap", [](lua_State* L) -> int {
+            auto* svc = getLuaServices(L);
+            if (svc && svc->mapDungeonUsesTerrainMap && svc->mapDungeonUsesTerrainMap()) {
+                lua_pushboolean(L, 1);
+                return 1;
+            }
+            return 0;
+        }},
                 // GetChannelDisplayInfo(i) → name, header, collapsed,
                 //   channelNumber, count, active, category, voiceEnabled,
                 //   voiceActive
@@ -8731,9 +8775,11 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 // Zoom out one step. SetMapZoom answers the continent and
-                // cosmic cases beside it; this is the dungeon-floor and cosmic
-                // step, and neither is reachable while GetNumDungeonMapLevels
-                // answers none.
+                // cosmic cases beside it, and FrameXML only reaches this one
+                // once a dungeon level is showing - which is what the three
+                // floor bindings now let it pick. From a floor the map does not
+                // step out a level at all: it shows the area that floor's own
+                // row belongs to.
                 {"ZoomOut", [](lua_State* L) -> int {
             auto* svc = getLuaServices(L);
             if (svc && svc->zoomMapOut) svc->zoomMapOut();
@@ -8751,7 +8797,23 @@ void registerSystemLuaAPI(lua_State* L) {
             fireWorldMapUpdate(L);
             return 0;
         }},
-                {"SetDungeonMapLevel",  lua_ReturnNothing},
+                // The level dropdown's pick and its two arrows, which hand the
+                // level straight over. It is one-based, one past the floor for
+                // the areas that carry a surface level (there, level one is no
+                // floor at all - the client stores -1 for it), and a level that
+                // no floor row of this map answers changes nothing whatever
+                // (0x00547b80, then the row scan at 0x00547a70).
+                //
+                // Nothing is answered either way. What the client does after a
+                // pick that took is re-run its whole map refresh (0x0050f490 ->
+                // 0x00546310), which is the update below.
+                {"SetDungeonMapLevel", [](lua_State* L) -> int {
+            auto* svc = getLuaServices(L);
+            const int level = static_cast<int>(luaL_optnumber(L, 1, 0));
+            if (svc && svc->setMapDungeonLevel && svc->setMapDungeonLevel(level))
+                fireWorldMapUpdate(L);
+            return 0;
+        }},
                 {"ClickLandmark",       lua_ReturnNothing},
                 // Landmark rows, which GetNumMapLandmarks already reports none
                 // of. Bound so that stays true if it ever reports some.

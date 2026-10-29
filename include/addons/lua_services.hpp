@@ -211,6 +211,16 @@ struct LuaServices {
     std::function<MapPoiFrame()> getMapPoiFrame;
     std::function<uint32_t()> getMapWorldAreaId;
     std::function<void(uint32_t)> setMapWorldAreaId;
+    /// The floors of the map being shown: how many levels it answers with,
+    /// which of them is showing (zero for none), and choosing one. The world
+    /// map's level dropdown, its arrows, the minimap's floor indicator and the
+    /// quest log's "open this map" all read these.
+    std::function<int()> getMapDungeonLevelCount;
+    std::function<int()> getMapDungeonLevel;
+    std::function<bool(int)> setMapDungeonLevel;
+    /// Whether the map's floors sit below a surface level, which is what the
+    /// level dropdown counts its floor names against.
+    std::function<bool()> mapDungeonUsesTerrainMap;
 
     /// The zone the player is standing in, worked out from the terrain under
     /// them and refreshed every frame.

@@ -76,6 +76,20 @@ struct OverlayEntry {
     bool tilesLoaded = false;
 };
 
+// ── One floor of a dungeon or zoned map (DungeonMap.dbc) ─────
+
+/// A floor row as the world map needs it: the number the art and the floor
+/// names count on, and the row's own id, which is what the client stores when
+/// it says which of a map's floors is showing (0x00547a70).
+struct DungeonFloor {
+    uint32_t rowId = 0;       ///< The DungeonMap row's id.
+    uint32_t floorIndex = 0;  ///< The floor itself, which starts at one.
+    /// The WorldMapArea this floor belongs to, which is where the client's
+    /// ZoomOut lands when it is called from a floor (0x00546a90, and the row's
+    /// own field seven). Zero on the rows that name no area.
+    uint32_t worldMapAreaId = 0;
+};
+
 // ── Zone (from WorldMapArea.dbc) ─────────────────────────────
 
 struct Zone {
@@ -89,8 +103,21 @@ struct Zone {
     uint32_t displayMapID = 0;
     uint32_t parentWorldMapID = 0;
     /// The dungeon floor the map opens on, and so which set of tiles it draws.
-    /// Zero for a map with no floors.
+    /// Zero for a map with no floors. Resolved through defaultDungeonFloorRowId,
+    /// because WorldMapArea names the row rather than the floor.
     uint32_t dungeonFloor = 0;
+    /// Every floor the map this area sits on has, in floor order. Matched by
+    /// map id, the way the client matches them (0x00546190): a Northrend zone
+    /// answers two, a Kalimdor one none.
+    std::vector<DungeonFloor> dungeonFloors;
+    /// WorldMapArea's default-floor column, which holds a **DungeonMap row id**
+    /// and not a floor index - the client hands it to the same code that later
+    /// reads a floor off it (written at 0x00546310, read at 0x00544fc0). Dalaran
+    /// names row 27, whose floor is 1. Zero is "opens on no floor", and the -1
+    /// two rows carry means the floor list has a surface level above them: the
+    /// client answers one level more than there are rows, and level one there
+    /// is no floor at all (0x00547b80).
+    int32_t defaultDungeonFloorRowId = 0;
     float virtualOffsetWowX = 0.0f;
     float virtualOffsetWowY = 0.0f;
     std::vector<uint32_t> exploreBits;  // all AreaBit indices (zone + subzones)
