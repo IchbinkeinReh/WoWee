@@ -21,6 +21,7 @@
 #include "core/thread_pool.hpp"
 #include <imgui.h>
 #include "rendering/terrain_manager.hpp"
+#include "rendering/collision_geometry.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/water_renderer.hpp"
@@ -2186,7 +2187,7 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
     // took that for a wall and took the zoom in, and the zoom crept back out
     // a tenth of a yard a second while the player stood still.
     const float probeDistance = std::max(currentDistance, userTargetDistance + collisionZoomDebt_);
-    if ((wmoRenderer || terrainManager) && currentDistance > MIN_DISTANCE) {
+    if ((wmoRenderer || m2Renderer || terrainManager) && currentDistance > MIN_DISTANCE) {
         // Built geometry and the ground are treated separately from here on.
         //
         // A wall or a pillar is a thing with a side to step around, and it wants
@@ -2201,10 +2202,34 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
         // It was the line alone, kept 0.54 off what it met: a wall the camera
         // slid along at an angle never crossed the line, came inside the near
         // plane's corners, and the building's interior showed through it.
+        // And the doodads that carry collision triangles - a table, a crate,
+        // a beam that is a model rather than part of the building: the
+        // camera's trace flags (0x100171) take bit 0x1, which walks each map
+        // chunk's doodads and keeps every one whose model has collision
+        // (0x007a2760 on the model's +0x10 bit 1). Their triangles, as the
+        // world has them, gathered once for the frame around the lines below.
+        static thread_local std::vector<glm::vec3> doodadTris;
+        doodadTris.clear();
+        if (m2Renderer) {
+            const glm::vec3 tip = pivot + camDir * probeDistance;
+            const glm::vec3 pad(1.5f);
+            m2Renderer->gatherCollisionTriangles(glm::min(pivot, tip) - pad, glm::max(pivot, tip) + pad,
+                                                 doodadTris);
+        }
+        auto doodadHit = [&](const glm::vec3& from, const glm::vec3& dir, float reach) -> float {
+            float nearest = reach;
+            for (size_t i = 0; i + 2 < doodadTris.size(); i += 3) {
+                const float t = rayTriangleIntersect(from, dir, doodadTris[i], doodadTris[i + 1], doodadTris[i + 2]);
+                if (t > 0.0f && t < nearest) nearest = t;
+            }
+            return nearest;
+        };
         auto wmoLimitAlong = [&](const glm::vec3& dir) -> float {
-            if (!wmoRenderer) return probeDistance;
+            if (!wmoRenderer && !m2Renderer) return probeDistance;
             // hit == maxDistance means no hit
-            float nearest = wmoRenderer->raycastBoundingBoxes(pivot, dir, probeDistance);
+            float nearest = wmoRenderer ? wmoRenderer->raycastBoundingBoxes(pivot, dir, probeDistance)
+                                        : probeDistance;
+            nearest = std::min(nearest, doodadHit(pivot, dir, nearest));
             glm::vec3 right = glm::cross(dir, glm::vec3(0.0f, 0.0f, 1.0f));
             const float rightLen = glm::length(right);
             right = rightLen > 1e-4f ? right / rightLen : glm::vec3(1.0f, 0.0f, 0.0f);
@@ -2216,11 +2241,14 @@ void CameraController::updateOrbitCamera(float deltaTime, FrameInput& f,
                 if (offsetLen < 1e-4f) continue;
                 // The rectangle starts about the pivot; where a wall stands
                 // closer beside the pivot than its edge, it starts inside it.
-                const float side = wmoRenderer->raycastBoundingBoxes(
-                    pivot, offset / offsetLen, offsetLen);
+                float side = wmoRenderer ? wmoRenderer->raycastBoundingBoxes(
+                    pivot, offset / offsetLen, offsetLen) : offsetLen;
+                side = std::min(side, doodadHit(pivot, offset / offsetLen, side));
                 if (side < offsetLen) offset *= std::max(0.0f, side - 0.02f) / offsetLen;
-                nearest = std::min(nearest, wmoRenderer->raycastBoundingBoxes(
-                                                pivot + offset, dir, nearest));
+                if (wmoRenderer)
+                    nearest = std::min(nearest, wmoRenderer->raycastBoundingBoxes(
+                                                    pivot + offset, dir, nearest));
+                nearest = std::min(nearest, doodadHit(pivot + offset, dir, nearest));
             }
             return camera_sweep::sweptDistance(probeDistance, nearest, MIN_DISTANCE);
         };
