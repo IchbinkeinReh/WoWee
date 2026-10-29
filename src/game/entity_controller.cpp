@@ -1862,6 +1862,28 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                 else if ((val & PLAYER_FLAGS_PVP_FLAG) == 0 || (prev & PLAYER_FLAGS_PVP_FLAG) == 0)
                     deadline = static_cast<int64_t>(core::appTimeSeconds() * 1000.0) + 300000;
             }
+            // ...and the watcher's 0xc00 leg, the helm and cloak switches, which
+            // is not an event of its own but a call to 0x00618110 with mask 3:
+            // that marks the unit's model record dirty and fires
+            // UNIT_PORTRAIT_UPDATE (145) then UNIT_MODEL_CHANGED (146) for the
+            // guid. Nothing in WoWee said either. The model rebuild below is only
+            // half of it: the character sheet's 3D preview (paperdollframe.lua)
+            // rebuilds on UNIT_MODEL_CHANGED for "player" alone, and six frames -
+            // the character sheet's own portrait, the micro-button portrait, the
+            // talent, trade-skill, inspect and achievement frames - redraw on
+            // UNIT_PORTRAIT_UPDATE. Hiding a helm with the character sheet open
+            // left the model and every portrait on screen showing it.
+            //
+            // Gated on the field bits and not on the cache comparison below,
+            // because the client compares the field it is replacing: the local
+            // toggle (SocialHandler::toggleHelm) flips the cache on the way out,
+            // so by the time the realm's echo arrives "did it change" is already
+            // false while the field really did move.
+            constexpr uint32_t PLAYER_FLAGS_HELM_CLOAK_BITS = 0x00000c00;  // 0x400 | 0x800
+            if ((prev ^ val) & PLAYER_FLAGS_HELM_CLOAK_BITS) {
+                pendingEvents_.emit("UNIT_PORTRAIT_UPDATE", {"player"});
+                pendingEvents_.emit("UNIT_MODEL_CHANGED", {"player"});
+            }
             // .gm on / .gm off: the server answers quest status for the
             // player as they are now, and an enemy gets none - so a GM who
             // arrived among the other faction's questgivers before turning
