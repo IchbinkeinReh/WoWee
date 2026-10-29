@@ -2946,6 +2946,16 @@ static int lua_GetQuestLogRewardSpell(lua_State* L) {
     return 4;
 }
 
+// isUsable, the fifth answer of GetQuestItemInfo, GetQuestLogRewardInfo and
+// GetQuestLogChoiceInfo: whether the player may use the item (0x006dc3f0, as
+// 0x0058d190 and 0x005e4490 ask it) - level, class, race, the armour or weapon
+// type, skill, spell, reputation. The quest frames tint the icon red where it
+// is false. Usable while the item is not known yet: the client keeps its
+// default of 1 when it has no record of the entry.
+static bool rewardUsable(const game::GameHandler& gh, const game::ItemQueryResponseData* info) {
+    return !info || gh.judgeItemRequirements(*info).usable();
+}
+
 /// One reward, described the way every reward button reads it.
 template <typename Container>
 static int pushRewardAt(lua_State* L, game::GameHandler* gh,
@@ -2961,7 +2971,7 @@ static int pushRewardAt(lua_State* L, game::GameHandler* gh,
             info && info->displayInfoId ? info->displayInfoId : r.displayInfoId).c_str());
         lua_pushnumber(L, r.count);
         lua_pushnumber(L, info ? info->quality : 1);
-        lua_pushboolean(L, 1);
+        lua_pushboolean(L, rewardUsable(*gh, info));
         return 5;
     }
     return luaReturnNil(L);
@@ -3325,7 +3335,7 @@ static int lua_GetQuestItemInfo(lua_State* L) {
             info && info->displayInfoId ? info->displayInfoId : r.displayInfoId).c_str());
         lua_pushnumber(L, r.count);
         lua_pushnumber(L, info ? info->quality : 1);
-        lua_pushboolean(L, 1);
+        lua_pushboolean(L, rewardUsable(*gh, info));
         return 5;
     }
     return luaReturnNil(L);
