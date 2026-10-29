@@ -1766,6 +1766,45 @@ void InventoryHandler::reconcileBuybackSlots() {
         }
     }
 
+    // A ring slot the realm filled that this session never sold.  The client
+    // builds its rows out of the ring - the guid pairs, the prices and the
+    // timestamps - and never out of a memory of the sale, so it shows what a
+    // previous session sold: clearBuybackState drops the mirror on world entry
+    // and the realm's ring does not.  What stands behind such a guid is an item
+    // object the client already has, which is where the entry, the stack and the
+    // durability come from - the same table the tooltips answer from.
+    {
+        const auto& online = owner_.onlineItemsRef();
+        for (size_t i = 0; i < buybackSlotGuids_.size(); ++i) {
+            const uint64_t guid = buybackSlotGuids_[i];
+            if (guid == 0) continue;
+            const uint32_t wire = kBuybackWireSlotStart + static_cast<uint32_t>(i);
+            const bool taken = std::any_of(buybackItems_.begin(), buybackItems_.end(),
+                                           [guid, wire](const BuybackItem& row) {
+                return row.itemGuid == guid || row.wireSlot == wire;
+            });
+            if (taken) continue;
+            const auto found = online.find(guid);
+            if (found == online.end()) continue;   // the instance itself is not known yet
+            const auto& oi = found->second;
+            if (!owner_.getItemInfo(oi.entry)) {
+                // Nothing to name the row with.  Ask, and let the answer run
+                // this scan again (handleItemQueryResponse) - the client's row
+                // has no name either until its own query comes back, but it has
+                // asked long before the tab is drawn.
+                owner_.ensureItemInfo(oi.entry);
+                continue;
+            }
+            BuybackItem row;
+            row.itemGuid = guid;
+            row.wireSlot = wire;
+            row.count = oi.stackCount ? oi.stackCount : 1u;
+            row.item = buildItemDef(oi.entry, row.count, oi.curDurability, oi.maxDurability,
+                                    guid, oi.flags, oi.randomPropertyId, oi.suffixFactor);
+            buybackItems_.push_back(row);
+        }
+    }
+
     // A ring slot can only identify one entry. Remove any stale duplicate that
     // may remain after a replacement update.
     for (uint32_t wire = kBuybackWireSlotStart; wire < kBuybackWireSlotEnd; ++wire) {
@@ -6095,6 +6134,19 @@ void InventoryHandler::rebuildOnlineInventory() {
         // other stale.
         fireBagUpdates();
     }
+
+    // The buyback ring, once the items behind it are current.
+    //
+    // The client builds its buyback rows out of the ring fields alone, so a row
+    // is owed for every ring slot the realm filled - including what a previous
+    // session sold, whose sale this client never saw.  What stands behind such a
+    // guid is one of the player's item objects and its item query, and either
+    // can still be on its way when the player's fields land: the instance is
+    // what tells this that the slot holds an item at all, and the query answer
+    // is what gives the row a name.  Both paths end here, so the row is made
+    // when the last of them arrives rather than never; reconcileBuybackSlots
+    // only says so when the list actually changed.
+    reconcileBuybackSlots();
 
     LOG_DEBUG("Rebuilt online inventory: equip=", [&](){
         int c = 0; for (auto g : owner_.equipSlotGuidsRef()) if (g) c++; return c;
