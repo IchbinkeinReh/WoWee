@@ -752,6 +752,23 @@ void TransportManager::updateTransportMovement(ActiveTransport& transport, float
     pushTransform(transport);
     applyDoodadMotionState(transport, /*moving=*/!transport.atDockDwell);
 
+    // The model plays each key's SequenceID from that key on (0x0070daa0 ->
+    // 0x0077fec0): an Undercity lift's ShipStart (162) as it sets off and
+    // ShipStop (164) as it arrives, its gears and gates moving with it.
+    // Played when it changes, once and held, as a transition; 0 is the
+    // model's resting loop.
+    if (transport.isM2 && m2Renderer_ && transport.wmoInstanceId != 0 && !pathEntry->keySequences.empty()) {
+        const uint32_t seq = pathEntry->sequenceAt(pathTimeMs);
+        if (static_cast<int>(seq) != transport.appliedNodeSequence) {
+            transport.appliedNodeSequence = static_cast<int>(seq);
+            if (seq == 0) m2Renderer_->setInstanceAnimation(transport.wmoInstanceId, 0, true);
+            else m2Renderer_->setInstanceAnimationHeld(transport.wmoInstanceId, seq, false);
+            LOG_INFO("Transport 0x", std::hex, transport.guid, std::dec, " entry=", transport.entry,
+                     " plays sequence ", seq, " at ", pathTimeMs, "ms (model has it: ",
+                     m2Renderer_->hasAnimation(transport.wmoInstanceId, seq) ? "yes" : "no", ")");
+        }
+    }
+
     // Debug logging every 600 frames (~10 seconds at 60fps)
     static int debugFrameCount = 0;
     if (debugFrameCount++ % 600 == 0) {

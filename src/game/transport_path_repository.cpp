@@ -293,6 +293,7 @@ bool TransportPathRepository::loadTransportAnimationDBC(pipeline::AssetManager* 
 
     // Group waypoints by transportEntry
     std::map<uint32_t, std::vector<std::pair<uint32_t, glm::vec3>>> waypointsByTransport;
+    std::map<uint32_t, std::map<uint32_t, uint32_t>> sequencesByTransport;
 
     for (uint32_t i = 0; i < dbc.getRecordCount(); i++) {
         // uint32_t id = dbc.getUInt32(i, 0);  // Not needed
@@ -324,6 +325,7 @@ bool TransportPathRepository::loadTransportAnimationDBC(pipeline::AssetManager* 
         }
 
         waypointsByTransport[transportEntry].emplace_back(timeIndex, glm::vec3(posX, posY, posZ));
+        sequencesByTransport[transportEntry][timeIndex] = dbc.getUInt32(i, 6);
     }
 
     // Create time-indexed paths from waypoints
@@ -455,6 +457,9 @@ bool TransportPathRepository::loadTransportAnimationDBC(pipeline::AssetManager* 
         // Store path
         PathEntry entry(std::move(spline), transportEntry, isZOnly, true, false);
         entry.linear = true;
+        for (const auto& [t, seq] : sequencesByTransport[transportEntry]) {
+            entry.keySequences.emplace_back(t - t0, seq);
+        }
         paths_.emplace(transportEntry, std::move(entry));
         pathsLoaded++;
     }

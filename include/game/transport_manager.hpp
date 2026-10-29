@@ -154,6 +154,9 @@ struct ActiveTransport {
     // doodad attached after the last push would otherwise keep its spawn state.
     bool atDockDwell = false;
     int appliedDoodadAnim = -1;
+    /// The TransportAnimation key sequence the model was last told to play
+    /// (0x0070daa0's +0x58); -1 before the first.
+    int appliedNodeSequence = -1;
     size_t appliedDoodadCount = 0;
 
     // The server's own route clock, when it publishes one (WotLK MO_TRANSPORT).

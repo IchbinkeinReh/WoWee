@@ -77,6 +77,20 @@ struct PathEntry {
     /// over a period that ends at the last key (0x00710640 takes the time
     /// modulo the last node's TimeIndex).
     bool linear = false;
+    /// Each TransportAnimation key's SequenceID (its field 6), by the key's
+    /// time - what the model plays from that key to the next (0x0070daa0).
+    std::vector<std::pair<uint32_t, uint32_t>> keySequences;
+
+    /// The sequence the model plays at `timeMs`: the one of the key the
+    /// segment starts at, as 0x0070daa0 takes it. 0 without any.
+    [[nodiscard]] uint32_t sequenceAt(uint32_t timeMs) const {
+        uint32_t seq = 0;
+        for (const auto& [t, s] : keySequences) {
+            if (t > timeMs) break;
+            seq = s;
+        }
+        return seq;
+    }
 
     /// Where the path has the transport at a time in [0, duration].
     [[nodiscard]] glm::vec3 positionAt(uint32_t timeMs) const {
