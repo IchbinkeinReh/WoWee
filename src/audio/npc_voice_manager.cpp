@@ -162,38 +162,47 @@ std::pair<const std::vector<VoiceSample>*, int32_t*> NpcVoiceManager::kitSlot(ui
 
     const auto display = kitIdByDisplay_.find(displayId);
     if (display == kitIdByDisplay_.end()) return {};
+    const uint32_t kitId = display->second;
 
-    // Read once per kit, however many units share the display. A slot with no
-    // clip in it stays cached empty, so it is not gone looking for again per click.
-    if (const auto loaded = kitSamples_.find(display->second); loaded != kitSamples_.end()) {
-        const auto& samples = loaded->second[slot];
-        if (samples.empty()) return {};
-        const auto last = kitLastFile_.find(display->second);
-        if (last == kitLastFile_.end()) return {&samples, nullptr};
-        return {&samples, &last->second[slot]};
+    // Read once per kit, however many units share the display - all three of
+    // its slots at once, so the greeting asked first does not leave the
+    // farewell and the irritated line cached empty. A slot with no clip in it
+    // stays empty, so it is not gone looking for again per click.
+    auto loaded = kitSamples_.find(kitId);
+    if (loaded == kitSamples_.end()) {
+        loaded = kitSamples_.try_emplace(kitId).first;
+        kitLastFile_[kitId].fill(-1);
+        const auto row = kitRows_.find(kitId);
+        auto se = assetManager_->loadDBCOptional("SoundEntries.dbc");
+        if (row != kitRows_.end() && se && se->isLoaded() && se->getFieldCount() > 23) {
+            for (size_t k = 0; k < 3; ++k) {
+                if (row->second[k] == 0) continue;
+                const auto entry = soundEntryRowById_.find(row->second[k]);
+                if (entry == soundEntryRowById_.end()) continue;
+                // Columns 3..12 name the files, column 23 their folder
+                // (sound_entry::filePath).
+                const std::string directory = se->getString(entry->second, 23);
+                for (uint32_t f = 0; f < 10; ++f) {
+                    const std::string file = se->getString(entry->second, 3 + f);
+                    if (file.empty()) continue;
+                    const std::string path = sound_entry::filePath(directory, file);
+                    VoiceSample sample;
+                    if (!loadSound(path, sample)) {
+                        LOG_DEBUG("NPC voice kit ", kitId, " slot ", k, ": no file ", path);
+                        continue;
+                    }
+                    LOG_DEBUG("NPC voice kit ", kitId, " slot ", k, ": ", path);
+                    sample.frequency = se->getUInt32(entry->second, 13 + f);
+                    loaded->second[k].push_back(std::move(sample));
+                }
+            }
+        }
+        LOG_INFO("NPC voice kit ", kitId, ": ", loaded->second[0].size(), " greeting, ",
+                 loaded->second[1].size(), " farewell, ", loaded->second[2].size(), " irritated clips");
     }
-
-    auto& samples = kitSamples_[display->second][slot];
-    auto& lastFiles = kitLastFile_[display->second];
-    lastFiles.fill(-1);
-
-    const auto row = kitRows_.find(display->second);
-    if (row == kitRows_.end() || row->second[slot] == 0) return {};
-    const auto entry = soundEntryRowById_.find(row->second[slot]);
-    auto se = assetManager_->loadDBCOptional("SoundEntries.dbc");
-    if (entry == soundEntryRowById_.end() || !se || !se->isLoaded() || se->getFieldCount() <= 22)
-        return {};
-
-    for (uint32_t f = 0; f < 10; ++f) {
-        const std::string file = se->getString(entry->second, 3 + f);
-        if (file.empty()) continue;
-        VoiceSample sample;
-        if (!loadSound(file, sample)) continue;
-        sample.frequency = se->getUInt32(entry->second, 13 + f);
-        samples.push_back(std::move(sample));
-    }
-    return samples.empty() ? std::pair<const std::vector<VoiceSample>*, int32_t*>{}
-                           : std::pair{&samples, &lastFiles[slot]};
+    auto& samples = loaded->second[slot];
+    if (samples.empty()) return {};
+    return {&samples, &kitLastFile_[kitId][slot]};
 }
 
 void NpcVoiceManager::loadVoiceSounds() {

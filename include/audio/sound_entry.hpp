@@ -62,6 +62,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
 
 namespace wowee::audio::sound_entry {
 
@@ -81,6 +82,16 @@ constexpr float pitchForFlags(uint32_t flags, float draw) {
 constexpr float volumeForFlags(uint32_t flags, float volume, float draw) {
     if ((flags & kFlagVolumeSwing) == 0) return volume;
     return std::clamp(volume + (-0.15f + 0.3f * draw), 0.0f, 1.0f);
+}
+
+/// A file a row names, as the archive holds it: columns 3..12 carry only the
+/// file's own name, column 23 (DirectoryBase) the folder it is in -
+/// "Sound\Creature\DwarfFemaleGuardNPC" and "DwarfFemaleGuardNPCGreeting01.wav".
+/// A row without a folder names its file whole.
+inline std::string filePath(const std::string& directory, const std::string& name) {
+    if (directory.empty()) return name;
+    if (directory.back() == '\\' || directory.back() == '/') return directory + name;
+    return directory + "\\" + name;
 }
 
 }  // namespace wowee::audio::sound_entry
