@@ -1219,12 +1219,17 @@ static int lua_GetSpellBonusDamage(lua_State* L) {
     return 1;
 }
 
-// GetSpellBonusHealing() → value
+// GetSpellBonusHealing() → value (0x0060e3b0).  One dword, no school: the client
+// reads PLAYER_FIELD_MOD_HEALING_DONE_POS straight out of the player object at
+// +0x1050 - blob dword 1044 - with no second run to add the way the damage side
+// has, and pushes it as a signed int, so a healing reduction shows as a negative
+// row on the sheet (paperdollframe.lua:978).  The server has already summed the
+// item mods into it; the only thing missing here was the clamp that turned a
+// negative into a zero.
 static int lua_GetSpellBonusHealing(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnZero(L); }
-    int32_t v = gh->getHealingPower();
-    lua_pushnumber(L, v >= 0 ? v : 0);
+    const uint16_t index = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_HEALING_DONE_POS);
+    const auto player = localPlayerObject(L, index);
+    lua_pushnumber(L, player ? static_cast<int32_t>(player->getField(index)) : 0);
     return 1;
 }
 
