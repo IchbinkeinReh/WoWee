@@ -3400,9 +3400,10 @@ static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
 
 /// GetInventoryItemCount(unit, slot) → how many are in that equipped slot.
 ///
-/// Stackable equipped things - ammo, thrown weapons - and the bank window's
-/// own bag buttons, which print the count on the button face. Answering
-/// nothing left every one of those blank.
+/// Stackable equipped things - thrown weapons - and the bank window's own bag
+/// buttons, which print the count on the button face. Answering nothing left
+/// every one of those blank. The ammunition is counted differently; see the
+/// slot 0 branch below.
 static int lua_GetInventoryItemCount(lua_State* L) {
     auto* gh = getGameHandler(L);
     const char* uid = luaL_optstring(L, 1, "player");
@@ -3415,6 +3416,27 @@ static int lua_GetInventoryItemCount(lua_State* L) {
     const int slotId = static_cast<int>(luaL_optnumber(L, 2, 0));
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
+    // Slot 0 is the ammunition, and its number is not a stack sitting in a slot.
+    //
+    // 0x005e7c00 reads the slot argument and hands back the number **less one**,
+    // which is what makes INVSLOT_AMMO = 0 arrive as the client's own index -1 -
+    // the one index its range test waves through as valid, and the one every
+    // GetInventoryItem* binding answers out of PLAYER_AMMO_ID instead of out of
+    // the equipment array (which has no ammo slot in this layout at all).  Here
+    // 0x005e9e40 takes that field's entry to 0x00754d00, whose accumulator
+    // (0x00754560) adds each instance's stack count as the bag walk at
+    // 0x007546f0 hands it items - the mask its caller forces on that walk is
+    // 0x247, and 0x00753a50 reads it as the equipment, the four worn bags and
+    // what they and the backpack hold, but never the bank's 0x8.  So the number
+    // printed on the ammo square is how much of the loaded entry is still
+    // carried to be consumed, and Inventory::countCarried is that walk.  Nothing
+    // loaded counts as nothing carried, which is what the client answers for a
+    // unit it is not the local player.
+    if (slotId == 0) {
+        const uint32_t entry = (gh && uidStr == "player") ? gh->getAmmoId() : 0u;
+        lua_pushnumber(L, entry ? gh->getInventory().countCarried(entry) : 0u);
+        return 1;
+    }
     // Not 1..19: the bank is addressed through this too - bankframe.lua asks
     // GetInventoryItemCount("player", BankButtonIDToInvSlotID(id)) for every
     // one of its twenty-eight slots, and those ids start at forty.
@@ -3474,6 +3496,23 @@ static int lua_GetInventoryItemLink(lua_State* L) {
     if (!gh) { return luaReturnNil(L); }
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
+    // Slot 0 again, this time through 0x005ea270: the loaded entry goes to the
+    // item record for the **entry** (0x0067ca30 asked with no guid), and the link
+    // builder it then calls - 0x0061e360(entry, record+0x14, 0, 0, 0) - is handed
+    // no guid either.  So the ammo square's link names an item the character is
+    // not holding as a particular instance, which is what a link the sheet
+    // rebuilds from a field has to look like, and it is nil when the records have
+    // never seen the entry.
+    if (slotId == 0) {
+        const uint32_t ammo = uidStr == "player" ? gh->getAmmoId() : 0u;
+        if (ammo == 0) return luaReturnNil(L);
+        gh->ensureItemInfo(ammo);
+        const auto* info = gh->getItemInfo(ammo);
+        if (!info) return luaReturnNil(L);
+        const uint32_t qi = info->quality < 8 ? info->quality : 1u;
+        lua_pushstring(L, game::itemChatLink(ammo, qi, info->name).c_str());
+        return 1;
+    }
     uint32_t itemId = 0;
     std::string name;
     uint32_t q = 1;
@@ -3514,6 +3553,19 @@ static int lua_GetInventoryItemID(lua_State* L) {
         const uint32_t entry = inspectedItemEntry(gh, uidStr, slotId);
         if (!entry) { return luaReturnNil(L); }
         lua_pushnumber(L, entry);
+        return 1;
+    }
+
+    // Slot 0 of the local player is the ammunition, and 0x005ea3e0 answers it
+    // with nothing more than the field: internal slot -1 (see the note at
+    // lua_GetInventoryItemCount) goes to 0x005e8300 - the blob's PLAYER_AMMO_ID
+    // dword - and the entry it holds is the answer, with no item query in front
+    // of it and no record behind it.  Zero in the field is nil, which is how the
+    // sheet reads an empty square.
+    if (slotId == 0) {
+        const uint32_t ammo = gh->getAmmoId();
+        if (ammo == 0) { return luaReturnNil(L); }
+        lua_pushnumber(L, ammo);
         return 1;
     }
 
@@ -3577,9 +3629,31 @@ static int lua_GetInventoryItemTexture(lua_State* L) {
     // with GetInventoryItemTexture("player", BankButtonIDToInvSlotID(id)), and
     // those ids land at forty and up - so a bound of NUM_SLOTS answered nil for
     // every one and the bank read as empty while bankSlots_ held the items.
-    if (!gh || !inventorySlotItem(gh->getInventory(), slotId)) { return luaReturnNil(L); }
+    if (!gh) { return luaReturnNil(L); }
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
+    // Slot 0 is the ammunition, and 0x005e9bc0 needs three things before it
+    // answers with an icon: the field non-zero, the entry **carried** non-zero -
+    // the same 0x00754d00 walk the count binding does, so a hunter who has run
+    // out of arrows gets a blank square even with the entry still loaded - and a
+    // record for the entry, whose icon is then formatted under the icon prefix.
+    // No record answers nil, which is also how PaperDollItemSlotButton_Update
+    // reads "no item"; an unresolved icon texture falls back to the question mark
+    // the rest of this family uses, because the client's own tail still returns a
+    // string there and the square counts as holding something either way.
+    if (slotId == 0) {
+        const uint32_t ammo = uidStr == "player" ? gh->getAmmoId() : 0u;
+        if (ammo == 0 || gh->getInventory().countCarried(ammo) == 0) return luaReturnNil(L);
+        gh->ensureItemInfo(ammo);
+        const auto* info = gh->getItemInfo(ammo);
+        if (!info) return luaReturnNil(L);
+        const std::string path = info->displayInfoId ? gh->getItemIconPath(info->displayInfoId)
+                                                     : std::string();
+        lua_pushstring(L, path.empty() ? "Interface\\Icons\\INV_Misc_QuestionMark"
+                                       : path.c_str());
+        return 1;
+    }
+    if (!inventorySlotItem(gh->getInventory(), slotId)) { return luaReturnNil(L); }
     if (uidStr != "player") {
         const uint32_t entry = inspectedItemEntry(gh, uidStr, slotId);
         const auto* info = entry ? gh->getItemInfo(entry) : nullptr;

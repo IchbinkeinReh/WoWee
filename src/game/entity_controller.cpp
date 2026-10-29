@@ -3141,6 +3141,40 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                 }
             }
         }
+        // The ammunition the realm says is loaded, watched on its own just as the
+        // client watches it.  The registration block at 0x005e8470 puts a second
+        // watch right after the points pair - `4, 0x1068, 4`, blob dword 1050,
+        // which the client's own descriptor table names PLAYER_AMMO_ID (index
+        // 1198) - and 0x005eaf70 re-puts the same watch when the player frame is
+        // rebuilt.  Its callback at 0x005e83e0 is the client's only raise of
+        // UNIT_INVENTORY_CHANGED (147) that comes from that field, and it names
+        // "player": before the raise it looks the loaded entry up in the item
+        // records (0x006de7e0, which answers the record's quality), so the notice
+        // goes out with the record already in hand - 0x006de7e0 finds the loaded
+        // entry among the item records and answers its +0x14, the same dword
+        // GetInventoryItemQuality (0x005ea040) answers with - and the sheet then
+        // re-reads the slot.
+        //
+        // That re-read is the whole point of the event.  paperdollframe.lua:1191
+        // refreshes a paperdoll button on UNIT_INVENTORY_CHANGED only when the
+        // first argument is "player", and the ammo button is one of those buttons:
+        // paperdollframe.xml:1044 defines CharacterAmmoSlot with no id of its own,
+        // which leaves GetID() at 0 = INVSLOT_AMMO.  Nothing here ever mentioned
+        // the field, so a hunter who walked into a vendor and bought arrows, or
+        // whose realm changed what was loaded from anywhere else, kept the square
+        // as it was drawn when the sheet was opened.
+        //
+        // The event carries no arguments other than the unit, so unlike the points
+        // pair above there is no baseline to keep: a first block whose field is not
+        // zero asks for a redraw, which costs nothing and says nothing false.
+        if (const uint16_t ammoIdx = fieldIndex(UF::PLAYER_AMMO_ID); ammoIdx != 0xFFFF) {
+            const auto now = block.fields.find(ammoIdx);
+            if (now != block.fields.end()) {
+                const auto was = lastFields.find(ammoIdx);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                    pendingEvents_.emit("UNIT_INVENTORY_CHANGED", {"player"});
+            }
+        }
         // Which currencies the character has met, the pair of masks
         // PLAYER_FIELD_KNOWN_CURRENCIES is read as (blob +0x790 and +0x794).  The
         // client puts one eight-byte watch over the pair (0x006e5180 registers
