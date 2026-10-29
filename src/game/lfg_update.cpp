@@ -264,14 +264,22 @@ bool parseLfgList(network::Packet& packet, uint32_t heldListId,
             // makes on it (0x0055b770:9709) is a guid test, not a field mask: the
             // top nibble of the high dword clear, and either the low dword set or
             // a bit set below it — 0xf07fffff, which leaves out bits 23 to 27. An
-            // entry passing it is a row deleted; one failing it names a row that
-            // is only unlinked from its group (0x005589d0 → 0x00556f90), and since
-            // no group membership is held here that half does nothing yet.
+            // entry passing it is a row deleted (0x00556f90, then "delete"). One
+            // failing it names a group record, and 0x005589d0 deletes that too -
+            // every member record in its array (+0x13c) first, then the group: the
+            // group row and every listing it owns go. A guid naming nothing held
+            // (a zero guid) finds nothing in the hash (0x006792e0) and does nothing.
             const uint32_t low = static_cast<uint32_t>(g);
             const uint32_t high = static_cast<uint32_t>(g >> 32);
-            const bool removal = (high & 0xf0000000u) == 0 &&
-                                 (low != 0 || (high & 0xf07fffffu) != 0);
-            if (removal) std::erase_if(rows, [&](const LfgListRow& r) { return r.guid == g; });
+            const bool single = (high & 0xf0000000u) == 0 &&
+                                (low != 0 || (high & 0xf07fffffu) != 0);
+            if (single) {
+                std::erase_if(rows, [&](const LfgListRow& r) { return r.guid == g; });
+            } else if (g != 0) {
+                std::erase_if(rows, [&](const LfgListRow& r) {
+                    return (!r.isListing && r.guid == g) || (r.isListing && r.ownerGuid == g);
+                });
+            }
         }
     }
 

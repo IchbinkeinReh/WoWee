@@ -449,10 +449,10 @@ TEST_CASE("A delta drops the guids it names and fills the rows it repeats", "[lf
     delta.writeUInt64(0x200);      // gone
     delta.writeUInt64(0);          // a zero guid is "touched", not removed
     delta.writeUInt64(0x0400000000000000ull);  // and a guid whose only set bit is
-    delta.writeUInt32(1);          //   bit 26 of its high dword is not one either:
-    delta.writeUInt32(0);          //   the test at 0x0055b770:9709 is 0xf07fffff,
-    delta.writeUInt64(0x100);      //   and such a row is only unlinked from its
-    delta.writeUInt32(0x2);        //   group, so it stays
+    delta.writeUInt32(1);          //   bit 26 of its high dword fails the test at
+    delta.writeUInt32(0);          //   0x0055b770:9709 (0xf07fffff): it names a group,
+    delta.writeUInt64(0x100);      //   which 0x005589d0 deletes with its members
+    delta.writeUInt32(0x2);
     writeComment(delta, "25 man");
     delta.writeUInt32(0);
     delta.writeUInt32(0);
@@ -460,13 +460,43 @@ TEST_CASE("A delta drops the guids it names and fills the rows it repeats", "[lf
     CHECK(delta.getRemainingSize() == 0);
 
     // The row is updated where it is held rather than added again, and a mask
-    // that leaves a field out leaves the value that was held for it.
-    REQUIRE(rows.size() == 2);
+    // that leaves a field out leaves the value that was held for it. The group
+    // named by the failing guid is gone.
+    REQUIRE(rows.size() == 1);
     CHECK(rows[0].guid == 0x100);
     CHECK(rows[0].comment == "25 man");
     CHECK(rows[0].encounterMask == 0b101);
     CHECK(rows[0].ownerGuid == 0);  // a player row's eight bytes were stepped over
-    CHECK(rows[1].guid == 0x0400000000000000ull);
+}
+
+TEST_CASE("A removed group takes the listings it owns with it", "[lfg]") {
+    std::vector<LfgListRow> rows;
+    LfgListRow group;
+    group.guid = 0x1F50000000000042ull;
+    rows.push_back(group);
+    LfgListRow member;
+    member.guid = 0x300;
+    member.isListing = true;
+    member.ownerGuid = group.guid;
+    rows.push_back(member);
+    LfgListRow loner;
+    loner.guid = 0x301;
+    loner.isListing = true;
+    rows.push_back(loner);
+
+    Packet delta(0x360);
+    delta.writeUInt32(6);
+    delta.writeUInt32(1031);
+    delta.writeUInt8(1);
+    delta.writeUInt32(1);
+    delta.writeUInt64(group.guid);  // top nibble set: a group (0x005589d0)
+    delta.writeUInt32(0);
+    delta.writeUInt32(0);
+    delta.writeUInt32(0);
+    delta.writeUInt32(0);
+    REQUIRE(parseLfgList(delta, kLfrList, rows));
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].guid == 0x301);
 }
 
 TEST_CASE("A cut short list keeps its header cleared and its rows half read", "[lfg]") {

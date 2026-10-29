@@ -217,9 +217,10 @@ struct LfgListRow {
  *
  * A removal entry is named by guid alone, and the client's test on it
  * (0x0055b770:9709) is narrower than "nonzero": the top nibble of the high dword
- * clear and either the low dword set or a bit set below it (0xf07fffff). An entry
- * that fails that test names a row that is unlinked from its group but kept
- * (0x005589d0), which is not something the rows here model yet.
+ * clear and either the low dword set or a bit set below it (0xf07fffff), and a
+ * passing entry is that row deleted. An entry that fails it names a group
+ * record, which 0x005589d0 deletes with every member record in its array: the
+ * group row and the listing rows it owns go together.
  *
  * A row whose guid is already held updates it in place, as the client's guid hash
  * does; a whole-list packet clears first. False when the packet is cut short, with
