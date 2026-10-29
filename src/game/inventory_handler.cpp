@@ -719,11 +719,54 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
     };
 
     // ---- Open container ----
-    table[Opcode::SMSG_OPEN_CONTAINER] = [](network::Packet& packet) {
-        if (packet.hasRemaining(8)) {
-            uint64_t containerGuid = packet.readUInt64();
-            LOG_DEBUG("SMSG_OPEN_CONTAINER: guid=0x", std::hex, containerGuid, std::dec);
+    //
+    // The realm names a container, never a slot, and 0x005d7110 is what turns
+    // that name into a window: if the guid is the local player's own it raises
+    // BAG_OPEN with 0, because the player object *is* the backpack's container;
+    // otherwise it walks the eleven containers the player carries and raises
+    // BAG_OPEN with that container's number for each one the guid matches.  The
+    // number is the interface's own - worn bags from one, the purchased bank bags
+    // straight after them, the same numbering fireBagUpdates below uses for
+    // BAG_UPDATE - and ContainerFrame_OnEvent answers it with `self:Show()` when
+    // it is the frame's own GetID.  That is how a bag the realm has just put on
+    // the character opens a window by itself, and how each bank bag opens with
+    // the bank.
+    //
+    // WoWee read the guid and logged it, so no window ever came from this
+    // packet: bags had to be asked for by hand, one click at a time, and a bag
+    // bought at a vendor stayed windowless until the bag key was pressed.  The
+    // counterpart notice, BAG_CLOSED, has been sent since the bag-swap fix -
+    // which made the gap worse than it looks, because a swap hides two windows
+    // and nothing here brings either back.
+    table[Opcode::SMSG_OPEN_CONTAINER] = [this](network::Packet& packet) {
+        if (!packet.hasRemaining(8)) return;
+        const uint64_t containerGuid = packet.readUInt64();
+        LOG_DEBUG("SMSG_OPEN_CONTAINER: guid=0x", std::hex, containerGuid, std::dec);
+
+        int bagId = -1;
+        if (containerGuid == owner_.getPlayerGuid()) {
+            bagId = 0;  // the player object is the backpack's container
+        } else {
+            for (int i = 0; i < game::Inventory::NUM_BAG_SLOTS; ++i) {
+                const uint64_t worn =
+                    owner_.equipSlotGuidsRef()[game::Inventory::FIRST_BAG_EQUIP_SLOT + i];
+                if (worn != 0 && worn == containerGuid) { bagId = i + 1; break; }
+            }
+            if (bagId < 0) {
+                for (int i = 0; i < effectiveBankBagSlots_; ++i) {
+                    const uint64_t bankBag = bankBagSlotGuids_[static_cast<size_t>(i)];
+                    if (bankBag != 0 && bankBag == containerGuid) {
+                        bagId = game::Inventory::NUM_BAG_SLOTS + 1 + i;
+                        break;
+                    }
+                }
+            }
         }
+        // A guid matching no container of ours asks for a window nothing here
+        // can number - a bag the client has not been told about yet, which the
+        // client itself leaves unopened.
+        if (bagId < 0) return;
+        if (auto& fire = owner_.addonEventCallbackRef()) fire("BAG_OPEN", {std::to_string(bagId)});
     };
 
     // ---- Sell / Buy / Inventory ----
