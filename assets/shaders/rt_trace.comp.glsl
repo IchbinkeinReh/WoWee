@@ -152,11 +152,6 @@ float rtHardShadowVis(float s) {
     return s > 1e-3 ? (s - 1.0) / s : 0.0;
 }
 
-// How far a shading normal may lean from its face before the face's is taken
-// for the lamps' light (lightN): all of it within 15 degrees, none of it past
-// 35.
-const float RT_NORMAL_AGREE_NEAR = 0.9659;  // cos 15 degrees
-const float RT_NORMAL_AGREE_FAR = 0.8192;   // cos 35 degrees
 // How far past the terminator the lamps' light wraps, (N.L + w) / (1 + w),
 // is pass.tune3.w: 0.25 (a face turned some 15 degrees from a lamp still
 // takes a little of it), 0.5 with "Softer lamp light" (some 30).
@@ -183,6 +178,9 @@ void main() {
     vec4 normalIn = imageLoad(uPointOut, px);
     vec3 shadingN = rtOctDecode(normalIn.xy);
     bool storeyBound = normalIn.z > 0.5;
+    // A room's baked colour: its normal already blended toward its face in
+    // the G-buffer (rtInteriorLampNormal), so not again here.
+    bool normalResolved = normalIn.w > 0.5;
     vec3 p = rtGbufWorld(g, px);
     vec3 origin = p + n * rtSurfaceOffset(dist);
     uint rng = rtSeed(uvec2(px), uint(pass.cameraPos.w));
@@ -252,9 +250,9 @@ void main() {
     // the next ones, cut off along a straight triangle edge across the floor
     // (Silvermoon, the Path of the Ancients). A character's or a pillar's
     // smoothing stays: their normals lie within some fifteen degrees of
-    // their faces.
-    vec3 lightN = normalize(mix(n, shadingN, smoothstep(RT_NORMAL_AGREE_FAR, RT_NORMAL_AGREE_NEAR,
-                                                         dot(shadingN, n))));
+    // their faces (rtNormalAgreement). A room's baked colour comes with the
+    // same rule applied already, to its vertex normal (normalResolved).
+    vec3 lightN = normalize(mix(n, shadingN, normalResolved ? 1.0 : rtNormalAgreement(n, shadingN)));
     vec3 pointSum = vec3(0.0);
     float bakedSum = 0.0;
     float weightSum = 0.0;

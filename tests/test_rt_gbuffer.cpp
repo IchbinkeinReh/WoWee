@@ -508,6 +508,42 @@ TEST_CASE("A room's baked colour takes the lamps by its face, not its smoothed v
     REQUIRE(glm::length(same - glm::normalize(face + bump)) < 1e-5f);
 }
 
+// rtInteriorLampNormal: a room's baked colour keeps its own normal where it
+// agrees with the face (a round pillar) and takes the face's where it leans
+// far off (the Undercity barber's floor), blended between.
+TEST_CASE("A room's lamp normal: its own near the face, the face's far off it", "[rt_gbuffer]") {
+    using wowee::rendering::rt_gbuffer::interiorLampNormal;
+    using wowee::rendering::rt_gbuffer::normalAgreement;
+    const glm::vec3 face(0.0f, 0.0f, 1.0f);
+    auto leaning = [](float degrees) {
+        const float r = glm::radians(degrees);
+        return glm::vec3(std::sin(r), 0.0f, std::cos(r));
+    };
+    // The thresholds: all within 15 degrees, none past 35, rising between.
+    REQUIRE(normalAgreement(face, leaning(10.0f)) == Catch::Approx(1.0f));
+    REQUIRE(normalAgreement(face, leaning(15.0f)) == Catch::Approx(1.0f).margin(1e-3));
+    REQUIRE(normalAgreement(face, leaning(35.0f)) == Catch::Approx(0.0f).margin(1e-3));
+    REQUIRE(normalAgreement(face, leaning(64.0f)) == 0.0f);
+    float last = 1.0f;
+    for (float a = 15.0f; a <= 35.0f; a += 1.0f) {
+        const float w = normalAgreement(face, leaning(a));
+        REQUIRE(w <= last + 1e-6f);
+        last = w;
+    }
+    // A pillar's smoothing, 10 degrees off its facet: kept as it is.
+    const glm::vec3 pillar = leaning(10.0f);
+    const glm::vec3 kept = interiorLampNormal(face, pillar, pillar);
+    REQUIRE(glm::length(kept - pillar) < 1e-5f);
+    // The barber's floor, 64 degrees off: the face's, wholly.
+    const glm::vec3 floorN = leaning(64.0f);
+    const glm::vec3 flat = interiorLampNormal(face, floorN, floorN);
+    REQUIRE(flat.z == Catch::Approx(1.0f));
+    // Half-way between, between the two.
+    const glm::vec3 mid = interiorLampNormal(face, leaning(25.0f), leaning(25.0f));
+    REQUIRE(mid.z > leaning(25.0f).z);
+    REQUIRE(mid.z < 1.0f);
+}
+
 // rtCapLight: the light the traced lights add, held to the Debug Lights'
 // "Maximum light" - scaled whole, so its brightest channel is the cap and
 // its hue stays; under the cap, and with no cap, as it is.

@@ -105,13 +105,18 @@ void main() {
     // with the walls'), and the patches turned with the camera.
     vec3 shading = n;
     uint storeyBound = 0u;
+    // A room's baked colour carries the normal the lamps light it by
+    // already (rtInteriorLampNormal, the face's where its own leans off it):
+    // rt_trace takes it as it is rather than blend it toward the face again.
+    float resolved = 0.0;
     if (valid) {
         vec4 gb0 = texelFetch(uSceneGbuf0, sp, 0);
         shading = rtGbufShadingNormal(gb0);
         if (dot(shading, n) < 0.0) shading = -shading;
         if (dot(shading, n) < 0.5) shading = n;
         storeyBound = rtGbufStoreyBound(gb0, texelFetch(uSceneGbuf1, sp, 0));
+        resolved = (rtGbufFlags(gb0) & RT_GB_INTERIOR) != 0u ? 1.0 : 0.0;
     }
-    imageStore(uPointNormal, px, vec4(rtOctEncode(shading), float(storeyBound), 0.0));
+    imageStore(uPointNormal, px, vec4(rtOctEncode(shading), float(storeyBound), resolved));
     imageStore(uGbuf, px, vec4(rtOctEncode(n), length(p), float(sub) + (valid ? 4.0 : 0.0)));
 }

@@ -152,6 +152,25 @@ inline glm::vec3 faceBasedNormal(const glm::vec3& face, const glm::vec3& vertexN
     return glm::dot(n, n) > 1e-8f ? glm::normalize(n) : face;
 }
 
+/// rtNormalAgreement: how much of a normal's own the lamps light by - all
+/// of it within 15 degrees of its face, none past 35, smoothstep between.
+inline constexpr float kNormalAgreeNear = 0.9659f;  // cos 15 degrees
+inline constexpr float kNormalAgreeFar = 0.8192f;   // cos 35 degrees
+inline float normalAgreement(const glm::vec3& face, const glm::vec3& n) {
+    const float t = std::clamp((glm::dot(face, n) - kNormalAgreeFar) / (kNormalAgreeNear - kNormalAgreeFar),
+                               0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+/// rtInteriorLampNormal: a room's baked colour's normal for the lamps - its
+/// own where its vertex normal agrees with the face, faceBasedNormal past
+/// 35 degrees, blended between.
+inline glm::vec3 interiorLampNormal(const glm::vec3& face, const glm::vec3& vertexNormal, const glm::vec3& shading) {
+    const glm::vec3 n = glm::mix(faceBasedNormal(face, vertexNormal, shading), shading,
+                                 normalAgreement(face, vertexNormal));
+    return glm::dot(n, n) > 1e-8f ? glm::normalize(n) : face;
+}
+
 /// rtInteriorShade: inside, what a baked colour is scaled by - `base` where
 /// no point light reaches, all of it where their shadowed light (its
 /// brightest channel) is `fullAt` or more, linear between, weighed in by the

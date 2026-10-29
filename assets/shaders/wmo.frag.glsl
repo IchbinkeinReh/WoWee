@@ -296,7 +296,7 @@ void main() {
     // by it and never know which side of a two-sided batch is showing.
     vec3 vertexNormal = normalize(Normal);
     // The face's own normal, on the vertex normal's side: a room's baked
-    // colour takes the traced lamps by it (rtFaceBasedNormal).
+    // colour takes the traced lamps by it (rtInteriorLampNormal).
     vec3 faceNormal = cross(dFdx(FragPos), dFdy(FragPos));
     faceNormal = dot(faceNormal, faceNormal) > 1e-20 ? normalize(faceNormal) : vertexNormal;
     if (dot(faceNormal, vertexNormal) < 0.0) faceNormal = -faceNormal;
@@ -399,10 +399,10 @@ void main() {
     }
 
     outColor = vec4(rtGiDebug(result), alpha);
-    // A room's baked colour: lit by its face, with the bumps on it, not by
-    // the smoothed vertex normal (rtFaceBasedNormal).
+    // A room's baked colour: lit by its own normal where it agrees with
+    // its face, by the face's past that (rtInteriorLampNormal).
     rtSurface.normal = (rtSurface.flags & RT_GB_INTERIOR) != 0u
-                           ? rtFaceBasedNormal(faceNormal, vertexNormal, norm) : norm;
+                           ? rtInteriorLampNormal(faceNormal, vertexNormal, norm) : norm;
     rtSurface.map = mapLit;
     rtWriteGbuffer(rtSurface, outColor.rgb);
 }

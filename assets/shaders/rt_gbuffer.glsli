@@ -228,6 +228,32 @@ vec3 rtFaceBasedNormal(vec3 face, vec3 vertexNormal, vec3 shading) {
     return dot(n, n) > 1e-8 ? normalize(n) : face;
 }
 
+// How far a normal may lean from its face before the lamps light by the
+// face's instead: all of its own within 15 degrees, none of it past 35, a
+// smooth blend between. One rule for both places it is applied - a room's
+// baked colour in the G-buffer (rtInteriorLampNormal) and every other
+// surface in rt_trace (lightN) - so the two cannot drift apart. Mirrored in
+// rt_gbuffer_pack.hpp (normalAgreement).
+const float RT_NORMAL_AGREE_NEAR = 0.9659;  // cos 15 degrees
+const float RT_NORMAL_AGREE_FAR = 0.8192;   // cos 35 degrees
+float rtNormalAgreement(vec3 face, vec3 n) {
+    return smoothstep(RT_NORMAL_AGREE_FAR, RT_NORMAL_AGREE_NEAR, dot(face, n));
+}
+
+// The normal a room's baked colour (RT_GB_INTERIOR) takes the traced lamps
+// by: its own, bumps and all, where its vertex normal lies within 15 degrees
+// of the face - a round pillar, a vault, an arch stay smooth - and the
+// face's with the bumps on it (rtFaceBasedNormal) past 35, where a floor's
+// MONR normals were smoothed with the walls (the Undercity barber's floor,
+// 50 to 65 degrees off). Resolved here, so rt_trace leaves it as it is
+// (rt_prepare marks it). Mirrored in rt_gbuffer_pack.hpp
+// (interiorLampNormal).
+vec3 rtInteriorLampNormal(vec3 face, vec3 vertexNormal, vec3 shading) {
+    vec3 byFace = rtFaceBasedNormal(face, vertexNormal, shading);
+    vec3 n = mix(byFace, shading, rtNormalAgreement(face, vertexNormal));
+    return dot(n, n) > 1e-8 ? normalize(n) : face;
+}
+
 // Inside, what a baked colour - an interior's vertex colours, a doodad's MODD
 // colour, a unit's floor colour - is scaled by: base where no point light
 // reaches, all of it where their light (shadowed, every light's, the

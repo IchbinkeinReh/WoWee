@@ -586,6 +586,18 @@ surface by the lamps as before, about the true face. Doodads keep their own
 normals (they are not smoothed across a wall), and so does everything
 outside.
 
+The face's normal is taken only where the smoothing leans far off the face:
+the same angle rule the lamps use everywhere (`rtNormalAgreement`, one
+definition in `rt_gbuffer.glsli`, `normalAgreement` in
+`rt_gbuffer_pack.hpp`). Where the vertex normal is within 15 degrees of
+the face, the surface keeps its own normal, bumps and all. Past 35 degrees
+it takes the face-based one, and between the two it blends by a smoothstep
+(`rtInteriorLampNormal`). So a round pillar, a vault or an arch stays
+smooth, and the barber's floor (50-65 degrees off) still lights by its face.
+`rt_prepare` marks these pixels in the point-normal image's fourth channel,
+and `rt_trace` takes their normal as it is rather than blend it toward the
+face a second time.
+
 Debug view 12 shows the point lights' light each pixel adds (before the
 texture), 13 the factor its baked colour is scaled by - the lamps' shadows
 and the room's shade together, grey, white as painted, red where there is
