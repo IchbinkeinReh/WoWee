@@ -1884,6 +1884,31 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                 pendingEvents_.emit("UNIT_PORTRAIT_UPDATE", {"player"});
                 pendingEvents_.emit("UNIT_MODEL_CHANGED", {"player"});
             }
+            // A question this branch cannot answer from the decompile, so log the
+            // evidence instead of guessing at it. UnitIsAFK and UnitIsDND answer
+            // from PLAYER_FLAGS 0x1 and 0x2 here, but the client's own two
+            // bindings do not agree with each other: 0x0060cc30 (UnitIsDND) does
+            // read PLAYER_FLAGS 0x2, while 0x0060cba0 (UnitIsAFK) reads **bit 3 of
+            // the unit flags dword** (unit blob +0xd4, which the descriptor
+            // records at 0x00ac624c name UNIT_FIELD_FLAGS), and 0x006dc640 - the
+            // routine the client reaches for a chat line of type 0x17 (AFK) -
+            // prints CLEARED_DND under PLAYER_FLAGS 0x4. So either 0x2 is AFK and
+            // 0x4 is busy, or 0x2 is busy and away lives in the unit flags, and
+            // the two readings cannot both be right.
+            //
+            // Printing both stores together on the same line is what settles it:
+            // type /afk on a live realm and whichever value moves by 0x1, 0x2 or
+            // 0x4 - or whose unit-flags bit 3 lights up - is the answer. Nothing
+            // here acts on the line; the bindings stay as they are until it has
+            // been read.
+            if ((prev ^ val) & 0x0000000f) {
+                const uint16_t ufi = fieldIndex(UF::UNIT_FIELD_FLAGS);
+                auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+                const uint32_t unitFlags = (player && ufi != 0xFFFF) ? player->getField(ufi) : 0u;
+                LOG_INFO("PLAYER_FLAGS low bits moved (", isCreate ? "create" : "update",
+                         "): flags 0x", std::hex, prev, " -> 0x", val, std::dec,
+                         " / unit flags 0x", std::hex, unitFlags, std::dec);
+            }
             // .gm on / .gm off: the server answers quest status for the
             // player as they are now, and an enemy gets none - so a GM who
             // arrived among the other faction's questgivers before turning
