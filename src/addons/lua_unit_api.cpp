@@ -10,6 +10,7 @@
 #include "game/power_prediction.hpp"
 #include "game/unit_level_display.hpp"
 #include <cstdlib>
+#include <bit>
 #include "game/interface_text.hpp"
 
 namespace wowee::addons {
@@ -1686,71 +1687,139 @@ static int lua_UnitAttackSpeed(lua_State* L) {
     return 2;
 }
 
+/// A damage field is float bits, and the client pushes them with no conversion
+/// at all (0x00610860 takes +0x100 of the field blob and hands it straight to
+/// Lua), so decode them here rather than giving the number a second home. A
+/// field this expansion's table does not name reads as no damage, which is what
+/// sends the callers below to their fallbacks.
+static double fieldAsFloat(game::Unit* unit, game::UF field) {
+    const uint16_t idx = game::fieldIndex(field);
+    if (!unit || idx == 0xFFFF) return 0.0;
+    return static_cast<double>(std::bit_cast<float>(unit->getField(idx)));
+}
+
 /// UnitDamage(unit) → min, max, off-hand min, off-hand max, positive bonus,
 /// negative bonus, percent.
 ///
-/// The comment here used to say weapon damage was not tracked, so it reported
-/// the attack-power contribution alone against a two-second swing. The
-/// equipped weapon carries its damage range and its speed, so the figure is
-/// the weapon's own damage plus what attack power adds over one swing -
-/// attack power divided by fourteen is damage per second, times the speed.
+/// The client pushes the unit's own four damage fields and adds nothing to
+/// them: 0x00610860 reads the blob's +0x100 through +0x10c - MINDAMAGE's 70
+/// and MAXDAMAGE's 71, then the off-hand pair at 72 and 73 - and passes them
+/// to Lua as float bits. The realm has already folded the weapon's damage and
+/// the unit's attack power into that pair, which is why a hunter's pet, a cat
+/// form and a geared warrior all answer from the same four reads. Working the
+/// figure out of the equipment instead, as this did, could only ever be right
+/// for the player: it modelled attack power as damage per second divided by
+/// fourteen times the swing, took half of it for the off hand, and left every
+/// other unit on the sheet - the pet tab above all, which asks for nothing but
+/// the pet - showing bare hands.
+///
+/// The last three are the physical-school bonuses. The client answers them only
+/// for a unit whose guid's high dword has bit 4 set, the player-controlled
+/// flag, and then from 0x00578210, 0x00578250 and 0x00578290 - accessors of a
+/// figure the client keeps for its own character sheet rather than of an update
+/// field, and one WoWee does not build. Everyone else gets 0, 0 and 1, which is
+/// also what the client gives them; the cost of not answering them for the
+/// player is a tooltip breakdown line, not the range itself, since the range
+/// already carries whatever the realm folded in.
 static int lua_UnitDamage(lua_State* L) {
     auto* gh = getGameHandler(L);
-    // The pet's damage comes off its own fields rather than from a weapon it
-    // does not carry, so it is answered before any of the equipment below.
     std::string who(luaL_optstring(L, 1, "player"));
     toLowerInPlace(who);
-    if (who == "pet") {
-        const double lo = gh ? gh->getPetMinDamage() : 0.0;
-        const double hi = gh ? gh->getPetMaxDamage() : 0.0;
-        lua_pushnumber(L, lo);   // minDamage
-        lua_pushnumber(L, hi);   // maxDamage
-        lua_pushnumber(L, 0.0);  // minOffHand
-        lua_pushnumber(L, 0.0);  // maxOffHand
-        lua_pushnumber(L, 0.0);  // physical bonus, positive
-        lua_pushnumber(L, 0.0);  // ...and negative
-        lua_pushnumber(L, 1.0);  // damage percent
-        return 7;
-    }
-    const int32_t ap = gh ? gh->getMeleeAttackPower() : -1;
-    double baseMin = 1.0, baseMax = 2.0;   // bare hands
-    double speed = 2.0;
-    double offMin = 0.0, offMax = 0.0;
-    if (gh) {
-        const auto& inv = gh->getInventory();
-        const auto& mh = inv.getEquipSlot(game::EquipSlot::MAIN_HAND);
-        if (!mh.empty() && mh.item.damageMax > 0.0f) {
-            baseMin = mh.item.damageMin;
-            baseMax = mh.item.damageMax;
-            if (mh.item.delayMs > 0) speed = mh.item.delayMs / 1000.0;
+    auto* unit = resolveUnit(L, who.c_str());
+    double lo = fieldAsFloat(unit, game::UF::UNIT_FIELD_MINDAMAGE);
+    double hi = fieldAsFloat(unit, game::UF::UNIT_FIELD_MAXDAMAGE);
+    double offLo = fieldAsFloat(unit, game::UF::UNIT_FIELD_MINOFFHANDDAMAGE);
+    double offHi = fieldAsFloat(unit, game::UF::UNIT_FIELD_MAXOFFHANDDAMAGE);
+    if (lo == 0.0 && hi == 0.0) {
+        // Nothing wrote the pair. What this answered with before the fields
+        // were named: the pet's own pair, which entity_controller keeps from
+        // the realm's block even when the pet's entity is not one this can
+        // reach, and otherwise the player's weapon plus the attack power the
+        // realm would have folded in.
+        if (who == "pet" && gh) {
+            lo = gh->getPetMinDamage();
+            hi = gh->getPetMaxDamage();
+        } else {
+            const int32_t ap = gh ? gh->getMeleeAttackPower() : -1;
+            lo = 1.0;
+            hi = 2.0;              // bare hands
+            double speed = 2.0;
+            if (gh && who == "player") {
+                const auto& inv = gh->getInventory();
+                const auto& mh = inv.getEquipSlot(game::EquipSlot::MAIN_HAND);
+                if (!mh.empty() && mh.item.damageMax > 0.0f) {
+                    lo = mh.item.damageMin;
+                    hi = mh.item.damageMax;
+                    if (mh.item.delayMs > 0) speed = mh.item.delayMs / 1000.0;
+                }
+                const auto& oh = inv.getEquipSlot(game::EquipSlot::OFF_HAND);
+                if (!oh.empty() && oh.item.damageMax > 0.0f) {
+                    offLo = oh.item.damageMin;
+                    offHi = oh.item.damageMax;
+                }
+            }
+            const double apSwing = (ap > 0) ? (ap / 14.0) * speed : 0.0;
+            lo += apSwing;
+            hi += apSwing;
+            offLo = offLo > 0.0 ? offLo + apSwing / 2.0 : 0.0;
+            offHi = offHi > 0.0 ? offHi + apSwing / 2.0 : 0.0;
         }
-        const auto& oh = inv.getEquipSlot(game::EquipSlot::OFF_HAND);
-        if (!oh.empty() && oh.item.damageMax > 0.0f) {
-            offMin = oh.item.damageMin;
-            offMax = oh.item.damageMax;
-        }
     }
-    const double apSwing = (ap > 0) ? (ap / 14.0) * speed : 0.0;
-    lua_pushnumber(L, baseMin + apSwing);
-    lua_pushnumber(L, baseMax + apSwing);
-    lua_pushnumber(L, offMin > 0.0 ? offMin + apSwing / 2.0 : 0.0);
-    lua_pushnumber(L, offMax > 0.0 ? offMax + apSwing / 2.0 : 0.0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 1.0);
+    lua_pushnumber(L, lo);   // minDamage
+    lua_pushnumber(L, hi);   // maxDamage
+    lua_pushnumber(L, offLo);
+    lua_pushnumber(L, offHi);
+    lua_pushnumber(L, 0.0);  // physical bonus, positive
+    lua_pushnumber(L, 0.0);  // ...and negative
+    lua_pushnumber(L, 1.0);  // damage percent
     return 7;
 }
 
 /// UnitRangedDamage(unit) → speed, min, max, positive, negative, percent.
+///
+/// The same shape as UnitDamage one field group along: 0x00610550 pushes the
+/// blob's ranged attack time at +0xe8 - UNIT_FIELD_RANGEDATTACKTIME, which
+/// WoWee already reads at 64 for a ranged spell's category cooldown - divided
+/// by 1000, then the ranged damage pair at +0x1ec and +0x1f0, fields 129 and
+/// 130, as float bits. So the bow's own damage and the shot's speed both come
+/// from the realm, and this answered neither: it named a bow's nominal 2.8 s
+/// for every unit that asked and built the range out of attack power alone, so
+/// a hunter's ranged row showed no weapon damage at all and a pet that asked
+/// was handed a swing speed it never had.
+///
+/// The three bonuses are the per-school PLAYER_FIELD_MOD_DAMAGE_DONE_* run
+/// again, indexed by the school of the shot's spell - which is the part of the
+/// client's answer that needs the shot itself, and is not modelled here. They
+/// stay the client's own no-bonus answers, 0, 0 and 1, as they are for every
+/// unit it does not treat as player-controlled.
 static int lua_UnitRangedDamage(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int32_t ap = gh ? gh->getRangedAttackPower() : -1;
-    const double swing = (ap > 0) ? (ap / 14.0) * 2.8 : 0.0;
-    lua_pushnumber(L, 2.8);
-    lua_pushnumber(L, swing);
-    lua_pushnumber(L, swing);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
+    std::string who(luaL_optstring(L, 1, "player"));
+    toLowerInPlace(who);
+    auto* unit = resolveUnit(L, who.c_str());
+    const uint16_t speedIdx = game::fieldIndex(game::UF::UNIT_FIELD_RANGEDATTACKTIME);
+    const double speed = (unit && speedIdx != 0xFFFF)
+                             ? unit->getField(speedIdx) / 1000.0
+                             : 0.0;
+    double lo = fieldAsFloat(unit, game::UF::UNIT_FIELD_MINRANGEDDAMAGE);
+    double hi = fieldAsFloat(unit, game::UF::UNIT_FIELD_MAXRANGEDDAMAGE);
+    if (lo == 0.0 && hi == 0.0) {
+        // Nothing wrote the pair, so fall back to what this did before the
+        // fields were named - attack power over a bow's nominal speed. The
+        // speed goes with the range rather than the realm's field because the
+        // two are read together everywhere the sheet uses them, and a range
+        // invented from a 2.8 s swing against a field speed would print a
+        // damage-per-second figure matching neither.
+        const double swingSpeed = speed > 0.0 ? speed : 2.8;
+        const int32_t ap = gh ? gh->getRangedAttackPower() : -1;
+        const double swing = (ap > 0) ? (ap / 14.0) * swingSpeed : 0.0;
+        lo = hi = swing;
+    }
+    lua_pushnumber(L, speed);
+    lua_pushnumber(L, lo);
+    lua_pushnumber(L, hi);
+    lua_pushnumber(L, 0.0);
+    lua_pushnumber(L, 0.0);
     lua_pushnumber(L, 1.0);
     return 6;
 }

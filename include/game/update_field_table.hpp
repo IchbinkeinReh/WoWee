@@ -275,9 +275,30 @@ enum class UF : uint16_t {
     /// pet answer their swing time from these; a weapon's delay is only what
     /// the realm wrote the field from. WotLK only - the other three layouts
     /// number their fields by their own client's table, and none of those
-    /// places this pair.
+    /// places this pair. The client's own field-name table names the two
+    /// together, as one UNIT_FIELD_BASEATTACKTIME entry two fields wide, which
+    /// is why 63 needs a name of its own here for anything to ask for it.
     UNIT_FIELD_BASEATTACKTIME,
     UNIT_FIELD_OFFHANDATTACKTIME,
+
+    /// WotLK: the rest of the damage family, under the names the client's own
+    /// field-name table gives them. UnitDamage (0x00610860) pushes four of them
+    /// straight out of the field blob - +0x100 and +0x104, which are
+    /// MINDAMAGE's 70 and MAXDAMAGE's 71, then +0x108 and +0x10c, the off-hand
+    /// pair at 72 and 73 - each stored as float bits and added to by nothing,
+    /// because the realm has already put the weapon's damage and the unit's
+    /// attack power into them. UnitRangedDamage (0x00610550) reads the ranged
+    /// pair below beside the ranged attack time at +0xe8, which is
+    /// UNIT_FIELD_RANGEDATTACKTIME: +0x1ec and +0x1f0, which the drift puts at
+    /// 129 and 130. Both pairs sit where the client's table says they do - the
+    /// off-hand pair directly below BYTES_1's 74, the ranged pair directly
+    /// below POWER_COST_MODIFIER's 131 - and a field this table already has
+    /// bounds each of them on the other side (MAXDAMAGE 71, RANGED_ATTACK_POWER
+    /// 126), so neither rests on the drift alone.
+    UNIT_FIELD_MINOFFHANDDAMAGE,
+    UNIT_FIELD_MAXOFFHANDDAMAGE,
+    UNIT_FIELD_MINRANGEDDAMAGE,
+    UNIT_FIELD_MAXRANGEDDAMAGE,
 
     COUNT
 };

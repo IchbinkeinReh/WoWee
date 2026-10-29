@@ -198,3 +198,38 @@ TEST_CASE("the unit's three attack times are one run of fields",
     CHECK(wotlk.at("UNIT_FIELD_OFFHANDATTACKTIME") + 1 ==
           wotlk.at("UNIT_FIELD_RANGEDATTACKTIME"));
 }
+
+TEST_CASE("the two damage pairs sit where the client reads them",
+          "[update-fields]") {
+    // UnitDamage (0x00610860) reads four consecutive dwords of the field blob
+    // at +0x100, +0x104, +0x108 and +0x10c: MINDAMAGE and MAXDAMAGE, which this
+    // table has always named, and the off-hand pair, which it did not. Both ends
+    // of that run are anchors this table already carries - MAXDAMAGE below and
+    // BYTES_1's 74 above, which combat_handler independently records the realm
+    // writing at 74 - so the pair is 72 and 73 with the blob drift as no more
+    // than the arithmetic between them.
+    //
+    // The ranged pair is the same shape on the other side of the block:
+    // UnitRangedDamage (0x00610550) reads +0x1ec and +0x1f0, and the client's
+    // own field-name table lists MINRANGEDDAMAGE and MAXRANGEDDAMAGE directly
+    // below POWER_COST_MODIFIER, which this table has at 131. RANGED_ATTACK_POWER
+    // at 126 with its two mod fields bounds the run from below, so 129 and 130
+    // are pinned twice over.
+    //
+    // A slipped index here is the convincing kind rather than the obvious one:
+    // one low reads the ranged attack power multiplier, one high reads a power
+    // cost modifier, and both are floats near one - a damage range of
+    // "1.0 - 1.0" looks like an empty field, not a wrong one.
+    const auto wotlk = declaredFields("wotlk");
+    for (const char* name : {"UNIT_FIELD_MINOFFHANDDAMAGE", "UNIT_FIELD_MAXOFFHANDDAMAGE",
+                             "UNIT_FIELD_MINRANGEDDAMAGE", "UNIT_FIELD_MAXRANGEDDAMAGE"})
+        REQUIRE(wotlk.count(name) == 1);
+    CHECK(wotlk.at("UNIT_FIELD_MINDAMAGE") + 1 == wotlk.at("UNIT_FIELD_MAXDAMAGE"));
+    CHECK(wotlk.at("UNIT_FIELD_MAXDAMAGE") + 1 == wotlk.at("UNIT_FIELD_MINOFFHANDDAMAGE"));
+    CHECK(wotlk.at("UNIT_FIELD_MINOFFHANDDAMAGE") + 1 == wotlk.at("UNIT_FIELD_MAXOFFHANDDAMAGE"));
+    CHECK(wotlk.at("UNIT_FIELD_MAXOFFHANDDAMAGE") + 1 == wotlk.at("UNIT_FIELD_BYTES_1"));
+    CHECK(wotlk.at("UNIT_FIELD_RANGED_ATTACK_POWER") + 3 == wotlk.at("UNIT_FIELD_MINRANGEDDAMAGE"));
+    CHECK(wotlk.at("UNIT_FIELD_MINRANGEDDAMAGE") + 1 == wotlk.at("UNIT_FIELD_MAXRANGEDDAMAGE"));
+    CHECK(wotlk.at("UNIT_FIELD_MAXRANGEDDAMAGE") + 1 ==
+          wotlk.at("UNIT_FIELD_POWER_COST_MODIFIER"));
+}
