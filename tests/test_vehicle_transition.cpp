@@ -720,3 +720,21 @@ TEST_CASE("seated with an upper ride animation and no ride one, that is the whol
     s.rideUpperAnimLoop = -1;
     CHECK_FALSE(gv::seatAnimation(SeatState::Seated, s, false));
 }
+
+TEST_CASE("an ease set to start later holds where it is until then", "[vehicle][camera]") {
+    // The follow smoothing's Fear state starts its eases 0.4 s on.
+    gv::EasedCameraOffset yaw;
+    yaw.value = 30.0f;
+    yaw.set(0.0f, 1400, 2400);
+    yaw.step(1000);
+    CHECK(yaw.value == 30.0f);
+    CHECK(yaw.easing());
+    yaw.step(1399);
+    CHECK(yaw.value == 30.0f);
+    yaw.step(1900);
+    CHECK(yaw.value < 30.0f);
+    CHECK(yaw.value > 0.0f);
+    yaw.step(2500);
+    CHECK(yaw.value == 0.0f);
+    CHECK_FALSE(yaw.easing());
+}

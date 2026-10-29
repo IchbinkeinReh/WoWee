@@ -27,12 +27,23 @@ enum class State { Idle = 0, Stop = 1, Track = 2, Move = 3, Strafe = 4, Turn = 5
 
 /// What the controls make (0x00602760): moving forward, back or on autorun
 /// or with both buttons is Move; a strafe Strafe; a turn key, or the right
-/// button's mouselook, Turn. Track (a tracked target) and Fear are not ones
-/// this client tells apart and are left out.
-inline State stateFor(bool move, bool strafe, bool turnKeys, bool mouselook) {
+/// button's mouselook, Turn.
+///
+/// Fear is the camera's +0x98 0x1000, which 0x00606f90 sets through
+/// 0x00602eb0 every frame the unit it looks at is carried by a server move
+/// spline - fear, charm, a charge, a jump - other than a flight path's
+/// (the unit's flag 0x100000) and one flagged 0x400. It outranks the rest.
+/// Track is +0x98 0x100, which the click-to-move controls set (0x00602dc0
+/// from 0x005fa170 / 0x005fa450 on their bits 0x1e00000); this client has
+/// no click-to-move, so nothing sets it, but it ranks where the client has
+/// it: under every control of the player's own.
+inline State stateFor(bool move, bool strafe, bool turnKeys, bool mouselook, bool track = false,
+                      bool fear = false) {
+    if (fear) return State::Fear;
     if (turnKeys || mouselook) return State::Turn;
     if (strafe) return State::Strafe;
     if (move) return State::Move;
+    if (track) return State::Track;
     return State::Idle;
 }
 
@@ -75,6 +86,9 @@ struct Plan {
     bool easePitch = false;  ///< ease the pitch to pitchTo
     float pitchTo = 0.0f;
     float seconds = 0.0f;    ///< over this long, both
+    /// Starting this long from now (the state's delay plus the part's,
+    /// 0x00602760; each ease starts at now + delay, 0x00601410).
+    float delay = 0.0f;
 };
 
 /// `yawFromFacing` the camera's yaw off the character's facing and `pitch`
@@ -87,6 +101,8 @@ inline Plan plan(State state, float yawFromFacing, float pitch, bool freelook, b
     Plan p;
     if (freelook) return p;
     const float factor = smarter(state).factor;
+    // The views' own delays (cameraSmoothViewDataSmarterYaw/Pitch) are 0.
+    p.delay = smarter(state).delay;
     // The pitch is smoothed only outside its band, and to the edge it left.
     const bool pitchOut = !pitchFree && (pitch < kPitchMin || pitch > kPitchMax);
     // The yaw's band is 0..0: anything off straight behind is smoothed.

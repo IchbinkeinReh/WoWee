@@ -59,3 +59,29 @@ TEST_CASE("a mouse button holding the camera keeps it where it is", "[camera][sm
     CHECK_FALSE(p.stopYaw);
     CHECK_FALSE(p.stopPitch);
 }
+
+TEST_CASE("carried by a server spline the camera's state is Fear, over every control", "[camera][smooth]") {
+    CHECK(stateFor(true, true, true, true, false, true) == State::Fear);
+    CHECK(stateFor(false, false, false, false, false, true) == State::Fear);
+    // Track ranks under the player's own controls, over standing still.
+    CHECK(stateFor(false, false, false, false, true, false) == State::Track);
+    CHECK(stateFor(true, false, false, false, true, false) == State::Move);
+    CHECK(stateFor(false, false, false, false) == State::Idle);
+}
+
+TEST_CASE("Fear eases behind after 0.4 s, ten times slower", "[camera][smooth]") {
+    // 0x005fd910's Smarter Fear: delay 0.4, factor 10.
+    Plan p = plan(State::Fear, 9.0f, 15.0f, false, false);
+    CHECK(p.easeYaw);
+    CHECK(p.yawTo == 0.0f);
+    CHECK_THAT(p.delay, WithinAbs(0.4, 1e-6));
+    // 9 degrees at 180 a second is 0.05 s, times 10: half a second.
+    CHECK_THAT(p.seconds, WithinAbs(0.5, 1e-5));
+    // A wide turn is held to the two seconds at most.
+    p = plan(State::Fear, 120.0f, 15.0f, false, false);
+    CHECK_THAT(p.seconds, WithinAbs(2.0, 1e-6));
+    // The controls' states start at once.
+    CHECK(plan(State::Move, 90.0f, 15.0f, false, false).delay == 0.0f);
+    // A mouse button holding the camera holds it in fear too.
+    CHECK_FALSE(plan(State::Fear, 90.0f, 15.0f, true, false).easeYaw);
+}

@@ -357,6 +357,9 @@ public:
     void setMountHeightOffset(float offset) { mountHeightOffset_ = offset; }
     void setExternalFollow(bool enabled) { externalFollow_ = enabled; }
     void setExternalMoving(bool moving) { externalMoving_ = moving; }
+    /// The character is carried by a server move spline other than a flight
+    /// path's (fear, charm, a charge): the follow smoothing's Fear state.
+    void setServerMoved(bool moved) { serverMoved_ = moved; }
     void setFacingYaw(float yaw) { facingYaw = yaw; }  // For taxi/scripted movement
     /// Face `yawDeg` with the camera behind, as a teleport leaves the player
     /// (the server's orientation): the character and the view both turn.
@@ -1037,6 +1040,10 @@ private:
     bool mounted_ = false;
     float mountHeightOffset_ = 0.0f;
     bool externalMoving_ = false;
+    bool serverMoved_ = false;
+    /// The facing the Fear ease was last planned for, and whether one was.
+    bool fearPlanned_ = false;
+    float fearFacing_ = 0.0f;
 
     // Online mode: trust server position, don't prefer outdoors over WMO floors
     bool onlineMode = false;

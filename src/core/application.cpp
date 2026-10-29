@@ -3979,6 +3979,9 @@ void Application::applyServerMovementState(float deltaTime) {
         externallyDrivenMotion || landingClampActive || hearthFreeze ||
         transportTransferFreeze || deckFloorPending_ || (vehiclePassenger && drivenUnit == 0) || noMover);
     renderer->getCameraController()->setExternalMoving(externallyDrivenMotion);
+    // The camera's Fear state (camera_smooth::stateFor): a server spline
+    // carrying the player, not a flight path's.
+    renderer->getCameraController()->setServerMoved(carriedBySpline);
     if (externallyDrivenMotion) {
         // Drop any stale local movement toggles while server drives taxi motion.
         renderer->getCameraController()->clearMovementInputs();

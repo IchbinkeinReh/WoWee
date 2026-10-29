@@ -191,6 +191,12 @@ struct EasedCameraOffset {
     }
     void step(uint32_t nowMs) {
         if (startMs == endMs) return;
+        // Not begun yet: one set to start after a delay holds where it is
+        // until then (camera_smooth::Plan::delay).
+        if (static_cast<int32_t>(nowMs - startMs) < 0) {
+            value = from;
+            return;
+        }
         const float t = static_cast<float>(nowMs - startMs) / static_cast<float>(endMs - startMs);
         if (1.0f < t) {
             startMs = endMs;

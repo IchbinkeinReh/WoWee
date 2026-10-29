@@ -3456,6 +3456,32 @@ void CameraController::update(float deltaTime) {
                 startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown),
                                      swimming || isFlightAirborne());
         }
+        // Carried by a server spline - feared, charmed, charging (Fear,
+        // camera_smooth::stateFor): 0x00606f90 asks 0x00602760 again every
+        // frame, and the ease to behind the character starts afresh, after
+        // its 0.4 s, whenever the way it faces changes - a fleeing
+        // character's every turn - and is otherwise left to run (0x00601410
+        // returns at once for the same one). The camera holds its own yaw
+        // meanwhile (0x006019b0) rather than turning with the facing. When
+        // the spline lets go, the controls' state is planned again
+        // (0x00602eb0); standing still, the eases stop where they are.
+        const bool fearNow = thirdPerson && serverMoved_ && !yawFollowsVehicleCamera_;
+        if (fearNow) {
+            const bool held = leftMouseDown || rightMouseDown;
+            const bool newFacing = !fearPlanned_ || std::fabs(std::remainder(facingYaw - fearFacing_, 360.0f)) >=
+                                                        camera_smooth::kAtRest;
+            if (!held && newFacing) {
+                fearFacing_ = facingYaw;
+                fearPlanned_ = true;
+                viewYaw_.startMs = viewYaw_.endMs;
+                startFollowSmoothing(camera_smooth::State::Fear, swimming || isFlightAirborne());
+            }
+        } else if (fearPlanned_) {
+            fearPlanned_ = false;
+            if (thirdPerson)
+                startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown),
+                                     swimming || isFlightAirborne());
+        }
     }
     float moveYaw = cameraDrivesFacing ? yaw : facingYaw;
     if (intoxication_ > 0.34f) {
@@ -3863,7 +3889,9 @@ void CameraController::startFollowSmoothing(camera_smooth::State state, bool pit
     // A factor of 0 stops an ease where it is (0x005fef40, 0x005feee0).
     if (plan.stopYaw) viewYaw_.startMs = viewYaw_.endMs;
     if (plan.stopPitch) viewPitch_.startMs = viewPitch_.endMs;
-    const uint32_t end = cameraClockMs_ + static_cast<uint32_t>(plan.seconds * 1000.0f);
+    // After the state's delay (Fear's 0.4 s), then over the plan's time.
+    const uint32_t start = cameraClockMs_ + static_cast<uint32_t>(plan.delay * 1000.0f);
+    const uint32_t end = start + static_cast<uint32_t>(plan.seconds * 1000.0f);
     // One already easing to the same place is left to finish (0x00601410,
     // 0x00601190).
     if (plan.easeYaw && !(viewYaw_.easing() &&
@@ -3871,14 +3899,14 @@ void CameraController::startFollowSmoothing(camera_smooth::State state, bool pit
         viewYaw_.startMs = viewYaw_.endMs;
         viewYaw_.value = fromFacing;
         viewYawApplied_ = fromFacing;
-        viewYaw_.set(plan.yawTo, cameraClockMs_, end);
+        viewYaw_.set(plan.yawTo, start, end);
     }
     const float pitchTo = -plan.pitchTo;
     if (plan.easePitch && !(viewPitch_.easing() &&
                             std::fabs(viewPitch_.to - pitchTo) < camera_smooth::kAtRest)) {
         viewPitch_.startMs = viewPitch_.endMs;
         viewPitch_.value = pitch;
-        viewPitch_.set(pitchTo, cameraClockMs_, end);
+        viewPitch_.set(pitchTo, start, end);
     }
     viewBlending_ = viewDistance_.easing() || viewPitch_.easing() || viewYaw_.easing();
 }
