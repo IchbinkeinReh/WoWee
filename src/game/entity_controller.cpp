@@ -3095,6 +3095,52 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             pendingEvents_.emit("HONOR_CURRENCY_UPDATE", {});
             pendingEvents_.emit("CURRENCY_DISPLAY_UPDATE", {});
         }
+        // The two points fields, which the client puts **one** watch over
+        // rather than two: 0x005e8470 registers `4, 0xda0, 8` over
+        // PLAYER_CHARACTER_POINTS1 and PLAYER_CHARACTER_POINTS2 together, with
+        // the callback at 0x005e8330, and 0x005eaf70 re-puts the same pair
+        // when the player frame is torn down and rebuilt.  That callback is
+        // the only raise of CHARACTER_POINTS_CHANGED (246) anywhere in the
+        // client, and it names both fields - each current dword minus the one
+        // the watcher was handed - through a "%d%d", whichever of the two
+        // moved: the other difference is simply 0.  Both listeners care about
+        // the second one: chatframe.lua:2603 prints LEVEL_UP_SKILL_POINTS with
+        // `UnitCharacterPoints("player")`'s second value - which 0x00610fb0
+        // answers out of this very pair of dwords - and only when the second
+        // difference is above 0, and skillframe.lua:10 and paperdollframe.lua:
+        // 119 refresh on the event alone.  It was raised with two zeroes, so
+        // the line was never printed no matter how many points the realm gave.
+        //
+        // The watcher's own baseline is what keeps this honest.  The watch is
+        // registered with the fields as they already stand, so a character who
+        // logs in holding points and slots hears nothing at all; raising the
+        // event on the first block seen would print the whole total as a gain.
+        // So the first sight of either field only sets the baseline, and a
+        // field a block leaves out keeps the value the snapshot has rather than
+        // counting as a change to zero - which is what an eight-byte watch over
+        // a pair does when only half of it arrives.
+        if (const uint16_t talentIdx = fieldIndex(UF::PLAYER_CHARACTER_POINTS1);
+            talentIdx != 0xFFFF) {
+            if (const uint16_t skillIdx = fieldIndex(UF::PLAYER_CHARACTER_POINTS2);
+                skillIdx != 0xFFFF) {
+                const auto wasTalents = lastFields.find(talentIdx);
+                const auto wasSkills = lastFields.find(skillIdx);
+                if (wasTalents != lastFields.end() && wasSkills != lastFields.end()) {
+                    auto current = [&](uint16_t idx, uint32_t previous) {
+                        const auto now = block.fields.find(idx);
+                        return now == block.fields.end() ? previous : now->second;
+                    };
+                    const auto talents = static_cast<int32_t>(current(talentIdx, wasTalents->second));
+                    const auto skills = static_cast<int32_t>(current(skillIdx, wasSkills->second));
+                    const auto oldTalents = static_cast<int32_t>(wasTalents->second);
+                    const auto oldSkills = static_cast<int32_t>(wasSkills->second);
+                    if (talents != oldTalents || skills != oldSkills)
+                        pendingEvents_.emit("CHARACTER_POINTS_CHANGED",
+                                            {std::to_string(talents - oldTalents),
+                                             std::to_string(skills - oldSkills)});
+                }
+            }
+        }
         // Which currencies the character has met, the pair of masks
         // PLAYER_FIELD_KNOWN_CURRENCIES is read as (blob +0x790 and +0x794).  The
         // client puts one eight-byte watch over the pair (0x006e5180 registers

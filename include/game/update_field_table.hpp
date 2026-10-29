@@ -168,8 +168,19 @@ enum class UF : uint16_t {
     // 1, and LockType ids from 1 (herbs, minerals, treasure, fish). The
     // minimap blips what they match (0x006dca00, 0x006dca90 read them at
     // 0xda8 and 0xdac past UNIT_END, which is 1022 and 1023). WotLK only.
-    // The skill points the old rank purchase spends (0xda4 past UNIT_END,
-    // 1021; 0x005cd970(1), 0x005ce540). WotLK only.
+    // The two points fields, watched as one pair rather than apart: 0x005e8470
+    // registers `4, 0xda0, 8` - one eight-byte watch over the talent points
+    // (0xda0 past UNIT_END, 1020) and the skill points the old rank purchase
+    // spends (0xda4, 1021; 0x005cd970(1), 0x005ce540) - with the callback at
+    // 0x005e8330, and 0x005eaf70 re-puts the same pair.  That callback is the
+    // client's only raise of CHARACTER_POINTS_CHANGED (246): it reads both
+    // dwords as they now stand, subtracts the two the watcher was handed, and
+    // names both differences through a "%d%d".  And 0x00610fb0
+    // (UnitCharacterPoints) answers nothing but these two dwords, walking
+    // 0xda0 and 0xda4 in the player's own blob - so what the chat line
+    // (chatframe.lua:2603) and the trainer's profession check read is the
+    // fields, not a local tally. WotLK only.
+    PLAYER_CHARACTER_POINTS1,
     PLAYER_CHARACTER_POINTS2,
     PLAYER_TRACK_CREATURES,
     PLAYER_TRACK_RESOURCES,
