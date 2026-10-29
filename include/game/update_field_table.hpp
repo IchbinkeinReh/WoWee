@@ -184,6 +184,14 @@ enum class UF : uint16_t {
     // Player PvP currency (TBC/WotLK only - Classic uses the old weekly honor system)
     PLAYER_FIELD_HONOR_CURRENCY,     // Accumulated honor points (uint32)
     PLAYER_FIELD_ARENA_CURRENCY,     // Accumulated arena points (uint32)
+    // Which currencies the realm says this character has met. WotLK only: no
+    // earlier layout this client's tables were read from names it, so on those
+    // layouts fieldIndex answers 0xFFFF and the token tab falls back to
+    // counting the bags. One field the client reads as
+    // two dwords (blob +0x790 and +0x794, wire 632 and 633); known_currencies.hpp
+    // says which bit of which half a currency id uses, and 0x005b0030 is the
+    // client's own token-list builder reading both.
+    PLAYER_FIELD_KNOWN_CURRENCIES,
     // The three arena teams, seven fields each with the team id first
     // (0x1150 past UNIT_END's player block, 0x005bc240). WotLK only.
     PLAYER_FIELD_ARENA_TEAM_INFO_1_1,

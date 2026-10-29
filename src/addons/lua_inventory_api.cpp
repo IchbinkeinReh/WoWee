@@ -7,6 +7,8 @@
 #include "addons/lua_engine.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/equip_slot_fit.hpp"
+#include "game/known_currencies.hpp"
+#include "game/update_field_table.hpp"
 #include "game/game_utils.hpp"
 #include "game/stationery.hpp"
 #include "game/auction_filters.hpp"
@@ -1002,14 +1004,19 @@ static int lua_GetContainerItemPurchaseItem(lua_State* L) {
 // ---- Currency tab (Blizzard_TokenUI) ----
 //
 // In 3.3.5a a currency is a CurrencyTypes.dbc row pointing at an item, and the
-// amount held is that item's stack count in the bags. There is no separate
-// currency store to read, which is why this is assembled here rather than
-// tracked in the handler.
+// amount held is that item's stack count in the bags - which is how the client
+// works it out too: 0x005b0030 asks for the row's item, reads the amount off
+// whatever it gets back, and leaves the row at zero when nothing comes back.
+// There is no separate store of amounts to read, which is why this is assembled
+// here rather than tracked in the handler.
 //
-// Only currencies the player actually holds are listed. The real client lists
-// every one ever earned, from PLAYER_FIELD_KNOWN_CURRENCIES, which is not
-// parsed here - showing what is held is the subset that can be stated
-// truthfully, and the tab was completely empty before.
+// What the realm does send is which currencies the character has met, as a pair
+// of bitmasks in PLAYER_FIELD_KNOWN_CURRENCIES, and that is what decides which
+// rows the tab draws: a currency once earned keeps its row at a count of zero
+// after it has been spent down, and one never earned has no row even if its item
+// happens to be sitting in the bags. A layout or a realm that has never named
+// that pair leaves the held currencies as the only answer that can be given, and
+// that fallback is what the tab had before - it beat an empty tab, not the pair.
 namespace {
 /// The guild bank item sitting in a tab and slot, or nullptr for an empty one.
 ///
@@ -1055,9 +1062,33 @@ std::vector<CurrencyRow> buildCurrencyList(lua_State* L) {
     std::vector<CurrencyRow> rows;
     auto* gh = getGameHandler(L);
     if (!gh) return rows;
+
+    // Whether the realm has named the pair at all is the test, not whether it
+    // read as zero: a layout that names no such field, or a realm that has not
+    // sent it yet, leaves no mask to trust and the count below is what is left.
+    bool named = false;
+    uint32_t knownLow = 0, knownHigh = 0;
+    if (const uint16_t idx = fieldIndex(game::UF::PLAYER_FIELD_KNOWN_CURRENCIES);
+        idx != 0xFFFF) {
+        const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+        if (player && player->hasField(idx)) {
+            named     = true;
+            knownLow  = player->getField(idx);
+            // The pair's other half is the next dword, which is how the client
+            // reads it as well (blob +0x790 then +0x794).
+            knownHigh = player->getField(static_cast<uint16_t>(idx + 1));
+        }
+    }
+
     for (const auto& c : gh->getCurrencyTypes()) {
         const uint32_t count = countItemInBags(gh, c.itemId);
-        if (count == 0) continue;
+        if (named) {
+            // The row belongs to the tab while the currency's bit stands,
+            // whatever the count beside it says - zero included.
+            if (!game::currencyIsKnown(knownLow, knownHigh, c.id)) continue;
+        } else if (count == 0) {
+            continue;
+        }
         CurrencyRow r;
         r.currencyId = c.id;
         r.itemId     = c.itemId;
