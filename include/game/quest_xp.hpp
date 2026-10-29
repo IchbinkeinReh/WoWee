@@ -17,11 +17,15 @@
 // past that costs a fifth, and ten levels past it still pays a tenth rather than
 // nothing. (0x005e0420's own chain is three comparisons against 0xb and 1 that
 // amount to exactly that clamp; it re-derives the same "quest level, or the
-// player's" value twice, which is why the decompile looks redundant.)
+// player's" value three times, which is why the decompile looks redundant.)
 //
-// The rounding is the client's, not the table's: to the nearest 5 under 100, the
-// nearest 10 under 500, the nearest 25 under 999, and the nearest 50 from there
-// (0x005e49b0's tail: 0x65, 0x1f5, 0x3e9). It runs on the damped number.
+// The rounding is the client's, not the table's. Its three tests are `< 0x65`,
+// `< 0x1f5` and `< 0x3e9` - that is 101, 501 and 1001, so a hundred takes the
+// nearest-5 bucket, five hundred the nearest-10 and a thousand the nearest-25 -
+// and from 1001 up the nearest 50. It runs on the damped number, which is why 232
+// at eight tenths answers 190: 232*8/10 is 185, and 185 rounds up. (The buckets
+// happen to agree with each other at the three boundary values, so reading those
+// constants as 100/500/1000 costs nothing; they are transcribed here as written.)
 //
 // What is left out on purpose: 0x005e49b0 also walks five quest-log slots whose
 // predicate multiplies the answer by three below level 60, and multiplies it by
@@ -47,11 +51,13 @@ inline int questXpDampFactor(int32_t rowLevel, uint32_t playerLevel) {
     return factor;
 }
 
-/// The client's own rounding of the reward number, after damping.
+/// The client's own rounding of the reward number, after damping. It truncates
+/// rather than rounding half up, which is why a number of 1 answers nothing while
+/// 3 answers 5. The three thresholds are the client's own 0x65, 0x1f5 and 0x3e9.
 inline uint32_t questXpRound(uint32_t xp) {
-    if (xp < 100) return (xp + 2) / 5 * 5;
-    if (xp < 500) return (xp + 5) / 10 * 10;
-    if (xp < 999) return (xp + 12) / 25 * 25;
+    if (xp < 101) return (xp + 2) / 5 * 5;
+    if (xp < 501) return (xp + 5) / 10 * 10;
+    if (xp < 1001) return (xp + 12) / 25 * 25;
     return (xp + 25) / 50 * 50;
 }
 

@@ -413,16 +413,23 @@ TEST_CASE("A quest pays experience damped, rounded, and not at the cap",
     CHECK(questXpDampFactor(70, 80) == 1);
     CHECK(questXpDampFactor(40, 80) == 1);
 
-    // The client's own rounding buckets, at their edges.
+    // The client's own rounding buckets, at their edges. The three boundaries are
+    // 0x65, 0x1f5 and 0x3e9 - 101, 501 and 1001 - so a hundred, five hundred and a
+    // thousand each still fall in the *smaller* bucket; they also each land on a
+    // number both buckets would give, which is why the constants are quoted in the
+    // header rather than depended on here.
     CHECK(questXpRound(0) == 0);
     CHECK(questXpRound(1) == 0);   // the buckets truncate: 3 becomes 5, 1 does not
     CHECK(questXpRound(3) == 5);
     CHECK(questXpRound(99) == 100);
     CHECK(questXpRound(100) == 100);
-    CHECK(questXpRound(499) == 500);
+    CHECK(questXpRound(105) == 110);
+    CHECK(questXpRound(495) == 500);
     CHECK(questXpRound(500) == 500);
-    CHECK(questXpRound(998) == 1000);
+    CHECK(questXpRound(505) == 500);
     CHECK(questXpRound(999) == 1000);
+    CHECK(questXpRound(1000) == 1000);
+    CHECK(questXpRound(1026) == 1050);
 
     // Damping first, rounding second. 232 at eight tenths is 185.6, which the
     // client's integer divide takes as 185 and whose rounding bucket lifts to
