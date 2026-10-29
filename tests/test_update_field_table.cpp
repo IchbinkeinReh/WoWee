@@ -450,3 +450,34 @@ TEST_CASE("A quest pays experience damped, rounded, and not at the cap",
     // A scaling quest answers at the character's own level, so it never damps.
     CHECK(questRewardXp(1234, questXpRowLevel(-1, 75), 75, 80) == 1250);
 }
+
+TEST_CASE("A quest at the cap pays at least its max-level amount",
+          "[updatefields][questxp]") {
+    using namespace wowee::game;
+
+    // Below the cap the quest's own amount is the whole answer, and the negative
+    // half of that field is a cost - GetQuestLogRequiredMoney's, not this one.
+    CHECK(questRewardMoney(47400, 19800, 79, 80) == 47400);
+    CHECK(questRewardMoney(47400, 19800, 75, 80) == 47400);
+    CHECK(questRewardMoney(-5000, 0, 80, 80) == 0);
+
+    // At the cap the second amount takes over only when it is at least as large,
+    // which is the direction of the client's compare (0x005e48f0). That is what
+    // makes it a floor rather than a replacement: the well-paying quest keeps its
+    // 47400, and the quest that pays nothing of its own is raised to the max-level
+    // figure. Equal amounts substitute each other, which changes nothing.
+    CHECK(questRewardMoney(47400, 19800, 80, 80) == 47400);
+    CHECK(questRewardMoney(0, 19800, 80, 80) == 19800);
+    CHECK(questRewardMoney(5000, 20000, 80, 80) == 20000);
+    CHECK(questRewardMoney(5000, 5000, 80, 80) == 5000);
+    CHECK(questRewardMoney(0, 0, 80, 80) == 0);
+    // A negative reading of the second word could never raise a payout, so the
+    // parser's non-negative gate costs nothing the client would have used.
+    CHECK(questRewardMoney(0, -5000, 80, 80) == 0);
+
+    // One level off the cap is not at it, and a layout that names no cap - or that
+    // never read the second word, as classic and TBC do not - leaves the floor
+    // unapplied rather than paying a quest that pays nothing at all.
+    CHECK(questRewardMoney(0, 19800, 79, 80) == 0);
+    CHECK(questRewardMoney(0, 19800, 80, 0) == 0);
+}

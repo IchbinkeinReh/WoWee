@@ -3060,10 +3060,21 @@ static int lua_GetQuestLogSpellLink(lua_State* L) {
 // it is negative, and the quest query serializer writes that single int32. So a
 // quest that charges the player was answering this with a negative reward, and
 // the reward panel drew a money frame with a negative amount in it.
+//
+// The level cap then raises that amount rather than cutting it, which is the
+// other half of the client's answer (0x005e48f0): the quest carries a second
+// money amount in the word beside the first, and a player whose level is not
+// below PLAYER_FIELD_MAX_LEVEL is paid that one whenever it is at least as large.
+// A quest that already pays well keeps its amount; one that pays nothing - a grey
+// quest, at the cap - pays the max-level figure. The rule itself is in
+// game/quest_xp.hpp, beside the XP rule that keys on the same field.
 static int lua_GetQuestLogRewardMoney(lua_State* L) {
-    const auto* q = selectedLogEntry(getGameHandler(L));
-    const int32_t money = q ? q->rewardMoney : 0;
-    lua_pushnumber(L, money > 0 ? money : 0);
+    auto* gh = getGameHandler(L);
+    const auto* q = selectedLogEntry(gh);
+    lua_pushnumber(L, game::questRewardMoney(q ? q->rewardMoney : 0,
+                                             q ? q->rewardMoneyMaxLevel : 0,
+                                             gh ? gh->getPlayerLevel() : 0u,
+                                             gh ? gh->getPlayerMaxLevel() : 0u));
     return 1;
 }
 

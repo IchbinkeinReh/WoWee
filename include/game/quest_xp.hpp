@@ -2,6 +2,10 @@
 
 #include <cstdint>
 
+// The two reward-panel numbers the client works out for itself rather than being
+// sent: experience (below) and money (further below). Both hang on the same level
+// cap. The file is named for the first because that one needed the most room.
+//
 // What a quest's reward panel prints for experience (GetQuestLogRewardXP,
 // 0x005e49b0). The amount is in no packet: the client reads QuestXP.dbc itself -
 // the row for a level, the column the quest names - and then shapes the number in
@@ -34,6 +38,21 @@
 // still read low. Related: the reward panel itself zeroes the XP line at the level
 // cap (0x0058dd50 writes its XP global as zero unless the level is below
 // PLAYER_FIELD_MAX_LEVEL), which is the same gate as the first rule below.
+//
+// Money (GetQuestLogRewardMoney, 0x005e48f0) is in the packet after all, but the
+// cap changes it, and there the cap *raises* the number instead of zeroing it.
+// The client takes the quest's reward amount - never the negative half of that
+// field, which is a cost and belongs to GetQuestLogRequiredMoney - and when the
+// player's level is not below PLAYER_FIELD_MAX_LEVEL it substitutes the quest's
+// **second** money amount (record +0x38, the word right after the reward amount
+// at +0x34) whenever that is at least as large as the first. Read that way the
+// compare's direction makes sense: a quest that already pays well keeps its
+// amount at the cap, and one that pays nothing - a grey quest, whose reward
+// amount is 0 - still pays the max-level figure. At the cap a quest pays *at
+// least* that much. (The second amount is what the server serializers write
+// beside the first - WoWee's own count of AzerothCore's quest query block spells
+// the run money(13), maxLevel(14), rewSpell(15), and the reward spell's offset
+// was already checked against the panel.)
 
 namespace wowee::game {
 
@@ -70,6 +89,23 @@ inline uint32_t questRewardXp(uint32_t base, int32_t rowLevel,
                               uint32_t playerLevel, uint32_t maxLevel) {
     if (maxLevel != 0 && playerLevel >= maxLevel) return 0;
     return questXpRound(base * static_cast<uint32_t>(questXpDampFactor(rowLevel, playerLevel)) / 10u);
+}
+
+/// The money line: the quest's reward amount, or nothing when that field is a
+/// cost (the negative half is GetQuestLogRequiredMoney's answer, not this one).
+/// At the level cap the quest's max-level amount takes over whenever it is at
+/// least as large, which is the client's `<=` - so the cap floors the payout at
+/// that figure instead of replacing it. `maxLevel` is PLAYER_FIELD_MAX_LEVEL, and
+/// as above zero means the layout names no cap, in which case the floor is not
+/// applied; `maxLevelAmount` stays 0 for the classic and TBC layouts, whose field
+/// order beside the money was never counted off a serializer, and a 0 floor can
+/// only ever raise a zero payout to zero.
+inline int32_t questRewardMoney(int32_t rewardMoney, int32_t maxLevelAmount,
+                                uint32_t playerLevel, uint32_t maxLevel) {
+    int32_t money = rewardMoney > 0 ? rewardMoney : 0;
+    if (maxLevel != 0 && playerLevel >= maxLevel && money <= maxLevelAmount)
+        money = maxLevelAmount;
+    return money;
 }
 
 } // namespace wowee::game

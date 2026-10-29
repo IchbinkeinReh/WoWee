@@ -3216,6 +3216,13 @@ public:
 /** Reward block extracted from SMSG_QUEST_QUERY_RESPONSE (quest log rewards). */
 struct QuestQueryRewardsData {
     int32_t  rewardMoney = 0;
+    /// The same quest's money at the level cap - the word immediately after the
+    /// reward amount in the WotLK quest query block. The client substitutes it
+    /// for the reward amount at the cap whenever it is at least as large
+    /// (0x005e48f0), which is how a quest that pays nothing still pays a
+    /// max-level character something. Zero on the layouts whose field order
+    /// beside the money was never counted off a serializer (classic, TBC).
+    int32_t  rewardMoneyMaxLevel = 0;
     std::array<uint32_t, 4> itemId{};
     std::array<uint32_t, 4> itemCount{};
     std::array<uint32_t, 6> choiceItemId{};

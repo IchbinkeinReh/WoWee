@@ -1536,10 +1536,19 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
     // and a guess would put an arbitrary item on the watch frame.
     size_t sourceItemField = 0;
     size_t rewardSpellField = 0;
+    // The quest's money at the level cap, which the client substitutes for the
+    // reward amount at the cap. Left at zero - "not read" - for the earlier
+    // layouts, like the fields above it.
+    size_t moneyMaxLevelField = 0;
     size_t xpIdField = 0, honorField = 0, talentsField = 0, arenaField = 0, titleField = 0;
     size_t repFactionField = 0, repValueField = 0, repOverrideField = 0;
     if (questLogStride >= 5) {        // WotLK
         moneyField = 11; rewardPairsField = 24; choicePairsField = 32;
+        // The cap's amount is the very next word: the serializer this whole block
+        // was counted off writes money(13), maxLevel(14), rewSpell(15) - and the
+        // reward spell's offset, two past the money, is already checked against
+        // what the reward panel draws.
+        moneyMaxLevelField = moneyField + 1;
         sourceItemField = 17;
         // XPId sits immediately before the money field in the serializer
         // (nextQuestInChain, XPId, RewOrReqMoney), so field 10 here - one below
@@ -1587,6 +1596,14 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
         if (out.itemId[i] > 0x00FFFFFFu || out.itemCount[i] > 0xFFFFu) return {};
     for (size_t i = 0; i < 6; ++i)
         if (out.choiceItemId[i] > 0x00FFFFFFu || out.choiceItemCount[i] > 0xFFFFu) return {};
+    if (moneyMaxLevelField) {
+        // Kept to the non-negative half: the client's own use of this word is a
+        // floor applied at the cap (`payout <= capAmount` -> take the cap's
+        // amount), so a negative reading there could never raise anything, and a
+        // slipped layout lands on a float or a string and reads enormous.
+        const int32_t atCap = static_cast<int32_t>(fieldAt(moneyMaxLevelField));
+        if (atCap >= 0 && atCap <= 0x00FFFFFF) out.rewardMoneyMaxLevel = atCap;
+    }
     if (rewardSpellField) {
         const uint32_t spell = fieldAt(rewardSpellField);
         // The same plausibility gate the items get: a layout that has slipped

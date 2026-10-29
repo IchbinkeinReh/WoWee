@@ -168,6 +168,12 @@ public:
         /// The reputation the first objective faction asks for (RequiredMinRepValue).
         int32_t repObjectiveValue = 0;
         int32_t  rewardMoney = 0;
+        /// The same money at the level cap, the word beside it on the wire. The
+        /// reward panel pays this instead when the player's level is not below
+        /// PLAYER_FIELD_MAX_LEVEL and it is at least as large as the reward amount
+        /// (0x005e48f0) - the floor that gives a grey quest a payout at the cap.
+        /// Zero where the layout was never counted (classic, TBC).
+        int32_t  rewardMoneyMaxLevel = 0;
         std::array<QuestRewardItem, 4> rewardItems{};
         std::array<QuestRewardItem, 6> rewardChoiceItems{};
     };

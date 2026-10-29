@@ -1393,6 +1393,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             // Store reward data and pre-fetch item info for icons.
             if (rwds.valid) {
                 q.rewardMoney = rwds.rewardMoney;
+                q.rewardMoneyMaxLevel = rwds.rewardMoneyMaxLevel;
                 if (rwds.rewardSpellId != 0) q.rewardSpellId = rwds.rewardSpellId;
                 if (rwds.xpId != 0) q.rewardXPId = rwds.xpId;
                 q.rewardHonor = rwds.rewardHonor;
