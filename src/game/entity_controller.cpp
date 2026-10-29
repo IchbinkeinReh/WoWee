@@ -1799,6 +1799,48 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
             constexpr uint32_t PLAYER_FLAGS_PLAYTIME = 0x00003000;
             if (!isCreate && last.known && ((last.value ^ val) & PLAYER_FLAGS_PLAYTIME) != 0)
                 pendingEvents_.emit("PLAYTIME_CHANGED", {});
+            // Three more families that same watcher turns into events, each one
+            // a single bit going one way or the other:
+            //
+            //   0x20000 - the taxi benchmark. Set fires ENABLE_TAXI_BENCHMARK
+            //             (523) and clearing it DISABLE_TAXI_BENCHMARK (524),
+            //             which uiparent.lua answers with the framerate
+            //             counter and a system line: that pair is what
+            //             SetTaxiBenchmarkMode - already sending the request
+            //             here - is supposed to look like.
+            //   0x2000000 - XP gain, and inverted: the bit *set* is the realm
+            //             taking XP away, so it answers DISABLE_XP_GAIN (643)
+            //             and its clearing ENABLE_XP_GAIN (642); reputation
+            //             frame's watch bar redraws on either. This is not
+            //             SMSG_TOGGLE_XP_GAIN - the client's handler for that
+            //             (its dispatch's case 0x4ed) only prints "XP Gain
+            //             Enabled/Disabled" to its debug console, which is all
+            //             the log line here reproduces.
+            //   0x10000 - allow low level raid: ENABLE_LOW_LEVEL_RAID (667)
+            //             when set, DISABLE (668) when cleared. The shipped
+            //             interface listens for neither, and the client fires
+            //             them anyway; GetAllowLowLevelRaid answers this bit.
+            //
+            // Unlike the two above, these do fire for a create block. The
+            // client compares against the field it is about to overwrite, and a
+            // player object that has only just been built holds zero, so a
+            // player who logs in with benchmark mode already on their account
+            // gets the counter put up by the create write. Taking zero from
+            // isCreate rather than from this cache is also what stops a
+            // reconnect from comparing against the previous session's flags.
+            const uint32_t prev = isCreate ? 0u : last.value;
+            constexpr uint32_t PLAYER_FLAGS_TAXI_BENCHMARK = 0x00020000;
+            constexpr uint32_t PLAYER_FLAGS_XP_GAIN_OFF    = 0x02000000;
+            constexpr uint32_t PLAYER_FLAGS_LOW_LEVEL_RAID = 0x00010000;
+            if ((prev ^ val) & PLAYER_FLAGS_TAXI_BENCHMARK)
+                pendingEvents_.emit((val & PLAYER_FLAGS_TAXI_BENCHMARK) ? "ENABLE_TAXI_BENCHMARK"
+                                                                       : "DISABLE_TAXI_BENCHMARK", {});
+            if ((prev ^ val) & PLAYER_FLAGS_XP_GAIN_OFF)
+                pendingEvents_.emit((val & PLAYER_FLAGS_XP_GAIN_OFF) ? "DISABLE_XP_GAIN"
+                                                                    : "ENABLE_XP_GAIN", {});
+            if ((prev ^ val) & PLAYER_FLAGS_LOW_LEVEL_RAID)
+                pendingEvents_.emit((val & PLAYER_FLAGS_LOW_LEVEL_RAID) ? "ENABLE_LOW_LEVEL_RAID"
+                                                                       : "DISABLE_LOW_LEVEL_RAID", {});
             // .gm on / .gm off: the server answers quest status for the
             // player as they are now, and an enemy gets none - so a GM who
             // arrived among the other faction's questgivers before turning
