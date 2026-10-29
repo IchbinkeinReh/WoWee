@@ -3270,6 +3270,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 return 0;
             }
             gh->selectGossipOption(opt.id, luaL_optstring(L, 2, ""));
+            // GOSSIP_CONFIRM_CANCEL (282) after the send, which is where the
+            // client raises it - 0x0058af10, just past the write of
+            // CMSG_GOSSIP_SELECT_OPTION (0x17c) - and with no argument at all.
+            // uiparent.lua:935 answers it exactly as it answers GOSSIP_CLOSED:
+            // hide the price dialog and the code dialog both. Without it an
+            // unanswered popup of the other kind stays on screen through the
+            // option that was actually taken, and its button then answers a
+            // conversation that has already moved on.
+            gh->fireAddonEvent("GOSSIP_CONFIRM_CANCEL");
             return 0;
         }},
                 {"GetNumGossipAvailableQuests", [](lua_State* L) -> int {
