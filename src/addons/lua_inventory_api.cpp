@@ -5,6 +5,8 @@
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_engine.hpp"
+#include "addons/lua_api_registrations.hpp"
+#include "core/application.hpp"
 #include "game/inventory_slots.hpp"
 #include "game/equip_slot_fit.hpp"
 #include "game/known_currencies.hpp"
@@ -1179,44 +1181,77 @@ bool knownCurrencyPair(game::GameHandler* gh, uint32_t& low, uint32_t& high) {
     return true;
 }
 
-/// The currencies the character has asked to see beside its bags.
+/// The three per-character choices of the token frame - which currencies sit
+/// beside the bags, which are marked unused, which categories are collapsed -
+/// for the character they were loaded for.
 ///
-/// The client keeps these as a second pair of masks over the same ids
-/// (0x005b0590 sets and clears one bit) and writes it through its settings store,
-/// so the choice survives a session there; here it lives for the session. The
-/// interface counts these itself - GetNumWatchedTokens is a Lua helper counting
-/// what GetBackpackCurrencyInfo answers, and MAX_WATCHED_TOKENS is its cap, three
-/// in this interface - so nothing here enforces a limit the client does not.
-game::CurrencyWatch& currencyWatched() {
-    static game::CurrencyWatch watched;
-    return watched;
+/// The client keeps the first two as pairs of masks it writes through its
+/// settings store under currencyTokensBackpack1/2 and currencyTokensUnused1/2,
+/// CVars registered stored-with-character (flag 0x20): another character has
+/// its own. This client's CVar store is one per install, so each character's
+/// pair is kept under the CVar's name and the character's guid, read when the
+/// character comes in and written as it changes. The collapsed categories are
+/// the store loader's (0x005afd90), which starts every category expanded at
+/// each login - so a new character starts with none collapsed.
+struct CurrencyChoices {
+    uint64_t character = 0;
+    game::CurrencyWatch watched;
+    game::CurrencyWatch unused;
+    std::set<uint32_t> collapsed;
+};
+
+std::string currencyChoiceKey(const char* cvar, uint64_t character) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), ".%016llx", static_cast<unsigned long long>(character));
+    return std::string(cvar) + buf;
 }
 
-/// The currencies the character has marked as not wanting to see.
-///
-/// The third pair of masks over the same ids: 0x005b0440 sets or clears one bit of
-/// DAT_00bd09f4/0x00bd09f8 (+0x30) for the row's currency, and the client writes it
-/// through its settings store (currencyTokensUnused1/2), so the choice outlives the
-/// session there and not here. Marking a currency is not deleting it: it moves the
-/// row out of the category it is filed under and into the last one, which is the
-/// bucket the client reserves for exactly that flag (currency_categories.hpp), and
-/// GetCurrencyListInfo reads the bit back as its fourth answer.
-game::CurrencyWatch& currencyUnusedSet() {
-    static game::CurrencyWatch unused;
-    return unused;
+uint32_t storedMaskHalf(const char* cvar, uint64_t character) {
+    return static_cast<uint32_t>(
+        std::strtoul(storedCVarValue(currencyChoiceKey(cvar, character), "0").c_str(), nullptr, 10));
 }
 
-/// Which categories the character has collapsed.
-///
-/// Expanded is the starting state - the client's store loader initialises the flag
-/// to 1 for every category (0x005afd90) - and ExpandCurrencyList is what changes it
-/// (0x005afcb0 writes the store's fourth dword, and only for a header row). Like
-/// the watched pair it is kept for the session here: the client's flag lives in the
-/// store and is reset by the same loader on the next login, so this matches it.
-std::set<uint32_t>& currencyCollapsed() {
-    static std::set<uint32_t> collapsed;
-    return collapsed;
+CurrencyChoices& currencyChoices() {
+    static CurrencyChoices choices;
+    auto* gh = core::Application::getInstance().getGameHandler();
+    const uint64_t character = gh ? gh->getPlayerGuid() : 0;
+    if (character != choices.character) {
+        choices = CurrencyChoices{};
+        choices.character = character;
+        if (character != 0) {
+            choices.watched.low = storedMaskHalf("currencyTokensBackpack1", character);
+            choices.watched.high = storedMaskHalf("currencyTokensBackpack2", character);
+            choices.unused.low = storedMaskHalf("currencyTokensUnused1", character);
+            choices.unused.high = storedMaskHalf("currencyTokensUnused2", character);
+        }
+    }
+    return choices;
 }
+
+/// The currencies the character has asked to see beside its bags (0x005b0590
+/// sets and clears one bit). The interface counts these itself -
+/// GetNumWatchedTokens counts what GetBackpackCurrencyInfo answers, and
+/// MAX_WATCHED_TOKENS is its cap - so nothing here enforces a limit.
+game::CurrencyWatch& currencyWatched() { return currencyChoices().watched; }
+
+/// The currencies the character has marked as not wanting to see (0x005b0440,
+/// DAT_00bd09f4/0x00bd09f8). Marking one moves its row out of its category and
+/// into the last one (currency_categories.hpp), and GetCurrencyListInfo reads
+/// the bit back as its fourth answer.
+game::CurrencyWatch& currencyUnusedSet() { return currencyChoices().unused; }
+
+/// Written through as it changes, as the client writes its settings store.
+void saveCurrencyChoices() {
+    const CurrencyChoices& c = currencyChoices();
+    if (c.character == 0) return;
+    setStoredCVar(currencyChoiceKey("currencyTokensBackpack1", c.character), std::to_string(c.watched.low));
+    setStoredCVar(currencyChoiceKey("currencyTokensBackpack2", c.character), std::to_string(c.watched.high));
+    setStoredCVar(currencyChoiceKey("currencyTokensUnused1", c.character), std::to_string(c.unused.low));
+    setStoredCVar(currencyChoiceKey("currencyTokensUnused2", c.character), std::to_string(c.unused.high));
+}
+
+/// Which categories the character has collapsed this session (0x005afcb0).
+std::set<uint32_t>& currencyCollapsed() { return currencyChoices().collapsed; }
 
 // Rebuilt per call rather than cached: the tab is opened rarely and the counts
 // change with every loot, so a cache here would be one more thing to
@@ -4683,6 +4718,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             const auto rows = buildCurrencyList(L);
             if (idx < 1 || idx > static_cast<int>(rows.size())) return 0;
             currencyWatched().set(rows[static_cast<size_t>(idx) - 1].currencyId, on);
+            saveCurrencyChoices();
             return 0;
         }},
                 // Two that have nothing in this client for them to change. The list
@@ -4721,6 +4757,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             const auto& r = rows[static_cast<size_t>(idx) - 1];
             if (r.isHeader) return 0;
             currencyUnusedSet().set(r.currencyId, on);
+            saveCurrencyChoices();
             return 0;
         }},
                 {"GetItemCount",      lua_GetItemCount},
