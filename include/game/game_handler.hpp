@@ -3549,8 +3549,15 @@ public:
     // In 3.3.5a a currency is a row pointing at an item, and the amount held is
     // that item's stack count in the bags - there is no separate store to read.
     struct CurrencyType {
+        // The id the known/watched/unused masks are keyed by, which is the record's
+        // fourth field; see known_currencies.hpp for which client routine reads
+        // which field and for why the record's first field is not it.
         uint32_t id = 0;
         uint32_t itemId = 0;
+        // The record's category field is not read. Nothing files rows by category
+        // yet, which is also what drops a row whose category names no category -
+        // the client's list walk goes category by category, so such a row is never
+        // reached there.
     };
     const std::vector<CurrencyType>& getCurrencyTypes();
 

@@ -154,6 +154,42 @@ TEST_CASE("The watched pair sets one currency at a time", "[updatefields][curren
     CHECK(watch.low == 0x00000001u);
 }
 
+// Which field of a CurrencyTypes.dbc row holds the currency's id is not a naming
+// question: it decides whether the realm's mask names any row at all. The client
+// keys all three of its masks - the realm's known pair, the watched pair it writes
+// through currencyTokensBackpack1/2, and the unused pair - on the record's fourth
+// field (0x005afe30, 0x005b0030 and 0x005b04f0/0x005b0590 each compute the bit from
+// it), takes the item the amount comes from out of the second (0x005b0a90 compares
+// it against 43339 and 43340, and 0x005affd0 finds a table row by matching it), and
+// files the row by the third (0x005afe30 against the category store's first field).
+// The record's first field is read by none of them, and it cannot be the id: the
+// masks are two dwords wide, so every id one of them addresses is inside 1..64.
+TEST_CASE("A CurrencyTypes row is keyed by its fourth field", "[updatefields][currency]") {
+    using wowee::game::currencyBitOf;
+    using wowee::game::kCurrencyTypeFieldCategory;
+    using wowee::game::kCurrencyTypeFieldId;
+    using wowee::game::kCurrencyTypeFieldItem;
+    using wowee::game::kCurrencyTypeFields;
+
+    static_assert(kCurrencyTypeFields == 4);
+    CHECK(kCurrencyTypeFieldId == 3);
+    CHECK(kCurrencyTypeFieldItem == 1);
+    CHECK(kCurrencyTypeFieldCategory == 2);
+    // The offsets those routines read, in the bytes the client's record view uses.
+    CHECK(kCurrencyTypeFieldId * 4 == 0x0c);
+    CHECK(kCurrencyTypeFieldItem * 4 == 0x04);
+    CHECK(kCurrencyTypeFieldCategory * 4 == 0x08);
+
+    // The reach that rules the first field out, without naming what is in this or
+    // any other build's table: 64 is the last id a pair of dwords has a bit for,
+    // and an id one past it is answered not-known rather than read. A field whose
+    // values run past that is not a mask key - it is a lookup the mask cannot make.
+    CHECK(currencyBitOf(64).valid);
+    CHECK_FALSE(currencyBitOf(65).valid);
+    CHECK_FALSE(currencyBitOf(341).valid);
+    CHECK_FALSE(currencyBitOf(0).valid);
+}
+
 // The character sheet's title dropdown is built by walking 1..GetNumTitles() and
 // asking IsTitleKnown about each, and that answers out of
 // PLAYER_FIELD_KNOWN_TITLES: six dwords holding three 64-bit groups, at blob

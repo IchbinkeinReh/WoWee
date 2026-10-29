@@ -25,6 +25,7 @@
 #include "game/transport_boarding.hpp"
 #include "game/opcodes.hpp"
 #include "game/update_field_table.hpp"
+#include "game/known_currencies.hpp"
 #include "game/pvp_flags.hpp"
 #include "game/expansion_profile.hpp"
 #include "rendering/renderer.hpp"
@@ -2282,9 +2283,13 @@ const std::vector<GameHandler::BattlemasterEntry>& GameHandler::getBattlegroundT
     return battlegroundTypes_;
 }
 
-// CurrencyTypes.dbc: id, then the item that carries the amount. Everything the
-// currency tab shows about a currency - name, icon, how many - comes from that
-// item, so the row itself needs nothing else.
+// CurrencyTypes.dbc: the id the realm's masks are keyed by, then the item that
+// carries the amount. Everything the currency tab shows about a currency - name,
+// icon, how many - comes from that item, so the row itself needs nothing else.
+// The id is the record's fourth field, not its first: known_currencies.hpp spells
+// out which client routine reads which offset, and the short version is that the
+// three currency masks are all keyed on the fourth, while nothing in the client's
+// currency code reads the first.
 const std::vector<GameHandler::CurrencyType>& GameHandler::getCurrencyTypes() {
     if (currencyTypesLoaded_) return currencyTypes_;
     auto* am = services_.assetManager;
@@ -2294,11 +2299,19 @@ const std::vector<GameHandler::CurrencyType>& GameHandler::getCurrencyTypes() {
     currencyTypesLoaded_ = true;
 
     auto dbc = am->loadDBC("CurrencyTypes.dbc");
-    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 2) return currencyTypes_;
+    if (!dbc || !dbc->isLoaded()) return currencyTypes_;
+    // The id has to be there to be asked about at all. A narrower table cannot be
+    // read at all rather than read partly: the field the masks key on is the one
+    // that would be missing, so every row would be looked up by the wrong id.
+    if (dbc->getFieldCount() < kCurrencyTypeFields) {
+        LOG_WARNING("Currency: CurrencyTypes.dbc has ", dbc->getFieldCount(),
+                 " fields, need ", kCurrencyTypeFields);
+        return currencyTypes_;
+    }
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
         CurrencyType c;
-        c.id     = dbc->getUInt32(i, 0);
-        c.itemId = dbc->getUInt32(i, 1);
+        c.id     = dbc->getUInt32(i, kCurrencyTypeFieldId);
+        c.itemId = dbc->getUInt32(i, kCurrencyTypeFieldItem);
         if (c.id == 0 || c.itemId == 0) continue;
         currencyTypes_.push_back(c);
     }
