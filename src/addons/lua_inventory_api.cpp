@@ -1246,19 +1246,27 @@ std::vector<CurrencyRow> buildCurrencyList(lua_State* L) {
             r.categoryId = c.categoryId;
             r.count      = count;
             r.extraType  = extraType;
+            // The name is the item's own, with no stand-in behind it: the client's
+            // builder stores the localized name pointer itself (0x004fd200 hands
+            // back obj + 0x1f4 plus the locale index, falling back to the enUS
+            // slot), so a row whose item is missing or nameless carries a null name
+            // and GetCurrencyListInfo answers nil for it. Inventing "Item #12345"
+            // kept such a row in the list where the client shows an empty one.
             if (const auto* info = gh->getItemInfo(c.itemId)) r.name = info->name;
             else r.unresolved = true;
-            if (r.name.empty()) r.name = "Item #" + std::to_string(c.itemId);
             group.push_back(std::move(r));
         }
         std::sort(group.begin(), group.end(), [](const CurrencyRow& a, const CurrencyRow& b) {
-            // 0x005aff10 resolves both names out of the items behind the rows and
-            // puts a row with nothing behind it last; the comparison it then makes
-            // is the client's locale collation (0x0076ec80), and a byte compare
-            // here gives the same order for names that differ in their first
-            // letters. Sorting only inside the category is what the client does
-            // too: the qsort is per category, after the header.
-            if (a.unresolved != b.unresolved) return !a.unresolved;
+            // 0x005aff10 resolves the name of each row out of the item behind it
+            // and sends a row it cannot - no entry at all, or an entry whose name
+            // slot is empty - to the end. The comparison it then makes is the
+            // client's locale collation (0x0076ec80), and a byte compare here gives
+            // the same order for names that differ in their first letters. Sorting
+            // happens inside the category, after the header, which is what the
+            // client's qsort does too.
+            const bool aLast = a.unresolved || a.name.empty();
+            const bool bLast = b.unresolved || b.name.empty();
+            if (aLast != bLast) return !aLast;
             return a.name < b.name;
         });
         rows.insert(rows.end(),
@@ -4425,7 +4433,12 @@ void registerInventoryLuaAPI(lua_State* L) {
             const auto rows = buildCurrencyList(L);
             if (idx < 1 || idx > static_cast<int>(rows.size())) return luaReturnNil(L);
             const auto& r = rows[static_cast<size_t>(idx) - 1];
-            lua_pushstring(L, r.name.c_str());   // 1: name
+            // 1: name. The row carries the item's name (or the category's), and the
+            // client stores that name as a pointer which is null when there is
+            // none - so an entry with no name and a category with an empty column
+            // both answer nil, and the interface draws the row with no text.
+            if (r.name.empty()) lua_pushnil(L);
+            else lua_pushstring(L, r.name.c_str());   // 1: name
             lua_pushboolean(L, r.isHeader ? 1 : 0);               // 2: isHeader
             // A header answers its category's flag; a row answers false, because
             // the client's builder writes the expanded flag into the header alone
@@ -4489,9 +4502,10 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // in the order the currencies were chosen - and then reads the
                 // amount, the PvP marker and the icon (0x005b0a90), including the
                 // two counters it takes from the player object instead of the bags.
-                // Its name comes back nil when the item it looked up holds nothing,
-                // with the other four still answered; nothing was found for the row
-                // at all, and all five are nil.
+                // Its name comes back nil only when the item behind the row has no
+                // name string (see the +0x1f4 test below), with the other four still
+                // answered; when there is no item entry at all nothing is answered
+                // for the row, and all five are nil.
                 {"GetBackpackCurrencyInfo", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int asked = static_cast<int>(luaL_optnumber(L, 1, 0));
@@ -4512,15 +4526,18 @@ void registerInventoryLuaAPI(lua_State* L) {
                 const auto* info = gh->getItemInfo(c.itemId);
                 if (!info) return answerNil(L);
                 const auto [shown, extraType] = currencyAmount(gh, c.itemId);
-                // The gate on the name is the amount the item itself reports, read
-                // as the client reads it, even for the two rows whose displayed
-                // amount comes from a field instead. Whether a realm keeps a
-                // countable item behind those two is a question for a live realm;
-                // this is what the client does, and this line is the one to ask.
-                if (countItemInBags(gh, c.itemId) != 0)
-                    lua_pushstring(L, info->name.c_str());
-                else
-                    lua_pushnil(L);
+                // The name is not gated on whether the character is holding the
+                // item. The client asks for the item's handle and then tests the
+                // dword at handle +0x1f4, which is the first slot of that item's
+                // localized name array: 0x004fd200 returns obj + 0x1f4 + index*4
+                // and falls back to +0x1f4 when the asked-for slot is null or
+                // empty. So the name is nil only for an item with no name string
+                // at all. A watched currency spent down therefore keeps its name
+                // beside the bags with a zero beside it, which is what gating on
+                // the count undid - the slot drew a number with nothing next to it,
+                // and the two PvP counters never had one at all.
+                if (!info->name.empty()) lua_pushstring(L, info->name.c_str());
+                else                     lua_pushnil(L);
                 lua_pushnumber(L, shown);              // 2: count
                 lua_pushnumber(L, extraType);          // 3: extraCurrencyType
                 const std::string icon = info->displayInfoId
