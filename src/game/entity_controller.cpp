@@ -1249,7 +1249,41 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             }
         }
         else if (ufi.auraState != 0xFFFF && key == ufi.auraState) {
+            const uint32_t oldAuraState = unit->getAuraState();
             unit->setAuraState(val);
+            // The client watches this dword - 0x004d5ba0(3,0xdc,4,FUN_00716810,…),
+            // and 0xdc is field 61 with the blob running six dwords behind the
+            // wire index - and its watcher answers for two units only: the
+            // player, and whoever is targeted now (DAT_00bd07b0's pair, the one
+            // a new target pushes up into DAT_00bd07b8 as target-of-target).
+            // Either way it runs the action usability rescan 0x0053cf10, which
+            // leaves SPELL_UPDATE_USABLE (0xf5) behind whatever it found, and
+            // then names PET_BAR_UPDATE_USABLE (0x15e). The second is the one
+            // with a listener in the shipped interface - petactionbarframe.lua
+            // :47 redraws the pet bar's grey on it, and has no other route from
+            // a mount or a stance - while the first is one FrameXML ignores and
+            // addons do not, so both are fired as the watcher fires them.
+            //
+            // The dword is the mount / stealth / dead / charm / shape mask, so
+            // these are the changes that grey and ungrey a whole action bar
+            // without the realm ever touching the spells on it: mounting,
+            // dying, a druid's or rogue's stance, a charm landing. WoWee's
+            // usability answers already read the state as it is asked
+            // (0x0053cf10's equivalent recomputes nothing), so what was missing
+            // was the asking - the buttons kept their old answers until some
+            // other event happened to walk them.
+            if (val != oldAuraState &&
+                (block.guid == owner_.getPlayerGuid() || block.guid == owner_.getTargetGuid())) {
+                // The rescan goes first, and inside it the stance bar: the
+                // client's 0x0053cf10 sets one flag across its whole form loop,
+                // names UPDATE_SHAPESHIFT_USABLE (0x17a) if any button changed
+                // its mind, and only then SPELL_UPDATE_USABLE (0xf5). The
+                // watcher's own 0x15e comes last, after the rescan returns.
+                if (owner_.shapeshiftCastabilityChanged())
+                    pendingEvents_.emit("UPDATE_SHAPESHIFT_USABLE", {});
+                pendingEvents_.emit("SPELL_UPDATE_USABLE", {});
+                pendingEvents_.emit("PET_BAR_UPDATE_USABLE", {});
+            }
         }
         else if (ufi.bytes1 != 0xFFFF && key == ufi.bytes1) {
             const uint8_t oldVisibilityFlags = unit->getVisibilityFlags();
@@ -1286,6 +1320,12 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             if (((oldVisibilityFlags ^ newVisibilityFlags) & 0x2) != 0 &&
                 block.guid == owner_.getPlayerGuid()) {
                 pendingEvents_.emit("UPDATE_STEALTH", {});
+                // Going quiet or loud changes what the stance bar can cast -
+                // the rescan the client runs answers that too, and names the
+                // bar when it changes. Same order as the watcher: the bar
+                // first, then SPELL_UPDATE_USABLE.
+                if (owner_.shapeshiftCastabilityChanged())
+                    pendingEvents_.emit("UPDATE_SHAPESHIFT_USABLE", {});
                 pendingEvents_.emit("SPELL_UPDATE_USABLE", {});
             }
 

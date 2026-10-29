@@ -4604,6 +4604,14 @@ public:
     auto& playerStatsArr() { return playerStats_; }
     auto& playerXpRef() { return playerXp_; }
 
+    /// 0x0053cf10's usability rescan, the half the stealth and aura-state
+    /// watchers run: every form the player knows asked again whether it can be
+    /// cast at all. Not the question predictedPowerUsability asks - that one is
+    /// only whether there is the power for the form. True when one of the bar's
+    /// buttons changed its mind, which is when the client names
+    /// UPDATE_SHAPESHIFT_USABLE - once for the bar, not once per button.
+    bool shapeshiftCastabilityChanged();
+
     // ── Skills ───────────────────────────────────────────────────────
     auto& playerSkillsRef() { return playerSkills_; }
     auto& skillLineAbilityLoadedRef() { return skillLineAbilityLoaded_; }
@@ -6354,6 +6362,8 @@ private:
     void predictedPowerUsability();
     std::array<bool, 144> actionShortOfPower_{};             ///< 0x00c1dc98
     std::unordered_map<uint32_t, bool> formShortOfPower_;   ///< 0x00be8e2c's +5
+    /// The same stance-bar buttons, as the castability rescan last saw them.
+    std::unordered_map<uint32_t, bool> formCastable_;       ///< 0x00be8e2c's +4
     uint64_t pendingSpiritHealerGuid_ = 0;
     bool resurrectPending_ = false;
     bool resurrectRequestPending_ = false;

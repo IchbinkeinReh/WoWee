@@ -319,6 +319,22 @@ void GameHandler::predictedPowerUsability() {
     if (forms) fireAddonEvent("UPDATE_SHAPESHIFT_USABLE", {});
 }
 
+bool GameHandler::shapeshiftCastabilityChanged() {
+    if (!spellHandler_) return false;
+    // The rescan 0x0053cf10 walks the player's forms (DAT_00be8e28 is how many)
+    // and re-asks each one through the same question the spellbook answers
+    // IsUsableSpell with (0x00541680): the caster's aura state, its powers,
+    // whether it is dead or ghosted, what its target carries. One answer
+    // changed is enough - the client names UPDATE_SHAPESHIFT_USABLE once for
+    // the bar, not once per button (0x0053cf10 sets one flag over the whole loop
+    // and fires after it).
+    bool changed = false;
+    for (const auto& form : knownShapeshiftForms(getPlayerClass(), getKnownSpells()))
+        changed |= power_prediction::noteShort(formCastable_[form.spellId],
+                                               spellHandler_->spellUsable(form.spellId, nullptr));
+    return changed;
+}
+
 void GameHandler::setPredictedPower(Unit& unit, int type, int32_t value) {
     if (power_prediction::set(unit.predictedPower(), type, value,
                               static_cast<int32_t>(unit.getMaxPowerByType(static_cast<uint8_t>(type)))))
