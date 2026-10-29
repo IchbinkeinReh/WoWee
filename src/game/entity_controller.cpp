@@ -1170,6 +1170,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                     pendingEvents_.emit("PLAYER_DEAD", {});
                 }
                 if ((entity->getType() == ObjectType::UNIT || entity->getType() == ObjectType::PLAYER) && owner_.npcDeathCallbackRef()) {
+                    if (oldHealth != 0 && owner_.unitDiedCallbackRef()) owner_.unitDiedCallbackRef()(block.guid);
                     owner_.npcDeathCallbackRef()(block.guid);
                     result.npcDeathNotified = true;
                 }
@@ -1390,6 +1391,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 bool nowDead = (val & UNIT_DYNFLAG_DEAD) != 0;
                 if (!wasDead && nowDead) {
                     if (!result.npcDeathNotified && owner_.npcDeathCallbackRef()) {
+                        if (owner_.unitDiedCallbackRef()) owner_.unitDiedCallbackRef()(block.guid);
                         owner_.npcDeathCallbackRef()(block.guid);
                         result.npcDeathNotified = true;
                     }

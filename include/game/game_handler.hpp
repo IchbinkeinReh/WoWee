@@ -1747,6 +1747,11 @@ public:
     // NPC death callback (for animations)
     using NpcDeathCallback = std::function<void(uint64_t guid)>;
     void setNpcDeathCallback(NpcDeathCallback cb) { npcDeathCallback_ = std::move(cb); }
+    /// A unit seen dying - its health running out or its dead flag going up
+    /// on an update, not a unit or corpse that comes into view already dead:
+    /// what asks its death line (0x0073c5d0 asks it on the dead state's
+    /// change only). Before the death callback, so the line comes first.
+    void setUnitDiedCallback(NpcDeathCallback cb) { unitDiedCallback_ = std::move(cb); }
 
     // Resolves a unit GUID to its CharacterRenderer instance id (0 = not
     // rendered). Wired by AnimationCallbackHandler; used to bone-attach spell
@@ -4843,6 +4848,7 @@ public:
     }
     auto& mountCallbackRef() { return mountCallback_; }
     auto& npcDeathCallbackRef() { return npcDeathCallback_; }
+    auto& unitDiedCallbackRef() { return unitDiedCallback_; }
     auto& npcFarewellCallbackRef() { return npcFarewellCallback_; }
     auto& npcGreetingCallbackRef() { return npcGreetingCallback_; }
     auto& npcRespawnCallbackRef() { return npcRespawnCallback_; }
@@ -6293,6 +6299,7 @@ private:
     void applyPackedKillCountsFromFields(QuestLogEntry& quest);
 
     NpcDeathCallback npcDeathCallback_;
+    NpcDeathCallback unitDiedCallback_;
     UnitRenderInstanceResolver unitRenderInstanceResolver_;
     NpcRespawnCallback npcRespawnCallback_;
     StandStateCallback standStateCallback_;
