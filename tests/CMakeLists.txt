@@ -1454,6 +1454,10 @@ wowee_add_test(test_camera_smooth
 wowee_add_test(test_rt_lamp_wrap
     SOURCES test_rt_lamp_wrap.cpp)
 
+# -- test_rt_min_brightness: the Ray Tracing page's floor on the traced darkening.
+wowee_add_test(test_rt_min_brightness
+    SOURCES test_rt_min_brightness.cpp)
+
 # ── test_rt_rays ─────────────────────────────────────────────
 # Rays a pixel of each kind: one by default, held to 1-5.
 wowee_add_test(test_rt_rays

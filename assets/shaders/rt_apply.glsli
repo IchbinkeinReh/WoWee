@@ -224,6 +224,12 @@ void main() {
         outMul = vec4(vec3(1.0) + g.g * (rr - 1.0) - rr * rtOcclusionLoss(g, ao), 1.0);
         outAdd = vec4(g.kp * pointIn, 0.0);
     }
+    // The Ray Tracing page's "Minimum brightness": the scale held to at
+    // least pass.misc.z (rt_min_brightness.hpp). It multiplies the ambient by
+    // the occlusion, the sun's shade and the baked shade together, so a
+    // corner all three find dark went to black whatever the ambient; a lit
+    // surface is above the floor and as it was.
+    outMul.rgb = max(outMul.rgb, vec3(pass.misc.z));
 
     // WOWEE_GI_DEBUG 5-9 and the Debug Graphics views, instead of the picture:
     // the traced sun's visibility, the point lights' light as it is added,

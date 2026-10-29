@@ -1,6 +1,7 @@
 #include "rendering/renderer.hpp"
 #include "rendering/shadow_sun.hpp"
 #include "rendering/rt_lamp_wrap.hpp"
+#include "rendering/rt_min_brightness.hpp"
 #include "rendering/rt_light_kinds.hpp"
 #include "rendering/depth_convention.hpp"
 #include "rendering/shadow_pass_work.hpp"
@@ -6655,6 +6656,7 @@ void Renderer::recordRtLighting() {
     in.interiorFullAt = currentFrameData.rtTune2.z;
     in.maxLight = currentFrameData.rtTune2.w;
     in.lampWrap = lampWrap(rtSoftLamps_);
+    in.minBrightness = rtMinBrightnessFactor(rtMinBrightnessPercent_);
     in.rays = rtRays_;
     in.occlusion = currentFrameData.lightTune.w;
     in.debugView = static_cast<int>(currentFrameData.giParams.y + 0.5f);

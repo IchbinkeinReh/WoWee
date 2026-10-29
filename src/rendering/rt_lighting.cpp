@@ -744,7 +744,7 @@ void RtLighting::record(VkCommandBuffer cmd, const SceneTarget& target, const Fr
                          1.0f / traceExtent_.height);
     d.sceneExtent = glm::vec4(target.extent.width, target.extent.height, 1.0f / target.extent.width,
                               1.0f / target.extent.height);
-    d.misc = glm::vec4(scene_->hasContent() ? 1.0f : 0.0f, havePrev ? 1.0f : 0.0f, 0.0f, 0.0f);
+    d.misc = glm::vec4(scene_->hasContent() ? 1.0f : 0.0f, havePrev ? 1.0f : 0.0f, in.minBrightness, 0.0f);
     d.tune = glm::vec4(in.shadowStrength, in.sunShadow, in.occlusion, in.pointLights);
     // w: a point light the ground or a building stops gives nothing, whatever
     // the point shadows' strength (rt_trace's rtHardShadowVis).

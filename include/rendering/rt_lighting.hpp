@@ -166,6 +166,8 @@ public:
         float maxLight = 0.0f;
         /// How far past the terminator the lamps' light wraps (rt_lamp_wrap.hpp).
         float lampWrap = 0.25f;
+        /// The least the traced scale darkens a surface to (rt_min_brightness.hpp).
+        float minBrightness = 0.0f;
         /// Rays a pixel of each kind, 1 to kMaxRtRaysPerPixel (Ray Tracing
         /// settings): toward the sun, for the occlusion, toward a point
         /// light, and a probe's rays for the bounced light. One is the

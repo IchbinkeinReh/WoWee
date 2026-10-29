@@ -1,4 +1,5 @@
 #include "rendering/rt_rays.hpp"
+#include "rendering/rt_min_brightness.hpp"
 #include "game/group_defines.hpp"
 #include "game/difficulty_change.hpp"
 
@@ -2036,6 +2037,7 @@ void GameScreen::saveSettings() {
     out << "ray_traced_lighting=" << settingsPanel_.pendingRtLighting << "\n";
     out << "rt_full_resolution=" << (settingsPanel_.pendingRtFullRes ? 1 : 0) << "\n";
     out << "rt_soft_lamps=" << (settingsPanel_.pendingRtSoftLamps ? 1 : 0) << "\n";
+    out << "rt_min_brightness=" << settingsPanel_.pendingRtMinBrightness << "\n";
     out << "rt_eye_brighten=" << settingsPanel_.pendingRtEyeBrighten << "\n";
     out << "rt_eye_seconds=" << settingsPanel_.pendingRtEyeSeconds << "\n";
     out << "rt_eye_sensitivity=" << settingsPanel_.pendingRtEyeSensitivity << "\n";
@@ -2382,6 +2384,9 @@ void GameScreen::loadSettings() {
             else if (key == "ray_traced_lighting") settingsPanel_.pendingRtLighting = std::clamp(std::stoi(val), 0, 3);
             else if (key == "rt_full_resolution") settingsPanel_.pendingRtFullRes = (std::stoi(val) != 0);
             else if (key == "rt_soft_lamps") settingsPanel_.pendingRtSoftLamps = (std::stoi(val) != 0);
+            else if (key == "rt_min_brightness")
+                settingsPanel_.pendingRtMinBrightness =
+                    std::clamp(std::stoi(val), 0, rendering::kRtMinBrightnessMaxPercent);
             else if (key == "rt_eye_brighten") settingsPanel_.pendingRtEyeBrighten = std::clamp(std::stoi(val), 0, 100);
             else if (key == "rt_eye_seconds") settingsPanel_.pendingRtEyeSeconds = std::clamp(std::stof(val), 0.5f, 20.0f);
             else if (key == "rt_eye_sensitivity") settingsPanel_.pendingRtEyeSensitivity = std::clamp(std::stoi(val), 0, 100);

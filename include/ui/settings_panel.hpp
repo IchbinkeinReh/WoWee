@@ -76,6 +76,7 @@ public:
     int pendingRtLighting = 0;
     bool pendingRtFullRes = false;  ///< trace every pixel (Ray Tracing)
     bool pendingRtSoftLamps = false;  ///< the lamps' wider wrap (Ray Tracing)
+    int pendingRtMinBrightness = 0;   ///< the traced darkening's floor, % (rt_min_brightness.hpp)
     /// The eye adaptation (Ray Tracing; eye_adaptation::paramsFor).
     int pendingRtEyeBrighten = 30;
     float pendingRtEyeSeconds = 2.5f;

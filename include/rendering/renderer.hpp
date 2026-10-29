@@ -734,6 +734,8 @@ public:
     void setRtFullResolution(bool full);
     /// The lamps' wider wrap (Ray Tracing, "Softer lamp light"; rt_lamp_wrap.hpp).
     void setRtSoftLamps(bool softer) { rtSoftLamps_ = softer; }
+    /// The Ray Tracing page's "Minimum brightness (%)" (rt_min_brightness.hpp).
+    void setRtMinBrightness(int percent) { rtMinBrightnessPercent_ = percent; }
     /// How far the eye may brighten a dark view (percent over one) and how
     /// long it takes to adapt to the dark (seconds); eye_adaptation::paramsFor.
     /// The sensitivity narrows the neutral band (percent, 0 as it is).
@@ -1116,6 +1118,7 @@ private:
     std::string rtHeldOffLogged_;
     LightingTune lightingTune_{};
     bool rtSoftLamps_ = false;
+    int rtMinBrightnessPercent_ = 0;
     int eyeBrighteningPercent_ = 30;
     float eyeAdaptSeconds_ = 2.5f;
     int eyeSensitivityPercent_ = 0;

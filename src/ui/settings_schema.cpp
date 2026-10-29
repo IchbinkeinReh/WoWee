@@ -279,6 +279,14 @@ constexpr SettingDesc kSchema[] = {
      "they shine on: softer, flatter lamp light, and the faces just\n"
      "turned away from a low candle - the bevel of a step, a curb -\n"
      "lit a little instead of dark.", "", 0, "raytracedlighting"},
+    // A floor on what the tracing darkens a surface to (rt_min_brightness.hpp):
+    // 0 the tracing as it always was.
+    {"rtminbrightness", "Minimum brightness (%)", SettingKind::Int, 0, 50, 1,
+     "Ray Tracing", "",
+     "The least of its brightness without ray tracing a surface keeps\n"
+     "where the traced shadows, occlusion and a room's shade together\n"
+     "would take it to black. Lit places are unchanged; only the\n"
+     "near-black corners are lifted. 0 lets them go fully dark.", "", 0, "raytracedlighting"},
     // The eye adaptation under the traced lighting (eye_adaptation.hpp):
     // how far it may lift a dark view, and how slowly it follows. The
     // defaults are how it has always been; 0 is the original's picture.
