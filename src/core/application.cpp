@@ -1814,9 +1814,9 @@ void Application::run() {
     // CPU 0 and defeated all command-recording parallelism.
     //
     // One thing does set an affinity mask, and only when the player asks for
-    // it: the client's own processAffinityMask cvar, read once at startup
-    // before any worker exists and handed straight to the OS (0x004022e0
-    // registers it, with the screen's own warning that "changes require restart
+    // it: the client's own processAffinityMask cvar, read once at startup and
+    // handed straight to the OS - a process mask, which applies to the threads
+    // already running as well (0x004022e0 is the cvar's change callback, with the screen's own warning that "changes require restart
     // to take effect"; 0x0076fe00 is GetCurrentProcess and
     // SetProcessAffinityMask, and nothing else). The mask is held as a plain
     // number, as the client's own parse reads it - 3 allows the first two
@@ -1828,10 +1828,7 @@ void Application::run() {
     if (const unsigned long long mask =
             std::strtoull(addons::storedCVarValue("processAffinityMask", "0").c_str(), nullptr, 10);
         mask != 0) {
-#ifdef __linux__
-        LOG_WARNING("processAffinityMask is set; the mask is a Windows call, and this build "
-                    "leaves cores to the scheduler");
-#else
+#if defined(_WIN32)
         if (SetProcessAffinityMask(GetCurrentProcess(), static_cast<DWORD_PTR>(mask))) {
             LOG_INFO("Process affinity set to 0x", std::hex, mask, std::dec,
                      " by the processAffinityMask cvar");
@@ -1839,6 +1836,11 @@ void Application::run() {
             LOG_WARNING("processAffinityMask 0x", std::hex, mask, std::dec,
                         " was refused - it names cores this machine does not have");
         }
+#else
+        // Not on Linux or macOS: <windows.h> is not this build's, and the
+        // client's own call is the Windows one.
+        LOG_WARNING("processAffinityMask is set; the mask is a Windows call, and this build "
+                    "leaves cores to the scheduler");
 #endif
     }
 
