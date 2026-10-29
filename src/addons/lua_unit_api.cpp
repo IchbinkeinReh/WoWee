@@ -1071,8 +1071,9 @@ static int lua_GetBlockChance(lua_State* L) {
 // answers nothing when there is none and the binding then pushes zero.  The
 // second half of the guard is ours, not the client's: an expansion whose layout
 // does not name the field cannot be asked for it.
-static std::shared_ptr<game::Entity> localPlayerObject(lua_State* L, uint16_t index) {
-    if (index == 0xFFFF) return nullptr;
+static std::shared_ptr<game::Entity> localPlayerObject(lua_State* L, uint16_t first,
+                                                       uint16_t second = 0xFFFF) {
+    if (first == 0xFFFF && second == 0xFFFF) return nullptr;
     auto* gh = getGameHandler(L);
     return gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
 }
@@ -1186,12 +1187,35 @@ static int lua_GetCombatRating(lua_State* L) {
     return 1;
 }
 
-// GetSpellBonusDamage(school) → value  (1-6 magic schools)
+// GetSpellBonusDamage(school) → that school's spell damage bonus (0x0060e310).
+// It is not one number, and the school is the index: the client checks the
+// argument lands in 1..7 - the field run is seven wide, schools 1..7 in the
+// order Holy, Fire, Nature, Frost, Shadow, Arcane and the all-schools one the
+// sheet does not show - and raises otherwise, returning nothing.  Then it adds
+// **two** arrays read off the local player's player object (0x00578210 and
+// 0x00578250): PLAYER_FIELD_MOD_DAMAGE_DONE_POS at +0xffc into the field blob
+// the object keeps at +0x1008, and PLAYER_FIELD_MOD_DAMAGE_DONE_NEG at +0x1018.
+// The second is a damage *reduction* and comes from the server already
+// negative, so the sum goes below zero for a cursed or debuffed caster, and the
+// client does not clamp that away.  wowee answered its cached maximum across the
+// six magic schools, clamped at zero, whatever school was asked for - which is
+// the same number for every row of the sheet's spell damage list.
 static int lua_GetSpellBonusDamage(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnZero(L); }
-    int32_t sp = gh->getSpellPower();
-    lua_pushnumber(L, sp >= 0 ? sp : 0);
+    const int school = static_cast<int>(luaL_checkinteger(L, 1));
+    if (school < 1 || school > 7)
+        return luaL_error(L, "bad argument #1 to 'GetSpellBonusDamage' (number expected, got %s)",
+                          lua_typename(L, lua_type(L, 1)));
+    const uint16_t posIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_POS);
+    const uint16_t negIndex = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_DAMAGE_DONE_NEG);
+    const auto player = localPlayerObject(L, posIndex, negIndex);
+    int32_t total = 0;
+    if (player) {
+        if (posIndex != 0xFFFF)
+            total += static_cast<int32_t>(player->getField(static_cast<uint16_t>(posIndex + school - 1)));
+        if (negIndex != 0xFFFF)
+            total += static_cast<int32_t>(player->getField(static_cast<uint16_t>(negIndex + school - 1)));
+    }
+    lua_pushnumber(L, total);
     return 1;
 }
 

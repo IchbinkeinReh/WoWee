@@ -106,6 +106,15 @@ enum class UF : uint16_t {
 
     // Player spell power / healing bonus (WotLK: PRIVATE - int32 per school)
     PLAYER_FIELD_MOD_DAMAGE_DONE_POS,  // Spell damage bonus (first of 7 schools)
+    // The other half of the same seven-school run - a damage *reduction*, sent
+    // negative.  0x0060e310 (GetSpellBonusDamage) answers one school as
+    // PLAYER_FIELD_MOD_DAMAGE_DONE_POS[school] + this one[school], the two
+    // accessors being +0xffc and +0x1018 into the field blob the player object
+    // keeps at +0x1008 (0x00578210, 0x00578250), and pushes that sum without
+    // clamping, so a curse shows as a negative spell damage.  The descriptor
+    // table names both runs seven dwords wide, POS at blob 1023 and NEG at 1030,
+    // with MOD_DAMAGE_DONE_PCT (float) after that at 1037.  WotLK only here.
+    PLAYER_FIELD_MOD_DAMAGE_DONE_NEG,
     PLAYER_FIELD_MOD_HEALING_DONE_POS, // Healing bonus
     // What the player's gear takes off the target's resistances, sent already
     // summed: 0x0060e470 reads +0x105c into the field blob the player object
