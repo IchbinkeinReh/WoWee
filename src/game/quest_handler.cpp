@@ -1397,6 +1397,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 if (rwds.rewardSpellId != 0) q.rewardSpellId = rwds.rewardSpellId;
                 if (rwds.xpId != 0) q.rewardXPId = rwds.xpId;
                 q.rewardHonor = rwds.rewardHonor;
+                q.rewardHonorMultiplier = rwds.rewardHonorMultiplier;
                 q.rewardTalents = rwds.bonusTalents;
                 q.rewardArenaPoints = rwds.arenaPoints;
                 if (rwds.rewardTitleId != 0) q.rewardTitleId = rwds.rewardTitleId;

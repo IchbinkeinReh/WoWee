@@ -1,10 +1,13 @@
 #pragma once
 
+#include <cfenv>
+#include <cmath>
 #include <cstdint>
 
-// The two reward-panel numbers the client works out for itself rather than being
-// sent: experience (below) and money (further below). Both hang on the same level
-// cap. The file is named for the first because that one needed the most room.
+// The reward-panel numbers the client works out for itself rather than simply
+// being sent: experience, money and honour - each below in the order the panel
+// draws them. The first two hang on the same level cap; the third is its own
+// small piece of arithmetic, and a strange one.
 //
 // What a quest's reward panel prints for experience (GetQuestLogRewardXP,
 // 0x005e49b0). The amount is in no packet: the client reads QuestXP.dbc itself -
@@ -142,6 +145,33 @@ inline int32_t questDialogMoney(int32_t rewardMoney) {
 inline uint32_t questDialogXp(uint32_t rewardXp, uint32_t playerLevel,
                               uint32_t maxLevel) {
     return atLevelCap(playerLevel, maxLevel) ? 0u : rewardXp;
+}
+
+/// The quest log's honour line (GetQuestLogRewardHonor, 0x005e4b70): the flat
+/// addition the packet sends, plus the quest's honour **multiplier** - and the
+/// conversion the client performs on that multiplier is by the constant 0.1
+/// (0x009e3004), not by anything read off the player or a table. It still *calls*
+/// 0x007554f0 first, which reads the player's level out of its unit block and
+/// returns a row of a level-keyed table at 0x00ad4c2c, and then never uses the
+/// answer: the multiplication's other operand is on the FPU stack from before the
+/// call, and %eax is dropped on the floor. So a multiplier below 5.0 adds nothing
+/// whatever, and matching the panel means matching that oddity rather than the
+/// formula the call hints at.
+///
+/// The conversion is the client's `fistpl` under the default x87 rounding mode -
+/// nearest - which is what nearbyint does with the default C mode. The width of
+/// the product is not a detail: the client multiplies in FPU registers, which hold
+/// more than a float, and the constant is the float just *above* a tenth
+/// (0x3dcccccd), so a multiplier of 5.0 really does give 0.50000000745 and rounds
+/// up. Multiply in float32 instead and that product collapses back onto exactly
+/// 0.5 - a float cannot tell it from a half - and the tie then rounds the other
+/// way, answering 250 where the panel prints 251. Same at 15.0, 25.0 and the rest.
+/// Doubles hold the product of two float operands exactly, which is why the
+/// multiply happens in one.
+inline int32_t questRewardHonor(int32_t addition, float multiplier) {
+    if (addition <= 0 && !(multiplier > 0.0f)) return 0;
+    return addition + static_cast<int32_t>(
+        std::nearbyint(static_cast<double>(multiplier) * static_cast<double>(0.1f)));
 }
 
 } // namespace wowee::game

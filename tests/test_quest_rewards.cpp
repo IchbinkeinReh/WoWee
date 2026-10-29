@@ -177,7 +177,8 @@ TEST_CASE("Quest query rewards: WotLK layout (AzerothCore)", "[quest_rewards]") 
     putU32(b, 0);     // rewSpell
     putU32(b, 0);     // rewSpellCast
     putU32(b, 250);   // rewHonorAddition
-    putF(b, 0.0f);    // rewHonorMultiplier
+    putF(b, 20.0f);   // rewHonorMultiplier (non-zero: it is the word's position
+                      // that matters, and the client turns this into +2 honour)
     putU32(b, 0);     // srcItemId
     putU32(b, 8);     // flags
     putU32(b, 47);    // charTitleId
@@ -225,6 +226,9 @@ TEST_CASE("Quest query rewards: WotLK layout (AzerothCore)", "[quest_rewards]") 
     CHECK(r.xpId == 5);
     // Honor (field 15), bonus talents (21) and arena points (22), also locked.
     CHECK(r.rewardHonor == 250);
+    // The multiplier is the float in the next word (field 16); the client's honour
+    // answer is 250 + round(20.0 * 0.1) = 252, so the word has to survive the parse.
+    CHECK(r.rewardHonorMultiplier == 20.0f);
     CHECK(r.bonusTalents == 1);
     CHECK(r.arenaPoints == 100);
     CHECK(r.rewardTitleId == 47);  // CharTitleId at field 19

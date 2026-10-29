@@ -3251,6 +3251,11 @@ struct QuestQueryRewardsData {
     /// the flat addition, which is what most quests set (the multiplier path is
     /// not derived here).
     uint32_t rewardHonor = 0;
+    /// The honour multiplier beside the flat addition (RewHonorMultiplier, a
+    /// float). The client folds it into the honour answer as
+    /// round(multiplier * 0.1) - see game/quest_rewards.hpp. WotLK only, same
+    /// caveat as the fields above.
+    float rewardHonorMultiplier = 0.0f;
     uint32_t bonusTalents = 0;
     uint32_t arenaPoints = 0;
     /// CharTitles.dbc id of a title the quest awards (few quests do). WotLK only.

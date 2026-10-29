@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -1625,6 +1626,14 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
     if (honorField) {
         const uint32_t h = fieldAt(honorField);
         if (h <= 100000u) out.rewardHonor = h;
+        // The very next word is the honour multiplier, sent as a float (the
+        // serializer writes RewHonorAddition then RewHonorMultiplier, and the
+        // client's record holds the pair adjacent at +0x44/+0x48). It is worth
+        // keeping because the client folds it into the honour answer - see
+        // game/quest_rewards.hpp. A slipped layout lands on an id or a string and
+        // reads as an enormous multiplier, so it gets the house range gate.
+        const float mult = std::bit_cast<float>(fieldAt(honorField + 1));
+        if (mult >= 0.0f && mult < 1000.0f) out.rewardHonorMultiplier = mult;
     }
     if (talentsField) {
         const uint32_t t = fieldAt(talentsField);

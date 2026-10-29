@@ -14,7 +14,7 @@
 #include "game/quest_progress.hpp"
 #include "game/quest_objectives.hpp"
 #include "game/quest_poi_icons.hpp"
-#include "game/quest_xp.hpp"
+#include "game/quest_rewards.hpp"
 #include "game/glyph_socket.hpp"
 #include "game/spell_mods.hpp"
 #include "game/trainer_service_list.hpp"
@@ -693,7 +693,7 @@ static int lua_GetQuestLogPushable(lua_State* L) {
 //
 // Not reproduced, and pinned no further than "it exists": 0x005e49b0's five-slot
 // loop that can triple the number below level 60, and the aura multiplier
-// 0x007246a0 folds in. Those read low; see game/quest_xp.hpp.
+// 0x007246a0 folds in. Those read low; see game/quest_rewards.hpp.
 static int lua_GetQuestLogRewardXP(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* q = gh ? selectedQuest(gh) : nullptr;
@@ -713,9 +713,17 @@ static int lua_GetQuestLogRewardXP(lua_State* L) {
 // query response carries, and hard zeros before, on a stale "not in any quest
 // packet" comment. WotLK-only, so classic/TBC keep zero until their layout is
 // read off a serializer.
+//
+// Honor is not quite the packet's number: 0x005e4b70 answers the flat addition
+// plus the quest's multiplier converted by the constant 0.1, having called a
+// level-keyed table lookup and dropped its result. The rule is in
+// game/quest_rewards.hpp; a multiplier below 5.0 changes nothing, which is most
+// of them.
 static int lua_GetQuestLogRewardHonor(lua_State* L) {
     const auto* q = selectedQuest(getGameHandler(L));
-    lua_pushnumber(L, q ? q->rewardHonor : 0.0);
+    lua_pushnumber(L, q ? game::questRewardHonor(static_cast<int32_t>(q->rewardHonor),
+                                                 q->rewardHonorMultiplier)
+                        : 0.0);
     return 1;
 }
 static int lua_GetQuestLogRewardTalents(lua_State* L) {
@@ -3067,7 +3075,7 @@ static int lua_GetQuestLogSpellLink(lua_State* L) {
 // below PLAYER_FIELD_MAX_LEVEL is paid that one whenever it is at least as large.
 // A quest that already pays well keeps its amount; one that pays nothing - a grey
 // quest, at the cap - pays the max-level figure. The rule itself is in
-// game/quest_xp.hpp, beside the XP rule that keys on the same field.
+// game/quest_rewards.hpp, beside the XP rule that keys on the same field.
 static int lua_GetQuestLogRewardMoney(lua_State* L) {
     auto* gh = getGameHandler(L);
     const auto* q = selectedLogEntry(gh);

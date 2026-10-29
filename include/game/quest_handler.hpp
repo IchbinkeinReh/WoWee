@@ -123,6 +123,10 @@ public:
         uint32_t rewardSpellId = 0;
         uint32_t rewardXPId = 0;  // QuestXP.dbc column; reward XP = that column at this quest's level
         uint32_t rewardHonor = 0;
+        /// The quest's honour multiplier, kept because the client's honour answer
+        /// is the addition plus that number converted by 0.1 (0x005e4b70) - see
+        /// game/quest_rewards.hpp.
+        float rewardHonorMultiplier = 0.0f;
         uint32_t rewardTalents = 0;
         uint32_t rewardArenaPoints = 0;
         uint32_t rewardTitleId = 0;  // CharTitles.dbc id of an awarded title, 0 = none
@@ -208,7 +212,7 @@ public:
     /// unknown (index 0 is genuinely no XP), so the reward panel simply omits the
     /// line, as it does for a quest that gives none. This is the raw row value -
     /// the level damping, the rounding and the level-cap gate that decide what the
-    /// panel finally prints are in game/quest_xp.hpp, because they are the same
+    /// panel finally prints are in game/quest_rewards.hpp, because they are the same
     /// rules the client's own binding runs (0x005e0420 then 0x005e49b0).
     uint32_t getQuestRewardXP(int32_t level, uint32_t xpDifficulty);
 
