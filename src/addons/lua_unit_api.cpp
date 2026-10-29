@@ -880,10 +880,10 @@ static constexpr game::UF kNegStatFields[5] = {game::UF::UNIT_FIELD_NEGSTAT0,
 /// answer, colours the number red when a debuff is in play, and here always
 /// found no halves to find. So STAT is the total, not the base.
 ///
-/// The same gate as the attack-power bindings - the realm's
-/// UNIT_FLAG_PLAYER_CONTROLLED, which the client tests as bit 3 of the guid -
-/// and four zeros for anyone without it, since a creature's stats are not sent
-/// to be read. WoWee keeps its cached total for the two tokens it has one for
+/// The same gate as the attack-power bindings: the client answers for any unit
+/// (0x00610300 tests OBJECT_FIELD_TYPE & TYPEMASK_UNIT, bit 3 of the type
+/// field, not a unit flag) - a creature's fields simply arrive as zero, a
+/// vehicle's or a charmed creature's do not. WoWee keeps its cached total for the two tokens it has one for
 /// when the unit itself cannot be reached, which is what answers a pet whose
 /// entity is out of hand; the cache holds only the total, so no buff shows.
 static int lua_UnitStat(lua_State* L) {
@@ -899,7 +899,7 @@ static int lua_UnitStat(lua_State* L) {
     bool fromUnit = false;
     if (statIdx >= 0 && statIdx < 5) {
         auto* unit = resolveUnit(L, who.c_str());
-        if (unit && (unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED)) {
+        if (unit) {
             stat = statField(unit, kStatFields[static_cast<size_t>(statIdx)]);
             positive = statField(unit, kPosStatFields[static_cast<size_t>(statIdx)]);
             negative = statField(unit, kNegStatFields[static_cast<size_t>(statIdx)]);
@@ -964,8 +964,8 @@ static ResistAnswer resistanceAnswer(game::Unit* unit, int school, bool withMods
 
 /// UnitArmor(unit) → baseArmor, effectiveArmor, armor, posBuff, negBuff.
 ///
-/// School zero of the block above, taken in full: the client gates on the
-/// realm's UNIT_FLAG_PLAYER_CONTROLLED and then lets 0x004f54d0 work out the
+/// School zero of the block above, taken in full: the client answers for any
+/// unit (OBJECT_FIELD_TYPE & TYPEMASK_UNIT) and lets 0x004f54d0 work out the
 /// three arrays at index zero. paperdollframe.lua:430 hands all five answers to
 /// PaperDollFormatStat, which colours the number by the parts and builds the
 /// "base +pos -neg" tooltip beside it - WoWee pushed the effective figure three
@@ -980,11 +980,6 @@ static int lua_UnitArmor(lua_State* L) {
     ResistAnswer a;
     auto* unit = resolveUnit(L, who.c_str());
     if (unit) {
-        if (!(unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED)) {
-            lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0);
-            lua_pushnumber(L, 0); lua_pushnumber(L, 0);
-            return 5;
-        }
         a = resistanceAnswer(unit, 0, true);
     } else if (gh) {
         const int32_t armor = (who == "pet") ? gh->getPetResistances()[0] : gh->getArmorRating();
@@ -1002,10 +997,10 @@ static int lua_UnitArmor(lua_State* L) {
 ///
 /// The school is 0-based here, unlike UnitStat: the client checks
 /// `if (6 < index)` with no subtraction, and armour is school zero of the same
-/// array. Only the local player gets the parts (see resistanceAnswer); the pet
-/// and anyone else player-controlled get the clamped dword twice with two zeros
-/// after it, and anyone without the realm's player-controlled flag gets four
-/// zeros, because the realm does not send a creature's resistances to read.
+/// array. Only the local player gets the parts (see resistanceAnswer); every
+/// other unit gets the clamped dword twice with two zeros after it - the
+/// client answers any unit (TYPEMASK_UNIT), and a creature's resistances
+/// simply arrive as zero.
 static int lua_UnitResistance(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int school = static_cast<int>(luaL_optnumber(L, 2, 0));
@@ -1014,8 +1009,7 @@ static int lua_UnitResistance(lua_State* L) {
 
     ResistAnswer a;
     bool answered = false;
-    if (auto* unit = resolveUnit(L, who.c_str());
-        unit && (unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED)) {
+    if (auto* unit = resolveUnit(L, who.c_str())) {
         const bool self = gh && unit->getGuid() == gh->getPlayerGuid();
         a = resistanceAnswer(unit, school, self);
         answered = true;
@@ -1931,10 +1925,9 @@ static int pushAttackPower(lua_State* L, const AttackPowerAnswer& a) {
 /// fraction-of-attack-power kind rather than the flat kind - left the sheet
 /// quoting the unscaled figure.
 ///
-/// The client answers 0, 0, 0 for a unit whose guid's high dword has bit 3
-/// clear, the bit the realm sets in UNIT_FIELD_FLAGS as
-/// UNIT_FLAG_PLAYER_CONTROLLED: the player and its own pet both carry it, a
-/// guardian, a totem or a creature does not. PaperDollFrame_SetAttackPower is
+/// The client answers for any unit: 0x00610b60 tests OBJECT_FIELD_TYPE &
+/// TYPEMASK_UNIT (bit 3 of the object's type field), not a unit flag, and a
+/// creature's attack power simply arrives as zero. PaperDollFrame_SetAttackPower is
 /// shared and the pet tab calls it with "pet", which is how the pet's line came
 /// to print its owner's attack power - the binding knew only the player's
 /// number and the handler's cached pet figure, and the cache is left here as
@@ -1945,8 +1938,6 @@ static int lua_UnitAttackPower(lua_State* L) {
     toLowerInPlace(who);
     auto* unit = resolveUnit(L, who.c_str());
     if (unit) {
-        if (!(unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED))
-            return pushAttackPower(L, {});
         return pushAttackPower(L, attackPowerAnswer(unit, game::UF::UNIT_FIELD_ATTACK_POWER,
                                                     game::UF::UNIT_FIELD_ATTACK_POWER_MODS,
                                                     game::UF::UNIT_FIELD_ATTACK_POWER_MULTIPLIER));
@@ -1967,8 +1958,6 @@ static int lua_UnitRangedAttackPower(lua_State* L) {
     toLowerInPlace(who);
     auto* unit = resolveUnit(L, who.c_str());
     if (unit) {
-        if (!(unit->getUnitFlags() & game::UNIT_FLAG_PLAYER_CONTROLLED))
-            return pushAttackPower(L, {});
         return pushAttackPower(L, attackPowerAnswer(
                                       unit, game::UF::UNIT_FIELD_RANGED_ATTACK_POWER,
                                       game::UF::UNIT_FIELD_RANGED_ATTACK_POWER_MODS,
@@ -2152,8 +2141,8 @@ static int lua_UnitDamage(lua_State* L) {
     // 0x00578250 and 0x00578290, each of which answers zero unless the unit it
     // runs on is the local player.  So the player gets its own three fields and
     // every other unit the no-bonus answers, which is what wowee answered for the
-    // player too.  The one place the two differ is a player-controlled pet that
-    // carries that guid bit: its fields are private and never sent, so the client
+    // player too.  The one place the two differ is a pet: its damage-modifier
+    // fields are the player's and never sent for it, so the client
     // hands back a percent of 0.0 and the sheet then divides the damage bounds by
     // it (paperdollframe.lua:544).  wowee keeps 1.0 there rather than reproducing
     // a divide by zero for a pet the realm has never sent a damage modifier for.
@@ -2195,7 +2184,8 @@ static int lua_UnitDamage(lua_State* L) {
 /// again, indexed by the school of the shot's spell - which is the part of the
 /// client's answer that needs the shot itself, and is not modelled here. They
 /// stay the client's own no-bonus answers, 0, 0 and 1, as they are for every
-/// unit it does not treat as player-controlled.
+/// unit but the active player (TYPEMASK_PLAYER and the active player's own
+/// fields).
 static int lua_UnitRangedDamage(lua_State* L) {
     auto* gh = getGameHandler(L);
     std::string who(luaL_optstring(L, 1, "player"));
