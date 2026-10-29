@@ -539,9 +539,10 @@ private:
         uint32_t chainDeadlineMs = 0;
         uint64_t casterGuid = 0;       ///< the aura's caster, its chains' other end
         uint32_t boundInstance = 0;    ///< the instance its models hang on
-        /// Its kit's SoundID, asked once for the model it hangs on: a looping
-        /// entry is held by the handle and goes with the kit (0x004c5c80), a
-        /// one-shot has nothing left to hold.
+        /// Its kit's SoundID, asked once as the kit goes onto the unit: a
+        /// looping entry is held by the handle, tied to the unit and following
+        /// it (0x004c5c80 -> 0x00879aa0), until the kit leaves; a one-shot has
+        /// nothing left to hold.
         uint32_t soundHandle = 0;
         bool soundAsked = false;
         std::vector<KitModelInstance> models;
@@ -662,6 +663,9 @@ private:
     struct HeldKitSound {
         uint32_t handle = 0;
         uint32_t endsMs = 0;  ///< colourClockMs_ when the kit it came with goes
+        /// The unit's model the sound is tied to (0x004c5c80 -> 0x00879aa0
+        /// writes the unit's guid into the sound): it follows it. 0 for none.
+        uint32_t renderInstanceId = 0;
     };
     std::vector<HeldKitSound> heldKitSounds_;
     /// Their casts are over: the sounds go with them.
@@ -900,8 +904,10 @@ private:
     AttachedEffectScale attachedEffectScale_;
     /// 0x00720400 for a unit: hide or show its Flags 8 kits as asked.
     void stepUnarmedKits(uint64_t unitGuid, UnitAuraKits& unit, bool force);
+    /// Its models off the unit's model, its held sound kept (a model change).
+    void hideAuraKitModels(AuraKit& aura);
     /// The kit leaves the unit: its models go, and the looping sound it held
-    /// goes with them (0x004c5c80).
+    /// with them.
     void hideAuraKit(AuraKit& aura);
     /// Each frame: the unit's kits follow it, onto a new model when it has
     /// one, and its Flags 8 kits show as 0x00720400 has them.

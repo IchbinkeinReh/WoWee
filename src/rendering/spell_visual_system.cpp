@@ -720,7 +720,8 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitOnUni
     if (const uint32_t handle = playKitSound(kit, type, renderInstanceId, place ? *place : position,
                                              type == spell_kit::KitType::Precast);
         handle != 0)
-        heldKitSounds_.push_back({.handle = handle, .endsMs = colourClockMs_ + castTimeMs});
+        heldKitSounds_.push_back(
+            {.handle = handle, .endsMs = colourClockMs_ + castTimeMs, .renderInstanceId = renderInstanceId});
     // 0x0073b140: the unit's own part - the kit's animation, the weapon
     // effects of a precast or cast kit (0x0073a6c0), the kit's colour and
     // its camera shake.
@@ -1439,18 +1440,24 @@ std::vector<SpellVisualSystem::KitModelInstance> SpellVisualSystem::playKitModel
     return shown;
 }
 
-void SpellVisualSystem::hideAuraKit(AuraKit& aura) {
+void SpellVisualSystem::hideAuraKitModels(AuraKit& aura) {
     if (m2Renderer_) {
         for (const KitModelInstance& model : aura.models) m2Renderer_->removeInstance(model.instanceId);
     }
-    // The kit's looping sound goes with the kit (0x004c5c80 stops it there, and
-    // stops it no other way): a unit changing model loses it and asks it again
-    // with the kit on its new model.
+    aura.models.clear();
+    aura.boundInstance = 0;
+}
+
+void SpellVisualSystem::hideAuraKit(AuraKit& aura) {
+    hideAuraKitModels(aura);
+    // The kit's looping sound goes when the kit does. It is tied to the unit
+    // (0x004c5c80 -> 0x00879aa0 writes the unit's guid into it), not to the
+    // model the kit hangs on, so a unit changing model keeps it
+    // (hideAuraKitModels): asked again there, a one-shot played twice a
+    // frame apart and a loop restarted.
     if (aura.soundHandle != 0) audio::AudioEngine::instance().stopSound(aura.soundHandle);
     aura.soundHandle = 0;
     aura.soundAsked = false;
-    aura.models.clear();
-    aura.boundInstance = 0;
 }
 
 void SpellVisualSystem::askAuraKitSound(AuraKit& aura, const KitRecord& kit, uint32_t instance,
@@ -2185,6 +2192,13 @@ void SpellVisualSystem::expireHeldKitSounds() {
             it = heldKitSounds_.erase(it);
             continue;
         }
+        // Tied to its unit (0x004c5c80 -> 0x00879aa0 writes the unit's guid
+        // into the sound): it goes where the unit goes.
+        glm::vec3 at(0.0f);
+        if (it->renderInstanceId != 0 && renderer_ && renderer_->getCharacterRenderer() &&
+            renderer_->getCharacterRenderer()->getInstancePosition(it->renderInstanceId, at)) {
+            audio.setSoundPosition(it->handle, at);
+        }
         ++it;
     }
 }
@@ -2822,7 +2836,7 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
             // Onto the unit's model as it now is: the kit is the unit's,
             // whatever model draws it.
             if (aura.boundInstance != instance) {
-                hideAuraKit(aura);
+                hideAuraKitModels(aura);
                 auto kitIt = kits_.find(aura.kitId);
                 if (instance != 0 && kitIt != kits_.end()) {
                     glm::vec3 unitPos(0.0f);
@@ -2839,6 +2853,12 @@ void SpellVisualSystem::updateAuraKits(float deltaTime) {
             }
             CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
             if (!charRenderer) continue;
+            // Its held sound goes where the unit goes (0x00879aa0).
+            if (aura.soundHandle != 0) {
+                glm::vec3 unitPos(0.0f);
+                if (charRenderer->getInstancePosition(instance, unitPos))
+                    audio::AudioEngine::instance().setSoundPosition(aura.soundHandle, unitPos);
+            }
             for (KitModelInstance& model : aura.models) {
                 // 0x007449c0: its Hold once its Stand has run.
                 model.elapsed += deltaTime;
