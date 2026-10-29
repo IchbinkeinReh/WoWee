@@ -1076,6 +1076,24 @@ static int lua_GetShieldBlock(lua_State* L) {
     return 1;
 }
 
+// GetSpellPenetration() → what the player's gear takes off the target's
+// resistances (0x0060e470).  Also a field, also summed by the server: the same
+// player object's blob at +0x105c - dword 1047, PLAYER_FIELD_MOD_TARGET_
+// RESISTANCE - pushed as its negation, because the field holds the resistance
+// *change* and penetration is a decrease.  The sheet prints it as its own stat
+// (paperdollframe.lua:988) and twice inside the spell-hit rating's tooltip
+// (paperdollframe.lua:342).  Negated in double, so the field's most negative
+// value cannot wrap the way the client's own int negation would.
+static int lua_GetSpellPenetration(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint16_t index = game::fieldIndex(game::UF::PLAYER_FIELD_MOD_TARGET_RESISTANCE);
+    const auto player = (gh && index != 0xFFFF)
+                            ? gh->getEntityManager().getEntity(gh->getPlayerGuid())
+                            : nullptr;
+    lua_pushnumber(L, player ? -static_cast<double>(static_cast<int32_t>(player->getField(index))) : 0.0);
+    return 1;
+}
+
 // GetCritChance() → percent (melee crit)
 static int lua_GetCritChance(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -3999,15 +4017,11 @@ void registerUnitLuaAPI(lua_State* L) {
             return 2;
         }},
                 {"GetArmorPenetration",     lua_GetArmorPenetration},
-                // Spell penetration: the client reads a player field, not the
-                // inventory.  0x0060e470 answers minus PLAYER_FIELD_MOD_TARGET_
-                // RESISTANCE (+0x105c into the player's field blob, dword 1047
-                // of it in the client's own per-field descriptor table), which
-                // is what the server sends once it has summed the item mods
-                // itself - the sign is because the field carries a resistance
-                // reduction.  Still a zero here until that field is asked for;
-                // the earlier note that no player field carries it was wrong.
-                {"GetSpellPenetration",     lua_ZeroPercent},
+                // Both of these are player fields the server has already summed
+                // from the item mods, not figures the client works out from the
+                // bags - the note here used to say the latter, and the client
+                // reads a field in both cases (see the two bindings).
+                {"GetSpellPenetration",     lua_GetSpellPenetration},
                 {"GetShieldBlock",          lua_GetShieldBlock},
                 {"GetUnitHealthRegenRateFromSpirit", lua_GetUnitHealthRegenRateFromSpirit},
                 {"GetUnitManaRegenRateFromSpirit",   lua_GetUnitManaRegenRateFromSpirit},

@@ -196,6 +196,25 @@ TEST_CASE("the shield block value is the dword after the spell crit floats",
     CHECK(wotlk.at("PLAYER_SHIELD_BLOCK") == 1039);
 }
 
+TEST_CASE("the resistance a target loses is three past the healing bonus",
+          "[update-fields]") {
+    // GetSpellPenetration (0x0060e470) reads +0x105c into the field blob the
+    // player object keeps at +0x1008 - dword 1047 - which the client's own
+    // per-field descriptor table names PLAYER_FIELD_MOD_TARGET_RESISTANCE.  The
+    // character sheet prints its negation as its own stat row, so a wrong slot
+    // shows a number of the right shape: the healing-percent float two below it
+    // would read as a penetration of 0.01 or so, and the healing bonus next
+    // door as hundreds.  Pinning the run keeps both halves of that gap honest.
+    const auto wotlk = declaredFields("wotlk");
+    REQUIRE(wotlk.count("PLAYER_FIELD_MOD_TARGET_RESISTANCE") == 1);
+    CHECK(wotlk.at("PLAYER_FIELD_MOD_TARGET_RESISTANCE") ==
+          wotlk.at("PLAYER_FIELD_MOD_HEALING_DONE_POS") + 3);
+    CHECK(wotlk.at("PLAYER_FIELD_MOD_TARGET_RESISTANCE") + 2 ==
+          wotlk.at("PLAYER_FIELD_BYTES"));
+    // 1047 dwords into the player's own blob, 148 of WoWee's numbering ahead.
+    CHECK(wotlk.at("PLAYER_FIELD_MOD_TARGET_RESISTANCE") == 1195);
+}
+
 TEST_CASE("the unit's three attack times are one run of fields",
           "[update-fields]") {
     // The client's UnitAttackSpeed (0x00610a00) and UnitRangedDamage

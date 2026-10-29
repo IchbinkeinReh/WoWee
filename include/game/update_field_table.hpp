@@ -93,6 +93,14 @@ enum class UF : uint16_t {
     // Player spell power / healing bonus (WotLK: PRIVATE - int32 per school)
     PLAYER_FIELD_MOD_DAMAGE_DONE_POS,  // Spell damage bonus (first of 7 schools)
     PLAYER_FIELD_MOD_HEALING_DONE_POS, // Healing bonus
+    // What the player's gear takes off the target's resistances, sent already
+    // summed: 0x0060e470 reads +0x105c into the field blob the player object
+    // keeps at +0x1008 - dword 1047 of it, PLAYER_FIELD_MOD_TARGET_RESISTANCE
+    // in the client's own per-field descriptor table - and pushes its negation,
+    // which is what GetSpellPenetration answers with and what the character
+    // sheet prints as SPELL_PENETRATION (paperdollframe.lua:988).  Negative in
+    // the field, positive out of the binding.  WotLK only here.
+    PLAYER_FIELD_MOD_TARGET_RESISTANCE,
 
     // Player combat stats (WotLK: PRIVATE - float values)
     PLAYER_BLOCK_PERCENTAGE,         // Block chance %
