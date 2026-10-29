@@ -43,6 +43,8 @@
 // than what plays - but not the silence slots 0..2 are waiting out
 // (0x004c8d80): music entering a zone during the silence waits for it.
 
+#include "audio/sound_entry.hpp"
+
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -63,8 +65,10 @@ inline constexpr int kSilenceSlot = 12;
 /// rise of one out of quiet (0.01).
 inline constexpr float kFadeSeconds = 4.0f;
 inline constexpr float kFadeFromQuietSeconds = 0.01f;
-/// A SoundEntries row that loops (0x004c6a40 reads Flags +0x3c & 0x200).
-inline constexpr uint32_t kSoundLoops = 0x200;
+/// A SoundEntries row that loops (0x004c6a40 reads Flags +0x3c & 0x200). It is the
+/// one Flag read here; what the same column asks of the play itself is in
+/// audio/sound_entry.hpp.
+inline constexpr uint32_t kSoundLoops = sound_entry::kFlagLoops;
 
 /// A slot's music: day and night sound, -1 for none, and the silence after.
 struct SlotMusic {

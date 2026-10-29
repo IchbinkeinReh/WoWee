@@ -99,6 +99,29 @@ TEST_CASE("A bank bag's container is its slot", "[bank][slots]") {
     }
 }
 
+// SMSG_OPEN_CONTAINER (0x113) names a container by guid, and the client turns
+// the guid into an interface bag id: 0 when the guid is the player's own, the
+// player object being the backpack's container, and otherwise that container's
+// place in the list of bags the player carries - a list the client walks eleven
+// entries deep (0x005d7110). BAG_OPEN, BAG_CLOSED and ContainerFrame(n):GetID()
+// all speak that numbering, so the walk and this layout's bags have to be the
+// same length or an open request names a container no frame has an id for.
+TEST_CASE("The containers a realm can name are the bags this layout carries",
+          "[bank][slots]") {
+    // The interface's own figure: NUM_CONTAINER_FRAMES = 13 at
+    // containerframe.lua:1, making ContainerFrame1..13 with GetID 0..12.
+    constexpr int NUM_CONTAINER_FRAMES = 13;
+    // Eleven for the later layout - four worn bags and the seven bank bags
+    // constants.lua counts - and ten for vanilla's six.
+    REQUIRE(kWornBagCount + bankLayoutFor(false).bagCount == 11);
+    REQUIRE(kWornBagCount + bankLayoutFor(true).bagCount == 10);
+    // And the id space is that list with the backpack's zero in front, so the
+    // highest id either layout can ask a frame to show is the last bank bag's -
+    // eleven - inside the thirteen frames containerframe.lua:1 counts out.
+    REQUIRE(kWornBagCount + bankLayoutFor(false).bagCount < NUM_CONTAINER_FRAMES);
+    REQUIRE(kWornBagCount + bankLayoutFor(true).bagCount < NUM_CONTAINER_FRAMES);
+}
+
 TEST_CASE("No two regions inside the no-container overlap", "[bank][slots]") {
     // Equipment, backpack, bank and keyring all address through kNoContainer,
     // so an overlap would make one region's slot mean another's.
@@ -142,4 +165,17 @@ TEST_CASE("The no-source marker is not a container number", "[cursor][slots]") {
         INFO("source " << bag);
         REQUIRE(kCursorNoSource != bag);
     }
+}
+
+TEST_CASE("the character's positions for a swap's bind ask", "[inventory][slots]") {
+    using wowee::game::slots::isCharacterPosition;
+    using wowee::game::slots::kNoContainer;
+    CHECK(isCharacterPosition(kNoContainer, 0));    // head
+    CHECK(isCharacterPosition(kNoContainer, 18));   // tabard
+    CHECK(isCharacterPosition(kNoContainer, 22));   // the last bag-bar slot
+    CHECK_FALSE(isCharacterPosition(kNoContainer, 23));  // the backpack's first
+    CHECK(isCharacterPosition(kNoContainer, 0x43));      // bank bags
+    CHECK(isCharacterPosition(kNoContainer, 0x49));
+    CHECK_FALSE(isCharacterPosition(kNoContainer, 0x4a));
+    CHECK_FALSE(isCharacterPosition(19, 0));             // a slot inside a bag
 }

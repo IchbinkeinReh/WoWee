@@ -67,9 +67,48 @@ constexpr uint32_t kSlotStand = 5;      ///< $FDX
 constexpr uint32_t kSlotWingFlap = 7;   ///< $WNG
 constexpr uint32_t kSlotWingGlide = 10; ///< $WGG
 
+/// The slots a jump's own sound is, asked outright (0x0073ed10, 0x0073d2b0):
+/// as the unit leaves the ground, and as it comes down again - a jump, a
+/// take-off into flight and a landing out of it. Only 30 of the 1306
+/// CreatureSoundData rows name either: 25 of those the universal flying
+/// mount's (SoundEntries 10905 take-off, 10904 landing), and no player's -
+/// a character on foot and on a flying mount alike is silent here.
+constexpr uint32_t kSlotJumpStart = 11;
+constexpr uint32_t kSlotJumpEnd = 12;
+
+/// The slot a unit's reaction asks of it, rather than one of its model's
+/// events: SMSG_AI_REACTION with a reaction of HATE (0) asks slot 8, and the
+/// table names the column it reads PreAggro (`GhostWolfPreAggro1', the same
+/// line an aggro would answer with). Only the ask is this slot's own - the
+/// UNFRIENDLY reaction (2) is a voice line, not a sound slot, and 0x00716b10
+/// takes it to `voiceColumn(kVoiceKindAggro)` instead.
+constexpr uint32_t kSlotAlert = 8;
+
 /// CreatureSoundData columns (3.3.5a, 38 of them).
+/// The voice lines a unit says, by the kind they are asked as (0x007474b0),
+/// and the column of the unit's own CreatureSoundData row each reads. None of
+/// them is a sound slot: no chance is rolled, and the pet row that stands in
+/// for the slots (0x0071a3f0) does not stand in here. Kind 3 is asked by
+/// nothing and says nothing, and kind 4 is the only kind asked of a pet while
+/// Sound_EnablePetSounds is off.
+constexpr uint32_t kVoiceKindAggro = 0, kVoiceKindOrder = 1, kVoiceKindKill = 2, kVoiceKindDeath = 4;
+constexpr uint32_t kVoiceColumnNone = 0xFFFFFFFF;
+constexpr uint32_t voiceColumn(uint32_t kind) {
+    switch (kind) {
+    case kVoiceKindAggro: return 10;  ///< +0x28, as it takes a dislike
+    case kVoiceKindOrder: return 29;  ///< +0x74, as a pet awaits its order
+    case kVoiceKindKill:  return 28;  ///< +0x70, as a pet is set on its target
+    case kVoiceKindDeath: return 6;   ///< +0x18, as it dies
+    default: return kVoiceColumnNone;
+    }
+}
 constexpr uint32_t kColumnFootstep = 9;  ///< +0x24, FootstepTerrainLookup's CreatureFootstepID
 constexpr uint32_t kColumnFidget0 = 14;
+/// The line a pet says as it is sent off, which SMSG_PET_DISMISS_SOUND asks for
+/// outright (0x00716c00): of 1306 rows 6 name one, all a warlock's voidpets
+/// (`A_Imp_Dismiss', `A_SUCCUBUS_DISMISS', `A_DOOMGUARD_DISMISS01',
+/// `A_VOIDWALKER_DISMISS'), and the 7th - row 2257 - names a test clip.
+constexpr uint32_t kColumnPetDismiss = 30;
 constexpr uint32_t kColumnBirth = 33;
 constexpr uint32_t kColumnSpellCastDirected = 34;
 constexpr uint32_t kColumnSubmerge = 35;
@@ -108,8 +147,8 @@ constexpr uint32_t slotColumn(uint32_t slot) {
     case 8: return 13;   // Alert
     case 9: return 5;    // InjuryCrushingBlow
     case 10: return 12;  // WingGlide
-    case 11: return 26;  // JumpStart
-    case 12: return 27;  // JumpEnd
+    case kSlotJumpStart: return 26;  // JumpStart
+    case kSlotJumpEnd: return 27;    // JumpEnd
     default: return 0;
     }
 }
@@ -250,6 +289,38 @@ constexpr bool footfallSilent(uint32_t bytes1, uint32_t moveFlags, uint8_t seatS
                               uint32_t playerFlags) {
     return hovers(bytes1) || (moveFlags & kMoveFlagHover) != 0 || seatState != 0 ||
            (isPlayer && (playerFlags & kPlayerFlagGhost) != 0);
+}
+
+// An emote's voice line, which is not in the unit's CreatureSoundData row at
+// all: EmotesTextSound says which race's and which sex's clip answers an
+// EmotesText id. The client reads the table as five columns and a twenty-byte
+// row (0x0063e4f0 insists on both) and asks for the line through the same play
+// a unit's slots go through - 0x00746d60, whose emote-flagged branch holds both
+// emote CVars.
+constexpr uint32_t kEmoteSoundColumnEmotesText = 1;
+constexpr uint32_t kEmoteSoundColumnRace = 2;
+constexpr uint32_t kEmoteSoundColumnSex = 3;
+constexpr uint32_t kEmoteSoundColumnSound = 4;
+constexpr uint32_t kEmoteSoundColumnCount = 5;
+
+/// One of its rows, held once the table has been read.
+struct EmoteSoundRow {
+    uint32_t emotesTextId = 0;
+    uint32_t race = 0;
+    uint32_t sex = 0;
+    uint32_t soundId = 0;
+};
+
+/// Which clip an emote asks for: the row naming the emote text, the speaker's
+/// race and its sex - 3.3.5a's table has one row per those three, two to
+/// twenty rows per emote. Nothing asks where no row answers, which is how a
+/// speaker whose race and sex are not known yet stays quiet, and a creature
+/// with it: every row names a playable race and one of the two sexes.
+inline uint32_t emoteSoundId(const std::vector<EmoteSoundRow>& rows, uint32_t emotesTextId,
+                             uint32_t race, uint32_t sex) {
+    for (const auto& row : rows)
+        if (row.emotesTextId == emotesTextId && row.race == race && row.sex == sex) return row.soundId;
+    return 0;
 }
 
 }  // namespace wowee::rendering::unit_event

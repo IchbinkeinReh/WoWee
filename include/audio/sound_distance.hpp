@@ -19,7 +19,20 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
+
 namespace wowee::audio::sound_distance {
+
+/// What a SoundEntries row asks of a 3D play, from its MinDistance (26) and
+/// its DistanceCutoff (27). A row naming no cutoff keeps the reach every play
+/// here had before the row was read - a hundred yards, which is what the sound
+/// system's model needs to fall off over, not a rule of the row's - and one
+/// naming no min has no full-volume core. A min past the cutoff is pulled back
+/// to it, or the gain would rise with distance.
+inline void entryDistance(float rowMin, float rowCutoff, float& outMin, float& outMax) {
+    outMax = rowCutoff > 0.0f ? rowCutoff : 100.0f;
+    outMin = rowMin > 0.0f ? std::min(rowMin, outMax) : 1.0f;
+}
 
 /// Whether a sound at `at` is heard from `listener`, with its `cutoff`.
 /// A cutoff of 0 or less is none: a sound heard at any distance.

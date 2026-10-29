@@ -39,7 +39,7 @@ Action onKitPlayed(const anim::AnimationDataTable& data, const KitPlay& kit, int
     a.kind = Action::Kind::Play;
     a.anim = anim;
     a.once = !precast;
-    a.holdsCastLoop = kit.type == kTypePlayImpact;
+    a.holdsCastLoop = kit.type == kTypeVisual;
     return a;
 }
 

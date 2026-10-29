@@ -93,7 +93,6 @@
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "audio/movement_sound_manager.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_frame_data.hpp"
@@ -3493,7 +3492,7 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
             if (audioCoordinator_->getCombatSoundManager()) audioCoordinator_->getCombatSoundManager()->initialize(cachedAssetManager);
             break;
         case 3:
-            if (audioCoordinator_->getSpellSoundManager()) audioCoordinator_->getSpellSoundManager()->initialize(cachedAssetManager);
+            // Nothing left at this stage; the later ones keep their numbers.
             break;
         case 4:
             if (audioCoordinator_->getMovementSoundManager()) audioCoordinator_->getMovementSoundManager()->initialize(cachedAssetManager);
@@ -5488,9 +5487,6 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             }
             if (audioCoordinator_->getCombatSoundManager()) {
                 audioCoordinator_->getCombatSoundManager()->initialize(assetManager);
-            }
-            if (audioCoordinator_->getSpellSoundManager()) {
-                audioCoordinator_->getSpellSoundManager()->initialize(assetManager);
             }
             if (audioCoordinator_->getMovementSoundManager()) {
                 audioCoordinator_->getMovementSoundManager()->initialize(assetManager);

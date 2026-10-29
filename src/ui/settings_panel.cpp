@@ -44,7 +44,7 @@
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "audio/spell_sound_manager.hpp"
+#include "rendering/spell_visual_system.hpp"
 #include "audio/movement_sound_manager.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
@@ -1501,7 +1501,14 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
             }
         }
     } else if (key == "framecap") {
-        if (services_.window) services_.window->setFrameCap(frameCapFpsForChoice(pendingFrameCap));
+        if (services_.window) {
+            const int fps = frameCapFpsForChoice(pendingFrameCap);
+            services_.window->setFrameCap(fps);
+            // Under the client's name too: its options write this limit into
+            // the maxFPS cvar next to a background one, and the frame's wait
+            // is worked out from both (0x006836d0).
+            addons::setStoredCVar("maxFPS", std::to_string(fps));
+        }
     } else if (key == "lensflare") {
         if (renderer) {
             if (auto* lf = renderer->getLensFlare()) lf->setIntensity(pendingLensFlare);
@@ -1867,8 +1874,13 @@ void SettingsPanel::applyAudioVolumes(audio::AudioCoordinator* ac) {
         ui->setVolumeScale(fx * pendingUiVolume / 100.0f);
     if (auto* combat = ac->getCombatSoundManager())
         combat->setVolumeScale(fx * pendingCombatVolume / 100.0f);
-    if (auto* spell = ac->getSpellSoundManager())
-        spell->setVolumeScale(fx * pendingSpellVolume / 100.0f);
+    // The spells' own balance is over what the kits already bring - a kit's
+    // sound comes in with its SoundEntries volume. Not times the effects
+    // volume: a kit plays on the engine's Effects channel, whose group
+    // setEffectsVolume above already sets to it, and taking it twice played
+    // spell sounds at its square (a quarter at half).
+    if (auto* svs = services_.renderer ? services_.renderer->getSpellVisualSystem() : nullptr)
+        svs->setKitSoundVolumeScale(static_cast<float>(pendingSpellVolume) / 100.0f);
     if (auto* movement = ac->getMovementSoundManager())
         movement->setVolumeScale(fx * pendingMovementVolume / 100.0f);
     if (auto* footstep = ac->getFootstepManager())

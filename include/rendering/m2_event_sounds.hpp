@@ -240,12 +240,17 @@ public:
     /// of it as may play at once are playing (audio/play_limit.hpp).
     /// With `absolute`, `volumeScale` is the volume itself, not a scale of
     /// the kit's - a play whose own volume is set (0x004c6a40 takes one in
-    /// (0, 1] in place of the kit's). `priority` is its voice's
+    /// (0, 1] in place of the kit's), which is also the one case the client
+    /// does not swing in volume. What the row asks of the play - its pitch
+    /// and volume swings - is applied either way (audio/sound_entry.hpp).
+    /// `priority` is its voice's
     /// (audio/voice_priority.hpp): kActiveMover for one the active mover is
-    /// part of.
+    /// part of. `outHandle`, where given, takes the play's handle to ask
+    /// about with AudioEngine::isSoundPlaying - what the client holds in the
+    /// slot the play was handed (0x004c6a40's third argument); 0 for no play.
     void playOnce(uint32_t soundId, const glm::vec3* at, float volumeScale, pipeline::AssetManager* assets,
                   audio::PlayLimit limit = audio::PlayLimit::None, bool absolute = false,
-                  int priority = audio::voice_priority::kDefault);
+                  int priority = audio::voice_priority::kDefault, uint32_t* outHandle = nullptr);
     /// A SoundEntries row by its Name (0x004ccaa0), 0 for none.
     uint32_t idByName(const std::string& name, pipeline::AssetManager* assets);
 
@@ -256,6 +261,9 @@ private:
         float volume = 1.0f;                      ///< VolumeFloat
         float minDistance = 0.0f;                 ///< MinDistance
         float cutoff = 0.0f;                      ///< DistanceCutoff
+        /// Flags (column 25) whole: 0x200 loops the kit, and 0x400/0x800 ask the
+        /// play for a pitch or a volume swing (audio/sound_entry.hpp).
+        uint32_t flags = 0;
         bool loops = false;                       ///< Flags 0x200
     };
     const Kit* kit(uint32_t soundId, pipeline::AssetManager* assets);

@@ -90,9 +90,62 @@ enum class UF : uint16_t {
     // (0x004f88b0 reads +0x10e7). WotLK only here.
     PLAYER_FIELD_BYTES2,
 
+    // The honour counters the PvP and honour panels print.  All four are read
+    // straight out of the fields, unsigned: 0x00611a20 (GetPVPSessionStats)
+    // takes the low halfword of PLAYER_FIELD_KILLS and
+    // PLAYER_FIELD_TODAY_CONTRIBUTION, 0x00611ad0 (GetPVPYesterdayStats) the
+    // high halfword of the same dword and PLAYER_FIELD_YESTERDAY_CONTRIBUTION,
+    // and 0x00611b80 (GetPVPLifetimeStats) PLAYER_FIELD_LIFETIME_HONORBALE_
+    // KILLS - the client's own spelling of it, missing an O like its own header
+    // does.  The lifetime dishonourable count is byte 3 of PLAYER_FIELD_BYTES
+    // (+0x1067), and reads as zero below 5.  WotLK only here.
+    PLAYER_FIELD_KILLS,
+    PLAYER_FIELD_TODAY_CONTRIBUTION,
+    PLAYER_FIELD_YESTERDAY_CONTRIBUTION,
+    PLAYER_FIELD_LIFETIME_HONORBALE_KILLS,
+
+    // Which faction the realm is showing under the experience bar, as a
+    // reputation list index rather than a faction id.  GetWatchedFactionInfo
+    // (0x005d1240) reads +0x10e8 into the field blob the player object keeps at
+    // +0x1008 - blob dword 1082, which the client's own per-field descriptor
+    // table names PLAYER_FIELD_WATCHED_FACTION_INDEX - rejects it below 0 or
+    // above 0x7f, and looks up the reputation list entry at that index to get
+    // the faction, its standing and the rank bounds.  The same index goes back
+    // out in CMSG_SET_WATCHED_FACTION (0x005d0ba0 converts a faction id to it and
+    // sends -1 for an untracked one, and only sends when the field would change),
+    // so the choice belongs to the realm: it survives a relog and follows the
+    // character to another client.  WotLK only here.
+    PLAYER_FIELD_WATCHED_FACTION_INDEX,
+
     // Player spell power / healing bonus (WotLK: PRIVATE - int32 per school)
     PLAYER_FIELD_MOD_DAMAGE_DONE_POS,  // Spell damage bonus (first of 7 schools)
+    // The other half of the same seven-school run - a damage *reduction*, sent
+    // negative.  0x0060e310 (GetSpellBonusDamage) answers one school as
+    // PLAYER_FIELD_MOD_DAMAGE_DONE_POS[school] + this one[school], the two
+    // accessors being +0xffc and +0x1018 into the field blob the player object
+    // keeps at +0x1008 (0x00578210, 0x00578250), and pushes that sum without
+    // clamping, so a curse shows as a negative spell damage.  The descriptor
+    // table names both runs seven dwords wide, POS at blob 1023 and NEG at 1030,
+    // with MOD_DAMAGE_DONE_PCT (float) after that at 1037.  WotLK only here.
+    PLAYER_FIELD_MOD_DAMAGE_DONE_NEG,
+    // The third seven-school run, a float: UnitDamage (0x00610860) pushes it as
+    // its seventh answer and the character sheet **divides** the damage bounds
+    // by it (paperdollframe.lua:544-545), so it is a multiplier rather than a
+    // percentage.  Read with the pair above through 0x00578290 (+0x1034 into the
+    // field blob the player object keeps at +0x1008 - blob dword 1037), always at
+    // index 0: the call sites push 0, visible in the code bytes as `6a 00` before
+    // each of the three helper calls, which is the argument Ghidra drops.  WotLK
+    // only here.
+    PLAYER_FIELD_MOD_DAMAGE_DONE_PCT,
     PLAYER_FIELD_MOD_HEALING_DONE_POS, // Healing bonus
+    // What the player's gear takes off the target's resistances, sent already
+    // summed: 0x0060e470 reads +0x105c into the field blob the player object
+    // keeps at +0x1008 - dword 1047 of it, PLAYER_FIELD_MOD_TARGET_RESISTANCE
+    // in the client's own per-field descriptor table - and pushes its negation,
+    // which is what GetSpellPenetration answers with and what the character
+    // sheet prints as SPELL_PENETRATION (paperdollframe.lua:988).  Negative in
+    // the field, positive out of the binding.  WotLK only here.
+    PLAYER_FIELD_MOD_TARGET_RESISTANCE,
 
     // Player combat stats (WotLK: PRIVATE - float values)
     PLAYER_BLOCK_PERCENTAGE,         // Block chance %
@@ -101,13 +154,33 @@ enum class UF : uint16_t {
     PLAYER_CRIT_PERCENTAGE,          // Melee crit chance %
     PLAYER_RANGED_CRIT_PERCENTAGE,   // Ranged crit chance %
     PLAYER_SPELL_CRIT_PERCENTAGE1,   // Spell crit chance % (first school; 7 consecutive float fields)
+    // How much a block takes off, which GetShieldBlock() answers with straight
+    // out of the field: 0x0060dff0 reads +0xdec into the field blob the player
+    // object keeps at +0x1008 - dword 891 of it, the dword the client's own
+    // per-field descriptor table names PLAYER_SHIELD_BLOCK - and hands the
+    // character sheet's block tooltip that number as the damage blocked.  An
+    // int, not one of the percent floats either side of it, and the client
+    // reads it unsigned: it adds 2^32 when the int comes out negative.  WotLK
+    // only here.
+    PLAYER_SHIELD_BLOCK,
     PLAYER_FIELD_COMBAT_RATING_1,    // First of 25 int32 combat rating slots (CR_* indices)
     // What the player's tracking finds, as bit masks: creature types from
     // 1, and LockType ids from 1 (herbs, minerals, treasure, fish). The
     // minimap blips what they match (0x006dca00, 0x006dca90 read them at
     // 0xda8 and 0xdac past UNIT_END, which is 1022 and 1023). WotLK only.
-    // The skill points the old rank purchase spends (0xda4 past UNIT_END,
-    // 1021; 0x005cd970(1), 0x005ce540). WotLK only.
+    // The two points fields, watched as one pair rather than apart: 0x005e8470
+    // registers `4, 0xda0, 8` - one eight-byte watch over the talent points
+    // (0xda0 past UNIT_END, 1020) and the skill points the old rank purchase
+    // spends (0xda4, 1021; 0x005cd970(1), 0x005ce540) - with the callback at
+    // 0x005e8330, and 0x005eaf70 re-puts the same pair.  That callback is the
+    // client's only raise of CHARACTER_POINTS_CHANGED (246): it reads both
+    // dwords as they now stand, subtracts the two the watcher was handed, and
+    // names both differences through a "%d%d".  And 0x00610fb0
+    // (UnitCharacterPoints) answers nothing but these two dwords, walking
+    // 0xda0 and 0xda4 in the player's own blob - so what the chat line
+    // (chatframe.lua:2603) and the trainer's profession check read is the
+    // fields, not a local tally. WotLK only.
+    PLAYER_CHARACTER_POINTS1,
     PLAYER_CHARACTER_POINTS2,
     PLAYER_TRACK_CREATURES,
     PLAYER_TRACK_RESOURCES,
@@ -122,6 +195,35 @@ enum class UF : uint16_t {
     // Player PvP currency (TBC/WotLK only - Classic uses the old weekly honor system)
     PLAYER_FIELD_HONOR_CURRENCY,     // Accumulated honor points (uint32)
     PLAYER_FIELD_ARENA_CURRENCY,     // Accumulated arena points (uint32)
+    // The level this character stops at, which the realm sends rather than the
+    // client deciding. Blob dword 1131 of the player's field array (its +0x11ac,
+    // next to the honour and arena counters at 1129/1130), which the descriptor
+    // table names PLAYER_FIELD_MAX_LEVEL; 1131 past UNIT_END's 148 is wire 1279.
+    // Four readers all compare it against UNIT_FIELD_LEVEL: 0x005e49b0
+    // (GetQuestLogRewardXP) answers no reward XP at all at the cap, 0x005e48f0
+    // (GetQuestLogRewardMoney) switches to the quest's other money amount there,
+    // 0x0058dd50 zeroes the reward panel's XP line the same way, and 0x0054e5b0
+    // sends the "no more XP" byte with it.
+    PLAYER_FIELD_MAX_LEVEL,
+    // Which currencies the realm says this character has met. WotLK only: no
+    // earlier layout this client's tables were read from names it, so on those
+    // layouts fieldIndex answers 0xFFFF and the token tab falls back to
+    // counting the bags. One field the client reads as
+    // two dwords (blob +0x790 and +0x794, wire 632 and 633); known_currencies.hpp
+    // says which bit of which half a currency id uses, and 0x005b0030 is the
+    // client's own token-list builder reading both.
+    PLAYER_FIELD_KNOWN_CURRENCIES,
+    // The titles the realm says this character has earned, six dwords holding
+    // three 64-bit groups (wire 626..631, blob +0x778..+0x78f - the run ends
+    // exactly where the currency pair above begins). The client's own field-name
+    // table names the run three times, two dwords each
+    // (PLAYER__FIELD_KNOWN_TITLES, _TITLES1, _TITLES2, with its own doubled
+    // underscore), and it installs one eight-byte watcher per pair, all three of
+    // which raise KNOWN_TITLES_UPDATE (498) with no arguments (0x006e5180). This
+    // layout names the run once, at its first dword; known_titles.hpp says which
+    // group and which bit a title id addresses, and IsTitleKnown (0x0051b410) is
+    // the client's reader.
+    PLAYER_FIELD_KNOWN_TITLES,
     // The three arena teams, seven fields each with the team id first
     // (0x1150 past UNIT_END's player block, 0x005bc240). WotLK only.
     PLAYER_FIELD_ARENA_TEAM_INFO_1_1,
@@ -220,6 +322,25 @@ enum class UF : uint16_t {
     /// 0x005e8300) and the class spells it needs no reagents for, three
     /// mask words (+0x1008 +0x1224, 0x00800d60).
     PLAYER_AMMO_ID,
+    /// WotLK: the spell the realm means to resurrect this client with while a
+    /// soulstone is on it (+0x1008 +0x106c, blob dword 1051).  Nothing else
+    /// announces a soulstone: the death popup asks this field directly
+    /// (0x0051acd0), and its own second button comes and goes with it.
+    PLAYER_SELF_RES_SPELL,
+    /// WotLK: what it costs to take back the twelve things the realm is holding
+    /// for the player, and when each was sold - twelve dwords at (+0x1008
+    /// +0x1074) and twelve at (+0x10a4), which the client's descriptor table
+    /// names PLAYER_FIELD_BUYBACK_PRICE_1 (1201, covering 12) and
+    /// PLAYER_FIELD_BUYBACK_TIMESTAMP_1 (1213, covering 12).  The price the
+    /// merchant window prints is the field, not a local figure: 0x00584b00
+    /// answers `+0x1074 + idx*4` with the index bounded at 0xb, and
+    /// GetBuybackItemInfo (0x00585070) calls it for the third value.  The item
+    /// itself is not in these - it is an ordinary item instance in the player's
+    /// own item store at slots 74..85 (the guid pairs the ring is read out of),
+    /// which is why 1213 is a timestamp and not an item id.  One watch covers the
+    /// pair of arrays: see the buyback block in the player-field watcher.
+    PLAYER_FIELD_BUYBACK_PRICE_1,
+    PLAYER_FIELD_BUYBACK_TIMESTAMP_1,
     PLAYER_NO_REAGENT_COST_1,
     /// The six glyph sockets' GlyphSlot.dbc ids (+0x1008 +0x1230), the
     /// GlyphProperties ids in them (+0x1248), and the bitmask of the sockets
@@ -227,6 +348,11 @@ enum class UF : uint16_t {
     PLAYER_FIELD_GLYPH_SLOTS_1,
     PLAYER_FIELD_GLYPHS_1,
     PLAYER_GLYPHS_ENABLED,
+    /// WotLK: the spell power the pet is given, the dword straight after the
+    /// unlocked glyph mask (+0x1264). GetPetSpellBonusDamage reads exactly this
+    /// (0x0060e410), and the watcher on it (0x006d1cb0) is what the pet sheet's
+    /// Spell Bonus Damage line waits for.
+    PLAYER_FIELD_PET_SPELL_POWER,
     GAMEOBJECT_FLAGS,
     GAMEOBJECT_BYTES_1,
     // MO_TRANSPORT route clock. LEVEL carries the route's period in ms; the high
@@ -259,6 +385,106 @@ enum class UF : uint16_t {
     // Container fields
     CONTAINER_FIELD_NUM_SLOTS,
     CONTAINER_FIELD_SLOT_1,
+
+    /// WotLK: the unit's own attack times, main hand then off hand. The
+    /// client's UnitAttackSpeed (0x00610a00) reads them at +0xe0 and +0xe4 of
+    /// the field blob, both a millisecond count it divides by 1000, and the
+    /// ranged one at +0xe8 - which is UNIT_FIELD_RANGEDATTACKTIME, already in
+    /// this table at 64. So the pair is 62 and 63: the blob runs six dwords
+    /// behind the wire index across the unit fields (UnitLevel reads +0xc0 for
+    /// LEVEL's 54, BYTES_1's 74 sits at +0x110). A druid's cat form and every
+    /// pet answer their swing time from these; a weapon's delay is only what
+    /// the realm wrote the field from. WotLK only - the other three layouts
+    /// number their fields by their own client's table, and none of those
+    /// places this pair. The client's own field-name table names the two
+    /// together, as one UNIT_FIELD_BASEATTACKTIME entry two fields wide, which
+    /// is why 63 needs a name of its own here for anything to ask for it.
+    UNIT_FIELD_BASEATTACKTIME,
+    UNIT_FIELD_OFFHANDATTACKTIME,
+
+    /// WotLK: the rest of the damage family, under the names the client's own
+    /// field-name table gives them. UnitDamage (0x00610860) pushes four of them
+    /// straight out of the field blob - +0x100 and +0x104, which are
+    /// MINDAMAGE's 70 and MAXDAMAGE's 71, then +0x108 and +0x10c, the off-hand
+    /// pair at 72 and 73 - each stored as float bits and added to by nothing,
+    /// because the realm has already put the weapon's damage and the unit's
+    /// attack power into them. UnitRangedDamage (0x00610550) reads the ranged
+    /// pair below beside the ranged attack time at +0xe8, which is
+    /// UNIT_FIELD_RANGEDATTACKTIME: +0x1ec and +0x1f0, which the drift puts at
+    /// 129 and 130. Both pairs sit where the client's table says they do - the
+    /// off-hand pair directly below BYTES_1's 74, the ranged pair directly
+    /// below POWER_COST_MODIFIER's 131 - and a field this table already has
+    /// bounds each of them on the other side (MAXDAMAGE 71, RANGED_ATTACK_POWER
+    /// 126), so neither rests on the drift alone.
+    UNIT_FIELD_MINOFFHANDDAMAGE,
+    UNIT_FIELD_MAXOFFHANDDAMAGE,
+    UNIT_FIELD_MINRANGEDDAMAGE,
+    UNIT_FIELD_MAXRANGEDDAMAGE,
+
+    /// WotLK: the two attack-power mod fields beside each base. UnitAttackPower
+    /// (0x00610b60) reads three dwords of the blob - +0x1d4 the base (WoWee's
+    /// ATTACK_POWER, 123), +0x1d8 the mods, +0x1dc a float multiplier - and
+    /// multiplies every answer it pushes by (multiplier + 1). The mods dword is
+    /// two signed halves: +0x1d8 low for the positive buff, +0x1da high for the
+    /// negative one, which is why one field carries both. UnitRangedAttackPower
+    /// (0x00610ca0) does the same with +0x1e0/+0x1e4/+0x1e8, bases 126, mods
+    /// 127, multiplier 128. Each pair is wedged between two fields this table
+    /// already has - 123 and 126 on one side, 126 and MINRANGEDDAMAGE's 129 on
+    /// the other - and the client's field-name table lists them in that order
+    /// (ATTACK_POWER_MODS at 0x009f8b74, …MULTIPLIER at 0x009f8b50).
+    UNIT_FIELD_ATTACK_POWER_MODS,
+    UNIT_FIELD_ATTACK_POWER_MULTIPLIER,
+    UNIT_FIELD_RANGED_ATTACK_POWER_MODS,
+    UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER,
+
+    /// WotLK: the buff halves of the five primary stats. UnitStat (0x00610300)
+    /// answers four values, three of them straight out of the field blob and all
+    /// four gated on the unit being player-controlled: STAT0..4 (84-88, blob
+    /// +0x138) as it stands, that same dword clamped at zero (0x005774b0, the
+    /// `uVar & ((int)uVar < 0) - 1` trick) as the figure the sheet prints, then
+    /// POSSTAT0..4 (89-93, blob +0x14c) and NEGSTAT0..4 (94-98, blob +0x160).
+    /// So STAT is the *total*, not the base: paperdollframe.lua:246 gets the
+    /// unbuffed number by subtracting both halves back out of it, and colours
+    /// the line red when a negative half is in play.
+    ///
+    /// The client names all fifteen of these itself. Its field-name table holds
+    /// UNIT_FIELD_NEGSTAT4 at 0x009f8c58 stepping up through NEGSTAT0,
+    /// POSSTAT4..0, STAT4..0 to UNIT_FIELD_STAT0 at 0x009f8d70 - one name per
+    /// element, in descending index order, with WoWee's own RESISTANCES 99
+    /// directly above and STAT0 84 directly below. The blob reads agree
+    /// dword for dword with that count, drift rule included.
+    UNIT_FIELD_POSSTAT0,
+    UNIT_FIELD_POSSTAT1,
+    UNIT_FIELD_POSSTAT2,
+    UNIT_FIELD_POSSTAT3,
+    UNIT_FIELD_POSSTAT4,
+    UNIT_FIELD_NEGSTAT0,
+    UNIT_FIELD_NEGSTAT1,
+    UNIT_FIELD_NEGSTAT2,
+    UNIT_FIELD_NEGSTAT3,
+    UNIT_FIELD_NEGSTAT4,
+
+    /// WotLK: the buff halves of armour and the six schools, seven each in the
+    /// same school order as RESISTANCES (99-105). 0x004f54d0 is the whole of it:
+    /// effective = RESISTANCES[i], positive = this +i, negative = the other +i,
+    /// and the base is effective - positive - negative, with the effective pair
+    /// - and only those - clamped away when negative. UnitArmor (0x00610ec0)
+    /// calls it for any player-controlled unit and pushes five values;
+    /// UnitResistance (0x006101a0) calls it only for the local player and takes
+    /// four, answering the pet from RESISTANCES alone with no parts. The two
+    /// bindings disagree with each other about the pet; that is the client's own
+    /// behaviour, mirrored here rather than tidied up, because it is what the
+    /// shipped interface shows for a hunter's pet.
+    ///
+    /// Bases rather than one name per element: the client's field-name table has
+    /// a single string for each run (RESISTANCEBUFFMODSNEGATIVE at 0x009f8bf0,
+    /// POSITIVE at 0x009f8c18, RESISTANCES at 0x009f8c40 - descending index
+    /// order, so NEGATIVE is the 113 end and POSITIVE the 106 end, which
+    /// 0x004f54d0's own blob reads at +0x190 and +0x1ac confirm). Each run is
+    /// then pinned between two keys this table has always had: RESISTANCES' 99
+    /// and BASE_MANA's 120.
+    UNIT_FIELD_RESISTANCEBUFFMODSPOSITIVE,
+    UNIT_FIELD_RESISTANCEBUFFMODSNEGATIVE,
 
     COUNT
 };

@@ -966,9 +966,6 @@ struct ChannelNotifyData {
     /// YOU_LEFT: the channel's id and whether it is a constant one, which the
     /// server leaves for the player when the zone no longer has it.
     bool constant = false;
-    /// MODE_CHANGE: a member's flags after the change (the flags before it
-    /// are on the wire too, and nothing needs them).
-    uint8_t newMemberFlags = 0;
 
     [[nodiscard]] bool isValid() const { return !channelName.empty(); }
 };
@@ -3141,7 +3138,9 @@ struct QuestDetailsData {
     /// TBC and Classic offers have no flags field at all, so it stays zero
     /// there rather than being guessed at.
     uint32_t questFlags = 0;
-    uint32_t rewardMoney = 0;
+    /// Signed, as in QuestOfferRewardData: the word is one field for a payout or a
+    /// cost and the client splits it by sign (0x0058dd50).
+    int32_t  rewardMoney = 0;
     uint32_t rewardXp = 0;
     std::vector<QuestRewardItem> rewardChoiceItems;  // Player picks one of these
     std::vector<QuestRewardItem> rewardItems;         // These are always given
@@ -3190,7 +3189,11 @@ struct QuestOfferRewardData {
     std::string title;
     std::string rewardText;
     uint32_t questFlags = 0;    // QUEST_FLAGS_*, 3.x only
-    uint32_t rewardMoney = 0;
+    /// Signed: the offer packet writes one word for both "pays" and "charges", and
+    /// the client splits it by its sign (0x0058dd50) - a negative amount is the
+    /// cost, and the reward answer is zero. Read unsigned, a charging quest paid
+    /// out four billion copper.
+    int32_t  rewardMoney = 0;
     uint32_t rewardXp = 0;
     uint32_t rewardHonor = 0;   // honor points (the packet's ×10 value, unscaled)
     uint32_t rewardTalents = 0;
@@ -3216,6 +3219,13 @@ public:
 /** Reward block extracted from SMSG_QUEST_QUERY_RESPONSE (quest log rewards). */
 struct QuestQueryRewardsData {
     int32_t  rewardMoney = 0;
+    /// The same quest's money at the level cap - the word immediately after the
+    /// reward amount in the WotLK quest query block. The client substitutes it
+    /// for the reward amount at the cap whenever it is at least as large
+    /// (0x005e48f0), which is how a quest that pays nothing still pays a
+    /// max-level character something. Zero on the layouts whose field order
+    /// beside the money was never counted off a serializer (classic, TBC).
+    int32_t  rewardMoneyMaxLevel = 0;
     std::array<uint32_t, 4> itemId{};
     std::array<uint32_t, 4> itemCount{};
     std::array<uint32_t, 6> choiceItemId{};
@@ -3238,6 +3248,11 @@ struct QuestQueryRewardsData {
     /// the flat addition, which is what most quests set (the multiplier path is
     /// not derived here).
     uint32_t rewardHonor = 0;
+    /// The honour multiplier beside the flat addition (RewHonorMultiplier, a
+    /// float). The client folds it into the honour answer as
+    /// round(multiplier * 0.1) - see game/quest_rewards.hpp. WotLK only, same
+    /// caveat as the fields above.
+    float rewardHonorMultiplier = 0.0f;
     uint32_t bonusTalents = 0;
     uint32_t arenaPoints = 0;
     /// CharTitles.dbc id of a title the quest awards (few quests do). WotLK only.

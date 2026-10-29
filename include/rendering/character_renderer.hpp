@@ -655,7 +655,7 @@ private:
         /// +0xa38 0x10000: the PrecastKit's StartAnimID asked, the cast's loop
         /// until it ends (0x0073b140, 0x007224d0); -1 for none.
         int32_t precastStart = -1;
-        /// +0xfa4: a PlayImpact kit's animation, which holds the cast loop
+        /// +0xfa4: a visual kit's animation (type 0), which holds the cast loop
         /// off until it ends (0x007224d0, 0x0073bbd0); -1 for none.
         int32_t kitAnimationHeld = -1;
         /// +0x9f8: the stand state its animation was last given for; -1

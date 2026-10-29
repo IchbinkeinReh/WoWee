@@ -36,9 +36,22 @@ struct MountFamilyHash {
     std::size_t operator()(MountFamily f) const { return static_cast<std::size_t>(f); }
 };
 
+// Every mount clip here is chosen by archive path, never by a SoundEntries id,
+// so the row that names it is found by leaf file name. rowVolume < 0 means no
+// row names this file and the play's own guess at a level is all there is.
 struct MountSample {
     std::string path;
     std::vector<uint8_t> data;
+    float rowVolume = -1.0f;
+    uint32_t flags = 0;
+};
+
+// What a SoundEntries row asks of a play of one of its files: the level it
+// names (VolumeFloat, column 24) and the Flags that decide whether the play is
+// swung (column 25) - see audio/sound_entry.hpp for what the bits mean.
+struct MountRowAsk {
+    float volume = 1.0f;
+    uint32_t flags = 0;
 };
 
 class MountSoundManager {
@@ -78,6 +91,18 @@ private:
     void stopAllMountSounds();
     void loadMountSounds();
     bool loadSound(const std::string& path, MountSample& sample);
+
+    /// The SoundEntries rows that name this manager's clips, by lowered leaf
+    /// file name; read before the clips are loaded, applied after.
+    std::unordered_map<std::string, MountRowAsk> rowsByLeaf;
+    void indexRowAsks();
+    void applyRowAsks();
+    /// The level and pitch the clip's own row asks for. `own` is what this play
+    /// used before any row was read, and it survives only for a clip no row
+    /// names: with no row there is no level to take and no flag to swing by.
+    void askedByRow(const MountSample& sample, float own, float& volume, float& pitch) const;
+    /// The ambient loop's level: its own, not the row's (no such loop in the client).
+    void askedAmbient(const MountSample& sample, float own, float& volume, float& pitch) const;
 
     pipeline::AssetManager* assetManager_ = nullptr;
     bool mounted_ = false;

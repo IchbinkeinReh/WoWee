@@ -69,6 +69,15 @@ std::shared_ptr<const ue::FootstepTerrainSounds> loadFootstepSounds(pipeline::As
     return table;
 }
 
+/// The gate every pet's own line goes through (0x007474b0's first test): a
+/// line is said while Sound_EnablePetSounds is on, or by a unit that is nobody's
+/// pet - the client asks its sound component's owner link (+0x114) whether it is
+/// empty, and who summoned the unit answers the same question of the fields.
+bool petVoiceAllowed(const game::Unit& unit) {
+    return addons::storedCVarValue("Sound_EnablePetSounds", "1") != "0" ||
+           game::unitSummonedByGuid(unit) == 0;
+}
+
 }  // namespace
 
 int32_t EntitySpawner::unitSoundRow(const game::Unit& unit, bool petRow) const {
@@ -137,6 +146,186 @@ void EntitySpawner::playUnitSlot(const game::Unit& unit, uint32_t slot, bool alw
     if (at) where = *at;
     else where = unitSoundPosition(guid);
     if (where) player.playOnce(sound, &*where, 1.0f, assetManager_, type, false, priority);
+}
+
+void EntitySpawner::playUnitJumpSound(const game::Unit& unit, uint32_t slot) {
+    // A jump's slots are asked outright, not by their chance: the client's
+    // four callers all pass its "no roll" parameter (0x0073ed10 cases 0xbb
+    // and 0x346, FUN_0073d2b0), and where the unit stands is where it jumps.
+    playUnitSlot(unit, slot, true, nullptr);
+}
+
+void EntitySpawner::playUnitReactionSound(const game::Unit& unit, uint32_t reaction) {
+    // 0x00716b10, SMSG_AI_REACTION's handler: it asks one thing per reaction and
+    // nothing for the others. A reaction of HATE asks the unit its slot 8,
+    // rolled like any other though its chance is 100 of 100; an UNFRIENDLY one
+    // asks its Aggro voice line instead - a pet's kind, so the pet gate stands
+    // between it and the ear. Neither ask is given a position: the line is said
+    // where the unit stands, and the packet carries none.
+    if (!renderer_ || !gameHandler_ || !assetManager_) return;
+    if (reaction == 0) {
+        playUnitSlot(unit, ue::kSlotAlert, false, nullptr);
+        return;
+    }
+    if (reaction == 2 && petVoiceAllowed(unit))
+        playUnitVoiceKind(unit, ue::kVoiceKindAggro);
+}
+
+void EntitySpawner::playUnitVoiceLine(const game::Unit& unit, uint32_t sound, uint32_t* outHandle) {
+    // How every line of 0x007474b0 reaches the ear: heard as that unit's own
+    // voice, the active player's own - and the mover it drives - kept over a
+    // crowd's (0x6e) and, with the listener at the character, at the listener
+    // and fainter. None of these lines is counted by a kind, so nothing caps
+    // how many of them are going at once.
+    const uint64_t guid = unit.getGuid();
+    const bool own = guid == gameHandler_->getPlayerGuid() || guid == gameHandler_->activeMover();
+    const int priority = own ? audio::voice_priority::kActiveMover : audio::voice_priority::kDefault;
+    rendering::M2EventSounds& player = renderer_->getM2EventSounds();
+    if (own && addons::storedCVarValue("Sound_ListenerAtCharacter", "1") != "0") {
+        player.playOnce(sound, nullptr, ue::kListenerAtCharacterVolume, assetManager_,
+                        audio::PlayLimit::None, false, priority, outHandle);
+        return;
+    }
+    if (const auto where = unitSoundPosition(guid))
+        player.playOnce(sound, &*where, 1.0f, assetManager_, audio::PlayLimit::None, false, priority, outHandle);
+}
+
+void EntitySpawner::playUnitVoiceKind(const game::Unit& unit, uint32_t kind) {
+    // The row the unit's display gives it (0x0072d940's +0x974), asked plain:
+    // the pet row that stands in for a sound slot does not stand in for a
+    // voice line, and no chance is rolled for one either.
+    const uint32_t column = ue::voiceColumn(kind);
+    if (column == ue::kVoiceColumnNone) return;
+    const int32_t row = unitSoundRow(unit, false);
+    if (row < 0) return;
+    auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
+    if (!sounds || sounds->getFieldCount() <= column) return;
+    const uint32_t sound = sounds->getUInt32(static_cast<uint32_t>(row), column);
+    if (sound == 0) return;
+    // A unit says one line at a time (0x007474b0): the play it is saying is
+    // held in its tracker slot, and while that runs a kind only gets through
+    // when it outranks the kind already playing. Death outranks a Kill, an
+    // Order outranks an Aggro, and an Aggro outranks nothing at all.
+    const uint64_t guid = unit.getGuid();
+    if (auto playing = unitVoiceLines_.find(guid); playing != unitVoiceLines_.end()) {
+        if (!audio::AudioEngine::instance().isSoundPlaying(playing->second.first))
+            unitVoiceLines_.erase(playing);
+        else if (static_cast<int32_t>(kind) <= playing->second.second)
+            return;
+    }
+    uint32_t handle = 0;
+    playUnitVoiceLine(unit, sound, &handle);
+    if (handle == 0) return;  // nothing started: no line to be in the way
+    unitVoiceLines_[guid] = {handle, static_cast<int32_t>(kind)};
+}
+
+void EntitySpawner::playUnitPetActionSound(const game::Unit& unit, uint32_t action) {
+    // 0x00716b90, SMSG_PET_ACTION_SOUND: a value of 0 asks the pet to say what
+    // it waits on, 1 says it has been set on something. Nothing else the value
+    // can hold says anything. Both are a pet's lines, so the client asks them
+    // while Sound_EnablePetSounds is on - or of a unit that is nobody's pet,
+    // which the guid in the packet can still name.
+    if (!renderer_ || !gameHandler_ || !assetManager_) return;
+    if (action > 1) return;
+    if (!petVoiceAllowed(unit)) return;
+    playUnitVoiceKind(unit, action == 0 ? ue::kVoiceKindOrder : ue::kVoiceKindKill);
+}
+
+void EntitySpawner::playPetDismissSound(uint32_t modelId, const glm::vec3& at) {
+    // 0x00716c00, SMSG_PET_DISMISS_SOUND: the packet names no unit but a model,
+    // and the line asked for is that model's own - the sound row of the model's
+    // CreatureModelData row (its +0x34, the fallback the display's own SoundID
+    // leaves to it), dismiss column. So a pet whose sound row only its display
+    // names says nothing here, and no unit need be known to hear it. None of the
+    // voice kinds' gates are on this ask: no pet gate, no chance, no cooldown,
+    // and the play is handed no tracker slot - so it neither waits on a line the
+    // pet is still saying nor keeps one out of its way.
+    if (!renderer_ || !assetManager_) return;
+    auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+    auto sounds = assetManager_->loadDBCOptional("CreatureSoundData.dbc");
+    if (!models || !sounds || sounds->getFieldCount() <= ue::kColumnPetDismiss) return;
+    const int32_t model = models->findRecordById(modelId);
+    if (model < 0 || models->getFieldCount() <= kModelSoundColumn) return;
+    const uint32_t soundId = models->getUInt32(static_cast<uint32_t>(model), kModelSoundColumn);
+    if (soundId == 0) return;
+    const int32_t row = sounds->findRecordById(soundId);
+    if (row < 0) return;
+    const uint32_t sound = sounds->getUInt32(static_cast<uint32_t>(row), ue::kColumnPetDismiss);
+    if (sound == 0) return;
+    // The position the packet gives, raised by 1.0 (0x009e1130) off the ground
+    // it was read at.
+    const glm::vec3 where{at.x, at.y, at.z + 1.0f};
+    renderer_->getM2EventSounds().playOnce(sound, &where, 1.0f, assetManager_);
+}
+
+void EntitySpawner::playUnitDeathSound(uint64_t guid) {
+    // 0x007474b0 kind 4, asked as the unit's dead state goes up (0x0073c5d0)
+    // and by the combat death handler (0x007561e0): the Death column of the
+    // CreatureSoundData row its display gives it. Not a slot - so no chance is
+    // rolled, and not the pet row either, which only the slot asks substitute
+    // (0x0071a3f0); and of the four voice kinds this is the one a pet is asked
+    // for regardless of Sound_EnablePetSounds. The client refuses one display
+    // outright - the record it keeps for a player only (0x0072d940 gives a
+    // +0x964 to type 9 alone) when that record's own flags have 0x1000000 -
+    // and a creature never has such a record to refuse.
+    if (!renderer_ || !gameHandler_ || !assetManager_) return;
+    if (deadCreatureGuids_.count(guid)) return;  // the same death, noticed twice
+    auto entity = gameHandler_->getEntityManager().getEntity(guid);
+    if (!entity || !entity->isUnit()) return;
+    playUnitVoiceKind(static_cast<const game::Unit&>(*entity), ue::kVoiceKindDeath);
+}
+
+const std::vector<ue::EmoteSoundRow>& EntitySpawner::emoteSoundRows() {
+    if (emoteSoundRowsLoaded_ || !assetManager_) return emoteSoundRows_;
+    emoteSoundRowsLoaded_ = true;
+    auto table = assetManager_->loadDBCOptional("EmotesTextSound.dbc");
+    if (!table || table->getRecordCount() == 0) {
+        LOG_WARNING("Emotes: EmotesTextSound.dbc not available - an emote says nothing");
+        return emoteSoundRows_;
+    }
+    // ID, EmotesText id, race, sex, SoundEntries id: what the client insists
+    // the table is when it loads it (0x0063e4f0 refuses five columns or a
+    // twenty-byte row differently, and reads no layout for either).
+    if (table->getFieldCount() < ue::kEmoteSoundColumnCount) {
+        LOG_WARNING("EmotesTextSound.dbc has ", table->getFieldCount(), " fields, expected ",
+                    ue::kEmoteSoundColumnCount);
+        return emoteSoundRows_;
+    }
+    const uint32_t records = table->getRecordCount();
+    emoteSoundRows_.reserve(records);
+    for (uint32_t i = 0; i < records; ++i) {
+        emoteSoundRows_.push_back({
+            .emotesTextId = table->getUInt32(i, ue::kEmoteSoundColumnEmotesText),
+            .race = table->getUInt32(i, ue::kEmoteSoundColumnRace),
+            .sex = table->getUInt32(i, ue::kEmoteSoundColumnSex),
+            .soundId = table->getUInt32(i, ue::kEmoteSoundColumnSound),
+        });
+    }
+    LOG_INFO("EmotesTextSound: ", emoteSoundRows_.size(), " voice lines read");
+    return emoteSoundRows_;
+}
+
+void EntitySpawner::playUnitEmoteSound(const game::Unit& unit, uint32_t emotesTextId) {
+    // An emote's voice line, asked of the unit the emote shows on. Both gates
+    // are the client's, and they sit inside the play itself - 0x00746d60's
+    // branch for an emote-flagged ask: nothing at all while
+    // Sound_EnableEmoteSounds is off, and while Sound_EnablePetSounds is off a
+    // pet stays quiet, where its own unit still emotes. The client's pet test
+    // is its sound component's owner link (+0x114); who summoned the unit is
+    // the same question asked of the fields.
+    if (!renderer_ || !gameHandler_ || !assetManager_) return;
+    if (addons::storedCVarValue("Sound_EnableEmoteSounds", "1") == "0") return;
+    const uint64_t guid = unit.getGuid();
+    if (!petVoiceAllowed(unit)) return;
+    // The line is the speaker's race's and sex's, which only a player has -
+    // and only once its name has been answered, so a first emote from someone
+    // out of sight stays unheard rather than guessed at.
+    const uint32_t sound = ue::emoteSoundId(emoteSoundRows(), emotesTextId,
+                                            gameHandler_->lookupPlayerRace(guid),
+                                            gameHandler_->lookupPlayerGender(guid));
+    if (sound == 0) return;
+    // Heard by the same rule as every other line a unit says.
+    playUnitVoiceLine(unit, sound);
 }
 
 void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {

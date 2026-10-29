@@ -23,15 +23,16 @@ NPCInteractionCallbackHandler::NPCInteractionCallbackHandler(
 {
 }
 
-audio::VoiceType NPCInteractionCallbackHandler::resolveNpcVoiceType(uint64_t guid) const {
-    audio::VoiceType voiceType = audio::VoiceType::GENERIC;
+std::pair<uint32_t, audio::VoiceType> NPCInteractionCallbackHandler::resolveNpcVoice(uint64_t guid) const {
     auto entity = gameHandler_.getEntityManager().getEntity(guid);
-    if (entity && entity->getType() == game::ObjectType::UNIT) {
-        auto unit = std::static_pointer_cast<game::Unit>(entity);
-        uint32_t displayId = unit->getDisplayId();
-        voiceType = entitySpawner_.detectVoiceTypeFromDisplayId(displayId);
-    }
-    return voiceType;
+    if (!entity || entity->getType() != game::ObjectType::UNIT)
+        return {0, audio::VoiceType::GENERIC};
+    auto unit = std::static_pointer_cast<game::Unit>(entity);
+    const uint32_t displayId = unit->getDisplayId();
+    // The display is asked for its own sake now - its row names the kit the line
+    // comes from - and the race guess it feeds is only what the race library is
+    // asked for when the display names no kit.
+    return {displayId, entitySpawner_.detectVoiceTypeFromDisplayId(displayId)};
 }
 
 void NPCInteractionCallbackHandler::setupCallbacks() {
@@ -48,8 +49,8 @@ void NPCInteractionCallbackHandler::setupCallbacks() {
         if (audioCoordinator_ && audioCoordinator_->getNpcVoiceManager()) {
             // Convert canonical to render coords for 3D audio
             glm::vec3 renderPos = core::coords::canonicalToRender(position);
-            audio::VoiceType voiceType = resolveNpcVoiceType(guid);
-            audioCoordinator_->getNpcVoiceManager()->playGreeting(guid, voiceType, renderPos);
+            const auto [displayId, voiceType] = resolveNpcVoice(guid);
+            audioCoordinator_->getNpcVoiceManager()->playGreeting(guid, displayId, voiceType, renderPos);
         }
     });
 
@@ -57,8 +58,8 @@ void NPCInteractionCallbackHandler::setupCallbacks() {
     gameHandler_.setNpcFarewellCallback([this](uint64_t guid, const glm::vec3& position) {
         if (audioCoordinator_ && audioCoordinator_->getNpcVoiceManager()) {
             glm::vec3 renderPos = core::coords::canonicalToRender(position);
-            audio::VoiceType voiceType = resolveNpcVoiceType(guid);
-            audioCoordinator_->getNpcVoiceManager()->playFarewell(guid, voiceType, renderPos);
+            const auto [displayId, voiceType] = resolveNpcVoice(guid);
+            audioCoordinator_->getNpcVoiceManager()->playFarewell(guid, displayId, voiceType, renderPos);
         }
     });
 
@@ -66,25 +67,14 @@ void NPCInteractionCallbackHandler::setupCallbacks() {
     gameHandler_.setNpcVendorCallback([this](uint64_t guid, const glm::vec3& position) {
         if (audioCoordinator_ && audioCoordinator_->getNpcVoiceManager()) {
             glm::vec3 renderPos = core::coords::canonicalToRender(position);
-            audio::VoiceType voiceType = resolveNpcVoiceType(guid);
-            audioCoordinator_->getNpcVoiceManager()->playVendor(guid, voiceType, renderPos);
+            const auto [displayId, voiceType] = resolveNpcVoice(guid);
+            audioCoordinator_->getNpcVoiceManager()->playVendor(guid, displayId, voiceType, renderPos);
         }
     });
-
-    // NPC aggro callback - play combat start voice line
-    gameHandler_.setNpcAggroCallback([this](uint64_t guid, const glm::vec3& position) {
-        if (audioCoordinator_ && audioCoordinator_->getNpcVoiceManager()) {
-            glm::vec3 renderPos = core::coords::canonicalToRender(position);
-            audio::VoiceType voiceType = resolveNpcVoiceType(guid);
-            uint32_t displayId = 0;
-            auto entity = gameHandler_.getEntityManager().getEntity(guid);
-            if (entity && entity->getType() == game::ObjectType::UNIT) {
-                displayId = std::static_pointer_cast<game::Unit>(entity)->getDisplayId();
-            }
-            audioCoordinator_->getNpcVoiceManager()->playAggro(
-                guid, displayId, voiceType, renderPos);
-        }
-    });
+    // An angry unit's line is not asked here: the client asks it of the unit
+    // itself as its reaction changes (SMSG_AI_REACTION, handled through
+    // AnimationCallbackHandler), out of its own sound row rather than out of a
+    // race library.
 }
 
 }} // namespace wowee::core

@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -474,15 +475,24 @@ bool GroupListParser::parse(network::Packet& packet, GroupListData& data,
     // 0x54000000, a 'T' - which is what the implausible-count warning below has
     // been reporting once per group update.
     //
-    // Both bits, because the two listings of GroupType disagree about which one
-    // marks a finder group - 0x08 in one, 0x04 in the other - and servers set
-    // them together.
-    constexpr uint8_t kGroupTypeLfg = 0x0C;
-    if (hasRoles && (data.groupType & kGroupTypeLfg)) {
+    // Which of the two bits, settled off the client rather than off the two
+    // listings of GroupType that disagree (0x08 in one, 0x04 in the other).
+    // 0x006d8870 reads the type byte into one stack local that Ghidra shows
+    // pre-filled with a canary (`local_8 = 0x6d887d`, then the byte at +1), and
+    // the tests that follow are bit tests on that dword: bits 8 to 15 are the
+    // byte, so `local_8 & 0x800` (:6811) is **bit 3** - the one that opens the
+    // five bytes - and `local_8 >> 10 & 1` (:6994, handed to 0x0052c0d0) is
+    // **bit 2**, which is not a finder flag at all but the group's *restriction*
+    // flag. Bit 0 is kept apart in local_10 (:6801-6806) and bit 1 is folded to
+    // bit 24; neither is what opens the five bytes.
+    constexpr uint8_t kGroupTypeLfgFields = 0x08;
+    constexpr uint8_t kGroupTypeRestricted = 0x04;
+    if (hasRoles && (data.groupType & kGroupTypeLfgFields)) {
         if (rem() < 5) return false;
         packet.readUInt8();  // lfg state
         data.lfgDungeonEntry = packet.readUInt32();
     }
+    data.lfgRestricted = (data.groupType & kGroupTypeRestricted) != 0;
 
     if (rem() < 8) return false;
     packet.readUInt64(); // group GUID
@@ -899,9 +909,10 @@ bool QuestDetailsParser::parse(network::Packet& packet, QuestDetailsData& data) 
         }
     }
 
-    // Money and XP rewards
+    // Money and XP rewards. The money word keeps its sign - see
+    // QuestDetailsData::rewardMoney.
     if (packet.hasRemaining(4))
-        data.rewardMoney = packet.readUInt32();
+        data.rewardMoney = static_cast<int32_t>(packet.readUInt32());
     if (packet.hasRemaining(4))
         data.rewardXp = packet.readUInt32();
 
@@ -1300,8 +1311,9 @@ bool QuestOfferRewardParser::parse(network::Packet& packet, QuestOfferRewardData
                 data.fixedRewards.push_back(item);
         }
 
+        // Signed: one word for a payout or a cost, split by the client's sign test.
         if (packet.hasRemaining(4))
-            data.rewardMoney = packet.readUInt32();
+            data.rewardMoney = static_cast<int32_t>(packet.readUInt32());
         if (packet.hasRemaining(4))
             data.rewardXp = packet.readUInt32();
         // The trailing block, in the wire's order (GossipDef.cpp): honour,
@@ -1485,7 +1497,7 @@ bool QuestOfferRewardParser::parse(network::Packet& packet, QuestOfferRewardData
     if (best) {
         data.choiceRewards = best->choiceRewards;
         data.fixedRewards  = best->fixedRewards;
-        data.rewardMoney   = best->rewardMoney;
+        data.rewardMoney   = static_cast<int32_t>(best->rewardMoney);
         // Pre-WotLK servers do not send an XP field here; parseTail's trailing
         // read lands on flags (Classic) or honor (TBC). Never surface it as XP.
         data.rewardXp      = 0;
@@ -1527,10 +1539,19 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
     // and a guess would put an arbitrary item on the watch frame.
     size_t sourceItemField = 0;
     size_t rewardSpellField = 0;
+    // The quest's money at the level cap, which the client substitutes for the
+    // reward amount at the cap. Left at zero - "not read" - for the earlier
+    // layouts, like the fields above it.
+    size_t moneyMaxLevelField = 0;
     size_t xpIdField = 0, honorField = 0, talentsField = 0, arenaField = 0, titleField = 0;
     size_t repFactionField = 0, repValueField = 0, repOverrideField = 0;
     if (questLogStride >= 5) {        // WotLK
         moneyField = 11; rewardPairsField = 24; choicePairsField = 32;
+        // The cap's amount is the very next word: the serializer this whole block
+        // was counted off writes money(13), maxLevel(14), rewSpell(15) - and the
+        // reward spell's offset, two past the money, is already checked against
+        // what the reward panel draws.
+        moneyMaxLevelField = moneyField + 1;
         sourceItemField = 17;
         // XPId sits immediately before the money field in the serializer
         // (nextQuestInChain, XPId, RewOrReqMoney), so field 10 here - one below
@@ -1578,6 +1599,14 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
         if (out.itemId[i] > 0x00FFFFFFu || out.itemCount[i] > 0xFFFFu) return {};
     for (size_t i = 0; i < 6; ++i)
         if (out.choiceItemId[i] > 0x00FFFFFFu || out.choiceItemCount[i] > 0xFFFFu) return {};
+    if (moneyMaxLevelField) {
+        // Kept to the non-negative half: the client's own use of this word is a
+        // floor applied at the cap (`payout <= capAmount` -> take the cap's
+        // amount), so a negative reading there could never raise anything, and a
+        // slipped layout lands on a float or a string and reads enormous.
+        const int32_t atCap = static_cast<int32_t>(fieldAt(moneyMaxLevelField));
+        if (atCap >= 0 && atCap <= 0x00FFFFFF) out.rewardMoneyMaxLevel = atCap;
+    }
     if (rewardSpellField) {
         const uint32_t spell = fieldAt(rewardSpellField);
         // The same plausibility gate the items get: a layout that has slipped
@@ -1597,6 +1626,14 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
     if (honorField) {
         const uint32_t h = fieldAt(honorField);
         if (h <= 100000u) out.rewardHonor = h;
+        // The very next word is the honour multiplier, sent as a float (the
+        // serializer writes RewHonorAddition then RewHonorMultiplier, and the
+        // client's record holds the pair adjacent at +0x44/+0x48). It is worth
+        // keeping because the client folds it into the honour answer - see
+        // game/quest_rewards.hpp. A slipped layout lands on an id or a string and
+        // reads as an enormous multiplier, so it gets the house range gate.
+        const float mult = std::bit_cast<float>(fieldAt(honorField + 1));
+        if (mult >= 0.0f && mult < 1000.0f) out.rewardHonorMultiplier = mult;
     }
     if (talentsField) {
         const uint32_t t = fieldAt(talentsField);

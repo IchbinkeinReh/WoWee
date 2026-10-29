@@ -9,7 +9,6 @@
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "audio/movement_sound_manager.hpp"
 #include "audio/screen_effect_audio.hpp"
 #include "pipeline/asset_manager.hpp"
@@ -46,16 +45,14 @@ bool AudioCoordinator::initialize() {
     ambientSoundManager_ = std::make_unique<AmbientSoundManager>();
     uiSoundManager_ = std::make_unique<UiSoundManager>();
     combatSoundManager_ = std::make_unique<CombatSoundManager>();
-    spellSoundManager_ = std::make_unique<SpellSoundManager>();
     movementSoundManager_ = std::make_unique<MovementSoundManager>();
 
-    LOG_INFO("AudioCoordinator initialized with ", 11, " audio managers");
+    LOG_INFO("AudioCoordinator initialized with ", 10, " audio managers");
     return true;
 }
 void AudioCoordinator::shutdown() {
     // Reset all managers first (they may reference AudioEngine)
     movementSoundManager_.reset();
-    spellSoundManager_.reset();
     combatSoundManager_.reset();
     uiSoundManager_.reset();
     ambientSoundManager_.reset();

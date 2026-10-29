@@ -1050,6 +1050,8 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         auto* cr = renderer_->getCharacterRenderer();
         auto* spawner = entitySpawner_;
 
+        // Its death line only when seen dying (GameHandler::setUnitDiedCallback).
+        gameHandler_->setUnitDiedCallback([spawner](uint64_t guid) { spawner->playUnitDeathSound(guid); });
         gameHandler_->setNpcDeathCallback([cr, spawner](uint64_t guid) {
             spawner->markCreatureDead(guid);
             uint32_t instanceId = spawner->getCreatureInstanceId(guid);

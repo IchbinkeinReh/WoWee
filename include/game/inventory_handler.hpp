@@ -185,21 +185,48 @@ public:
     void sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count);
     void sellItemBySlot(int backpackIndex);
     void sellItemInBag(int bagIndex, int slotIndex);
-    void buyBackItem(uint32_t buybackSlot);
+    /// `row` is the number the buyback tab gave the row (BuybackItem(i) in
+    /// FrameXML), resolved through buybackRow to the ring slot it stands for.
+    void buyBackItem(uint32_t row);
     /// Tell the interface durability moved - the armour indicator redraws
     /// from an event, not by polling.
     void announceDurabilityChange();
     void repairItem(uint64_t vendorGuid, uint64_t itemGuid);
     void repairAll(uint64_t vendorGuid, bool useGuildBank = false);
     uint32_t estimateRepairAllCost() const;
+    /// The sale mirror, in the order the sales happened.  What the interface
+    /// sees is buybackRowCount / buybackRow.
     const std::deque<BuybackItem>& getBuybackItems() const { return buybackItems_; }
+    /// What taking a ring slot back costs, straight out of the player fields.
+    ///
+    /// The realm sets this, not the item's record: 0x00584b00 reads
+    /// PLAYER_FIELD_BUYBACK_PRICE_1 + (wireSlot - 74) - bounds the index at 11
+    /// and answers 0 past it - and 0x00585070 pushes exactly that as the row's
+    /// third value, never the DBC sell price.  So a row can carry a price the
+    /// item's own record does not mention, and the client shows the realm's.
+    uint32_t buybackFieldPrice(uint32_t wireSlot) const;
+    /// The buyback rows as the interface numbers them: ring slots the server has
+    /// confirmed, in the order it publishes them, and nothing else.
+    ///
+    /// merchantframe.lua walks rows 1..GetNumBuybackItems() and asks each one
+    /// for its item, so whatever is counted is whatever gets drawn and clicked.
+    /// The original client's list holds only ring slots that actually hold an
+    /// item and a price (0x00584bb0 admits a row on both tests, and 0x00585070,
+    /// 0x005852c0 and 0x005855c0 all re-check the item), and GetNumBuybackItems (0x005843f0)
+    /// answers no rows at all unless a merchant is open - it reads the merchant
+    /// guid pair, the same globals MerchantFrame.cpp's repair cost reads.  So a
+    /// sale not confirmed into the ring yet has no row here either, rather than
+    /// a row the window would draw and a click could take.
+    uint32_t buybackRowCount() const;
+    /// The row's item, or nullptr past the end of the list.
+    const BuybackItem* buybackRow(uint32_t row) const;
     // ---- Equipping, and the prompt before something binds ----
     //
     // `confirmed` is how a caller says the player has already been asked. Both
     // interfaces ask - this client's own popup and FrameXML's EQUIP_BIND - and
     // both come back through here, so without it the answer to the prompt
     // raises the prompt again.
-    void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot);
+    void equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, bool confirmed = false);
     void autoEquipItemBySlot(int backpackIndex, bool confirmed = false);
     void autoEquipItemInBag(int bagIndex, int slotIndex, bool confirmed = false);
     /// 0x006dfc40: an item of class 6 is not equipped but made the ammunition,
@@ -220,9 +247,25 @@ public:
     struct PendingEquip {
         bool    active  = false;
         bool    fromBag = false;
+        /// The request named the equipment slot it wanted (`/equipslot`), so
+        /// neither a backpack index nor a bag slot identifies it - itemGuid does.
+        bool    toSlot  = false;
         int     bag     = 0;
         int     slot    = 0;
-        uint8_t wireSlot = 0;   ///< what the event carried, for the reply
+        uint8_t wireSlot = 0;   ///< where the reply sends it: an equipment slot, or a bag position
+        uint64_t itemGuid = 0;  ///< the item a named-slot request named
+    };
+    /// The exchange held back by the same prompt, from the other verb: dropping
+    /// what the cursor holds onto a position on the character (0x006df890). It
+    /// is the wire's own pair of positions, so they are kept that way; one
+    /// prompt can be up at a time, whichever of the two held the move back.
+    struct PendingSwap {
+        bool    active  = false;
+        uint8_t fromBag = 0;    ///< where the carried item is, as the wire counts it
+        uint8_t fromSlot = 0;
+        uint8_t toBag = 0;      ///< the position on the character it was dropped on
+        uint8_t toSlot = 0;
+        bool    applyLocally = true;  ///< the caller's own flag, kept for the reply
     };
     // ---- Looting, and the prompt before something binds ----
     //
@@ -305,8 +348,12 @@ public:
     /// applyLocally=false sends the move without touching the model, for a
     /// caller that has already put the items where this would move them -
     /// see GameHandler::sortBags.
+    ///
+    /// `confirmed` is the answer to the bind prompt: only equipPendingItem
+    /// passes it, and only for an exchange whose other side is a position on the
+    /// character. See 0x006df890.
     void swapContainerItems(uint8_t srcBag, uint8_t srcSlot, uint8_t dstBag,
-                            uint8_t dstSlot, bool applyLocally = true);
+                            uint8_t dstSlot, bool applyLocally = true, bool confirmed = false);
     /// Read and write a model slot by the wire's flat numbering.
     bool readWireSlot(uint8_t container, uint8_t slot, game::ItemDef& out) const;
     bool writeWireSlot(uint8_t container, uint8_t slot, const game::ItemDef& item);
@@ -574,13 +621,27 @@ public:
     void queryItemInfo(uint32_t entry, uint64_t guid);
     uint64_t resolveOnlineItemGuid(uint32_t itemId) const;
     void detectInventorySlotBases(const FlatFieldMap& fields);
-    bool applyInventoryFields(const FlatFieldMap& fields);
+    /// Read the inventory fields off an update block.
+    ///
+    /// initial = true for the create block, and for any re-read of fields
+    /// already held: those slots did not just move, so they announce nothing.
+    /// The client's equipment watchers are put on the object after it is
+    /// created, so a create block never reaches them.
+    bool applyInventoryFields(const FlatFieldMap& fields, bool initial = false);
     void extractContainerFields(uint64_t containerGuid, const FlatFieldMap& fields);
     ItemDef buildItemDef(uint32_t entry, uint32_t stackCount, uint32_t curDur, uint32_t maxDur, uint64_t guid,
                          uint32_t flags = 0, int32_t randomPropertyId = 0, uint32_t suffixFactor = 0);
     void rebuildOnlineInventory();
     /// Announce the bank slots that moved, once their items are current.
     void fireBankSlotEvents();
+    /// Announce the equipment slots that moved, once their items are current.
+    ///
+    /// The 12340 client watches its own equipment fields (0x006dedd0) and fires
+    /// per slot: PLAYER_EQUIPMENT_CHANGED carrying that slot's Lua number, and
+    /// for the two weapon hands and the ranged slot the name whose numbers the
+    /// character sheet prints. A single argument-less event for the whole block
+    /// reached none of them.
+    void fireEquipSlotEvents();
     void maybeDetectVisibleItemLayout();
     void updateOtherPlayerVisibleItems(uint64_t guid, const FlatFieldMap& fields);
     void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries);
@@ -605,6 +666,9 @@ public:
     void handleItemQueryResponse(network::Packet& packet);
 
 private:
+    /// What the currency items the player holds summed to at the last
+    /// CURRENCY_DISPLAY_UPDATE fireBagUpdates raised (~0: none raised yet).
+    uint64_t currencySignature_ = ~uint64_t{0};
     /// Each other player's PLAYER_FLAGS hide-helm and hide-cloak bits.
     std::unordered_map<uint64_t, uint32_t> otherPlayerHideBits_;
     uint32_t hiddenFor(uint64_t guid) const;
@@ -759,6 +823,19 @@ private:
     std::deque<BuybackItem> buybackItems_;
     std::unordered_map<uint64_t, BuybackItem> pendingSellToBuyback_;
     std::array<uint64_t, 12> buybackSlotGuids_{};
+    // The realm's two buyback arrays, read off the player block.  Position k of
+    // each belongs to ring slot 74+k, and one watch covers all twenty-four
+    // dwords (0x00585f80 registers 4, 0x1074, 0x60): PLAYER_FIELD_BUYBACK_PRICE_1
+    // at blob 0x1074 and PLAYER_FIELD_BUYBACK_TIMESTAMP_1 at 0x10a4.  What the
+    // row builder at 0x00584bb0 does with them says what they are for: a row is
+    // admitted only when that ring slot holds an item *and* price[k] is non-zero,
+    // and the admitted ring slots are published sorted ascending by timestamp[k]
+    // (_qsort over (timestamp, ring slot) pairs with the comparator at
+    // 0x005841a0, and only the ring-slot half kept).  Hence the buyback list is
+    // in sell order - row 1 the oldest, the newest at GetNumBuybackItems() - and
+    // the price asked for a row is price[ring slot - 74], not price[row].
+    std::array<uint32_t, 12> buybackPrices_{};
+    std::array<uint32_t, 12> buybackTimestamps_{};
     int pendingBuybackSlot_ = -1;
     uint32_t pendingBuybackWireSlot_ = 0;
     uint32_t pendingBuyItemId_ = 0;
@@ -777,6 +854,7 @@ private:
     // ---- Mail state ----
     SocketSession socketSession_;
     PendingEquip pendingEquip_;
+    PendingSwap pendingSwap_;
     /// The use held back waiting for an answer. Kept whole rather than as a
     /// slot pair: the item may be gone from that slot by the time the player
     /// answers, and re-reading it would use whatever moved into its place.
@@ -823,6 +901,9 @@ private:
     /// written the items the bank frame reads. Announcing earlier redraws the
     /// slot from what it held before the move.
     std::vector<int> pendingBankSlotEvents_;
+    /// Equipment slots whose guid changed, held for the same reason and drained
+    /// in the same place. Wire index, so the Lua slot number is index + 1.
+    std::vector<int> pendingEquipSlotEvents_;
     int effectiveBankSlots_ = 28;
     int effectiveBankBagSlots_ = 7;
 

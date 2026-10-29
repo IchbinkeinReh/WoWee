@@ -131,8 +131,14 @@ TEST_CASE("a plain party reads back as it was written", "[group-list]") {
 }
 
 TEST_CASE("a dungeon finder group reads back as it was written", "[group-list]") {
-    // The whole bug: the same four members, five bytes further along. 0x08 is
-    // the finder bit; servers set 0x04 beside it, and the parser takes either.
+    // The whole bug: the same four members, five bytes further along. Which of
+    // the two finder-ish bits puts them there is settled by the client, not by
+    // what a core happens to write: 0x006d8870 reads the five bytes when
+    // `local_8 & 0x800` (:6811), and the way the type byte was folded into that
+    // local (:6799-6806) leaves bits 8-15 holding it, so the gate is **bit 3** -
+    // 0x08. 0x04 is something else entirely (see the next test), and taking
+    // "either" bit read five bytes that were never written for a restricted
+    // group that is not a finder one.
     for (const uint8_t groupType : {uint8_t{0x08}, uint8_t{0x0C}}) {
         INFO("groupType 0x" << std::hex << static_cast<int>(groupType));
         bool ok = false;
@@ -200,6 +206,45 @@ TEST_CASE("a finder group's roster carries its dungeon", "[group-list]") {
     const GroupListData plain = parsed(groupList(0x00, fourOthers(), 0x1001, false), ok);
     REQUIRE(ok);
     CHECK(plain.lfgDungeonEntry == 0);
+}
+
+TEST_CASE("bit 2 of the type byte restricts the group, and finds nothing", "[group-list]") {
+    // The other bit of the pair. 0x006d8870:6994 hands 0x0052c0d0 the type
+    // byte's bit 2 (`local_8 >> 10 & 1`), which keeps it in 0xbd19a8 and fires
+    // PARTY_LFG_RESTRICTED (event 518) on it; HasLFGRestrictions (0x0052c350)
+    // is that byte, while IsPartyLFG (0x0052c310) is the dungeon above. A
+    // restricted group is a group the server will not let lead off into a raid
+    // or a guild bank - `uiparent.lua:3562` and the ten unitpopup lines - and it
+    // is a state a plain party can be in without the finder being involved.
+    //
+    // Reading it as a finder flag was a live misread: taking "either" bit made
+    // this roster consume the five bytes that only a finder group writes, so
+    // every member of a restricted non-finder group came out of the wrong bytes.
+    bool ok = false;
+    const GroupListData restricted = parsed(groupList(0x04, fourOthers(), 0x1001, false), ok);
+    REQUIRE(ok);
+    REQUIRE(restricted.members.size() == 4);
+    CHECK(restricted.members[0].name == "Tholan");
+    CHECK(restricted.members[3].roles == 8);
+    CHECK(restricted.lfgDungeonEntry == 0);
+    CHECK(restricted.lfgRestricted);
+
+    // Both bits, which is what a server writes for a finder group.
+    const GroupListData both = parsed(groupList(0x0C, fourOthers(), 0x1002, true), ok);
+    REQUIRE(ok);
+    CHECK(both.lfgDungeonEntry == 285);
+    CHECK(both.lfgRestricted);
+
+    // The finder bit alone: a finder group, unrestricted.
+    const GroupListData finder = parsed(groupList(0x08, fourOthers(), 0x1002, true), ok);
+    REQUIRE(ok);
+    CHECK(finder.lfgDungeonEntry == 285);
+    CHECK_FALSE(finder.lfgRestricted);
+
+    // And a party has neither.
+    const GroupListData party = parsed(groupList(0x00, fourOthers(), 0x1001, false), ok);
+    REQUIRE(ok);
+    CHECK_FALSE(party.lfgRestricted);
 }
 
 TEST_CASE("a worldport forgets the finder dungeon only ungrouped and off its map", "[group-list]") {

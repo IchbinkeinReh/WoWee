@@ -48,7 +48,8 @@ Wowee follows a modular architecture with clear separation of concerns:
 **Application** (`application.hpp/cpp`) - Main controller
 - Owns all subsystems (renderer, game handler, asset manager, UI, addon manager, audio coordinator)
 - Manages application state (`AUTHENTICATION` → `REALM_SELECTION` → `CHARACTER_SELECTION` / `CHARACTER_CREATION` → `IN_GAME`, plus `DISCONNECTED`, and `FIRST_RUN` when nothing has been extracted and the asset builder is shown instead of the login)
-- Runs update/render loop, paced by `FramePacer` (`frame_pacer.hpp/cpp`): integer-nanosecond deltas off a monotonic clock, and a frame cap that sleeps most of the wait and spins the rest
+- Runs update/render loop, paced by `FramePacer` (`frame_pacer.hpp/cpp`): integer-nanosecond deltas off a monotonic clock, and a frame cap that sleeps most of the wait and spins the rest. Which cap applies is the client's rule (`capInEffect`, 0x006836d0): `maxFPS` while the window is the active one, `maxFPSBk` once it is not and only where it is at least as strict, and a limit under eight frames is lifted to eight
+- Narrows the process onto the cores the player asked for, once at startup: the client's `processAffinityMask` cvar (registered 0x004022e0, applied by 0x0076fe00 = `SetProcessAffinityMask(GetCurrentProcess(), mask)`) is read before the first worker thread exists, because every later thread inherits the mask and the client's own screen text says a change needs a restart. Nothing is pinned the other way — no worker is confined, and Linux only reports the cvar since the call is Windows-only
 - Populates `GameServices` struct and passes to `GameHandler` at construction
 
 **Window** (`window.hpp/cpp`) - SDL3 + Vulkan wrapper
@@ -328,11 +329,13 @@ FrameXML calls into, plus what the client draws in the world.
 **Sound Managers:**
 - `AmbientSoundManager` - Wind, water, fire, birds, crickets, city ambience, bell tolls
 - `ActivitySoundManager` - Swimming strokes, jumping, landing
-- `FootstepManager` - Footsteps (terrain-aware), mount footsteps
+- `FootstepManager` - Footsteps (terrain-aware), mount footsteps; the prints they leave are gated by `showfootprints`, which the client keeps as a bit in a flag word (setter 0x0078d8f0, tested at 0x00723a50) rather than as a value of its own
 - `MovementSoundManager` - Water entry and wading splashes
 - `MountSoundManager` - Mount-specific movement audio
 - `MusicManager` - Zone music (ZoneMusic.dbc day and night tracks pooled, plus this project's own soundtrack)
-- `CombatSoundManager`, `SpellSoundManager`, `UiSoundManager`, `NpcVoiceManager`, `PlayerVoiceManager`
+- `CombatSoundManager`, `UiSoundManager`, `NpcVoiceManager`, `PlayerVoiceManager`
+- A spell's own sounds are no manager's business: each visual kit brings the SoundEntries row its DBC names, and `SpellVisualSystem` plays it with the kit. Where that row loops it runs as long as the kit does — an aura's state or channel kit holds its sound until the aura leaves the unit, a precast kit's lasts its cast's timed length — and stops with it
+- A unit's own sounds are the spawner's, out of its CreatureSoundData row: the slots its model events ask for — fidgets, wingbeats, the stand sound, a flying unit's take-off and landing — its footfalls over the ground it stands on, and an emote's voice line, which `EmotesTextSound.dbc` picks by the emote text and the speaker's race and sex under `Sound_EnableEmoteSounds` and `Sound_EnablePetSounds`
 
 ### 9. Warden Anti-Cheat (`src/game/`)
 

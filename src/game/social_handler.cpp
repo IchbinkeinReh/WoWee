@@ -10,6 +10,7 @@
 #include "game/interface_text.hpp"
 #include "game/entity.hpp"
 #include "game/packet_parsers.hpp"
+#include "game/power_prediction.hpp"
 #include "game/update_field_table.hpp"
 #include "game/opcode_table.hpp"
 #include "audio/audio_coordinator.hpp"
@@ -555,19 +556,25 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_GROUP_DECLINE] = [this](network::Packet& packet) { handleGroupDecline(packet); };
     table[Opcode::SMSG_GROUP_LIST] = [this](network::Packet& packet) { handleGroupList(packet); };
     table[Opcode::SMSG_GROUP_DESTROYED] = [this](network::Packet& /*packet*/) {
-        // ERR_GROUP_DISBANDED, a system line, and only to someone who was in
-        // the group (0x006cbe40). This said it twice in English, on screen and
-        // in chat.
+        // The client asks its own party slots whether the player is in a group -
+        // 0x0052bd10 counts the four guids at 0xbd1948 - and shows the line only
+        // when one of them holds someone (0x006cbe40, error 0x4b). This said
+        // ERR_GROUP_DISBANDED twice, on screen and in chat, in English.
         const bool wasInGroup = !partyData.members.empty();
+        const bool wasRaid = groupIsRaid(partyData.groupType);
         partyData.members.clear();
         partyData.memberCount = 0;
         partyData.leaderGuid = 0;
         if (wasInGroup)
             gameError(owner_, ErrTo::Chat, "ERR_GROUP_DISBANDED", "Your group has been disbanded.");
-        if (owner_.addonEventCallbackRef()) {
-            owner_.addonEventCallbackRef()("GROUP_ROSTER_UPDATE", {});
-            owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
-        }
+        firePartyClearedEvents(wasRaid);
+        // That handler then drops the pending summon (0x0055b120) and fires
+        // CANCEL_SUMMON (455) whatever was pending: a summon offer dies with the
+        // group. Both handlers that empty the party this way do it, at
+        // 0x006cbe5a-0x006cbe66 and 0x006cbe1e-0x006cbe2f; Ghidra never cut these
+        // two handlers out of the file as functions, so the disassembly of the exe
+        // at those addresses is what shows it.
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CANCEL_SUMMON", {});
     };
     table[Opcode::SMSG_GROUP_CANCEL] = [this](network::Packet& /*packet*/) {
         // PARTY_INVITE_CANCEL and nothing said (0x006cbd10 -> 0x00512560,
@@ -1164,9 +1171,16 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_LFG_PARTY_INFO] = [this](network::Packet& packet) {
         handleLfgPartyInfo(packet);
     };
-    for (auto op : { Opcode::SMSG_LFG_UPDATE_SEARCH, Opcode::SMSG_UPDATE_LFG_LIST }) {
-        table[op] = [](network::Packet& packet) { packet.skipAll(); };
-    }
+    // The raid browser's browse list, which lfrframe.lua fills through
+    // SearchLFGGetResults. The packet names the list it describes as a type and
+    // an id, and is dropped unless those repack to the list this client asked to
+    // join; parseLfgList reads the rest (0x0055b770).
+    table[Opcode::SMSG_LFG_UPDATE_SEARCH] = [this](network::Packet& packet) {
+        handleLfgUpdateSearch(packet);
+    };
+    table[Opcode::SMSG_UPDATE_LFG_LIST] = [this](network::Packet& packet) {
+        handleUpdateLfgList(packet);
+    };
     table[Opcode::SMSG_OPEN_LFG_DUNGEON_FINDER] = [this](network::Packet& packet) {
         packet.skipAll();
         if (owner_.openLfgCallbackRef()) owner_.openLfgCallbackRef()();
@@ -1327,16 +1341,15 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
                      std::count_if(items.begin(), items.end(),
                                    [](uint32_t e) { return e != 0; }), "/19 slots");
             if (owner_.addonEventCallbackRef()) {
-                char guidBuf[32];
-                snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)guid);
-                owner_.addonEventCallbackRef()("INSPECT_READY", {guidBuf});
-                // INSPECT_READY is a later expansion's name and nothing in this
-                // interface listens for it. The inspect paperdoll refreshes on
-                // UNIT_INVENTORY_CHANGED for the unit it is showing, so the gear
-                // arrived and the window was never told - it kept whatever it had
-                // when it opened. Fired for the unit token this guid answers to,
-                // and only when it answers to one: an inspected player who is not
-                // the target has no token for the interface to match against.
+                // The inspect paperdoll refreshes on UNIT_INVENTORY_CHANGED for
+                // the unit it is showing. INSPECT_READY, which this used to fire,
+                // is a later expansion's name: not in this client's event-id
+                // table, not once in Wow.exe, and no frame of this interface
+                // registers it - the gear arrived and the window was never told,
+                // keeping whatever it had when it opened. Fired for the unit
+                // token this guid answers to, and only when it answers to one: an
+                // inspected player who is not the target has no token for the
+                // interface to match against.
                 const std::string inspectUnit = owner_.guidToUnitId(guid);
                 if (!inspectUnit.empty()) {
                     owner_.addonEventCallbackRef()("UNIT_INVENTORY_CHANGED", {inspectUnit});
@@ -1397,9 +1410,9 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
                  " gearCached=", (gearIt != owner_.inspectedPlayerItemEntriesRef().end() ? "yes" : "no"),
                  " payload bytes remaining=", packet.getRemainingSize());
         if (owner_.addonEventCallbackRef()) {
-            char guidBuf[32];
-            snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)guid);
-            owner_.addonEventCallbackRef()("INSPECT_READY", {guidBuf});
+            // The talents of a TBC inspect client arrive on this packet too, and
+            // the tab that shows them waits for INSPECT_TALENT_READY (556).
+            if (inspectResult_.hasTalentData) owner_.addonEventCallbackRef()("INSPECT_TALENT_READY", {});
             const std::string inspectUnit = owner_.guidToUnitId(guid);
             if (!inspectUnit.empty()) {
                 owner_.addonEventCallbackRef()("UNIT_INVENTORY_CHANGED", {inspectUnit});
@@ -1532,14 +1545,10 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
     LOG_INFO("Inspect results for ", playerName, ": ", totalTalents, " talents, ",
              unspentTalents, " unspent, ", (int)talentGroupCount, " specs");
     if (owner_.addonEventCallbackRef()) {
-        char guidBuf[32];
-        snprintf(guidBuf, sizeof(guidBuf), "0x%016llX", (unsigned long long)guid);
-        owner_.addonEventCallbackRef()("INSPECT_READY", {guidBuf});
-        // The same packet carries the talents, and the talent tab of the
-        // inspect window redraws on this event alone. Only INSPECT_READY was
-        // fired, which is what the gear tab listens for - so inspecting anyone
-        // filled the paperdoll and left the talent tab blank, however
-        // completely the ranks above had been parsed.
+        // INSPECT_TALENT_READY (556) is the name the talent tab of the inspect
+        // window redraws on, and this packet is what carries the talents -
+        // inspecting anyone used to fill the paperdoll and leave the tab blank,
+        // however completely the ranks above had been parsed.
         owner_.addonEventCallbackRef()("INSPECT_TALENT_READY", {});
         const std::string inspectUnit = owner_.guidToUnitId(guid);
         if (!inspectUnit.empty()) {
@@ -2258,11 +2267,13 @@ void SocialHandler::leaveGroup() {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = GroupDisbandPacket::build();
     owner_.getSocket()->send(packet);
+    // The client fires nothing on the way out: it empties the group only when
+    // the server answers - SMSG_GROUP_DESTROYED for a disband, an empty roster
+    // otherwise - and the events come out of that. This clears on the spot, so
+    // the clear's events have to be fired here.
+    const bool wasRaid = groupIsRaid(partyData.groupType);
     partyData = GroupListData{};
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("GROUP_ROSTER_UPDATE", {});
-        owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
-    }
+    firePartyClearedEvents(wasRaid);
 }
 
 void SocialHandler::forgetLfgDungeonOnWorldport(uint32_t mapId) {
@@ -2564,6 +2575,38 @@ void SocialHandler::handleGroupDecline(network::Packet& packet) {
               {data.playerName});
 }
 
+/// The events that go out when the group stops existing.
+///
+/// The client's own emptier `0x0052d6e0` fires them, and every path that drops
+/// the group reaches them through it: PARTY_MEMBERS_CHANGED (181) and then
+/// PLAYER_ROLES_ASSIGNED (519), at `00520000.c:10379-10380`. Only when it is
+/// called with a non-zero argument - the roster handler empties the party on the
+/// way in with `0x0052d6e0(0)` and fires nothing for that (`006d0000.c:6902`),
+/// which is why a roster redrawing the group is not a group end.
+///
+/// RAID_ROSTER_UPDATE (435) is not one of the emptier's events - the client
+/// raises it where the raid member list is rebuilt or cleared (`0x00572e40`,
+/// `0x00572f90`, and one party-command result at `006c0000.c:10218`) - and it is
+/// the only event that reloads the raid pullouts: `raidframe.lua:35` is
+/// `RaidFrame_LoadUI(); RaidFrame_Update(); RaidPullout_RenewFrames();`, while
+/// its PARTY_MEMBERS_CHANGED branch calls the plain update alone. So a raid that
+/// ends raises it here as well, or its pullouts stay on screen.
+///
+/// None of these is GROUP_ROSTER_UPDATE, which is what this used to fire. That
+/// name belongs to a later expansion and not to this client at all: its script
+/// events are an id table (`0x00608880` writes one name per id up from
+/// `0x00c24eb0`, 646 of them) and the name is not among them; the string appears
+/// nowhere in `Wow.exe`, where RAID_ROSTER_UPDATE and PARTY_MEMBERS_CHANGED each
+/// appear once as plaintext; and the FrameXML shipped here has no listener for
+/// it. Every fire of it was into the void, and the refresh it was written to
+/// cause was taken by nobody.
+void SocialHandler::firePartyClearedEvents(bool wasRaid) {
+    if (!owner_.addonEventCallbackRef()) return;
+    owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
+    owner_.addonEventCallbackRef()("PLAYER_ROLES_ASSIGNED", {});
+    if (wasRaid) owner_.addonEventCallbackRef()("RAID_ROSTER_UPDATE", {});
+}
+
 void SocialHandler::handleGroupList(network::Packet& packet) {
     const bool hasRoles = isActiveExpansion("wotlk");
     const bool hasBattleGroupFlag = isActiveExpansion("tbc");
@@ -2577,7 +2620,41 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     // 0x006d8870 empties the party (0x0052d6e0(0), the finder dungeon with
     // it) and then sets the roster's dungeon (0x0052c0a0), which says
     // LFG_UPDATE when that changes it - for every roster of a finder group.
+    //
+    // The leader is stored the same way one line earlier (0x0052bc80 at
+    // 006d0000.c:6992), and its setter is the only thing in the client that
+    // fires PARTY_LEADER_CHANGED: it compares the guid it holds with the one
+    // coming in and says 182 only on a difference (0x00520000.c:8873-8896). The
+    // pre-clear zeroes that stored guid (`:10369-10370`), so the comparison
+    // always differs and every roster of a group re-fires it - the same trap the
+    // finder dungeon and the restriction flag above fall into. A roster with no
+    // leader guid is no group, and firing it there would be the group ending,
+    // which this event does not announce.
+    if (partyData.leaderGuid != 0) owner_.fireAddonEvent("PARTY_LEADER_CHANGED", {});
     if (partyData.lfgDungeonEntry != 0) owner_.fireAddonEvent("LFG_UPDATE", {});
+    // The real group, from a roster that is not a battleground's (0x006d8870
+    // :6968-6990, `(type & 1) == 0`): a raid's count is its members and the
+    // player, a party's the members of the player's own party; and the leader.
+    if ((partyData.groupType & 0x1) == 0) {
+        const bool raid = groupIsRaid(partyData.groupType);
+        const uint32_t members = static_cast<uint32_t>(partyData.members.size());
+        realGroup_.raidCount = raid ? (members == 0 ? 0u : members + 1u) : 0u;
+        uint32_t party = members;
+        if (raid) {
+            party = 0;
+            for (const auto& m : partyData.members) if (m.subGroup == partyData.subGroup) ++party;
+        }
+        if (party < 5) realGroup_.partyCount = party;
+        realGroup_.leader = partyData.leaderGuid;
+    }
+    // The very next call of that same routine is 0x0052c0d0 with the type byte's
+    // bit 2 (0x006d8870:6994), the group's *restriction* flag, and it fires
+    // PARTY_LFG_RESTRICTED whenever the flag it holds and the bit differ
+    // (0x00520000.c:9104-9114). The party was emptied on the way in, which zeroes
+    // the flag and fires nothing (0x0052d6e0:10375), so the differ always does for
+    // a restricted group: every roster of one re-fires this. What listens -
+    // `raidframe.lua:18, :61`, whose roster refresh is the only FrameXML consumer.
+    if (partyData.lfgRestricted) owner_.fireAddonEvent("PARTY_LFG_RESTRICTED", {});
     // 0x006d8870: a group with members sets the party's dungeon and raid
     // difficulties and the player's (0xbd1978, 0xbd197c, 0xbd1980).
     if (partyData.hasPlayerDifficulty) {
@@ -2666,8 +2743,13 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     if (wasInGroup && nowInGroup && partyData.lootMethod != prevLootMethod &&
         owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("PARTY_LOOT_METHOD_CHANGED", {});
+    // 0x006d0000.c:6996, the tail of the roster handler, is PARTY_MEMBERS-
+    // _CHANGED (181); 182, 501 and 518 went out of that handler a few lines
+    // earlier (:6992-:6994) - above here, with the state they read - and 519
+    // comes from the roles landing on the player object (:7142), which in the
+    // client is a field change and so can precede 181. Here it follows it, which
+    // is the one position that differs.
     if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("GROUP_ROSTER_UPDATE", {});
         owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
         // The roles came with this roster and UnitGroupRolesAssigned reads them
         // straight out of it. The player frame draws its tank or healer badge
@@ -2681,15 +2763,17 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
 
 void SocialHandler::handleGroupUninvite(network::Packet& packet) {
     (void)packet;
+    const bool wasRaid = groupIsRaid(partyData.groupType);
     partyData = GroupListData{};
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("GROUP_ROSTER_UPDATE", {});
-        owner_.addonEventCallbackRef()("PARTY_MEMBERS_CHANGED", {});
-        owner_.addonEventCallbackRef()("RAID_ROSTER_UPDATE", {});
-    }
+    // 0x006cbe10 empties the party first (0x0052d6e0(1), which is where the
+    // events come from), then shows ERR_UNINVITE_YOU, then drops the pending
+    // summon (0x0055b120) and fires CANCEL_SUMMON (455). The order is the
+    // handler's own; the events go out before the line, and 455 after it.
+    firePartyClearedEvents(wasRaid);
     // ERR_UNINVITE_YOU, a system line (0x006cbe10). This said it in English,
     // on screen and in chat.
     gameError(owner_, ErrTo::Chat, "ERR_UNINVITE_YOU", "You have been removed from the group.");
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CANCEL_SUMMON", {});
 }
 
 void SocialHandler::handlePartyCommandResult(network::Packet& packet) {
@@ -2785,6 +2869,18 @@ void SocialHandler::handlePartyMemberStats(network::Packet& packet, bool isFull)
     // snapshot for as long as the group lasts.
     const bool wasOnline = (member->onlineStatus & 0x0001) != 0;
     bool onlineChanged = false;
+    // What the member held before this packet, so the announcements can be
+    // gated on what actually moved. The client compares the member's stats block
+    // before and after the read (0x006cba60) and works from that difference in
+    // the same bit layout as these flags, not from the flags themselves - see
+    // the events below.
+    const uint16_t prevStatus = member->onlineStatus;
+    const uint32_t prevHealth = member->curHealth;
+    const uint32_t prevMaxHealth = member->maxHealth;
+    const uint8_t prevPowerType = member->powerType;
+    const uint16_t prevPower = member->curPower;
+    const uint16_t prevMaxPower = member->maxPower;
+    const uint16_t prevLevel = member->level;
     if (updateFlags & 0x0001) {
         if (remaining() >= 2) {
             member->onlineStatus = packet.readUInt16();
@@ -2887,8 +2983,57 @@ void SocialHandler::handlePartyMemberStats(network::Packet& packet, bool isFull)
             }
         }
         if (!unitId.empty()) {
-            if (updateFlags & (0x0002 | 0x0004)) owner_.addonEventCallbackRef()("UNIT_HEALTH", {unitId});
-            if (updateFlags & (0x0010 | 0x0020)) owner_.addonEventCallbackRef()("UNIT_POWER", {unitId});
+            // Which fields moved, in the client's bit layout (0x006cba60), and
+            // the announcements 0x006cf740 raises for each - in its order, which
+            // is not the flag order: the level goes out before the health. The
+            // flags field (0x1) is what a member who went offline or into a
+            // corpse moves, and the client answers it with both the health bar
+            // and the member's power, then swallows the two bits it just paid
+            // for so the health and power flags do not announce the same thing
+            // again.
+            uint32_t moved = 0;
+            if (member->onlineStatus != prevStatus) moved |= 0x0001;
+            if (member->curHealth != prevHealth) moved |= 0x0002;
+            if (member->maxHealth != prevMaxHealth) moved |= 0x0004;
+            if (member->powerType != prevPowerType) moved |= 0x0008;
+            if (member->curPower != prevPower) moved |= 0x0010;
+            if (member->maxPower != prevMaxPower) moved |= 0x0020;
+            if (member->level != prevLevel) moved |= 0x0040;
+
+            // The power events are named for the power itself, chosen by the
+            // member's own power type byte - the one the 0x8 flag writes - and
+            // runes (5) name nothing. "UNIT_POWER", which this site used to
+            // fire for both, is not a name this client has; see the table in
+            // power_prediction.hpp.
+            const auto firePower = [&](uint32_t bit, const char* const* events) {
+                if ((moved & bit) == 0) return;
+                if (member->powerType >= 7) return;
+                if (const char* const name = events[member->powerType])
+                    owner_.addonEventCallbackRef()(name, {unitId});
+            };
+            if (moved & 0x0001) {
+                owner_.addonEventCallbackRef()("UNIT_HEALTH", {unitId});
+                firePower(0x0001, power_prediction::kPowerEvents);
+                moved &= ~0x0012u;  // 0x006cf740: & 0xffffffed, the health and power flags
+            }
+            if (moved & 0x0040) owner_.addonEventCallbackRef()("UNIT_LEVEL", {unitId});
+            if (moved & 0x0002) owner_.addonEventCallbackRef()("UNIT_HEALTH", {unitId});
+            if (moved & 0x0004) owner_.addonEventCallbackRef()("UNIT_MAXHEALTH", {unitId});
+            // Which bar to show at all. A member whose power type the packet
+            // changes - a shapeshift, a hunter's pet-less form - is shown a
+            // different bar, and UNIT_DISPLAYPOWER is the only name that says so.
+            if (moved & 0x0008) owner_.addonEventCallbackRef()("UNIT_DISPLAYPOWER", {unitId});
+            firePower(0x0010, power_prediction::kPowerEvents);
+            firePower(0x0020, power_prediction::kMaxPowerEvents);
+            // A change in bits 1 or 4 of the flags byte - the only two the
+            // client tests there (0x006cf740: `^old ^new & 0x12`), and the only
+            // way this packet says a member's reaction moved.
+            if (((prevStatus ^ member->onlineStatus) & 0x12) != 0)
+                owner_.addonEventCallbackRef()("UNIT_FACTION", {unitId});
+            // Not gated on a change the way the client gates it: it compares all
+            // sixty-four aura slots of its own snapshot, while this cache is
+            // WoWee's and is dropped for the guids that are not cached. The
+            // server's mask already names only the slots that changed.
             if (updateFlags & 0x0200) {
                 owner_.addonEventCallbackRef()("UNIT_AURA", {unitId});
                 // The 1.12 name, which carries no unit.
@@ -3722,14 +3867,14 @@ void SocialHandler::handleFriendList(network::Packet& packet) {
         entry.status = status; entry.areaId = area; entry.level = level; entry.classId = classId;
         owner_.contactsRef().push_back(std::move(entry));
     }
-    // The full list arrives in reply to this client asking for it, so it is the
-    // "show" case as well as the "changed" case. SHOW additionally re-selects
-    // the tab; UPDATE only refreshes the rows. A single friend going online
-    // sends the status packet instead, and fires UPDATE alone.
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
-        owner_.addonEventCallbackRef()("FRIENDLIST_SHOW", {});
-    }
+    // FRIENDLIST_UPDATE (342) and nothing else - the client raises that name
+    // from six places around the friend list and has no "show" event at all:
+    // FRIENDLIST_SHOW is a 1.12 name, absent from the event-id table and from
+    // Wow.exe, and while this interface's frame still registers it (a leftover
+    // of the same age) nothing can fire it. The friends frame does the show-time
+    // refresh itself in FriendsFrame_OnShow (friendsframe.lua:243-252), which is
+    // where FriendsFrame_Update has always been called from.
+    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
 }
 
 void SocialHandler::handleContactList(network::Packet& packet) {
@@ -3762,9 +3907,11 @@ void SocialHandler::handleContactList(network::Packet& packet) {
         if (nit != owner_.getPlayerNameCache().end()) entry.name = nit->second;
         owner_.contactsRef().push_back(std::move(entry));
     }
+    // The one name the client raises for a contact list, 342 again (the ignore
+    // and mute lists have their own, 343 and 344, and the mask says which of
+    // them this list carried).
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
-        owner_.addonEventCallbackRef()("FRIENDLIST_SHOW", {});
         if (owner_.lastContactListMaskRef() & 0x2) owner_.addonEventCallbackRef()("IGNORELIST_UPDATE", {});
     }
 }
@@ -4151,13 +4298,12 @@ void SocialHandler::requestBattlefieldList(uint32_t bgTypeId) {
         // 0x0054e5b0: below PLAYER_FIELD_MAX_LEVEL, the player's
         // PLAYER_FLAGS bit 25 (experience turned off); at it, 0.
         uint8_t noXp = 0;
-        const uint16_t unitEnd = fieldIndex(UF::UNIT_END);
         const uint16_t levelField = fieldIndex(UF::UNIT_FIELD_LEVEL);
         const uint16_t flagsField = fieldIndex(UF::PLAYER_FLAGS);
+        const uint32_t maxLevel = owner_.getPlayerMaxLevel();
         if (const auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
-            self && unitEnd != 0xFFFF && levelField != 0xFFFF && flagsField != 0xFFFF) {
-            constexpr uint16_t kMaxLevelFromUnitEnd = 0x46B;  // PLAYER_FIELD_MAX_LEVEL
-            if (self->getField(levelField) < self->getField(static_cast<uint16_t>(unitEnd + kMaxLevelFromUnitEnd)))
+            self && maxLevel != 0 && levelField != 0xFFFF && flagsField != 0xFFFF) {
+            if (self->getField(levelField) < maxLevel)
                 noXp = static_cast<uint8_t>((self->getField(flagsField) >> 25) & 1u);
         }
         packet.writeUInt8(noXp);
@@ -4738,6 +4884,206 @@ void SocialHandler::handleLfgUpdateParty(network::Packet& packet) {
     LfgUpdateBody body;
     if (!parseLfgUpdate(packet, /*party=*/true, updateType, body)) return;
     applyLfgUpdate(updateType, body, /*party=*/true);
+}
+
+// The raid browser's two requests. Nothing the server sends asks for them -
+// SearchLFGJoin (0x00559400) checks that the type is one of the seven this
+// client knows and that the id names an LFGDungeonData row, packs
+// type<<24 | id&0xffffff, and hands it to 0x00558ed0, which records it as the
+// joined list (0x00beaa14), drops the results held for whatever list came
+// before, and sends CMSG_SEARCH_LFG_JOIN (0x35E) with the packed value.
+// SearchLFGLeave (0x00558f90) sends CMSG_SEARCH_LFG_LEAVE (0x35F) with the same
+// value and clears it. That id is the whole of this client's "listed" state, so
+// it is kept here rather than as another LfgState: the client holds it beside
+// the queue flags, and FrameXML's GetLFGMode tests the queue before it.
+//
+// What is fired from here belongs to the list, not to the queue: the client drops the
+// window held for whatever list came before it (twice around storing the new id,
+// 0x00558ed0:7223-7231), raises UPDATE_LFG_LIST, and only then sends the request — so the
+// panel is redrawn empty rather than over the previous list's rows. The join *result* the
+// server answers with stays silent on purpose: it is the queue update that follows it that
+// reports the queue (see handleLfgJoinResult).
+void SocialHandler::lfgSearchJoin(uint32_t typeId, uint32_t lfgId) {
+    const uint32_t packed = (typeId << 24) | (lfgId & 0x00FFFFFFu);
+    if (packed == lfgJoinedListId_) return;
+    if (!owner_.getSocket()) return;
+    const uint16_t wire = wireOpcode(Opcode::CMSG_SEARCH_LFG_JOIN);
+    if (wire == 0xFFFF) return;
+    clearLfgListWindow();
+    lfgJoinedListId_ = packed;
+    fireLfgListChanged();
+    network::Packet packet(wire);
+    packet.writeUInt32(packed);
+    owner_.getSocket()->send(packet);
+}
+
+void SocialHandler::lfgSearchLeave() {
+    if (lfgJoinedListId_ == 0) return;
+    if (owner_.getSocket()) {
+        const uint16_t wire = wireOpcode(Opcode::CMSG_SEARCH_LFG_LEAVE);
+        if (wire != 0xFFFF) {
+            network::Packet packet(wire);
+            packet.writeUInt32(lfgJoinedListId_);
+            owner_.getSocket()->send(packet);
+        }
+    }
+    // Leaving drops the rows with the id: 0x00558f90 clears the results held for the list
+    // before it sends and again as it clears the id, then raises UPDATE_LFG_LIST
+    // (:7271-7278), so a row of the old list is never answered to the new one — and so the
+    // panel notices the list went away.
+    clearLfgListWindow();
+    lfgJoinedListId_ = 0;
+    fireLfgListChanged();
+}
+
+// SMSG_LFG_UPDATE_SEARCH, case 0x369 of the LFG family routine (0x0055bdc0):
+// one byte, and the only thing the client does with it is negative - the byte
+// false while a joined list is held drops that list, resets the joined id
+// (0x00beaa14) and reports the change; the byte true leaves everything alone,
+// because the id it would confirm is the one the client set for itself.
+void SocialHandler::handleLfgUpdateSearch(network::Packet& packet) {
+    if (!packet.hasRemaining(1)) return;
+    const bool listed = packet.readUInt8() != 0;
+    packet.skipAll();
+    if (listed || lfgJoinedListId_ == 0) return;
+    lfgJoinedListId_ = 0;
+    // The rows go with the list: the client clears the window it holds, resets the id and
+    // clears it once more through 0x00558c30, which is the whole of that branch. The
+    // window it leaves in place past the list it belongs to would be answered to the next
+    // list's rows, and the name requests its rows registered are unregistered by the same
+    // routine (:6967), so those go too.
+    clearLfgListWindow();
+    // The one event fired is 469: `FUN_00558c30` is a clearing call and a fire, and that
+    // fire is what the whole LFG module raises 469 with (:7019). Nothing else is raised,
+    // which leaves the queue-side displays that read the "listed" mode through GetLFGMode
+    // — and listen to LFG_UPDATE, event 501 — answering the old mode until something else
+    // fires it. That is the client's own behaviour at this site, reproduced rather than
+    // improved on: it fires no 501 here.
+    fireLfgListChanged();
+}
+
+// SMSG_UPDATE_LFG_LIST (0x360), the rows of the raid browser's list. The packet is
+// dropped whole unless it names the list this client joined (parseLfgList), and the
+// client raises its own event only when the packet names a *different* list than
+// the window already held - the id is compared before the rows are read
+// (0x0055b770:9695-9697) and the event fires at the end (:9978-9981). Same rule
+// here: the rows are stored either way, and UPDATE_LFG_LIST is what makes lfrframe.lua
+// rebuild the panel (lfrframe.lua:20, :31-34 — the event that runs
+// `LFRBrowseFrameList_Update()` while the browse frame is shown).
+void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
+    if (lfgJoinedListId_ == 0) {
+        packet.skipAll();
+        return;
+    }
+    const uint32_t previousWindow = lfgListWindowId_;
+    bool wholeList = false;
+    bool matched = false;
+    parseLfgList(packet, lfgJoinedListId_, lfgListRows_, &wholeList, &matched);
+    // An update for a list other than the one held - one already left: the
+    // client returns before it touches the window (0x0055b770:9691-9694), and
+    // marking the window current here kept the first real packet of the new
+    // list from announcing it.
+    if (!matched) return;
+    // A whole-list packet opens by clearing the window, and that clearing routine is
+    // where the client unregisters the name callbacks its rows had registered
+    // (0x00558af0:6967). Those answers reach no callback now, so the count of them
+    // goes with the window: the client leaves its own count behind there, because
+    // unregistering closes no request, and a count left standing would stop the list
+    // ever being re-announced for as long as this list is held.
+    if (wholeList) {
+        lfgNamesAsked_.clear();
+        lfgPendingNames_ = 0;
+    }
+    // The rows the packet brought are not yet the rows the panel shows: a row is a
+    // player record plus the listing attached to it, and the pairing is what
+    // 0x00553530 does when the interface asks for an index.
+    rebuildLfgBrowserRows();
+    // Then the names the new rows are missing, which the client asks for row by row
+    // as it allocates them (0x0055b770:9931-9937). Nothing is answered from them yet,
+    // but the answers are what put a name — and a class — on a row the panel has
+    // already drawn.
+    requestLfgRowNames();
+    lfgListWindowId_ = lfgJoinedListId_;
+    if (previousWindow != 0 && previousWindow == lfgListWindowId_) return;
+    fireLfgListChanged();
+}
+
+// The rows the browse panel shows, re-paired and then ordered. The name each row
+// sorts by is resolved the way the client resolves it for its own name key: the row's
+// guid through its name cache (0x0067d770 feeding the strncmp at 0x0076e760), and an
+// empty answer is what makes that key say nothing and the walk move on.
+void SocialHandler::rebuildLfgBrowserRows() {
+    lfgBrowserRows_ = buildLfgBrowserRows(lfgListRows_, lfgListingsFirst_);
+    sortLfgBrowserRows(lfgBrowserRows_, lfgListRows_, lfgSortKeys_,
+                       [this](const LfgListRow& r) { return owner_.lookupName(r.guid); });
+}
+
+// A browse-panel column header click (SearchLFGSort, 0x0055d2b0). The client's own
+// state is the seven-key list at 0x00bea820 and the array-swap byte at 0x00acd660;
+// both live here, and either path ends with it resorting and raising UPDATE_LFG_LIST
+// (0x0055b700:9646-9654 for a key, :10709-10710 for the swap) — which is how a header
+// click reaches the panel at all: lfrframe.lua:31-34 refills the browse list on that
+// event alone. No guard on whether a list is held: the client has none either, and
+// resorting nothing costs nothing.
+void SocialHandler::sortLfgBrowser(std::string_view word) {
+    applyLfgSortHeaderClick(lfgSortKeys_, lfgListingsFirst_, word);
+    rebuildLfgBrowserRows();
+    fireLfgListChanged();
+}
+
+// The names the list's rows are missing. A listing record the client has to allocate
+// asks for its guid's name and registers a callback with that request
+// (0x0055b770:9931-9937), and it bumps its count of outstanding names only when the
+// record was new — a row arriving again over a record that already exists asks twice
+// in no case. So the test here is the same one the client's is: a row with no name
+// record and no request already out. Only listings are asked for: that request is the
+// only one the list handler makes, and the row the panel shows is named by its
+// listing, not by its group (0x00553530 takes the group's member[0]).
+void SocialHandler::requestLfgRowNames() {
+    for (const auto& row : lfgListRows_) {
+        if (!row.isListing) continue;
+        if (lfgNamesAsked_.count(row.guid)) continue;
+        if (!owner_.lookupName(row.guid).empty()) continue;
+        lfgNamesAsked_.insert(row.guid);
+        ++lfgPendingNames_;
+        owner_.queryPlayerName(row.guid);
+    }
+}
+
+// One name answer arrived for a guid the browser asked about. The client's callback
+// (0x005528a0) has no guid to match on — it closes one request off a counter and says
+// anything at all only when that count reaches zero — so the panel is re-announced
+// once, by the last answer of the batch. It matters that the answer is late rather
+// than early: a row drawn before its name arrives answers "UNKNOWN" for the name,
+// nothing for the class token, and no class name at all (0x00555fd0:4856-4873), and
+// the name is one of the sort keys, so the order changes with it too.
+void SocialHandler::onLfgNameAnswered(uint64_t guid) {
+    if (!lfgNamesAsked_.erase(guid)) return;
+    if (!lfgNameAnswerClosesGate(lfgPendingNames_)) return;
+    rebuildLfgBrowserRows();
+    // That callback's event is 469 — UPDATE_LFG_LIST, named by the client's own
+    // id-to-name table (`kLfgListChangedEvent`), and the one lfrframe.lua refills the
+    // browse list on.
+    fireLfgListChanged();
+}
+
+// The window dropped, as 0x00558af0 drops it: the player rows, the listings and the
+// window's own id go with it, and the name callbacks the rows had registered are
+// unregistered (:6967) — which is the client's one leak here, since unregistering closes
+// no request and its count of them (0x00beaaac) is left standing. WoWee drops the count
+// too, because a count that outlives the callbacks answering it can never reach zero and
+// the list would never be re-announced again while that list is held.
+void SocialHandler::clearLfgListWindow() {
+    lfgListRows_.clear();
+    lfgBrowserRows_.clear();
+    lfgNamesAsked_.clear();
+    lfgPendingNames_ = 0;
+    lfgListWindowId_ = 0;
+}
+
+void SocialHandler::fireLfgListChanged() {
+    if (owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()(std::string(kLfgListChangedEvent), {});
 }
 
 void SocialHandler::applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party) {
@@ -5535,6 +5881,30 @@ void SocialHandler::resetForWorldEntry() {
     lfgBootInProgress_ = lfgBootDidVote_ = lfgBootMyVote_ = false;
     lfgBootTargetName_.clear();
     lfgBootReason_.clear();
+    // The raid browser, as the client's LFG init leaves it (0x0055d440): no
+    // list joined and the window empty - else IsListedInLFR held over from
+    // the last character and blocked the Dungeon Finder - and the seven sort
+    // keys and the listings-first order back as they start.
+    clearLfgListWindow();
+    lfgJoinedListId_ = 0;
+    realGroup_ = RealGroup{};
+    lfgSortKeys_ = defaultLfgSortKeys();
+    lfgListingsFirst_ = true;
+}
+
+void SocialHandler::applyRealGroupUpdate(uint8_t groupType, uint32_t count, uint64_t leader) {
+    // 0x006cc300: bit 1 of the byte is a raid. Not a raid: the raid count is
+    // dropped if there was one and the party count kept (under 5); a raid: its
+    // count is the members and the player, 0 for none (under 41). The leader
+    // goes with either (0x0052bd60, 0x00572530).
+    if ((groupType & 0x2) == 0) {
+        realGroup_.raidCount = 0;
+        if (count < 5) realGroup_.partyCount = count;
+    } else {
+        const uint32_t raid = count == 0 ? 0u : count + 1u;
+        if (raid < 0x29) realGroup_.raidCount = raid;
+    }
+    realGroup_.leader = leader;
 }
 
 void SocialHandler::resetTransferState() {
@@ -5661,7 +6031,10 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
                 line = interfaceFormat("FACTION_STANDING_INCREASED",
                     "Reputation with %s increased by %d.", {name, amount});
             }
-            owner_.watchedFactionIdRef() = factionId;
+            // Nothing watches the faction whose reputation just moved: the
+            // original client's watched faction is the realm's field
+            // (PLAYER_FIELD_WATCHED_FACTION_INDEX), which only a click on the
+            // reputation frame's checkbox and the CMSG it sends can change.
             if (owner_.repChangeCallbackRef()) owner_.repChangeCallbackRef()(name, delta, standing);
             // These events fire unconditionally on any rep change (not gated by callback).
             owner_.fireAddonEvent("UPDATE_FACTION", {});
@@ -5710,8 +6083,19 @@ void SocialHandler::handleGroupSetLeader(network::Packet& packet) {
         else
             gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_S", "%s is now the group leader.", {leaderName});
     }
-    owner_.fireAddonEvent("PARTY_LEADER_CHANGED", {});
-    owner_.fireAddonEvent("GROUP_ROSTER_UPDATE", {});
+    // Neither event this used to fire. 0x006cbd70 shows its system line and
+    // stops - it stores nothing, so nothing is fired; the new leader arrives on
+    // the roster the server sends straight after, and that is where
+    // PARTY_LEADER_CHANGED comes from (0x0052bc80, through 006d0000.c:6992). The
+    // other name it fired is not this client's at all.
+    //
+    // What is still not matched: the client resolves the name (0x0076ea40) and
+    // picks between four message ids on the *restriction* flag and on whether the
+    // name found anyone - 0x45 and 0x47 for a leader that was found, 0x46 and 0x48
+    // for a name nobody in the group answers to (`006c0000.c:10120-10145`), always
+    // with the name as an argument. There is no you/other pair there. Settling
+    // which lines those four are needs the client's message-id table, which is a
+    // thread of its own.
 }
 
 // ============================================================

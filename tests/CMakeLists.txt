@@ -1442,6 +1442,10 @@ wowee_add_test(test_rt_glow
 wowee_add_test(test_shadow_sun
     SOURCES test_shadow_sun.cpp)
 
+# -- test_sound_entry: a SoundEntries row's file path and the swings its flags ask.
+wowee_add_test(test_sound_entry
+    SOURCES test_sound_entry.cpp)
+
 # -- test_camera_smooth: the camera swinging back behind as the character moves.
 wowee_add_test(test_camera_smooth
     SOURCES test_camera_smooth.cpp)

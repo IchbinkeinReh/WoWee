@@ -5,6 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <utility>
+#include <vector>
+
+#include "game/protocol_constants.hpp"
 
 namespace wowee::game::go_interaction {
 
@@ -222,6 +226,49 @@ inline constexpr size_t kWindowCount = static_cast<size_t>(Window::Count);
         if (openWith[i] == released) return window;
     }
     return std::nullopt;
+}
+
+/// The windows UNIT_NPC_FLAGS opens, each with the flag that keeps it open, in
+/// the order 0x0071a0b0 asks them: gossip 0x1, the quest giver's 0x2, the flight
+/// master's 0x2000, the trainer's 0x10, the banker's 0x20000, the guild banker's
+/// 0x00800000 and the postmaster's 0x04000000.  The flight master comes before
+/// the trainer here, where the letting-go order above has them the other way
+/// round, and no other window is in it: a merchant, an auction house, a stable,
+/// a registrar or a tabard vendor whose flag goes away keeps its window open.
+inline constexpr std::pair<uint32_t, Window> kWindowKeptByNpcFlag[] = {
+    {NPC_FLAG_GOSSIP,        Window::Gossip},
+    {NPC_FLAG_QUESTGIVER,    Window::Quest},
+    {NPC_FLAG_FLIGHT_MASTER, Window::Taxi},
+    {NPC_FLAG_TRAINER,       Window::Trainer},
+    {NPC_FLAG_BANKER,        Window::Bank},
+    {NPC_FLAG_GUILD_BANKER,  Window::GuildBank},
+    {NPC_FLAG_POSTMASTER,    Window::Mailbox},
+};
+
+/// 0x0071a0b0 on a unit whose UNIT_NPC_FLAGS went from `before` to `after`:
+/// every window whose flag went away with the bit, and only one open with this
+/// very unit (`with` - the same per-window guids as the list above, 0 for a
+/// window not open, and `guid` 0 for a unit no window can be open with).
+///
+/// More than one can answer for one change, and the client closes everything
+/// that matches rather than stopping at the first: a quest giver who stops being
+/// a gossip as well loses the gossip frame and then the quest frame, in that
+/// order.
+///
+/// Not its vtable +0x50, which the client also runs whenever the quest giver's
+/// or the flight master's bit changes either way: that redraws the unit, and the
+/// marks over a quest giver come from the status query wowee already sends when
+/// a unit becomes one (quest_status_requery).
+[[nodiscard]] inline std::vector<Window> npcFlagWindowsLost(uint32_t before, uint32_t after,
+                                                            uint64_t guid,
+                                                            const std::array<uint64_t, kWindowCount>& with) {
+    std::vector<Window> lost;
+    if (guid == 0) return lost;
+    for (const auto& [flag, window] : kWindowKeptByNpcFlag) {
+        if ((before & flag) != 0 && (after & flag) == 0 && with[static_cast<size_t>(window)] == guid)
+            lost.push_back(window);
+    }
+    return lost;
 }
 
 /// SMSG_TRADE_STATUS codes after which the trade manager forgets its

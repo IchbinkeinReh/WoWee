@@ -80,10 +80,13 @@ public:
     /// A `limit` play is refused while as many of its type as the client
     /// allows are playing (audio/play_limit.hpp). `priority` is FMOD's:
     /// past the real voices the least important play on silent
-    /// (audio/voice_priority.hpp).
+    /// (audio/voice_priority.hpp). `outHandle`, where given, takes the id to
+    /// ask about with isSoundPlaying(): the handle a play went into, which the
+    /// client hands the caller's own slot (0x004c6a40's third argument). It is
+    /// 0 where nothing started.
     bool playSound2D(const std::vector<uint8_t>& wavData, float volume = 1.0f, float pitch = 1.0f,
                      Channel channel = Channel::Own, PlayLimit limit = PlayLimit::None,
-                     int priority = voice_priority::kDefault);
+                     int priority = voice_priority::kDefault, uint32_t* outHandle = nullptr);
     bool playSound2D(const std::string& mpqPath, float volume = 1.0f, float pitch = 1.0f,
                      Channel channel = Channel::Own, int priority = voice_priority::kDefault);
 
@@ -102,7 +105,13 @@ public:
     bool playSound3D(const std::vector<uint8_t>& wavData, const glm::vec3& position,
                      float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f,
                      float minDistance = 1.0f, Channel channel = Channel::Own,
-                     PlayLimit limit = PlayLimit::None, int priority = voice_priority::kDefault);
+                     PlayLimit limit = PlayLimit::None, int priority = voice_priority::kDefault,
+                     uint32_t* outHandle = nullptr);
+    /// Whether the play `handle` was given is still going. False once it has
+    /// ended and update() has taken it away, and for handle 0 - the same
+    /// question the client asks of the slot a unit's line went into
+    /// (0x004c5be0), which is what keeps a unit saying one line at a time.
+    [[nodiscard]] bool isSoundPlaying(uint32_t handle) const;
     bool playSound3D(const std::string& mpqPath, const glm::vec3& position,
                      float volume = 1.0f, float pitch = 1.0f, float maxDistance = 100.0f,
                      Channel channel = Channel::Own);

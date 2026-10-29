@@ -515,6 +515,21 @@ public:
     void updateLogoutCountdown(float deltaTime);
     void resetTransferState();
     GroupListData& mutablePartyData() { return partyData; }
+    /// The player's own group as it stands outside a battleground - the "real"
+    /// group the client keeps beside the roster (0xbd1990 its leader, 0xbd1998
+    /// the party count, 0xbeb60c the raid's): what IsRealPartyLeader,
+    /// GetRealNumPartyMembers and GetRealNumRaidMembers read. The roster of a
+    /// group that is not a battleground's writes it (0x006d8870 under
+    /// `(type & 1) == 0`), and SMSG_REAL_GROUP_UPDATE while one is
+    /// (0x006cc300) - not the roster itself, which stays the battleground's.
+    struct RealGroup {
+        uint64_t leader = 0;
+        uint32_t partyCount = 0;
+        uint32_t raidCount = 0;
+    };
+    [[nodiscard]] const RealGroup& realGroup() const { return realGroup_; }
+    /// SMSG_REAL_GROUP_UPDATE's three fields, as 0x006cc300 stores them.
+    void applyRealGroupUpdate(uint8_t groupType, uint32_t count, uint64_t leader);
     InspectResult& mutableInspectResult() { return inspectResult_; }
     void setRaidTargetGuid(uint8_t icon, uint64_t guid) {
         if (icon < kRaidMarkCount) raidTargetGuids_[icon] = guid;
@@ -600,6 +615,68 @@ public:
     [[nodiscard]] const LfgCompletionReward& getLfgCompletionReward() const { return lfgCompletionReward_; }
     [[nodiscard]] bool isLfgQueued()               const { return lfgState_ == LfgState::Queued; }
     [[nodiscard]] bool isLfgInDungeon()            const { return lfgState_ == LfgState::InDungeon; }
+    /// The raid browser's joined-list id, packed the way this client packs it:
+    /// the type in the top eight bits, the LFGDungeonData id in the low
+    /// twenty-four (its 0x00beaa14). Zero means not listed.
+    [[nodiscard]] uint32_t getLfgJoinedListId()    const { return lfgJoinedListId_; }
+    /// Ask to be listed in the raid browser for one raid, or stop being listed
+    /// (SearchLFGJoin / SearchLFGLeave, 0x00559400 and 0x00558f90).
+    void lfgSearchJoin(uint32_t typeId, uint32_t lfgId);
+    void lfgSearchLeave();
+    /// How many rows the raid browser's browse panel has, which is
+    /// SearchLFGGetNumResults' first number (0x00553ba0) and answers zero while no
+    /// list is held - the client's own guard on its held list id.
+    [[nodiscard]] uint32_t getLfgListRowCount() const {
+        return lfgListWindowId_ == 0 ? 0 : static_cast<uint32_t>(lfgListRows_.size());
+    }
+    /// One of those rows by index from zero, or null past the end.
+    [[nodiscard]] const LfgListRow* getLfgListRow(uint32_t index) const {
+        if (lfgListWindowId_ == 0 || index >= lfgListRows_.size()) return nullptr;
+        return &lfgListRows_[index];
+    }
+    /// How many rows the browse panel can actually show, which is what
+    /// SearchLFGGetNumResults answers: the parsed rows paired up the way the
+    /// client resolves an index (0x00553530), so a player record with no listing
+    /// attached is not counted at all.
+    [[nodiscard]] uint32_t getLfgBrowserRowCount() const {
+        return lfgListWindowId_ == 0 ? 0 : static_cast<uint32_t>(lfgBrowserRows_.size());
+    }
+    /// One of those pairs by index from zero, or null past the end. Its index
+    /// fields name entries of getLfgListRow, and stay valid until the next list
+    /// packet, which rebuilds both.
+    [[nodiscard]] const LfgBrowserRow* getLfgBrowserRow(uint32_t index) const {
+        if (lfgListWindowId_ == 0 || index >= lfgBrowserRows_.size()) return nullptr;
+        return &lfgBrowserRows_[index];
+    }
+    /// Which list those rows are held for, packed type<<24 | id. The client masks
+    /// the low twenty-four bits off its joined browser id (0x00beab20) to name the
+    /// dungeon those rows' bosses belong to, at 0x00553c30:3228; the id here is the
+    /// one a packet actually named (0x00beaa98), which is the one the rows read
+    /// belong to and, whenever rows are held, the same id.
+    [[nodiscard]] uint32_t getLfgSearchListId() const { return lfgListWindowId_; }
+    /**
+     * What one of the browse panel's column headers does (`SearchLFGSort`,
+     * 0x0055d2b0), by the word that header carries: "group" swaps which array of rows
+     * is walked first and sorts nothing, and any other word makes that key primary —
+     * reversing it if it already was. The client's guard against no word at all (a
+     * usage line and no change, :10638-10642) is the binding's, not this one's.
+     *
+     * Both paths end with the client raising UPDATE_LFG_LIST (0x0055b700:9654, and
+     * :10710 for the swap), which is what the panel refills itself on; that is the one
+     * thing here that a header click sends to the interface.
+     */
+    void sortLfgBrowser(std::string_view word);
+    /**
+     * A name answer landed, and one of the raid browser's rows may be waiting on it.
+     *
+     * The client's callback matches no guid at all — it is a bare "an answer arrived"
+     * notice closing one request off a counter (0x005528a0) — so this is called for
+     * every answer and closes one only while a row is outstanding. The list is
+     * re-announced when the last request closes, which is what fills a row's name in
+     * and, off the same answer, its class: `SearchLFGGetResults` reads both from the
+     * record its row's guid resolves to (0x00555fd0:4856-4873).
+     */
+    void onLfgNameAnswered(uint64_t guid);
     [[nodiscard]] uint32_t getLfgDungeonId()       const { return lfgDungeonId_; }
     [[nodiscard]] std::string getCurrentLfgDungeonName() const;
     [[nodiscard]] uint32_t getLfgProposalId()      const { return lfgProposalId_; }
@@ -669,6 +746,12 @@ private:
     void handleGroupDecline(network::Packet& packet);
     void handleGroupList(network::Packet& packet);
     void handleGroupUninvite(network::Packet& packet);
+    /// The events that go out when the group stops existing: PARTY_MEMBERS-
+    /// _CHANGED and PLAYER_ROLES_ASSIGNED, plus RAID_ROSTER_UPDATE for a raid.
+    /// The client's own emptier 0x0052d6e0 fires the first two; the note on the
+    /// definition gives each one's site, and why none of them is the
+    /// GROUP_ROSTER_UPDATE that these sites used to fire instead.
+    void firePartyClearedEvents(bool wasRaid);
     void handlePartyCommandResult(network::Packet& packet);
     void handlePartyMemberStats(network::Packet& packet, bool isFull);
     void handleGuildInfo(network::Packet& packet);
@@ -705,6 +788,36 @@ private:
     void handleLfgRoleCheckUpdate(network::Packet& packet);
     void handleLfgUpdatePlayer(network::Packet& packet);
     void handleLfgUpdateParty(network::Packet& packet);
+    /// SMSG_LFG_UPDATE_SEARCH, one byte: the server saying this player is no
+    /// longer listed drops the joined raid-browser list (case 0x369 of 0x0055bdc0).
+    void handleLfgUpdateSearch(network::Packet& packet);
+    void handleUpdateLfgList(network::Packet& packet);
+    /// Re-pair the held rows for the browse panel (0x00553530's index resolution) and
+    /// order them as the client orders its two arrays before the getter walks them
+    /// (0x0055b700:9646-9653, which resorts and then rebuilds the same way).
+    void rebuildLfgBrowserRows();
+    /// Ask for the names the held rows have none for, as the client does for each
+    /// listing record it has to allocate (0x0055b770:9931-9937), and count the
+    /// requests it made: the last answer to arrive re-announces the list.
+    void requestLfgRowNames();
+    /// The window the list is held in, dropped: its rows, its paired rows and the
+    /// names those rows waited on. That is what 0x00558af0 does, unregistering the
+    /// name callback of every row it drops on the way (:6967) — which is also why it
+    /// closes no request and the count outlives the rows it belongs to.
+    void clearLfgListWindow();
+    /**
+     * Raise UPDATE_LFG_LIST: script event 469, named by the client's own id-to-name
+     * table (`kLfgListChangedEvent`). Six sites fire it and every one of them is the
+     * raid browser's — when the joined list id changes (0x00558ed0:7231) and when it is
+     * cleared (0x00558f90:7278), from the one branch of the SMSG_LFG_UPDATE_SEARCH case
+     * (through 0x00558c30:7019), at the tail of the SMSG_UPDATE_LFG_LIST handler (:9980),
+     * after a resort (:9654) and after the "group" swap (:10710). It carries no arguments,
+     * and its only consumer in FrameXML is lfrframe.lua:31-34, which refills the browse
+     * list while that frame is visible: this is the event the panel's rows ride on, and
+     * `LFG_UPDATE` — which those lines use for the comment box alone, and which this file
+     * used to raise from all of these sites — is event 501 and something else.
+     */
+    void fireLfgListChanged();
     void applyLfgUpdate(uint8_t updateType, const LfgUpdateBody& body, bool party);
     /// Whether any of the body's dungeons is a raid, which turns the queue's
     /// lines into the raid browser's (0x00557260).
@@ -880,6 +993,42 @@ private:
 
     // LFG / Dungeon Finder
     LfgState lfgState_        = LfgState::None;
+    /// The raid browser list this player joined, packed type<<24 | id; zero when
+    /// not listed. This client's own 0x00beaa14 - it is set by the request, not
+    /// by any packet, which is why IsListedInLFR can only be as right as this.
+    uint32_t lfgJoinedListId_ = 0;
+    /// The rows of the list held, in the order the packet brought them: the
+    /// player rows first, then the listings. The client shows them in neither of
+    /// those orders — it qsorts its two arrays separately (0x0055b700) and then
+    /// walks the array of listings that belong to no one before the player array
+    /// unless the swap byte says otherwise (0x00553530:2831-2864).
+    std::vector<LfgListRow> lfgListRows_;
+    /// Those rows paired into the rows the browse panel can show, rebuilt whenever
+    /// the rows are (buildLfgBrowserRows, then sortLfgBrowserRows). Held beside them
+    /// rather than derived at query time so that the index fields of one never
+    /// outlive the vector they name indices into.
+    std::vector<LfgBrowserRow> lfgBrowserRows_;
+    /// The browse panel's sort state: the client's seven {key, direction} slots at
+    /// 0x00bea820, and the byte at 0x00acd660 that says which of the two arrays of
+    /// rows is walked first. The LFG module's init fills the list with all seven keys
+    /// ascending and sets that byte to listings-first (0x0055d440:10766-10772).
+    RealGroup realGroup_;
+    std::vector<LfgSortEntry> lfgSortKeys_ = defaultLfgSortKeys();
+    bool lfgListingsFirst_ = true;
+    /// Which list those rows belong to, the id of the last packet actually read -
+    /// the client's 0x00beaa98, which is also what it tests to decide whether the
+    /// rows changed enough to report. Zero when none is held.
+    uint32_t lfgListWindowId_ = 0;
+    /// The names the browser's rows are waiting for. A listing row that had to be
+    /// allocated asks for its guid's name and registers a callback with the request
+    /// (0x0055b770:9931-9937); a row whose name record already exists does not ask
+    /// again, which is what `lfgNamesAsked_` stands in for, and `lfgPendingNames_` is
+    /// the client's 0x00beaaac. The answer that closes the last of them re-announces
+    /// the list (0x005528a0, `lfgNameAnswerClosesGate`), which is how a row the panel
+    /// had already drawn gets its name - and with it the class the same answer
+    /// carries, since the row getter reads both off the record the guid resolves to.
+    std::unordered_set<uint64_t> lfgNamesAsked_;
+    uint32_t lfgPendingNames_ = 0;
     LfgCompletionReward lfgCompletionReward_;
     uint32_t lfgDungeonId_    = 0;
     uint32_t lfgProposalId_   = 0;

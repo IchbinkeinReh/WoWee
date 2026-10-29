@@ -649,12 +649,10 @@ void MovementHandler::sendMovement(Opcode opcode) {
         }
     }
 
-    // Track movement state transition for PLAYER_STARTED/STOPPED_MOVING events
-    const uint32_t kMoveMask = static_cast<uint32_t>(MovementFlags::FORWARD) |
-                               static_cast<uint32_t>(MovementFlags::BACKWARD) |
-                               static_cast<uint32_t>(MovementFlags::STRAFE_LEFT) |
-                               static_cast<uint32_t>(MovementFlags::STRAFE_RIGHT);
-    const bool wasMoving = (movementInfo.flags & kMoveMask) != 0;
+    // The state before this message. There is no event for the player starting
+    // or stopping: PLAYER_STARTED_MOVING and PLAYER_STOPPED_MOVING are names from
+    // a much later client, and this one's event-id table holds no movement name
+    // at all - who moves is asked of the unit, not announced.
     const uint32_t flagsBefore = movementInfo.flags;
     const bool launchedBefore = movementInfo.jumpVelocity != 0.0f;
 
@@ -858,15 +856,6 @@ void MovementHandler::sendMovement(Opcode opcode) {
                 opcode = Opcode::MSG_MOVE_SET_PITCH;
             }
         }
-    }
-
-    // Fire PLAYER_STARTED/STOPPED_MOVING on movement state transitions
-    {
-        const bool isMoving = (movementInfo.flags & kMoveMask) != 0;
-        if (isMoving && !wasMoving && owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("PLAYER_STARTED_MOVING", {});
-        else if (!isMoving && wasMoving && owner_.addonEventCallbackRef())
-            owner_.addonEventCallbackRef()("PLAYER_STOPPED_MOVING", {});
     }
 
     if (opcode == Opcode::MSG_MOVE_SET_FACING) {

@@ -142,6 +142,9 @@ public:
 
     /// Release the lines held for `guid`, now that its name is known.
     void flushChatAwaitingName(uint64_t guid);
+    /// Fire the channel invite held back for `guid`'s name (0x0050e120 case 0x18
+    /// requests the inviter's name and lets 0x004fb5c0 raise the popup with it).
+    void onChannelInviteNameKnown(uint64_t guid);
     /// Release anything whose wait has run out, named or not. A line nobody
     /// answers for is still a line the player should see.
     void expireChatAwaitingName();
@@ -240,6 +243,11 @@ private:
     bool loginChannelJoinArmed_ = false;
     bool loginChannelJoinDone_ = false;
     std::set<std::string> ownedChannels_;
+    /// An invite waiting on its inviter's name, as 0x0050e120 case 0x18 leaves it
+    /// in the 0x80 bytes at DAT_00b75950. One at a time: a second invite while
+    /// this is set is dropped by the case that reads it.
+    uint64_t pendingInviteGuid_ = 0;
+    std::string pendingInviteChannel_;
     /// Who sent the message a chat line id names, newest last.
     ///
     /// Every chat event carries a line id as its eleventh argument, and

@@ -93,6 +93,9 @@ TEST_CASE("Quest query rewards: Classic layout (vmangos)", "[quest_rewards]") {
     auto r = QuestQueryRewardsParser::parse(b, /*questLogStride=*/3);
     REQUIRE(r.valid);
     CHECK(r.rewardMoney == 150);
+    // The classic serializer's field beside the money was never counted off a
+    // serializer here, so the cap's amount is left unread rather than guessed at.
+    CHECK(r.rewardMoneyMaxLevel == 0);
     CHECK(r.itemId[0] == 1234);
     CHECK(r.itemCount[0] == 1);
     CHECK(r.itemId[1] == 0);
@@ -145,6 +148,7 @@ TEST_CASE("Quest query rewards: TBC layout (cmangos-tbc)", "[quest_rewards]") {
     auto r = QuestQueryRewardsParser::parse(b, /*questLogStride=*/4);
     REQUIRE(r.valid);
     CHECK(r.rewardMoney == 7700);
+    CHECK(r.rewardMoneyMaxLevel == 0);   // TBC order beside the money unconfirmed
     CHECK(r.itemId[0] == 25406);
     CHECK(r.choiceItemId[0] == 25407);
     CHECK(r.choiceItemId[1] == 25408);
@@ -173,7 +177,8 @@ TEST_CASE("Quest query rewards: WotLK layout (AzerothCore)", "[quest_rewards]") 
     putU32(b, 0);     // rewSpell
     putU32(b, 0);     // rewSpellCast
     putU32(b, 250);   // rewHonorAddition
-    putF(b, 0.0f);    // rewHonorMultiplier
+    putF(b, 20.0f);   // rewHonorMultiplier (non-zero: it is the word's position
+                      // that matters, and the client turns this into +2 honour)
     putU32(b, 0);     // srcItemId
     putU32(b, 8);     // flags
     putU32(b, 47);    // charTitleId
@@ -207,6 +212,10 @@ TEST_CASE("Quest query rewards: WotLK layout (AzerothCore)", "[quest_rewards]") 
     auto r = QuestQueryRewardsParser::parse(b, /*questLogStride=*/5);
     REQUIRE(r.valid);
     CHECK(r.rewardMoney == 47400);
+    // The max-level amount is the very next word (field 12, absolute 14 - the
+    // packet has always written it, the parser used to drop it). Locked here so
+    // the reward panel's floor at the level cap has a number to work from.
+    CHECK(r.rewardMoneyMaxLevel == 19800);
     CHECK(r.itemId[0] == 35953);
     CHECK(r.itemCount[0] == 2);
     CHECK(r.choiceItemId[0] == 36926);
@@ -217,6 +226,9 @@ TEST_CASE("Quest query rewards: WotLK layout (AzerothCore)", "[quest_rewards]") 
     CHECK(r.xpId == 5);
     // Honor (field 15), bonus talents (21) and arena points (22), also locked.
     CHECK(r.rewardHonor == 250);
+    // The multiplier is the float in the next word (field 16); the client's honour
+    // answer is 250 + round(20.0 * 0.1) = 252, so the word has to survive the parse.
+    CHECK(r.rewardHonorMultiplier == 20.0f);
     CHECK(r.bonusTalents == 1);
     CHECK(r.arenaPoints == 100);
     CHECK(r.rewardTitleId == 47);  // CharTitleId at field 19

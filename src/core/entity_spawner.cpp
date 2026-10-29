@@ -654,6 +654,7 @@ void EntitySpawner::clearAllQueues() {
     creatureSpawnRetryDeadlines_.clear();
     creaturePermanentFailureGuids_.clear();
     deadCreatureGuids_.clear();
+    unitVoiceLines_.clear();  // no line of this world is playing any more
     pendingPlayerSpawns_.clear();
     pendingPlayerSpawnGuids_.clear();
     // Waits for a load still running: the worker reads through assetManager_.

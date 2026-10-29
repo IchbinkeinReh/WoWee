@@ -2,6 +2,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "addons/unit_or_name.hpp"
 #include "game/gossip_quest_status.hpp"
+#include "game/interface_text.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -3503,13 +3504,37 @@ void registerSocialLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->releaseSpirit();
             return 0;
         }},
-                // The text for the second button, or nil for no button at all.
-                // This client knows the same thing as canSelfRes: the server
-                // sent SMSG_PRE_RESURRECT because a Reincarnation or Twisting
-                // Nether is up.
+                // The text for the second button, or nil for no button at all
+                // (staticpopup.lua:1131 sets the label, :1183 decides whether the
+                // button is there, :1174 whether it is enabled).
+                //
+                // 0x0051acd0 answers only while the local player is dead - the
+                // test is health below one, the field blob's +0x48 being
+                // UNIT_FIELD_HEALTH (blob dword 18, wire 24; a ghost has 1, and
+                // the client answers nil for it) - and what it answers is a spell
+                // name, not a phrase: the id sitting in PLAYER_SELF_RES_SPELL,
+                // queried through the spell store, or "UNKNOWN" when that query
+                // fails.  A soulstone is therefore its own button, with no packet
+                // involved at all.  With the field empty the client scans the
+                // spellbook for a self-resurrect spell (0x006d6640 -> 0x006d6560)
+                // and names that; here the SMSG_PRE_RESURRECT WoWee already listens
+                // for stands in for the scan, and the word is the popup's own
+                // USE_SOULSTONE rather than an English literal, so a client in
+                // another language keeps the label it gave the button at
+                // staticpopup.lua:1128 before OnShow reaches it.
                 {"HasSoulstone", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh && gh->canSelfRes()) { lua_pushstring(L, "Use Soulstone"); return 1; }
+            if (!gh || !gh->isPlayerDead()) { lua_pushnil(L); return 1; }
+            if (const uint32_t spellId = gh->getSelfResSpellId(); spellId != 0) {
+                const std::string& name = gh->getSpellName(spellId);
+                lua_pushstring(L, name.empty() ? "UNKNOWN" : name.c_str());
+                return 1;
+            }
+            if (gh->canSelfRes()) {
+                const std::string label = game::interfaceString("USE_SOULSTONE", "Use Soulstone");
+                lua_pushstring(L, label.c_str());
+                return 1;
+            }
             lua_pushnil(L);
             return 1;
         }},

@@ -123,6 +123,10 @@ public:
         uint32_t rewardSpellId = 0;
         uint32_t rewardXPId = 0;  // QuestXP.dbc column; reward XP = that column at this quest's level
         uint32_t rewardHonor = 0;
+        /// The quest's honour multiplier, kept because the client's honour answer
+        /// is the addition plus that number converted by 0.1 (0x005e4b70) - see
+        /// game/quest_rewards.hpp.
+        float rewardHonorMultiplier = 0.0f;
         uint32_t rewardTalents = 0;
         uint32_t rewardArenaPoints = 0;
         uint32_t rewardTitleId = 0;  // CharTitles.dbc id of an awarded title, 0 = none
@@ -168,6 +172,12 @@ public:
         /// The reputation the first objective faction asks for (RequiredMinRepValue).
         int32_t repObjectiveValue = 0;
         int32_t  rewardMoney = 0;
+        /// The same money at the level cap, the word beside it on the wire. The
+        /// reward panel pays this instead when the player's level is not below
+        /// PLAYER_FIELD_MAX_LEVEL and it is at least as large as the reward amount
+        /// (0x005e48f0) - the floor that gives a grey quest a payout at the cap.
+        /// Zero where the layout was never counted (classic, TBC).
+        int32_t  rewardMoneyMaxLevel = 0;
         std::array<QuestRewardItem, 4> rewardItems{};
         std::array<QuestRewardItem, 6> rewardChoiceItems{};
     };
@@ -197,10 +207,13 @@ public:
     // ZoneOrSort values; empty if unknown
     const std::string& getQuestSortName(uint32_t sortId);
 
-    /// The reward experience a quest shows: QuestXP.dbc read at the quest's
-    /// level, in the column its XP-difficulty index selects. Zero when the
-    /// level or index is unknown (index 0 is genuinely no XP), so the reward
-    /// panel simply omits the line, as it does for a quest that gives none.
+    /// The table's number for a quest: QuestXP.dbc read at a level row, in the
+    /// column its XP-difficulty index selects. Zero when the level or index is
+    /// unknown (index 0 is genuinely no XP), so the reward panel simply omits the
+    /// line, as it does for a quest that gives none. This is the raw row value -
+    /// the level damping, the rounding and the level-cap gate that decide what the
+    /// panel finally prints are in game/quest_rewards.hpp, because they are the same
+    /// rules the client's own binding runs (0x005e0420 then 0x005e49b0).
     uint32_t getQuestRewardXP(int32_t level, uint32_t xpDifficulty);
 
     /// The reputation a quest reward shows for one faction entry: the override

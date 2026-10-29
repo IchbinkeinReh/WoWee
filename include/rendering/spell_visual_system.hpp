@@ -64,9 +64,9 @@ public:
     void playSpellVisualPrecast(uint32_t visualId, const glm::vec3& worldPosition,
                                 uint32_t castTimeMs = 0, uint32_t attachInstanceId = 0, uint32_t spellId = 0);
 
-    /// A SpellVisualKit by its id, as SMSG_PLAY_SPELL_VISUAL (type 1,
-    /// 0x008006c0) and SMSG_PLAY_SPELL_IMPACT (type 0, 0x00800610) play one
-    /// on a unit.
+    /// A SpellVisualKit by its id, as SMSG_PLAY_SPELL_VISUAL (0x1F3, kit
+    /// type 0 through 0x00800610) and SMSG_PLAY_SPELL_IMPACT (0x1F7, type 1
+    /// through 0x008006c0) play one on a unit.
     void playKit(uint32_t kitId, spell_kit::KitType type, const glm::vec3& worldPosition, uint32_t renderInstanceId);
 
     /// A ground-aimed cast's area kits at its destination (0x0080e1b0): the
@@ -407,6 +407,9 @@ public:
     /// listener at the character; else where it is - kept over a crowd's
     /// either way.
     void playOwnSoundAt(uint32_t soundId, const glm::vec3& position);
+    /// The settings' "Spells" balance, over what each kit's own SoundEntries
+    /// volume brings - the client scales these with the Effects channel alone.
+    void setKitSoundVolumeScale(float scale) { kitSoundVolumeScale_ = scale; }
 
     /// The cast a dynamic object carries: DYNAMICOBJECT_CASTER, SPELLID and
     /// CASTTIME (0x00804cc0).
@@ -522,7 +525,7 @@ private:
         float holdAt = -1.0f;
         float elapsed = 0.0f;
     };
-    /// An aura's state kit on a unit.
+    /// A state kit or a channel kit on a unit, held as long as the aura is.
     struct AuraKit {
         uint32_t spellId = 0;
         uint32_t visualId = 0;
@@ -536,6 +539,12 @@ private:
         uint32_t chainDeadlineMs = 0;
         uint64_t casterGuid = 0;       ///< the aura's caster, its chains' other end
         uint32_t boundInstance = 0;    ///< the instance its models hang on
+        /// Its kit's SoundID, asked once as the kit goes onto the unit: a
+        /// looping entry is held by the handle, tied to the unit and following
+        /// it (0x004c5c80 -> 0x00879aa0), until the kit leaves; a one-shot has
+        /// nothing left to hold.
+        uint32_t soundHandle = 0;
+        bool soundAsked = false;
         std::vector<KitModelInstance> models;
     };
     struct UnitAuraKits {
@@ -629,13 +638,38 @@ private:
     void startDynamicObjectKit(DynamicObjectVisual& object);
     bool missileInFlight(const DynamicObjectCast& cast) const;
     /// 0x00745230 on a unit (renderInstanceId, 0 for none) or at a place:
-    /// the kit's models, its weapon effects (precast and cast kits), its
-    /// camera shake and its colour. Returns a state kit's models.
+    /// the kit's sound, its models, its weapon effects (precast and cast
+    /// kits), its camera shake and its colour. Returns a state kit's models.
     using KitPlayExtra = SpellKitPlayExtra;
     std::vector<KitModelInstance> playKitOnUnit(uint32_t kitId, spell_kit::KitType type,
                                                uint32_t renderInstanceId, const glm::vec3& position,
                                                const glm::vec3* place, uint32_t castTimeMs = 0,
                                                uint32_t spellId = 0, const KitPlayExtra& extra = {});
+    /// The kit's SoundID (+0x3c) as 0x00745230 plays it with the kit, through
+    /// the kit's effect or the unit (spell_kit::kitSoundOwnVoice).
+    ///
+    /// A looping entry of a kit that is held on - a state or channel kit, a
+    /// precast kit, an area kit at a place (spell_kit::kitSoundLoops) - runs as
+    /// long as the kit does and goes with it (0x004c5c80), so it is only
+    /// started where `holds` says the caller keeps the kit's end to stop it
+    /// with; its handle comes back for that. Anywhere else the entry is unheard
+    /// rather than left running, and a one-shot plays out on its own: both give
+    /// back 0.
+    uint32_t playKitSound(const KitRecord& kit, spell_kit::KitType type, uint32_t renderInstanceId,
+                          const glm::vec3& position, bool holds = false);
+    float kitSoundVolumeScale_ = 1.0f;  ///< The settings' "Spells" balance
+    /// A kit's looping sound the caller holds only for a while: a precast
+    /// kit's, for its cast's time. 3.3.5a's visuals give 1775 of them.
+    struct HeldKitSound {
+        uint32_t handle = 0;
+        uint32_t endsMs = 0;  ///< colourClockMs_ when the kit it came with goes
+        /// The unit's model the sound is tied to (0x004c5c80 -> 0x00879aa0
+        /// writes the unit's guid into the sound): it follows it. 0 for none.
+        uint32_t renderInstanceId = 0;
+    };
+    std::vector<HeldKitSound> heldKitSounds_;
+    /// Their casts are over: the sounds go with them.
+    void expireHeldKitSounds();
     /// The unit's virtual 0x104 (0x0072af60): a kit with Flags 0x1 of a
     /// spell whose visual has a chain kit (0x00800bf0) waits on its unit
     /// (0x00728050) for a chain's pulse to reach it, ten seconds at most.
@@ -800,10 +834,14 @@ private:
     /// 0x007265c0 cases 0 and 12 for a kit on `unitGuid` for `spellId`;
     /// `otherSource` names the unit kit flag 0x1000 draws from.
     void startKitChains(const KitRecord& kit, uint64_t unitGuid, uint32_t spellId, uint64_t otherSource);
-    /// A state kit as it plays (0x0073b140 for type 2): its shake and colour
-    /// on the unit, then its CharProcs (0x007265c0) - its chains, and 16's
-    /// mount transition.
-    void startStateKitOnUnit(uint64_t unitGuid, const AuraKit& aura, uint64_t otherSource);
+    /// A state or channel kit as it plays (0x0073b140 for type 2): its sound
+    /// and its shake and colour on the unit, then its CharProcs (0x007265c0) -
+    /// its chains, and 16's mount transition.
+    void startStateKitOnUnit(uint64_t unitGuid, AuraKit& aura, uint64_t otherSource);
+    /// The state or channel kit's SoundID as it goes onto the unit, once for
+    /// the model it hangs on: a looping entry held in the aura until the kit
+    /// leaves it, a one-shot just played.
+    void askAuraKitSound(AuraKit& aura, const KitRecord& kit, uint32_t instance, const glm::vec3& unitPos);
     /// 0x0072af60 for a state or channel kit (counter -1): held when its kit
     /// has Flags 0x1 and the visual runs a chain.
     void holdStateKitForChain(AuraKit& aura);
@@ -866,6 +904,10 @@ private:
     AttachedEffectScale attachedEffectScale_;
     /// 0x00720400 for a unit: hide or show its Flags 8 kits as asked.
     void stepUnarmedKits(uint64_t unitGuid, UnitAuraKits& unit, bool force);
+    /// Its models off the unit's model, its held sound kept (a model change).
+    void hideAuraKitModels(AuraKit& aura);
+    /// The kit leaves the unit: its models go, and the looping sound it held
+    /// with them.
     void hideAuraKit(AuraKit& aura);
     /// Each frame: the unit's kits follow it, onto a new model when it has
     /// one, and its Flags 8 kits show as 0x00720400 has them.
@@ -1030,6 +1072,9 @@ private:
         float volume = 1.0f;
         float minDistance = 0.0f;  ///< MinDistance (26)
         float cutoff = 0.0f;       ///< DistanceCutoff (27)
+        /// Flags (25) whole: 0x200 loops, and 0x400/0x800 ask the play for a
+        /// pitch or a volume swing (audio/sound_entry.hpp).
+        uint32_t flags = 0;
         bool loops = false;        ///< Flags (25) 0x200
     };
     std::unordered_map<uint32_t, LoadedSound> soundEntries_;           // SoundEntries id → its file, empty if none

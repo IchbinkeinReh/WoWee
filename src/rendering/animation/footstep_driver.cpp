@@ -10,6 +10,7 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/footstep_manager.hpp"
 #include "audio/mount_sound_manager.hpp"
+#include "addons/lua_api_registrations.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -212,6 +213,12 @@ void FootstepDriver::update(float deltaTime, Renderer* renderer,
         cameraController && cameraController->isThirdPerson() &&
         cameraController->isGrounded() && !cameraController->isSwimming();
 
+    // "showfootprints", and the reason a sweep for the name finds nothing to
+    // read: the setter (0x0078d8f0) keeps no value, it only flips bit 0x400 of
+    // a flag word that the step update then tests (0x00723a50) before a print
+    // is queued. A step's print is what is toggled here, never its sound.
+    const bool showPrints = addons::storedCVarValue("showfootprints", "1") != "0";
+
     if (canPlayFootsteps && mounted && mountInstanceId > 0 && !taxiFlight) {
         // Mount footsteps: use mount's animation for timing
         uint32_t animId = 0;
@@ -277,7 +284,7 @@ void FootstepDriver::update(float deltaTime, Renderer* renderer,
                     const auto surface = resolveFootstepSurface(renderer);
                     if (surface == audio::FootstepSurface::WATER) {
                         playWaterStepExtras(renderer);
-                    } else {
+                    } else if (showPrints) {
                         spawnFootprint(renderer, characterRenderer, mountInstanceId,
                                        nextMountFootLeft_, fallbackForMount(family));
                         nextMountFootLeft_ = !nextMountFootLeft_;
@@ -302,7 +309,7 @@ void FootstepDriver::update(float deltaTime, Renderer* renderer,
             auto surface = resolveFootstepSurface(renderer);
             if (surface == audio::FootstepSurface::WATER) {
                 playWaterStepExtras(renderer);
-            } else {
+            } else if (showPrints) {
                 spawnFootprint(renderer, characterRenderer, characterInstanceId,
                                nextPlayerFootLeft_, FootprintFallback::BIPED);
                 nextPlayerFootLeft_ = !nextPlayerFootLeft_;

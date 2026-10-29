@@ -989,8 +989,14 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     questLog_.erase(it);
                     owner_.setQuestTracked(questId, false);
                     LOG_INFO("  Removed quest ", questId, " from quest log");
-                    if (owner_.addonEventCallbackRef())
-                        owner_.addonEventCallbackRef()("QUEST_TURNED_IN", {std::to_string(questId)});
+                    // QUEST_FINISHED (289), no arguments - "QUEST_TURNED_IN" is
+                    // not a name this client has, and the questId it carried
+                    // went to nobody. QuestFrame_OnEvent answers the real name
+                    // by hiding the quest frame (questframe.lua:13, :18), which
+                    // is the whole of what this announces; the client raises it
+                    // at 00580000.c:9690 and :9816, as the turn-in state is
+                    // cleared once the quest is out of the log.
+                    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("QUEST_FINISHED", {});
                     break;
                 }
             }
@@ -1223,10 +1229,14 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 owner_.addSystemChatMessage(questTitleText("ERR_QUEST_FORCE_REMOVED_S",
                     "The quest %s has been removed from your quest log", removedTitle));
             }
+            // QUEST_LOG_UPDATE (293) and UNIT_QUEST_LOG_CHANGED (460) are the
+            // two names a quest leaving the log raises. QUEST_REMOVED, which
+            // this site added, is a name from a later expansion: the client has
+            // it neither in its event-id table nor once in Wow.exe, and no frame
+            // of this interface registers it.
             if (owner_.addonEventCallbackRef()) {
                 owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
                 owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
-                owner_.addonEventCallbackRef()("QUEST_REMOVED", {std::to_string(questId)});
             }
         }
     };
@@ -1383,9 +1393,11 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             // Store reward data and pre-fetch item info for icons.
             if (rwds.valid) {
                 q.rewardMoney = rwds.rewardMoney;
+                q.rewardMoneyMaxLevel = rwds.rewardMoneyMaxLevel;
                 if (rwds.rewardSpellId != 0) q.rewardSpellId = rwds.rewardSpellId;
                 if (rwds.xpId != 0) q.rewardXPId = rwds.xpId;
                 q.rewardHonor = rwds.rewardHonor;
+                q.rewardHonorMultiplier = rwds.rewardHonorMultiplier;
                 q.rewardTalents = rwds.bonusTalents;
                 q.rewardArenaPoints = rwds.arenaPoints;
                 if (rwds.rewardTitleId != 0) q.rewardTitleId = rwds.rewardTitleId;
@@ -1880,10 +1892,11 @@ void QuestHandler::abandonQuest(uint32_t questId) {
 
     if (localIndex >= 0) {
         questLog_.erase(questLog_.begin() + static_cast<ptrdiff_t>(localIndex));
+        // The same two as the force-removal packet above; no third name for a
+        // quest that is gone.
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
             owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
-            owner_.addonEventCallbackRef()("QUEST_REMOVED", {std::to_string(questId)});
         }
     }
 

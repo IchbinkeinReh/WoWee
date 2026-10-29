@@ -23,7 +23,6 @@
 #include "rendering/spell_visual_system.hpp"
 #include "rendering/spell_missile.hpp"
 #include "audio/audio_coordinator.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "core/app_clock.hpp"
 #include "core/application.hpp"
 #include "addons/addon_manager.hpp"
@@ -413,34 +412,6 @@ static CombatTextEntry::Type combatTextTypeFromSpellMissInfo(uint8_t missInfo) {
     }
 }
 
-static audio::SpellSoundManager::MagicSchool schoolMaskToMagicSchool(uint32_t mask) {
-    if (mask & 0x04) return audio::SpellSoundManager::MagicSchool::FIRE;
-    if (mask & 0x10) return audio::SpellSoundManager::MagicSchool::FROST;
-    if (mask & 0x02) return audio::SpellSoundManager::MagicSchool::HOLY;
-    if (mask & 0x08) return audio::SpellSoundManager::MagicSchool::NATURE;
-    if (mask & 0x20) return audio::SpellSoundManager::MagicSchool::SHADOW;
-    if (mask & 0x40) return audio::SpellSoundManager::MagicSchool::ARCANE;
-    return audio::SpellSoundManager::MagicSchool::ARCANE;
-}
-
-// ---- Extracted helpers to reduce nesting in handleSpellGo ----
-
-audio::SpellSoundManager::MagicSchool SpellHandler::resolveSpellSchool(uint32_t spellId) {
-    owner_.loadSpellNameCache();
-    auto it = owner_.spellNameCacheRef().find(spellId);
-    if (it != owner_.spellNameCacheRef().end() && it->second.schoolMask)
-        return schoolMaskToMagicSchool(it->second.schoolMask);
-    return audio::SpellSoundManager::MagicSchool::ARCANE;
-}
-
-void SpellHandler::playSpellCastSound(uint32_t spellId) {
-    auto* ac = owner_.services().audioCoordinator;
-    if (!ac) return;
-    auto* ssm = ac->getSpellSoundManager();
-    if (!ssm) return;
-    ssm->playCast(resolveSpellSchool(spellId));
-}
-
 // ---- Spell visual effect helpers ----
 
 uint32_t SpellHandler::resolveSpellVisualId(uint32_t spellId) { return owner_.getSpellVisualId(spellId); }
@@ -729,8 +700,8 @@ void SpellHandler::handleNotifyDestLocSpellCast(network::Packet& packet) {
 SpellHandler::SpellHandler(GameHandler& owner)
     : owner_(owner) {}
 
-// The five values FrameXML unpacks from any UNIT_SPELLCAST_* event:
-//   unit, spell name, rank, cast id, spell id
+// The four values the client raises any UNIT_SPELLCAST_* event with:
+//   unit, spell name, rank, cast id
 //
 // Every one of these was fired as the unit and the spell id alone, which put
 // the id where the name belongs and left the cast id absent. Two things went
@@ -750,13 +721,28 @@ SpellHandler::SpellHandler(GameHandler& owner)
 // The cast id is the spell id here, which is what UnitCastingInfo reports, so
 // the two agree. It is not what the server calls a cast id - this client does
 // not keep the counter - but nothing compares it to anything else.
+//
+// What this client really fires for 324-335 comes from one dispatcher,
+// 0x0060bf60(token*, byte, castRecord*, baseId), called with 0x144 (START),
+// 0x145 (STOP), 0x149 (DELAYED), 0x14b (CHANNEL_START) and a computed id at
+// 007f0000.c:12174; it fires event(id, "%s%s%s%d", token, record+0x220,
+// record+0x224, b) - so (unit, spell name, rank, a byte read off the unit at
+// its guid+4, e.g. unaff_EBX+0x24 at 00800000.c:4500, and a different field for
+// other object kinds) - and when the cast record is null it does not fire the
+// four: it calls 0x0060bf10 instead and fires the token **alone**. That second
+// form is what the shipped handlers expect for a spell with no client-side
+// record - chatframe.lua:729 and :913 bail on `if (not name)` for exactly that.
+// That byte is the unit's cast counter; the fourth here is the spell id
+// instead, which is what UnitCastingInfo answers as the cast id, so the cast
+// bar's comparison of the two holds. A fifth (the spell id) is a later
+// expansion's, and the "%s%s%s%d" has none.
 std::vector<std::string> SpellHandler::spellcastArgs(const std::string& unitId,
                                                      uint32_t spellId) const {
     const std::string& name = owner_.getSpellName(spellId);
     const std::string& rank = owner_.getSpellRank(spellId);
     // A name that is not cached yet would be empty, and an empty string is a
     // string - which is what the readers want. Nil would raise in strlower.
-    return {unitId, name, rank, std::to_string(spellId), std::to_string(spellId)};
+    return {unitId, name, rank, std::to_string(spellId)};
 }
 
 void SpellHandler::requestPetName(uint64_t petGuid) {
@@ -876,12 +862,16 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_CLEAR_COOLDOWN] = [this](network::Packet& p) { handleClearCooldown(p); };
     table[Opcode::SMSG_MODIFY_COOLDOWN] = [this](network::Packet& p) { handleModifyCooldown(p); };
     // 0x00804110: the player's history, or the pet's, emptied (0x00802a50).
+    // A guid that is neither is answered without a word: the client returns
+    // before 0x0053bac0, so nothing redraws at all.
     table[Opcode::SMSG_COOLDOWN_CHEAT] = [this](network::Packet& p) {
         if (!p.hasRemaining(8)) return;
         const uint64_t guid = p.readUInt64();
-        if (guid == owner_.getPlayerGuid()) playerHistory_.clear();
-        else if (guid != 0 && guid == owner_.getPetGuid()) petHistory_.clear();
-        playerCooldownsChanged();
+        const bool forPlayer = guid == owner_.getPlayerGuid();
+        const bool forPet = !forPlayer && guid != 0 && guid == owner_.getPetGuid();
+        if (forPlayer) playerHistory_.clear();
+        else if (forPet) petHistory_.clear();
+        if (forPlayer || forPet) cooldownHistoryChanged(forPet);
     };
     table[Opcode::SMSG_PLAY_SPELL_VISUAL] = [this](network::Packet& p) { handlePlaySpellVisual(p); };
     table[Opcode::SMSG_SET_FLAT_SPELL_MODIFIER] = [this](network::Packet& p) { handleSpellModifier(p, true); };
@@ -1478,7 +1468,34 @@ int32_t SpellHandler::categoryCooldown(uint32_t spellId, bool pet) const {
 void SpellHandler::playerCooldownsChanged() {
     if (!owner_.addonEventCallbackRef()) return;
     owner_.addonEventCallbackRef()("ACTIONBAR_UPDATE_COOLDOWN", {});
+    // 0x0053bac0's middle step, gated as the client gates it: on its stance-bar
+    // count (DAT_00be8e28), the same list GetNumShapeshiftForms and
+    // UPDATE_SHAPESHIFT_FORMS are answered from. UPDATE_SHAPESHIFT_COOLDOWN
+    // (0x17b) is fired from no other place in the client, and its listener
+    // routes it to ShapeshiftBar_UpdateState (bonusactionbarframe.lua:152), the
+    // only code that sets the form buttons' timers - through
+    // GetShapeshiftFormCooldown, which WoWee already answers from the spell's
+    // own cooldown. So a stance or a bonus-bar ability came off its cooldown
+    // with the swirl still cut into the button until the bar was next rebuilt.
+    if (!knownShapeshiftForms(owner_.getPlayerClass(), owner_.getKnownSpells()).empty())
+        owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_COOLDOWN", {});
     owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
+}
+
+// 0x0053bac0 first (the action bar's 0x005a7cc0, then SPELL_UPDATE_COOLDOWN),
+// and then one of a pair the cooldown store itself decides: 0x005d6f10 for the
+// player's records, 0x005d3090 for the pet's. Both are one-argument calls with
+// no event arguments, and the client always `return`s after the one it picked -
+// BAG_UPDATE_COOLDOWN is fired from 0x005d6f10 and nowhere else in the whole
+// client, so a pet record never redraws the bags and nothing else ever redrew
+// the pet bar. Its listener, petactionbarframe.lua:53, answers by calling
+// PetActionBar_UpdateCooldowns (172), which asks GetPetActionCooldown for every
+// slot - the call WoWee already answers from its pet history, so the numbers
+// were there and only the word about them was missing.
+void SpellHandler::cooldownHistoryChanged(bool forPet) {
+    if (!owner_.addonEventCallbackRef()) return;
+    playerCooldownsChanged();
+    owner_.addonEventCallbackRef()(forPet ? "PET_BAR_UPDATE_COOLDOWN" : "BAG_UPDATE_COOLDOWN", {});
 }
 
 const std::array<uint32_t, 3>* SpellHandler::runeCostRow(uint32_t id) const {
@@ -1611,7 +1628,16 @@ void SpellHandler::noteGlobalCooldown(uint32_t spellId, uint64_t caster, spell_h
 }
 
 void SpellHandler::notePetCastFailed(uint32_t spellId) {
-    petHistory_.dropGlobalCooldown(spellId, historyNowMs());
+    // 0x00804720 zeroes the global cooldown of every record for the spell,
+    // prunes, and - only for a list it changed - runs 0x0053bac0. Its callers
+    // then close with 0x005d3090 whatever matched (0x00804780, and the same leg
+    // at the end of 0x00806c30): the pet bar asking the cooldown of every slot.
+    // A pet action refused by the realm - no target, an invalid target - left
+    // the swipe of its global cooldown cut into the button until the bar was
+    // next rebuilt.
+    if (petHistory_.dropGlobalCooldown(spellId, historyNowMs())) playerCooldownsChanged();
+    if (owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("PET_BAR_UPDATE_COOLDOWN", {});
 }
 
 void SpellHandler::castSent(uint32_t spellId, uint64_t caster) {
@@ -1942,11 +1968,25 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
     LOG_INFO("Casting spell: ", spellId, " on 0x", std::hex, item != 0 ? item : target, std::dec);
     castSent(spellId, owner_.getPlayerGuid());
 
-    // Fire UNIT_SPELLCAST_SENT for cast bar addons
+    // The cast routine (0x0080ac90) ends a cast with UNIT_SPELLCAST_SENT (323),
+    // and its shape is four strings: the literal "player", the spell's name, its
+    // rank, and the name the cast was aimed at - the empty string when the guid
+    // names nothing (0x0074d750 answers the name through the name cache, and
+    // DAT_009e14ff is the empty one). No spell id: that is a later expansion's
+    // argument. It is fired only when the cast's caster is the local player
+    // (0x004cee50 compares the two), so a pet's cast sends none.
+    //
+    // The one reader of this in the shipped interface is the cast-sequence
+    // manager (chatframe.lua:723-748): it takes unit, name, rank and matches the
+    // spell name - lower-cased, with "()" and "(rank)" variants - against every
+    // sequence's own list. With a target name where the spell name belongs and
+    // a number where the rank belongs, nothing ever matched and no sequence
+    // could start.
     if (owner_.addonEventCallbackRef()) {
         std::string targetName;
         if (target != 0) targetName = owner_.lookupName(target);
-        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT", {"player", targetName, std::to_string(spellId)});
+        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT",
+            {"player", owner_.getSpellName(spellId), owner_.getSpellRank(spellId), targetName});
     }
 }
 
@@ -2853,8 +2893,16 @@ void SpellHandler::castAtLocation(uint32_t spellId, const ground_target::Place& 
     castSent(spellId, caster != 0 ? caster : owner_.getPlayerGuid());
     LOG_INFO("Casting spell: ", spellId, " at (", wire.x, ", ", wire.y, ", ", wire.z, ") transport 0x", std::hex,
              transportGuid, std::dec);
-    if (owner_.addonEventCallbackRef())
-        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT", {"player", "", std::to_string(spellId)});
+    // The same UNIT_SPELLCAST_SENT as an aimed cast, from the same routine
+    // (0x0080ac90 handles both), and with the same two rules: it is gated on the
+    // caster being the local player (0x004cee50), so a pet's cast at a place
+    // announces nothing; and the fourth argument is the *name* the cast is aimed
+    // at, which a place has none of - the empty string, as DAT_009e14ff is for
+    // the client when the guid it is shown names nothing.
+    if (caster == 0 && owner_.addonEventCallbackRef()) {
+        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_SENT",
+            {"player", owner_.getSpellName(spellId), owner_.getSpellRank(spellId), std::string()});
+    }
 }
 
 void SpellHandler::cancelChannelOnMove() {
@@ -3607,12 +3655,6 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
                 svs->cancelAllPrecastVisuals();
         }
 
-        // Stop precast sound
-        if (auto* ac = owner_.services().audioCoordinator) {
-            if (auto* ssm = ac->getSpellSoundManager()) {
-                ssm->stopPrecast();
-            }
-        }
     }
 
     // Show failure reason
@@ -3626,14 +3668,22 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // leaves the history, unless refused as NOT_READY (0x00802970).
     {
         const int64_t now = historyNowMs();
+        bool heldLetGo = false;
         if (data.result != kSpellFailedNotReady) {
             loadSpellNameCache();
             const auto it = owner_.spellNameCacheRef().find(data.spellId);
-            if (it != owner_.spellNameCacheRef().end() && (it->second.attr & 0x2000000u) != 0)
+            if (it != owner_.spellNameCacheRef().end() && (it->second.attr & 0x2000000u) != 0) {
                 playerHistory_.event(data.spellId, now, true);
+                heldLetGo = true;
+            }
         }
-        playerHistory_.dropGlobalCooldown(data.spellId, now);
-        playerCooldownsChanged();
+        // The two legs are separate in 0x00809af0: 0x00804720 runs 0x0053bac0
+        // only over a list it changed, and the held-spell branch closes with
+        // the display leg on its own - 0x0053bac0, 0x0053cf10 for the on-hold
+        // sweep, then 0x005d6f10. WoWee fired 0x0053bac0 once for every reason
+        // and never had the bags' part at all.
+        if (playerHistory_.dropGlobalCooldown(data.spellId, now)) playerCooldownsChanged();
+        if (heldLetGo) cooldownHistoryChanged(false);
     }
     // Totem failures name tool item ids; request their info so a retry of the
     // craft can show the tool's name even if it wasn't cached yet.
@@ -3775,20 +3825,6 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
         castTimeRemaining_ = castTimeTotal_;
         if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("CURRENT_SPELL_CAST_CHANGED", {});
 
-        // Play precast sound - skip profession/tradeskill spells
-        if (!owner_.isProfessionSpell(data.spellId)) {
-            if (auto* ac = owner_.services().audioCoordinator) {
-                if (auto* ssm = ac->getSpellSoundManager()) {
-                    owner_.loadSpellNameCache();
-                    auto it = owner_.spellNameCacheRef().find(data.spellId);
-                    auto school = (it != owner_.spellNameCacheRef().end() && it->second.schoolMask)
-                        ? schoolMaskToMagicSchool(it->second.schoolMask)
-                        : audio::SpellSoundManager::MagicSchool::ARCANE;
-                    ssm->playPrecast(school, audio::SpellSoundManager::SpellPower::MEDIUM);
-                }
-            }
-        }
-
         if (owner_.spellCastAnimCallbackRef()) {
             owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), true, false, castType);
         }
@@ -3920,6 +3956,15 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                     static_cast<int32_t>(e.startRecoveryMs), e.dmgClass, e.attr,
                     castSpeedOf(*caster));
                 petHistory_.add(h);
+                // 0x00805d70 refreshed the displays the moment it wrote the
+                // record: 0x0053bac0 for a caster the character owns, and
+                // 0x005d3090 when that caster is the pet - the bags' leg never
+                // runs from here. WoWee wrote the number and said nothing, so
+                // the pet bar's swirls came only from whatever else happened
+                // to redraw them.
+                playerCooldownsChanged();
+                if (data.casterUnit == owner_.getPetGuid() && owner_.addonEventCallbackRef())
+                    owner_.addonEventCallbackRef()("PET_BAR_UPDATE_COOLDOWN", {});
             }
         }
         // The player's own cast, not from an item: its cooldown and its
@@ -3937,7 +3982,11 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
                 h.categoryDuration = categoryCooldown(data.spellId, false);
                 h.onHold = (it->second.attr & 0x2000000u) != 0;  // 0x00801220
                 playerHistory_.add(h);
-                playerCooldownsChanged();
+                // 0x0080e1b0's player legs both close with the bags' leg, the
+                // same one the pet legs answer with 0x005d3090: a spell the
+                // character cast shared its cooldown with the bag slot that
+                // runs the same item, and that swirl only moves on this name.
+                cooldownHistoryChanged(false);
             }
         }
         // Cast from an item of the player's whose use spell it is: the item
@@ -4001,10 +4050,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         if (restorationLoop) {
             owner_.setStandState(1); // UNIT_STAND_STATE_SIT
         }
-        // Play cast-complete sound
-        if (!owner_.isProfessionSpell(data.spellId) && !rangedWeaponAttack)
-            playSpellCastSound(data.spellId);
-
         // Ranged auto-attack spells (Auto Shot, Shoot, Throw) complete as timed
         // casts and are NOT classified as instant melee abilities, so trigger the
         // ranged shot animation explicitly here.
@@ -4119,12 +4164,6 @@ void SpellHandler::handleSpellGo(network::Packet& packet) {
         if (!rangedWeaponAttack && owner_.spellCastAnimCallbackRef()) {
             owner_.spellCastAnimCallbackRef()(data.casterUnit, false, false, SpellCastType::OMNI);
         }
-        bool targetsPlayer = false;
-        for (const auto& tgt : data.hitTargets) {
-            if (tgt == owner_.getPlayerGuid()) { targetsPlayer = true; break; }
-        }
-        if (targetsPlayer && !rangedWeaponAttack)
-            playSpellCastSound(data.spellId);
     }
 
     // Clear unit cast bar
@@ -4273,11 +4312,12 @@ void SpellHandler::handleSpellCooldown(network::Packet& packet) {
 
     LOG_DEBUG("handleSpellCooldown: parsed for ",
               isClassicFormat ? "Classic" : "TBC/WotLK", " format");
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
-        owner_.addonEventCallbackRef()("BAG_UPDATE_COOLDOWN", {});
-        owner_.addonEventCallbackRef()("ACTIONBAR_UPDATE_COOLDOWN", {});
-    }
+    // 0x00806dd0 reads the guid before anything else and drops the packet
+    // whole when it is neither the player's nor the pet's - no record written
+    // and no display told to look again, so a cooldown for anyone else used to
+    // set off every cooldown frame the character has.
+    if (cooldownGuid != 0 && (forPlayer || cooldownGuid == owner_.getPetGuid()))
+        cooldownHistoryChanged(!forPlayer);
 }
 
 void SpellHandler::handleCooldownEvent(network::Packet& packet) {
@@ -4287,14 +4327,12 @@ void SpellHandler::handleCooldownEvent(network::Packet& packet) {
     if (packet.hasRemaining(8))
         eventGuid = packet.readUInt64();
     // 0x00804010: the held cooldown begins now (0x00802970) - the pet's,
-    // else the player's.
-    (eventGuid != 0 && eventGuid == owner_.getPetGuid() ? petHistory_ : playerHistory_)
-        .event(spellId, historyNowMs(), false);
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
-        owner_.addonEventCallbackRef()("BAG_UPDATE_COOLDOWN", {});
-        owner_.addonEventCallbackRef()("ACTIONBAR_UPDATE_COOLDOWN", {});
-    }
+    // else the player's. The guid the packet names is what decides the store,
+    // and with it the display leg that closes 0x00802ba0: a pet cooldown
+    // redraws the pet bar, and the bags stay out of it.
+    const bool forPet = eventGuid != 0 && eventGuid == owner_.getPetGuid();
+    (forPet ? petHistory_ : playerHistory_).event(spellId, historyNowMs(), false);
+    cooldownHistoryChanged(forPet);
 }
 
 /// Keep the by-guid copy of a unit's auras in step with the target view.
@@ -6365,11 +6403,13 @@ void SpellHandler::handleClearCooldown(network::Packet& packet) {
     if (packet.hasRemaining(4)) {
         uint32_t spellId = packet.readUInt32();
         // 0x00804010: the entries for it go (0x00802970) - the pet's, else
-        // the player's.
+        // the player's. Clearing one is a change like any other, so the
+        // display leg closes it too; stopping at 0x0053bac0 left the swirl of
+        // a cooldown the realm cleared drawn until something else refreshed.
         const uint64_t guid = packet.hasRemaining(8) ? packet.readUInt64() : 0;
-        (guid != 0 && guid == owner_.getPetGuid() ? petHistory_ : playerHistory_)
-            .event(spellId, historyNowMs(), true);
-        playerCooldownsChanged();
+        const bool forPet = guid != 0 && guid == owner_.getPetGuid();
+        (forPet ? petHistory_ : playerHistory_).event(spellId, historyNowMs(), true);
+        cooldownHistoryChanged(forPet);
     }
 }
 
@@ -6382,17 +6422,19 @@ void SpellHandler::handleModifyCooldown(network::Packet& packet) {
         const uint64_t guid = packet.readUInt64();
         int32_t  diffMs  = static_cast<int32_t>(packet.readUInt32());
         // 0x00804010: the starts move (0x00802a10) - the pet's, else the
-        // player's.
-        (guid != 0 && guid == owner_.getPetGuid() ? petHistory_ : playerHistory_).modify(spellId, diffMs);
-        playerCooldownsChanged();
+        // player's - and 0x00802bf0 closes the same way as every other write,
+        // with the pet's bar or the bags'.
+        const bool forPet = guid != 0 && guid == owner_.getPetGuid();
+        (forPet ? petHistory_ : playerHistory_).modify(spellId, diffMs);
+        cooldownHistoryChanged(forPet);
     }
 }
 
 void SpellHandler::handlePlaySpellVisual(network::Packet& packet) {
     if (!packet.hasRemaining(12)) return;
     uint64_t casterGuid = packet.readUInt64();
-    uint32_t visualId   = packet.readUInt32();
-    if (visualId == 0) return;
+    uint32_t kitId      = packet.readUInt32();
+    if (kitId == 0) return;
     auto* renderer = owner_.services().renderer;
     if (!renderer) return;
     glm::vec3 spawnPos;
@@ -6404,10 +6446,11 @@ void SpellHandler::handlePlaySpellVisual(network::Packet& packet) {
         glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
         spawnPos = core::coords::canonicalToRender(canonical);
     }
-    // The packet names a SpellVisualKit, played on the unit as type 1
-    // (0x008006c0).
+    // The packet names a SpellVisualKit, played on the unit as type 0
+    // (0x00800610) - the ask that holds the unit's cast loop off while the
+    // kit's animation plays, and hangs no weapon effects.
     if (auto* sv = renderer->getSpellVisualSystem())
-        sv->playKit(visualId, rendering::spell_kit::KitType::Cast, spawnPos,
+        sv->playKit(kitId, rendering::spell_kit::KitType::Visual, spawnPos,
                     owner_.resolveUnitRenderInstance(casterGuid));
 }
 
@@ -6622,11 +6665,6 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
         if (auto* renderer = owner_.services().renderer) {
             if (auto* svs = renderer->getSpellVisualSystem())
                 svs->cancelAllPrecastVisuals();
-        }
-        if (auto* ac = owner_.services().audioCoordinator) {
-            if (auto* ssm = ac->getSpellSoundManager()) {
-                ssm->stopPrecast();
-            }
         }
         if (owner_.spellCastAnimCallbackRef()) {
             owner_.spellCastAnimCallbackRef()(owner_.getPlayerGuid(), false, false, SpellCastType::OMNI);

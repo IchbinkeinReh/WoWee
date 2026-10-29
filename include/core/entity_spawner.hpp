@@ -7,6 +7,7 @@
 #include "pipeline/blp_loader.hpp"
 #include "rendering/blob_shadow.hpp"
 #include "rendering/melee_sound.hpp"
+#include "rendering/unit_model_events.hpp"
 #include "rendering/animation/body_yaw.hpp"
 #include "core/character_geosets.hpp"
 #include "core/weapon_attachment.hpp"
@@ -365,6 +366,31 @@ public:
     /// The race splash of each unit wading across four tenths of its height
     /// into or out of water (rendering/unit_splash.hpp).
     void playUnitSplashes(uint32_t localPlayerInstance);
+    /// A unit's jump's own sound, asked of it outright as its movement
+    /// handlers ask it: kSlotJumpStart leaving the ground, kSlotJumpEnd
+    /// coming down (unit_model_events.hpp).
+    void playUnitJumpSound(const game::Unit& unit, uint32_t slot);
+    /// The voice line an emote asks for, played as the unit it shows on speaks
+    /// it: EmotesTextSound by the emote text and the speaker's race and sex,
+    /// under the client's two emote CVars (unit_model_events.hpp).
+    void playUnitEmoteSound(const game::Unit& unit, uint32_t emotesTextId);
+    /// What a unit says at the reaction it was just given (SMSG_AI_REACTION):
+    /// its PreAggro sound slot for HATE, by that slot's own chance, and its
+    /// Aggro voice line for UNFRIENDLY (rendering/unit_model_events.hpp).
+    void playUnitReactionSound(const game::Unit& unit, uint32_t reaction);
+    /// What a unit says as its death is noticed - its CreatureSoundData row's
+    /// Death column, not a sound slot (rendering/unit_model_events.hpp). Ask
+    /// it before markCreatureDead, which is what keeps a death noticed twice
+    /// from being said twice.
+    void playUnitDeathSound(uint64_t guid);
+    /// What a pet says about the order it was just given (SMSG_PET_ACTION_SOUND):
+    /// its Order line for a value of 0, its Kill line for 1
+    /// (rendering/unit_model_events.hpp).
+    void playUnitPetActionSound(const game::Unit& unit, uint32_t action);
+    /// What a pet says as it is sent off (SMSG_PET_DISMISS_SOUND): the dismiss
+    /// column of the CreatureSoundData row a given model names, said at a given
+    /// position (rendering/unit_model_events.hpp).
+    void playPetDismissSound(uint32_t modelId, const glm::vec3& at);
     /// A unit's melee hit arriving (SMSG_ATTACKERSTATEUPDATE), kept on its
     /// attacker for its model's events; an attack stopping, which settles it
     /// (rendering/melee_sound.hpp).
@@ -1380,6 +1406,22 @@ private:
     /// A unit's sound slot (0x00747310): by its chance unless `always`, at
     /// `at` or where the unit is.
     void playUnitSlot(const game::Unit& unit, uint32_t slot, bool always, const glm::vec3* at);
+    /// A unit's voice line of some kind (0x007474b0): the column its kind reads
+    /// from the CreatureSoundData row its display gives it.
+    void playUnitVoiceKind(const game::Unit& unit, uint32_t kind);
+    /// How a voice line reaches the ear - the unit's own, wherever it stands.
+    /// `outHandle`, where given, takes the play's handle.
+    void playUnitVoiceLine(const game::Unit& unit, uint32_t sound, uint32_t* outHandle = nullptr);
+    /// EmotesTextSound's rows, read once when an emote first asks (0x0063e4f0,
+    /// which will not load the table twice).
+    const std::vector<rendering::unit_event::EmoteSoundRow>& emoteSoundRows();
+    std::vector<rendering::unit_event::EmoteSoundRow> emoteSoundRows_;
+    bool emoteSoundRowsLoaded_ = false;
+    /// The line each unit is saying: the handle its play went into and the
+    /// kind it was asked as (0x007474b0's tracker at unit+0x908 and its kind at
+    /// +0x930). A unit says one line at a time; a new kind is heard only where
+    /// it outranks the kind still playing.
+    std::unordered_map<uint64_t, std::pair<uint32_t, int32_t>> unitVoiceLines_;
     uint32_t unitEventRandom_ = 0x2545F491u;
     /// Each unit's depth below the water at its last check while not
     /// swimming (+0x784), by guid.

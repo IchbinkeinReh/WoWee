@@ -42,7 +42,6 @@
 #include "audio/activity_sound_manager.hpp"
 #include "audio/player_voice_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "audio/spell_sound_manager.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "pipeline/dbc_layout.hpp"
 #include "network/world_socket.hpp"
@@ -1031,10 +1030,21 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         // inventory. The main bar builds its token frame on this and had no
         // reason to, so the frame stayed empty however much was held.
         //
-        // One event, not two: KNOWN_CURRENCY_TYPES_UPDATE and
-        // CURRENCY_DISPLAY_UPDATE share a branch there, and the branch rebuilds
-        // the whole row either way.
-        fireAddonEvent("KNOWN_CURRENCY_TYPES_UPDATE", {});
+        // CURRENCY_DISPLAY_UPDATE (605) is the event the client raises here,
+        // from the pass it runs once the player object is live: 0x006e6150
+        // installs the player's field watchers (0x006e5180) and then calls
+        // 0x00528010, a refresh list guarded to run once per player object,
+        // whose currency entry is a call to 0x005b0660 - rebuild the list
+        // (0x005b0030), raise 605. KNOWN_CURRENCY_TYPES_UPDATE (604) is not
+        // raised on the way in at all: it has exactly one site, the callback
+        // watching the known-currency pair (+0x790, eight bytes), and that
+        // belongs to a mask that moves rather than to a character arriving.
+        //
+        // The main bar answers 604 and 605 with one branch
+        // (mainmenubar.lua:176-177,193), so either event fills the row - which
+        // is why this is a matter of which name is right, not of whether the
+        // frame comes up.
+        fireAddonEvent("CURRENCY_DISPLAY_UPDATE", {});
         // PLAYER_LOGIN fires only on initial login (not teleports)
         if (initialWorldEntry) {
             fireAddonEvent("PLAYER_LOGIN", {});
@@ -1521,6 +1531,23 @@ const std::deque<GameHandler::BuybackItem>& GameHandler::getBuybackItems() const
 uint64_t GameHandler::getVendorGuid() const {
     if (inventoryHandler_) return inventoryHandler_->getVendorGuid();
     return currentVendorItems.vendorGuid;
+}
+uint32_t GameHandler::buybackFieldPrice(uint32_t wireSlot) const {
+    return inventoryHandler_ ? inventoryHandler_->buybackFieldPrice(wireSlot) : 0u;
+}
+uint32_t GameHandler::buybackRowCount() const {
+    if (inventoryHandler_) return inventoryHandler_->buybackRowCount();
+    // No handler of its own: this deque is a leftover of the time the vendor
+    // state lived here, and nothing ever filled ring slots into it.
+    return static_cast<uint32_t>(buybackItems_.size());
+}
+const GameHandler::BuybackItem* GameHandler::buybackRowAt(uint32_t row) const {
+    if (inventoryHandler_) {
+        // Layout-identical structs; see getBuybackItems.  nullptr stays nullptr.
+        return reinterpret_cast<const BuybackItem*>(inventoryHandler_->buybackRow(row));
+    }
+    if (row >= buybackItems_.size()) return nullptr;
+    return &buybackItems_[row];
 }
 
 // Mail
@@ -2398,8 +2425,8 @@ void GameHandler::detectInventorySlotBases(const FlatFieldMap& fields) {
     if (inventoryHandler_) inventoryHandler_->detectInventorySlotBases(fields);
 }
 
-bool GameHandler::applyInventoryFields(const FlatFieldMap& fields) {
-    return inventoryHandler_ ? inventoryHandler_->applyInventoryFields(fields) : false;
+bool GameHandler::applyInventoryFields(const FlatFieldMap& fields, bool initial) {
+    return inventoryHandler_ ? inventoryHandler_->applyInventoryFields(fields, initial) : false;
 }
 
 uint64_t GameHandler::getInteractNpcGuid() const {
@@ -4103,6 +4130,32 @@ Unit* GameHandler::getUnitByGuid(uint64_t guid) {
     return static_cast<Unit*>(entity.get());
 }
 
+std::vector<std::string> GameHandler::unitTokensForGuid(uint64_t guid) const {
+    std::vector<std::string> out;
+    if (guid == 0) return out;
+    if (guid == playerGuid) out.emplace_back("player");
+    if (guid == petGuid_) out.emplace_back("pet");
+    if (isInGroup()) {
+        const auto& group = getPartyData();
+        for (int slot = 1; slot <= 4; ++slot)
+            if (partySlotGuid(group, playerGuid, slot) == guid) out.push_back("party" + std::to_string(slot));
+        if (groupIsRaid(group.groupType)) {
+            for (size_t i = 0; i < group.members.size() && i < 40; ++i)
+                if (group.members[i].guid == guid) out.push_back("raid" + std::to_string(i + 1));
+        }
+    }
+    if (guid == targetGuid) out.emplace_back("target");
+    if (guid == focusGuid) out.emplace_back("focus");
+    if (guid == mouseoverGuid_) out.emplace_back("mouseover");
+    for (size_t i = 0; i < arena::Roster::kSlots; ++i) {
+        if (arenaRoster_.opponent(i) == guid) out.push_back("arena" + std::to_string(i + 1));
+        if (arenaRoster_.pet(i) == guid) out.push_back("arenapet" + std::to_string(i + 1));
+    }
+    for (uint32_t i = 0; i < kMaxEncounterSlots; ++i)
+        if (getEncounterUnitGuid(i) == guid) out.push_back("boss" + std::to_string(i + 1));
+    return out;
+}
+
 std::string GameHandler::guidToUnitId(uint64_t guid) const {
     if (guid == playerGuid)      return "player";
     if (guid == targetGuid)      return "target";
@@ -4217,8 +4270,8 @@ void GameHandler::buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, u
     if (inventoryHandler_) inventoryHandler_->buyItem(vendorGuid, itemId, slot, count);
 }
 
-void GameHandler::buyBackItem(uint32_t buybackSlot) {
-    if (inventoryHandler_) inventoryHandler_->buyBackItem(buybackSlot);
+void GameHandler::buyBackItem(uint32_t row) {
+    if (inventoryHandler_) inventoryHandler_->buyBackItem(row);
 }
 
 void GameHandler::repairItem(uint64_t vendorGuid, uint64_t itemGuid) {
@@ -4242,8 +4295,8 @@ void GameHandler::sellItemBySlot(int backpackIndex) {
     if (inventoryHandler_) inventoryHandler_->sellItemBySlot(backpackIndex);
 }
 
-void GameHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot) {
-    if (inventoryHandler_) inventoryHandler_->equipItemToSlot(itemGuid, equipSlot);
+void GameHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, bool confirmed) {
+    if (inventoryHandler_) inventoryHandler_->equipItemToSlot(itemGuid, equipSlot, confirmed);
 }
 
 void GameHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {
@@ -4289,9 +4342,10 @@ void GameHandler::unequipToBackpack(EquipSlot equipSlot) {
 }
 
 void GameHandler::swapContainerItems(uint8_t srcBag, uint8_t srcSlot, uint8_t dstBag,
-                                     uint8_t dstSlot, bool applyLocally) {
+                                     uint8_t dstSlot, bool applyLocally, bool confirmed) {
     if (inventoryHandler_) {
-        inventoryHandler_->swapContainerItems(srcBag, srcSlot, dstBag, dstSlot, applyLocally);
+        inventoryHandler_->swapContainerItems(srcBag, srcSlot, dstBag, dstSlot, applyLocally,
+                                              confirmed);
     }
 }
 

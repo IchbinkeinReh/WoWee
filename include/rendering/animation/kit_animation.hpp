@@ -19,7 +19,7 @@ namespace rendering {
 namespace kit_animation {
 
 /// The kit types 0x0073b140 tells apart (spell_kit::KitType's values).
-inline constexpr uint32_t kTypePlayImpact = 0;
+inline constexpr uint32_t kTypeVisual = 0;
 inline constexpr uint32_t kTypeState = 2;
 inline constexpr uint32_t kTypePrecast = 4;
 
@@ -55,7 +55,7 @@ struct Action {
     /// The StartAnimID played before is no longer the cast's (+0xa38 0x10000
     /// cleared).
     bool clearsStart = false;
-    /// A PlayImpact kit's animation (type 0, 0x80): the unit's cast loop
+    /// A visual kit's animation (type 0, 0x80): the unit's cast loop
     /// waits while it plays (+0xfa4, 0x007224d0).
     bool holdsCastLoop = false;
 };

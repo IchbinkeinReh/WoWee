@@ -18,9 +18,11 @@
 //     player has answered - the victim arrives as a guid, not a name.
 //   * The role check knows which dungeons it is for and how many are
 //     answering it.
-//   * The proposal's per-member detail, party backfill and the raid browser's
-//     search are NOT modelled. They answer empty, and each says why where it
-//     is bound.
+//   * The proposal's per-member detail and party backfill are NOT modelled. They
+//     answer empty, and each says why where it is bound. The raid browser's search
+//     is modelled — the rows, how they pair up, how they sort, the bosses they count
+//     and the class column — and the block above the bindings says what of it still
+//     answers nothing, and why.
 //
 // That list is worth keeping honest. It read "locks, rewards, the boot vote's
 // detail ... are NOT modelled" for some time after all three had been written,
@@ -78,6 +80,20 @@ int maxPlayersFor(const game::LfgDungeon& d) {
         return d.groupId == 9 ? 25 : 10;
     }
     return 5;
+}
+
+/// The dungeon the raid browser's rows belong to: the list held with its type
+/// masked off, as its row of LFGDungeons. That row's map id and difficulty are the
+/// pair the client hands the encounter table for both the boss counts a row shows
+/// and the boss its tooltip names (0x00555fd0:4915, 0x00553c30:3235 and 3258), and
+/// no count and no boss comes out without it.
+const game::LfgDungeon* browserDungeon(game::GameHandler* gh) {
+    const uint32_t id = gh->getLfgSearchListId() & 0xffffffu;
+    if (id == 0) return nullptr;
+    for (const auto& d : gh->getLfgDungeons()) {
+        if (d.id == id) return &d;
+    }
+    return nullptr;
 }
 
 /// The dungeon finder lists dungeons and the raid browser lists raids, so each
@@ -681,11 +697,20 @@ void registerLfgLuaAPI(lua_State* L) {
     // handlers - a hidden frame still runs them - so with LFG_PROPOSAL_SHOW
     // fired, forming a group raised on a nil global whether or not this
     // element had been handed over.
-    // Sorting the raid browser's result list by a column. The browser itself is
-    // not built here - the SearchLFG family it belongs to is deliberately
-    // unfinished - but this one is an OnClick on a column header, so leaving it
-    // unbound meant clicking a header raised instead of doing nothing.
-    {"SearchLFGSort", [](lua_State* L) -> int { (void)L; return 0; }},
+    // SearchLFGSort("type") - 0x0055d2b0, an OnClick on one of the browse panel's
+    // seven column headers (lfrframe.xml:697-805 gives each its `sortType` word).
+    // "group" swaps which of the two arrays of rows is walked first and sorts nothing
+    // (0x0055d2b0:10645, 10709-10711); any other word moves that key to the front of
+    // the seven, and reverses it if it was already front (:10684-10705). With no word
+    // at all the client answers `Usage: SearchLFGSort("type")` and changes nothing
+    // (:10638-10642), which is what happens here too - the printer being the one thing
+    // still missing.
+    {"SearchLFGSort", [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        if (!gh || !lua_isstring(L, 1)) return 0;
+        gh->sortLfgBrowser(lua_tostring(L, 1));
+        return 0;
+    }},
     // LeaveLFG() (0x00554160 -> 0x00553ab0).
     {"LeaveLFG", [](lua_State* L) -> int {
         if (auto* gh = getGameHandler(L)) gh->lfgLeaveLocal();
@@ -883,17 +908,278 @@ void registerLfgLuaAPI(lua_State* L) {
     // ---- The raid browser ----
     //
     // A separate system from the queue: it searches for groups already forming
-    // rather than building one. None of it is implemented, and the counts
-    // answer zero so every loop over results runs zero times.
-    {"SearchLFGGetNumResults",     luaReturnZero},
-    {"SearchLFGGetResults",        [](lua_State* L) -> int { return luaReturnNil(L); }},
-    {"SearchLFGGetPartyResults",   [](lua_State* L) -> int { return luaReturnNil(L); }},
-    {"SearchLFGGetEncounterResults", [](lua_State* L) -> int { return luaReturnNil(L); }},
-    {"SearchLFGGetJoinedID",       luaReturnZero},
-    // Nothing behind them yet, but they ask the taint check all the same
-    // (0x00559400, 0x005594e0: kind 9).
-    {"SearchLFGJoin",              [](lua_State* L) -> int { taint::allowed(L, 9); return 0; }},
-    {"SearchLFGLeave",             [](lua_State* L) -> int { taint::allowed(L, 9); return 0; }},
+    // rather than building one. None of it is implemented, and the counts answer
+    // zero so every loop over results runs zero times. What is answered here is
+    // shaped to the client's own answers rather than to "nothing", because a
+    // placeholder that answers the wrong *kind* of nothing switches the interface
+    // off somewhere else:
+    //
+    //   SearchLFGGetNumResults    two numbers (this client's returns both the
+    //                             shown count and the total, and lfrframe.lua
+    //                             names both: `numResults, totalResults`).
+    //   SearchLFGGetJoinedID      the joined id, or nothing while none is joined
+    //                             - see the binding itself for why zero will not
+    //                             do.
+    //
+    // The requests and the rows are both read now: this client sends
+    // CMSG_SEARCH_LFG_JOIN (0x35E) and CMSG_SEARCH_LFG_LEAVE (0x35F) at
+    // 0x00558ed0 and 0x00558f90, each with the joined id packed as type<<24|id,
+    // and SMSG_UPDATE_LFG_LIST is parsed into rows by parseLfgList (0x0055b770).
+    // Those rows are then paired the way 0x00553530 resolves an index — a player
+    // record plus the listing attached to it, whose other listings are its
+    // members (buildLfgBrowserRows) — and what a pair answers is the field the
+    // client's own getter pushes from that record, 0x00555fd0 for the fourteen
+    // below. Where that getter falls back, this falls back the same way:
+    //
+    //   SearchLFGGetNumResults    the rows shown, then the total. The client's
+    //                             second number is the sum of two counters whose
+    //                             writers were never read (0x00beab28, 0x00beab2c),
+    //                             so both numbers here are the rows held; both are
+    //                             zero while no list is held, which is the client's
+    //                             own guard on 0x00beab20.
+    //   SearchLFGGetResults       fourteen of the thirty-eight this getter pushes
+    //                             (0x005529e0 adds 28 values that lfrframe.lua:539
+    //                             never asks for), at the row index the UI passes
+    //                             down (it counts from one). Name, level, comment,
+    //                             partyMembers and status come out of the packet:
+    //                             the name from the listing's own guid, falling
+    //                             back to "UNKNOWN" as that getter does
+    //                             (0x00819d40), the comment from the group record
+    //                             when the row has one and from the listing
+    //                             otherwise (+0x24 against +0x91), partyMembers as
+    //                             the client counts it — one under the members held,
+    //                             the row's own listing excluded (0x005534c0).
+    //                             areaName stays "UNKNOWN": 0x0065c290 is the generic
+    //                             store getter, and the call that fetches this record
+    //                             lost both its store and its key in the decompile
+    //                             (:4865, :4901). What its records hold can be read off
+    //                             how they are used — a name at +0x10 that the "class"
+    //                             sort key collates (:4628), a male and a female form
+    //                             at +0x14 and +0x18 that 0x007159e0 picks between by
+    //                             gender, and a string at +0x1c pushed as this
+    //                             getter's eighth value — which adds up to a class
+    //                             table record, so the local lfrframe.lua:539 calls
+    //                             `areaName` is named for a value this client's getter
+    //                             does not answer an area with. It is never read, so
+    //                             the fallback costs nothing visible and nothing is
+    //                             claimed about which store it is. The class column is
+    //                             not that store's: it comes from the row's guid, and
+    //                             see the two notes in the binding for what a row with
+    //                             no name known answers. The two boss counts are the rows
+    //                             DungeonEncounter.dbc holds for the joined
+    //                             dungeon's instance — the client walks that table
+    //                             by the map id and difficulty its own LFGDungeons
+    //                             row carries, and counts among them the bits the
+    //                             row's mask holds (0x00553830, fed at
+    //                             0x00555fd0:4907-4916). The last four are false: 0x005529e0
+    //                             pushes four booleans then 24 numbers, every one
+    //                             of those pushes lost its arguments in the
+    //                             decompile, and which record field answers
+    //                             isLeader / isTank / isHealer / isDamage is not
+    //                             established.
+    //                             A row is answered for an index the client would
+    //                             have hidden — a player record with no listing
+    //                             attached, for which 0x00555fd0 returns no values
+    //                             and lfrframe.lua would SetText a nil — never:
+    //                             buildLfgBrowserRows drops those pairs outright.
+    //   SearchLFGGetPartyResults  the six lfrframe.lua:628 names, in that getter's
+    //                             order (name, level, relationship, className,
+    //                             areaName, comment — the two name fields swap
+    //                             against the row getter), from the member's own
+    //                             listing. The relationship is what the contact
+    //                             list answers by guid, "ignored" ahead of "friend"
+    //                             as 0x006b52e0 and 0x006b3920 are tried in that
+    //                             order, and nothing for a stranger: the tooltip
+    //                             shows only members whose relationship is a
+    //                             string. A member no name is known for gets the
+    //                             client's own answer for that case — nil, an empty
+    //                             string, three nils (0x00556280:5010-5016).
+    //   SearchLFGGetEncounterResults the boss's name, nothing for its texture and
+    //                             whether it is done — see the binding. Nothing for
+    //                             the texture is what the client itself answers: the
+    //                             spell icon column of the copy on disk is zero in
+    //                             every row, so its store lookup answers nothing
+    //                             (0x005538b0:3050-3059), and lfrframe.lua:669 keeps
+    //                             three names but reads two of them.
+    {"SearchLFGGetNumResults",     [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        const uint32_t rows = gh ? gh->getLfgBrowserRowCount() : 0;
+        lua_pushinteger(L, rows);
+        lua_pushinteger(L, rows);
+        return 2;
+    }},
+    {"SearchLFGGetResults",        [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        const lua_Integer index = lua_isnumber(L, 1) ? lua_tointeger(L, 1) : 0;
+        const game::LfgBrowserRow* pair = (gh && index > 0)
+            ? gh->getLfgBrowserRow(static_cast<uint32_t>(index - 1)) : nullptr;
+        if (!pair) return 0;   // as the getter returns for an index out of its range
+        const auto* listing = gh->getLfgListRow(pair->listing);
+        if (!listing) return 0;
+        const auto* group = pair->player == game::kLfgNoRow
+            ? nullptr : gh->getLfgListRow(pair->player);
+        // The bosses counted are the joined dungeon's instance's, against the
+        // row's own mask - the group record's when the row has one and the
+        // listing's otherwise, which is the choice at 0x00555fd0:4907-4912.
+        const game::LfgDungeon* dungeon = browserDungeon(gh);
+        const uint32_t mask = group ? group->encounterMask : listing->encounterMask;
+        const game::LfgEncounterCounts bosses = dungeon
+            ? game::countLfgEncounters(gh->getDungeonEncounters(), dungeon->mapId,
+                                       dungeon->difficulty, mask)
+            : game::LfgEncounterCounts{};
+        std::string name = gh->lookupName(listing->guid);
+        const bool nameKnown = !name.empty();
+        if (name.empty()) name = "UNKNOWN";
+        lua_pushstring(L, name.c_str());                             // name
+        lua_pushinteger(L, listing->level);                          // level
+        lua_pushstring(L, "UNKNOWN");                                // areaName
+        // The class is not in the list at all. The getter resolves the row's guid
+        // through the name cache and reads the class and the gender off the record
+        // that answer brought — +0x148 and +0x144 past the name pointer the lookup
+        // hands back (0x00555fd0:4873 through 0x0072aab0, and the same read behind the
+        // "class" sort key at 0x00555a70:4618-4630). A row whose name is not known
+        // therefore has no class either, and the two fall back differently: the class
+        // column gets the client's "UNKNOWN" (0x00819d40 at :4874) and the token gets
+        // nothing at all (0x0084e280 at :4902), which is the guard lfrframe.lua:553
+        // is written around. Where a class is known the name is the store record's,
+        // which the client picks between a male and a female form by that gender
+        // (0x007159e0: +0x18 then +0x14, falling back to +0x10); this answers the one
+        // class name it has, as UnitClass does.
+        const uint8_t classId = nameKnown ? gh->lookupPlayerClass(listing->guid) : 0;
+        const char* token = luaClassToken(classId);
+        if (token) lua_pushstring(L, kLuaClasses[classId]);
+        else       lua_pushstring(L, "UNKNOWN");                     // className
+        lua_pushstring(L, (group ? group->comment : listing->comment).c_str());
+        lua_pushinteger(L, static_cast<lua_Integer>(pair->members.size()));  // partyMembers
+        lua_pushboolean(L, listing->listed ? 1 : 0);                 // status
+        if (token) lua_pushstring(L, token); else lua_pushnil(L);     // class
+        lua_pushinteger(L, bosses.total);                            // encountersTotal
+        lua_pushinteger(L, bosses.complete);                         // encountersComplete
+        lua_pushboolean(L, 0);                                       // isLeader
+        lua_pushboolean(L, 0);                                       // isTank
+        lua_pushboolean(L, 0);                                       // isHealer
+        lua_pushboolean(L, 0);                                       // isDamage
+        return 14;
+    }},
+    // 0x00556280 wants both of its numbers and answers nothing without them,
+    // member rows from member[1] up (0x00553490 skips the row's own listing).
+    {"SearchLFGGetPartyResults",   [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        if (!gh || !lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return 0;
+        const lua_Integer index = lua_tointeger(L, 1);
+        const lua_Integer which = lua_tointeger(L, 2);
+        const game::LfgBrowserRow* pair = index > 0
+            ? gh->getLfgBrowserRow(static_cast<uint32_t>(index - 1)) : nullptr;
+        const game::LfgListRow* member =
+            (pair && which > 0 && which <= static_cast<lua_Integer>(pair->members.size()))
+            ? gh->getLfgListRow(pair->members[static_cast<uint32_t>(which - 1)]) : nullptr;
+        std::string name = member ? gh->lookupName(member->guid) : std::string();
+        if (name.empty()) {
+            lua_pushnil(L);
+            lua_pushstring(L, "");
+            lua_pushnil(L);
+            lua_pushnil(L);
+            lua_pushnil(L);
+            return 5;
+        }
+        const char* relationship = nullptr;
+        for (const auto& c : gh->getContacts())
+            if (c.guid == member->guid) {
+                if (c.isIgnored()) relationship = "ignored";
+                else if (c.isFriend()) relationship = "friend";
+                break;
+            }
+        lua_pushstring(L, name.c_str());
+        lua_pushinteger(L, member->level);
+        if (relationship) lua_pushstring(L, relationship); else lua_pushnil(L);
+        // The member's class comes from the same place the row's does — the record its
+        // guid resolves to, +0x148 — and its fallback is the empty string the client
+        // answers with here (DAT_009e14ff at 0x00556280:4990), not the "UNKNOWN" the
+        // row getter uses. Not a name the panel shows for a member: lfrframe.lua:628
+        // keeps six values and reads the name, the level, the relationship and the
+        // comment.
+        const uint8_t memberClass = gh->lookupPlayerClass(member->guid);
+        if (luaClassToken(memberClass)) lua_pushstring(L, kLuaClasses[memberClass]);
+        else                            lua_pushstring(L, "");       // className
+        lua_pushstring(L, "UNKNOWN");                                // areaName
+        lua_pushstring(L, member->comment.c_str());
+        return 6;
+    }},
+    // SearchLFGGetEncounterResults(index, encounterIndex) - 0x00553c30, which
+    // wants both numbers and answers nothing at all when the joined list's dungeon
+    // has no row of LFGDungeons to read a map and difficulty off (3229-3237). The
+    // boss asked for is the encounterIndex-th of that instance in the order the
+    // table stores them, and whether it is done comes from the same mask the row's
+    // two counts were counted with. Past the end of either - no such row, or no
+    // such boss - the client pushes three nils (0x005538b0:3069-3071); its own loop
+    // is bounded by encountersTotal, the count of this same walk, so lfrframe.lua
+    // never reaches the nil name it would SetText.
+    {"SearchLFGGetEncounterResults", [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        if (!gh || !lua_isnumber(L, 1) || !lua_isnumber(L, 2)) return 0;
+        const game::LfgDungeon* dungeon = browserDungeon(gh);
+        if (!dungeon) return 0;
+        const lua_Integer index = lua_tointeger(L, 1);
+        const lua_Integer which = lua_tointeger(L, 2);
+        const game::LfgBrowserRow* pair = index > 0
+            ? gh->getLfgBrowserRow(static_cast<uint32_t>(index - 1)) : nullptr;
+        const auto* listing = pair ? gh->getLfgListRow(pair->listing) : nullptr;
+        if (!listing) {
+            lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+            return 3;
+        }
+        const auto* group = pair->player == game::kLfgNoRow
+            ? nullptr : gh->getLfgListRow(pair->player);
+        const uint32_t mask = group ? group->encounterMask : listing->encounterMask;
+        const auto* boss = which > 0
+            ? game::lfgEncounterAt(gh->getDungeonEncounters(), dungeon->mapId,
+                                   dungeon->difficulty, static_cast<uint32_t>(which - 1))
+            : nullptr;
+        if (!boss) {
+            lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+            return 3;
+        }
+        lua_pushstring(L, boss->name.c_str());
+        lua_pushnil(L);                                        // texture: see the row note
+        lua_pushboolean(L, game::lfgEncounterDone(mask, *boss) ? 1 : 0);
+        return 3;
+    }},
+    // The joined id, low twenty-four bits only, and nothing at all when no list
+    // is joined - this client pushes it only when that id is non-zero
+    // (0x005529a0 reading 0x00beaa14), and the browser's dropdown does
+    // `SearchLFGGetJoinedID() or "none"`, so a zero would be a number true in
+    // Lua and the dropdown would select a value matching no button.
+    {"SearchLFGGetJoinedID",       [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        const uint32_t id = gh ? gh->getLfgJoinedListId() & 0x00FFFFFFu : 0;
+        if (id == 0) return 0;
+        lua_pushinteger(L, id);
+        return 1;
+    }},
+    // The two requests, checked the way 0x00559400 checks them: two numbers, a
+    // type under the seven this client knows, and an id that names an
+    // LFGDungeonData row (its FUN_0065c290 refuses one that does not). Both ask
+    // the taint check (kind 9) - and a refused one does nothing at all.
+    {"SearchLFGJoin",              [](lua_State* L) -> int {
+        if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+            return luaL_error(L, "Usage: SearchLFGJoin(typeID, lfgID)");
+        if (!taint::allowed(L, 9)) return 0;
+        const uint32_t typeId = static_cast<uint32_t>(lua_tointeger(L, 1));
+        const uint32_t lfgId  = static_cast<uint32_t>(lua_tointeger(L, 2));
+        auto* gh = getGameHandler(L);
+        if (!gh || typeId >= 7) return 0;
+        bool knownRow = false;
+        for (const auto& d : gh->getLfgDungeons())
+            if (d.id == (lfgId & 0x00FFFFFFu)) { knownRow = true; break; }
+        if (!knownRow) return 0;
+        gh->lfgSearchJoin(typeId, lfgId);
+        return 0;
+    }},
+    {"SearchLFGLeave",             [](lua_State* L) -> int {
+        if (!taint::allowed(L, 9)) return 0;
+        if (auto* gh = getGameHandler(L)) gh->lfgSearchLeave();
+        return 0;
+    }},
     };
 
     for (const auto& [name, func] : api) {
