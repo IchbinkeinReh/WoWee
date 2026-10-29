@@ -1135,25 +1135,30 @@ uint32_t countItemInBags(game::GameHandler* gh, uint32_t itemId) {
     return gh->getInventory().countItem(itemId);
 }
 
-/// A row's amount and its extra currency type.
-///
-/// Counting here adds up every stack of the item; the client stops at the first
-/// instance it finds and reads that stack alone. The two only part company if a
-/// realm splits one currency across stacks. A layout that names no PvP counter
-/// falls back to the item, which is the only figure left.
+/// A currency item's amount: the first of the player's currency-token slots
+/// holding it (0x005b0680 / 0x005b0a90 walk slots 0x76..0x95 and read that
+/// item's stack), which is where the realms keep them. Bags and backpack only
+/// where no token slot holds it - a layout before WotLK has none.
+uint32_t currencyItemCount(game::GameHandler* gh, uint32_t itemId) {
+    if (const uint32_t inSlots = gh->currencyTokenCount(itemId); inSlots != 0) return inSlots;
+    return countItemInBags(gh, itemId);
+}
+
+/// A row's amount and its extra currency type. A layout that names no PvP
+/// counter falls back to the item, which is the only figure left.
 std::pair<uint32_t, uint32_t> currencyAmount(game::GameHandler* gh, uint32_t itemId) {
     const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
     if (itemId == kArenaPointsItem) {
         const uint16_t idx = fieldIndex(game::UF::PLAYER_FIELD_ARENA_CURRENCY);
         return {(player && idx != 0xFFFF) ? player->getField(idx)
-                                          : countItemInBags(gh, itemId), 1};
+                                          : currencyItemCount(gh, itemId), 1};
     }
     if (itemId == kHonorPointsItem) {
         const uint16_t idx = fieldIndex(game::UF::PLAYER_FIELD_HONOR_CURRENCY);
         return {(player && idx != 0xFFFF) ? player->getField(idx)
-                                          : countItemInBags(gh, itemId), 2};
+                                          : currencyItemCount(gh, itemId), 2};
     }
-    return {countItemInBags(gh, itemId), 0};
+    return {currencyItemCount(gh, itemId), 0};
 }
 
 /// The realm's known-currency pair, when it has named one.

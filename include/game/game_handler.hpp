@@ -2808,6 +2808,12 @@ public:
     /// The items a saved set holds, by slot, as the item guids the server sent.
     const std::array<uint64_t, 19>* getEquipmentSetItems(uint32_t setId) const;
     uint32_t getEquipmentSetIgnoreMask(uint32_t setId) const;
+    /// How many of an item the player's currency-token slots hold (inventory
+    /// slots 118..149, the player's field pairs from INV_SLOT_HEAD + 236): where
+    /// the realms keep the currency items, and the only place the client counts
+    /// a currency (0x005b0680, 0x005b0a90 walk 0x76..0x95). The first slot
+    /// holding the item answers with its stack, as the client's walk does.
+    uint32_t currencyTokenCount(uint32_t itemId) const;
     /// The item an online guid refers to, or zero when it is not known here.
     uint32_t getItemIdByGuid(uint64_t guid) const {
         auto it = onlineItems_.find(guid);

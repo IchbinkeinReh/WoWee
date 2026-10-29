@@ -5231,6 +5231,23 @@ const GossipMessageData& GameHandler::getCurrentGossip() const {
     if (questHandler_) return questHandler_->getCurrentGossip();
     return currentGossip;
 }
+uint32_t GameHandler::currencyTokenCount(uint32_t itemId) const {
+    if (itemId == 0) return 0;
+    const auto player = entityController_ ? entityController_->getEntityManager().getEntity(playerGuid) : nullptr;
+    const uint16_t head = fieldIndex(UF::PLAYER_FIELD_INV_SLOT_HEAD);
+    if (!player || head == 0xFFFF) return 0;
+    constexpr uint32_t kFirstTokenSlot = 0x76;  // 118
+    constexpr uint32_t kLastTokenSlot = 0x95;   // 149
+    for (uint32_t slot = kFirstTokenSlot; slot <= kLastTokenSlot; ++slot) {
+        const uint16_t lo = static_cast<uint16_t>(head + slot * 2);
+        const uint64_t guid = (static_cast<uint64_t>(player->getField(lo + 1)) << 32) | player->getField(lo);
+        if (guid == 0) continue;
+        const auto it = onlineItems_.find(guid);
+        if (it != onlineItems_.end() && it->second.entry == itemId) return it->second.stackCount;
+    }
+    return 0;
+}
+
 bool GameHandler::playerCanDualWield() const {
     // The client keeps it (DAT_00c9eac8) from a learned spell with effect 40,
     // SPELL_EFFECT_DUAL_WIELD, and clears it when that spell is unlearned.
