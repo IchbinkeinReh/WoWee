@@ -531,10 +531,12 @@ void ChatHandler::registerOpcodes(DispatchTable& table) {
     };
 
     table[Opcode::SMSG_CHANNEL_LIST] = [this](network::Packet& p) { handleChannelList(p); };
-    // Add and update carry the same fields and mean the same thing to a
-    // roster that keys on the guid.
-    table[Opcode::SMSG_USERLIST_ADD] = [this](network::Packet& p) { handleUserlistAdd(p); };
-    table[Opcode::SMSG_USERLIST_UPDATE] = [this](network::Packet& p) { handleUserlistAdd(p); };
+    // Add (0x3f0 -> 0x00504130) and update (0x3f2 -> 0x00500380) are separate
+    // routines in the client and answer differently - the one appends, the
+    // other only changes a row it already has - but they read the same fields,
+    // so one reader with the kind carried through is as far as they merge.
+    table[Opcode::SMSG_USERLIST_ADD] = [this](network::Packet& p) { handleUserlistAdd(p, UserlistChange::add); };
+    table[Opcode::SMSG_USERLIST_UPDATE] = [this](network::Packet& p) { handleUserlistAdd(p, UserlistChange::update); };
     table[Opcode::SMSG_USERLIST_REMOVE] = [this](network::Packet& p) { handleUserlistRemove(p); };
 }
 
@@ -2279,8 +2281,15 @@ void ChatHandler::handleChannelList(network::Packet& packet) {
 ///
 ///   ADD, UPDATE  guid(8) playerFlags(1) channelFlags(1) count(4) name
 ///   REMOVE       guid(8)                channelFlags(1) count(4) name
+///
+/// Only the add lists anyone. The update (0x00500380) and the remove
+/// (0x005042f0) both walk the rows looking for the guid and `return` out of the
+/// whole handler when it is not among them - no row made, no count, no roster
+/// event - so a promotion, a mute or a leaving for a member this client never
+/// listed is simply dropped. The add (0x00504130) is the one that appends, and
+/// it appends before it does anything else.
 void ChatHandler::applyUserlistChange(const std::string& chanName, uint64_t guid,
-                                      uint8_t memberFlags, bool removing) {
+                                      uint8_t memberFlags, UserlistChange change) {
     if (chanName.empty()) return;
     // The same bits the full list reads, and the same trap: 0x01 is the owner
     // and 0x02 the moderator, not the other way round.
@@ -2289,10 +2298,17 @@ void ChatHandler::applyUserlistChange(const std::string& chanName, uint64_t guid
     auto it = std::find_if(roster.begin(), roster.end(),
                            [&](const ChannelMember& m) { return m.guid == guid; });
 
-    if (removing) {
-        if (it != roster.end()) roster.erase(it);
+    if (change == UserlistChange::remove) {
+        // 0x005042f0 walks the rows and returns out of the handler when the guid
+        // is not there, so a leaving nobody listed says nothing at all - not
+        // even the two events below, which the client raises only past the scan.
+        if (it == roster.end()) return;
+        roster.erase(it);
     } else {
         if (it == roster.end()) {
+            // The update (0x00500380) scans the same way and bails: it changes a
+            // member, it does not announce one. Only the add gets this far.
+            if (change != UserlistChange::add) return;
             ChannelMember m;
             m.guid = guid;
             m.name = owner_.lookupName(guid);
@@ -2321,7 +2337,7 @@ void ChatHandler::applyUserlistChange(const std::string& chanName, uint64_t guid
     }
 }
 
-void ChatHandler::handleUserlistAdd(network::Packet& packet) {
+void ChatHandler::handleUserlistAdd(network::Packet& packet, UserlistChange change) {
     if (!packet.hasRemaining(14)) return;
     const uint64_t guid = packet.readUInt64();
     const uint8_t memberFlags = packet.readUInt8();
@@ -2332,7 +2348,7 @@ void ChatHandler::handleUserlistAdd(network::Packet& packet) {
     // which is the order 0x00500380 reads them in - and it is what a menu that
     // is already open is waiting to hear about.
     noteChannelFlags(chanName, chanFlags);
-    applyUserlistChange(chanName, guid, memberFlags, /*removing=*/false);
+    applyUserlistChange(chanName, guid, memberFlags, change);
 }
 
 void ChatHandler::handleUserlistRemove(network::Packet& packet) {
@@ -2342,7 +2358,7 @@ void ChatHandler::handleUserlistRemove(network::Packet& packet) {
     packet.readUInt32();   // how many are in it now
     const std::string chanName = packet.readString();
     noteChannelFlags(chanName, chanFlags);         // same order as the add
-    applyUserlistChange(chanName, guid, 0, /*removing=*/true);
+    applyUserlistChange(chanName, guid, 0, UserlistChange::remove);
 }
 
 // ============================================================

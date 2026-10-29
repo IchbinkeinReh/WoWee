@@ -205,10 +205,15 @@ private:
     void fireChannelNotice(ChatType type, const std::string& word, const std::string& channelName,
                            const std::string& player, const std::string& target, uint64_t senderGuid);
     void handleChannelList(network::Packet& packet);
-    void handleUserlistAdd(network::Packet& packet);
+    /// Which of the three member packets arrived. They are three packets rather
+    /// than one with a flag because the client answers them differently: ADD
+    /// (0x00504130) appends a row, UPDATE (0x00500380) scans the rows and
+    /// changes one already listed, REMOVE (0x005042f0) moves one out.
+    enum class UserlistChange : uint8_t { add, update, remove };
+    void handleUserlistAdd(network::Packet& packet, UserlistChange change);
     void handleUserlistRemove(network::Packet& packet);
     void applyUserlistChange(const std::string& chanName, uint64_t guid,
-                             uint8_t memberFlags, bool removing);
+                             uint8_t memberFlags, UserlistChange change);
     /// The channel's own flag byte, as every packet that carries one writes it
     /// (the slot's +0x90), and CHANNEL_FLAGS_UPDATED (552) for it - raised only
     /// when the byte moved and the channel is in the list to be told about.
