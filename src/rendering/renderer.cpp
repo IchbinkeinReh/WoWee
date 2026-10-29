@@ -2860,7 +2860,6 @@ void Renderer::update(float deltaTime) {
         // front of her puts out her glare as it does the sun's.
         daynight::stepSkyBodyOcclusion(moonOcclusionState_, lp ? sampleSunOcclusion(lp->moonDir) : 1.0f,
                                        moonQueryVisibility_, rate);
-        moonOcclusion_ = moonOcclusionState_.eased;
         moonScreenOcclusion_ = moonOcclusionState_.screenEased;
     }
 

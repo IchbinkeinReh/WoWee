@@ -407,7 +407,6 @@ private:
     /// query (Celestial::readVisibility); negative when it said nothing.
     float sunQueryVisibility_ = -1.0f;
     /// The same toward the White Lady, for her glare.
-    float moonOcclusion_ = 0.0f;
     float moonScreenOcclusion_ = 0.0f;
     float moonQueryVisibility_ = -1.0f;
     /// The two as they are eased and remembered (daynight::stepSkyBodyOcclusion).
