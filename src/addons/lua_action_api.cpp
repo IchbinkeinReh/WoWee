@@ -825,10 +825,11 @@ static int lua_IsCurrentAction(lua_State* L) {
     return 1;
 }
 
-// IsUsableAction(slot) → usable, notEnoughMana
+// IsUsableAction(slot) → (1, nil) usable, (nil, 1) its power is short,
+// (nil, nil) everything else. Never a pair of no's - see the shapes below.
 static int lua_IsUsableAction(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushboolean(L, 0); lua_pushboolean(L, 0); return 2; }
+    if (!gh) { lua_pushnil(L); lua_pushnil(L); return 2; }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
     if (const auto ref = petActionRef(gh, slot)) {
         // 0x005a9e20 for a pet's slot: its spell is cast by the pet
@@ -843,8 +844,12 @@ static int lua_IsUsableAction(lua_State* L) {
             if (!pet) {
                 usable = false;
             } else {
-                const auto data = gh->getSpellData(spell);
-                if (data.manaCost > 0 && gh->unitPower(*pet, data.powerType) < static_cast<int32_t>(data.manaCost)) {
+                auto* sh = gh->getSpellHandler();
+                if (sh && !sh->enoughPower(spell, *pet)) {
+                    // The same test, one answer: the pet affords the spell of
+                    // its own power, and enoughPower() is what spells 0x008017e0
+                    // in both directions (the pet's runic energy, a vehicle's
+                    // steam, health under a -2 cost).
                     usable = false;
                     noPower = true;
                 }
@@ -856,8 +861,10 @@ static int lua_IsUsableAction(lua_State* L) {
     }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
-        lua_pushboolean(L, 0);
-        lua_pushboolean(L, 0);
+        // The client's third shape: its slot test runs to 144 and an empty or
+        // out-of-range slot reads (nil, nil), never a pair of no's.
+        lua_pushnil(L);
+        lua_pushnil(L);
         return 2;
     }
     const auto& action = bar[slot];
@@ -869,27 +876,50 @@ static int lua_IsUsableAction(lua_State* L) {
     // Folding it in here painted the icon dark grey for the whole of every
     // cooldown, because ActionButton_UpdateUsable has three branches and
     // "not usable, mana is fine" is the one that means unusable.
+    // The client answers this one without computing anything at all: 0x005a7e60
+    // reads two precomputed per-slot arrays - DAT_00c1ded8 (the slot's action is
+    // there to be used) and DAT_00c1dc98 (its power is short) - over slots 1 to
+    // 144, and turns the pair into exactly three shapes: usable and affordable
+    // (1, nil), affordable-but-out-of-power (nil, 1), and everything else - an
+    // empty slot, a slot number off the bar, an action that is not there to be
+    // used - (nil, nil). No shape is (false, false), and combo points are not
+    // among the tests: they gate the *cast* (0x0080b5d0 on AttributesEx
+    // 0x100000|0x400000 against 0x00513920's per-target store), which is why a
+    // finisher with no points on its target sits bright on the client's bar and
+    // only fails when pressed.
     bool usable = true;
-    bool noMana = false;
+    bool noPower = false;
     if (action.type == game::ActionBarSlot::SPELL) {
         usable = gh->getKnownSpells().count(action.id) > 0;
-        // Check power cost
         if (usable && action.id != 0) {
-            auto spellData = gh->getSpellData(action.id);
-            if (spellData.manaCost > 0) {
-                auto pe = gh->getEntityManager().getEntity(gh->getPlayerGuid());
-                if (pe) {
-                    auto* unit = dynamic_cast<game::Unit*>(pe.get());
-                    if (unit && gh->unitPower(*unit, unit->getPowerType()) < static_cast<int32_t>(spellData.manaCost)) {
-                        noMana = true;
-                        usable = false;
-                    }
-                }
+            const auto pe = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+            const auto* unit = pe ? dynamic_cast<game::Unit*>(pe.get()) : nullptr;
+            // The client has one cost test, 0x008017e0, and it is the same one
+            // behind the button and behind the flags the button is drawn from.
+            // Asking it here rather than writing a second copy of it matters:
+            // the flags ACTIONBAR_UPDATE_USABLE announces are kept by
+            // enoughPower(), so a hand-rolled manaCost compare here could call
+            // an action affordable while the rescan that repaints the icon
+            // called it short - and that test reads the power type the *spell*
+            // names (0x0071c2e0), not the caster's current one, and takes the
+            // cost after its modifiers, not the template's number.
+            auto* sh = gh->getSpellHandler();
+            if (unit && sh && !sh->enoughPower(action.id, *unit)) {
+                noPower = true;
+                usable = false;
             }
         }
     }
-    lua_pushboolean(L, usable ? 1 : 0);
-    lua_pushboolean(L, noMana ? 1 : 0);
+    if (usable) {
+        lua_pushnumber(L, 1.0);
+        lua_pushnil(L);
+    } else if (noPower) {
+        lua_pushnil(L);
+        lua_pushnumber(L, 1.0);
+    } else {
+        lua_pushnil(L);
+        lua_pushnil(L);
+    }
     return 2;
 }
 
