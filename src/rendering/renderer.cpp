@@ -1171,7 +1171,7 @@ bool Renderer::initialize(core::Window* win) {
         eyeAdaptation_->shutdown();
         eyeAdaptation_.reset();
     } else {
-        setEyeAdaptation(eyeBrighteningPercent_, eyeAdaptSeconds_);
+        setEyeAdaptation(eyeBrighteningPercent_, eyeAdaptSeconds_, eyeSensitivityPercent_);
     }
 
     // Create render graph and register virtual resources
@@ -7366,10 +7366,13 @@ void Renderer::recordSunShafts() {
                        vkCtx->getSwapchainExtent(), in);
 }
 
-void Renderer::setEyeAdaptation(int brighteningPercent, float seconds) {
+void Renderer::setEyeAdaptation(int brighteningPercent, float seconds, int sensitivityPercent) {
     eyeBrighteningPercent_ = brighteningPercent;
     eyeAdaptSeconds_ = seconds;
-    if (eyeAdaptation_) eyeAdaptation_->setParams(eye_adaptation::paramsFor(brighteningPercent, seconds));
+    eyeSensitivityPercent_ = sensitivityPercent;
+    if (eyeAdaptation_) {
+        eyeAdaptation_->setParams(eye_adaptation::paramsFor(brighteningPercent, seconds, sensitivityPercent));
+    }
 }
 
 void Renderer::recordEyeAdaptation() {

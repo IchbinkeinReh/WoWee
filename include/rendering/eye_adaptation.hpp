@@ -62,8 +62,24 @@ constexpr float kMaxSeconds = 20.0f;
 ///
 /// The time is toward the dark; toward the light the eye stays five times
 /// quicker, as it is by default (2.5 s and 0.5 s).
-inline Params paramsFor(int brighteningPercent, float seconds) {
+///
+/// The sensitivity narrows the neutral band about its middle: 0 is the band
+/// as it is (2.7 stops, -6.3 to -3.6), 50 half as wide, 100 none at all -
+/// every view a little off the middle is brightened or darkened toward it.
+/// The higher, the smaller a difference from daylight already moves the
+/// eye.
+constexpr int kDefaultSensitivityPercent = 0;
+constexpr int kMaxSensitivityPercent = 100;
+
+inline Params paramsFor(int brighteningPercent, float seconds, int sensitivityPercent = kDefaultSensitivityPercent) {
     Params p;
+    const int sensitivity = std::clamp(sensitivityPercent, 0, kMaxSensitivityPercent);
+    if (sensitivity != kDefaultSensitivityPercent) {
+        const float middle = 0.5f * (p.neutralLow + p.neutralHigh);
+        const float half = 0.5f * (p.neutralHigh - p.neutralLow) * (1.0f - static_cast<float>(sensitivity) / 100.0f);
+        p.neutralLow = middle - half;
+        p.neutralHigh = middle + half;
+    }
     const int percent = std::clamp(brighteningPercent, 0, kMaxBrighteningPercent);
     if (percent != kDefaultBrighteningPercent) {
         const float lift = static_cast<float>(percent) / 100.0f;

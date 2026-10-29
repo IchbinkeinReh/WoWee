@@ -293,6 +293,12 @@ constexpr SettingDesc kSchema[] = {
      "How long the eye takes to adjust to a darker view. To a\n"
      "brighter one it is five times quicker (2.5 s here is 0.5 s\n"
      "there). Longer turns the change into a slow fade.", "", 2.5f, "raytracedlighting"},
+    {"rteyesensitivity", "Eye adaptation: sensitivity (%)", SettingKind::Int, 0, 100, 5,
+     "Ray Tracing", "",
+     "How soon the picture is brightened or darkened: how far a view\n"
+     "may be from daylight before the eye adjusts. 0 leaves a wide\n"
+     "range alone, as it has always been; higher adjusts smaller\n"
+     "differences; 100 adjusts every view toward the middle.", "", 0, "raytracedlighting"},
     // Rays a pixel, one setting a kind (rt_rays.hpp): 1 is the trace as it
     // always ran; each more is another ray of that kind a pixel, averaged.
     {"rtsunrays", "Rays a pixel: sun shadows", SettingKind::Int, 1, 5, 1,

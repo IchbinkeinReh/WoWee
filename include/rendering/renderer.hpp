@@ -737,7 +737,8 @@ public:
     void setRtSoftLamps(bool softer) { rtSoftLamps_ = softer; }
     /// How far the eye may brighten a dark view (percent over one) and how
     /// long it takes to adapt to the dark (seconds); eye_adaptation::paramsFor.
-    void setEyeAdaptation(int brighteningPercent, float seconds);
+    /// The sensitivity narrows the neutral band (percent, 0 as it is).
+    void setEyeAdaptation(int brighteningPercent, float seconds, int sensitivityPercent = 0);
     /// Rays a pixel of each kind (Ray Tracing settings; RtLighting::FrameInputs::rays).
     void setRtRaysPerPixel(const RtRaysPerPixel& rays) { rtRays_ = rays; }
     /// The lighting's adjustable strengths (Settings > Debug Graphics). The
@@ -1118,6 +1119,7 @@ private:
     bool rtSoftLamps_ = false;
     int eyeBrighteningPercent_ = 30;
     float eyeAdaptSeconds_ = 2.5f;
+    int eyeSensitivityPercent_ = 0;
     RtRaysPerPixel rtRays_{};
     int rtDebugView_ = 0;
     bool rtLightKindView_ = false;

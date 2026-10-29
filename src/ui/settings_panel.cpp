@@ -921,6 +921,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
     "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rteyebrighten", "rteyeseconds",
+    "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
     "dbgview", "dbgtimeoverride", "dbgtime", "dbgambient", "dbgsun", "dbgbakedlight", "dbgpointlights", "dbgbounce", "dbgshadowdarkness",
@@ -1121,6 +1122,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "rtsoftlamps", .asBool = &SettingsPanel::pendingRtSoftLamps},
     {.key = "rteyebrighten", .asInt = &SettingsPanel::pendingRtEyeBrighten},
     {.key = "rteyeseconds", .asFloat = &SettingsPanel::pendingRtEyeSeconds},
+    {.key = "rteyesensitivity", .asInt = &SettingsPanel::pendingRtEyeSensitivity},
     {.key = "rtsunrays", .asInt = &SettingsPanel::pendingRtSunRays},
     {.key = "rtaorays", .asInt = &SettingsPanel::pendingRtAoRays},
     {.key = "rtpointrays", .asInt = &SettingsPanel::pendingRtPointRays},
@@ -1614,8 +1616,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtFullResolution(pendingRtFullRes);
     } else if (key == "rtsoftlamps") {
         if (renderer) renderer->setRtSoftLamps(pendingRtSoftLamps);
-    } else if (key == "rteyebrighten" || key == "rteyeseconds") {
-        if (renderer) renderer->setEyeAdaptation(pendingRtEyeBrighten, pendingRtEyeSeconds);
+    } else if (key == "rteyebrighten" || key == "rteyeseconds" || key == "rteyesensitivity") {
+        if (renderer) renderer->setEyeAdaptation(pendingRtEyeBrighten, pendingRtEyeSeconds, pendingRtEyeSensitivity);
     } else if (key == "rtsunrays" || key == "rtaorays" || key == "rtpointrays" || key == "rtbouncerays") {
         if (renderer) {
             rendering::RtRaysPerPixel rays;

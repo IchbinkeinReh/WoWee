@@ -147,3 +147,44 @@ TEST_CASE("the time scales both ways, the light five times quicker", "[eye]") {
     const float fade = adapt(-4.0f, -9.0f, 1.0f, slow);
     CHECK(-4.0f - fade < 0.3f * (-4.0f - fast));
 }
+
+TEST_CASE("sensitivity 0 is the band as it has always been", "[eye]") {
+    const Params d;
+    const Params p = paramsFor(kDefaultBrighteningPercent, kDefaultSeconds, 0);
+    CHECK(p.neutralLow == d.neutralLow);
+    CHECK(p.neutralHigh == d.neutralHigh);
+    CHECK(d.neutralLow == Catch::Approx(-6.3f));
+    CHECK(d.neutralHigh == Catch::Approx(-3.6f));
+    // The two-argument form is the same.
+    CHECK(paramsFor(kDefaultBrighteningPercent, kDefaultSeconds).neutralLow == d.neutralLow);
+}
+
+TEST_CASE("sensitivity narrows the band about its middle", "[eye]") {
+    const Params d;
+    const float middle = 0.5f * (d.neutralLow + d.neutralHigh);
+    const Params half = paramsFor(kDefaultBrighteningPercent, kDefaultSeconds, 50);
+    CHECK(half.neutralHigh - half.neutralLow == Catch::Approx(0.5f * (d.neutralHigh - d.neutralLow)));
+    CHECK(0.5f * (half.neutralLow + half.neutralHigh) == Catch::Approx(middle));
+    const Params none = paramsFor(kDefaultBrighteningPercent, kDefaultSeconds, 100);
+    CHECK(none.neutralLow == Catch::Approx(middle));
+    CHECK(none.neutralHigh == Catch::Approx(middle));
+    // Out of range is held to it.
+    CHECK(paramsFor(30, 2.5f, 250).neutralLow == Catch::Approx(middle));
+    CHECK(paramsFor(30, 2.5f, -10).neutralLow == d.neutralLow);
+    // It touches nothing else.
+    CHECK(half.maxExposure == d.maxExposure);
+    CHECK(half.toDarkerSeconds == d.toDarkerSeconds);
+}
+
+TEST_CASE("a higher sensitivity adjusts a view the default leaves alone", "[eye]") {
+    // A shaded street, -5.9: inside the default band, outside a narrowed one.
+    const float street = -5.9f;
+    CHECK(exposureFor(street, paramsFor(30, 2.5f, 0)) == 1.0f);
+    CHECK(exposureFor(street, paramsFor(30, 2.5f, 60)) > 1.0f);
+    // A bright plain, -4.0, the other way.
+    CHECK(exposureFor(-4.0f, paramsFor(30, 2.5f, 0)) == 1.0f);
+    CHECK(exposureFor(-4.0f, paramsFor(30, 2.5f, 60)) < 1.0f);
+    // At the middle nothing moves, however sensitive.
+    const Params d;
+    CHECK(exposureFor(0.5f * (d.neutralLow + d.neutralHigh), paramsFor(30, 2.5f, 100)) == 1.0f);
+}

@@ -79,6 +79,7 @@ public:
     /// The eye adaptation (Ray Tracing; eye_adaptation::paramsFor).
     int pendingRtEyeBrighten = 30;
     float pendingRtEyeSeconds = 2.5f;
+    int pendingRtEyeSensitivity = 0;
     /// Rays a pixel of each kind (Ray Tracing; rendering::RtRaysPerPixel).
     int pendingRtSunRays = 1;
     int pendingRtAoRays = 1;
