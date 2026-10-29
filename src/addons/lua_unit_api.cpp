@@ -1,6 +1,7 @@
 // lua_unit_api.cpp - Unit query, stats, party/raid, and player state Lua API bindings.
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/shapeshift_forms.hpp"
+#include "game/battleground_flag.hpp"
 #include "game/game_utils.hpp"
 #include "game/bg_score_defs.hpp"
 #include "game/pvp_flags.hpp"
@@ -10,6 +11,7 @@
 #include "game/power_prediction.hpp"
 #include "game/unit_level_display.hpp"
 #include "game/known_titles.hpp"
+#include <cstdio>
 #include <cstdlib>
 #include <cmath>
 #include <bit>
@@ -3487,29 +3489,46 @@ void registerUnitLuaAPI(lua_State* L) {
             lua_pushboolean(L, (g1 != 0 && g2 != 0 && gh->unitMayAssist(g1, g2)) ? 1 : 0);
             return 1;
         }},
-                // GetPVPRankInfo(rank [, unit]) - 0x00611cb0.  The two answers
-                // come or go together, and the number is not the rank.  The name
-                // is a token lookup, "PVP_RANK_%d_%d" of the rank and of the
-                // side 0x006d6e90 answers from the unit's display race: the race
-                // row's faction template, whose flags give 1 Alliance, 2 Horde
-                // and 0 for neither.  The unit has to carry the guid's player
-                // extension bit or the lookup is skipped, and the name itself
-                // comes from 0x00819d40 - the client's own string store, not a
-                // table the realm sends, so there is none to give here.  With no
-                // name the client pushes nil and a plain 0; with one it pushes
-                // rank-4, or rank-5 for the four leader ranks below 5.  Handing
-                // back an empty string and the rank unchanged was wrong twice:
-                // both callers test `if (not rankName) rankName = NONE`
-                // (honorframe.lua:44-46, inspecthonorframe.lua:43-45) and "" is
-                // truthy in Lua, so those lines printed a blank where the
-                // original prints NONE; and the number goes into
-                // honorframe.lua:60's Interface\PvPRankBadges\PvPRankNN, so the
-                // unshifted rank asks that line for a badge the client never
-                // numbered.  Against a 3.3.5 realm the rank reaching this is 0
-                // anyway - its source is a byte clamped to zero below 5, see
-                // GetPVPLifetimeStats - so nil and 0 are what the original
-                // answers in practice, not only in the no-name case.
+                // GetPVPRankInfo(rank [, unit]) - 0x00611cb0. The name is the
+                // interface string "PVP_RANK_<rank>_<side>" (0x00819d40 is the
+                // GlobalStrings lookup; PVP_RANK_1_0 .. PVP_RANK_19_1 are
+                // there), for a rank of 1..18. The side is a number given as
+                // the second argument, else the unit's (the player's when none
+                // is named; a named unit that is not a player gives 0): its
+                // race's faction template group, 0 Horde, 1 Alliance, -1
+                // neither (0x006d6e90, bg_flag::raceTeam). With a name it
+                // pushes the name and rank-5 below rank 5 or rank-4 above;
+                // without one nil and 0. Both callers test
+                // `if (not rankName) rankName = NONE` (honorframe.lua:44-46).
                 {"GetPVPRankInfo", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetPVPRankInfo(rank [, unit])");
+            const int rank = static_cast<int>(lua_tonumber(L, 1));
+            int side = 0;
+            if (lua_isnumber(L, 2)) {
+                side = static_cast<int>(lua_tonumber(L, 2));
+            } else {
+                auto* gh = getGameHandler(L);
+                const game::Unit* unit = nullptr;
+                if (lua_isstring(L, 2)) {
+                    unit = resolveUnit(L, lua_tostring(L, 2));
+                    if (unit && unit->getType() != game::ObjectType::PLAYER) unit = nullptr;
+                } else if (gh) {
+                    unit = resolveUnit(L, "player");
+                }
+                const uint16_t bytes0 = game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0);
+                if (unit && bytes0 != 0xFFFF)
+                    side = game::bg_flag::raceTeam(static_cast<uint8_t>(unit->getField(bytes0) & 0xFF));
+            }
+            if (static_cast<unsigned>(rank - 1) < 18u) {
+                char key[32];
+                std::snprintf(key, sizeof(key), "PVP_RANK_%d_%d", rank, side);
+                lua_getglobal(L, key);
+                if (lua_isstring(L, -1) && lua_objlen(L, -1) > 0) {
+                    lua_pushnumber(L, rank < 5 ? rank - 5 : rank - 4);
+                    return 2;
+                }
+                lua_pop(L, 1);
+            }
             lua_pushnil(L);
             lua_pushnumber(L, 0);
             return 2;
