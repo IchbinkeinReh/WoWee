@@ -75,6 +75,35 @@ float heightfieldNormalZ(SampleFn&& sample, float x, float y, float spacing) {
     return heightfieldNormal(sample, x, y, spacing).z;
 }
 
+/// A step across ground whose normal is `n`, as the client's movement takes
+/// it: ground steeper than the walkable limit (kMinWalkableNormalZ, its
+/// cos 50 degrees) is a wall to the mover (0x0075e0c0, 0x0075e250 test the
+/// contact normal against 0.64278764), so the part of the step that would
+/// climb it is taken out and the rest goes along it. Walkable ground, and a
+/// step down or across a steep face, pass unchanged.
+inline glm::vec2 stepAgainstSteepGround(const glm::vec2& step, const glm::vec3& n) {
+    if (n.z >= kMinWalkableNormalZ) return step;
+    const glm::vec2 downhill(n.x, n.y);
+    const float len = glm::length(downhill);
+    if (len < 1e-6f) return step;
+    const glm::vec2 uphill = -downhill / len;
+    const float into = glm::dot(step, uphill);
+    if (into <= 0.0f) return step;
+    return step - uphill * into;
+}
+
+/// How fast the mover slides down ground too steep to stand on, given how
+/// fast it was sliding and the ground's normal: gravity along the slope
+/// (g sin of its angle), held to the client's terminal fall speed.
+/// On walkable ground, nothing.
+inline float slideSpeedOn(float speed, const glm::vec3& n, float dt) {
+    if (n.z >= kMinWalkableNormalZ) return 0.0f;
+    constexpr float kGravity = 19.291105f;   // yards/s^2 (0x00986f00)
+    constexpr float kTerminal = 60.148003f;  // yards/s
+    const float sinSlope = std::sqrt(std::max(0.0f, 1.0f - n.z * n.z));
+    return std::min(speed + kGravity * sinSlope * dt, kTerminal);
+}
+
 /// Where a step taken in flight ends, when it would end inside the ground.
 ///
 /// Flight has no use for the step-up budget that keeps a walker on the ground:

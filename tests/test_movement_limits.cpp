@@ -334,3 +334,45 @@ TEST_CASE("a jump the slope catches up with keeps rising", "[movement_limits]") 
     // On the ground with an upward push (out of the water): stands on it.
     REQUIRE_FALSE(risesOffGround(true, 1.5f, 0.009f));
 }
+
+// Ground steeper than the walkable limit is a wall to the mover: the part of
+// a step that climbs it is taken out (0x0075e0c0 / 0x0075e250 against
+// 0.64278764), and a mover standing on it slides.
+TEST_CASE("a step up ground too steep to stand on goes along it, not up it", "[movement][slope]") {
+    using wowee::rendering::movement::stepAgainstSteepGround;
+    // A 60 degree face rising toward +x: its normal leans to -x.
+    const float a = glm::radians(60.0f);
+    const glm::vec3 steep(-std::sin(a), 0.0f, std::cos(a));
+    // Straight at it: nothing left.
+    const glm::vec2 into = stepAgainstSteepGround({1.0f, 0.0f}, steep);
+    CHECK(glm::length(into) == Catch::Approx(0.0f).margin(1e-5));
+    // Across it at 45 degrees: the climbing half goes, the sideways half stays.
+    const glm::vec2 slant = stepAgainstSteepGround({0.7f, 0.7f}, steep);
+    CHECK(slant.x == Catch::Approx(0.0f).margin(1e-5));
+    CHECK(slant.y == Catch::Approx(0.7f));
+    // Down it: unchanged.
+    const glm::vec2 down = stepAgainstSteepGround({-1.0f, 0.0f}, steep);
+    CHECK(down.x == Catch::Approx(-1.0f));
+    // A 40 degree hill is walked straight up.
+    const float b = glm::radians(40.0f);
+    const glm::vec3 hill(-std::sin(b), 0.0f, std::cos(b));
+    const glm::vec2 up = stepAgainstSteepGround({1.0f, 0.0f}, hill);
+    CHECK(up.x == Catch::Approx(1.0f));
+}
+
+TEST_CASE("a mover on ground too steep to stand on slides, faster the steeper", "[movement][slope]") {
+    using wowee::rendering::movement::slideSpeedOn;
+    const auto normal = [](float deg) {
+        const float a = glm::radians(deg);
+        return glm::vec3(-std::sin(a), 0.0f, std::cos(a));
+    };
+    CHECK(slideSpeedOn(0.0f, normal(40.0f), 0.1f) == 0.0f);
+    const float at60 = slideSpeedOn(0.0f, normal(60.0f), 0.1f);
+    const float at80 = slideSpeedOn(0.0f, normal(80.0f), 0.1f);
+    CHECK(at60 > 0.0f);
+    CHECK(at80 > at60);
+    // It gathers, and stops at the terminal fall speed.
+    float v = 0.0f;
+    for (int i = 0; i < 1000; ++i) v = slideSpeedOn(v, normal(80.0f), 0.1f);
+    CHECK(v == Catch::Approx(60.148003f));
+}

@@ -913,6 +913,66 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
     // Use tighter steps when inside WMO for more precise collision.
     targetPos = sweepAgainstWalls(*followTarget, targetPos, true);
 
+    // Ground too steep to stand on is a wall, and a mover on it slides.
+    //
+    // The client tests the contact normal against cos 50 degrees (0x0075e0c0,
+    // 0x0075e250): steeper, and the surface stops the part of the move that
+    // climbs it. The heightfield went unchecked here - the limit had been
+    // taken off because it removed the ground rather than the step - so a
+    // run up a mesa's face went straight up it, and down another, at full
+    // speed (Thunder Bluff). A building's or a doodad's floor over the slope
+    // is walked on as it is; only the ground's own slope is judged.
+    if (!externalFollow_ && !swimming && !isFlightAirborne() && terrainManager && !ignoreSlopeLimit_) {
+        const glm::vec3 from = *followTarget;
+        auto ground = [this](float sx, float sy) { return terrainManager->getHeightAt(sx, sy); };
+        auto structureFloorAt = [&](float x, float y, float z) {
+            if (wmoRenderer) {
+                const auto h = wmoRenderer->getFloorHeight(x, y, z + 1.0f);
+                if (h && *h > z - 2.0f) return true;
+            }
+            if (m2Renderer) {
+                const auto h = m2Renderer->getFloorHeight(x, y, z + 1.0f);
+                if (h && *h > z - 2.0f) return true;
+            }
+            return false;
+        };
+        constexpr float kSlopeSpacing = 1.0f;
+        // The step, against the slope where it lands.
+        glm::vec2 step(targetPos.x - from.x, targetPos.y - from.y);
+        if (glm::dot(step, step) > 1e-8f) {
+            const auto toGround = ground(targetPos.x, targetPos.y);
+            // Ground rising under the feet, not ground far overhead - under
+            // a city or in a cave the heightfield is the world above.
+            if (toGround && *toGround > from.z + 0.05f && *toGround < from.z + movement::kMaxStepUp + 1.0f &&
+                !structureFloorAt(targetPos.x, targetPos.y, from.z)) {
+                const glm::vec3 n = movement::heightfieldNormal(ground, targetPos.x, targetPos.y, kSlopeSpacing);
+                const glm::vec2 kept = movement::stepAgainstSteepGround(step, n);
+                if (kept != step) {
+                    targetPos.x = from.x + kept.x;
+                    targetPos.y = from.y + kept.y;
+                }
+            }
+        }
+        // Standing on it: slide down, gathering speed as a fall does.
+        const auto underGround = ground(from.x, from.y);
+        const bool onGround = underGround && std::abs(from.z - *underGround) <= 0.3f;
+        if (onGround && !structureFloorAt(from.x, from.y, from.z)) {
+            const glm::vec3 n = movement::heightfieldNormal(ground, from.x, from.y, kSlopeSpacing);
+            slideSpeed_ = movement::slideSpeedOn(slideSpeed_, n, f.physicsDeltaTime);
+            const glm::vec2 downhill(n.x, n.y);
+            const float len = glm::length(downhill);
+            if (slideSpeed_ > 0.0f && len > 1e-6f) {
+                const glm::vec2 d = downhill / len * slideSpeed_ * f.physicsDeltaTime;
+                targetPos.x += d.x;
+                targetPos.y += d.y;
+            }
+        } else if (grounded) {
+            slideSpeed_ = 0.0f;
+        }
+    } else {
+        slideSpeed_ = 0.0f;
+    }
+
     return targetPos;
 }
 

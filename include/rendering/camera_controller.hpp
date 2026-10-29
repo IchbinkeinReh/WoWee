@@ -828,6 +828,8 @@ private:
     // Cached isInsideWMO result (throttled to avoid per-frame cost)
     bool cachedInsideWMO = false;
     bool cachedInsideInteriorWMO = false;
+    /// How fast the character is sliding down ground too steep to stand on.
+    float slideSpeed_ = 0.0f;
     /// How much of the zoom the collision sweep has taken, and how long
     /// nothing has been in the way. See the pull in updateOrbitCamera.
     float collisionZoomDebt_ = 0.0f;
