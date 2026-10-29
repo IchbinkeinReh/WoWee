@@ -82,7 +82,6 @@ public:
     void playGreeting(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position);
     void playFarewell(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position);
     void playVendor(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position);
-    void playPissed(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position);
 
     void setVolumeScale(float scale) { volumeScale_ = scale; }
     [[nodiscard]] float getVolumeScale() const { return volumeScale_; }

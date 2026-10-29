@@ -643,16 +643,5 @@ void NpcVoiceManager::playVendor(uint64_t npcGuid, uint32_t displayId, VoiceType
     playSound(npcGuid, displayId, voiceType, SoundCategory::VENDOR, -1, position);
 }
 
-void NpcVoiceManager::playPissed(uint64_t npcGuid, uint32_t displayId, VoiceType voiceType, const glm::vec3& position) {
-    // The repeat-click path reaches the kit's third slot through playGreeting's
-    // counter now, which is how the client walks it. This stays for a caller that
-    // wants the irritated line directly - and an angry unit's line is in fact
-    // asked of the unit's own reaction change (SMSG_AI_REACTION), which is where
-    // the client really asks for it.
-    if (linePlaying(npcGuid))
-        return;
-    playSound(npcGuid, displayId, voiceType, SoundCategory::PISSED, -1, position);
-}
-
 } // namespace audio
 } // namespace wowee
