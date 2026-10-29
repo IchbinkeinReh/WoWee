@@ -2990,6 +2990,31 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                     pendingEvents_.emit("UPDATE_FACTION", {});
             }
         }
+        // The honour counters, which raise PLAYER_PVP_KILLS_CHANGED (461).  Of
+        // the four fields the panels read, the client watches three: +0x10d4
+        // **two bytes** wide - the low halfword of PLAYER_FIELD_KILLS, this
+        // session's count, and not the yesterday halfword above it - plus
+        // today's contribution (+0x10d8) and the lifetime count (+0x10e0)
+        // (0x006e5180).  Yesterday's contribution is not watched at all, so the
+        // daily reset announces nothing.  honorframe.lua:2 and pvpframe.lua:15
+        // refresh from the event, and the numbers they set come through
+        // GetPVPSessionStats / GetPVPYesterdayStats / GetPVPLifetimeStats, which
+        // answer from these fields - so without the event both panels keep
+        // whatever they showed when they were opened, however many kills the
+        // realm reports afterwards.
+        bool pvpKillsChanged = false;
+        for (const std::pair<uint16_t, uint32_t> probe :
+             {std::pair<uint16_t, uint32_t>{fieldIndex(UF::PLAYER_FIELD_KILLS), 0xFFFFu},
+              std::pair<uint16_t, uint32_t>{fieldIndex(UF::PLAYER_FIELD_TODAY_CONTRIBUTION), 0xFFFFFFFFu},
+              std::pair<uint16_t, uint32_t>{fieldIndex(UF::PLAYER_FIELD_LIFETIME_HONORBALE_KILLS), 0xFFFFFFFFu}}) {
+            if (probe.first == 0xFFFF) continue;
+            const auto now = block.fields.find(probe.first);
+            if (now == block.fields.end()) continue;
+            const auto was = lastFields.find(probe.first);
+            const uint32_t oldVal = (was == lastFields.end()) ? 0u : was->second;
+            if ((oldVal & probe.second) != (now->second & probe.second)) pvpKillsChanged = true;
+        }
+        if (pvpKillsChanged) pendingEvents_.emit("PLAYER_PVP_KILLS_CHANGED", {});
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.
         for (const auto& [key, val] : block.fields) {
