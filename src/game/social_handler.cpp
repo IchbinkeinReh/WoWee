@@ -5987,7 +5987,10 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
                 line = interfaceFormat("FACTION_STANDING_INCREASED",
                     "Reputation with %s increased by %d.", {name, amount});
             }
-            owner_.watchedFactionIdRef() = factionId;
+            // Nothing watches the faction whose reputation just moved: the
+            // original client's watched faction is the realm's field
+            // (PLAYER_FIELD_WATCHED_FACTION_INDEX), which only a click on the
+            // reputation frame's checkbox and the CMSG it sends can change.
             if (owner_.repChangeCallbackRef()) owner_.repChangeCallbackRef()(name, delta, standing);
             // These events fire unconditionally on any rep change (not gated by callback).
             owner_.fireAddonEvent("UPDATE_FACTION", {});

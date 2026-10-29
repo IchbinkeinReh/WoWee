@@ -104,6 +104,19 @@ enum class UF : uint16_t {
     PLAYER_FIELD_YESTERDAY_CONTRIBUTION,
     PLAYER_FIELD_LIFETIME_HONORBALE_KILLS,
 
+    // Which faction the realm is showing under the experience bar, as a
+    // reputation list index rather than a faction id.  GetWatchedFactionInfo
+    // (0x005d1240) reads +0x10e8 into the field blob the player object keeps at
+    // +0x1008 - blob dword 1082, which the client's own per-field descriptor
+    // table names PLAYER_FIELD_WATCHED_FACTION_INDEX - rejects it below 0 or
+    // above 0x7f, and looks up the reputation list entry at that index to get
+    // the faction, its standing and the rank bounds.  The same index goes back
+    // out in CMSG_SET_WATCHED_FACTION (0x005d0ba0 converts a faction id to it and
+    // sends -1 for an untracked one, and only sends when the field would change),
+    // so the choice belongs to the realm: it survives a relog and follows the
+    // character to another client.  WotLK only here.
+    PLAYER_FIELD_WATCHED_FACTION_INDEX,
+
     // Player spell power / healing bonus (WotLK: PRIVATE - int32 per school)
     PLAYER_FIELD_MOD_DAMAGE_DONE_POS,  // Spell damage bonus (first of 7 schools)
     // The other half of the same seven-school run - a damage *reduction*, sent

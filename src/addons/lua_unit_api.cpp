@@ -1777,21 +1777,39 @@ static int lua_GetXPExhaustion(lua_State* L) {
 /// GetWatchedFactionInfo() → name, standingID, barMin, barMax, barValue.
 ///
 /// The reputation bar under the experience bar, which draws nothing at all
-/// without this. Returns nothing when no faction is being watched, which is
-/// what MainMenuBar_UpdateExperienceBars checks for before showing the bar.
+/// without this.
+///
+/// Five answers, and nil plus four zeros when nothing is watched: that is what
+/// 0x005d1240 pushes on both paths, and reputationframe.lua:324 names five.
+///
+/// Which faction that is comes from the realm - PLAYER_FIELD_WATCHED_FACTION
+/// INDEX holds a reputation list index, which the client bounds to 0..0x7f and
+/// turns into a faction, so the choice survives a relog and travels with the
+/// character.  It is not a local selection, and nothing here picks one.
 ///
 /// The bounds are the rank's own, not the whole scale: WoW's bar fills from
 /// the bottom of the current rank to the top of it, so a character halfway
 /// through Honored shows a half-full bar rather than one two-thirds along.
+/// Those bounds are the client's own nine at 0x00a2d2fc - -42000, -6000, -3000,
+/// 0, 3000, 9000, 21000, 42000, 43000 - read as min[i] and max[i] of one array,
+/// which is why the two look four bytes apart.
 static int lua_GetWatchedFactionInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) return 0;
-    const uint32_t factionId = gh->getWatchedFactionId();
-    if (factionId == 0) return 0;
-    const auto& standings = gh->getFactionStandings();
-    auto it = standings.find(factionId);
-    if (it == standings.end()) return 0;
-    const int32_t standing = it->second;
+    const uint32_t factionId = gh ? gh->getWatchedFactionId() : 0u;
+    int32_t standing = 0;
+    bool watched = false;
+    if (gh && factionId != 0) {
+        const auto& standings = gh->getFactionStandings();
+        if (auto it = standings.find(factionId); it != standings.end()) {
+            standing = it->second;
+            watched = true;
+        }
+    }
+    if (!watched) {
+        lua_pushnil(L);
+        for (int i = 0; i < 4; ++i) lua_pushnumber(L, 0);
+        return 5;
+    }
 
     // Blizzard's own thresholds, and the standing id that goes with each. Hated
     // is 1 and Exalted is 8, which is what the interface indexes FACTION_BAR_
@@ -1810,8 +1828,9 @@ static int lua_GetWatchedFactionInfo(lua_State* L) {
     lua_pushnumber(L, kRanks[rank].min);
     lua_pushnumber(L, kRanks[rank].max);
     lua_pushnumber(L, standing);
-    lua_pushnumber(L, factionId);
-    return 6;
+    // Five, as the client's are: the faction id is not one of its answers, and
+    // the interface gets the id it asked for back from GetSelectedFaction.
+    return 5;
 }
 
 /// GetNumBagSlots() → the four bags beside the backpack. A constant in every

@@ -3294,7 +3294,11 @@ public:
     }
 
     const std::string& getFactionNamePublic(uint32_t factionId) const;
-    uint32_t getWatchedFactionId() const { return watchedFactionId_; }
+    // Which faction the interface draws under the experience bar.  The realm
+    // owns that answer: it comes out of PLAYER_FIELD_WATCHED_FACTION_INDEX, and
+    // the last one this client asked for is only a fallback for a layout that
+    // has no such field to read.
+    uint32_t getWatchedFactionId() const;
     void setWatchedFactionId(uint32_t factionId);
     // Declare war / make peace with a faction (CMSG_SET_FACTION_ATWAR). No-op on
     // peace-forced factions. Updates the local flag optimistically.
@@ -4686,7 +4690,6 @@ public:
     auto& hasPlayerExploredZonesRef() { return hasPlayerExploredZones_; }
     auto& factionStandingsRef() { return factionStandings_; }
     auto& initialFactionsRef() { return initialFactions_; }
-    auto& watchedFactionIdRef() { return watchedFactionId_; }
 
     // ── Corpse & Home Bind ───────────────────────────────────────────
     auto& corpseGuidRef() { return corpseGuid_; }
@@ -6413,7 +6416,10 @@ private:
 
     // ---- Reputation change callback ----
     RepChangeCallback repChangeCallback_;
-    uint32_t watchedFactionId_ = 0; // auto-set to most recently changed faction
+    // The last faction this client asked the realm to watch, kept only for a
+    // layout with no PLAYER_FIELD_WATCHED_FACTION_INDEX to read: the field is
+    // the answer everywhere else.
+    uint32_t watchedFactionId_ = 0;
 
     // ---- PvP honor credit callback ----
     PvpHonorCallback pvpHonorCallback_;

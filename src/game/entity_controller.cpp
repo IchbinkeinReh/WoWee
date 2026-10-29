@@ -2973,6 +2973,23 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                     pendingEvents_.emit("PET_SPELL_POWER_UPDATE", {});
             }
         }
+        // The faction drawn under the experience bar, which is the realm's
+        // choice and not this client's: PLAYER_FIELD_WATCHED_FACTION_INDEX holds
+        // a reputation list index, and GetWatchedFactionInfo (0x005d1240) reads
+        // that field rather than any local selection.  The client has a watch on
+        // the same dword - blob 0x10e8, four bytes, event 362 = UPDATE_FACTION
+        // (0x006e5180) - so a faction the realm restores at login, or one set
+        // from another client, redraws the reputation bar here too, and not only
+        // the click that asked for it.
+        if (const uint16_t watchedIdx = fieldIndex(UF::PLAYER_FIELD_WATCHED_FACTION_INDEX);
+            watchedIdx != 0xFFFF) {
+            const auto now = block.fields.find(watchedIdx);
+            if (now != block.fields.end()) {
+                const auto was = lastFields.find(watchedIdx);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                    pendingEvents_.emit("UPDATE_FACTION", {});
+            }
+        }
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.
         for (const auto& [key, val] : block.fields) {

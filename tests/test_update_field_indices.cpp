@@ -242,6 +242,32 @@ TEST_CASE("the honour counters are four dwords in a row",
     // every counter in this run one field out.
 }
 
+TEST_CASE("the watched faction sits in the gap after the honour run",
+          "[update-fields]") {
+    // Which faction the interface draws under the experience bar is the realm's
+    // answer, not the client's: GetWatchedFactionInfo (0x005d1240) reads +0x10e8
+    // into the field blob the player object keeps at +0x1008, bounds what it
+    // finds there to 0..0x7f, and looks the reputation list entry at that index
+    // up.  The client's own descriptor table names blob dword 1082
+    // PLAYER_FIELD_WATCHED_FACTION_INDEX, one past the invisibility byte it
+    // already had at 1229 and one before the combat ratings at 1231, and covers
+    // exactly one dword - so the field belongs between two indices wowee had
+    // right, which is how it stayed invisible: nothing shifts around it.
+    //
+    // The value is a reputation list index, the same slot CMSG_SET_WATCHED_FACTION
+    // carries (0x005d0ba0 converts a faction id to it and sends -1 for an
+    // untracked faction, and only when the field would change), so the two ends
+    // have to name the same slot or a click watches one faction and the bar
+    // shows another.
+    const auto wotlk = declaredFields("wotlk");
+    REQUIRE(wotlk.count("PLAYER_FIELD_WATCHED_FACTION_INDEX") == 1);
+    CHECK(wotlk.at("PLAYER_FIELD_WATCHED_FACTION_INDEX") == 1230);
+    CHECK(wotlk.at("PLAYER_FIELD_WATCHED_FACTION_INDEX") ==
+          wotlk.at("PLAYER_FIELD_BYTES2") + 1);
+    CHECK(wotlk.at("PLAYER_FIELD_WATCHED_FACTION_INDEX") + 1 ==
+          wotlk.at("PLAYER_FIELD_COMBAT_RATING_1"));
+}
+
 TEST_CASE("the spell damage run is three arrays of seven schools",
           "[update-fields]") {
     // GetSpellBonusDamage (0x0060e310) answers one school as POS[school] +

@@ -2913,7 +2913,24 @@ uint32_t GameHandler::getRepListIdByFactionId(uint32_t factionId) const {
     return (it != factionIdToRepList_.end()) ? it->second : 0xFFFFFFFFu;
 }
 
+uint32_t GameHandler::getWatchedFactionId() const {
+    // GetWatchedFactionInfo (0x005d1240) asks the realm, not itself: +0x10e8 of
+    // the field blob the player object keeps at +0x1008 is the reputation list
+    // index of the faction to watch, rejected below 0 or above 0x7f and turned
+    // into a faction through the reputation list.  Nothing here watches a faction
+    // on its own, which is what the original client does not do either.
+    const uint16_t field = fieldIndex(UF::PLAYER_FIELD_WATCHED_FACTION_INDEX);
+    if (field == 0xFFFF) return watchedFactionId_;
+    const auto player = getEntityManager().getEntity(getPlayerGuid());
+    if (!player) return 0;
+    const int32_t repListId = static_cast<int32_t>(player->getField(field));
+    if (repListId < 0 || repListId > 0x7f) return 0;
+    return getFactionIdByRepListId(static_cast<uint32_t>(repListId));
+}
+
 void GameHandler::setWatchedFactionId(uint32_t factionId) {
+    // Kept for the case getWatchedFactionId has no field to read; once the realm
+    // answers, the field it sends is what the interface sees.
     watchedFactionId_ = factionId;
     if (!isInWorld()) return;
     // CMSG_SET_WATCHED_FACTION: int32 repListId (-1 = unwatch)
