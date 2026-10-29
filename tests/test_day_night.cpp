@@ -459,3 +459,41 @@ TEST_CASE("A sky body that comes on screen hidden starts hidden", "[day_night]")
     stepSkyBodyOcclusion(fresh, 1.0f, -1.0f, 1.0f);
     CHECK(fresh.eased == Catch::Approx(1.0f));
 }
+
+// What is drawn over the body on the screen - the glare, the flare, the
+// shafts - goes by the query as the client's does: off screen (no answer) the
+// disc has nothing in view. A sun that left the screen in view and came back
+// behind a crown - the camera moved meanwhile - came back with its glare up
+// until the answer arrived.
+TEST_CASE("A sky body's screen occlusion is hidden while its query has no answer", "[day_night]") {
+    using namespace wowee::rendering::daynight;
+    const float rate = 0.12f;
+    SkyBodyOcclusion s;
+    for (int i = 0; i < 30; ++i) stepSkyBodyOcclusion(s, 0.0f, 1.0f, rate);
+    CHECK(s.screenEased == Catch::Approx(0.0f).margin(1e-3));
+    // Off screen: hidden on the screen at once; the world keeps the last answer.
+    stepSkyBodyOcclusion(s, 0.0f, -1.0f, rate);
+    CHECK(s.screenEased == Catch::Approx(1.0f));
+    CHECK(s.eased == Catch::Approx(0.0f).margin(1e-3));
+    // Back on screen behind a crown: the two frames without an answer stay
+    // hidden, and so does the answer.
+    for (int i = 0; i < 2; ++i) {
+        stepSkyBodyOcclusion(s, 0.0f, -1.0f, rate);
+        CHECK(s.screenEased == Catch::Approx(1.0f));
+    }
+    stepSkyBodyOcclusion(s, 0.0f, 0.0f, rate);
+    CHECK(s.screenEased == Catch::Approx(1.0f));
+    // In view again: eased in, not snapped.
+    stepSkyBodyOcclusion(s, 0.0f, 1.0f, rate);
+    CHECK(s.screenEased > 0.8f);
+    CHECK(s.screenEased < 1.0f);
+}
+
+TEST_CASE("Without an occlusion query the screen goes by the line", "[day_night]") {
+    using namespace wowee::rendering::daynight;
+    SkyBodyOcclusion s;
+    for (int i = 0; i < 30; ++i) stepSkyBodyOcclusion(s, 0.0f, -1.0f, 0.12f);
+    CHECK(s.screenEased == Catch::Approx(0.0f).margin(1e-3));
+    stepSkyBodyOcclusion(s, 1.0f, -1.0f, 0.12f);
+    CHECK(s.screenEased == Catch::Approx(1.0f));
+}

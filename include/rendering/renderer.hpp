@@ -400,11 +400,15 @@ private:
     /// Sampled once a frame in update() and eased, because the raw answer is a
     /// yes or a no and a hill edge crossing it would snap the flare on and off.
     float sunOcclusion_ = 0.0f;
+    /// The same for what is drawn over the sun on the screen (glare, flare,
+    /// shafts): hidden while its query has no answer (SkyBodyOcclusion).
+    float sunScreenOcclusion_ = 0.0f;
     /// How much of the sun's disc the world left in view, by the occlusion
     /// query (Celestial::readVisibility); negative when it said nothing.
     float sunQueryVisibility_ = -1.0f;
     /// The same toward the White Lady, for her glare.
     float moonOcclusion_ = 0.0f;
+    float moonScreenOcclusion_ = 0.0f;
     float moonQueryVisibility_ = -1.0f;
     /// The two as they are eased and remembered (daynight::stepSkyBodyOcclusion).
     daynight::SkyBodyOcclusion sunOcclusionState_;

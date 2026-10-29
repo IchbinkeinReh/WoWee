@@ -2842,6 +2842,7 @@ void Renderer::update(float deltaTime) {
         // hidden (daynight::stepSkyBodyOcclusion).
         daynight::stepSkyBodyOcclusion(sunOcclusionState_, sunTarget, sunQueryVisibility_, rate);
         sunOcclusion_ = sunOcclusionState_.eased;
+        sunScreenOcclusion_ = sunOcclusionState_.screenEased;
         if (glareDiag && (glareDiagTimer_ -= deltaTime) <= 0.0f) {
             glareDiagTimer_ = 3.0f;
             const bool anyGroup = camera && wmoRenderer &&
@@ -2858,6 +2859,7 @@ void Renderer::update(float deltaTime) {
         daynight::stepSkyBodyOcclusion(moonOcclusionState_, lp ? sampleSunOcclusion(lp->moonDir) : 1.0f,
                                        moonQueryVisibility_, rate);
         moonOcclusion_ = moonOcclusionState_.eased;
+        moonScreenOcclusion_ = moonOcclusionState_.screenEased;
     }
 
     auto updateStart = std::chrono::steady_clock::now();
@@ -4494,8 +4496,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                     lightingManager ? &lightingManager->getLightingParams() : nullptr,
                     useOriginalSkybox);
                 skyParams.weatherLight = weatherLight_;
-                skyParams.sunOcclusion = sunOcclusion_;
-                skyParams.moonOcclusion = moonOcclusion_;
+                skyParams.sunOcclusion = sunScreenOcclusion_;
+                skyParams.moonOcclusion = moonScreenOcclusion_;
                 skyParams.skyboxWeight = drawSkyModels && lightingManager
                 ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers()) : 0.0f;
                 skySystem->render(cmd, perFrameSet, *camera, skyParams, drawStars);
@@ -4677,8 +4679,8 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 lightingManager ? &lightingManager->getLightingParams() : nullptr,
                 useOriginalSkybox);
             skyParams.weatherLight = weatherLight_;
-            skyParams.sunOcclusion = sunOcclusion_;
-            skyParams.moonOcclusion = moonOcclusion_;
+            skyParams.sunOcclusion = sunScreenOcclusion_;
+            skyParams.moonOcclusion = moonScreenOcclusion_;
             skyParams.skyboxWeight = drawSkyModels && lightingManager
                 ? LightingManager::skyboxGlareWeight(lightingManager->getSkyboxLayers()) : 0.0f;
             if (drawStarsModel) starsModelRenderer_->prepareRender(frameIdx);
@@ -7332,7 +7334,7 @@ void Renderer::recordSunShafts() {
             // shaft down that edge from whatever lit wall stood there. The
             // occlusion includes the sun's occlusion query, so a sun behind a
             // tree's crown puts them out as a roof does.
-            strength *= 1.0f - glm::clamp(sunOcclusion_, 0.0f, 1.0f);
+            strength *= 1.0f - glm::clamp(sunScreenOcclusion_, 0.0f, 1.0f);
 
             // The sun's own colour, kept in hue and not in brightness, and
             // half white: the rays should warm at dusk, not turn orange.

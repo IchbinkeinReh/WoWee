@@ -614,6 +614,16 @@ struct SkyBodyOcclusion {
     float queryHidden = 0.0f; ///< the last answer the query gave
     bool  known = false;      ///< whether it has given one
     bool  answered = false;   ///< whether it gave one last frame
+    /// What is drawn on the screen over the body takes - its glare, the lens
+    /// flare, the sun shafts: hidden while the query has no answer (off
+    /// screen, and the two frames after it comes back), as the client's query
+    /// is (0x009abe00 divides by the disc's whole projected area, so a disc
+    /// off the screen has nothing of it in view). With the last answer
+    /// standing instead, a sun that left the screen in view and came back
+    /// behind a tree - the camera moved meanwhile - came back with the glare
+    /// it left with, at full, until the answer and the glare's fall caught up.
+    /// The world's own use (the mist's light, `eased`) keeps the last answer.
+    float screenEased = 0.0f;
 };
 
 /// One frame: the line test's `line` (0 clear .. 1 blocked), the query's
@@ -627,6 +637,10 @@ inline void stepSkyBodyOcclusion(SkyBodyOcclusion& s, float line, float queryVis
     }
     s.answered = answer;
     const float target = bodyOcclusion(line, s.known ? 1.0f - s.queryHidden : -1.0f);
+    // Without a query at all (never an answer), the screen goes by the line.
+    const float screenTarget = (answer || !s.known) ? target : 1.0f;
+    if (screenTarget > s.screenEased) s.screenEased = screenTarget;
+    else s.screenEased += (screenTarget - s.screenEased) * rate;
     if (afterGap && target > s.eased) {
         s.eased = target;
         return;
