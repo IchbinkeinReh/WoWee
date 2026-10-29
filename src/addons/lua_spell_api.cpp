@@ -893,10 +893,18 @@ static int lua_TargetUnit(lua_State* L) {
 }
 
 // ClearTarget() - clear current target
+// ClearTarget() (0x00525fc0) - 1 when there was a target to let go, nil
+// when there was none. ToggleGameMenu reads it: "elseif ClearTarget() and
+// not UnitIsCharmed("player") then" is the step that makes the first Escape
+// with a target only clear it. Returning nothing, that step never held, and
+// the same press went on to open the game menu.
 static int lua_ClearTarget(lua_State* L) {
     auto* gh = getGameHandler(L);
+    const bool had = gh && gh->getTargetGuid() != 0;
     if (gh) gh->clearTarget();
-    return 0;
+    if (had) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
+    return 1;
 }
 
 // FocusUnit(unitId) - set focus target
@@ -1377,8 +1385,13 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"SpellStopCasting", [](lua_State* L) -> int {
             if (!taint::allowed(L, 2)) return 0;   // 0x00809ea0
             auto* gh = getGameHandler(L);
+            // 1 when a cast was stopped, nil when there was none - the next
+            // step of ToggleGameMenu runs only on nil.
+            const bool casting = gh && gh->isCasting();
             if (gh) gh->cancelCast();
-            return 0;
+            if (casting) lua_pushnumber(L, 1.0);
+            else lua_pushnil(L);
+            return 1;
         }},
                 {"SpellStopTargeting", [](lua_State* L) -> int {
             // Puts down whatever the cursor holds for a target: a spell
@@ -1387,10 +1400,16 @@ void registerSpellLuaAPI(lua_State* L) {
             // (0x00809e30, kind 2).
             if (!taint::allowed(L, 2)) return 0;
             auto* gh = getGameHandler(L);
+            // 1 when something was waiting for a target, nil when not
+            // (0x00809e30), as ToggleGameMenu reads it.
+            const bool targeting = gh && (gh->isGroundTargeting() || gh->isAwaitingItemTarget() ||
+                                          gh->isAwaitingGlyphTarget());
             if (gh) gh->cancelGroundTargeting();
             if (gh && gh->isAwaitingItemTarget()) gh->cancelItemTargeting();
             if (gh) gh->cancelGlyphTargeting();
-            return 0;
+            if (targeting) lua_pushnumber(L, 1.0);
+            else lua_pushnil(L);
+            return 1;
         }},
                 {"SpellIsTargeting", [](lua_State* L) -> int {
             // 0x00d3f4e4: a spell is on the cursor waiting for its target.
