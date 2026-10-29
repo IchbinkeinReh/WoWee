@@ -1214,6 +1214,30 @@ bool settingRange(const std::string& key, float& lo, float& hi) {
     return false;
 }
 
+bool isGraphicsCategory(const std::string& category) {
+    static constexpr const char* kGraphics[] = {
+        "Display", "Graphics", "Shadows", "Detail", "Grass", "Water", "Ray Tracing", "Upscaling",
+        "Debug Graphics", "Debug Time", "Debug Lights", "Debug Glow", "Debug Shadows",
+    };
+    for (const char* c : kGraphics) {
+        if (category == c) return true;
+    }
+    return false;
+}
+
+std::vector<const SettingDesc*> graphicsDefaultRows() {
+    std::vector<const SettingDesc*> rows;
+    for (const auto& row : kSchema) {
+        if (!isGraphicsCategory(row.category) || row.store[0] != '\0') continue;
+        if (std::string(row.key) == "graphicspreset") {
+            rows.insert(rows.begin(), &row);
+        } else {
+            rows.push_back(&row);
+        }
+    }
+    return rows;
+}
+
 bool settingNeedsRayTracing(const std::string& key) {
     // Every row on these two pages acts on the traced lights alone.
     for (const auto& row : kSchema) {

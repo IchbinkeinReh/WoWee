@@ -21,6 +21,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace wowee {
 namespace ui {
@@ -194,6 +195,19 @@ bool settingRange(const std::string& key, float& lo, float& hi);
 /// reason, where the device cannot run it (rendering/rt_capability.hpp) - in
 /// the settings window and the options panels alike.
 bool settingNeedsRayTracing(const std::string& key);
+
+/// The categories that are graphics: the ones the settings window's Video
+/// tab draws, the Debug Graphics pages with them. One list, so that the login
+/// screen's "Reset to default" and the tab cannot disagree about what a
+/// graphics setting is (test_settings_schema_consistency reads the tab).
+bool isGraphicsCategory(const std::string& category);
+
+/// Every graphics setting this client keeps itself - a graphics category's
+/// rows with no store of the game's own - in schema order, the preset first:
+/// what "Reset to default" puts back to each row's defaultValue. The preset
+/// goes first because choosing one assigns the columns it covers, which the
+/// rows after it then put back to their own defaults.
+std::vector<const SettingDesc*> graphicsDefaultRows();
 
 }  // namespace ui
 }  // namespace wowee

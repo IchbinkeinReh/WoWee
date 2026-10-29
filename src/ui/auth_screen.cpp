@@ -2008,11 +2008,13 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
     {
         const float y = col.y;
         const float bh = px(kButton);
-        if (ui_.button("gfx.reset", ImVec2(col.x0, y), ImVec2(col.x0 + px(170), y + bh),
-                       "Reset to Medium")) {
-            applyPresetToState(loginGfx_, 2);
-            loginGfx_.preset = 2;
-            loginPresetPicked_ = true;
+        // Every graphics setting, not only the ones on this sheet: the
+        // Video tab's, the ray tracing's, the Debug Graphics pages'. Asked
+        // first, since it cannot be undone.
+        if (!confirmGraphicsReset_ &&
+            ui_.button("gfx.reset", ImVec2(col.x0, y), ImVec2(col.x0 + px(170), y + bh),
+                       "Reset to default")) {
+            confirmGraphicsReset_ = true;
         }
         const float applyW = px(130);
         const float cancelW = px(110);
@@ -2027,6 +2029,40 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
                 services_.window->setVsync(loginGfx_.vsync);
             }
             settingsOpen_ = false;
+        }
+    }
+
+    if (confirmGraphicsReset_) {
+        // Yes or no, over the sheet.
+        const float cw = px(440);
+        const float ch = px(kPad) * 2.0f + ui_.lineHeight(px(kLabel)) * 3.0f + px(16) + px(kButton);
+        const ImVec2 ca((screenW - cw) * 0.5f, (screenH - ch) * 0.5f);
+        const ImVec2 cb(ca.x + cw, ca.y + ch);
+        ui_.sheet(ca, cb, /*taped=*/false);
+        ui_.claimMouse(ca, cb);
+        Column c{ca.x + px(kPad), cb.x - px(kPad), ca.y + px(kPad)};
+        ui_.text(c.at(), "Reset all graphics settings to their defaults?", px(kLabel), theme.ink);
+        c.gap(ui_.lineHeight(px(kLabel)) + px(4));
+        ui_.text(c.at(), "Every one, including ray tracing and the debug pages.", px(kSmall), theme.pencil);
+        c.gap(ui_.lineHeight(px(kSmall)) + px(4));
+        ui_.text(c.at(), "Sound, controls, interface and chat stay as they are.", px(kSmall), theme.pencil);
+        const float y = cb.y - px(kPad) - px(kButton);
+        const float bw = px(110);
+        if (ui_.button("gfx.reset.no", ImVec2(c.x1 - bw * 2.0f - px(12), y), ImVec2(c.x1 - bw - px(12), y + px(kButton)),
+                       "No")) {
+            confirmGraphicsReset_ = false;
+        }
+        if (ui_.button("gfx.reset.yes", ImVec2(c.x1 - bw, y), ImVec2(c.x1, y + px(kButton)), "Yes",
+                       PaperUI::ButtonKind::Primary)) {
+            confirmGraphicsReset_ = false;
+            if (onResetGraphicsDefaults_) onResetGraphicsDefaults_();
+            // The sheet shows what the file now holds, with nothing pending
+            // for Apply to write over it.
+            loadLoginGraphicsState();
+            loginPresetPicked_ = false;
+            if (services_.window && services_.window->isVsyncEnabled() != loginGfx_.vsync) {
+                services_.window->setVsync(loginGfx_.vsync);
+            }
         }
     }
 

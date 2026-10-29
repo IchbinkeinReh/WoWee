@@ -850,6 +850,16 @@ void SettingsPanel::drawSchemaCategory(const char* category,
     }
 }
 
+void SettingsPanel::restoreGraphicsDefaults() {
+    // Each through setSettingValue, so each has the side effects a change by
+    // hand has - the pipelines rebuilt for the anti-aliasing, the tracing
+    // reconfigured for its mode - and the CVar store follows.
+    for (const SettingDesc* d : graphicsDefaultRows()) {
+        setSettingValue(d->key, settingNumberText(d->defaultValue));
+    }
+    updateGraphicsPresetFromCurrentSettings();
+}
+
 void SettingsPanel::restoreSchemaDefaults(const char* category) {
     std::size_t count = 0;
     const auto* schema = clientSettingsSchema(count);

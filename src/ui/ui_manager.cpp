@@ -36,6 +36,7 @@ UIManager::UIManager() {
     characterCreateScreen = std::make_unique<CharacterCreateScreen>();
     characterScreen = std::make_unique<CharacterScreen>();
     gameScreen = std::make_unique<GameScreen>();
+    authScreen->setOnResetGraphicsDefaults([this] { gameScreen->resetGraphicsToDefaults(); });
 }
 
 UIManager::~UIManager() = default;

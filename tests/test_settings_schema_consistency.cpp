@@ -405,3 +405,58 @@ TEST_CASE("The ray tracing rows are the ones that need it", "[settings_schema]")
         }
     }
 }
+
+// The login screen's "Reset to default" puts back every graphics setting and
+// nothing else: every row of a graphics category the client keeps itself,
+// the preset first, and no row of any other category.
+TEST_CASE("the graphics reset covers every graphics row and nothing else", "[settings][schema]") {
+    const auto rows = graphicsDefaultRows();
+    REQUIRE_FALSE(rows.empty());
+    CHECK(std::string(rows.front()->key) == "graphicspreset");
+    std::set<std::string> reset;
+    for (const SettingDesc* d : rows) {
+        INFO(d->key);
+        CHECK(isGraphicsCategory(d->category));
+        CHECK(d->store[0] == '\0');
+        CHECK(reset.insert(d->key).second);
+    }
+    for (const auto& d : schema()) {
+        INFO(d.key << " in " << d.category);
+        const bool graphics = isGraphicsCategory(d.category) && d.store[0] == '\0';
+        CHECK(reset.count(d.key) == (graphics ? 1u : 0u));
+    }
+    // A few by name, from both ends: the tracing and its debug pages are
+    // in; sound, chat and the interface are out.
+    for (const char* k : {"raytracedlighting", "rteyebrighten", "rtsunrays", "dbgview", "dbgtime",
+                          "upscaling", "shadows", "grassdensity", "fullscreen"}) {
+        INFO(k);
+        CHECK(reset.count(k) == 1u);
+    }
+    for (const char* k : {"mastervolume", "chatbubbles", "uiopacity", "autoloot", "mousespeed"}) {
+        INFO(k);
+        CHECK(reset.count(k) == 0u);
+    }
+}
+
+// What a graphics category is, read off the settings window's Video tab: every
+// category it draws is one, and every one is drawn there.
+TEST_CASE("the graphics categories are the Video tab's", "[settings][schema]") {
+    const std::string src = wowee::test::slurp("src/ui/settings_panel.cpp");
+    const std::size_t from = src.find("BeginTabItem(\"Video\"");
+    const std::size_t to = src.find("BeginTabItem(\"Interface\"", from);
+    REQUIRE(from != std::string::npos);
+    REQUIRE(to != std::string::npos);
+    const std::string tab = src.substr(from, to - from);
+    const std::regex drawn(R"(drawSchemaCategory\("([^"]+)\")");
+    std::set<std::string> onTab;
+    for (std::sregex_iterator it(tab.begin(), tab.end(), drawn), end; it != end; ++it) {
+        onTab.insert((*it)[1].str());
+    }
+    REQUIRE_FALSE(onTab.empty());
+    std::set<std::string> categories;
+    for (const auto& d : schema()) categories.insert(d.category);
+    for (const auto& c : categories) {
+        INFO(c);
+        CHECK(isGraphicsCategory(c) == (onTab.count(c) == 1u));
+    }
+}

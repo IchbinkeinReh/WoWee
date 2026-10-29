@@ -48,6 +48,12 @@ public:
     /// Set services (dependency injection)
     void setServices(const UIServices& services) { services_ = services; }
 
+    /// What the settings sheet's "Reset to default" runs: every graphics
+    /// setting back to its default, applied and saved (GameScreen).
+    void setOnResetGraphicsDefaults(std::function<void()> callback) {
+        onResetGraphicsDefaults_ = std::move(callback);
+    }
+
 
     /**
      * Check if authentication is in progress
@@ -287,6 +293,9 @@ private:
     /// A preset was picked on the sheet (or Reset pressed) since it opened, so
     /// Apply also writes that preset's columns the sheet has no control for.
     bool loginPresetPicked_ = false;
+    /// "Reset to default" pressed: the yes/no over the sheet is showing.
+    bool confirmGraphicsReset_ = false;
+    std::function<void()> onResetGraphicsDefaults_;
 
     /// Draws the card and everything on it. Answers the rect it took, so the
     /// caller can hand the pointer over the whole sheet rather than only over

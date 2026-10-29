@@ -76,6 +76,9 @@ public:
     int pendingRtLighting = 0;
     bool pendingRtFullRes = false;  ///< trace every pixel (Ray Tracing)
     bool pendingRtSoftLamps = false;  ///< the lamps' wider wrap (Ray Tracing)
+    /// Every graphics setting back to its schema default (graphicsDefaultRows),
+    /// with the side effects of each; nothing else is touched. Not saved here.
+    void restoreGraphicsDefaults();
     int pendingRtMinBrightness = 0;   ///< the traced darkening's floor, % (rt_min_brightness.hpp)
     /// The eye adaptation (Ray Tracing; eye_adaptation::paramsFor).
     int pendingRtEyeBrighten = 30;

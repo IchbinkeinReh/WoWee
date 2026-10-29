@@ -137,6 +137,12 @@ public:
     ChatPanel& getChatPanel() { return chatPanel_; }
 
     void saveSettings();
+    /// The login screen's "Reset to default": every graphics setting back to
+    /// its default, applied and saved; the rest of settings.cfg as it was.
+    void resetGraphicsToDefaults() {
+        settingsPanel_.restoreGraphicsDefaults();
+        saveSettings();
+    }
 
     /// The settings the client owns. Exposed so the Lua bridge can drive the
     /// same values FrameXML's own options panels are bound to.
