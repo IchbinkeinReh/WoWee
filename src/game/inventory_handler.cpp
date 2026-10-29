@@ -6211,23 +6211,22 @@ void InventoryHandler::fireEquipSlotEvents() {
     std::sort(slots.begin(), slots.end());
     slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
     if (!owner_.addonEventCallbackRef()) return;
+    bool handsMoved = false;
+    bool rangedMoved = false;
     for (int slot : slots) {
-        // Which numbers the change moves, in the client's own split. It watches
-        // its equipment fields (0x006dedd0): for the two hands it calls the
-        // routine that fires UNIT_ATTACK, for the ranged slot the one that
-        // fires UNIT_RANGED_ATTACK_POWER.
-        //
-        // Those two are the only names the character sheet acts on for an equip
-        // change - it has no handler for the equipment event at all, and its
-        // damage, attack-speed and ranged lines are recomputed from the branch
-        // these two land in (paperdollframe.lua:187), each reading the weapon
-        // now in the slot. So this is both when the client fires them and why
-        // the number moves.
+        // Which numbers the change moves. The character sheet recomputes its
+        // damage, attack-speed and ranged lines from UNIT_ATTACK and
+        // UNIT_RANGED_ATTACK_POWER (paperdollframe.lua:187) - which the client
+        // raises from its item-change routine (0x006e1e10 via 0x006cef20, and
+        // event 0x78), not from the equipment watcher - so a weapon change says
+        // them here, where this client learns of it.
         if (slot == static_cast<int>(EquipSlot::MAIN_HAND) ||
             slot == static_cast<int>(EquipSlot::OFF_HAND)) {
             owner_.addonEventCallbackRef()("UNIT_ATTACK", {"player"});
+            handsMoved = true;
         } else if (slot == static_cast<int>(EquipSlot::RANGED)) {
             owner_.addonEventCallbackRef()("UNIT_RANGED_ATTACK_POWER", {"player"});
+            rangedMoved = true;
         }
         // Then the slot itself, by its Lua number: the wire order is the button
         // order, so index + 1 is what GetInventoryItemLink takes, which is what
@@ -6241,6 +6240,29 @@ void InventoryHandler::fireEquipSlotEvents() {
         } else {
             owner_.addonEventCallbackRef()("PLAYER_EQUIPMENT_CHANGED",
                                            {std::to_string(slot + 1)});
+        }
+    }
+    // What the equipment watcher (0x006dedd0) does for the weapon slots: it
+    // re-reads the action slots whose button shows the weapon and raises
+    // ACTIONBAR_SLOT_CHANGED for each - for the two hands (15, 16) every slot
+    // holding a spell with the Attack effect (78, 0x005aa4e0 / 0x005a96d0), for
+    // the ranged slot (17) every slot holding a ranged auto-repeat spell
+    // (Attributes 0x2 and AttributesEx2 0x20: Shoot, Throw, Auto Shot;
+    // 0x005aa550 / 0x005a9760). Their icons are the weapon's.
+    if (handsMoved || rangedMoved) {
+        const auto& bar = owner_.getActionBar();
+        const auto& spells = owner_.spellNameCacheRef();
+        constexpr uint32_t kEffectAttack = 78;
+        for (size_t i = 0; i < bar.size() && i < 0x90; ++i) {
+            if (bar[i].type != ActionBarSlot::SPELL || bar[i].id == 0) continue;
+            const auto it = spells.find(bar[i].id);
+            if (it == spells.end()) continue;
+            const auto& sp = it->second;
+            const bool attack = handsMoved && std::find(std::begin(sp.effectIds), std::end(sp.effectIds),
+                                                        kEffectAttack) != std::end(sp.effectIds);
+            const bool autoRanged = rangedMoved && (sp.attr & 0x2u) != 0 && (sp.attrEx2 & 0x20u) != 0;
+            if (attack || autoRanged)
+                owner_.addonEventCallbackRef()("ACTIONBAR_SLOT_CHANGED", {std::to_string(i + 1)});
         }
     }
 }
