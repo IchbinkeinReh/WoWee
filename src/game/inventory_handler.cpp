@@ -6508,10 +6508,21 @@ void InventoryHandler::updateOtherPlayerVisibleItems(uint64_t guid, const FlatFi
     if (base < 0 || stride <= 0) return; // Defensive: should never happen with defaults.
 
     std::array<uint32_t, 19> newEntries{};
+    std::array<uint32_t, 19> newEnchants{};
     for (int s = 0; s < 19; s++) {
         uint16_t idx = static_cast<uint16_t>(base + s * stride);
         auto it = fields.find(idx);
-        if (it != fields.end()) newEntries[s] = it->second;
+        if (it != fields.end()) newEntries[s] = visibleItemEntryField(it->second);
+        // The dword beside the entry, the enchantment half of the pair.  Only at
+        // stride 2, which is the layout rather than a guess: 0x006de360 reads the
+        // pair as `block + 0x21c + slot*8`, eight bytes a slot, and the descriptor
+        // records at 0x00ac4800 name ENTRYID then ENCHANTMENT with nothing between
+        // them.  A layout the heuristic settled on with another stride has no pair
+        // to read - `idx + 1` would be the next slot's entry - so it stays blank.
+        if (stride == 2) {
+            const auto eit = fields.find(static_cast<uint16_t>(idx + 1));
+            if (eit != fields.end()) newEnchants[s] = eit->second;
+        }
     }
 
     int nonZero = 0;
@@ -6594,6 +6605,12 @@ void InventoryHandler::updateOtherPlayerVisibleItems(uint64_t guid, const FlatFi
         old = newEntries;
         changed = true;
     }
+    // Kept beside the entries because that is the pair they arrive in.  Not
+    // folded into `changed`: the entry is what redresses a model, and an
+    // enchantment change on the player's own weapon arrives through the item
+    // object rather than this table.  GameHandler::visibleItemRecord answers
+    // these two together, as the client's fallback record does.
+    owner_.otherPlayerVisibleItemEnchantsRef()[guid] = newEnchants;
     // The helm and cloak switches dress the model too (0x006e0fd0).
     {
         auto fit = fields.find(fieldIndex(UF::PLAYER_FLAGS));
@@ -6643,10 +6660,17 @@ void InventoryHandler::updateOtherPlayerVisibleItems(uint64_t guid, const FlatFi
     }
 }
 
-void InventoryHandler::cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries) {
+void InventoryHandler::cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries,
+                                                     const std::array<ItemLinkInstance, 19>& instances) {
     if (guid == 0) return;
 
     owner_.inspectedPlayerItemEntriesRef()[guid] = itemEntries;
+    // One row per slot, entry and instance together: 0x006cdf30 reads them out
+    // of the inspect block in one run and writes them into one 72-byte record,
+    // so splitting them across two writes would be the client's row in name only.
+    // Written even when empty, so a re-inspect that answers with less clears what
+    // the last one left behind instead of pairing old numbers with new entries.
+    owner_.inspectedPlayerItemInstancesRef()[guid] = instances;
 
     std::array<uint32_t, 19> displayIds{};
     std::array<uint8_t, 19> invTypes{};

@@ -275,9 +275,11 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
         } else if (entity->getType() == ObjectType::PLAYER && owner_.playerDespawnCallbackRef()) {
             owner_.playerDespawnCallbackRef()(guid);
             owner_.otherPlayerVisibleItemEntriesRef().erase(guid);
+            owner_.otherPlayerVisibleItemEnchantsRef().erase(guid);
             owner_.otherPlayerVisibleDirtyRef().erase(guid);
             owner_.otherPlayerMoveTimeMsRef().erase(guid);
             owner_.inspectedPlayerItemEntriesRef().erase(guid);
+            owner_.inspectedPlayerItemInstancesRef().erase(guid);
             owner_.pendingAutoInspectRef().erase(guid);
             owner_.playerLeftSight(guid);
             // Clear pending name query so the query is re-sent when this player
@@ -3801,9 +3803,11 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
                 // Player entities also need renderer cleanup on DESTROY_OBJECT, not just out-of-range.
                 owner_.playerDespawnCallbackRef()(data.guid);
                 owner_.otherPlayerVisibleItemEntriesRef().erase(data.guid);
+                owner_.otherPlayerVisibleItemEnchantsRef().erase(data.guid);
                 owner_.otherPlayerVisibleDirtyRef().erase(data.guid);
                 owner_.otherPlayerMoveTimeMsRef().erase(data.guid);
                 owner_.inspectedPlayerItemEntriesRef().erase(data.guid);
+                owner_.inspectedPlayerItemInstancesRef().erase(data.guid);
                 owner_.pendingAutoInspectRef().erase(data.guid);
                 owner_.playerLeftSight(data.guid);
                 pendingNameQueries.erase(data.guid);

@@ -644,7 +644,10 @@ public:
     void fireEquipSlotEvents();
     void maybeDetectVisibleItemLayout();
     void updateOtherPlayerVisibleItems(uint64_t guid, const FlatFieldMap& fields);
-    void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries);
+    /// The entries and, from WotLK's inspect block, the instance numbers that
+    /// came with them - see GameHandler::cacheInspectedPlayerEquipment.
+    void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries,
+                                       const std::array<ItemLinkInstance, 19>& instances = {});
     void emitOtherPlayerEquipment(uint64_t guid);
     /// The same resolution, answered rather than announced - see the
     /// definition for why both shapes exist.

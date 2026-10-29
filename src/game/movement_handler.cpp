@@ -2758,6 +2758,7 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
         }
     }
     owner_.otherPlayerVisibleItemEntriesRef().clear();
+    owner_.otherPlayerVisibleItemEnchantsRef().clear();
     owner_.otherPlayerVisibleDirtyRef().clear();
     otherPlayerMoveTimeMs_.clear();
     if (owner_.getSpellHandler()) owner_.getSpellHandler()->clearUnitCastStates();

@@ -3681,6 +3681,15 @@ static int lua_GetInventoryItemLink(lua_State* L) {
     // kept as a fallback for a slot whose item object never arrived.
     int32_t recordPropertyId = 0;
     uint64_t itemGuid = 0;
+    // The instance numbers for a unit that is not this character come out of the
+    // client's **record**, and which record depends on which unit it is: the one
+    // in the inspect window has a row the inspect block wrote (0x006cdf30 -
+    // entry, enchant, gems, property and seed in one run), and every other
+    // player in range gets the row 0x006de360 builds straight out of the
+    // visible-item fields, which names the entry and the permanent enchant and
+    // nothing beyond that.  WoWee had only the first - and only its entry - so a
+    // passing player's gear answered nil until an inspect had actually come back.
+    game::ItemLinkInstance record;
     if (uidStr == "player") {
         const auto& inv = gh->getInventory();
         const game::ItemSlot* sp = inventorySlotItem(inv, slotId);
@@ -3697,19 +3706,29 @@ static int lua_GetInventoryItemLink(lua_State* L) {
         // sharpening stone is not a property of the item, and the client's link
         // has no slot for it.
     } else {
-        itemId = inspectedItemEntry(gh, uidStr, slotId);
-        if (!itemId) { return luaReturnNil(L); }
+        const uint64_t guid = resolveUnitGuid(gh, uidStr);
+        itemId = gh->inspectedItemRecord(guid, slotId - 1, record);
+        if (itemId) {
+            // The name and the colour come from the item cache, which will not
+            // have an entry this client has never seen; asking queues the query.
+            // Nil until it answers is what the client does too - its leg calls
+            // 0x0067ca30 for the item record and returns nothing when that has
+            // no row for the entry yet.
+            gh->ensureItemInfo(itemId);
+        } else if (!gh->visibleItemRecord(guid, slotId - 1, itemId, record)) {
+            return luaReturnNil(L);
+        }
         const auto* info = gh->getItemInfo(itemId);
         if (!info) { return luaReturnNil(L); }
         name = info->name;
         q = info->quality;
-        // The other units' leg is the six-argument builder 0x0061e290, which
-        // reads all of it out of the visible-item record: entry +0x8, ilvl
-        // +0xc, three gems at +0x14/+0x18/+0x1c, and the two trailing numbers
-        // at +0x3c (a word) and +0x40.  The inspection packet gives WoWee the
-        // entry only, so a link here cannot name what that character's gear is
-        // wearing; it reads as the plain item does, and that is a data gap on
-        // the inspection side rather than a choice about the link.
+        // The other units' leg is the six-argument builder 0x0061e290, and every
+        // number past the entry comes out of that record: the enchant at +0x0c,
+        // the three socket gems at +0x14/+0x18/+0x1c, then +0x3c read back as a
+        // word (movzwl, which is why a prefix id reaches the link as 655xx) and
+        // +0x40.  What the record holds is what the row carried, which is all of
+        // it for inspected gear and entry plus enchant for a player the fields
+        // alone named.
     }
 
     // The link's *text* is the record's name put through ITEM_SUFFIX_TEMPLATE:
@@ -3722,7 +3741,11 @@ static int lua_GetInventoryItemLink(lua_State* L) {
     // One property value feeds both the number and the words: 0x0061e290 passes
     // the position-seven value straight to 0x00706d70, so a link cannot name one
     // roll of an item and carry another in its numbers.
-    game::ItemLinkInstance inst = gh->itemLinkInstance(itemGuid);
+    // The item object answers for this character's own gear; a unit that is not
+    // this character was answered from the record above, and mixing the two -
+    // taking an enchant from one row and a property from another - is not a
+    // thing the client has a way to do.
+    game::ItemLinkInstance inst = itemGuid != 0 ? gh->itemLinkInstance(itemGuid) : record;
     const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
                                                         : recordPropertyId;
     inst.randomPropertyId = property;

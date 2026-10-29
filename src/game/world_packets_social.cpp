@@ -1,4 +1,5 @@
 #include "game/world_packets.hpp"
+#include "game/visible_item_fields.hpp"   // visibleItemEntryField
 #include "game/packed_time.hpp"
 #include "game/packet_parsers.hpp"
 #include "game/opcodes.hpp"
@@ -1533,7 +1534,7 @@ network::Packet InitiateTradePacket::build(uint64_t targetGuid) {
 }
 
 bool readInspectEnchantments(network::Packet& packet, std::array<uint32_t, 19>& items,
-                             std::array<uint16_t, 19>& permanentEnchants) {
+                             std::array<ItemLinkInstance, 19>& gear) {
     // Read with only the mask and the enchantments, the random property, the
     // creator and the suffix of each item were taken for the next one, and
     // every slot after the first came out of the wrong bytes.
@@ -1548,22 +1549,42 @@ bool readInspectEnchantments(network::Packet& packet, std::array<uint32_t, 19>& 
         // A negative entry is the item's id with a flag (0x006cdf30 stores
         // the magnitude).
         const int32_t entry = static_cast<int32_t>(packet.readUInt32());
-        items[slot] = static_cast<uint32_t>(entry < 0 ? -entry : entry);
+        items[slot] = visibleItemEntryField(entry);
         sawGear = true;
+        // The mask is over the item's twelve enchantment **blocks**, not over
+        // gems: 0x006cdf30 writes one id per set bit into successive dwords of
+        // the record starting at its enchantment slot, so block 0 is the
+        // permanent enchant, block 1 the temporary one and blocks 2, 3 and 4
+        // the three sockets - the same triples an item object's fields give
+        // (blobs 16, 19 and 22/25/28).  A cleared bit moves the next block up
+        // one dword all the same, which is why the loop tests bits rather than
+        // counting ids.
         const uint16_t enchantMask = packet.readUInt16();
+        ItemLinkInstance inst;
         for (int e = 0; e < kEnchantmentSlots; ++e) {
             if (!(enchantMask & (1u << e))) continue;
             if (!packet.hasRemaining(2)) return sawGear;
             const uint16_t enchId = packet.readUInt16();
-            // Slot zero is the permanent enchant, which the paperdoll names.
-            if (e == 0) permanentEnchants[slot] = enchId;
+            if (e == 0)      inst.enchantId = enchId;
+            // e == 1 is the temporary enchant - the oil or stone on the item.
+            // The record keeps it beside the permanent one, an item link has no
+            // number for it, and nothing else has asked for it yet.
+            else if (e >= 2 && e <= 4) inst.gems[e - 2] = enchId;
         }
         if (!packet.hasRemaining(2)) break;
-        packet.readUInt16();                 // random property
+        // The random property, as the record holds it: a **word**.  0x005ea270
+        // then reads it back with movzwl for the link number, so a prefix - a
+        // negative id on the wire - reaches the link as 0xFFxx, while the
+        // tooltip feeder 0x0062e050 sign-extends the same word.  Zero-extending
+        // here is what makes the number and the name agree with what the client
+        // prints: at 65494 there is no property row to name, and the client
+        // prints the bare name with that number in the link.
+        inst.randomPropertyId = static_cast<int32_t>(packet.readUInt16());
         if (!packet.hasFullPackedGuid()) break;
         packet.readPackedGuid();             // creator
         if (!packet.hasRemaining(4)) break;
-        packet.readUInt32();                 // suffix factor
+        inst.seed = packet.readUInt32();     // suffix factor
+        gear[slot] = inst;
     }
     return sawGear;
 }

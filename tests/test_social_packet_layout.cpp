@@ -24,6 +24,10 @@ namespace {
 struct Writer {
     std::vector<uint8_t> bytes;
     void u8(uint8_t v) { bytes.push_back(v); }
+    void u16(uint16_t v) {
+        bytes.push_back(static_cast<uint8_t>(v & 0xFF));
+        bytes.push_back(static_cast<uint8_t>(v >> 8));
+    }
     void u32(uint32_t v) {
         for (int i = 0; i < 4; ++i) bytes.push_back(static_cast<uint8_t>(v >> (i * 8)));
     }
@@ -172,28 +176,54 @@ TEST_CASE("inspect: each item carries its property, creator and suffix", "[inspe
     // Player::BuildEnchantmentsInfoData: slot mask, then per item the entry,
     // the enchantment mask and ids, the random property (u16), the creator's
     // packed guid and the suffix factor (0x006cdf30).
+    //
+    // The enchantment mask is over the item's twelve enchantment **blocks** -
+    // 0x006cdf30 writes one id per set bit into successive record dwords from
+    // the enchantment slot up, so bit 0 is the permanent enchant, bit 1 the
+    // temporary one and bits 2, 3 and 4 the three sockets.  A cleared bit moves
+    // the next block up just the same, which is what the chest here shows with
+    // its bit 1 clear.
+    //
+    // The head is the two oddities on the way through: an entry the realm sent
+    // negative (the magnitude is the item, the flag beside it says it was
+    // flagged), and a property word belonging to a prefix, which the link reads
+    // back zero-extended at 0x005ea3a1 while the tooltip sign-extends it at
+    // 0x0062e424.  The row stores the word, so the number 65494 is what a link
+    // for that item says - and with no ITEM_RANDOM_PROPERTIES row at 65494, the
+    // client prints the bare name over it.
     Writer w;
     w.u32((1u << 0) | (1u << 4));   // head and chest
-    w.u32(40546);                   // head
-    w.bytes.push_back(0x01); w.bytes.push_back(0x00);   // enchant slot 0
-    w.bytes.push_back(0xA4); w.bytes.push_back(0x0E);   // 3748
-    w.bytes.push_back(0x00); w.bytes.push_back(0x00);   // random property
+    w.u32(0xFFFF619Eu);             // head: entry -40546
+    w.u16(0x0001);                  // enchantment block 0 only
+    w.u16(3748);
+    w.u16(0xFFD6);                  // random property -42, as a word
     w.u8(0);                        // no creator
-    w.u32(0);                       // suffix
+    w.u32(0);                       // no suffix factor
     w.u32(40550);                   // chest
-    w.bytes.push_back(0x00); w.bytes.push_back(0x00);   // no enchants
-    w.bytes.push_back(0x2A); w.bytes.push_back(0x00);   // random property 42
+    w.u16(0x000D);                  // blocks 0, 2 and 3: the enchant and two gems
+    w.u16(2672);                    // ITEM_FIELD_ENCHANTMENT_1_1
+    w.u16(3149);                    // the first socket gem (block 2)
+    w.u16(3150);                    // the second (block 3)
+    w.u16(42);                      // random property 42
     w.u8(0x01); w.u8(0x51);         // made by guid 0x51
     w.u32(1500);                    // suffix factor
     auto packet = w.packet();
     std::array<uint32_t, 19> items{};
-    std::array<uint16_t, 19> enchants{};
-    REQUIRE(readInspectEnchantments(packet, items, enchants));
+    std::array<ItemLinkInstance, 19> gear{};
+    REQUIRE(readInspectEnchantments(packet, items, gear));
     CHECK(packet.getRemainingSize() == 0);
     CHECK(items[0] == 40546u);
-    CHECK(enchants[0] == 3748u);
+    CHECK(gear[0].enchantId == 3748u);
+    CHECK(gear[0].randomPropertyId == 0xFFD6);
+    CHECK(gear[0].gems[0] == 0u);
+    CHECK(gear[0].seed == 0u);
     CHECK(items[4] == 40550u);
-    CHECK(enchants[4] == 0u);
+    CHECK(gear[4].enchantId == 2672u);
+    CHECK(gear[4].gems[0] == 3149u);
+    CHECK(gear[4].gems[1] == 3150u);
+    CHECK(gear[4].gems[2] == 0u);
+    CHECK(gear[4].randomPropertyId == 42);
+    CHECK(gear[4].seed == 1500u);
 }
 
 // ── /who ──────────────────────────────────────────────────────────────

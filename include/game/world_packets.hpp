@@ -4033,10 +4033,16 @@ public:
 
 /// SMSG_INSPECT_TALENT's gear, after the talents (0x006cdf30): a mask of the
 /// nineteen equipment slots filled, then per slot the item, a mask of its
-/// enchantment slots and an id per set bit, the random property (u16), the
+/// enchantment blocks and an id per set bit, the random property (u16), the
 /// creator's packed guid and the suffix factor. True when any slot was read.
+///
+/// `gear` is what the client puts in the same record positions it reads the
+/// visible-item fields into - see visible_item_fields.hpp - so a link for an
+/// inspected unit's gear and a link for gear the fields already named come out
+/// of the same numbers.  The block the mask's bit 1 marks, the temporary
+/// enchant, is read and dropped: an item link has no place for it.
 bool readInspectEnchantments(network::Packet& packet, std::array<uint32_t, 19>& items,
-                             std::array<uint16_t, 19>& permanentEnchants);
+                             std::array<ItemLinkInstance, 19>& gear);
 
 
 } // namespace game

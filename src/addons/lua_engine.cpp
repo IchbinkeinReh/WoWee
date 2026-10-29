@@ -3517,11 +3517,33 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     // it is one entry per equipment slot.
     if (uid != "player" && slot > 19) { lua_pushboolean(L, 0); return 1; }
     if (uid != "player") {
+        // 0x0062e050's other-unit leg reads the same record GetInventoryItemLink
+        // reads, so which row answers depends on which unit this is: the one in
+        // the inspect window has the row the inspect block wrote, and any other
+        // player in range gets the row built out of the visible-item fields.
+        // Asking the inspect cache alone - which is what this did - answered
+        // false for every player but the inspected one, so hovering the gear of
+        // someone walking past produced nothing at all.
         const uint64_t guid = wowee::addons::resolveUnitGuid(gh, uid);
-        auto& cache = gh->inspectedPlayerItemEntriesRef();
-        auto it = guid ? cache.find(guid) : cache.end();
-        const uint32_t entry = (it != cache.end()) ? it->second[static_cast<size_t>(slot - 1)] : 0;
-        lua_pushboolean(L, fillItemTooltipById(L, gh, entry) ? 1 : 0);
+        game::ItemLinkInstance record;
+        uint32_t entry = gh->inspectedItemRecord(guid, slot - 1, record);
+        if (entry == 0) gh->visibleItemRecord(guid, slot - 1, entry, record);
+        if (!fillItemTooltipById(L, gh, entry)) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        // The suffix and its stat lines, from the row's own property and seed -
+        // the pair the tooltip feeder reads at record+0x3c and record+0x40.  The
+        // word there is a *signed* one for the tooltip (movswl of record+0x3c at
+        // 0x0062e424) where the link read it with movzwl, so a prefix id names
+        // itself here and prints as 655xx in the link.  That is not an
+        // inconsistency worth inventing; it is what the two readers do.
+        game::ItemDef def;
+        def.itemId = entry;
+        def.randomPropertyId = static_cast<int32_t>(static_cast<int16_t>(record.randomPropertyId));
+        def.suffixFactor = record.seed;
+        appendRandomSuffix(w, gh, def);
+        lua_pushboolean(L, 1);
         return 1;
     }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "game/item_text.hpp"   // ItemLinkInstance - the numbers an item link carries
+#include "game/visible_item_fields.hpp"   // the visible-item pair as the client's record reads it
 #include "game/mirror_image.hpp"
 #include "game/rune_state.hpp"
 #include "game/spell_history.hpp"
@@ -4513,6 +4514,47 @@ public:
         inst.seed             = item.suffixFactor;   // ITEM_FIELD_PROPERTY_SEED
         return inst;
     }
+    /// The row for one slot of another player's gear, out of the visible-item
+    /// fields alone: 0x006de360's **fallback** record, which the client builds
+    /// whenever its inspected-record cache is not for the unit being asked about
+    /// - which is every player in range who is not the one in the inspect window.
+    /// So a link, a tooltip and a model for a passing player are answered from
+    /// these fields with no inspect request at all, and the two numbers the pair
+    /// can name are the entry and the permanent enchant; the gems, the property
+    /// and the seed stay zero because the fields do not carry them (see
+    /// visible_item_fields.hpp for the pair and the record layout).
+    ///
+    /// False for a slot the fields say is empty, which is what the client's own
+    /// callers test - `record+0x08 != 0` - before they read anything else.
+    /// Inspected gear is the richer row and asks for
+    /// inspectedPlayerItemInstancesRef() instead; the two are never mixed, just
+    /// as the client uses one record or the other.
+    bool visibleItemRecord(uint64_t guid, int slot, uint32_t& entry,
+                           ItemLinkInstance& inst) const {
+        if (slot < 0 || slot >= 19) return false;
+        const auto it = otherPlayerVisibleItemEntries_.find(guid);
+        if (it == otherPlayerVisibleItemEntries_.end()) return false;
+        entry = visibleItemEntryField(it->second[static_cast<size_t>(slot)]);
+        if (entry == 0) return false;
+        ItemLinkInstance row;
+        const auto eit = otherPlayerVisibleItemEnchants_.find(guid);
+        if (eit != otherPlayerVisibleItemEnchants_.end()) {
+            row.enchantId = visibleItemEnchantField(eit->second[static_cast<size_t>(slot)]);
+        }
+        inst = row;
+        return true;
+    }
+    /// The inspected unit's row for a slot: the entry the inspect stream named
+    /// and the instance numbers that came in the same block.  Empty entry when
+    /// nothing has been inspected for that unit.
+    uint32_t inspectedItemRecord(uint64_t guid, int slot, ItemLinkInstance& inst) const {
+        if (slot < 0 || slot >= 19) return 0;
+        const auto it = inspectedPlayerItemEntries_.find(guid);
+        if (it == inspectedPlayerItemEntries_.end()) return 0;
+        const auto instIt = inspectedPlayerItemInstances_.find(guid);
+        if (instIt != inspectedPlayerItemInstances_.end()) inst = instIt->second[static_cast<size_t>(slot)];
+        return it->second[static_cast<size_t>(slot)];
+    }
     uint64_t getVendorGuid() const;
 
     /**
@@ -4651,8 +4693,10 @@ public:
     auto& onlineEquipDirtyRef() { return onlineEquipDirty_; }
     auto& onlineItemsRef() { return onlineItems_; }
     auto& inspectedPlayerItemEntriesRef() { return inspectedPlayerItemEntries_; }
+    auto& inspectedPlayerItemInstancesRef() { return inspectedPlayerItemInstances_; }
     auto& otherPlayerVisibleDirtyRef() { return otherPlayerVisibleDirty_; }
     auto& otherPlayerVisibleItemEntriesRef() { return otherPlayerVisibleItemEntries_; }
+    auto& otherPlayerVisibleItemEnchantsRef() { return otherPlayerVisibleItemEnchants_; }
     auto& otherPlayerMoveTimeMsRef() { return otherPlayerMoveTimeMs_; }
     auto& pendingItemPushNotifsRef() { return pendingItemPushNotifs_; }
     auto& pendingItemQueriesRef() { return pendingItemQueries_; }
@@ -4963,7 +5007,13 @@ public:
     void rebuildOnlineInventory();
     void maybeDetectVisibleItemLayout();
     void updateOtherPlayerVisibleItems(uint64_t guid, const FlatFieldMap& fields);
-    void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries);
+    /// Inspected gear, cached by slot: the entries and - where the realm sent
+    /// them in the inspect block - what each of those items is wearing.  Rows
+    /// without instances are the older shape (Classic's SMSG_INSPECT, and the
+    /// cores whose payload is fixed-size records), which is why the second
+    /// argument can be left out.
+    void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries,
+                                       const std::array<ItemLinkInstance, 19>& instances = {});
     void detectInventorySlotBases(const FlatFieldMap& fields);
     bool applyInventoryFields(const FlatFieldMap& fields, bool initial = false);
     void extractContainerFields(uint64_t containerGuid, const FlatFieldMap& fields);
@@ -5691,11 +5741,21 @@ private:
     int visibleItemStride_ = 2;
     bool visibleItemLayoutVerified_ = false;  // true once heuristic confirms/overrides default
     std::unordered_map<uint64_t, std::array<uint32_t, 19>> otherPlayerVisibleItemEntries_;
+    // The dword beside each entry - PLAYER_VISIBLE_ITEM_n_ENCHANTMENT, read at
+    // base + slot*2 + 1.  0x006de360 splits it in half: the low halfword is the
+    // permanent enchant the item link carries second, the high halfword the
+    // temporary one the record keeps at +0x10.
+    std::unordered_map<uint64_t, std::array<uint32_t, 19>> otherPlayerVisibleItemEnchants_;
     std::unordered_set<uint64_t> otherPlayerVisibleDirty_;
     std::unordered_map<uint64_t, uint32_t> otherPlayerMoveTimeMs_;
 
     // Inspect fallback (when visible item fields are missing/unreliable)
     std::unordered_map<uint64_t, std::array<uint32_t, 19>> inspectedPlayerItemEntries_;
+    // What that gear is wearing, in the same nineteen slots.  The inspect
+    // stream carries it (readInspectEnchantments) and 0x006cdf30 writes it into
+    // the same record the visible-item fields are read into, so the numbers are
+    // not an addition to the entry but part of the one row.
+    std::unordered_map<uint64_t, std::array<ItemLinkInstance, 19>> inspectedPlayerItemInstances_;
     std::unordered_set<uint64_t> pendingAutoInspect_;
     float inspectRateLimit_ = 0.0f;
 

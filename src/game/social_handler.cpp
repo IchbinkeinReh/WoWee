@@ -1317,7 +1317,13 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
         std::array<uint32_t, 19> items{};
         std::array<uint16_t, 19> enchantIds{};
         if (parseInspectEquipmentPayload(packet, guid, items, enchantIds)) {
-            owner_.cacheInspectedPlayerEquipment(guid, items);
+            // These cores' fixed-size records carry one enchant per slot and
+            // nothing else, so the row has the permanent enchant and no gems,
+            // property or seed - the shape WotLK's inspect block also leaves
+            // when a mask bit is clear.
+            std::array<ItemLinkInstance, 19> gear{};
+            for (size_t s = 0; s < gear.size(); ++s) gear[s].enchantId = enchantIds[s];
+            owner_.cacheInspectedPlayerEquipment(guid, items, gear);
 
             auto entity = owner_.getEntityManager().getEntity(guid);
             std::string playerName = "Target";
@@ -1498,8 +1504,8 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
 
     // BuildEnchantmentsInfoData, as 0x006cdf30 reads it.
     std::array<uint32_t, 19> itemEntries{};
-    std::array<uint16_t, 19> enchantIds{};
-    const bool sawGear = readInspectEnchantments(packet, itemEntries, enchantIds);
+    std::array<ItemLinkInstance, 19> gear{};
+    const bool sawGear = readInspectEnchantments(packet, itemEntries, gear);
 
     // A different player means the honour figures in hand are somebody else's.
     // The fields here are assigned one at a time rather than as a whole struct,
@@ -1524,7 +1530,11 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
     inspectResult_.talentTreePoints  = {};
     inspectResult_.talentGroups      = talentGroupCount;
     inspectResult_.activeTalentGroup = activeTalentGroup;
-    inspectResult_.enchantIds        = enchantIds;
+    // The permanent enchant of each slot, which is what the inspect window's
+    // own row keeps; the gems, the property and the seed the same block
+    // carried go to the gear cache, where the links and tooltips ask for them.
+    for (size_t s = 0; s < gear.size(); ++s)
+        inspectResult_.enchantIds[s] = static_cast<uint16_t>(gear[s].enchantId);
     inspectResult_.talentRanks       = std::move(inspectTalents);
     inspectResult_.classId           = owner_.lookupPlayerClass(guid);
 
@@ -1534,7 +1544,7 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
     // paperdoll however well equipped they were.
     if (sawGear) {
         inspectResult_.itemEntries = itemEntries;
-        owner_.cacheInspectedPlayerEquipment(guid, itemEntries);
+        owner_.cacheInspectedPlayerEquipment(guid, itemEntries, gear);
     } else {
         auto gearIt = owner_.inspectedPlayerItemEntriesRef().find(guid);
         inspectResult_.itemEntries =
