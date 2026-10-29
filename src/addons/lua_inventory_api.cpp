@@ -4542,21 +4542,46 @@ static int lua_RollOnLoot(lua_State* L) {
     const int type = static_cast<int>(luaL_optnumber(L, 2, 0));
     if (type < 0 || type > 3) return 0;
 
-    // Rolling for something that will bind asks first. CONFIRM_LOOT_ROLL is
-    // raised by the client rather than the server - uiparent.lua answers it
-    // with the popup whose OK calls ConfirmLootRoll(id, rollType) - so nothing
-    // raised it here and Need on a bind-on-pickup item bound it with no
-    // warning at all, which is the one place this differs from the real client
-    // in a way a player pays for.
+    // Both bindings land in one client routine, 0x006fbc70: RollOnLoot hands it
+    // (rollId, rollType, 0) and ConfirmLootRoll the same with the last one a 1,
+    // which is how it knows the asking has already happened. A roll of anything
+    // but a pass asks first, and what it asks *about* is the type:
     //
-    // Need and Greed only. Both hand the item over and bind it; disenchant
-    // yields the shard and passing yields nothing, so neither asks.
-    if (type == 1 || type == 2) {
+    //   need/greed  the item binds as it changes hands - the entry's binding
+    //               type (+0x178) is 1.
+    //   disenchant  the item is rare or better - the entry's quality (+0x14) is
+    //               over 2. Green and grey are only ever worth their dust, so
+    //               disenchanting one is not a decision; a blue or a purple
+    //               could have been kept, and it is gone either way.
+    //
+    // Both events feed one popup - uiparent.lua:842 and :853 show
+    // CONFIRM_LOOT_ROLL with LOOT_NO_DROP and CONFIRM_DISENCHANT_ROLL with
+    // LOOT_NO_DROP_DISENCHANT - both carrying (rollId, rollType) behind a "%d
+    // %d" (0x009e0e64), and its OK button calls ConfirmLootRoll, which is the
+    // same routine with the asking turned off. Nothing raised either event
+    // here before, so Need on a bind-on-pickup item bound it with no warning.
+    //
+    // The comment that stood here said disenchant "yields the shard and
+    // passing yields nothing, so neither asks" and left type 3 out, which the
+    // routine contradicts: it asks for disenchant too, on quality rather than
+    // on binding. That is the one mistake on this path a player cannot take
+    // back. The quality is the same number the tooltip colours by - the item
+    // tip at 0x006277f0 indexes the quality colour table with this same
+    // +0x14 and fills "ITEM_QUALITY%d_DESC" with it.
+    if (type != 0) {
         const auto* info = gh->getItemInfo(roll->itemId);
-        if (info && info->valid && info->bindType == 1) {
-            gh->fireAddonEvent("CONFIRM_LOOT_ROLL",
-                               {std::to_string(rollId), std::to_string(type)});
-            return 0;
+        if (info && info->valid) {
+            if (type == 3) {
+                if (info->quality > 2) {
+                    gh->fireAddonEvent("CONFIRM_DISENCHANT_ROLL",
+                                       {std::to_string(rollId), std::to_string(type)});
+                    return 0;
+                }
+            } else if (info->bindType == 1) {
+                gh->fireAddonEvent("CONFIRM_LOOT_ROLL",
+                                   {std::to_string(rollId), std::to_string(type)});
+                return 0;
+            }
         }
     }
 

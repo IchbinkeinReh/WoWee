@@ -2057,6 +2057,9 @@ struct ItemQueryResponseData {
     uint32_t itemClass = 0;
     uint32_t subClass = 0;
     uint32_t displayInfoId = 0;
+    /// +0x14 on the client's entry record - the number it colours an item name
+    /// with and fills "ITEM_QUALITY%d_DESC" from (0x006277f0), and the one a
+    /// disenchant roll is confirmed against (0x006fbc70).
     uint32_t quality = 0;
     uint32_t itemFlags = 0;     // Item flag bitmask (Heroic=0x8, Unique-Equipped=0x1000000)
     /// The template's Sheath: where the weapon hangs put away (1 two-hand,
@@ -2102,6 +2105,9 @@ struct ItemQueryResponseData {
         int32_t charges = 0;
     };
     std::array<ItemSpell, 5> spells{};
+    /// +0x178 on the client's entry record: the same word a need/greed roll is
+    /// confirmed against (== 1 at 0x006fbc70) and the word a trade of a rare
+    /// enough bind-on-equip item is confirmed against (0x00588f90).
     uint32_t bindType = 0;      // 0=none, 1=BoP, 2=BoE, 3=BoU, 4=BoQ
     std::string description;    // Flavor/lore text
     uint32_t pageTextId = 0;     // Non-zero: item can be read via CMSG_READ_ITEM + page query
