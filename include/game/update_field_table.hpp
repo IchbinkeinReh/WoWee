@@ -265,6 +265,20 @@ enum class UF : uint16_t {
     CONTAINER_FIELD_NUM_SLOTS,
     CONTAINER_FIELD_SLOT_1,
 
+    /// WotLK: the unit's own attack times, main hand then off hand. The
+    /// client's UnitAttackSpeed (0x00610a00) reads them at +0xe0 and +0xe4 of
+    /// the field blob, both a millisecond count it divides by 1000, and the
+    /// ranged one at +0xe8 - which is UNIT_FIELD_RANGEDATTACKTIME, already in
+    /// this table at 64. So the pair is 62 and 63: the blob runs six dwords
+    /// behind the wire index across the unit fields (UnitLevel reads +0xc0 for
+    /// LEVEL's 54, BYTES_1's 74 sits at +0x110). A druid's cat form and every
+    /// pet answer their swing time from these; a weapon's delay is only what
+    /// the realm wrote the field from. WotLK only - the other three layouts
+    /// number their fields by their own client's table, and none of those
+    /// places this pair.
+    UNIT_FIELD_BASEATTACKTIME,
+    UNIT_FIELD_OFFHANDATTACKTIME,
+
     COUNT
 };
 

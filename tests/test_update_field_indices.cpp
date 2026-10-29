@@ -174,3 +174,27 @@ TEST_CASE("the glyph run and the pet's spell power are consecutive dwords",
     CHECK(wotlk.at("PLAYER_GLYPHS_ENABLED") == wotlk.at("PLAYER_FIELD_GLYPHS_1") + 6);
     CHECK(wotlk.at("PLAYER_FIELD_PET_SPELL_POWER") == wotlk.at("PLAYER_GLYPHS_ENABLED") + 1);
 }
+
+TEST_CASE("the unit's three attack times are one run of fields",
+          "[update-fields]") {
+    // The client's UnitAttackSpeed (0x00610a00) and UnitRangedDamage
+    // (0x00610550) read the trio straight out of the field blob at +0xe0,
+    // +0xe4 and +0xe8 - consecutive dwords, the last of which this table
+    // already names as UNIT_FIELD_RANGEDATTACKTIME, 64. So the main-hand and
+    // off-hand pair is 62 and 63: across the unit fields the blob runs six
+    // dwords behind the wire index, which UnitLevel (0x0060f9e0, +0xc0 for
+    // LEVEL's 54) and MINDAMAGE/MAXDAMAGE (+0x100 and +0x104 for WoWee's 70
+    // and 71) both show.
+    //
+    // Worth pinning because a slipped index reads a convincing number rather
+    // than an obviously wrong one: the neighbours here are a faction template
+    // and a mount's display id, and 2050 divided by 1000 is a perfectly
+    // plausible weapon speed.
+    const auto wotlk = declaredFields("wotlk");
+    REQUIRE(wotlk.count("UNIT_FIELD_BASEATTACKTIME") == 1);
+    REQUIRE(wotlk.count("UNIT_FIELD_OFFHANDATTACKTIME") == 1);
+    CHECK(wotlk.at("UNIT_FIELD_BASEATTACKTIME") + 1 ==
+          wotlk.at("UNIT_FIELD_OFFHANDATTACKTIME"));
+    CHECK(wotlk.at("UNIT_FIELD_OFFHANDATTACKTIME") + 1 ==
+          wotlk.at("UNIT_FIELD_RANGEDATTACKTIME"));
+}

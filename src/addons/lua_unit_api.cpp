@@ -1619,35 +1619,66 @@ static int lua_UnitDefense(lua_State* L) {
     return 2;
 }
 
-/// UnitAttackSpeed(unit) → main hand, off hand, in seconds. Nothing here
-/// tracks weapon speed yet; two seconds is a one-handed weapon and keeps the
-/// damage-per-second division that follows from dividing by zero.
-/// UnitAttackSpeed(unit) → mainHandSpeed, offHandSpeed.
+/// UnitAttackSpeed(unit) → mainHandSpeed, offHandSpeed, both in seconds.
 ///
-/// The off-hand speed is nil when nothing is in that hand, and that is what
-/// the character sheet branches on: PaperDollFrame_SetAttackSpeed does
-/// `if ( offhandSpeed )` and then prints a two-handed line. Answering a speed
-/// unconditionally claimed an off-hand weapon for everyone, and the line it
-/// then built concatenated a value nothing had filled in.
+/// The client answers this from the unit's own attack-time fields, not from a
+/// weapon it may not be carrying: 0x00610a00 reads the blob's speed trio -
+/// main hand +0xe0, off hand +0xe4, ranged +0xe8 - each a millisecond count it
+/// divides by 1000, and the ranged one is UNIT_FIELD_RANGEDATTACKTIME, which
+/// WoWee already reads at 64 for a ranged spell's category cooldown. Across
+/// the unit fields the blob runs six dwords behind the wire index (UnitLevel
+/// is 0x0060f9e0 reading +0xc0 for LEVEL's 54; MINDAMAGE's 70 and MAXDAMAGE's
+/// 71 sit at +0x100 and +0x104), so the pair asked for here is fields 62 and
+/// 63. Every unit carries them, which is what a cat form's 1.0 s and a pet's
+/// own swing time look like; a weapon's delay is only the number the realm
+/// wrote the field from, and answering from the weapon left every unit but the
+/// player - the pet row of the pet sheet above all - on a bare-handed 2.0 s.
+///
+/// The off-hand speed is nil when nothing is in that hand (the client's own
+/// gate at ScriptEvents.cpp:0xb42: the equipped item is two-handed and no
+/// off-hand weapon comes back), and that is what the character sheet branches
+/// on: PaperDollFrame_SetAttackSpeed does `if ( offhandSpeed )` and then prints
+/// a two-handed line. Answering a speed unconditionally claimed an off-hand
+/// weapon for everyone, and the line it then built concatenated a value nothing
+/// had filled in. A hand whose field never arrived reads as no off-hand, and a
+/// main hand whose field never arrived falls back to the weapon's delay rather
+/// than the client's 0.0: the three earlier layouts do not place this pair in
+/// their tables, and a 0.0 there would divide every damage-per-second figure
+/// on the sheet by nothing.
 static int lua_UnitAttackSpeed(lua_State* L) {
     auto* gh = getGameHandler(L);
     const char* uid = luaL_optstring(L, 1, "player");
-    std::string u(uid);
-    toLowerInPlace(u);
-    // The comment above used to say nothing tracked weapon speed. The equipped
-    // item carries delayMs and always has, so both hands answer from the
-    // weapon rather than from a flat two seconds - which every damage-per-
-    // second figure on the sheet is divided by.
-    double mainSpeed = 2.0;      // unarmed, which is what WoW uses bare-handed
+    auto* unit = resolveUnit(L, uid);
+    const uint16_t mainIdx = game::fieldIndex(game::UF::UNIT_FIELD_BASEATTACKTIME);
+    const uint16_t offIdx = game::fieldIndex(game::UF::UNIT_FIELD_OFFHANDATTACKTIME);
+    double mainSpeed = 0.0;
     double offSpeed = 0.0;
     bool hasOffHand = false;
-    if (gh && u == "player") {
-        const auto& inv = gh->getInventory();
-        const auto& mh = inv.getEquipSlot(game::EquipSlot::MAIN_HAND);
-        if (!mh.empty() && mh.item.delayMs > 0) mainSpeed = mh.item.delayMs / 1000.0;
-        const auto& oh = inv.getEquipSlot(game::EquipSlot::OFF_HAND);
-        hasOffHand = !oh.empty();
-        if (hasOffHand) offSpeed = oh.item.delayMs > 0 ? oh.item.delayMs / 1000.0 : 2.0;
+    if (unit) {
+        if (mainIdx != 0xFFFF) mainSpeed = unit->getField(mainIdx) / 1000.0;
+        if (offIdx != 0xFFFF) {
+            offSpeed = unit->getField(offIdx) / 1000.0;
+            hasOffHand = offSpeed > 0.0;
+        }
+    }
+    if (mainSpeed == 0.0) {
+        // Nothing wrote the field: the equipped item's delay, and bare hands
+        // when there is no item. Always the player's own - no other unit has
+        // an inventory here - which is what this binding did before the
+        // fields were named.
+        std::string u(uid);
+        toLowerInPlace(u);
+        mainSpeed = 2.0;
+        if (gh && u == "player") {
+            const auto& inv = gh->getInventory();
+            const auto& mh = inv.getEquipSlot(game::EquipSlot::MAIN_HAND);
+            if (!mh.empty() && mh.item.delayMs > 0) mainSpeed = mh.item.delayMs / 1000.0;
+            const auto& oh = inv.getEquipSlot(game::EquipSlot::OFF_HAND);
+            if (!hasOffHand && !oh.empty()) {
+                offSpeed = oh.item.delayMs > 0 ? oh.item.delayMs / 1000.0 : 2.0;
+                hasOffHand = true;
+            }
+        }
     }
     lua_pushnumber(L, mainSpeed);
     if (hasOffHand) lua_pushnumber(L, offSpeed);
