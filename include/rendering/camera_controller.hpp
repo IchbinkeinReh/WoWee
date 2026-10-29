@@ -275,6 +275,15 @@ public:
     using StandUpCallback = std::function<void()>;
     void setStandUpCallback(StandUpCallback cb) { standUpCallback_ = std::move(cb); }
 
+    /// Whether the STICKYCAMERA modified click is held: asked as the left
+    /// button lets go of the camera (CameraOrSelectOrMoveStop's argument,
+    /// IsModifiedClick("STICKYCAMERA"), 0x005fc730).
+    void setStickyCameraProbe(std::function<bool()> probe) { stickyCameraProbe_ = std::move(probe); }
+    /// Whether the follow smoothing may run for the view the camera is on:
+    /// not for a view saved away from its default, unless
+    /// cameraCustomViewSmoothing (0x005fff40 -> 0x005ff8e0).
+    void setViewAllowsFollowSmoothing(bool allowed) { viewAllowsFollowSmoothing_ = allowed; }
+
     // Callback invoked when the player sits down via local input (X key).
     using SitDownCallback = std::function<void()>;
     void setSitDownCallback(SitDownCallback cb) { sitDownCallback_ = std::move(cb); }
@@ -658,6 +667,13 @@ private:
     /// The controls the follow smoothing last saw: move, strafe, turn keys,
     /// left button, right button (bits 0-4).
     uint32_t followSmoothControls_ = 0;
+    /// The camera let go sticky (+0x98 0x20, 0x00604850): no follow smoothing
+    /// until a button lets go of it plainly.
+    bool stickyCamera_ = false;
+    std::function<bool()> stickyCameraProbe_;
+    bool viewAllowsFollowSmoothing_ = true;
+    /// The button whose release last let go of the camera was the left one.
+    bool releasedByLeft_ = false;
     /// Start (or stop) the follow smoothing for the controls' state.
     void startFollowSmoothing(camera_smooth::State state, bool pitchFree);
     bool viewMovedByPlayer_ = false;

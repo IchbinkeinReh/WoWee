@@ -4583,6 +4583,27 @@ static rendering::CameraController* luaCamera(lua_State* L) {
     return svc && svc->getCameraController ? svc->getCameraController() : nullptr;
 }
 
+/// Whether the follow smoothing runs on the view the camera is on (0x005fff40):
+/// with cameraCustomViewSmoothing, or while the view is still its default -
+/// distance, pitch and yaw each within a thousandth of it (0x005ff8e0).
+static void refreshViewSmoothing(rendering::CameraController& cc) {
+    const auto& views = cameraViews();
+    bool allowed = storedCVarFloat("cameraCustomViewSmoothing", "0") != 0.0f;
+    const int i = views.current;
+    if (!allowed && i >= 0 && i < 8) {
+        const auto& v = views.views[static_cast<size_t>(i)];
+        const float parts[3] = {v.distance, v.pitch, v.yaw};
+        allowed = true;
+        for (int k = 0; k < 3; ++k) {
+            const float def = static_cast<float>(std::atof(kCameraViewDefault[i][k]));
+            // Pitch and yaw are kept in radians by the client, distance in yards.
+            const float scale = k == 0 ? 1.0f : 0.017453292f;
+            if (std::fabs((parts[k] - def) * scale) >= 0.001f) allowed = false;
+        }
+    }
+    cc.setViewAllowsFollowSmoothing(allowed);
+}
+
 /// 0x00603330 from the bindings: view `index` taken by cameraViewBlendStyle -
 /// 1 eased, 2 at once, anything else not at all - the current one again at
 /// once while the player has not moved it since. A new one is kept in
@@ -4596,6 +4617,7 @@ static void setCameraView(rendering::CameraController& cc, int index) {
         setStoredCVar("cameraView", std::to_string(index));
     }
     const auto& to = views.views[static_cast<size_t>(index)];
+    refreshViewSmoothing(cc);
     if (style == 2) {
         cc.goToViewPose(to, 0.0f);
         return;
@@ -4653,6 +4675,7 @@ static int lua_SaveView(lua_State* L) {
         std::snprintf(text, sizeof(text), "%f", static_cast<double>(parts[part]));
         setStoredCVar(cameraViewCVar(index, part), text);
     }
+    refreshViewSmoothing(*cc);
     return 0;
 }
 
@@ -4669,6 +4692,7 @@ static int lua_ResetView(lua_State* L) {
         .pitch = static_cast<float>(std::atof(kCameraViewDefault[index][1])),
         .yaw = static_cast<float>(std::atof(kCameraViewDefault[index][2]))};
     if (views.current == index) setCameraView(*cc, index);
+    refreshViewSmoothing(*cc);
     return 0;
 }
 

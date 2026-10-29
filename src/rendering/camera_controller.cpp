@@ -3839,6 +3839,9 @@ void CameraController::stepViewMoves() {
 }
 
 void CameraController::startFollowSmoothing(camera_smooth::State state, bool pitchFree) {
+    // Not with the camera let go sticky, nor on a view saved away from its
+    // default (0x005fff40): 0x00602760 then sets nothing going.
+    if (stickyCamera_ || !viewAllowsFollowSmoothing_) return;
     // Under cameraSmoothStyle's default, Smarter (camera_smooth.hpp). The
     // eases are the view's own (+0x25c..+0x26c yaw, +0x22c..+0x23c pitch), as
     // in the client, where a view blend and this share them.
@@ -3898,12 +3901,14 @@ void CameraController::processMouseButton(const SDL_MouseButtonEvent& event) {
 
     if (event.button == SDL_BUTTON_LEFT) {
         leftMouseDown = (event.down) && !uiWantsMouse;
+        if (!event.down) releasedByLeft_ = true;
         if (event.down && event.clicks >= 2) {
             autoRunning = false;
         }
     }
     if (event.button == SDL_BUTTON_RIGHT) {
         rightMouseDown = (event.down) && !uiWantsMouse;
+        if (!event.down) releasedByLeft_ = false;
     }
     updateMouseCapture();
 }
@@ -3943,6 +3948,10 @@ void CameraController::updateMouseCapture() {
         dragOffsetY_ = 0.0f;
     } else if (!anyDown && mouseButtonDown) {
         SDL_SetWindowRelativeMouseMode(SDL_GetKeyboardFocus(), false);
+        // The last button off the camera (0x005fa450 -> 0x00604850): let go
+        // by the left one with STICKYCAMERA held, it stays where it was put -
+        // no follow smoothing - until a plain release.
+        stickyCamera_ = releasedByLeft_ && stickyCameraProbe_ && stickyCameraProbe_();
         rotateArmed_ = false;
     }
     mouseButtonDown = anyDown;

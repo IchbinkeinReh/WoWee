@@ -3038,6 +3038,9 @@ void Application::connectWorldHooks() {
         };
         cc->setStandUpCallback([standTo]() { standTo(rendering::AnimationController::STAND_STATE_STAND); });
         cc->setSitDownCallback([standTo]() { standTo(rendering::AnimationController::STAND_STATE_SIT); });
+        cc->setStickyCameraProbe([this]() {
+            return gameHandler && gameHandler->askInterface("IsModifiedClick('STICKYCAMERA')");
+        });
         // The stand state is carried by AnimationCallbackHandler, which
         // owns the one callback slot for it. A second registration here
         // replaced or was replaced by that one depending on which was
