@@ -1663,6 +1663,25 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
         return n;
     };
 
+    // The channel store's changes are also a notice.  0x00504840 rebuilds the
+    // display list its rows come out of and, when its caller hands it a 1,
+    // raises CHANNEL_UI_UPDATE with nothing at all (line 4032: the fire is
+    // `FUN_0081b530(0x222, 0)`, and 0x222 = 546); the four callers that do hand
+    // it one are the store's own join (0x00507880), pending/leaving
+    // (0x00507900), leave (0x00507a30) and free (0x005093f0) routines, each of
+    // which ends in 0x00505d40, which is the refresh with that 1.  The other
+    // three call sites pass 0 - a query refreshing for itself - so the notice
+    // belongs to the changes and not to the reading.  It is raised once per
+    // change, however many rows one routine moved, and channelframe.lua:20,33
+    // answers it with ChannelFrame_Update(), which reads the whole store back:
+    // without it the Channels panel kept the list it had when it was opened.
+    bool storeChanged = false;   // already told, for a notice that moves two parts
+    const auto noteChannelStore = [&] {
+        if (storeChanged || !owner_.addonEventCallbackRef()) return;
+        storeChanged = true;
+        owner_.addonEventCallbackRef()("CHANNEL_UI_UPDATE", {});
+    };
+
     // 0x0050e120: every notice is a word handed to the interface, which
     // finds CHAT_<word>_NOTICE in its own strings. This client used to write
     // its own English sentence for each instead.
@@ -1733,11 +1752,14 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
         // player into another zone's channel of the same row: YOU_CHANGED.
         const cc::Slot* before = channelSlots_.find(data.zoneChannelId, data.channelName);
         notice = cc::noticeFor(type, before && !before->pending);
-        if (channelSlots_.joined(data.zoneChannelId, data.channelName, data.instanceId,
-                                 data.channelFlags)) {
-            zoneChannelMask_ |= cc::maskBit(data.zoneChannelId);
-        }
+        const bool newly = channelSlots_.joined(data.zoneChannelId, data.channelName,
+                                                data.instanceId, data.channelFlags);
+        if (newly) zoneChannelMask_ |= cc::maskBit(data.zoneChannelId);
         slotId = data.zoneChannelId;
+        // 0x00507880's own test is the record's in-use flag: the refresh runs
+        // when the store already had this channel - the pending slot a join
+        // request left behind - and not at all for a name it never heard of.
+        if (before != nullptr || newly) noteChannelStore();
     } else if (data.notifyType == ChannelNotifyType::YOU_LEFT) {
         // A constant channel the server takes away with the zone - Trade on
         // leaving a city - is SUSPENDED and keeps its number; one the player
@@ -1747,6 +1769,11 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
         channelSlots_.left(data.zoneChannelId, data.channelName);
         slotId = data.zoneChannelId;
         ownedChannels_.erase(data.channelName);
+        // Case 0x03 hands the row to 0x00507900, which marks it leaving and
+        // ends in the refresh - and that is inside the case, before the line
+        // the switch writes on the way out.  The channel suspending with its
+        // number kept (SUSPENDED) is the same leg.
+        noteChannelStore();
     } else {
         notice = cc::noticeFor(type);
     }
@@ -1779,6 +1806,12 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
         channelSlots_.clear(slotId, data.channelName);
         ownedChannels_.erase(data.channelName);
         refreshJoinedChannels();
+        // The notices that free a slot are the ones 0x0050e120 hands to
+        // 0x00507a30 - `if (local_18 != 0)` at 11354, past the line it wrote at
+        // 11353 - and that routine ends in the refresh too.  For a leave this
+        // is the second of the two legs and the notice was already told when
+        // the row moved.
+        noteChannelStore();
     }
 }
 
