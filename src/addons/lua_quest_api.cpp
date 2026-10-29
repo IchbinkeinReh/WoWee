@@ -715,14 +715,24 @@ static int lua_GetQuestLogRewardXP(lua_State* L) {
 // read off a serializer.
 //
 // Honor is not quite the packet's number: 0x005e4b70 answers the flat addition
-// plus the quest's multiplier converted by the constant 0.1, having called a
-// level-keyed table lookup and dropped its result. The rule is in
-// game/quest_rewards.hpp; a multiplier below 5.0 changes nothing, which is most
-// of them.
+// plus the quest's multiplier times the player's level's row of
+// TeamContributionPoints.dbc and a tenth (game::questRewardHonor).
+static float teamContributionPointsFor(game::GameHandler* gh) {
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (!am || !am->isInitialized()) return 0.0f;
+    auto table = am->loadDBCOptional("TeamContributionPoints.dbc");
+    const uint32_t level = gh->getPlayerLevel();
+    // 0x007554f0: the row the level less one is, not a row by id.
+    if (!table || !table->isLoaded() || table->getFieldCount() < 2 || level == 0 ||
+        level - 1 >= table->getRecordCount())
+        return 0.0f;
+    return table->getFloat(level - 1, 1);
+}
 static int lua_GetQuestLogRewardHonor(lua_State* L) {
-    const auto* q = selectedQuest(getGameHandler(L));
+    auto* gh = getGameHandler(L);
+    const auto* q = selectedQuest(gh);
     lua_pushnumber(L, q ? game::questRewardHonor(static_cast<int32_t>(q->rewardHonor),
-                                                 q->rewardHonorMultiplier)
+                                                 q->rewardHonorMultiplier, teamContributionPointsFor(gh))
                         : 0.0);
     return 1;
 }

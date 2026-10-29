@@ -507,31 +507,24 @@ TEST_CASE("The quest giver's dialog copies its numbers and shuts the XP at the c
     CHECK(questDialogXp(12345, 80, 0) == 12345);
 }
 
-TEST_CASE("A quest's honor is the addition plus its multiplier shrunk to a tenth",
+TEST_CASE("A quest's honor is the addition plus multiplier times the level's row, a tenth",
           "[updatefields][questxp]") {
     using namespace wowee::game;
 
-    // The flat addition is the whole answer for every multiplier the client's
-    // conversion turns into nothing - which is everything under 5.0, so most
-    // quests in the book.
-    CHECK(questRewardHonor(250, 0.0f) == 250);
-    CHECK(questRewardHonor(250, 1.0f) == 250);
-    CHECK(questRewardHonor(250, 4.9f) == 250);
-    // From 5.0 up it adds something: the tenth the client multiplies by is the
-    // float just above a tenth, so 5.0 is already past the half - but only if the
-    // product is held wider than a float, which is what the client's FPU registers
-    // do. In float32 the product lands back on exactly 0.5 and 5.0, 15.0 and 25.0
-    // each round the wrong way, one honour short. The fixture quest - 250 and 20.0
-    // - answers 252, which is what its panel prints.
-    CHECK(questRewardHonor(250, 5.0f) == 251);
-    CHECK(questRewardHonor(250, 15.0f) == 252);
-    CHECK(questRewardHonor(250, 20.0f) == 252);
-    CHECK(questRewardHonor(250, 25.0f) == 253);
-    CHECK(questRewardHonor(0, 20.0f) == 2);
-    // Neither amount answers nothing; the guard is the client's own test that one
-    // of the two is worth reading at all. With a multiplier to read, a negative
-    // addition stands as sent - the client adds to it, it does not clamp it.
-    CHECK(questRewardHonor(0, 0.0f) == 0);
-    CHECK(questRewardHonor(-5, 0.0f) == 0);
-    CHECK(questRewardHonor(-5, 20.0f) == -3);
+    // TeamContributionPoints.dbc's row for level 80 is 1241.143; level 1's is
+    // 28.0. A multiplier of 1 at 80 adds 124.11, rounded to 124.
+    CHECK(questRewardHonor(250, 1.0f, 1241.143f) == 374);
+    CHECK(questRewardHonor(250, 2.0f, 1241.143f) == 498);  // 248.23
+    CHECK(questRewardHonor(0, 1.0f, 28.0f) == 3);          // 2.8
+    // No row (not a player, or a level past the table): the addition alone.
+    CHECK(questRewardHonor(250, 20.0f, 0.0f) == 250);
+    // The product is rounded as the float the client stores it as, ties to
+    // even: 25.0 * 1.0 * 0.1f is 2.5000000372 wide, 2.5 as a float - 2.
+    CHECK(questRewardHonor(0, 1.0f, 25.0f) == 2);
+    CHECK(questRewardHonor(0, 1.0f, 35.0f) == 4);        // 3.5 -> 4
+    // Asked only when one of the two is worth reading; a negative addition
+    // with a multiplier stands as sent - the client adds to it.
+    CHECK(questRewardHonor(0, 0.0f, 1241.143f) == 0);
+    CHECK(questRewardHonor(-5, 0.0f, 1241.143f) == 0);
+    CHECK(questRewardHonor(-5, 1.0f, 1241.143f) == 119);
 }

@@ -148,30 +148,24 @@ inline uint32_t questDialogXp(uint32_t rewardXp, uint32_t playerLevel,
 }
 
 /// The quest log's honour line (GetQuestLogRewardHonor, 0x005e4b70): the flat
-/// addition the packet sends, plus the quest's honour **multiplier** - and the
-/// conversion the client performs on that multiplier is by the constant 0.1
-/// (0x009e3004), not by anything read off the player or a table. It still *calls*
-/// 0x007554f0 first, which reads the player's level out of its unit block and
-/// returns a row of a level-keyed table at 0x00ad4c2c, and then never uses the
-/// answer: the multiplication's other operand is on the FPU stack from before the
-/// call, and %eax is dropped on the floor. So a multiplier below 5.0 adds nothing
-/// whatever, and matching the panel means matching that oddity rather than the
-/// formula the call hints at.
+/// addition the packet sends, plus the multiplier times the player's level's
+/// row of TeamContributionPoints.dbc, times a tenth. 0x007554f0 returns that
+/// product on the FPU stack - FLD the row's float (+4 of 8-byte rows, the row
+/// the player's level less one), FMUL the multiplier - and 0.0 for a unit
+/// that is not a player or a level past the table. 0x005e4b70 multiplies it
+/// by 0.1 (the float 0x3dcccccd), stores that as a float (FSTP float) and
+/// converts the float by FISTP under the default rounding, to nearest even.
+/// Asked at all only when the addition is above 0 or the multiplier is.
 ///
-/// The conversion is the client's `fistpl` under the default x87 rounding mode -
-/// nearest - which is what nearbyint does with the default C mode. The width of
-/// the product is not a detail: the client multiplies in FPU registers, which hold
-/// more than a float, and the constant is the float just *above* a tenth
-/// (0x3dcccccd), so a multiplier of 5.0 really does give 0.50000000745 and rounds
-/// up. Multiply in float32 instead and that product collapses back onto exactly
-/// 0.5 - a float cannot tell it from a half - and the tie then rounds the other
-/// way, answering 250 where the panel prints 251. Same at 15.0, 25.0 and the rest.
-/// Doubles hold the product of two float operands exactly, which is why the
-/// multiply happens in one.
-inline int32_t questRewardHonor(int32_t addition, float multiplier) {
-    if (addition <= 0 && !(multiplier > 0.0f)) return 0;
-    return addition + static_cast<int32_t>(
-        std::nearbyint(static_cast<double>(multiplier) * static_cast<double>(0.1f)));
+/// `levelRow` is that row's value for the player's level, 0 for none.
+inline int32_t questRewardHonor(int32_t addition, float multiplier, float levelRow) {
+    if (!(addition > 0 || multiplier > 0.0f)) return 0;
+    // In the FPU's extended precision, as the client multiplies; then held as
+    // a float, as it stores it.
+    const long double product = static_cast<long double>(levelRow) * static_cast<long double>(multiplier) *
+                                static_cast<long double>(0.1f);
+    const float stored = static_cast<float>(product);
+    return addition + static_cast<int32_t>(std::nearbyint(stored));
 }
 
 } // namespace wowee::game
