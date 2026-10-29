@@ -3029,6 +3029,16 @@ public:
     /// (0xbd07a8): a living creature says farewell (0x00720860), then its
     /// window closes (0x00512e60).
     void closeNpcInteraction();
+    /// A unit's UNIT_NPC_FLAGS went from `before` to `after` (0x0071a0b0).  Each
+    /// flag that opened a window keeps it open, so a flag going away closes the
+    /// window it opened - and only the one open with this very unit: the gossip
+    /// frame, the quest windows, the flight map, the trainer, the bank, the guild
+    /// bank and the mailbox.  Each of those closes names its own event
+    /// (GOSSIP_CLOSED, QUEST_FINISHED, TAXIMAP_CLOSED, TRAINER_CLOSED,
+    /// BANKFRAME_CLOSED, GUILDBANKFRAME_CLOSED, MAIL_CLOSED); a merchant, an
+    /// auction house, a stable, a registrar or a tabard vendor keeps its window
+    /// open, because the client leaves those alone.
+    void npcFlagsChanged(uint64_t guid, uint32_t before, uint32_t after);
     /// Leaving the world (0x00528c30), on every worldport and at logout: the
     /// mirror timers stop, loot is released, every window the player had
     /// open with an object closes, the trade is cancelled, and the target,

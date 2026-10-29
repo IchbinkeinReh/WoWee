@@ -1508,11 +1508,17 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
                 petExperienceChanged = true;
             }
         } else if (key == ufi.npcFlags) {
+            const uint32_t oldNpcFlags = unit->getNpcFlags();
             // A questgiver is asked for its status when it is created; one
             // that becomes a questgiver later - a seasonal NPC whose event
             // has begun - has to be asked then.
-            const bool gained = quest_status_requery::becameQuestGiver(unit->getNpcFlags(), val);
+            const bool gained = quest_status_requery::becameQuestGiver(oldNpcFlags, val);
             unit->setNpcFlags(val);
+            // 0x0071a0b0: the flags are also what keeps an open window open.
+            // A unit that stops being a gossip, a quest giver, a flight master,
+            // a trainer, a banker, a guild banker or a postmaster closes the
+            // window it had opened, when the window is open with it.
+            owner_.npcFlagsChanged(block.guid, oldNpcFlags, val);
             if (gained && owner_.getSocket()) {
                 network::Packet qsPkt(wireOpcode(Opcode::CMSG_QUESTGIVER_STATUS_QUERY));
                 qsPkt.writeUInt64(block.guid);

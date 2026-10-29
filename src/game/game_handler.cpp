@@ -3652,6 +3652,15 @@ void GameHandler::closeInteractionWindow(go_interaction::Window window) {
     }
 }
 
+void GameHandler::npcFlagsChanged(uint64_t guid, uint32_t before, uint32_t after) {
+    // 0x0071a0b0 asks each flag in its own order and closes everything that
+    // matches, so more than one window can go with one update - a quest giver
+    // who stops being a gossip loses the gossip frame and then the quest frame.
+    const auto with = interactionWindowObjects();
+    for (auto window : go_interaction::npcFlagWindowsLost(before, after, guid, with))
+        closeInteractionWindow(window);
+}
+
 void GameHandler::closeNpcInteraction() {
     // 0x00518d50 on the interaction object (0xbd07a8), which each window
     // sets as it opens (0x0051fce0): a living creature says farewell

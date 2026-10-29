@@ -66,6 +66,12 @@ constexpr uint32_t NPC_FLAG_SPIRIT_GUIDE   = 0x00008000;
 constexpr uint32_t NPC_FLAG_INNKEEPER      = 0x00010000;
 constexpr uint32_t NPC_FLAG_BANKER         = 0x00020000;
 constexpr uint32_t NPC_FLAG_AUCTIONEER     = 0x00200000;
+// The last two are the bits the client's own windows key on, not names from a
+// header: 0x0071a0b0 watches UNIT_NPC_FLAGS and closes the guild bank's window
+// (0xc1dc10, by 0x005a4270) when 0x00800000 goes away, and the mailbox's
+// (0xbeb030, by 0x0056da60) when 0x04000000 does.
+constexpr uint32_t NPC_FLAG_GUILD_BANKER   = 0x00800000;
+constexpr uint32_t NPC_FLAG_POSTMASTER     = 0x04000000;
 
 // ---------------------------------------------------------------------------
 // Default action-bar spell IDs
