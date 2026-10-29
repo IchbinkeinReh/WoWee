@@ -653,7 +653,8 @@ private:
     /// unless AttributesEx6 0x80000000.
     int32_t categoryCooldown(uint32_t spellId, bool pet) const;
     /// 0x0053bac0: the player's history changed - ACTIONBAR_UPDATE_COOLDOWN
-    /// (0x005a7cc0), then SPELL_UPDATE_COOLDOWN.
+    /// (0x005a7cc0), UPDATE_SHAPESHIFT_COOLDOWN for a character with forms,
+    /// then SPELL_UPDATE_COOLDOWN.
     void playerCooldownsChanged();
     /// That, plus the display leg every cooldown write ends with: whosever
     /// history moved decides which bar redraws its swirls - 0x005d6f10 fires

@@ -1466,6 +1466,17 @@ int32_t SpellHandler::categoryCooldown(uint32_t spellId, bool pet) const {
 void SpellHandler::playerCooldownsChanged() {
     if (!owner_.addonEventCallbackRef()) return;
     owner_.addonEventCallbackRef()("ACTIONBAR_UPDATE_COOLDOWN", {});
+    // 0x0053bac0's middle step, gated as the client gates it: on its stance-bar
+    // count (DAT_00be8e28), the same list GetNumShapeshiftForms and
+    // UPDATE_SHAPESHIFT_FORMS are answered from. UPDATE_SHAPESHIFT_COOLDOWN
+    // (0x17b) is fired from no other place in the client, and its listener
+    // routes it to ShapeshiftBar_UpdateState (bonusactionbarframe.lua:152), the
+    // only code that sets the form buttons' timers - through
+    // GetShapeshiftFormCooldown, which WoWee already answers from the spell's
+    // own cooldown. So a stance or a bonus-bar ability came off its cooldown
+    // with the swirl still cut into the button until the bar was next rebuilt.
+    if (!knownShapeshiftForms(owner_.getPlayerClass(), owner_.getKnownSpells()).empty())
+        owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_COOLDOWN", {});
     owner_.addonEventCallbackRef()("SPELL_UPDATE_COOLDOWN", {});
 }
 
