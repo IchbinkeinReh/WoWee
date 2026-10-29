@@ -76,6 +76,9 @@ public:
     int pendingRtLighting = 0;
     bool pendingRtFullRes = false;  ///< trace every pixel (Ray Tracing)
     bool pendingRtSoftLamps = false;  ///< the lamps' wider wrap (Ray Tracing)
+    /// The eye adaptation (Ray Tracing; eye_adaptation::paramsFor).
+    int pendingRtEyeBrighten = 30;
+    float pendingRtEyeSeconds = 2.5f;
     /// Rays a pixel of each kind (Ray Tracing; rendering::RtRaysPerPixel).
     int pendingRtSunRays = 1;
     int pendingRtAoRays = 1;

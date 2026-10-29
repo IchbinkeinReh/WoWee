@@ -735,6 +735,9 @@ public:
     void setRtFullResolution(bool full);
     /// The lamps' wider wrap (Ray Tracing, "Softer lamp light"; rt_lamp_wrap.hpp).
     void setRtSoftLamps(bool softer) { rtSoftLamps_ = softer; }
+    /// How far the eye may brighten a dark view (percent over one) and how
+    /// long it takes to adapt to the dark (seconds); eye_adaptation::paramsFor.
+    void setEyeAdaptation(int brighteningPercent, float seconds);
     /// Rays a pixel of each kind (Ray Tracing settings; RtLighting::FrameInputs::rays).
     void setRtRaysPerPixel(const RtRaysPerPixel& rays) { rtRays_ = rays; }
     /// The lighting's adjustable strengths (Settings > Debug Graphics). The
@@ -1104,6 +1107,8 @@ private:
     std::string rtHeldOffLogged_;
     LightingTune lightingTune_{};
     bool rtSoftLamps_ = false;
+    int eyeBrighteningPercent_ = 30;
+    float eyeAdaptSeconds_ = 2.5f;
     RtRaysPerPixel rtRays_{};
     int rtDebugView_ = 0;
     float gameTimeOverride_ = -1.0f;

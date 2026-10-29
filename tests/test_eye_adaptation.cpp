@@ -94,3 +94,56 @@ TEST_CASE("the picture's luminance is the mean of its logs, in either byte order
 
     CHECK(measureLog2(nullptr, 2, 2, false) == 0.0f);
 }
+
+TEST_CASE("the settings' defaults are the eye as it has always been", "[eye]") {
+    const Params p = paramsFor(kDefaultBrighteningPercent, kDefaultSeconds);
+    const Params d;
+    CHECK(p.maxExposure == d.maxExposure);
+    CHECK(p.minExposure == d.minExposure);
+    CHECK(p.toBrighterSeconds == d.toBrighterSeconds);
+    CHECK(p.toDarkerSeconds == d.toDarkerSeconds);
+    CHECK(d.maxExposure == Catch::Approx(1.3f));
+    CHECK(d.toDarkerSeconds == Catch::Approx(2.5f));
+}
+
+TEST_CASE("brightening 0 leaves every view at an exposure of one", "[eye]") {
+    const Params p = paramsFor(0, kDefaultSeconds);
+    CHECK(p.maxExposure == 1.0f);
+    CHECK(p.minExposure == 1.0f);
+    for (float adapted : {-14.0f, -8.0f, -5.0f, -2.0f, 0.0f}) {
+        CHECK(exposureFor(adapted, p) == 1.0f);
+    }
+}
+
+TEST_CASE("brightening is the most a dark view is lifted, darkening going with it", "[eye]") {
+    CHECK(paramsFor(50, kDefaultSeconds).maxExposure == Catch::Approx(1.5f));
+    const Params most = paramsFor(100, kDefaultSeconds);
+    CHECK(most.maxExposure == Catch::Approx(2.0f));
+    CHECK(most.minExposure == 0.5f);  // held at half
+    CHECK(exposureFor(-20.0f, most) == Catch::Approx(2.0f));
+    // Out of range is held to it.
+    CHECK(paramsFor(250, kDefaultSeconds).maxExposure == Catch::Approx(2.0f));
+    CHECK(paramsFor(-5, kDefaultSeconds).maxExposure == 1.0f);
+    // More brightening never darkens less.
+    float lastMin = 1.0f;
+    for (int percent = 0; percent <= 100; percent += 5) {
+        const Params p = paramsFor(percent, kDefaultSeconds);
+        CHECK(p.maxExposure >= 1.0f);
+        CHECK(p.minExposure <= lastMin);
+        lastMin = p.minExposure;
+    }
+}
+
+TEST_CASE("the time scales both ways, the light five times quicker", "[eye]") {
+    const Params slow = paramsFor(kDefaultBrighteningPercent, 10.0f);
+    CHECK(slow.toDarkerSeconds == Catch::Approx(10.0f));
+    CHECK(slow.toBrighterSeconds == Catch::Approx(2.0f));
+    CHECK(paramsFor(30, 100.0f).toDarkerSeconds == Catch::Approx(kMaxSeconds));
+    CHECK(paramsFor(30, 0.0f).toDarkerSeconds == Catch::Approx(kMinSeconds));
+    CHECK(paramsFor(30, std::nanf("")).toDarkerSeconds == Catch::Approx(kDefaultSeconds));
+    // A long time is a slow fade: a second into a dark room the eye has
+    // come a quarter as far as it does at the default.
+    const float fast = adapt(-4.0f, -9.0f, 1.0f, paramsFor(30, kDefaultSeconds));
+    const float fade = adapt(-4.0f, -9.0f, 1.0f, slow);
+    CHECK(-4.0f - fade < 0.3f * (-4.0f - fast));
+}

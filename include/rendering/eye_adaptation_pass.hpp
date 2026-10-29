@@ -51,6 +51,9 @@ public:
     /// set, before the interface. Draws nothing at an exposure of one.
     void composite(VkCommandBuffer cmd);
 
+    /// How far and how fast the eye adapts (eye_adaptation::paramsFor).
+    void setParams(const eye_adaptation::Params& params) { params_ = params; }
+
     [[nodiscard]] float exposure() const { return exposure_; }
     [[nodiscard]] float adaptedLog2() const { return adaptedLog2_; }
 

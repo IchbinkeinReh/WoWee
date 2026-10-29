@@ -44,6 +44,41 @@ struct Params {
     float toDarkerSeconds = 2.5f;
 };
 
+/// The two settings (Ray Tracing, "Eye adaptation"): how far the eye may
+/// brighten a dark view, in percent over one, and how long it takes to
+/// settle into the dark, in seconds. Their defaults are the Params above.
+constexpr int kDefaultBrighteningPercent = 30;
+constexpr int kMaxBrighteningPercent = 100;
+constexpr float kDefaultSeconds = 2.5f;
+constexpr float kMinSeconds = 0.5f;
+constexpr float kMaxSeconds = 20.0f;
+
+/// The Params those two settings give.
+///
+/// The brightening is the most a dark view is lifted: 30 is x1.3, 100 x2.
+/// The most a glaring one is taken down goes with it, by the same share of
+/// stops - x0.75 at 30, never below x0.5 - so 0 is no adjustment at all,
+/// an exposure of exactly one, the picture as the original has it.
+///
+/// The time is toward the dark; toward the light the eye stays five times
+/// quicker, as it is by default (2.5 s and 0.5 s).
+inline Params paramsFor(int brighteningPercent, float seconds) {
+    Params p;
+    const int percent = std::clamp(brighteningPercent, 0, kMaxBrighteningPercent);
+    if (percent != kDefaultBrighteningPercent) {
+        const float lift = static_cast<float>(percent) / 100.0f;
+        const float share = std::log2(1.0f + lift) / std::log2(1.0f + kDefaultBrighteningPercent / 100.0f);
+        p.maxExposure = 1.0f + lift;
+        p.minExposure = std::max(0.5f, std::pow(0.75f, share));
+    }
+    const float darker = std::isfinite(seconds) ? std::clamp(seconds, kMinSeconds, kMaxSeconds) : kDefaultSeconds;
+    if (darker != kDefaultSeconds) {
+        p.toDarkerSeconds = darker;
+        p.toBrighterSeconds = darker / 5.0f;
+    }
+    return p;
+}
+
 /// The exposure an eye adapted to `adaptedLog2` sees with.
 inline float exposureFor(float adaptedLog2, const Params& p = {}) {
     float stops = 0.0f;

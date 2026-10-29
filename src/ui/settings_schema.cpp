@@ -279,6 +279,20 @@ constexpr SettingDesc kSchema[] = {
      "they shine on: softer, flatter lamp light, and the faces just\n"
      "turned away from a low candle - the bevel of a step, a curb -\n"
      "lit a little instead of dark.", "", 0, "raytracedlighting"},
+    // The eye adaptation under the traced lighting (eye_adaptation.hpp):
+    // how far it may lift a dark view, and how slowly it follows. The
+    // defaults are how it has always been; 0 is the original's picture.
+    {"rteyebrighten", "Eye adaptation: brightening (%)", SettingKind::Int, 0, 100, 5,
+     "Ray Tracing", "Eye adaptation",
+     "How much brighter the picture may get when the view is dark,\n"
+     "as the eye adjusts: 30 is up to 1.3 times as bright, 100 twice.\n"
+     "A glaring view is taken down a little with it. 0 turns the\n"
+     "adjustment off: the picture as the original client has it.", "", 30, "raytracedlighting"},
+    {"rteyeseconds", "Eye adaptation: time (seconds)", SettingKind::Float, 0.5f, 20, 0.5f,
+     "Ray Tracing", "",
+     "How long the eye takes to adjust to a darker view. To a\n"
+     "brighter one it is five times quicker (2.5 s here is 0.5 s\n"
+     "there). Longer turns the change into a slow fade.", "", 2.5f, "raytracedlighting"},
     // Rays a pixel, one setting a kind (rt_rays.hpp): 1 is the trace as it
     // always ran; each more is another ray of that kind a pixel, averaged.
     {"rtsunrays", "Rays a pixel: sun shadows", SettingKind::Int, 1, 5, 1,

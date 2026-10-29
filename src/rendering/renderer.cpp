@@ -1169,6 +1169,8 @@ bool Renderer::initialize(core::Window* win) {
         LOG_WARNING("Eye adaptation failed to initialise - no eye adaptation");
         eyeAdaptation_->shutdown();
         eyeAdaptation_.reset();
+    } else {
+        setEyeAdaptation(eyeBrighteningPercent_, eyeAdaptSeconds_);
     }
 
     // Create render graph and register virtual resources
@@ -7350,6 +7352,12 @@ void Renderer::recordSunShafts() {
     sunShafts_->record(currentCmd, vkCtx->getCurrentFrame(),
                        currentImageIndex < images.size() ? images[currentImageIndex] : VK_NULL_HANDLE,
                        vkCtx->getSwapchainExtent(), in);
+}
+
+void Renderer::setEyeAdaptation(int brighteningPercent, float seconds) {
+    eyeBrighteningPercent_ = brighteningPercent;
+    eyeAdaptSeconds_ = seconds;
+    if (eyeAdaptation_) eyeAdaptation_->setParams(eye_adaptation::paramsFor(brighteningPercent, seconds));
 }
 
 void Renderer::recordEyeAdaptation() {
