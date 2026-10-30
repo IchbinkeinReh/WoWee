@@ -1980,36 +1980,80 @@ void GameHandler::loadTitleNameCache() const {
     const auto* layout = pipeline::getActiveDBCLayout()
         ? pipeline::getActiveDBCLayout()->getLayout("CharTitles") : nullptr;
 
-    uint32_t titleField = layout ? layout->field("Title")    : 2;
-    uint32_t bitField   = layout ? layout->field("TitleBit") : 36;
+    // Two name columns, not one. WotLK's CharTitles row carries the same title
+    // twice, once per gender, and the original client keeps both: its compiled
+    // record (stride 0x14, built from this table at load) holds a male pointer
+    // at +0x08 and a female one at +0x0c, and GetTitleName (FUN_0051b4e0) picks
+    // between them by the unit's gender byte (`if (cVar7 != '\x01')`). The columns
+    // named here are a block's *first* slot in each case, which is where
+    // DBCFile::promoteLocalizedStrings has already copied this locale's text to:
+    // the male block runs 2..17 with its text at 5 and its flags at 18, the
+    // female block 19..34 with its text at 22 and its flags at 35.
+    //
+    // Reading only the male column is not a missing translation - it is the
+    // wrong word. In deDE the two forms differ ("Pirscher %s" and
+    // "Pirscherin %s", "Zornerfüllter Gladiator %s" and "Zornerfüllte
+    // Gladiatorin %s"), so every female player on screen was named in the
+    // masculine.
+    uint32_t titleField  = layout ? layout->field("Title")       : 2;
+    uint32_t bitField    = layout ? layout->field("TitleBit")    : 36;
+    uint32_t femaleField = layout ? layout->tryField("TitleFemale") : 0xFFFFFFFFu;
     if (titleField == 0xFFFFFFFF) titleField = 2;
+    if (femaleField == 0xFFFFFFFF) femaleField = titleField;   // one form, as before
     if (bitField   == 0xFFFFFFFF) bitField   = static_cast<uint32_t>(dbc->getFieldCount() - 1);
 
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
         const uint32_t id = dbc->getUInt32(i, 0);   // the row id a quest reward references
-        std::string name = dbc->getString(i, titleField);
-        if (name.empty()) continue;
+        TitleForms forms;
+        forms.male   = dbc->getString(i, titleField);
+        forms.female = dbc->getString(i, femaleField);
+        if (forms.male.empty()) continue;
         // By id for a quest reward (which carries the id), and by mask bit for
         // the worn title (which is a bit off the player's own fields).
-        if (id != 0) titleFormatById_[id] = name;
+        if (id != 0) titleFormatById_[id] = forms;
         uint32_t bit = dbc->getUInt32(i, bitField);
-        if (bit != 0) titleNameCache_[bit] = std::move(name);
+        if (bit != 0) titleNameCache_[bit] = std::move(forms);
     }
     LOG_INFO("CharTitles: loaded ", titleNameCache_.size(), " title names from DBC");
+}
+
+const std::string& GameHandler::titleForm(const TitleForms& forms, uint8_t gender) {
+    // The client's own rule, which is a comparison rather than a lookup: the
+    // gender byte is 1 for female and anything else takes the male form - so an
+    // unknown gender lands on the male form too, which is what the original
+    // client answers for a unit whose fields have not arrived.
+    return (gender == 1 && !forms.female.empty()) ? forms.female : forms.male;
+}
+
+uint8_t GameHandler::titleGenderOf(uint64_t guid) const {
+    uint8_t race = 0, gender = 0, facial = 0;
+    uint32_t appearanceBytes = 0;
+    // The same byte the client reads off the unit object (+0x1008, +0x1c): the
+    // unit's own fields, not the name query's answer, which this client has for
+    // other players and not for itself.
+    if (!getPlayerAppearance(guid, race, gender, appearanceBytes, facial)) return 0xFF;
+    return gender;
 }
 
 std::string GameHandler::getFormattedTitle(uint32_t bit) const {
     loadTitleNameCache();
     auto it = titleNameCache_.find(bit);
-    if (it == titleNameCache_.end() || it->second.empty()) return {};
-    return formatTitleString(it->second);
+    if (it == titleNameCache_.end()) return {};
+    // The local player's own gender: this is the title as they wear it.
+    const std::string& fmt = titleForm(it->second, titleGenderOf(playerGuid));
+    if (fmt.empty()) return {};
+    return formatTitleString(fmt);
 }
 
 std::string GameHandler::getFormattedTitleById(uint32_t id) const {
     loadTitleNameCache();
     auto it = titleFormatById_.find(id);
-    if (it == titleFormatById_.end() || it->second.empty()) return {};
-    return formatTitleString(it->second);
+    if (it == titleFormatById_.end()) return {};
+    // A quest reward carrying a title is being given to the local player, so
+    // the row is read in their form - which is what the announce sentence says.
+    const std::string& fmt = titleForm(it->second, titleGenderOf(playerGuid));
+    if (fmt.empty()) return {};
+    return formatTitleString(fmt);
 }
 
 float GameHandler::critPercentFromGameTable(std::vector<float>& baseCache,
@@ -2143,11 +2187,16 @@ std::string GameHandler::formatTitleStringFor(const std::string& fmt,
 }
 
 std::string GameHandler::getFormattedTitleFor(uint32_t bit,
-                                              const std::string& name) const {
+                                              const std::string& name,
+                                              uint8_t gender) const {
     loadTitleNameCache();
     auto it = titleNameCache_.find(bit);
-    if (it == titleNameCache_.end() || it->second.empty()) return {};
-    return formatTitleStringFor(it->second, name);
+    if (it == titleNameCache_.end()) return {};
+    // The form of the words follows the unit wearing the title, and the name in
+    // the hole follows them - both of them that player's, not the reader's.
+    const std::string& fmt = titleForm(it->second, gender);
+    if (fmt.empty()) return {};
+    return formatTitleStringFor(fmt, name);
 }
 
 void GameHandler::sendSetTitle(int32_t bit) {

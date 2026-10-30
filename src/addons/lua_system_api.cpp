@@ -7976,9 +7976,17 @@ void registerSystemLuaAPI(lua_State* L) {
                 // not how many are owned. paperdollframe.lua walks
                 // 1..GetNumTitles() calling IsTitleKnown on each. The client
                 // answers its CharTitles table's bound plus one (0x005165e0,
-                // DAT_00ad337c + 1); this answers the three 64-bit groups of
-                // PLAYER_FIELD_KNOWN_TITLES, which covers every bit the mask
-                // has - a few ids more to ask about, every one answered.
+                // DAT_00ad337c + 1), and this install's table has 142 rows, so
+                // that client asks about 1..143; this answers the three 64-bit
+                // groups of PLAYER_FIELD_KNOWN_TITLES, 192, which is every bit
+                // the mask can hold and 49 more than the table has rows for.
+                // Asking about those 49 is harmless the way the loop is written:
+                // GetTitleName is only reached behind IsTitleKnown, and the mask
+                // has no bit set for a title that does not exist. It is the one
+                // shape in which that would not be harmless - a realm setting a
+                // bit with no row behind it - and then strtrim(GetTitleName(i))
+                // raises on the nil, which is why the extra reach is recorded
+                // here rather than tuned to 143.
                 {"GetNumTitles", [](lua_State* L) -> int {
             lua_pushnumber(L, game::kKnownTitleCount); return 1;
         }},
@@ -9594,6 +9602,17 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, gh ? gh->getChosenTitleBit() : -1);
             return 1;
         }},
+                // GetTitleName(titleMaskID) - the client's own usage line, and
+                // the argument is a bit of the known-titles mask rather than a
+                // CharTitles row id. The two are not the same number in this
+                // table (the row with id 155 carries bit 122), and the title
+                // list hands the same loop index to IsTitleKnown, which reads a
+                // mask bit, and to this, and works - so this one matches on the
+                // bit, which is the TitleBit column and not the first one.
+                //
+                // The words come back in the gender of the player whose title
+                // list this is, which is the local player: the client's
+                // GetTitleName reads its own object's gender byte.
                 {"GetTitleName", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             int bit = static_cast<int>(luaL_checknumber(L, 1));

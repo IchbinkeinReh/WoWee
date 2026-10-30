@@ -3462,8 +3462,13 @@ public:
     ///
     /// getFormattedTitle above answers for the local player, because the row
     /// it reads is a sentence with the reader's name in it. Anyone else needs
-    /// their own name in that hole, which is all this adds.
-    std::string getFormattedTitleFor(uint32_t bit, const std::string& name) const;
+    /// their own name in that hole, and their own form of the words: which of
+    /// the two the row says them in follows that unit's gender byte, exactly as
+    /// it does in the original client's GetTitleName. Pass 1 for a female unit
+    /// and anything else - 0, or 0xFF when the fields have not arrived - for the
+    /// male form, which is what the client itself falls back to.
+    std::string getFormattedTitleFor(uint32_t bit, const std::string& name,
+                                     uint8_t gender) const;
     /// Send CMSG_SET_TITLE to activate a title (bit >= 0) or clear it (bit = -1).
     void sendSetTitle(int32_t bit);
 
@@ -6191,8 +6196,23 @@ private:
 
     // Title cache: maps titleBit → title string (lazy-loaded from CharTitles.dbc)
     // The strings use "%s" as a player-name placeholder (e.g. "Commander %s", "%s the Explorer").
-    mutable std::unordered_map<uint32_t, std::string> titleNameCache_;
-    mutable std::unordered_map<uint32_t, std::string> titleFormatById_;  // CharTitles id -> format
+    //
+    // WotLK's row holds each title twice, and both are kept: the male form and
+    // the female one. Which is said is decided per unit by its gender byte, the
+    // same test the original client's GetTitleName makes. An expansion whose
+    // table names only one column gets that one in both slots.
+    struct TitleForms {
+        std::string male;
+        std::string female;
+    };
+    /// The form to say for a unit of this gender: 1 is female, and anything
+    /// else - including 0xFF, an answer not read from anywhere - is male.
+    static const std::string& titleForm(const TitleForms& forms, uint8_t gender);
+    /// A unit's gender byte off its own fields, or 0xFF when it is not a player
+    /// or its fields have not arrived.
+    [[nodiscard]] uint8_t titleGenderOf(uint64_t guid) const;
+    mutable std::unordered_map<uint32_t, TitleForms> titleNameCache_;
+    mutable std::unordered_map<uint32_t, TitleForms> titleFormatById_;  // CharTitles id -> forms
     mutable bool titleNameCacheLoaded_ = false;
     // Combat game tables for the stat flyout: per-class base crit, and the
     // per-class-per-level Agility ratio (11 classes × 100 levels).

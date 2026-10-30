@@ -725,18 +725,13 @@ void GameHandler::registerCoreOpcodes() {
         // server writes (lost ? 0 : 1). This read it as "lost" the other way
         // round, so every title earned was announced and recorded as lost.
         const bool isLost = packet.readUInt32() == 0;
-        loadTitleNameCache();
-        std::string titleStr;
-        auto tit = titleNameCache_.find(titleBit);
-        if (tit != titleNameCache_.end() && !tit->second.empty()) {
-            const std::string& pName = lookupName(playerGuid);
-            const std::string& fmt = tit->second;
-            size_t pos = fmt.find("%s");
-            if (pos != std::string::npos)
-                titleStr = fmt.substr(0, pos) + pName + fmt.substr(pos + 2);
-            else
-                titleStr = fmt;
-        }
+        // The row read in the local player's form with their own name in the
+        // hole, which is getFormattedTitle's job - and it was rewritten here
+        // instead, which is how the female form came to be missed: the helper
+        // had been choosing between the two forms for a while and this path had
+        // not gone through it. An earned title is being given to this player, so
+        // this player's form is the one the sentence says.
+        const std::string titleStr = getFormattedTitle(titleBit);
         // The title with the player's name put in, and nothing at all for a
         // title CharTitles.dbc does not have - the client prints only for a
         // row it finds. This wrote English "Title earned: ...!" or "Title

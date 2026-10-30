@@ -484,6 +484,28 @@ CHECKS = [
     ("dbc_layout_check.py",
      r"^(\d+) field\(s\) naming a column the file does not have", 0,
      "DBC field indices naming a column the file does not have"),
+    # The same layouts naming a column that exists and answers no string in any
+    # record - the in-range half of the problem, which the line above cannot see
+    # at all. One row, read and kept: Spell.SpellFamilyName = 208 is not a string
+    # in 3.3.5 but the spell's family *id*, a small integer, and only became a
+    # localised name in a later expansion. The name ends in "Name" and the column
+    # does not hold one, which is the mistake this section can make; it is pinned
+    # rather than filtered out, because the filter would be as much of a guess as
+    # the name was and a second such row is worth reading.
+    #
+    # Twenty-two other rows went the first time this was written, all of them the
+    # same false alarm: DBCFile::promoteLocalizedStrings copies a non-enUS file's
+    # text back to each localised block's first column before anything reads it,
+    # so CharTitles.Title = 2 and Spell.Name = 136 read correctly out of columns
+    # that are zero in the file. That rule is ported into the sweep, which is
+    # what makes this line worth having: the two columns it does not explain are
+    # findings. That is also how the male/female split in CharTitles.dbc turned
+    # up - and reading only the male column named every female player by the male
+    # form of her title, which in German is a different word.
+    ("dbc_layout_check.py",
+     r"^(\d+) field\(s\) naming a column the file does have, which answers no "
+     "string at all", 1,
+     "DBC field indices naming an in-range column that answers no string"),
     # Packet handlers that change this client's own model, tell the player in
     # chat, and tell the interface nothing - the shape that produces a bug
     # correct after a relog and wrong until then. Twenty, each read once: what

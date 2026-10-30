@@ -406,8 +406,17 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
                 std::string titled;
                 if ((nameMask & un::kPlayerPvpTitle) && !name.empty()) {
                     const uint16_t t = game::fieldIndex(game::UF::PLAYER_CHOSEN_TITLE);
-                    if (t != 0xFFFF && ent.getField(t) != 0)
-                        titled = gameHandler.getFormattedTitleFor(ent.getField(t), name);
+                    if (t != 0xFFFF && ent.getField(t) != 0) {
+                        // Which of the title's two forms to say is decided by
+                        // the gender of the unit wearing it, which the client
+                        // reads off that unit and not off the one looking.
+                        uint8_t race = 0, gender = 0, facial = 0;
+                        uint32_t appearanceBytes = 0;
+                        if (!gameHandler.getPlayerAppearance(g, race, gender,
+                                                             appearanceBytes, facial))
+                            gender = 0xFF;
+                        titled = gameHandler.getFormattedTitleFor(ent.getField(t), name, gender);
+                    }
                 }
                 if (name.empty()) gameHandler.queryPlayerName(g);
                 out += titled.empty() ? name : titled;
