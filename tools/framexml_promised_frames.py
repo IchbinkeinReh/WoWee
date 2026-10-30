@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Frames the takeover tables name that no file the loader opens declares.
 
-    tools/framexml_promised_frames.py
+    tools/framexml_promised_frames.py ["<the extracted interface>"]
 
 The tables in src/ui/framexml_takeover.cpp are promises. A suppression row says
 "FrameXML draws this, hide it when this client owns the element"; a check row
@@ -56,7 +56,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from framexml_source import loaded_files, without_comments
 
 ROOT = Path(__file__).resolve().parent.parent
-INTERFACE = ROOT / "Data/interface"
+# The interface root on the command line, the way every other interface sweep
+# takes it; Data/interface is the fallback and is not tracked in the checkout.
+INTERFACE = (Path(sys.argv[1]) if len(sys.argv) > 1
+             else ROOT / "Data/interface")
 TAKEOVER = ROOT / "src/ui/framexml_takeover.cpp"
 
 #: Rows of the two tables that name frames. The element enum tells them apart
@@ -175,6 +178,13 @@ def resolves(name, names, per_file):
 
 
 def main():
+    if not INTERFACE.is_dir():
+        # declared() walks loaded_files(), which answers with an empty set for
+        # a directory that is not there - so nothing resolves and every frame
+        # the takeover tables name is reported as missing at once.
+        print(f"No interface at {INTERFACE} - name the unpacked interface on "
+              "the command line; there are no declarations to check against.")
+        return 2
     names, per_file = declared()
     want = promised()
     missing = sorted((n, e) for n, e in want.items()

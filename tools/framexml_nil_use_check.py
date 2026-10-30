@@ -5,6 +5,8 @@ The previous sweep only caught `local v = Missing()` followed by a use of v.
 A call used straight in the expression is the same fault with no variable in
 between, and concatenation is a third raising context that neither covered:
 "text"..nil is an error in Lua, not the empty string.
+
+    tools/framexml_nil_use_check.py ["<the extracted interface>"]
 """
 import re, pathlib, collections, sys
 
@@ -18,7 +20,15 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 # skip it where there is none. A path in separate components is invisible
 # to that check, and the sweep then runs on CI, finds nothing, and is
 # failed for reporting nothing.
-root = REPO / "Data/interface"
+root = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
+        else REPO / "Data/interface")
+if not root.is_dir():
+    # The files scanned are the interface's own, so with no interface there is
+    # nothing to scan and the report comes out clean - the same shape the
+    # comment above this path was written to warn about.
+    print(f"No interface at {root} - name the unpacked interface on the "
+          "command line; there are no bodies to scan here.")
+    sys.exit(2)
 files = list(root.glob("framexml/*.lua")) + list(root.glob("addons/*/*.lua"))
 texts = {f: f.read_text(errors="ignore") for f in files}
 

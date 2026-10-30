@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """This client's own slash commands, and whether FrameXML's chat can reach them.
 
-    tools/client_command_bridge_check.py
+    tools/client_command_bridge_check.py ["<the extracted interface>"]
 
 WHAT HANDING CHAT OVER TOOK AWAY
 
@@ -53,7 +53,10 @@ from framexml_source import loaded_files, without_comments  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMANDS = ROOT / "src/ui/chat/commands"
-INTERFACE = ROOT / "Data/interface"
+# The interface root on the command line, the way every other interface sweep
+# takes it; Data/interface is the fallback and is not tracked in the checkout.
+INTERFACE = (Path(sys.argv[1]) if len(sys.argv) > 1
+             else ROOT / "Data/interface")
 BRIDGE = ROOT / "src/addons/addon_manager.cpp"
 
 
@@ -91,6 +94,13 @@ def bridged():
 
 
 def main():
+    if not INTERFACE.is_dir():
+        # loaded_files() answers with an empty set for a directory that is not
+        # there, so every registry alias would read unreachable - which is what
+        # the report looks like with the bridge missing, too.
+        print(f"No interface at {INTERFACE} - name the unpacked interface on "
+              "the command line; there is no SlashCmdList to compare here.")
+        return 2
     aliases = registry_aliases()
     slash = framexml_slash_names()
     have_bridge = bridged()
