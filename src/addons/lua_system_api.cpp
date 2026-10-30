@@ -62,6 +62,7 @@
 #include "game/expansion_profile.hpp"
 #include "core/coordinates.hpp"
 #include "rendering/minimap_zoom.hpp"
+#include "rendering/minimap_blips.hpp"
 #include "rendering/world_map/coordinate_projection.hpp"
 #include "core/local_time.hpp"
 
@@ -3144,32 +3145,35 @@ static int lua_GetNumMapLandmarks(lua_State* L) {
 /// the client had them loaded from AreaPOI.dbc and was drawing them on its own
 /// map, so FrameXML's map came up with no pins on it at all.
 ///
-/// The list wired here is the one the facade already builds for its own map,
-/// and it is not the list the reference answers.  The reference rebuilds its
-/// pins inside the routine that *changes* the shown map (0x00546310, which
-/// fills 0x00be8ee0 entries - id, x, y and two kind dwords, stride 0x14), and
-/// the walk that fills them reads no AreaPOI row at all.  Its first family is
-/// the record array at 0x00ad312c (count 0x00ad3118, stride 0x58): 0x005445f0
-/// projects a record into the map's space, and the record is kept only when
-/// that lands inside the map, when the id at its +0x44 resolves through the
-/// index at 0x00ad3154 to a row on this map, and when the world state named at
-/// its +0x50 is satisfied (0x00548d10, the same getter game/world_state_ui.hpp
-/// documents for the world state frame).  Read back out at 0x00545a30 a record
-/// answers its name at +0x48 and its description at +0x4c, its flag word at
-/// +0x40 is what gates it (bit 0x80) and what the 7th return is (bit 0x200),
-/// the icon cell comes from the record's own dword run at +8 indexed by
-/// "world state value - 1" clamped to 8 rather than from a fixed column, and
-/// its +0x54 is the mapLinkID - so the pins that *lead somewhere* are this
-/// family's.  One further record per map is built from the player's own
-/// position, and a second kind, marked in the entry's third dword, answers a
-/// row looked up by id with a fixed textureIndex of 6, no description, and no
-/// link.
+/// The pins FrameXML draws here are the same rows the reference draws - AreaPOI
+/// - but it reaches them its own way, and the way says what is missing.  Its
+/// list is rebuilt inside the routine that *changes* the shown map (0x00546310,
+/// which fills 0x00be8ee0 entries of id, x, y and two kind dwords, stride 0x14)
+/// from a copy of the AreaPOI rows: 0x00ad3118 records at 0x00ad312c, stride
+/// 0x58 - twenty-two dwords, which is why the stride is not the file's 216-byte
+/// record size: the client's copy stops after the map link and has the localised
+/// string blocks folded in.  Field for field the reads land on AreaPOI's own
+/// columns: +0x40 the flags, +0x44 the area id, +0x48 the name, +0x4c the
+/// description, +0x50 a world state, +0x54 the map link, and the nine Icon
+/// columns from +0x8.
 ///
-/// What that leaves open is the family itself: neither this record array nor
-/// the table behind the second kind is named yet, and the two obvious guesses
-/// are not it - WorldStateUI.dbc is 63 fields and 252-byte records, not the
-/// 0x58 stride read here, and AreaGroup.dbc is 8 fields and 32.  Naming it is
-/// the step before any of this can be answered for real.
+/// What it does with them: 0x005445f0 projects the row into the map's space and
+/// one that lands outside is not in the list; the area id has to be at least 1
+/// and resolve through the index at 0x00ad3154 to a row whose +0x28 is negative
+/// or whose +0xc answers at 0x00546150; and a row naming a world state is in the
+/// list only while that state is satisfied (0x00548d10), the same rule the
+/// minimap already follows (minimap_blips.hpp, areaPoiIcon).  Read back out at
+/// 0x00545a30 the icon comes from that state's value minus one, clamped to the
+/// nine - and in this install's AreaPOI.dbc every row reads zero for the state
+/// column, of all 738 rows, so the reference takes Icon[0] like this does.  The
+/// flag word answers bit 0x200 as the seventh value.
+///
+/// Alongside them the reference keeps one record per map built from the player's
+/// own position, and a second kind of entry - marked in the entry's third dword,
+/// and the only kind ClickLandmark walks - answered from a table it looks an id
+/// up in, with a fixed textureIndex of 6, no description, and no link.  That
+/// table (0x00ad4f0c rows, 0x00ad4f20, stride 0x44) is still unnamed: its rows
+/// carry a map's id second and up to four area ids third to sixth.
 static int lua_GetMapLandmarkInfo(lua_State* L) {
     auto* svc = getLuaServices(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
@@ -3185,15 +3189,23 @@ static int lua_GetMapLandmarkInfo(lua_State* L) {
     lua_pushnumber(L, m.icon);                  // 3: textureIndex
     lua_pushnumber(L, m.x);                     // 4: x across the map
     lua_pushnumber(L, m.y);                     // 5: y down the map
-    // A landmark that leads to another map. Nothing here links one to another,
-    // and nil is what a plain point of interest answers.
+    // A landmark that leads to another map - AreaPOI's map link column, +0x54
+    // of the client's record, and a per-row number in the file (its first rows
+    // carry 1, 12, 26, 40, 49, 63 there).  Still nil, deliberately: answering
+    // it sends worldmapframe.lua's WorldMapPOI_OnClick down its ClickLandmark
+    // branch instead of the plain map click, and ClickLandmark does nothing
+    // here yet - the table it walks to turn a link into a map is the unnamed
+    // one above.  So the link waits for the verb.
     lua_pushnil(L);                             // 6: mapLinkID
     // Whether the battlefield minimap shows it too. Seven values, not six:
-    // blizzard_battlefieldminimap.lua gates every pin on this one, so a nil
-    // here is a battle map with no points of interest on it at all. AreaPOI
-    // carries no such flag, and a landmark worth drawing on the world map is
-    // worth drawing on the smaller one.
-    lua_pushboolean(L, 1);                      // 7: showInBattleMap
+    // blizzard_battlefieldminimap.lua gates every pin on this one, so a false
+    // there hides it on the smaller map - and the flag is AreaPOI's own, bit
+    // 0x200 of the word the client reads at +0x40.  This install's file has the
+    // bit set for 681 of its 738 rows and clear for 57, so the always-true
+    // answer here was not a safe default but a different list: 57 pins the
+    // reference does not draw on that window were drawn here.
+    lua_pushboolean(L, (m.flags & rendering::minimap_blips::kPoiOnBattleMap) != 0
+        ? 1 : 0);                               // 7: showInBattleMap
     return 7;
 }
 

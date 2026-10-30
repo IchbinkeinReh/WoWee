@@ -112,6 +112,10 @@ public:
         std::string description;
         uint32_t iconType = 0;
         float x = 0.0f, y = 0.0f;
+        /// AreaPOI's flag word, carried through so the interface can ask the
+        /// one question about it that is its own: whether the pin is drawn on a
+        /// battlefield's minimap too (minimap_blips.hpp, kPoiOnBattleMap).
+        uint32_t flags = 0;
     };
     /// The POIs on the shown map. Only those belonging to it, and only those
     /// that project inside it.

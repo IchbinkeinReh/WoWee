@@ -940,6 +940,7 @@ std::vector<WorldMapFacade::Landmark> WorldMapFacade::currentLandmarks() const {
         mark.name = poi.name;
         mark.description = poi.description;
         mark.iconType = poi.iconType;
+        mark.flags = poi.flags;
         mark.x = uv.x;
         mark.y = uv.y;
         out.push_back(std::move(mark));

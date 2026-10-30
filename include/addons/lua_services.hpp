@@ -157,6 +157,10 @@ struct LuaServices {
         std::string description;
         int   icon = 0;
         float x = 0.0f, y = 0.0f;   ///< [0,1] across the map being shown
+        /// The point's own flags, as AreaPOI carries them - which is how the
+        /// interface gets to ask whether a pin belongs on a battlefield's
+        /// minimap as well (minimap_blips.hpp, kPoiOnBattleMap).
+        uint32_t flags = 0;
     };
     std::function<std::vector<MapLandmark>()> getMapLandmarks;
 

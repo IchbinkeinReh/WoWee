@@ -1137,6 +1137,7 @@ bool Application::initialize() {
                 m.icon = static_cast<int>(l.iconType);
                 m.x = l.x;
                 m.y = l.y;
+                m.flags = l.flags;
                 out.push_back(std::move(m));
             }
             return out;

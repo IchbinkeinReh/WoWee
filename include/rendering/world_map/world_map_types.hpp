@@ -164,6 +164,12 @@ struct POI {
     uint32_t factionId = 0;     ///< 0=neutral, 67=Horde, 469=Alliance
     float wowX = 0, wowY = 0, wowZ = 0;  ///< Canonical WoW coordinates
     uint32_t mapId = 0;         ///< WoW internal map ID
+    /// AreaPOI's own flag word, at the same place the client's POI record
+    /// carries it. 0x00545a30 reads bit 0x80 as one of the three tests that
+    /// decide whether the drawn icon comes from the record at all, and bit
+    /// 0x200 becomes GetMapLandmarkInfo's seventh value - see
+    /// minimap_blips.hpp for the POI bits that have names.
+    uint32_t flags = 0;
     std::string name;
     std::string description;
 };

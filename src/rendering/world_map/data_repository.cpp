@@ -605,6 +605,7 @@ void DataRepository::loadPOIs(pipeline::AssetManager& assetManager) {
     const uint32_t colY          = poiL ? (*poiL)["Y"]           : 13;
     const uint32_t colZ          = poiL ? (*poiL)["Z"]           : 14;
     const uint32_t colMap        = poiL ? (*poiL)["ContinentID"] : 15;
+    const uint32_t colFlags      = poiL ? (*poiL)["Flags"]       : 16;
     const uint32_t colName       = poiL ? (*poiL)["Name"]        : 18;
 
     const uint32_t fieldCount = poiDbc->getFieldCount();
@@ -624,6 +625,10 @@ void DataRepository::loadPOIs(pipeline::AssetManager& assetManager) {
         poi.wowY = poiDbc->getFloat(i, colY);
         poi.wowZ = poiDbc->getFloat(i, colZ);
         poi.mapId = poiDbc->getUInt32(i, colMap);
+        // A layout that carries no Flags column reads as no flags, which costs
+        // the interface's battle-map pin test (lua_system_api.cpp) and nothing
+        // else - the map itself draws these pins without asking the flag.
+        poi.flags = colFlags < fieldCount ? poiDbc->getUInt32(i, colFlags) : 0;
         poi.name = poiDbc->getString(i, colName);
 
         if (poi.name.empty()) continue;
