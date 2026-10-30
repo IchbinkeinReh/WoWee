@@ -1182,8 +1182,22 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         handleUpdateLfgList(packet);
     };
     table[Opcode::SMSG_OPEN_LFG_DUNGEON_FINDER] = [this](network::Packet& packet) {
+        // One uint32: the dungeon the server means. The client (0x005528d0,
+        // registered for this opcode at 0x006b0b80(0x515,…)) reads it and raises
+        // LFG_OPEN_FROM_GOSSIP with it, and lfdframe.lua:91 does the rest from
+        // that one number - marks LFDParentFrame.fromGossip, which is what
+        // closes the window again when the gossip that asked for it closes
+        // (LFDParentFrame's own GOSSIP_CLOSED handler), shows the panel, and
+        // sets LFDQueueFrame.type to that dungeon so the panel opens on it
+        // rather than on the random queue. Opening the window here instead threw
+        // the number away and left the window belonging to nobody.
+        uint32_t dungeonId = 0;
+        if (packet.hasRemaining(4)) dungeonId = packet.readUInt32();
         packet.skipAll();
-        if (owner_.openLfgCallbackRef()) owner_.openLfgCallbackRef()();
+        if (owner_.addonEventCallbackRef()) {
+            owner_.addonEventCallbackRef()("LFG_OPEN_FROM_GOSSIP",
+                                           {std::to_string(dungeonId)});
+        }
     };
 
     // ---- Arena ----
