@@ -7,7 +7,12 @@ raises, so the gap is loud. This asks whether its events arrive, and the failure
 is silent: the frame simply sits there, or shows what it was drawn with, or
 never opens at all.
 
-    tools/framexml_event_gap.py
+    tools/framexml_event_gap.py "<the extracted interface>"
+
+The interface is installed data rather than repository content, so the default
+path below is often not where it is. A missing directory is not the same as an
+empty gap list - with nothing registered, "never sent: 0" is the line a fully
+covered client prints - so the run stops instead.
 
 Eleven real bugs came out of this after the call side had gone quiet - a mail
 frame that hung after sending, bag cooldown swirls that never drew, an
@@ -54,9 +59,12 @@ TWO THINGS THIS CANNOT DECIDE
 
 import os
 import re
+import sys
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-INTERFACE = os.path.join(ROOT, "Data", "interface")
+#: Name the extracted interface on the command line; see the docstring.
+INTERFACE = (sys.argv[1] if len(sys.argv) > 1
+             else os.path.join(ROOT, "Data", "interface"))
 SRC = os.path.join(ROOT, "src")
 
 EVENT = r'"([A-Z][A-Z0-9_]{3,})"'
@@ -224,6 +232,12 @@ def shares_tokens(event, body):
 
 
 def main():
+    if not os.path.isdir(INTERFACE):
+        # Nothing to register the events, so nothing can be missing from them:
+        # the run would print the same lines a fully covered client prints.
+        print(f"{INTERFACE} is not a directory - name the extracted interface "
+              "directory on the command line.")
+        return 2
     where, fired = registered(), sent()
     opcodes, skipped = handled_opcodes()
 
@@ -288,4 +302,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
