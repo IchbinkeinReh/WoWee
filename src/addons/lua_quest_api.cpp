@@ -3939,12 +3939,29 @@ void registerQuestLuaAPI(lua_State* L) {
                 // files because it is the frame's own art. The same set backs
                 // ItemTextGetMaterial, which does answer.
                 //
-                // What is missing is a source, not a texture. A book's material
-                // is on the item or the game object that opened it;
-                // SMSG_QUESTGIVER_QUEST_DETAILS carries no such field, and the
-                // quest giver's own is not the quest's. Answering from the
-                // giver would be a guess dressed as data, and the caller's
-                // substitution of Parchment is what nearly every quest wants.
+                // What is missing is a source, not a texture - and the source
+                // is not on the quest. The reference's binding (0x0058c990) and
+                // ItemTextGetMaterial's (0x00589c90, confirmed by its entry in
+                // the binding table) are the same eight lines of code in two
+                // files: a bit of the frame's record's flag word says which of
+                // two item ids to take - the record's own +0xc, or one fetched
+                // from elsewhere - the id is resolved through the item cache,
+                // and one word of the item record (+0x188) indexes
+                // PageTextMaterial.dbc, whose name is what the caller pastes
+                // between "ItemText-" and "-TopLeft". That word is the page
+                // material this file already reads off the item query, and
+                // ItemTextGetMaterial above is the same read done for a book
+                // rather than for a quest. So a quest *about a readable item*
+                // draws that item's backing, and answering nil is wrong for it.
+                //
+                // Which bit that is, and which of the quest's items the record
+                // keeps at +0xc, is still unsettled - the quest detail packet
+                // carries required and reward items, and nothing here says which
+                // of them the frame stores. Nil stays until that is pinned: the
+                // caller substitutes PageTextMaterial row 1, Parchment, and that
+                // is what nearly every quest would name anyway, whereas a guess
+                // draws marble or bronze around a quest that has nothing to do
+                // with either.
                 {"GetQuestBackgroundMaterial", [](lua_State* L) -> int { return luaReturnNil(L); }},
                 // Whether the quest is flagged PvP, and whether the giver
                 // opened it without being asked. Neither is parsed from the
@@ -3975,12 +3992,22 @@ void registerQuestLuaAPI(lua_State* L) {
             if (questFrameFlags(getGameHandler(L)) & 0x8000u) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;
         }},
-                // QuestGetAutoAccept() stays false, and that is the answer
-                // rather than a gap: QUEST_FLAGS_AUTO_ACCEPT is 0x80000 and
-                // AzerothCore's own note beside it says no 3.3.5a quest
-                // carries it. The flag is parsed now, so if one ever does this
-                // can read it from the same place.
-                {"QuestGetAutoAccept", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                // QuestGetAutoAccept() (0x0058c430) reads bit 0x80000 of the
+                // flags word the frame is showing and answers 1 or nil - the
+                // same shape as QuestIsDaily and QuestIsWeekly beside it, and
+                // the same word. In practice the answer is still nil for every
+                // 3.3.5a quest: AzerothCore's own note beside its
+                // QUEST_FLAGS_AUTO_ACCEPT says no quest in the 3.3.5a data
+                // carries the bit. What changes is where the answer comes
+                // from: it used to be a literal, so a core that does flag a
+                // quest (a cata-ish quest table, or a custom one) would still
+                // have shown its Accept button and its full frame border,
+                // while the caller hides QuestFrameDeclineButton and sets
+                // QuestFrame.autoQuest on the strength of this one bit.
+                {"QuestGetAutoAccept", [](lua_State* L) -> int {
+            if (questFrameFlags(getGameHandler(L)) & 0x80000u) lua_pushnumber(L, 1); else lua_pushnil(L);
+            return 1;
+        }},
                 // Shown when a reward is confirmed without one being picked.
                 // The message belongs to the server in the real client; there
                 // is nothing to say here, and the call is made for its effect

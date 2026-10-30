@@ -9767,6 +9767,24 @@ void registerSystemLuaAPI(lua_State* L) {
             if (guid) gh->inspectUnit(guid);
             return 0;
         }},
+                // ClearInspectPlayer() (0x005e7890) drops the client's inspect
+                // record: a guid pair at DAT_00c24220, six more fields behind
+                // it, and a call that releases the record itself. It has to,
+                // because that store is one slot wide - the inspect frame's
+                // whole state is "whatever is in it", so leaving it filled
+                // would leave the next player's window showing the last
+                // player's gear.
+                //
+                // Nothing here is one slot wide. The inspected gear and the
+                // inspected achievements are both maps keyed by the player's
+                // guid, and the readers go through the unit they are asked
+                // about, which is also how a hover tooltip over a bystander
+                // gets the gear that player is wearing. Clearing on window
+                // close would therefore not reset a stale window; it would
+                // delete data that is still being read, and the next hover
+                // would need a fresh inspect request for a player who is
+                // standing right there. So there is nothing to clear, and the
+                // no-op is the answer rather than a gap.
                 {"ClearInspectPlayer", [](lua_State* L) -> int {
             (void)L;
             return 0;

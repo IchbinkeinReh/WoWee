@@ -1789,7 +1789,12 @@ void registerSocialLuaAPI(lua_State* L) {
                 // could never run and the tab was empty whatever arrived. The
                 // note that stood here said the request is never made, which
                 // was true of the request and not of the reader.
-                // One realm, so everyone is on it.
+                // UnitIsSameServer("unit","otherUnit") (0x00612670) takes two
+                // units, compares the realm part of their guids, and on a
+                // mismatch still allows the pair on one byte of the cached
+                // player record - the cross-realm friend. One realm here, so
+                // everyone is on it and true is what that comparison answers
+                // for every unit this client can name.
                 {"UnitIsSameServer", [](lua_State* L) -> int { lua_pushboolean(L, 1); return 1; }},
                 // Recruit-a-Friend summoning, which needs a linked account.
                 {"CanSummonFriend", luaReturnFalse},
