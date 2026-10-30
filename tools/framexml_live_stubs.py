@@ -127,6 +127,35 @@ which is what the original client says, and a hunter's pet keeps its one.
 
 Recorded so the three are not re-triaged, and so the entry-keyed template cache
 is looked for by name next time rather than rediscovered.
+
+A COMMENT IS NOT A CALL (2026-10-30)
+
+The file text was grepped raw, so a name mentioned only inside a commented-out
+block counted as reached from a live element. Two rows went, and both are things
+3.3.5 itself deleted rather than anything here: petframe.lua's pet-expiry flash
+block (GetPetTimeRemaining, mentioned twice inside `--`), and the old honour
+progress bar in inspecthonorframe.lua (GetInspectPVPRankProgress, once). Lua
+comments are
+blanked before matching now, long-bracket ones consumed whole and strings left
+alone, and `<!-- -->` in the markup files the same way. 174 stubs, 75 reached.
+
+ONE THAT IS A QUERY AND NOT A VERB
+
+ForceGossip reads like an instruction and is a question. FUN_0058ab50 casts the
+current gossip target's guid pair to a unit (the same checked cast type 8 that
+the hover-height watcher uses), and answers bit 27 of the flag dword at +0xc of
+the record hung off that unit at +0x964 - the same creature-template record the
+pet stat modifiers read at +0x34 and +0x38, and the same accessor family: bits
+2, 4 (inverted), 19, 22, 25, 26 and 27 are each one one-line getter.
+
+gossipframe.lua:12 uses it as `not ForceGossip()` inside the test that clicks a
+lone gossip option for you when there are no quests and one option. So a definite
+no - which is what this client answers - auto-selects, and the original
+auto-selects too for every NPC whose template does not set bit 27. That is the
+error direction to remember, and the record's source is still unidentified: bit
+27 is not sparse in CreatureDisplayInfo.dbc (only a float column and a -1 sentinel
+column have it at all), so the client is not reading that table's flags column and
+the record is assembled at load rather than being one row of one table.
 """
 import re
 import sys
@@ -226,6 +255,70 @@ def _live_files():
 
 OWNED = _live_files()
 
+_LONG_OPEN = re.compile(r"\[(=*)\[")
+
+
+def _strip_lua_comments(text):
+    """Blank out Lua comments, leaving strings alone.
+
+    A commented-out call is not a call: petframe.lua mentions
+    GetPetTimeRemaining twice and both mentions are inside a `--` block left
+    over from the expansion that removed the pet expiry bar. Long-bracket
+    comments (`--[[ ]]`, `--[==[ ]==]`) have to be consumed whole or a `]]` in
+    one ends the comment early, and the string cases have to be skipped or a
+    `"a -- b"` hides every call after it on that line.
+    """
+    out, i, n = [], 0, len(text)
+    while i < n:
+        ch = text[i]
+        if text.startswith("--", i):
+            m = _LONG_OPEN.match(text, i + 2)
+            if m:
+                close = "]" + m.group(1) + "]"
+                k = text.find(close, m.end())
+                i = n if k < 0 else k + len(close)
+            else:
+                k = text.find("\n", i + 2)
+                i = n if k < 0 else k
+            out.append(" ")
+            continue
+        if ch in "\"'":
+            j = i + 1
+            while j < n and text[j] != ch and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+            continue
+        if ch == "[":
+            m = _LONG_OPEN.match(text, i)
+            if m:
+                close = "]" + m.group(1) + "]"
+                k = text.find(close, m.end())
+                j = n if k < 0 else k + len(close)
+                out.append(text[i:j])
+                i = j
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _strip_xml_comments(text):
+    """Blank out `<!-- -->`, which is the same mistake in the markup files."""
+    out, i = [], 0
+    while True:
+        k = text.find("<!--", i)
+        if k < 0:
+            out.append(text[i:])
+            return "".join(out)
+        e = text.find("-->", k + 4)
+        out.append(text[i:k])
+        i = len(text) if e < 0 else e + 3
+
+
+# A comment is not a call, and both file kinds have one.
+STRIP = {".lua": _strip_lua_comments, ".xml": _strip_xml_comments}
+
 bound = {}
 inline_stub = {}
 for f in (ROOT / "src/addons").glob("*.cpp"):
@@ -274,6 +367,9 @@ for fname, element in OWNED.items():
     if not matches:
         continue
     text = matches[0].read_text(errors="ignore")
+    strip = STRIP.get(matches[0].suffix)
+    if strip:
+        text = strip(text)
     for name in stubbed:
         if re.search(rf"\b{re.escape(name)}\s*\(", text):
             hits.setdefault(name, []).append(f"{element}:{fname}")
