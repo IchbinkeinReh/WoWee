@@ -2685,12 +2685,20 @@ static int lua_GetTradeTargetItemLink(lua_State* L) {
     return pushTradeLink(L, gh, gh->getPeerTradeSlots()[i - 1]);
 }
 
-// ClickTradeButton(slot) - put what is held into the slot, or take back what is
-// already there when nothing is held
+// ClickTradeButton(slot [, rightButton]) - put what is held into the slot, or
+// take back what is already there when nothing is held
 static int lua_ClickTradeButton(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) return 0;
+    // The client answers this one click with two different requests (0x005879d0),
+    // and which one it sends is decided by the second argument: tradeframe.xml's
+    // OnMouseUp handler hands it `button == "RightButton"`, and staticpopup.lua
+    // hands the enchant slot a true.  The test there is on the value and not on
+    // whether anything was passed (0x0084e0b0 answers 0 for an absent argument and
+    // for a false one alike), so a left click through that same handler takes the
+    // first leg, which is what makes this a boolean and not an argument count.
+    const bool rightButton = lua_toboolean(L, 2) != 0;
     uint8_t srcBag = 0, srcSlot = 0;
     // Through the same translation as every other send. This passed FrameXML's
     // own numbering straight to the server - bags counted 0 to 4 and slots from
@@ -2698,11 +2706,39 @@ static int lua_ClickTradeButton(lua_State* L) {
     // 255 with an absolute slot, or a worn bag's equipment slot with a 0-based
     // index inside it. The server finds no item at the slot it was given and
     // answers TRADE_STATUS_TRADE_CANCELED, so offering an item ended the trade.
+    if (rightButton) {
+        // A right click takes the offered item back and asks nothing of what the
+        // cursor holds: the second leg reads the slot, clears it (0x007041a0,
+        // opcode 0x11e with the slot byte) and puts the item away, and never
+        // reaches the code that would place the held item.  Which of the two
+        // requests went out was all this got wrong - it offered what was held,
+        // so right-clicking a filled slot added to the trade instead of taking
+        // the slot's occupant back.  It asked whether the slot holds something
+        // first, and that gate is deliberately not reproduced: this client's own
+        // seven slots are filled from the server's extended update, so a slot it
+        // had not heard of yet would answer "nothing to take" and the take-back
+        // would never be sent at all.
+        //
+        // What the leg also does locally - the item leaving its row on the table
+        // and the client's own marker on it going away (0x00707020) - is the
+        // server's move to make here, and there is no core to compare against:
+        // WOWEE_SERVER_SRC is unset, so which core answers which verb stays
+        // unobserved either way.
+        gh->clearTradeItem(static_cast<uint8_t>(i - 1));
+        return 0;
+    }
     if (s_cursorType == CursorType::ITEM && s_cursorBag >= 0 &&
         cursorWireSlot(srcBag, srcSlot)) {
         gh->setTradeItem(static_cast<uint8_t>(i - 1), srcBag, srcSlot);
         clearCursorItem(L);
     } else {
+        // The first leg is more than the send: whatever the row held goes onto
+        // the cursor afterwards (0x00520770, handed the row's previous item), and
+        // on a swap the displaced item rides the cursor as well instead of going
+        // back into the bag it came from.  Not reproduced - a trade row has no
+        // place in this client's cursor numbering, and nothing behind it sends
+        // such an item anywhere once it is let go, so the item would ride the
+        // cursor and vanish on the drop instead of going where the server put it.
         gh->clearTradeItem(static_cast<uint8_t>(i - 1));
     }
     return 0;
