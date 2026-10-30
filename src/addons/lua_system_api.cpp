@@ -24,6 +24,7 @@
 #include "core/version.hpp"
 #include "core/config_paths.hpp"
 #include "ui/settings_schema.hpp"
+#include "ui/settings_i18n.hpp"
 #include "imgui.h"
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
@@ -6187,16 +6188,32 @@ static int lua_ReloadUI(lua_State* L) {
 // one schema in ui/settings_schema.hpp. The Wowee options category is built
 // from this rather than written out in Lua, so adding a setting is a row in the
 // schema and nothing else.
+// A string global's text, or "" where it is not a string: the interface's
+// GlobalStrings, for the settings the original client has an option for.
+static std::string globalStringText(lua_State* L, const char* name) {
+    lua_getglobal(L, name);
+    std::string text = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
+    return text;
+}
+
 static int lua_WoweeSettingList(lua_State* L) {
     std::size_t count = 0;
     const auto* schema = ui::clientSettingsSchema(count);
     auto* svc = getLuaServices(L);
+    // The words in the client's language: German for a German client, with
+    // the interface's own GlobalStrings text for the options the original
+    // client has; the schema's English otherwise.
+    const auto* profile = svc && svc->expansionRegistry ? svc->expansionRegistry->getActive() : nullptr;
+    const bool german = profile && ui::settingsLocaleGerman(profile->locale);
+    const ui::GlobalStringLookup globals = [L](const char* name) { return globalStringText(L, name); };
     lua_newtable(L);
     for (std::size_t i = 0; i < count; ++i) {
         const auto& d = schema[i];
+        const ui::SettingText text = ui::settingText(d, german, globals);
         lua_newtable(L);
         lua_pushstring(L, d.key);      lua_setfield(L, -2, "key");
-        lua_pushstring(L, d.label);    lua_setfield(L, -2, "label");
+        lua_pushstring(L, text.label.c_str()); lua_setfield(L, -2, "label");
         lua_pushstring(L, d.kind == ui::SettingKind::Bool  ? "bool"
                         : d.kind == ui::SettingKind::Int   ? "int"
                         : d.kind == ui::SettingKind::Enum  ? "enum"
@@ -6205,16 +6222,20 @@ static int lua_WoweeSettingList(lua_State* L) {
         lua_pushnumber(L, d.minValue); lua_setfield(L, -2, "min");
         lua_pushnumber(L, d.maxValue); lua_setfield(L, -2, "max");
         lua_pushnumber(L, d.step);     lua_setfield(L, -2, "step");
+        // category and section stay the schema's: they name the panels'
+        // frames and group the rows. What a person reads is beside them.
         lua_pushstring(L, d.category); lua_setfield(L, -2, "category");
         lua_pushstring(L, d.section);  lua_setfield(L, -2, "section");
-        lua_pushstring(L, d.tooltip);  lua_setfield(L, -2, "tooltip");
-        lua_pushstring(L, d.choices);  lua_setfield(L, -2, "choices");
+        lua_pushstring(L, text.category.c_str()); lua_setfield(L, -2, "categorylabel");
+        lua_pushstring(L, text.section.c_str());  lua_setfield(L, -2, "sectionlabel");
+        lua_pushstring(L, text.tooltip.c_str());  lua_setfield(L, -2, "tooltip");
+        lua_pushstring(L, text.choices.c_str());  lua_setfield(L, -2, "choices");
         lua_pushnumber(L, d.defaultValue); lua_setfield(L, -2, "default");
         lua_pushstring(L, d.enabledWhen);  lua_setfield(L, -2, "enabledwhen");
         lua_pushstring(L, d.store);        lua_setfield(L, -2, "store");
         // What the ray traced lighting makes of it while it is on, where it
         // makes it moot (rayTracingIgnoredReason); absent otherwise.
-        if (const char* moot = ui::rayTracingIgnoredReason(d.key)) {
+        if (const char* moot = ui::rayTracingIgnoredText(d.key, german)) {
             lua_pushstring(L, moot);
             lua_setfield(L, -2, "rtignored");
         }

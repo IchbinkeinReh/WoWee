@@ -10,6 +10,7 @@
 #include "core/env_flag.hpp"
 #include "core/character_paths.hpp"
 #include "ui/settings_schema.hpp"
+#include "ui/settings_i18n.hpp"
 #include "pipeline/m2_asset_loader.hpp"
 #include "core/coordinates.hpp"
 #include "core/app_clock.hpp"
@@ -1026,7 +1027,8 @@ bool Application::initialize() {
         };
         luaSvc.settingUnavailable = [this](const std::string& key) -> std::string {
             if (!renderer || !ui::settingNeedsRayTracing(key)) return {};
-            return renderer->rtUnavailableReason();
+            const auto* profile = expansionRegistry_ ? expansionRegistry_->getActive() : nullptr;
+            return renderer->rtUnavailableReason(profile && ui::settingsLocaleGerman(profile->locale));
         };
         luaSvc.setClientSetting = [uim = uiManager.get()](const std::string& key,
                                                           const std::string& value) {

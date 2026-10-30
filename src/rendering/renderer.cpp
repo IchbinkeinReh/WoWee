@@ -6385,9 +6385,9 @@ VkImageView Renderer::getNeutralRtLightingView() const {
     return rtLighting_ ? rtLighting_->neutralView() : VK_NULL_HANDLE;
 }
 
-std::string Renderer::rtUnavailableReason() const {
+std::string Renderer::rtUnavailableReason(bool german) const {
     if (!vkCtx) return {};
-    return rt_capability::settingsReason(vkCtx->rtCapability());
+    return rt_capability::settingsReason(vkCtx->rtCapability(), german);
 }
 
 void Renderer::warmUpRayTracing() {

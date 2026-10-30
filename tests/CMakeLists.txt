@@ -482,6 +482,20 @@ target_link_libraries(test_settings_schema_consistency PRIVATE catch2_main)
 add_test(NAME settings_schema_consistency COMMAND test_settings_schema_consistency)
 register_test_target(test_settings_schema_consistency)
 
+# ── test_settings_i18n ───────────────────────────────────────
+# Every row of the schema in German, so a German client does not show the
+# settings this client adds in English beside the game's own German options.
+add_executable(test_settings_i18n
+    test_settings_i18n.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/settings_schema.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/settings_i18n.cpp
+)
+target_include_directories(test_settings_i18n PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_settings_i18n SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_settings_i18n PRIVATE catch2_main)
+add_test(NAME settings_i18n COMMAND test_settings_i18n)
+register_test_target(test_settings_i18n)
+
 # ── test_settings_panel_layout ───────────────────────────────
 # The options panels are generated from the schema by Lua, and nothing else
 # checks the arithmetic between them. A control laid out past the bottom of a

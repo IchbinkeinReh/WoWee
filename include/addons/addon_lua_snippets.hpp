@@ -93,6 +93,15 @@ if not list or #list == 0 then return end
 
 local ROOT = "WoWee"
 
+-- The panels' own words in the client's language: German for a German
+-- client, as the rows themselves are (WoweeSettingList gives each its label,
+-- tooltip and choices that way); English otherwise.
+local GERMAN = GetLocale and GetLocale() == "deDE"
+local function say(en, de)
+    if GERMAN then return de end
+    return en
+end
+
 -- The panel container is 413 wide and 428 tall - measured off the real
 -- FrameXML rather than assumed, after "623 by a little under 500" had been
 -- written here long enough to be quoted into three other places. Two columns
@@ -188,7 +197,7 @@ local function clauseInWords(test)
     local other = byKey[key]
     local name = other and other.label or key
     if want == nil then
-        return "Available when " .. name .. " is on."
+        return say("Available when " .. name .. " is on.", "Verfügbar, wenn " .. name .. " an ist.")
     end
     -- The value by its own label where the schema names one, so the line reads
     -- "when Upscaling is not FSR 2" rather than "is not 2".
@@ -200,8 +209,12 @@ local function clauseInWords(test)
             i = i + 1
         end
     end
-    if negated then return "Available when " .. name .. " is not " .. choice .. "." end
-    return "Available when " .. name .. " is " .. choice .. "."
+    if negated then
+        return say("Available when " .. name .. " is not " .. choice .. ".",
+                   "Verfügbar, außer bei " .. name .. ": " .. choice .. ".")
+    end
+    return say("Available when " .. name .. " is " .. choice .. ".",
+               "Verfügbar bei " .. name .. ": " .. choice .. ".")
 end
 
 local function waitingOn(setting)
@@ -388,6 +401,19 @@ end
 -- The three controls. Each answers a read function and a write function, so
 -- one refresh walks all of them without caring which kind it is holding.
 
+-- A label wider than the room it has takes the smaller font, so that it stays
+-- in its column rather than running under the next one. Measured once, with
+-- the widest text it will hold, before anything reads its colour.
+local function fitLabel(fontString, text, width)
+    if not fontString or not fontString.GetStringWidth or not fontString.SetFontObject then return end
+    local shown = fontString:GetText()
+    fontString:SetText(text)
+    if (fontString:GetStringWidth() or 0) > width and GameFontHighlightSmall then
+        fontString:SetFontObject(GameFontHighlightSmall)
+    end
+    fontString:SetText(shown)
+end
+
 local function addCheckButton(layout, panel, setting, onChanged)
     local x, y = reserve(layout, 27)
     local name = panel:GetName() .. setting.key
@@ -397,6 +423,7 @@ local function addCheckButton(layout, panel, setting, onChanged)
     local label = templateRegion(name, "Text")
                   or ownLabel(panel, button, "GameFontHighlight", "LEFT", "RIGHT", 2, 1)
     label:SetText(setting.label)
+    fitLabel(label, setting.label, layout.columnWidth - 30)
     button:SetScript("OnClick", function(self)
         WoweeSetSetting(setting.key, self:GetChecked() and "1" or "0")
         -- Ticking one of these can be what makes another control live -
@@ -442,6 +469,7 @@ local function addSlider(layout, panel, setting)
     local function showValue(value)
         valueText:SetText(setting.label .. ":  " .. num(value))
     end
+    fitLabel(valueText, setting.label .. ":  " .. num(setting.max), layout.columnWidth)
     -- Only a drag writes. read() moves the thumb to the setting, and SetValue
     -- fires this; writing from it put every slider on the page back each time
     -- the window opened - applied again, saved again, and as the float the
@@ -602,12 +630,16 @@ local function buildPanel(category, settings)
         panel:SetAllPoints(container)
         panel:Hide()
     end
-    panel.name = category
+    -- The name the lists show, in the client's language. The frame's own
+    -- name above keeps the schema's, which stays the same in every locale.
+    local shown = settings[1] and settings[1].categorylabel or category
+    if not shown or shown == "" then shown = category end
+    panel.name = shown
     panel.parent = ROOT
 
     local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 16, -16)
-    title:SetText(ROOT .. ": " .. category)
+    title:SetText(ROOT .. ": " .. shown)
 
     local layout = newLayout(panel)
     local controls = {}
@@ -622,7 +654,9 @@ local function buildPanel(category, settings)
     for _, setting in ipairs(settings) do
         if setting.section ~= "" and setting.section ~= heading then
             heading = setting.section
-            addHeading(layout, heading, setting.kind == "bool" and 27 or 50)
+            local headingText = setting.sectionlabel
+            if not headingText or headingText == "" then headingText = heading end
+            addHeading(layout, headingText, setting.kind == "bool" and 27 or 50)
         end
         local control
         if setting.kind == "bool" then
@@ -806,13 +840,16 @@ blurb:SetPoint("TOPLEFT", 16, -42) -- needs 44
 blurb:SetWidth(CONTENT_WIDTH)
 blurb:SetJustifyH("LEFT")
 blurb:SetJustifyV("TOP")
-blurb:SetText("This client's own settings, under the headings below. "
+blurb:SetText(say("This client's own settings, under the headings below. "
     .. "Everything takes effect as you change it; Cancel puts back what was "
-    .. "there when you opened the panel.")
+    .. "there when you opened the panel.",
+    "Die eigenen Einstellungen dieses Clients, unter den Überschriften unten. "
+    .. "Alles wirkt sofort; Abbrechen stellt wieder her, was beim Öffnen "
+    .. "eingestellt war."))
 
 local elsewhere = root:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
 elsewhere:SetPoint("TOPLEFT", 16, -235) -- needs 15
-elsewhere:SetText("In the game's own panels")
+elsewhere:SetText(say("In the game's own panels", "In den Fenstern des Spiels"))
 
 local elsewhereRule = root:CreateTexture(nil, "ARTWORK")
 elsewhereRule:SetTexture("Interface\\Buttons\\WHITE8X8")
@@ -844,21 +881,24 @@ WOWEE_SETTINGS_ELSEWHERE = {
     -- Display pages, along with everything else the retired Effects panel
     -- used to carry. What is left of the game's Video options is the
     -- window itself.
-    { panel = "Video",             names = { "resolution", "interface scale" } },
+    { panel = say("Video", "Grafik"),
+      names = { say("resolution", "Auflösung"), say("interface scale", "UI-Skalierung") } },
     -- Sound had a row here and does not any more: the master volume, the mute
     -- and the effects scale are on this client's own Sound and Sound Effects
     -- pages, with the switches that used to sit beside them. Interface is
     -- gone the same way - mouse sensitivity, the minimap clock and friendly
     -- nameplates are rows on Camera, Minimap and Combat & HUD.
-    { panel = "Key Bindings",      names = { "every key" } },
+    { panel = say("Key Bindings", "Tastaturbelegung"), names = { say("every key", "jede Taste") } },
 }
 
 -- No blank line after the sentence. The panel is 428 tall and the content
 -- wants every line of that: a spacer here is one line of the four the About
 -- block needs at the bottom.
 local elsewhereLines = {
-    "Some settings are driven by the game's own controls rather than repeated "
-    .. "here, so that the two cannot disagree:" }
+    say("Some settings are driven by the game's own controls rather than repeated "
+    .. "here, so that the two cannot disagree:",
+    "Manche Einstellungen haben die eigenen Regler des Spiels, statt hier "
+    .. "wiederholt zu werden, damit beide nicht abweichen:") }
 for _, group in ipairs(WOWEE_SETTINGS_ELSEWHERE) do
     elsewhereLines[#elsewhereLines + 1] =
         "|cffffd100" .. group.panel .. "|r  ..  " .. table.concat(group.names, ", ")
@@ -869,7 +909,7 @@ elsewhereText:SetText(table.concat(elsewhereLines, "\n"))
 -- written here, where it would go stale the first time a tag was cut.
 local aboutTitle = root:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
 aboutTitle:SetPoint("TOPLEFT", 16, -341) -- needs 15
-aboutTitle:SetText("About")
+aboutTitle:SetText(say("About", "Über"))
 
 local aboutRule = root:CreateTexture(nil, "ARTWORK")
 aboutRule:SetTexture("Interface\\Buttons\\WHITE8X8")
@@ -889,9 +929,10 @@ aboutText:SetJustifyV("TOP")
 -- MIT for two months after the restriction was added. A licence nobody is
 -- shown is one nobody knows about, and this is the one screen in the client
 -- that says what this software is.
-aboutText:SetText("WoWee, a World of Warcraft client\n"
+aboutText:SetText(say("WoWee, a World of Warcraft client\n", "WoWee, ein World-of-Warcraft-Client\n")
     .. (WoweeVersion and WoweeVersion() or "") .. "\n"
-    .. "MIT, less commercial game use. See LICENSE.\n"
+    .. say("MIT, less commercial game use. See LICENSE.\n",
+           "MIT, ohne kommerzielle Spielnutzung. Siehe LICENSE.\n")
     .. "Kelsi Davis  ..  |cff66b3ffgithub.com/Kelsidavis/WoWee|r")
 
 -- Find a setting without knowing which panel it is on.
@@ -902,7 +943,7 @@ aboutText:SetText("WoWee, a World of Warcraft client\n"
 -- says which panel each one is on.
 local searchTitle = root:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
 searchTitle:SetPoint("TOPLEFT", 16, -90) -- needs 15
-searchTitle:SetText("Find a setting")
+searchTitle:SetText(say("Find a setting", "Einstellung finden"))
 
 local searchRule = root:CreateTexture(nil, "ARTWORK")
 searchRule:SetTexture("Interface\\Buttons\\WHITE8X8")
@@ -946,9 +987,12 @@ local function runSearch(query)
     -- An empty section continues the one above, so the heading is tracked down
     -- the list rather than read off each row: FXAA has no section of its own
     -- and is still found by searching for anti-aliasing.
-    local heading = ""
+    local heading, headingShown = "", ""
     for _, setting in ipairs(list) do
-        if setting.section and setting.section ~= "" then heading = setting.section end
+        if setting.section and setting.section ~= "" then
+            heading = setting.section
+            headingShown = setting.sectionlabel or heading
+        end
         -- The tooltip counts too. It is the sentence saying what the setting
         -- does, it is already in the schema, and it is where the words a
         -- player reaches for live when the label is the client's word for the
@@ -956,7 +1000,8 @@ local function runSearch(query)
         -- smooths them.
         local named = lower(setting.label):find(query, 1, true) or
                       lower(setting.key):find(query, 1, true) or
-                      lower(heading):find(query, 1, true)
+                      lower(heading):find(query, 1, true) or
+                      lower(headingShown):find(query, 1, true)
         local described = not named and lower(setting.tooltip or ""):find(query, 1, true)
         if named or described then
             found = found + 1
@@ -966,7 +1011,8 @@ local function runSearch(query)
             -- descriptions merely mention it, and not be shown at all. Reading
             -- the descriptions is what made that possible: "the" matched almost
             -- nothing before and matches forty-five settings now.
-            local line = "|cffffd100" .. setting.label .. "|r  in  " .. setting.category
+            local line = "|cffffd100" .. setting.label .. "|r  in  " ..
+                         (setting.categorylabel or setting.category)
             if named then
                 byName = byName + 1
                 table.insert(shown, byName, line)
@@ -984,7 +1030,8 @@ local function runSearch(query)
                 found = found + 1
                 if found <= 5 then
                     shown[#shown + 1] = "|cffffd100" .. name ..
-                                        "|r  in the game's own  " .. group.panel .. "  panel"
+                                        say("|r  in the game's own  " .. group.panel .. "  panel",
+                                            "|r  im Spielfenster  " .. group.panel)
                 end
             end
         end
@@ -996,10 +1043,11 @@ local function runSearch(query)
     while #shown > 5 do table.remove(shown) end
 
     if found == 0 then
-        searchResults:SetText("|cff909090No setting matches that.|r")
+        searchResults:SetText(say("|cff909090No setting matches that.|r",
+                                  "|cff909090Keine Einstellung passt dazu.|r"))
     elseif found > 5 then
         searchResults:SetText(table.concat(shown, "\n") ..
-            "\n|cff909090... and " .. (found - 5) .. " more|r")
+            "\n|cff909090" .. say("... and ", "... und ") .. (found - 5) .. say(" more", " weitere") .. "|r")
     else
         searchResults:SetText(table.concat(shown, "\n"))
     end
@@ -1021,13 +1069,17 @@ InterfaceOptions_AddCategory(root)
 -- frame's list.
 if VideoOptionsFrame then
     addHostHeading(VideoOptionsFrame,
-        "This client's own graphics settings, under the headings below. "
-        .. "The game's own Resolution and Effects panels are above.")
+        say("This client's own graphics settings, under the headings below. "
+        .. "The game's own Resolution and Effects panels are above.",
+        "Die eigenen Grafikeinstellungen dieses Clients, unter den Überschriften "
+        .. "unten. Die Fenster des Spiels für Auflösung und Effekte stehen darüber."))
 end
 if AudioOptionsFrame then
     addHostHeading(AudioOptionsFrame,
-        "This client's own sound settings. The game's Sound panel above "
-        .. "carries the master, music, ambience and effects volumes.")
+        say("This client's own sound settings. The game's Sound panel above "
+        .. "carries the master, music, ambience and effects volumes.",
+        "Die eigenen Soundeinstellungen dieses Clients. Das Soundfenster des "
+        .. "Spiels darüber hat die Gesamt-, Musik-, Umgebungs- und Effektlautstärke."))
 end
 
 -- Backwards, because a nested category is inserted directly after its parent:

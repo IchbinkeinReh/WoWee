@@ -168,8 +168,15 @@ inline std::string describe(const Result& r) {
 
 /// What the settings say under a ray tracing row it greys out; empty when
 /// the lighting can run.
-inline std::string settingsReason(const Result& r) {
+inline std::string settingsReason(const Result& r, bool german = false) {
     if (r.available) return {};
+    if (german) {
+        if (r.blockedByMsaa) {
+            return "Nicht verfÃ¼gbar bei eingeschalteter KantenglÃ¤ttung (MSAA): dieser Grafikkarte fehlt " +
+                   r.missing + ". KantenglÃ¤ttung ausschalten, um es zu nutzen.";
+        }
+        return "Auf dieser Grafikkarte nicht verfÃ¼gbar: ihr fehlt " + r.missing + ".";
+    }
     if (r.blockedByMsaa) {
         return "Unavailable with anti-aliasing (MSAA) on: this graphics card lacks " + r.missing +
                ". Turn anti-aliasing off to use it.";

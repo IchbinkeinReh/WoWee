@@ -751,7 +751,7 @@ public:
     /// Why the ray traced lighting cannot run on this device at the current
     /// sample count, in the words the settings show; empty when it can. The
     /// mode asked for is then held at off (setRtLightingMode).
-    [[nodiscard]] std::string rtUnavailableReason() const;
+    [[nodiscard]] std::string rtUnavailableReason(bool german = false) const;
     /// Trace every pixel rather than half the resolution (RtLighting::
     /// setFullResolution); WOWEE_RT_FULLRES=0/1 holds it whatever this says.
     void setRtFullResolution(bool full);
