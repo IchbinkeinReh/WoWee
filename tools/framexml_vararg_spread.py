@@ -40,6 +40,34 @@ answer nothing. What matters is whether the ordinary path can also answer
 nothing, so a binding whose only statement is a bare `return 0` is reported
 loudly and one with pushes elsewhere is reported as worth a look.
 
+WHAT THE "READ THE GUARD" COLUMN ACTUALLY HOLDS
+
+It cannot decide a guard from a stub, so it defers. All nine rows it gave on
+2026-10-30 were read, and every one is a guard on the path where there is
+nothing to say - which is the answer the caller is written against:
+
+    CombatLogGetCurrentEntry      no pending entry; the Blizzard combat log's
+                                  `while CombatLogGetCurrentEntry() do` relies
+                                  on an empty answer to terminate
+    GetAutoCompleteResults        no game handler, or asked for zero names
+    GetChannelList                no chat handler, or Lua's checkstack refused
+                                  the room for the answers
+    GetChatWindowChannels         a window index with no window behind it
+    GetChatWindowMessages         the same; and General with nothing in it is
+                                  answered the defaults rather than empty,
+                                  which is the fix this sweep found in 2026-08
+    GetCursorInfo                 the cursor holds nothing - the switch's
+                                  default - plus the equipment-set row going
+                                  missing under a cursor that says it is set
+    GetQuestTimers                no timed quest, which is the common case
+    GetTalentPrereqs              a talent index out of range, and the pet tab,
+                                  which this client answers nothing for on
+                                  purpose
+    GetTrackedAchievements        nothing tracked, or the checkstack refused
+
+The loud column - a binding whose only answer is nothing - is what the guard
+holds at zero, and it is zero.
+
 WHAT IT CANNOT SEE
 
 A vararg callee reached through a local alias, or one whose declaration this
