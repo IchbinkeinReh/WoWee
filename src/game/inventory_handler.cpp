@@ -3155,6 +3155,25 @@ void InventoryHandler::swapBagSlots(int srcBagIndex, int dstBagIndex) {
         uint8_t dstSlot = static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT + dstBagIndex);
         LOG_INFO("swapBagSlots: bag ", srcBagIndex, " (slot ", (int)srcSlot,
                  ") <-> bag ", dstBagIndex, " (slot ", (int)dstSlot, ")");
+        // The client chooses its verb by which sides are on the character.  Its
+        // tail tests both sides' bag numbers and both sides' guids against the
+        // player's own (0x6dfb5e..0x6dfb72) and only on the character-both-sides
+        // path writes CMSG_SWAP_INV_ITEM (push $0x10d at 0x6dfb74) - the opcode
+        // dword plus exactly two slot bytes.  A disassembly is worth having for
+        // that one: the second byte looks missing in the decompile because it is
+        // emitted by the *other* branch's leg, reached from `push %ecx` at
+        // 0x6dfb90 by `jmp 0x6dfbf1`, which lands just past that leg's
+        // `push %edx` at 0x6dfbf0 so the shared write at 0x6dfbf4 emits the
+        // value already pushed.  A bag on either side takes the leg at 0x6dfbbc
+        // instead: four bytes, bag slot bag slot, each bag number read back from
+        // 0x006d29f0, which answers 0xff for a container that is not a bag.  The
+        // build below is that second shape with 0xff in both bag places - the
+        // bytes the client would have sent here, under the other opcode.
+        //
+        // Which cores answer which verb has not been compared: there is no server
+        // checkout on this machine (WOWEE_SERVER_SRC is unset), and
+        // WOWEE_NET_LOG_SWAP_ITEM is there for the day there is one.  So the send
+        // stays as it is.
         auto packet = SwapItemPacket::build(255, dstSlot, 255, srcSlot);
         owner_.getSocket()->send(packet);
     }
