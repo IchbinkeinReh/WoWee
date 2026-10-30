@@ -6,6 +6,8 @@
 #include "ui/ui_services.hpp"
 #include "game/game_handler.hpp"
 #include "addons/addon_manager.hpp"
+#include "addons/lua_api_registrations.hpp"
+#include "addons/lua_engine.hpp"
 #include "core/application.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "ui/chat/chat_utils.hpp"
@@ -20,6 +22,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <string>
+#include <string_view>
 
 namespace wowee { namespace ui {
 
@@ -490,6 +494,132 @@ public:
     }
 };
 
+// --- /cvarlist, /cvar_reset, /cvar_default ---
+//
+// The client's own console command table registers these three
+// (FUN_00769100("cvarlist", 0x00767220, 5, "List cvars"), and the two setters
+// with the help strings "Set the value of a CVar to it's startup value" and
+// "...to it's coded default value"). The 5 is the reachability mask - console and
+// slash both - so a player typing /cvarlist in the chat box gets a listing in the
+// real client, and got "unknown command" here.
+//
+// The state behind them is the CVar store's, which is why the answers come from
+// addons::cVarConsoleRows rather than from anything in this file: the store is
+// one of several places a value comes from, and a listing built beside it would
+// say something the panels are already not doing.
+namespace {
+
+/// A console line in the chat frame, which is where the client's own prints go.
+///
+/// The one thing here that reads differently from the real client: it sends its
+/// "No such cvar" line through the same sink at message level 3, which is the
+/// red it is typed in, while these all arrive as ordinary system lines. There is
+/// no level on this client's chat messages to put it back on.
+void sayCVar(ChatCommandContext& ctx, const std::string& text) {
+    ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(text));
+}
+
+/// The Lua state the CVars live in, or null before the interface is up.
+lua_State* cVarLuaState(ChatCommandContext& ctx) {
+    auto* am = ctx.services.addonManager;
+    return am && am->isInitialized() ? am->getLuaEngine()->getState() : nullptr;
+}
+
+/// The first word of the arguments, cut the way the client cuts them.
+///
+/// Both setters run the line through the client's tokeniser with the delimiter
+/// set " ,;\t\"\r\n" (FUN_0076f1e0) and take the first token into a 64-byte
+/// buffer, so a quoted name works, a comma separates two names of which only the
+/// first is looked at, and a name longer than 63 characters is not the name the
+/// client goes looking for.
+std::string firstCVarToken(const std::string& args) {
+    static constexpr std::string_view kDelimiters = " ,;\t\"\r\n";
+    const size_t start = args.find_first_not_of(kDelimiters);
+    if (start == std::string_view::npos) return {};
+    const size_t end = args.find_first_of(kDelimiters, start);
+    std::string token = std::string(args.substr(start, end == std::string::npos ? end
+                                                                               : end - start));
+    if (token.size() > 63) token.resize(63);
+    return token;
+}
+
+} // namespace
+
+class CVarListCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        lua_State* L = cVarLuaState(ctx);
+        if (!L) return {};
+        // No arguments: the client's handler reads none, so /cvarlist with a word
+        // after it still lists everything.
+        for (const addons::CVarConsoleRow& row : addons::cVarConsoleRows(L)) {
+            std::string line = "  \"" + row.name + "\" is \"" + row.value + "\"";
+            if (!row.defaultValue.empty())
+                line += " (default \"" + row.defaultValue + "\")";
+            if (!row.resetValue.empty())
+                line += " (reset \"" + row.resetValue + "\")";
+            ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(line));
+        }
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"cvarlist"}; }
+    [[nodiscard]] std::string helpText() const override { return "List every CVar and its value"; }
+};
+
+class CVarResetCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        const std::string name = firstCVarToken(ctx.args);
+        lua_State* L = cVarLuaState(ctx);
+        if (!name.empty()) {
+            if (!addons::cVarConsoleHas(name)) {
+                sayCVar(ctx, "No such cvar \"" + name + "\"");
+                return {};
+            }
+            if (L) addons::resetStoredCVar(L, name);
+            return {};
+        }
+        sayCVar(ctx, "Resetting all cvars");
+        if (!L) return {};
+        // Every name in the listing, which is what the client's walk covers
+        // except the CVars it builds in a loop - the eight camera views'
+        // Distance/Pitch/Yaw and the per-motion smoothing knobs. Those keep their
+        // values here; see addons::clientCVarNames.
+        for (const addons::CVarConsoleRow& row : addons::cVarConsoleRows(L))
+            addons::resetStoredCVar(L, row.name);
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"cvar_reset"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "Set a CVar to its startup value (/cvar_reset [name])";
+    }
+};
+
+class CVarDefaultCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        const std::string name = firstCVarToken(ctx.args);
+        lua_State* L = cVarLuaState(ctx);
+        if (!name.empty()) {
+            if (!addons::cVarConsoleHas(name)) {
+                sayCVar(ctx, "No such cvar \"" + name + "\"");
+                return {};
+            }
+            if (L) addons::restoreCVarDefault(L, name);
+            return {};
+        }
+        sayCVar(ctx, "Restoring all cvars");
+        if (!L) return {};
+        for (const addons::CVarConsoleRow& row : addons::cVarConsoleRows(L))
+            addons::restoreCVarDefault(L, row.name);
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"cvar_default"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "Set a CVar to its coded default (/cvar_default [name])";
+    }
+};
+
 void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<ProfileCommand>());
     reg.registerCommand(std::make_unique<ClimbCommand>());
@@ -503,6 +633,9 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<StopMacroCommand>());
     reg.registerCommand(std::make_unique<ClearCommand>());
     reg.registerCommand(std::make_unique<DifficultyCommand>());
+    reg.registerCommand(std::make_unique<CVarListCommand>());
+    reg.registerCommand(std::make_unique<CVarResetCommand>());
+    reg.registerCommand(std::make_unique<CVarDefaultCommand>());
 }
 
 } // namespace ui

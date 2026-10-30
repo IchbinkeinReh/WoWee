@@ -28,6 +28,7 @@
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/lua_api_registrations.hpp"
 #include "addons/chat_color_table.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/chat_window_background.hpp"
@@ -663,6 +664,21 @@ static CVarFileSnapshot& cvarFileSnapshot() {
     return snapshot;
 }
 
+/// What each CVar held when this session read its file, kept apart from the
+/// store because the store moves and this does not.
+///
+/// It is the client's "startup value": the string its cvar object holds at
+/// +0x4c, which `cvar_reset` (0x00767840) puts back and `cvarlist` (0x00767220)
+/// prints in parentheses. The client takes it from Config.wtf as each CVar is
+/// registered and never refreshes it, so resetting the same CVar twice lands on
+/// the same value however many times it was changed in between - and a name that
+/// Config.wtf did not mention has no startup value at all, which is why the
+/// reset falls back to the registered default rather than to nothing.
+static std::unordered_map<std::string, std::string>& cvarStartupValues() {
+    static std::unordered_map<std::string, std::string> values;
+    return values;
+}
+
 /// Where the CVars live between runs.
 ///
 /// Its own file rather than settings.cfg, which this client's own panel writes
@@ -702,6 +718,9 @@ static void loadStoredCVars() {
         std::string key = line.substr(0, eq);
         toLowerInPlace(key);
         cvarStore()[key] = line.substr(eq + 1);
+        // The same string twice, for two questions that are not the same: what
+        // the CVar is now, and what it was when the session started.
+        cvarStartupValues()[key] = line.substr(eq + 1);
         ++loaded;
     }
     LOG_INFO("CVars: loaded ", loaded, " from ", cvarStorePath());
@@ -947,7 +966,14 @@ static std::unordered_set<std::string>& reregisteredClientCVars() {
     return names;
 }
 
-static void pushCvarDefault(lua_State* L, const std::string& n) {
+/// `stated`, when given, comes back false for a name this chain does not name.
+/// The "0" at the end of it is a stand-in for an unanswered CVar rather than a
+/// value the client registered the CVar with, and the CVar listing has to tell
+/// the two apart: it prints `(default "0")` only where the client actually holds
+/// a default string on the object (+0x40 null means print nothing).
+static void pushCvarDefault(lua_State* L, const std::string& n,
+                            bool* stated = nullptr) {
+    if (stated) *stated = true;
     // A CVar an addon registered has the default it was registered with.
     if (auto it = scriptRegisteredCVars().find(n); it != scriptRegisteredCVars().end()) {
         lua_pushstring(L, it->second.c_str());
@@ -1430,7 +1456,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // (guildShowOffline() starts true, and the roster it is given holds
     // everyone); the default answered "0" against a list that shows them.
     else if (n == "guildshowoffline") lua_pushstring(L, "1");
-    else lua_pushstring(L, "0");
+    // Nothing stated this name: the stand-in, and the one answer here that is not
+    // something the client registered the CVar with.
+    else { lua_pushstring(L, "0"); if (stated) *stated = false; }
 }
 
 
@@ -2181,6 +2209,151 @@ void applyStoredCVarSideEffects(lua_State* L) {
     }
     g_replayingStoredCVars = false;
     LOG_INFO("CVars: applied ", cvarStore().size(), " stored values");
+}
+
+/// What GetCVar answers for an already lower-cased name.
+///
+/// The listing and the two console setters read through this rather than out of
+/// the store, because the store is only one of the places an answer comes from:
+/// the interface's own scale, the client settings behind the kClientCVars
+/// bindings and the switches the game handler keeps each answer for themselves.
+/// A listing that read the map would print values the panels are not using,
+/// which is the disagreement this file keeps having to chase down.
+static std::string cVarAnswer(lua_State* L, const std::string& lower) {
+    lua_pushstring(L, lower.c_str());
+    lua_GetCVar(L);
+    const char* v = lua_tostring(L, -1);
+    std::string out = v ? v : "";
+    lua_pop(L, 1);
+    return out;
+}
+
+/// The default string the client holds on the CVar object (+0x40), or false when
+/// it states none for the name.
+static bool cVarStatedDefault(lua_State* L, const std::string& lower, std::string& out) {
+    bool stated = false;
+    pushCvarDefault(L, lower, &stated);
+    const char* v = lua_tostring(L, -1);
+    const bool answered = stated && v != nullptr;
+    if (answered) out = v;
+    lua_pop(L, 1);
+    return answered;
+}
+
+/// The console commands' write: the store, the file, and back into whatever
+/// reads the CVar - and nothing else. No CVAR_UPDATE, because the client's
+/// reset path assigns the CVar's own string (0x0047cf80) and raises no event;
+/// see the note on resetStoredCVar in the header.
+static void writeCVarFromConsole(lua_State* L, const std::string& lower,
+                                 const std::string& target) {
+    // And before any of it, for a CVar registered read-only - the `>> 2 & 1` test
+    // both setters make on the registration flags (kCVarReadOnly). Bit 8, which
+    // the interface's SetCVar treats as read-only as well, is not part of that
+    // test, so it is not part of this one either.
+    if (auto flags = clientCVarFlags(lower); flags && (*flags & kCVarReadOnly)) return;
+    // 0x00766990 and 0x00766a20 both stop short when the value the CVar already
+    // has is the one they were about to write, and compare case-insensitively
+    // doing it (0x0076e780 is the A-Z fold - not the case-sensitive compare
+    // 0x00767220 uses to decide which parentheticals to print).
+    std::string current = cVarAnswer(L, lower);
+    std::string wanted = target;
+    toLowerInPlace(current);
+    toLowerInPlace(wanted);
+    if (current == wanted) return;
+    cvarStore()[lower] = target;
+    saveStoredCVars();
+    applyCVarSideEffects(L, lower, target);
+}
+
+std::vector<CVarConsoleRow> cVarConsoleRows(lua_State* L) {
+    std::vector<CVarConsoleRow> rows;
+    if (!L) return rows;
+    // The client walks one linked list of every CVar object it owns, so the
+    // listing is every name in it: the client's own, the ones RegisterCVar made,
+    // and every name a config line or a SetCVar mentioned - the client registers
+    // those as it reads them too (0x007681f0), with no flags. Hidden CVars
+    // included: the list is the client's own inventory, not what an addon may
+    // ask about, so GetCVarInfo's reticence about a hidden name does not reach
+    // it.
+    std::vector<std::pair<std::string, std::string>> names;  // spelling, key
+    std::unordered_set<std::string> seen;
+    const auto add = [&](std::string spelling, std::string key) {
+        if (!seen.insert(key).second) return;
+        names.emplace_back(std::move(spelling), std::move(key));
+    };
+    for (std::string_view registered : clientCVarNames()) {
+        std::string key(registered);
+        toLowerInPlace(key);
+        add(std::string(registered), std::move(key));   // the client's own spelling
+    }
+    for (const auto& [key, value] : scriptRegisteredCVars()) add(key, key);
+    for (const auto& [key, value] : cvarStore()) add(key, key);
+    // Alphabetically, which is this table's order rather than the client's
+    // registration order; see clientCVarNames.
+    std::sort(names.begin(), names.end(),
+              [](const auto& a, const auto& b) { return a.second < b.second; });
+
+    rows.reserve(names.size());
+    for (const auto& [spelling, key] : names) {
+        CVarConsoleRow row;
+        row.name = spelling;
+        row.value = cVarAnswer(L, key);
+        // Both halves are left empty when they are not to be printed: no default
+        // string on the object at all (this client states one per name it has
+        // looked at, and the stand-in at the end of that chain is not one), or
+        // the same string the CVar already has. That compare is case-sensitive in
+        // the client, unlike the setters' - so a value differing only in case is
+        // listed as changed, and no write is made for it.
+        std::string def;
+        if (cVarStatedDefault(L, key, def) && def != row.value) row.defaultValue = def;
+        if (auto it = cvarStartupValues().find(key);
+            it != cvarStartupValues().end() && it->second != row.value) {
+            row.resetValue = it->second;
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+bool cVarConsoleHas(const std::string& name) {
+    std::string key(name);
+    toLowerInPlace(key);
+    // The client's lookup (0x0055f4d0) is a hash table keyed on the lower-cased
+    // name compared case-insensitively, and it answers for a hidden CVar as
+    // readily as for any other - unlike SetCVar's own lookup, which hides those.
+    return clientCVarFlags(key).has_value() || scriptRegisteredCVars().count(key) ||
+           cvarStore().count(key);
+}
+
+void resetStoredCVar(lua_State* L, const std::string& name) {
+    if (!L) return;
+    std::string key(name);
+    toLowerInPlace(key);
+    // +0x4c then +0x40: the startup value, or the registered default for a name
+    // this session's file did not mention. Neither is not "set it to nothing" -
+    // 0x00766990 returns without writing at all.
+    if (auto it = cvarStartupValues().find(key); it != cvarStartupValues().end()) {
+        writeCVarFromConsole(L, key, it->second);
+        return;
+    }
+    std::string def;
+    if (cVarStatedDefault(L, key, def)) writeCVarFromConsole(L, key, def);
+}
+
+void restoreCVarDefault(lua_State* L, const std::string& name) {
+    if (!L) return;
+    std::string key(name);
+    toLowerInPlace(key);
+    // The mirror: 0x00766a20 reads +0x40 first and +0x4c only when there is no
+    // registered default to put back.
+    std::string def;
+    if (cVarStatedDefault(L, key, def)) {
+        writeCVarFromConsole(L, key, def);
+        return;
+    }
+    if (auto it = cvarStartupValues().find(key); it != cvarStartupValues().end()) {
+        writeCVarFromConsole(L, key, it->second);
+    }
 }
 
 /// Report the controls kRemovedControlsLua could not find.

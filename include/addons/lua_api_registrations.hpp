@@ -3,6 +3,9 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #pragma once
 
+#include <string>
+#include <vector>
+
 struct lua_State;
 
 namespace wowee::addons {
@@ -70,6 +73,50 @@ void noteClientSettingChanged(const std::string& settingKey, const std::string& 
 /// a player can rely on, and this client is exited every way there is.
 void setStoredCVar(const std::string& key, const std::string& value);
 void registerActionLuaAPI(lua_State* L);
+
+/// One line of the CVar listing the client's own console command prints
+/// (`FUN_00769100("cvarlist", 0x00767220, 5, "List cvars")`).
+///
+/// The three values are the three the client keeps on its CVar object, at +0x28,
+/// +0x40 and +0x4c: what GetCVar answers now, the value the CVar was registered
+/// with, and the value it held when the session started. An empty
+/// An empty `defaultValue` or `resetValue` is the client's null: that half of the
+/// line is not printed at all. The rows have that test applied already, since
+/// the client prints a half only where it differs from the current value and
+/// compares case-sensitively doing it (0x0076e760).
+struct CVarConsoleRow {
+    std::string name;
+    std::string value;
+    std::string defaultValue;
+    std::string resetValue;
+};
+
+/// Every CVar there is to list: the names the client registers, the ones the
+/// interface's RegisterCVar made, and every name holding a value - each answered
+/// the way GetCVar answers it, so the listing cannot disagree with a panel.
+std::vector<CVarConsoleRow> cVarConsoleRows(lua_State* L);
+
+/// Whether a CVar of that name exists, spelled any way. Case-insensitive, as the
+/// client's lookup (0x0055f4d0) is.
+bool cVarConsoleHas(const std::string& name);
+
+/// /cvar_reset and /cvar_default (0x00767840, 0x007678f0), one name at a time.
+///
+/// Each takes the other's target when it has none of its own: the reset reads the
+/// startup value and falls back to the registered default, the default the other
+/// way round (0x00766990 and 0x00766a20 read +0x4c/+0x40 in the opposite order),
+/// and neither writes when the current answer already matches - which the client
+/// compares case-insensitively (0x0076e780, the A-Z fold, and not the
+/// case-sensitive compare the listing above uses).
+///
+/// Neither announces CVAR_UPDATE. The client's reset path assigns the CVar's own
+/// string and re-parses it (0x0047cf80); the only site in the binary that raises
+/// CVAR_UPDATE - script event 298, whose name is registered at 0x00c25358 - is
+/// the three-argument SetCVar binding, and it fires the event with its *third*
+/// argument. So a reset leaves an open options panel showing where it was until
+/// the interface is reloaded, and this client does the same.
+void resetStoredCVar(lua_State* L, const std::string& name);
+void restoreCVarDefault(lua_State* L, const std::string& name);
 
 /// Whether this client performs a binding command itself, without the
 /// interface.

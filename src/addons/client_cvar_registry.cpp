@@ -3,6 +3,9 @@
 #include <cctype>
 #include <cstring>
 #include <initializer_list>
+#include <span>
+#include <string_view>
+#include <vector>
 
 namespace wowee::addons {
 
@@ -531,6 +534,19 @@ std::optional<uint32_t> clientCVarFlags(std::string_view name) {
         if (equalsNoCase(name, cvar.name)) return cvar.flags;
     }
     return loopCVarFlags(name);
+}
+
+std::span<const std::string_view> clientCVarNames() {
+    // Built once from the table rather than kept beside it: the table is a
+    // constexpr array of `const char*`, and every caller wants a list of names
+    // it can sort and iterate without knowing the row's other field.
+    static const std::vector<std::string_view> names = [] {
+        std::vector<std::string_view> list;
+        list.reserve(std::span(kClientCVars).size());
+        for (const ClientCVar& cvar : kClientCVars) list.push_back(cvar.name);
+        return list;
+    }();
+    return names;
 }
 
 }  // namespace wowee::addons
