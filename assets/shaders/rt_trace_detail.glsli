@@ -19,7 +19,7 @@ layout(std430, set = RT_SCENE_SET, binding = 10) readonly buffer RtDetails { uin
 layout(std430, set = RT_SCENE_SET, binding = 11) readonly buffer RtTerrainRecords { uint rtTerrain[]; };
 
 const uint RT_DETAIL_SLOT_WORDS = 2736u;   // rt_detail::kSlotWords
-const uint RT_TERRAIN_RECORD_WORDS = 272u;  // RtScene::kTerrainRecordWords
+const uint RT_TERRAIN_RECORD_WORDS = 353u;  // RtScene::kTerrainRecordWords
 const uint RT_NONE16 = 0xFFFFu;
 
 vec3 rtDetailFetch(uint slot, uint level, ivec2 p) {
@@ -97,7 +97,21 @@ vec3 rtTerrainColor(uint record, vec3 hit, float footprint, vec3 fallback) {
         c += rtDetailSample(slot, uv, lod) * w[l];
         used += w[l];
     }
-    return used > 0.0 ? c + fallback * (1.0 - used) : fallback;
+    c = used > 0.0 ? c + fallback * (1.0 - used) : fallback;
+    // The vertex colour (MCCV), which terrain.frag multiplies the light by:
+    // stored halved, bilinear over the 9x9 outer vertices.
+    if ((flags & 16u) != 0u) {
+        vec2 q = auv * 8.0;
+        ivec2 j0 = clamp(ivec2(floor(q)), ivec2(0), ivec2(7));
+        vec2 g = clamp(q - vec2(j0), 0.0, 1.0);
+        uint vb = at + 272u;
+        vec3 s00 = unpackUnorm4x8(rtTerrain[vb + uint(j0.y * 9 + j0.x)]).rgb;
+        vec3 s10 = unpackUnorm4x8(rtTerrain[vb + uint(j0.y * 9 + j0.x + 1)]).rgb;
+        vec3 s01 = unpackUnorm4x8(rtTerrain[vb + uint((j0.y + 1) * 9 + j0.x)]).rgb;
+        vec3 s11 = unpackUnorm4x8(rtTerrain[vb + uint((j0.y + 1) * 9 + j0.x + 1)]).rgb;
+        c *= 2.0 * mix(mix(s00, s10, g.x), mix(s01, s11, g.x), g.y);
+    }
+    return c;
 }
 
 // The colour of the hit rtClosestEx last found along origin + dir * t, its

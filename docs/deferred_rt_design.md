@@ -309,7 +309,8 @@ height at half what it was first made with by default.
   shows (its depth matches, its face looks at the camera) takes the frame
   drawn under the water there - textured, lit, shadowed, fogged as drawn. The
   outer 3% of the screen blends to the traced colour.
-- Elsewhere the hit is lit by the ambient and, past one shadow ray, the sun;
+- Elsewhere the hit is lit by the ambient and, past one shadow ray, the sun,
+  the sum held to 1 as terrain.frag and the models' shaders hold theirs;
   a reflection's hit is hazed by the zone's fog over the distance, a
   refracted one absorbed over its path through the water. Its colour is
   `rt_trace_detail.glsli`'s: a model's or a building's triangle by its
@@ -318,8 +319,9 @@ height at half what it was first made with by default.
   textured triangle; `.w` the mask in the low half, the pyramid in the high)
   and scaled by the triangle's packed colour over the texture's mean, so
   tints stay; a terrain chunk by its layers, blended by its alpha maps at
-  16x16 as `terrain.frag` blends them (a record of 272 words, binding 11,
-  named by the mesh's third word). The level is the one whose texels match
+  16x16 as `terrain.frag` blends them and times its vertex colour (MCCV) at
+  the 9x9 outer vertices (a record of 353 words, binding 11, named by the
+  mesh's third word). The level is the one whose texels match
   the pixel's footprint over the whole path.
 - The pyramids are made from the decoded BLP when a texture is uploaded
   (`VkTexture::rtDetail`), shared by content in an `RtSlotStore`, held by the

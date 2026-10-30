@@ -1434,6 +1434,25 @@ void TerrainRenderer::registerRtChunk(TerrainChunkGPU& gpuChunk, const pipeline:
         }
         layers.size = (core::coords::TILE_SIZE / 16.0f);
         layers.texScale = pipeline::kTerrainTextureRepeatsPerChunk / (core::coords::TILE_SIZE / 16.0f);
+        // The vertex colour terrain.frag multiplies the light by, at the
+        // outer vertices: placed on the grid by where each one is.
+        {
+            layers.shading.assign(81, glm::vec3(1.0f));
+            bool tinted = false;
+            const float step = layers.size / 8.0f;
+            for (const auto& v : chunk.vertices) {
+                const float fu = (layers.maxY - v.position[1]) / step;
+                const float fv = (layers.maxX - v.position[0]) / step;
+                const int u = static_cast<int>(std::lround(fu));
+                const int w = static_cast<int>(std::lround(fv));
+                if (u < 0 || u > 8 || w < 0 || w > 8) continue;
+                if (std::abs(fu - u) > 0.1f || std::abs(fv - w) > 0.1f) continue;  // an inner vertex
+                const glm::vec3 c(v.shading[0], v.shading[1], v.shading[2]);
+                layers.shading[size_t(w) * 9 + size_t(u)] = c;
+                tinted = tinted || c != glm::vec3(1.0f);
+            }
+            if (!tinted) layers.shading.clear();  // none: the record says so
+        }
         if (layers.details[0] != RtScene::kInvalid || gpuChunk.layerCount > 0) {
             src.terrainLayers = RtScene::terrainRecord(layers);
         }

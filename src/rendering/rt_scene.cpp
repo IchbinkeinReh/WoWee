@@ -1365,6 +1365,13 @@ std::vector<uint32_t> RtScene::terrainRecord(const TerrainLayers& layers) {
     r[6] = std::bit_cast<uint32_t>(layers.maxY);
     r[7] = std::bit_cast<uint32_t>(layers.size);
     r[8] = std::bit_cast<uint32_t>(layers.texScale);
+    if (layers.shading.size() == 81) {
+        r[4] |= 16u;
+        for (size_t i = 0; i < 81; ++i) {
+            const glm::vec3 c = glm::clamp(layers.shading[i] * 0.5f, glm::vec3(0.0f), glm::vec3(1.0f));
+            r[16 + 256 + i] = glm::packUnorm4x8(glm::vec4(c, 1.0f));
+        }
+    }
     // Each 64x64 map at 16x16, the mean of sixteen: 2 yards a texel, which
     // the reflection's waves blur past; 32x32 held 4 KB a chunk, 51 MB for
     // the 49 tiles loaded around a city.

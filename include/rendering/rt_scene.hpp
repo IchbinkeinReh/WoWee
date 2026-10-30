@@ -135,8 +135,9 @@ public:
     /// none), flags (1 weighted, 2/4/8 layer 1/2/3 present), the chunk's
     /// largest x and y and its size, the texture scale, then its three alpha
     /// maps at 16x16, a1 | a2 << 8 | a3 << 16 a texel, rows along x from
-    /// the largest.
-    static constexpr uint32_t kTerrainRecordWords = 16 + 16 * 16;
+    /// the largest; then the vertex colour at 9x9, halved, RGBA8 (flag 16
+    /// when there is one).
+    static constexpr uint32_t kTerrainRecordWords = 16 + 16 * 16 + 9 * 9;
     struct TerrainLayers {
         uint32_t details[4] = {kInvalid, kInvalid, kInvalid, kInvalid};
         bool weighted = false;
@@ -144,6 +145,10 @@ public:
         float maxX = 0.0f, maxY = 0.0f, size = 1.0f, texScale = 1.0f;
         /// The 64x64 alpha maps of layers 1-3; empty for a layer without one.
         const std::vector<uint8_t>* alpha[3] = {nullptr, nullptr, nullptr};
+        /// The vertex colour (MCCV, as terrain.frag's Shading: 1 neutral, up
+        /// to 2) at the chunk's 9x9 outer vertices, rows along x from the
+        /// largest as the alpha maps; empty for none.
+        std::vector<glm::vec3> shading;
     };
     [[nodiscard]] static std::vector<uint32_t> terrainRecord(const TerrainLayers& layers);
 

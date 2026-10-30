@@ -40,9 +40,11 @@ vec3 rtwSky(vec3 dir) {
 }
 
 // A traced hit's colour lit: its triangle's under the ambient, and the sun
-// where `sunVis` lets it through.
+// where `sunVis` lets it through - the sum held to 1, as terrain.frag and
+// the models' shaders hold theirs.
 vec3 rtwLitHit(vec4 surface, vec3 n, vec3 toSun, float sunVis) {
-    return surface.rgb * (ambientColor.rgb + lightColor.rgb * max(dot(n, toSun), 0.0) * sunVis);
+    vec3 light = ambientColor.rgb + lightColor.rgb * max(dot(n, toSun), 0.0) * sunVis;
+    return surface.rgb * clamp(light, 0.0, 1.0);
 }
 
 // The frame drawn under the water (SceneColor) where a traced hit is on
