@@ -3600,21 +3600,43 @@ void registerSocialLuaAPI(lua_State* L) {
                 // missing, so the summon popup threw in its OnShow and
                 // ShowResurrectRequest threw before it could show anything -
                 // the handover fixed a duplicate and replaced it with a raise.
+                // The client reads this one out of its guid store on every call
+                // (0x00516510), so a name learned between the request and the
+                // popup still lands in the sentence; an unknown caster answers the
+                // empty string there, which is what this does rather than naming
+                // the guid.
                 {"GetSummonConfirmSummoner", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushstring(L, gh ? gh->getSummonerName().c_str() : "");
+            std::string who = gh ? gh->getSummonerName() : std::string();
+            if (who.empty() && gh) who = gh->lookupName(gh->getSummonerGuid());
+            lua_pushstring(L, who.c_str());
             return 1;
         }},
+                // Whole seconds, because that is what the client answers: it keeps
+                // the request's end as one absolute stamp (`now + the ms length`,
+                // 0x00513bf0) and hands back `(stamp - clock) / 1000` with integer
+                // division (0x005164b0). The popup reads this once in OnShow and
+                // counts down on its own afterwards, then ceils what it prints -
+                // so the fraction WoWee's own timer carries would round the first
+                // sentence a second up from what the client shows.
                 {"GetSummonConfirmTimeLeft", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, gh ? gh->getSummonTimeoutSec() : 0.0f);
+            const float sec = gh ? gh->getSummonTimeoutSec() : 0.0f;
+            lua_pushnumber(L, sec > 0.0f ? static_cast<double>(static_cast<int>(sec)) : 0.0);
             return 1;
         }},
-                // The destination is not carried in what this client parses,
-                // and the popup prints it into a sentence - so an empty string
-                // rather than nil, which would concatenate into a raise.
+                // The destination's name, read from the area the request carried
+                // (kept now, not thrown away with the log line). The popup
+                // formats it into "X is summoning you to Y", so this answers the
+                // empty string rather than nil - nil would concatenate into a
+                // raise - which is also exactly the client's own answer for an id
+                // its AreaTable cache has no row for (0x00516580, and 0x009e14ff
+                // is a bare NUL).
                 {"GetSummonConfirmAreaName", [](lua_State* L) -> int {
-            lua_pushstring(L, ""); return 1;
+            auto* gh = getGameHandler(L);
+            const std::string area = gh ? gh->getAreaName(gh->getSummonAreaId()) : std::string();
+            lua_pushstring(L, area.c_str());
+            return 1;
         }},
                 // Asked every frame by the popup's OnUpdate to grey the accept
                 // button. The server refuses a summon it will not honour, so

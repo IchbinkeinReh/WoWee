@@ -6266,6 +6266,15 @@ void SocialHandler::handleSummonRequest(network::Packet& packet) {
     owner_.summonerGuidRef()        = packet.readUInt64();
     uint32_t zoneId             = packet.readUInt32();
     uint32_t timeoutMs          = packet.readUInt32();
+    // The request names where the player would land, as an AreaTable id. The
+    // client keeps all of it - the guid pair, this id, and `now + the length it
+    // was given` as one stamp (0x00513bf0, which then fires CONFIRM_SUMMON) - and
+    // GetSummonConfirmAreaName (0x00516580) answers that id back as the row's
+    // localized name (the name column of the AreaTable record it looks the id up
+    // in, +0x2c), or the empty string for an id with no row (0x009e14ff holds a
+    // bare NUL). The popup prints the name into a sentence, so an id kept only
+    // for the log left the player reading "summoning you to ."
+    owner_.summonAreaIdRef()        = zoneId;
     owner_.summonTimeoutSecRef()    = timeoutMs / 1000.0f;
     owner_.pendingSummonRequestRef()= true;
 
@@ -6276,16 +6285,20 @@ void SocialHandler::handleSummonRequest(network::Packet& packet) {
     if (owner_.summonerNameRef().empty()) {
         owner_.summonerNameRef() = owner_.lookupName(owner_.summonerGuidRef());
     }
-    if (owner_.summonerNameRef().empty()) {
-        char tmp[32];
-        std::snprintf(tmp, sizeof(tmp), "0x%llX",
-                      static_cast<unsigned long long>(owner_.summonerGuidRef()));
-        owner_.summonerNameRef() = tmp;
-    }
+    // Nothing to invent when neither the unit nor the name cache knows the
+    // caster: GetSummonConfirmSummoner (0x00516510) reads its guid store on every
+    // call and answers the empty string when the guid has no record there - and
+    // asks that store *without* the flag that would query the server for the name
+    // (0x0067d770 queues a query only through that flag). A guid printed as a
+    // name is a name the realm never gave; the binding asks again per call, so a
+    // name learned in the meantime still reaches the sentence.
+    char guidText[32];
+    std::snprintf(guidText, sizeof(guidText), "0x%llX",
+                  static_cast<unsigned long long>(owner_.summonerGuidRef()));
 
     // CONFIRM_SUMMON and its popup, which names the summoner and the place;
     // no chat line (0x006d8680). This printed "X is summoning you to Y.".
-    LOG_INFO("SMSG_SUMMON_REQUEST: summoner=", owner_.summonerNameRef(),
+    LOG_INFO("SMSG_SUMMON_REQUEST: summoner=", owner_.summonerNameRef(), " guid=", guidText,
              " zoneId=", zoneId, " timeout=", owner_.summonTimeoutSecRef(), "s");
     owner_.fireAddonEvent("CONFIRM_SUMMON", {});
 }

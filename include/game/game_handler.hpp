@@ -2543,6 +2543,12 @@ public:
     // ---- Summon ----
     bool hasPendingSummonRequest() const { return pendingSummonRequest_; }
     const std::string& getSummonerName() const { return summonerName_; }
+    /// The cast request's guid, kept so a name that arrived after the request can
+    /// still be read - the client's binding reads its name store on every call.
+    uint64_t getSummonerGuid() const { return summonerGuid_; }
+    /// The AreaTable id of the place the summon would land the player in, as the
+    /// request named it; 0 when the popup has no destination to show.
+    uint32_t getSummonAreaId() const { return summonAreaId_; }
     float getSummonTimeoutSec() const { return summonTimeoutSec_; }
     void acceptSummon();
     /// A player gone from the world here: a group member's stats are asked
@@ -4878,6 +4884,7 @@ public:
     auto& pendingSummonRequestRef() { return pendingSummonRequest_; }
     auto& summonerGuidRef() { return summonerGuid_; }
     auto& summonerNameRef() { return summonerName_; }
+    auto& summonAreaIdRef() { return summonAreaId_; }
     auto& summonTimeoutSecRef() { return summonTimeoutSec_; }
     auto& bfMgrInvitePendingRef() { return bfMgrInvitePending_; }
 
@@ -5963,6 +5970,7 @@ private:
     bool        pendingSummonRequest_ = false;
     uint64_t    summonerGuid_         = 0;
     std::string summonerName_;
+    uint32_t    summonAreaId_         = 0;
     float       summonTimeoutSec_     = 0.0f;
 
     // Who results (last SMSG_WHO response)
