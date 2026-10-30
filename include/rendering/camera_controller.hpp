@@ -350,6 +350,9 @@ public:
     /// the server is told.
     [[nodiscard]] float getFlightPitchRad() const { return glm::radians(flightPitchDeg_); }
     [[nodiscard]] bool isAscending() const { return wasAscending_; }
+    /// Swimming with the swim-up or swim-down key held (swim_pitch.hpp).
+    [[nodiscard]] bool isSwimRising() const { return swimming && swimRising_; }
+    [[nodiscard]] bool isSwimDiving() const { return swimming && swimDiving_; }
     [[nodiscard]] bool isDescending() const { return wasDescending_; }
     void setHoverActive(bool active) { hoverActive_ = active; }
     void setMounted(bool m) { mounted_ = m; }
@@ -967,6 +970,8 @@ private:
     /// range plays as a landing, so a mounted player crossing a field looked to
     /// everyone else like one landing over and over.
     float airborneSeconds_ = 0.0f;
+    bool swimRising_ = false;
+    bool swimDiving_ = false;
     bool wasAscending_ = false;   // Space held while flyingActive_
     /// The pitch keys' way this frame and last: 1 up, -1 down, 0 none.
     int nowPitchKeys_ = 0;

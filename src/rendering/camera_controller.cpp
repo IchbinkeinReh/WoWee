@@ -559,6 +559,10 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         // Flags2 0x1 holds the rise and the dive as well (0x009898e0).
         bool diveKey = f.xDown && !f.noAscendDescend;
         bool diveIntent = diveKey || (f.nowForward && (f.forward3D.z < -0.28f));
+        // The swim-up and swim-down keys held, which tilt the body 45
+        // degrees as it swims (swim_pitch.hpp).
+        swimRising_ = f.spaceHeld && !f.noAscendDescend;
+        swimDiving_ = !swimRising_ && diveKey;
         if (f.spaceHeld && !f.noAscendDescend) {
             verticalVelocity = SWIM_BUOYANCY;
         } else if (diveKey) {

@@ -1450,6 +1450,10 @@ wowee_add_test(test_sound_entry
 wowee_add_test(test_camera_smooth
     SOURCES test_camera_smooth.cpp)
 
+# -- test_swim_pitch: the tilt of a swimming or flying player's body.
+wowee_add_test(test_swim_pitch
+    SOURCES test_swim_pitch.cpp)
+
 # -- test_rt_lamp_wrap: the lamps' wrapped N.L and the "Softer lamp light" switch.
 wowee_add_test(test_rt_lamp_wrap
     SOURCES test_rt_lamp_wrap.cpp)

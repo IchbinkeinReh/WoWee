@@ -1,3 +1,4 @@
+#include "rendering/swim_pitch.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/shadow_sun.hpp"
 #include "rendering/rt_lamp_wrap.hpp"
@@ -3180,7 +3181,38 @@ void Renderer::update(float deltaTime) {
         bodyIn.spineAllowed = !mounted;
         bodyIn.halveSpine = false;  // The player's own unit takes the whole lag on SpineLow first
         const body_yaw::Result body = body_yaw::update(characterBody_, bodyIn);
-        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(0.0f, 0.0f, characterBody_.body));
+        // Swimming or flying on foot, the body tilts toward where it goes
+        // (swim_pitch.hpp, 0x00719b80): the camera's pitch moving forward or
+        // back, 45 degrees with the swim-up and swim-down keys. Mounted, the
+        // mount takes the pitch (applyMountPositioning).
+        {
+            swim_pitch::Motion motion;
+            motion.forward = (moveFlags & body_yaw::kForward) != 0;
+            motion.backward = (moveFlags & body_yaw::kBackward) != 0;
+            motion.strafing = (moveFlags & (body_yaw::kStrafeLeft | body_yaw::kStrafeRight)) != 0;
+            motion.ascending = (moveFlags & body_yaw::kAscending) != 0 || cameraController->isSwimRising();
+            motion.descending = (moveFlags & body_yaw::kDescending) != 0 || cameraController->isSwimDiving();
+            const bool swimOrFly = !mounted && !dead && !taxiFlight &&
+                                   (moveFlags & (body_yaw::kSwimming | body_yaw::kFlying)) != 0;
+            float movementPitch = 0.0f;
+            if (camera) {
+                const glm::vec3 fwd = camera->getForward();
+                const float len = glm::length(fwd);
+                if (len > 1e-4f) movementPitch = std::asin(std::clamp(fwd.z / len, -1.0f, 1.0f));
+            }
+            if (swimOrFly) {
+                characterSwimPitch_ = swim_pitch::step(characterSwimPitch_,
+                                                       swim_pitch::target(motion, movementPitch), deltaTime);
+            } else {
+                characterSwimPitch_ = 0.0f;
+            }
+            const float tilt = swim_pitch::active(swimOrFly, motion, characterSwimPitch_) ? characterSwimPitch_ : 0.0f;
+            // The model faces +X: a nose-up pitch turns it about its own Y
+            // axis the negative way (CharacterRenderer::getModelMatrix's roll
+            // slot, applied after the yaw).
+            characterRenderer->setInstanceRotation(characterInstanceId,
+                                                   glm::vec3(0.0f, -tilt, characterBody_.body));
+        }
         characterRenderer->setInstanceTorsoYaw(characterInstanceId, body.spineYaw, body.headYaw);
 
         // Turning on the spot shuffles, standing up and alive (the stand
