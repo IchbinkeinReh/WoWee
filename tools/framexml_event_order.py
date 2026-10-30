@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Event arguments in the wrong positions, where the count is right.
 
-    tools/framexml_event_order.py
+    tools/framexml_event_order.py "<the extracted interface>"
 
 Both arity sweeps ask how MANY values an event carries. Neither can see which
 value went where, and that is the fault they missed: UNIT_SPELLCAST_SUCCEEDED

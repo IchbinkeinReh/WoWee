@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Events fired with fewer arguments than the handler unpacks.
 
+    tools/framexml_event_arity.py "<the extracted interface>"
+
 The unfired-event column says whether an event is sent at all. This asks the
 next question: whether what is sent carries what the handler reads.
 
