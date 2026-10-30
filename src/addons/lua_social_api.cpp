@@ -2689,6 +2689,12 @@ void registerSocialLuaAPI(lua_State* L) {
                 // in a battleground. None of the three existed, and
                 // UIParent_OnEvent calls the first of them the moment the
                 // healer is in range.
+                //
+                // The client's whole side of this is two sends and they are the
+                // two here: the query (0x2e2) goes when the healer's guid is
+                // first remembered - not on a timer - and the queue (0x2e3) on
+                // the accept (0x005262d0, a thunk to 0x00524b60, which writes it
+                // with the guid pair it kept).
                 {"AcceptAreaSpiritHeal", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) gh->queueAreaSpiritHeal();
             return 0;
@@ -2696,7 +2702,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 // There is no opcode for leaving the queue - AzerothCore drops
                 // a player from it when they leave the battleground and at no
                 // other time - so this accepts the click and does nothing,
-                // which is the honest answer rather than a raise.
+                // which is the honest answer rather than a raise. The client
+                // agrees: its cancel (0x0051f710 behind a thunk at 0x00522fa0)
+                // sends no packet either, and what it does instead is tear the
+                // "SPIRIT_HEALER_RELEASE_RED" effect off the player - the visual
+                // the 0x378 packet starts (0x0051f690 -> 0x007f4a00) and which
+                // this client draws no part of. The countdown therefore keeps
+                // running off the server's stamp: 0x00516b90 answers
+                // (stamp - now) / 1000 off one absolute ms stamp, and only a
+                // change of healer guid clears that stamp (0x00523eb0).
                 {"CancelAreaSpiritHeal", [](lua_State* L) -> int { (void)L; return 0; }},
                 {"GetAreaSpiritHealerTime", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
