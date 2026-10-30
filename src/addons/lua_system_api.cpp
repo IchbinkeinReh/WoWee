@@ -7429,15 +7429,22 @@ void registerSystemLuaAPI(lua_State* L) {
                 // PVPBattlegroundFrame_OnShow calls it and a nil global raises
                 // as the panel opens.
                 {"SortBGList",               lua_ReturnNothing},
-                // Stationery for a letter. None is carried, and the picker
-                // draws the default when the count is zero - which it could
-                // not do while the count raised.
-                // One: the plain parchment. Zero left the stationery popup
-                // empty, and SendMailFrame_CanSend will not enable the Send
-                // button until a stationery has been picked - so with none to
-                // pick, no letter could be sent. See GetStationeryInfo.
+                // How many papers the compose frame offers. That is Stationery
+                // .dbc filtered by the client's own rule - the row whose flag
+                // says no paper need be bought, plus every row whose item is
+                // lying about in the bags - so the count is that list's length
+                // and nothing else.
+                //
+                // It used to answer one: the plain parchment. A popup with
+                // nothing in it cannot be clicked, and SendMailFrame_CanSend
+                // will not enable the Send button until a paper is picked, so
+                // the honest zero at the time was what stopped letters going
+                // out at all. See InventoryHandler::stationeryOptions.
                 {"GetNumStationeries",       [](lua_State* L) -> int {
-                    lua_pushnumber(L, 1);
+                    auto* gh = getGameHandler(L);
+                    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+                    const size_t count = inv ? inv->stationeryOptions().size() : 0;
+                    lua_pushnumber(L, static_cast<lua_Number>(count));
                     return 1;
                 }},
                 // GetNumMutes used to answer zero here, because the ignore tab's

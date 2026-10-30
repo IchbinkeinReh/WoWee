@@ -16,7 +16,6 @@
 #include "game/chat_handler.hpp"
 #include "game/difficulty_change.hpp"
 #include "game/reputation_standing.hpp"
-#include "game/stationery.hpp"
 #include "rendering/animation_controller.hpp"
 
 namespace wowee::addons {
@@ -2009,49 +2008,73 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushnil(L);
             return 10;
         }},
-                // Stationery is the letterhead a mail is written on. The list
-                // is empty - GetNumStationeries answers zero from the counting
-                // table in lua_engine.cpp - so the picker has no rows and these
-                // are the calls around it.
+                // Stationery is the paper a letter is written on, and the list
+                // of them is Stationery.dbc itself: the row whose flag bit 0
+                // says a letter needs no bought paper, plus every row whose item
+                // the player is carrying. That is the client's rule, not one
+                // invented here (0x0056fc80 asks its own inventory counts -
+                // 0x00754a20 - for each of the table's seven rows, and keeps the
+                // ones that answer). Which rows a player sees is therefore what
+                // they have bought, and the popup is the only place most of
+                // those items are ever named, so reading the list also asks the
+                // server for the templates. See InventoryHandler::
+                // stationeryOptions for the whole thing in one place.
                 //
-                // Deliberately NOT bound here. That table records every name it
-                // answers for under a "count:" prefix so it stays in the
-                // missing-API report, and binding it explicitly would take it
-                // out - which is the one thing that report exists to prevent.
-                // The stationery list is a real feature this client does not
-                // have, and it should keep saying so.
-                // Stationery is the paper a letter is written on. There is one
-                // - the plain parchment every letter uses unless the player
-                // bought something else - and answering that there are none
-                // left the popup empty with nothing to pick.
-                //
-                // That is not cosmetic. SendMailFrame_CanSend counts three
-                // things before it will enable the Send button, and one of them
-                // is that a stationery has been chosen. With an empty list
-                // there was no way to choose one, so the button could never be
-                // enabled and no letter could be sent at all.
-                //
-                // GetStationeryInfo(index) → name, texture, cost. A nil cost
-                // means free, which is what the frame draws as no price.
+                // GetStationeryInfo(index) → name, texture, cost, as
+                // mailframe.lua unpacks them: the row's label, the art name it
+                // pastes into STATIONERY_PATH..texture.."1", and a price or nil.
+                // The client's own version of the triple is two strings and a
+                // number (0x0056df80), the second built as "%s%s%s" from a
+                // StringLookups value, a backslash or nothing, and an item-name
+                // getter - which is why the label and the art are served here
+                // from the two places this interface's consumer can use them:
+                // the item's name for the label, and the table's art column for
+                // the paper. The price is nil for a paper already in the bags,
+                // which the frame draws with no price at all, and the vendor's
+                // buy price otherwise - a number this client used to read off
+                // the item query and drop on the floor.
                 {"GetStationeryInfo", [](lua_State* L) -> int {
-                    if (static_cast<int>(luaL_optnumber(L, 1, 0)) != 1) return luaReturnNil(L);
-                    lua_pushstring(L, "Default");
-                    // The plain parchment, by the name its art carries:
-                    // STATIONERY_PATH..texture.."1" has to reach a file, and
-                    // "Default" reached none - so the letter being written had
-                    // the same black background the one being read did.
-                    lua_pushstring(L, game::stationeryTexture(1, 0));
-                    lua_pushnil(L);                 // free
+                    auto* gh = getGameHandler(L);
+                    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+                    const uint32_t index = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
+                    if (!inv || index < 1) return luaReturnNil(L);
+                    const auto& options = inv->stationeryOptions();
+                    if (index > options.size()) return luaReturnNil(L);
+                    const auto& row = options[index - 1];
+                    lua_pushstring(L, row.name.c_str());
+                    if (!row.texture.empty()) lua_pushstring(L, row.texture.c_str());
+                    else                      lua_pushnil(L);
+                    if (row.hasCost) lua_pushnumber(L, row.cost);
+                    else             lua_pushnil(L);                 // free
                     return 3;
                 }},
+                // Guarded with `if ( texture )` before being pasted into a path,
+                // so nil leaves the paper that is already up rather than
+                // building a texture name out of nothing. The chosen id is
+                // looked up in the table and not in the offered list, as the
+                // client does (0x0056e170): a paper stays chosen after the last
+                // one of it leaves the bags.
                 {"GetSelectedStationeryTexture", [](lua_State* L) -> int {
-                    lua_pushstring(L, game::stationeryTexture(1, 0));
+                    auto* gh = getGameHandler(L);
+                    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+                    if (!inv) return luaReturnNil(L);
+                    const auto art = inv->stationeryArt(inv->selectedStationery());
+                    if (!art || art->empty()) return luaReturnNil(L);
+                    lua_pushstring(L, art->c_str());
                     return 1;
                 }},
-                // Which one is chosen is the frame's business - it keeps the
-                // index itself and hands it here. Nothing on this side varies
-                // with it while there is only one.
-                {"SelectStationery", [](lua_State* L) -> int { (void)L; return 0; }},
+                // The frame keeps its own highlighted index and hands the choice
+                // here; what lands on this side is the Stationery.dbc id the
+                // send packet carries, which is the part the realm remembers.
+                // Out of range clears it, which is what the client's
+                // SelectStationery does (0x0056e0e0) and what puts the Send
+                // button back under the three-check gate.
+                {"SelectStationery", [](lua_State* L) -> int {
+                    auto* gh = getGameHandler(L);
+                    if (auto* inv = gh ? gh->getInventoryHandler() : nullptr)
+                        inv->selectStationery(static_cast<uint32_t>(luaL_optnumber(L, 1, 0)));
+                    return 0;
+                }},
                 // Guarded with `if ( texture )` before being pasted into a
                 // path, so nil leaves the default parchment rather than
                 // building a texture name out of nothing.

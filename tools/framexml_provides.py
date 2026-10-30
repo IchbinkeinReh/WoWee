@@ -7,10 +7,13 @@ only the C++ binding tables, which is between a third and a half of the answer:
 a tool that cannot see those reports them as gaps.
 
 That is not hypothetical. `framexml_reachable_globals` reported
-GetNumStationeries as unbound and reachable from the mail frame. It has been
-answered by the counting table since long before, and acting on that report made
+GetNumStationeries as unbound and reachable from the mail frame. It was answered
+by the counting table long before that report, and acting on the report made
 things worse - binding it explicitly removed it from the missing-API report,
-which is the one thing that report exists to preserve. Meanwhile
+which is the one thing that report exists to preserve. (It has since left the
+counting table for a real binding, once the paper-style popup was built out of
+Stationery.dbc; the counting entry was only ever a stand-in for a feature the
+client did not have.) Meanwhile
 `framexml_element_readiness` had it right the whole time, because its
 `registered()` did read the bootstrap.
 

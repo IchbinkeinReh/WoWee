@@ -22,6 +22,27 @@ namespace game {
 
 class GameHandler;
 
+/// One row of the paper-style list the mail compose frame offers.
+struct StationeryOption {
+    /// Stationery.dbc's row id, which is what CMSG_SEND_MAIL carries and what
+    /// the realm hands back on the letter this one wrote.
+    uint32_t id = 0;
+    /// The item the paper is sold as, and the thing the player has to be
+    /// carrying to be offered the row at all - unless its flag says otherwise.
+    uint32_t itemId = 0;
+    /// Stationery.dbc's art column, pasted into Interface\Stationery\..1 and ..2.
+    std::string texture;
+    /// That item's name, empty until its query answer lands.
+    std::string name;
+    /// What a vendor asks for it, in copper - only when the player is not
+    /// carrying one.
+    uint32_t cost = 0;
+    /// False draws no price at all, which is how the client marks a paper the
+    /// player already has.
+    bool hasCost = false;
+    bool owned = false;
+};
+
 class InventoryHandler {
 public:
     using PacketHandler = std::function<void(network::Packet&)>;
@@ -460,6 +481,34 @@ public:
 
     /// Put paper in the compose frame, so its Send button can be enabled.
     void selectDefaultStationery();
+
+    /// The papers on offer, rebuilt from Stationery.dbc on every read.
+    ///
+    /// The client's rule, from MailInfo.cpp: a row is offered when its flag bit
+    /// 0 is set - the paper a letter can be written on without buying anything
+    /// - or when the player is carrying the item that row is sold as
+    /// (0x0056fc80, which asks 0x00754a20 how many of the item the bags hold).
+    /// It caches that list and rebuilds it when an inventory change or an item
+    /// query says the answer may have changed; with seven rows in the table,
+    /// reading it fresh cannot go stale and costs nothing worth naming.
+    ///
+    /// The order is the client's too (its qsort comparator 0x0056dd00): papers
+    /// already in the bags first, then the rest by their item's name.
+    const std::vector<StationeryOption>& stationeryOptions();
+
+    /// The chosen paper, as the Stationery.dbc id the send packet carries.
+    uint32_t selectedStationery() const { return selectedStationery_; }
+
+    /// Choose by the popup's one-based index. Out of range clears the choice,
+    /// which is what SelectStationery does (0x0056e0e0), and clearing it is what
+    /// disables the Send button again (SendMailFrame_CanSend counts it).
+    void selectStationery(uint32_t index);
+
+    /// One row of Stationery.dbc by id, offered or not. A choice outlives the
+    /// reason it was offered - the paper can be sold out of the bags after it
+    /// was picked - and the client reads the art out of the table for the chosen
+    /// id rather than out of its list (0x0056e170).
+    std::optional<std::string> stationeryArt(uint32_t id) const;
 
     /// Say why a letter is not going out, and tell the compose frame so it
     /// puts its Send button back.
@@ -953,6 +1002,13 @@ private:
     int selectedMailIndex_ = -1;
     bool showMailCompose_ = false;
     bool hasNewMail_ = false;
+    /// The paper the next letter is written on - a Stationery.dbc row id, or 0
+    /// for none, which is also what the client sends when nothing was picked
+    /// (MailInfo.cpp's DAT_00beb1cc).
+    uint32_t selectedStationery_ = 0;
+    /// Kept as a member only so the bindings can read it through a reference;
+    /// rebuilt in full on every read.
+    std::vector<StationeryOption> stationeryOptions_;
     std::array<MailAttachSlot, MAIL_MAX_ATTACHMENTS> mailAttachments_{};
 
     // ---- Bank state ----

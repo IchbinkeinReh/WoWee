@@ -188,7 +188,7 @@ network::Packet GetMailListPacket::build(uint64_t mailboxGuid) {
 
 network::Packet SendMailPacket::build(uint64_t mailboxGuid, const std::string& recipient,
                                       const std::string& subject, const std::string& body,
-                                      uint64_t money, uint64_t cod,
+                                      uint64_t money, uint64_t cod, uint32_t stationeryId,
                                       const std::vector<uint64_t>& itemGuids) {
     // WotLK 3.3.5a format
     network::Packet packet(wireOpcode(Opcode::CMSG_SEND_MAIL));
@@ -196,7 +196,12 @@ network::Packet SendMailPacket::build(uint64_t mailboxGuid, const std::string& r
     packet.writeString(recipient);
     packet.writeString(subject);
     packet.writeString(body);
-    packet.writeUInt32(0);       // stationery
+    // The paper the letter is written on. The client writes the Stationery.dbc
+    // id the popup picked here, and the realm keeps it: it comes back as the
+    // received letter's stationeryIcon and its paper behind the body. Zero is
+    // also what the client writes when nothing was chosen, so a letter written
+    // on the plain parchment is sent this way too.
+    packet.writeUInt32(stationeryId);
     packet.writeUInt32(0);       // unknown
     uint8_t attachCount = static_cast<uint8_t>(itemGuids.size());
     packet.writeUInt8(attachCount);

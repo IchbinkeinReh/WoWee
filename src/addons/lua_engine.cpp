@@ -9929,7 +9929,10 @@ void LuaEngine::installMissingApiFallback() {
         "  'GetNumPoints','GetNumQuestItemDrops','GetNumQuestItems',\n"
         "  'GetNumQuestLogRewardFactions',\n"
         "  'GetNumRandomDungeons',\n"
-        "  'GetNumStationeries',\n"
+        // 'GetNumStationeries' is out of this list: the mail frame's paper-style
+        // popup now has a real list, built from Stationery.dbc by
+        // InventoryHandler::stationeryOptions and counted by the binding in the
+        // system table. Zero here would be the answer that hid the feature.
         "  'GetNumTitles','GetNumTooltips','GetNumTrackingTypes',\n"
         "  'GetNumVoiceSessionMembersBySessionID',\n"
         "  'GetNumDungeonMapLevels','GetNumMapOverlays','GetNumVoiceSessions',\n"

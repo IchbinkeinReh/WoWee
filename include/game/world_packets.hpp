@@ -2099,6 +2099,12 @@ struct ItemQueryResponseData {
     int32_t intellect = 0;
     int32_t spirit = 0;
     uint32_t sellPrice = 0;
+    /// What a vendor asks for it, in copper. Read off the wire beside
+    /// sellPrice and thrown away until the mail frame's paper-style popup
+    /// needed it: the original client's stationery row prices a paper the
+    /// player is not carrying with this number (0x0056df80 pushes the price at
+    /// item-record +0x20, and answers nil - free - when they are carrying it).
+    uint32_t buyPrice = 0;
     uint32_t itemLevel = 0;
     uint32_t requiredLevel = 0;
     std::string subclassName;
@@ -3718,12 +3724,20 @@ public:
     static network::Packet build(uint64_t mailboxGuid);
 };
 
-/** CMSG_SEND_MAIL packet builder */
+/** CMSG_SEND_MAIL packet builder.
+ *
+ *  `stationeryId` is the Stationery.dbc row the letter is written on - the one
+ *  picked in the compose frame's paper-style popup. The client writes the id it
+ *  is holding and zero when nothing was picked (0x00570910 reads its chosen id
+ *  into `local_18` and puts it at that place in the packet); the realm keeps it
+ *  and hands it back as the received letter's stationeryIcon, so a letter sent
+ *  on picked paper arrives on that paper rather than on the plain one.
+ */
 class SendMailPacket {
 public:
     static network::Packet build(uint64_t mailboxGuid, const std::string& recipient,
                                  const std::string& subject, const std::string& body,
-                                 uint64_t money, uint64_t cod,
+                                 uint64_t money, uint64_t cod, uint32_t stationeryId = 0,
                                  const std::vector<uint64_t>& itemGuids = {});
 };
 

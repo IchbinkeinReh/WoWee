@@ -3599,15 +3599,88 @@ void InventoryHandler::selectDefaultStationery() {
     // successfully. So the first letter of a session could never be sent - the
     // button was disabled before it was ever pressed, which is exactly what the
     // input log shows and what "mail not being sent" turned out to be.
+    //
+    // The click is the interface's own - SendMailFrame_Reset ends with it - and
+    // it goes through SelectStationery, so the id it lands on is recorded by the
+    // binding and this side does not have to know which paper that was.
     owner_.runInterfaceCommand(
         "if StationeryPopupFrame and not StationeryPopupFrame.selectedIndex then "
         "StationeryPopupButton_OnClick(nil, 1) end");
+}
+
+const std::vector<StationeryOption>& InventoryHandler::stationeryOptions() {
+    stationeryOptions_.clear();
+    auto* am = owner_.services().assetManager;
+    if (!am || !am->isInitialized()) return stationeryOptions_;
+    auto dbc = am->loadDBCOptional("Stationery.dbc");
+    // ID, ItemID, art name (a string column), flags. The flags are an int: read
+    // as a string offset they hand back whatever the previous column's name
+    // happens to start with at that number.
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 4) return stationeryOptions_;
+
+    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+        StationeryOption o;
+        o.id = dbc->getUInt32(r, 0);
+        o.itemId = dbc->getUInt32(r, 1);
+        o.texture = dbc->getString(r, 2);
+        const bool freebie = (dbc->getUInt32(r, 3) & 1u) != 0u;
+        o.owned = o.itemId != 0 && owner_.getInventory().countItem(o.itemId) > 0;
+        if (!freebie && !o.owned) continue;
+
+        // The row is labelled with the item's own name and priced with what a
+        // vendor asks for it. The client asks for that template the way a
+        // tooltip miss does - a paper the player has never seen is named for
+        // the first time in this popup, so the query usually has to be sent.
+        const auto* info = o.itemId ? owner_.getItemInfo(o.itemId) : nullptr;
+        if (!info) {
+            if (o.itemId) owner_.queryItemInfo(o.itemId, 0);
+        } else {
+            o.name = info->name;
+            // A paper already in the bags is drawn with no price at all: the
+            // client reads the price off the item record only when both its
+            // counts of that item are zero (0x0056df80).
+            o.hasCost = !o.owned;
+            o.cost = info->buyPrice;
+        }
+        stationeryOptions_.push_back(std::move(o));
+    }
+
+    // The client's order (0x0056dd00): papers already in the bags ahead of
+    // those merely offered, then by the item's name. Ahead of both it puts the
+    // rows that have art, which here is all seven - so that half of the
+    // comparison has nothing to order and is not restated.
+    std::stable_sort(stationeryOptions_.begin(), stationeryOptions_.end(),
+                     [](const StationeryOption& a, const StationeryOption& b) {
+        if (a.owned != b.owned) return a.owned;
+        return a.name < b.name;
+    });
+    return stationeryOptions_;
+}
+
+void InventoryHandler::selectStationery(uint32_t index) {
+    const auto& options = stationeryOptions();
+    selectedStationery_ = (index >= 1 && index <= options.size()) ? options[index - 1].id : 0;
+}
+
+std::optional<std::string> InventoryHandler::stationeryArt(uint32_t id) const {
+    if (id == 0) return std::nullopt;
+    auto* am = owner_.services().assetManager;
+    if (!am || !am->isInitialized()) return std::nullopt;
+    auto dbc = am->loadDBCOptional("Stationery.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 4) return std::nullopt;
+    const int32_t row = dbc->findRecordById(id);
+    if (row < 0) return std::nullopt;
+    return dbc->getString(static_cast<uint32_t>(row), 2);
 }
 
 void InventoryHandler::closeMailbox() {
     mailboxOpen_ = false;
     mailboxGuid_ = 0;
     showMailCompose_ = false;
+    // The client's MailInfo reset clears the chosen paper with the rest of the
+    // mail store (0x00571530 zeroes the count, the choice and the draft money
+    // together), so the next letter starts with no paper picked.
+    selectedStationery_ = 0;
     clearMailAttachments();
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_CLOSED", {});
     // A look for mail held over while it was open goes out now, with nothing
@@ -3706,9 +3779,11 @@ void InventoryHandler::sendMail(const std::string& recipient, const std::string&
         refuseSend("This realm's mail carries one item per letter.", "too many attachments");
         return;
     }
-    auto packet = owner_.getPacketParsers()->buildSendMail(mailboxGuid_, recipient, subject, body, money, cod, itemGuids);
+    auto packet = owner_.getPacketParsers()->buildSendMail(mailboxGuid_, recipient, subject, body,
+                                                           money, cod, selectedStationery_, itemGuids);
     LOG_INFO("sendMail: to='", recipient, "' subject='", subject, "' money=", money,
-             " attachments=", itemGuids.size(), " mailboxGuid=", mailboxGuid_);
+             " attachments=", itemGuids.size(), " stationery=", selectedStationery_,
+             " mailboxGuid=", mailboxGuid_);
     owner_.getSocket()->send(packet);
     clearMailAttachments();
 }

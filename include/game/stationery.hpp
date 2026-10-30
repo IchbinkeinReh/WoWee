@@ -5,6 +5,14 @@
 namespace wowee {
 namespace game {
 
+/// These two answer for a letter being *read* - the small icon on its inbox row
+/// and the paper behind its body - and are written out from the table instead of
+/// read from it, so that path needs no table to be loaded first. The compose
+/// frame's paper-style popup does read Stationery.dbc by name, and that is where
+/// these rows, their item ids and their flag bit come from: see
+/// InventoryHandler::stationeryOptions. The ids and pairs below are the whole
+/// seven-row table, so the two sides agree as long as the table does.
+
 /// The letterhead a letter is written on, by its Stationery.dbc id.
 ///
 /// FrameXML appends "1" and "2" to this and hangs the two halves behind the
