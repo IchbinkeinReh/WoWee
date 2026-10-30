@@ -30,8 +30,16 @@ So the second table below is the one to read first: events with no sender whose
 source message the client *already handles*. Those are two working halves with
 nothing in between, and they are nearly always real.
 
-THREE THINGS THIS CANNOT DECIDE
------------------------------
+THINGS THIS CANNOT DECIDE
+-------------------------
+* **A name spelled differently from the string is invisible to the fire-call
+  patterns.** UPDATE_LFG_LIST read as a gap for weeks while sitting in the "read
+  these first" table beside the two real ones: the call passes
+  `std::string(kLfgListChangedEvent)`, and the string lives in
+  `include/game/lfg_update.hpp` under that other spelling. `viaConstants()` now
+  resolves that pair across both source roots and prints the two halves, so the
+  send is counted and checkable rather than assumed.
+
 * **A name kept in a variable is invisible to the fire-call patterns.** The
   calendar's reader fills a list of signal structs and one call raises whatever
   that list holds, so not one of its ten event names sits next to a fire call and
@@ -75,6 +83,10 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 INTERFACE = (sys.argv[1] if len(sys.argv) > 1
              else os.path.join(ROOT, "Data", "interface"))
 SRC = os.path.join(ROOT, "src")
+#: Headers, which the fire-call scans below do not need and the constant
+#: resolution does: this tree spells an event name once in a header
+#: (include/game/lfg_update.hpp) and fires it by that name from src/.
+INCLUDE = os.path.join(ROOT, "include")
 
 EVENT = r'"([A-Z][A-Z0-9_]{3,})"'
 
@@ -224,6 +236,56 @@ def walkers():
     return sites
 
 
+#: A fire call whose first argument is a named constant instead of a literal:
+#:     owner_.addonEventCallbackRef()(std::string(kLfgListChangedEvent), {});
+#: (social_handler.cpp:5234).  UPDATE_LFG_LIST came back a gap - in the "read
+#: these first" table, beside the two real ones - for the same reason the
+#: calendar names did: the name sits nowhere near the call, in a header, under a
+#: different spelling.
+CONST_ARG = re.compile(r'(?:fireAddonEvent|addonEventCallback[A-Za-z_]*(?:\(\))?)'
+                       r'\(\s*(?:std::string(?:_view)?\s*\(\s*)?([A-Za-z_]\w*)\s*[,)]')
+#: The other half of the same name: the declaration that gives a constant its
+#: string.  Only a declaration counts - a plain assignment to a local says
+#: nothing about what the fire call passes.
+CONST_DEF = re.compile(r'\b(?:constexpr|const)\b[^=;]{0,90}?\b([A-Za-z_]\w*)\s*=\s*'
+                       + EVENT)
+
+
+def viaConstants():
+    """Events fired by constant name, and the two sites that make that claim.
+
+    Returns (names, sites) where a site is (event, constant, file, line of the
+    fire call).  A name is credited only when the file's call and some header's
+    declaration agree on the same identifier, so the pair is checkable by hand.
+    """
+    def sources():
+        for root in (SRC, INCLUDE):
+            for dirpath, _, filenames in os.walk(root):
+                for name in filenames:
+                    if not name.endswith((".cpp", ".hpp")):
+                        continue
+                    path = os.path.join(dirpath, name)
+                    yield path, open(path, encoding="utf-8", errors="ignore").read()
+
+    definitions = {}
+    for _, src in sources():
+        for match in CONST_DEF.finditer(src):
+            definitions.setdefault(match.group(1), match.group(2))
+
+    names, sites = set(), []
+    for path, src in sources():
+        for match in CONST_ARG.finditer(src):
+            constant = match.group(1)
+            if constant not in definitions:
+                continue
+            event = definitions[constant]
+            names.add(event)
+            line = src[:match.start()].count("\n") + 1
+            root = INCLUDE if path.startswith(INCLUDE) else SRC
+            sites.append((event, constant, os.path.relpath(path, root), line))
+    return names, sites
+
+
 def chat_family():
     """The CHAT_MSG_ family, which neither half of the scan above can see.
 
@@ -341,6 +403,8 @@ def main():
               "directory on the command line.")
         return 2
     where, fired = registered(), sent()
+    byConstant, constantSites = viaConstants()
+    fired |= byConstant
     # `&` binds looser than `-`, so the parentheses are not decoration.
     inHand = (held() & set(where)) - fired
     opcodes, skipped = handled_opcodes()
@@ -421,6 +485,16 @@ def main():
                   "walks the list:")
             for event in sorted(inHand):
                 print(f"  {event}")
+
+    if constantSites:
+        # Counted as sent, and shown rather than trusted: the pair is a fire
+        # call naming a constant and the declaration that gives it its string,
+        # so both halves can be looked at.
+        print()
+        print(f"{len(byConstant)} more are fired by a named constant instead of a literal, "
+              "and are\ncounted as sent on these two halves:")
+        for event, constant, path, line in sorted(set(constantSites)):
+            print(f"  {event:<38} {constant:<28} {path}:{line}")
 
     ours, theirs = chat_family()
     unnamed = sorted(theirs - ours)
