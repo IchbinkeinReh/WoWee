@@ -2235,7 +2235,11 @@ void QuestHandler::applyQuestStateFromFields(const FlatFieldMap& fields) {
     if (ufQuestStart == 0xFFFF) return;
 
     const uint8_t qStride = owner_.getPacketParsers() ? owner_.getPacketParsers()->questLogStride() : 5;
-    if (qStride < 2) return;
+
+    if (qStride < 2) {
+        syncQuestLogMembershipFromSlots(fields, ufQuestStart, qStride);
+        return;
+    }
 
     for (uint16_t slot = 0; slot < 25; ++slot) {
         const uint16_t idField    = ufQuestStart + slot * qStride;
@@ -2280,6 +2284,50 @@ void QuestHandler::applyQuestStateFromFields(const FlatFieldMap& fields) {
                 LOG_INFO("Quest ", questId, " complete=", serverComplete,
                          " from VALUES update field state");
                 break;
+            }
+        }
+    }
+    // After the slots' own pass, which takes a quest it was waiting to
+    // accept into the log itself, and asks its giver again.
+    syncQuestLogMembershipFromSlots(fields, ufQuestStart, qStride);
+}
+
+void QuestHandler::syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, uint16_t ufQuestStart,
+                                                   uint8_t qStride) {
+    // Which quests the slots hold. The client's quest log is these fields -
+    // it reads the slots whenever it draws the log - so a quest the server
+    // puts in a slot or takes out of one is in the log or out of it at once,
+    // whatever did it: a quest-giver, a GM's .quest add or .quest remove, a
+    // quest the server drops on its own. Here the log was built from the
+    // slots once, at login, and otherwise only from the packets of an
+    // accept, an abandon and a turn-in, so a quest added or removed any
+    // other way showed only after a relog. A slot that changes resyncs the
+    // log from all of them (resyncQuestLogFromServerSlots).
+    std::array<uint32_t, 25> ids{};
+    for (uint16_t slot = 0; slot < 25; ++slot) {
+        const auto it = fields.find(static_cast<uint16_t>(ufQuestStart + slot * qStride));
+        if (it != fields.end()) ids[slot] = it->second;
+    }
+    if (ids != slotQuestIds_) {
+        slotQuestIds_ = ids;
+        std::unordered_set<uint32_t> before;
+        for (const auto& q : questLog_) before.insert(q.questId);
+        if (resyncQuestLogFromServerSlots(false)) {
+            std::unordered_set<uint32_t> after;
+            for (const auto& q : questLog_) {
+                after.insert(q.questId);
+                // Its title and objectives, for one the log has not had.
+                if (before.count(q.questId) == 0) requestQuestQuery(q.questId, false);
+            }
+            bool changed = after != before;
+            for (uint32_t id : after) {
+                if (before.count(id) == 0) announceQuestLogChanged(id);
+            }
+            if (changed && owner_.addonEventCallbackRef()) {
+                // A quest gone has no index left to name; the log and
+                // the tracker redraw from the list as it is now.
+                owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
+                owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
             }
         }
     }

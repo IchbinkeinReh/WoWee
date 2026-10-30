@@ -254,6 +254,8 @@ public:
     void addQuestToLocalLogIfMissing(uint32_t questId, const std::string& title, const std::string& objectives);
     bool resyncQuestLogFromServerSlots(bool forceQueryMetadata);
     void applyQuestStateFromFields(const FlatFieldMap& fields);
+    /// The log's quests from the slots, when the slots changed (slotQuestIds_).
+    void syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, uint16_t ufQuestStart, uint8_t qStride);
     void applyPackedKillCountsFromFields(QuestLogEntry& quest);
     // Reconcile collect-item objective progress against the player's actual
     // bag contents. In 3.3.5a the server does not push item objective counts
@@ -289,6 +291,7 @@ public:
                                  const std::string& itemName);
 
     void clearQuestStateForCharacterSwitch() {
+        slotQuestIds_.fill(0);
         questLog_.clear();
         pendingQuestQueryIds_.clear();
         npcQuestStatus_.clear();
@@ -368,6 +371,11 @@ private:
     bool questFactionRewDbcLoaded_ = false;
 
     std::unordered_map<uint32_t, float> pendingQuestAcceptTimeouts_;
+    /// The quest each of the 25 log slots held at the last player update
+    /// (PLAYER_QUEST_LOG_START, 0 empty): a change is a quest taken or
+    /// dropped, by whatever means, and the log follows it
+    /// (applyQuestStateFromFields).
+    std::array<uint32_t, 25> slotQuestIds_{};
     std::unordered_map<uint32_t, uint64_t> pendingQuestAcceptNpcGuids_;
     bool questOfferRewardOpen_ = false;
     QuestOfferRewardData currentQuestOfferReward_;
