@@ -36,7 +36,20 @@ UIManager::UIManager() {
     characterCreateScreen = std::make_unique<CharacterCreateScreen>();
     characterScreen = std::make_unique<CharacterScreen>();
     gameScreen = std::make_unique<GameScreen>();
-    authScreen->setOnResetGraphicsDefaults([this] { gameScreen->resetGraphicsToDefaults(); });
+    authScreen->setOnResetGraphicsDefaults([gs = gameScreen.get()] { gs->resetGraphicsToDefaults(); });
+    // The login sheet shows and changes the game's own settings: the values
+    // the in-game pages drive, with their ranges and side effects, saved to
+    // the one file. The world takes the rest of them when it is entered
+    // (GameScreen re-reads the file and applies it then).
+    AuthScreen::SettingsAccess access;
+    access.get = [gs = gameScreen.get()](const std::string& key) {
+        return gs->getSettingsPanel().settingValue(key);
+    };
+    access.set = [gs = gameScreen.get()](const std::string& key, const std::string& value) {
+        return gs->getSettingsPanel().setSettingValue(key, value);
+    };
+    access.save = [gs = gameScreen.get()] { gs->saveSettings(); };
+    authScreen->setSettingsAccess(std::move(access));
 }
 
 UIManager::~UIManager() = default;

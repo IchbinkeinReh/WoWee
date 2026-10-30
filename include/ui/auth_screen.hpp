@@ -54,6 +54,19 @@ public:
         onResetGraphicsDefaults_ = std::move(callback);
     }
 
+    /// The game's own settings, which the sheet shows and changes: the same
+    /// SettingsPanel the in-game options pages drive, so a value, its range
+    /// and its side effects are one thing on both screens. Wired by UIManager.
+    struct SettingsAccess {
+        /// A setting by schema key, as a string ("" for an unknown key).
+        std::function<std::string(const std::string& key)> get;
+        /// Writes and applies it, as the in-game pages do.
+        std::function<bool(const std::string& key, const std::string& value)> set;
+        /// Writes settings.cfg.
+        std::function<void()> save;
+    };
+    void setSettingsAccess(SettingsAccess access) { settingsAccess_ = std::move(access); }
+
 
     /**
      * Check if authentication is in progress
@@ -233,65 +246,15 @@ private:
     // ----- Login-screen graphics settings sheet -----
     bool settingsOpen_ = false;
 
-    // Local copies of the settings keys we expose in the login popup.
-    // Loaded on first open; saved on Apply.
-    /// The graphics the login screen offers, kept apart from SettingsPanel's
-    /// fields on purpose.
-    ///
-    /// It mirrors eighteen of them, and that mirroring caused four bugs: a
-    /// dropdown offering two entries of a three-entry scale, a preset
-    /// table that had drifted from the panel's in four of ten columns, four
-    /// keys with no clamp and a fifth clamped to a different floor, and a set
-    /// of defaults that disagreed with the schema's. Every one of them is fixed
-    /// by the two sides reading one thing rather than by this struct going
-    /// away: the scale, the preset table, the ranges and the defaults are all
-    /// shared now, and settings_apply_on_load fails if any of them drifts
-    /// again.
-    ///
-    /// What is left is eighteen fields of plain state and a loader that clamps
-    /// them, which is what this screen needs before a SettingsPanel exists to
-    /// hold anything - it runs before the game screen does. Collapsing it means
-    /// reworking the first screen every player sees, for a mirror whose every
-    /// known failure is already held by a check. That is a trade worth
-    /// declining until something here drifts that the checks do not catch.
-    struct LoginGraphicsState {
-        int  preset          = 2;   // 0=Custom 1=Low 2=Medium 3=High 4=Ultra
-        bool shadows         = true;
-        float shadowDistance = 300.0f;
-        float viewDistance   = kDefaultViewDistance;
-        /// How far distance fog takes the sky's colour, 0 to 1. See
-        /// LightingManager::setFogSkyBlend.
-        float fogSkyBlend    = 0.0f;
-        float fogStrength    = 1.0f;
-        bool  sharpStars     = false;
-        // The other extras the original client lacks, carried so a preset
-        // picked here turns them off as the in-game one does.
-        float lensFlare      = 0.0f;
-        bool  sunShafts      = false;
-        int   lightShafts    = 0;   // 0=Off 1=Low 2=Medium 3=High
-        int  antiAliasing    = 1;   // 0=Off 1=2x 2=4x 3=8x
-        bool fxaa            = false;
-        bool normalMapping   = true;
-        int  upscalingMode   = 0;   // 0=Off 1=FSR1 2=FSR3
-        /// This client's procedural water; off is the client's own liquid.
-        /// The client's 'specular' option, off as its cvar is (0x0078e1a0).
-        bool specular        = false;
-        int  groundClutter   = kDefaultGroundClutter; // 0-150
-        // Ground cover, so that a preset picked here means what the same
-        // preset means in game. Ultra grows it; the others do not.
-        bool grass           = false;
-        int  grassDensity    = 100; // percent
-        int  grassHeight     = 100; // percent
-        int  grassDistance   = 150; // yards
-        int  brightness      = 50;  // 0-100
-        bool vsync           = true;
-        bool fullscreen      = false;
-    };
-    LoginGraphicsState loginGfx_;
-    bool loginGfxLoaded_ = false;
-    /// A preset was picked on the sheet (or Reset pressed) since it opened, so
-    /// Apply also writes that preset's columns the sheet has no control for.
-    bool loginPresetPicked_ = false;
+    /// The graphics the sheet showed when it opened, every row by key, for
+    /// Cancel to put back. Everything applies as it is changed, as on the
+    /// in-game pages; Apply saves.
+    std::vector<std::pair<std::string, std::string>> sheetOpened_;
+    /// The page of the sheet shown: a graphics category of the schema.
+    std::string sheetCategory_;
+    /// Which part of that page, when it is too long for the sheet.
+    int sheetPart_ = 0;
+    bool sheetHookChecked_ = false;
     /// "Reset to default" pressed: the yes/no over the sheet is showing.
     bool confirmGraphicsReset_ = false;
     // The last session ended while ray tracing (core/rt_session_marker.hpp):
@@ -313,9 +276,10 @@ private:
     void renderProminentStatus(float screenW, float screenH);
     /// The login music, which has nothing to do with the controls.
     void updateMusic();
-    void loadLoginGraphicsState();
-    void saveLoginGraphicsState();
-    static void applyPresetToState(LoginGraphicsState& s, int preset);
+    void openLoginSettingsSheet();
+    /// Closes the sheet; without `keep`, what was changed on it goes back.
+    void closeLoginSettingsSheet(bool keep);
+    SettingsAccess settingsAccess_;
 };
 
 }} // namespace wowee::ui

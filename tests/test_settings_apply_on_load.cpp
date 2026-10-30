@@ -137,9 +137,10 @@ TEST_CASE("no default is spelled out a second time", "[settings]") {
     REQUIRE(panelHeader.size() > 500);
     REQUIRE(authHeader.size() > 500);
 
-    CHECK(authHeader.find("kDefaultViewDistance") != std::string::npos);
-    CHECK(authHeader.find("kDefaultGroundClutter") != std::string::npos);
+    CHECK(panelHeader.find("kDefaultViewDistance") != std::string::npos);
+    CHECK(panelHeader.find("kDefaultGroundClutter") != std::string::npos);
     // The old value, in either header, would mean a fourth copy came back.
+    CHECK(panelHeader.find("1200.0f") == std::string::npos);
     CHECK(authHeader.find("1200.0f") == std::string::npos);
 }
 
@@ -275,23 +276,13 @@ TEST_CASE("field of view is applied where the camera exists", "[settings]") {
 // drew the shadow pass whatever the setting said.
 
 TEST_CASE("the presets are written once", "[settings]") {
+    // The login screen had a copy of the preset table's application, and of
+    // the settings it applied them to. It shows the game's own settings now,
+    // so it has no preset of its own to get wrong.
     const std::string login = wowee::test::slurp("src/ui/auth_screen.cpp");
     REQUIRE(login.size() > 1000);
-
-    const size_t at = login.find("void AuthScreen::applyPresetToState");
-    REQUIRE(at != std::string::npos);
-    const std::string body = login.substr(at, login.find("\n}\n", at) - at);
-
-    INFO("the login screen builds its presets from the shared table");
-    CHECK(body.find("kGraphicsPresets") != std::string::npos);
-
-    // The numbers it used to carry. Any of them back here means a second
-    // opinion about what a preset is.
-    for (const char* literal : {"75.0f", "150.0f", "250.0f", "400.0f",
-                                "600.0f", "1000.0f", "1600.0f", "2400.0f"}) {
-        INFO("the login screen spells out " << literal << " again");
-        CHECK(body.find(literal) == std::string::npos);
-    }
+    CHECK(login.find("kGraphicsPresets") == std::string::npos);
+    CHECK(login.find("applyPresetToState") == std::string::npos);
 }
 
 TEST_CASE("Low turns dynamic shadows off and the rest leave them on", "[settings]") {
@@ -374,141 +365,28 @@ TEST_CASE("the presets climb", "[settings]") {
 }
 
 // ---------------------------------------------------------------------------
-// Both screens read the same file, so they have to agree about what it may say.
-//
-// The login screen keeps its own loader with its own ranges. Four keys had no
-// clamp there at all - the preset index, the parallax quality, the upscaling
-// mode and the brightness - so a value outside its range was kept, shown
-// against a control that could not represent it, and written back on Apply. A
-// fifth, the shadow distance, clamped to a floor of 50 where the schema and the
-// game both use 40, which turned a saved 40 into a 50 just by visiting the
-// login screen.
+// The login screen once kept its own copy of eighteen graphics settings, with
+// its own loader, ranges, defaults and preset table. Each of those disagreed
+// with the game's at some point - a dropdown with two entries of a three-entry
+// scale, four keys with no clamp, a floor of 50 where the schema said 40, a
+// preset table four columns stale. Its sheet now draws the schema's graphics
+// pages over the game's own settings, so there is nothing of its own left to
+// drift.
 
-namespace {
-
-/// The lo,hi of every key a loader clamps, whichever of the two spellings it
-/// uses: std::clamp in the game's loader, clampF/clampI at the login screen.
-std::map<std::string, std::pair<double, double>> clampRanges(const std::string& src) {
-    std::map<std::string, std::pair<double, double>> out;
-    const std::regex entry(
-        // The gap must not cross another `key ==`, or a key with no clamp of
-        // its own takes the next one's: `shadows` is read as val == "1" and was
-        // paired with shadow_distance's 40..500, and the comparison below then
-        // agreed about a range neither key has.
-        R"RX(key == "([a-z0-9_]+)"\)?(?:(?!key ==)[\s\S]){0,200}?(?:std::clamp|clampF|clampI)\(\s*std::sto[if]\(val\)\s*,\s*([-0-9.]+)f?\s*,\s*([-0-9.]+)f?\s*\))RX");
-    for (std::sregex_iterator it(src.begin(), src.end(), entry), last; it != last; ++it) {
-        const std::string key = (*it)[1].str();
-        if (out.count(key)) continue;  // first spelling wins; they are per-key
-        out[key] = {std::stod((*it)[2].str()), std::stod((*it)[3].str())};
-    }
-    return out;
-}
-
-}  // namespace
-
-TEST_CASE("the two loaders clamp the same keys the same way", "[settings]") {
+TEST_CASE("the login sheet keeps no settings of its own", "[settings]") {
     const std::string login = wowee::test::slurp("src/ui/auth_screen.cpp");
-    const std::string game = wowee::test::slurp("src/ui/game_screen_minimap.cpp");
+    const std::string header = wowee::test::slurp("include/ui/auth_screen.hpp");
     REQUIRE(login.size() > 1000);
-    REQUIRE(game.size() > 1000);
+    REQUIRE(header.size() > 500);
 
-    const auto loginRanges = clampRanges(login);
-    const auto gameRanges = clampRanges(game);
-    REQUIRE(loginRanges.size() >= 8);
-    REQUIRE(gameRanges.size() >= 30);
-
-    int shared = 0;
-    for (const auto& [key, range] : loginRanges) {
-        auto other = gameRanges.find(key);
-        if (other == gameRanges.end()) continue;
-        ++shared;
-        INFO("the login screen clamps " << key << " to " << range.first << ".."
-             << range.second << " and the game clamps it to "
-             << other->second.first << ".." << other->second.second);
-        CHECK(range.first == other->second.first);
-        CHECK(range.second == other->second.second);
-    }
-    INFO("the two loaders were found to share almost no keys, which means the"
-         " parse stopped matching rather than that they agree");
-    // graphics_preset is not counted here: its bound is kGraphicsPresetCount,
-    // which is the stronger form of agreeing - both read the same constant
-    // rather than the same number.
-    CHECK(shared >= 8);
-}
-
-TEST_CASE("the login screen clamps every number it reads", "[settings]") {
-    // A key it parses with stoi/stof and does not clamp is one it will keep
-    // out of range and write back.
-    const std::string login = wowee::test::slurp("src/ui/auth_screen.cpp");
-    const size_t at = login.find("Clamped to the same ranges");
-    REQUIRE(at != std::string::npos);
-    const size_t end = login.find("void AuthScreen::saveLoginGraphicsState");
-    REQUIRE(end != std::string::npos);
-    const std::string body = login.substr(at, end - at);
-
-    const std::regex read(R"RX(key == "([a-z0-9_]+)"\)?\s+loginGfx_\.\w+\s*=\s*([^;]+);)RX");
-    for (std::sregex_iterator it(body.begin(), body.end(), read), last; it != last; ++it) {
-        const std::string key = (*it)[1].str();
-        const std::string expr = (*it)[2].str();
-        if (expr.find("std::stoi") == std::string::npos &&
-            expr.find("std::stof") == std::string::npos) {
-            continue;  // a bool read as val == "1" cannot be out of range
-        }
-        INFO(key << " is read as a number at the login screen and not clamped");
-        CHECK((expr.find("clampF") != std::string::npos ||
-               expr.find("clampI") != std::string::npos));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The login screen's struct is the third place a default is written.
-//
-// The schema holds one, the panel's pending field holds another, and
-// LoginGraphicsState holds a third - and the third was checked by nothing. A
-// fresh install with no config file shows whichever the screen it opened
-// happens to carry, so the same install can offer two different pictures before
-// anything has been chosen.
-
-TEST_CASE("the login screen starts where the schema says", "[settings]") {
-    const std::string login = wowee::test::slurp("include/ui/auth_screen.hpp");
-    REQUIRE(login.size() > 500);
-
-    const size_t at = login.find("struct LoginGraphicsState");
-    REQUIRE(at != std::string::npos);
-    const std::string body = login.substr(at, login.find("};", at) - at);
-
-    // schema key -> the field spelling in LoginGraphicsState. Only the ones the
-    // login screen actually offers; it is a subset of the panel on purpose.
-    const std::vector<std::pair<const char*, const char*>> mirrored = {
-        {"antialiasing", "antiAliasing"},
-        {"shadowdistance", "shadowDistance"},
-        {"fogskyblend", "fogSkyBlend"},
-        {"fogstrength", "fogStrength"},
-        {"upscaling", "upscalingMode"},
-    };
-
-    std::size_t count = 0;
-    const wowee::ui::SettingDesc* rows = wowee::ui::clientSettingsSchema(count);
-    REQUIRE(count > 0);
-
-    for (const auto& [key, field] : mirrored) {
-        const wowee::ui::SettingDesc* desc = nullptr;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (std::string(rows[i].key) == key) { desc = &rows[i]; break; }
-        }
-        INFO(key << " is not in the schema any more, so this pairing is stale");
-        REQUIRE(desc != nullptr);
-
-        const std::regex init(std::string("\\b") + field + R"(\s*=\s*([-0-9.]+)f?\s*;)");
-        std::smatch m;
-        INFO("LoginGraphicsState has no plain initialiser for " << field);
-        REQUIRE(std::regex_search(body, m, init));
-
-        INFO(key << ": the schema starts at " << desc->defaultValue
-                 << " and the login screen's " << field << " starts at " << m[1].str());
-        // As floats: the schema holds 0.4f, which is not the double 0.4.
-        CHECK(std::stof(m[1].str()) == desc->defaultValue);
-    }
+    CHECK(header.find("LoginGraphicsState") == std::string::npos);
+    CHECK(login.find("loginGfx_") == std::string::npos);
+    CHECK(login.find("saveLoginGraphicsState") == std::string::npos);
+    // Built from the schema's graphics pages, through the game's settings.
+    CHECK(login.find("clientSettingsSchema") != std::string::npos);
+    CHECK(login.find("isGraphicsCategory") != std::string::npos);
+    CHECK(login.find("settingsAccess_.set") != std::string::npos);
+    CHECK(login.find("settingEnabled(") != std::string::npos);
 }
 
 // ---------------------------------------------------------------------------
@@ -768,11 +646,12 @@ TEST_CASE("the enhanced water is gone, and a file that names it still loads", "[
     CHECK(wowee::test::slurp("include/ui/settings_panel.hpp").find("pendingEnhancedWater") == std::string::npos);
     CHECK(wowee::test::slurp("include/ui/graphics_presets.hpp").find("enhancedWater") == std::string::npos);
     // The game's loader reads past the old key and its saver no longer
-    // writes it; the login sheet's save takes it out of the file.
+    // writes it. The login sheet saves through that saver, which writes the
+    // whole file, so the key goes from there too.
     const std::string files = wowee::test::slurp("src/ui/game_screen_minimap.cpp");
     CHECK(files.find("else if (key == \"enhanced_water\") {}") != std::string::npos);
     CHECK(files.find("out << \"enhanced_water=") == std::string::npos);
     CHECK(files.find("out << \"rt_wave_amp=") != std::string::npos);
     CHECK(files.find("out << \"rt_wave_freq=") != std::string::npos);
-    CHECK(wowee::test::slurp("src/ui/auth_screen.cpp").find("cfg.erase(\"enhanced_water\")") != std::string::npos);
+    CHECK(wowee::test::slurp("src/ui/auth_screen.cpp").find("enhanced_water") == std::string::npos);
 }

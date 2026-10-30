@@ -4,7 +4,9 @@
 #include "addons/lua_api_registrations.hpp"
 #include <future>
 #include <chrono>
-#include "ui/graphics_presets.hpp"
+#include "ui/settings_i18n.hpp"
+#include "ui/settings_schema.hpp"
+#include "game/interface_text.hpp"
 #include "ui/settings_panel.hpp"
 #include "ui/data_folder_picker.hpp"
 #include "auth/crypto.hpp"
@@ -425,6 +427,25 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
     // Asked once. The gear is on the card, so rendering it can turn the sheet
     // on halfway through, and asking again afterwards popped an inertness
     // that had never been pushed.
+    // A picture of the sheet (WOWEE_SCREENSHOT): WOWEE_LOGIN_SHEET=<page>,
+    // with ":<part>" for a later part of a long page or ":reset" for the
+    // yes/no, opens it on that page. Only when a screenshot is asked for.
+    if (!sheetHookChecked_) {
+        sheetHookChecked_ = true;
+        const char* page = std::getenv("WOWEE_LOGIN_SHEET");
+        if (page && *page && std::getenv("WOWEE_SCREENSHOT")) {
+            const std::string spec = page;
+            const std::size_t colon = spec.find(':');
+            openLoginSettingsSheet();
+            sheetCategory_ = spec.substr(0, colon);
+            const std::string extra = colon == std::string::npos ? std::string() : spec.substr(colon + 1);
+            if (extra == "reset") {
+                confirmGraphicsReset_ = true;
+            } else if (!extra.empty()) {
+                sheetPart_ = std::atoi(extra.c_str());
+            }
+        }
+    }
     const bool sheetWasOpen = settingsOpen_;
     if (sheetWasOpen) ui_.pushInert();
     renderCard(authHandler, screen.x, screen.y);
@@ -437,7 +458,7 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
     // settings sheet, then the keyboard.
     if (!popupWasOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         if (settingsOpen_) {
-            settingsOpen_ = false;
+            closeLoginSettingsSheet(false);
         } else {
             ui_.clearFocus();
         }
@@ -1068,8 +1089,7 @@ void AuthScreen::renderCard(auth::AuthHandler& authHandler, float screenW, float
         }
         if (ui_.glyphButton("settings", ImVec2(col.x1 - r * 3.4f, cy), r,
                             PaperUI::Glyph::Gear)) {
-            settingsOpen_ = true;
-            loginGfxLoaded_ = false;  // reload from disk each time it opens
+            openLoginSettingsSheet();
             // The sheet lands under the pointer, and one of its controls is
             // wherever this gear is. Without this the press carries into it:
             // at 1280x760 the gear sits on the ground-clutter slider, which
@@ -1686,201 +1706,180 @@ bool AuthScreen::uploadBackgroundImage(const unsigned char* data) {
     return true;
 }
 // ---------------------------------------------------------------------------
-// Login-screen graphics settings popup
+// Login-screen graphics settings sheet
 // ---------------------------------------------------------------------------
 
-void AuthScreen::applyPresetToState(LoginGraphicsState& s, int preset) {
-    // The numbers come from the one table both screens read. They were written
-    // out here as well until they disagreed with it in four of ten columns, so
-    // that choosing High here and High in game gave two different pictures.
-    //
-    // Custom is preset 0 and is not a set of values, so it is left alone.
-    const int index = preset - 1;
-    if (index < 0 || index >= kGraphicsPresetCount) return;
-    const GraphicsPresetValues& p = kGraphicsPresets[index];
+namespace {
 
-    s.viewDistance   = p.viewDistance;
-    s.shadows        = p.shadows;
-    s.shadowDistance = p.shadowDistance;
-    s.antiAliasing   = p.antiAliasing;
-    s.fxaa           = p.fxaa;
-    s.normalMapping  = p.normalMapping;
-    s.groundClutter  = p.groundClutter;
-    s.grass          = p.grass;
-    s.grassDensity   = p.grassDensity;
-    s.grassHeight    = p.grassHeight;
-    s.grassDistance  = p.grassDistance;
-    s.lensFlare      = p.lensFlare;
-    s.sharpStars     = p.sharpStars;
-    s.sunShafts      = p.sunShafts;
-    s.lightShafts    = p.lightShafts;
-    s.fogSkyBlend    = p.fogSkyBlend;
-    s.specular       = p.specular;
-
-    // Not in the table because the in-game preset has no opinion about them
-    // either: upscaling is the player's, and brightness,
-    // vsync and fullscreen are not quality settings. A preset that reset them
-    // would undo a display choice every time one was picked.
+/// Whether the client's words are German: the expansion profile's locale, the
+/// same test the options pages make (WoweeSettingList).
+bool clientSpeaksGerman() {
+    if (auto* registry = core::Application::getInstance().getExpansionRegistry();
+        registry && registry->getActive()) {
+        return settingsLocaleGerman(registry->getActive()->locale);
+    }
+    return false;
 }
 
-void AuthScreen::loadLoginGraphicsState() {
-    std::ifstream file(SettingsPanel::getSettingsPath());
-    if (!file.is_open()) {
-        // File doesn't exist yet - keep struct defaults (Medium equivalent)
-        return;
-    }
-
-    std::string line;
-    while (std::getline(file, line)) {
-        auto eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        std::string key = line.substr(0, eq);
-        std::string val = line.substr(eq + 1);
-
-        // Clamped to the same ranges GameScreen::loadSettings uses.
-        //
-        // Four of these had no clamp at all until 2026-08-15 - the preset
-        // index, the parallax quality (since removed), the upscaling mode and the brightness -
-        // so a value the file held outside its range was kept here, shown
-        // against a control that could not represent it, and written back on
-        // Apply. The shadow distance had one, but it started at 50 where the
-        // schema and the game both start at 40, so a saved 40 came back as 50.
-        //
-        // Without this a value the file holds outside the range is kept, shown
-        // against a slider that cannot represent it, and written straight back
-        // on Apply - while the game clamps the same value on the way in. A
-        // config carrying view_distance=0 showed the slider pinned at the far
-        // left reading 0 and stayed there for good, with the world drawing at
-        // 400 regardless. Reported as settings "always saved as low".
-        const auto clampF = [](float v, float lo, float hi) {
-            return v < lo ? lo : (v > hi ? hi : v);
+/// The graphics pages in the order the game's Video frame lists them: the
+/// schema's order, with the Debug pages last in their own (kLastOnVideo in
+/// the options pages' Lua).
+const std::vector<std::string>& sheetCategories() {
+    static const std::vector<std::string> order = [] {
+        static constexpr const char* kLast[] = {
+            "Debug Graphics", "Debug Time", "Debug Lights", "Debug Glow", "Debug Shadows",
         };
-        const auto clampI = [](int v, int lo, int hi) {
-            return v < lo ? lo : (v > hi ? hi : v);
+        const auto isLast = [](const std::string& c) {
+            for (const char* l : kLast) {
+                if (c == l) return true;
+            }
+            return false;
         };
-        if (key == "graphics_preset")       loginGfx_.preset        = clampI(std::stoi(val), 0, kGraphicsPresetCount);
-        else if (key == "shadows")          loginGfx_.shadows        = (val == "1");
-        else if (key == "shadow_distance")  loginGfx_.shadowDistance = clampF(std::stof(val), 40.0f, 500.0f);
-        else if (key == "view_distance")    loginGfx_.viewDistance   = clampF(std::stof(val), 177.0f, 1277.0f);
-        else if (key == "fog_sky_blend")    loginGfx_.fogSkyBlend    = clampF(std::stof(val), 0.0f, 1.0f);
-        else if (key == "fog_strength")     loginGfx_.fogStrength    = clampF(std::stof(val), 0.0f, 2.0f);
-        else if (key == "sharp_stars")      loginGfx_.sharpStars     = (val == "1");
-        else if (key == "lens_flare")       loginGfx_.lensFlare      = clampF(std::stof(val), 0.0f, 2.0f);
-        else if (key == "sun_shafts")       loginGfx_.sunShafts      = (val == "1");
-        else if (key == "light_shafts")     loginGfx_.lightShafts    = clampI(std::stoi(val), 0, 3);
-        else if (key == "antialiasing")     loginGfx_.antiAliasing   = clampI(std::stoi(val), 0, 3);
-        else if (key == "fxaa")             loginGfx_.fxaa           = (val == "1");
-        else if (key == "normal_mapping")   loginGfx_.normalMapping  = (val == "1");
-        else if (key == "upscaling_mode")   loginGfx_.upscalingMode  = clampI(std::stoi(val), 0, 2);
-        else if (key == "specular")         loginGfx_.specular       = (val == "1");
-        else if (key == "ground_clutter_density") loginGfx_.groundClutter = clampI(std::stoi(val), 0, 150);
-        else if (key == "grass_enabled")    loginGfx_.grass          = (val == "1");
-        else if (key == "grass_density")    loginGfx_.grassDensity   = clampI(std::stoi(val), 0, 300);
-        else if (key == "grass_height")     loginGfx_.grassHeight    = clampI(std::stoi(val), 50, 300);
-        else if (key == "grass_distance")   loginGfx_.grassDistance  = clampI(std::stoi(val), 30, 800);
-        else if (key == "brightness")       loginGfx_.brightness     = clampI(std::stoi(val), 0, 100);
-        else if (key == "vsync")            loginGfx_.vsync          = (val == "1");
-        else if (key == "fullscreen")       loginGfx_.fullscreen     = (val == "1");
-    }
-}
-
-void AuthScreen::saveLoginGraphicsState() {
-    // Read the full settings file into a map to preserve non-graphics keys.
-    std::map<std::string, std::string> cfg;
-    std::ifstream in(SettingsPanel::getSettingsPath());
-    if (in.is_open()) {
-        std::string line;
-        while (std::getline(in, line)) {
-            auto eq = line.find('=');
-            if (eq != std::string::npos)
-                cfg[line.substr(0, eq)] = line.substr(eq + 1);
+        std::vector<std::string> out;
+        std::size_t count = 0;
+        const SettingDesc* rows = clientSettingsSchema(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::string c = rows[i].category;
+            if (!isGraphicsCategory(c) || isLast(c)) continue;
+            if (std::find(out.begin(), out.end(), c) == out.end()) out.push_back(c);
         }
-        in.close();
-    }
+        for (const char* l : kLast) {
+            if (isGraphicsCategory(l)) out.emplace_back(l);
+        }
+        return out;
+    }();
+    return order;
+}
 
-    // Overwrite graphics keys.
-    cfg["graphics_preset"]       = std::to_string(loginGfx_.preset);
-    cfg["shadows"]               = loginGfx_.shadows        ? "1" : "0";
-    cfg["shadow_distance"]       = std::to_string(static_cast<int>(loginGfx_.shadowDistance));
-    cfg["view_distance"]         = std::to_string(static_cast<int>(loginGfx_.viewDistance));
-    cfg["fog_sky_blend"]         = std::to_string(loginGfx_.fogSkyBlend);
-    cfg["fog_strength"]          = std::to_string(loginGfx_.fogStrength);
-    cfg["sharp_stars"]           = loginGfx_.sharpStars      ? "1" : "0";
-    cfg["lens_flare"]            = std::to_string(loginGfx_.lensFlare);
-    cfg["sun_shafts"]            = loginGfx_.sunShafts       ? "1" : "0";
-    cfg["light_shafts"]          = std::to_string(loginGfx_.lightShafts);
-    cfg["antialiasing"]          = std::to_string(loginGfx_.antiAliasing);
-    cfg["fxaa"]                  = loginGfx_.fxaa           ? "1" : "0";
-    cfg["normal_mapping"]        = loginGfx_.normalMapping  ? "1" : "0";
-    // Surface depth (parallax) is gone: what an older build saved for it goes too.
-    cfg.erase("pom");
-    cfg.erase("pom_quality");
-    // Not upscaling_mode: this sheet has no control for it, and writing the
-    // field back put a 0 into every file that did not have one yet - which
-    // is a phone's on its first run, overriding the reduced render resolution
-    // the game picks for it (GameScreen::loadSettings). The file's own value,
-    // if any, is kept by the map.
-    // The enhanced water is gone: what an older build saved for it goes too.
-    cfg.erase("enhanced_water");
-    cfg["specular"]              = loginGfx_.specular        ? "1" : "0";
-    // Written before the enhanced water had a switch, for a refraction that
-    // was always on; nothing reads it now.
-    cfg.erase("water_refraction");
-    cfg["ground_clutter_density"]= std::to_string(loginGfx_.groundClutter);
-    cfg["grass_enabled"]         = loginGfx_.grass ? "1" : "0";
-    cfg["grass_density"]         = std::to_string(loginGfx_.grassDensity);
-    cfg["grass_height"]          = std::to_string(loginGfx_.grassHeight);
-    cfg["grass_distance"]        = std::to_string(loginGfx_.grassDistance);
-    cfg["brightness"]            = std::to_string(loginGfx_.brightness);
-    cfg["vsync"]                 = loginGfx_.vsync           ? "1" : "0";
-    cfg["fullscreen"]            = loginGfx_.fullscreen      ? "1" : "0";
-
-    // A preset picked here sets the columns this sheet has no control for as
-    // well - the doodad distance, clutter radius, particles and weather - or
-    // Low would leave them at whatever they were. Only when one was picked:
-    // a preset merely shown here may stand over values changed in game since.
-    const int presetIndex = loginGfx_.preset - 1;
-    const bool presetColumns =
-        loginPresetPicked_ && presetIndex >= 0 && presetIndex < kGraphicsPresetCount;
-    if (presetColumns) {
-        const GraphicsPresetValues& p = kGraphicsPresets[presetIndex];
-        cfg["environment_detail"]      = std::to_string(p.environmentDetail);
-        cfg["ground_clutter_distance"] = std::to_string(p.groundClutterDistance);
-        cfg["particle_density"]        = std::to_string(p.particleDensity);
-        cfg["weather_detail"]          = std::to_string(p.weatherDetail);
+/// Every row on the sheet's pages.
+std::vector<const SettingDesc*> sheetRows() {
+    std::vector<const SettingDesc*> out;
+    std::size_t count = 0;
+    const SettingDesc* rows = clientSettingsSchema(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (isGraphicsCategory(rows[i].category) && rows[i].store[0] == '\0') out.push_back(&rows[i]);
     }
+    return out;
+}
 
-    // Write everything back.
-    {
-        std::ofstream out(SettingsPanel::getSettingsPath());
-        if (!out.is_open()) return;
-        for (const auto& [k, v] : cfg)
-            out << k << "=" << v << "\n";
+std::vector<std::string> splitChoices(const std::string& text) {
+    std::vector<std::string> out;
+    std::size_t at = 0;
+    while (true) {
+        const std::size_t bar = text.find('|', at);
+        out.push_back(text.substr(at, bar == std::string::npos ? std::string::npos : bar - at));
+        if (bar == std::string::npos) break;
+        at = bar + 1;
     }
+    return out;
+}
 
-    // And the CVar store, as the game's own panel does (setSettingValue,
-    // applyGraphicsPreset). farclip, groundEffectDensity and the Effects
-    // panel's cvars are applied over settings.cfg at start-up, so a view
-    // distance or clutter chosen here was undone in game by the cvars the
-    // last session left - Low's 177 yards came back as 1277.
-    addons::noteClientSettingChanged("viewdistance", cfg["view_distance"]);
-    addons::noteClientSettingChanged("groundclutter", cfg["ground_clutter_density"]);
-    if (presetColumns) {
-        addons::noteClientSettingChanged("environmentdetail", cfg["environment_detail"]);
-        addons::noteClientSettingChanged("groundclutterdistance", cfg["ground_clutter_distance"]);
-        addons::noteClientSettingChanged("particledensity", cfg["particle_density"]);
-        addons::noteClientSettingChanged("weatherdetail", cfg["weather_detail"]);
+/// As many decimals as the row's step has.
+const char* sliderFormat(float step) {
+    if (step >= 1.0f) return "%.0f";
+    if (step >= 0.1f - 1e-4f) return "%.1f";
+    return "%.2f";
+}
+
+/// The text the interface has for a GlobalStrings name, or "" before there
+/// is an interface - the same lookup the client's own lines use.
+std::string interfaceGlobal(const char* name) { return game::interfaceString(name, ""); }
+
+/// What a greyed row waits on, in words: one line per clause of its
+/// enabledWhen, as the options pages say it (clauseInWords).
+std::string waitingInWords(const SettingDesc& desc, bool german) {
+    std::string out;
+    const std::string all = desc.enabledWhen;
+    std::size_t start = 0;
+    while (start <= all.size()) {
+        const std::size_t amp = all.find('&', start);
+        const std::string clause = all.substr(start, amp == std::string::npos ? std::string::npos : amp - start);
+        start = amp == std::string::npos ? all.size() + 1 : amp + 1;
+        if (clause.empty()) continue;
+        std::string key = clause, want;
+        bool negated = false, compare = false;
+        if (const std::size_t bang = clause.find("!="); bang != std::string::npos) {
+            key = clause.substr(0, bang);
+            want = clause.substr(bang + 2);
+            negated = compare = true;
+        } else if (const std::size_t eq = clause.find('='); eq != std::string::npos) {
+            key = clause.substr(0, eq);
+            want = clause.substr(eq + 1);
+            compare = true;
+        }
+        std::string name = key, choice = want;
+        std::size_t count = 0;
+        const SettingDesc* rows = clientSettingsSchema(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (key != rows[i].key) continue;
+            const SettingText text = settingText(rows[i], german, interfaceGlobal);
+            name = text.label;
+            if (compare && !text.choices.empty()) {
+                const auto choices = splitChoices(text.choices);
+                const int index = std::atoi(want.c_str());
+                if (index >= 0 && index < static_cast<int>(choices.size())) choice = choices[static_cast<size_t>(index)];
+            }
+            break;
+        }
+        if (!out.empty()) out += "\n";
+        if (!compare) {
+            out += german ? "Verfügbar, wenn " + name + " an ist." : "Available when " + name + " is on.";
+        } else if (negated) {
+            out += german ? "Verfügbar, außer bei " + name + ": " + choice + "."
+                          : "Available when " + name + " is not " + choice + ".";
+        } else {
+            out += german ? "Verfügbar bei " + name + ": " + choice + "."
+                          : "Available when " + name + " is " + choice + ".";
+        }
     }
-    loginPresetPicked_ = false;
+    return out;
+}
+
+}  // namespace
+
+void AuthScreen::openLoginSettingsSheet() {
+    settingsOpen_ = true;
+    confirmGraphicsReset_ = false;
+    if (sheetCategory_.empty() && !sheetCategories().empty()) sheetCategory_ = sheetCategories().front();
+    // What Cancel puts back: every row, as it was.
+    sheetOpened_.clear();
+    if (settingsAccess_.get) {
+        for (const SettingDesc* row : sheetRows()) sheetOpened_.emplace_back(row->key, settingsAccess_.get(row->key));
+    }
+}
+
+void AuthScreen::closeLoginSettingsSheet(bool keep) {
+    settingsOpen_ = false;
+    confirmGraphicsReset_ = false;
+    if (keep) {
+        if (settingsAccess_.save) settingsAccess_.save();
+    } else if (settingsAccess_.get && settingsAccess_.set) {
+        // Only what differs, as the options pages' Cancel does: writing a
+        // setting applies it, and full screen or vertical sync written back
+        // unchanged would rebuild the window for nothing. The preset first,
+        // since choosing one assigns the rows after it.
+        for (int pass = 0; pass < 2; ++pass) {
+            for (const auto& [key, was] : sheetOpened_) {
+                if ((key == "graphicspreset") != (pass == 0)) continue;
+                const std::string now = settingsAccess_.get(key);
+                if (now == was) continue;
+                const char* a = now.c_str();
+                const char* b = was.c_str();
+                char* endA = nullptr;
+                char* endB = nullptr;
+                const double x = std::strtod(a, &endA);
+                const double y = std::strtod(b, &endB);
+                if (endA != a && endB != b && std::abs(x - y) <= 1e-5 * std::max(1.0, std::abs(y))) continue;
+                settingsAccess_.set(key, was);
+            }
+        }
+    }
+    sheetOpened_.clear();
 }
 
 void AuthScreen::renderRtCrashDialog(float screenW, float screenH) {
     namespace rtm = rendering::rt_memory;
-    bool german = false;
-    if (auto* registry = core::Application::getInstance().getExpansionRegistry();
-        registry && registry->getActive()) {
-        german = registry->getActive()->locale == "deDE";
-    }
+    const bool german = clientSpeaksGerman();
     rtm::Refusal r;
     r.reason = rtm::Reason::PreviousSession;
     r.needed = rtMarkerTracingMB_ * rtm::kMiB;
@@ -1924,6 +1923,15 @@ void AuthScreen::renderRtCrashDialog(float screenW, float screenH) {
                    PaperUI::ButtonKind::Primary)) {
         rtMarkerShown_ = false;
         core::rt_session::clear(markerFile);
+        // Through the game's settings, which then save: they are what the
+        // file is written from, and a value put into the file behind them was
+        // written back over by the next save.
+        if (settingsAccess_.set && settingsAccess_.save) {
+            settingsAccess_.set("raytracedlighting", "0");
+            settingsAccess_.save();
+            ui_.setLayer(PaperLayer::Page);
+            return;
+        }
         // Into the settings file, which the game reads on the way in.
         std::map<std::string, std::string> cfg;
         {
@@ -1942,207 +1950,354 @@ void AuthScreen::renderRtCrashDialog(float screenW, float screenH) {
 }
 
 void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
-    if (!loginGfxLoaded_) {
-        loadLoginGraphicsState();
-        loginGfxLoaded_ = true;
-    }
-
     const PaperTheme& theme = ui_.theme();
     const auto px = [this](float units) { return ui_.px(units); };
+    const bool german = clientSpeaksGerman();
+    const auto words = [german](const char* en, const char* de) { return german ? de : en; };
 
-    constexpr float kPad = 30.0f;
+    constexpr float kPad = 26.0f;
     constexpr float kTitle = 30.0f;
     constexpr float kLabel = 13.5f;
     constexpr float kSmall = 12.5f;
-    constexpr float kControl = 34.0f;
+    constexpr float kControl = 32.0f;
     constexpr float kCheckBox = 19.0f;
-    constexpr float kCheckStep = 30.0f;
+    constexpr float kChip = 30.0f;
     constexpr float kButton = 42.0f;
 
-    const float labelRow = ui_.lineHeight(px(kLabel)) + px(3);
-    const float controlRow = labelRow + px(kControl);
-    const float smallRow = ui_.lineHeight(px(kSmall));
-
-    // Seven switches on the left, six things with a range on the right. The
-    // taller of the two columns is what the sheet has to be tall enough for.
-    const float leftH = 7.0f * px(kCheckStep);
-    const float rightH = 6.0f * (controlRow + px(8));
-    const float contentH = px(kTitle) * 1.05f + smallRow + px(16)   // title block
-                         + controlRow + px(20)                       // preset
-                         + std::max(leftH, rightH) + px(22)
-                         + px(kButton);
-    const float w = px(560);
-    const float h = px(kPad) * 2.0f + contentH;
+    const float w = std::min(screenW - px(20), px(900));
+    const float h = std::min(screenH - px(20), px(720));
 
     ui_.setLayer(PaperLayer::Overlay);
     ui_.scrim(0.45f);
 
-    const ImVec2 a((screenW - w) * 0.5f, std::max(px(10), (screenH - h) * 0.5f));
+    const ImVec2 a((screenW - w) * 0.5f, (screenH - h) * 0.5f);
     const ImVec2 b(a.x + w, a.y + h);
     ui_.sheet(a, b, /*taped=*/false);
     // The sheet eats every click that lands on it, including the ones that
     // land on none of its controls.
     ui_.claimMouse(a, b);
+    // The yes/no over it hears everything while it is up.
+    const bool confirming = confirmGraphicsReset_;
+    if (confirming) ui_.pushInert();
 
     Column col{a.x + px(kPad), b.x - px(kPad), a.y + px(kPad)};
 
-    ui_.text(col.at(), "Graphics", px(kTitle), theme.ink, /*titleFace=*/true);
+    ui_.text(col.at(), words("Graphics", "Grafik"), px(kTitle), theme.ink, /*titleFace=*/true);
     {
         const float r = px(kSmall) * 0.95f;
-        if (ui_.glyphButton("gfx.close", ImVec2(col.x1 - r, col.y + r), r,
-                            PaperUI::Glyph::Cross)) {
-            settingsOpen_ = false;
+        if (ui_.glyphButton("gfx.close", ImVec2(col.x1 - r, col.y + r), r, PaperUI::Glyph::Cross)) {
+            closeLoginSettingsSheet(false);
         }
     }
-    col.gap(px(kTitle) * 1.05f);
-    ui_.text(col.at(), "These take effect the next time you log in.", px(kSmall), theme.pencil);
-    col.gap(smallRow + px(8));
-    ui_.rule(ImVec2(col.x0, col.y), ImVec2(col.x1, col.y), paperFade(theme.pencil, 0.6f),
-             px(1.0f), 0x9A17u);
-    col.gap(px(8));
+    // The title face's capitals stand above its line; the line under it starts
+    // below them, or an initial umlaut runs into the title.
+    col.gap(ui_.lineHeight(px(kTitle), /*titleFace=*/true) + px(4));
+    ui_.text(col.at(),
+             words("Changes show as you make them; what is in the world, once you enter it.",
+                   "Änderungen wirken sofort; was die Welt betrifft, sobald Ihr sie betretet."),
+             px(kSmall), theme.pencil);
+    col.gap(ui_.lineHeight(px(kSmall)) + px(8));
+    ui_.rule(ImVec2(col.x0, col.y), ImVec2(col.x1, col.y), paperFade(theme.pencil, 0.6f), px(1.0f), 0x9A17u);
+    col.gap(px(10));
 
-    // ---- preset -----------------------------------------------------------
+    // ---- the pages, as chips wrapped across the sheet ----------------------
     {
-        ui_.text(col.at(), "Preset", px(kLabel), theme.inkSoft);
-        col.gap(labelRow);
-        const std::vector<std::string> names = {"Custom", "Low", "Medium", "High", "Ultra"};
-        int preset = std::clamp(loginGfx_.preset, 0, static_cast<int>(names.size()) - 1);
-        const auto [pa, pb] = col.cell(0.0f, px(220), px(kControl));
-        if (ui_.dropdown("gfx.preset", pa, pb, names[static_cast<size_t>(preset)], names,
-                         &preset)) {
-            loginGfx_.preset = preset;
-            // Custom is not a set of values, it is the absence of one; picking
-            // it leaves everything where the player put it.
-            if (preset != 0) applyPresetToState(loginGfx_, preset);
-            loginPresetPicked_ = (preset != 0);
+        float x = col.x0;
+        for (const std::string& category : sheetCategories()) {
+            const std::string name = categoryText(category, german);
+            const float cw = ui_.chipWidth(name.c_str(), px(kChip));
+            if (x > col.x0 && x + cw > col.x1) {
+                x = col.x0;
+                col.gap(px(kChip) + px(6));
+            }
+            const std::string id = "gfx.page." + category;
+            if (ui_.chip(id.c_str(), ImVec2(x, col.y), ImVec2(x + cw, col.y + px(kChip)), name.c_str(),
+                         sheetCategory_ == category, theme.crayonBlue)) {
+                if (sheetCategory_ != category) sheetPart_ = 0;
+                sheetCategory_ = category;
+            }
+            x += cw + px(6);
         }
-        col.gap(px(20));
+        col.gap(px(kChip) + px(14));
     }
 
-    const float columnGap = px(30);
+    // ---- the page's rows, in two columns -----------------------------------
+    //
+    // The same rows the in-game Video pages are built from, with the same
+    // labels, ranges, choices, greying and hover text, so neither screen can
+    // offer a setting the other does not or say it differently.
+    const float footerTop = b.y - px(kPad) - px(kButton);
+    const float contentTop = col.y;
+    const float contentBottom = footerTop - px(30);
+    const float columnGap = px(28);
     const float columnW = (col.width() - columnGap) * 0.5f;
-    const float columnTop = col.y;
+    const float labelSize = px(kLabel);
 
-    // ---- the switches -----------------------------------------------------
+    const auto read = [this](const std::string& key) {
+        return settingsAccess_.get ? settingsAccess_.get(key) : std::string();
+    };
+    // Why the ray traced rows are greyed on this device, and whether the
+    // tracing runs, for the rows it makes moot.
+    const std::string rtReason =
+        services_.renderer ? services_.renderer->rtUnavailableReason(german) : std::string();
+    const bool rtOn = rtReason.empty() && settingIsOn(read("raytracedlighting"));
+
+    struct Item {
+        const SettingDesc* desc = nullptr;  ///< nullptr for a heading
+        SettingText text;
+        float height = 0.0f;
+        bool labelInline = false;  ///< a checkbox whose label fits beside it
+    };
+    std::vector<Item> items;
     {
-        Column left{col.x0, col.x0 + columnW, columnTop};
-        const auto toggle = [&](const char* id, const char* label, bool* value) {
-            ui_.checkbox(id, ImVec2(left.x0, left.y), px(kCheckBox), label, value);
-            left.gap(px(kCheckStep));
-        };
-        toggle("gfx.shadows", "Shadows", &loginGfx_.shadows);
-        toggle("gfx.fxaa", "FXAA", &loginGfx_.fxaa);
-        toggle("gfx.normals", "Normal mapping", &loginGfx_.normalMapping);
-        toggle("gfx.specular", "Specular", &loginGfx_.specular);
-        toggle("gfx.vsync", "V-Sync", &loginGfx_.vsync);
-        toggle("gfx.fullscreen", "Fullscreen", &loginGfx_.fullscreen);
-    }
-
-    // ---- the ranges -------------------------------------------------------
-    {
-        Column right{col.x1 - columnW, col.x1, columnTop};
-        const auto labelled = [&](const char* label) {
-            ui_.text(right.at(), label, px(kLabel), theme.inkSoft);
-            right.gap(labelRow);
-            return right.row(px(kControl));
-        };
-
-        {
-            const auto [ra, rb] = labelled("Anti-aliasing");
-            // The same four the settings schema offers. This list once had
-            // three, so 8x could be set in the game, never shown here, and
-            // silently rewritten by anything picked here instead.
-            const std::vector<std::string> names = {"Off", "2x MSAA", "4x MSAA", "8x MSAA"};
-            int aa = std::clamp(loginGfx_.antiAliasing, 0, 3);
-            if (ui_.dropdown("gfx.aa", ra, rb, names[static_cast<size_t>(aa)], names, &aa))
-                loginGfx_.antiAliasing = aa;
-            right.gap(px(8));
-        }
-        {
-            const auto [ra, rb] = labelled("Shadow distance");
-            ui_.sliderFloat("gfx.shadowdist", ra, rb, &loginGfx_.shadowDistance, 50.0f, 600.0f);
-            right.gap(px(8));
-        }
-        {
-            const auto [ra, rb] = labelled("View distance");
-            ui_.sliderFloat("gfx.viewdist", ra, rb, &loginGfx_.viewDistance, 177.0f, 1277.0f);
-            right.gap(px(8));
-        }
-        {
-            // 150, not 200: GameScreen::loadSettings clamps there, so the last
-            // fifty units of this slider were silently discarded at login.
-            const auto [ra, rb] = labelled("Ground clutter");
-            ui_.sliderInt("gfx.clutter", ra, rb, &loginGfx_.groundClutter, 0, 150);
-            right.gap(px(8));
-        }
-        {
-            const auto [ra, rb] = labelled("Brightness");
-            ui_.sliderInt("gfx.brightness", ra, rb, &loginGfx_.brightness, 0, 100);
-            right.gap(px(8));
+        std::string heading;
+        for (const SettingDesc* row : sheetRows()) {
+            if (sheetCategory_ != row->category) continue;
+            Item item;
+            item.desc = row;
+            item.text = settingText(*row, german, interfaceGlobal);
+            if (row->section[0] != '\0' && heading != row->section) {
+                heading = row->section;
+                Item head;
+                head.text.label = item.text.section;
+                head.height = ui_.lineHeight(labelSize) + px(12);
+                items.push_back(head);
+            }
+            if (row->kind == SettingKind::Bool) {
+                const float box = px(kCheckBox);
+                const float inlineW = box + px(9) + ui_.textWidth(item.text.label.c_str(), box * 0.78f);
+                item.labelInline = inlineW <= columnW;
+                const float labelH =
+                    item.labelInline ? 0.0f : ui_.wrappedHeight(columnW - box - px(9), item.text.label.c_str(), labelSize);
+                item.height = std::max(box, labelH) + px(11);
+            } else {
+                item.height = ui_.wrappedHeight(columnW, item.text.label.c_str(), labelSize) + px(3) + px(kControl) +
+                              px(10);
+            }
+            items.push_back(std::move(item));
         }
     }
 
-    col.y = columnTop + std::max(leftH, rightH) + px(22);
+    // Laid down the first column and then the second; what is left over goes
+    // on to the next part of the page.
+    struct Placed {
+        std::size_t item;
+        float x;
+        float y;
+    };
+    std::vector<std::vector<Placed>> parts(1);
+    {
+        int column = 0;
+        float y = contentTop;
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            // A heading keeps its first row with it.
+            const float need =
+                items[i].height + (!items[i].desc && i + 1 < items.size() ? items[i + 1].height : 0.0f);
+            if (y + need > contentBottom && y > contentTop) {
+                if (++column == 2) {
+                    column = 0;
+                    parts.emplace_back();
+                }
+                y = contentTop;
+            }
+            parts.back().push_back({i, column == 0 ? col.x0 : col.x0 + columnW + columnGap, y});
+            y += items[i].height;
+        }
+    }
+    sheetPart_ = std::clamp(sheetPart_, 0, static_cast<int>(parts.size()) - 1);
+    // The wheel turns the parts of a long page.
+    if (parts.size() > 1 && !ui_.popupOpen() &&
+        ImGui::IsMouseHoveringRect(ImVec2(col.x0, contentTop), ImVec2(col.x1, contentBottom), false)) {
+        const float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel < 0.0f) sheetPart_ = std::min(sheetPart_ + 1, static_cast<int>(parts.size()) - 1);
+        if (wheel > 0.0f) sheetPart_ = std::max(sheetPart_ - 1, 0);
+    }
+
+    std::string hoverTitle, hoverText;
+    for (const Placed& place : parts[static_cast<size_t>(sheetPart_)]) {
+        const Item& item = items[place.item];
+        const ImVec2 at(place.x, place.y);
+        if (!item.desc) {
+            ui_.text(ImVec2(at.x, at.y + px(4)), item.text.label.c_str(), labelSize, theme.ink, /*titleFace=*/true);
+            const float ry = at.y + ui_.lineHeight(labelSize) + px(6);
+            ui_.rule(ImVec2(at.x, ry), ImVec2(at.x + columnW, ry), paperFade(theme.pencil, 0.5f), px(1.0f),
+                     0x51A7u + static_cast<uint32_t>(place.item));
+            continue;
+        }
+        const SettingDesc& d = *item.desc;
+        const std::string key = d.key;
+        const std::string id = "gfx." + key;
+
+        // Greyed rather than hidden, for the same three reasons the in-game
+        // pages grey a row, with the reason under its hover text.
+        std::string reason;
+        if (!rtReason.empty() && settingNeedsRayTracing(key)) {
+            reason = rtReason;
+        } else if (const char* moot = rtOn ? rayTracingIgnoredText(key, german) : nullptr) {
+            reason = moot;
+        } else if (!settingEnabled(d, read)) {
+            reason = waitingInWords(d, german);
+        }
+        const bool enabled = reason.empty() && settingsAccess_.set;
+
+        const std::string value = read(key);
+        const double number = std::atof(value.c_str());
+        const ImVec2 rowEnd(at.x + columnW, at.y + item.height - px(6));
+        if (!enabled) ui_.pushInert();
+        const ImU32 labelColour = enabled ? theme.inkSoft : theme.pencil;
+
+        if (d.kind == SettingKind::Bool) {
+            bool on = settingIsOn(value);
+            const float box = px(kCheckBox);
+            bool changed = false;
+            if (item.labelInline) {
+                changed = ui_.checkbox(id.c_str(), at, box, item.text.label.c_str(), &on);
+            } else {
+                changed = ui_.checkbox(id.c_str(), at, box, "", &on);
+                ui_.wrapped(ImVec2(at.x + box + px(9), at.y), columnW - box - px(9), item.text.label.c_str(),
+                            labelSize, labelColour);
+            }
+            if (changed && enabled) settingsAccess_.set(key, on ? "1" : "0");
+        } else {
+            const float labelH = ui_.wrapped(at, columnW, item.text.label.c_str(), labelSize, labelColour);
+            const ImVec2 ca(at.x, at.y + labelH + px(3));
+            const ImVec2 cb(at.x + columnW, ca.y + px(kControl));
+            if (d.kind == SettingKind::Enum) {
+                const std::vector<std::string> choices = splitChoices(item.text.choices);
+                int index = std::clamp(static_cast<int>(number + 0.5), 0, static_cast<int>(choices.size()) - 1);
+                if (ui_.dropdown(id.c_str(), ca, cb, choices[static_cast<size_t>(index)], choices, &index) &&
+                    enabled) {
+                    settingsAccess_.set(key, std::to_string(index));
+                }
+            } else {
+                float v = static_cast<float>(number);
+                if (ui_.sliderFloat(id.c_str(), ca, cb, &v, d.minValue, d.maxValue, sliderFormat(d.step)) &&
+                    enabled) {
+                    // To the row's own step, and only when that moved it.
+                    double snapped = v;
+                    if (d.step > 0.0f) {
+                        snapped = d.minValue + std::round((v - d.minValue) / d.step) * d.step;
+                        snapped = std::clamp(snapped, static_cast<double>(d.minValue), static_cast<double>(d.maxValue));
+                    }
+                    if (d.kind == SettingKind::Int) snapped = std::round(snapped);
+                    if (std::abs(snapped - number) > 1e-6) settingsAccess_.set(key, settingNumberText(snapped));
+                }
+            }
+        }
+        if (!enabled) {
+            ui_.popInert();
+            ui_.veil(at, rowEnd, 0.45f);
+        }
+
+        if (ImGui::IsMouseHoveringRect(at, rowEnd, false)) {
+            hoverTitle = item.text.label;
+            hoverText = item.text.tooltip;
+            if (!reason.empty()) hoverText += (hoverText.empty() ? "" : "\n\n") + reason;
+        }
+    }
+
+    // ---- which part of a long page -----------------------------------------
+    if (parts.size() > 1) {
+        const float y = contentBottom + px(4);
+        const float bh = px(24);
+        const float bw = px(34);
+        if (ui_.button("gfx.part.prev", ImVec2(col.x0, y), ImVec2(col.x0 + bw, y + bh), "<", PaperUI::ButtonKind::Quiet,
+                       sheetPart_ > 0)) {
+            --sheetPart_;
+        }
+        const std::string where = std::to_string(sheetPart_ + 1) + " / " + std::to_string(parts.size());
+        ui_.textCentered(col.x0 + bw + px(30), y + px(3), where.c_str(), px(kSmall), theme.inkSoft);
+        if (ui_.button("gfx.part.next", ImVec2(col.x0 + bw + px(60), y), ImVec2(col.x0 + bw * 2.0f + px(60), y + bh),
+                       ">", PaperUI::ButtonKind::Quiet, sheetPart_ + 1 < static_cast<int>(parts.size()))) {
+            ++sheetPart_;
+        }
+    }
 
     // ---- the way out ------------------------------------------------------
     {
-        const float y = col.y;
+        const float y = footerTop;
         const float bh = px(kButton);
-        // Every graphics setting, not only the ones on this sheet: the
-        // Video tab's, the ray tracing's, the Debug Graphics pages'. Asked
-        // first, since it cannot be undone.
-        if (!confirmGraphicsReset_ &&
-            ui_.button("gfx.reset", ImVec2(col.x0, y), ImVec2(col.x0 + px(170), y + bh),
-                       "Reset to default")) {
+        const float buttonText = px(16);
+        const auto widthFor = [&](const char* label, float least) {
+            return std::max(px(least), ui_.textWidth(label, buttonText) * 1.15f + px(48));
+        };
+        // Every graphics setting, not only the ones on this page: the ray
+        // tracing's and the Debug pages' with the rest. Asked first, since it
+        // cannot be undone.
+        const char* resetLabel = words("Reset to default", "Auf Standard zurücksetzen");
+        if (ui_.button("gfx.reset", ImVec2(col.x0, y), ImVec2(col.x0 + widthFor(resetLabel, 170), y + bh),
+                       resetLabel)) {
             confirmGraphicsReset_ = true;
         }
-        const float applyW = px(130);
-        const float cancelW = px(110);
+        const char* applyLabel = words("Apply", "Übernehmen");
+        const char* cancelLabel = words("Cancel", "Abbrechen");
+        const float applyW = widthFor(applyLabel, 130);
+        const float cancelW = widthFor(cancelLabel, 110);
         if (ui_.button("gfx.cancel", ImVec2(col.x1 - applyW - px(12) - cancelW, y),
-                       ImVec2(col.x1 - applyW - px(12), y + bh), "Cancel")) {
-            settingsOpen_ = false;
+                       ImVec2(col.x1 - applyW - px(12), y + bh), cancelLabel)) {
+            closeLoginSettingsSheet(false);
         }
-        if (ui_.button("gfx.apply", ImVec2(col.x1 - applyW, y), ImVec2(col.x1, y + bh), "Apply",
+        if (ui_.button("gfx.apply", ImVec2(col.x1 - applyW, y), ImVec2(col.x1, y + bh), applyLabel,
                        PaperUI::ButtonKind::Primary)) {
-            saveLoginGraphicsState();
-            if (services_.window && services_.window->isVsyncEnabled() != loginGfx_.vsync) {
-                services_.window->setVsync(loginGfx_.vsync);
-            }
-            settingsOpen_ = false;
+            closeLoginSettingsSheet(true);
         }
     }
+    if (confirming) ui_.popInert();
 
-    if (confirmGraphicsReset_) {
+    // The hovered row's description, beside the pointer, as the game's own
+    // tooltip is.
+    if (settingsOpen_ && !confirming && !ui_.popupOpen() && !hoverText.empty()) {
+        const float tw = std::min(px(380), screenW - px(20));
+        const float inner = tw - px(28);
+        const float titleH = ui_.wrappedHeight(inner, hoverTitle.c_str(), labelSize);
+        const float bodyH = ui_.wrappedHeight(inner, hoverText.c_str(), px(kSmall));
+        const float th = px(14) * 2.0f + titleH + px(6) + bodyH;
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        ImVec2 ta(mouse.x + px(18), mouse.y + px(18));
+        if (ta.x + tw > screenW - px(6)) ta.x = std::max(px(6), mouse.x - tw - px(12));
+        if (ta.y + th > screenH - px(6)) ta.y = std::max(px(6), screenH - px(6) - th);
+        const ImVec2 tb(ta.x + tw, ta.y + th);
+        ui_.sheet(ta, tb, /*taped=*/false);
+        ui_.wrapped(ImVec2(ta.x + px(14), ta.y + px(14)), inner, hoverTitle.c_str(), labelSize, theme.ink);
+        ui_.wrapped(ImVec2(ta.x + px(14), ta.y + px(14) + titleH + px(6)), inner, hoverText.c_str(), px(kSmall),
+                    theme.inkSoft);
+    }
+
+    if (settingsOpen_ && confirmGraphicsReset_) {
         // Yes or no, over the sheet.
-        const float cw = px(440);
-        const float ch = px(kPad) * 2.0f + ui_.lineHeight(px(kLabel)) * 3.0f + px(16) + px(kButton);
+        const char* line1 = words("Reset all graphics settings to their defaults?",
+                                  "Alle Grafikeinstellungen auf ihren Standard zurücksetzen?");
+        const char* line2 = words("Every one, including ray tracing and the debug pages.",
+                                  "Jede einzelne, auch Raytracing und die Debug-Seiten.");
+        const char* line3 = words("Sound, controls, interface and chat stay as they are.",
+                                  "Sound, Steuerung, Oberfläche und Chat bleiben, wie sie sind.");
+        const float textW = std::max({ui_.textWidth(line1, px(kLabel)), ui_.textWidth(line2, px(kSmall)),
+                                      ui_.textWidth(line3, px(kSmall))});
+        const float cw = std::min(screenW - px(20), std::max(px(440), textW + px(kPad) * 2.0f));
+        const float ch = px(kPad) * 2.0f + ui_.lineHeight(px(kLabel)) * 3.0f + px(28) + px(kButton);
         const ImVec2 ca((screenW - cw) * 0.5f, (screenH - ch) * 0.5f);
         const ImVec2 cb(ca.x + cw, ca.y + ch);
         ui_.sheet(ca, cb, /*taped=*/false);
         ui_.claimMouse(ca, cb);
         Column c{ca.x + px(kPad), cb.x - px(kPad), ca.y + px(kPad)};
-        ui_.text(c.at(), "Reset all graphics settings to their defaults?", px(kLabel), theme.ink);
+        ui_.text(c.at(), line1, px(kLabel), theme.ink);
         c.gap(ui_.lineHeight(px(kLabel)) + px(4));
-        ui_.text(c.at(), "Every one, including ray tracing and the debug pages.", px(kSmall), theme.pencil);
+        ui_.text(c.at(), line2, px(kSmall), theme.pencil);
         c.gap(ui_.lineHeight(px(kSmall)) + px(4));
-        ui_.text(c.at(), "Sound, controls, interface and chat stay as they are.", px(kSmall), theme.pencil);
+        ui_.text(c.at(), line3, px(kSmall), theme.pencil);
         const float y = cb.y - px(kPad) - px(kButton);
         const float bw = px(110);
         if (ui_.button("gfx.reset.no", ImVec2(c.x1 - bw * 2.0f - px(12), y), ImVec2(c.x1 - bw - px(12), y + px(kButton)),
-                       "No")) {
+                       words("No", "Nein"))) {
             confirmGraphicsReset_ = false;
         }
-        if (ui_.button("gfx.reset.yes", ImVec2(c.x1 - bw, y), ImVec2(c.x1, y + px(kButton)), "Yes",
+        if (ui_.button("gfx.reset.yes", ImVec2(c.x1 - bw, y), ImVec2(c.x1, y + px(kButton)), words("Yes", "Ja"),
                        PaperUI::ButtonKind::Primary)) {
             confirmGraphicsReset_ = false;
+            // Applied and saved (GameScreen::resetGraphicsToDefaults): what
+            // Cancel would put back is what there is now.
             if (onResetGraphicsDefaults_) onResetGraphicsDefaults_();
-            // The sheet shows what the file now holds, with nothing pending
-            // for Apply to write over it.
-            loadLoginGraphicsState();
-            loginPresetPicked_ = false;
-            if (services_.window && services_.window->isVsyncEnabled() != loginGfx_.vsync) {
-                services_.window->setVsync(loginGfx_.vsync);
-            }
+            openLoginSettingsSheet();
         }
     }
 

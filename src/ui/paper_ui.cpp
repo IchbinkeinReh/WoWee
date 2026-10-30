@@ -163,6 +163,10 @@ void PaperUI::setLayer(PaperLayer layer) {
     dl_ = (layer == PaperLayer::Overlay) ? overlay_ : page_;
 }
 
+void PaperUI::veil(ImVec2 a, ImVec2 b, float alpha) {
+    dl_->AddRectFilled(a, b, paperFade(theme_.paperTop, alpha));
+}
+
 void PaperUI::pushInert() { ++inert_; }
 void PaperUI::popInert() { if (inert_ > 0) --inert_; }
 

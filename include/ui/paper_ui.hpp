@@ -193,6 +193,9 @@ public:
     void sheet(ImVec2 a, ImVec2 b, bool taped = true);
     /// Dims everything already drawn, for a modal to sit on.
     void scrim(float alpha);
+    /// Lays the page's own colour part of the way over a region, so that a
+    /// control drawn there but not offered (pushInert) reads as faded.
+    void veil(ImVec2 a, ImVec2 b, float alpha);
 
     /// A colour chosen for a dark interface, brought onto paper.
     ///
