@@ -59,4 +59,11 @@ struct Motion {
     return swimmingOrFlying && (m.forward || m.backward || std::abs(current) > kSnap);
 }
 
+/// Another unit's tilt (0x00719a90): its movement pitch as its last packet
+/// gave it, taken at once - no easing - while it swims or flies and moves
+/// forward or back; level otherwise.
+[[nodiscard]] inline float otherUnit(bool swimmingOrFlying, bool forwardOrBack, float movementPitch) {
+    return swimmingOrFlying && forwardOrBack ? movementPitch : 0.0f;
+}
+
 }  // namespace wowee::rendering::swim_pitch

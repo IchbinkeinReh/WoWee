@@ -22,6 +22,7 @@
 #include "core/world_entry_callback_handler.hpp"
 #include "core/ui_screen_callback_handler.hpp"
 #include "game/spell_classification.hpp"
+#include "rendering/swim_pitch.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/animation/jump_landing.hpp"
 #include "rendering/animation/mover_event.hpp"
@@ -240,6 +241,15 @@ uint32_t unitBodyFlags(const game::Entity& entity, bool moving, bool swimming, b
     if (swimming) flags |= by::kSwimming;
     if (flying) flags |= by::kFlying;
     return flags;
+}
+
+// Another unit's swimming or flying tilt (swim_pitch::otherUnit,
+// 0x00719a90): the pitch its last movement packet carried, while its flags
+// say forward or back.
+float unitSwimTilt(const game::GameHandler& gh, const game::Entity& entity, uint64_t guid, bool swimmingOrFlying) {
+    namespace by = rendering::body_yaw;
+    const bool forwardOrBack = (entity.getReportedMoveFlags() & (by::kForward | by::kBackward)) != 0;
+    return rendering::swim_pitch::otherUnit(swimmingOrFlying, forwardOrBack, gh.vehicleRoster().pitch(guid));
 }
 
 // UNIT_FIELD_BYTES_1 byte 3: the unit's animation tier (+0xb80, kept by
@@ -5053,9 +5063,15 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                                        !jumpHolds && !isMovingNow && !deadOrCorpse && !creatureMount &&
                                            unitPtr->getStandState() == 0);
             }
-            charRenderer->setInstanceRotation(instanceId, glm::vec3(0.0f, 0.0f, bodyYaw));
+            // Tilted by its pitch while it swims or flies forward or back
+            // (swim_pitch::otherUnit, 0x00719a90): the model's own Y axis,
+            // nose up positive, as the player's (Renderer).
+            const float unitTilt = unitSwimTilt(*gameHandler, *entity, guid,
+                                                _creatureSwimmingState.count(guid) > 0 ||
+                                                    _creatureFlyingState.count(guid) > 0);
+            charRenderer->setInstanceRotation(instanceId, glm::vec3(0.0f, -unitTilt, bodyYaw));
             if (creatureMount)
-                charRenderer->setInstanceRotation(creatureMount->instanceId, glm::vec3(0.0f, 0.0f, bodyYaw));
+                charRenderer->setInstanceRotation(creatureMount->instanceId, glm::vec3(0.0f, -unitTilt, bodyYaw));
         }
     }
     {
@@ -5283,10 +5299,13 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                                        !jumpHolds && !isMovingNow && !deadOrCorpse && !remoteMount &&
                                            unitPtr->getStandState() == 0);
             }
-            charRenderer->setInstanceRotation(instanceId, glm::vec3(0.0f, 0.0f, bodyYaw));
+            const float unitTilt = unitSwimTilt(*gameHandler, *entity, guid,
+                                                _pCreatureSwimmingState.count(guid) > 0 ||
+                                                    _pCreatureFlyingState.count(guid) > 0);
+            charRenderer->setInstanceRotation(instanceId, glm::vec3(0.0f, -unitTilt, bodyYaw));
             if (remoteMount) {
                 charRenderer->setInstanceRotation(remoteMount->instanceId,
-                                                  glm::vec3(0.0f, 0.0f, bodyYaw));
+                                                  glm::vec3(0.0f, -unitTilt, bodyYaw));
             }
         }
     }

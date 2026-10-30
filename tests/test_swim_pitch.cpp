@@ -63,3 +63,9 @@ TEST_CASE("Swim pitch: on while swimming and moving, or easing back out", "[swim
     CHECK_FALSE(active(true, still, 0.0f));
     CHECK_FALSE(active(false, fwd, -0.3f));  // on land: never
 }
+
+TEST_CASE("Swim pitch: another unit takes its packet's pitch at once", "[swim]") {
+    CHECK(otherUnit(true, true, -0.4f) == -0.4f);
+    CHECK(otherUnit(true, false, -0.4f) == 0.0f);   // treading water
+    CHECK(otherUnit(false, true, -0.4f) == 0.0f);   // on land
+}
