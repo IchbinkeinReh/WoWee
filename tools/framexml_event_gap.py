@@ -32,11 +32,14 @@ nothing in between, and they are nearly always real.
 
 THREE THINGS THIS CANNOT DECIDE
 -----------------------------
-* **A name kept in a variable is invisible here.** The calendar's reader fills
-  a list of signal structs and one call raises whatever that list holds, so not
-  one of its ten event names sits next to a fire call and all ten read as gaps.
-  They get their own table rather than being folded into either side: a name in
-  a list is an event only if something walks the list.
+* **A name kept in a variable is invisible to the fire-call patterns.** The
+  calendar's reader fills a list of signal structs and one call raises whatever
+  that list holds, so not one of its ten event names sits next to a fire call and
+  all ten read as gaps. They get their own table rather than being folded into
+  either side. What that table now says depends on whether the tree contains a
+  call that raises a struct's `event` field at all (`walkers()`): if it does, the
+  names are proven sends - the fire site is printed with them, because the rule
+  cannot tell one signal struct from another, only that the shape matches.
 
 * **"Never fired" can mean "something else is fired in its place."**
   SMSG_QUESTGIVER_QUEST_LIST was sending GOSSIP_SHOW where QUEST_GREETING
@@ -195,6 +198,30 @@ def held():
             direct |= set(re.findall(
                 r'(?<![\w.])' + re.escape(helper) + r'\s*\([^;{}]{0,120}?' + EVENT, src))
     return direct
+
+
+#: A fire call whose first argument is a struct's field instead of a name:
+#: `fireAddonEvent(signal.event, signal.args)` (game_handler_callbacks.cpp:5160
+#: and :5213 raise everything the calendar reader appended). One such call turns
+#: every name stored in that shape into a send - which is why `held` reports the
+#: site rather than a warning.
+WALKER = re.compile(r'(?:fireAddonEvent|addonEventCallback[A-Za-z_]*(?:\(\))?)'
+                    r'\(\s*[\w_][\w_.-]*\s*\.\s*event')
+
+
+def walkers():
+    """Where this client raises whatever a list of signal structs holds."""
+    sites = []
+    for dirpath, _, filenames in os.walk(SRC):
+        for name in filenames:
+            if not name.endswith((".cpp", ".hpp")):
+                continue
+            path = os.path.join(dirpath, name)
+            for n, line in enumerate(open(path, encoding="utf-8",
+                                          errors="ignore"), 1):
+                if WALKER.search(line):
+                    sites.append((os.path.relpath(path, SRC), n, line.strip()))
+    return sites
 
 
 def chat_family():
@@ -372,12 +399,28 @@ def main():
             print(f"  {event:<38} {opcode}")
 
     if inHand:
+        sites = walkers()
         print()
-        print(f"{len(inHand)} more are written as an event name in this client's source, but "
-              "never\nnext to a fire call - they reach the interface through a variable. "
-              "Neither\na gap nor a proven send; read what walks the list that holds them:")
-        for event in sorted(inHand):
-            print(f"  {event}")
+        if sites:
+            # The rule is only about shapes: a name handed to a helper that
+            # appends it as the first field of a struct, and a call somewhere
+            # that fires a struct's `event` field. That is the calendar's whole
+            # route, verified by hand, and it is what the names below are being
+            # believed on - so the site is printed and the claim is checkable.
+            print(f"{len(inHand)} more are written as an event name in this client's source, "
+                  "never\nnext to a fire call, and are counted as sent because this call "
+                  "raises\nwhatever the list holds:")
+            for path, n, line in sites:
+                print(f"  {path}:{n}  {line}")
+            for event in sorted(inHand):
+                print(f"  {event}")
+        else:
+            print(f"{len(inHand)} more are written as an event name in this client's source, "
+                  "but never\nnext to a fire call - and nothing in this tree fires a struct's "
+                  "`event` field\neither, so nothing raises them. A gap unless something "
+                  "walks the list:")
+            for event in sorted(inHand):
+                print(f"  {event}")
 
     ours, theirs = chat_family()
     unnamed = sorted(theirs - ours)
