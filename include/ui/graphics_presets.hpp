@@ -69,7 +69,6 @@ struct GraphicsPresetValues {
     bool  sunShafts;
     int   lightShafts;       ///< index into Off|Low|Medium|High
     float fogSkyBlend;
-    /// This client's procedural water rather than the client's own liquid.
     /// The client's 'specular' cvar (registered at 0x0078e1a0 with the
     /// default "0" at 0x009e14a0). The exe holds no quality presets: its only
     /// other source is the hardware row of VideoHardware.dbc (0x0076b3f0
