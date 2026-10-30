@@ -694,7 +694,19 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         readyCheckDeadline_.reset();
         readyCheckInitiatorGuid_ = 0;
         readyCheckAnswers_.clear();
-        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("READY_CHECK_FINISHED", {});
+        // The one argument is the flag the original sends, and sending nothing
+        // was a line of chat nobody earned.  readycheck.lua unpacks it as
+        // `local preempted = ...`, and when it is *not* set and the viewer is
+        // not the one who started the check, that handler adds
+        // READY_CHECK_YOU_WERE_AFK to the chat frame.  The original raises this
+        // event from one site only (0x00574880, at 00570000.c:3384) and always
+        // with the format "%d" and the value 1 - it fires when an answer turns
+        // up from somebody who is not in the check it is tracking, which ends
+        // that check without blaming anyone for being away.  Whether a player
+        // was AFK is its own timer's business (0x00573390), and nothing here
+        // knows it either, so the flag goes out as the client sends it.
+        if (owner_.addonEventCallbackRef())
+            owner_.addonEventCallbackRef()("READY_CHECK_FINISHED", {"1"});
     };
     table[Opcode::SMSG_RAID_INSTANCE_INFO] = [this](network::Packet& packet) { handleRaidInstanceInfo(packet); };
 
