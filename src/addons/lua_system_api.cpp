@@ -9235,23 +9235,37 @@ void registerSystemLuaAPI(lua_State* L) {
                 // of. Bound so that stays true if it ever reports some.
                 {"GetMapLandmarkInfo",  lua_GetMapLandmarkInfo},
                 {"GetMapOverlayInfo",   lua_GetMapOverlayInfo},
-                // Which map a quest's objectives are on, and what a quest item
-                // drops from. Both are read while building the map's quest
-                // list; nil is "not on this map", which is what the list does
-                // with a quest it cannot place.
-                // Which map a quest wants opened, and on which dungeon floor.
-                // Nothing here tracks either, and the answer for "none" is a
-                // pair of zeroes rather than nil because that is what the
-                // caller tests: WorldMap_OpenToQuest asks `if ( mapID ~= 0 )`
-                // and then `if ( floorNumber ~= 0 )`, and nil ~= 0 is true in
-                // Lua - so answering nil ran both branches, on the path the
-                // quest tracker takes every time a tracked quest is clicked.
-                // SetMapByID drops a zero id and SetDungeonMapLevel does
-                // nothing at all, so it was inert; it was inert by luck.
+                // Which map a quest wants opened, and on which dungeon floor
+                // (0x005e56c0 -> 0x005e2b60). Chosen off the quest POI list -
+                // the areas the server sent for the quests in the log - and
+                // against the map that is showing, which is why FrameXML shows
+                // WorldMapFrame before asking: with the map closed the answer
+                // is the pair of zeroes. Those zeroes are also what "no such
+                // map" answers with, and it is a pair of zeroes rather than
+                // nil because that is what the caller tests:
+                // WorldMap_OpenToQuest asks `if ( mapID ~= 0 )` and then
+                // `if ( floorNumber ~= 0 )`, and nil ~= 0 is true in Lua - so
+                // answering nil ran both branches, on the path the quest
+                // tracker takes every time a tracked quest is clicked.
+                //
+                // What is not here is the reference's last resort: with no
+                // area listed for the quest it walks the quest's zone up its
+                // AreaTable parents and opens the WorldMapArea row of the
+                // top of that chain at floor 0, which needs both tables where
+                // this has only the POI list. So a quest the server gave no
+                // points of interest for leaves the map where it was.
                 {"GetQuestWorldMapAreaID", [](lua_State* L) -> int {
-            lua_pushnumber(L, 0);   // mapID
-            lua_pushnumber(L, 0);   // floorNumber
+            if (!lua_isnumber(L, 1)) {
+                return luaL_error(L, "Usage: GetQuestWorldMapAreaID(questID)");
+            }
+            const auto [mapId, floorNumber] =
+                questPoiOpenTarget(L, static_cast<int32_t>(lua_tonumber(L, 1)));
+            lua_pushnumber(L, mapId);      // a WorldMapArea id
+            lua_pushnumber(L, floorNumber);  // a DungeonMap floor
             return 2; }},
+                // What a quest item drops from, read while building the map's
+                // quest list; nil is "not on this map", which is what the list
+                // does with a quest it cannot place.
                 {"GetQuestLogItemDrop",    lua_ReturnNil},
                 // How many of those there are. Unbound, so the world map's
                 // quest tooltip called a nil global and raised - the guard

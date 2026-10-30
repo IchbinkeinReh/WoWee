@@ -1011,6 +1011,23 @@ static game::QuestPoiIconList::QuestState questPoiStateFn(game::GameHandler* gh)
     return [gh, rows](int32_t questId) { return questPoiState(gh, *rows, questId); };
 }
 
+// Which map a quest wants shown, and on which floor. Declared in
+// lua_api_helpers.hpp because the reader is the world map's own binding, while
+// the answer comes off this list and the map this is laid out on.
+//
+// The questPOI switch is not consulted: 0x005e2b60 does not consult it either,
+// and with the switch off the areas were never asked for, so the list answers
+// zeroes on its own.
+std::pair<uint32_t, uint32_t> questPoiOpenTarget(lua_State* L, int32_t questId) {
+    auto* gh = getGameHandler(L);
+    auto* list = questPoiList(gh);
+    if (!list) return {};
+    // The player's position in server coordinates, the axes the points use -
+    // the same pair QuestPOIUpdateIcons weighs its marks with.
+    const auto& mi = gh->getMovementInfo();
+    return list->openTargetFor(questId, questPoiMapView(L), questPoiStateFn(gh), mi.y, mi.x);
+}
+
 /// QuestMapUpdateAllQuests() (0x005e63d0) → how many quests have an area on
 /// the map shown. Zero at a continent: only a zone or a dungeon floor counts.
 static int lua_QuestMapUpdateAllQuests(lua_State* L) {

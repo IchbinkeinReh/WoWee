@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <optional>
 #include <chrono>
 #include <cstring>
@@ -1158,6 +1159,16 @@ bool boughtHeldMerchantItem(lua_State* L);
 /// here rather than subscripting the log, or it answers about a different
 /// quest than the one asked about.
 const game::GameHandler::QuestLogEntry* questAtLogRow(game::GameHandler* gh, int index);
+
+/// Which map a quest wants shown, and on which floor - the pair
+/// GetQuestWorldMapAreaID hands FrameXML (0x005e56c0 -> 0x005e2b60).
+///
+/// Declared here because the answer comes off the quest POI list and the map
+/// that list is laid out on, which live with the quest bindings, while the
+/// reader is the world map's. A pair of zeroes means "leave the map where it
+/// is", which is also what the caller tests: nil is not what it asks for, and
+/// `nil ~= 0` is true in Lua.
+std::pair<uint32_t, uint32_t> questPoiOpenTarget(lua_State* L, int32_t questId);
 
 /// The recipe a drawn trade skill row stands for, or null for a heading, an
 /// index past the end, or no open profession.

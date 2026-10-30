@@ -114,6 +114,27 @@ public:
     /// The icon of a quest, or null (0x005deee0).
     [[nodiscard]] const QuestPoiIcon* iconFor(int32_t questId) const;
 
+    /// GetQuestWorldMapAreaID's pair (0x005e2b60): the WorldMapArea row the
+    /// world map switches to for a quest, and the DungeonMap floor of it.
+    ///
+    /// The area taken is the one the map already shows, when it shows one of
+    /// the quest's; otherwise the floor nearest the one shown among the areas
+    /// drawn on that same map, the nearest of those to the player; otherwise
+    /// the first area the shown map is not drawn on at all.  Which areas count
+    /// is the same mask test the marks go through.  The reference also
+    /// refreshes the slot's mask here and keeps what it computed, so this
+    /// writes it too.
+    ///
+    /// `{0, 0}` for a quest with no areas listed and for a map with no
+    /// WorldMapArea row shown - the reference falls back in both cases to
+    /// walking the quest's zone up its AreaTable parents and answering the
+    /// WorldMapArea row of the top of that chain with floor 0, which needs
+    /// both of those tables where this has only the view.  The caller reads a
+    /// pair of zeroes as "leave the map where it is".
+    std::pair<uint32_t, uint32_t> openTargetFor(int32_t questId, const QuestPoiMapView& view,
+                                                const QuestState& state, float playerX,
+                                                float playerY);
+
     [[nodiscard]] const std::array<QuestPoiIcon, kSlots>& icons() const { return icons_; }
 
     /// SetPOIIconOverlapDistance (0x00ad1014) and ...PushDistance (0x00ad1018,
