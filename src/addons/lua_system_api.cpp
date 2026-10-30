@@ -1188,6 +1188,27 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // like any other CVar; nothing here reads either.
     else if (n == "camerasmoothstyle") lua_pushstring(L, "4");
     else if (n == "camerayawsmoothspeed") lua_pushstring(L, "180");
+    // The same group's other rates, and the window a view blend is held to.
+    // These are not left for the generic stand-in because this client does
+    // read them: SetView's blend times itself by distance /
+    // cameraDistanceSmoothSpeed and pitch / cameraPitchSmoothSpeed and then
+    // clamps to cameraSmoothTimeMin and cameraSmoothTimeMax (0x00603330 ->
+    // 0x00600e00, 0x00601190), and MoveView{In,Out,Up,Down}Start move at
+    // cameraDistanceMoveSpeed yards and cameraPitchMoveSpeed degrees a second
+    // (0x005ff080 ff.). Each of those reads names the same fallback the client
+    // registers, so the answer has to be that number or GetCVar shows one
+    // value while the camera moves at another.
+    else if (n == "cameradistancesmoothspeed") lua_pushstring(L, "8.33");
+    else if (n == "camerapitchsmoothspeed") lua_pushstring(L, "45");
+    else if (n == "camerasmoothtimemin") lua_pushstring(L, "0.1");
+    else if (n == "camerasmoothtimemax") lua_pushstring(L, "2.0");
+    else if (n == "cameradistancemovespeed") lua_pushstring(L, "8.33");
+    else if (n == "camerapitchmovespeed") lua_pushstring(L, "90");
+    // Whether a view the player has moved still blends (Controls > "Camera
+    // Following Style"'s second style). Registered "0" like the rest of the
+    // group, and read by refreshViewSmoothing, so it is said here for the same
+    // reason as the rates above - the read and the answer are one number.
+    else if (n == "cameracustomviewsmoothing") lua_pushstring(L, "0");
     // Titles on player names, as the real client shows them.
     else if (n == "unitnameplayerpvptitle") lua_pushstring(L, "1");
     // Cast bars over enemy nameplates are on, and so are bubbles over the
@@ -1196,6 +1217,14 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // their raid's conversation floating over the boss.
     else if (n == "showvkeycastbar") lua_pushstring(L, "1");
     else if (n == "chatbubblesparty") lua_pushstring(L, "1");
+    // Clicking anywhere in a chat window starts typing, on, as 0x00510000
+    // registers it. Nothing in the C++ reads the name: the shipped FrameXML
+    // does, and only while chatStyle is "im" - the always-visible chat box - so
+    // this is one of the rows whose whole effect is in the interface's own
+    // click handling. Answered because the Chat page has the row on the CVar,
+    // and a row showing "off" over a game that behaves as "on" is the kind of
+    // disagreement this file keeps having to fix.
+    else if (n == "wholechatwindowclickable") lua_pushstring(L, "1");
     // Pets and guardians plated on both sides; pets named, guardians not
     // (0x00511xxx, 0x007e6150).
     else if (n == "nameplateshowenemypets") lua_pushstring(L, "1");
@@ -1317,18 +1346,32 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // so this stays where the real client leaves it rather than being turned
     // on into a filter that would not filter.
     else if (n == "showcastablebuffs") lua_pushstring(L, "0");
-    // The numbers on a unit frame's bars. A stock 3.3.5 client keeps these off
-    // and shows them on mouseover; on this one they are wanted permanently,
-    // which is what the Status Text interface option turns on.
+    // The numbers on a unit frame's bars. Off, as 0x00510000 registers each of
+    // the four: a stock client writes them only while the mouse is over the
+    // bar, and the four Status Text checkboxes are what write them permanently.
+    // They were answered "1" here for a while, which showed the numbers from
+    // the first login - the same kind of switch that previewTalents and
+    // showKeyring had, and the same reason to leave it to the player.
     // The unit frames each ask about their own, not about "statusText" - the
-    // player frame's bars carry cvar = "playerStatusText". Defaulting only the
-    // general one left every bar's numbers hidden, correct text and all.
+    // player frame's bars carry cvar = "playerStatusText" - so answering only
+    // the general one leaves every bar's numbers hidden, correct text and all.
     else if (n == "statustext" || n == "playerstatustext" ||
              n == "targetstatustext" || n == "petstatustext" ||
              n == "partystatustext") {
-        lua_pushstring(L, "1");
+        lua_pushstring(L, "0");
     }
     else if (n == "statustextpercentage") lua_pushstring(L, "0");
+    // The game's own red edge, on: 0x00510000 registers "1". Nothing in the C++
+    // reads this one - it is the shipped FrameXML that does. playerframe.lua
+    // calls CombatFeedback_StartFullscreenStatus() as PLAYER_REGEN_DISABLED
+    // goes out and StopFullscreenStatus as PLAYER_REGEN_ENABLED does, and those
+    // two are combatfeedback.lua calling LowHealthFrame_StartFlashing(0.7, 0.7)
+    // and LowHealthFrame_StopFlashing() on WorldFrame's own LowHealthFrame. So
+    // with this answered "0" - which the generic stand-in did - a player stood
+    // in combat at half health with no edge at all, and the interface's own
+    // checkbox for it had never been touched. This client's low-health pulse is
+    // a separate setting and stays as it was; the game's flash is not it.
+    else if (n == "screenedgeflash") lua_pushstring(L, "1");
     // Which stat category each column of the character sheet shows. These are
     // not preferences with a sensible fallback - UpdatePaperdollStats compares
     // the value against five names and fills the column from whichever matches,

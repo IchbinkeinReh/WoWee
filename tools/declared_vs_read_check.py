@@ -62,11 +62,18 @@ Three worth naming because they look like faults and are not:
     the branch that scans the currency list and decides, which is what a fresh
     account wants.
 
-The one left undecided is screenEdgeFlash, the full-screen combat flash. Its
-default is plausibly on, LowHealthFrame exists to draw it, and unlike the
-entries above it is reachable from an Interface Options checkbox - so zero
-costs a preference rather than a feature, and turning a full-screen flash on
-from a guess is the wrong way round.
+screenEdgeFlash was the one left undecided, and it is no longer a guess: the
+binary registers it "1" (FUN_00767fc0 at 00510000.c:11283, the default argument
+read back as the string it points at), so it now answers "1" here and the HUD
+row over it starts ticked the same way. What that registration buys is smaller
+than the CVar's name suggests. playerframe.lua calls
+CombatFeedback_StartFullscreenStatus() on PLAYER_REGEN_DISABLED and
+StopFullscreenStatus on PLAYER_REGEN_ENABLED, and those are
+combatfeedback.lua flashing WorldFrame's LowHealthFrame - with no health test
+anywhere in it, and with its alpha forced to 0 by
+`if ( not GetUIPanel("fullscreen") )` while no panel declares frameArea="full".
+So the answer matches the game and changes nothing on screen; this client's own
+low-health pulse is a separate row and stays as it was.
 
 THE SEVENTEEN ATTRIBUTES, READ 2026-08-05
 

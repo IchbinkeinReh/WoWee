@@ -8,9 +8,10 @@ The two sides are:
 
   * `GetCVar` in `src/addons/lua_system_api.cpp`, which is what the interface
     asks. Its fallbacks are what a checkbox ticks itself from.
-  * `storedCVarValue(name, default)`, which is what the client reads where the
-    setting is actually used - twenty-nine of them, in the combat text, the
-    nameplates, the chat filters, the shadow quality and the rest.
+  * `storedCVarValue(name, default)` and its float twin `storedCVarFloat`, which
+    are what the client reads where the setting is actually used - in the combat
+    text, the nameplates, the chat filters, the shadow quality, and the camera's
+    own blend rates and time window.
 
 Neither is wrong to exist. The interface needs an answer before anything is
 stored, and the client needs one at the point of use. What they must not do is
@@ -22,6 +23,10 @@ Nothing else here would notice. Both values are individually reasonable, both
 sides work, and the disagreement only shows up on screen - which is the same
 shape as the login screen's parallax scale and the preset table that had drifted
 in four of ten columns.
+
+The two sides spell a number differently, so they are compared as numbers when
+both read as numbers: `storedCVarFloat("cameraSmoothTimeMin", "0.1")` beside a
+`GetCVar` answer of `"0.1"` is the same window, and `"0.10"` would be too.
 
 Reads the source rather than running anything, so it costs nothing and holds for
 files that start using either side after this was written.
@@ -45,7 +50,26 @@ FALLBACK = re.compile(
     r'((?:n == "[a-z0-9_]+"\s*(?:\|\|\s*)?)+)\)?\s*(?:\{\s*)?lua_pushstring\(L,\s*"([^"]*)"\)',
     re.IGNORECASE | re.DOTALL)
 NAME = re.compile(r'n == "([a-z0-9_]+)"', re.IGNORECASE)
-DIRECT = re.compile(r'storedCVarValue\(\s*"([A-Za-z0-9_]+)"\s*,\s*(?:\.\w+\s*=\s*)?"([^"]*)"')
+DIRECT = re.compile(
+    r'storedCVar(Value|Float)\(\s*"([A-Za-z0-9_]+)"\s*,\s*(?:\.\w+\s*=\s*)?"([^"]*)"')
+
+
+def agree(answer, read, as_number):
+    """The same value, however each side spells it.
+
+    Only a `storedCVarFloat` read may spell its fallback differently from the
+    string GetCVar pushes, because that is the one that converts. A
+    `storedCVarValue` fallback is compared as text by the client itself, so
+    "01" against "1" is a real disagreement here even though both parse to one.
+    """
+    if answer == read:
+        return True
+    if not as_number:
+        return False
+    try:
+        return float(answer) == float(read)
+    except ValueError:
+        return False
 
 
 def main():
@@ -61,18 +85,18 @@ def main():
 
     reads = {}
     for path in sorted(list(ROOT.glob("src/**/*.cpp")) + list(ROOT.glob("include/**/*.hpp"))):
-        for name, value in DIRECT.findall(path.read_text(encoding="utf-8")):
-            reads.setdefault(name, (value, path.relative_to(ROOT)))
+        for kind, name, value in DIRECT.findall(path.read_text(encoding="utf-8")):
+            reads.setdefault(name, (value, path.relative_to(ROOT), kind))
 
     print(f"GetCVar answers for {len(answers)} CVars; "
           f"the client reads {len(reads)} of them where they are used.\n")
 
     unanswered, disagree = [], []
-    for name, (value, where) in sorted(reads.items()):
+    for name, (value, where, kind) in sorted(reads.items()):
         answer = answers.get(name.lower())
         if answer is None:
             unanswered.append((name, value, where))
-        elif answer != value:
+        elif not agree(answer, value, kind == "Float"):
             disagree.append((name, answer, value, where))
 
     for name, value, where in unanswered:
