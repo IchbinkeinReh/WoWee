@@ -3130,7 +3130,7 @@ static int lua_GetMapZones(lua_State* L) {
     return 0;
 }
 
-// GetNumMapLandmarks() → 0 (no landmark data exposed yet)
+// GetNumMapLandmarks() → how many pins the map being shown has
 static int lua_GetNumMapLandmarks(lua_State* L) {
     auto* svc = getLuaServices(L);
     lua_pushnumber(L, (svc && svc->getMapLandmarks)
@@ -3143,6 +3143,33 @@ static int lua_GetNumMapLandmarks(lua_State* L) {
 /// The area POIs on whatever the map is showing. Answered zero of them while
 /// the client had them loaded from AreaPOI.dbc and was drawing them on its own
 /// map, so FrameXML's map came up with no pins on it at all.
+///
+/// The list wired here is the one the facade already builds for its own map,
+/// and it is not the list the reference answers.  The reference rebuilds its
+/// pins inside the routine that *changes* the shown map (0x00546310, which
+/// fills 0x00be8ee0 entries - id, x, y and two kind dwords, stride 0x14), and
+/// the walk that fills them reads no AreaPOI row at all.  Its first family is
+/// the record array at 0x00ad312c (count 0x00ad3118, stride 0x58): 0x005445f0
+/// projects a record into the map's space, and the record is kept only when
+/// that lands inside the map, when the id at its +0x44 resolves through the
+/// index at 0x00ad3154 to a row on this map, and when the world state named at
+/// its +0x50 is satisfied (0x00548d10, the same getter game/world_state_ui.hpp
+/// documents for the world state frame).  Read back out at 0x00545a30 a record
+/// answers its name at +0x48 and its description at +0x4c, its flag word at
+/// +0x40 is what gates it (bit 0x80) and what the 7th return is (bit 0x200),
+/// the icon cell comes from the record's own dword run at +8 indexed by
+/// "world state value - 1" clamped to 8 rather than from a fixed column, and
+/// its +0x54 is the mapLinkID - so the pins that *lead somewhere* are this
+/// family's.  One further record per map is built from the player's own
+/// position, and a second kind, marked in the entry's third dword, answers a
+/// row looked up by id with a fixed textureIndex of 6, no description, and no
+/// link.
+///
+/// What that leaves open is the family itself: neither this record array nor
+/// the table behind the second kind is named yet, and the two obvious guesses
+/// are not it - WorldStateUI.dbc is 63 fields and 252-byte records, not the
+/// 0x58 stride read here, and AreaGroup.dbc is 8 fields and 32.  Naming it is
+/// the step before any of this can be answered for real.
 static int lua_GetMapLandmarkInfo(lua_State* L) {
     auto* svc = getLuaServices(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
@@ -9274,9 +9301,30 @@ void registerSystemLuaAPI(lua_State* L) {
                 fireWorldMapUpdate(L);
             return 0;
         }},
+                // ClickLandmark(mapLinkID) - clicking a pin that leads
+                // somewhere.  0x00546ef0 looks the link up by key in a table of
+                // its own (key range 0x00ad36e4..0x00ad36e0, key to row at
+                // 0x00ad36f4), then walks the *other* list the map change built:
+                // 0x00546310 fills a second array alongside the pins -
+                // 0x00be8ee4 ids at 0x00be8f2c - by going over the table at
+                // 0x00ad4f0c rows / 0x00ad4f20 (stride 0x44), keeping a row
+                // whose second dword is the map being shown and, of the
+                // up-to-four ids in its dwords 2..5, the first that lands on a
+                // row with +0x28 at zero or above whose +0xc answers at
+                // 0x00546100 for this player.  What is stored is that row's own
+                // id.  Clicking then looks each stored id up at 0x00ad4edc and
+                // wants the row it finds to have its second dword equal the
+                // clicked link's second dword, and hands the map-change routine
+                // that row's first dword with the link as its third argument -
+                // which is how a pin opens a map instead of a tooltip.  Neither
+                // table is named; AreaGroup.dbc's shape (an id, a map, four area
+                // ids) is the nearest thing to the 0x44-stride one and it is not
+                // it, being 8 fields and 32-byte records.  And no pin answered
+                // here carries a mapLinkID, so nothing is clickable yet.
                 {"ClickLandmark",       lua_ReturnNothing},
-                // Landmark rows, which GetNumMapLandmarks already reports none
-                // of. Bound so that stays true if it ever reports some.
+                // The pins on the shown map: counted by GetNumMapLandmarks and
+                // described by GetMapLandmarkInfo, whose note above is where the
+                // reference's own families are worked out.
                 {"GetMapLandmarkInfo",  lua_GetMapLandmarkInfo},
                 {"GetMapOverlayInfo",   lua_GetMapOverlayInfo},
                 // Which map a quest wants opened, and on which dungeon floor
