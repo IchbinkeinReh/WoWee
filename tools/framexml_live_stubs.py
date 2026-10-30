@@ -164,6 +164,29 @@ record's shape - a bit field at column 3 and two small floats at columns 13 and
 sound and spell-chain tables, a vehicle seat, a map overlay, a destructible
 model, a durability level and a scaling-stat distribution. A table this install
 were short of would have shown up there under a creature-template name.
+
+FIVE OF THE REACHED ROWS ARE NOT ASKS FROM THE REFERENCE CLIENT (2026-10-30)
+
+The interface tree named on the command line is not the 12340 client's own UI.
+It is the post-Cataclysm layout under a 30300 tag: 115 of its FrameXML XML files
+hold <Frame> definitions, they point at ..\FrameXML\UI.xsd, and a 3.3.5 FrameXML
+carries no frame XML at all. So "reached from a live element" is a superset of
+what the reference client ever reached, and the binary is what separates the two
+halves: take the second column of the decompile's strings.tsv, sort it, and
+`comm -23` it against these rows. Five of the 74 come out with no match:
+AchievementMicroButton_Update (called at blizzard_achievementui.lua:671),
+MutedList_Update (friendsframe.lua:1341), CannotBeResurrected,
+InspectAchievements and MovieRecording_IsRecording. Nothing in the tree defines
+the first three, so that interface is asking the client for functions this client
+never had. The fourth is the row the other way round: uiparent.lua:346 defines
+InspectAchievements itself, so its own Lua function replaces the native binding
+at load and no stub of ours is ever what runs - the binding still matters for a
+tree that does not define it, which is why it is bound rather than absent. The
+other
+69 are names the 12340 executable does carry, and those are the rows worth
+reading the decompile over; the rest are a newer UI asking for something the
+reference client never had, and chasing them against this binary is a dead end
+by construction.
 """
 import re
 import sys
