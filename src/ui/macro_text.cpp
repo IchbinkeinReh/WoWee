@@ -36,6 +36,29 @@ private:
     size_t pos_ = 0;
 };
 
+/// The two prefixes a macro line may carry and still not be executed.
+///
+/// 0x00564db0 - the routine that runs a macro, from the bar, from RunMacro,
+/// from RunMacroText and from a "MACRO name" binding alike - walks the body
+/// line by line and hands over a line only when its first character is
+/// neither of these. '#' is the directive line the button reads a tooltip from
+/// (see macroShowtooltipArg); '-' the client skips beside it, and nothing the
+/// interface or this client writes into a macro body begins that way, so a
+/// line that starts with one is simply not something to run. It used to be
+/// here: a body line "-hello" said "-hello" in chat, where the real client
+/// says nothing at all.
+///
+/// The same loop is also where /stopmacro takes effect - its condition holds
+/// while the record of the running macro is still set, which is what stops
+/// ChatPanel's own loop short. And the real client hands each of these lines
+/// to FrameXML (EXECUTE_CHAT_LINE, 383, answered by the hidden MacroEditBox in
+/// chatframe.lua:2468, which copies the chat frame's target attributes and
+/// sends the line as chat), while this client runs them through its own slash
+/// dispatch instead. Raised here as well, every line would run twice.
+bool executedAsMacroLine(const std::string& line) {
+    return !line.empty() && line.front() != '#' && line.front() != '-';
+}
+
 }  // namespace
 
 std::vector<std::string> macroCommandLines(const std::string& macroText) {
@@ -43,7 +66,7 @@ std::vector<std::string> macroCommandLines(const std::string& macroText) {
     LineReader reader(macroText);
     std::string line;
     while (reader.next(line)) {
-        if (!line.empty() && line.front() != '#') {
+        if (executedAsMacroLine(line)) {
             commands.push_back(line);
         }
     }

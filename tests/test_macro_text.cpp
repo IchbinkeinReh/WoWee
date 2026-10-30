@@ -41,6 +41,15 @@ TEST_CASE("comments and blank lines are not commands", "[macrotext]") {
     CHECK(macroCommandLines(macro) == std::vector<std::string>{"/cast Frostbolt"});
 }
 
+TEST_CASE("a line starting with a dash is not a command either", "[macrotext]") {
+    // 0x00564db0 hands a macro's line over only when its first character is
+    // neither '#' nor '-'. Nothing the interface writes begins with a dash, so
+    // this is a body a player typed by hand: "-hi" says nothing at all in the
+    // real client, and said "-hi" to everyone nearby here.
+    CHECK(macroCommandLines("-hi\n/cast Frostbolt\n-hello\n") ==
+          std::vector<std::string>{"/cast Frostbolt"});
+}
+
 TEST_CASE("carriage returns are stripped", "[macrotext]") {
     // A macro edited on Windows carries these. "/cast Frostbolt\r" matches no
     // spell, and the failure is a macro that does nothing with no message.
