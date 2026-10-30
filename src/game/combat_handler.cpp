@@ -1131,8 +1131,11 @@ void CombatHandler::handleUpdateComboPoints(network::Packet& packet) {
     // check; the first thing it calls, 0x005aa470, rewrites the 144 per-slot
     // pairs the buttons are drawn from (DAT_00c1ded8, DAT_00c1dc98) and
     // announces a change with ACTIONBAR_UPDATE_USABLE (0xb2). A form flipping is
-    // UPDATE_SHAPESHIFT_USABLE (0x17a), a button going unusable is a sound
-    // (0x0074d520 0x23), and the rescan's own name SPELL_UPDATE_USABLE (0xf5)
+    // UPDATE_SHAPESHIFT_USABLE (0x17a), a spell of that list becoming affordable
+    // again says so as COMBAT_TEXT_UPDATE("SPELL_ACTIVE", name) - 0x0074d520 is
+    // not a sound: it fires 0x1e4 with "%s%s", the type name being that call's
+    // first argument read out of the combat-text type table at 0xadb820, slot
+    // 0x23 - and the rescan's own name SPELL_UPDATE_USABLE (0xf5)
     // reaches no frame of this interface. WoWee's action flags hold the power
     // half only (0x0053d1b0, the power-only variant), which is the half the
     // buttons actually read: IsUsableAction (0x005a7e60) reads nothing else

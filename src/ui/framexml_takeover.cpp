@@ -220,12 +220,14 @@ void frameXmlNoteAddOnLoaded(const std::string& addOnName) {
 }
 
 bool frameXmlDrawsCombatText() {
-    // False while the client sends no COMBAT_TEXT_UPDATE, whatever is loaded.
+    // False while the COMBAT_TEXT_UPDATE this client sends carries no numbers,
+    // whatever is loaded.
     //
     // Standing down for Blizzard_CombatText assumed it would draw what this
     // client had stopped drawing. It cannot: every damage and healing number it
-    // shows arrives on COMBAT_TEXT_UPDATE, and this client has never fired that
-    // event once. What it does fire reaches the addon as the bare event name -
+    // shows arrives on COMBAT_TEXT_UPDATE, and the only one this client sends is
+    // the SPELL_ACTIVE line a power rescan raises (predictedPowerUsability) - no
+    // damage, no healing. What it does fire reaches the addon as the bare event name -
     // which is why entering combat still announces itself from the middle of
     // the screen while nothing else does, and why the handover read as working.
     //
