@@ -114,6 +114,26 @@ EXPECTED = {
     # Same field on the per-charter struct inside that list, for the same
     # reason.
     ("Charter", "requiredSigs"): "shown from SMSG_PETITION_SHOW, not the list",
+    # A swing's line takes its amount from the total that sits *ahead* of the
+    # sub-damage run, and the original client sums at most two entries of it -
+    # 0x007512b0 walks the absorb run and the resist run, `while (uVar10 < 2)`,
+    # breaking on a zero school - which is what combat_log_feed.cpp:400 does.
+    # The integer per entry is on the wire (school, float, integer, twelve
+    # bytes) and neither client puts it in a log line: it is read so the run
+    # ends where the next run starts. The count itself sizes that run and the
+    # length checks around it, both inside the parser, and the two consumers
+    # iterate the vector.
+    ("SubDamage", "intDamage"): "the log line's amount is the total, not the entry",
+    ("AttackerStateUpdateData", "subDamageCount"): "the parser's own loop bound",
+    # The subject of an auction mail is a colon record, and the display line
+    # needs two of its five fields: the entry, to look the name up, and the
+    # response, to pick the wording. The lot id is the realm's handle for the
+    # item *instance* - the enchant it carried, the roll it made - and a mail
+    # list row gives the client no instance fields to pair it with, since the
+    # attachment that comes with it carries its own. So it is decoded with the
+    # rest of the record and used by nothing: with no instance data beside it,
+    # there is nothing the lot id could be asked about.
+    ("AuctionMailSubject", "lotId"): "a handle to instance data the mail never sends",
 }
 
 

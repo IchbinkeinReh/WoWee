@@ -535,16 +535,24 @@ CHECKS = [
     # arrived as a letter with the raw colon-separated body in it. A field
     # nobody reads usually means a branch nobody runs.
     #
-    # Five were answered the day it was written and
-    # both were live - a loot row the player cannot take drawing as ordinary
-    # loot, and a group invite the server had already refused raising the
-    # accept popup. Both sat next to a comment saying the data was unavailable,
-    # which is the shape this exists to catch.
+    # Two of them were live the day it was written - a loot row the player
+    # cannot take drawing as ordinary loot, and a group invite the server had
+    # already refused raising the accept popup. Both sat next to a comment
+    # saying the data was unavailable, which is the shape this exists to catch.
+    # The rest of the set are fields checked once and found correctly unread,
+    # each with its reason on its own line in the tool.
+    #
+    # Zero as of 2026-10-30. The last three were a melee swing's per-entry
+    # integer damage and the count that sizes its run - neither reaches a log
+    # line in either client, since the amount shown is the total ahead of the
+    # run and the only per-entry sums are the absorb and resist arrays, capped
+    # at two entries - and an auction mail's lot id, which names an item
+    # instance the mail list never describes.
     #
     # The tool carries its own canary, because two separate mistakes make it
     # report a clean zero while seeing nothing at all.
     ("parsed_never_read_check.py",
-     r"^(\d+) parsed and never read", 3,
+     r"^(\d+) parsed and never read", 0,
      "packet fields stored by the parser and read by nobody"),
     # The mirror of the row above: a field every reader agrees on and no writer
     # ever fills, so they all agree on the declaration's initialiser. Zero,
