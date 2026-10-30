@@ -4171,21 +4171,29 @@ void registerUnitLuaAPI(lua_State* L) {
                 // UNIT_FIELD_BYTES_0 - hunterPetOf again, the predicate HasPetUI
                 // and GetPetHappiness ask.
                 //
-                // Everything past that which is not a hunter's pet goes to a
-                // record read out of a DBC row cache by the unit's own key,
-                // taking the float at record+0x34 for health and +0x38 for power,
-                // and zero when there is no record. The key is the entry id: the
-                // other callers of that cache build it as `guid >> 0x18 | (guid &
-                // 0xfffff) << 8`, and the callee (0x0067b6a0, the one whose node
-                // label is "\AUDBCACHECALLBACK\") starts with `if (key == 0)
-                // return 0`, so a player - whose entry is zero - is answered out
-                // of the gate. Which table the rows come from is not pinned down
-                // here; the point is that a 3.3.5 client reads creature
-                // *templates* this way and neither dbc folder on this machine
-                // carries a table under a template name (245 files in the
-                // extracted set, 247 in the install's, and no Creature.dbc among
-                // them), so the record is not there and zero is what the original
-                // client answers on this data.
+                // Everything past that which is not a hunter's pet goes to the
+                // per-entry creature record the client keeps for the unit - the
+                // one SMSG_CREATURE_QUERY_RESPONSE fills, which is what
+                // getCreatureInfoCache holds here - taking the float at
+                // record+0x34 for health and +0x38 for power, and zero when
+                // there is no record. The key is the entry id (the cache callee
+                // 0x0067b6a0 opens with `if (key == 0) return 0`, so a player -
+                // entry zero - is answered out of the gate), and the record
+                // matches the query field for field: +0xc is the flags dword a
+                // whole family of getters reads one bit at a time - the same
+                // dword ForceGossip answers bit 27 of - and +0x10, +0x14 and
+                // +0x18 are read as plain dwords, which are the creatureType,
+                // family and rank that follow typeFlags on the wire.
+                //
+                // And a 3.3.5 creature query carries no float at all, so those
+                // two reads reinterpret an id - a rank, a display id - and a
+                // small integer read as IEEE 754 is a denormal, ~1e-38. That is
+                // what the zero is. It is not a gap either: every table of this
+                // install was scanned for the record's shape (a bit field at
+                // dword 3 plus modifier-sized floats at dwords 13 and 14) and
+                // the nine hits are tables keyed by a sound id, a vehicle seat,
+                // an overlay - none keyed by a creature entry - so there is no
+                // template table this client is short of.
                 //
                 // Which is visible, and correctly so: the only FrameXML use is the
                 // stamina and intellect lines of the pet paperdoll's stat tooltip

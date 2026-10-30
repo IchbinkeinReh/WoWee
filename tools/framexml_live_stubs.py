@@ -104,13 +104,13 @@ answered a bare 1.0 and all three are answered from the unit now. The client
 gates them identically - the unit is the local player, or it has a
 UNIT_FIELD_PETNUMBER, and anything else pushes *zero* - and then: max health is
 the unit's own UNIT_FIELD_MAXHEALTHMODIFIER float plus one (0x00612870 at field
-blob +0x22c), and the other two answer one only for a hunter's pet. What is
-left unimplemented is the client's non-hunter leg: it reads a creature template
-out of a DBC row cache keyed by the unit's entry (0x0067b6a0, node label
-"\AUDBCACHECALLBACK\", key `guid >> 0x18 | (guid & 0xfffff) << 8`, and its
-first test is `key == 0` - which is why a player answers zero), and a 3.3.5
-install carries no table under a creature-template name for that cache to read,
-so zero is what this client answers as well.
+blob +0x22c), and the other two answer one only for a hunter's pet. The client's
+non-hunter leg is not a feature this one lacks: it reads the two floats at
++0x34 and +0x38 of the per-entry creature record a query response fills (lookup
+0x0067b6a0, memory-pool label "\AUDBCACHECALLBACK\", keyed by the entry id, and
+its first test is `key == 0` - which is why a player answers zero). A 3.3.5
+creature query carries no float field at all, so those two reads reinterpret an
+id, and a small integer read as IEEE 754 is a denormal: zero, on both sides.
 
 The multiplier field is a wire field after all; an earlier reading here had
 written it off as client-internal. The client's *unit* descriptor space runs
@@ -125,8 +125,11 @@ Visible on the pet paperdoll's stat tooltip, whose only use these are: a
 warlock pet or a death knight's ghoul now says its stamina changes nothing,
 which is what the original client says, and a hunter's pet keeps its one.
 
-Recorded so the three are not re-triaged, and so the entry-keyed template cache
-is looked for by name next time rather than rediscovered.
+Recorded so the three are not re-triaged, and so that record is looked for by
+its real name next time - it is the answer to a creature query, which is what
+this repository already keeps in its creature info cache, and not a row of a
+table. The pool label that made it look like a DBC row is the reason that was
+wrong for as long as it was.
 
 A COMMENT IS NOT A CALL (2026-10-30)
 
@@ -137,25 +140,30 @@ block (GetPetTimeRemaining, mentioned twice inside `--`), and the old honour
 progress bar in inspecthonorframe.lua (GetInspectPVPRankProgress, once). Lua
 comments are
 blanked before matching now, long-bracket ones consumed whole and strings left
-alone, and `<!-- -->` in the markup files the same way. 174 stubs, 75 reached.
+alone, and `<!-- -->` in the markup files the same way. 173 stubs, 74 reached.
 
 ONE THAT IS A QUERY AND NOT A VERB
 
 ForceGossip reads like an instruction and is a question. FUN_0058ab50 casts the
 current gossip target's guid pair to a unit (the same checked cast type 8 that
 the hover-height watcher uses), and answers bit 27 of the flag dword at +0xc of
-the record hung off that unit at +0x964 - the same creature-template record the
+the record hung off that unit at +0x964 - the same per-entry creature record the
 pet stat modifiers read at +0x34 and +0x38, and the same accessor family: bits
 2, 4 (inverted), 19, 22, 25, 26 and 27 are each one one-line getter.
 
 gossipframe.lua:12 uses it as `not ForceGossip()` inside the test that clicks a
 lone gossip option for you when there are no quests and one option. So a definite
 no - which is what this client answers - auto-selects, and the original
-auto-selects too for every NPC whose template does not set bit 27. That is the
-error direction to remember, and the record's source is still unidentified: bit
-27 is not sparse in CreatureDisplayInfo.dbc (only a float column and a -1 sentinel
-column have it at all), so the client is not reading that table's flags column and
-the record is assembled at load rather than being one row of one table.
+auto-selects too for every NPC whose query answer does not set bit 27. That is
+the error direction the stub had backwards, and it is closed: the record is the
+SMSG_CREATURE_QUERY_RESPONSE answer kept per entry, the +0xc flag dword is the
+typeFlags this repository already parses, and bit 27 is ForceGossip. What settled
+that it is a query answer and not a row: fingerprinting all 246 tables for the
+record's shape - a bit field at column 3 and two small floats at columns 13 and
+14 - left nine near misses, none of them keyed by a creature entry: they are the
+sound and spell-chain tables, a vehicle seat, a map overlay, a destructible
+model, a durability level and a scaling-stat distribution. A table this install
+were short of would have shown up there under a creature-template name.
 """
 import re
 import sys
