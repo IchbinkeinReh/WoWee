@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Binding return values in the wrong position, where the count is right.
 
-    tools/framexml_return_order.py
+    tools/framexml_return_order.py "<the extracted interface>"
 
 The companion to framexml_event_order.py, asking the same question of functions
 instead of events. framexml_short_returns.py counts what a binding pushes
@@ -47,7 +47,15 @@ sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
 from framexml_source import without_comments, loaded_files
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-XML, ADDONS = ROOT/"Data/interface", ROOT/"src/addons"
+# The interface is installed data, not repository content, so it has to be
+# named - and with none of it read there are no destructuring sites to compare
+# against, which is exactly what a clean run looks like. Stop rather than
+# report that.
+XML = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
+if not XML.is_dir():
+    print(f"no interface at {XML} - name one on the command line")
+    raise SystemExit(2)
+ADDONS = ROOT / "src/addons"
 
 # C bindings: name -> ordered list of pushed expressions (best-effort)
 bodies = {}
@@ -89,7 +97,14 @@ def pushes(body):
 
 NAMEISH = re.compile(r"(?i)^name$|name$|text$|title$|link$")
 IDISH = re.compile(r"(?i)id$|index$|slot$|count$")
-def looks_id(e): return bool(re.search(r"(?i)\b[\w.:>()\[\]-]*(id|index|slot|count)\b", e)) and not re.search(r"(?i)name", e)
+def looks_id(e):
+    # A subscript is an index, not the value. `kLuaClasses[classId]` hands back
+    # a class NAME looked up by an id - the shape these getters use everywhere -
+    # and reading it as "an id in a name slot" put SearchLFGGetResults' fourth
+    # value on the list. What a table stores is not visible from the expression,
+    # so the reading that stays quiet is the honest one.
+    e = re.sub(r"\[[^]]*\]", "[]", e)
+    return bool(re.search(r"(?i)\b[\w.:>()\[\]-]*(id|index|slot|count)\b", e)) and not re.search(r"(?i)name", e)
 def looks_name(e): return bool(re.search(r"(?i)name|\.c_str\(\)|^\"", e))
 
 rows, seen = [], set()
