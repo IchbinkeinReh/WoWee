@@ -67,6 +67,48 @@ def _engine_text():
                      + _chunks())
 
 
+def _installed_method_names():
+    """Methods a sibling file hangs on whatever table its caller left on the stack.
+
+    `addTabardModelMethods` in lua_tabard_api.cpp walks a `luaL_Reg` array and
+    `lua_setfield(L, -2, r.name)`s each name onto the frame metatable the engine
+    pushed at lua_engine.cpp:7110. Every name-shaped regex here looks at the
+    engine, which mentions that function by call and never by name, so
+    `framexml_unbound_widget_methods` kept reporting the tabard dressing room's
+    six model methods - CanSaveTabardNow, CycleVariation, InitializeTabardColors,
+    Save and the two emblem textures - as answering nil a month after they were
+    written.
+
+    Only an array that such a loop walks counts. The obvious version - read every
+    `{"Name", lua_X}` pair in every file - takes the *global* binding tables of
+    lua_inventory_api.cpp and lua_action_api.cpp along with it, and IsEquippedItem,
+    SetBinding and their siblings then read as widget methods, which is a frame
+    answering `frame:SetBinding("W")` that the real client refuses.
+    """
+    out = set()
+    for path in sorted(ADDONS.glob("*.cpp")):
+        src = path.read_text(encoding="utf-8", errors="ignore")
+        for m in re.finditer(r"for\s*\([^;{}]*:\s*(\w+)\s*\)\s*\{[^{}]*"
+                             r"lua_setfield\(\s*\w+\s*,\s*-2\s*,\s*\w+\.name",
+                             src, re.S):
+            decl = re.search(r"\b" + re.escape(m.group(1))
+                             + r"\b\s*(?:\[\s*\])?\s*=\s*\{(.*?)\};", src, re.S)
+            if decl:
+                out |= set(re.findall(r'\{\s*"([A-Za-z_]\w*)"\s*,', decl.group(1)))
+        # The same install with the names in the loop header instead of in an
+        # array: `for (const char* name : {"CreateAnimationGroup",
+        # "StopAnimating"}) { ... lua_setfield(L, -2, name); }` at
+        # lua_engine.cpp:4807, which copies the animation bootstrap's two names
+        # onto regions off the globals. StopAnimating - glyph UI's
+        # `spin:StopAnimating()` - was this sweep's last remaining row and answered
+        # nothing on paper, while the copy has run since the line was written.
+        for m in re.finditer(r"for\s*\(\s*const char\s*\*\s*(\w+)\s*:\s*\{([^{}]*)\}\s*\)"
+                             r"\s*\{[^{}]*lua_setfield\(\s*\w+\s*,\s*-2\s*,\s*\1\s*\)",
+                             src, re.S):
+            out |= set(re.findall(r'"([A-Za-z_]\w*)"', m.group(2)))
+    return out
+
+
 def globals_provided():
     """Every global name the client answers, however it answers it.
 
@@ -121,7 +163,7 @@ def widget_methods_provided():
     # buff icon hover - the loudest answer that sweep has - while the aura
     # tooltip had been built by the C binding all along.
     assigned = set(re.findall(r"\b\w*MT\.([A-Za-z_]\w*)\s*=[^=]", src))
-    return table | shims | region | allowlist | assigned
+    return table | shims | region | allowlist | assigned | _installed_method_names()
 
 
 def counting_table():
@@ -152,6 +194,10 @@ def noop_widget_methods():
     real |= set(re.findall(r'set\("([A-Za-z_]\w*)"', src))
     real |= set(re.findall(r'function\s+\w+\s*:\s*(\w+)\s*\(', src))
     real |= _loop_built(src)
+    # A name installed by a sibling's adder is implemented, so it cannot also be
+    # the no-op the engine's allowlist claims. None are today; leaving this out
+    # would make the next adder report as one.
+    real |= _installed_method_names()
     allowlist = set(re.findall(r"\b([A-Za-z]\w*)=1", src))
     return allowlist - real
 
