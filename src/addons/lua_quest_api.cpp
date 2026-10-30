@@ -16,6 +16,7 @@
 #include "game/quest_poi_icons.hpp"
 #include "game/quest_rewards.hpp"
 #include "game/glyph_socket.hpp"
+#include "game/interface_text.hpp"
 #include "game/spell_mods.hpp"
 #include "game/trainer_service_list.hpp"
 #include "ui/chat/chat_utils.hpp"
@@ -4025,11 +4026,24 @@ void registerQuestLuaAPI(lua_State* L) {
             if (questFrameFlags(getGameHandler(L)) & 0x80000u) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;
         }},
-                // Shown when a reward is confirmed without one being picked.
-                // The message belongs to the server in the real client; there
-                // is nothing to say here, and the call is made for its effect
-                // rather than its answer.
-                {"QuestChooseRewardError", [](lua_State* L) -> int { (void)L; return 0; }},
+                // Shown when a reward is confirmed without one being picked
+                // (questframe.lua's QuestRewardCompleteButton_OnClick asks when
+                // itemChoice is 0 and the quest offers a choice).  Nothing was
+                // said, so the button looked simply dead.  The client's is not a
+                // server message after all: 0x0058c3a0 has no decompiled body,
+                // and disassembled it is only "push 0xa5; call 0x005216f0" - the
+                // show-a-game-error routine, which reads that id out of the table
+                // at 0x00ac8af0 (key, kind, sound, vocal, chat type).  Row 0xa5
+                // says ERR_QUEST_MUST_CHOOSE through UI_ERROR_MESSAGE, no spoken
+                // line, and the sound it names (see audio/vocal_error.hpp, which
+                // already knows which sound that is).
+                {"QuestChooseRewardError", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) {
+                gh->addUIError(game::interfaceString("ERR_QUEST_MUST_CHOOSE", "You must select a reward."));
+                gh->playGameErrorSound("ERR_QUEST_MUST_CHOOSE");
+            }
+            return 0;
+        }},
                 {"GetQuestItemLink",        lua_GetQuestItemLink},
                 {"GetQuestSpellLink",       lua_GetQuestSpellLink},
                 {"GetQuestMoneyToGet",   lua_GetQuestMoneyToGet},
