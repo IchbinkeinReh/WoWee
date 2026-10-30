@@ -4852,6 +4852,35 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             tradeStatus_ = TradeStatus::Open;
             tradeSelfAccepted_ = false;
             tradePartnerAccepted_ = false;
+            // The table starts empty.  Status 2 (0x007044a0 case 2) zeroes the
+            // row store of both halves - _memset(0xca0b80, 0, 0x460), all
+            // fourteen rows - along with the gold each side has down
+            // (0xca0b74, 0xca0b78) and both enchant spells (0xca0ff0,
+            // 0xca0ff4), and 0x005870a0 clears beside them the mirrored display
+            // the window answers from (0xbfa400 through 0xbfa5d8) and this
+            // half's item guids and counts (0xbfa5dc through 0xbfa654).  Status
+            // 8 zeroes the rows and the gold the same way when a trade
+            // completes, which is what keeps a finished trade from leaving
+            // anything behind.
+            //
+            // It does leave something behind here.  The reset that closes a
+            // window is not reached by a completed trade - the final
+            // SMSG_TRADE_STATUS_EXTENDED may arrive after the completion and
+            // reads the state - and here the rows are exactly what the window
+            // answers from.  So the next window opened showing the last trade's
+            // items in both halves, with their names, quantities and links, and
+            // this player still holding the gold they had put down, for as long
+            // as the realm stayed quiet about those slots.
+            myTradeSlots_ = {};
+            peerTradeSlots_ = {};
+            myTradeGold_ = 0;
+            peerTradeGold_ = 0;
+            tradeEnchantSpell_[0] = 0;
+            tradeEnchantSpell_[1] = 0;
+            shownTradeSlots_[0] = {};
+            shownTradeSlots_[1] = {};
+            shownTradeEnchantSpell_[0] = 0;
+            shownTradeEnchantSpell_[1] = 0;
             // TRADE_SHOW opens with the other player (0x005873e0 ->
             // 0x005870a0 -> 0x0051fce0): the one who asked, or the one
             // asked (0x00703c10, set by 0x00703cf0 or BEGIN_TRADE).
