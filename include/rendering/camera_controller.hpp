@@ -898,6 +898,11 @@ private:
     // Swimming
     bool swimming = false;
     bool wasSwimming = false;
+    /// Jumped out of the water and still rising (swim_jump.hpp): not taken
+    /// back into it until the jump turns to a fall.
+    bool swimJumpRising_ = false;
+    /// The swim jump's MSG_MOVE_JUMP, sent with this frame's messages.
+    bool swimJumpPending_ = false;
     static constexpr float SWIM_SPEED_FACTOR = 0.67f;
     static constexpr float SWIM_GRAVITY = -5.0f;
     static constexpr float SWIM_BUOYANCY = 8.0f;

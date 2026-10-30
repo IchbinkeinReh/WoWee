@@ -701,6 +701,12 @@ TEST_CASE("An outgoing jump carries the client's block", "[entity][fall]") {
         CHECK(j.dirY == Catch::Approx(1.0f));
         CHECK(j.horizontalSpeed == 7.0f);
     }
+    SECTION("out of the water: the swimmer's faster impulse") {
+        constexpr uint32_t kSwimming = 0x200000;
+        const auto j = outgoingJumpBlock(kForward | kSwimming, 0.0f, 2.5f, 7.0f, 4.5f);
+        CHECK(j.verticalSpeed == Catch::Approx(-9.096718f));
+        CHECK(j.horizontalSpeed == 7.0f);
+    }
     SECTION("backing up: turned by pi at run-back speed") {
         const auto j = outgoingJumpBlock(kBackward, 0.0f, 2.5f, 7.0f, 4.5f);
         CHECK(j.dirX == Catch::Approx(-1.0f));

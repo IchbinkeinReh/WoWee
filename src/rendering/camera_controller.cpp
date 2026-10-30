@@ -4,6 +4,7 @@
 #include "game/vehicle_camera.hpp"
 
 #include "core/env_flag.hpp"
+#include "rendering/swim_jump.hpp"
 #include "rendering/swim_wall.hpp"
 #include "core/click_drag.hpp"
 #include "core/coordinates.hpp"
@@ -510,6 +511,21 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             inWater = true;
         }
 
+        // Out of the water by a jump (swim_jump.hpp): risen from it, the
+        // body is not taken back in until the jump turns to a fall - the
+        // water is still under the feet for the first few frames of it.
+        if (swimJumpRising_) {
+            if (verticalVelocity > 0.0f && !grounded) inWater = false;
+            else swimJumpRising_ = false;
+        }
+        bool swimJump = false;
+        if (swimming && inWater && waterH &&
+            swim_jump::allowed(f.spaceHeld && !f.noAscendDescend,
+                               f.nowForward || f.nowBackward || f.nowStrafeLeft || f.nowStrafeRight,
+                               *waterH - targetPos.z, WATER_SURFACE_OFFSET)) {
+            swimJump = true;
+            inWater = false;
+        }
 
         if (inWater) {
         swimming = true;
@@ -715,7 +731,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         grounded = false;
         } else {
         // Exiting water - boost upward to help climb onto shore/stairs.
-        if (wasSwimming) {
+        if (wasSwimming && !swimJump) {
             // Anchor lastGroundZ to current position so WMO floor probes
             // start from a sensible height instead of stale pre-swim values.
             lastGroundZ = targetPos.z;
@@ -726,6 +742,19 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             }
         }
         swimming = false;
+        if (swimJump) {
+            // The jump itself: the swimmer's impulse, the way the keys move
+            // it, and MSG_MOVE_JUMP in place of a STOP_SWIM (below).
+            verticalVelocity = swim_jump::kVerticalSpeed;
+            grounded = false;
+            jumpLocked_ = true;
+            jumpMoveDir_ = glm::vec3(f.movement.x, f.movement.y, 0.0f);
+            jumpMoveSpeed_ = f.speed;
+            coyoteTimer = 0.0f;
+            jumpBufferTimer = 0.0f;
+            swimJumpRising_ = true;
+            swimJumpPending_ = true;
+        }
 
         // Taking off: space, on something allowed to fly. It climbs from the
         // first frame rather than jumping first, which is what the key means
@@ -2119,6 +2148,10 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
             lastSafePos_ = targetPos;
             hasLastSafe_ = true;
         }
+    } else if (swimming) {
+        // In the water is no fall, however it was reached: hopping out of it
+        // and back in (swim_jump.hpp) added each hop's air time to one fall.
+        continuousFallTime_ = 0.0f;
     } else if (!grounded && !swimming && !externalFollow_) {
         // Falling (or standing on nothing past grace period) - accumulate fall time
         continuousFallTime_ += f.physicsDeltaTime;
@@ -3700,7 +3733,11 @@ void CameraController::update(float deltaTime) {
 
     // Swimming state transitions
     if (movementCallback) {
-        if (swimming && !wasSwimming) {
+        if (swimJumpPending_) {
+            // Out of the water by a jump: the client sends the jump alone,
+            // its flags without SWIMMING (0x00988370 clears it).
+            movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_JUMP));
+        } else if (swimming && !wasSwimming) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_SWIM));
         } else if (!swimming && wasSwimming) {
             movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_STOP_SWIM));
@@ -3739,6 +3776,7 @@ void CameraController::update(float deltaTime) {
 
     // Update previous-frame state
     wasSwimming = swimming;
+    swimJumpPending_ = false;
     wasMovingForward = nowForward;
     wasMovingBackward = nowBackward;
     wasStrafingLeft = nowStrafeLeft;

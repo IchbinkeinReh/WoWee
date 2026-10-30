@@ -739,6 +739,11 @@ void MovementHandler::sendMovement(Opcode opcode) {
                 movementInfo.jumpCosAngle = jump.dirY;
                 movementInfo.jumpXYSpeed = jump.horizontalSpeed;
             }
+            // Falling now, and out of the water and the air with it: the fall's
+            // start (0x00988370) clears swimming, ascending, descending and
+            // flying (flags & 0xf91fffff) - a jump out of the water goes up
+            // without SWIMMING, and no STOP_SWIM follows it.
+            movementInfo.flags &= 0xf91fffffu;
             break;
         case Opcode::MSG_MOVE_START_TURN_LEFT:
             movementInfo.flags |= static_cast<uint32_t>(MovementFlags::TURN_LEFT);
