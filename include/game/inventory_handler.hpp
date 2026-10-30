@@ -77,6 +77,39 @@ public:
         /// slot) and answers its link and its name from them, so a traded item
         /// that was enchanted, socketed or rolled reads as itself.
         ItemLinkInstance inst;
+        /// The rest of the row the packet lays down for a slot.  Nothing in the
+        /// window reads any of it; 0x00586dc0 keeps a copy of each of these
+        /// words for the partner's half (0xbfa400 through 0xbfa5c0) and compares
+        /// the next offer against that copy, so an offer whose durability,
+        /// charge count, lock or maker moved is a slot that changed and the
+        /// slot's frame is told about it.
+        uint64_t creatorGuid     = 0;
+        uint64_t giftCreatorGuid = 0;
+        uint32_t wrapped         = 0;
+        uint32_t charges         = 0;
+        uint32_t lockId          = 0;
+        uint32_t maxDurability   = 0;
+        uint32_t durability      = 0;
+
+        /// The words a slot row is compared with - seventeen of the row's twenty
+        /// dwords: everything but the display id (+0x04), which the client
+        /// neither mirrors nor compares, and the two spare dwords (+0x1c, +0x2c)
+        /// that a slot's row fills with zeroes.
+        [[nodiscard]] bool sameOffer(const TradeSlot& other) const {
+            return itemId == other.itemId
+                && stackCount == other.stackCount
+                && inst.enchantId == other.inst.enchantId
+                && inst.gems == other.inst.gems
+                && inst.randomPropertyId == other.inst.randomPropertyId
+                && inst.seed == other.inst.seed
+                && creatorGuid == other.creatorGuid
+                && giftCreatorGuid == other.giftCreatorGuid
+                && wrapped == other.wrapped
+                && charges == other.charges
+                && lockId == other.lockId
+                && maxDurability == other.maxDurability
+                && durability == other.durability;
+        }
     };
 
     TradeStatus getTradeStatus() const { return tradeStatus_; }
@@ -805,6 +838,15 @@ private:
     uint64_t peerTradeGold_ = 0;
     /// 0xca0ff0 and 0xca0ff4: the enchant spell each side's offer names.
     uint32_t tradeEnchantSpell_[2] = {};
+    /// What the window has already been told, per side and per slot: the rows
+    /// the last offers announced and the enchant spells they announced with
+    /// them.  0x00586dc0 keeps exactly this, beside the partner's mirrored
+    /// display (0xbfa400 through 0xbfa5c0, and 0xbfa668 / 0xbfa66c for the two
+    /// spells), and fires the slot's changed-event off the difference - which is
+    /// the only way a slot taken off the table by being left out of the packet
+    /// reaches the window at all.
+    std::array<TradeSlot, TRADE_SLOT_COUNT> shownTradeSlots_[2]{};
+    uint32_t shownTradeEnchantSpell_[2] = {};
 
     // ---- Loot state ----
     bool lootWindowOpen_ = false;

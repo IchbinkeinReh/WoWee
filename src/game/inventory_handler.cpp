@@ -4770,6 +4770,15 @@ void InventoryHandler::resetTradeState() {
     // offer brings its own.
     tradeEnchantSpell_[0] = 0;
     tradeEnchantSpell_[1] = 0;
+    // And what was announced of them.  The client zeroes the display it
+    // compares against beside the slots themselves (0x005870a0, which clears
+    // 0xbfa400 through 0xbfa674 when the window opens and when it closes), so
+    // the next trade starts with nothing announced rather than with the last
+    // one's rows still matching.
+    shownTradeSlots_[0] = {};
+    shownTradeSlots_[1] = {};
+    shownTradeEnchantSpell_[0] = 0;
+    shownTradeEnchantSpell_[1] = 0;
     tradeSelfAccepted_ = false;
     tradePartnerAccepted_ = false;
 }
@@ -5023,43 +5032,51 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
         if (!packet.hasRemaining(kSlotBytes)) { packet.skipAll(); break; }
         const uint8_t slotNum = packet.readUInt8();
         if (slotNum < TRADE_SLOT_COUNT) mentioned[slotNum] = true;
-        const uint32_t itemId    = packet.readUInt32();
-        const uint32_t displayId = packet.readUInt32();
-        const uint32_t stackCnt  = packet.readUInt32();
-        /*uint32_t wrapped     =*/ packet.readUInt32();
-        /*uint64_t giftCreator =*/ packet.readUInt64();
+        const uint32_t itemId      = packet.readUInt32();
+        const uint32_t displayId   = packet.readUInt32();
+        const uint32_t stackCnt    = packet.readUInt32();
+        const uint32_t wrapped     = packet.readUInt32();
+        const uint64_t giftCreator = packet.readUInt64();
         const uint32_t permEnchant = packet.readUInt32();
         std::array<uint32_t, 3> gems{};
         for (int g = 0; g < 3; ++g) gems[g] = packet.readUInt32();   // socket enchants
-        /*uint64_t creator     =*/ packet.readUInt64();
-        /*uint32_t charges     =*/ packet.readUInt32();
+        const uint64_t creator     = packet.readUInt64();
+        const uint32_t charges     = packet.readUInt32();
         const uint32_t suffixFactor = packet.readUInt32();
-        const int32_t randomProp = static_cast<int32_t>(packet.readUInt32());
-        /*uint32_t lockId      =*/ packet.readUInt32();
-        /*uint32_t maxDur      =*/ packet.readUInt32();
-        /*uint32_t durability  =*/ packet.readUInt32();
+        const int32_t randomProp  = static_cast<int32_t>(packet.readUInt32());
+        const uint32_t lockId     = packet.readUInt32();
+        const uint32_t maxDur     = packet.readUInt32();
+        const uint32_t durability = packet.readUInt32();
 
         if (slotNum < TRADE_SLOT_COUNT) {
-            slots[slotNum].itemId = itemId;
-            slots[slotNum].displayId = displayId;
-            slots[slotNum].stackCount = stackCnt;
+            TradeSlot offer;
+            offer.itemId = itemId;
+            offer.displayId = displayId;
+            offer.stackCount = stackCnt;
+            offer.wrapped = wrapped;
+            offer.giftCreatorGuid = giftCreator;
+            offer.creatorGuid = creator;
+            offer.charges = charges;
+            offer.lockId = lockId;
+            offer.maxDurability = maxDur;
+            offer.durability = durability;
             // The client puts these four - and nothing else of the row's - into
             // the link it answers for a traded item: 0x0061e290(entry, quality,
             // row+0x0c, row+0x10..0x18, row+0x40, row+0x3c).  The seed is the
             // suffix factor, exactly as itemLinkInstance reads it off an item
             // object, and the property is the same one that decorates the name.
-            slots[slotNum].inst = ItemLinkInstance{
-                permEnchant, gems, randomProp, suffixFactor};
+            offer.inst = ItemLinkInstance{permEnchant, gems, randomProp, suffixFactor};
+            slots[slotNum] = offer;
         }
         if (itemId != 0) owner_.ensureItemInfo(itemId);
     }
     packet.skipAll();
     for (int slot = 0; slot < TRADE_SLOT_COUNT; ++slot) {
         if (mentioned[static_cast<size_t>(slot)]) continue;
-        slots[slot].itemId = 0;
-        slots[slot].displayId = 0;
-        slots[slot].stackCount = 0;
-        slots[slot].inst = {};
+        // The whole row, not just what the window shows: an empty slot is an
+        // empty row for the comparison below, and a row left half-cleared would
+        // read as unchanged the next time the slot is filled with what survived.
+        slots[slot] = {};
     }
 
     uint64_t& side = ownSide ? myTradeGold_ : peerTradeGold_;
@@ -5068,6 +5085,53 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
 
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("TRADE_UPDATE", {});
+        // A slot whose offer moved is named to the window on its own.
+        //
+        // The partner's half is decided by comparison: 0x00586dc0 holds a copy
+        // of every word of the row it last announced (0xbfa400 through
+        // 0xbfa5c0) and fires TRADE_TARGET_ITEM_CHANGED for a row that differs
+        // from the one the new packet brought - seventeen words, everything the
+        // row holds but the display id and two spare dwords.  This half is
+        // announced by the routines that put an item on the table and take one
+        // off it - 0x005869a0 when a slot is filled and 0x00586410 when it is
+        // emptied, both with slot+1 - which the client reaches through the item
+        // on its cursor, guid and all, and this client reaches through the
+        // packet, because a packet is the only thing that has ever filled this
+        // half.  Either way: one event per slot whose offer changed, same
+        // argument, and a slot emptied by being left out of the packet says the
+        // same thing as one emptied by an empty row.
+        //
+        // The copy is only brought up to date where something moved, as the
+        // client updates its own display only inside the branch that fired.
+        auto& shown = shownTradeSlots_[ownSide ? 0 : 1];
+        for (int slot = 0; slot < TRADE_SLOT_COUNT; ++slot) {
+            auto& last = shown[static_cast<size_t>(slot)];
+            const auto& live = slots[static_cast<size_t>(slot)];
+            if (live.sameOffer(last)) continue;
+            last = live;
+            owner_.addonEventCallbackRef()(
+                ownSide ? "TRADE_PLAYER_ITEM_CHANGED" : "TRADE_TARGET_ITEM_CHANGED",
+                {std::to_string(slot + 1)});
+        }
+
+        // The enchant slot's spell is a header dword, not a row, so there is no
+        // row to compare it with: the client keeps the value it last announced
+        // for each side (0xbfa668 for the one at 0xca0ff0, 0xbfa66c for the one
+        // at 0xca0ff4) and names the enchant slot itself when one of them moved.
+        // Both sides are checked on every offer, whichever one the packet
+        // described, and the index a spell sits at is the index its own offer
+        // wrote - which is the same crossing the window's item bindings already
+        // answer through (see getTradeEnchantSpell): the side that this packet
+        // says is this player's fires the *partner's* event.
+        for (int spellIndex = 0; spellIndex < 2; ++spellIndex) {
+            const size_t i = static_cast<size_t>(spellIndex);
+            if (shownTradeEnchantSpell_[i] == tradeEnchantSpell_[i]) continue;
+            shownTradeEnchantSpell_[i] = tradeEnchantSpell_[i];
+            owner_.addonEventCallbackRef()(
+                spellIndex == 0 ? "TRADE_TARGET_ITEM_CHANGED" : "TRADE_PLAYER_ITEM_CHANGED",
+                {std::to_string(TRADE_SLOT_COUNT)});
+        }
+
         // The trade window's own refresh redraws the item slots and nothing
         // else; the two money frames listen for this and only this. Without it
         // the gold on the table stays at whatever it read when the window
@@ -5082,6 +5146,13 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
         if (goldChanged) {
             owner_.addonEventCallbackRef()(
                 ownSide ? "PLAYER_TRADE_MONEY" : "TRADE_MONEY_CHANGED", {});
+            // PLAYER_MONEY rides along with this player's own leg and with
+            // nothing else (0x00586dc0 fires 0x138 and then 0xa3, never either
+            // one alone; the partner's leg, 0x137, stands by itself).  What
+            // changed is the gold on the table rather than the purse, and the
+            // client refreshes the purse frames anyway - the same event the
+            // money field's own watcher raises.
+            if (ownSide) owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
         }
     }
 }
