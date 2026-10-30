@@ -545,6 +545,30 @@ std::string firstConsoleToken(const std::string& args) {
     return token;
 }
 
+/// The two words `/set` reads, cut the way its handler cuts them (0x007681f0):
+/// one tokeniser called twice over the same running position, the name into a
+/// 64-byte buffer and the value into a 2048-byte one. The difference from the
+/// single token above is the second cap - a name stops at 63 characters, a value
+/// at 2047 - and the fact that a value with no delimiter in it is one token
+/// however long. Delimiters are the same set, so a quoted value is cut at the
+/// quote here too, which is what the original does.
+void consoleNameAndValue(const std::string& args, std::string& name, std::string& value) {
+    static constexpr std::string_view kDelimiters = " ,;\t\"\r\n";
+    size_t pos = 0;
+    const auto next = [&](size_t cap) {
+        pos = args.find_first_not_of(kDelimiters, pos);
+        if (pos == std::string::npos) return std::string{};
+        const size_t end = args.find_first_of(kDelimiters, pos);
+        std::string token = args.substr(pos, end == std::string::npos ? std::string::npos
+                                                                     : end - pos);
+        pos = end == std::string::npos ? args.size() : end;
+        if (token.size() > cap) token.resize(cap);
+        return token;
+    };
+    name = next(63);
+    value = next(2047);
+}
+
 } // namespace
 
 class CVarListCommand : public IChatCommand {
@@ -619,6 +643,43 @@ public:
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"cvar_default"}; }
     [[nodiscard]] std::string helpText() const override {
         return "Set a CVar to its coded default (/cvar_default [name])";
+    }
+};
+
+// --- /set <name> [value] ---
+//
+// `set` in the client's console command table (FUN_00769100(&DAT_00a385e0,
+// 0x007681f0, 5, "Set the value of a CVar") - the name is "set", spelled at
+// 0x00a385e0 rather than inline). Mask 5, so it is reachable from the chat box;
+// FrameXML has no SLASH_SET of its own (only /settitle), so nothing else answers
+// the name and a player typing /set got this client's help line instead.
+//
+// What the handler does is in setCVarFromConsole: the name is looked up
+// case-insensitively, and - unlike the two commands above - a name that lookup
+// cannot find is not an error. The client registers it with no flags and assigns
+// the value, so `/set myaddon_thing 1` puts the name into the same store a panel
+// reads and into `cvarlist`. Nothing is printed either way.
+//
+// The one place this client parts ways with it: with no name in front of it the
+// original registers a CVar whose name is the empty string. The name is what the
+// config file is keyed by, and one line keyed on nothing is a line this client
+// would have to special-case on every read, so an empty name writes nothing.
+class SetCVarConsoleCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        lua_State* L = cVarLuaState(ctx);
+        if (!L) return {};
+        std::string name;
+        std::string value;
+        consoleNameAndValue(ctx.args, name, value);
+        // No value is a value: the handler's second tokeniser call leaves its
+        // buffer empty and assigns that, which re-parses the numeric CVar to 0.
+        addons::setCVarFromConsole(L, name, value);
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"set"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "Set a CVar by name, making one up if there is none (/set <name> <value>)";
     }
 };
 
@@ -742,6 +803,7 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<CVarListCommand>());
     reg.registerCommand(std::make_unique<CVarResetCommand>());
     reg.registerCommand(std::make_unique<CVarDefaultCommand>());
+    reg.registerCommand(std::make_unique<SetCVarConsoleCommand>());
     reg.registerCommand(std::make_unique<ChangePlayerDifficultyCommand>());
     reg.registerCommand(std::make_unique<PitchLimitCommand>());
     reg.registerCommand(std::make_unique<InertConsoleCommand>());

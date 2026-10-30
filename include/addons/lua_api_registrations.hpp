@@ -118,6 +118,22 @@ bool cVarConsoleHas(const std::string& name);
 void resetStoredCVar(lua_State* L, const std::string& name);
 void restoreCVarDefault(lua_State* L, const std::string& name);
 
+/// `/set <name> <value>` (0x007681f0), the console's write for a name given to it
+/// rather than chosen from a list.
+///
+/// A name it cannot look up is not refused: the client registers it as a CVar
+/// with no flags (0x00767fc0, the same call RegisterCVar makes) and assigns the
+/// value, so from then on the name is in `cvarlist` and answers GetCVar. That is
+/// why this one has no "No such cvar" answer at all - unlike the two above, which
+/// look the name up first and complain when the lookup fails.
+///
+/// Same skip rules as those two: a read-only CVar is left alone, and a value the
+/// CVar already answers is not written (case-insensitively). Neither the `+0x68`
+/// callback's veto nor the flag-bit-2 route through the engine's own setter has a
+/// counterpart here; see the note above about CVAR_UPDATE for why nothing is
+/// announced either.
+void setCVarFromConsole(lua_State* L, const std::string& name, const std::string& value);
+
 /// Whether this client performs a binding command itself, without the
 /// interface.
 ///

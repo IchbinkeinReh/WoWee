@@ -2265,6 +2265,17 @@ static void writeCVarFromConsole(lua_State* L, const std::string& lower,
     applyCVarSideEffects(L, lower, target);
 }
 
+void setCVarFromConsole(lua_State* L, const std::string& name, const std::string& value) {
+    if (!L || name.empty()) return;
+    // The client's lookup of the name is the case-insensitive one (0x0055f4d0),
+    // and a lookup that fails is not an error here: 0x007681f0 goes on to
+    // register the name with no flags and assign the value anyway. The store is
+    // the same kind of list, so writing the key is the registration.
+    std::string lower = name;
+    toLowerInPlace(lower);
+    writeCVarFromConsole(L, lower, value);
+}
+
 std::vector<CVarConsoleRow> cVarConsoleRows(lua_State* L) {
     std::vector<CVarConsoleRow> rows;
     if (!L) return rows;
