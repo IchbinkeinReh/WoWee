@@ -150,6 +150,15 @@ EXPECTED = {
     # player never answered. Passing a false here would change nothing; passing
     # a true would suppress a message that is meant to appear.
     "READY_CHECK_FINISHED",
+    # channelframe unpacks three and hands them to ChannelList_UpdateVoice(id,
+    # enabled, active), which reads as a shortfall against this client's single
+    # argument. The real client fires three, two and one from the same binding -
+    # 0x00500ae0 fires (display+1, voiceChannelId) when the display row carries
+    # a voice channel at +0x14 and (display+1) alone when it does not - and this
+    # client has no voice chat, so every row is the second case. The handler's
+    # answer to `enabled` nil is `speaker:Hide()`, which is right for a channel
+    # with nothing to speak on.
+    "CHANNEL_VOICE_UPDATE",
 }
 
 rows = []
@@ -201,6 +210,17 @@ EXPECTED_UNEVEN = {
     # `if ( not arg2 and arg1 == self:GetID() )`, which a second argument makes
     # fail outright: the square would never grey.
     "ITEM_LOCK_CHANGED": "the missing argument means an equipment slot",
+    # The example the comment above this list was written from, and the list's
+    # own blind spot: it is uneven here the way it is uneven in the real client,
+    # which fires 400 from five sites with *no* format at all (0x005ca870,
+    # 0x005ca8b0, 0x005cb9f0) and from one site with a 1 when its argument says
+    # the roster went stale (0x005ca0f0, whose else-branch fires no argument
+    # either). So "the count depends on the path" is the event's shape rather
+    # than a fault to iron out. Nothing here turns the nil into a 0 either:
+    # eventBool(false) is kEventNil, which the engine pushes as nil, and every
+    # reader asks `if arg1 then GuildRoster() end`, which a nil and an absent
+    # argument answer the same way.
+    "GUILD_ROSTER_UPDATE": "the real client's own fires are uneven the same way",
 }
 
 uneven = {n: v for n, v in sites.items()
