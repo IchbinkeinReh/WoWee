@@ -181,6 +181,43 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
     return true;
 }
 
+void WaterRenderer::setRtWaterScene(VkDescriptorSetLayout sceneLayout, bool hardware) {
+    if (!vkCtx || !sceneLayout || rtPipelineLayout_) return;
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.size = sizeof(WaterPushConstants);
+    rtPipelineLayout_ = createPipelineLayout(vkCtx->getDevice(),
+                                             {perFrameLayout_, materialSetLayout, sceneSetLayout, sceneLayout},
+                                             {pushRange});
+    rtHardware_ = hardware;
+    if (!rtPipelineLayout_) LOG_ERROR("WaterRenderer: no pipeline layout for the ray traced water");
+}
+
+void WaterRenderer::destroyRtPipelines() {
+    if (!vkCtx) return;
+    VkDevice device = vkCtx->getDevice();
+    destroy(device, rtPipeline_);
+    destroy(device, rt1xPipeline_);
+}
+
+void WaterRenderer::recreatePipelines() {
+    if (!vkCtx) return;
+    // Built again against the new passes when next drawn with.
+    destroyRtPipelines();
+
+    destroyFrameUBO();
+    createFrameUBO();
+    createSceneHistoryResources(refractionCaptureExtent(),
+                                vkCtx->getSwapchainFormat(),
+                                vkCtx->getDepthFormat());
+
+    VkRenderPass mainPass = vkCtx->getImGuiRenderPass();
+    if (clientPipelineLayout_) {
+        buildClientPipelines(mainPass, vkCtx->getMsaaSamples(), clientWaterPipeline_, clientMagmaPipeline_,
+                             clientProcPipeline_);
+    }
+}
+
 VkPipeline WaterRenderer::buildWaterPipeline(VkRenderPass pass, VkSampleCountFlagBits samples,
                                              const char* fragPath, VkPipelineLayout layout) {
     if (!vkCtx || !pass || !layout) return VK_NULL_HANDLE;
@@ -215,44 +252,6 @@ VkPipeline WaterRenderer::buildWaterPipeline(VkRenderPass pass, VkSampleCountFla
     vertShader.destroy();
     fragShader.destroy();
     return p;
-}
-
-void WaterRenderer::setRtWaterScene(VkDescriptorSetLayout sceneLayout, bool hardware) {
-    if (!vkCtx || !sceneLayout || rtPipelineLayout_) return;
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushRange.size = sizeof(WaterPushConstants);
-    rtPipelineLayout_ = createPipelineLayout(vkCtx->getDevice(),
-                                             {perFrameLayout_, materialSetLayout, sceneSetLayout, sceneLayout},
-                                             {pushRange});
-    rtSceneLayout_ = sceneLayout;
-    rtHardware_ = hardware;
-    if (!rtPipelineLayout_) LOG_ERROR("WaterRenderer: no pipeline layout for the ray traced water");
-}
-
-void WaterRenderer::destroyRtPipelines() {
-    if (!vkCtx) return;
-    VkDevice device = vkCtx->getDevice();
-    destroy(device, rtPipeline_);
-    destroy(device, rt1xPipeline_);
-}
-
-void WaterRenderer::recreatePipelines() {
-    if (!vkCtx) return;
-    // Built again against the new passes when next drawn with.
-    destroyRtPipelines();
-
-    destroyFrameUBO();
-    createFrameUBO();
-    createSceneHistoryResources(refractionCaptureExtent(),
-                                vkCtx->getSwapchainFormat(),
-                                vkCtx->getDepthFormat());
-
-    VkRenderPass mainPass = vkCtx->getImGuiRenderPass();
-    if (clientPipelineLayout_) {
-        buildClientPipelines(mainPass, vkCtx->getMsaaSamples(), clientWaterPipeline_, clientMagmaPipeline_,
-                             clientProcPipeline_);
-    }
 }
 
 void WaterRenderer::setRefractionEnabled(bool enabled) {

@@ -394,7 +394,6 @@ private:
     // The ray traced water's: the scene's set as set 3, and its pipelines
     // (water.frag, or water_rt_hw.frag for ray queries) against the scene
     // pass and the 1x pass.
-    VkDescriptorSetLayout rtSceneLayout_ = VK_NULL_HANDLE;
     bool rtHardware_ = false;
     VkPipelineLayout rtPipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline rtPipeline_ = VK_NULL_HANDLE;
