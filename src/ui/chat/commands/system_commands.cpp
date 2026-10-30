@@ -394,6 +394,28 @@ public:
     }
 };
 
+// --- /mem ---
+// What the process holds and who holds it: the process's resident and
+// private bytes, each Vulkan heap's use against its budget, and the ray
+// tracing's owners, GPU and CPU - readable in the chat on a phone, where the
+// log is hard to get at. Also written to the log at warning.
+class MemCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        auto* renderer = ctx.services.renderer;
+        if (!renderer) return {};
+        for (const std::string& line : renderer->memoryReport()) {
+            ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(line));
+            LOG_WARNING("/mem: ", line);
+        }
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"mem"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "Show the client's memory: process, Vulkan heaps, ray tracing by part";
+    }
+};
+
 // --- /profile [on|off|dump|csv [path|off]] ---
 class ProfileCommand : public IChatCommand {
 public:
@@ -496,6 +518,7 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<GpsCommand>());
     reg.registerCommand(std::make_unique<CamCommand>());
     reg.registerCommand(std::make_unique<DaytimeCommand>());
+    reg.registerCommand(std::make_unique<MemCommand>());
     reg.registerCommand(std::make_unique<RunCommand>());
     reg.registerCommand(std::make_unique<DumpCommand>());
     reg.registerCommand(std::make_unique<ReloadCommand>());

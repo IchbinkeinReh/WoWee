@@ -103,9 +103,14 @@ inline void destroyParticleResources(VkDevice device, VmaAllocator allocator,
     destroy(allocator, vertexBuffer, vertexAllocation);
 }
 
-// Buffer creation
+// Buffer creation. `pool`: a custom VMA pool to take it from (VK_NULL_HANDLE
+// for the default ones). A buffer of kDedicatedBytes or more has memory of its
+// own, so freeing it gives the memory back: in a shared block, what the
+// streaming placed beside it after it kept the block - some 800 MB of the
+// ray tracing's held on after it was switched off.
+inline constexpr VkDeviceSize kDedicatedBytes = 32ull << 20;
 AllocatedBuffer createBuffer(VmaAllocator allocator, VkDeviceSize size,
-    VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
+    VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VmaPool pool = VK_NULL_HANDLE);
 
 void destroyBuffer(VmaAllocator allocator, AllocatedBuffer& buffer);
 

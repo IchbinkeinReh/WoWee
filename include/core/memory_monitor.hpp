@@ -45,6 +45,16 @@ public:
      */
     [[nodiscard]] bool isSevereMemoryPressure() const;
 
+    /// This process's memory: resident (the working set; VmRSS) and private
+    /// (committed, not shared: Windows' private bytes; on Linux and Android
+    /// RssAnon + RssShmem, the part another process cannot hold). 0 where the
+    /// platform does not say.
+    struct ProcessMemory {
+        uint64_t residentBytes = 0;
+        uint64_t privateBytes = 0;
+    };
+    [[nodiscard]] static ProcessMemory processMemory();
+
 private:
     MemoryMonitor() = default;
     size_t totalRAM_ = 0;

@@ -4,6 +4,7 @@
 
 #include "core/frame_profiler.hpp"
 #include "core/logger.hpp"
+#include "core/memory_monitor.hpp"
 #include "rendering/vk_texture.hpp"
 
 #include <glm/gtc/packing.hpp>
@@ -57,6 +58,18 @@ constexpr uint32_t kInitialNodes = 1u << 17;
 // million triangles a second on one core, so this keeps a frame's share to a
 // few milliseconds while the world streams in after the switch is turned on.
 constexpr uint64_t kBuildBudgetTriangles = 150000;
+// Built, uploaded and let go of at a time when the whole scene is uploaded at
+// once (uploadAllPending). A city's 4-5 million triangles all built first,
+// staged and copied in one go held every one of them three times over - the
+// built triangles, their staging, and the pools grown half again at a time
+// with each old one kept until a frame that never came - plus every BLAS's
+// scratch: a peak of a gigabyte and more on top of the scene, the moment the
+// tracing was switched on, which on a phone is what its out-of-memory
+// killer took the client for.
+constexpr uint64_t kImmediateChunkTriangles = 500000;
+
+// Staging the scene has handed to the GPU and not yet had back, for /mem.
+std::atomic<uint64_t> g_rtStagingBytes{0};
 
 uint32_t grownCapacity(uint32_t current, uint32_t needed) {
     uint32_t c = std::max(current, 1024u);
@@ -226,6 +239,18 @@ void RtScene::shutdown() {
     destroyBuffer(alloc, maskBuffer_);
     destroyBuffer(alloc, meshTable_);
     destroyBuffer(alloc, placeholder_);
+    destroyBuffer(alloc, detailBuffer_);
+    destroyBuffer(alloc, terrainBuffer_);
+    immediate_ = false;
+    freeImmediateGarbage();
+    if (blasPool_) {
+        // The BLASes of meshes removed lately are freed by their deferred
+        // releases; the device is idle, so those run now, before their pool
+        // goes.
+        ctx_->flushDeferredCleanup();
+        vmaDestroyPool(alloc, blasPool_);
+        blasPool_ = VK_NULL_HANDLE;
+    }
     if (descriptorPool_) vkDestroyDescriptorPool(dev, descriptorPool_, nullptr);
     if (setLayout_) vkDestroyDescriptorSetLayout(dev, setLayout_, nullptr);
     descriptorPool_ = VK_NULL_HANDLE;
@@ -384,16 +409,79 @@ void RtScene::setActive(bool active) {
     ++sceneVersion_;
 }
 
+VmaPool RtScene::blasPool() {
+    if (blasPool_ || !ctx_) return blasPool_;
+    VkBufferCreateInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bi.size = 65536;
+    bi.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    VmaAllocationCreateInfo ai{};
+    ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    uint32_t type = 0;
+    if (vmaFindMemoryTypeIndexForBufferInfo(ctx_->getAllocator(), &bi, &ai, &type) != VK_SUCCESS) return blasPool_;
+    VmaPoolCreateInfo pci{};
+    pci.memoryTypeIndex = type;
+    pci.blockSize = 32ull << 20;
+    if (vmaCreatePool(ctx_->getAllocator(), &pci, &blasPool_) != VK_SUCCESS) blasPool_ = VK_NULL_HANDLE;
+    return blasPool_;
+}
+
+void RtScene::freeImmediateGarbage() {
+    VmaAllocator alloc = ctx_->getAllocator();
+    for (auto& g : immediateGarbage_) {
+        destroyBuffer(alloc, g.buffer);
+        if (g.stagingBytes > 0) g_rtStagingBytes.fetch_sub(g.stagingBytes, std::memory_order_relaxed);
+    }
+    immediateGarbage_.clear();
+    immediateGarbage_.shrink_to_fit();
+}
+
 void RtScene::uploadAllPending() {
     if (!ctx_ || !active_) return;
-    // The triangles of every mesh first, on as many threads as there are
-    // cores: each mesh is its own, and this is most of the time the upload
-    // took on one (4.4 s for a city's 14,000 meshes).
+    // From here each submit is waited on, and what only it used - staging,
+    // a BLAS's scratch - goes straight after it rather than at frame fences
+    // that do not pass while this runs. So does a pool a growth copied out
+    // of, when no frame has had the pools to trace with yet; with them in
+    // use (the loading screen of a teleport) a frame in flight may still
+    // read the old one, and it waits for the fences as before. Not a device
+    // wait: the loaders' threads submit to the transfer queue meanwhile.
+    immediate_ = true;
+    immediatePools_ = !triPool_.buffer.buffer;
+    const auto before = core::MemoryMonitor::processMemory();
+
+    // The triangle pool once, to the size it will need, rather than grown
+    // half again at a time with every step copied.
     {
-        std::vector<MeshId> todo;
+        uint64_t total = 0;
         for (MeshId id : pendingMeshes_) {
             const Mesh& m = meshes_[id];
-            if (m.live && m.queued && !m.prebuilt) todo.push_back(id);
+            if (m.live && m.queued) total += m.triCount;
+        }
+        if (total > 0 && !triPool_.buffer.buffer) {
+            VkCommandBuffer cmd = ctx_->beginSingleTimeCommands();
+            if (cmd != VK_NULL_HANDLE) {
+                const uint64_t want = uint64_t(triPool_.buffer.buffer ? triPool_.alloc.capacity() : 0) + total;
+                ensurePoolCapacity(cmd, triPool_, static_cast<uint32_t>(std::min<uint64_t>(want, 0xFFFFFFF0u)),
+                                   /*exact=*/true);
+                ctx_->endSingleTimeCommands(cmd);
+                freeImmediateGarbage();
+            }
+        }
+    }
+
+    // Then a chunk at a time: its triangles built on as many threads as there
+    // are cores (each mesh is its own, and the build is most of the time this
+    // takes), uploaded, waited on, and let go of.
+    uint64_t peakPrivate = before.privateBytes;
+    while (!pendingMeshes_.empty()) {
+        std::vector<MeshId> todo;
+        uint64_t chunk = 0;
+        for (MeshId id : pendingMeshes_) {
+            if (chunk >= kImmediateChunkTriangles) break;
+            const Mesh& m = meshes_[id];
+            if (!m.live || !m.queued) continue;
+            chunk += m.triCount;
+            if (!m.prebuilt) todo.push_back(id);
         }
         std::atomic<size_t> next{0};
         const auto work = [&]() {
@@ -408,15 +496,17 @@ void RtScene::uploadAllPending() {
         for (unsigned t = 1; t < threads && todo.size() > 64; ++t) pool.emplace_back(work);
         work();
         for (auto& th : pool) th.join();
-    }
-    while (!pendingMeshes_.empty()) {
-        const size_t before = pendingMeshes_.size();
+
+        const size_t pendingBefore = pendingMeshes_.size();
         VkCommandBuffer cmd = ctx_->beginSingleTimeCommands();
-        if (cmd == VK_NULL_HANDLE) return;
+        if (cmd == VK_NULL_HANDLE) break;
         uploadPending(cmd);
         ctx_->endSingleTimeCommands(cmd);
-        if (pendingMeshes_.size() >= before) break;  // nothing taken: give up rather than spin
+        peakPrivate = std::max(peakPrivate, core::MemoryMonitor::processMemory().privateBytes);
+        freeImmediateGarbage();
+        if (pendingMeshes_.size() >= pendingBefore) break;  // nothing taken: give up rather than spin
     }
+    immediate_ = false;
     // Any left over build again from their source when their turn comes.
     for (MeshId id : pendingMeshes_) {
         Mesh& m = meshes_[id];
@@ -426,6 +516,9 @@ void RtScene::uploadAllPending() {
         m.nodes.clear();
         m.extras.clear();
     }
+    const auto after = core::MemoryMonitor::processMemory();
+    LOG_WARNING("RtScene: uploaded the scene at once; private ", before.privateBytes >> 20, " MB before, peak ",
+                peakPrivate >> 20, " MB, ", after.privateBytes >> 20, " MB after");
 }
 
 void RtScene::releaseGpu() {
@@ -631,6 +724,8 @@ VkDeviceAddress RtScene::bufferAddress(VkBuffer buffer) const {
     return pfnGetBufferDeviceAddress_(ctx_->getDevice(), &info);
 }
 
+uint64_t RtScene::stagingBytesInFlight() { return g_rtStagingBytes.load(std::memory_order_relaxed); }
+
 void RtScene::stage(VkCommandBuffer cmd, VkBuffer dst, VkDeviceSize dstOffset, const void* data,
                     VkDeviceSize size) {
     if (size == 0) return;
@@ -642,12 +737,21 @@ void RtScene::stage(VkCommandBuffer cmd, VkBuffer dst, VkDeviceSize dstOffset, c
     VkBufferCopy region{0, dstOffset, size};
     vkCmdCopyBuffer(cmd, staging.buffer, dst, 1, &region);
     VmaAllocator alloc = ctx_->getAllocator();
-    ctx_->deferAfterFrameFence([alloc, staging]() mutable { destroyBuffer(alloc, staging); });
+    const uint64_t bytes = size;
+    g_rtStagingBytes.fetch_add(bytes, std::memory_order_relaxed);
+    if (immediate_) {
+        immediateGarbage_.push_back({staging, bytes});
+        return;
+    }
+    ctx_->deferAfterFrameFence([alloc, staging, bytes]() mutable {
+        destroyBuffer(alloc, staging);
+        g_rtStagingBytes.fetch_sub(bytes, std::memory_order_relaxed);
+    });
 }
 
-void RtScene::ensurePoolCapacity(VkCommandBuffer cmd, GpuPool& pool, uint32_t needed) {
+void RtScene::ensurePoolCapacity(VkCommandBuffer cmd, GpuPool& pool, uint32_t needed, bool exact) {
     if (pool.buffer.buffer && pool.alloc.capacity() >= needed) return;
-    const uint32_t newCap = grownCapacity(pool.alloc.capacity(), needed);
+    const uint32_t newCap = exact ? std::max(needed, 1024u) : grownCapacity(pool.alloc.capacity(), needed);
     AllocatedBuffer grown = createBuffer(ctx_->getAllocator(),
                                          VkDeviceSize(newCap) * pool.elementSize, pool.usage,
                                          VMA_MEMORY_USAGE_GPU_ONLY);
@@ -657,7 +761,11 @@ void RtScene::ensurePoolCapacity(VkCommandBuffer cmd, GpuPool& pool, uint32_t ne
         vkCmdCopyBuffer(cmd, pool.buffer.buffer, grown.buffer, 1, &region);
         VmaAllocator alloc = ctx_->getAllocator();
         AllocatedBuffer old = pool.buffer;
-        ctx_->deferAfterAllFrameFences([alloc, old]() mutable { destroyBuffer(alloc, old); });
+        if (immediate_ && immediatePools_) {
+            immediateGarbage_.push_back({old, 0});
+        } else {
+            ctx_->deferAfterAllFrameFences([alloc, old]() mutable { destroyBuffer(alloc, old); });
+        }
     }
     pool.buffer = grown;
     pool.alloc.grow(newCap);
@@ -682,7 +790,8 @@ void RtScene::uploadPending(VkCommandBuffer cmd) {
     std::vector<MeshId> batch;
     uint64_t built = 0;
     size_t consumed = 0;
-    for (; consumed < pendingMeshes_.size() && built < kBuildBudgetTriangles; ++consumed) {
+    const uint64_t budget = immediate_ ? kImmediateChunkTriangles : kBuildBudgetTriangles;
+    for (; consumed < pendingMeshes_.size() && built < budget; ++consumed) {
         const MeshId id = pendingMeshes_[consumed];
         Mesh& m = meshes_[id];
         if (!m.live || !m.queued) continue;
@@ -826,7 +935,8 @@ void RtScene::buildPendingBlas(VkCommandBuffer cmd, const std::vector<MeshId>& i
         m.blasBuffer = createBuffer(alloc, sizes.accelerationStructureSize,
                                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
                                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                    VMA_MEMORY_USAGE_GPU_ONLY);
+                                    VMA_MEMORY_USAGE_GPU_ONLY,
+                                    sizes.accelerationStructureSize < kDedicatedBytes ? blasPool() : VK_NULL_HANDLE);
         AllocatedBuffer scratch = createBuffer(alloc, sizes.buildScratchSize + scratchAlignment_,
                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
@@ -854,7 +964,11 @@ void RtScene::buildPendingBlas(VkCommandBuffer cmd, const std::vector<MeshId>& i
         range.primitiveCount = m.triCount;
         const VkAccelerationStructureBuildRangeInfoKHR* ranges = &range;
         pfnCmdBuildAs_(cmd, 1, &build, &ranges);
-        ctx_->deferAfterFrameFence([alloc, scratch]() mutable { destroyBuffer(alloc, scratch); });
+        if (immediate_) {
+            immediateGarbage_.push_back({scratch, 0});
+        } else {
+            ctx_->deferAfterFrameFence([alloc, scratch]() mutable { destroyBuffer(alloc, scratch); });
+        }
 
         VkAccelerationStructureDeviceAddressInfoKHR ai{};
         ai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
@@ -1442,6 +1556,41 @@ void RtScene::uploadSlots(VkCommandBuffer cmd, RtSlotStore& store, AllocatedBuff
 
 VkDescriptorSet RtScene::descriptorSet() const {
     return ctx_ ? frames_[ctx_->getCurrentFrame()].set : VK_NULL_HANDLE;
+}
+
+void RtScene::memoryReport(std::vector<MemoryEntry>& out) const {
+    VmaAllocator a = ctx_ ? ctx_->getAllocator() : nullptr;
+    auto gpu = [a](const AllocatedBuffer& b) { return allocationBytes(a, b.allocation); };
+    uint64_t blas = 0, sources = 0, building = 0;
+    for (const auto& m : meshes_) {
+        blas += gpu(m.blasBuffer);
+        const MeshSource& s = m.source;
+        sources += vectorBytes(s.positions) + vectorBytes(s.indices) + vectorBytes(s.surfaces) +
+                   vectorBytes(s.normals) + vectorBytes(s.oneSided) + vectorBytes(s.uvs) +
+                   vectorBytes(s.masks) + vectorBytes(s.details) + vectorBytes(s.terrainLayers);
+        building += vectorBytes(m.tris) + vectorBytes(m.nodes) + vectorBytes(m.extras);
+    }
+    uint64_t tlas = 0, frame = 0;
+    for (const auto& fr : frames_) {
+        for (const TlasResources* t : {&fr.staticAs, &fr.dynamicAs}) {
+            tlas += gpu(t->tlasBuffer) + gpu(t->scratch) + gpu(t->asInstances);
+        }
+        frame += gpu(fr.instances) + gpu(fr.tlasNodes) + gpu(fr.groups);
+    }
+    out.push_back({"RT scene triangles", gpu(triPool_.buffer), 0});
+    out.push_back({"RT scene BVH nodes (compute tracer)", gpu(nodePool_.buffer), 0});
+    out.push_back({"RT scene UVs, masks, mesh table", gpu(extraPool_.buffer) + gpu(maskBuffer_) + gpu(meshTable_),
+                   vectorBytes(masks_)});
+    out.push_back({"RT BLAS", blas, 0});
+    out.push_back({"RT TLAS, scratch, instances", tlas + frame,
+                   vectorBytes(instanceData_) + vectorBytes(tlasNodes_) + vectorBytes(asInstanceData_) +
+                       vectorBytes(dynInstanceData_) + vectorBytes(dynTlasNodes_) +
+                       vectorBytes(dynAsInstanceData_)});
+    out.push_back({"RT hit textures and terrain records", gpu(detailBuffer_) + gpu(terrainBuffer_),
+                   details_.bytes() + terrainRecords_.bytes()});
+    out.push_back({"RT mesh sources (kept to rebuild)", 0, sources});
+    out.push_back({"RT meshes waiting for upload", 0, building});
+    out.push_back({"RT staging in flight", stagingBytesInFlight(), 0});
 }
 
 RtScene::Stats RtScene::stats() const {

@@ -3,8 +3,10 @@
 #include <fstream>
 #include <string>
 #include <sstream>
+#include <cstdlib>
 #ifdef _WIN32
 #include <windows.h>
+#include <psapi.h>
 #elif defined(__APPLE__)
 #include <mach/mach.h>
 #include <sys/types.h>
@@ -78,6 +80,43 @@ void MemoryMonitor::initialize() {
         LOG_WARNING("Could not detect system RAM, assuming 16GB");
     }
 #endif
+}
+
+MemoryMonitor::ProcessMemory MemoryMonitor::processMemory() {
+    ProcessMemory pm;
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS_EX c{};
+    c.cb = sizeof(c);
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&c), sizeof(c))) {
+        pm.residentBytes = c.WorkingSetSize;
+        pm.privateBytes = c.PrivateUsage;
+    }
+#elif defined(__APPLE__)
+    mach_task_basic_info info{};
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) ==
+        KERN_SUCCESS) {
+        pm.residentBytes = info.resident_size;
+        pm.privateBytes = info.resident_size;
+    }
+#else
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    uint64_t anon = 0, shmem = 0;
+    auto kb = [](const std::string& l) {
+        std::istringstream iss(l.substr(l.find(':') + 1));
+        uint64_t v = 0;
+        iss >> v;
+        return v * 1024ull;
+    };
+    while (std::getline(status, line)) {
+        if (line.rfind("VmRSS:", 0) == 0) pm.residentBytes = kb(line);
+        else if (line.rfind("RssAnon:", 0) == 0) anon = kb(line);
+        else if (line.rfind("RssShmem:", 0) == 0) shmem = kb(line);
+    }
+    pm.privateBytes = anon + shmem;
+#endif
+    return pm;
 }
 
 size_t MemoryMonitor::getAvailableRAM() const {

@@ -51,6 +51,7 @@
 #include <vulkan/vulkan.h>
 
 #include "rendering/rt_bvh.hpp"
+#include "rendering/memory_report.hpp"
 #include "rendering/rt_detail.hpp"
 #include "rendering/rt_range_allocator.hpp"
 #include "rendering/vk_context.hpp"
@@ -221,6 +222,9 @@ public:
         uint64_t gpuBytes = 0;
     };
     [[nodiscard]] Stats stats() const;
+    /// What the scene holds, by part, GPU and CPU (/mem).
+    void memoryReport(std::vector<MemoryEntry>& out) const;
+    [[nodiscard]] static uint64_t stagingBytesInFlight();
 
 private:
     struct Mesh {
@@ -317,7 +321,22 @@ private:
 
     bool loadHardwareEntryPoints();
     bool createDescriptors();
-    void ensurePoolCapacity(VkCommandBuffer cmd, GpuPool& pool, uint32_t needed);
+    void ensurePoolCapacity(VkCommandBuffer cmd, GpuPool& pool, uint32_t needed, bool exact = false);
+    // uploadAllPending's mode: every submit waited on, and what it no longer
+    // needs freed straight after rather than at frame fences.
+    // The BLASes' own VMA pool, so the blocks they fill are theirs alone and
+    // go back when they do, rather than pinned by whatever streamed in beside
+    // them. Made with the first BLAS.
+    VmaPool blasPool_ = VK_NULL_HANDLE;
+    VmaPool blasPool();
+    bool immediate_ = false;
+    bool immediatePools_ = false;  ///< and a grown pool's old buffer freed at once too
+    struct Garbage {
+        AllocatedBuffer buffer;
+        uint64_t stagingBytes;
+    };
+    std::vector<Garbage> immediateGarbage_;
+    void freeImmediateGarbage();
     uint32_t poolAllocate(VkCommandBuffer cmd, GpuPool& pool, uint32_t count);
     void uploadPending(VkCommandBuffer cmd);
     void buildPendingBlas(VkCommandBuffer cmd, const std::vector<MeshId>& meshes);

@@ -859,6 +859,11 @@ bool VkContext::createLogicalDevice() {
         vkbPhysicalDevice_.enable_extension_if_present(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
     checkpointsSupported_ = vkbPhysicalDevice_.enable_extension_if_present(
         VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
+    // How much of each heap this process may use and does: the budget the
+    // ray tracing is measured against before it is switched on, and what
+    // /mem shows. Without it VMA's budget is an estimate from the heap sizes.
+    memoryBudgetSupported_ =
+        vkbPhysicalDevice_.enable_extension_if_present(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 
     // Hardware ray queries for the ray traced lighting. All three extensions
     // and both features, or none: the lighting falls back to its compute
@@ -1228,6 +1233,7 @@ bool VkContext::createAllocator() {
     allocInfo.vulkanApiVersion = std::min(instanceApiVersion_, vmaCeiling);
     // Acceleration structure builds take their inputs by device address.
     if (hardwareRayQuery_) allocInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+    if (memoryBudgetSupported_) allocInfo.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
     if (instanceApiVersion_ > vmaCeiling) {
         LOG_INFO("Instance is Vulkan ", VK_VERSION_MAJOR(instanceApiVersion_), ".",
                  VK_VERSION_MINOR(instanceApiVersion_), " but VMA was built for ",

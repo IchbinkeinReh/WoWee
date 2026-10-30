@@ -862,6 +862,20 @@ void RtLighting::recordApply(VkCommandBuffer cmd, const SceneTarget& target, Slo
     vkCmdEndRenderPass(cmd);
 }
 
+void RtLighting::memoryReport(std::vector<MemoryEntry>& out) const {
+    VmaAllocator a = ctx_ ? ctx_->getAllocator() : nullptr;
+    auto img = [a](const AllocatedImage& i) { return allocationBytes(a, i.allocation); };
+    uint64_t targets = img(raw_.img) + img(tmp_.img), buffers = 0;
+    for (const Slot& s : slots_) {
+        targets += img(s.gbuf.img) + img(s.hist.img) + img(s.out.img) + img(s.point.img);
+        buffers += allocationBytes(a, s.ubo.allocation) + allocationBytes(a, s.lights.allocation);
+    }
+    out.push_back({"RT G-buffer", img(gbuf0_) + img(gbuf1_), 0});
+    out.push_back({"RT trace, history and filter images", targets + img(neutral_), 0});
+    out.push_back({"RT pass blocks and light lists", buffers, 0});
+    out.push_back({"RT probe volume", probes_.gpuBytes(a), 0});
+}
+
 RtLighting::ConsumerData RtLighting::consumerData(bool traced) const {
     ConsumerData c;
     // The atlas keeps its light whether or not this frame traces, and is read

@@ -12,6 +12,7 @@
 #include "rendering/rt_rays.hpp"
 #include "rendering/generation_keyed_cache.hpp"
 #include "rendering/rt_gi_probes.hpp"
+#include "rendering/memory_report.hpp"
 #include "rendering/rt_point_lights.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_utils.hpp"
@@ -200,6 +201,8 @@ public:
         RtGiProbes::ConsumerData gi;
     };
     [[nodiscard]] ConsumerData consumerData(bool traced) const;
+    /// Its images and buffers, and the probes' (/mem).
+    void memoryReport(std::vector<MemoryEntry>& out) const;
 
 private:
     struct Target {

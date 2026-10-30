@@ -696,6 +696,9 @@ public:
     /// upscaler, MSAA, FXAA, shadows, view distance and low-cost shading.
     /// /perf shows it over its table, and the ablation report starts with it.
     [[nodiscard]] std::string qualitySummary() const;
+    /// The memory report /mem prints: the process, the Vulkan heaps, and
+    /// the ray tracing's owners. One line each.
+    [[nodiscard]] std::vector<std::string> memoryReport() const;
     uint32_t getShadowMapSize() const { return SHADOW_MAP_SIZE; }
     void setViewDistance(float distance);
     float getViewDistance() const { return viewDistance_; }

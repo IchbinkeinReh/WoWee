@@ -30,6 +30,7 @@
 #include "rendering/starfield.hpp"
 #include "rendering/day_night.hpp"
 #include "core/memory_monitor.hpp"
+#include "rendering/vk_texture.hpp"
 #include "rendering/clouds.hpp"
 #include "rendering/lens_flare.hpp"
 #include "rendering/weather.hpp"
@@ -6748,6 +6749,50 @@ void Renderer::setLowCostShading(bool on) {
 #endif
     if (on != lowCostShading_) LOG_INFO("Low-cost shading ", on ? "on" : "off");
     lowCostShading_ = on;
+}
+
+std::vector<std::string> Renderer::memoryReport() const {
+    std::vector<std::string> lines;
+    char buf[256];
+    auto mb = [](uint64_t b) { return double(b) / (1024.0 * 1024.0); };
+    const auto pm = core::MemoryMonitor::processMemory();
+    const auto& mon = core::MemoryMonitor::getInstance();
+    std::snprintf(buf, sizeof(buf), "Process: resident %.0f MB, private %.0f MB; system %.0f of %.0f MB available",
+                  mb(pm.residentBytes), mb(pm.privateBytes), mb(mon.getAvailableRAM()), mb(mon.getTotalRAM()));
+    lines.emplace_back(buf);
+    if (vkCtx && vkCtx->getAllocator()) {
+        const VkPhysicalDeviceMemoryProperties* props = nullptr;
+        vmaGetMemoryProperties(vkCtx->getAllocator(), &props);
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+        vmaGetHeapBudgets(vkCtx->getAllocator(), budgets);
+        for (uint32_t h = 0; props && h < props->memoryHeapCount; ++h) {
+            const bool local = (props->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+            std::snprintf(buf, sizeof(buf),
+                          "Heap %u (%s, %.0f MB): ours %.0f MB in %.0f MB of blocks; process uses %.0f of "
+                          "%.0f MB budget%s",
+                          h, local ? "device-local" : "host", mb(props->memoryHeaps[h].size),
+                          mb(budgets[h].statistics.allocationBytes), mb(budgets[h].statistics.blockBytes),
+                          mb(budgets[h].usage), mb(budgets[h].budget),
+                          vkCtx->memoryBudgetSupported() ? "" : " (estimated)");
+            lines.emplace_back(buf);
+        }
+    }
+    std::vector<MemoryEntry> owners;
+    if (rtScene_) rtScene_->memoryReport(owners);
+    if (rtLighting_) rtLighting_->memoryReport(owners);
+    owners.push_back({"RT hit textures, copies kept by the textures", 0, VkTexture::rtDetailBytes()});
+    uint64_t gpuSum = 0, cpuSum = 0;
+    for (const auto& e : owners) {
+        gpuSum += e.gpuBytes;
+        cpuSum += e.cpuBytes;
+        std::snprintf(buf, sizeof(buf), "  %s: GPU %.1f MB, CPU %.1f MB", e.name.c_str(), mb(e.gpuBytes),
+                      mb(e.cpuBytes));
+        lines.emplace_back(buf);
+    }
+    std::snprintf(buf, sizeof(buf), "Ray tracing in all: GPU %.0f MB, CPU %.0f MB (lighting %s)", mb(gpuSum),
+                  mb(cpuSum), rtLighting_ && rtLighting_->active() ? "on" : "off");
+    lines.emplace_back(buf);
+    return lines;
 }
 
 std::string Renderer::qualitySummary() const {

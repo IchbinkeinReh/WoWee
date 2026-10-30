@@ -128,6 +128,12 @@ void RtGiProbes::shutdown() {
     ctx_ = nullptr;
 }
 
+uint64_t RtGiProbes::gpuBytes(VmaAllocator allocator) const {
+    uint64_t n = allocationBytes(allocator, atlas_.allocation) + allocationBytes(allocator, rays_.allocation);
+    for (const auto& l : lists_) n += allocationBytes(allocator, l.allocation);
+    return n;
+}
+
 bool RtGiProbes::createPipelines() {
     pipelinesTried_ = true;
     VkDevice dev = ctx_->getDevice();

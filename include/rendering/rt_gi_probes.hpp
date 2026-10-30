@@ -7,6 +7,7 @@
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
+#include "rendering/memory_report.hpp"
 #include "rendering/rt_gi_volume.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_utils.hpp"
@@ -40,6 +41,8 @@ class RtScene;
  */
 class RtGiProbes {
 public:
+    /// The atlas and the ray buffers, in bytes (/mem).
+    [[nodiscard]] uint64_t gpuBytes(VmaAllocator allocator) const;
     /// The tail of RtPassData (rt_common.glsli) these passes read.
     struct PassData {
         glm::vec4 volume[gi::kCascades];

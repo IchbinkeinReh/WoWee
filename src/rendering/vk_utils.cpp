@@ -10,7 +10,7 @@ namespace wowee {
 namespace rendering {
 
 AllocatedBuffer createBuffer(VmaAllocator allocator, VkDeviceSize size,
-    VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage)
+    VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VmaPool pool)
 {
     AllocatedBuffer result{};
 
@@ -24,6 +24,10 @@ AllocatedBuffer createBuffer(VmaAllocator allocator, VkDeviceSize size,
     allocInfo.usage = memoryUsage;
     if (memoryUsage == VMA_MEMORY_USAGE_CPU_TO_GPU || memoryUsage == VMA_MEMORY_USAGE_CPU_ONLY) {
         allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    }
+    allocInfo.pool = pool;
+    if (pool == VK_NULL_HANDLE && size >= kDedicatedBytes) {
+        allocInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
     }
 
     if (vmaCreateBuffer(allocator, &bufInfo, &allocInfo,
@@ -61,6 +65,13 @@ AllocatedImage createImage(VkDevice device, VmaAllocator allocator,
 
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    // A render target of a screen's size has memory of its own, for the same
+    // reason as a large buffer (createBuffer): freed, it is given back.
+    const bool target = (usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                                  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0;
+    if (target && uint64_t(width) * height * uint32_t(samples) >= (1u << 21)) {
+        allocInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    }
 
     if (vmaCreateImage(allocator, &imgInfo, &allocInfo,
             &result.image, &result.allocation, nullptr) != VK_SUCCESS) {

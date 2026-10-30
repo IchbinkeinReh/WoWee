@@ -289,6 +289,7 @@ public:
         gpuTimings() const { return gpuTimings_; }
     [[nodiscard]] bool hasDedicatedTransferQueue() const { return hasDedicatedTransfer_; }
     [[nodiscard]] VmaAllocator getAllocator() const { return allocator; }
+    [[nodiscard]] bool memoryBudgetSupported() const { return memoryBudgetSupported_; }
     [[nodiscard]] VkSurfaceKHR getSurface() const { return surface; }
     [[nodiscard]] VkPipelineCache getPipelineCache() const { return pipelineCache_; }
 
@@ -604,6 +605,7 @@ private:
     /// and what address it touched when it died.
     bool deviceFaultSupported_ = false;
     bool checkpointsSupported_ = false;
+    bool memoryBudgetSupported_ = false;  ///< VK_EXT_memory_budget enabled
     bool hardwareRayQuery_ = false;
     rt_capability::Input rtCapabilityInput_;
 #if defined(VK_EXT_device_fault)
