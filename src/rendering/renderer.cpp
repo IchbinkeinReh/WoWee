@@ -692,13 +692,16 @@ void Renderer::updatePerFrameUBO() {
         // default (lightingTune_).
         const float sunScale = std::max(lightingTune_.sun, 0.0f);
         currentFrameData.lightColor = glm::vec4(lp.diffuseColor * glareDim * sunScale, 1.0f);
-        // w: ch8's red, how dark the terrain's baked shadows are drawn.
+        // w: how much of the terrain's painted shadow (MCSH) shows, the
+        // Debug Shadows "Terrain painted shadows" setting (1 as the client
+        // draws it). ch8's red, the zone's shadow opacity, went here before,
+        // and no shader read it: the client writes ch8 into its shadow
+        // colour (0x007ee750, 0xd38cc8) and nothing reads that either. Its
+        // terrain draws the mask as a 0 / 0xffff texture (0x007b7930) through
+        // the Terrain programs' 0.7 + 0.3 x the light let through.
         const float ambientScale = std::max(lightingTune_.ambient, 0.0f);
-        currentFrameData.ambientColor =
-            glm::vec4(lp.ambientColor * glareDim * ambientScale,
-                      lightingTune_.bakedTerrainShadow == 1.0f
-                          ? lp.shadowOpacity
-                          : std::clamp(lp.shadowOpacity * lightingTune_.bakedTerrainShadow, 0.0f, 1.0f));
+        currentFrameData.ambientColor = glm::vec4(lp.ambientColor * glareDim * ambientScale,
+                                                  std::max(lightingTune_.bakedTerrainShadow, 0.0f));
         // The zone's fog colour for the world, the camera's own - its
         // interior's blended in - for interior groups and what stands in
         // them (0x007f16f0, 0x007a8440). w: the power the fog is drawn

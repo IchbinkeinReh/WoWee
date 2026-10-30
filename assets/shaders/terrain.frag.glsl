@@ -222,7 +222,9 @@ void main() {
     // for one sun, trees and buildings included - is a second set of
     // shadows that matches neither the sun overhead nor anything standing
     // there, soft streaks across open ground with no caster in sight.
-    float lit = blend.a;
+    // The painted mask as strong as the Debug Shadows setting asks
+    // (ambientColor.w, 1 as the client draws it; past 1 deeper than it).
+    float lit = 1.0 - (1.0 - blend.a) * max(ambientColor.w, 0.0);
     if (shadowParams.x > 0.5) {
         vec3 ldir = normalize(-lightDir.xyz);
         float nl = dot(norm, ldir);

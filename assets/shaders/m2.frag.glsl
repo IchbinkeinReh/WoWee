@@ -283,7 +283,9 @@ void main() {
         RtLight rt = kGbuffer ? rtNeutral() : rtLightAt(FragPos);
         const vec3 ambientLit = rtAmbient(rt, ambientColor.rgb, FragPos, terrainN);
         vec3 light = min(ambientLit + nl * lightColor.rgb, vec3(1.0)) * vInteriorAmbient.rgb;
-        float shade = vDetailLit;
+        // The ground's painted shadow under it, as strong as the terrain's
+        // (ambientColor.w, terrain.frag).
+        float shade = 1.0 - (1.0 - vDetailLit) * max(ambientColor.w, 0.0);
         if (shadowParams.x > 0.5) {
             // The shadow variants: the shadow map's light, no more than the
             // baked shadow lets through, and a face edge-on to the sun let

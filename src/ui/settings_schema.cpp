@@ -478,8 +478,9 @@ constexpr SettingDesc kSchema[] = {
      "How much of the shadow map's sun shadows shows, with the ray\n"
      "tracing on or off. They hold the units' shadows and their own.", "", 100},
     {"dbgterrainshadow", "Terrain painted shadows (%)", SettingKind::Int, 0, 200, 5, "Debug Shadows", "",
-     "The shadows painted into the ground under trees and buildings,\n"
-     "against the zone's own darkness for them.", "", 100},
+     "The shadows painted into the ground under trees and buildings\n"
+     "(and the grass on it). 100 is how the client draws them; they show\n"
+     "only with dynamic shadows off, the shadow map taking their place.", "", 100, "shadows=0"},
     {"dbgblobshadow", "Round unit shadows (%)", SettingKind::Int, 0, 100, 5, "Debug Shadows", "",
      "The round shadows under units with shadows and ray tracing off.", "", 100},
 

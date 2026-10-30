@@ -783,7 +783,7 @@ public:
         float pointShadow = 1.0f;       ///< ray traced: the point lights' shadows
         float bakedLampShadow = 1.0f;   ///< ray traced: how much of a baked colour a lamp's shadow takes
         float occlusion = 1.0f;         ///< ray traced: ambient occlusion
-        float bakedTerrainShadow = 1.0f;  ///< the terrain's baked shadow map, times its zone opacity
+        float bakedTerrainShadow = 1.0f;  ///< how much of the terrain's painted shadow (MCSH) shows
         float blobShadow = 1.0f;        ///< the round shadows under units (shadows off, ray tracing off)
     };
     void setLightingTune(const LightingTune& tune) { lightingTune_ = tune; }
