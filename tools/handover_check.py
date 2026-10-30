@@ -7,7 +7,13 @@ wrong. Neither shows up as an error, a warning, or a log line. The panel simply
 does not appear, which is also what a panel that was never handed over looks
 like.
 
-    tools/handover_check.py
+    tools/handover_check.py ["<the extracted interface>"]
+
+The interface side is read from Data/interface when no directory is named, and
+that is not tracked in the checkout: named there, lua_globals() comes back
+empty and *every* call in a driver line is reported as naming nothing. Run
+against the unpacked interface instead, or it reports itself rather than the
+handover.
 
 TWO THINGS IT CHECKS
 
@@ -49,7 +55,11 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
-FRAMEXML = ROOT / "Data/interface"
+# Named on the command line, Data/interface otherwise - and the literal stays,
+# because that is what sweep_guard reads to tell "no interface here" from a
+# sweep that ran and found nothing.
+FRAMEXML = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
+            else ROOT / "Data/interface")
 
 # A Lua line the client hands to the interface, however it is spelled.
 COMMAND = re.compile(r'(?:runInterfaceCommand|executeString)\s*\(\s*"((?:[^"\\]|\\.)*)"')
@@ -125,6 +135,13 @@ def cpp_sources():
 
 
 def main():
+    if not FRAMEXML.is_dir():
+        # Half of this sweep would still work without an interface, and
+        # reporting only that half as though it were the whole report is how a
+        # sweep starts looking clean. Both halves need the directory named.
+        print(f"No interface at {FRAMEXML} - name the unpacked interface on "
+              "the command line; without it every driver call reads dead.")
+        return 2
     defined = lua_globals()
     # Names the engine answers itself rather than FrameXML, so absence from the
     # interface says nothing about them.

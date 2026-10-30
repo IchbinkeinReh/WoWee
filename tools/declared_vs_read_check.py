@@ -8,6 +8,8 @@ and nothing about that failure is visible: no missing name, no nil, no raise.
 
     tools/declared_vs_read_check.py
 
+    tools/declared_vs_read_check.py ["<the extracted interface>"]
+
 THREE THINGS IT COMPARES
 
 **Attributes the emitter never names.** The chat box says historyLines="32"
@@ -118,7 +120,13 @@ sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
 from framexml_source import without_comments
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-FRAMEXML = ROOT / "Data/interface/framexml"
+# The interface root on the command line - the framexml directory comes off it,
+# so the same argument works for every interface sweep. Data/interface is the
+# fallback and is not tracked; the literal is what tells sweep_guard to skip
+# this one rather than fail it here.
+INTERFACE = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
+             else ROOT / "Data/interface")
+FRAMEXML = INTERFACE / "framexml"
 EMITTER = ROOT / "src/ui/framexml_emitter.cpp"
 ADDONS = ROOT / "src/addons"
 SRC = ROOT / "src"
@@ -274,6 +282,12 @@ EXPECTED_UNFIRED = {
 
 
 def main():
+    if not FRAMEXML.is_dir():
+        # All three sections compare against the XML. With none to read, each
+        # answers zero, which is the same report a clean tree gives.
+        print(f"No framexml at {FRAMEXML} - name the unpacked interface on "
+              "the command line; there is nothing to compare against here.")
+        return 2
     emitter = EMITTER.read_text(errors="ignore") if EMITTER.exists() else ""
     named = set(re.findall(r'"(\w+)"', emitter))
     attrs = attributes()
