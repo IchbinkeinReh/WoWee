@@ -140,7 +140,8 @@ block (GetPetTimeRemaining, mentioned twice inside `--`), and the old honour
 progress bar in inspecthonorframe.lua (GetInspectPVPRankProgress, once). Lua
 comments are
 blanked before matching now, long-bracket ones consumed whole and strings left
-alone, and `<!-- -->` in the markup files the same way. 173 stubs, 74 reached.
+alone, and `<!-- -->` in the markup files the same way. 173 stubs, 73 reached -
+one of the 74 counted that day is taken back out by the check two sections down.
 
 ONE THAT IS A QUERY AND NOT A VERB
 
@@ -165,28 +166,36 @@ sound and spell-chain tables, a vehicle seat, a map overlay, a destructible
 model, a durability level and a scaling-stat distribution. A table this install
 were short of would have shown up there under a creature-template name.
 
-FIVE OF THE REACHED ROWS ARE NOT ASKS FROM THE REFERENCE CLIENT (2026-10-30)
+A LIVE ELEMENT IS NOT THE SAME AS A BINDING THE CLIENT EVER HAD (2026-10-30)
 
 The interface tree named on the command line is not the 12340 client's own UI.
 It is the post-Cataclysm layout under a 30300 tag: 115 of its FrameXML XML files
-hold <Frame> definitions, they point at ..\FrameXML\UI.xsd, and a 3.3.5 FrameXML
-carries no frame XML at all. So "reached from a live element" is a superset of
-what the reference client ever reached, and the binary is what separates the two
-halves: take the second column of the decompile's strings.tsv, sort it, and
-`comm -23` it against these rows. Five of the 74 come out with no match:
-AchievementMicroButton_Update (called at blizzard_achievementui.lua:671),
-MutedList_Update (friendsframe.lua:1341), CannotBeResurrected,
-InspectAchievements and MovieRecording_IsRecording. Nothing in the tree defines
-the first three, so that interface is asking the client for functions this client
-never had. The fourth is the row the other way round: uiparent.lua:346 defines
-InspectAchievements itself, so its own Lua function replaces the native binding
-at load and no stub of ours is ever what runs - the binding still matters for a
-tree that does not define it, which is why it is bound rather than absent. The
-other
-69 are names the 12340 executable does carry, and those are the rows worth
-reading the decompile over; the rest are a newer UI asking for something the
-reference client never had, and chasing them against this binary is a dead end
-by construction.
+hold <Frame> definitions and they point at ..\FrameXML\UI.xsd, and a 3.3.5
+FrameXML carries no frame XML and no schema at all. So "reached from a live
+element" is a superset of what the reference client ever reached, and the two
+ways a row can be manufactured are now taken out of the headline count and
+reported under it.
+
+Pass the decompile's `strings.tsv` as the second argument and every reached name
+the executable's own strings do not carry is marked in place and listed: four
+here - AchievementMicroButton_Update (called at blizzard_achievementui.lua:671),
+MutedList_Update (friendsframe.lua:1341), CannotBeResurrected and
+MovieRecording_IsRecording. Nothing in the tree defines those either, so the
+interface is simply asking for functions this client never registered, and
+reading them off the binary is a dead end by construction. With no strings file
+the sweep says so rather than pretending the check ran.
+
+The other direction is a name the interface defines for itself. uiparent.lua:346
+defines InspectAchievements, and a top-level Lua definition lands in the
+interpreter after the native binding is installed, so whatever a panel calls by
+that name is the interface's own function and never our stub - which is better
+than what the stub does, and why the row was manufactured. Only a *global*
+definition counts: `local Name = function` and `Frame.Name = function` are a
+local and a method and neither displaces the global. The binding stays
+registered, because a tree that does not define the name needs it.
+
+That leaves the rows worth reading the decompile over: names the executable
+really does carry, reached from something it draws.
 """
 import re
 import sys
@@ -204,6 +213,11 @@ from pathlib import Path
 # answer is usually about a particular one:
 #
 #     python3 tools/framexml_live_stubs.py ~/wow-1.12/interface
+#
+# The second argument is the reference binary's own string dump (the decompile's
+# strings.tsv), which splits names the client never had from names it did; see
+# the section of this note headed "A live element is not the same as a binding
+# the client ever had".
 ROOT = Path(__file__).resolve().parent.parent
 XML = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
 if not XML.is_dir():
@@ -393,6 +407,9 @@ for f in (ROOT / "src/addons").glob("*.cpp"):
 stubbed = {n for n, impl in bound.items() if impl in STUBS} | set(inline_stub)
 
 hits = {}
+# Every live file's text, kept: a name the interface defines for itself has to
+# be found in it, and the same text was already read for the calls.
+texts = {}
 for fname, element in OWNED.items():
     matches = list(XML.rglob(fname))
     if not matches:
@@ -401,11 +418,79 @@ for fname, element in OWNED.items():
     strip = STRIP.get(matches[0].suffix)
     if strip:
         text = strip(text)
+    texts[fname] = (matches[0], text)
     for name in stubbed:
         if re.search(rf"\b{re.escape(name)}\s*\(", text):
             hits.setdefault(name, []).append(f"{element}:{fname}")
 
+# A name the interface defines for itself is not reached as a binding. The
+# native function is installed into the interpreter before the interface loads,
+# and a top-level `function Name (unit)` in a file that loads afterwards puts the
+# interface's own function there instead, so whichever panel calls the name
+# reaches Lua code and never one of these stubs. Only a global definition
+# counts: `local Name = function` and `Frame.Name = function` are a local and a
+# method, and neither replaces the global the binding sits in.
+#
+# InspectAchievements is one: uiparent.lua:346 defines it, and the UnitPopup
+# menu calls it. It was counted as a stub reached from two live files, and the
+# row was manufactured - the binding is still worth having for a tree that does
+# not define the name, but nothing here is reached by it.
+_GLOBAL_DEF = re.compile(r"^(?:function\s+([A-Za-z_]\w*)|([A-Za-z_]\w*)\s*=\s*function)", re.M)
+
+
+def _provided(name):
+    """Files of the live set that define this name globally."""
+    out = []
+    for fname, (path, text) in texts.items():
+        for m in _GLOBAL_DEF.finditer(text):
+            if (m.group(1) or m.group(2)) == name:
+                out.append(fname)
+                break
+    return out
+
+
+shadowed = {n: _provided(n) for n in list(hits) if _provided(n)}
+for name in shadowed:
+    del hits[name]
+
+# The other half of the "live element" question: an element that reaches a name
+# is not the same as the reference client ever having been asked for it. The
+# interface tree under Data/ is a post-Cataclysm FrameXML tagged 30300 (its XML
+# files carry <Frame> definitions and point at UI.xsd, which a 3.3.5 FrameXML
+# has neither of), so some of these names belong to a UI this executable never
+# ran. The binary is the test: its decompile dumps every string it carries, and
+# a binding name absent from that list was never a binding here.
+STRINGS = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+absent = set()
+if STRINGS and STRINGS.is_file():
+    known = set()
+    with STRINGS.open(errors="ignore") as fh:
+        for line in fh:
+            parts = line.rstrip("\n").split("\t", 1)
+            if len(parts) == 2:
+                known.add(parts[1])
+    absent = {n for n in hits if n not in known}
+elif STRINGS:
+    print(f"no strings file at {STRINGS}\n")
+
 print(f"{len(bound)} bindings, {len(stubbed)} of them stubs, "
       f"{len(hits)} reached from a handed-over element\n")
 for name in sorted(hits, key=lambda n: (-len(hits[n]), n)):
-    print(f"  {name:<34} {bound[name]:<20} {', '.join(sorted(set(hits[name])))}")
+    mark = "  (not in the client binary)" if name in absent else ""
+    print(f"  {name:<34} {bound[name]:<20} {', '.join(sorted(set(hits[name])))}{mark}")
+
+if shadowed:
+    print(f"\n{len(shadowed)} stub{'s' if len(shadowed) != 1 else ''} whose name the "
+          "interface defines for itself, so its own function replaces the binding "
+          "at load and nothing here is reached:")
+    for name, files in sorted(shadowed.items()):
+        print(f"  {name:<34} {', '.join(sorted(files))}")
+
+if STRINGS and STRINGS.is_file():
+    print(f"\n{len(absent)} of the reached names are not in the client's own strings - "
+          "a newer interface asking for a binding this executable never had:")
+    for name in sorted(absent):
+        print(f"  {name}")
+else:
+    print("\nnames were not checked against the client binary; pass its decompile's "
+          "strings.tsv as the second argument to split the list")
