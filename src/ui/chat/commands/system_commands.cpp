@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 
@@ -511,11 +512,12 @@ namespace {
 
 /// A console line in the chat frame, which is where the client's own prints go.
 ///
-/// The one thing here that reads differently from the real client: it sends its
-/// "No such cvar" line through the same sink at message level 3, which is the
-/// red it is typed in, while these all arrive as ordinary system lines. There is
-/// no level on this client's chat messages to put it back on.
-void sayCVar(ChatCommandContext& ctx, const std::string& text) {
+/// The one thing here that reads differently from the real client: its console
+/// prints carry a message level in the line record - 0 for the ordinary ones, 3
+/// for the errors (`No such cvar`, `Invalid difficulty`) - and these all arrive
+/// as the same kind of system line. This client's chat messages carry no level to
+/// put that distinction on.
+void sayConsole(ChatCommandContext& ctx, const std::string& text) {
     ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(text));
 }
 
@@ -527,12 +529,12 @@ lua_State* cVarLuaState(ChatCommandContext& ctx) {
 
 /// The first word of the arguments, cut the way the client cuts them.
 ///
-/// Both setters run the line through the client's tokeniser with the delimiter
+/// The console commands run the line through their tokeniser with the delimiter
 /// set " ,;\t\"\r\n" (FUN_0076f1e0) and take the first token into a 64-byte
 /// buffer, so a quoted name works, a comma separates two names of which only the
 /// first is looked at, and a name longer than 63 characters is not the name the
 /// client goes looking for.
-std::string firstCVarToken(const std::string& args) {
+std::string firstConsoleToken(const std::string& args) {
     static constexpr std::string_view kDelimiters = " ,;\t\"\r\n";
     const size_t start = args.find_first_not_of(kDelimiters);
     if (start == std::string_view::npos) return {};
@@ -569,17 +571,17 @@ public:
 class CVarResetCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
-        const std::string name = firstCVarToken(ctx.args);
+        const std::string name = firstConsoleToken(ctx.args);
         lua_State* L = cVarLuaState(ctx);
         if (!name.empty()) {
             if (!addons::cVarConsoleHas(name)) {
-                sayCVar(ctx, "No such cvar \"" + name + "\"");
+                sayConsole(ctx, "No such cvar \"" + name + "\"");
                 return {};
             }
             if (L) addons::resetStoredCVar(L, name);
             return {};
         }
-        sayCVar(ctx, "Resetting all cvars");
+        sayConsole(ctx, "Resetting all cvars");
         if (!L) return {};
         // Every name in the listing, which is what the client's walk covers
         // except the CVars it builds in a loop - the eight camera views'
@@ -598,17 +600,17 @@ public:
 class CVarDefaultCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
-        const std::string name = firstCVarToken(ctx.args);
+        const std::string name = firstConsoleToken(ctx.args);
         lua_State* L = cVarLuaState(ctx);
         if (!name.empty()) {
             if (!addons::cVarConsoleHas(name)) {
-                sayCVar(ctx, "No such cvar \"" + name + "\"");
+                sayConsole(ctx, "No such cvar \"" + name + "\"");
                 return {};
             }
             if (L) addons::restoreCVarDefault(L, name);
             return {};
         }
-        sayCVar(ctx, "Restoring all cvars");
+        sayConsole(ctx, "Restoring all cvars");
         if (!L) return {};
         for (const addons::CVarConsoleRow& row : addons::cVarConsoleRows(L))
             addons::restoreCVarDefault(L, row.name);
@@ -617,6 +619,45 @@ public:
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"cvar_default"}; }
     [[nodiscard]] std::string helpText() const override {
         return "Set a CVar to its coded default (/cvar_default [name])";
+    }
+};
+
+// --- /changeplayerdifficulty <0|1> ---
+//
+// The last name the client's console command table reaches by slash that this
+// client left unanswered: FUN_00769100("changePlayerDifficulty", 0x0052d060, 5,
+// 0), the last 0 being no help string. It is the hard path rather than the
+// dropdown's: the client turns the argument into a number with its own decimal
+// reader (0x0076f0d0 - a sign, then digits, no 0x) and sends whenever the result
+// is under 2, asking nothing first. Neither the "may this player change it" test
+// (0x0052cbc0) nor the cooldown a change starts, both of which the interface's
+// own leg (0x0052d8d0) obeys, is consulted - the realm is what refuses, through
+// SMSG_CHANGEPLAYER_DIFFICULTY_RESULT, which this client already reads.
+//
+// A missing argument reads as 0 because that is what the reader answers for an
+// empty token, so the bare form sends Normal rather than complaining.
+class ChangePlayerDifficultyCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        const std::string token = firstConsoleToken(ctx.args);
+        // Compared as the client compares it, on the unsigned result: "2" and up
+        // and anything negative is refused here instead of being sent.
+        const uint32_t difficulty =
+            static_cast<uint32_t>(std::strtoull(token.c_str(), nullptr, 10));
+        if (difficulty >= 2) {
+            sayConsole(ctx, "Invalid difficulty");
+            return {};
+        }
+        ctx.gameHandler.sendChangePlayerDifficulty(difficulty);
+        return {};
+    }
+    // The registry keys on the alias as written and dispatches the typed name
+    // lower-cased, so the client's camelCase spelling has to be stored lower.
+    [[nodiscard]] std::vector<std::string> aliases() const override {
+        return {"changeplayerdifficulty"};
+    }
+    [[nodiscard]] std::string helpText() const override {
+        return "Set the difficulty in a dynamic instance (/changeplayerdifficulty 0|1)";
     }
 };
 
@@ -636,6 +677,7 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<CVarListCommand>());
     reg.registerCommand(std::make_unique<CVarResetCommand>());
     reg.registerCommand(std::make_unique<CVarDefaultCommand>());
+    reg.registerCommand(std::make_unique<ChangePlayerDifficultyCommand>());
 }
 
 } // namespace ui
