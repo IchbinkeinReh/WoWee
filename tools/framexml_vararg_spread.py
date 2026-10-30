@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bindings whose returns are spread into a vararg call, answering nothing.
 
-    tools/framexml_vararg_spread.py
+    tools/framexml_vararg_spread.py ["<the extracted interface>"]
 
 WHY THIS FINDS WHAT THE OTHER SWEEPS CANNOT
 
@@ -58,7 +58,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from lua_binding_scan import binding_bodies
 
 ROOT = Path(__file__).resolve().parent.parent
-INTERFACE = ROOT / "Data/interface"
+# The interface root on the command line, the way every other interface sweep
+# takes it; Data/interface is the fallback and is not tracked in the checkout.
+INTERFACE = (Path(sys.argv[1]) if len(sys.argv) > 1
+             else ROOT / "Data/interface")
 ADDONS = ROOT / "src/addons"
 
 #: Answering nothing is right for these, checked once each.
@@ -101,6 +104,13 @@ def spread_sites(callees):
 
 
 def main():
+    if not INTERFACE.is_dir():
+        # Both halves come out of loaded_files(), which answers with an empty
+        # set for a directory that is not there: no vararg callee and no spread
+        # site, which is what a clean interface looks like.
+        print(f"No interface at {INTERFACE} - name the unpacked interface on "
+              "the command line; there are no call sites to read here.")
+        return 2
     callees = vararg_callees()
     sites = spread_sites(callees)
     bodies = binding_bodies()
