@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Frames the interface declares that the emitter never creates.
 
-    tools/framexml_frame_emitted_check.py
+    tools/framexml_frame_emitted_check.py "<the extracted interface>"
+
+The interface is installed data rather than repository content - there is no
+`Data/interface` in this checkout any more - so the run stops when the named
+path is not a directory. Walking a directory that is not there founds the whole
+check on nothing: no files, no canary (it is looked for under the same path),
+and the same "0 frames / (none)" a fully covered tree prints.
 
 WHY THIS FINDS WHAT THE OTHER SWEEPS CANNOT
 
@@ -23,8 +29,8 @@ It needs the `framexml_emit` target, which is built with the tests:
 WHAT IT COMPARES
 
 Concrete (non-virtual) frame elements carrying a literal name, against the Lua
-emitFrameXml produces for that same file. Zero today, across 172 in-game files
-and 2369 frames.
+emitFrameXml produces for that same file. Zero against the 172 in-game files and
+2369 frames of the tree it was first run against.
 
 It also compiles what was emitted, which is a second and separate claim: a
 syntax error anywhere in a chunk takes down every frame in that file, and the
@@ -53,7 +59,12 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-EMIT = ROOT / "build/bin/framexml_emit"
+#: Windows writes the target as `framexml_emit.exe`, and pathlib does not resolve
+#: a bare name the way a shell does - so the original path "does not exist" here,
+#: and the check reported "not built" against a binary that was sitting there.
+EMIT = next((p for p in (ROOT / "build/bin/framexml_emit.exe",
+                         ROOT / "build/bin/framexml_emit") if p.exists()),
+            ROOT / "build/bin/framexml_emit")
 
 FRAME_EL = (r"(?:Frame|Button|CheckButton|StatusBar|Slider|EditBox|ScrollFrame"
             r"|ScrollingMessageFrame|MessageFrame|SimpleHTML|ColorSelect|Model"
@@ -80,7 +91,16 @@ def main():
         print("  cmake --build build --target framexml_emit")
         return 1
 
-    files = [p for p in sorted((ROOT / "Data/interface").rglob("*.xml"))
+    iface = pathlib.Path(sys.argv[1] if len(sys.argv) > 1
+                         else ROOT / "Data" / "interface")
+    if not iface.is_dir():
+        # Walking this prints the same lines a clean tree prints, so say so and
+        # stop rather than report a zero nobody measured.
+        print(f"  {iface} is not a directory - name the extracted interface "
+              "directory on the command line.")
+        return 2
+
+    files = [p for p in sorted(iface.rglob("*.xml"))
              if "gluexml" not in str(p)]
     rows, total = [], 0
     for p in files:
@@ -113,13 +133,17 @@ def main():
     # Without it an emitter that produced nothing at all would report a clean
     # zero, since every comparison would be against an empty haystack... which
     # is the same silent-success failure the wire sweeps had.
-    probe = ROOT / "Data/interface/framexml/gamemenuframe.xml"
-    if probe.exists():
-        run = subprocess.run([str(EMIT), str(probe)], capture_output=True, text=True)
-        if "GameMenuFrame" not in run.stdout:
-            print("  CANARY FAILED: the emitter produced no GameMenuFrame.")
-            print("  Every count below is meaningless.\n")
-            return 1
+    probe = iface / "framexml" / "gamemenuframe.xml"
+    if not probe.exists():
+        # The canary is what tells an empty comparison from a passing one, so a
+        # tree without it cannot be reported on at all.
+        print(f"  CANARY MISSING: no {probe} - nothing was checked.")
+        return 1
+    run = subprocess.run([str(EMIT), str(probe)], capture_output=True, text=True)
+    if "GameMenuFrame" not in run.stdout:
+        print("  CANARY FAILED: the emitter produced no GameMenuFrame.")
+        print("  Every count below is meaningless.\n")
+        return 1
 
     print(f"{len(files)} in-game xml files, {total} named frames\n")
     print(f"{len(rows)} file(s) with frames the emitter does not create:\n")
