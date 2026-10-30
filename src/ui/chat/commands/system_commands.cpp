@@ -696,6 +696,36 @@ public:
     }
 };
 
+// --- /memusage, /heapusage2, /setmap ---
+//
+// Three of the names in the client's console command table share one handler:
+// FUN_00769100 registers "MemUsage" and "HeapUsage2" (mask 4, slash only) and
+// "setmap" (mask 5, console and slash) all against 0x008c8de0, and that handler
+// is six bytes - `return 1;`. Typing any of the three therefore does nothing at
+// all, prints nothing, and reports success to the console.
+//
+// Listing them here is what makes this client do the same rather than answer
+// with FrameXML's help line: a name none of SlashCmdList, the registry or the
+// emote list recognises falls to the end of ChatEdit_ParseText, which adds
+// HELP_TEXT_SIMPLE to the chat frame and clears the edit box. The original
+// prints that for a misspelling and prints nothing for these three.
+//
+// The two memory names that really report are left out on purpose. "HeapUsage"
+// (0x004d27e0) walks the client's own allocator, through a 50000-byte buffer on
+// the stack, and "ObjUsage" (0x004d49e0) walks its object list by the next
+// pointer at +0xac and the size at +0xa4; what either prints is the state of an
+// allocator and an object heap this client does not have.
+class InertConsoleCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext&) override { return {}; }
+    [[nodiscard]] std::vector<std::string> aliases() const override {
+        return {"memusage", "heapusage2", "setmap"};
+    }
+    [[nodiscard]] std::string helpText() const override {
+        return "Does nothing, as the original's handler does";
+    }
+};
+
 void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<ProfileCommand>());
     reg.registerCommand(std::make_unique<ClimbCommand>());
@@ -714,6 +744,7 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<CVarDefaultCommand>());
     reg.registerCommand(std::make_unique<ChangePlayerDifficultyCommand>());
     reg.registerCommand(std::make_unique<PitchLimitCommand>());
+    reg.registerCommand(std::make_unique<InertConsoleCommand>());
 }
 
 } // namespace ui
