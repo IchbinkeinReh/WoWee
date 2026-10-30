@@ -2,6 +2,7 @@
 
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
+#include "game/item_text.hpp"      // ItemLinkInstance - what a trade row's link carries
 #include "game/inventory.hpp"
 #include "game/handler_types.hpp"
 #include "network/packet.hpp"
@@ -69,6 +70,13 @@ public:
         uint32_t displayId   = 0;
         uint32_t stackCount  = 0;
         uint64_t itemGuid    = 0;
+        /// What the offer said about *this copy* of the item: the permanent
+        /// enchant, the three socketed gems, the rolled property and its seed.
+        /// The extended packet carries all six per slot - the client keeps them
+        /// in the row it mirrors for the partner's half (0xca0b80, 0x50 bytes a
+        /// slot) and answers its link and its name from them, so a traded item
+        /// that was enchanted, socketed or rolled reads as itself.
+        ItemLinkInstance inst;
     };
 
     TradeStatus getTradeStatus() const { return tradeStatus_; }

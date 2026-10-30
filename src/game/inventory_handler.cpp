@@ -204,17 +204,6 @@ std::vector<PendingAuctionLine>& pendingAuctionLines() {
     return lines;
 }
 
-/// The item as the auction lines name it (0x00706d70): its plain name, with
-/// a random suffix put on through ITEM_SUFFIX_TEMPLATE. No link.
-std::string auctionItemName(const GameHandler& owner, const std::string& name, int32_t randomProp) {
-    if (randomProp != 0) {
-        const std::string suffix = owner.getRandomPropertyName(randomProp);
-        if (!suffix.empty())
-            return interfaceFormat("ITEM_SUFFIX_TEMPLATE", "%s %s", {name, suffix});
-    }
-    return name;
-}
-
 /// ERR_AUCTION_SOLD_S, _EXPIRED_S, _OUTBID_S, _WON_S and _REMOVED_S, which
 /// the game error table sends as system chat - now if the item's name is
 /// known, else when its query answers.
@@ -223,7 +212,7 @@ void auctionItemLine(GameHandler& owner, uint32_t itemEntry, int32_t randomProp,
     const ItemQueryResponseData* info = owner.getItemInfo(itemEntry);
     if (info && !info->name.empty()) {
         owner.addSystemChatMessage(interfaceFormat(key, enUS,
-            {auctionItemName(owner, info->name, randomProp)}));
+            {owner.itemNameWithProperty(info->name, randomProp)}));
         return;
     }
     pendingAuctionLines().push_back({itemEntry, randomProp, key, enUS});
@@ -684,11 +673,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             owner_.ensureItemInfo(itemId);
             return;
         }
-        std::string itemName = info->name;
-        if (randomProp != 0) {
-            std::string suffix = owner_.getRandomPropertyName(randomProp);
-            if (!suffix.empty()) itemName += " " + suffix;
-        }
+        std::string itemName = owner_.itemNameWithProperty(info->name, randomProp);
         uint32_t quality = info->quality;
         std::string link = buildItemLink(itemId, quality, itemName, owner_.getPlayerLevel());
         // LOOT_ITEM_SELF, LOOT_ITEM_PUSHED_SELF or LOOT_ITEM_CREATED_SELF (and
@@ -1648,11 +1633,13 @@ void InventoryHandler::handleLootRoll(network::Packet& packet) {
 std::string InventoryHandler::rollItemLink(uint32_t itemId, int32_t randomProp) {
     owner_.ensureItemInfo(itemId);
     auto* info = owner_.getItemInfo(itemId);
-    std::string itemName = (info && !info->name.empty()) ? info->name : ("Item #" + std::to_string(itemId));
-    if (randomProp != 0) {
-        std::string suffix = owner_.getRandomPropertyName(randomProp);
-        if (!suffix.empty()) itemName += " " + suffix;
-    }
+    // The link's own text, so through the client's name builder rather than a
+    // joined space: a rolled property is put beside the name by
+    // ITEM_SUFFIX_TEMPLATE, which is how 0x00706d70 does it for every link and
+    // chat line that knows the id.
+    std::string itemName = owner_.itemNameWithProperty(
+        (info && !info->name.empty()) ? info->name : ("Item #" + std::to_string(itemId)),
+        randomProp);
     return buildItemLink(itemId, info ? info->quality : 1u, itemName, owner_.getPlayerLevel());
 }
 
@@ -3741,11 +3728,8 @@ void InventoryHandler::noteMailAttachRefundable(int attachIndex) {
     // carry, which is how 0x0061e290 feeds its position-seven value to
     // 0x00706d70 rather than letting the two disagree.
     const game::ItemLinkInstance inst = owner_.itemLinkInstance(att.itemGuid);
-    std::string linkName = info ? info->name : att.item.name;
-    if (inst.randomPropertyId != 0) {
-        const std::string suffix = owner_.getRandomPropertyName(inst.randomPropertyId);
-        if (!suffix.empty()) linkName += " " + suffix;
-    }
+    std::string linkName = owner_.itemNameWithProperty(
+        info ? info->name : att.item.name, inst.randomPropertyId);
     owner_.addonEventCallbackRef()(
         "MAIL_LOCK_SEND_ITEMS",
         {std::to_string(attachIndex + 1),
@@ -5044,12 +5028,13 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
         const uint32_t stackCnt  = packet.readUInt32();
         /*uint32_t wrapped     =*/ packet.readUInt32();
         /*uint64_t giftCreator =*/ packet.readUInt64();
-        /*uint32_t permEnchant =*/ packet.readUInt32();
-        for (int g = 0; g < 3; ++g) packet.readUInt32();   // socket enchants
+        const uint32_t permEnchant = packet.readUInt32();
+        std::array<uint32_t, 3> gems{};
+        for (int g = 0; g < 3; ++g) gems[g] = packet.readUInt32();   // socket enchants
         /*uint64_t creator     =*/ packet.readUInt64();
         /*uint32_t charges     =*/ packet.readUInt32();
-        /*uint32_t suffixFactor=*/ packet.readUInt32();
-        /*int32_t randomProp   =*/ packet.readUInt32();
+        const uint32_t suffixFactor = packet.readUInt32();
+        const int32_t randomProp = static_cast<int32_t>(packet.readUInt32());
         /*uint32_t lockId      =*/ packet.readUInt32();
         /*uint32_t maxDur      =*/ packet.readUInt32();
         /*uint32_t durability  =*/ packet.readUInt32();
@@ -5058,6 +5043,13 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
             slots[slotNum].itemId = itemId;
             slots[slotNum].displayId = displayId;
             slots[slotNum].stackCount = stackCnt;
+            // The client puts these four - and nothing else of the row's - into
+            // the link it answers for a traded item: 0x0061e290(entry, quality,
+            // row+0x0c, row+0x10..0x18, row+0x40, row+0x3c).  The seed is the
+            // suffix factor, exactly as itemLinkInstance reads it off an item
+            // object, and the property is the same one that decorates the name.
+            slots[slotNum].inst = ItemLinkInstance{
+                permEnchant, gems, randomProp, suffixFactor};
         }
         if (itemId != 0) owner_.ensureItemInfo(itemId);
     }
@@ -5067,6 +5059,7 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
         slots[slot].itemId = 0;
         slots[slot].displayId = 0;
         slots[slot].stackCount = 0;
+        slots[slot].inst = {};
     }
 
     uint64_t& side = ownSide ? myTradeGold_ : peerTradeGold_;
@@ -5477,7 +5470,7 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                 if (it->itemEntry != data.entry) { ++it; continue; }
                 if (!data.name.empty())
                     owner_.addSystemChatMessage(interfaceFormat(it->key, it->enUS,
-                        {auctionItemName(owner_, data.name, it->randomProp)}));
+                        {owner_.itemNameWithProperty(data.name, it->randomProp)}));
                 it = waiting.erase(it);
             }
         }
@@ -5485,11 +5478,9 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         // Flush any deferred loot notifications waiting on this item's name/quality.
         for (auto it = owner_.pendingItemPushNotifsRef().begin(); it != owner_.pendingItemPushNotifsRef().end(); ) {
             if (it->itemId == data.entry) {
-                std::string itemName = data.name.empty() ? ("item #" + std::to_string(data.entry)) : data.name;
-                if (it->randomProp != 0) {
-                    std::string suffix = owner_.getRandomPropertyName(it->randomProp);
-                    if (!suffix.empty()) itemName += " " + suffix;
-                }
+                std::string itemName = owner_.itemNameWithProperty(
+                    data.name.empty() ? ("item #" + std::to_string(data.entry)) : data.name,
+                    it->randomProp);
                 std::string link = buildItemLink(data.entry, data.quality, itemName,
                                                  owner_.getPlayerLevel());
                 // The same line the immediate path prints (0x00523900).

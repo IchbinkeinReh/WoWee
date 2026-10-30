@@ -217,11 +217,9 @@ void renderItemTooltip(const game::ItemDef& item, const game::Inventory* invento
     ImVec4 qColor = ui::getQualityColor(item.quality);
     // Append the rolled random suffix (e.g. "of the Bear") so a randomly-enchanted item
     // reads with its full name, matching how the auction house already labels it.
-    std::string displayName = item.name;
-    if (item.randomPropertyId != 0 && gameHandler) {
-        std::string suffix = gameHandler->getRandomPropertyName(item.randomPropertyId);
-        if (!suffix.empty()) displayName += " " + suffix;
-    }
+    std::string displayName = gameHandler
+        ? gameHandler->itemNameWithProperty(item.name, item.randomPropertyId)
+        : item.name;
     ImGui::TextColored(qColor, "%s", displayName.c_str());
     if (item.itemLevel > 0) {
         ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 0.7f), "Item Level %u", item.itemLevel);

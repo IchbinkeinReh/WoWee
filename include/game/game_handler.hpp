@@ -553,6 +553,14 @@ public:
         return randomPropertyNameResolver_ ? randomPropertyNameResolver_(id) : std::string{};
     }
 
+    /// What an item is *called* wherever a rolled property is known: the plain
+    /// name with the property beside it through ITEM_SUFFIX_TEMPLATE.  The
+    /// client has one routine for this - 0x00706d70, which is handed the same
+    /// property id that 0x0061e290 puts at a link's seventh number, so the
+    /// number in a link and the words around it are read from one place.  A
+    /// property the tables cannot name leaves the name alone, as it does there.
+    std::string itemNameWithProperty(const std::string& name, int32_t randomPropertyId) const;
+
     // Random-suffix/property stat bonuses. Given the item's signed randomPropertyId and its
     // suffixFactor (ITEM_FIELD_PROPERTY_SEED), returns the rolled {statType, value} pairs a
     // green/blue item gains from "of the Bear" etc. statType uses the ITEM_MOD codes shared
@@ -2581,6 +2589,9 @@ public:
         uint8_t  bag         = 0xFF;   // 0xFF = not set
         uint8_t  bagSlot     = 0xFF;
         bool     occupied    = false;
+        /// The offer's own words about this copy: enchant, gems, rolled
+        /// property and its seed.  See InventoryHandler::TradeSlot.
+        ItemLinkInstance inst;
     };
 
     TradeStatus getTradeStatus() const;

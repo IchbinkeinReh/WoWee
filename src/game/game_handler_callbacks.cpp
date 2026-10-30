@@ -1412,6 +1412,7 @@ const std::array<GameHandler::TradeSlot, GameHandler::TRADE_SLOT_COUNT>& GameHan
             converted[i].displayId = src[i].displayId;
             converted[i].stackCount = src[i].stackCount;
             converted[i].itemGuid = src[i].itemGuid;
+            converted[i].inst = src[i].inst;
             converted[i].occupied = (src[i].itemId != 0);
         }
         return converted;
@@ -1427,6 +1428,7 @@ const std::array<GameHandler::TradeSlot, GameHandler::TRADE_SLOT_COUNT>& GameHan
             converted[i].displayId = src[i].displayId;
             converted[i].stackCount = src[i].stackCount;
             converted[i].itemGuid = src[i].itemGuid;
+            converted[i].inst = src[i].inst;
             converted[i].occupied = (src[i].itemId != 0);
         }
         return converted;
@@ -1441,6 +1443,13 @@ uint64_t GameHandler::getPeerTradeGold() const {
 }
 uint32_t GameHandler::getTradeEnchantSpell(bool ownSide) const {
     return inventoryHandler_ ? inventoryHandler_->getTradeEnchantSpell(ownSide) : 0;
+}
+
+std::string GameHandler::itemNameWithProperty(const std::string& name, int32_t randomPropertyId) const {
+    if (randomPropertyId == 0 || name.empty()) return name;
+    const std::string property = getRandomPropertyName(randomPropertyId);
+    if (property.empty()) return name;
+    return interfaceFormat("ITEM_SUFFIX_TEMPLATE", "%s %s", {name, property});
 }
 
 bool GameHandler::supportsEquipmentSets() const {

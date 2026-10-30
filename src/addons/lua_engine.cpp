@@ -3101,11 +3101,7 @@ static void fillItemTooltip(wowee::ui::Widget* w, const game::ItemDef& item,
     // ItemRandomSuffix.dbc row here. The client's own bag window has appended
     // it all along; the tooltip FrameXML asks for showed the base name, so the
     // same item read differently depending on which window was open.
-    title.left = item.name;
-    if (item.randomPropertyId != 0 && gh) {
-        const std::string suffix = gh->getRandomPropertyName(item.randomPropertyId);
-        if (!suffix.empty()) title.left += " " + suffix;
-    }
+    title.left = gh ? gh->itemNameWithProperty(item.name, item.randomPropertyId) : item.name;
     // WoW's quality colours, which are most of what an item tooltip says at a
     // glance - an epic reads as purple before anyone reads the words.
     // The client's own table rather than a fourth copy. This used to carry its

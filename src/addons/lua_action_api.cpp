@@ -2574,7 +2574,15 @@ static int lua_SetModifiedClick(lua_State* L) {
 static void pushTradeItemLead(lua_State* L, game::GameHandler* gh,
                               const game::GameHandler::TradeSlot& slot) {
     const auto* info = gh->getItemInfo(slot.itemId);
-    lua_pushstring(L, info ? info->name.c_str() : "");
+    // The name the client shows is the record's with the rolled property beside
+    // it: 0x00706d70(buf, size, entry, propertyId) is what both legs call, and
+    // the property it takes is the row's own, so an item traded with "of the
+    // Bear" on it is named with those words - and coloured, in the link, by the
+    // record's quality rather than by anything the roll would suggest.
+    const std::string name = info
+        ? gh->itemNameWithProperty(info->name, slot.inst.randomPropertyId)
+        : std::string{};
+    lua_pushstring(L, name.c_str());
     lua_pushstring(L, gh->getItemIconPath(
         info && info->displayInfoId ? info->displayInfoId : slot.displayId).c_str());
     lua_pushnumber(L, slot.stackCount);
@@ -2651,8 +2659,14 @@ static int pushTradeLink(lua_State* L, game::GameHandler* gh,
                          const game::GameHandler::TradeSlot& slot) {
     const auto* info = (gh && slot.occupied) ? gh->getItemInfo(slot.itemId) : nullptr;
     if (!info || info->name.empty()) { return luaReturnNil(L); }
-    const std::string link = game::itemChatLink(slot.itemId, static_cast<uint32_t>(info->quality), info->name,
-                           {}, gh->getPlayerLevel());
+    // The row's own instance numbers, not an empty set: 0x0061e290 is handed
+    // the enchant, the three gems, the property and the seed from the trade row
+    // (0xca0b80 + 0x0c, 0x10, 0x40 and 0x3c), and the tooltip the trade window
+    // asks for is built from this link.  A traded item that was enchanted,
+    // socketed or rolled would otherwise read as its plain template.
+    const std::string name = gh->itemNameWithProperty(info->name, slot.inst.randomPropertyId);
+    const std::string link = game::itemChatLink(slot.itemId, static_cast<uint32_t>(info->quality),
+                                                name, slot.inst, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }

@@ -412,10 +412,7 @@ static int lua_GetBuybackItemLink(lua_State* L) {
                                                         : bi.item.randomPropertyId;
     inst.randomPropertyId = property;
     std::string name = bi.item.name;
-    if (property != 0) {
-        const std::string propertyName = gh->getRandomPropertyName(property);
-        if (!propertyName.empty()) name += " " + propertyName;
-    }
+    name = gh->itemNameWithProperty(name, property);
     const std::string link = game::itemChatLink(bi.item.itemId, static_cast<uint32_t>(q),
                                                 name, inst, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
@@ -1684,10 +1681,7 @@ static int lua_GetSendMailItemLink(lua_State* L) {
     const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
                                                         : att.item.randomPropertyId;
     inst.randomPropertyId = property;
-    if (property != 0) {
-        const std::string suffix = gh->getRandomPropertyName(property);
-        if (!suffix.empty()) name += " " + suffix;
-    }
+    name = gh->itemNameWithProperty(name, property);
     const std::string link = game::itemChatLink(att.item.itemId, info ? info->quality : 0, name,
                                                 inst, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
@@ -3502,10 +3496,7 @@ static int lua_GetContainerItemLink(lua_State* L) {
     const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
                                                         : itemSlot->item.randomPropertyId;
     inst.randomPropertyId = property;
-    if (property != 0) {
-        const std::string suffix = gh->getRandomPropertyName(property);
-        if (!suffix.empty()) name += " " + suffix;
-    }
+    name = gh->itemNameWithProperty(name, property);
     const std::string link = game::itemChatLink(itemSlot->item.itemId, q, name,
                                                 inst, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
@@ -3873,10 +3864,7 @@ static int lua_GetInventoryItemLink(lua_State* L) {
     const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
                                                         : recordPropertyId;
     inst.randomPropertyId = property;
-    if (property != 0) {
-        const std::string propertyName = gh->getRandomPropertyName(property);
-        if (!propertyName.empty()) name += " " + propertyName;
-    }
+    name = gh->itemNameWithProperty(name, property);
 
     uint32_t qi = q < 8 ? q : 1u;
     const std::string link = game::itemChatLink(itemId, qi, name, inst,
@@ -6274,11 +6262,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             // alone, and a suffixed item's id is its plain base - so a whole
             // page of "Ring" gave no way to tell one from another, and the
             // stats that tell them apart are the suffix's.
-            if (info && a.randomPropertyId != 0) {
-                const std::string suffix =
-                    gh->getRandomPropertyName(static_cast<int32_t>(a.randomPropertyId));
-                if (!suffix.empty()) name += " " + suffix;
-            }
+            if (info)
+                name = gh->itemNameWithProperty(name, static_cast<int32_t>(a.randomPropertyId));
             std::string icon = (info && info->displayInfoId != 0) ? gh->getItemIconPath(info->displayInfoId) : "";
             uint32_t quality = info ? info->quality : 1;
             lua_pushstring(L, name.c_str());        // name
