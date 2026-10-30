@@ -32,7 +32,12 @@ _sys.path.insert(0, str(Path(__file__).resolve().parent))
 from framexml_source import without_comments, loaded_files
 
 ROOT = Path(__file__).resolve().parent.parent
-XML = ROOT / "Data/interface"
+# The extracted interface is installed data rather than repository content:
+# name its directory, or nothing here is read and the sweep reports nothing.
+XML = Path(_sys.argv[1]) if len(_sys.argv) > 1 else ROOT / "Data/interface"
+if not XML.is_dir():
+    print(f"no interface at {XML} - name one on the command line")
+    raise SystemExit(2)
 SRC = ROOT / "src"
 
 # ---- What the client fires, and with how many arguments ----
