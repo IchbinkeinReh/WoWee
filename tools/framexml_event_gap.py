@@ -30,8 +30,14 @@ So the second table below is the one to read first: events with no sender whose
 source message the client *already handles*. Those are two working halves with
 nothing in between, and they are nearly always real.
 
-TWO THINGS THIS CANNOT DECIDE
+THREE THINGS THIS CANNOT DECIDE
 -----------------------------
+* **A name kept in a variable is invisible here.** The calendar's reader fills
+  a list of signal structs and one call raises whatever that list holds, so not
+  one of its ten event names sits next to a fire call and all ten read as gaps.
+  They get their own table rather than being folded into either side: a name in
+  a list is an event only if something walks the list.
+
 * **"Never fired" can mean "something else is fired in its place."**
   SMSG_QUESTGIVER_QUEST_LIST was sending GOSSIP_SHOW where QUEST_GREETING
   belonged, so the gossip frame opened over the quest list. Read the handler.
@@ -120,6 +126,75 @@ def sent():
                 names |= set(re.findall(
                     r'(?<![\w.])' + re.escape(alias) + r'\(\s*' + EVENT, src))
     return names
+
+
+#: Where a function keeps the event name it was handed: a signal struct's
+#: `event` field, or the first field of a struct it appends to a list of them.
+STORE_FIELD = r'\.\s*event\s*=\s*(\w+)\s*[;,]'
+STORE_INIT = r'(?:push_back|emplace_back)\(\{\s*(\w+)\s*[,}]'
+#: A definition at the start of a line: its name, its parameters, and where its
+#: body begins. Approximate on purpose - the body only has to reach the next
+#: definition, which is how these helpers are written in this tree.
+DEFINITION = re.compile(
+    r'(?m)^[A-Za-z_][\w:<>,\s*&\[\]]*?\b(\w+)\s*\(([^)]*)\)\s*\{')
+#: The same two shapes holding a literal rather than a variable.
+HELD_LITERAL = (r'(?:push_back|emplace_back)\(\{\s*' + EVENT,
+                r'\.\s*event\s*=\s*' + EVENT)
+
+
+def held():
+    """Events carried to the fire call in a variable, so the name is never next to it.
+
+    `sent()` reads names that sit inside a fire call. The calendar does not
+    write like that: its packet reader fills a list of `CalendarSignal`s
+    (calendar_data.cpp), and one `fireAddonEvent(signal.event, signal.args)`
+    in game_handler_callbacks.cpp raises whatever that list holds. Not one of
+    its ten events is next to a fire call, and all ten came back as gaps -
+    CALENDAR_UPDATE_EVENT was in the "read these first" table, above the two
+    real ones, for months.
+
+    So take the two shapes that hold a name: a struct appended with the name as
+    its first field, or a field named `event`; and the helpers that put a
+    parameter of their own into one of those, whose call sites are then read
+    for literals. What this finds is not counted as sent - it is printed as its
+    own table, to be checked by hand, because a name in a list is only raised
+    if something walks that list.
+    """
+    helpers, direct = set(), set()
+    texts = []
+    for dirpath, _, filenames in os.walk(SRC):
+        for name in filenames:
+            if not name.endswith((".cpp", ".hpp")):
+                continue
+            try:
+                src = open(os.path.join(dirpath, name),
+                           encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            texts.append(src)
+            for pattern in HELD_LITERAL:
+                direct |= set(re.findall(pattern, src))
+            defs = []
+            for match in DEFINITION.finditer(src):
+                params = set()
+                for part in match.group(2).split(","):
+                    part = part.strip().rstrip("=").split("=")[0].strip()
+                    if part:
+                        params.add(part.replace("*", " ").split()[-1].lstrip("&"))
+                defs.append((match.group(1), params, match.start(), match.end()))
+            for i, (fname, params, _start, bodyStart) in enumerate(defs):
+                body = src[bodyStart:defs[i + 1][2] if i + 1 < len(defs) else len(src)]
+                for pattern in (STORE_FIELD, STORE_INIT):
+                    for match in re.finditer(pattern, body):
+                        if match.group(1) in params:
+                            helpers.add(fname)
+    for src in texts:
+        for helper in helpers:
+            # The literal anywhere in the call's argument list - say(ctx, "NAME")
+            # hands it over as the second one.
+            direct |= set(re.findall(
+                r'(?<![\w.])' + re.escape(helper) + r'\s*\([^;{}]{0,120}?' + EVENT, src))
+    return direct
 
 
 def chat_family():
@@ -239,17 +314,27 @@ def main():
               "directory on the command line.")
         return 2
     where, fired = registered(), sent()
+    # `&` binds looser than `-`, so the parentheses are not decoration.
+    inHand = (held() & set(where)) - fired
     opcodes, skipped = handled_opcodes()
 
-    # Battle.net has no counterpart on a 3.3.5 server.
-    gap = sorted(e for e in where if e not in fired and not e.startswith("BN_"))
+    # Battle.net has no counterpart on a 3.3.5 server. Held names are out of the
+    # gap list too, but they get their own table below: a name stored in a list
+    # is only an event if something walks the list, so they are reported rather
+    # than believed.
+    gap = sorted(e for e in where
+                 if e not in fired and e not in inHand and not e.startswith("BN_"))
 
     def squash(name):
         return name.replace("_", "")
 
     backed = []
     for event in gap:
-        for opcode in opcodes:
+        # Shortest first, then by name: several opcodes can match one event by
+        # the token rule (SMSG_VOICE_SESSION_LEAVE, _ENABLE and
+        # _ROSTER_UPDATE all back VOICE_SESSIONS_UPDATE), and walking a set made
+        # the line the check prints change between runs of the same tree.
+        for opcode in sorted(opcodes, key=lambda n: (len(n), n)):
             body = opcode[len("SMSG_"):]
             if squash(body) == squash(event) or squash(event) in squash(body) \
                     or shares_tokens(event, body):
@@ -273,7 +358,7 @@ def main():
     # no handler at all. Worth seeing, and worth not being told to read first.
     onlySkipped = []
     for event in gap:
-        for opcode in skipped:
+        for opcode in sorted(skipped, key=lambda n: (len(n), n)):
             body = opcode[len("SMSG_"):]
             if squash(body) == squash(event) or squash(event) in squash(body) \
                     or shares_tokens(event, body):
@@ -285,6 +370,14 @@ def main():
               "which is\na decision rather than a gap:")
         for event, opcode in onlySkipped:
             print(f"  {event:<38} {opcode}")
+
+    if inHand:
+        print()
+        print(f"{len(inHand)} more are written as an event name in this client's source, but "
+              "never\nnext to a fire call - they reach the interface through a variable. "
+              "Neither\na gap nor a proven send; read what walks the list that holds them:")
+        for event in sorted(inHand):
+            print(f"  {event}")
 
     ours, theirs = chat_family()
     unnamed = sorted(theirs - ours)
