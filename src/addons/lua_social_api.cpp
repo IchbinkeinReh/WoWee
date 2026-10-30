@@ -940,6 +940,13 @@ namespace {
 /// Daily quests take a different icon in the list. Protocol-defined, WotLK.
 constexpr uint32_t kQuestFlagsDaily = 0x1000;
 
+/// "Show me this NPC's window even when there is one thing to click." Bit 27 of
+/// the creature type flags - `>> 0x1b & 1` of the flag dword at +0xc of the
+/// record the client hangs off the unit at +0x964 (FUN_00715e10, one of a family
+/// of such getters). Named here rather than spelled out at the one use because
+/// the number is the whole answer and the reason is the comment.
+constexpr uint32_t kTypeFlagForceGossip = 0x08000000;
+
 bool gossipQuestIsAvailable(uint32_t icon) { return game::gossip_quest::iconIsAvailable(icon); }
 /// Taken already, finished or not - which is one list in the gossip window.
 bool gossipQuestIsActive(uint32_t icon) { return game::gossip_quest::iconIsActive(icon); }
@@ -3005,11 +3012,6 @@ void registerSocialLuaAPI(lua_State* L) {
             pushFlag(q && q->isRepeatable);
             return 3;
         }},
-                // Whether the gossip window must be shown even when there is
-                // one thing to click. The server sends no such flag here, and
-                // the frame reads it as "not ForceGossip()" to decide whether
-                // to go straight to a lone vendor or flight master - which is
-                // what the real client does, so a definite no keeps that.
                 // GuildSetMOTD(text) - what /gmotd does
                 //
                 // The rest of the guild commands were already bound; this one
@@ -3246,8 +3248,42 @@ void registerSocialLuaAPI(lua_State* L) {
             selectedFaction() = static_cast<int>(luaL_checknumber(L, 1));
             return 0;
         }},
+                // ForceGossip() is a question and not an instruction, whatever
+                // the name says. FUN_0058ab50 casts the current gossip target's
+                // guid pair to a unit - the same checked-cast type 8 the hover
+                // height watcher uses - and answers bit 27 of the flag dword at
+                // +0xc of the record hung off that unit at +0x964. That record
+                // is the per-entry creature info a query response fills, which
+                // is what getCreatureInfoCache holds, and the two sides are
+                // reading one field: this repository already names bit 5
+                // (kCreatureTypeFlagMoreAudible, 0x20) and bit 25
+                // (kTypeFlagNoShadowBlob, 0x02000000, which the client reads as
+                // `>> 0x19 & 1` of that same dword), and the client tests the
+                // field across its whole width - `& 0x1f` at one end, bit 27 at
+                // the other. It is not a column of CreatureDisplayInfo.dbc
+                // either: no column of that table carries that bit family, so
+                // the record arrives rather than being looked up locally.
+                //
+                // gossipframe.lua:12 asks `not ForceGossip()` inside the test
+                // that clicks a lone gossip option for you when the window has
+                // one option and no quests, so an NPC whose template sets the
+                // flag keeps its window instead of an instant pick. An entry
+                // with no query record answers no, which is what the client
+                // answers when its +0x964 pointer is null - and that, not a
+                // hardcoded no, is why an ordinary vendor still opens straight
+                // up.
                 {"ForceGossip", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0);
+            auto* gh = getGameHandler(L);
+            bool forced = false;
+            const uint64_t npc = gh ? gh->getCurrentGossip().npcGuid : 0;
+            auto* entity = npc ? gh->getEntityManager().getEntity(npc) : nullptr;
+            if (entity && entity->getType() == game::ObjectType::UNIT) {
+                const auto& creatures = gh->getCreatureInfoCache();
+                const auto it = creatures.find(static_cast<game::Unit*>(entity)->getEntry());
+                if (it != creatures.end())
+                    forced = (it->second.typeFlags & kTypeFlagForceGossip) != 0;
+            }
+            lua_pushboolean(L, forced ? 1 : 0);
             return 1;
         }},
                 {"GetGossipOptions", [](lua_State* L) -> int {
