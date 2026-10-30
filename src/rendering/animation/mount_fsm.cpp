@@ -156,11 +156,10 @@ MountFSM::Output MountFSM::evaluate(const Input& in) {
     // facing *before* the divide by dt; the old code wrapped the rate itself,
     // and worked in degrees so any turn pinned the roll at its small cap.
     //
-    // The magnitude and the gating are the client's; the sign is kept as this
-    // client had it, because the roll is applied through this client's own
-    // instance rotation (applyMountPositioning), whose roll axis is not the
-    // client's model matrix. The client's own coefficient is -0.15 in that
-    // matrix's convention.
+    // The magnitude, the sign and the gating are the client's: -0.15, the
+    // left side down into a turn to the left, about the model's own forward
+    // axis as the character renderer now composes it (yaw, pitch, roll, as
+    // 0x004c56d0) - the player's own bank (swim_pitch::stepRoll) is the same.
     constexpr float kPi = core::coords::TWO_PI * 0.5f;
     float yawDeltaDeg = in.characterYaw - prevYaw_;
     while (yawDeltaDeg > 180.0f) yawDeltaDeg -= 360.0f;
@@ -168,7 +167,7 @@ MountFSM::Output MountFSM::evaluate(const Input& in) {
     prevYaw_ = in.characterYaw;
     if (!onTaxi && in.flying && dt > 0.0f) {
         const float yawRateRad = (yawDeltaDeg * (core::coords::TWO_PI / 360.0f)) / dt;
-        const float targetRoll = yawRateRad * 0.15f;
+        const float targetRoll = yawRateRad * -0.15f;
         const bool fwdBack = in.movingForward || in.movingBackward;
         const float ease = std::clamp(dt * (kPi * 0.5f) * (fwdBack ? 1.0f : 4.0f), 0.0f, 1.0f);
         roll_ += ease * (targetRoll - roll_);

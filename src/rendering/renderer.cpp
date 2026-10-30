@@ -3151,8 +3151,8 @@ void Renderer::update(float deltaTime) {
             const float roll = swim_pitch::active(swimOrFly, motion, characterSwimPitch_) || std::abs(characterRoll_) > 0.01f
                                    ? characterRoll_ : 0.0f;
             // The model faces +X: a nose-up pitch turns it about its own Y
-            // axis the negative way (CharacterRenderer::getModelMatrix's roll
-            // slot, applied after the yaw).
+            // axis the negative way, and the bank about its X - composed yaw,
+            // pitch, roll as the client does (CharacterRenderer::getModelMatrix).
             characterRenderer->setInstanceRotation(characterInstanceId,
                                                    glm::vec3(roll, -tilt, characterBody_.body));
         }

@@ -5200,18 +5200,20 @@ glm::mat4 CharacterRenderer::getModelMatrix(const CharacterInstance& instance) c
     // Apply transformations: T * R * S
     model = glm::translate(model, instance.position + instance.renderOffset);
 
-    // Apply rotation (euler angles, Z-up)
-    // Convention: yaw around Z, pitch around X, roll around Y.
+    // Rotation as the client composes a unit's (0x004c56d0): yaw about Z,
+    // then about Y - the pitch of a model facing +X, nose up negative - then
+    // about X, its roll. instance.rotation is (roll, pitch, yaw) in that
+    // sense; the order matters once both lean, a flier banking in a climb.
     model = glm::rotate(model, instance.rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));  // Yaw
-    model = glm::rotate(model, instance.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));  // Pitch
-    model = glm::rotate(model, instance.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));  // Roll
+    model = glm::rotate(model, instance.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));  // Pitch
+    model = glm::rotate(model, instance.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));  // Roll
     if (instance.tiltBlendWeight > 0.0f) {
         // 0x0082dd80: the matrix and the fully tilted one, weighted and
         // summed element by element (0x004c2120, 0x004c1e60).
         glm::mat4 full = glm::translate(glm::mat4(1.0f), instance.position + instance.renderOffset);
         full = glm::rotate(full, instance.tiltBlendRotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
-        full = glm::rotate(full, instance.tiltBlendRotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
         full = glm::rotate(full, instance.tiltBlendRotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        full = glm::rotate(full, instance.tiltBlendRotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
         const float w = std::min(instance.tiltBlendWeight, 1.0f);
         model = model * (1.0f - w) + full * w;
     }
@@ -5928,8 +5930,8 @@ bool CharacterRenderer::getInstanceBounds(uint32_t instanceId, glm::vec3& outCen
     const glm::vec3 localCenter = (boundsMin + boundsMax) * 0.5f;
     glm::mat4 rotation(1.0f);
     rotation = glm::rotate(rotation, inst.rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
-    rotation = glm::rotate(rotation, inst.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
     rotation = glm::rotate(rotation, inst.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+    rotation = glm::rotate(rotation, inst.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
     outCenter = inst.position + glm::vec3(rotation * glm::vec4(localCenter * scale, 0.0f));
     outRadius = std::max(0.5f, radius * scale);
     return true;

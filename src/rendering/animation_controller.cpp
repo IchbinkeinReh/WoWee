@@ -539,7 +539,9 @@ void AnimationController::applyMountPositioning(float mountBob, float mountRoll,
     if (mountInstanceId_ > 0) {
         const glm::vec3& characterPosition = renderer_->getCharacterPosition();
         characterRenderer->setInstancePosition(mountInstanceId_, characterPosition);
-        characterRenderer->setInstanceRotation(mountInstanceId_, glm::vec3(mountPitch_, mountRoll, mountYawRad));
+        // (roll, pitch, yaw) as the renderer takes them: a model facing +X
+        // noses up about Y the negative way, and banks about X.
+        characterRenderer->setInstanceRotation(mountInstanceId_, glm::vec3(mountRoll, -mountPitch_, mountYawRad));
     }
 
     // Use mount's attachment point for proper bone-driven rider positioning.
@@ -572,7 +574,7 @@ void AnimationController::applyMountPositioning(float mountBob, float mountRoll,
 
         float riderPitch = mountPitch_ * 0.35f;
         float riderRoll = mountRoll * 0.35f;
-        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(riderPitch, riderRoll, mountYawRad));
+        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(riderRoll, -riderPitch, mountYawRad));
         return;
     }
 
@@ -636,19 +638,19 @@ void AnimationController::applyMountPositioning(float mountBob, float mountRoll,
         float yawRad = glm::radians(characterYaw);
         float riderPitch = mountPitch_ * 0.35f;
         float riderRoll = mountRoll * 0.35f;
-        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(riderPitch, riderRoll, yawRad));
+        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(riderRoll, -riderPitch, yawRad));
     } else {
         mountSeatSmoothingInit_ = false;
         float yawRad = glm::radians(characterYaw);
         glm::mat4 mountRotation = glm::mat4(1.0f);
         mountRotation = glm::rotate(mountRotation, yawRad, glm::vec3(0.0f, 0.0f, 1.0f));
+        mountRotation = glm::rotate(mountRotation, -mountPitch_, glm::vec3(0.0f, 1.0f, 0.0f));
         mountRotation = glm::rotate(mountRotation, mountRoll, glm::vec3(1.0f, 0.0f, 0.0f));
-        mountRotation = glm::rotate(mountRotation, mountPitch_, glm::vec3(0.0f, 1.0f, 0.0f));
         glm::vec3 localOffset(0.0f, 0.0f, mountHeightOffset_ + mountBob);
         glm::vec3 worldOffset = glm::vec3(mountRotation * glm::vec4(localOffset, 0.0f));
         glm::vec3 playerPos = characterPosition + worldOffset;
         characterRenderer->setInstancePosition(characterInstanceId, playerPos);
-        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(mountPitch_, mountRoll, yawRad));
+        characterRenderer->setInstanceRotation(characterInstanceId, glm::vec3(mountRoll, -mountPitch_, yawRad));
     }
 }
 

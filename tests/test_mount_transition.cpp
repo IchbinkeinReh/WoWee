@@ -117,12 +117,20 @@ TEST_CASE("the mount faces as the rider and leans with the ground (0x0071fbf0)",
     CHECK(r.y == Catch::Approx(0.0f).margin(1e-6));
     CHECK(r.z == Catch::Approx(1.2f));
     // Facing along x, the ground rising to +x: the mount's up leans back,
-    // a roll about its own y.
+    // a pitch about its own y; no roll.
     s.facing = 0.0f;
     s.normal = glm::normalize(glm::vec3(0.3f, 0.0f, 1.0f));
     r = mt::mountRotation(s);
     CHECK(r.x == Catch::Approx(0.0f).margin(1e-6));
-    CHECK(std::sin(r.y) == Catch::Approx(s.normal.x));
+    CHECK(std::tan(r.y) == Catch::Approx(s.normal.x / s.normal.z));
+    // Ground falling to its left (+y up): a roll about its own x, and the
+    // composed up is the normal (Rz Ry Rx, as the renderer composes).
+    s.normal = glm::normalize(glm::vec3(0.2f, 0.4f, 1.0f));
+    r = mt::mountRotation(s);
+    const glm::vec3 up(std::cos(r.x) * std::sin(r.y), -std::sin(r.x), std::cos(r.x) * std::cos(r.y));
+    CHECK(up.x == Catch::Approx(s.normal.x).margin(1e-5));
+    CHECK(up.y == Catch::Approx(s.normal.y).margin(1e-5));
+    CHECK(up.z == Catch::Approx(s.normal.z).margin(1e-5));
 }
 
 TEST_CASE("Mount transition: the mount is drawn at the unit's own model scale") {
@@ -164,8 +172,8 @@ TEST_CASE("a model tilts on its ground by its M2 flags & 3 (0x0082dd80)", "[moun
     // 3: up along the normal.
     const glm::vec3 three = mt::tiltedRotation(n, facing, 3);
     const float a = three.x, b = three.y;
-    // Rz(facing) * Rx(a) * Ry(b) * (0,0,1).
-    const glm::vec3 local(std::sin(b), -std::sin(a) * std::cos(b), std::cos(a) * std::cos(b));
+    // Rz(facing) * Ry(b) * Rx(a) * (0,0,1).
+    const glm::vec3 local(std::cos(a) * std::sin(b), -std::sin(a), std::cos(a) * std::cos(b));
     const glm::vec3 world(std::cos(facing) * local.x - std::sin(facing) * local.y,
                           std::sin(facing) * local.x + std::cos(facing) * local.y, local.z);
     CHECK(world.x == Catch::Approx(n.x).margin(1e-5));

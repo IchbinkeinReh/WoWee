@@ -175,8 +175,8 @@ inline glm::vec3 easeGroundNormal(const glm::vec3& eased, const glm::vec3& groun
 /// 0x0082dd80's turn for a model at `facing` on a ground normal, by the
 /// model's M2 global flags & 3: 3 tilts it the whole way, up along the
 /// normal (0x00824a80); 1 only along its facing, its sides kept level; any
-/// other, not at all. As Euler angles in the order the character renderer
-/// composes them (yaw about z, then about x, then about y).
+/// other, not at all. As Euler angles as the character renderer takes them
+/// (roll about x, pitch about y, yaw about z; composed z, then y, then x).
 inline glm::vec3 tiltedRotation(const glm::vec3& normal, float facing, uint32_t modelFlags) {
     const float len = std::sqrt(glm::dot(normal, normal));
     const glm::vec3 nn = len > 1e-6f ? normal / len : glm::vec3(0.0f, 0.0f, 1.0f);
@@ -185,7 +185,8 @@ inline glm::vec3 tiltedRotation(const glm::vec3& normal, float facing, uint32_t 
     const glm::vec3 n(c * nn.x - sn * nn.y, sn * nn.x + c * nn.y, nn.z);
     switch (modelFlags & 3u) {
         case 3u:
-            return glm::vec3(std::atan2(-n.y, n.z), std::asin(std::clamp(n.x, -1.0f, 1.0f)), facing);
+            // Rz Ry(b) Rx(a) (0,0,1) = (cos a sin b, -sin a, cos a cos b).
+            return glm::vec3(std::asin(std::clamp(-n.y, -1.0f, 1.0f)), std::atan2(n.x, n.z), facing);
         case 1u:
             // Its side axis level, its forward the side crossed with the normal.
             return glm::vec3(0.0f, std::atan2(n.x, n.z), facing);
@@ -233,16 +234,16 @@ inline glm::vec3 riderLift(const State& s, const glm::vec3& seat, const glm::vec
     return (seat - mountPlace) * s.riderProgress;
 }
 
-/// 0x0071fbf0's turn for the mount, as Euler angles in the order the
-/// character renderer composes them (yaw about z, then pitch about x, then
-/// roll about y): facing, and tilted so its up is the eased normal.
+/// 0x0071fbf0's turn for the mount, as Euler angles as the character
+/// renderer takes them (roll about x, pitch about y, yaw about z; composed
+/// z, then y, then x): facing, and tilted so its up is the eased normal.
 inline glm::vec3 mountRotation(const State& s) {
     const float c = std::cos(-s.facing);
     const float sn = std::sin(-s.facing);
     const glm::vec3 n(c * s.normal.x - sn * s.normal.y, sn * s.normal.x + c * s.normal.y, s.normal.z);
-    const float roll = std::asin(std::clamp(n.x, -1.0f, 1.0f));
-    const float pitch = std::atan2(-n.y, n.z);
-    return glm::vec3(pitch, roll, s.facing);
+    const float roll = std::asin(std::clamp(-n.y, -1.0f, 1.0f));
+    const float pitch = std::atan2(n.x, n.z);
+    return glm::vec3(roll, pitch, s.facing);
 }
 
 }  // namespace wowee::rendering::mount_transition

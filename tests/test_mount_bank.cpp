@@ -51,8 +51,9 @@ TEST_CASE("a flying mount banks into the turn, proportional and clamped", "[moun
         MountFSM fsm;
         fsm.configure({}, false);
         const float roll = settledRoll(fsm, 90.0f, /*flying=*/true);
-        CHECK(roll > 0.15f);
-        CHECK(roll < 0.45f);
+        // A left turn (yaw growing): the left side down, a negative roll.
+        CHECK(roll < -0.15f);
+        CHECK(roll > -0.45f);
     }
 
     // A spin faster than the cap settles exactly at a quarter turn.
@@ -60,6 +61,6 @@ TEST_CASE("a flying mount banks into the turn, proportional and clamped", "[moun
         MountFSM fsm;
         fsm.configure({}, false);
         const float roll = settledRoll(fsm, 1000.0f, /*flying=*/true);
-        CHECK(roll == Catch::Approx(quarterTurn).margin(1e-3));
+        CHECK(roll == Catch::Approx(-quarterTurn).margin(1e-3));
     }
 }
