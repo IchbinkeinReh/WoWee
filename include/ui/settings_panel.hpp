@@ -79,6 +79,9 @@ public:
     /// Every graphics setting back to its schema default (graphicsDefaultRows),
     /// with the side effects of each; nothing else is touched. Not saved here.
     void restoreGraphicsDefaults();
+    /// The resolution back to the first-run size (Window::getFirstRunWidth),
+    /// applied; part of restoreGraphicsDefaults and Restore Video Defaults.
+    void restoreDefaultResolution();
     int pendingRtMinBrightness = 0;   ///< the traced darkening's floor, % (rt_min_brightness.hpp)
     bool pendingRtWater = true;       ///< "Ray traced water" (water_rt.glsli)
     int pendingRtWaveAmp = 100;       ///< its waves' height, % of the default

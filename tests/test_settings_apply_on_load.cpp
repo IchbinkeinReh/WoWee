@@ -655,3 +655,22 @@ TEST_CASE("the enhanced water is gone, and a file that names it still loads", "[
     CHECK(files.find("out << \"rt_wave_freq=") != std::string::npos);
     CHECK(wowee::test::slurp("src/ui/auth_screen.cpp").find("enhanced_water") == std::string::npos);
 }
+
+TEST_CASE("resetting the graphics resets the resolution to the first-run size", "[settings]") {
+    // The login sheet's Reset and the settings window's Restore Video
+    // Defaults both put the resolution back, and to the size a first run
+    // opens at - the window's own - not to a number written beside it.
+    const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
+    REQUIRE(panel.size() > 1000);
+    const size_t at = panel.find("void SettingsPanel::restoreGraphicsDefaults");
+    REQUIRE(at != std::string::npos);
+    const std::string body = panel.substr(at, panel.find("\n}\n", at) - at);
+    CHECK(body.find("restoreDefaultResolution()") != std::string::npos);
+
+    const size_t res = panel.find("void SettingsPanel::restoreDefaultResolution");
+    REQUIRE(res != std::string::npos);
+    const std::string resBody = panel.substr(res, panel.find("\n}\n", res) - res);
+    CHECK(resBody.find("getFirstRunWidth") != std::string::npos);
+    CHECK(resBody.find("applyResolution") != std::string::npos);
+    CHECK(panel.find("kDefaultResW") == std::string::npos);
+}

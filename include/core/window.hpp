@@ -48,6 +48,10 @@ public:
     /// mouse position and every interface coordinate is in these, so this is
     /// what the interface asks for - and what a window can be sized to.
     [[nodiscard]] int getWidth() const { return width; }
+    /// The size the window was made at - what a first run, with no
+    /// resolution saved yet, plays at. "Reset to default" goes back to it.
+    [[nodiscard]] int getFirstRunWidth() const { return firstRunWidth; }
+    [[nodiscard]] int getFirstRunHeight() const { return firstRunHeight; }
     [[nodiscard]] int getHeight() const { return height; }
     /// The surface behind it, in pixels. What the swapchain has to be.
     ///
@@ -107,6 +111,8 @@ private:
     void refreshDrawableSize();
     int windowedWidth = 0;
     int windowedHeight = 0;
+    int firstRunWidth = 0;
+    int firstRunHeight = 0;
     bool fullscreen = false;
     int frameCapFps_ = 0;   // 0 = uncapped
     bool vsync = true;

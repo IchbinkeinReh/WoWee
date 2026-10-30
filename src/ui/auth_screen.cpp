@@ -420,16 +420,10 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
     // dismissed by one press.
     const bool popupWasOpen = ui_.popupOpen();
 
-    // The card hears nothing while the settings sheet is over it, but it is
-    // still drawn - a modal that blanks what it covers loses the player's
-    // place.
-    //
-    // Asked once. The gear is on the card, so rendering it can turn the sheet
-    // on halfway through, and asking again afterwards popped an inertness
-    // that had never been pushed.
     // A picture of the sheet (WOWEE_SCREENSHOT): WOWEE_LOGIN_SHEET=<page>,
-    // with ":<part>" for a later part of a long page or ":reset" for the
-    // yes/no, opens it on that page. Only when a screenshot is asked for.
+    // with ":<part>" for a later part of a long page, ":reset" for the
+    // yes/no or ":resetdone" for after a Yes, opens it on that page. Only
+    // when a screenshot is asked for.
     if (!sheetHookChecked_) {
         sheetHookChecked_ = true;
         const char* page = std::getenv("WOWEE_LOGIN_SHEET");
@@ -441,11 +435,23 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
             const std::string extra = colon == std::string::npos ? std::string() : spec.substr(colon + 1);
             if (extra == "reset") {
                 confirmGraphicsReset_ = true;
+            } else if (extra == "resetdone") {
+                // As if Yes had been pressed: the picture after the reset.
+                if (onResetGraphicsDefaults_) onResetGraphicsDefaults_();
+                openLoginSettingsSheet();
+                sheetCategory_ = spec.substr(0, colon);
             } else if (!extra.empty()) {
                 sheetPart_ = std::atoi(extra.c_str());
             }
         }
     }
+    // The card hears nothing while the settings sheet is over it, but it is
+    // still drawn - a modal that blanks what it covers loses the player's
+    // place.
+    //
+    // Asked once. The gear is on the card, so rendering it can turn the sheet
+    // on halfway through, and asking again afterwards popped an inertness
+    // that had never been pushed.
     const bool sheetWasOpen = settingsOpen_;
     if (sheetWasOpen) ui_.pushInert();
     renderCard(authHandler, screen.x, screen.y);
@@ -2267,8 +2273,8 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
         // Yes or no, over the sheet.
         const char* line1 = words("Reset all graphics settings to their defaults?",
                                   "Alle Grafikeinstellungen auf ihren Standard zurücksetzen?");
-        const char* line2 = words("Every one, including ray tracing and the debug pages.",
-                                  "Jede einzelne, auch Raytracing und die Debug-Seiten.");
+        const char* line2 = words("Every one, the resolution, ray tracing and the debug pages too.",
+                                  "Jede einzelne, auch Auflösung, Raytracing und die Debug-Seiten.");
         const char* line3 = words("Sound, controls, interface and chat stay as they are.",
                                   "Sound, Steuerung, Oberfläche und Chat bleiben, wie sie sind.");
         const float textW = std::max({ui_.textWidth(line1, px(kLabel)), ui_.textWidth(line2, px(kSmall)),

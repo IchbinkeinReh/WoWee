@@ -49,6 +49,8 @@ Window::Window(const WindowConfig& config)
     , height(config.height)
     , windowedWidth(config.width)
     , windowedHeight(config.height)
+    , firstRunWidth(config.width)
+    , firstRunHeight(config.height)
     , fullscreen(config.fullscreen)
     , vsync(config.vsync) {
 }

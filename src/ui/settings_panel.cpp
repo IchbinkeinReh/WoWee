@@ -405,19 +405,10 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
     // position in this list rather than a size - see ui/display_modes.hpp.
     const auto& kResolutions = kDisplayResolutions;
     constexpr int kResCount = kNumDisplayResolutions;
-    constexpr int kDefaultResW = 1920;
-    constexpr int kDefaultResH = 1080;
     // Fullscreen, vsync, shadows and ground clutter had constants here too.
     // All of them are schema rows now, so the schema carries their defaults
-    // and the restore button reads them from there.
-
-    int defaultResIndex = 0;
-    for (int i = 0; i < kResCount; i++) {
-        if (kResolutions[i][0] == kDefaultResW && kResolutions[i][1] == kDefaultResH) {
-            defaultResIndex = i;
-            break;
-        }
-    }
+    // and the restore button reads them from there. The resolution's default
+    // is the window's first-run size (restoreDefaultResolution).
 
     if (!settingsInit) {
         pendingFullscreen = window->isFullscreen();
@@ -637,10 +628,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                     // Only the resolution is outside the schema now: it is the
                     // window's size rather than a quality setting, and applying
                     // it goes through the window rather than the renderer.
-                    pendingResIndex = defaultResIndex;
-                    pendingResolutionWidth = kDefaultResW;
-                    pendingResolutionHeight = kDefaultResH;
-                    window->applyResolution(pendingResolutionWidth, pendingResolutionHeight);
+                    restoreDefaultResolution();
                     updateGraphicsPresetFromCurrentSettings();
                     saveCallback();
                 }
@@ -865,7 +853,29 @@ void SettingsPanel::restoreGraphicsDefaults() {
     for (const SettingDesc* d : graphicsDefaultRows()) {
         setSettingValue(d->key, settingNumberText(d->defaultValue));
     }
+    // And the resolution, after full screen has gone back to its default.
+    restoreDefaultResolution();
     updateGraphicsPresetFromCurrentSettings();
+}
+
+void SettingsPanel::restoreDefaultResolution() {
+    // What a first run plays at: the size the window is made at, with no
+    // resolution saved. This was 1920x1080 here while a first run opened at
+    // 1280x720, so "defaults" was a size no fresh install ever had.
+    auto* window = services_.window;
+    if (!window) return;
+    const int w = window->getFirstRunWidth();
+    const int h = window->getFirstRunHeight();
+    if (w <= 0 || h <= 0) return;
+    window->applyResolution(w, h);
+    // What the window became: a window is clamped to the display's usable
+    // area, and the setting should name the size there is.
+    pendingResolutionWidth = window->isFullscreen() ? w : window->getWidth();
+    pendingResolutionHeight = window->isFullscreen() ? h : window->getHeight();
+    pendingResIndex = ui::displayResolutionIndexFor(pendingResolutionWidth, pendingResolutionHeight);
+    // Saved from now on, so the next start opens at it rather than at
+    // whatever the file last said.
+    displaySettingsLoaded_ = true;
 }
 
 void SettingsPanel::restoreSchemaDefaults(const char* category) {
