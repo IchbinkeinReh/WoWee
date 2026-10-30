@@ -6694,6 +6694,17 @@ private:
                              const std::vector<std::string>& args = {});
     /// The whole calendar, as of the server's last answer to a request for it.
     CalendarData calendarData_;
+    /// The reminders armed against that calendar, re-armed by every calendar
+    /// packet that lands. The client keeps one scheduled callback per event
+    /// record (its handle at `+0xc0`, armed by 0x005b79b0); these are the same
+    /// set, recomputed, rather than a timer list.
+    std::vector<CalendarAlarm> calendarAlarms_;
+    /// Recompute them off `calendarData_` as it now stands, against the game
+    /// clock (0x005b79b0, which every path that stores an event record calls).
+    void armCalendarAlarms();
+    /// Say the reminders that come due at `now`, and forget every one whose
+    /// moment has gone past - whether it was said or not.
+    void sayCalendarAlarms(const WowDate& now);
     /// One event in full, as of the last one opened.
     CalendarEventDetail calendarEventDetail_;
 

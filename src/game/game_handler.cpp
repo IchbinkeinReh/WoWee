@@ -368,6 +368,13 @@ void GameHandler::updateNetworking() {
     // deadline these go out with the names that are in. See
     // ChatHandler::rosterNameWaits_.
     if (chatHandler_) chatHandler_->expireChannelRosterWaits();
+    // The calendar's reminders, fifteen minutes before an event the player has
+    // said yes to. On the game clock rather than the app's: what they were
+    // armed against were the server's own dates, and a clock that only server
+    // packets advance is what those are worth.
+    if (!calendarAlarms_.empty()) {
+        if (const std::optional<WowDate> now = getGameDate(); now) sayCalendarAlarms(*now);
+    }
     // The zone channels, once the player has a zone to name them after.
     if (chatHandler_) chatHandler_->updateLoginChannelJoin();
 
