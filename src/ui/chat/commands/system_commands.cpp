@@ -661,6 +661,41 @@ public:
     }
 };
 
+// --- /pitchlimit <degrees> ---
+//
+// `pitchLimit` in the client's console command table
+// (FUN_00769100("pitchLimit", 0x005fe400, 4, 0) - slash only, no help string).
+// Its handler reads the argument twice with the console's float reader
+// (0x0076fb80) and writes the two camera pitch limits: degrees * 0.017453292 into
+// the maximum at 0x00ad1b4c and degrees * -0.017453292 into the minimum at
+// 0x00ad1b50, both held there in radians. So the command sets a symmetric pair
+// from one number, is bounded by nothing (not even abs: a negative argument
+// inverts the pair and leaves the camera no pitch at all), prints nothing and
+// reports success whatever it was given.
+//
+// The two globals start up as 0x3fc6d3f2 and 0xbfffd3f2, that is ±89 degrees;
+// this client's clamps were constants at ±88 until the command needed them to
+// move, so the defaults here are the client's own rather than the old constants.
+// A missing argument reads as 0, which is a camera that cannot tilt - also the
+// client's answer, and why this command does not complain about it.
+class PitchLimitCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        auto* renderer = ctx.services.renderer;
+        auto* cam = renderer ? renderer->getCameraController() : nullptr;
+        if (!cam) return {};
+        const std::string token = firstConsoleToken(ctx.args);
+        // Degrees, because every pitch clamp in the camera works in degrees while
+        // the client keeps its pair in radians; the setter converts both sides.
+        cam->setPitchLimitDegrees(std::strtof(token.c_str(), nullptr));
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"pitchlimit"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "How far the camera may tilt up and down (/pitchlimit <degrees>)";
+    }
+};
+
 void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<ProfileCommand>());
     reg.registerCommand(std::make_unique<ClimbCommand>());
@@ -678,6 +713,7 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<CVarResetCommand>());
     reg.registerCommand(std::make_unique<CVarDefaultCommand>());
     reg.registerCommand(std::make_unique<ChangePlayerDifficultyCommand>());
+    reg.registerCommand(std::make_unique<PitchLimitCommand>());
 }
 
 } // namespace ui

@@ -3361,7 +3361,7 @@ void CameraController::update(float deltaTime) {
     nowPitchKeys_ = pitchKeysPitch ? pitchKeys : 0;
     if (pitchKeysPitch) {
         const float pitched = float(pitchKeys) * 180.0f * deltaTime;
-        pitch = glm::clamp(pitch + pitched, MIN_PITCH, MAX_PITCH);
+        pitch = glm::clamp(pitch + pitched, pitchLimitMinDeg_, pitchLimitMaxDeg_);
         if (isFlightAirborne())
             flightPitchDeg_ = glm::clamp(flightPitchDeg_ + pitched, -90.0f, 90.0f);
         camera->setRotation(yaw, pitch);
@@ -3774,7 +3774,7 @@ void CameraController::update(float deltaTime) {
         const float swayYaw = std::sin(intoxicationTime_ * 1.35f) * 2.5f * intoxication_ * shakeScale_;
         const float swayPitch = std::sin(intoxicationTime_ * 1.8f + 0.7f) * 1.6f * intoxication_ * shakeScale_;
         camera->setRotation(yaw + swayYaw,
-                            glm::clamp(pitch + swayPitch, MIN_PITCH, MAX_PITCH));
+                            glm::clamp(pitch + swayPitch, pitchLimitMinDeg_, pitchLimitMaxDeg_));
     }
 }
 
@@ -3916,9 +3916,9 @@ void CameraController::lookBy(float yawDegrees, float pitchDegrees) {
     // 0x005ffc20: where the pitch eases from and to move with it, each held
     // to the limits, and the ease goes on from there.
     // WoW-style pitch limits: can look almost straight down, limited upward
-    pitch = glm::clamp(pitch + pitchDegrees, MIN_PITCH, MAX_PITCH);
+    pitch = glm::clamp(pitch + pitchDegrees, pitchLimitMinDeg_, pitchLimitMaxDeg_);
     if (viewPitch_.easing()) {
-        viewPitch_.shift(pitchDegrees, MIN_PITCH, MAX_PITCH);
+        viewPitch_.shift(pitchDegrees, pitchLimitMinDeg_, pitchLimitMaxDeg_);
         pitch = viewPitch_.value;
     }
     if (camera) camera->setRotation(yaw, pitch);
@@ -4404,7 +4404,7 @@ CameraController::ViewPose CameraController::currentViewPose() const {
 void CameraController::goToViewPose(const ViewPose& pose, float seconds) {
     viewMovedByPlayer_ = false;
     const float distance = clampedZoomDistance(pose.distance);
-    const float toPitch = glm::clamp(-pose.pitch, MIN_PITCH, MAX_PITCH);
+    const float toPitch = glm::clamp(-pose.pitch, pitchLimitMinDeg_, pitchLimitMaxDeg_);
     // The yaw from the facing, taken to within half a turn of where it goes.
     const float fromYaw = pose.yaw + std::remainder((yaw - facingYaw) - pose.yaw, 360.0f);
     if (seconds <= 0.0f) {

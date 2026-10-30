@@ -717,6 +717,17 @@ public:
     void setPivotHeight(float h) { pivotHeight_ = std::clamp(h, 0.0f, 3.0f); }
     [[nodiscard]] float getPivotHeight() const { return pivotHeight_; }
 
+    /// The console's `pitchLimit` (0x005fe400): how far the view may be tilted,
+    /// in degrees from straight out. Written the way the command writes it - the
+    /// same number on both sides, so `/pitchlimit -45` leaves a maximum below its
+    /// minimum and no pitch inside the range. The client keeps the pair in
+    /// radians; every pitch clamp here works in degrees, so the pair is held
+    /// degrees and the conversion is this setter's.
+    void setPitchLimitDegrees(float degrees) {
+        pitchLimitMaxDeg_ = degrees;
+        pitchLimitMinDeg_ = -degrees;
+    }
+
     /// Where the camera looks, on the character it is following.
     ///
     /// pivotHeight_ is a distance in metres, and a metre is a different part
@@ -809,8 +820,15 @@ private:
     static constexpr float CAM_SPHERE_RADIUS = 0.32f;  // Keep camera farther from geometry to avoid clipping-through surfaces
     static constexpr float COLLISION_FOCUS_RADIUS_THIRD_PERSON = 20.0f;  // Reduced for performance
     static constexpr float COLLISION_FOCUS_RADIUS_FREE_FLY = 20.0f;
-    static constexpr float MIN_PITCH = -88.0f;      // Look almost straight down
-    static constexpr float MAX_PITCH = 88.0f;       // Look almost straight up (WoW standard)
+    /// How far the view may be tilted up and down, in degrees - the client's
+    /// pair at 0x00ad1b4c (max) and 0x00ad1b50 (min), held there in radians and
+    /// initialised to ±0x3fc6d3f2/0xbfffd3f2, which is ±89°. A pair rather than
+    /// two constants because the console's `pitchLimit` command (0x005fe400)
+    /// writes both: +deg into the max, -deg into the min, nothing bounded and
+    /// the sign not taken apart - so a negative argument asks for a range that
+    /// holds no pitch at all, which is what the original asks for as well.
+    float pitchLimitMinDeg_ = -89.0f;
+    float pitchLimitMaxDeg_ = 89.0f;
     glm::vec3* followTarget = nullptr;
     float smoothedCollisionDist_ = -1.0f;           // Asymmetrically-smoothed WMO collision limit (-1 = uninitialised)
     /// The ground's own limit, smoothed before it is combined with the built
