@@ -1380,6 +1380,45 @@ static bool muteRowNamed(const game::ContactEntry& c, const std::string& name) {
     return a == b;
 }
 
+/// The names in the client's console command table that this client can run,
+/// and which `/console` therefore reaches.
+///
+/// FUN_00769100 registers thirty-four names one at a time, and the console
+/// window registers fourteen more in a loop at 0x00766140 (its name table is the
+/// pointer array at 0x00adbae8: fontcolor, bgcolor, highlightcolor, fontsize,
+/// font, consolelines, clear, proportionaltext, spacing, settings, default,
+/// closeconsole, repeat, AppendLogToFile). Cmd_Exec (0x007658a0) answers a line
+/// out of that one table, and FrameXML's SlashCmdList["CONSOLE"] passes it
+/// whatever was typed after `/console` - `/konsole` in deDE, where
+/// SLASH_CONSOLE1 spells it that way - which is how a player without a console
+/// window reaches these names at all. Listed below are the ones this client
+/// reproduced as its own commands, each documented where it is implemented; the
+/// client's own spelling is kept in the comment where it differs.
+///
+/// What is deliberately not here: the graphics and debug knobs, the two
+/// allocator reports and UpdatePOI, because nothing in this client corresponds
+/// to them, and `quit`/`logout`, whose console handlers (0x00768410, 0x006b2030)
+/// are the client's exit and logout flows while this client answers those names
+/// through FrameXML's own /quit and /logout. `reloadui` and
+/// `changePlayerDifficulty` are answered by the binding itself, in front of this
+/// check, because each needs its argument read a particular way.
+///
+/// A name in none of those sets is a miss, and the client's answer to a miss is
+/// the one console line `Unknown command` - printed into a window this client
+/// has not, so nothing is printed here either.
+static bool consoleCommandHere(const std::string& name) {
+    static constexpr const char* const kNames[] = {
+        "cvarlist", "cvar_reset", "cvar_default",  // 0x00767220 / 0x00767840 / 0x007678f0
+        "set", "ver",                              // 0x007681f0 / 0x00768420
+        "pitchlimit",                              // "pitchLimit", 0x005fe400
+        "togglehelm", "togglecloak",               // 0x00407710 / 0x004077c0
+        "memusage", "heapusage2", "setmap",        // all three one stub, 0x008c8de0
+    };
+    for (const char* candidate : kNames)
+        if (name == candidate) return true;
+    return false;
+}
+
 void registerSocialLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"BNGetNumFriends",     lua_BNGetNumFriends},
@@ -4084,16 +4123,20 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BNListConversation",       [](lua_State* L) -> int { (void)L; return 0; }},
                 {"BNSendConversationMessage",[](lua_State* L) -> int { (void)L; return 0; }},
                 {"BNSendWhisper",            [](lua_State* L) -> int { (void)L; return 0; }},
-                // ConsoleExec(command) - the console, of which two commands are
-                // reachable and worth honouring.
+                // ConsoleExec(command) - the client's console entry point, and
+                // the only one this client has, having no console window. FrameXML
+                // calls it from two of its own slash commands: SlashCmdList
+                // ["RELOAD"] with the single word "reloadui", and SlashCmdList
+                // ["CONSOLE"] with whatever was typed after /console (/konsole),
+                // which is the whole line, command and argument together.
                 //
-                // SlashCmdList["RELOAD"] is ConsoleExec("reloadui") and nothing
-                // else, and this client's chat tries SlashCmdList before its
-                // own registry - so /reload, /reloadui and /rl all landed here
-                // and did nothing while the client's own reload sat behind
-                // them. Routed to the same request ReloadUI makes.
+                // The RELOAD leg: this client's chat tries SlashCmdList before
+                // its own registry, so /reload, /reloadui and /rl all landed here
+                // and did nothing while the client's own reload sat behind them.
+                // Routed to the same request ReloadUI makes.
                 {"ConsoleExec", [](lua_State* L) -> int {
-            std::string cmd(luaL_optstring(L, 1, ""));
+            const std::string typed(luaL_optstring(L, 1, ""));
+            std::string cmd = typed;
             toLowerInPlace(cmd);
             if (cmd == "reloadui") {
                 if (auto* svc = getLuaServices(L); svc && svc->requestReloadUI) {
@@ -4110,6 +4153,31 @@ void registerSocialLuaAPI(lua_State* L) {
                     if (auto* gh = getGameHandler(L)) gh->sendChangePlayerDifficulty(*difficulty);
                 } else {
                     LOG_WARNING("Console: Invalid difficulty");
+                }
+            }
+            // The console's own command table, which the line `/console <name>
+            // [args]` carries here whole. Cut the way Cmd_Exec cuts it
+            // (0x00768900): the command off the front, everything after it as one
+            // argument with the spaces taken off both ends. What the command is
+            // named by is listed above; those names are this client's commands as
+            // well, so they go to the registry rather than being reimplemented
+            // here.
+            //
+            // The argument keeps the case it was typed with while the command is
+            // folded: the client compares a name case-insensitively but stores it
+            // as spelled, so `/console set MyCVar 1` registers `MyCVar` and
+            // answers GetCVar for that spelling from then on. Lowering the whole
+            // line - which is what this binding used to do, and what the two legs
+            // above still do, harmlessly, since neither reads anything but digits
+            // and lowercase letters out of the rest - would have registered
+            // `mycvar` instead.
+            const dc::ConsoleLine command = dc::splitConsoleLine(typed);
+            if (!command.command.empty()) {
+                std::string name(command.command);
+                toLowerInPlace(name);
+                if (consoleCommandHere(name)) {
+                    if (auto* svc = getLuaServices(L); svc && svc->runClientChatCommand)
+                        svc->runClientChatCommand(name, std::string(command.args));
                 }
             }
             return 0;

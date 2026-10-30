@@ -651,9 +651,10 @@ public:
 //
 // `set` in the client's console command table (FUN_00769100(&DAT_00a385e0,
 // 0x007681f0, 5, "Set the value of a CVar") - the name is "set", spelled at
-// 0x00a385e0 rather than inline). Mask 5, so it is reachable from the chat box;
-// FrameXML has no SLASH_SET of its own (only /settitle), so nothing else answers
-// the name and a player typing /set got this client's help line instead.
+// 0x00a385e0 rather than inline). Help category 5 "default" - nothing about that
+// says where the name is reachable from, but FrameXML has no SLASH_SET of its own
+// (only /settitle), so nothing else answers the name and a player typing /set got
+// this client's help line instead.
 //
 // What the handler does is in setCVarFromConsole: the name is looked up
 // case-insensitively, and - unlike the two commands above - a name that lookup
@@ -761,9 +762,13 @@ public:
 // --- /ver ---
 //
 // "ver" in the client's console command table (FUN_00769100(&DAT_00a38540,
-// 0x00768420, 5, 0) - mask 5, and the name is spelled right beside the "run" the
-// executor goes looking for when a line matches nothing). The handler is
-// twenty-one bytes: one console print (0x00765270, level 0) of
+// 0x00768420, 5, 0) - help category 5 "default", and the name is spelled right
+// beside the "run" the executor goes looking for when a line matches nothing).
+// The third argument is no permission: Cmd_Exec (0x007658a0) reads only the
+// handler out of the entry, and the one reader of that dword in the whole client
+// is the console's own help command, which groups names by category (the nine
+// names are the table at 0x00adbc70). The handler is twenty-one bytes: one
+// console print (0x00765270, level 0) of
 // "WoW [Release] Build 12340 (Jun 24 2010)" and `return 1;`. No argument is read
 // and nothing is checked, so `/ver` answers the same way twice in a row.
 //
@@ -786,16 +791,22 @@ public:
 // --- /memusage, /heapusage2, /setmap ---
 //
 // Three of the names in the client's console command table share one handler:
-// FUN_00769100 registers "MemUsage" and "HeapUsage2" (mask 4, slash only) and
-// "setmap" (mask 5, console and slash) all against 0x008c8de0, and that handler
-// is six bytes - `return 1;`. Typing any of the three therefore does nothing at
-// all, prints nothing, and reports success to the console.
+// FUN_00769100 registers "MemUsage" and "HeapUsage2" (help category 4, game) and
+// "setmap" (5, default) all against 0x008c8de0, and that handler is six bytes -
+// `return 1;`. Run from the console - typed into its window, or after /console
+// or /konsole, which is FrameXML's route into Cmd_Exec - any of the three does
+// nothing at all, prints nothing, and reports success.
 //
-// Listing them here is what makes this client do the same rather than answer
-// with FrameXML's help line: a name none of SlashCmdList, the registry or the
-// emote list recognises falls to the end of ChatEdit_ParseText, which adds
-// HELP_TEXT_SIMPLE to the chat frame and clears the edit box. The original
-// prints that for a misspelling and prints nothing for these three.
+// Bare in the chat box the original answers differently, and it is worth being
+// straight about it: these names are in no SLASH_ global, ChatEdit_ParseText
+// consults nothing but SlashCmdList and the emote table, and its tail adds
+// HELP_TEXT_SIMPLE to the chat frame. So a player typing /memusage into the
+// 12340 client gets the help line, not silence. They get it here too only if
+// this client does not answer the name - its own commands are bridged into
+// SlashCmdList (see tools/client_command_bridge_check.py), because with no
+// console window a name this client can run has to be typed bare or it cannot
+// be typed at all. Listing them keeps the bridged name and what the console
+// would have done for it in step.
 //
 // The two memory names that really report are left out on purpose. "HeapUsage"
 // (0x004d27e0) walks the client's own allocator, through a 50000-byte buffer on
