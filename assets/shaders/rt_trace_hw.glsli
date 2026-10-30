@@ -18,11 +18,14 @@ struct RtInstance { vec4 worldToObject[3]; uint mesh; uint flags; uint group; ui
 const uint RT_MESH_TERRAIN = 1u;  // RtScene::kMeshTerrain
 const uint RT_MESH_BUILDING = 2u;  // RtScene::kMeshBuilding
 
-layout(std430, set = 1, binding = 0) readonly buffer RtTris { RtTri rtTris[]; };
-layout(std430, set = 1, binding = 2) readonly buffer RtMeshes { RtMesh rtMeshes[]; };
-layout(std430, set = 1, binding = 3) readonly buffer RtInstances { RtInstance rtInstances[]; };
-layout(set = 1, binding = 5) uniform accelerationStructureEXT rtTlas;
-layout(set = 1, binding = 8) uniform accelerationStructureEXT rtDynamicTlas;
+#ifndef RT_SCENE_SET
+#define RT_SCENE_SET 1
+#endif
+layout(std430, set = RT_SCENE_SET, binding = 0) readonly buffer RtTris { RtTri rtTris[]; };
+layout(std430, set = RT_SCENE_SET, binding = 2) readonly buffer RtMeshes { RtMesh rtMeshes[]; };
+layout(std430, set = RT_SCENE_SET, binding = 3) readonly buffer RtInstances { RtInstance rtInstances[]; };
+layout(set = RT_SCENE_SET, binding = 5) uniform accelerationStructureEXT rtTlas;
+layout(set = RT_SCENE_SET, binding = 8) uniform accelerationStructureEXT rtDynamicTlas;
 
 uint rtTriIndex(uint instance, uint primitive) {
     return rtMeshes[rtInstances[instance].mesh].triOffset + primitive;

@@ -21,11 +21,18 @@ struct RtInstance { vec4 worldToObject[3]; uint mesh; uint flags; uint group; ui
 const uint RT_MESH_TERRAIN = 1u;  // RtScene::kMeshTerrain
 const uint RT_MESH_BUILDING = 2u;  // RtScene::kMeshBuilding
 
-layout(std430, set = 1, binding = 0) readonly buffer RtTris { RtTri rtTris[]; };
-layout(std430, set = 1, binding = 1) readonly buffer RtNodes { RtNode rtNodes[]; };
-layout(std430, set = 1, binding = 2) readonly buffer RtMeshes { RtMesh rtMeshes[]; };
-layout(std430, set = 1, binding = 3) readonly buffer RtInstances { RtInstance rtInstances[]; };
-layout(std430, set = 1, binding = 4) readonly buffer RtTopNodes { RtNode rtTopNodes[]; };
+// Whether the bound buffers hold a scene: the lighting passes' block says.
+#ifndef RT_SCENE_HAS_CONTENT
+#define RT_SCENE_HAS_CONTENT (pass.misc.x > 0.5)
+#endif
+#ifndef RT_SCENE_SET
+#define RT_SCENE_SET 1
+#endif
+layout(std430, set = RT_SCENE_SET, binding = 0) readonly buffer RtTris { RtTri rtTris[]; };
+layout(std430, set = RT_SCENE_SET, binding = 1) readonly buffer RtNodes { RtNode rtNodes[]; };
+layout(std430, set = RT_SCENE_SET, binding = 2) readonly buffer RtMeshes { RtMesh rtMeshes[]; };
+layout(std430, set = RT_SCENE_SET, binding = 3) readonly buffer RtInstances { RtInstance rtInstances[]; };
+layout(std430, set = RT_SCENE_SET, binding = 4) readonly buffer RtTopNodes { RtNode rtTopNodes[]; };
 
 const int RT_STACK = 32;
 
@@ -119,7 +126,7 @@ bool rtTraceScene(vec3 o, vec3 d, inout float tMax, out uint hitTri, out uint hi
                   bool anyHit, inout uint rng) {
     hitTri = 0u;
     hitInstance = 0u;
-    if (pass.misc.x < 0.5) return false;  // the bound buffers hold no scene
+    if (!(RT_SCENE_HAS_CONTENT)) return false;  // the bound buffers hold no scene
     vec3 invD = 1.0 / d;
     uint stack[RT_STACK];
     int sp = 0;

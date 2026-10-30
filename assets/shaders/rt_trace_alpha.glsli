@@ -11,11 +11,17 @@
 // Goldshire in shade. That is what is left for a translucent triangle with no
 // mask.
 
+// The scene's descriptor set: 1 in the lighting passes, another where the
+// shader that traces has its own sets there (water.frag's 3).
+#ifndef RT_SCENE_SET
+#define RT_SCENE_SET 1
+#endif
+
 struct RtTriExtra { uvec4 data; };  // three UVs as half2, the mask
-layout(std430, set = 1, binding = 6) readonly buffer RtTriExtras { RtTriExtra rtTriExtras[]; };
-layout(std430, set = 1, binding = 7) readonly buffer RtMasks { uint rtMasks[]; };
+layout(std430, set = RT_SCENE_SET, binding = 6) readonly buffer RtTriExtras { RtTriExtra rtTriExtras[]; };
+layout(std430, set = RT_SCENE_SET, binding = 7) readonly buffer RtMasks { uint rtMasks[]; };
 // A group's box, min and max (RtScene::setGroupBounds); group 0 is none.
-layout(std430, set = 1, binding = 9) readonly buffer RtGroups { vec4 rtGroups[]; };
+layout(std430, set = RT_SCENE_SET, binding = 9) readonly buffer RtGroups { vec4 rtGroups[]; };
 
 // Set by the caller for one ray: pass every grouped instance - every unit and
 // what it carries - by. The sun's ray does near the camera, where the shadow

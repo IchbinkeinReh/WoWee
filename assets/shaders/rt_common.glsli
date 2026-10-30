@@ -64,54 +64,7 @@ const uint RT_MODE_SHADOWS = 1u;
 const uint RT_MODE_AO = 2u;
 const uint RT_MODE_GI = 3u;
 
-// PCG hash. Good enough decorrelation per pixel and frame that the temporal
-// filter sees independent samples.
-uint rtHash(uint v) {
-    uint state = v * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-    return (word >> 22u) ^ word;
-}
-
-uint rtSeed(uvec2 pixel, uint frame) {
-    return rtHash(pixel.x ^ rtHash(pixel.y ^ rtHash(frame)));
-}
-
-float rtRandom(inout uint state) {
-    state = rtHash(state);
-    return float(state) * (1.0 / 4294967296.0);
-}
-
-// An orthonormal basis around n (Duff et al. 2017).
-void rtBasis(vec3 n, out vec3 t, out vec3 b) {
-    float s = n.z >= 0.0 ? 1.0 : -1.0;
-    float a = -1.0 / (s + n.z);
-    float c = n.x * n.y * a;
-    t = vec3(1.0 + s * n.x * n.x * a, s * c, -s * n.x);
-    b = vec3(c, s + n.y * n.y * a, -n.y);
-}
-
-vec3 rtCosineHemisphere(vec3 n, inout uint rng) {
-    float u = rtRandom(rng), v = rtRandom(rng);
-    float r = sqrt(u);
-    float phi = 6.28318530718 * v;
-    vec3 t, b;
-    rtBasis(n, t, b);
-    return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u)));
-}
-
-// A direction inside the cone of half-angle atan(tanRadius) around d.
-vec3 rtConeSample(vec3 d, float tanRadius, inout uint rng) {
-    float u = rtRandom(rng), v = rtRandom(rng);
-    float r = sqrt(u) * tanRadius;
-    float phi = 6.28318530718 * v;
-    vec3 t, b;
-    rtBasis(d, t, b);
-    return normalize(d + t * (r * cos(phi)) + b * (r * sin(phi)));
-}
-
-vec4 rtUnpackSurface(float packed) {
-    return unpackUnorm4x8(floatBitsToUint(packed));
-}
+#include "rt_sampling.glsli"
 
 // World position of a pixel in the scene depth.
 vec3 rtWorldFromDepth(vec2 uv, float depth) {
