@@ -3778,6 +3778,29 @@ void CameraController::update(float deltaTime) {
     }
 }
 
+/// The client's aspect pair, as multipliers rather than as divisors.
+///
+/// `FUN_0047c020` divides the two mouse deltas by `p/√(p²+1)` and `1/√(p²+1)`
+/// before the gains are applied, with `p` the resolution's ratio - 4/3 unless
+/// `widescreen` says otherwise (`FUN_0047bf90` is what installs the pair, from
+/// `FUN_0050f7c0`, which `sscanf`s `gxResolution` as `"%d%c%d"`). Carrying the
+/// division across to the gains gives these two multipliers, which is why the
+/// original's pitch turns *faster* than its yaw on a wide picture and slower on
+/// a square one, at the same registered 180 and 90.
+float CameraController::getMouseSensitivity() const {
+    const float aspect = camera ? camera->getAspectRatio() : 0.0f;
+    if (!(aspect > 0.0f)) return mouseSensitivity;
+    const float root = std::sqrt(aspect * aspect + 1.0f);
+    return mouseSensitivity * (root / aspect);
+}
+
+/// The pitch half of the pair above: multiplied by √(p²+1) instead.
+float CameraController::getMousePitchSensitivity() const {
+    const float aspect = camera ? camera->getAspectRatio() : 0.0f;
+    if (!(aspect > 0.0f)) return mousePitchSensitivity;
+    return mousePitchSensitivity * std::sqrt(aspect * aspect + 1.0f);
+}
+
 void CameraController::processMouseMotion(const SDL_MouseMotionEvent& event) {
     if (!enabled || !camera) {
         return;
@@ -3813,7 +3836,9 @@ void CameraController::processMouseMotion(const SDL_MouseMotionEvent& event) {
     // SDL yrel > 0 = mouse moved DOWN. In WoW, mouse-down = look down = pitch decreases.
     // invertMouse flips to flight-sim style (mouse-down = look up).
     const float invert = invertMouse ? 1.0f : -1.0f;
-    lookBy(-event.xrel * mouseSensitivity, event.yrel * mouseSensitivity * invert);
+    // Each axis on its own gain, the picture's ratio inside both.
+    lookBy(-event.xrel * getMouseSensitivity(),
+           event.yrel * getMousePitchSensitivity() * invert);
 }
 
 void CameraController::startViewMove(int direction, float speed, float rate) {
@@ -4318,7 +4343,7 @@ void CameraController::applyLookDelta(float dxPixels, float dyPixels) {
     if (!enabled || !camera || introActive) return;
 
     const float invert = invertMouse ? 1.0f : -1.0f;
-    lookBy(-dxPixels * mouseSensitivity, dyPixels * mouseSensitivity * invert);
+    lookBy(-dxPixels * getMouseSensitivity(), dyPixels * getMousePitchSensitivity() * invert);
 }
 
 void CameraController::processMouseWheel(float delta) {

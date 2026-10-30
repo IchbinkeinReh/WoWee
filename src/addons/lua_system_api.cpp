@@ -2130,6 +2130,21 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
     // its number through unchanged, which only stayed safe because the shipped
     // slider was redrawn on this client's scale - on its own 90 to 270 it would
     // have handed the camera 90 degrees per movement of the mouse.
+    // Pitch, for the writes that name only it - the console's SetCVar, an addon.
+    // The shipped slider never writes this name on its own (it writes it as half
+    // its own value, and the yaw row above takes that share through the
+    // setting), so this is the whole of what such a write does: the client turns
+    // 1/600 of a degree per movement of the mouse per unit of it (0x006020b0).
+    // Touching the look slider afterwards takes the pitch back to its share, as
+    // moving that slider in the original writes its half of the pair too.
+    if (key == "camerapitchmovespeed") {
+        if (auto* svc = getLuaServices(L); svc && svc->getCameraController) {
+            if (auto* cc = svc->getCameraController()) {
+                cc->setMousePitchSensitivity(
+                    static_cast<float>(std::atof(value.c_str())) * 0.0016666667f);
+            }
+        }
+    }
     // Loop Music. The checkbox says Loop Music and the CVar behind it says
     // ZoneMusicNoDelay: the zone's next track follows without the silence
     // between them (0x004c87d0). A track still plays once.

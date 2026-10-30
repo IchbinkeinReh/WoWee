@@ -1160,12 +1160,15 @@ void Runtime::Impl::readInput(rendering::Renderer* renderer, SDL_Window* window,
         const glm::vec3 fwd = xrToWorld(fwdXr, bodyYawDeg);
         const float targetYaw = worldYawDeg(fwd);
         const float targetPitch = glm::degrees(std::asin(std::clamp(fwd.z, -1.0f, 1.0f)));
-        const float sens = std::max(cc->getMouseSensitivity(), 1e-4f);
+        // The head's angle is already in degrees, so each axis only has to have
+        // that axis's gain divided back out of it.
+        const float yawGain = std::max(cc->getMouseSensitivity(), 1e-4f);
+        const float pitchGain = std::max(cc->getMousePitchSensitivity(), 1e-4f);
         const float dYaw = wrapDegrees(targetYaw - cc->getYaw());
         const float dPitch = targetPitch - cc->getPitch();
         const float invert = cc->isInvertMouse() ? 1.0f : -1.0f;
         if (std::abs(dYaw) > 0.01f || std::abs(dPitch) > 0.01f) {
-            cc->applyLookDelta(-dYaw / sens, dPitch / (sens * invert));
+            cc->applyLookDelta(-dYaw / yawGain, dPitch / (pitchGain * invert));
         }
     }
 

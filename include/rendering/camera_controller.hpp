@@ -31,8 +31,21 @@ public:
     void releaseMouseCapture();
 
     void setMovementSpeed(float speed) { movementSpeed = speed; }
-    void setMouseSensitivity(float sensitivity) { mouseSensitivity = sensitivity; }
-    [[nodiscard]] float getMouseSensitivity() const { return mouseSensitivity; }
+    /// Both bases at once, on the ratio the shipped look slider keeps between
+    /// them: it writes cameraPitchMoveSpeed as half the yaw it is drawn with,
+    /// and the two factors - 0.00125 against 1/600 - turn that half into two
+    /// thirds in this client's base units.
+    void setMouseLook(float yawDegreesPerMovement) {
+        mouseSensitivity = yawDegreesPerMovement;
+        mousePitchSensitivity = yawDegreesPerMovement * (2.0f / 3.0f);
+    }
+    /// The pitch alone, for a write that names only cameraPitchMoveSpeed - the
+    /// console command, or an addon - where there is no yaw to take a share of.
+    void setMousePitchSensitivity(float sensitivity) { mousePitchSensitivity = sensitivity; }
+    /// Degrees turned per movement of the mouse, aspect pair included, and the
+    /// same for pitch. Out of line because the pair comes off the camera.
+    [[nodiscard]] float getMouseSensitivity() const;
+    [[nodiscard]] float getMousePitchSensitivity() const;
     void setInvertMouse(bool invert) { invertMouse = invert; }
     [[nodiscard]] bool isInvertMouse() const { return invertMouse; }
     /// How far back the camera may be pulled, as a multiple of the original
@@ -611,10 +624,13 @@ private:
     float slowMultiplier = 0.3f;
 
     // Mouse settings
-    // Degrees of view per movement of the mouse. The starting value is the
-    // client's own Mouse Look Speed default - 180 degrees, of which it turns
-    // 0.00125 per unit this number is measured in (0x006020b0), which is 0.225.
+    // The base of each axis, before the picture's ratio (see
+    // getMouseSensitivity above). 0.225 is Mouse Look Speed's registered 180
+    // degrees times the 0.00125 the client turns per movement of the mouse
+    // (0x006020b0). 0.15 is where the look slider's pitch lands at that same
+    // default: half its 180, times 1/600.
     float mouseSensitivity = 0.225f;
+    float mousePitchSensitivity = 0.15f;
     bool invertMouse = false;
     bool mouseButtonDown = false;
     bool leftMouseDown = false;

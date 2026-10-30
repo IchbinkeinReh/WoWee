@@ -123,14 +123,15 @@ void GamepadControls::applyMovement(float x, float y) {
 void GamepadControls::applyLook(float x, float y, float deltaTime) {
     if (!camera_) return;
     if (x == 0.0f && y == 0.0f) return;
-    // applyLookDelta takes mouse pixels and multiplies by the mouse's own
-    // sensitivity. Dividing it out here keeps the pad's turn rate in degrees
-    // a second, so slowing the mouse does not slow the pad.
-    const float mouseSensitivity = std::max(camera_->getMouseSensitivity(), 0.0001f);
+    // applyLookDelta takes movements of the mouse and multiplies by that axis's
+    // own gain. Dividing it out per axis here keeps the pad's turn rate in
+    // degrees a second, so slowing the mouse - or a wider picture, which moves
+    // the two gains apart - does not slow the pad.
+    const float yawGain = std::max(camera_->getMouseSensitivity(), 0.0001f);
+    const float pitchGain = std::max(camera_->getMousePitchSensitivity(), 0.0001f);
     const float degrees = lookDegreesPerSecond_ * deltaTime;
-    const float pixels = degrees / mouseSensitivity;
     const float up = invertLook_ ? -y : y;
-    camera_->applyLookDelta(x * pixels, up * pixels);
+    camera_->applyLookDelta(x * (degrees / yawGain), up * (degrees / pitchGain));
 }
 
 void GamepadControls::applyZoom(float in, float out, float deltaTime) {
