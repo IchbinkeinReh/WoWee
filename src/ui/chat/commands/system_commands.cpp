@@ -18,6 +18,7 @@
 #include "rendering/lighting_manager.hpp"
 #include "core/frame_profiler.hpp"
 #include "core/logger.hpp"
+#include "core/version.hpp"
 #include "game/transport_manager.hpp"
 #include <algorithm>
 #include <cctype>
@@ -757,6 +758,31 @@ public:
     }
 };
 
+// --- /ver ---
+//
+// "ver" in the client's console command table (FUN_00769100(&DAT_00a38540,
+// 0x00768420, 5, 0) - mask 5, and the name is spelled right beside the "run" the
+// executor goes looking for when a line matches nothing). The handler is
+// twenty-one bytes: one console print (0x00765270, level 0) of
+// "WoW [Release] Build 12340 (Jun 24 2010)" and `return 1;`. No argument is read
+// and nothing is checked, so `/ver` answers the same way twice in a row.
+//
+// What is printed here is this client's own build in the same shape - name,
+// bracketed mode, build, build date - which is what the login screen and the
+// settings panel already show. The original's numbers say which binary is
+// running, and this is not that binary.
+class VersionCommand : public IChatCommand {
+public:
+    ChatCommandResult execute(ChatCommandContext& ctx) override {
+        sayConsole(ctx, std::string("Wowee [Release] ") + core::kVersionString);
+        return {};
+    }
+    [[nodiscard]] std::vector<std::string> aliases() const override { return {"ver"}; }
+    [[nodiscard]] std::string helpText() const override {
+        return "Print which build this client is (/ver)";
+    }
+};
+
 // --- /memusage, /heapusage2, /setmap ---
 //
 // Three of the names in the client's console command table share one handler:
@@ -806,6 +832,7 @@ void registerSystemCommands(ChatCommandRegistry& reg) {
     reg.registerCommand(std::make_unique<SetCVarConsoleCommand>());
     reg.registerCommand(std::make_unique<ChangePlayerDifficultyCommand>());
     reg.registerCommand(std::make_unique<PitchLimitCommand>());
+    reg.registerCommand(std::make_unique<VersionCommand>());
     reg.registerCommand(std::make_unique<InertConsoleCommand>());
 }
 
