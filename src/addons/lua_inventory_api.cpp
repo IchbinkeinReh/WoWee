@@ -6353,8 +6353,62 @@ void registerInventoryLuaAPI(lua_State* L) {
             const auto& inbox = gh->getMailInbox();
             if (index > static_cast<int>(inbox.size())) { return luaReturnNil(L); }
             const auto& mail = inbox[index - 1];
-            lua_pushstring(L, "Interface\\Icons\\INV_Letter_15"); // packageIcon
-            lua_pushstring(L, "Interface\\Icons\\INV_Letter_15"); // stationeryIcon
+            // packageIcon and stationeryIcon, as the client builds them
+            // (0x0056e520).  Both were answered with the same hardcoded
+            // INV_Letter_15, so every row of the inbox carried one and the same
+            // picture whatever was in the letter.
+            //
+            // The client tries a Package.dbc row first - a delivery with an icon
+            // of its own, which is how a COD parcel is drawn.  That half cannot
+            // be done here: which wire dword becomes the record's package id is
+            // not established (the record's tail is packageId, stationeryId,
+            // money, COD, flags, days - not the order they arrive in), and the
+            // Package.dbc in the local dumps is the single test row this table
+            // shipped with (id 2, icon INV_BOX_04), so there would be nothing to
+            // check the answer against either way.  What the code says about the
+            // rest is not in doubt, and is what runs below:
+            //
+            //     more than one attachment -> one fixed display id, 0x1ee9,
+            //     exactly one            -> that item's own icon,
+            //     none                   -> nothing at all, which is what makes
+            //                               InboxFrame hide the icon instead of
+            //                               leaving a placeholder on the row.
+            //
+            // A display row with no icon of its own still answers the question
+            // mark: that fallback lives inside the client's resolver (0x0070a910),
+            // and nothing is answered only when the record lookup fails.
+            const auto mailIcon = [gh](uint32_t displayId) {
+                if (displayId == 0) return std::string();
+                std::string path = gh->getItemIconPath(displayId);
+                if (path.empty()) path = "Interface\\Icons\\INV_Misc_QuestionMark";
+                return path;
+            };
+            std::string packageIcon;
+            if (mail.attachments.size() > 1) {
+                packageIcon = mailIcon(0x1ee9);
+            } else if (mail.attachments.size() == 1) {
+                // By id, not from anything sent with the mail: an attachment is
+                // an item this client may never have seen.
+                const uint32_t entry = mail.attachments[0].itemId;
+                gh->ensureItemInfo(entry);
+                const auto* info = gh->getItemInfo(entry);
+                if (info) packageIcon = mailIcon(info->displayInfoId);
+            }
+            if (packageIcon.empty()) lua_pushnil(L);
+            else lua_pushstring(L, packageIcon.c_str());
+            // The other one is the letter the envelope holds, not its contents:
+            // the Stationery row's item, and that item's icon.  The same seven
+            // rows as GetInboxText's letterhead, and a different value from it -
+            // see game::stationeryItemId.
+            std::string stationeryIcon;
+            const uint32_t stamp = game::stationeryItemId(mail.stationeryId);
+            if (stamp != 0) {
+                gh->ensureItemInfo(stamp);
+                const auto* info = gh->getItemInfo(stamp);
+                if (info) stationeryIcon = mailIcon(info->displayInfoId);
+            }
+            if (stationeryIcon.empty()) lua_pushnil(L);
+            else lua_pushstring(L, stationeryIcon.c_str());
             // Through getMailSenderName, which is what turns a player's guid
             // into a name once the query comes back, and names the auction
             // house, a creature or an object for the other message types. The

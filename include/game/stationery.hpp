@@ -31,5 +31,33 @@ inline const char* stationeryTexture(uint32_t stationeryId, uint8_t messageType)
     return messageType == 2 ? "AuctionStationery" : "StationeryTest";
 }
 
+/// The item a letterhead is sold as, by its Stationery.dbc id, or 0 for an id the
+/// table has no row for.
+///
+/// Not the same picture as above, and the two used to be answered with one
+/// letter: `stationeryTexture` is the parchment behind the mail *body*, while this
+/// is the small icon on the inbox row.  The client takes the Stationery row's
+/// column 1, looks that number up as an *item*, and answers the item's icon
+/// (0x0056e520) - which is what makes the value an item id rather than a texture,
+/// and rules out feeding the name above through it.
+///
+/// The same seven rows as above, read out of 3.3.5's own Stationery.dbc, in the
+/// table's own order: ids 1, 41, 61, 62, 64, 65, 67 pair with items 8164, 9311,
+/// 18154, 21140, 22058, 34171, 46830.  Two rows share a letterhead (ids 1 and 41
+/// are both STATIONERYTEST) and still name different items, so the two switches
+/// are not the same list and cannot be folded into one.
+inline uint32_t stationeryItemId(uint32_t stationeryId) {
+    switch (stationeryId) {
+        case 1:  return 8164;
+        case 41: return 9311;
+        case 61: return 18154;
+        case 62: return 21140;
+        case 64: return 22058;
+        case 65: return 34171;
+        case 67: return 46830;
+    }
+    return 0;
+}
+
 } // namespace game
 } // namespace wowee
