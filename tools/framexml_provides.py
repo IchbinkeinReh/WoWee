@@ -15,7 +15,12 @@ which is the one thing that report exists to preserve. Meanwhile
 `registered()` did read the bootstrap.
 
 So: one implementation, imported. A sweep that wants to know whether a name is
-answered asks here.
+answered asks here - and it has to read every place the bootstrap lives, which
+is not one file. Two headers under include/addons carry Lua raw strings handed
+to bootstrap() like the literals in lua_engine.cpp do, and leaving them out made
+`noop_widget_methods` name GetFontString and SetFontString among the no-ops when
+button_label_lua.hpp has implemented both since it was written: eleven call sites
+dereferencing `:GetFontString()` were reported as raising on a nil.
 
     from framexml_provides import globals_provided, widget_methods_provided
 """
@@ -25,11 +30,41 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 ADDONS = ROOT / "src/addons"
 ENGINE = ADDONS / "lua_engine.cpp"
+SNIPPETS = ROOT / "include/addons"
 
 
 def _sources():
     return [p.read_text(encoding="utf-8", errors="ignore")
-            for p in sorted(ADDONS.glob("*.cpp"))]
+            for p in sorted(ADDONS.glob("*.cpp"))] + _chunks()
+
+
+def _chunks():
+    """Bootstrap Lua that lives in a header rather than in a .cpp.
+
+    Two of them carry raw-string Lua handed to bootstrap() exactly like the
+    literals in lua_engine.cpp: button_label_lua.hpp (kButtonLabelLua, which is
+    where SetFontString, GetFontString and GetNormalFontObject are defined) and
+    addon_lua_snippets.hpp (the options-panel builder, the bit library, the
+    missing-cvar fallback). Reading only the .cpp said those methods are answered
+    by nothing, so framexml_noop_returns reported eleven call sites dereferencing
+    `:GetFontString()` on a nil - on buttons, where the block had been creating a
+    font string on demand since it was written.
+
+    Filtered on the raw string rather than taken wholesale: these headers also
+    carry C++, and a method-shaped thing in C++ is not a method FrameXML calls.
+    """
+    out = []
+    for path in sorted(SNIPPETS.glob("*.hpp")):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if 'R"LUA(' in text:
+            out.append(text)
+    return out
+
+
+def _engine_text():
+    """The engine plus the header chunks, as one body of Lua-bearing source."""
+    return "\n".join([ENGINE.read_text(encoding="utf-8", errors="ignore")]
+                     + _chunks())
 
 
 def globals_provided():
@@ -60,7 +95,7 @@ def widget_methods_provided():
     Separate from globals because they resolve through the widget metatable
     rather than _G, and a name can be one without being the other.
     """
-    src = ENGINE.read_text(encoding="utf-8", errors="ignore")
+    src = _engine_text()
     table = set(re.findall(r'\{(?:\.\w+\s*=\s*)?"([A-Za-z_]\w*)",\s*(?:\.\w+\s*=\s*)?lua_', src))
     # Every method the bootstrap defines on anything, not only on the frame
     # metatable. Matching `mt:` alone missed animMeta and groupMeta, so
@@ -96,7 +131,7 @@ def counting_table():
     they stay in the missing-API report under a "count:" prefix. Binding one
     for real takes it out of that report, which is a loss rather than progress.
     """
-    src = ENGINE.read_text(encoding="utf-8", errors="ignore")
+    src = _engine_text()
     m = re.search(r"local counting = \{(.*?)\}", src, re.S)
     return set(re.findall(r"'(\w+)'", m.group(1))) if m else set()
 
@@ -112,7 +147,7 @@ def noop_widget_methods():
     answered, while its one caller compared a byte count against it and the
     guild event log came out blank.
     """
-    src = ENGINE.read_text(encoding="utf-8", errors="ignore")
+    src = _engine_text()
     real = set(re.findall(r'\{(?:\.\w+\s*=\s*)?"([A-Za-z_]\w*)",\s*(?:\.\w+\s*=\s*)?lua_', src))
     real |= set(re.findall(r'set\("([A-Za-z_]\w*)"', src))
     real |= set(re.findall(r'function\s+\w+\s*:\s*(\w+)\s*\(', src))
