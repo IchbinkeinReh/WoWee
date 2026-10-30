@@ -325,6 +325,91 @@ bool ChatHandler::dropAsSpam(const MessageChatData& data) {
     return true;
 }
 
+namespace {
+/// Which guid 0x0050be70 puts to the ignore-list test for a line of this type,
+/// and whether it puts one at all. It asks about the guid the type reads for the
+/// far side of the line: the header's sender for most types, and for the
+/// creature-spoken types and the Battle.net line the guid read in the body.
+/// The battleground announcements and the achievement lines are not asked about.
+enum class IgnoreSide : uint8_t { none, sender, body };
+IgnoreSide ignoreSideFor(ChatType type) {
+    switch (type) {
+        case ChatType::MONSTER_SAY:
+        case ChatType::MONSTER_PARTY:
+        case ChatType::MONSTER_YELL:
+        case ChatType::MONSTER_WHISPER:
+        case ChatType::MONSTER_EMOTE:
+        case ChatType::RAID_BOSS_EMOTE:
+        case ChatType::RAID_BOSS_WHISPER:
+        case ChatType::BATTLENET:
+            return IgnoreSide::body;
+        case ChatType::BG_SYSTEM_NEUTRAL:
+        case ChatType::BG_SYSTEM_ALLIANCE:
+        case ChatType::BG_SYSTEM_HORDE:
+        case ChatType::ACHIEVEMENT:
+        case ChatType::GUILD_ACHIEVEMENT:
+            return IgnoreSide::none;
+        default:
+            return IgnoreSide::sender;
+    }
+}
+} // namespace
+
+bool ChatHandler::dropAsIgnored(const MessageChatData& data) {
+    // An ignored player is silenced by the client, not by the realm: 0x0050be70
+    // runs the same list the channel invite popup runs, by the same guid, and
+    // leaves the line unseen when they are on it. Only a channel invite had ever
+    // been gated by the list here, so an ignored player went on talking in the
+    // chat window, a name was still queried for them, and the realm was never
+    // told about the line either.
+    //
+    // A monster's guid is never on a list of players, so the body half of the
+    // test only ever bites for the Battle.net line; it is kept because the
+    // reader runs it there too, and it says what it says about a line aimed at
+    // someone ignored.
+    const IgnoreSide side = ignoreSideFor(data.type);
+    if (side == IgnoreSide::none) return false;
+    const uint64_t guid = side == IgnoreSide::body ? data.receiverGuid : data.senderGuid;
+    // A line with nobody on that side is not on the list (0x006b52e0 answers no
+    // for a zero guid before it looks).
+    if (guid == 0 || owner_.ignoreListGuidsRef().count(guid) == 0) return false;
+
+    // The creature-spoken branch asks the list and nothing else.
+    if (side == IgnoreSide::body) return true;
+
+    // The general branch does not ask at all for a line with the GM tag bit set
+    // (0x04, the same byte that reads "AFK" at 0x01, "DND" at 0x02 and "DEV" at
+    // 0x10), and three of its types keep their line whatever the list says: the
+    // echo of one's own whisper, the ignored-player line and the restricted one.
+    if ((data.chatTag & 0x4u) != 0) return false;
+    if (data.type == ChatType::WHISPER_INFORM || data.type == ChatType::IGNORED ||
+        data.type == ChatType::RESTRICTED) return false;
+
+    // A dropped whisper is still a reply target: the reader pushes the sender
+    // onto its whisper list before any of these tests (0x004fb710), so /r after
+    // an ignored whisper goes back to the one who sent it. Only the guid is
+    // known here - the name is what the drop stops this from querying, and the
+    // reply resolves it from the cache the same way.
+    if (data.type == ChatType::WHISPER && data.senderGuid != 0)
+        owner_.lastWhisperSenderGuidRef() = data.senderGuid;
+
+    // The whisper is reported to the realm first (0x00500180, 0x225): the
+    // sender's guid in the same two words the chat packet carried it in, then a
+    // byte this branch passes as 0. The reader skips the report only when the
+    // language word is -1, which is the value an addon line carries here; and
+    // the foreign whisper (0x08), which the reader tests on the sender and then
+    // makes an ordinary whisper, is merged with these by the parser's own
+    // rewrite, so it rides the whisper's report rather than going without one.
+    if (data.type == ChatType::WHISPER && data.language != ChatLanguage::ADDON &&
+        owner_.getSocket() && wireOpcode(Opcode::CMSG_CHAT_IGNORED) != 0xFFFF) {
+        network::Packet pkt(wireOpcode(Opcode::CMSG_CHAT_IGNORED));
+        pkt.writeUInt64(data.senderGuid);
+        pkt.writeUInt8(0);
+        owner_.getSocket()->send(pkt);
+    }
+    return true;
+}
+
 void ChatHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_MESSAGECHAT] = [this](network::Packet& packet) {
         if (owner_.getState() == WorldState::IN_WORLD) handleMessageChat(packet);
@@ -656,6 +741,11 @@ void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& 
     LOG_DEBUG("INCOMING CHAT: type=", static_cast<int>(data.type),
              " (", getChatTypeString(data.type), ") sender=0x", std::hex, data.senderGuid, std::dec,
              " '", data.senderName, "' msg='", data.message.substr(0, 60), "'");
+
+    // Before anything else the line is asked about, and before a name is asked
+    // for: the reader tests its own ignore list as soon as the body is read, and
+    // reads no name for a line it is about to drop.
+    if (dropAsIgnored(data)) return;
 
     // WoW servers echo successful outgoing whispers as WHISPER_INFORM, but the
     // client already creates a local WHISPER_INFORM row immediately on send.
@@ -1246,6 +1336,12 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
         LOG_WARNING("Failed to parse SMSG_TEXT_EMOTE");
         return;
     }
+
+    // The other line of an ignored player's, and the only other place the list
+    // is consulted on what comes in over the wire: 0x00504070 reads the guid,
+    // asks the same question of it and returns before the line is made. The
+    // animation itself is a separate packet and is left alone, as there.
+    if (data.senderGuid != 0 && owner_.ignoreListGuidsRef().count(data.senderGuid)) return;
 
     // The player's own emote, as the server echoes it, is the line the chat
     // shows for it - "You wave at Bob." This returned here, on the reading that
