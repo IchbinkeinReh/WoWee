@@ -3866,10 +3866,28 @@ void registerSocialLuaAPI(lua_State* L) {
                 // this file, so it was already the one in use. This copy was a
                 // flat false in a single value, dead and one value short of
                 // the contract if it had ever won.
-                // Seconds before the corpse is released automatically. -1 is
-                // WoW's "no timer", which is the branch that prints the release
-                // prompt without a countdown - right for a client that does not
-                // run one.
+                // GetReleaseTimeRemaining (0x00516210) answers one of three
+                // things, none of them off the wire: seconds left of a
+                // countdown, -1 for "nothing will force a release", or nought.
+                // UIParent's PLAYER_DEAD branch shows the death popup on
+                // `> 0 or == -1`, so nought is the single answer that shows no
+                // popup at all, and the popup's own OnShow swaps in
+                // DEATH_RELEASE_NOTIMER when it hears -1. -1 is the answer for
+                // a client that runs no forced release: the popup shows, with
+                // the prompt and no countdown.
+                //
+                // Which of the three the reference picks is decided at the
+                // player's death rather than at a release: FUN_006dc070 (run
+                // from the player-state change handler and from the 0x37a case
+                // of the packet dispatcher) reads one byte of the player's
+                // client-side object and branches on it - bit 0x10 set answers
+                // nought, bit 0x08 set with bit 14 of that object's flags dword
+                // clear starts a 360000 ms countdown, anything else answers -1.
+                // The countdown is then a tick stamp written by FUN_00513a30 and
+                // read back as (stamp - now) / 1000. Which byte that is and what
+                // the two bits mean is not named anywhere: four sites read it,
+                // no write of it turned up, and it is read only for the local
+                // player (0x0071c8f0 checks the handle first).
                 {"GetReleaseTimeRemaining", [](lua_State* L) -> int {
             lua_pushnumber(L, -1); return 1;
         }},

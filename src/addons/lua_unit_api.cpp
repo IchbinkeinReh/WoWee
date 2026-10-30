@@ -2723,14 +2723,6 @@ static int lua_StopAttack(lua_State* L) {
     return 0;
 }
 
-// GetReleaseTimeRemaining() → milliseconds before the corpse releases itself,
-// or -1 when nothing will force it
-//
-// UIParent asks this the moment the player dies, as `> 0 or == -1`, so an
-// absent answer is an error on every death rather than a popup that does not
-// appear. Nothing here counts down to a forced release, and -1 is the game's
-// own way of saying so.
-
 /// GetNumRaidMembers() → everyone in the raid, this player included, or nought
 /// when the group is not a raid.
 ///
