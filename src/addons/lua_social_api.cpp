@@ -642,9 +642,14 @@ static int lua_GetNumIgnores(lua_State* L) {
 // same tail - FUN_00819d40("UNKNOWN", -1, 0) and a push. GetMuteName's function
 // ends the same way. A missing argument is the one thing that answers nothing:
 // the client prints "Usage: GetIgnoreName(index)" and returns no values.
-static int lua_GetIgnoreName(lua_State* L) {
+/// The name at a one-based index into one half of the contact store, which is
+/// what GetIgnoreName (0x006b4620) and GetMuteName (0x006b4760) both do - the
+/// two client functions are the same walk over the same sorted array with a
+/// different mask, right down to their tails, so this is one function and the
+/// two bindings name the mask.
+static int pushContactNameAt(lua_State* L, uint32_t listMask) {
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const auto rows = ignoredRows(getGameHandler(L));
+    const auto rows = contactRows(getGameHandler(L), listMask);
     if (index >= 1 && index <= static_cast<int>(rows.size()) && !rows[index - 1]->name.empty()) {
         const auto& name = rows[index - 1]->name;
         lua_pushlstring(L, name.data(), name.size());
@@ -653,6 +658,8 @@ static int lua_GetIgnoreName(lua_State* L) {
     }
     return 1;
 }
+
+static int lua_GetIgnoreName(lua_State* L) { return pushContactNameAt(L, 0x2); }
 
 // --- Talent API ---
 
@@ -1344,23 +1351,10 @@ static int lua_IsIgnoredContact(lua_State* L) {
     return 1;
 }
 
-/// GetMuteName(index) (0x006b4760), one-based into mutedRows - the mute half of
-/// contactRows, the same sorted array the ignore list is drawn from. Both ways of
-/// missing answer the same thing: an index outside the array, and a row whose name
-/// has not arrived yet, both fall through to one push in the client -
-/// FUN_00819d40("UNKNOWN", -1, 0) - so the answer is the string "UNKNOWN" and
-/// never nil. GetIgnoreName's function ends the same way for the same reason.
-static int lua_GetMuteName(lua_State* L) {
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const auto rows = mutedRows(getGameHandler(L));
-    if (index >= 1 && index <= static_cast<int>(rows.size()) && !rows[index - 1]->name.empty()) {
-        const auto& name = rows[index - 1]->name;
-        lua_pushlstring(L, name.data(), name.size());
-    } else {
-        lua_pushstring(L, "UNKNOWN");
-    }
-    return 1;
-}
+/// GetMuteName(index) (0x006b4760), one-based into the mute half of the same
+/// sorted array the ignore list is drawn from - which is why it is the same
+/// function as GetIgnoreName with a different mask.
+static int lua_GetMuteName(lua_State* L) { return pushContactNameAt(L, 0x4); }
 
 /// The row the mute list has selected. The client stores that row's GUID (its
 /// contact store +0xdae8/+0xdaec) rather than its position, and GetSelectedMute
