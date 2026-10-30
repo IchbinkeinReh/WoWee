@@ -1,8 +1,9 @@
 #version 460
-// Built three ways: as it is; with RT_WATER for the ray traced water through
-// the hardware tracer (and RT_HARDWARE); with RT_WATER alone through the
-// software one (water_rt.glsli).
-#if defined(RT_WATER) && defined(RT_HARDWARE)
+// The ray traced water (water_rt.glsli), the only water this client draws
+// itself: the rest is the original client's liquid (WaterRenderer's client
+// path). Built twice: as it is, through the software tracer, and with
+// RT_HARDWARE through ray queries (water_rt_hw.frag.spv).
+#ifdef RT_HARDWARE
 #extension GL_EXT_ray_query : require
 #endif
 
@@ -51,21 +52,20 @@ layout(set = 1, binding = 0) uniform WaterMaterial {
 
 layout(set = 2, binding = 0) uniform sampler2D SceneColor;
 layout(set = 2, binding = 1) uniform sampler2D SceneDepth;
-layout(set = 2, binding = 2) uniform sampler2D ReflectionColor;
+// Binding 2 was the planar reflection, gone with the enhanced water.
 // Wake points are laid down behind anything wading through the shallows. Each
 // is a churn site that spreads and dies, so a running character leaves a trail
 // of froth rather than a disc stuck under its feet.
 const int MAX_WAKE_POINTS = 32;
 
 layout(set = 2, binding = 3) uniform WaterFrameData {
-    mat4 reflViewProj;
     vec4 wakeBounds;                  // xy = centre, z = cull radius, w = count
     vec4 wakePoints[MAX_WAKE_POINTS]; // xy = world pos, z = age 0..1, w = strength
     // The ray traced water (water_rt.glsli): x on, y the view (0 the water,
     // 1 its reflection alone, 2 what comes up through it alone), z how far
     // a reflected ray goes, w 1 while the traced scene holds anything.
     vec4 rtWater;
-    vec4 rtWater2;      // x how far a refracted ray goes
+    vec4 rtWater2;      // x how far a refracted ray goes, z the waves' height, w their frequency (1 default)
     vec4 rtSkyTop;      // the sky a reflection that leaves the scene meets: overhead
     vec4 rtSkyHorizon;  // and at the horizon
 };
@@ -83,7 +83,9 @@ layout(location = 0) out vec4 outColor;
 // ============================================================
 float noiseValue(vec2 p);  // defined below; used to bend the wave fronts
 
-vec3 dualScrollWaveNormal(vec2 p, float time) {
+// `amp` and `freq` scale the octaves' heights and closeness (the settings'
+// Wave amplitude and Wave frequency; their slope goes as both).
+vec3 dualScrollWaveNormal(vec2 p, float time, float amp, float freq) {
     // Three wave octaves at different angles, frequencies, and speeds.
     // Directions are non-axis-aligned to prevent visible tiling patterns.
     // Frequency increases and amplitude decreases per octave (standard
@@ -91,9 +93,9 @@ vec3 dualScrollWaveNormal(vec2 p, float time) {
     vec2 d1 = normalize(vec2(0.86, 0.51));   // ~30° from +X
     vec2 d2 = normalize(vec2(-0.47, 0.88));  // ~118° (opposing cross-wave)
     vec2 d3 = normalize(vec2(0.32, -0.95));  // ~-71° (third axis for variety)
-    float f1 = 0.19, f2 = 0.43, f3 = 0.72;  // spatial frequency (higher = tighter ripples)
+    float f1 = 0.19 * freq, f2 = 0.43 * freq, f3 = 0.72 * freq;  // spatial frequency (higher = tighter ripples)
     float s1 = 0.95, s2 = 1.73, s3 = 2.40;  // scroll speed (higher octaves move faster)
-    float a1 = 0.22, a2 = 0.10, a3 = 0.05;  // amplitude (decreasing for natural falloff)
+    float a1 = 0.22 * amp, a2 = 0.10 * amp, a3 = 0.05 * amp;  // amplitude (decreasing for natural falloff)
 
     vec2 p1 = p + d1 * (time * s1 * 4.0);
     vec2 p2 = p + d2 * (time * s2 * 4.0);
@@ -141,10 +143,8 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-#ifdef RT_WATER
 #define RT_SCENE_SET 3
 #define RT_SCENE_HAS_CONTENT (rtWater.w > 0.5)
-#endif
 
 // ============================================================
 // Linearize depth
@@ -271,7 +271,6 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
     return color;
 }
 
-#ifdef RT_WATER
 #include "rt_sampling.glsli"
 #ifdef RT_HARDWARE
 #include "rt_trace_hw.glsli"
@@ -279,7 +278,6 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
 #include "rt_trace_sw.glsli"
 #endif
 #include "water_rt.glsli"
-#endif
 
 void main() {
     float time = fogParams.z;
@@ -342,7 +340,7 @@ void main() {
 
     // --- Normal computation ---
     vec3 meshNorm = normalize(Normal);
-    vec3 detailNorm = dualScrollWaveNormal(FragPos.xy, time);
+    vec3 detailNorm = dualScrollWaveNormal(FragPos.xy, time, rtWater2.z, rtWater2.w);
     // Wave detail is a scrolling pattern with a finite period. Held at full
     // strength to the horizon it does two things the eye picks up immediately:
     // the tiling repeats visibly, and the highlights land smaller than a pixel
@@ -474,7 +472,6 @@ void main() {
     vec3 litBase = waterBody * (ambientColor.rgb * 0.7 + NdotL * lightColor.rgb * 0.5);
     refractedColor = mix(refractedColor, litBase, clamp(depthFade * 0.3, 0.0, 0.5));
 
-#ifdef RT_WATER
     // The ray traced water (water_rt.glsli): the reflection and what comes up
     // through the water traced at this pixel's wave normal, by Fresnel. From
     // under the surface the two trade places - the reflection goes down into
@@ -519,7 +516,6 @@ void main() {
             if (!tir) refractedColor = rtwReflection(FragPos - n * 0.05, t, ldir, rng);
         }
     }
-#endif
 
     // ============================================================
     // Shoreline - wet sand and moving sediment
@@ -554,32 +550,6 @@ void main() {
                              soak * 0.80);
     }
 
-    // ============================================================
-    // Planar reflection - subtle, not mirror-like
-    // ============================================================
-    // reflWeight starts at 0; only contributes where we have valid reflection data
-    float reflAmount = 0.0;
-    vec3 envReflect = vec3(0.0);
-
-    vec4 reflClip = reflViewProj * vec4(FragPos, 1.0);
-    if (reflClip.w > 0.1) {
-        vec2 reflUV = reflClip.xy / reflClip.w * 0.5 + 0.5;
-        reflUV.y = 1.0 - reflUV.y;
-        reflUV += norm.xy * 0.015;
-
-        // Wide fade so there's no visible boundary - fully gone well inside the edge
-        float edgeFade = smoothstep(0.0, 0.15, reflUV.x) * smoothstep(1.0, 0.85, reflUV.x)
-                       * smoothstep(0.0, 0.15, reflUV.y) * smoothstep(1.0, 0.85, reflUV.y);
-
-        reflUV = clamp(reflUV, vec2(0.002), vec2(0.998));
-        vec3 texReflect = texture(ReflectionColor, reflUV).rgb;
-
-        float reflBrightness = dot(texReflect, vec3(0.299, 0.587, 0.114));
-        float reflValidity = smoothstep(0.002, 0.05, reflBrightness) * edgeFade;
-
-        envReflect = texReflect * 0.5;
-        reflAmount = reflValidity * 0.4;
-    }
 
     // ============================================================
     // GGX Specular
@@ -610,14 +580,9 @@ void main() {
     vec3 sssColor = vec3(0.05, 0.55, 0.35) * sss * lightColor.rgb;
 
     // ============================================================
-    // Combine - reflection only where valid, no dark fallback
+    // Combine - what comes through and the reflection, by Fresnel
     // ============================================================
-    // reflAmount is 0 where no valid reflection data exists - no dark arc
-    float reflectWeight = clamp(fresnel * reflAmount, 0.0, 0.30);
-    vec3 color = mix(refractedColor, envReflect, reflectWeight);
-#ifdef RT_WATER
-    if (rtOn) color = mix(refractedColor, rtReflect, rtFresnel);
-#endif
+    vec3 color = rtOn ? mix(refractedColor, rtReflect, rtFresnel) : refractedColor;
     color += specular + sssColor;
 
     float crest = smoothstep(0.5, 1.0, WaveOffset) * 0.04;
@@ -811,21 +776,17 @@ void main() {
     // into the horizon haze instead of ending on a hard line. This has to come
     // after the clamp - clamping afterwards restored the 0.15 floor and put the
     // edge straight back.
-#ifdef RT_WATER
     // The traced water holds what lies under it already: drawn whole, but
     // for the last few hundredths of a yard at the shore, where the sheet's
     // edge would otherwise show as a line.
     if (rtOn) alpha = max(alpha, smoothstep(0.0, 0.08, shoreDepth));
-#endif
     alpha *= smoothstep(2400.0, 600.0, dist);
 
-#ifdef RT_WATER
     // The debug views: the reflection alone, or what comes through alone.
     if (rtOn && rtWater.y > 0.5) {
         outColor = vec4(rtWater.y < 1.5 || rtWater.y > 2.5 ? rtReflect : refractedColor, 1.0);
         return;
     }
-#endif
     color = applyFog(color, FragPos, dist, fogColor.rgb);
 
     outColor = vec4(color, alpha);

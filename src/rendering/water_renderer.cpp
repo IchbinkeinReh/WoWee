@@ -104,7 +104,7 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
         return false;
     }
 
-    // --- Scene history + reflection descriptor set layout (set 2) ---
+    // --- Scene history + frame block descriptor set layout (set 2) ---
     VkDescriptorSetLayoutBinding sceneColorBinding{};
     sceneColorBinding.binding = 0;
     sceneColorBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -117,29 +117,25 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
     sceneDepthBinding.descriptorCount = 1;
     sceneDepthBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    VkDescriptorSetLayoutBinding reflColorBinding{};
-    reflColorBinding.binding = 2;
-    reflColorBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    reflColorBinding.descriptorCount = 1;
-    reflColorBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding reflUBOBinding{};
-    reflUBOBinding.binding = 3;
-    reflUBOBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    reflUBOBinding.descriptorCount = 1;
-    reflUBOBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 2 was the planar reflection's picture, which went with the
+    // enhanced water; the frame block keeps its number.
+    VkDescriptorSetLayoutBinding frameUBOBinding{};
+    frameUBOBinding.binding = 3;
+    frameUBOBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    frameUBOBinding.descriptorCount = 1;
+    frameUBOBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     sceneSetLayout = createDescriptorSetLayout(device,
-        {sceneColorBinding, sceneDepthBinding, reflColorBinding, reflUBOBinding});
+        {sceneColorBinding, sceneDepthBinding, frameUBOBinding});
     if (!sceneSetLayout) {
         LOG_ERROR("WaterRenderer: failed to create scene set layout");
         return false;
     }
 
-    // Pool needs 3 combined image samplers + 1 uniform buffer per frame
+    // Pool needs 2 combined image samplers + 1 uniform buffer per frame
     std::array<VkDescriptorPoolSize, 2> scenePoolSizes{};
     scenePoolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    scenePoolSizes[0].descriptorCount = 3 * SCENE_HISTORY_FRAMES;
+    scenePoolSizes[0].descriptorCount = 2 * SCENE_HISTORY_FRAMES;
     scenePoolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     scenePoolSizes[1].descriptorCount = SCENE_HISTORY_FRAMES;
     VkDescriptorPoolCreateInfo scenePoolInfo{};
@@ -165,61 +161,16 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
         return false;
     }
 
-    // Create reflection resources FIRST so reflectionUBO exists when
-    // createSceneHistoryResources writes descriptor binding 3
-    createReflectionResources();
+    // The frame block FIRST, so it exists when createSceneHistoryResources
+    // writes descriptor binding 3.
+    createFrameUBO();
 
     createSceneHistoryResources(refractionCaptureExtent(),
                                 vkCtx->getSwapchainFormat(),
                                 vkCtx->getDepthFormat());
 
-    // --- Shaders ---
-    VkShaderModule vertShader, fragShader;
-    if (!vertShader.loadFromFile(device, "assets/shaders/water.vert.spv")) {
-        LOG_ERROR("WaterRenderer: failed to load vertex shader");
-        return false;
-    }
-    if (!fragShader.loadFromFile(device, "assets/shaders/water.frag.spv")) {
-        LOG_ERROR("WaterRenderer: failed to load fragment shader");
-        return false;
-    }
-
-    // --- Vertex input (interleaved: pos3 + normal3 + uv2 = 8 floats = 32 bytes) ---
-    VkVertexInputBindingDescription vertBinding{};
-    vertBinding.binding = 0;
-    vertBinding.stride = 8 * sizeof(float);
-    vertBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    // Water vertex shader only takes aPos(vec3) at loc 0 and aTexCoord(vec2) at loc 1
-    // (normal is computed in shader from wave derivatives)
-    std::vector<VkVertexInputAttributeDescription> vertAttribs = {
-        { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },                     // aPos
-        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 6 * sizeof(float) },        // aTexCoord (skip normal)
-    };
-
-    VkRenderPass mainPass = vkCtx->getImGuiRenderPass();
-
-    waterPipeline = PipelineBuilder()
-        .setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
-                    fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
-        .setVertexInput({ vertBinding }, vertAttribs)
-        .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-        .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, depth::kNearerOrEqual)  // depth test yes, write no
-        .setColorBlendAttachment(PipelineBuilder::blendAlpha())
-        .setMultisample(vkCtx->getMsaaSamples())
-        .setLayout(pipelineLayout)
-        .setRenderPass(mainPass)
-        .setDynamicStates(viewportAndScissorDynamic())
-        .build(device, vkCtx->getPipelineCache());
-
-    vertShader.destroy();
-    fragShader.destroy();
-
-    if (!waterPipeline) {
-        LOG_ERROR("WaterRenderer: failed to create pipeline");
-        return false;
-    }
+    // The traced water's pipelines are built when first drawn with
+    // (setRtWaterScene, buildWaterPipeline).
 
     // The client's own liquid, drawn while enhanced water is off.
     if (!initClientLiquid(perFrameLayout)) {
@@ -288,65 +239,16 @@ void WaterRenderer::destroyRtPipelines() {
 
 void WaterRenderer::recreatePipelines() {
     if (!vkCtx) return;
-    VkDevice device = vkCtx->getDevice();
     // Built again against the new passes when next drawn with.
     destroyRtPipelines();
 
-    destroyReflectionResources();
-    createReflectionResources();
+    destroyFrameUBO();
+    createFrameUBO();
     createSceneHistoryResources(refractionCaptureExtent(),
                                 vkCtx->getSwapchainFormat(),
                                 vkCtx->getDepthFormat());
 
-    // Destroy old pipeline (keep layout)
-    destroy(device, waterPipeline);
-
-    // Load shaders
-    VkShaderModule vertShader, fragShader;
-    if (!vertShader.loadFromFile(device, "assets/shaders/water.vert.spv")) {
-        LOG_ERROR("WaterRenderer::recreatePipelines: failed to load vertex shader");
-        return;
-    }
-    if (!fragShader.loadFromFile(device, "assets/shaders/water.frag.spv")) {
-        LOG_ERROR("WaterRenderer::recreatePipelines: failed to load fragment shader");
-        vertShader.destroy();
-        return;
-    }
-
-    // Vertex input (same as initialize)
-    VkVertexInputBindingDescription vertBinding{};
-    vertBinding.binding = 0;
-    vertBinding.stride = 8 * sizeof(float);
-    vertBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    std::vector<VkVertexInputAttributeDescription> vertAttribs = {
-        { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
-        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 6 * sizeof(float) },
-    };
-
     VkRenderPass mainPass = vkCtx->getImGuiRenderPass();
-
-    waterPipeline = PipelineBuilder()
-        .setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
-                    fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
-        .setVertexInput({ vertBinding }, vertAttribs)
-        .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-        .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, depth::kNearerOrEqual)
-        .setColorBlendAttachment(PipelineBuilder::blendAlpha())
-        .setMultisample(vkCtx->getMsaaSamples())
-        .setLayout(pipelineLayout)
-        .setRenderPass(mainPass)
-        .setDynamicStates(viewportAndScissorDynamic())
-        .build(device, vkCtx->getPipelineCache());
-
-    vertShader.destroy();
-    fragShader.destroy();
-
-    if (!waterPipeline) {
-        LOG_ERROR("WaterRenderer::recreatePipelines: failed to create pipeline");
-    }
-
     if (clientPipelineLayout_) {
         buildClientPipelines(mainPass, vkCtx->getMsaaSamples(), clientWaterPipeline_, clientMagmaPipeline_,
                              clientProcPipeline_);
@@ -415,10 +317,9 @@ void WaterRenderer::shutdown() {
     vkCtx->flushDeferredCleanup();
 
     destroyWater1xResources();
-    destroyReflectionResources();
+    destroyFrameUBO();
     destroySceneHistoryResources();
     destroyClientLiquid();
-    destroy(device, waterPipeline);
     destroy(device, pipelineLayout);
     destroyRtPipelines();
     destroy(device, rtPipelineLayout_);
@@ -580,13 +481,8 @@ void WaterRenderer::createSceneHistoryResources(VkExtent2D extent, VkFormat colo
         depthInfo.imageView = sh.depthView;
         depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        VkDescriptorImageInfo reflColorInfo{};
-        reflColorInfo.sampler = sceneColorSampler;
-        reflColorInfo.imageView = reflectionColorView ? reflectionColorView : sh.colorView;
-        reflColorInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
         VkDescriptorBufferInfo reflUBOInfo{};
-        reflUBOInfo.buffer = reflectionUBO;
+        reflUBOInfo.buffer = frameUBOBuffer_;
         // Each frame in flight reads its own slot; see uploadFrameUBO.
         reflUBOInfo.offset = static_cast<VkDeviceSize>(f) * kFrameUBOStride;
         reflUBOInfo.range = sizeof(WaterFrameUBOData);
@@ -611,16 +507,7 @@ void WaterRenderer::createSceneHistoryResources(VkExtent2D extent, VkFormat colo
         w1.pImageInfo = &depthInfo;
         writes.push_back(w1);
 
-        VkWriteDescriptorSet w2{};
-        w2.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w2.dstSet = sh.sceneSet;
-        w2.dstBinding = 2;
-        w2.descriptorCount = 1;
-        w2.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w2.pImageInfo = &reflColorInfo;
-        writes.push_back(w2);
-
-        if (reflectionUBO) {
+        if (frameUBOBuffer_) {
             VkWriteDescriptorSet w3{};
             w3.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w3.dstSet = sh.sceneSet;
@@ -1276,19 +1163,13 @@ void WaterRenderer::clear() {
 
 void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                             const Camera& camera, float time, bool use1x, uint32_t frameIndex) {
-    if (!enhancedWater_) {
-        // The client's own liquid; none of the enhanced water's passes run.
-        clientTimeSeconds_ = time;
-        if (renderingEnabled && !surfaces.empty()) renderClient(cmd, perFrameSet, camera, use1x, frameIndex);
-        return;
-    }
     // The ray traced water this frame (water_rt.glsli): its pipelines are
     // built the first time it is drawn with, against the pass it draws in.
-    VkPipelineLayout layout = pipelineLayout;
-    VkPipeline pipeline = (use1x && water1xPipeline) ? water1xPipeline : waterPipeline;
+    VkPipelineLayout layout = rtPipelineLayout_;
+    VkPipeline pipeline = VK_NULL_HANDLE;
     bool traced = rtWaterDrawn();
     if (traced) {
-        const char* frag = rtHardware_ ? "assets/shaders/water_rt_hw.frag.spv" : "assets/shaders/water_rt_sw.frag.spv";
+        const char* frag = rtHardware_ ? "assets/shaders/water_rt_hw.frag.spv" : "assets/shaders/water.frag.spv";
         VkPipeline& rtPipe = (use1x && water1xRenderPass) ? rt1xPipeline_ : rtPipeline_;
         if (!rtPipe) {
             rtPipe = (use1x && water1xRenderPass)
@@ -1299,14 +1180,21 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         }
         if (rtPipe) {
             pipeline = rtPipe;
-            layout = rtPipelineLayout_;
         } else {
             traced = false;
         }
     }
+    // The client's own liquid: all of it, or with the traced water its magma
+    // and slime.
+    clientTimeSeconds_ = time;
+    if (renderingEnabled && !surfaces.empty()) renderClient(cmd, perFrameSet, camera, use1x, frameIndex, traced);
+    if (!traced) return;
     frameUBO_.rtWater = glm::vec4(traced ? 1.0f : 0.0f, static_cast<float>(rtFrame_.view), rtFrame_.reflectReach,
                                   rtFrame_.sceneHasContent ? 1.0f : 0.0f);
-    frameUBO_.rtWater2 = glm::vec4(rtFrame_.refractReach, 0.0f, 0.0f, 0.0f);
+    // The waves' height at half what they were made with: the mirror showed
+    // them as a choppy sea on a still pond.
+    frameUBO_.rtWater2 = glm::vec4(rtFrame_.refractReach, 0.0f, kRtWaveAmpScale * rtFrame_.waveAmp,
+                                   rtFrame_.waveFreq);
     frameUBO_.rtSkyTop = glm::vec4(rtFrame_.skyTop, 1.0f);
     frameUBO_.rtSkyHorizon = glm::vec4(rtFrame_.skyHorizon, 1.0f);
     // The wake as it stands, into this frame's slot - safe now, the frame has
@@ -1373,6 +1261,7 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         bool isWmoWater = (surface.wmoId != 0);
         bool canalProfile = isWmoWater || (surface.liquidType == 5);
         uint8_t basicType = (surface.liquidType == 0) ? 0 : ((surface.liquidType - 1) % 4);
+        if (basicType >= 2) continue;  // magma and slime: the client's (renderClient)
         // WMO water gets no wave displacement - prevents visible slosh at
         // geometry edges (bridges, docks) where water is far below the surface.
         float waveAmp = isWmoWater ? 0.0f : (basicType == 1 ? 0.35f : 0.08f);
@@ -1387,8 +1276,8 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             push.farColor = basicType == 1 ? lightWaterColors_.oceanFar : lightWaterColors_.riverFar;
             push.lightColors = 1.0f;
         }
-        push.waveAmp = waveAmp;
-        push.waveFreq = waveFreq;
+        push.waveAmp = waveAmp * kRtWaveAmpScale * rtFrame_.waveAmp;
+        push.waveFreq = waveFreq * rtFrame_.waveFreq;
         push.waveSpeed = waveSpeed;
         push.liquidBasicType = static_cast<float>(basicType);
         push.screenSize = glm::vec2(static_cast<float>(renderExtent_.width),
@@ -1905,162 +1794,12 @@ float WaterRenderer::getLiquidAlpha(uint16_t liquidType) const {
 }
 
 // ==============================================================
-// Planar reflection resources
+// The frame block
 // ==============================================================
 
-void WaterRenderer::createReflectionResources() {
+void WaterRenderer::createFrameUBO() {
     if (!vkCtx) return;
-    VkDevice device = vkCtx->getDevice();
     VmaAllocator allocator = vkCtx->getAllocator();
-
-    // --- Reflection color image ---
-    VkImageCreateInfo colorImgCI{};
-    colorImgCI.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    colorImgCI.imageType = VK_IMAGE_TYPE_2D;
-    colorImgCI.format = vkCtx->getSwapchainFormat();
-    colorImgCI.extent = {.width = REFLECTION_WIDTH, .height = REFLECTION_HEIGHT, .depth = 1};
-    colorImgCI.mipLevels = 1;
-    colorImgCI.arrayLayers = 1;
-    colorImgCI.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorImgCI.tiling = VK_IMAGE_TILING_OPTIMAL;
-    colorImgCI.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    colorImgCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    VmaAllocationCreateInfo allocCI{};
-    allocCI.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-    if (vmaCreateImage(allocator, &colorImgCI, &allocCI,
-                       &reflectionColorImage, &reflectionColorAlloc, nullptr) != VK_SUCCESS) {
-        LOG_ERROR("WaterRenderer: failed to create reflection color image");
-        return;
-    }
-
-    VkImageViewCreateInfo colorViewCI{};
-    colorViewCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    colorViewCI.image = reflectionColorImage;
-    colorViewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    colorViewCI.format = vkCtx->getSwapchainFormat();
-    colorViewCI.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
-    if (vkCreateImageView(device, &colorViewCI, nullptr, &reflectionColorView) != VK_SUCCESS) {
-        LOG_ERROR("WaterRenderer: failed to create reflection color view");
-        return;
-    }
-
-    // --- Reflection depth image ---
-    VkImageCreateInfo depthImgCI{};
-    depthImgCI.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    depthImgCI.imageType = VK_IMAGE_TYPE_2D;
-    depthImgCI.format = vkCtx->getDepthFormat();
-    depthImgCI.extent = {.width = REFLECTION_WIDTH, .height = REFLECTION_HEIGHT, .depth = 1};
-    depthImgCI.mipLevels = 1;
-    depthImgCI.arrayLayers = 1;
-    depthImgCI.samples = VK_SAMPLE_COUNT_1_BIT;
-    depthImgCI.tiling = VK_IMAGE_TILING_OPTIMAL;
-    depthImgCI.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    depthImgCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    if (vmaCreateImage(allocator, &depthImgCI, &allocCI,
-                       &reflectionDepthImage, &reflectionDepthAlloc, nullptr) != VK_SUCCESS) {
-        LOG_ERROR("WaterRenderer: failed to create reflection depth image");
-        return;
-    }
-    setObjectName(vkCtx->getDevice(), VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(reflectionDepthImage), "water reflection depth");
-
-    VkImageViewCreateInfo depthViewCI{};
-    depthViewCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    depthViewCI.image = reflectionDepthImage;
-    depthViewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    depthViewCI.format = vkCtx->getDepthFormat();
-    depthViewCI.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
-    if (vkCreateImageView(device, &depthViewCI, nullptr, &reflectionDepthView) != VK_SUCCESS) {
-        LOG_ERROR("WaterRenderer: failed to create reflection depth view");
-        return;
-    }
-
-    // --- Reflection sampler ---
-    VkSamplerCreateInfo sampCI{};
-    sampCI.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    sampCI.magFilter = VK_FILTER_LINEAR;
-    sampCI.minFilter = VK_FILTER_LINEAR;
-    sampCI.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampCI.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampCI.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    reflectionSampler = vkCtx->getOrCreateSampler(sampCI);
-    if (reflectionSampler == VK_NULL_HANDLE) {
-        LOG_ERROR("WaterRenderer: failed to create reflection sampler");
-        return;
-    }
-
-    // --- Reflection render pass ---
-    VkAttachmentDescription colorAttach{};
-    colorAttach.format = vkCtx->getSwapchainFormat();
-    colorAttach.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttach.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttach.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttach.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttach.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttach.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkAttachmentDescription depthAttach{};
-    depthAttach.format = vkCtx->getDepthFormat();
-    depthAttach.samples = VK_SAMPLE_COUNT_1_BIT;
-    depthAttach.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttach.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttach.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    depthAttach.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttach.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthAttach.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference colorRef{.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference depthRef{.attachment = 1, .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
-    subpass.pDepthStencilAttachment = &depthRef;
-
-    VkSubpassDependency dep{};
-    dep.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dep.dstSubpass = 0;
-    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dep.srcAccessMask = 0;
-    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-    std::array<VkAttachmentDescription, 2> attachments = {colorAttach, depthAttach};
-    VkRenderPassCreateInfo rpCI{};
-    rpCI.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpCI.attachmentCount = static_cast<uint32_t>(attachments.size());
-    rpCI.pAttachments = attachments.data();
-    rpCI.subpassCount = 1;
-    rpCI.pSubpasses = &subpass;
-    rpCI.dependencyCount = 1;
-    rpCI.pDependencies = &dep;
-
-    if (vkCreateRenderPass(device, &rpCI, nullptr, &reflectionRenderPass) != VK_SUCCESS) {
-        LOG_ERROR("WaterRenderer: failed to create reflection render pass");
-        return;
-    }
-
-    // --- Reflection framebuffer ---
-    std::array<VkImageView, 2> fbAttach = {reflectionColorView, reflectionDepthView};
-    VkFramebufferCreateInfo fbCI{};
-    fbCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    fbCI.renderPass = reflectionRenderPass;
-    fbCI.attachmentCount = static_cast<uint32_t>(fbAttach.size());
-    fbCI.pAttachments = fbAttach.data();
-    fbCI.width = REFLECTION_WIDTH;
-    fbCI.height = REFLECTION_HEIGHT;
-    fbCI.layers = 1;
-
-    if (vkCreateFramebuffer(device, &fbCI, nullptr, &reflectionFramebuffer) != VK_SUCCESS) {
-        LOG_ERROR("WaterRenderer: failed to create reflection framebuffer");
-        return;
-    }
-
-    // --- Reflection UBO ---
     VkBufferCreateInfo bufCI{};
     bufCI.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufCI.size = kFrameUBOStride * SCENE_HISTORY_FRAMES;
@@ -2071,138 +1810,38 @@ void WaterRenderer::createReflectionResources() {
     uboAllocCI.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
     VmaAllocationInfo mapInfo{};
-    if (vmaCreateBuffer(allocator, &bufCI, &uboAllocCI,
-                        &reflectionUBO, &reflectionUBOAlloc, &mapInfo) != VK_SUCCESS) {
-        LOG_ERROR("WaterRenderer: failed to create reflection UBO");
+    if (vmaCreateBuffer(allocator, &bufCI, &uboAllocCI, &frameUBOBuffer_, &frameUBOAlloc_, &mapInfo) !=
+        VK_SUCCESS) {
+        LOG_ERROR("WaterRenderer: failed to create the frame UBO");
         return;
     }
-    reflectionUBOMapped = mapInfo.pMappedData;
-
-    // Initialize with identity
-    WaterFrameUBOData initData{};
-    initData.reflViewProj = glm::mat4(1.0f);
-    if (reflectionUBOMapped) {
+    frameUBOMapped_ = mapInfo.pMappedData;
+    const WaterFrameUBOData initData{};
+    if (frameUBOMapped_) {
         for (uint32_t f = 0; f < SCENE_HISTORY_FRAMES; ++f) {
-            std::memcpy(static_cast<char*>(reflectionUBOMapped) + f * kFrameUBOStride,
-                        &initData, sizeof(initData));
+            std::memcpy(static_cast<char*>(frameUBOMapped_) + f * kFrameUBOStride, &initData, sizeof(initData));
         }
     }
-
-    // Transition reflection color image to shader-read so first frame doesn't read undefined
-    vkCtx->immediateSubmit([&](VkCommandBuffer cmd) {
-        VkImageMemoryBarrier2 barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        barrier.srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = reflectionColorImage;
-        barrier.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        VkDependencyInfo dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dep.imageMemoryBarrierCount = 1;
-        dep.pImageMemoryBarriers = &barrier;
-        cmdPipelineBarrier2(cmd, dep);
-    });
-    reflectionColorLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    LOG_INFO("Water reflection resources created (", REFLECTION_WIDTH, "x", REFLECTION_HEIGHT, ")");
 }
 
-void WaterRenderer::destroyReflectionResources() {
+void WaterRenderer::destroyFrameUBO() {
     if (!vkCtx) return;
-    VkDevice device = vkCtx->getDevice();
-    VmaAllocator allocator = vkCtx->getAllocator();
-
-    if (reflectionFramebuffer) { vkDestroyFramebuffer(device, reflectionFramebuffer, nullptr); reflectionFramebuffer = VK_NULL_HANDLE; }
-    if (reflectionRenderPass) { vkDestroyRenderPass(device, reflectionRenderPass, nullptr); reflectionRenderPass = VK_NULL_HANDLE; }
-    if (reflectionColorView) { vkDestroyImageView(device, reflectionColorView, nullptr); reflectionColorView = VK_NULL_HANDLE; }
-    if (reflectionDepthView) { vkDestroyImageView(device, reflectionDepthView, nullptr); reflectionDepthView = VK_NULL_HANDLE; }
-    if (reflectionColorImage) { vmaDestroyImage(allocator, reflectionColorImage, reflectionColorAlloc); reflectionColorImage = VK_NULL_HANDLE; }
-    if (reflectionDepthImage) { vmaDestroyImage(allocator, reflectionDepthImage, reflectionDepthAlloc); reflectionDepthImage = VK_NULL_HANDLE; }
-    reflectionSampler = VK_NULL_HANDLE; // Owned by VkContext sampler cache
-    if (reflectionUBO) {
-        AllocatedBuffer ab{}; ab.buffer = reflectionUBO; ab.allocation = reflectionUBOAlloc;
-        destroyBuffer(allocator, ab);
-        reflectionUBO = VK_NULL_HANDLE;
-        reflectionUBOMapped = nullptr;
-    }
-    reflectionColorLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-}
-
-// ==============================================================
-// Reflection pass begin/end
-// ==============================================================
-
-bool WaterRenderer::beginReflectionPass(VkCommandBuffer cmd) {
-    if (!reflectionRenderPass || !reflectionFramebuffer || !cmd) return false;
-
-    VkRenderPassBeginInfo rpInfo{};
-    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpInfo.renderPass = reflectionRenderPass;
-    rpInfo.framebuffer = reflectionFramebuffer;
-    rpInfo.renderArea = {.offset = {.x = 0, .y = 0}, .extent = {.width = REFLECTION_WIDTH, .height = REFLECTION_HEIGHT}};
-
-    VkClearValue clears[2]{};
-    clears[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    clears[1].depthStencil = {.depth = depth::kFar, .stencil = 0};
-    rpInfo.clearValueCount = 2;
-    rpInfo.pClearValues = clears;
-
-    vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-    VkViewport vp{.x = 0, .y = 0, .width = static_cast<float>(REFLECTION_WIDTH), .height = static_cast<float>(REFLECTION_HEIGHT), .minDepth = 0.0f, .maxDepth = 1.0f};
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-    VkRect2D sc{.offset = {.x = 0, .y = 0}, .extent = {.width = REFLECTION_WIDTH, .height = REFLECTION_HEIGHT}};
-    vkCmdSetScissor(cmd, 0, 1, &sc);
-
-    return true;
-}
-
-void WaterRenderer::endReflectionPass(VkCommandBuffer cmd) {
-    if (!cmd) return;
-    vkCmdEndRenderPass(cmd);
-    reflectionColorLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    // Update only the current frame's scene descriptor set with the reflection texture.
-    // Updating all frames would race with in-flight command buffers that have the
-    // other frame's descriptor set bound.
-    if (reflectionColorView && reflectionSampler && vkCtx) {
-        uint32_t fi = vkCtx->getCurrentFrame() % SCENE_HISTORY_FRAMES;
-        if (sceneHistory[fi].sceneSet) {
-            VkDescriptorImageInfo reflInfo{};
-            reflInfo.sampler = reflectionSampler;
-            reflInfo.imageView = reflectionColorView;
-            reflInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = sceneHistory[fi].sceneSet;
-            write.dstBinding = 2;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.pImageInfo = &reflInfo;
-            vkUpdateDescriptorSets(vkCtx->getDevice(), 1, &write, 0, nullptr);
-        }
+    if (frameUBOBuffer_) {
+        AllocatedBuffer ab{};
+        ab.buffer = frameUBOBuffer_;
+        ab.allocation = frameUBOAlloc_;
+        destroyBuffer(vkCtx->getAllocator(), ab);
+        frameUBOBuffer_ = VK_NULL_HANDLE;
+        frameUBOMapped_ = nullptr;
     }
 }
 
-void WaterRenderer::updateReflectionUBO(const glm::mat4& reflViewProj) {
-    frameUBO_.reflViewProj = reflViewProj;
-    uploadFrameUBO();
-}
-
-// Into the slot of the frame being recorded. There was one slot for every frame
-// in flight, so the reflection matrix was rewritten for the next frame while the
-// GPU was still drawing water with it for the last one - the reflection was
-// sampled through a camera a frame out of step with the one that rendered it,
-// and shook whenever the view moved.
+// Into the slot of the frame being recorded: a block the GPU is still drawing
+// the last frame with is not rewritten under it.
 void WaterRenderer::uploadFrameUBO() {
-    if (!reflectionUBOMapped || !vkCtx) return;
+    if (!frameUBOMapped_ || !vkCtx) return;
     const uint32_t slot = vkCtx->getCurrentFrame() % SCENE_HISTORY_FRAMES;
-    std::memcpy(static_cast<char*>(reflectionUBOMapped) + slot * kFrameUBOStride,
+    std::memcpy(static_cast<char*>(frameUBOMapped_) + slot * kFrameUBOStride,
                 &frameUBO_, sizeof(frameUBO_));
 }
 
@@ -2305,84 +1944,6 @@ void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
 }
 
 // ==============================================================
-// Mirror camera computations
-// ==============================================================
-
-std::optional<float> WaterRenderer::getDominantWaterHeight(const glm::vec3& cameraPos) const {
-    if (surfaces.empty()) return std::nullopt;
-
-    // Find the water surface closest to the camera (XY distance)
-    float bestDist = std::numeric_limits<float>::max();
-    float bestHeight = 0.0f;
-    bool found = false;
-
-    for (const auto& surface : surfaces) {
-        // Skip magma/slime - only reflect water/ocean
-        uint8_t basicType = (surface.liquidType == 0) ? 0 : ((surface.liquidType - 1) % 4);
-        if (basicType >= 2) continue;
-
-        // Compute center of surface in world space
-        glm::vec3 center = surface.origin +
-            surface.stepX * (static_cast<float>(surface.width) * 0.5f) +
-            surface.stepY * (static_cast<float>(surface.height) * 0.5f);
-
-        float dx = cameraPos.x - center.x;
-        float dy = cameraPos.y - center.y;
-        float dist = dx * dx + dy * dy;
-        if (dist < bestDist) {
-            bestDist = dist;
-            // The plane the enhanced water reflects in: where it draws it.
-            bestHeight = surface.minHeight + surface.enhancedZOffset;
-            found = true;
-        }
-    }
-
-    if (!found) return std::nullopt;
-    return bestHeight;
-}
-
-glm::mat4 WaterRenderer::computeReflectedView(const Camera& camera, float waterHeight) {
-    // In this engine, Z is up. Water height is stored in the Z component.
-    // Mirror camera position across Z = waterHeight plane.
-
-    glm::vec3 camPos = camera.getPosition();
-    glm::vec3 reflPos = camPos;
-    reflPos.z = 2.0f * waterHeight - camPos.z;
-
-    // Get camera forward and reflect the Z component
-    glm::vec3 forward = camera.getForward();
-    forward.z = -forward.z;
-    glm::vec3 reflTarget = reflPos + forward;
-
-    glm::vec3 up(0.0f, 0.0f, 1.0f);
-    return glm::lookAt(reflPos, reflTarget, up);
-}
-
-glm::mat4 WaterRenderer::computeObliqueProjection(const glm::mat4& proj, const glm::mat4& view,
-                                                    float waterHeight) {
-    // Clip plane: everything below waterHeight in world space
-    // Z is up, so the clip plane normal is (0, 0, 1)
-    glm::vec4 clipPlaneWorld(0.0f, 0.0f, 1.0f, -waterHeight);
-    glm::vec4 clipPlaneView = glm::transpose(glm::inverse(view)) * clipPlaneWorld;
-
-    // Lengyel's oblique near-plane projection matrix modification
-    glm::mat4 result = proj;
-    glm::vec4 q;
-    q.x = (glm::sign(clipPlaneView.x) + result[2][0]) / result[0][0];
-    q.y = (glm::sign(clipPlaneView.y) + result[2][1]) / result[1][1];
-    q.z = -1.0f;
-    q.w = (1.0f + result[2][2]) / result[3][2];
-
-    glm::vec4 c = clipPlaneView * (2.0f / glm::dot(clipPlaneView, q));
-    result[0][2] = c.x;
-    result[1][2] = c.y;
-    result[2][2] = c.z + 1.0f;
-    result[3][2] = c.w;
-
-    return result;
-}
-
-// ==============================================================
 // Separate 1x water pass (used when MSAA is active)
 // ==============================================================
 
@@ -2443,51 +2004,12 @@ bool WaterRenderer::createWater1xPass(VkFormat colorFormat, VkFormat depthFormat
         return false;
     }
 
-    // Build 1x water pipeline against this render pass
-    VkShaderModule vertShader, fragShader;
-    if (!vertShader.loadFromFile(device, "assets/shaders/water.vert.spv") ||
-        !fragShader.loadFromFile(device, "assets/shaders/water.frag.spv")) {
-        LOG_ERROR("WaterRenderer: failed to load shaders for 1x pipeline");
-        return false;
-    }
-
-    VkVertexInputBindingDescription vertBinding{};
-    vertBinding.binding = 0;
-    vertBinding.stride = 8 * sizeof(float);
-    vertBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    std::vector<VkVertexInputAttributeDescription> vertAttribs = {
-        { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
-        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 6 * sizeof(float) },
-    };
-
-    water1xPipeline = PipelineBuilder()
-        .setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
-                    fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
-        .setVertexInput({ vertBinding }, vertAttribs)
-        .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-        .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
-        .setDepthTest(true, false, depth::kNearerOrEqual)
-        .setColorBlendAttachment(PipelineBuilder::blendAlpha())
-        .setMultisample(VK_SAMPLE_COUNT_1_BIT)
-        .setLayout(pipelineLayout)
-        .setRenderPass(water1xRenderPass)
-        .setDynamicStates(viewportAndScissorDynamic())
-        .build(device, vkCtx->getPipelineCache());
-
-    vertShader.destroy();
-    fragShader.destroy();
-
-    if (!water1xPipeline) {
-        LOG_ERROR("WaterRenderer: failed to create 1x water pipeline");
-        return false;
-    }
     if (clientPipelineLayout_) {
         buildClientPipelines(water1xRenderPass, VK_SAMPLE_COUNT_1_BIT,
                              clientWater1xPipeline_, clientMagma1xPipeline_, clientProc1xPipeline_);
     }
 
-    LOG_INFO("WaterRenderer: created 1x water pass and pipeline");
+    LOG_INFO("WaterRenderer: created 1x water pass");
     return true;
 }
 
@@ -2526,7 +2048,6 @@ void WaterRenderer::destroyWater1xResources() {
         if (fb) vkDestroyFramebuffer(device, fb, nullptr);
     }
     water1xFramebuffers.clear();
-    destroy(device, water1xPipeline);
     destroy(device, rt1xPipeline_);
     destroy(device, clientWater1xPipeline_);
     destroy(device, clientMagma1xPipeline_);
@@ -3174,7 +2695,7 @@ void WaterRenderer::loadProcCubeSlot(ClientTexSlot& slot, const std::string& nam
 }
 
 void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                                 bool use1x, uint32_t frameIndex) {
+                                 bool use1x, uint32_t frameIndex, bool tracedWater) {
     VkPipeline waterPipe = use1x && clientWater1xPipeline_ ? clientWater1xPipeline_ : clientWaterPipeline_;
     VkPipeline magmaPipe = use1x && clientMagma1xPipeline_ ? clientMagma1xPipeline_ : clientMagmaPipeline_;
     VkPipeline procPipe = use1x && clientProc1xPipeline_ ? clientProc1xPipeline_ : clientProcPipeline_;
@@ -3314,6 +2835,10 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
     {
         for (auto& surface : surfaces) {
             if (!surface.clientVertexBuffer || !surface.indexBuffer || surface.indexCount == 0) continue;
+            if (tracedWater) {
+                const uint8_t basicType = (surface.liquidType == 0) ? 0 : ((surface.liquidType - 1) % 4);
+                if (basicType < 2) continue;  // the traced water's
+            }
             ClientLiquid* liquid = clientLiquidFor(surface.clientLiquidType);
             if (!liquid || liquid->kind == client_liquid::MaterialKind::None) continue;
             const bool isMagma = liquid->kind == client_liquid::MaterialKind::Magma;

@@ -530,96 +530,6 @@ bool Renderer::createPerFrameResources() {
         vkUpdateDescriptorSets(device, 6, writes, 0, nullptr);
     }
 
-    // --- Create reflection per-frame UBO and descriptor set ---
-    {
-        VkBufferCreateInfo bufInfo{};
-        bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufInfo.size = sizeof(GPUPerFrameData);
-        bufInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-
-        VmaAllocationCreateInfo allocInfo{};
-        allocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-        allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
-
-        VmaAllocationInfo mapInfo{};
-        if (vmaCreateBuffer(vkCtx->getAllocator(), &bufInfo, &allocInfo,
-                &reflPerFrameUBO, &reflPerFrameUBOAlloc, &mapInfo) != VK_SUCCESS) {
-            LOG_ERROR("Failed to create reflection per-frame UBO");
-            return false;
-        }
-        reflPerFrameUBOMapped = mapInfo.pMappedData;
-
-        VkDescriptorSetLayout layouts[MAX_FRAMES];
-        for (auto& layout : layouts) layout = perFrameSetLayout;
-
-        VkDescriptorSetAllocateInfo setAlloc{};
-        setAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        setAlloc.descriptorPool = sceneDescriptorPool;
-        setAlloc.descriptorSetCount = MAX_FRAMES;
-        setAlloc.pSetLayouts = layouts;
-
-        if (vkAllocateDescriptorSets(device, &setAlloc, reflPerFrameDescSet) != VK_SUCCESS) {
-            LOG_ERROR("Failed to allocate reflection per-frame descriptor sets");
-            return false;
-        }
-
-        // Bind each reflection descriptor to the same UBO but its own frame's shadow view
-        for (uint32_t i = 0; i < MAX_FRAMES; i++) {
-            VkDescriptorBufferInfo descBuf{};
-            descBuf.buffer = reflPerFrameUBO;
-            descBuf.offset = 0;
-            descBuf.range = sizeof(GPUPerFrameData);
-
-            VkDescriptorImageInfo shadowImgInfo{};
-            // sampler is ignored: binding 1 declares it immutable in the layout.
-            shadowImgInfo.imageView = shadowDepthView[i];
-            shadowImgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-            // Always neutral: the volume is built for the camera, and the
-            // mirrored one would read it at the wrong place. The reflection's
-            // block switches the fog off.
-            VkDescriptorImageInfo fogImgInfo{};
-            fogImgInfo.imageView = volumetricFog_->getNeutralView();
-            fogImgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-            // Neutral as well: the result is the camera's, and the block's
-            // switch is off in the reflection's copy.
-            VkDescriptorImageInfo rtImgInfo{};
-            rtImgInfo.imageView = rtLighting_->neutralView();
-            rtImgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-            VkWriteDescriptorSet writes[6]{};
-            writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[0].dstSet = reflPerFrameDescSet[i];
-            writes[0].dstBinding = 0;
-            writes[0].descriptorCount = 1;
-            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            writes[0].pBufferInfo = &descBuf;
-            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[1].dstSet = reflPerFrameDescSet[i];
-            writes[1].dstBinding = 1;
-            writes[1].descriptorCount = 1;
-            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[1].pImageInfo = &shadowImgInfo;
-            writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[2].dstSet = reflPerFrameDescSet[i];
-            writes[2].dstBinding = 2;
-            writes[2].descriptorCount = 1;
-            writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[2].pImageInfo = &fogImgInfo;
-            for (uint32_t b = 3; b <= 5; ++b) {
-                writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[b].dstSet = reflPerFrameDescSet[i];
-                writes[b].dstBinding = b;
-                writes[b].descriptorCount = 1;
-                writes[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[b].pImageInfo = &rtImgInfo;
-            }
-
-            vkUpdateDescriptorSets(device, 6, writes, 0, nullptr);
-        }
-    }
-
     // The compute side. Not fatal: without it the fog simply stays off, and
     // applyPendingQuality says so when it is asked for.
     if (!volumetricFog_->createPipelines(perFrameSetLayout, shadowDepthView)) {
@@ -640,11 +550,6 @@ void Renderer::destroyPerFrameResources() {
 
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         destroy(vkCtx->getAllocator(), perFrameUBOs[i], perFrameUBOAllocs[i]);
-    }
-    if (reflPerFrameUBO) {
-        vmaDestroyBuffer(vkCtx->getAllocator(), reflPerFrameUBO, reflPerFrameUBOAlloc);
-        reflPerFrameUBO = VK_NULL_HANDLE;
-        reflPerFrameUBOMapped = nullptr;
     }
     // Before the layout: its compute pipeline layout was built from it.
     if (volumetricFog_) {
@@ -832,6 +737,8 @@ void Renderer::updatePerFrameUBO() {
                       : rtDebugView_ == kRtWaterRefractionView  ? 2
                       : rtDebugView_ == kRtWaterTracedOnlyView ? 3
                                                                  : 0;
+            wf.waveAmp = rtWaveAmp_;
+            wf.waveFreq = rtWaveFreq_;
             wf.reflectReach = hw ? 400.0f : 150.0f;
             wf.refractReach = hw ? 80.0f : 40.0f;
             if (lightingManager) {
@@ -841,6 +748,9 @@ void Renderer::updatePerFrameUBO() {
             }
         }
         waterRenderer->setRtWaterFrame(wf);
+        // The copy of the frame under the water is the traced water's alone:
+        // the client's liquid reads none of it.
+        waterRenderer->setRefractionEnabled(waterRenderer->rtWaterDrawn());
     }
     currentFrameData.rtTune = glm::vec4(std::max(lightingTune_.shadowStrength, 0.0f),
                                         std::max(lightingTune_.pointLights, 0.0f),
@@ -1214,7 +1124,6 @@ bool Renderer::initialize(core::Window* win) {
     overlaySystem_ = std::make_unique<OverlaySystem>(vkCtx);
     renderGraph_->registerResource("shadow_depth");
     renderGraph_->registerResource("volumetric_fog");
-    renderGraph_->registerResource("reflection_texture");
     renderGraph_->registerResource("scene_color");
     renderGraph_->registerResource("scene_depth");
     renderGraph_->registerResource("final_image");
@@ -1465,17 +1374,6 @@ void Renderer::unregisterPreview(CharacterPreview* preview) {
     }
 }
 
-void Renderer::setEnhancedWaterEnabled(bool enabled) {
-    // Refraction belongs to the enhanced water: its shoreline, meniscus and
-    // underwater tint are written against water that refracts, so it is on
-    // exactly when that water is drawn. The client's own liquid needs neither
-    // the scene copy nor the reflection pass.
-    enhancedWater_ = enabled;
-    if (waterRenderer) {
-        waterRenderer->setEnhancedWater(enabled);
-        waterRenderer->setRefractionEnabled(enabled);
-    }
-}
 void Renderer::setMsaaSamples(VkSampleCountFlagBits samples) {
     if (!vkCtx) return;
 
@@ -5371,8 +5269,6 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             waterRenderer.reset();
         } else {
             waterRenderer->loadClientLiquids(assetManager);
-            waterRenderer->setEnhancedWater(enhancedWater_);
-            waterRenderer->setRefractionEnabled(enhancedWater_);
             waterRenderer->setClientSpecular(clientSpecular_);
             if (rtScene_) {
                 waterRenderer->setRtWaterScene(rtScene_->descriptorSetLayout(),
@@ -6141,91 +6037,6 @@ void Renderer::setSecondaryViewportScissor(VkCommandBuffer cmd) {
     vkCmdSetScissor(cmd, 0, 1, &sc);
 }
 
-void Renderer::renderReflectionPass() {
-    WOWEE_PROFILE_SCOPE("record water reflection", Cpu);
-    if (!waterRenderer || !camera || !waterRenderer->hasReflectionPass() || !waterRenderer->hasSurfaces()) return;
-    if (!waterRenderer->isEnhancedWater()) return;  // the client's liquid reflects nothing
-    // The ray traced water traces its reflection: no planar pass under it.
-    if (waterRenderer->rtWaterDrawn()) return;
-    if (currentCmd == VK_NULL_HANDLE || !reflPerFrameUBOMapped) return;
-
-    // Select the current frame's pre-bound reflection descriptor set
-    // (each frame's set was bound to its own shadow depth view at init).
-    uint32_t frame = vkCtx->getCurrentFrame();
-    VkDescriptorSet reflDescSet = reflPerFrameDescSet[frame];
-
-    // Reflection pass uses 1x MSAA. Scene pipelines must be render-pass-compatible,
-    // which requires matching sample counts. Only render scene into reflection when MSAA is off.
-    bool canRenderScene = (vkCtx->getMsaaSamples() == VK_SAMPLE_COUNT_1_BIT);
-
-    // Find dominant water height near camera
-    const glm::vec3 camPos = camera->getPosition();
-    auto waterH = waterRenderer->getDominantWaterHeight(camPos);
-    if (!waterH) return;
-
-    float waterHeight = *waterH;
-
-    // Skip reflection if camera is underwater (Z is up)
-    if (camPos.z < waterHeight + 0.5f) return;
-
-    // Compute reflected view and oblique projection
-    glm::mat4 reflView = WaterRenderer::computeReflectedView(*camera, waterHeight);
-    // The oblique near plane is built on the standard depth mapping, and the
-    // result reversed like the camera's own projection.
-    glm::mat4 reflProj = depth::reversed(WaterRenderer::computeObliqueProjection(
-        camera->getForwardDepthProjectionMatrix(), reflView, waterHeight));
-
-    // Update water renderer's reflection UBO with the reflected viewProj
-    waterRenderer->updateReflectionUBO(reflProj * reflView);
-
-    // Fill the reflection per-frame UBO (same as normal but with reflected matrices)
-    GPUPerFrameData reflData = currentFrameData;
-    reflData.view = reflView;
-    reflData.projection = reflProj;
-    // Reflected camera position (Z is up)
-    glm::vec3 reflPos = camPos;
-    reflPos.z = 2.0f * waterHeight - reflPos.z;
-    reflData.viewPos = glm::vec4(reflPos, 1.0f);
-    // The fog volume is the camera's; its sets here bind the neutral one.
-    reflData.volumetricParams = glm::vec4(0.0f);
-    reflData.rtParams = glm::vec4(0.0f);
-    reflData.giParams = glm::vec4(0.0f);
-    std::memcpy(reflPerFrameUBOMapped, &reflData, sizeof(GPUPerFrameData));
-
-    // Begin reflection render pass (clears to black; scene rendered if pipeline-compatible)
-    if (!waterRenderer->beginReflectionPass(currentCmd)) return;
-
-    if (canRenderScene) {
-        // Render scene into reflection texture (sky + terrain + WMO only for perf)
-        if (skySystem) {
-            auto* reflSkybox = skySystem->getSkybox();
-            const float reflTimeOfDay = lightingManager
-                ? lightingManager->getTimeOfDayHours()
-                : (reflSkybox ? reflSkybox->getTimeOfDay() : 12.0f);
-            // The same fields the main sky gets, from the one place that
-            // fills them. weatherIntensity stays 0 for the reflection pass
-            // (no game handler in scope).
-            rendering::SkyParams skyParams = rendering::skyParamsFromLighting(
-                reflTimeOfDay, -1.0f, 0.0f,
-                lightingManager ? &lightingManager->getLightingParams() : nullptr, false);
-            // A flare is an artefact of the lens, so it belongs to the camera
-            // and not to what the water is showing it; the glare is drawn
-            // over the camera's own picture only (0x009ac400).
-            skyParams.sunOcclusion = 1.0f;
-            skyParams.moonOcclusion = 1.0f;
-            skySystem->render(currentCmd, reflDescSet, *camera, skyParams);
-        }
-        if (terrainRenderer && terrainEnabled) {
-            terrainRenderer->render(currentCmd, reflDescSet, *camera);
-        }
-        if (wmoRenderer) {
-            wmoRenderer->render(currentCmd, reflDescSet, *camera);
-        }
-    }
-
-    waterRenderer->endReflectionPass(currentCmd);
-}
-
 bool Renderer::shadowMapReadyThisFrame() const {
     // One answer for planShadowPass and for the fog, which samples what it
     // draws: two copies of these conditions could disagree, and a fog
@@ -6981,15 +6792,15 @@ void Renderer::requestShadowAtlas() {
 
 void Renderer::writeShadowMapBindings() {
     // The views are new, so every set naming the old ones is written again:
-    // both frame slots' sets and the reflection's, binding 1 each. The
+    // both frame slots' sets, binding 1 each. The
     // character preview binds a dummy view of its own and is not one of them.
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         VkDescriptorImageInfo shadowImgInfo{};
         // sampler is ignored: binding 1 declares it immutable in the layout.
         shadowImgInfo.imageView = shadowDepthView[i];
         shadowImgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkWriteDescriptorSet writes[2]{};
-        const VkDescriptorSet sets[2] = {perFrameDescSets[i], reflPerFrameDescSet[i]};
+        VkWriteDescriptorSet writes[1]{};
+        const VkDescriptorSet sets[1] = {perFrameDescSets[i]};
         uint32_t count = 0;
         for (VkDescriptorSet set : sets) {
             if (set == VK_NULL_HANDLE) continue;
@@ -7488,7 +7299,6 @@ void Renderer::buildFrameGraph(game::GameHandler* gameHandler) {
     renderGraph_->reset();
 
     auto shadowDepth = renderGraph_->findResource("shadow_depth");
-    auto reflTex = renderGraph_->findResource("reflection_texture");
 
     // Inside a building the minimap is the indoor one, drawn from the WMO
     // groups' own pictures (0x007f5ba0). Asked here, while the frame is built,
@@ -7542,13 +7352,6 @@ void Renderer::buildFrameGraph(game::GameHandler* gameHandler) {
             renderVolumetricFog();
         });
     renderGraph_->setPassEnabled("volumetric_fog", volumetricThisFrame_);
-
-    // Reflection pre-pass → outputs reflection_texture (reads scene, so after shadow)
-    renderGraph_->addPass("reflection_pass", {shadowDepth}, {reflTex},
-        [this](VkCommandBuffer cmd) {
-            renderReflectionPass();
-            vkCtx->gpuMark(cmd, "water reflection");
-        });
 
     renderGraph_->compile();
 }

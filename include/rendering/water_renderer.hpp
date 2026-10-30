@@ -113,22 +113,27 @@ struct WaterSurface {
 };
 
 /**
- * Water renderer (Vulkan) with planar reflections, Gerstner waves,
+ * Water renderer (Vulkan): the client's own liquids, and with ray tracing
+ * on the traced water with Gerstner waves,
  * GGX specular, shoreline foam, and subsurface scattering.
  */
 // Matches set 2 binding 3 in water.frag.glsl. Keep kMaxWakePoints in step with
 // the MAX_WAKE_POINTS constant declared there.
 constexpr int kMaxWakePoints = 32;
 
+/// The traced water's waves at their default (rtwaveamp 100%): half the
+/// height they were first made with, which in the traced mirror read as a
+/// choppy sea on a still pond.
+inline constexpr float kRtWaveAmpScale = 0.5f;
+
 struct WaterFrameUBOData {
-    glm::mat4 reflViewProj{1.0f};
     glm::vec4 wakeBounds{0.0f};              // xy = centre, z = cull radius, w = count
     glm::vec4 wakePoints[kMaxWakePoints]{};  // xy = pos, z = age 0..1, w = strength
     // The ray traced water (water_rt.glsli): x on, y the view (1 the
     // reflection alone, 2 what comes through alone), z how far a reflected
     // ray goes, w 1 while the traced scene holds anything.
     glm::vec4 rtWater{0.0f};
-    glm::vec4 rtWater2{0.0f};      // x how far a refracted ray goes
+    glm::vec4 rtWater2{0.0f};      // x how far a refracted ray goes, z/w the waves' height and frequency
     glm::vec4 rtSkyTop{0.0f};      // the sky a reflection leaving the scene meets, overhead
     glm::vec4 rtSkyHorizon{0.0f};  // and at the horizon
 };
@@ -139,6 +144,8 @@ struct RtWaterFrame {
     VkDescriptorSet sceneSet = VK_NULL_HANDLE;  ///< RtScene's, this frame
     bool sceneHasContent = false;
     int view = 0;               ///< 1 the reflection alone, 2 what comes through
+    float waveAmp = 1.0f;       ///< the waves' height, 1 the default
+    float waveFreq = 1.0f;      ///< and their frequency
     float reflectReach = 400.0f;
     float refractReach = 80.0f;
     glm::vec3 skyTop{0.5f, 0.7f, 1.0f};
@@ -196,22 +203,6 @@ public:
                              uint32_t frameIndex = 0,
                              VkExtent2D srcDepthExtent = {});  ///< zero: srcExtent
 
-    // --- Planar reflection pass ---
-    // Call sequence: beginReflectionPass → [render scene] → endReflectionPass
-    bool beginReflectionPass(VkCommandBuffer cmd);
-    void endReflectionPass(VkCommandBuffer cmd);
-
-    // Get the dominant water height near a position (for reflection plane)
-    std::optional<float> getDominantWaterHeight(const glm::vec3& cameraPos) const;
-
-    // Compute reflected view matrix for a given water height
-    static glm::mat4 computeReflectedView(const Camera& camera, float waterHeight);
-    // Compute oblique clip projection to clip below-water geometry in reflection
-    static glm::mat4 computeObliqueProjection(const glm::mat4& proj, const glm::mat4& view, float waterHeight);
-
-    // Update the reflection UBO with reflected viewProj matrix
-    void updateReflectionUBO(const glm::mat4& reflViewProj);
-
     /// Feed the surface disturbance left by something moving through the water.
     /// `intensity` is 0 when nothing is disturbing the surface. `wading` picks
     /// churned-up froth underfoot; swimming instead lays a V wake off the
@@ -219,30 +210,24 @@ public:
     void updateWake(float deltaTime, const glm::vec2& pos, const glm::vec2& travelDir,
                     float intensity, bool wading);
 
-    VkRenderPass getReflectionRenderPass() const { return reflectionRenderPass; }
-    VkExtent2D getReflectionExtent() const { return {.width = REFLECTION_WIDTH, .height = REFLECTION_HEIGHT}; }
-    bool hasReflectionPass() const { return reflectionRenderPass != VK_NULL_HANDLE; }
     bool hasSurfaces() const { return !surfaces.empty(); }
 
     void setEnabled(bool enabled) { renderingEnabled = enabled; }
     bool isEnabled() const { return renderingEnabled; }
 
-    /// Which water is drawn. Off - the default - is the client's own liquid:
-    /// its LiquidType textures, its depth ramps and its blending
-    /// (client_liquid.hpp). On is this client's procedural water with
-    /// reflection and refraction.
-    void setEnhancedWater(bool enabled) { enhancedWater_ = enabled; }
     /// The ray traced water's scene set layout (RtScene) and which tracer it
     /// was made for; once, after both exist. Its pipelines are built when
     /// first drawn with.
     void setRtWaterScene(VkDescriptorSetLayout sceneLayout, bool hardware);
     /// This frame's ray traced water, before render().
     void setRtWaterFrame(const RtWaterFrame& frame) { rtFrame_ = frame; }
-    /// Whether this frame's water is the traced one: on, with what it needs.
+    /// Whether this frame's water and ocean are the traced ones: on, with
+    /// what they need. Otherwise every liquid is the client's own (its
+    /// LiquidType textures, depth ramps and blending, client_liquid.hpp), as
+    /// magma and slime always are.
     [[nodiscard]] bool rtWaterDrawn() const {
-        return enhancedWater_ && rtFrame_.on && rtFrame_.sceneSet != VK_NULL_HANDLE && rtPipelineLayout_ != VK_NULL_HANDLE;
+        return rtFrame_.on && rtFrame_.sceneSet != VK_NULL_HANDLE && rtPipelineLayout_ != VK_NULL_HANDLE;
     }
-    [[nodiscard]] bool isEnhancedWater() const { return enhancedWater_; }
 
     /// LiquidType.dbc and LiquidMaterial.dbc, for the client's liquid. Textures
     /// are loaded on a type's first draw.
@@ -311,7 +296,6 @@ private:
     /// 0x10000000, to 0xb23f68 through 0xce04a0 (0x007bd8a0), and 0x008a1fa0
     /// picks CMaterialWater over CMaterialWaterNoSpec by it.
     bool clientSpecular_ = false;
-    bool enhancedWater_ = false;
     double clientTimeSeconds_ = 0.0;
 
     // --- The client's own liquid ---
@@ -383,8 +367,10 @@ private:
     void loadClientSlot(ClientTexSlot& slot, const std::string& name);
     void createClientMesh(WaterSurface& surface);
     void writeClientRamps(uint32_t frameSlot);
+    /// `tracedWater`: the traced water draws the water and the ocean, so
+    /// only the magma and the slime are left here.
     void renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, const Camera& camera,
-                      bool use1x, uint32_t frameIndex);
+                      bool use1x, uint32_t frameIndex, bool tracedWater);
 
     void createWaterMesh(WaterSurface& surface);
     void destroyWaterMesh(WaterSurface& surface);
@@ -398,17 +384,16 @@ private:
     void createSceneHistoryResources(VkExtent2D extent, VkFormat colorFormat, VkFormat depthFormat);
     void destroySceneHistoryResources();
 
-    // Reflection pass resources
-    void createReflectionResources();
-    void destroyReflectionResources();
+    // The per-frame block (WaterFrameUBOData), a slot a frame in flight.
+    void createFrameUBO();
+    void destroyFrameUBO();
 
     VkContext* vkCtx = nullptr;
 
-    // Pipeline
-    VkPipeline waterPipeline = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     // The ray traced water's: the scene's set as set 3, and its pipelines
-    // (water_rt_hw/sw.frag) against the scene pass and the 1x pass.
+    // (water.frag, or water_rt_hw.frag for ray queries) against the scene
+    // pass and the 1x pass.
     VkDescriptorSetLayout rtSceneLayout_ = VK_NULL_HANDLE;
     bool rtHardware_ = false;
     VkPipelineLayout rtPipelineLayout_ = VK_NULL_HANDLE;
@@ -429,7 +414,7 @@ private:
     VkSampler sceneDepthSampler = VK_NULL_HANDLE;
     // Per-frame scene history to avoid race between frames in flight
     static constexpr uint32_t SCENE_HISTORY_FRAMES = 2;
-    // One reflection/wake UBO slot per frame in flight, at an offset every
+    // One frame UBO slot per frame in flight, at an offset every
     // device accepts for a uniform buffer (Vulkan caps the alignment at 256).
     static constexpr VkDeviceSize kFrameUBOStride =
         (sizeof(WaterFrameUBOData) + 255) / 256 * 256;
@@ -447,21 +432,6 @@ private:
     bool sceneHistoryReady = false;
     mutable uint32_t renderDiagCounter_ = 0;
 
-    // Planar reflection resources
-    static constexpr uint32_t REFLECTION_WIDTH = 512;
-    static constexpr uint32_t REFLECTION_HEIGHT = 512;
-    VkRenderPass reflectionRenderPass = VK_NULL_HANDLE;
-    VkFramebuffer reflectionFramebuffer = VK_NULL_HANDLE;
-    VkImage reflectionColorImage = VK_NULL_HANDLE;
-    VmaAllocation reflectionColorAlloc = VK_NULL_HANDLE;
-    VkImageView reflectionColorView = VK_NULL_HANDLE;
-    VkImage reflectionDepthImage = VK_NULL_HANDLE;
-    VmaAllocation reflectionDepthAlloc = VK_NULL_HANDLE;
-    VkImageView reflectionDepthView = VK_NULL_HANDLE;
-    VkSampler reflectionSampler = VK_NULL_HANDLE;
-    VkImageLayout reflectionColorLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    // Reflection UBO (mat4 reflViewProj)
     // Surface disturbance trail. Points age out, spreading as they go; the
     // per-point drift is what turns a swimmer's pair of emissions into a V.
     struct WakePoint {
@@ -478,13 +448,12 @@ private:
 
     void uploadFrameUBO();
 
-    ::VkBuffer reflectionUBO = VK_NULL_HANDLE;
-    VmaAllocation reflectionUBOAlloc = VK_NULL_HANDLE;
-    void* reflectionUBOMapped = nullptr;
+    ::VkBuffer frameUBOBuffer_ = VK_NULL_HANDLE;
+    VmaAllocation frameUBOAlloc_ = VK_NULL_HANDLE;
+    void* frameUBOMapped_ = nullptr;
 
     // Separate 1x water pass (used when MSAA is active)
     VkRenderPass water1xRenderPass = VK_NULL_HANDLE;
-    VkPipeline water1xPipeline = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> water1xFramebuffers;
 
     std::vector<WaterSurface> surfaces;

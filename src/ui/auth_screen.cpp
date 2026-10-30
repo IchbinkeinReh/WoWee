@@ -1700,7 +1700,6 @@ void AuthScreen::applyPresetToState(LoginGraphicsState& s, int preset) {
     s.sunShafts      = p.sunShafts;
     s.lightShafts    = p.lightShafts;
     s.fogSkyBlend    = p.fogSkyBlend;
-    s.enhancedWater  = p.enhancedWater;
     s.specular       = p.specular;
 
     // Not in the table because the in-game preset has no opinion about them
@@ -1758,7 +1757,6 @@ void AuthScreen::loadLoginGraphicsState() {
         else if (key == "fxaa")             loginGfx_.fxaa           = (val == "1");
         else if (key == "normal_mapping")   loginGfx_.normalMapping  = (val == "1");
         else if (key == "upscaling_mode")   loginGfx_.upscalingMode  = clampI(std::stoi(val), 0, 2);
-        else if (key == "enhanced_water")   loginGfx_.enhancedWater  = (val == "1");
         else if (key == "specular")         loginGfx_.specular       = (val == "1");
         else if (key == "ground_clutter_density") loginGfx_.groundClutter = clampI(std::stoi(val), 0, 150);
         else if (key == "grass_enabled")    loginGfx_.grass          = (val == "1");
@@ -1807,7 +1805,8 @@ void AuthScreen::saveLoginGraphicsState() {
     // is a phone's on its first run, overriding the reduced render resolution
     // the game picks for it (GameScreen::loadSettings). The file's own value,
     // if any, is kept by the map.
-    cfg["enhanced_water"]        = loginGfx_.enhancedWater   ? "1" : "0";
+    // The enhanced water is gone: what an older build saved for it goes too.
+    cfg.erase("enhanced_water");
     cfg["specular"]              = loginGfx_.specular        ? "1" : "0";
     // Written before the enhanced water had a switch, for a refraction that
     // was always on; nothing reads it now.
@@ -1952,7 +1951,6 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
         toggle("gfx.shadows", "Shadows", &loginGfx_.shadows);
         toggle("gfx.fxaa", "FXAA", &loginGfx_.fxaa);
         toggle("gfx.normals", "Normal mapping", &loginGfx_.normalMapping);
-        toggle("gfx.water", "Enhanced water", &loginGfx_.enhancedWater);
         toggle("gfx.specular", "Specular", &loginGfx_.specular);
         toggle("gfx.vsync", "V-Sync", &loginGfx_.vsync);
         toggle("gfx.fullscreen", "Fullscreen", &loginGfx_.fullscreen);

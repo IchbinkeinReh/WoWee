@@ -227,16 +227,30 @@ constexpr SettingDesc kSchema[] = {
      "are sharper and cost more; Low suits weaker hardware. Not in\n"
      "the original client, so off unless chosen.",
      "Off|Low|Medium|High", 0},
-    // Off by default, and off in every preset: the original client draws its
-    // liquids with their own animated textures and the light's depth colours
-    // (WaterRenderer's client path), which is what is drawn when this is off.
-    // A page of its own: Detail is full to the bottom of both columns, and
-    // this one row put past it is a row nobody finds.
-    {"enhancedwater", "Enhanced water (reflections and refraction)", SettingKind::Bool, 0, 0, 0,
+    // The ray traced water (water_rt.glsli): with the ray traced lighting
+    // on, water and ocean are this client's own - waves, the world in the
+    // mirror and the bed through it, traced. Otherwise every liquid is the
+    // original client's, its animated textures and the light's depth colours
+    // (WaterRenderer's client path). A page of its own: Detail is full to the
+    // bottom of both columns.
+    {"rtwater", "Ray traced water", SettingKind::Bool, 0, 0, 0,
      "Water", "Water",
-     "This client's own water: waves, reflections of the world, the\n"
-     "bed seen through it and foam at the shore. Off is the original\n"
-     "client's animated water. Costs a reflection pass each frame.", "", 0},
+     "With ray tracing on: waves, the water's reflection and what lies\n"
+     "under it traced through the world - the bed bent by the waves,\n"
+     "darker and bluer with depth, the sky and the shore in the mirror.\n"
+     "Off, or without ray tracing, the original client's water.", "", 1, "raytracedlighting"},
+    // The waves' height and their closeness, of the traced water's own
+    // (water.vert's Gerstner waves, water.frag's detail ripples). 100% is
+    // half the height they were first made with, which the mirror showed
+    // as a choppy sea on a still pond.
+    {"rtwaveamp", "Wave amplitude (%)", SettingKind::Int, 0, 200, 5,
+     "Water", "",
+     "How high the ray traced water's waves stand: 0 is a still mirror,\n"
+     "200 twice the default.", "", 100, "raytracedlighting&rtwater"},
+    {"rtwavefreq", "Wave frequency (%)", SettingKind::Int, 25, 300, 5,
+     "Water", "",
+     "How close together the ray traced water's waves run: lower is\n"
+     "long swells, higher short chop.", "", 100, "raytracedlighting&rtwater"},
     // The client's own 'specular' option, not an extra: its cvar registered
     // at 0x0078e1a0, default "0" (0x009e14a0), whose handler 0x0078de60 sets
     // world flag 0x8000000 "on restart". Off in every preset: the exe has
@@ -247,14 +261,6 @@ constexpr SettingDesc kSchema[] = {
      "The original client's Specular option: the sun glints off water\n"
      "and off the ground textures made to shine. Takes effect the next\n"
      "time the game starts, as in the original client.", "", 0},
-    // The enhanced water traced through the world instead of a reflection
-    // pass and a screen offset (water_rt.glsli).
-    {"rtwater", "Ray traced water", SettingKind::Bool, 0, 0, 0,
-     "Water", "",
-     "With ray tracing and enhanced water on: the water's reflection and\n"
-     "what lies under it traced through the world - the bed bent by the\n"
-     "waves, darker and bluer with depth, the sky and the shore in the\n"
-     "mirror. Needs enhanced water, whose waves bend both.", "", 1, "enhancedwater&raytracedlighting"},
 
     // Off by default: the compute tracer is what most machines get, and it
     // costs real frames. One row rather than three switches, because each
@@ -1332,7 +1338,7 @@ bool settingNeedsRayTracing(const std::string& key) {
     // the rows whose labels or tooltips say ray traced.
     static constexpr const char* kTraced[] = {
         "dbgview",          "dbgpointlights",     "dbgbounce",       "dbginteriorbase",
-        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "dbgtracedsunshadow", "dbgpointshadow",
+        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "rtwaveamp", "rtwavefreq", "dbgtracedsunshadow", "dbgpointshadow",
         "dbgbakedlampshadow", "dbgocclusion",
     };
     for (const char* k : kTraced) {

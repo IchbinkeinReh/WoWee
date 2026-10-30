@@ -911,7 +911,7 @@ constexpr const char* kGraphicsPresetKeys[] = {
     "groundclutter",
     "grassenabled", "grassdensity", "grassheight", "grassdistance",
     "lensflare", "sharpstars", "sunshafts", "lightshafts", "fogskyblend",
-    "enhancedwater", "specular",
+    "specular",
     "environmentdetail", "groundclutterdistance", "particledensity", "weatherdetail",
 };
 
@@ -932,13 +932,13 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "antialiasing", "fxaa",
     "normalmapping", "normalmapstrength",
     "groundclutter", "grassenabled", "grassdensity", "grassheight",
-    "grassdistance", "enhancedwater", "specular", "upscaling", "fsrquality",
+    "grassdistance", "specular", "upscaling", "fsrquality",
     "fsrsharpness", "framegen", "brightness", "uiopacity", "minimapsquare",
     "minimapnpcdots", "minimapclock", "minimapcoords", "minimaprotate", "latencymeter", "showfps",
     "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
-    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtminbrightness", "rtwater", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
+    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtminbrightness", "rtwater", "rtwaveamp", "rtwavefreq", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
     "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
@@ -1005,7 +1005,6 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
         pendingSunShafts         = p.sunShafts;
         pendingVolumetricFog     = p.lightShafts;
         pendingFogSkyBlend       = p.fogSkyBlend;
-        pendingEnhancedWater     = p.enhancedWater;
         pendingSpecular          = p.specular;
         pendingEnvironmentDetail     = p.environmentDetail;
         pendingGroundClutterDistance = p.groundClutterDistance;
@@ -1064,7 +1063,6 @@ SettingsPanel::GraphicsPreset SettingsPanel::matchingGraphicsPreset() const {
             pendingSunShafts == p.sunShafts &&
             pendingVolumetricFog == p.lightShafts &&
             std::abs(pendingFogSkyBlend - p.fogSkyBlend) <= 0.025f &&
-            pendingEnhancedWater == p.enhancedWater &&
             pendingSpecular == p.specular &&
             std::abs(pendingEnvironmentDetail - p.environmentDetail) <= 5 &&
             std::abs(pendingGroundClutterDistance - p.groundClutterDistance) <= 10 &&
@@ -1140,6 +1138,8 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "rtsoftlamps", .asBool = &SettingsPanel::pendingRtSoftLamps},
     {.key = "rtminbrightness", .asInt = &SettingsPanel::pendingRtMinBrightness},
     {.key = "rtwater", .asBool = &SettingsPanel::pendingRtWater},
+    {.key = "rtwaveamp", .asInt = &SettingsPanel::pendingRtWaveAmp},
+    {.key = "rtwavefreq", .asInt = &SettingsPanel::pendingRtWaveFreq},
     {.key = "rtnormalkeep", .asInt = &SettingsPanel::pendingRtNormalKeep},
     {.key = "rtnormalface", .asInt = &SettingsPanel::pendingRtNormalFace},
     {.key = "rteyebrighten", .asInt = &SettingsPanel::pendingRtEyeBrighten},
@@ -1222,7 +1222,6 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "shadowdistance",    .asFloat = &SettingsPanel::pendingShadowDistance},
     {.key = "shadowresolution",  .asInt   = &SettingsPanel::pendingShadowResolution},
     {.key = "shadowcascades",    .asInt   = &SettingsPanel::pendingShadowCascades},
-    {.key = "enhancedwater",     .asBool  = &SettingsPanel::pendingEnhancedWater},
     {.key = "specular",          .asBool  = &SettingsPanel::pendingSpecular},
     {.key = "antialiasing",      .asInt   = &SettingsPanel::pendingAntiAliasing},
     {.key = "fxaa",              .asBool  = &SettingsPanel::pendingFXAA},
@@ -1478,8 +1477,6 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
     } else if (key == "shadowcascades") {
         // The same way: the atlas is rebuilt for the new count next frame.
         if (renderer) renderer->setShadowCascadeCount(pendingShadowCascades + 1);
-    } else if (key == "enhancedwater") {
-        if (renderer) renderer->setEnhancedWaterEnabled(pendingEnhancedWater);
     } else if (key == "specular") {
         if (renderer) renderer->setClientSpecular(pendingSpecular);
     } else if (key == "groundclutter") {
@@ -1649,6 +1646,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtMinBrightness(pendingRtMinBrightness);
     } else if (key == "rtwater") {
         if (renderer) renderer->setRtWater(pendingRtWater);
+    } else if (key == "rtwaveamp" || key == "rtwavefreq") {
+        if (renderer) renderer->setRtWaterWaves(pendingRtWaveAmp / 100.0f, pendingRtWaveFreq / 100.0f);
     } else if (key == "rtnormalkeep" || key == "rtnormalface") {
         // Held apart at use (normalBlendCosines): a face angle under the
         // keep angle is taken as the keep angle.

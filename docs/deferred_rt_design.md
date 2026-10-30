@@ -46,8 +46,7 @@ pixels wherever a doodad stands behind a window. So:
   cull/depth variants, character opaque / alpha-test bases with variants.
   Pipelines are created once at load or MSAA change, not per draw.
 * The renderers choose the set per call (`gbuffer` argument), never from a
-  persistent flag: the water reflection pass keeps calling terrain and WMO with
-  the forward set.
+  persistent flag.
 
 ## Pass order with RT on
 
@@ -295,13 +294,16 @@ today - water but for the ray traced water below.
 
 ## Ray traced water
 
-With the "Ray traced water" setting (Water page; it needs the enhanced water
-and the ray traced lighting), water and ocean - not magma or slime - trace
-their own reflection and what comes through them in the fragment shader:
-`water.frag` built with `RT_WATER` (and `RT_HARDWARE` for ray queries) binds
-the scene's set as its set 3 and includes a tracer, then `water_rt.glsli`. One
-ray each way a pixel, at its wave normal, every frame; no history. The planar
-reflection pass is skipped while it draws.
+With the "Ray traced water" setting (Water page; it needs the ray traced
+lighting), water and ocean - not magma or slime - are this client's own
+water, its waves bending a traced reflection and what comes through them:
+`water.frag` (through the software tracer; `water_rt_hw.frag.spv` built with
+`RT_HARDWARE` for ray queries) binds the scene's set as its set 3 and includes
+a tracer, then `water_rt.glsli`. One ray each way a pixel, at its wave normal,
+every frame; no history. Otherwise, and for magma and slime always, the
+liquids are the original client's (`WaterRenderer::renderClient`). The waves'
+height and frequency are the settings' Wave amplitude and Wave frequency, the
+height at half what it was first made with by default.
 
 - A reflected or refracted hit that is on screen and is what that pixel
   shows (its depth matches, its face looks at the camera) takes the frame

@@ -502,7 +502,7 @@ TEST_CASE("the settings ray tracing makes moot are known graphics rows", "[setti
 }
 
 // Clauses joined by '&' must all hold (settingEnabled), as the ray traced
-// water's "enhancedwater&raytracedlighting" asks.
+// water's wave sliders' "raytracedlighting&rtwater" asks.
 TEST_CASE("an enabledWhen of several clauses needs every one", "[settings][schema]") {
     SettingDesc d{};
     d.enabledWhen = "a&b=2";
@@ -514,4 +514,45 @@ TEST_CASE("an enabledWhen of several clauses needs every one", "[settings][schem
     v["a"] = "1";
     v["b"] = "3";
     CHECK_FALSE(settingEnabled(d, read));
+}
+
+TEST_CASE("the ray traced water and its waves' sliders", "[settings][schema]") {
+    size_t count = 0;
+    const SettingDesc* rows = clientSettingsSchema(count);
+    auto row = [&](const char* key) -> const SettingDesc* {
+        for (size_t i = 0; i < count; ++i) {
+            if (std::string(rows[i].key) == key) return &rows[i];
+        }
+        return nullptr;
+    };
+    const SettingDesc* water = row("rtwater");
+    REQUIRE(water != nullptr);
+    // Only the ray tracing: the enhanced water it needed is gone.
+    CHECK(std::string(water->enabledWhen) == "raytracedlighting");
+    CHECK(row("enhancedwater") == nullptr);
+    const SettingDesc* amp = row("rtwaveamp");
+    const SettingDesc* freq = row("rtwavefreq");
+    REQUIRE(amp != nullptr);
+    REQUIRE(freq != nullptr);
+    for (const SettingDesc* d : {amp, freq}) {
+        INFO(d->key);
+        CHECK(d->kind == SettingKind::Int);
+        CHECK(std::string(d->category) == "Water");
+        CHECK(std::string(d->enabledWhen) == "raytracedlighting&rtwater");
+        CHECK(d->defaultValue == 100);
+        CHECK(isGraphicsCategory(d->category));
+    }
+    CHECK(amp->minValue == 0);
+    CHECK(amp->maxValue == 200);
+    CHECK(freq->minValue == 25);
+    CHECK(freq->maxValue == 300);
+    // Greyed with the water: off, or without ray tracing.
+    std::map<std::string, std::string> v{{"raytracedlighting", "1"}, {"rtwater", "1"}};
+    auto read = [&](const std::string& k) { return v[k]; };
+    CHECK(settingEnabled(*amp, read));
+    v["rtwater"] = "0";
+    CHECK_FALSE(settingEnabled(*amp, read));
+    v["rtwater"] = "1";
+    v["raytracedlighting"] = "0";
+    CHECK_FALSE(settingEnabled(*freq, read));
 }

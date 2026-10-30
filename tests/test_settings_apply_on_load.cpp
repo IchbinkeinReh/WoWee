@@ -110,7 +110,7 @@ TEST_CASE("the settings the user reported are on the applied list",
     const auto applyKeys =
         namesIn(wowee::test::slurp("src/ui/settings_panel.cpp"), "ApplyKeys");
     for (const char* key : {"viewdistance", "groundclutter", "shadows",
-                            "shadowdistance", "enhancedwater", "brightness"}) {
+                            "shadowdistance", "rtwater", "rtwaveamp", "rtwavefreq", "brightness"}) {
         INFO(key);
         CHECK(applyKeys.count(key) == 1);
     }
@@ -344,8 +344,8 @@ TEST_CASE("a preset applies the detail levels it carries", "[settings]") {
 }
 
 TEST_CASE("every preset leaves the client's missing extras off", "[settings]") {
-    // Lens flare, sharp stars, sun shafts, light shafts, sky-tinted fog and the
-    // enhanced water are not in the original client. They stay as opt-in
+    // Lens flare, sharp stars, sun shafts, light shafts and sky-tinted fog are
+    // not in the original client. They stay as opt-in
     // extras; no preset turns one on, and picking a preset turns each off.
     for (int i = 0; i < wowee::ui::kGraphicsPresetCount; ++i) {
         const auto& p = wowee::ui::kGraphicsPresets[i];
@@ -355,7 +355,6 @@ TEST_CASE("every preset leaves the client's missing extras off", "[settings]") {
         CHECK_FALSE(p.sunShafts);
         CHECK(p.lightShafts == 0);
         CHECK(p.fogSkyBlend == 0.0f);
-        CHECK_FALSE(p.enhancedWater);
     }
 }
 
@@ -759,4 +758,21 @@ TEST_CASE("no preset turns the client's specular option on", "[settings]") {
     const auto applyKeys =
         namesIn(wowee::test::slurp("src/ui/settings_panel.cpp"), "ApplyKeys");
     CHECK(applyKeys.count("specular") == 1);
+}
+
+TEST_CASE("the enhanced water is gone, and a file that names it still loads", "[settings]") {
+    // No row, no field, no switch on the login sheet: its water is the ray
+    // traced water's now, and without ray tracing the client's own.
+    const std::string schema = wowee::test::slurp("src/ui/settings_schema.cpp");
+    CHECK(schema.find("\"enhancedwater\"") == std::string::npos);
+    CHECK(wowee::test::slurp("include/ui/settings_panel.hpp").find("pendingEnhancedWater") == std::string::npos);
+    CHECK(wowee::test::slurp("include/ui/graphics_presets.hpp").find("enhancedWater") == std::string::npos);
+    // The game's loader reads past the old key and its saver no longer
+    // writes it; the login sheet's save takes it out of the file.
+    const std::string files = wowee::test::slurp("src/ui/game_screen_minimap.cpp");
+    CHECK(files.find("else if (key == \"enhanced_water\") {}") != std::string::npos);
+    CHECK(files.find("out << \"enhanced_water=") == std::string::npos);
+    CHECK(files.find("out << \"rt_wave_amp=") != std::string::npos);
+    CHECK(files.find("out << \"rt_wave_freq=") != std::string::npos);
+    CHECK(wowee::test::slurp("src/ui/auth_screen.cpp").find("cfg.erase(\"enhanced_water\")") != std::string::npos);
 }

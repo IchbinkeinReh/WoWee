@@ -148,7 +148,6 @@ void GameScreen::reapplySettingsAfterGpuRebuild(rendering::Renderer* renderer) {
     panel.terrainSettingsApplied_ = false;
     panel.lightingSettingsApplied_ = false;
     panel.fxaaSettingsApplied_ = false;
-    panel.enhancedWaterApplied_ = false;
     panel.lensFlareApplied_ = false;
     panel.normalMapSettingsApplied_ = false;
     panel.fsrSettingsApplied_ = false;
@@ -546,15 +545,6 @@ void GameScreen::render(game::GameHandler& gameHandler) {
         if (post) {
             post->setFXAAEnabled(settingsPanel_.pendingFXAA);
             settingsPanel_.fxaaSettingsApplied_ = true;
-        }
-    }
-
-    // Apply the saved water choice once when the renderer is available
-    if (!settingsPanel_.enhancedWaterApplied_) {
-        auto* renderer = services_.renderer;
-        if (renderer) {
-            renderer->setEnhancedWaterEnabled(settingsPanel_.pendingEnhancedWater);
-            settingsPanel_.enhancedWaterApplied_ = true;
         }
     }
 

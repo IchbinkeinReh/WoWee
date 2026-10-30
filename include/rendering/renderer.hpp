@@ -838,8 +838,6 @@ public:
     /// Off (the default): the client's own liquid (WaterRenderer's client
     /// path). On: this client's procedural water, with its reflection pass
     /// and refraction copy.
-    void setEnhancedWaterEnabled(bool enabled);
-    [[nodiscard]] bool isEnhancedWaterEnabled() const { return enhancedWater_; }
     /// The client's 'specular' option (0x0078de60 sets world flag 0x8000000;
     /// off by default): water drawn as psLiquidWater rather than NoSpec, the
     /// terrain's "_s.blp" textures and highlight. As in the client it takes
@@ -988,16 +986,11 @@ private:
     float globalTime = 0.0f;
 
     // Per-frame reflection UBO (mirrors camera for planar reflections)
-    VkBuffer reflPerFrameUBO = VK_NULL_HANDLE;
-    VmaAllocation reflPerFrameUBOAlloc = VK_NULL_HANDLE;
-    void* reflPerFrameUBOMapped = nullptr;
-    VkDescriptorSet reflPerFrameDescSet[MAX_FRAMES] = {};
 
     bool createPerFrameResources();
     void destroyPerFrameResources();
     void updatePerFrameUBO();
     void setupWater1xPass();
-    void renderReflectionPass();
 
     // ── Multithreaded secondary command buffer recording ──
     // Indices into secondaryCmds_ arrays
@@ -1130,6 +1123,8 @@ private:
     LightingTune lightingTune_{};
     bool rtSoftLamps_ = false;
     bool rtWater_ = true;  ///< "Ray traced water" (water_rt.glsli)
+    float rtWaveAmp_ = 1.0f;
+    float rtWaveFreq_ = 1.0f;
 public:
     /// The Debug Graphics views of the ray traced water: its reflection
     /// alone, and what comes up through it alone.
@@ -1139,6 +1134,11 @@ public:
     // not taken where the hit is on screen: what is traced, and textured.
     static constexpr int kRtWaterTracedOnlyView = 17;
     void setRtWater(bool on) { rtWater_ = on; }
+    /// Its waves' height and frequency, 1 the default of each.
+    void setRtWaterWaves(float amplitude, float frequency) {
+        rtWaveAmp_ = amplitude;
+        rtWaveFreq_ = frequency;
+    }
 private:
     int rtMinBrightnessPercent_ = 0;
     int rtNormalKeepDeg_ = 15;
@@ -1185,7 +1185,6 @@ private:
     // shafts take their copy and applied in the overlay pass.
     std::unique_ptr<EyeAdaptationPass> eyeAdaptation_;
     bool sunShaftsEnabled_ = false;  // opt-in: the original client has none
-    bool enhancedWater_ = false;     // opt-in: the original client draws its own liquid
     bool pendingClientSpecular_ = false;  // the 'specular' setting as last set
     bool clientSpecular_ = false;         // ...as latched at the first world load
     /// renderWorld ran this frame. The shafts are built from the world's

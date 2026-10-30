@@ -81,6 +81,8 @@ public:
     void restoreGraphicsDefaults();
     int pendingRtMinBrightness = 0;   ///< the traced darkening's floor, % (rt_min_brightness.hpp)
     bool pendingRtWater = true;       ///< "Ray traced water" (water_rt.glsli)
+    int pendingRtWaveAmp = 100;       ///< its waves' height, % of the default
+    int pendingRtWaveFreq = 100;      ///< and their frequency, %
     int pendingRtNormalKeep = 15;     ///< the normal blend's angles, degrees (rt_normal_blend.hpp)
     int pendingRtNormalFace = 35;
     /// The eye adaptation (Ray Tracing; eye_adaptation::paramsFor).
@@ -140,9 +142,6 @@ public:
     int pendingDbgBlobShadow = 100;
     /// A multiplier on how thick that mist is. See Renderer::setVolumetricFogDensity.
     float pendingVolumetricDensity = 1.0f;
-    /// This client's procedural water with reflection and refraction, instead
-    /// of the client's own liquid. Off by default. See Renderer::setEnhancedWaterEnabled.
-    bool pendingEnhancedWater = false;
     /// The client's 'specular' option, off by default as its cvar is
     /// (0x0078e1a0). Takes effect at the next start. See Renderer::setClientSpecular.
     bool pendingSpecular = false;
@@ -372,7 +371,6 @@ public:
     bool lightingSettingsApplied_ = false; // True once saved shadows/brightness are applied
     bool lensFlareApplied_ = false;        // True once the saved flare strength reached the sky
     bool frameCapApplied_ = false;         // True once the saved frame limit reached the window
-    bool enhancedWaterApplied_ = false;
     bool normalMapSettingsApplied_ = false;  // True once saved normal map settings applied
 
     // ---- Mute state: mute bypasses master volume without touching slider values ----

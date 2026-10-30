@@ -2040,6 +2040,8 @@ void GameScreen::saveSettings() {
     out << "rt_soft_lamps=" << (settingsPanel_.pendingRtSoftLamps ? 1 : 0) << "\n";
     out << "rt_min_brightness=" << settingsPanel_.pendingRtMinBrightness << "\n";
     out << "rt_water=" << (settingsPanel_.pendingRtWater ? 1 : 0) << "\n";
+    out << "rt_wave_amp=" << settingsPanel_.pendingRtWaveAmp << "\n";
+    out << "rt_wave_freq=" << settingsPanel_.pendingRtWaveFreq << "\n";
     out << "rt_normal_keep=" << settingsPanel_.pendingRtNormalKeep << "\n";
     out << "rt_normal_face=" << settingsPanel_.pendingRtNormalFace << "\n";
     out << "rt_eye_brighten=" << settingsPanel_.pendingRtEyeBrighten << "\n";
@@ -2090,7 +2092,6 @@ void GameScreen::saveSettings() {
     out << "sun_shafts=" << (settingsPanel_.pendingSunShafts ? 1 : 0) << "\n";
     out << "screen_glow=" << (settingsPanel_.pendingScreenGlow ? 1 : 0) << "\n";
     out << "brightness=" << settingsPanel_.pendingBrightness << "\n";
-    out << "enhanced_water=" << (settingsPanel_.pendingEnhancedWater ? 1 : 0) << "\n";
     out << "specular=" << (settingsPanel_.pendingSpecular ? 1 : 0) << "\n";
     out << "antialiasing=" << settingsPanel_.pendingAntiAliasing << "\n";
     out << "fxaa=" << (settingsPanel_.pendingFXAA ? 1 : 0) << "\n";
@@ -2395,6 +2396,8 @@ void GameScreen::loadSettings() {
                 settingsPanel_.pendingRtNormalFace =
                     std::clamp(std::stoi(val), 0, rendering::kNormalBlendMaxDegrees);
             else if (key == "rt_water") settingsPanel_.pendingRtWater = (std::stoi(val) != 0);
+            else if (key == "rt_wave_amp") settingsPanel_.pendingRtWaveAmp = std::clamp(std::stoi(val), 0, 200);
+            else if (key == "rt_wave_freq") settingsPanel_.pendingRtWaveFreq = std::clamp(std::stoi(val), 25, 300);
             else if (key == "rt_min_brightness")
                 settingsPanel_.pendingRtMinBrightness =
                     std::clamp(std::stoi(val), 0, rendering::kRtMinBrightnessMaxPercent);
@@ -2453,7 +2456,9 @@ void GameScreen::loadSettings() {
             // Not water_refraction, which the files written before this hold
             // as 1 for a feature that was always on: read as this, it would
             // turn the enhanced water on for everyone who had played before.
-            else if (key == "enhanced_water") settingsPanel_.pendingEnhancedWater = (std::stoi(val) != 0);
+            // The enhanced water is gone; a file that still has it is read
+            // past it, and the next save leaves it out.
+            else if (key == "enhanced_water") {}
             else if (key == "specular") settingsPanel_.pendingSpecular = (std::stoi(val) != 0);
             else if (key == "antialiasing") settingsPanel_.pendingAntiAliasing = std::clamp(std::stoi(val), 0, 3);
             else if (key == "fxaa") settingsPanel_.pendingFXAA = (std::stoi(val) != 0);
