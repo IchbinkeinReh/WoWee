@@ -49,10 +49,22 @@ handlers that announce perfectly well were reported as silent.
 SMSG_BATTLEFIELD_MGR_ENTRY_INVITE fires its event two lines below the chat
 message this sweep caught it by.
 
+A fourth form turned out to be the same blind spot one level further out: the
+handler calls a method of its own class and *that* method fires. One handler was
+reported that way, and the rule added for it is `firingHelpers` - a function
+defined in the same file whose own body holds a tell counts as a tell to whoever
+calls it. What it cannot weigh is whether the helper fires on the path this
+caller takes, which is the same limit as the line below about not telling
+whether the event a handler fires is the right one.
+
 A false row here is worse than a missing one. The obvious response to "this
 handler tells nobody" is to add a fire - and raiseUiError already reaches
 UI_ERROR_MESSAGE through addUIError, which is how this file once grew a second
-answer to a question already answered two headers away.
+answer to a question already answered two headers away. SpellHandler::
+handleCastFailed is the row this nearly did for: it announces through
+addUIError, fires the cast event and UNIT_SPELLCAST_STOP through
+raiseCastFailureEvents, plays the error sound and the character's line, feeds
+the combat log, and its own body spells none of those.
 
 THE TWO REAL ONES
 
@@ -187,6 +199,26 @@ NAMED = re.compile(
     re.M)
 
 
+#: A named function of a handler class, so its body can be read for the same
+#: tells.  A dispatch entry that delegates announces through the function it
+#: calls, and reading only the lambda saw the delegation and no fire:
+#: SpellHandler::handleCastFailed tells the player with addUIError and fires the
+#: cast event and UNIT_SPELLCAST_STOP - but the fires are in
+#: raiseCastFailureEvents, two lines of `owner_.addonEventCallbackRef()(event,
+#: ...)` one function away, and the handler's own body only names it.  Adding a
+#: fire to the handler to answer that report would have been the duplicate this
+#: file's own notes warn about.
+MEMBER_FN = re.compile(
+    r"^[A-Za-z_][\w:<>,*&\[\] ]*?\b\w+::(\w+)\s*\([^;{]*?\)\s*(?:const\s*)?"
+    r"(?:noexcept\s*)?(?:override\s*)?\{", re.M)
+
+
+def firingHelpers(text):
+    """Names of functions *in this file* whose bodies reach the interface."""
+    return {m.group(1) for m in MEMBER_FN.finditer(text)
+            if any(t in body_after(text, m.end()) for t in TELLS_INTERFACE)}
+
+
 def body_after(text, start):
     """The braced block beginning at the { that `start` points just past."""
     depth, i = 1, start
@@ -206,12 +238,22 @@ def main():
         text = without_comments(path.read_text(errors="ignore"))
         found = [(m.group(1), m.end()) for m in HANDLER.finditer(text)]
         found += [(m.group(1), m.end()) for m in NAMED.finditer(text)]
+        helpers = firingHelpers(text)
+        callsHelper = (re.compile(r"\b(" + "|".join(map(re.escape, sorted(helpers))) + r")\s*\(")
+                       if helpers else None)
         for name, at in found:
             body = body_after(text, at)
             total += 1
             if not any(t in body for t in TELLS_PLAYER):
                 continue
             if any(t in body for t in TELLS_INTERFACE) or ANNOUNCES.search(body):
+                continue
+            # One level out: the handler hands the work to a function of its own
+            # class, and that function is where the fire lives.  SpellHandler::
+            # handleCastFailed was reported for this - it announces, it fires the
+            # cast event and the stop through raiseCastFailureEvents, and its own
+            # body never spells the fire.
+            if callsHelper and callsHelper.search(body):
                 continue
             # ...and changed something while it was at it. Without this the
             # report is a hundred and nine notifications - an attack that
