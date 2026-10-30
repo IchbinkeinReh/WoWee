@@ -42,6 +42,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -195,6 +196,13 @@ public:
     /// Build and upload while active; release everything GPU-side when not.
     /// Switching off must happen with the device idle.
     void setActive(bool active);
+    /// Told when the tracing is switched on (true) and off (false). Off, an
+    /// owner removes every mesh and instance it added; on, it registers
+    /// everything it has loaded again, from its own data - the scene keeps no
+    /// source of a mesh once it is uploaded, nor anything while it is off.
+    void addActivationListener(std::function<void(bool)> listener) {
+        activationListeners_.push_back(std::move(listener));
+    }
     [[nodiscard]] bool isActive() const { return active_; }
     /// Every mesh still waiting to be built and uploaded, now, in submits of
     /// their own that are waited on - rather than a share a frame, which on
@@ -329,6 +337,7 @@ private:
     // them. Made with the first BLAS.
     VmaPool blasPool_ = VK_NULL_HANDLE;
     VmaPool blasPool();
+    std::vector<std::function<void(bool)>> activationListeners_;
     bool immediate_ = false;
     bool immediatePools_ = false;  ///< and a grown pool's old buffer freed at once too
     struct Garbage {

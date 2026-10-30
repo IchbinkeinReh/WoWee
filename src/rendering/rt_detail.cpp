@@ -83,7 +83,12 @@ uint32_t RtSlotStore::add(const uint32_t* words) {
     const uint64_t h = hashOf(words);
     auto [lo, hi] = byHash_.equal_range(h);
     for (auto it = lo; it != hi; ++it) {
-        if (std::memcmp(slot(it->second), words, size_t(slotWords_) * sizeof(uint32_t)) == 0) return it->second;
+        // Its words while they are here; once uploaded, the 64-bit hash.
+        const auto p = pending_.find(it->second);
+        if (p == pending_.end() ||
+            std::memcmp(p->second.data(), words, size_t(slotWords_) * sizeof(uint32_t)) == 0) {
+            return it->second;
+        }
     }
     uint32_t s;
     if (!free_.empty()) {
@@ -94,20 +99,16 @@ uint32_t RtSlotStore::add(const uint32_t* words) {
         refs_.push_back(0);
         hashes_.push_back(0);
         used_.push_back(0);
-        isDirty_.push_back(0);
-        words_.resize(words_.size() + slotWords_);
     }
-    std::memcpy(words_.data() + size_t(s) * slotWords_, words, size_t(slotWords_) * sizeof(uint32_t));
     refs_[s] = 0;
     hashes_[s] = h;
     used_[s] = 1;
     byHash_.emplace(h, s);
     unreferenced_.push_back(s);
     ++live_;
-    if (!isDirty_[s]) {
-        isDirty_[s] = 1;
-        dirty_.push_back(s);
-    }
+    auto& w = pending_[s];
+    if (w.empty()) pendingWords_ += slotWords_;
+    w.assign(words, words + slotWords_);
     return s;
 }
 
@@ -123,9 +124,29 @@ void RtSlotStore::freeSlot(uint32_t s) {
             break;
         }
     }
+    if (auto p = pending_.find(s); p != pending_.end()) {
+        pendingWords_ -= slotWords_;
+        pending_.erase(p);
+    }
     used_[s] = 0;
     free_.push_back(s);
     --live_;
+    if (live_ == 0) {
+        // Nothing left: the bookkeeping goes too, so a store emptied by the
+        // tracing being switched off holds nothing.
+        refs_.clear();
+        refs_.shrink_to_fit();
+        hashes_.clear();
+        hashes_.shrink_to_fit();
+        used_.clear();
+        used_.shrink_to_fit();
+        free_.clear();
+        free_.shrink_to_fit();
+        unreferenced_.clear();
+        byHash_.clear();
+        pending_.clear();
+        pendingWords_ = 0;
+    }
 }
 
 void RtSlotStore::release(uint32_t s) {
@@ -134,26 +155,20 @@ void RtSlotStore::release(uint32_t s) {
 }
 
 void RtSlotStore::collect() {
-    for (uint32_t s : unreferenced_) {
+    std::vector<uint32_t> slots;
+    slots.swap(unreferenced_);
+    for (uint32_t s : slots) {
         if (s < refs_.size() && used_[s] && refs_[s] == 0) freeSlot(s);
     }
-    unreferenced_.clear();
 }
 
-std::vector<uint32_t> RtSlotStore::takeDirty() {
-    std::vector<uint32_t> out;
-    out.swap(dirty_);
-    for (uint32_t s : out) isDirty_[s] = 0;
+std::vector<RtSlotStore::Pending> RtSlotStore::takePending() {
+    std::vector<Pending> out;
+    out.reserve(pending_.size());
+    for (auto& [slot, words] : pending_) out.push_back({slot, std::move(words)});
+    pending_.clear();
+    pendingWords_ = 0;
     return out;
-}
-
-void RtSlotStore::markAllDirty() {
-    for (uint32_t s = 0; s < refs_.size(); ++s) {
-        if (!isDirty_[s]) {
-            isDirty_[s] = 1;
-            dirty_.push_back(s);
-        }
-    }
 }
 
 }  // namespace wowee::rendering

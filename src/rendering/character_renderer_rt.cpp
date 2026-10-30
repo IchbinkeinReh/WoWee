@@ -323,6 +323,17 @@ void CharacterRenderer::rtForget(RtCharacter& rc) {
     rc.group = 0;
 }
 
+void CharacterRenderer::onRtActive(bool on) {
+    if (!rtScene_ || on) return;
+    for (auto& [id, rc] : rtCharacters_) rtForget(rc);
+    rtCharacters_.clear();
+    for (auto& [key, shape] : rtShapes_) {
+        if (shape.wholeMesh != RtScene::kInvalid) rtScene_->removeMesh(shape.wholeMesh);
+        for (const auto& piece : shape.pieces) rtScene_->removeMesh(piece.mesh);
+    }
+    rtShapes_.clear();
+}
+
 void CharacterRenderer::syncRtScene(const glm::vec3& cameraPos) {
     if (!rtScene_ || !rtScene_->isActive()) return;
     const uint64_t gen = ++rtSyncGeneration_;

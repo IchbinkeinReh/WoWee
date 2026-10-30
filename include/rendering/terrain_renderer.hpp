@@ -6,6 +6,7 @@
 #include "rendering/shadow_params.hpp"
 
 #include "pipeline/terrain_mesh.hpp"
+#include <functional>
 #include "pipeline/blp_loader.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/cube_texture.hpp"
@@ -70,6 +71,8 @@ struct TerrainChunkGPU {
 
     // Owning tile coordinates (for per-tile removal)
     int tileX = -1, tileY = -1;
+    // Its place in the tile, by which its mesh is found again (onRtActive).
+    int chunkX = -1, chunkY = -1;
 
     // Bounding sphere for frustum culling
     float boundingSphereRadius = 0.0f;
@@ -191,6 +194,13 @@ public:
 
     /// Where chunks register their geometry for the ray traced lighting.
     void setRtScene(RtScene* scene) { rtScene_ = scene; }
+    /// Where a resident chunk's mesh is (TerrainManager's tiles), for
+    /// registering it with the ray traced scene again; null where it is not.
+    using RtChunkSource = std::function<const pipeline::ChunkMesh*(int tileX, int tileY, int chunkX, int chunkY)>;
+    void setRtChunkSource(RtChunkSource source) { rtChunkSource_ = std::move(source); }
+    /// The ray tracing switched on: every resident chunk registered again,
+    /// from the tiles' meshes; off: every one let go of (RtScene keeps none).
+    void onRtActive(bool on);
 
 private:
     TerrainChunkGPU uploadChunk(const pipeline::ChunkMesh& chunk);
@@ -225,6 +235,7 @@ private:
     VkContext* vkCtx = nullptr;
     RtScene* rtScene_ = nullptr;
     void registerRtChunk(TerrainChunkGPU& gpuChunk, const pipeline::ChunkMesh& chunk);
+    RtChunkSource rtChunkSource_;
     pipeline::AssetManager* assetManager = nullptr;
 
     // Main pipelines

@@ -52,6 +52,11 @@ static_assert(kSlotWords * 2 >= kTexels);
 /// meshes that use them: the detail textures' pyramids, the terrain chunks'
 /// layer records. A slot is freed with its last reference, so the store
 /// follows the models and tiles loaded rather than growing over a session.
+///
+/// A slot's words are held only until they are uploaded (takePending): the
+/// GPU's copy is the one the tracing reads, and on a phone a second one in
+/// the process's heap is the same memory twice. Content is matched by its
+/// hash, and by the words themselves while they are still here.
 class RtSlotStore {
 public:
     static constexpr uint32_t kNone = 0xFFFFFFFFu;
@@ -72,28 +77,30 @@ public:
     [[nodiscard]] uint32_t capacity() const { return static_cast<uint32_t>(refs_.size()); }
     [[nodiscard]] uint32_t live() const { return live_; }
     [[nodiscard]] uint32_t refs(uint32_t slot) const { return slot < refs_.size() ? refs_[slot] : 0; }
-    [[nodiscard]] uint64_t bytes() const { return uint64_t(words_.size()) * sizeof(uint32_t); }
-    [[nodiscard]] const uint32_t* slot(uint32_t s) const { return words_.data() + size_t(s) * slotWords_; }
-    [[nodiscard]] const std::vector<uint32_t>& words() const { return words_; }
+    /// What is held in the process's heap: the words waiting to be uploaded.
+    [[nodiscard]] uint64_t bytes() const { return uint64_t(pendingWords_) * sizeof(uint32_t); }
 
-    /// The slots whose words changed since the last call, each once.
-    std::vector<uint32_t> takeDirty();
-    void markAllDirty();
+    /// The slots added since the last call and their words, each once; the
+    /// store keeps no copy of them after.
+    struct Pending {
+        uint32_t slot;
+        std::vector<uint32_t> words;
+    };
+    std::vector<Pending> takePending();
 
 private:
     uint64_t hashOf(const uint32_t* words) const;
     void freeSlot(uint32_t s);
 
     uint32_t slotWords_;
-    std::vector<uint32_t> words_;
     std::vector<uint32_t> refs_;
     std::vector<uint64_t> hashes_;
     std::vector<uint8_t> used_;  // holds content, referenced or waiting for collect()
     std::vector<uint32_t> free_;
     std::vector<uint32_t> unreferenced_;  // added since the last collect()
     std::unordered_multimap<uint64_t, uint32_t> byHash_;
-    std::vector<uint32_t> dirty_;
-    std::vector<uint8_t> isDirty_;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> pending_;
+    uint64_t pendingWords_ = 0;
     uint32_t live_ = 0;
 };
 

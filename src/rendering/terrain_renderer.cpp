@@ -423,6 +423,8 @@ bool TerrainRenderer::loadTerrain(const pipeline::TerrainMesh& mesh,
 
             gpuChunk.tileX = tileX;
             gpuChunk.tileY = tileY;
+            gpuChunk.chunkX = x;
+            gpuChunk.chunkY = y;
 
             // Create per-chunk params UBO
             // A failed allocation here is pressure rather than corruption, but
@@ -484,6 +486,8 @@ bool TerrainRenderer::loadTerrainIncremental(const pipeline::TerrainMesh& mesh,
 
         gpuChunk.tileX = tileX;
         gpuChunk.tileY = tileY;
+        gpuChunk.chunkX = cx;
+        gpuChunk.chunkY = cy;
 
         if (!createChunkParamsUBO(gpuChunk)) {
             LOG_WARNING("Terrain[", tileX, ",", tileY, "] chunk UBO allocation failed"
@@ -1383,8 +1387,29 @@ void TerrainRenderer::clear() {
     evictProtectFrom_ = 0;
 }
 
-void TerrainRenderer::registerRtChunk(TerrainChunkGPU& gpuChunk, const pipeline::ChunkMesh& chunk) {
+void TerrainRenderer::onRtActive(bool on) {
     if (!rtScene_) return;
+    for (auto& c : chunks) {
+        if (!on) {
+            if (c.rtMesh != RtScene::kInvalid) {
+                rtScene_->removeInstance(c.rtInstance);
+                rtScene_->removeMesh(c.rtMesh);
+            }
+            c.rtMesh = RtScene::kInvalid;
+            c.rtInstance = RtScene::kInvalid;
+            continue;
+        }
+        if (c.rtMesh != RtScene::kInvalid || c.chunkX < 0 || !rtChunkSource_) continue;
+        if (const pipeline::ChunkMesh* mesh = rtChunkSource_(c.tileX, c.tileY, c.chunkX, c.chunkY)) {
+            registerRtChunk(c, *mesh);
+        }
+    }
+}
+
+void TerrainRenderer::registerRtChunk(TerrainChunkGPU& gpuChunk, const pipeline::ChunkMesh& chunk) {
+    // Only while tracing: switched on, every resident chunk is registered
+    // then (onRtActive), from the tile's mesh, which is what this reads.
+    if (!rtScene_ || !rtScene_->isActive()) return;
     RtScene::MeshSource src;
     src.positions.reserve(chunk.vertices.size());
     for (const auto& v : chunk.vertices) {

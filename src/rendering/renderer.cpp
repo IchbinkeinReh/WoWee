@@ -5254,6 +5254,19 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             return false;
         }
         terrainRenderer->setRtScene(rtScene_.get());
+        // The owners of what the ray traced scene holds, told when the
+        // tracing goes on and off: it keeps no source of a mesh once
+        // uploaded, nor anything while off, so they register again from
+        // their own data. Once, here; the renderers are this one's.
+        if (rtScene_ && !rtListenerAdded_) {
+            rtListenerAdded_ = true;
+            rtScene_->addActivationListener([this](bool on) {
+                if (terrainRenderer) terrainRenderer->onRtActive(on);
+                if (wmoRenderer) wmoRenderer->onRtActive(on);
+                if (m2Renderer) m2Renderer->onRtActive(on);
+                if (characterRenderer) characterRenderer->onRtActive(on);
+            });
+        }
         // 0x0078de60: "Specular enabled on restart." - latched here, once.
         clientSpecular_ = pendingClientSpecular_;
         terrainRenderer->setSpecular(clientSpecular_);

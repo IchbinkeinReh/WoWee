@@ -1148,6 +1148,7 @@ private:
     bool rtWater_ = true;  ///< "Ray traced water" (water_rt.glsli)
     float rtWaveAmp_ = 1.0f;
     float rtWaveFreq_ = 1.0f;
+    bool rtListenerAdded_ = false;
     // The memory guard (rt_memory_guard.hpp): run each frame before the ray
     // tracing's prepare, and before the loading screen's warm-up.
     void rtMemoryGuard();

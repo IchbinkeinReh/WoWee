@@ -86,8 +86,14 @@ TEST_CASE("RtSlotStore: the same content is stored once", "[rt_detail]") {
     const uint32_t sb = store.add(b.data());
     CHECK(sb != sa);
     CHECK(store.live() == 2);
-    CHECK(store.slot(sb)[7] == 2u);
     CHECK(store.bytes() == 2ull * rt_detail::kSlotWords * 4);
+    // Uploaded, the words are let go of, and the same content is still
+    // found by its hash.
+    const auto up = store.takePending();
+    CHECK(up.size() == 2);
+    CHECK(store.bytes() == 0);
+    CHECK(store.add(b.data()) == sb);
+    CHECK(store.takePending().empty());
 }
 
 TEST_CASE("RtSlotStore: a slot goes with its last reference and is taken again", "[rt_detail]") {
@@ -103,11 +109,14 @@ TEST_CASE("RtSlotStore: a slot goes with its last reference and is taken again",
     // Released past zero: nothing happens.
     store.release(s);
     CHECK(store.live() == 0);
-    // The freed slot is the next one used, and the old content is not found.
+    // Emptied, the store holds nothing at all; what comes next starts afresh.
+    CHECK(store.capacity() == 0);
+    CHECK(store.bytes() == 0);
     const uint32_t t = store.add(b.data());
-    CHECK(t == s);
-    CHECK(store.capacity() == 1);
-    CHECK(store.slot(t)[0] == 9u);
+    CHECK(t == 0);
+    const auto up = store.takePending();
+    REQUIRE(up.size() == 1);
+    CHECK(up[0].words[0] == 9u);
     const uint32_t u = store.add(a.data());
     CHECK(u != t);
 }
@@ -127,16 +136,24 @@ TEST_CASE("RtSlotStore: one added and never taken is freed by collect", "[rt_det
     CHECK(store.live() == 1);
 }
 
-TEST_CASE("RtSlotStore: what changed is reported once, and all of it on request", "[rt_detail]") {
+TEST_CASE("RtSlotStore: what is to upload is handed over once, and the store keeps no copy", "[rt_detail]") {
     RtSlotStore store(16);
     std::vector<uint32_t> a(16, 1), b(16, 2);
     const uint32_t sa = store.add(a.data());
     const uint32_t sb = store.add(b.data());
-    auto d = store.takeDirty();
+    store.acquire(sa);
+    store.acquire(sb);
+    auto d = store.takePending();
     CHECK(d.size() == 2);
-    CHECK(store.takeDirty().empty());
-    store.markAllDirty();
-    d = store.takeDirty();
-    CHECK(d.size() == 2);
-    CHECK(((d[0] == sa && d[1] == sb) || (d[0] == sb && d[1] == sa)));
+    CHECK(store.takePending().empty());
+    CHECK(store.bytes() == 0);
+    CHECK(((d[0].slot == sa && d[1].slot == sb) || (d[0].slot == sb && d[1].slot == sa)));
+    // A slot freed before its upload takes its words with it.
+    std::vector<uint32_t> c(16, 3);
+    const uint32_t sc = store.add(c.data());
+    store.acquire(sc);
+    CHECK(store.bytes() == 64);
+    store.release(sc);
+    CHECK(store.bytes() == 0);
+    CHECK(store.takePending().empty());
 }

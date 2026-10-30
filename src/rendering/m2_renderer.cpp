@@ -1600,9 +1600,11 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
 
         // Upload vertex buffer to GPU
         {
+            // Readable back: the ray traced scene registers the model again
+            // from it, keeping no copy of its own (onRtActive).
             auto buf = uploadBuffer(*vkCtx_,
                 vertexData.data(), vertexData.size() * sizeof(float),
-                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
             gpuModel.vertexBuffer = buf.buffer;
             gpuModel.vertexAlloc = buf.allocation;
         }
@@ -1611,7 +1613,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
         {
             auto buf = uploadBuffer(*vkCtx_,
                 model.indices.data(), model.indices.size() * sizeof(uint16_t),
-                VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+                VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
             gpuModel.indexBuffer = buf.buffer;
             gpuModel.indexAlloc = buf.allocation;
         }
@@ -2331,7 +2333,9 @@ void M2Renderer::detectLamp(M2ModelGPU& gpuModel, const pipeline::M2Model& model
 }
 
 void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& model) {
-    if (!rtScene_ || model.vertices.empty() || model.indices.empty()) return;
+    // Only while tracing; switched on, every loaded model is registered then
+    // (onRtActive).
+    if (!rtScene_ || !rtScene_->isActive() || model.vertices.empty() || model.indices.empty()) return;
     // What the renderer never draws, and what is too small and numerous to be
     // worth its triangles (ground clutter).
     if (gpuModel.isInvisibleTrap || gpuModel.isSpellEffect ||
@@ -2476,6 +2480,93 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
         }
         const uint32_t mesh = rtScene_->addMesh(std::move(piece));
         if (mesh != RtScene::kInvalid) gpuModel.rtPieces.push_back({part.bone, mesh});
+    }
+}
+
+void M2Renderer::onRtActive(bool on) {
+    if (!rtScene_ || !vkCtx_) return;
+    if (!on) {
+        for (auto& [id, gm] : models) releaseRtModel(gm);
+        for (RtTracking* tr : {&rtStatic_, &rtDynamic_}) {
+            const uint32_t bit = tr == &rtDynamic_ ? RtScene::kDynamicBit : 0u;
+            for (uint32_t slot : tr->owned) rtScene_->removeInstance(slot | bit);
+            *tr = RtTracking{};
+        }
+        rtDynamicOwnerIds_.clear();
+        rtSyncCursor_ = 0;
+        for (auto& inst : instances) {
+            inst.rtInstance = RtScene::kInvalid;
+            inst.rtPieceInstances.clear();
+        }
+        return;
+    }
+    // The models' vertices and indices are on the GPU only: read back in
+    // batches of up to 64 MB, through one host buffer each, and registered
+    // from that, as at load. Their own uploads first, which may be in flight.
+    vkCtx_->waitAllUploads();
+    std::vector<M2ModelGPU*> todo;
+    for (auto& [id, gm] : models) {
+        if (!gm.vertexBuffer || !gm.indexBuffer || gm.vertexCount == 0 || gm.indexCount == 0) continue;
+        if (gm.rtMesh != RtScene::kInvalid || !gm.rtPieces.empty()) continue;
+        todo.push_back(&gm);
+    }
+    constexpr VkDeviceSize kVertexBytes = 18 * sizeof(float);  // loadModel's interleaved vertex
+    constexpr VkDeviceSize kBatchBytes = 64ull << 20;
+    VmaAllocator alloc = vkCtx_->getAllocator();
+    size_t next = 0;
+    while (next < todo.size()) {
+        struct Region {
+            M2ModelGPU* gm;
+            VkDeviceSize vertexAt, indexAt;
+        };
+        std::vector<Region> regions;
+        VkDeviceSize total = 0;
+        while (next < todo.size()) {
+            M2ModelGPU* gm = todo[next];
+            const VkDeviceSize vb = gm->vertexCount * kVertexBytes;
+            const VkDeviceSize ib = (VkDeviceSize(gm->indexCount) * sizeof(uint16_t) + 3) & ~VkDeviceSize(3);
+            if (!regions.empty() && total + vb + ib > kBatchBytes) break;
+            regions.push_back({gm, total, total + vb});
+            total += vb + ib;
+            ++next;
+        }
+        AllocatedBuffer host = createBuffer(alloc, total, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_GPU_TO_CPU);
+        if (!host.buffer) break;
+        VkCommandBuffer cmd = vkCtx_->beginSingleTimeCommands();
+        for (const Region& r : regions) {
+            const VkBufferCopy v{0, r.vertexAt, r.gm->vertexCount * kVertexBytes};
+            vkCmdCopyBuffer(cmd, r.gm->vertexBuffer, host.buffer, 1, &v);
+            const VkBufferCopy i{0, r.indexAt, VkDeviceSize(r.gm->indexCount) * sizeof(uint16_t)};
+            vkCmdCopyBuffer(cmd, r.gm->indexBuffer, host.buffer, 1, &i);
+        }
+        vkCtx_->endSingleTimeCommands(cmd);
+        void* mapped = nullptr;
+        if (vmaMapMemory(alloc, host.allocation, &mapped) == VK_SUCCESS) {
+            vmaInvalidateAllocation(alloc, host.allocation, 0, VK_WHOLE_SIZE);
+            const auto* bytes = static_cast<const uint8_t*>(mapped);
+            for (const Region& r : regions) {
+                pipeline::M2Model model;
+                model.vertices.resize(r.gm->vertexCount);
+                const auto* f = reinterpret_cast<const float*>(bytes + r.vertexAt);
+                for (uint32_t k = 0; k < r.gm->vertexCount; ++k, f += 18) {
+                    pipeline::M2Vertex& v = model.vertices[k];
+                    v.position = glm::vec3(f[0], f[1], f[2]);
+                    v.normal = glm::vec3(f[3], f[4], f[5]);
+                    v.texCoords[0] = glm::vec2(f[6], f[7]);
+                    v.texCoords[1] = glm::vec2(f[8], f[9]);
+                    for (int b = 0; b < 4; ++b) {
+                        v.boneWeights[b] = static_cast<uint8_t>(std::lround(std::clamp(f[10 + b], 0.0f, 1.0f) * 255.0f));
+                        v.boneIndices[b] = static_cast<uint8_t>(std::lround(std::max(f[14 + b], 0.0f)));
+                    }
+                }
+                model.indices.resize(r.gm->indexCount);
+                std::memcpy(model.indices.data(), bytes + r.indexAt, model.indices.size() * sizeof(uint16_t));
+                model.bones = r.gm->bones;
+                registerRtModel(*r.gm, model);
+            }
+            vmaUnmapMemory(alloc, host.allocation);
+        }
+        destroyBuffer(alloc, host);
     }
 }
 

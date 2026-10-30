@@ -88,6 +88,9 @@ public:
     /// of the half-dozen ways they change. A transport, and anything else
     /// seen to move, is one of the scene's dynamic instances.
     void syncRtScene();
+    /// The ray tracing switched on: every loaded model registered again,
+    /// from its own data; off: every one let go of (RtScene keeps none).
+    void onRtActive(bool on);
     /// The omni lights (MOLT) of the instances near `eye`, placed in the
     /// world: lamps, braziers; and what of them glows (ModelData::glows):
     /// glow cards and lava outside. None of it depends on the hour.

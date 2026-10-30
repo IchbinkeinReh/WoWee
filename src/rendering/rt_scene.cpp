@@ -394,14 +394,23 @@ void RtScene::buildMesh(Mesh& m) {
 
 void RtScene::setActive(bool active) {
     if (active == active_ || !ctx_) return;
-    active_ = active;
     if (!active) {
+        // The owners let go of every mesh and instance first: nothing of
+        // the scene is kept while the tracing is off, not even the sources
+        // to build it again (they register again when it comes back on).
+        for (auto& listen : activationListeners_) listen(false);
+        active_ = false;
         releaseGpu();
         return;
     }
+    active_ = true;
+    // And register everything they have loaded, from their own data.
+    for (auto& listen : activationListeners_) listen(true);
     for (MeshId id = 0; id < meshes_.size(); ++id) {
         Mesh& m = meshes_[id];
-        if (m.live && !m.queued && !m.uploaded) {
+        // One whose source went with its upload cannot be built again here;
+        // its owner registers it anew (the listeners above).
+        if (m.live && !m.queued && !m.uploaded && !m.source.indices.empty()) {
             m.queued = true;
             pendingMeshes_.push_back(id);
         }
@@ -556,17 +565,29 @@ void RtScene::releaseGpu() {
     destroyBuffer(alloc, maskBuffer_);
     maskCapacity_ = 0;
     masksUploaded_ = 0;
-    // So are the detail pyramids and the terrain records.
+    // So are the detail pyramids and the terrain records - which the owners'
+    // meshes, all removed, no longer hold.
     destroyBuffer(alloc, detailBuffer_);
     detailCapacity_ = 0;
-    details_.markAllDirty();
     destroyBuffer(alloc, terrainBuffer_);
     terrainCapacity_ = 0;
-    terrainRecords_.markAllDirty();
     destroyBuffer(alloc, meshTable_);
     meshTableCapacity_ = 0;
     meshTableDirty_ = true;
     builtVersion_ = ~0ull;
+    // And the top levels' CPU copies, built again when it is back on.
+    for (auto* v : {&instanceData_, &dynInstanceData_}) {
+        v->clear();
+        v->shrink_to_fit();
+    }
+    for (auto* v : {&tlasNodes_, &dynTlasNodes_}) {
+        v->clear();
+        v->shrink_to_fit();
+    }
+    for (auto* v : {&asInstanceData_, &dynAsInstanceData_}) {
+        v->clear();
+        v->shrink_to_fit();
+    }
     ++sceneVersion_;
     ++descriptorGeneration_;
 }
@@ -889,6 +910,11 @@ void RtScene::uploadPending(VkCommandBuffer cmd) {
         m.nodes.shrink_to_fit();
         m.extras.clear();
         m.extras.shrink_to_fit();
+        // Nor its source: the GPU has it, and its owner registers it again
+        // should it be wanted once more (the tracing switched back on).
+        const uint32_t flags = m.source.flags;
+        m.source = MeshSource{};
+        m.source.flags = flags;
     }
     meshTableDirty_ = true;
     // A mesh only dynamic instances place - a character's, a piece of one -
@@ -1516,30 +1542,49 @@ void RtScene::uploadSlots(VkCommandBuffer cmd, RtSlotStore& store, AllocatedBuff
     if (count == 0) return;
     const VkDeviceSize slotBytes = VkDeviceSize(store.slotWords()) * sizeof(uint32_t);
     bool fresh = false;
+    AllocatedBuffer oldBuffer{};
+    uint32_t oldCapacity = 0;
     if (!buffer.buffer || capacity < count) {
-        if (buffer.buffer) {
-            VmaAllocator alloc = ctx_->getAllocator();
-            AllocatedBuffer old = buffer;
-            ctx_->deferAfterAllFrameFences([alloc, old]() mutable { destroyBuffer(alloc, old); });
-        }
+        oldBuffer = buffer;
+        oldCapacity = capacity;
         capacity = grownCapacity(capacity, count);
         buffer = createBuffer(ctx_->getAllocator(), VkDeviceSize(capacity) * slotBytes,
-                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                               VMA_MEMORY_USAGE_GPU_ONLY);
         ++descriptorGeneration_;
         fresh = true;
         if (!buffer.buffer) {
-            capacity = 0;
+            buffer = oldBuffer;  // kept: what it holds is still wanted
+            capacity = oldCapacity;
             return;
         }
     }
-    std::vector<uint32_t> dirty = store.takeDirty();
-    if (fresh) {
-        // A new buffer holds none of them: all of it, in one copy.
-        stage(cmd, buffer.buffer, 0, store.words().data(), VkDeviceSize(count) * slotBytes);
-    } else {
-        if (dirty.empty()) return;
-        for (uint32_t s : dirty) stage(cmd, buffer.buffer, VkDeviceSize(s) * slotBytes, store.slot(s), slotBytes);
+    if (fresh && oldBuffer.buffer && oldCapacity > 0) {
+        // What the old buffer held, copied on the GPU: the store keeps no
+        // copy of what it has uploaded.
+        const VkBufferCopy region{0, 0, VkDeviceSize(std::min(oldCapacity, capacity)) * slotBytes};
+        vkCmdCopyBuffer(cmd, oldBuffer.buffer, buffer.buffer, 1, &region);
+        VkMemoryBarrier2 cb{};
+        cb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        cb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        cb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        cb.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        cb.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        VkDependencyInfo cdep{};
+        cdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        cdep.memoryBarrierCount = 1;
+        cdep.pMemoryBarriers = &cb;
+        cmdPipelineBarrier2(cmd, cdep);
+    }
+    if (oldBuffer.buffer) {
+        VmaAllocator alloc = ctx_->getAllocator();
+        ctx_->deferAfterAllFrameFences([alloc, oldBuffer]() mutable { destroyBuffer(alloc, oldBuffer); });
+    }
+    const auto pending = store.takePending();
+    if (pending.empty() && !fresh) return;
+    for (const auto& p : pending) {
+        stage(cmd, buffer.buffer, VkDeviceSize(p.slot) * slotBytes, p.words.data(), slotBytes);
     }
     VkMemoryBarrier2 mb{};
     mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -1561,13 +1606,16 @@ VkDescriptorSet RtScene::descriptorSet() const {
 void RtScene::memoryReport(std::vector<MemoryEntry>& out) const {
     VmaAllocator a = ctx_ ? ctx_->getAllocator() : nullptr;
     auto gpu = [a](const AllocatedBuffer& b) { return allocationBytes(a, b.allocation); };
-    uint64_t blas = 0, sources = 0, building = 0;
+    uint64_t blas = 0, sources = 0, building = 0, srcTerrain = 0, srcBuildings = 0;
     for (const auto& m : meshes_) {
         blas += gpu(m.blasBuffer);
         const MeshSource& s = m.source;
-        sources += vectorBytes(s.positions) + vectorBytes(s.indices) + vectorBytes(s.surfaces) +
-                   vectorBytes(s.normals) + vectorBytes(s.oneSided) + vectorBytes(s.uvs) +
-                   vectorBytes(s.masks) + vectorBytes(s.details) + vectorBytes(s.terrainLayers);
+        const uint64_t bytes = vectorBytes(s.positions) + vectorBytes(s.indices) + vectorBytes(s.surfaces) +
+                               vectorBytes(s.normals) + vectorBytes(s.oneSided) + vectorBytes(s.uvs) +
+                               vectorBytes(s.masks) + vectorBytes(s.details) + vectorBytes(s.terrainLayers);
+        sources += bytes;
+        if (s.flags & kMeshTerrain) srcTerrain += bytes;
+        else if (s.flags & kMeshBuilding) srcBuildings += bytes;
         building += vectorBytes(m.tris) + vectorBytes(m.nodes) + vectorBytes(m.extras);
     }
     uint64_t tlas = 0, frame = 0;
@@ -1588,7 +1636,9 @@ void RtScene::memoryReport(std::vector<MemoryEntry>& out) const {
                        vectorBytes(dynAsInstanceData_)});
     out.push_back({"RT hit textures and terrain records", gpu(detailBuffer_) + gpu(terrainBuffer_),
                    details_.bytes() + terrainRecords_.bytes()});
-    out.push_back({"RT mesh sources (kept to rebuild)", 0, sources});
+    out.push_back({"RT mesh sources: terrain", 0, srcTerrain});
+    out.push_back({"RT mesh sources: buildings", 0, srcBuildings});
+    out.push_back({"RT mesh sources: models and units", 0, sources - srcTerrain - srcBuildings});
     out.push_back({"RT meshes waiting for upload", 0, building});
     out.push_back({"RT staging in flight", stagingBytesInFlight(), 0});
 }

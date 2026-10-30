@@ -5431,8 +5431,22 @@ void WMORenderer::gatherGlows(ModelData& modelData) {
     }
 }
 
+void WMORenderer::onRtActive(bool on) {
+    if (!rtScene_) return;
+    if (!on) {
+        std::vector<uint32_t> ids;
+        for (const auto& [id, mesh] : rtModelMeshes_) ids.push_back(id);
+        for (uint32_t id : ids) releaseRtModel(id);
+        for (auto& [id, rec] : rtInstances_) rtScene_->removeInstance(rec.rtId);
+        rtInstances_.clear();
+        return;
+    }
+    for (const auto& [id, model] : loadedModels) registerRtModel(id, model);
+}
+
 void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
-    if (!rtScene_ || rtModelMeshes_.count(modelId)) return;
+    // Only while tracing; switched on, every loaded model is registered then.
+    if (!rtScene_ || !rtScene_->isActive() || rtModelMeshes_.count(modelId)) return;
     RtScene::MeshSource src;
     // Its floors and walls divide one space from another: a point light they
     // stop gives nothing beyond them (RtScene::kRayStructure).

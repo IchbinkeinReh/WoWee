@@ -588,6 +588,10 @@ public:
     /// while the lighting is on. An instance that moves - a transport, a
     /// doodad on one - goes over to the scene's dynamic instances.
     void syncRtScene();
+    /// The ray tracing switched on: every loaded model registered again, its
+    /// vertices read back from its GPU buffers (the model's own are not
+    /// kept); off: every one let go of (RtScene keeps none).
+    void onRtActive(bool on);
     /// The point lights the instances' models carry (torches, braziers,
     /// lamps, spell effects), placed for this frame, within `range` of `eye`.
     /// Walks the instances syncRtScene found to carry lights, so it follows

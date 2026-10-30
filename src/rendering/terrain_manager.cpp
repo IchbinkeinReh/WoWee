@@ -149,6 +149,25 @@ TerrainManager::~TerrainManager() {
 bool TerrainManager::initialize(pipeline::AssetManager* assets, TerrainRenderer* renderer) {
     assetManager = assets;
     terrainRenderer = renderer;
+    // A resident chunk's mesh, for the ray traced scene to register again:
+    // a committed tile's, or one still finalizing (uploaded, not yet moved
+    // into loadedTiles). On the main thread, as the tiles are changed.
+    if (terrainRenderer) {
+        terrainRenderer->setRtChunkSource([this](int tx, int ty, int cx, int cy) -> const pipeline::ChunkMesh* {
+            if (cx < 0 || cx >= 16 || cy < 0 || cy >= 16) return nullptr;
+            if (auto it = loadedTiles.find(TileCoord{tx, ty}); it != loadedTiles.end() && it->second) {
+                const auto& chunk = it->second->mesh.getChunk(cx, cy);
+                if (chunk.isValid()) return &chunk;
+            }
+            for (const auto& ft : finalizingTiles_) {
+                if (ft.pending && ft.pending->coord.x == tx && ft.pending->coord.y == ty) {
+                    const auto& chunk = ft.pending->mesh.getChunk(cx, cy);
+                    if (chunk.isValid()) return &chunk;
+                }
+            }
+            return nullptr;
+        });
+    }
 
     if (!assetManager) {
         LOG_ERROR("Asset manager is null");

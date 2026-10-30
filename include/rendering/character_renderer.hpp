@@ -507,6 +507,10 @@ public:
     /// line with this renderer's, posed as they are drawn this frame
     /// (character_renderer_rt.cpp).
     void syncRtScene(const glm::vec3& cameraPos);
+    /// The ray tracing switched off: every character's shape and instances
+    /// let go of (RtScene keeps none); the sync registers them again once it
+    /// is back on.
+    void onRtActive(bool on);
     /// The point lights the characters' models carry - a fire elemental's
     /// glow, a held torch - placed for this frame, within `range` of `eye`.
     void collectRtLights(const glm::vec3& eye, float range, std::vector<rt_lights::PointLight>& out) const;
