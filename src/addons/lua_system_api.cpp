@@ -1980,37 +1980,91 @@ static int lua_GetCVarAbsoluteMax(lua_State* L) {
     return cvarAbsoluteBound(L, true, "Usage: GetCVarAbsoluteMax(\"cvar\")");
 }
 
-/// What CVAR_UPDATE carries as its first argument: the CVar's *label*, not its
-/// name. The two are different spellings of the same setting, and FrameXML uses
-/// both within two lines of each other -
+/// The payload this client announces a CVar change with, for the changes *it*
+/// makes - its own settings window, which is not one of FrameXML's panels.
 ///
-///     if ( (event == "CVAR_UPDATE") and (arg1 == "SHOW_TARGET_CASTBAR") ) then
-///         if ( GetCVar("showTargetCastbar") == "0") then
+/// A change the interface makes needs none of this: SetCVar's third argument is
+/// the announcement and the binding forwards it (see lua_SetCVar), so a panel
+/// that declares `event = "SHOW_BUFF_DURATION_TEXT"` gets heard as that. What is
+/// written here is what this window announces instead, and it is only ever as
+/// right as the pairs below: FrameXML's settings tables say what a CVar is
+/// announced as, in two places -
 ///
-/// - so there is no ambiguity about which belongs where. Firing the name meant
-/// every consumer in the interface compared a camelCase name against an
-/// upper-case label and took the other branch, silently: the health and mana
-/// numbers on unit frames never appeared or disappeared, the free-bag-slots
-/// count never switched on, and the target and focus cast bars never followed
-/// their setting.
+///     ["REMOVE_CHAT_DELAY"] = { default = "0", cvar = "removeChatDelay",
+///                               event = "REMOVE_CHAT_DELAY_TEXT" }
 ///
-/// Mostly the label is the name in upper snake case, and where it is not,
-/// FrameXML states the pair itself: the status-text bars set self.cvar and
-/// self.cvarLabel on consecutive lines of their OnLoad, and the rest are named
-/// in the comparisons that read them. The real client keeps this mapping in a
-/// CVar registry inside the binary, which is not something this client has, so
-/// what is written here is what the interface itself says.
+/// in interfaceoptionsframe.lua, and self.cvar beside self.cvarLabel in the
+/// status-text bars' OnLoad. Framing this as a name-to-label mapping the binary
+/// was assumed to hold was what made it wrong: the transform below answers
+/// BUFF_DURATIONS for buffDurations, and every listener compares
+/// SHOW_BUFF_DURATION_TEXT, so a change made in this window reached the CVar and
+/// never the frames listening for it. tools/framexml_cvar_label_check.py reads
+/// those declarations and reports where this table disagrees with them.
+///
+/// The transform is the fallback for the CVars that have no declared pair, where
+/// the only evidence of what the interface expects is the comparison itself:
+/// `arg1 == "DISPLAY_FREE_BAG_SLOTS"` has no settings table entry beside it, and
+/// a window-driven change to displayFreeBagSlots is the only way that setting
+/// ever moves here.
 static std::string cvarLabelFor(const std::string& name) {
-    // The ones the transform below would get wrong. Every entry is a pair
-    // FrameXML writes down somewhere.
+    // The pairs FrameXML declares, which the transform below would get wrong.
     static const std::pair<const char*, const char*> kNamed[] = {
-        {"playerstatustext",     "STATUS_TEXT_PLAYER"},
-        {"partystatustext",      "STATUS_TEXT_PARTY"},
-        {"petstatustext",        "STATUS_TEXT_PET"},
-        {"targetstatustext",     "STATUS_TEXT_TARGET"},
-        {"statustextpercentage", "STATUS_TEXT_PERCENT"},
-        {"showcastabledebuffs",  "SHOW_CASTABLE_DEBUFFS_TEXT"},
-        {"showarenaenemyframes", "SHOW_ARENA_ENEMY_FRAMES_TEXT"},
+        // The status-text bars, which set both halves in their OnLoad.
+        {"playerstatustext",       "STATUS_TEXT_PLAYER"},
+        {"partystatustext",        "STATUS_TEXT_PARTY"},
+        {"petstatustext",          "STATUS_TEXT_PET"},
+        {"targetstatustext",       "STATUS_TEXT_TARGET"},
+        // Compared in TextStatusBar_OnEvent with no declaration beside it; the
+        // percent text has no checkbox of its own, which is why.
+        {"statustextpercentage",   "STATUS_TEXT_PERCENT"},
+        // interfaceoptionsframe.lua's table, which is where the panels that use
+        // the old SetBinding-style rows say what each CVar is announced as.
+        {"alwaysshowactionbars",   "ALWAYS_SHOW_MULTIBARS_TEXT"},
+        {"autolootdefault",        "AUTO_LOOT_DEFAULT_TEXT"},
+        {"autoquestwatch",         "AUTO_QUEST_WATCH_TEXT"},
+        {"buffdurations",          "SHOW_BUFF_DURATION_TEXT"},
+        {"displayworldpvpobjectives", "WORLD_PVP_OBJECTIVES_DISPLAY"},
+        {"enablecombattext",       "SHOW_COMBAT_TEXT_TEXT"},
+        {"fctauras",               "COMBAT_TEXT_SHOW_AURAS_TEXT"},
+        {"fctcombatstate",         "COMBAT_TEXT_SHOW_COMBAT_STATE_TEXT"},
+        {"fctcombopoints",         "COMBAT_TEXT_SHOW_COMBO_POINTS_TEXT"},
+        {"fctdamagereduction",     "COMBAT_TEXT_SHOW_RESISTANCES_TEXT"},
+        {"fctdodgeparrymiss",      "COMBAT_TEXT_SHOW_DODGE_PARRY_MISS_TEXT"},
+        {"fctenergygains",         "COMBAT_TEXT_SHOW_ENERGIZE_TEXT"},
+        {"fctfriendlyhealers",     "COMBAT_TEXT_SHOW_FRIENDLY_NAMES_TEXT"},
+        {"fcthonorgains",          "COMBAT_TEXT_SHOW_HONOR_GAINED_TEXT"},
+        {"fctlowmanahealth",       "COMBAT_TEXT_SHOW_LOW_HEALTH_MANA_TEXT"},
+        {"fctperiodicenergygains", "COMBAT_TEXT_SHOW_PERIODIC_ENERGIZE_TEXT"},
+        {"fctreactives",           "COMBAT_TEXT_SHOW_REACTIVES_TEXT"},
+        {"fctrepchanges",          "COMBAT_TEXT_SHOW_REPUTATION_TEXT"},
+        {"hidepartyinraid",        "HIDE_PARTY_INTERFACE_TEXT"},
+        {"lockactionbars",         "LOCK_ACTIONBAR_TEXT"},
+        {"lootundermouse",         "LOOT_UNDER_MOUSE_TEXT"},
+        {"questfadingdisable",     "SHOW_QUEST_FADING_TEXT"},
+        {"removechatdelay",        "REMOVE_CHAT_DELAY_TEXT"},
+        {"showarenaenemycastbar",  "SHOW_ARENA_ENEMY_CASTBAR_TEXT"},
+        {"showarenaenemyframes",   "SHOW_ARENA_ENEMY_FRAMES_TEXT"},
+        {"showarenaenemypets",     "SHOW_ARENA_ENEMY_PETS_TEXT"},
+        {"showcastablebuffs",      "SHOW_CASTABLE_BUFFS_TEXT"},
+        {"showcastabledebuffs",    "SHOW_CASTABLE_DEBUFFS_TEXT"},
+        {"showdispeldebuffs",      "SHOW_DISPELLABLE_DEBUFFS_TEXT"},
+        {"shownewbietips",         "SHOW_NEWBIE_TIPS_TEXT"},
+        {"showpartybackground",    "SHOW_PARTY_BACKGROUND_TEXT"},
+        {"showpartypets",          "SHOW_PARTY_PETS_TEXT"},
+        {"showtargetoftarget",     "SHOW_TARGET_OF_TARGET_TEXT"},
+        {"targetoftargetmode",     "SHOW_TARGET_OF_TARGET_STATE"},
+        // Not a label at all: the one writer of chatStyle announces it as its
+        // own name (interfaceoptionspanels.lua:962), and floatingchatframe's
+        // Click-anywhere button compares exactly that.
+        {"chatstyle",              "chatStyle"},
+        // Compared by that same Click-anywhere button, and declared nowhere:
+        // the social panel row for this CVar names its text and no event, so
+        // the original client never announces it and the button only ever
+        // updates from the chatStyle change beside it. This window drives the
+        // CVar (settings_schema.cpp), and the comparison says what the frame is
+        // waiting for, so that is what this announces - under the transform it
+        // would be WHOLE_CHAT_WINDOW_CLICKABLE, which nothing reads.
+        {"wholechatwindowclickable", "CHAT_WHOLE_WINDOW_CLICKABLE"},
     };
     std::string key(name);
     toLowerInPlace(key);
@@ -2527,14 +2581,36 @@ static int lua_SetCVar(lua_State* L) {
     // moves, and most of those calls set the value it already has.
     if (changed) saveStoredCVars();
     applyCVarSideEffects(L, key, value);
-    // Announced, because nine frames listen for it - the options panels redraw
-    // themselves from this rather than from the click that caused it.
-    // Through the engine in the registry, which is where it puts itself; the
-    // event tables are its business rather than this file's.
+    // What is announced is the caller's *third argument*, not a spelling of the
+    // name. SetCVar's binding in the binary (FUN_00514c10, and the fire at
+    // 0x00514cff) tests that argument for being a string or a number
+    // (FUN_0084df60 - the argument slot's type against 3 and 4) and raises
+    // CVAR_UPDATE only when it is, with that argument itself: the interface's
+    // panels pass the label their own settings table declares, and a SetCVar
+    // called without one says nothing to anyone. Inferring a label instead was
+    // guessing at a payload the caller had already chosen: SetCVar("chatStyle",
+    // v, "chatStyle") - the only writer floatingchatframe's Click-anywhere
+    // button answers to - arrived as CHAT_STYLE and matched nothing, and the
+    // thirty-plus pairs FrameXML spells out (buffDurations is announced as
+    // SHOW_BUFF_DURATION_TEXT) arrived as BUFF_DURATIONS and matched nothing
+    // either. lua_isstring answers true for a number, which is the binary's
+    // rule: both types announce.
+    //
+    // The second event argument is this client's rather than the binary's. That
+    // fire pushes one string under a "%s%s" format (0x009e1ad0), so the `value`
+    // every FrameXML handler unpacks - TextStatusBar_OnEvent branches on it -
+    // reads past the argument list. Sending the value is the answer the
+    // handlers were written for; matching what the stack happened to hold is
+    // not something worth reproducing.
+    //
+    // Through the engine in the registry, which is where the event puts itself;
+    // the event tables are its business rather than this file's.
+    if (!lua_isstring(L, 3)) return 0;
+    const std::string payload = lua_tostring(L, 3);
     lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
     auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    if (engine) engine->fireEvent("CVAR_UPDATE", {cvarLabelFor(name), value});
+    if (engine) engine->fireEvent("CVAR_UPDATE", {payload, value});
     return 0;
 }
 
@@ -6640,7 +6716,15 @@ static void writeStoredSetting(lua_State* L, const ui::SettingDesc& row, const s
     if (store.rfind("cvar:", 0) == 0) {
         lua_pushstring(L, store.c_str() + 5);
         lua_pushstring(L, stored.c_str());
-        callGlobal(L, "SetCVar", 2);
+        // The third argument is what the change is announced as, and without
+        // one the write is silent: the binary fires CVAR_UPDATE only for a
+        // SetCVar that was given that argument. A panel of the interface's
+        // chooses it from its own settings table; this window is not one of
+        // those panels, so it chooses it here, from the pairs the interface
+        // declares (cvarLabelFor). A row whose CVar nobody announces is a row
+        // whose change only the `after` chunk below can make visible.
+        lua_pushstring(L, cvarLabelFor(store.c_str() + 5).c_str());
+        callGlobal(L, "SetCVar", 3);
     } else if (store.rfind("click:", 0) == 0) {
         lua_pushstring(L, store.c_str() + 6);
         lua_pushstring(L, stored.c_str());

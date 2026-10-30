@@ -369,13 +369,22 @@ CHECKS = [
     ("framexml_art_check.py",
      r"^(\d+) not in this install", 1,
      "art the interface asks for that this install does not have"),
-    # CVAR_UPDATE carries the CVar's label, not its name, and the two are
-    # different spellings - so a mapping that cannot produce a label the
-    # interface tests for is a branch that can never be taken. Silently: a
-    # string that is not equal to another string is not an error.
+    # What a CVar change is announced as is SetCVar's third argument, and the
+    # interface's settings tables carry that pair (`cvar = "buffDurations",
+    # event = "SHOW_BUFF_DURATION_TEXT"`). A change made in this client's own
+    # settings window has no panel to supply it, so it announces from kNamed -
+    # and every row here was a setting whose CVar moved while the frames waiting
+    # for the announcement sat, because the transform answered BUFF_DURATIONS and
+    # the listeners compare SHOW_BUFF_DURATION_TEXT.
     ("framexml_cvar_label_check.py",
-     r"^(\d+) that no CVar name here would produce", 1,
-     "CVAR_UPDATE labels the interface tests for that nothing can produce"),
+     r"^(\d+) pair\(s\) this client would announce as something else", 0,
+     "CVAR_UPDATE announcements disagreeing with what the interface declares"),
+    # A label compared in the interface and passed by nobody is a dead branch
+    # there too, so it is only a gap where this client cannot reach it either:
+    # a setting this window drives whose frame never hears about it.
+    ("framexml_cvar_label_check.py",
+     r"(\d+) of them unreachable here as well", 0,
+     "CVAR_UPDATE labels the interface compares that this client cannot announce"),
     # The same question the event-arity sweeps ask, one layer down: an inline
     # <OnX> body is a function whose parameter list the emitter decides from
     # the script's name, and a body naming something that list does not carry
