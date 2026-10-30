@@ -316,8 +316,16 @@ void ChatPanel::sendChatMessage(game::GameHandler& gameHandler) {
             }
         }
 
-        // Unrecognized slash command - fall through to dropdown chat type
-        message = input;
+        // Nothing answers the line - not the interface's SlashCmdList, not the
+        // registry, not the emote list - and it is still not said. Only a macro
+        // body gets here any more (typed chat is FrameXML's edit box, whose own
+        // ChatEdit_ParseText answers an unknown command with HELP_TEXT_SIMPLE and
+        // clears the box, so nothing reaches SendChatMessage there either), and
+        // what a macro says with a plain-text line is exactly that: a plain-text
+        // line. A line with a slash in front of it is a command to the client,
+        // and one it cannot find is not chat.
+        chatInputBuffer_[0] = '\0';
+        return;
     }
 
     // Determine chat type from dropdown selection
