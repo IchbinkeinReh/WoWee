@@ -5216,6 +5216,21 @@ void registerQuestLuaAPI(lua_State* L) {
                 // is what makes a typo look like a working call, and because a
                 // window that calls nothing undefined is the measure of
                 // whether it can be handed over.
+                //
+                // What the reference does with this one (0x005856d0) is more
+                // than pick art, and that is worth knowing before anyone wires
+                // a cursor up: it looks the hovered merchant item up, and if
+                // the player's money is under the item's cost it sets cursor
+                // state 0x1d - the "you cannot have this one" hand - and
+                // returns. Otherwise it walks the item's five requirements and
+                // a reputation test (0x005a37b0 on the item's required faction)
+                // and answers 0x1d if any fails, state 3 if none does. The
+                // container version (0x005d8bd0) has no such test: it sets 3
+                // for any item in the bag that is not flagged at record +0x394
+                // bit 0. So a vendor cursor has to re-decide on every hover -
+                // merchantframe.xml calls this from the frame's OnUpdate while
+                // `itemHover` is set, which is what makes the hand change the
+                // moment a bag fills up or a coin lands.
                 {"ShowMerchantSellCursor", [](lua_State* L) -> int { (void)L; return 0; }},
                 // The merchant's repair-an-item button toggles between these
                 // two and reads the state back through InRepairMode. All three
