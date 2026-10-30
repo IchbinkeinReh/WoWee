@@ -1695,12 +1695,14 @@ static int lua_IsResting(lua_State* L) {
     return 1;
 }
 
+// IsFalling() (0x00612430) -> 1 while the player falls, else nil: the
+// FALLING flag (0x1000) without ROOT (0x800). It tested 0x2000, FALLINGFAR,
+// which a jump never sets, so it answered false through every jump and fall
+// this client made.
 static int lua_IsFalling(lua_State* L) {
     auto* gh = getGameHandler(L);
-    // Check FALLING movement flag
-    if (!gh) { return luaReturnFalse(L); }
-    const auto& mi = gh->getMovementInfo();
-    lua_pushboolean(L, (mi.flags & 0x2000) != 0); // MOVEFLAG_FALLING = 0x2000
+    if (gh && game::isFallingForInterface(gh->getMovementInfo().flags)) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
     return 1;
 }
 

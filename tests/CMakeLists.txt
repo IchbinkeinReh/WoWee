@@ -1450,6 +1450,10 @@ wowee_add_test(test_sound_entry
 wowee_add_test(test_camera_smooth
     SOURCES test_camera_smooth.cpp)
 
+# -- test_is_falling: what IsFalling() tests.
+wowee_add_test(test_is_falling
+    SOURCES test_is_falling.cpp)
+
 # -- test_swim_jump: jumping out of the water.
 wowee_add_test(test_swim_jump
     SOURCES test_swim_jump.cpp)

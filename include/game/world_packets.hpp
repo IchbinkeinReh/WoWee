@@ -419,6 +419,14 @@ enum class MovementFlags : uint32_t {
     HOVER               = 0x40000000,
 };
 
+/// IsFalling() (0x00612430): the mover falling (0x1000) and not rooted
+/// (0x800). Not FALLINGFAR (0x2000), which the server sets only once a fall
+/// has gone on - a jump or a step off a ledge reads as falling at once.
+[[nodiscard]] inline constexpr bool isFallingForInterface(uint32_t flags) {
+    return (flags & static_cast<uint32_t>(MovementFlags::FALLING)) != 0 &&
+           (flags & static_cast<uint32_t>(MovementFlags::ROOT)) == 0;
+}
+
 /// The flags that mean the player is under way, as opposed to standing in a
 /// state.
 ///
