@@ -204,6 +204,38 @@ static std::optional<PetActionRef> petActionRef(game::GameHandler* gh, int slot)
     return PetActionRef{static_cast<uint32_t>(i), gh->getPetActionSlot(i)};
 }
 using game::pet::petSlotSpell;
+/// Whether this pet belongs to a hunter (0x0071b630).
+///
+/// Asked of the pet, never of the player: the pet's own UNIT_FIELD_PETNUMBER has
+/// to be non-zero - that is what makes a pet a pet rather than a guardian to the
+/// client - and the unit its UNIT_FIELD_CREATEDBY pair names has to be a player
+/// reading class 3 in byte 1 of UNIT_FIELD_BYTES_0. So a warlock's voidwalker,
+/// whose master is no hunter, answers false, and so does a pet whose creator this
+/// client never got a record for: a failed lookup is false, not unknown.
+///
+/// Shared because both pet bindings ask it - HasPetUI directly, GetPetHappiness
+/// through the happiness row lookup at 0x0071f390, which is the same predicate
+/// again - and the happiness icon has to agree with what HasPetUI said about it.
+static bool hunterPetOf(game::GameHandler* gh, const game::Unit* pet) {
+    if (!gh || !pet) return false;
+    const uint16_t number = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
+    if (number == 0xFFFF || pet->getField(number) == 0) return false;
+    // The creator guid's high half lives one index above the low half.
+    const uint16_t by = game::fieldIndex(game::UF::UNIT_FIELD_CREATEDBY);
+    if (by == 0xFFFF) return false;
+    const uint64_t creator =
+        pet->getField(by)
+        | (static_cast<uint64_t>(pet->getField(static_cast<uint16_t>(by + 1))) << 32);
+    uint8_t classId = 0;
+    if (auto owner = gh->getEntityManager().getEntity(creator)) {
+        const uint32_t bytes0 =
+            owner->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
+        classId = static_cast<uint8_t>((bytes0 >> 8) & 0xFF);
+    }
+    if (classId == 0 && creator == gh->getPlayerGuid()) classId = gh->getPlayerClass();
+    if (classId == 0) classId = gh->lookupPlayerClass(creator);
+    return classId == 3;   // hunter
+}
 /// The global naming a pet command's or stance's icon (0x005a97f0:
 /// "PET_%s_TEXTURE"), nothing for anything else.
 static const char* petTokenTexture(uint32_t packed) {
@@ -3531,11 +3563,15 @@ void registerActionLuaAPI(lua_State* L) {
                 // whether it is a hunter's. PetFrame_SetHappiness reads the
                 // second to decide whether to draw the happiness icon, and one
                 // return left it nil.
+                //
+                // The second is that predicate on the pet handle, and the pet
+                // handle is what 0x005d3960 asks it of - not the player.
                 {"HasPetUI", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const bool has = gh && gh->hasPet();
             lua_pushboolean(L, has ? 1 : 0);
-            lua_pushboolean(L, 0);   // hunter pet: not distinguished yet
+            const bool hunterPet = hunterPetOf(gh, resolveUnit(L, "pet"));
+            lua_pushboolean(L, hunterPet ? 1 : 0);
             return 2;
         }},
                 // Happiness, for a hunter's pet only. Nil is the honest answer
@@ -3599,11 +3635,26 @@ void registerActionLuaAPI(lua_State* L) {
                 // nothing to its own maximum. The three faces are the thirds of
                 // that range, and the damage each is worth - three quarters,
                 // normal, a quarter more - is the game's, not a guess.
+                //
+                // And always two, even for the answer that has no happiness:
+                // 0x005d3b00's one failure tail pushes nil and then the double
+                // 100.0, so "no happiness" still carries a damage figure - the
+                // 100% of an unmeasured pet. PetFrame_SetHappiness never gets
+                // that far (it returns on the nil) but the second value is not
+                // something the binding withholds.
+                //
+                // And only a hunter's pet has any: the row this is read out of
+                // is fetched through 0x0071f390, which is the hunter-pet
+                // predicate again, so a warlock pet - which does carry
+                // happiness as a power, the realm sends it - gets the failure
+                // answer rather than a level.
                 {"GetPetHappiness", [](lua_State* L) -> int {
             auto* pet = resolveUnit(L, "pet");
-            if (!pet) { lua_pushnil(L); return 1; }
+            if (!pet || !hunterPetOf(getGameHandler(L), pet)) {
+                lua_pushnil(L); lua_pushnumber(L, 100); return 2;
+            }
             const uint32_t maxHappiness = pet->getMaxPowerByType(4);
-            if (maxHappiness == 0) { lua_pushnil(L); return 1; }
+            if (maxHappiness == 0) { lua_pushnil(L); lua_pushnumber(L, 100); return 2; }
 
             const uint32_t happiness = pet->getPowerByType(4);
             const int level = (happiness * 3 >= maxHappiness * 2) ? 3
