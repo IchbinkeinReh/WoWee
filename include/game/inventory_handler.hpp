@@ -83,6 +83,14 @@ public:
     const std::array<TradeSlot, TRADE_SLOT_COUNT>& getPeerTradeSlots() const { return peerTradeSlots_; }
     uint64_t getMyTradeGold() const { return myTradeGold_; }
     uint64_t getPeerTradeGold() const { return peerTradeGold_; }
+    /// The spell an offer's enchant slot names: the extended packet's last
+    /// header dword, which 0x00704680 reads straight into 0xca0ff0 + side*4.
+    /// Keyed by the packet's own discriminator (true = this player's offer).
+    /// The trade window's bindings read the *other* side's - see
+    /// lua_GetTradePlayerItemInfo for why that is the client and not a slip.
+    uint32_t getTradeEnchantSpell(bool ownSide) const {
+        return tradeEnchantSpell_[ownSide ? 0 : 1];
+    }
     void acceptTradeRequest();
     void declineTradeRequest();
     void acceptTrade();
@@ -787,6 +795,8 @@ private:
     std::array<TradeSlot, TRADE_SLOT_COUNT> peerTradeSlots_{};
     uint64_t myTradeGold_   = 0;
     uint64_t peerTradeGold_ = 0;
+    /// 0xca0ff0 and 0xca0ff4: the enchant spell each side's offer names.
+    uint32_t tradeEnchantSpell_[2] = {};
 
     // ---- Loot state ----
     bool lootWindowOpen_ = false;

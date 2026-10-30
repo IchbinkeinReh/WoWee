@@ -4781,6 +4781,11 @@ void InventoryHandler::resetTradeState() {
     peerTradeSlots_ = {};
     myTradeGold_ = 0;
     peerTradeGold_ = 0;
+    // The client zeroes both enchant spells where it opens the window (0x007044a0
+    // case 2, alongside the memset of the seven slots); either way the next
+    // offer brings its own.
+    tradeEnchantSpell_[0] = 0;
+    tradeEnchantSpell_[1] = 0;
     tradeSelfAccepted_ = false;
     tradePartnerAccepted_ = false;
 }
@@ -4976,7 +4981,9 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
     //   uint32 slotCount      seven, twice
     //   uint32 slotCount
     //   uint32 gold           the *header* carries it, not the tail
-    //   uint32 spell          cast on the lowest slot's item
+    //   uint32 spell          the enchant slot's spell: 0x00704680 keeps it at
+    //                         0xca0ff0 + side*4, and 0x00703c50 reads it back to
+    //                         name the enchant slot.  Nothing casts it.
     //   per slot (seven of them):
     //     uint8  slotIndex
     //     uint32 entry, displayId, stackCount, wrapped
@@ -5009,11 +5016,15 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
     const uint32_t slotCount = packet.readUInt32();
     /*uint32_t slotCount2 =*/ packet.readUInt32();
     const uint32_t gold = packet.readUInt32();
-    /*uint32_t spell     =*/ packet.readUInt32();
+    const uint32_t spell = packet.readUInt32();
 
     // Zero is this player's own offer, which is the side myTradeSlots_ holds.
     const bool ownSide = (traderData == 0);
     auto& slots = ownSide ? myTradeSlots_ : peerTradeSlots_;
+
+    // Kept by side, exactly as the packet says it, and read back the other way
+    // round - which is the client's own mix-up, not a translation of it.
+    tradeEnchantSpell_[ownSide ? 0 : 1] = spell;
 
     uint32_t count = slotCount;
     if (count > TRADE_SLOT_COUNT) count = TRADE_SLOT_COUNT;

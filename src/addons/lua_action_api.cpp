@@ -2560,31 +2560,91 @@ static int lua_SetModifiedClick(lua_State* L) {
 // live here. The peer's side is read-only: a trade slot of theirs can be looked
 // at and not touched, so clicking one does nothing rather than pretending.
 
-static int pushTradeSlot(lua_State* L, game::GameHandler* gh,
-                         const game::GameHandler::TradeSlot& slot) {
-    if (!slot.occupied || slot.itemId == 0) { return luaReturnNil(L); }
+// The two info bindings answer a fixed shape, and the shapes are not the same
+// length.  0x00587eb0 (this player's side) answers five values - name, icon,
+// count, then a number, then the enchant slot's spell name - and 0x00587c60
+// (the partner's side) answers six, with the client's usability answer between
+// the number and the enchantment.  FrameXML reads that fourth of ours as
+// isUsable on one half of the window and quality on the other
+// (tradeframe.lua:68 and :96), but it is the same value both times: the item
+// record's quality, which the client reads out of its record cache at +0x14
+// through a gate at +0x28 and answers -1 when the gate says there is none.  The
+// container binding 0x005d7a90 reads the same pair for the value FrameXML calls
+// quality.  Neither half has a usability flag in that place at all.
+static void pushTradeItemLead(lua_State* L, game::GameHandler* gh,
+                              const game::GameHandler::TradeSlot& slot) {
     const auto* info = gh->getItemInfo(slot.itemId);
     lua_pushstring(L, info ? info->name.c_str() : "");
     lua_pushstring(L, gh->getItemIconPath(
         info && info->displayInfoId ? info->displayInfoId : slot.displayId).c_str());
     lua_pushnumber(L, slot.stackCount);
-    lua_pushboolean(L, 1);       // isUsable
-    lua_pushnil(L);              // enchantment: not carried by the trade packet
-    return 5;
+    lua_pushnumber(L, info ? static_cast<double>(info->quality) : -1.0);
+}
+
+// The enchant slot's text, which only ever answers for the seventh slot.  Both
+// legs ask for the *other* side's spell, and the swap is the client's rather
+// than a slip in one call site: 0x00704680 writes the packet's side byte
+// straight into 0xca0ff0 + side*4, and side 0 is the half whose slots the client
+// keeps item objects for (the parser's own-side branch, `local_5 == 0`), while
+// 0x00587eb0 reads back index 1 and 0x00587c60 index 0.  The watcher agrees with
+// the readers: 0x00586dc0 compares 0x00703c50(0) against 0xbfa668 and fires
+// TRADE_TARGET_ITEM_CHANGED for slot 7 when it moves, and 0x00703c50(1) against
+// 0xbfa66c for TRADE_PLAYER_ITEM_CHANGED.  Each half of the window names the
+// enchantment the other half offered.
+static void pushTradeEnchantment(lua_State* L, game::GameHandler* gh, bool ownSide) {
+    const uint32_t spell = gh->getTradeEnchantSpell(!ownSide);
+    if (spell == 0) { lua_pushnil(L); return; }
+    // A spell id with no record answers nothing, which is what 0x004cfd20
+    // returning nil leaves the binding to push.
+    const std::string& name = gh->getSpellName(spell);
+    if (name.empty()) { lua_pushnil(L); return; }
+    lua_pushstring(L, name.c_str());
+}
+
+// An empty slot - and a bad index, which falls off the end of the client's
+// arrays into the same tail - answers its own empty shape and not a lone nil:
+// nil, nil, 0, 0 and nil, or nil, nil, 0, 0, nil, nil on the partner's side.
+static int pushTradeItemEmpty(lua_State* L, bool partnerSide) {
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    lua_pushnil(L);
+    if (partnerSide) lua_pushnil(L);
+    return partnerSide ? 6 : 5;
 }
 
 static int lua_GetTradePlayerItemInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
+    if (!gh) return 0;
     const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) { return luaReturnNil(L); }
-    return pushTradeSlot(L, gh, gh->getMyTradeSlots()[i - 1]);
+    if (i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) return pushTradeItemEmpty(L, false);
+    const auto& slot = gh->getMyTradeSlots()[i - 1];
+    if (!slot.occupied || slot.itemId == 0) return pushTradeItemEmpty(L, false);
+    pushTradeItemLead(L, gh, slot);
+    if (i - 1 == game::GameHandler::TRADE_SLOT_NONTRADED) pushTradeEnchantment(L, gh, true);
+    else lua_pushnil(L);
+    return 5;
 }
 
 static int lua_GetTradeTargetItemInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
+    if (!gh) return 0;
     const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) { return luaReturnNil(L); }
-    return pushTradeSlot(L, gh, gh->getPeerTradeSlots()[i - 1]);
+    if (i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) return pushTradeItemEmpty(L, true);
+    const auto& slot = gh->getPeerTradeSlots()[i - 1];
+    if (!slot.occupied || slot.itemId == 0) return pushTradeItemEmpty(L, true);
+    pushTradeItemLead(L, gh, slot);
+    // The partner's half is the only one with a usability answer, and it is nil
+    // and not false when the item fails - 0x006dc3f0 measures the record's
+    // required level, class and race against this player and 0x00587c60 pushes
+    // nothing when it says no.  WoWee has no such measure for an item it was
+    // never offered, so it keeps answering the usable answer, which is what the
+    // client gives for an item that meets its requirements.
+    lua_pushboolean(L, 1);
+    if (i - 1 == game::GameHandler::TRADE_SLOT_NONTRADED) pushTradeEnchantment(L, gh, false);
+    else lua_pushnil(L);
+    return 6;
 }
 
 static int pushTradeLink(lua_State* L, game::GameHandler* gh,

@@ -1439,6 +1439,9 @@ uint64_t GameHandler::getMyTradeGold() const {
 uint64_t GameHandler::getPeerTradeGold() const {
     return inventoryHandler_ ? inventoryHandler_->getPeerTradeGold() : peerTradeGold_;
 }
+uint32_t GameHandler::getTradeEnchantSpell(bool ownSide) const {
+    return inventoryHandler_ ? inventoryHandler_->getTradeEnchantSpell(ownSide) : 0;
+}
 
 bool GameHandler::supportsEquipmentSets() const {
     return inventoryHandler_ && inventoryHandler_->supportsEquipmentSets();

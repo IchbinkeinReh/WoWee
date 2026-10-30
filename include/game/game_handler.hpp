@@ -2593,6 +2593,9 @@ public:
     const std::array<TradeSlot, TRADE_SLOT_COUNT>& getPeerTradeSlots() const;
     uint64_t getMyTradeGold() const;
     uint64_t getPeerTradeGold() const;
+    /// The enchant spell one side's offer names, keyed by the extended packet's
+    /// own discriminator (true = this player's own offer).
+    uint32_t getTradeEnchantSpell(bool ownSide) const;
 
     void acceptTradeRequest();   // respond to incoming SMSG_TRADE_STATUS(1) with CMSG_BEGIN_TRADE
     /// Take back an acceptance, leaving the trade open.
