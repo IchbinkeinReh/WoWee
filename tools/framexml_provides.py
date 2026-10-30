@@ -78,7 +78,15 @@ def widget_methods_provided():
     # so anchoring on the opening quote finds only the first of each and
     # under-counts the allowlist by four to one.
     allowlist = set(re.findall(r"\b([A-Za-z]\w*)=1", src))
-    return table | shims | region | allowlist
+    # Assigned onto the metatable directly, which is how a method backed by a C
+    # function pushed as a global reaches the widget table:
+    # `__WoweeFrameMT.SetUnitAura = __WoweeTooltipSetUnitAura`.  Matching only
+    # the `function mt:name(` form of the line above missed every one of these,
+    # and tooltip_setter_check reported SetUnitAura as a name that raises on a
+    # buff icon hover - the loudest answer that sweep has - while the aura
+    # tooltip had been built by the C binding all along.
+    assigned = set(re.findall(r"\b\w*MT\.([A-Za-z_]\w*)\s*=[^=]", src))
+    return table | shims | region | allowlist | assigned
 
 
 def counting_table():

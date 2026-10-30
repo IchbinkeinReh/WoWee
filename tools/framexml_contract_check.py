@@ -18,7 +18,7 @@ shrugging:
 All three found real crashes on frames that are owned by default, and none of
 them showed up in any count of missing names. This keeps them from coming back.
 
-    tools/framexml_contract_check.py
+    tools/framexml_contract_check.py "<the extracted interface>"
 
 Reports candidates, not faults. An extra nil only matters if it is used, and
 plenty are guarded by `if (not x)` on the next line - UnitPowerType and
@@ -34,14 +34,33 @@ _sys.path.insert(0, str(Path(__file__).resolve().parent))
 from framexml_source import without_comments
 
 ROOT = Path(__file__).resolve().parent.parent
-# Written as one literal on purpose. sweep_guard decides whether to skip a
-# sweep by looking for its input path in this source, and a path spelled in
-# separate components is invisible to that: this sweep ran on CI where there is
-# no interface to read, reported nothing, and was failed for reporting nothing.
-FRAMEXML = ROOT / "Data/interface" / "framexml"
-ADDONS = ROOT / "Data/interface" / "addons"
+# The default keeps the one-literal spelling sweep_guard looks for in this
+# source.  That guard decides whether to skip a sweep by finding its input path
+# here, and this sweep ran on CI where there is no interface to read, reported
+# nothing, and was failed for reporting nothing.  The interface is installed data
+# rather than repository content, so the directory to read is named on the
+# command line; without one, or with a directory that is not there, nothing is
+# parsed and the run stops rather than printing what a fully conforming client
+# prints.
+INTERFACE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
+FRAMEXML = INTERFACE / "framexml"
+ADDONS = INTERFACE / "addons"
 BINDINGS = ROOT / "src" / "addons"
 GAME = ROOT / "src" / "game"
+
+#: Return-count candidates that are correct as they stand, named rather than
+#: counted so the printed count means what it says.
+#:
+#: Every Battle.net name is answered by a stub - there is no Battle.net to answer
+#: it with - and the frames that unpack fourteen names from BNGetFriendInfo are
+#: the friends and whisper panels sitting on that stub.  A missing return is a
+#: fault only when the value is used, and these cannot be used: the friend list
+#: never fills, so nothing walks what was unpacked from it.  Named individually
+#: rather than by prefix, so a new BN name still reports.
+EXPECTED_RETURNS = {
+    "BNGetConversationMemberInfo", "BNGetFriendInfo", "BNGetFriendInfoByID",
+    "BNGetFriendInviteInfo", "BNGetToonInfo",
+}
 
 CHECKS_ARG1 = re.compile(r"luaL_check(?:number|string|integer)\s*\(\s*L\s*,\s*1\s*\)")
 NAMED_FN = re.compile(r"static int lua_(\w+)\s*\(lua_State\* L\)\s*\{(?:\.\w+\s*=\s*)?")
@@ -169,7 +188,8 @@ def checkReturns():
             give[name] = max(rets + [give.get(name) or 0])
 
     return sorted((n, give[n], c, w) for n, (c, w) in want.items()
-                  if give.get(n) is not None and n in give and c > give[n])
+                  if give.get(n) is not None and n in give and c > give[n]
+                  and n not in EXPECTED_RETURNS)
 
 
 def checkEventArgs():
@@ -203,6 +223,10 @@ def checkEventArgs():
 
 
 def main():
+    if not FRAMEXML.is_dir():
+        print(f"{FRAMEXML} is not a directory - name the extracted interface "
+              "directory on the command line.")
+        return 2
     arity = checkArity()
     returns = checkReturns()
     events = checkEventArgs()

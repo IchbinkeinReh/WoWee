@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Widget methods FrameXML calls that answer nil - and so raise when called.
 
+    tools/framexml_method_check.py "<the extracted interface>"
+
+The interface is installed data rather than repository content, so the default
+below is often not where it is.  Naming it matters more here than elsewhere:
+the answered half is read out of src/ either way, so without it the sweep
+counts its own methods and finds no calls to check them against.
+
 A missing *global* is harmless: the fallback makes it callable and it answers
 nil. A missing *method* is not. The frame metatable answers a no-op only for
 names in __WoweeWidgetMethods; anything else comes back nil, and `frame:Foo()`
@@ -31,7 +38,7 @@ if it is any of:
 Run it after any batch of widget work. A hit that survives all five is a real
 call on nil.
 """
-import re, pathlib, collections
+import re, sys, pathlib, collections
 
 # Paths are resolved against the repository, not the working directory:
 # run from build/ these globs matched nothing and the report came out
@@ -39,7 +46,14 @@ import re, pathlib, collections
 # cannot fail.
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
-src = (REPO / "src" / "addons" / "lua_engine.cpp").read_text(encoding="utf-8")
+# Every registration file, not only the engine.  The tabard model methods are
+# installed by addTabardModelMethods over in lua_tabard_api.cpp, and reading one
+# file reported all five of them - InitializeTabardColors, CycleVariation,
+# GetUpper/GetLowerEmblemTexture, CanSaveTabardNow - as a call on nil on a frame
+# that answers every one.  The engine is no longer where the widget methods
+# live; it is where the bootstrap is.
+src = "\n".join(p.read_text(encoding="utf-8", errors="ignore")
+                for p in sorted((REPO / "src" / "addons").glob("*.cpp")))
 
 # The curated set that answers a no-op.
 block = re.search(r'"__WoweeWidgetMethods = \{\\n"(.*?)"\}\\n"', src, re.S)
@@ -47,7 +61,9 @@ known = set(re.findall(r'(\w+)=1', block.group(1))) if block else set()
 
 # Methods actually implemented, however they are registered.
 impl = set(re.findall(r'set\("(\w+)"', src))
-impl |= set(re.findall(r'\{(?:\.\w+\s*=\s*)?"(\w+)",\s*(?:\.\w+\s*=\s*)?lua_\w+\}', src))
+# The entry, not the entry plus its closing brace: a `luaL_Reg` row can be
+# written across two lines, and the pattern wanted `}` on the same one.
+impl |= set(re.findall(r'\{(?:\.\w+\s*=\s*)?"(\w+)",\s*(?:\.\w+\s*=\s*)?lua_\w+\s*[,}]', src))
 impl |= set(re.findall(r"mt[:.]\s*(\w+)\s*=|function mt:(\w+)", src))
 impl |= {m for pair in re.findall(r"\"function mt:(\w+)", src) for m in (pair,)}
 impl |= set(re.findall(r"\"mt\.(\w+) =", src))
@@ -59,6 +75,15 @@ impl |= set(re.findall(r"\"mt\['(\w+)'\]", src))
 impl |= set(re.findall(r"function\s+[\w.]*[Mm][Tt]\w*\s*:\s*(\w+)", src))
 impl |= set(re.findall(r"function\s+\w*[Mm]eta\w*\s*:\s*(\w+)", src))
 impl |= set(re.findall(r"\w+\.(\w+)\s*=\s*function\s*\(self", src))
+# Assigned a *bare name* rather than an inline function - the last two patterns
+# want `= function`, so a method installed by handing it a C function that the
+# bootstrap pushed as a global reads as missing:
+#     __WoweeFrameMT.SetUnitAura = __WoweeTooltipSetUnitAura
+# SetUnitAura was reported as a call on nil for exactly this reason, on the buff
+# icon hover, while the C binding behind it had been building that tooltip all
+# along.  Same blind spot as framexml_provides' widget_methods_provided, which
+# counts these now too.
+impl |= set(re.findall(r"\w*[Mm][Tt]\.([A-Za-z_]\w*)\s*=[^=]", src))
 # Installed on the frame table itself rather than on the metatable, which
 # is how a method that only some frame types have is given out - FrameXML
 # tests for the presence of those, so they cannot live on the table every
@@ -75,8 +100,18 @@ interface_defined = set()
 # skip it where there is none. A path in separate components is invisible
 # to that check, and the sweep then runs on CI, finds nothing, and is
 # failed for reporting nothing.
-for _f in list((REPO / "Data/interface").glob("framexml/*.lua")) + \
-          list((REPO / "Data/interface").glob("addons/*/*.lua")):
+INTERFACE = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
+             else REPO / "Data/interface")
+if not INTERFACE.is_dir():
+    # The client side of this parse comes out of src/ whether or not the
+    # interface is there, so a missing directory leaves the answered count
+    # intact and the call-site side empty: the report reads exactly like a
+    # client whose every method is answered.
+    print(f"{INTERFACE} is not a directory - name the extracted interface "
+          "directory on the command line.")
+    raise SystemExit(2)
+for _f in list(INTERFACE.glob("framexml/*.lua")) + \
+          list(INTERFACE.glob("addons/*/*.lua")):
     _t = _f.read_text(errors="ignore")
     interface_defined |= set(re.findall(r'\bfunction\s+[\w.]+[:.](\w+)\s*\(', _t))
     # `self.Desaturate = AchievementIcon_Desaturate` - assigned to a named
@@ -94,7 +129,7 @@ for _f in list((REPO / "Data/interface").glob("framexml/*.lua")) + \
     interface_defined |= set(re.findall(r'[\w.\]\[]+\.(\w+)\s*=\s*[\w.]+\s*\(', _t))
 answered |= interface_defined
 
-interface = (REPO / "Data/interface")
+interface = INTERFACE
 files = list(interface.glob("framexml/*.lua")) + list(interface.glob("addons/*/*.lua"))
 
 # obj:Method( - a real method call. Not obj.Method, which is a field read.

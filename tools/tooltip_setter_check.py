@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """GameTooltip setters that answer with a no-op, so the tooltip comes up blank.
 
-    tools/tooltip_setter_check.py
+    tools/tooltip_setter_check.py "<the extracted interface>"
+
+The interface is installed data rather than repository content, so the default
+below is often not where it is.  With nothing parsed there is no setter called
+to compare, and the run stops rather than printing the "zero today" lines a
+client whose every tooltip is answered prints.
 
 WHY THESE AND NOT ALL METHODS
 
@@ -64,7 +69,7 @@ from framexml_provides import (  # noqa: E402
     noop_widget_methods, widget_methods_provided)
 
 ROOT = Path(__file__).resolve().parent.parent
-INTERFACE = ROOT / "Data/interface"
+INTERFACE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
 
 #: Names a tooltip is reached by. `tooltip` catches the local FrameXML takes
 #: when a function is handed one, which is how most of the templates call it.
@@ -81,6 +86,10 @@ def called():
 
 
 def main():
+    if not INTERFACE.is_dir():
+        print(f"{INTERFACE} is not a directory - name the extracted interface "
+              "directory on the command line.")
+        return 2
     calls = called()
     names = set(calls)
     # Through framexml_provides rather than by matching names here.
