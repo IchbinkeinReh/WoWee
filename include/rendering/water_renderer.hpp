@@ -124,6 +124,25 @@ struct WaterFrameUBOData {
     glm::mat4 reflViewProj{1.0f};
     glm::vec4 wakeBounds{0.0f};              // xy = centre, z = cull radius, w = count
     glm::vec4 wakePoints[kMaxWakePoints]{};  // xy = pos, z = age 0..1, w = strength
+    // The ray traced water (water_rt.glsli): x on, y the view (1 the
+    // reflection alone, 2 what comes through alone), z how far a reflected
+    // ray goes, w 1 while the traced scene holds anything.
+    glm::vec4 rtWater{0.0f};
+    glm::vec4 rtWater2{0.0f};      // x how far a refracted ray goes
+    glm::vec4 rtSkyTop{0.0f};      // the sky a reflection leaving the scene meets, overhead
+    glm::vec4 rtSkyHorizon{0.0f};  // and at the horizon
+};
+
+/// What the ray traced water needs from the frame (Renderer, each frame).
+struct RtWaterFrame {
+    bool on = false;
+    VkDescriptorSet sceneSet = VK_NULL_HANDLE;  ///< RtScene's, this frame
+    bool sceneHasContent = false;
+    int view = 0;               ///< 1 the reflection alone, 2 what comes through
+    float reflectReach = 400.0f;
+    float refractReach = 80.0f;
+    glm::vec3 skyTop{0.5f, 0.7f, 1.0f};
+    glm::vec3 skyHorizon{0.7f, 0.75f, 0.8f};
 };
 
 class WaterRenderer {
@@ -213,6 +232,16 @@ public:
     /// (client_liquid.hpp). On is this client's procedural water with
     /// reflection and refraction.
     void setEnhancedWater(bool enabled) { enhancedWater_ = enabled; }
+    /// The ray traced water's scene set layout (RtScene) and which tracer it
+    /// was made for; once, after both exist. Its pipelines are built when
+    /// first drawn with.
+    void setRtWaterScene(VkDescriptorSetLayout sceneLayout, bool hardware);
+    /// This frame's ray traced water, before render().
+    void setRtWaterFrame(const RtWaterFrame& frame) { rtFrame_ = frame; }
+    /// Whether this frame's water is the traced one: on, with what it needs.
+    [[nodiscard]] bool rtWaterDrawn() const {
+        return enhancedWater_ && rtFrame_.on && rtFrame_.sceneSet != VK_NULL_HANDLE && rtPipelineLayout_ != VK_NULL_HANDLE;
+    }
     [[nodiscard]] bool isEnhancedWater() const { return enhancedWater_; }
 
     /// LiquidType.dbc and LiquidMaterial.dbc, for the client's liquid. Textures
@@ -378,7 +407,19 @@ private:
     // Pipeline
     VkPipeline waterPipeline = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+    // The ray traced water's: the scene's set as set 3, and its pipelines
+    // (water_rt_hw/sw.frag) against the scene pass and the 1x pass.
+    VkDescriptorSetLayout rtSceneLayout_ = VK_NULL_HANDLE;
+    bool rtHardware_ = false;
+    VkPipelineLayout rtPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline rtPipeline_ = VK_NULL_HANDLE;
+    VkPipeline rt1xPipeline_ = VK_NULL_HANDLE;
+    RtWaterFrame rtFrame_;
+    VkPipeline buildWaterPipeline(VkRenderPass pass, VkSampleCountFlagBits samples, const char* fragPath,
+                                  VkPipelineLayout layout);
+    void destroyRtPipelines();
     VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout perFrameLayout_ = VK_NULL_HANDLE;  ///< the renderer's set 0, kept for the traced water's layout
     VkDescriptorPool materialDescPool = VK_NULL_HANDLE;
     VkDescriptorSetLayout sceneSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool sceneDescPool = VK_NULL_HANDLE;

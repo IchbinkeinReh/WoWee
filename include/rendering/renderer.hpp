@@ -1129,6 +1129,17 @@ private:
     std::string rtHeldOffLogged_;
     LightingTune lightingTune_{};
     bool rtSoftLamps_ = false;
+    bool rtWater_ = true;  ///< "Ray traced water" (water_rt.glsli)
+public:
+    /// The Debug Graphics views of the ray traced water: its reflection
+    /// alone, and what comes up through it alone.
+    static constexpr int kRtWaterReflectionView = 15;
+    static constexpr int kRtWaterRefractionView = 16;
+    // The reflection as the scene's triangles give it, the frame's colour
+    // not taken where the hit is on screen: what is traced, and textured.
+    static constexpr int kRtWaterTracedOnlyView = 17;
+    void setRtWater(bool on) { rtWater_ = on; }
+private:
     int rtMinBrightnessPercent_ = 0;
     int rtNormalKeepDeg_ = 15;
     int rtNormalFaceDeg_ = 35;

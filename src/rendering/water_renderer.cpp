@@ -68,6 +68,7 @@ WaterRenderer::~WaterRenderer() {
 bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLayout) {
     vkCtx = ctx;
     if (!vkCtx) return false;
+    perFrameLayout_ = perFrameLayout;
 
     LOG_INFO("Initializing water renderer (Vulkan)");
     VkDevice device = vkCtx->getDevice();
@@ -229,9 +230,67 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
     return true;
 }
 
+VkPipeline WaterRenderer::buildWaterPipeline(VkRenderPass pass, VkSampleCountFlagBits samples,
+                                             const char* fragPath, VkPipelineLayout layout) {
+    if (!vkCtx || !pass || !layout) return VK_NULL_HANDLE;
+    VkDevice device = vkCtx->getDevice();
+    VkShaderModule vertShader, fragShader;
+    if (!vertShader.loadFromFile(device, "assets/shaders/water.vert.spv")) return VK_NULL_HANDLE;
+    if (!fragShader.loadFromFile(device, fragPath)) {
+        vertShader.destroy();
+        return VK_NULL_HANDLE;
+    }
+    VkVertexInputBindingDescription vertBinding{};
+    vertBinding.binding = 0;
+    vertBinding.stride = 8 * sizeof(float);
+    vertBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    std::vector<VkVertexInputAttributeDescription> vertAttribs = {
+        { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
+        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 6 * sizeof(float) },
+    };
+    VkPipeline p = PipelineBuilder()
+        .setShaders(vertShader.stageInfo(VK_SHADER_STAGE_VERTEX_BIT),
+                    fragShader.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
+        .setVertexInput({ vertBinding }, vertAttribs)
+        .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+        .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
+        .setDepthTest(true, false, depth::kNearerOrEqual)
+        .setColorBlendAttachment(PipelineBuilder::blendAlpha())
+        .setMultisample(samples)
+        .setLayout(layout)
+        .setRenderPass(pass)
+        .setDynamicStates(viewportAndScissorDynamic())
+        .build(device, vkCtx->getPipelineCache());
+    vertShader.destroy();
+    fragShader.destroy();
+    return p;
+}
+
+void WaterRenderer::setRtWaterScene(VkDescriptorSetLayout sceneLayout, bool hardware) {
+    if (!vkCtx || !sceneLayout || rtPipelineLayout_) return;
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.size = sizeof(WaterPushConstants);
+    rtPipelineLayout_ = createPipelineLayout(vkCtx->getDevice(),
+                                             {perFrameLayout_, materialSetLayout, sceneSetLayout, sceneLayout},
+                                             {pushRange});
+    rtSceneLayout_ = sceneLayout;
+    rtHardware_ = hardware;
+    if (!rtPipelineLayout_) LOG_ERROR("WaterRenderer: no pipeline layout for the ray traced water");
+}
+
+void WaterRenderer::destroyRtPipelines() {
+    if (!vkCtx) return;
+    VkDevice device = vkCtx->getDevice();
+    destroy(device, rtPipeline_);
+    destroy(device, rt1xPipeline_);
+}
+
 void WaterRenderer::recreatePipelines() {
     if (!vkCtx) return;
     VkDevice device = vkCtx->getDevice();
+    // Built again against the new passes when next drawn with.
+    destroyRtPipelines();
 
     destroyReflectionResources();
     createReflectionResources();
@@ -361,6 +420,8 @@ void WaterRenderer::shutdown() {
     destroyClientLiquid();
     destroy(device, waterPipeline);
     destroy(device, pipelineLayout);
+    destroyRtPipelines();
+    destroy(device, rtPipelineLayout_);
     destroy(device, sceneDescPool);
     destroy(device, sceneSetLayout);
     destroy(device, materialDescPool);
@@ -1221,10 +1282,36 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         if (renderingEnabled && !surfaces.empty()) renderClient(cmd, perFrameSet, camera, use1x, frameIndex);
         return;
     }
+    // The ray traced water this frame (water_rt.glsli): its pipelines are
+    // built the first time it is drawn with, against the pass it draws in.
+    VkPipelineLayout layout = pipelineLayout;
+    VkPipeline pipeline = (use1x && water1xPipeline) ? water1xPipeline : waterPipeline;
+    bool traced = rtWaterDrawn();
+    if (traced) {
+        const char* frag = rtHardware_ ? "assets/shaders/water_rt_hw.frag.spv" : "assets/shaders/water_rt_sw.frag.spv";
+        VkPipeline& rtPipe = (use1x && water1xRenderPass) ? rt1xPipeline_ : rtPipeline_;
+        if (!rtPipe) {
+            rtPipe = (use1x && water1xRenderPass)
+                         ? buildWaterPipeline(water1xRenderPass, VK_SAMPLE_COUNT_1_BIT, frag, rtPipelineLayout_)
+                         : buildWaterPipeline(vkCtx->getImGuiRenderPass(), vkCtx->getMsaaSamples(), frag,
+                                              rtPipelineLayout_);
+            if (!rtPipe) LOG_ERROR("WaterRenderer: could not build the ray traced water's pipeline");
+        }
+        if (rtPipe) {
+            pipeline = rtPipe;
+            layout = rtPipelineLayout_;
+        } else {
+            traced = false;
+        }
+    }
+    frameUBO_.rtWater = glm::vec4(traced ? 1.0f : 0.0f, static_cast<float>(rtFrame_.view), rtFrame_.reflectReach,
+                                  rtFrame_.sceneHasContent ? 1.0f : 0.0f);
+    frameUBO_.rtWater2 = glm::vec4(rtFrame_.refractReach, 0.0f, 0.0f, 0.0f);
+    frameUBO_.rtSkyTop = glm::vec4(rtFrame_.skyTop, 1.0f);
+    frameUBO_.rtSkyHorizon = glm::vec4(rtFrame_.skyHorizon, 1.0f);
     // The wake as it stands, into this frame's slot - safe now, the frame has
     // waited for the GPU to finish with it.
     uploadFrameUBO();
-    VkPipeline pipeline = (use1x && water1xPipeline) ? water1xPipeline : waterPipeline;
     if (!renderingEnabled || surfaces.empty() || !pipeline) {
         if (renderDiagCounter_++ % 300 == 0 && !surfaces.empty()) {
             LOG_WARNING("Water: render skipped - enabled=", renderingEnabled,
@@ -1249,10 +1336,14 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
                              0, 1, &perFrameSet, 0, nullptr);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
                              2, 1, &activeSceneSet, 0, nullptr);
+    if (traced) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
+                                 3, 1, &rtFrame_.sceneSet, 0, nullptr);
+    }
 
     for (const auto& surface : surfaces) {
         if (surface.vertexBuffer == VK_NULL_HANDLE || surface.indexCount == 0) continue;
@@ -1308,11 +1399,11 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         push.depthRange = glm::vec2(camera.getNearPlane(), camera.getFarPlane());
         push.sceneValid = sceneHistoryReady ? 1.0f : 0.0f;
 
-        vkCmdPushConstants(cmd, pipelineLayout,
+        vkCmdPushConstants(cmd, layout,
                             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                             0, sizeof(WaterPushConstants), &push);
 
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
                                  1, 1, &surface.materialSet, 0, nullptr);
 
         VkDeviceSize offset = 0;
@@ -2436,6 +2527,7 @@ void WaterRenderer::destroyWater1xResources() {
     }
     water1xFramebuffers.clear();
     destroy(device, water1xPipeline);
+    destroy(device, rt1xPipeline_);
     destroy(device, clientWater1xPipeline_);
     destroy(device, clientMagma1xPipeline_);
     destroy(device, clientProc1xPipeline_);

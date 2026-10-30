@@ -146,7 +146,9 @@ bool RtScene::createDescriptors() {
         b.binding = binding;
         b.descriptorType = type;
         b.descriptorCount = 1;
-        b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        // And the water's fragments, which trace through it
+        // (water_rt.glsli).
+        b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         bindings.push_back(b);
     };
     addBinding(kBindingTriangles, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);

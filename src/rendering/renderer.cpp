@@ -817,6 +817,31 @@ void Renderer::updatePerFrameUBO() {
             currentFrameData.giParams.y = static_cast<float>(rtDebugView_);
         }
     }
+    // The ray traced water this frame (water_rt.glsli): with the traced
+    // lighting running and the setting on, through the scene the lighting
+    // traces. A software tracer goes less far: a big lake's every pixel
+    // walks the BVH twice, and the hardware's rays cost far less.
+    if (waterRenderer) {
+        RtWaterFrame wf;
+        wf.on = rtWater_ && rtLighting_ && rtLighting_->active() && rtDeferredThisFrame_ && rtScene_;
+        if (wf.on) {
+            const bool hw = rtScene_->backend() == RtScene::Backend::Hardware;
+            wf.sceneSet = rtScene_->descriptorSet();
+            wf.sceneHasContent = rtScene_->hasContent();
+            wf.view = rtDebugView_ == kRtWaterReflectionView    ? 1
+                      : rtDebugView_ == kRtWaterRefractionView  ? 2
+                      : rtDebugView_ == kRtWaterTracedOnlyView ? 3
+                                                                 : 0;
+            wf.reflectReach = hw ? 400.0f : 150.0f;
+            wf.refractReach = hw ? 80.0f : 40.0f;
+            if (lightingManager) {
+                const auto& sky = lightingManager->getLightingParams();
+                wf.skyTop = sky.skyTopColor;
+                wf.skyHorizon = sky.skySmogColor;
+            }
+        }
+        waterRenderer->setRtWaterFrame(wf);
+    }
     currentFrameData.rtTune = glm::vec4(std::max(lightingTune_.shadowStrength, 0.0f),
                                         std::max(lightingTune_.pointLights, 0.0f),
                                         std::max(lightingTune_.bakedLampShadow, 0.0f), 1.0f);
@@ -5349,6 +5374,10 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             waterRenderer->setEnhancedWater(enhancedWater_);
             waterRenderer->setRefractionEnabled(enhancedWater_);
             waterRenderer->setClientSpecular(clientSpecular_);
+            if (rtScene_) {
+                waterRenderer->setRtWaterScene(rtScene_->descriptorSetLayout(),
+                                               rtScene_->backend() == RtScene::Backend::Hardware);
+            }
         }
     }
 
@@ -6116,6 +6145,8 @@ void Renderer::renderReflectionPass() {
     WOWEE_PROFILE_SCOPE("record water reflection", Cpu);
     if (!waterRenderer || !camera || !waterRenderer->hasReflectionPass() || !waterRenderer->hasSurfaces()) return;
     if (!waterRenderer->isEnhancedWater()) return;  // the client's liquid reflects nothing
+    // The ray traced water traces its reflection: no planar pass under it.
+    if (waterRenderer->rtWaterDrawn()) return;
     if (currentCmd == VK_NULL_HANDLE || !reflPerFrameUBOMapped) return;
 
     // Select the current frame's pre-bound reflection descriptor set

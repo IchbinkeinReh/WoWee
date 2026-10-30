@@ -1,4 +1,10 @@
-#version 450
+#version 460
+// Built three ways: as it is; with RT_WATER for the ray traced water through
+// the hardware tracer (and RT_HARDWARE); with RT_WATER alone through the
+// software one (water_rt.glsli).
+#if defined(RT_WATER) && defined(RT_HARDWARE)
+#extension GL_EXT_ray_query : require
+#endif
 
 layout(set = 0, binding = 0) uniform PerFrame {
     mat4 view;
@@ -55,6 +61,13 @@ layout(set = 2, binding = 3) uniform WaterFrameData {
     mat4 reflViewProj;
     vec4 wakeBounds;                  // xy = centre, z = cull radius, w = count
     vec4 wakePoints[MAX_WAKE_POINTS]; // xy = world pos, z = age 0..1, w = strength
+    // The ray traced water (water_rt.glsli): x on, y the view (0 the water,
+    // 1 its reflection alone, 2 what comes up through it alone), z how far
+    // a reflected ray goes, w 1 while the traced scene holds anything.
+    vec4 rtWater;
+    vec4 rtWater2;      // x how far a refracted ray goes
+    vec4 rtSkyTop;      // the sky a reflection that leaves the scene meets: overhead
+    vec4 rtSkyHorizon;  // and at the horizon
 };
 
 layout(location = 0) in vec3 FragPos;
@@ -127,6 +140,11 @@ float GeometrySmith(float NdotV, float NdotL, float roughness) {
 vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
+
+#ifdef RT_WATER
+#define RT_SCENE_SET 3
+#define RT_SCENE_HAS_CONTENT (rtWater.w > 0.5)
+#endif
 
 // ============================================================
 // Linearize depth
@@ -252,6 +270,16 @@ vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
     }
     return color;
 }
+
+#ifdef RT_WATER
+#include "rt_sampling.glsli"
+#ifdef RT_HARDWARE
+#include "rt_trace_hw.glsli"
+#else
+#include "rt_trace_sw.glsli"
+#endif
+#include "water_rt.glsli"
+#endif
 
 void main() {
     float time = fogParams.z;
@@ -446,6 +474,53 @@ void main() {
     vec3 litBase = waterBody * (ambientColor.rgb * 0.7 + NdotL * lightColor.rgb * 0.5);
     refractedColor = mix(refractedColor, litBase, clamp(depthFade * 0.3, 0.0, 0.5));
 
+#ifdef RT_WATER
+    // The ray traced water (water_rt.glsli): the reflection and what comes up
+    // through the water traced at this pixel's wave normal, by Fresnel. From
+    // under the surface the two trade places - the reflection goes down into
+    // the water, what comes through comes from the air - and past the
+    // critical angle all of it is reflection.
+    // Water and ocean; magma and slime are opaque and keep their own look.
+    bool rtOn = rtWater.x > 0.5 && basicType < 1.5;
+    vec3 rtReflect = vec3(0.0);
+    float rtFresnel = 0.0;
+    if (rtOn) {
+        rtwScreenReuse = rtWater.y < 2.5;
+        uint rng = uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u + uint(time * 60.0);
+        // The wave normal, facing up: the mesh's faces down (water.vert
+        // crosses binormal into tangent), so it is turned over before the
+        // detail and the ripples go on it as above.
+        vec3 waveN = normalize(mix(meshNorm.z < 0.0 ? -meshNorm : meshNorm, detailNorm, 0.55 * detailFade));
+        if (rippleEnv > 0.001) {
+            vec2 radialDir = (FragPos.xy - rippleOrigin) / max(d, 0.01);
+            float dHdr = rippleEnv * 0.12 * (-0.12 * sin(d * 2.5 - time * 6.0) + 2.5 * cos(d * 2.5 - time * 6.0));
+            waveN = normalize(waveN + vec3(-radialDir * dHdr, 0.0));
+        }
+        // Under the water's plane, looking up at it.
+        bool below = viewPos.z < FragPos.z;
+        vec3 n = below ? -waveN : waveN;
+        float cosI = max(dot(n, viewDir), 0.0);
+        vec3 r = reflect(-viewDir, n);
+        vec3 t = refract(-viewDir, n, below ? RTW_IOR : 1.0 / RTW_IOR);
+        bool tir = dot(t, t) < 1e-6;
+        rtFresnel = tir ? 1.0 : rtwFresnel(cosI);
+        bool bedShown;
+        if (!below) {
+            // Not under the water's own plane: a wave can tip the mirror
+            // past it.
+            r.z = max(r.z, 0.02);
+            rtReflect = rtwReflection(FragPos + n * 0.05, normalize(r), ldir, rng);
+            if (!tir) {
+                refractedColor = rtwRefraction(FragPos - n * 0.05, t, ldir, absorptionCoeff, litBase, rng,
+                                               bedShown).rgb;
+            }
+        } else {
+            rtReflect = rtwRefraction(FragPos + n * 0.05, r, ldir, absorptionCoeff, litBase, rng, bedShown).rgb;
+            if (!tir) refractedColor = rtwReflection(FragPos - n * 0.05, t, ldir, rng);
+        }
+    }
+#endif
+
     // ============================================================
     // Shoreline - wet sand and moving sediment
     // ============================================================
@@ -540,6 +615,9 @@ void main() {
     // reflAmount is 0 where no valid reflection data exists - no dark arc
     float reflectWeight = clamp(fresnel * reflAmount, 0.0, 0.30);
     vec3 color = mix(refractedColor, envReflect, reflectWeight);
+#ifdef RT_WATER
+    if (rtOn) color = mix(refractedColor, rtReflect, rtFresnel);
+#endif
     color += specular + sssColor;
 
     float crest = smoothstep(0.5, 1.0, WaveOffset) * 0.04;
@@ -733,8 +811,21 @@ void main() {
     // into the horizon haze instead of ending on a hard line. This has to come
     // after the clamp - clamping afterwards restored the 0.15 floor and put the
     // edge straight back.
+#ifdef RT_WATER
+    // The traced water holds what lies under it already: drawn whole, but
+    // for the last few hundredths of a yard at the shore, where the sheet's
+    // edge would otherwise show as a line.
+    if (rtOn) alpha = max(alpha, smoothstep(0.0, 0.08, shoreDepth));
+#endif
     alpha *= smoothstep(2400.0, 600.0, dist);
 
+#ifdef RT_WATER
+    // The debug views: the reflection alone, or what comes through alone.
+    if (rtOn && rtWater.y > 0.5) {
+        outColor = vec4(rtWater.y < 1.5 || rtWater.y > 2.5 ? rtReflect : refractedColor, 1.0);
+        return;
+    }
+#endif
     color = applyFog(color, FragPos, dist, fogColor.rgb);
 
     outColor = vec4(color, alpha);

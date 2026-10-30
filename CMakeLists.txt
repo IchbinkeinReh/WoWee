@@ -543,6 +543,9 @@ function(compile_shaders TARGET_NAME)
         "rt_prepare.comp.glsl|rt_prepare_ms.comp.spv|-DRT_MSAA"
         "rt_trace.comp.glsl|rt_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
         "rt_gi_trace.comp.glsl|rt_gi_trace_hw.comp.spv|-DRT_HARDWARE --target-env=vulkan1.2"
+        # The ray traced water (water_rt.glsli), through each tracer.
+        "water.frag.glsl|water_rt_sw.frag.spv|-DRT_WATER"
+        "water.frag.glsl|water_rt_hw.frag.spv|-DRT_WATER -DRT_HARDWARE --target-env=vulkan1.2"
     )
     foreach(VARIANT ${SHADER_VARIANTS})
         string(REPLACE "|" ";" VARIANT_PARTS "${VARIANT}")
@@ -550,9 +553,14 @@ function(compile_shaders TARGET_NAME)
         list(GET VARIANT_PARTS 1 VARIANT_OUT)
         list(GET VARIANT_PARTS 2 VARIANT_ARGS)
         separate_arguments(VARIANT_ARGS UNIX_COMMAND "${VARIANT_ARGS}")
+        # The stage from the source's name, as for the plain builds above.
+        set(VARIANT_STAGE compute)
+        if(VARIANT_SRC MATCHES "\.frag\.glsl$")
+            set(VARIANT_STAGE frag)
+        endif()
         add_custom_command(
             OUTPUT ${SPV_DIR}/${VARIANT_OUT}
-            COMMAND ${GLSLC} -fshader-stage=compute ${VARIANT_ARGS} -O
+            COMMAND ${GLSLC} -fshader-stage=${VARIANT_STAGE} ${VARIANT_ARGS} -O
                     ${SHADER_DIR}/${VARIANT_SRC} -o ${SPV_DIR}/${VARIANT_OUT}
             DEPENDS ${SHADER_DIR}/${VARIANT_SRC} ${GLSL_INCLUDES}
             COMMENT "Compiling SPIR-V: ${VARIANT_SRC} -> ${VARIANT_OUT}"

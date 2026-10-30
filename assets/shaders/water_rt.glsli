@@ -1,0 +1,124 @@
+// The ray traced water (water.frag built with RT_WATER, the "Ray traced
+// water" setting): the surface's reflection and what lies under it traced
+// through the scene the lighting traces (rt_trace_hw.glsli or
+// rt_trace_sw.glsli, set 3), rather than read off a planar reflection and a
+// screen-space offset. Mirrored in rt_water.hpp, which the tests check.
+//
+// A calm water surface is a mirror and a refractor, so each pixel's two rays
+// are fixed by its wave normal and there is no noise to gather over frames:
+// one ray each way, every frame, at the pixel's own wave normal - the
+// enhanced water's waves are what bend both.
+//
+// - Reflection: reflect(-V, N), traced up to rtWater.z yards. A hit is lit
+//   by its triangle's colour under the ambient and, past one shadow ray,
+//   the sun; the air between is the zone's distance fog. A miss is the sky,
+//   its horizon and zenith colours (rtSkyHorizon, rtSkyTop).
+// - Refraction: refract(-V, N, 1 / 1.333), traced up to rtWater2.x yards.
+//   The light that comes back up through the water is the bed's, taken from
+//   the frame drawn under the water where the hit is on screen there and
+//   matches it (its depth), and from the hit's own colour lit where it is
+//   not; over the path, Beer-Lambert absorption, exp(-sigma x d), and what
+//   the water scatters in, its body colour lit, by 1 - exp(-sigma x d).
+//   No hit within reach: all of it the water's own.
+// - The two by Schlick's Fresnel at the 1.333 interface (F0 0.02); from
+//   under the surface past the critical angle, all reflection.
+
+const float RTW_IOR = 1.333;
+const float RTW_F0 = 0.02;
+
+float rtwFresnel(float cosTheta) {
+    float c = clamp(1.0 - cosTheta, 0.0, 1.0);
+    return RTW_F0 + (1.0 - RTW_F0) * c * c * c * c * c;
+}
+
+// The sky a reflected ray that leaves the scene meets.
+vec3 rtwSky(vec3 dir) {
+    float up = clamp(dir.z, 0.0, 1.0);
+    return mix(rtSkyHorizon.rgb, rtSkyTop.rgb, sqrt(up));
+}
+
+// A traced hit's colour lit: its triangle's under the ambient, and the sun
+// where `sunVis` lets it through.
+vec3 rtwLitHit(vec4 surface, vec3 n, vec3 toSun, float sunVis) {
+    return surface.rgb * (ambientColor.rgb + lightColor.rgb * max(dot(n, toSun), 0.0) * sunVis);
+}
+
+// The frame drawn under the water (SceneColor) where a traced hit is on
+// screen and is what that pixel shows: its projected depth matches the
+// frame's, and the face hit looks toward the camera - the far side of a
+// wall or the underside of a bridge deck, which a reflection meets and the
+// camera does not see, sits within the depth tolerance of the near side.
+// That colour is the surface as drawn - textured, lit, shadowed, fogged -
+// rather than its triangle's one colour.
+//
+// Returns how much of the frame's colour to take: 1 well inside the screen,
+// falling to 0 over its outer 3% so the change to the traced colour where a
+// hit leaves it is not a line. 0 for no match.
+bool rtwScreenReuse = true;  // off for the traced-only debug view
+float rtwOnScreen(vec3 hit, vec3 hitNormal, out vec3 color) {
+    color = vec3(0.0);
+    if (!rtwScreenReuse || push.sceneValid < 0.5) return 0.0;
+    if (dot(hitNormal, viewPos.xyz - hit) <= 0.0) return 0.0;
+    vec4 clip = projection * view * vec4(hit, 1.0);
+    if (clip.w < 0.1) return 0.0;
+    vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+    vec2 edge = min(uv, 1.0 - uv);
+    float w = smoothstep(0.0, 0.03, min(edge.x, edge.y));
+    if (w <= 0.0) return 0.0;
+    float scene = linearizeDepth(texture(SceneDepth, uv).r, push.depthRange.x, push.depthRange.y);
+    if (abs(scene - clip.w) >= max(0.5, 0.03 * clip.w)) return 0.0;
+    color = texture(SceneColor, uv).rgb;
+    return w;
+}
+
+// The reflection along `dir` from `origin`.
+vec3 rtwReflection(vec3 origin, vec3 dir, vec3 toSun, inout uint rng) {
+    float t;
+    vec3 hn;
+    vec4 hs;
+    float reach = max(rtWater.z, 1.0);
+    if (!rtClosest(origin, dir, reach, rng, t, hn, hs)) {
+        return rtwSky(dir);
+    }
+    vec3 hit = origin + dir * t;
+    vec3 shown;
+    // Fogged already, over the camera's distance to it.
+    float onScreen = rtwOnScreen(hit, hn, shown);
+    if (onScreen >= 1.0) return shown;
+    bool unit;
+    float vis = dot(hn, toSun) > 0.0 && !rtOccludedBy(hit + hn * 0.05, toSun, 400.0, rng, unit) ? 1.0 : 0.0;
+    vec3 c = rtwLitHit(hs, hn, toSun, vis);
+    // The air between the surface and what it shows.
+    float haze = clamp(t / max(fogParams.y, 1.0), 0.0, 1.0);
+    return mix(mix(c, fogColor.rgb, haze), shown, onScreen);
+}
+
+// What comes up through the water along the refracted `dir` from `origin`:
+// rgb, and in a the path length the water absorbed over (rtWater2.x where
+// nothing was met).
+vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterColor, inout uint rng,
+                   out bool bedFromScreen) {
+    bedFromScreen = false;
+    float t;
+    vec3 hn;
+    vec4 hs;
+    float reach = max(rtWater2.x, 1.0);
+    vec3 bed = vec3(0.0);
+    float d = reach;
+    if (rtClosest(origin, dir, reach, rng, t, hn, hs)) {
+        d = t;
+        vec3 hit = origin + dir * t;
+        // The frame under the water has the bed as drawn - textured, lit,
+        // shadowed - wherever the hit is on screen there and is what that
+        // pixel shows; the hit's own colour only where it is not.
+        vec3 shown;
+        float onScreen = rtwOnScreen(hit, hn, shown);
+        bed = shown;
+        if (onScreen < 1.0) {
+            bed = mix(rtwLitHit(hs, hn, toSun, 0.8), shown, onScreen);
+        }
+        bedFromScreen = onScreen >= 1.0;
+    }
+    vec3 transmit = exp(-sigma * d);
+    return vec4(bed * transmit + scatterColor * (1.0 - transmit), d);
+}

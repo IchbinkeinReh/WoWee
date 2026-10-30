@@ -1466,6 +1466,11 @@ wowee_add_test(test_swim_pitch
 wowee_add_test(test_rt_lamp_wrap
     SOURCES test_rt_lamp_wrap.cpp)
 
+# -- test_rt_water: the ray traced water's optics.
+wowee_add_test(test_rt_water
+    SOURCES test_rt_water.cpp)
+
+
 # -- test_rt_min_brightness: the Ray Tracing page's floor on the traced darkening.
 wowee_add_test(test_rt_min_brightness
     SOURCES test_rt_min_brightness.cpp)

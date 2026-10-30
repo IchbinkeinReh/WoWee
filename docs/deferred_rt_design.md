@@ -291,7 +291,28 @@ torchlight would change the body's light the moment it starts to fade - a unit
 that finds nothing of itself takes the shadow map's shadow at the traced
 strength, no occlusion, and the point lights of the surface right behind it
 (which it shares a place with). Particles, ribbons and water read nothing, as
-today.
+today - water but for the ray traced water below.
+
+## Ray traced water
+
+With the "Ray traced water" setting (Water page; it needs the enhanced water
+and the ray traced lighting), water and ocean - not magma or slime - trace
+their own reflection and what comes through them in the fragment shader:
+`water.frag` built with `RT_WATER` (and `RT_HARDWARE` for ray queries) binds
+the scene's set as its set 3 and includes a tracer, then `water_rt.glsli`. One
+ray each way a pixel, at its wave normal, every frame; no history. The planar
+reflection pass is skipped while it draws.
+
+- A reflected or refracted hit that is on screen and is what that pixel
+  shows (its depth matches, its face looks at the camera) takes the frame
+  drawn under the water there - textured, lit, shadowed, fogged as drawn. The
+  outer 3% of the screen blends to the traced colour.
+- Elsewhere the hit is its triangle's one colour (its texture's mean times
+  its tint), lit by the ambient and, past one shadow ray, the sun; a
+  reflection's hit is hazed by the zone's fog over the distance, a refracted
+  one absorbed over its path through the water.
+- Debug views 15-17: the reflection alone, what comes through alone, and the
+  reflection as traced, without the frame's colour.
 
 ## MSAA
 
