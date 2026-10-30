@@ -9001,6 +9001,50 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, gh->ownsChatChannel(joined[static_cast<size_t>(sel) - 1]) ? 1 : 0);
             return 1;
         }},
+                // IsDisplayChannelModerator() (0x004ffae0): the same channel
+                // lookup as the binding above and one flag test wider - the
+                // byte is read as & 3 instead of & 1, so the owner counts here.
+                //
+                // The byte itself is the local player's own row of that
+                // channel's roster: the roster walk copies the whole thing, wire
+                // flags and the three bits the client ORs on for itself at
+                // 0x20/0x40/0x80 (00500000.c:3186-3220, none of which & 1 or & 3
+                // can see), and does it into one global only for the row whose
+                // guid pair matches the local player's. Whose channel that byte
+                // describes is therefore whichever roster arrived last, and a
+                // channel switch can leave it behind; reading the selected
+                // channel's own roster says what is meant and cannot go stale.
+                // The roster only exists once something asked for it, which the
+                // panel does with GetNumChannelMembers when a row is clicked -
+                // before the menu that asks this is built.
+                //
+                // The reference tests one dword of the channel record first and
+                // answers nil when it reads above -1. No instruction carries
+                // that address but the two bindings themselves, so it is not
+                // modelled here - the same call the binding above made.
+                //
+                // Outside voice chat this is reached for one thing: the "Invite"
+                // entry a custom channel's row menu gets (channelframe.lua:459),
+                // which leads to InviteToChannel. The unit menu asks it twice
+                // more (unitpopup.lua:853,865), both under IsVoiceChatEnabled()
+                // and GetVoiceStatus(), which are answered no, so those two stay
+                // out of reach either way.
+                {"IsDisplayChannelModerator", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const int sel = selectedDisplayChannel();
+            if (!gh || sel < 1) return luaReturnNil(L);
+            const auto& joined = gh->getJoinedChannels();
+            if (sel > static_cast<int>(joined.size())) return luaReturnNil(L);
+            const uint64_t self = gh->getPlayerGuid();
+            bool moderator = false;
+            for (const auto& m : gh->getChannelRoster(joined[static_cast<size_t>(sel) - 1])) {
+                if (m.guid != self) continue;
+                moderator = m.owner || m.moderator;
+                break;
+            }
+            lua_pushboolean(L, moderator ? 1 : 0);
+            return 1;
+        }},
                 {"SetSelectedDisplayChannel", [](lua_State* L) -> int {
             selectedDisplayChannel() = static_cast<int>(luaL_optnumber(L, 1, 0));
             return 0;

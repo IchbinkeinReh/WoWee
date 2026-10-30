@@ -3573,8 +3573,25 @@ void registerSocialLuaAPI(lua_State* L) {
             if (difficulty < 2) gh->changePlayerDifficulty(difficulty);
             return 0;
         }},
-                {"IsSilenced",                [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                {"IsDisplayChannelModerator", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                // IsSilenced(name) (0x004ffb50): whether the named player may
+                // not speak in the channel the panel has selected. The name
+                // becomes a guid pair - off a unit object when one answers it,
+                // else from the name alone (0x0060abf0) - and that pair is
+                // looked for in the roster rows the selected channel was filled
+                // with (stride 0x18, guid pair at +8/+0xc, flags byte at +0x10):
+                // a row with bit 0x10 clear answers 1, a row with the bit set
+                // and no row at all both answer nil.
+                //
+                // It is a voice mute, and nothing here has voice chat to mute:
+                // its two consumers are the unit menu's CHAT_SILENCE and
+                // CHAT_UNSILENCE (unitpopup.lua:854,866), and both are hidden
+                // before the question is asked, by IsVoiceChatEnabled() and
+                // GetVoiceStatus(name). IsDisplayChannelModerator is asked by
+                // those same two branches and has a menu of its own elsewhere,
+                // so it is answered for real - in lua_system_api.cpp, beside the
+                // selected-channel state it reads. One name is registered once;
+                // two registrations of it would be settled by load order.
+                {"IsSilenced", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
                 // PromoteToLeader(name) - /promote, /pr, and the unit menu's
                 // "Promote to Leader". The client had no outgoing side for this
                 // at all: SMSG_GROUP_SET_LEADER was handled and CMSG was never
