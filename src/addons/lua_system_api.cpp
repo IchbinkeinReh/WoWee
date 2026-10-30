@@ -10976,7 +10976,28 @@ void registerSystemLuaAPI(lua_State* L) {
                 // `newLevel < MAX_PLAYER_LEVEL` then raised on every level gained.
                 // On the earlier two it simply came out an expansion too high,
                 // and a level 60 was never treated as capped.
+                // ... and it comes from the account, not from the client.  The
+                // binding beside it answers the expansion this build speaks;
+                // this one answers the byte the realm chose for *this* account,
+                // which is the only thing that ever writes the client's +0x2f2d
+                // (0x004ddc20 reads that and nothing else).  The two agree for
+                // an upgraded account and part company for a trial one: the
+                // realm sends 0 there, and MAX_PLAYER_LEVEL_TABLE[0] is 60, so
+                // a trial character caps at 60 in the original and at 80 here.
+                // Clamping is deliberately not done - a byte outside 0..2 makes
+                // the table read nil in the original too, and that is what it
+                // should do here.
                 {"GetAccountExpansionLevel", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (gh && gh->accountState().present) {
+                lua_pushnumber(L, gh->accountState().accountExpansion);
+                return 1;
+            }
+            // No block in the response - the result was neither OK nor the
+            // queue - so the realm never said anything about the account.  The
+            // original would be reading a zero it never filled; there is no
+            // session to notice that in, and the build's own expansion is the
+            // least wrong answer to give a frame that is asking.
             lua_pushnumber(L, expansionLevelZeroBased(L));
             return 1;
         }},
