@@ -3375,7 +3375,10 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
             // the roster's online state is still kept in step.
             const bool on = data.eventType == GuildEvent::SIGNED_ON;
             if (data.numStrings >= 1) (void)guildMemberOnlineTransition(data.strings[0], on);
-            if (data.numStrings >= 1 && addons::storedCVarValue("guildMemberNotify", "1") != "0" &&
+            // Registered off (0x00510000 "0" - "Receive notification when guild
+            // members log on/off"), so the arrival line is the player's to ask
+            // for; the friends-list notices above are not behind it.
+            if (data.numStrings >= 1 && addons::storedCVarValue("guildMemberNotify", "0") != "0" &&
                 data.strings[0] != ownName(owner_) && !owner_.friendsCacheRef().count(data.strings[0])) {
                 msg = on ? interfaceFormat("ERR_FRIEND_ONLINE_SS", "|Hplayer:%s|h[%s]|h has come online.",
                                            {data.strings[0], data.strings[0]})

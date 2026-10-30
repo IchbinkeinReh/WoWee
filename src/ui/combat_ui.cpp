@@ -232,8 +232,9 @@ void CombatUI::renderCombatText(game::GameHandler& gameHandler) {
         addons::storedCVarValue("fctDamage", "1") != "0";
     const bool showHealing =
         addons::storedCVarValue("fctHealing", "1") != "0";
+    // Registered off, unlike damage and healing (all three at 0x00510000).
     const bool showMisses =
-        addons::storedCVarValue("fctDodgeParryMiss", "1") != "0";
+        addons::storedCVarValue("fctDodgeParryMiss", "0") != "0";
 
     const auto wanted = [&](game::CombatTextEntry::Type t) {
         using T = game::CombatTextEntry;

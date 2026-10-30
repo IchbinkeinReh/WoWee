@@ -336,8 +336,10 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
             if (topNow != topBefore) {
                 if (topNow) playerTopThreatOn_.insert(unitGuid);
                 else        playerTopThreatOn_.erase(unitGuid);
+                // Registered on (0x00510000 "1"), so losing the top of the
+                // threat list makes a noise until the player turns that off.
                 if (topNow && threatWarningWanted() &&
-                    addons::storedCVarValue("threatPlaySounds", "0") != "0") {
+                    addons::storedCVarValue("threatPlaySounds", "1") != "0") {
                     if (auto* ac = owner_.services().audioCoordinator) {
                         if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
                     }

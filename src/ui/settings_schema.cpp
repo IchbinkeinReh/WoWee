@@ -655,8 +655,10 @@ constexpr SettingDesc kSchema[] = {
      "Size of the bag windows.", "", 1},
     {"separatebags", "Separate bag windows", SettingKind::Bool, 0, 0, 0, "Interface", "",
      "Open each bag in its own window, rather than all in one.", "", 1},
+    // Off, as the client registers showKeyring (0x00510000 "0"): the original
+    // leaves the keyring button hidden until the player asks for it.
     {"showkeyring", "Show keyring", SettingKind::Bool, 0, 0, 0, "Interface", "",
-     "Show the key ring button beside the bags.", "", 1},
+     "Show the key ring button beside the bags.", "", 0},
     {"freebagslots", "Free space on the backpack", SettingKind::Bool, 0, 0, 0, "Interface", "",
      "Count the empty slots across all your bags on the backpack button.",
      "", 0, "", "cvar:displayFreeBagSlots"},
@@ -677,14 +679,14 @@ constexpr SettingDesc kSchema[] = {
      "if IsAddOnLoaded and IsAddOnLoaded('Blizzard_AchievementUI') "
      "and AchievementFrame_ForceUpdate then AchievementFrame_ForceUpdate() end"},
     {"showitemlevel", "Item level in tooltips", SettingKind::Bool, 0, 0, 0, "Interface", "",
-     "Show an item's level in its tooltip.", "", 1, "", "cvar:showItemLevel"},
+     "Show an item's level in its tooltip.", "", 0, "", "cvar:showItemLevel"},
 
     {"equipmentmanager", "Equipment manager", SettingKind::Bool, 0, 0, 0, "Interface", "Character sheet",
      "Save sets of gear on the character sheet and swap between them\n"
      "in one click.", "", 0, "", "cvar:equipmentManager"},
     {"previewtalents", "Preview talent changes", SettingKind::Bool, 0, 0, 0, "Interface", "",
      "Lay talent points out on the talent sheet before spending them,\n"
-     "and confirm them all at once.", "", 1, "", "cvar:previewTalents"},
+     "and confirm them all at once.", "", 0, "", "cvar:previewTalents"},
 
     // ----------------------------------------------------------------- Minimap
     // Rotate-with-camera was deliberately absent until 2026-09-06: the loader
@@ -692,8 +694,9 @@ constexpr SettingDesc kSchema[] = {
     // at the rotated map on screen. It is a row now, saved like the rest -
     // the game's Display page that offered it is retired, and the minimap's
     // own menu had been turning it within a session all along.
+    // On: the client registers showClock "1" (0x00510000).
     {"minimapclock", "Clock", SettingKind::Bool, 0, 0, 0, "Minimap", "Appearance",
-     "Show the time of day under the minimap.", "", 0},
+     "Show the time of day under the minimap.", "", 1},
     {"minimapsquare", "Square minimap", SettingKind::Bool, 0, 0, 0, "Minimap", "",
      "Draw the minimap as a square rather than a circle.", "", 0},
     {"minimapnpcdots", "Nearby creature dots", SettingKind::Bool, 0, 0, 0, "Minimap", "",
@@ -784,7 +787,7 @@ constexpr SettingDesc kSchema[] = {
     {"secureabilitytoggle", "Ignore a double tap on Attack", SettingKind::Bool, 0, 0, 0,
      "Combat", "",
      "A second press of Attack within half a second is ignored, so a\n"
-     "double tap cannot switch auto-attack straight back off.", "", 0},
+     "double tap cannot switch auto-attack straight back off.", "", 1},
     {"autofacetarget", "Turn to face the target (debug)", SettingKind::Bool, 0, 0, 0,
      "Combat", "",
      "Turn your character toward the target when you start attacking it\n"
@@ -897,7 +900,7 @@ constexpr SettingDesc kSchema[] = {
      "COMBAT_TEXT_FLOAT_MODE = v "
      "if CombatText_UpdateDisplayedMessages then CombatText_UpdateDisplayedMessages() end"},
     {"fctdodgeparrymiss", "Dodges, parries and misses", SettingKind::Bool, 0, 0, 0, "Combat Text", "",
-     "Say when a swing at you missed, and why.", "", 1, "combattext",
+     "Say when a swing at you missed, and why.", "", 0, "combattext",
      "cvar:fctDodgeParryMiss", "", "COMBAT_TEXT_SHOW_DODGE_PARRY_MISS = v"},
     {"fctdamagereduction", "Damage reduction", SettingKind::Bool, 0, 0, 0, "Combat Text", "",
      "How much of a hit your armour, resistances and absorbs took off.",
@@ -1012,8 +1015,11 @@ constexpr SettingDesc kSchema[] = {
 
     {"enablemusic", "Enable music", SettingKind::Bool, 0, 0, 0, "Sound", "Music",
      "Off silences the score without disturbing the volume below.", "", 1},
+    // At the level the client registers its music CVar at (Sound_MusicVolume
+    // "0.4" out of 0x004d0000), and ambience below at "0.6" - master and the
+    // effects scale stay at full, as they do there.
     {"musicvolume", "Music volume", SettingKind::Int, 0, 100, 5, "Sound", "",
-     "The zone's music.", "", 30},
+     "The zone's music.", "", 40},
     {"loopmusic", "Play without gaps", SettingKind::Bool, 0, 0, 0, "Sound", "",
      "Start the zone's next track straight away rather than leaving the\n"
      "silence its music sets between them (Sound_ZoneMusicNoDelay).", "", 0},
@@ -1021,7 +1027,7 @@ constexpr SettingDesc kSchema[] = {
     {"enableambience", "Enable ambience", SettingKind::Bool, 0, 0, 0, "Sound", "Ambience",
      "Off silences the world's own noise without disturbing the volumes below.", "", 1},
     {"ambientvolume", "Ambience volume", SettingKind::Int, 0, 100, 5, "Sound", "",
-     "Wind, water, birds and the rest of the world's own noise.", "", 100},
+     "Wind, water, birds and the rest of the world's own noise.", "", 60},
 
     {"npcvoicevolume", "NPC voices", SettingKind::Int, 0, 100, 5, "Sound", "Voices",
      "Greetings, farewells and quest speech from the people you talk to.", "", 100},
@@ -1124,7 +1130,7 @@ constexpr SettingDesc kSchema[] = {
      "Float what is said and yelled nearby over the speaker's head.", "", 1},
     {"chatbubblesparty", "Party chat in bubbles", SettingKind::Bool, 0, 0, 0, "Chat", "",
      "Float party and raid chat over the speaker's head as well.",
-     "", 0, "chatbubbles"},
+     "", 1, "chatbubbles"},
 
     // ---------------------------------------------------------------- Gameplay
     {"autoloot", "Auto loot", SettingKind::Bool, 0, 0, 0, "Gameplay", "Looting",

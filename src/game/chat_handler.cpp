@@ -1104,10 +1104,11 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
                        data.type == ChatType::MONSTER_PARTY);
         // Party Chat Bubbles, a separate box beside the one for say and yell,
         // and read by nothing until now: party lines never floated over anyone
-        // whichever way it was set. Off unless asked for, as it ships, since a
-        // five-person group talking is a lot of text over the fight.
+        // whichever way it was set. Registered on beside chatBubbles at
+        // 0x00510000, so a party's lines float over its members until the box
+        // is unticked.
         if (!bubble && (data.type == ChatType::PARTY || data.type == ChatType::RAID)) {
-            bubble = addons::storedCVarValue("chatBubblesParty", "0") != "0";
+            bubble = addons::storedCVarValue("chatBubblesParty", "1") != "0";
         }
         if (bubble) {
             bool isYell = (data.type == ChatType::YELL || data.type == ChatType::MONSTER_YELL);
@@ -1995,8 +1996,10 @@ void ChatHandler::updateLoginChannelJoin() {
 
     // Guild Recruitment (0x00507d30, run at the end of the login join): with
     // the interface's option on, joined by a player in no guild. It has no
-    // switch of this client's own; the CVar is the option.
-    if (addons::storedCVarValue("guildRecruitmentChannel", "0") != "0" && !owner_.isInGuild()) {
+    // switch of this client's own; the CVar is the option - and it is
+    // registered on (0x00510000 "1", with 0x00512750 as its setter), so a
+    // player in no guild is in the channel from the first login.
+    if (addons::storedCVarValue("guildRecruitmentChannel", "1") != "0" && !owner_.isInGuild()) {
         for (const auto& r : rows) {
             if (r.flags & chat_channels::kFlagGuildRecruitment) {
                 joinChannel(r.shortcut);

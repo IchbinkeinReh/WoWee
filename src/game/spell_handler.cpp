@@ -1618,8 +1618,10 @@ int32_t SpellHandler::moddedCooldown(uint32_t spellId, int32_t ms) const {
 }
 
 bool SpellHandler::petToggleHeld(uint32_t spellId) const {
-    // 0x00809100: the cvar, then the pet's list (0x00d3f5ac + 24*1).
-    return addons::storedCVarValue("secureAbilityToggle", "0") != "0" &&
+    // 0x00809100: the cvar, then the pet's list (0x00d3f5ac + 24*1). The
+    // client registers it on (0x00510000 "1"), so the guard is up until the
+    // player turns it off.
+    return addons::storedCVarValue("secureAbilityToggle", "1") != "0" &&
            petHistory_.startedRecently(spellId, historyNowMs());
 }
 
@@ -1724,9 +1726,10 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
             if (owner_.isAutoAttacking()) {
                 // Ability Toggle, which the panel describes exactly: protection
                 // from turning an ability off by hitting its button twice in a
-                // short space of time. Offered, and read by nothing - so a
-                // double-tap on Attack has always stopped the swing that the
-                // first tap started.
+                // short space of time. The client registers it on (0x00510000
+                // "1" - "Whether you should be protected against accidentally
+                // double-clicking an aura"), so a fresh profile has the guard up
+                // and unticks the row to stop the swing on a double tap.
                 //
                 // The guard is on the second press rather than on the state:
                 // stopping deliberately a second later is what the button is
@@ -1737,7 +1740,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
                 constexpr long kToggleGuardMs = 500;
                 if (autoAttackToggledAt_.time_since_epoch().count() != 0 &&
                     since < kToggleGuardMs &&
-                    addons::storedCVarValue("secureAbilityToggle", "0") != "0") {
+                    addons::storedCVarValue("secureAbilityToggle", "1") != "0") {
                     return;
                 }
                 owner_.stopAutoAttack();
