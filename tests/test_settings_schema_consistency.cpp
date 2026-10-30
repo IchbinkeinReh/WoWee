@@ -51,6 +51,20 @@ std::vector<std::string> choicesOf(const SettingDesc& d) {
     return out;
 }
 
+/// A row's enabledWhen, its '&'-joined clauses one by one.
+std::vector<std::string> clausesOf(const SettingDesc& d) {
+    std::vector<std::string> out;
+    const std::string all = d.enabledWhen ? d.enabledWhen : "";
+    std::size_t start = 0;
+    while (!all.empty()) {
+        const std::size_t amp = all.find('&', start);
+        out.push_back(all.substr(start, amp == std::string::npos ? amp : amp - start));
+        if (amp == std::string::npos) break;
+        start = amp + 1;
+    }
+    return out;
+}
+
 }  // namespace
 
 TEST_CASE("a setting key names one setting", "[settings][schema]") {
@@ -154,9 +168,7 @@ TEST_CASE("a control that depends on another names one that exists", "[settings]
     for (const auto& d : schema()) keys.insert(d.key);
 
     for (const auto& d : schema()) {
-        const std::string test = d.enabledWhen ? d.enabledWhen : "";
-        if (test.empty()) continue;
-
+      for (const std::string& test : clausesOf(d)) {
         std::string other = test;
         const std::size_t bang = test.find("!=");
         const std::size_t eq = test.find('=');
@@ -167,6 +179,7 @@ TEST_CASE("a control that depends on another names one that exists", "[settings]
                    << " is not a setting");
         CHECK(keys.count(other) == 1);
         CHECK(other != d.key);  // a control gating itself never turns on
+      }
     }
 }
 
@@ -178,7 +191,7 @@ TEST_CASE("a control gated on a dropdown names an index it has", "[settings][sch
     for (const auto& d : rows) byKey[d.key] = &d;
 
     for (const auto& d : rows) {
-        const std::string test = d.enabledWhen ? d.enabledWhen : "";
+      for (const std::string& test : clausesOf(d)) {
         const std::size_t bang = test.find("!=");
         const std::size_t eq = test.find('=');
         if (bang == std::string::npos && eq == std::string::npos) continue;
@@ -196,6 +209,7 @@ TEST_CASE("a control gated on a dropdown names an index it has", "[settings][sch
         const int index = std::stoi(want);
         CHECK(index >= 0);
         CHECK(index <= static_cast<int>(it->second->maxValue));
+      }
     }
 }
 
@@ -485,4 +499,19 @@ TEST_CASE("the settings ray tracing makes moot are known graphics rows", "[setti
         INFO(k);
         CHECK(rayTracingIgnoredReason(k) == nullptr);
     }
+}
+
+// Clauses joined by '&' must all hold (settingEnabled), as the ray traced
+// water's "enhancedwater&raytracedlighting" asks.
+TEST_CASE("an enabledWhen of several clauses needs every one", "[settings][schema]") {
+    SettingDesc d{};
+    d.enabledWhen = "a&b=2";
+    std::map<std::string, std::string> v{{"a", "1"}, {"b", "2"}};
+    auto read = [&](const std::string& k) { return v[k]; };
+    CHECK(settingEnabled(d, read));
+    v["a"] = "0";
+    CHECK_FALSE(settingEnabled(d, read));
+    v["a"] = "1";
+    v["b"] = "3";
+    CHECK_FALSE(settingEnabled(d, read));
 }

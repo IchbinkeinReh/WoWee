@@ -247,6 +247,14 @@ constexpr SettingDesc kSchema[] = {
      "The original client's Specular option: the sun glints off water\n"
      "and off the ground textures made to shine. Takes effect the next\n"
      "time the game starts, as in the original client.", "", 0},
+    // The enhanced water traced through the world instead of a reflection
+    // pass and a screen offset (water_rt.glsli).
+    {"rtwater", "Ray traced water", SettingKind::Bool, 0, 0, 0,
+     "Water", "",
+     "With ray tracing and enhanced water on: the water's reflection and\n"
+     "what lies under it traced through the world - the bed bent by the\n"
+     "waves, darker and bluer with depth, the sky and the shore in the\n"
+     "mirror. Needs enhanced water, whose waves bend both.", "", 1, "enhancedwater&raytracedlighting"},
 
     // Off by default: the compute tracer is what most machines get, and it
     // costs real frames. One row rather than three switches, because each
@@ -335,7 +343,7 @@ constexpr SettingDesc kSchema[] = {
     // are the user's tuned look (some lamps and fires stronger and farther
     // reaching, building lights and glow weaker, darker interiors and
     // shadows). Two pages, as one does not fit in two columns.
-    {"dbgview", "Show instead of the picture", SettingKind::Enum, 0, 14, 1, "Debug Graphics", "View",
+    {"dbgview", "Show instead of the picture", SettingKind::Enum, 0, 17, 1, "Debug Graphics", "View",
      "Replace the picture with one part of the ray traced lighting.\n"
      "The traced views work in every ray tracing mode; the probe views\n"
      "need Shadows, occlusion and bounce light; what a building's baked\n"
@@ -353,12 +361,16 @@ constexpr SettingDesc kSchema[] = {
      "red where nothing is painted). The kind of each light draws every\n"
      "lamp's light in the colour of what gave it - fire, lamp, glow,\n"
      "building, unit, model, particles - with a dot at each light and a\n"
-     "legend naming the colours.\n"
+     "legend naming the colours. The ray traced water's views show its\n"
+     "reflection alone, what comes through it alone, and the reflection\n"
+     "as traced - not the picture's own colour where it is on screen.\n"
      "WOWEE_GI_DEBUG, when set, wins.",
      "Off|Probe light ratio (grey = open field)|Probe irradiance|Ambient with the probes|"
      "Probe cascades|Traced sun visibility|Point lights' light|Traced occlusion|"
      "Traced history length|How each pixel found its traced surface|Baked shade|Depth edges|"
-     "Point light added|Baked colour factor|Kind of each light", 0},
+     "Point light added|Baked colour factor|Kind of each light|"
+     "Ray traced water: reflection|Ray traced water: what comes through|"
+     "Ray traced water: reflection, traced only", 0},
     {"dbgambient", "Ambient light (%)", SettingKind::Int, 0, 300, 5, "Debug Graphics", "Light",
      "The zone's ambient light, the base every surface starts from\n"
      "before the sun and the lamps. 100 is the zone's own.", "", 100},
@@ -1320,7 +1332,7 @@ bool settingNeedsRayTracing(const std::string& key) {
     // the rows whose labels or tooltips say ray traced.
     static constexpr const char* kTraced[] = {
         "dbgview",          "dbgpointlights",     "dbgbounce",       "dbginteriorbase",
-        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "dbgtracedsunshadow", "dbgpointshadow",
+        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "rtwater", "dbgtracedsunshadow", "dbgpointshadow",
         "dbgbakedlampshadow", "dbgocclusion",
     };
     for (const char* k : kTraced) {

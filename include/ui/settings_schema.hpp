@@ -72,7 +72,7 @@ struct SettingDesc {
     /// When this control is worth offering, as a test against another setting.
     ///
     /// "" is always. "key" is whenever that setting is on. "key=2" and "key!=2"
-    /// compare its value. A control whose test fails is drawn greyed rather
+    /// compare its value. Clauses joined by '&' must all hold. A control whose test fails is drawn greyed rather
     /// than hidden, so the panel does not change shape as things are switched
     /// on and off - and so that a player can see the setting exists and what it
     /// depends on.
@@ -111,9 +111,9 @@ struct SettingDesc {
 /// Shared so that the settings window and the options panels cannot disagree
 /// about when a control is live - the point of the field is that there is one
 /// answer, and two readers of it.
+/// One clause of `enabledWhen`: "key", "key=v" or "key!=v".
 template <typename ReadSetting>
-bool settingEnabled(const SettingDesc& desc, ReadSetting read) {
-    const std::string test = desc.enabledWhen;
+bool settingClauseHolds(const std::string& test, ReadSetting read) {
     if (test.empty()) return true;
     const std::size_t bang = test.find("!=");
     if (bang != std::string::npos) {
@@ -125,6 +125,21 @@ bool settingEnabled(const SettingDesc& desc, ReadSetting read) {
     }
     const std::string value = read(test);
     return !value.empty() && value != "0";
+}
+
+/// Whether a row's `enabledWhen` holds: its clauses joined by '&', each of
+/// which must.
+template <typename ReadSetting>
+bool settingEnabled(const SettingDesc& desc, ReadSetting read) {
+    const std::string all = desc.enabledWhen;
+    std::size_t start = 0;
+    while (true) {
+        const std::size_t amp = all.find('&', start);
+        if (!settingClauseHolds(all.substr(start, amp == std::string::npos ? amp : amp - start), read))
+            return false;
+        if (amp == std::string::npos) return true;
+        start = amp + 1;
+    }
 }
 
 /// A setting's value as a string, the way a CVar carries one.

@@ -2039,6 +2039,7 @@ void GameScreen::saveSettings() {
     out << "rt_full_resolution=" << (settingsPanel_.pendingRtFullRes ? 1 : 0) << "\n";
     out << "rt_soft_lamps=" << (settingsPanel_.pendingRtSoftLamps ? 1 : 0) << "\n";
     out << "rt_min_brightness=" << settingsPanel_.pendingRtMinBrightness << "\n";
+    out << "rt_water=" << (settingsPanel_.pendingRtWater ? 1 : 0) << "\n";
     out << "rt_normal_keep=" << settingsPanel_.pendingRtNormalKeep << "\n";
     out << "rt_normal_face=" << settingsPanel_.pendingRtNormalFace << "\n";
     out << "rt_eye_brighten=" << settingsPanel_.pendingRtEyeBrighten << "\n";
@@ -2393,6 +2394,7 @@ void GameScreen::loadSettings() {
             else if (key == "rt_normal_face")
                 settingsPanel_.pendingRtNormalFace =
                     std::clamp(std::stoi(val), 0, rendering::kNormalBlendMaxDegrees);
+            else if (key == "rt_water") settingsPanel_.pendingRtWater = (std::stoi(val) != 0);
             else if (key == "rt_min_brightness")
                 settingsPanel_.pendingRtMinBrightness =
                     std::clamp(std::stoi(val), 0, rendering::kRtMinBrightnessMaxPercent);

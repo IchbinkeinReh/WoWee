@@ -179,13 +179,8 @@ local function rayTracingOn()
     return mode ~= nil and mode ~= "" and mode ~= "0"
 end
 
-local function waitingOn(setting)
-    -- What this device lacks for it comes first: no other setting changes that.
-    if setting.unavailable and setting.unavailable ~= "" then return setting.unavailable end
-    -- What the traced lighting makes moot, greyed only while it is on.
-    if setting.rtignored and setting.rtignored ~= "" then return setting.rtignored end
-    local test = setting.enabledwhen
-    if not test or test == "" then return nil end
+-- One clause of enabledwhen ("key", "key=v", "key!=v") in words.
+local function clauseInWords(test)
     local key, want = test:match("^(.-)!=(.*)$")
     local negated = key ~= nil
     if not key then key, want = test:match("^(.-)=(.*)$") end
@@ -209,10 +204,22 @@ local function waitingOn(setting)
     return "Available when " .. name .. " is " .. choice .. "."
 end
 
-local function isEnabled(setting)
-    if setting.unavailable and setting.unavailable ~= "" then return false end
-    if setting.rtignored and setting.rtignored ~= "" and rayTracingOn() then return false end
+local function waitingOn(setting)
+    -- What this device lacks for it comes first: no other setting changes that.
+    if setting.unavailable and setting.unavailable ~= "" then return setting.unavailable end
+    -- What the traced lighting makes moot, greyed only while it is on.
+    if setting.rtignored and setting.rtignored ~= "" then return setting.rtignored end
     local test = setting.enabledwhen
+    if not test or test == "" then return nil end
+    -- Clauses joined by '&', each its own line.
+    local lines = {}
+    for clause in (test .. "&"):gmatch("([^&]*)&") do
+        if clause ~= "" then table.insert(lines, clauseInWords(clause)) end
+    end
+    return table.concat(lines, "\n")
+end
+
+local function clauseHolds(test)
     if not test or test == "" then return true end
     local key, want = test:match("^(.-)!=(.*)$")
     if key then return WoweeGetSetting(key) ~= want end
@@ -220,6 +227,17 @@ local function isEnabled(setting)
     if key then return WoweeGetSetting(key) == want end
     local value = WoweeGetSetting(test)
     return value ~= nil and value ~= "" and value ~= "0"
+end
+
+local function isEnabled(setting)
+    if setting.unavailable and setting.unavailable ~= "" then return false end
+    if setting.rtignored and setting.rtignored ~= "" and rayTracingOn() then return false end
+    local test = setting.enabledwhen
+    if not test or test == "" then return true end
+    for clause in (test .. "&"):gmatch("([^&]*)&") do
+        if not clauseHolds(clause) then return false end
+    end
+    return true
 end
 
 -- Greyed rather than hidden, so the panel keeps its shape and a player can see

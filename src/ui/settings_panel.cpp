@@ -938,7 +938,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
-    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtminbrightness", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
+    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtminbrightness", "rtwater", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
     "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
@@ -1139,6 +1139,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "rtfullres", .asBool = &SettingsPanel::pendingRtFullRes},
     {.key = "rtsoftlamps", .asBool = &SettingsPanel::pendingRtSoftLamps},
     {.key = "rtminbrightness", .asInt = &SettingsPanel::pendingRtMinBrightness},
+    {.key = "rtwater", .asBool = &SettingsPanel::pendingRtWater},
     {.key = "rtnormalkeep", .asInt = &SettingsPanel::pendingRtNormalKeep},
     {.key = "rtnormalface", .asInt = &SettingsPanel::pendingRtNormalFace},
     {.key = "rteyebrighten", .asInt = &SettingsPanel::pendingRtEyeBrighten},
@@ -1646,6 +1647,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtSoftLamps(pendingRtSoftLamps);
     } else if (key == "rtminbrightness") {
         if (renderer) renderer->setRtMinBrightness(pendingRtMinBrightness);
+    } else if (key == "rtwater") {
+        if (renderer) renderer->setRtWater(pendingRtWater);
     } else if (key == "rtnormalkeep" || key == "rtnormalface") {
         // Held apart at use (normalBlendCosines): a face angle under the
         // keep angle is taken as the keep angle.
