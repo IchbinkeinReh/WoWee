@@ -233,11 +233,14 @@ vec3 rtFaceBasedNormal(vec3 face, vec3 vertexNormal, vec3 shading) {
 // smooth blend between. One rule for both places it is applied - a room's
 // baked colour in the G-buffer (rtInteriorLampNormal) and every other
 // surface in rt_trace (lightN) - so the two cannot drift apart. Mirrored in
-// rt_gbuffer_pack.hpp (normalAgreement).
+// rt_gbuffer_pack.hpp (normalAgreement). The two angles are the Ray Tracing
+// page's "Normal blend" sliders, as cosines (rt_normal_blend.hpp): x the
+// near one, y the far one; RT_NORMAL_AGREE_* are their defaults, for a block
+// nothing filled in.
 const float RT_NORMAL_AGREE_NEAR = 0.9659;  // cos 15 degrees
 const float RT_NORMAL_AGREE_FAR = 0.8192;   // cos 35 degrees
-float rtNormalAgreement(vec3 face, vec3 n) {
-    return smoothstep(RT_NORMAL_AGREE_FAR, RT_NORMAL_AGREE_NEAR, dot(face, n));
+float rtNormalAgreement(vec3 face, vec3 n, vec2 cosines) {
+    return smoothstep(cosines.y, cosines.x, dot(face, n));
 }
 
 // The normal a room's baked colour (RT_GB_INTERIOR) takes the traced lamps
@@ -248,9 +251,9 @@ float rtNormalAgreement(vec3 face, vec3 n) {
 // 50 to 65 degrees off). Resolved here, so rt_trace leaves it as it is
 // (rt_prepare marks it). Mirrored in rt_gbuffer_pack.hpp
 // (interiorLampNormal).
-vec3 rtInteriorLampNormal(vec3 face, vec3 vertexNormal, vec3 shading) {
+vec3 rtInteriorLampNormal(vec3 face, vec3 vertexNormal, vec3 shading, vec2 cosines) {
     vec3 byFace = rtFaceBasedNormal(face, vertexNormal, shading);
-    vec3 n = mix(byFace, shading, rtNormalAgreement(face, vertexNormal));
+    vec3 n = mix(byFace, shading, rtNormalAgreement(face, vertexNormal, cosines));
     return dot(n, n) > 1e-8 ? normalize(n) : face;
 }
 

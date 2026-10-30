@@ -252,7 +252,7 @@ void main() {
     // smoothing stays: their normals lie within some fifteen degrees of
     // their faces (rtNormalAgreement). A room's baked colour comes with the
     // same rule applied already, to its vertex normal (normalResolved).
-    vec3 lightN = normalize(mix(n, shadingN, normalResolved ? 1.0 : rtNormalAgreement(n, shadingN)));
+    vec3 lightN = normalize(mix(n, shadingN, normalResolved ? 1.0 : rtNormalAgreement(n, shadingN, pass.tune4.xy)));
     vec3 pointSum = vec3(0.0);
     float bakedSum = 0.0;
     float weightSum = 0.0;

@@ -168,6 +168,9 @@ public:
         float lampWrap = 0.25f;
         /// The least the traced scale darkens a surface to (rt_min_brightness.hpp).
         float minBrightness = 0.0f;
+        /// The normal blend's cosines (rt_normal_blend.hpp), near and far.
+        float normalBlendNear = 0.9659f;
+        float normalBlendFar = 0.8192f;
         /// Rays a pixel of each kind, 1 to kMaxRtRaysPerPixel (Ray Tracing
         /// settings): toward the sun, for the occlusion, toward a point
         /// light, and a probe's rays for the bounced light. One is the

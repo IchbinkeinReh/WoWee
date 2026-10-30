@@ -3,6 +3,7 @@
 #include "rendering/shadow_sun.hpp"
 #include "rendering/rt_lamp_wrap.hpp"
 #include "rendering/rt_min_brightness.hpp"
+#include "rendering/rt_normal_blend.hpp"
 #include "rendering/rt_light_kinds.hpp"
 #include "rendering/depth_convention.hpp"
 #include "rendering/shadow_pass_work.hpp"
@@ -707,8 +708,11 @@ void Renderer::updatePerFrameUBO() {
         // Not dimmed by the glare: 0x007816f0 darkens only 0xd38ca8/cac.
         currentFrameData.averagedDirectColor = glm::vec4(lp.averagedDirectColor * sunScale, 1.0f);
         currentFrameData.averagedAmbientColor = glm::vec4(lp.averagedAmbientColor * ambientScale, 1.0f);
+        // y, z: the normal blend's cosines, which wmo.frag's rooms take from
+        // here and rt_trace from its pass block - one pair for both.
+        const NormalBlendCosines blend = normalBlendCosines(rtNormalKeepDeg_, rtNormalFaceDeg_);
         currentFrameData.windowLight = glm::vec4(
-            wmo_sidn::windowLevel(lightingManager->getTimeOfDay()), 0.0f, 0.0f, 0.0f);
+            wmo_sidn::windowLevel(lightingManager->getTimeOfDay()), blend.nearCos, blend.farCos, 0.0f);
         if (wmoRenderer) wmoRenderer->setRtWindowLevel(currentFrameData.windowLight.x);
         currentFrameData.specularColor = glm::vec4(lp.sunColor, clientSpecular_ ? 1.0f : 0.0f);
         currentFrameData.fogParams.x = lp.fogStart;
@@ -6689,6 +6693,11 @@ void Renderer::recordRtLighting() {
     in.maxLight = currentFrameData.rtTune2.w;
     in.lampWrap = lampWrap(rtSoftLamps_);
     in.minBrightness = rtMinBrightnessFactor(rtMinBrightnessPercent_);
+    {
+        const NormalBlendCosines blend = normalBlendCosines(rtNormalKeepDeg_, rtNormalFaceDeg_);
+        in.normalBlendNear = blend.nearCos;
+        in.normalBlendFar = blend.farCos;
+    }
     in.rays = rtRays_;
     in.occlusion = currentFrameData.lightTune.w;
     in.debugView = static_cast<int>(currentFrameData.giParams.y + 0.5f);

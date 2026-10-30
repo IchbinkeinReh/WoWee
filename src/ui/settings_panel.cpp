@@ -930,7 +930,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
-    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtminbrightness", "rteyebrighten", "rteyeseconds",
+    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtminbrightness", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
     "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
@@ -1131,6 +1131,8 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "rtfullres", .asBool = &SettingsPanel::pendingRtFullRes},
     {.key = "rtsoftlamps", .asBool = &SettingsPanel::pendingRtSoftLamps},
     {.key = "rtminbrightness", .asInt = &SettingsPanel::pendingRtMinBrightness},
+    {.key = "rtnormalkeep", .asInt = &SettingsPanel::pendingRtNormalKeep},
+    {.key = "rtnormalface", .asInt = &SettingsPanel::pendingRtNormalFace},
     {.key = "rteyebrighten", .asInt = &SettingsPanel::pendingRtEyeBrighten},
     {.key = "rteyeseconds", .asFloat = &SettingsPanel::pendingRtEyeSeconds},
     {.key = "rteyesensitivity", .asInt = &SettingsPanel::pendingRtEyeSensitivity},
@@ -1636,6 +1638,10 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtSoftLamps(pendingRtSoftLamps);
     } else if (key == "rtminbrightness") {
         if (renderer) renderer->setRtMinBrightness(pendingRtMinBrightness);
+    } else if (key == "rtnormalkeep" || key == "rtnormalface") {
+        // Held apart at use (normalBlendCosines): a face angle under the
+        // keep angle is taken as the keep angle.
+        if (renderer) renderer->setRtNormalBlend(pendingRtNormalKeep, pendingRtNormalFace);
     } else if (key == "rteyebrighten" || key == "rteyeseconds" || key == "rteyesensitivity") {
         if (renderer) renderer->setEyeAdaptation(pendingRtEyeBrighten, pendingRtEyeSeconds, pendingRtEyeSensitivity);
     } else if (key == "rtsunrays" || key == "rtaorays" || key == "rtpointrays" || key == "rtbouncerays") {

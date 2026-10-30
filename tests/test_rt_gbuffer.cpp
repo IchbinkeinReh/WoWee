@@ -7,6 +7,7 @@
 #include <catch_amalgamated.hpp>
 
 #include "rendering/rt_gbuffer_pack.hpp"
+#include "rendering/rt_normal_blend.hpp"
 
 #include <algorithm>
 #include <random>
@@ -579,4 +580,36 @@ TEST_CASE("The maximum light holds the added light at its cap, its hue kept", "[
     t.flags = kValid;
     const Factors lit = apply(t, r, tune, glm::vec3(0.0f, 0.0f, 1.0f));
     REQUIRE(glm::length(lit.add - t.kp * capLight(r.point, 0.75f)) < 1e-5f);
+}
+
+// The "Normal blend" sliders: their defaults are the rule's constants
+// exactly, the face angle never under the keep angle, and the blend moves
+// with them.
+TEST_CASE("The normal blend sliders map to the rule's cosines", "[rt_gbuffer]") {
+    using namespace wowee::rendering;
+    using wowee::rendering::rt_gbuffer::kNormalAgreeFar;
+    using wowee::rendering::rt_gbuffer::kNormalAgreeNear;
+    using wowee::rendering::rt_gbuffer::normalAgreement;
+    const NormalBlendCosines d = normalBlendCosines(kNormalBlendKeepDefault, kNormalBlendFaceDefault);
+    REQUIRE(d.nearCos == kNormalAgreeNear);
+    REQUIRE(d.farCos == kNormalAgreeFar);
+    // A face angle under the keep angle is the keep angle: a step there.
+    const NormalBlendCosines crossed = normalBlendCosines(40, 20);
+    REQUIRE(crossed.nearCos == Catch::Approx(std::cos(glm::radians(40.0f))).margin(1e-4));
+    REQUIRE(crossed.farCos < crossed.nearCos);
+    REQUIRE(crossed.nearCos - crossed.farCos < 2e-4f);
+    // Held to 0..90.
+    REQUIRE(normalBlendCosines(-5, 200).nearCos == 1.0f);
+    REQUIRE(normalBlendCosines(-5, 200).farCos == Catch::Approx(0.0f).margin(1e-6));
+    // Wider: a 30 degree lean that defaults blend partly keeps all its own
+    // with keep at 40, and is the face's alone with face at 25.
+    const glm::vec3 face(0.0f, 0.0f, 1.0f);
+    const glm::vec3 lean30(std::sin(glm::radians(30.0f)), 0.0f, std::cos(glm::radians(30.0f)));
+    const float mid = normalAgreement(face, lean30);
+    REQUIRE(mid > 0.0f);
+    REQUIRE(mid < 1.0f);
+    const NormalBlendCosines wide = normalBlendCosines(40, 60);
+    REQUIRE(normalAgreement(face, lean30, wide.nearCos, wide.farCos) == 1.0f);
+    const NormalBlendCosines narrow = normalBlendCosines(10, 25);
+    REQUIRE(normalAgreement(face, lean30, narrow.nearCos, narrow.farCos) == 0.0f);
 }

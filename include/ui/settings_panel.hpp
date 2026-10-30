@@ -80,6 +80,8 @@ public:
     /// with the side effects of each; nothing else is touched. Not saved here.
     void restoreGraphicsDefaults();
     int pendingRtMinBrightness = 0;   ///< the traced darkening's floor, % (rt_min_brightness.hpp)
+    int pendingRtNormalKeep = 15;     ///< the normal blend's angles, degrees (rt_normal_blend.hpp)
+    int pendingRtNormalFace = 35;
     /// The eye adaptation (Ray Tracing; eye_adaptation::paramsFor).
     int pendingRtEyeBrighten = 30;
     float pendingRtEyeSeconds = 2.5f;

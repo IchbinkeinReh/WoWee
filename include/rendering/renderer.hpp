@@ -736,6 +736,11 @@ public:
     void setRtSoftLamps(bool softer) { rtSoftLamps_ = softer; }
     /// The Ray Tracing page's "Minimum brightness (%)" (rt_min_brightness.hpp).
     void setRtMinBrightness(int percent) { rtMinBrightnessPercent_ = percent; }
+    /// The Ray Tracing page's two "Normal blend" angles (rt_normal_blend.hpp).
+    void setRtNormalBlend(int keepDegrees, int faceDegrees) {
+        rtNormalKeepDeg_ = keepDegrees;
+        rtNormalFaceDeg_ = faceDegrees;
+    }
     /// How far the eye may brighten a dark view (percent over one) and how
     /// long it takes to adapt to the dark (seconds); eye_adaptation::paramsFor.
     /// The sensitivity narrows the neutral band (percent, 0 as it is).
@@ -1121,6 +1126,8 @@ private:
     LightingTune lightingTune_{};
     bool rtSoftLamps_ = false;
     int rtMinBrightnessPercent_ = 0;
+    int rtNormalKeepDeg_ = 15;
+    int rtNormalFaceDeg_ = 35;
     int eyeBrighteningPercent_ = 30;
     float eyeAdaptSeconds_ = 2.5f;
     int eyeSensitivityPercent_ = 0;

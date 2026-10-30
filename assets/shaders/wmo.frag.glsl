@@ -18,7 +18,8 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 cameraFogColor;  // the camera's fog, its interior's blended in
     vec4 averagedDirectColor;   // light mode 2's direct light (0xd38cb0)
     vec4 averagedAmbientColor;  // and its ambient (0xd38cb4)
-    vec4 windowLight;           // x: the light's window level (0xd38cdc, wmo_sidn.hpp)
+    vec4 windowLight;           // x: the light's window level (0xd38cdc, wmo_sidn.hpp);
+                                // yz: the normal blend's cosines (rt_normal_blend.hpp)
     // Unread here; declared so the cascades below land where the renderer writes them.
     vec4 specularColor;
     // The shadow cascades (shadow_csm.glsli); GPUPerFrameData ends with them.
@@ -402,7 +403,10 @@ void main() {
     // A room's baked colour: lit by its own normal where it agrees with
     // its face, by the face's past that (rtInteriorLampNormal).
     rtSurface.normal = (rtSurface.flags & RT_GB_INTERIOR) != 0u
-                           ? rtInteriorLampNormal(faceNormal, vertexNormal, norm) : norm;
+                           ? rtInteriorLampNormal(faceNormal, vertexNormal, norm,
+                                                  rtTune.w > 0.5 ? windowLight.yz
+                                                                 : vec2(RT_NORMAL_AGREE_NEAR, RT_NORMAL_AGREE_FAR))
+                           : norm;
     rtSurface.map = mapLit;
     rtWriteGbuffer(rtSurface, outColor.rgb);
 }

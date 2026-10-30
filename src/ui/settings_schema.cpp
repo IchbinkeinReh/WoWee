@@ -382,6 +382,18 @@ constexpr SettingDesc kSchema[] = {
     {"dbginteriorfullat", "Inside, lamp light for full colour (%)", SettingKind::Int, 5, 300, 5, "Debug Graphics", "",
      "How bright the lamps' traced light must be for a room's painted\n"
      "light to show in full. Lower lights more of the room.", "", 100},
+    // Where the lamps light a surface by its face rather than its own
+    // normal (rt_normal_blend.hpp): the defaults are the rule as it was.
+    {"rtnormalkeep", "Normal blend: keep own normal up to (degrees)", SettingKind::Int, 0, 90, 1,
+     "Debug Graphics", "",
+     "Lamps light a surface by its own (smoothed, bumped) normal while it\n"
+     "leans at most this far from the surface's real face: round pillars,\n"
+     "arches and characters stay smooth. Past it the face takes over.", "", 15, "raytracedlighting"},
+    {"rtnormalface", "Normal blend: face normal from (degrees)", SettingKind::Int, 0, 90, 1,
+     "Debug Graphics", "",
+     "Past this angle from its face a surface is lit by the face alone, so a\n"
+     "floor whose normals were smoothed with the walls does not go dark in\n"
+     "patches. Between the two a smooth blend; never less than the first.", "", 35, "raytracedlighting"},
     {"dbgtimeoverride", "Use this time of day", SettingKind::Bool, 0, 0, 0, "Debug Time", "Time of day",
      "Light the world at the time below instead of the server's.\n"
      "Only what is drawn; the server's clock is left alone.", "", 0},
@@ -1250,7 +1262,7 @@ bool settingNeedsRayTracing(const std::string& key) {
     // the rows whose labels or tooltips say ray traced.
     static constexpr const char* kTraced[] = {
         "dbgview",          "dbgpointlights",     "dbgbounce",       "dbginteriorbase",
-        "dbginteriorfullat", "dbgshadowdarkness", "dbgtracedsunshadow", "dbgpointshadow",
+        "dbginteriorfullat", "dbgshadowdarkness", "rtnormalkeep", "rtnormalface", "dbgtracedsunshadow", "dbgpointshadow",
         "dbgbakedlampshadow", "dbgocclusion",
     };
     for (const char* k : kTraced) {
