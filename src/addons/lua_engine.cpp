@@ -6606,31 +6606,35 @@ void LuaEngine::registerCoreAPI() {
     // event queue as a keyboard would - for checking in a run with no one at
     // the keys what only the key itself does (the Escape chain decides before
     // any binding runs). A scancode name as SDL_GetScancodeFromName takes it.
-    lua_pushcfunction(L_, [](lua_State* L) -> int {
-        const SDL_Scancode sc = SDL_GetScancodeFromName(luaL_checkstring(L, 1));
-        if (sc == SDL_SCANCODE_UNKNOWN) return 0;
-        for (const bool down : {true, false}) {
-            SDL_Event e{};
-            e.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
-            e.key.scancode = sc;
-            e.key.key = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false);
-            e.key.down = down;
-            // The game's window, focused or not: with no window named the
-            // interface's backend drops the key.
-            SDL_Window* w = SDL_GetKeyboardFocus();
-            if (!w) {
-                int count = 0;
-                if (SDL_Window** all = SDL_GetWindows(&count)) {
-                    if (count > 0) w = all[0];
-                    SDL_free(all);
+    // Only in such a run (WOWEE_AUTO_LUA set): otherwise any addon could make
+    // the hardware presses the protected actions wait for.
+    if (const char* autoLua = std::getenv("WOWEE_AUTO_LUA"); autoLua != nullptr && *autoLua != '\0') {
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            const SDL_Scancode sc = SDL_GetScancodeFromName(luaL_checkstring(L, 1));
+            if (sc == SDL_SCANCODE_UNKNOWN) return 0;
+            for (const bool down : {true, false}) {
+                SDL_Event e{};
+                e.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+                e.key.scancode = sc;
+                e.key.key = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false);
+                e.key.down = down;
+                // The game's window, focused or not: with no window named the
+                // interface's backend drops the key.
+                SDL_Window* w = SDL_GetKeyboardFocus();
+                if (!w) {
+                    int count = 0;
+                    if (SDL_Window** all = SDL_GetWindows(&count)) {
+                        if (count > 0) w = all[0];
+                        SDL_free(all);
+                    }
                 }
+                e.key.windowID = w ? SDL_GetWindowID(w) : 0;
+                SDL_PushEvent(&e);
             }
-            e.key.windowID = w ? SDL_GetWindowID(w) : 0;
-            SDL_PushEvent(&e);
-        }
-        return 0;
-    });
-    lua_setglobal(L_, "__WoweePressKey");
+            return 0;
+        });
+        lua_setglobal(L_, "__WoweePressKey");
+    }
 
     // The micro menu's game-menu button reaches this client's own settings.
     // GameMenuFrame is suppressed, so ToggleGameMenu had nothing to show and
