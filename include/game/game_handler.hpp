@@ -939,7 +939,6 @@ public:
     bool hasActiveGmTicket() const { return gmTicketActive_; }
     const std::string& getGmTicketText() const { return gmTicketText_; }
     bool isGmSupportAvailable() const { return gmSupportAvailable_; }
-    float getGmTicketWaitHours() const { return gmTicketWaitHours_; }
 
     // Battlefield Manager (Wintergrasp)
     bool hasBfMgrInvite()  const { return bfMgrInvitePending_; }
@@ -6624,7 +6623,6 @@ private:
     // ---- GM Ticket state (SMSG_GMTICKET_GETTICKET / SMSG_GMTICKET_SYSTEMSTATUS) ----
     bool        gmTicketActive_    = false;  ///< True when an open ticket exists on the server
     std::string gmTicketText_;               ///< Text of the open ticket (from SMSG_GMTICKET_GETTICKET)
-    float       gmTicketWaitHours_ = 0.0f;  ///< Server-estimated wait time in hours
     bool        gmSupportAvailable_ = true; ///< GM support system online (SMSG_GMTICKET_SYSTEMSTATUS)
 
     // ---- Battlefield Manager state (WotLK Wintergrasp / outdoor battlefields) ----

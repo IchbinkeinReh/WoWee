@@ -2646,59 +2646,79 @@ void GameHandler::registerRemainingOpcodes() {
             }
         }
     };
-    // WotLK 3.3.5a format:
-    //   uint8  status  - 6=has open ticket, 3=closed, anything else none
-    // If status == 6 (GMTICKET_STATUS_HASTEXT):
-    //   cstring ticketText
-    //   uint32  ticketAge       (seconds old)
-    //   uint32  daysUntilOld    (days remaining before escalation)
-    //   float   waitTimeHours   (estimated GM wait time)
+    // 0x005ad240 case 0x212 reads the ticket in this order and nothing else:
+    //   uint32 status                    6 = GMTICKET_STATUS_HASTEXT
+    //   uint32                           kept at DAT_00c1e8d0, never fired
+    //   cstring text                     read with a 2000-byte cap
+    //   uint8  category                  the event's first %d
+    //   float  ticketAge                 clamped to >= 0 on the way out
+    //   float  oldestTicketTime
+    //   float  updateTime
+    //   uint8  assignedToGM              the event's first trailing %d
+    //   uint8  openedByGM                ... and its last
+    // and names UPDATE_TICKET with "%d%s%f%f%f%d%d" (005a0000.c:10009).  All
+    // three floats arrive already in days: helpframe.lua:107 spells them out
+    // as "ticketAge - days / oldestTicketTime - days / updateTime - days", so
+    // there is nothing to convert.
+    //
+    // What was read here was a byte status, then the text, then two uint32s
+    // and a float taken as hours.  Little-endian kept the status reading six,
+    // and the string read then took the three zero bytes that follow it in
+    // that dword, so the ticket's own words came back empty and everything
+    // measured from there was whatever the padding said.  The two bytes that
+    // say whether a GM has opened the ticket or taken it up as escalated were
+    // never read at all, so the frame's "opened by a GM" and "escalated"
+    // answers could not appear however much a GM had done either.
     dispatchTable_[Opcode::SMSG_GMTICKET_GETTICKET] = [this](network::Packet& packet) {
-        // WotLK 3.3.5a format:
-        //   uint8  status  - 6=has open ticket, 3=closed, anything else none
-        // If status == 6 (GMTICKET_STATUS_HASTEXT):
-        //   cstring ticketText
-        //   uint32  ticketAge       (seconds old)
-        //   uint32  daysUntilOld    (days remaining before escalation)
-        //   float   waitTimeHours   (estimated GM wait time)
-        if (!packet.hasRemaining(1)) { packet.skipAll(); return; }
-        uint8_t gmStatus = packet.readUInt8();
+        if (!packet.hasRemaining(4)) { packet.skipAll(); return; }
+        const uint32_t gmStatus = packet.readUInt32();
         // Status 6 = GMTICKET_STATUS_HASTEXT - open ticket with text
-        if (gmStatus == 6 && packet.hasRemaining(1)) {
-            gmTicketText_    = packet.readString();
-            uint32_t ageSec  = (packet.hasRemaining(4)) ? packet.readUInt32() : 0;
-            /*uint32_t daysLeft =*/ (packet.hasRemaining(4)) ? packet.readUInt32() : 0;
-            gmTicketWaitHours_ = (packet.hasRemaining(4))
-                ? packet.readFloat() : 0.0f;
+        if (gmStatus == 6 && packet.hasRemaining(4)) {
+            /*uint32_t stamp =*/ packet.readUInt32();
+            gmTicketText_ = packet.readString();
+            const uint32_t category =
+                (packet.hasRemaining(1)) ? packet.readUInt8() : 0;
+            // Only the first of the three floats is clamped, and only the
+            // copy the client fires: a negative age becomes 0 before it is
+            // named, while the other two are passed through as they came.
+            double ticketAge = 0.0;
+            if (packet.hasRemaining(4)) {
+                const float v = packet.readFloat();
+                ticketAge = (v < 0.0f) ? 0.0 : static_cast<double>(v);
+            }
+            auto readDays = [&packet]() {
+                return (packet.hasRemaining(4))
+                    ? static_cast<double>(packet.readFloat()) : 0.0;
+            };
+            const double oldestTicketTime = readDays();
+            const double updateTime = readDays();
+            const uint32_t assignedToGM =
+                (packet.hasRemaining(1)) ? packet.readUInt8() : 0;
+            const uint32_t openedByGM =
+                (packet.hasRemaining(1)) ? packet.readUInt8() : 0;
             gmTicketActive_ = true;
             // UPDATE_TICKET below and no chat line (0x005ad240 case 0x212);
             // this also printed English "You have an open GM ticket ..." on
             // every login.
-            LOG_INFO("SMSG_GMTICKET_GETTICKET: open ticket age=", ageSec,
-                     "s wait=", gmTicketWaitHours_, "h");
+            LOG_INFO("SMSG_GMTICKET_GETTICKET: open ticket age=", ticketAge,
+                     "d oldest=", oldestTicketTime, "d update=", updateTime);
 
-            // The interface measures all of this in days and works the wait out
-            // itself, as (oldestTicketTime - ticketAge). This packet gives the
-            // wait directly, so the oldest time is the age plus it - which
-            // arrives at the same number the server meant.
-            //
             // updateTime says how stale the estimate is; anything over an hour
-            // is treated as no estimate at all, and this one was computed from
-            // the packet that just arrived.
-            const double ageDays = static_cast<double>(ageSec) / 86400.0;
+            // is treated as no estimate at all by the frame reading it, and
+            // this is the number the realm measured it with.
             auto days = [](double v) {
                 char out[32];
                 std::snprintf(out, sizeof(out), "%.6f", v);
                 return std::string(out);
             };
             fireAddonEvent("UPDATE_TICKET", {
-                "1",                                            // category: has one
+                std::to_string(category),
                 gmTicketText_,
-                days(ageDays),
-                days(ageDays + gmTicketWaitHours_ / 24.0),
-                "0",                                            // just measured
-                "0",                                            // not assigned
-                "0",                                            // not opened by a GM
+                days(ticketAge),
+                days(oldestTicketTime),
+                days(updateTime),
+                std::to_string(assignedToGM),
+                std::to_string(openedByGM),
             });
         } else if (gmStatus == 3) {
             gmTicketActive_ = false;
