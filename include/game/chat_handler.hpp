@@ -148,6 +148,14 @@ public:
     /// Release anything whose wait has run out, named or not. A line nobody
     /// answers for is still a line the player should see.
     void expireChatAwaitingName();
+    /// A name query answered for a channel roster that was holding its events
+    /// (0x004ffe30, the callback the roster fill and the member add register on
+    /// the request itself). The row is filled in, and the last answer for that
+    /// channel re-sorts the roster and raises the two channel events.
+    void onChannelRosterNameKnown(uint64_t guid);
+    /// Raise the two channel events for a roster whose names never came, so a
+    /// panel is not held shut by a query the realm never answers.
+    void expireChannelRosterWaits();
     void handleMotd(network::Packet& packet);
 
     // --- State accessors ---
@@ -218,6 +226,14 @@ private:
     /// (the slot's +0x90), and CHANNEL_FLAGS_UPDATED (552) for it - raised only
     /// when the byte moved and the channel is in the list to be told about.
     void noteChannelFlags(const std::string& chanName, uint8_t chanFlags);
+    /// Ask for the names the roster rows are missing, and hold the two channel
+    /// events for that channel until they answer. Nothing is held when every row
+    /// already has a name. See rosterNameWaits_ for the rule this mirrors.
+    void holdRosterForNames(const std::string& chanName,
+                            const std::vector<ChannelMember>& roster);
+    /// CHANNEL_ROSTER_UPDATE and CHANNEL_COUNT_UPDATE for one channel, both by
+    /// display index and both carrying the row count as it stands.
+    void fireChannelRosterEvents(const std::string& chanName);
     void initializeChatLog();
     void logChatMessage(const MessageChatData& msg, const char* source);
     /// SMSG_EXPECTED_SPAM_RECORDS (0x00501c70): the server's spam regexes.
@@ -270,6 +286,31 @@ private:
     std::deque<std::pair<uint32_t, uint64_t>> chatLineSenders_;
     uint32_t nextChatLineId_ = 1;
     std::unordered_map<std::string, std::vector<ChannelMember>> channelRosters_;
+    /// The channel rosters waiting on names, and the guids still outstanding for
+    /// each.
+    ///
+    /// The client counts the roster rows whose name it does not have
+    /// (`DAT_00b743d8`) and raises CHANNEL_ROSTER_UPDATE and CHANNEL_COUNT_UPDATE
+    /// only when that count is zero - either at the end of the fill (`0x00503990`)
+    /// or from the callback the request carries (`0x004ffe30`), which re-sorts
+    /// first. So the panel is never shown a row named after nobody and then made
+    /// to move it when the name lands.
+    ///
+    /// Kept per channel here, where the client has one counter and one roster
+    /// store for the whole client: its next fill resets that counter, which drops
+    /// the events the rows it replaced were still owed. And a wait past its
+    /// deadline fires anyway (expireChannelRosterWaits) - the client waits for an
+    /// answer that may never come, and a panel that never updates is worse than
+    /// one that updates twice.
+    struct RosterNameWait {
+        std::unordered_set<uint64_t> guids;
+        double deadline = 0.0;
+    };
+    std::unordered_map<std::string, RosterNameWait> rosterNameWaits_;
+    /// Long enough for a name query to come back, and longer than the chat line
+    /// wait: a roster is not being read this second, and re-asking the panel on
+    /// the way costs less than drawing it twice.
+    static constexpr double kRosterNameWaitSeconds = 3.0;
     bool chatLogEnabled_ = false;
     bool chatLogInitialized_ = false;
     std::string chatLogPath_;

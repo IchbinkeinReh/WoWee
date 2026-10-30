@@ -362,6 +362,12 @@ void GameHandler::updateNetworking() {
     // socket below would be a tick later than it needs to be; before it means
     // a line waits one extra tick at most.
     if (chatHandler_) chatHandler_->expireChatAwaitingName();
+    // A channel roster held its events for names that may never be answered. The
+    // client waits as long as it likes (0x00b743d8 is only ever decremented by an
+    // answer); a panel that never hears anything is the worse outcome, so past a
+    // deadline these go out with the names that are in. See
+    // ChatHandler::rosterNameWaits_.
+    if (chatHandler_) chatHandler_->expireChannelRosterWaits();
     // The zone channels, once the player has a zone to name them after.
     if (chatHandler_) chatHandler_->updateLoginChannelJoin();
 

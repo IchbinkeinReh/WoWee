@@ -2151,6 +2151,98 @@ void ChatHandler::noteChannelFlags(const std::string& chanName, uint8_t chanFlag
     owner_.fireAddonEvent("CHANNEL_FLAGS_UPDATED", {std::to_string(idx)});
 }
 
+/// Ask for the names of the rows that have none, and hold the panel's events.
+///
+/// 0x00503990 does not fill the roster and announce it: for every row it looks the
+/// guid up through 0x0067d770 **with 0x004ffe30 as the request's callback**, and a
+/// row that has no name yet raises the counter it checks at the end. The two
+/// events are raised only when that counter is at zero, and the callback that
+/// closes the last one re-sorts the rows first - so the list the player is shown
+/// is the one with the names in it, sorted once, rather than one with "(unknown)"
+/// in the middle of it that then reorders itself.
+///
+/// The callback closes a wait on the **answer**, not on a name: 0x004ffe30 walks
+/// the rows for the guid, returns without touching the counter when it is not
+/// among them, and otherwise takes one off. A guid the realm knows nothing about
+/// therefore still closes its wait, which is what keeps a roster from being held
+/// by it forever.
+void ChatHandler::holdRosterForNames(const std::string& chanName,
+                                     const std::vector<ChannelMember>& roster) {
+    RosterNameWait wait;
+    for (const auto& m : roster) {
+        if (m.nameKnown || m.guid == 0) continue;
+        wait.guids.insert(m.guid);
+        owner_.queryPlayerName(m.guid);
+    }
+    if (wait.guids.empty()) {
+        rosterNameWaits_.erase(chanName);
+        return;
+    }
+    wait.deadline = core::appTimeSeconds() + kRosterNameWaitSeconds;
+    rosterNameWaits_[chanName] = std::move(wait);
+}
+
+void ChatHandler::fireChannelRosterEvents(const std::string& chanName) {
+    // By display index, not by name. ChannelRoster_Update and
+    // ChannelList_CountUpdate both take a position in the channel list -
+    // _G["ChannelButton"..id] is how the second finds its row, and the first is
+    // called elsewhere with GetSelectedDisplayChannel(), which is an index. A
+    // name built "ChannelButtonGeneral", which is nothing, so neither the
+    // roster nor the count ever redrew.
+    const int displayIndex = getChannelIndex(chanName);
+    if (displayIndex <= 0) return;
+    auto it = channelRosters_.find(chanName);
+    const std::string idx = std::to_string(displayIndex);
+    const std::string count = std::to_string(it == channelRosters_.end() ? 0 : it->second.size());
+    // Both carry the count. The roster one is 0x004ffe30's
+    // event(548, "%d%d", displayIndex, members) - ChannelRoster_Update reads only
+    // the first of the two, but the client passes both from the same registers it
+    // has just stored at (&DAT_00b74464)[index*8].
+    owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx, count});
+    owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE", {idx, count});
+}
+
+void ChatHandler::onChannelRosterNameKnown(uint64_t guid) {
+    if (guid == 0 || rosterNameWaits_.empty()) return;
+    // Asked after the name is cached, the same way the invite hook is.
+    const std::string name = owner_.lookupName(guid);
+    for (auto wit = rosterNameWaits_.begin(); wit != rosterNameWaits_.end();) {
+        auto rit = channelRosters_.find(wit->first);
+        if (rit == channelRosters_.end()) {
+            wit = rosterNameWaits_.erase(wit);
+            continue;
+        }
+        auto mit = std::find_if(rit->second.begin(), rit->second.end(),
+                               [&](const ChannelMember& m) { return m.guid == guid; });
+        if (mit == rit->second.end()) { ++wit; continue; }   // 0x004ffe30's scan
+        if (!mit->nameKnown && !name.empty()) {
+            mit->name = name;
+            mit->nameKnown = true;
+        }
+        if (wit->second.guids.erase(guid) == 0) { ++wit; continue; }
+        if (!wit->second.guids.empty()) { ++wit; continue; }
+        // The last answer for that channel: sort with the names in, then tell the
+        // panel, which is what 0x004ffe30 does in that order.
+        const std::string chanName = wit->first;
+        wit = rosterNameWaits_.erase(wit);
+        sortChannelRoster(rit->second);
+        fireChannelRosterEvents(chanName);
+    }
+}
+
+void ChatHandler::expireChannelRosterWaits() {
+    if (rosterNameWaits_.empty()) return;
+    const double now = core::appTimeSeconds();
+    for (auto it = rosterNameWaits_.begin(); it != rosterNameWaits_.end();) {
+        if (now < it->second.deadline) { ++it; continue; }
+        const std::string chanName = it->first;
+        LOG_WARNING("Channel: no names for \"", chanName, "\" within ",
+                    kRosterNameWaitSeconds, "s - showing the roster without them");
+        it = rosterNameWaits_.erase(it);
+        fireChannelRosterEvents(chanName);
+    }
+}
+
 void ChatHandler::handleChannelList(network::Packet& packet) {
     // A channel type byte comes first - Channel::List writes `uint8(1)` before
     // the name - and this read the name straight from it. The stray byte does
@@ -2244,26 +2336,13 @@ void ChatHandler::handleChannelList(network::Packet& packet) {
     sortChannelRoster(roster);
 
     channelRosters_[chanName] = std::move(roster);
-    // Both, because the panel redraws its member list on the first and its
-    // member count on the second, and it registers for each separately.
-    //
-    // By display index, not by name. ChannelRoster_Update and
-    // ChannelList_CountUpdate both take a position in the channel list -
-    // _G["ChannelButton"..id] is how the second finds its row, and the first is
-    // called elsewhere with GetSelectedDisplayChannel(), which is an index. A
-    // name built "ChannelButtonGeneral", which is nothing, so neither the
-    // roster nor the count ever redrew.
-    const int displayIndex = getChannelIndex(chanName);
-    if (displayIndex > 0) {
-        const std::string idx = std::to_string(displayIndex);
-        const std::string count = std::to_string(channelRosters_[chanName].size());
-        // Both carry the count. The roster one is 0x004ffe30's
-        // event(548, "%d%d", displayIndex, members) - ChannelRoster_Update reads
-        // only the first of the two, but the client passes both from the same
-        // registers it has just stored at (&DAT_00b74464)[index*8].
-        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx, count});
-        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE", {idx, count});
-    }
+    // The panel redraws its member list on CHANNEL_ROSTER_UPDATE and its member
+    // count on CHANNEL_COUNT_UPDATE, and it registers for each separately - but
+    // the fill does not raise either while a row is still named after nobody. See
+    // holdRosterForNames for the counter that holds them back.
+    holdRosterForNames(chanName, channelRosters_[chanName]);
+    if (rosterNameWaits_.find(chanName) == rosterNameWaits_.end())
+        fireChannelRosterEvents(chanName);
 }
 
 
@@ -2326,15 +2405,21 @@ void ChatHandler::applyUserlistChange(const std::string& chanName, uint64_t guid
     // roster, and the panel asks for a member by position.
     sortChannelRoster(roster);
 
-    // By display index, for the reason spelled out in handleChannelList: both
-    // of these take a position in the channel list, not a name.
-    const int displayIndex = getChannelIndex(chanName);
-    if (displayIndex > 0) {
-        const std::string idx = std::to_string(displayIndex);
-        const std::string count = std::to_string(roster.size());
-        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx, count});
-        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE", {idx, count});
-    }
+    // The add (0x00504130) appends the row and then asks for **its** guid through
+    // 0x0067d770 with 0x004ffe30 as the answer's callback: a guid it has no name
+    // for raises that counter and raises neither event, and it is the callback -
+    // not the packet - that re-sorts the rows and raises both. So a join is not
+    // announced as a row named after nobody that the panel then has to move once
+    // the name lands.
+    //
+    // The update (0x00500380) and the remove (0x005042f0) look nothing up - they
+    // change or move a row that is already there, name included - and raise both
+    // events straight past their scans, wait or no wait.
+    if (change == UserlistChange::add)
+        holdRosterForNames(chanName, roster);
+    if (change != UserlistChange::add ||
+        rosterNameWaits_.find(chanName) == rosterNameWaits_.end())
+        fireChannelRosterEvents(chanName);
 }
 
 void ChatHandler::handleUserlistAdd(network::Packet& packet, UserlistChange change) {

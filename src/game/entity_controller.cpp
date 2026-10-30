@@ -4179,6 +4179,12 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
     // the name and lets 0x004fb5c0 raise the popup with it. As there, only an
     // answer that found the name ends the wait (0x004fb5c0 clears it on success).
     if (owner_.getChatHandler()) owner_.getChatHandler()->onChannelInviteNameKnown(data.guid);
+    // A channel roster held its two events back for this guid. The client's
+    // callback for those (0x004ffe30) walks the held roster's rows for the guid and
+    // closes one wait per row found - it never checks that an answer named anyone,
+    // so a wait closes here whether or not this response found a name, which is
+    // what keeps a roster from being held by a guid the realm knows nothing about.
+    if (owner_.getChatHandler()) owner_.getChatHandler()->onChannelRosterNameKnown(data.guid);
 }
 
 /// Whether a quest in the log is waiting on this name.
