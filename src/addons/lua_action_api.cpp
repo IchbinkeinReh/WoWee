@@ -2,6 +2,10 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/item_text.hpp"
 #include "game/equip_slot_fit.hpp"
+// For the cursor's own sounds: the coordinator reaches the manager that asks a
+// SoundEntries row by name, which is how the client asks them.
+#include "audio/audio_coordinator.hpp"
+#include "audio/ui_sound_manager.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -159,12 +163,42 @@ static void clearCursorItem(lua_State* L);
 static const game::EquipmentSetInfo* equipmentSetById(game::GameHandler* gh, uint32_t setId);
 static std::string equipmentSetIcon(const game::EquipmentSetInfo* set);
 
+/// What the cursor sounds like going up and going down.
+///
+/// The client asks for both by name, and asks them in the routine that moves
+/// the cursor rather than in one place it all passes through: every pickup
+/// plays INTERFACESOUND_CURSORGRABOBJECT just after it sets the cursor kind
+/// (0x00520960:426, 0x00520a80:505, 0x00520be0:527, 0x00520c60:566,
+/// 0x00520dc0:614), and ClearCursor plays the sound of the kind it is putting
+/// down in its switch over that kind (0x00519280: the item kinds at :7790 and
+/// the shared tail at :7818 ask INTERFACESOUND_CURSORDROPOBJECT, while the
+/// money cursor asks LOOTWINDOWCOINSOUND at :7771 instead - the same row its
+/// pickup asks at 00520000.c:360, the coin being a different sound on both
+/// sides; the kind that hands an item back to the world, 1, plays nothing).
+/// All three names are rows of SoundEntries.dbc, which is how they are asked
+/// here too.
+static void askCursorSound(lua_State* L, CursorType type, bool pickedUp) {
+    // Silent while the interface is building itself, as PlaySound is.
+    if (LuaEngine::uiSoundsSuppressed()) return;
+    auto* svc = getLuaServices(L);
+    auto* ac = svc ? svc->audioCoordinator : nullptr;
+    auto* sfx = ac ? ac->getUiSoundManager() : nullptr;
+    if (!sfx) return;
+    if (type == CursorType::MONEY) {
+        sfx->playByName("LOOTWINDOWCOINSOUND");
+        return;
+    }
+    sfx->playByName(pickedUp ? "INTERFACESOUND_CURSORGRABOBJECT"
+                             : "INTERFACESOUND_CURSORDROPOBJECT");
+}
+
 static void setCursorType(lua_State* L, CursorType type) {
     if (s_cursorType == type) return;
     // Putting anything down forgets the guild bank split. It rides on the
     // cursor between the pickup and the drop, and a leftover would be applied
     // to the next withdrawal - a stack the player never asked to divide.
     if (type != CursorType::GUILDBANK) s_cursorSplit = 0;
+    const CursorType prevType = s_cursorType;
     const bool wasCarrying = (s_cursorType != CursorType::NONE);
     const bool nowCarrying = (type != CursorType::NONE);
     s_cursorType = type;
@@ -172,7 +206,18 @@ static void setCursorType(lua_State* L, CursorType type) {
     auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
     if (!engine) return;
+    // Which side of the announcement the sound sits on follows the client:
+    // ClearCursor plays the drop inside its switch and raises CURSOR_UPDATE
+    // (event 275) at its tail afterwards (00510000.c:7768-7830), while a
+    // pickup's grab comes after the ClearCursor call that made the
+    // announcement (00520000.c:523-530). A carried kind changing straight to
+    // another carried kind - clicking an action button while a bag item is on
+    // the cursor - is the client's ClearCursor followed by a pickup, so it
+    // plays both, the old kind's drop before the announcement and the new
+    // kind's grab after it.
+    if (wasCarrying) askCursorSound(L, prevType, false);
     engine->fireEvent("CURSOR_UPDATE", {});
+    if (nowCarrying) askCursorSound(L, type, true);
     // Picking something up shows the empty slots of the action bars, so there
     // is somewhere visible to drop it; putting it down hides them again. Every
     // action button registers for both and neither was ever fired, so dragging
