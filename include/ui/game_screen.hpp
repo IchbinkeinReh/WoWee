@@ -137,6 +137,12 @@ public:
     ChatPanel& getChatPanel() { return chatPanel_; }
 
     void saveSettings();
+    /// The ray tracing's memory guard's answers, shown as the client's own
+    /// dialog; and the marker that says a session is tracing
+    /// (core/rt_session_marker.hpp), kept up to date. Each frame.
+    void pollRtMemory(game::GameHandler& gameHandler);
+    double rtMarkerWrittenAt_ = -1e9;
+    bool rtMarkerPresent_ = false;
     /// The login screen's "Reset to default": every graphics setting back to
     /// its default, applied and saved; the rest of settings.cfg as it was.
     void resetGraphicsToDefaults() {

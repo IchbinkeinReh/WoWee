@@ -1,5 +1,7 @@
 #include "core/stall_report.hpp"
 #include "core/application.hpp"
+#include "core/rt_session_marker.hpp"
+#include "core/config_paths.hpp"
 #include "core/world_settle.hpp"
 #include "core/cinematic_player.hpp"
 #include "game/vehicle_camera.hpp"
@@ -608,6 +610,8 @@ bool SDLCALL lifecycleWatch(void* userdata, SDL_Event* event) {
         case SDL_EVENT_DID_ENTER_FOREGROUND:  background = false; why = "DID_ENTER_FOREGROUND";  break;
         case SDL_EVENT_LOW_MEMORY:
             LOG_WARNING("SDL_EVENT_LOW_MEMORY: the system is short of memory");
+            // The ray tracing's guard offers to switch it off (rt_memory_guard).
+            if (auto* r = core::Application::getInstance().getRenderer()) r->noteSystemLowMemory();
             return true;
         case SDL_EVENT_TERMINATING:
             LOG_WARNING("SDL_EVENT_TERMINATING: the system is ending the app");
@@ -2636,6 +2640,8 @@ void Application::updateMapWindow() {
 }
 
 void Application::shutdown() {
+    // A clean exit: the next start has nothing to warn of (rt_session_marker).
+    rt_session::clear(getConfigRoot() + "/rt_session.marker");
     LOG_DEBUG("Shutting down application...");
 
     // Quitting from the world takes the interface down as logging out does

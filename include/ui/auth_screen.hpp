@@ -294,6 +294,13 @@ private:
     bool loginPresetPicked_ = false;
     /// "Reset to default" pressed: the yes/no over the sheet is showing.
     bool confirmGraphicsReset_ = false;
+    // The last session ended while ray tracing (core/rt_session_marker.hpp):
+    // asked once at the first frame, then a dialog until answered.
+    bool rtMarkerChecked_ = false;
+    bool rtMarkerShown_ = false;
+    uint64_t rtMarkerAvailableMB_ = 0;
+    uint64_t rtMarkerTracingMB_ = 0;
+    void renderRtCrashDialog(float screenW, float screenH);
     std::function<void()> onResetGraphicsDefaults_;
 
     /// Draws the card and everything on it. Answers the rect it took, so the

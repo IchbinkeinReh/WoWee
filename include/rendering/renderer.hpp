@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rendering/rt_memory_guard.hpp"
+#include <optional>
 #include "rendering/rt_rays.hpp"
 #include "rendering/day_night.hpp"
 #include "rendering/blob_shadow.hpp"
@@ -699,6 +701,24 @@ public:
     /// The memory report /mem prints: the process, the Vulkan heaps, and
     /// the ray tracing's owners. One line each.
     [[nodiscard]] std::vector<std::string> memoryReport() const;
+    /// The memory in use and to spare now (rt_memory_guard.hpp). Overridden
+    /// for testing by WOWEE_FAKE_GPU_FREE_MB (the graphics budget left),
+    /// WOWEE_FAKE_AVAIL_MB (the system's available RAM) and WOWEE_FAKE_UNIFIED.
+    [[nodiscard]] rt_memory::Snapshot memorySnapshot() const;
+    /// What the ray tracing holds now, GPU and CPU, in bytes.
+    [[nodiscard]] uint64_t rtHeldBytes() const;
+    [[nodiscard]] bool rtTracingActive() const;
+    /// The ray tracing refused, switched off or offered to be, for want of
+    /// memory - once: the screen shows it, and saves the setting off when it
+    /// was switched off.
+    std::optional<rt_memory::Refusal> takeRtMemoryRefusal() {
+        auto r = rtRefusal_;
+        rtRefusal_.reset();
+        return r;
+    }
+    /// The system said it is short of memory (SDL_EVENT_LOW_MEMORY: Android's
+    /// onLowMemory, and onTrimMemory at its critical levels).
+    void noteSystemLowMemory();
     uint32_t getShadowMapSize() const { return SHADOW_MAP_SIZE; }
     void setViewDistance(float distance);
     float getViewDistance() const { return viewDistance_; }
@@ -1128,6 +1148,15 @@ private:
     bool rtWater_ = true;  ///< "Ray traced water" (water_rt.glsli)
     float rtWaveAmp_ = 1.0f;
     float rtWaveFreq_ = 1.0f;
+    // The memory guard (rt_memory_guard.hpp): run each frame before the ray
+    // tracing's prepare, and before the loading screen's warm-up.
+    void rtMemoryGuard();
+    void refuseRt(const rt_memory::Refusal& r);
+    std::optional<rt_memory::Refusal> rtRefusal_;
+    uint64_t allocFailureSeen_ = 0;
+    double rtLastRamCheck_ = 0.0;
+    double rtOfferAgainAt_ = 0.0;
+    std::atomic<double> systemLowAt_{-1e9};  // set from the event watcher, maybe off the main thread
 public:
     /// The Debug Graphics views of the ray traced water: its reflection
     /// alone, and what comes up through it alone.

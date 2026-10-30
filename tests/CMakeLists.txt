@@ -1466,6 +1466,10 @@ wowee_add_test(test_swim_pitch
 wowee_add_test(test_rt_lamp_wrap
     SOURCES test_rt_lamp_wrap.cpp)
 
+# -- test_rt_memory_guard: whether there is memory for the ray tracing.
+wowee_add_test(test_rt_memory_guard
+    SOURCES test_rt_memory_guard.cpp)
+
 # -- test_rt_water: the ray traced water's optics.
 wowee_add_test(test_rt_water
     SOURCES test_rt_water.cpp)

@@ -1,4 +1,6 @@
 #include "ui/auth_screen.hpp"
+#include "rendering/rt_memory_guard.hpp"
+#include "core/rt_session_marker.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include <future>
 #include <chrono>
@@ -319,6 +321,18 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
         }
     }
 
+    if (!rtMarkerChecked_) {
+        rtMarkerChecked_ = true;
+        const std::string markerFile = core::getConfigRoot() + "/rt_session.marker";
+        if (auto last = core::rt_session::read(markerFile)) {
+            rtMarkerShown_ = true;
+            rtMarkerAvailableMB_ = last->availableMB;
+            rtMarkerTracingMB_ = last->tracingMB;
+            LOG_WARNING("The last session ended while ray tracing (", last->availableMB, " MB of RAM available, ",
+                        last->tracingMB, " MB held by the tracing, ", last->privateMB, " MB private)");
+        }
+    }
+
     drawBackdrop();
     updateMusic();
 
@@ -417,6 +431,7 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
     if (sheetWasOpen) ui_.popInert();
 
     if (settingsOpen_) renderLoginSettingsSheet(screen.x, screen.y);
+    if (rtMarkerShown_) renderRtCrashDialog(screen.x, screen.y);
 
     // Escape backs out of one thing per press: the open dropdown, then the
     // settings sheet, then the keyboard.
@@ -1857,6 +1872,73 @@ void AuthScreen::saveLoginGraphicsState() {
         addons::noteClientSettingChanged("weatherdetail", cfg["weather_detail"]);
     }
     loginPresetPicked_ = false;
+}
+
+void AuthScreen::renderRtCrashDialog(float screenW, float screenH) {
+    namespace rtm = rendering::rt_memory;
+    bool german = false;
+    if (auto* registry = core::Application::getInstance().getExpansionRegistry();
+        registry && registry->getActive()) {
+        german = registry->getActive()->locale == "deDE";
+    }
+    rtm::Refusal r;
+    r.reason = rtm::Reason::PreviousSession;
+    r.needed = rtMarkerTracingMB_ * rtm::kMiB;
+    r.available = rtMarkerAvailableMB_ * rtm::kMiB;
+    r.switchedOff = false;
+    const std::string text = rtm::message(r, german);
+
+    const PaperTheme& theme = ui_.theme();
+    const auto px = [this](float units) { return ui_.px(units); };
+    constexpr float kPad = 30.0f;
+    constexpr float kLabel = 13.5f;
+    constexpr float kButton = 42.0f;
+    const float w = px(600);
+    // The text wrapped to the dialog's width: lines of it, and the buttons.
+    const float wrapW = w - px(kPad) * 2.0f;
+    const float textH = ui_.wrappedHeight(wrapW, text.c_str(), px(kLabel));
+    const float h = px(kPad) * 2.0f + textH + px(24) + px(kButton);
+
+    ui_.setLayer(PaperLayer::Overlay);
+    ui_.scrim(0.45f);
+    const ImVec2 a((screenW - w) * 0.5f, (screenH - h) * 0.5f);
+    const ImVec2 b(a.x + w, a.y + h);
+    ui_.sheet(a, b, /*taped=*/false);
+    ui_.claimMouse(a, b);
+    ui_.wrapped(ImVec2(a.x + px(kPad), a.y + px(kPad)), wrapW, text.c_str(), px(kLabel), theme.ink);
+
+    const std::string markerFile = core::getConfigRoot() + "/rt_session.marker";
+    const float y = b.y - px(kPad) - px(kButton);
+    // Each button as wide as its words and some, the German ones being longer.
+    const char* keepLabel = german ? "Eingeschaltet lassen" : "Keep it on";
+    const char* offLabel = german ? "Raytracing ausschalten" : "Turn ray tracing off";
+    const float bw = std::max({px(170), ui_.textWidth(keepLabel, px(16)) + px(40),
+                               ui_.textWidth(offLabel, px(16)) + px(40)});
+    const float x1 = b.x - px(kPad);
+    if (ui_.button("rtcrash.keep", ImVec2(x1 - bw * 2.0f - px(12), y), ImVec2(x1 - bw - px(12), y + px(kButton)),
+                   keepLabel)) {
+        rtMarkerShown_ = false;
+        core::rt_session::clear(markerFile);
+    }
+    if (ui_.button("rtcrash.off", ImVec2(x1 - bw, y), ImVec2(x1, y + px(kButton)), offLabel,
+                   PaperUI::ButtonKind::Primary)) {
+        rtMarkerShown_ = false;
+        core::rt_session::clear(markerFile);
+        // Into the settings file, which the game reads on the way in.
+        std::map<std::string, std::string> cfg;
+        {
+            std::ifstream in(SettingsPanel::getSettingsPath());
+            std::string line;
+            while (std::getline(in, line)) {
+                const auto eq = line.find('=');
+                if (eq != std::string::npos) cfg[line.substr(0, eq)] = line.substr(eq + 1);
+            }
+        }
+        cfg["ray_traced_lighting"] = "0";
+        std::ofstream out(SettingsPanel::getSettingsPath());
+        for (const auto& [k, v] : cfg) out << k << "=" << v << "\n";
+    }
+    ui_.setLayer(PaperLayer::Page);
 }
 
 void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {

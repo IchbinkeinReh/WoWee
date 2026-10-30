@@ -814,6 +814,7 @@ void Renderer::updatePerFrameUBO() {
 bool Renderer::initialize(core::Window* win) {
     window = win;
     needsShutdown_ = true;
+    allocFailureSeen_ = lastAllocationFailure().serial;
     // The thread that records frames, and so the one that waits on the doodad
     // worker when something reaches for the renderers it is reading.
     mainThreadId_ = std::this_thread::get_id();
@@ -1716,6 +1717,7 @@ void Renderer::beginFrame() {
 
     // Between frames, so a resize of the ray traced lighting's images can wait
     // for the device and rewrite both slots' sets.
+    rtMemoryGuard();
     if (rtLighting_ && rtLighting_->prepare(sceneRenderExtent(), vkCtx->getMsaaSamples())) {
         writeRtLightingBindings();
     }
@@ -6379,7 +6381,8 @@ void Renderer::warmUpRayTracing() {
     if (!rtLighting_ || !rtScene_) return;
     // The meshes the world's renderers have added on the way in; the GPU is
     // the loading screen's to keep busy, and waiting on it here costs the
-    // player nothing they would see.
+    // player nothing they would see. Asked first whether they fit.
+    rtMemoryGuard();
     rtLighting_->warmUp();
 }
 
@@ -6749,6 +6752,117 @@ void Renderer::setLowCostShading(bool on) {
 #endif
     if (on != lowCostShading_) LOG_INFO("Low-cost shading ", on ? "on" : "off");
     lowCostShading_ = on;
+}
+
+namespace {
+double secondsNow() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+uint64_t envMiB(const char* name) {
+    const char* v = std::getenv(name);
+    return v && *v ? std::strtoull(v, nullptr, 10) * rt_memory::kMiB : 0;
+}
+}  // namespace
+
+void Renderer::noteSystemLowMemory() { systemLowAt_ = secondsNow(); }
+
+bool Renderer::rtTracingActive() const { return rtScene_ && rtScene_->isActive(); }
+
+rt_memory::Snapshot Renderer::memorySnapshot() const {
+    rt_memory::Snapshot s;
+    if (vkCtx && vkCtx->getAllocator()) {
+        const VkPhysicalDeviceMemoryProperties* props = nullptr;
+        vmaGetMemoryProperties(vkCtx->getAllocator(), &props);
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+        vmaGetHeapBudgets(vkCtx->getAllocator(), budgets);
+        for (uint32_t h = 0; props && h < props->memoryHeapCount; ++h) {
+            if (!(props->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) continue;
+            s.gpuBudget += budgets[h].budget;
+            s.gpuUsage += budgets[h].usage;
+        }
+        VkPhysicalDeviceProperties pdp{};
+        vkGetPhysicalDeviceProperties(vkCtx->getPhysicalDevice(), &pdp);
+        s.unified = pdp.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ||
+                    pdp.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
+    }
+    const auto& mon = core::MemoryMonitor::getInstance();
+    s.ramTotal = mon.getTotalRAM();
+    s.ramAvailable = mon.getAvailableRAM();
+    s.systemLow = secondsNow() - systemLowAt_ < 30.0;
+    static const uint64_t fakeGpuFree = envMiB("WOWEE_FAKE_GPU_FREE_MB");
+    static const uint64_t fakeAvail = envMiB("WOWEE_FAKE_AVAIL_MB");
+    static const bool fakeUnified = std::getenv("WOWEE_FAKE_UNIFIED") != nullptr;
+    if (fakeGpuFree > 0) s.gpuBudget = s.gpuUsage + fakeGpuFree;
+    if (fakeAvail > 0) s.ramAvailable = fakeAvail;
+    if (fakeUnified) s.unified = true;
+    return s;
+}
+
+uint64_t Renderer::rtHeldBytes() const {
+    std::vector<MemoryEntry> owners;
+    if (rtScene_) rtScene_->memoryReport(owners);
+    if (rtLighting_) rtLighting_->memoryReport(owners);
+    uint64_t n = 0;
+    for (const auto& e : owners) n += e.gpuBytes + e.cpuBytes;
+    return n;
+}
+
+void Renderer::refuseRt(const rt_memory::Refusal& r) {
+    LOG_WARNING("Ray tracing ", r.switchedOff ? "switched off" : "offered to be switched off",
+                " for want of memory: ", rt_memory::message(r, false));
+    if (r.switchedOff) setRtLightingMode(0);
+    rtRefusal_ = r;
+}
+
+void Renderer::rtMemoryGuard() {
+    if (!rtLighting_ || !rtScene_) return;
+    using namespace rt_memory;
+    // An allocation that failed for want of memory: whatever it was for, the
+    // tracing is what gives most back.
+    const AllocationFailure failure = lastAllocationFailure();
+    if (failure.serial != allocFailureSeen_) {
+        allocFailureSeen_ = failure.serial;
+        if (rtLighting_->mode() != RtLighting::Mode::Off) {
+            Refusal r;
+            r.reason = failure.result == VK_ERROR_OUT_OF_HOST_MEMORY ? Reason::OutOfHostMemory
+                                                                     : Reason::OutOfDeviceMemory;
+            r.needed = failure.bytes;
+            refuseRt(r);
+            return;
+        }
+    }
+    if (rtLighting_->mode() == RtLighting::Mode::Off) return;
+    if (!rtScene_->isActive()) {
+        // About to be switched on: whether it fits.
+        const VkExtent2D ext = sceneRenderExtent();
+        const Need need = estimate(rtScene_->stats().triangles, ext.width, ext.height,
+                                   static_cast<uint32_t>(vkCtx->getMsaaSamples()), rtLighting_->fullResolution(),
+                                   rtLighting_->mode() == RtLighting::Mode::Full,
+                                   rtScene_->backend() == RtScene::Backend::Hardware);
+        const Verdict v = judgeEnable(memorySnapshot(), need);
+        if (v.what != Short::None) {
+            Refusal r;
+            r.reason = v.what == Short::Gpu ? Reason::GpuBudget : Reason::RamShort;
+            r.needed = v.needed;
+            r.available = v.available;
+            refuseRt(r);
+        }
+        return;
+    }
+    // Running: the system's RAM, every two seconds.
+    const double now = secondsNow();
+    if (now - rtLastRamCheck_ < 2.0) return;
+    rtLastRamCheck_ = now;
+    const Snapshot s = memorySnapshot();
+    if (ramCritical(s) && now >= rtOfferAgainAt_) {
+        rtOfferAgainAt_ = now + 300.0;  // asked once in five minutes
+        Refusal r;
+        r.reason = Reason::RamCritical;
+        r.needed = rtHeldBytes();
+        r.available = s.ramAvailable;
+        r.switchedOff = false;
+        refuseRt(r);
+    }
 }
 
 std::vector<std::string> Renderer::memoryReport() const {

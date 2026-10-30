@@ -35,6 +35,10 @@
 #include "rendering/character_renderer.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
+#include "rendering/rt_memory_guard.hpp"
+#include "core/rt_session_marker.hpp"
+#include "core/config_paths.hpp"
+#include "core/memory_monitor.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/audio_engine.hpp"
 #include "audio/music_manager.hpp"
@@ -547,6 +551,8 @@ void GameScreen::render(game::GameHandler& gameHandler) {
             settingsPanel_.fxaaSettingsApplied_ = true;
         }
     }
+
+    pollRtMemory(gameHandler);
 
     // The saved frame limit, once the window exists to take it.
     if (!settingsPanel_.frameCapApplied_) {
@@ -2500,5 +2506,58 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
     }
 }
 
+
+void GameScreen::pollRtMemory(game::GameHandler& gameHandler) {
+    auto* renderer = services_.renderer;
+    if (!renderer) return;
+    namespace rtm = rendering::rt_memory;
+
+    // The marker, every ten seconds while the tracing runs; taken away when
+    // it stops. A clean exit takes it away too (Application::shutdown).
+    const std::string markerFile = core::getConfigRoot() + "/rt_session.marker";
+    const double now = ImGui::GetTime();
+    if (renderer->rtTracingActive()) {
+        if (now - rtMarkerWrittenAt_ >= 10.0) {
+            rtMarkerWrittenAt_ = now;
+            const auto pm = core::MemoryMonitor::processMemory();
+            core::rt_session::Numbers n;
+            n.availableMB = renderer->memorySnapshot().ramAvailable / rtm::kMiB;
+            n.tracingMB = renderer->rtHeldBytes() / rtm::kMiB;
+            n.privateMB = pm.privateBytes / rtm::kMiB;
+            core::rt_session::write(markerFile, n);
+            rtMarkerPresent_ = true;
+        }
+    } else if (rtMarkerPresent_) {
+        core::rt_session::clear(markerFile);
+        rtMarkerPresent_ = false;
+    }
+
+    const auto refusal = renderer->takeRtMemoryRefusal();
+    if (!refusal) return;
+    if (refusal->switchedOff) {
+        // Off, and saved so: the next start does not try again.
+        if (settingsPanel_.setSettingValue("raytracedlighting", "0")) saveSettings();
+    }
+    bool german = false;
+    if (auto* registry = core::Application::getInstance().getExpansionRegistry();
+        registry && registry->getActive()) {
+        german = registry->getActive()->locale == "deDE";
+    }
+    const std::string text = rtm::message(*refusal, german);
+    // The client's own dialog (StaticPopup), not movable, over the world. Its
+    // buttons the interface's OKAY and CANCEL where it has them.
+    std::string script =
+        "StaticPopupDialogs['WOWEE_RT_MEMORY'] = { text = [==[" + text + "]==], ";
+    if (refusal->switchedOff) {
+        script += "button1 = OKAY, ";
+    } else {
+        script += std::string("button1 = [==[") +
+                  (german ? "Raytracing ausschalten" : "Turn ray tracing off") +
+                  "]==], button2 = CANCEL, OnAccept = function() WoweeSetSetting('raytracedlighting', 0) end, ";
+    }
+    script += "timeout = 0, whileDead = 1, hideOnEscape = 1, showAlert = 1 } "
+              "StaticPopup_Show('WOWEE_RT_MEMORY')";
+    gameHandler.runInterfaceCommand(script);
+}
 
 }} // namespace wowee::ui

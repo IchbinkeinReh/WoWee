@@ -404,6 +404,14 @@ public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         auto* renderer = ctx.services.renderer;
         if (!renderer) return {};
+        // "/mem low": as if the system had said it is short of memory
+        // (Android's onLowMemory), to see what the ray tracing's guard does.
+        if (ctx.args.find("low") != std::string::npos) {
+            renderer->noteSystemLowMemory();
+            ctx.gameHandler.addLocalChatMessage(
+                chat_utils::makeSystemMessage("Memory: the system's low-memory signal, simulated."));
+            return {};
+        }
         for (const std::string& line : renderer->memoryReport()) {
             ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(line));
             LOG_WARNING("/mem: ", line);
@@ -412,7 +420,7 @@ public:
     }
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"mem"}; }
     [[nodiscard]] std::string helpText() const override {
-        return "Show the client's memory: process, Vulkan heaps, ray tracing by part";
+        return "Show the client's memory: process, Vulkan heaps, ray tracing by part (/mem low: simulate low memory)";
     }
 };
 

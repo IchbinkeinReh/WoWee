@@ -114,6 +114,17 @@ AllocatedBuffer createBuffer(VmaAllocator allocator, VkDeviceSize size,
 
 void destroyBuffer(VmaAllocator allocator, AllocatedBuffer& buffer);
 
+/// The last allocation createBuffer or createImage could not make for want
+/// of memory (VK_ERROR_OUT_OF_DEVICE_MEMORY or _HOST_MEMORY): which, how many
+/// bytes, and a serial that counts them, 0 for none yet. What turns the ray
+/// tracing off with a reason rather than leaving it half made.
+struct AllocationFailure {
+    VkResult result = VK_SUCCESS;
+    uint64_t bytes = 0;
+    uint64_t serial = 0;
+};
+AllocationFailure lastAllocationFailure();
+
 // Image creation
 AllocatedImage createImage(VkDevice device, VmaAllocator allocator,
     uint32_t width, uint32_t height, VkFormat format,

@@ -1,4 +1,5 @@
 #include "rendering/vk_utils.hpp"
+#include <mutex>
 
 #include <cstdio>
 #include "rendering/vk_context.hpp"
@@ -8,6 +9,23 @@
 
 namespace wowee {
 namespace rendering {
+
+namespace {
+std::mutex gFailureMutex;
+AllocationFailure gFailure;
+void noteFailure(VkResult r, uint64_t bytes) {
+    if (r != VK_ERROR_OUT_OF_DEVICE_MEMORY && r != VK_ERROR_OUT_OF_HOST_MEMORY) return;
+    std::lock_guard<std::mutex> lock(gFailureMutex);
+    gFailure.result = r;
+    gFailure.bytes = bytes;
+    ++gFailure.serial;
+}
+}  // namespace
+
+AllocationFailure lastAllocationFailure() {
+    std::lock_guard<std::mutex> lock(gFailureMutex);
+    return gFailure;
+}
 
 AllocatedBuffer createBuffer(VmaAllocator allocator, VkDeviceSize size,
     VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage, VmaPool pool)
@@ -30,9 +48,10 @@ AllocatedBuffer createBuffer(VmaAllocator allocator, VkDeviceSize size,
         allocInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
     }
 
-    if (vmaCreateBuffer(allocator, &bufInfo, &allocInfo,
-            &result.buffer, &result.allocation, &result.info) != VK_SUCCESS) {
-        LOG_ERROR("Failed to create VMA buffer (size=", size, ")");
+    if (const VkResult r = vmaCreateBuffer(allocator, &bufInfo, &allocInfo,
+            &result.buffer, &result.allocation, &result.info); r != VK_SUCCESS) {
+        LOG_ERROR("Failed to create VMA buffer (size=", size, "): ", static_cast<int>(r));
+        noteFailure(r, size);
     }
 
     return result;
@@ -73,9 +92,12 @@ AllocatedImage createImage(VkDevice device, VmaAllocator allocator,
         allocInfo.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
     }
 
-    if (vmaCreateImage(allocator, &imgInfo, &allocInfo,
-            &result.image, &result.allocation, nullptr) != VK_SUCCESS) {
-        LOG_ERROR("Failed to create VMA image (", width, "x", height, ")");
+    if (const VkResult r = vmaCreateImage(allocator, &imgInfo, &allocInfo,
+            &result.image, &result.allocation, nullptr); r != VK_SUCCESS) {
+        LOG_ERROR("Failed to create VMA image (", width, "x", height, "): ", static_cast<int>(r));
+        // The size is not known without the image; its texels at 8 bytes
+        // a sample are near enough for the dialog.
+        noteFailure(r, uint64_t(width) * height * uint32_t(samples) * 8);
         return result;
     }
 
