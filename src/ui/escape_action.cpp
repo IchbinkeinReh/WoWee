@@ -20,6 +20,12 @@ EscapeAction resolveEscape(const EscapeState& s) {
     // WoW, and it was the one thing this chain could not do.
     if (s.holdingItem)             return EscapeAction::ReturnHeldItem;
     if (s.settingsWindowShown)     return EscapeAction::CloseSettingsWindow;
+    // The client's own order from here: Escape is bound to TOGGLEGAMEMENU and
+    // the exe does nothing else with it (a focused edit box aside, above), so
+    // what it closes and in which order is ToggleGameMenu's - a popup, the
+    // game menu, option frames and dropdowns before the cast, the targeting
+    // spell, the windows and the target, and the menu last.
+    if (s.interfaceOwnsWindows)    return EscapeAction::AskTheInterface;
     // A cast in progress goes before any window: Escape cancelling a cast is
     // what the key is most often for, and a window that happens to be open
     // should not eat it.

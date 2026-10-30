@@ -1402,8 +1402,12 @@ void registerSpellLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             // 1 when something was waiting for a target, nil when not
             // (0x00809e30), as ToggleGameMenu reads it.
-            const bool targeting = gh && (gh->isGroundTargeting() || gh->isAwaitingItemTarget() ||
-                                          gh->isAwaitingGlyphTarget());
+            // A spell held for a unit counts as much as one held for the
+            // ground: putting either down is this step's answer. Without the
+            // unit's, one Escape put the spell down and went on through the
+            // windows and the target to the game menu.
+            const bool targeting = gh && (gh->isGroundTargeting() || gh->isUnitTargeting() ||
+                                          gh->isAwaitingItemTarget() || gh->isAwaitingGlyphTarget());
             if (gh) gh->cancelGroundTargeting();
             if (gh && gh->isAwaitingItemTarget()) gh->cancelItemTargeting();
             if (gh) gh->cancelGlyphTargeting();

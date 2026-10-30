@@ -180,3 +180,41 @@ TEST_CASE("With nothing held the chain is unchanged", "[escape]") {
     s.vendorOpen = true;
     CHECK(resolveEscape(s) == EscapeAction::CloseVendor);
 }
+
+TEST_CASE("With the interface loaded, its ToggleGameMenu orders the rest, as in the client",
+          "[escape]") {
+    // In the client Escape is the TOGGLEGAMEMENU binding and nothing more: a
+    // popup, the open game menu, the option frames and dropdowns go before
+    // SpellStopCasting, SpellStopTargeting, CloseAllWindows and ClearTarget,
+    // and the menu opens last. Taking the cast, the targeting spell or a
+    // vendor here first put them ahead of a popup or the menu itself.
+    EscapeState s;
+    s.interfaceOwnsWindows = true;
+    s.casting = true;
+    CHECK(resolveEscape(s) == EscapeAction::AskTheInterface);
+    s.casting = false;
+    s.spellTargeting = true;
+    CHECK(resolveEscape(s) == EscapeAction::AskTheInterface);
+    s.spellTargeting = false;
+    s.vendorOpen = true;
+    s.lootOpen = true;
+    s.tradeOpen = true;
+    CHECK(resolveEscape(s) == EscapeAction::AskTheInterface);
+
+    // What the client's binding never sees still goes first: the edit box
+    // that took the press, and this client's own settings window.
+    s.settingsWindowShown = true;
+    CHECK(resolveEscape(s) == EscapeAction::CloseSettingsWindow);
+    s.interfaceConsumedKey = true;
+    CHECK(resolveEscape(s) == EscapeAction::None);
+}
+
+TEST_CASE("Without the interface, this client's chain stands in for ToggleGameMenu",
+          "[escape]") {
+    EscapeState s;
+    s.casting = true;
+    s.vendorOpen = true;
+    CHECK(resolveEscape(s) == EscapeAction::CancelCast);
+    s.casting = false;
+    CHECK(resolveEscape(s) == EscapeAction::CloseVendor);
+}

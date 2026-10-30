@@ -1686,6 +1686,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             EscapeState st;
             st.interfaceConsumedKey  = interfaceConsumedKey(ImGuiKey_Escape);
             st.settingsWindowShown   = settingsPanel_.showSettingsWindow;
+            st.interfaceOwnsWindows  = frameXmlOwns(UiElement::Vendor);
             // Either cursor. With the bags handed over an item is picked up
             // through FrameXML's, and Escape has to put that one down too -
             // this read only the bag window's, so Escape opened the menu with

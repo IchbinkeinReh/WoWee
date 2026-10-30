@@ -82,6 +82,16 @@ struct EscapeState {
     /// handed to the interface.
     bool settingsWindowShown = false;
 
+    /// The interface (FrameXML) is loaded and draws the windows. Then the
+    /// rest of the order is its ToggleGameMenu's, as in the client, where
+    /// Escape is a key binding and nothing more: popups, the game menu
+    /// itself, the option frames, dropdowns, SpellStopCasting,
+    /// SpellStopTargeting, CloseAllWindows (whose frames' OnHide send the
+    /// closing packets), ClearTarget, and only then the game menu. Taking
+    /// casts and windows here first put them ahead of a popup or the open
+    /// game menu. Without the interface the chain below stands in for it.
+    bool interfaceOwnsWindows = false;
+
     // Things the server knows about. Each of these has to be closed through
     // the client so the closing packet is sent - hiding the frame instead
     // would leave the server believing the window is still open.
