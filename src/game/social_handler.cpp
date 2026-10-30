@@ -4264,6 +4264,19 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
             bgQueues_[queueSlot].queueTimeReceivedAt = std::chrono::steady_clock::now();
         }
         if (statusId == 2 && !wasInvite) { bgQueues_[queueSlot].inviteTimeout = inviteTimeout; bgQueues_[queueSlot].inviteReceivedTime = std::chrono::steady_clock::now(); }
+        // The invitation's end as one absolute stamp per slot, which is how the
+        // client holds it: the status handler writes `now + the length the packet
+        // carries` for a queue that is invited (0x0054ae40, 00540000.c:8544-8548)
+        // — on every status tick, not only on the way in — and zeroes the field
+        // for every other state, and for an invitation whose length came as zero.
+        // GetBattlefieldPortExpiration answers from nothing else.
+        if (queueSlot < bgPortExpiry_.size()) {
+            if (statusId == 2 && status.inviteTimeoutMs != 0)
+                bgPortExpiry_[queueSlot] = std::chrono::steady_clock::now() +
+                                           std::chrono::milliseconds(status.inviteTimeoutMs);
+            else
+                bgPortExpiry_[queueSlot] = {};
+        }
     } else {
         statusChanged = true;
     }
@@ -4284,6 +4297,20 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     // prompt never came up however long the player had waited for it.
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("UPDATE_BATTLEFIELD_STATUS", {std::to_string(queueSlot + 1)});
+}
+
+int32_t SocialHandler::battlefieldPortExpirationSec(size_t slot) const {
+    // The client's answer is `(stamp - clock) / 1000` in whole seconds, and zero
+    // when the stamp is empty or already behind the clock (0x00549b80: the slot
+    // must be 1 or 2 — its store is two records 0x40 apart from DAT_00bea4b8 —
+    // and its +0x28 non-zero). WoWee keeps three slots for the older expansions'
+    // FrameXML, so the bound is the array's own.
+    if (slot >= bgPortExpiry_.size()) return 0;
+    const auto& expiry = bgPortExpiry_[slot];
+    if (expiry == std::chrono::steady_clock::time_point{}) return 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= expiry) return 0;
+    return static_cast<int32_t>(std::chrono::duration_cast<std::chrono::seconds>(expiry - now).count());
 }
 
 void SocialHandler::handleBattlefieldList(network::Packet& packet) {

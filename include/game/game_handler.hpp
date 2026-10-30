@@ -829,6 +829,8 @@ public:
     void joinBattlefield(uint64_t battlemasterGuid, uint32_t bgTypeId,
                          uint32_t instanceId, bool asGroup);
     const std::array<BgQueueSlot, 3>& getBgQueues() const override;
+    /// Whole seconds a queue slot's invitation still has, 0 when none is running.
+    int32_t battlefieldPortExpirationSec(size_t slot) const;
     const std::vector<AvailableBgInfo>& getAvailableBgs() const override;
 
     // BG scoreboard (aliased from handler_types.hpp)

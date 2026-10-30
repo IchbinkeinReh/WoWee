@@ -140,6 +140,9 @@ public:
     void joinBattlefield(uint64_t battlemasterGuid, uint32_t bgTypeId,
                          uint32_t instanceId, bool asGroup);
     [[nodiscard]] const std::array<BgQueueSlot, 3>& getBgQueues() const { return bgQueues_; }
+    /// Whole seconds left on one queue slot's invitation, 0 for a slot that has
+    /// none running. The client's GetBattlefieldPortExpiration (0x00549b80).
+    [[nodiscard]] int32_t battlefieldPortExpirationSec(size_t slot) const;
     [[nodiscard]] const std::vector<AvailableBgInfo>& getAvailableBgs() const { return availableBgs_; }
     void requestPvpLog();
     [[nodiscard]] const BgScoreboardData* getBgScoreboard() const {
@@ -990,6 +993,10 @@ private:
 
     // Battleground
     std::array<BgQueueSlot, 3> bgQueues_{};
+    /// When each queue slot's invitation stops counting, as the client holds it:
+    /// one absolute stamp per slot, rewritten by every status that still invites
+    /// and empty for every other state (0x0054ae40, the record field at +0x28).
+    std::array<std::chrono::steady_clock::time_point, 3> bgPortExpiry_{};
     std::vector<AvailableBgInfo> availableBgs_;
     BgScoreboardData bgScoreboard_;
     std::vector<BgPlayerPosition> bgPlayerPositions_;

@@ -3773,10 +3773,34 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BNGetNumConversationMembers", [](lua_State* L) -> int { lua_pushnumber(L, 0); return 1; }},
                 {"BNGetConversationMemberInfo", [](lua_State* L) -> int { (void)L; return 0; }},
                 {"BNRequestFOFInfo",            [](lua_State* L) -> int { (void)L; return 0; }},
-                // The battleground queue timer, read in a loop from the
-                // minimap's battlefield icon while it is shown.
+                // The battleground invitation's countdown, read in a loop from the
+                // minimap's battlefield icon while a queue is invited
+                // (battlefieldframe.lua:129-150), and the only thing that frame
+                // puts on screen: the lowest expiration among the queues, and the
+                // bare number under it once ten seconds are left.
+                //
+                // The client's body is 0x00549b80: the slot (1 and 2 — its store
+                // is two records 0x40 apart from DAT_00bea4b8), that record's
+                // +0x28 as an absolute millisecond stamp, and the answer
+                // `(stamp - 0x0086ae20()) / 1000` in whole seconds, zero for an
+                // empty or already-past stamp. That stamp is written only by the
+                // status handler for a queue in the invited state — `now + the
+                // length the packet carries`, re-armed on every status tick and
+                // zeroed in every other state (0x0054ae40, 00540000.c:8544-8548) —
+                // and that is a quantity WoWee already parses as
+                // BattlefieldStatusData::inviteTimeoutMs and threw away here, so a
+                // player invited into a battleground never saw it tick down.
+                // A missing or out-of-range index answers 0; the client prints its
+                // usage line for no argument and reads nothing, which the interface
+                // never reaches (every call site is the loop over the queues).
                 {"GetBattlefieldPortExpiration", [](lua_State* L) -> int {
-            lua_pushnumber(L, 0); return 1; }},
+            auto* gh = getGameHandler(L);
+            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const int32_t seconds = (gh && index >= 1) ? gh->battlefieldPortExpirationSec(
+                static_cast<size_t>(index - 1)) : 0;
+            lua_pushnumber(L, seconds);
+            return 1;
+        }},
                 // The innkeeper's prompt: CONFIRM_BINDER's accept sends the
                 // reply, and its OnUpdate hides the popup when the player walks
                 // away. Distance to the innkeeper is not tracked, and staying

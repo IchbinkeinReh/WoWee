@@ -4565,6 +4565,10 @@ const std::array<GameHandler::BgQueueSlot, 3>& GameHandler::getBgQueues() const 
     return empty;
 }
 
+int32_t GameHandler::battlefieldPortExpirationSec(size_t slot) const {
+    return socialHandler_ ? socialHandler_->battlefieldPortExpirationSec(slot) : 0;
+}
+
 const std::vector<GameHandler::AvailableBgInfo>& GameHandler::getAvailableBgs() const {
     if (socialHandler_) return socialHandler_->getAvailableBgs();
     static const std::vector<AvailableBgInfo> empty;
