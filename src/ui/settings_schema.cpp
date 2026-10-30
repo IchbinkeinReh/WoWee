@@ -756,7 +756,7 @@ constexpr SettingDesc kSchema[] = {
      "below a fifth.", "", 1},
     {"screenedgeflash", "Low health edge flash", SettingKind::Bool, 0, 0, 0, "HUD", "",
      "The game's own red flash at the screen's edge while your health\n"
-     "is low - beside the warning above, which is this client's.", "", 0,
+     "is low - beside the warning above, which is this client's.", "", 1,
      "", "cvar:screenEdgeFlash"},
 
     {"buffdurations", "Time left under buffs", SettingKind::Bool, 0, 0, 0, "HUD", "Buffs",
@@ -765,7 +765,7 @@ constexpr SettingDesc kSchema[] = {
      "SHOW_BUFF_DURATIONS = v if BuffFrame_UpdatePositions then BuffFrame_UpdatePositions() end"},
     {"dispellabledebuffs", "Highlight debuffs you can remove", SettingKind::Bool, 0, 0, 0, "HUD", "",
      "Frame the debuffs on your target that one of your spells can\n"
-     "dispel.", "", 1, "", "cvar:showDispelDebuffs", "", "SHOW_DISPELLABLE_DEBUFFS = v"},
+     "dispel.", "", 0, "", "cvar:showDispelDebuffs", "", "SHOW_DISPELLABLE_DEBUFFS = v"},
     {"castablebuffs", "Only buffs you can cast", SettingKind::Bool, 0, 0, 0, "HUD", "",
      "On the target frame, show only the buffs you could cast yourself.",
      "", 0, "", "cvar:showCastableBuffs", "", "SHOW_CASTABLE_BUFFS = v"},
@@ -796,7 +796,7 @@ constexpr SettingDesc kSchema[] = {
 
     {"autoselfcast", "Cast helpful spells on yourself", SettingKind::Bool, 0, 0, 0, "Combat", "Casting",
      "A helpful spell cast with no friendly target goes on you, rather\n"
-     "than waiting for one.", "", 0, "", "cvar:autoSelfCast"},
+     "than waiting for one.", "", 1, "", "cvar:autoSelfCast"},
     {"selfcastkey", "Self cast key", SettingKind::Enum, 0, 3, 1, "Combat", "",
      "Hold this while casting to put the spell on yourself, whatever is\n"
      "targeted.", "None|Alt|Ctrl|Shift", 1, "", "click:SELFCAST", "NONE|ALT|CTRL|SHIFT"},
@@ -950,7 +950,7 @@ constexpr SettingDesc kSchema[] = {
      "", "cvar:showPartyPets", "", "SHOW_PARTY_PETS = v"},
 
     {"arenaframes", "Arena enemy frames", SettingKind::Bool, 0, 0, 0, "Unit Frames", "Arena",
-     "Frames for the other team in an arena match.", "", 0,
+     "Frames for the other team in an arena match.", "", 1,
      "", "cvar:showArenaEnemyFrames", "", "SHOW_ARENA_ENEMY_FRAMES = v"},
     {"arenapets", "Their pets", SettingKind::Bool, 0, 0, 0, "Unit Frames", "",
      "Frames for the other team's pets as well.", "", 1, "arenaframes",
@@ -984,7 +984,7 @@ constexpr SettingDesc kSchema[] = {
      "if InterfaceOptionsDisplayPanelShowAggroPercentage_SetFunc then "
      "InterfaceOptionsDisplayPanelShowAggroPercentage_SetFunc() end"},
     {"threatsounds", "Threat sounds", SettingKind::Bool, 0, 0, 0, "Unit Frames", "",
-     "Play a sound as your threat rises to the next level.", "", 0,
+     "Play a sound as your threat rises to the next level.", "", 1,
      "", "cvar:threatPlaySounds"},
 
     // The game draws a portrait once, a still picture of the head
@@ -1107,7 +1107,7 @@ constexpr SettingDesc kSchema[] = {
      "Say each player's roll on an item, not only who won it.", "", 1,
      "", "cvar:showLootSpam"},
     {"guildmemberalerts", "Guild members coming and going", SettingKind::Bool, 0, 0, 0, "Chat", "",
-     "A line when a guild member logs in or out.", "", 1, "", "cvar:guildMemberNotify"},
+     "A line when a guild member logs in or out.", "", 0, "", "cvar:guildMemberNotify"},
 
     {"joingeneral", "General", SettingKind::Bool, 0, 0, 0, "Chat", "Channels to join",
      "Everyone in your current zone.", "", 1},
@@ -1121,7 +1121,7 @@ constexpr SettingDesc kSchema[] = {
     {"joinlocal", "Local", SettingKind::Bool, 0, 0, 0, "Chat", "",
      "The realm's Local channel, on realms that provide one.", "", 1},
     {"joinguildrecruitment", "GuildRecruitment", SettingKind::Bool, 0, 0, 0, "Chat", "",
-     "Guilds looking for members, and players looking for a guild.", "", 0,
+     "Guilds looking for members, and players looking for a guild.", "", 1,
      "", "cvar:guildRecruitmentChannel"},
     // Speech bubbles were the game's own Social page's, two boxes among chat
     // options FrameXML reads for itself. These two the client reads - the
@@ -1142,7 +1142,7 @@ constexpr SettingDesc kSchema[] = {
      "click:AUTOLOOTTOGGLE", "NONE|ALT|CTRL|SHIFT"},
     {"lootatmouse", "Loot window at the mouse", SettingKind::Bool, 0, 0, 0, "Gameplay", "",
      "Open the loot window where the mouse is, rather than in its usual\n"
-     "place.", "", 0, "", "cvar:lootUnderMouse", "", "LOOT_UNDER_MOUSE = v"},
+     "place.", "", 1, "", "cvar:lootUnderMouse", "", "LOOT_UNDER_MOUSE = v"},
     {"autosellgrey", "Sell junk automatically", SettingKind::Bool, 0, 0, 0, "Gameplay", "",
      "Opening any merchant sells every Poor quality item - the grey ones -\n"
      "from your backpack and bags, and adds the coin. Nothing of another\n"
@@ -1172,7 +1172,7 @@ constexpr SettingDesc kSchema[] = {
 
     {"instantquesttext", "Show quest text at once", SettingKind::Bool, 0, 0, 0, "Gameplay", "Quests",
      "Quest text appears whole, rather than being revealed line by\n"
-     "line.", "", 0, "", "cvar:questFadingDisable", "", "QUEST_FADING_DISABLE = v"},
+     "line.", "", 1, "", "cvar:questFadingDisable", "", "QUEST_FADING_DISABLE = v"},
     {"autotrackquests", "Track a quest when you accept it", SettingKind::Bool, 0, 0, 0,
      "Gameplay", "", "A new quest goes straight onto the objectives tracker.", "", 1,
      "", "cvar:autoQuestWatch", "", "AUTO_QUEST_WATCH = v"},

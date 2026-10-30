@@ -54,6 +54,87 @@ DIRECT = re.compile(
     r'storedCVar(Value|Float)\(\s*"([A-Za-z0-9_]+)"\s*,\s*(?:\.\w+\s*=\s*)?"([^"]*)"')
 
 
+SCHEMA = ROOT / "src/ui/settings_schema.cpp"
+
+
+def schema_rows(text):
+    """The `kSchema[]` rows as lists of fields.
+
+    Positional reading is the only way: a tooltip is several string literals
+    glued together across lines and carries `\\"` escapes, so a row cannot be
+    matched with a pattern over the whole line. `defaultValue` is the eleventh
+    field and the store - `"cvar:NAME"` for the rows that write a CVar of the
+    same name - comes later, so the store is found by what it looks like.
+    """
+    start = text.index("kSchema[] = {")
+    end = text.index("};", start)
+    rows, i = [], start
+    while True:
+        i = text.find('{"', i + 1, end)
+        if i < 0:
+            return rows
+        rows.append(fields_of(text, i))
+    raise AssertionError("unreachable")
+
+
+def fields_of(s, i):
+    """One brace-init's fields, from s[i] == '{'."""
+    i += 1
+    out = []
+    while i < len(s):
+        c = s[i]
+        if c in " \t\r\n":
+            i += 1
+            continue
+        if c == "}":
+            break
+        if c == '"':
+            buf = []
+            while True:
+                j = i + 1
+                while j < len(s):
+                    if s[j] == "\\":
+                        j += 2
+                        continue
+                    if s[j] == '"':
+                        break
+                    j += 1
+                buf.append(s[i + 1:j])
+                i = j + 1
+                k = i
+                while k < len(s) and s[k] in " \t\r\n":
+                    k += 1
+                if k < len(s) and s[k] == '"':      # a concatenated literal
+                    i = k
+                    continue
+                break
+            out.append('"' + "".join(buf) + '"')
+            continue                                # the comma is the next scan
+        j = i
+        depth = 0
+        while j < len(s):
+            ch = s[j]
+            if ch == '"':
+                j = s.index('"', j + 1) + 1
+                continue
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif ch == "," and depth == 0:
+                break
+            j += 1
+        out.append(s[i:j].strip())
+        i = j
+        if i < len(s) and s[i] == ",":
+            i += 1
+    # a string field leaves its comma behind for the generic branch, which reads
+    # it as an empty field - drop those so the indices are the struct's own
+    return [t for t in out if t != ""]
+
+
 def agree(answer, read, as_number):
     """The same value, however each side spells it.
 
@@ -88,10 +169,37 @@ def main():
         for kind, name, value in DIRECT.findall(path.read_text(encoding="utf-8")):
             reads.setdefault(name, (value, path.relative_to(ROOT), kind))
 
-    print(f"GetCVar answers for {len(answers)} CVars; "
-          f"the client reads {len(reads)} of them where they are used.\n")
+    # The panel's own starting values. A row whose store is `cvar:NAME` is a
+    # control over that CVar, so its defaultValue is the box the player sees on
+    # the first login and has to mean the same thing GetCVar answers.
+    on_rows = []
+    if SCHEMA.is_file():
+        for fields in schema_rows(SCHEMA.read_text(encoding="utf-8")):
+            if len(fields) < 11:
+                continue
+            at = next((k for k, f in enumerate(fields) if f.startswith('"cvar:')), None)
+            if at is None or at < 11:
+                continue
+            default = fields[10].strip()
+            # A dropdown keeps an index and names what each index is stored as,
+            # so the row's own number is not the CVar's value: "Show it: Always"
+            # is targetOfTargetMode "5". The `values` list follows the store.
+            kept = fields[at + 1] if at + 1 < len(fields) else ""
+            if (kept.startswith('"') and "|" in kept
+                    # a `values` list is words, numbers and the odd strftime
+                    # code; the `after` script that follows it is Lua
+                    and re.fullmatch(r"[A-Za-z0-9_%:.\- |]*", kept[1:-1])):
+                choices = kept[1:-1].split("|")
+                try:
+                    default = choices[int(float(default))]
+                except (ValueError, IndexError):
+                    default = f"<no choice {default} of {len(choices)}>"
+            on_rows.append((fields[at][6:-1], default, fields[0]))
 
-    unanswered, disagree = [], []
+    print(f"GetCVar answers for {len(answers)} CVars; the client reads {len(reads)} "
+          f"of them where they are used; {len(on_rows)} panel rows sit on a CVar.\n")
+
+    unanswered, disagree, unstated = [], [], []
     for name, (value, where, kind) in sorted(reads.items()):
         answer = answers.get(name.lower())
         if answer is None:
@@ -99,16 +207,29 @@ def main():
         elif not agree(answer, value, kind == "Float"):
             disagree.append((name, answer, value, where))
 
+    for cvar, default, key in sorted(on_rows):
+        answer = answers.get(cvar.lower())
+        if answer is None:
+            # "0" is what GetCVar gives back for a name nobody answered, so a
+            # row starting anywhere else is the disagreement.
+            if not agree("0", default, True):
+                unstated.append((cvar, default, key))
+        elif not agree(answer, default, True):
+            disagree.append((cvar, answer, default, f"the {key} row of settings_schema.cpp"))
+
     for name, value, where in unanswered:
         print(f"  {name}: the client reads {value!r} at {where}, and GetCVar has no "
               f"answer - so the panel reads it as unset while the client acts on {value!r}")
     for name, answer, value, where in disagree:
         print(f"  {name}: GetCVar answers {answer!r} and the client reads {value!r} "
               f"at {where}")
+    for cvar, default, key in unstated:
+        print(f"  {cvar}: the {key} row starts at {default} and GetCVar has no "
+              "answer, so the box is drawn on and the interface reads off")
 
-    if unanswered or disagree:
-        print(f"\n{len(unanswered) + len(disagree)} CVar(s) mean different things "
-              "to the panel and to the client.")
+    if unanswered or disagree or unstated:
+        print(f"\n{len(unanswered) + len(disagree) + len(unstated)} CVar(s) mean "
+              "different things to the panel and to the client.")
         return 0
 
     # Both sides are found by pattern, so a pattern that stops matching reports
