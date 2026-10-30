@@ -723,6 +723,23 @@ static void loadStoredCVars() {
         cvarStartupValues()[key] = line.substr(eq + 1);
         ++loaded;
     }
+    // Mouse Look Speed was stored in this client's own units until now: the
+    // number written was the degrees-per-movement the camera was handed, so a
+    // config from before the two were separated says 0.2 where the CVar means
+    // 180. Read back as it stands it multiplies by 0.00125 again and the view
+    // stops turning, so anything under the shipped slider's own minimum of 90
+    // can only be the old scale and is converted - which keeps the rate that
+    // config had rather than replacing it with this build's default. Not saved
+    // from here: the conversion is the same every time it runs over that line,
+    // and the next CVar change writes the store anyway.
+    if (auto it = cvarStore().find("camerayawmovespeed"); it != cvarStore().end()) {
+        const float stored = std::atof(it->second.c_str());
+        if (stored > 0.0f && stored < 90.0f) {
+            const std::string moved = ui::settingNumberText(stored / 0.00125);
+            it->second = moved;
+            cvarStartupValues()["camerayawmovespeed"] = moved;
+        }
+    }
     LOG_INFO("CVars: loaded ", loaded, " from ", cvarStorePath());
 }
 
@@ -1249,8 +1266,21 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // Off, as it ships: a zone track stops at its end and the next one starts
     // when the zone asks for it.
     else if (n == "sound_zonemusicnodelay") lua_pushstring(L, "0");
-    // The mouse speed this client starts at.
-    else if (n == "camerayawmovespeed") lua_pushstring(L, "0.2");
+    // Mouse Look Speed, counted the way the client counts it. It registers 180,
+    // and the view turns 0.00125 degrees per movement of the mouse for each
+    // degree of that number (0x006020b0 - which first divides the two deltas by
+    // a factor pair built from the resolution's own ratio, 0x0047c020 and
+    // 0x0047bf90 reading 0x0050f7c0, which sscanf's gxResolution). This client
+    // keeps one sensitivity number, measured in degrees per movement, so the
+    // kClientCVars entry below carries the 0.00125 between the two and the
+    // setting behind it starts at 180 * 0.00125 = 0.225.
+    //
+    // Answering the setting's own number here instead - which is what this line
+    // used to do - made the Mouse Look Speed slider offer this client's scale
+    // rather than its own, and left MoveViewLeft/Right reading the same name as
+    // degrees a second: a player who had ever touched the slider got a view that
+    // turned 0.2 degrees a second.
+    else if (n == "camerayawmovespeed") lua_pushstring(L, "180");
     // Joined by default: 0x00510000 registers it "1" and gives it a setter
     // (0x00512750), because the channel is how a guild finds its next member -
     // a player in no guild is in it from the first login and leaves by unticking
@@ -1572,14 +1602,20 @@ struct ClientCVarBinding {
 constexpr ClientCVarBinding kClientCVars[] = {
     {"farclip",              "viewdistance"},
     // Mouse Sensitivity. Its shipped range is 0.5 to 1.5, a multiplier around
-    // 1.0, and this client's sensitivity is an amount that runs 0.05 to 1.0 -
-    // so passed through unchanged the slowest setting that slider offered was
-    // two and a half times this client's default. Its range is redefined in
-    // kCVarRanges rather than converted here, which is what farclip and
-    // cameraYawMoveSpeed do, and it has to be: Mouse Look Speed writes this
-    // same setting through that route, so a scale on this one alone would have
-    // the two sliders disagree about the value they share.
+    // 1.0 for the pointer, and this client's sensitivity is an amount that runs
+    // 0.05 to 1.0 - so passed through unchanged the slowest setting that slider
+    // offered was two and a half times this client's default. The pointer's own
+    // speed is not something this client keeps, so the slider drives the look
+    // rate directly and is drawn on that rate's scale instead (kCVarRanges);
+    // Mouse Look Speed reads the same setting in its own units below.
     {"mousespeed",           "mousespeed"},
+    // Mouse Look Speed, which is the setting above counted the way the client
+    // counts it: it turns the view cameraYawMoveSpeed * 0.00125 degrees per
+    // movement of the mouse (0x006020b0), so its shipped 90..270 slider is
+    // 0.1125..0.3375 of this client's degrees. Scaled through the table rather
+    // than converted at one call site, so GetCVar, the shipped slider, the
+    // console and the setting are one number in each of its two units.
+    {"camerayawmovespeed",   "mousespeed",  0.00125},
     {"showclock",            "minimapclock"},
     {"nameplateshowfriends", "friendlyplates"},
     // Not gxWindow: it is the fullscreen row the other way round, which a scale
@@ -2088,19 +2124,12 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
             svc->setClientSetting("fullscreen", value == "0" ? "1" : "0");
         }
     }
-    // Mouse Look Speed. Named cameraYawMoveSpeed, which is what it turns, but
-    // the control is the mouse slider on the Mouse panel - and this client has
-    // that setting already, so it goes there rather than to the camera, one
-    // value with two controls.
-    //
-    // The range is redefined below to the one the client's own slider uses,
-    // for the same reason farclip's is: passing a number through unchanged
-    // beats converting between two scales that were never the same.
-    if (key == "camerayawmovespeed") {
-        if (auto* svc = getLuaServices(L); svc && svc->setClientSetting) {
-            svc->setClientSetting("mousespeed", value);
-        }
-    }
+    // Mouse Look Speed needs nothing here: it is bound to the mouse sensitivity
+    // setting in kClientCVars with the client's own 0.00125 between the two
+    // units, and that table converts in both directions. Handled here it passed
+    // its number through unchanged, which only stayed safe because the shipped
+    // slider was redrawn on this client's scale - on its own 90 to 270 it would
+    // have handed the camera 90 degrees per movement of the mouse.
     // Loop Music. The checkbox says Loop Music and the CVar behind it says
     // ZoneMusicNoDelay: the zone's next track follows without the silence
     // between them (0x004c87d0). A track still plays once.
@@ -6790,12 +6819,24 @@ constexpr CVarRange kCVarRanges[] = {
     // 4. The page that slider was on is retired, but this is the range any
     // control over the CVar is drawn with.
     {"texturefilteringmode", 0.0f, 4.0f},
-    // Mouse Look Speed, over the range this client's own mouse slider uses.
-    {"camerayawmovespeed", 0.05f, 1.0f},
-    // Mouse Sensitivity, which writes the same setting as Mouse Look Speed
-    // above and so has to offer the same range. Shipped as 0.5 to 1.5, a
-    // multiplier around 1.0, against a setting that sits at 0.2 and stops at 1.
-    {"mousespeed", 0.05f, 1.0f},
+    // Mouse Look Speed, on the scale the CVar itself is measured in - the
+    // shipped Mouse panel slider offers 90 to 270 and the client reads that as
+    // degrees (0x006020b0 turns the view value * 0.00125 degrees per movement of
+    // the mouse). The binding above converts it into this client's degrees per
+    // movement, so the slider is drawn on its own numbers again instead of being
+    // bent to the setting's scale, which is what let a 90 hand over a 90.
+    {"camerayawmovespeed", 90.0f, 270.0f},
+    // Mouse Sensitivity, the same setting in the units this client's own camera
+    // counts it in. Shipped as 0.5 to 1.5, a multiplier around 1.0 for the
+    // pointer, which this client does not keep: the slider moves the view, so it
+    // is drawn on the view's range and its slowest setting was 2.5x the default.
+    //
+    // Those two numbers are Mouse Look Speed's 90 and 270 times the 0.00125
+    // between the two scales. The two sliders write one value, so what they
+    // reach has to be the same span - otherwise one can put the shared value
+    // where the other has no handle for it, which is what this table's own
+    // first finding was, seen from the other control.
+    {"mousespeed", 0.1125f, 0.3375f},
     // Max camera distance, as a multiple of the original client's limit. The
     // shipped table stops at 2; this client has always been willing to go
     // further, and did it through a checkbox of its own until this slider was

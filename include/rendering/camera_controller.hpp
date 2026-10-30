@@ -611,7 +611,10 @@ private:
     float slowMultiplier = 0.3f;
 
     // Mouse settings
-    float mouseSensitivity = 0.2f;
+    // Degrees of view per movement of the mouse. The starting value is the
+    // client's own Mouse Look Speed default - 180 degrees, of which it turns
+    // 0.00125 per unit this number is measured in (0x006020b0), which is 0.225.
+    float mouseSensitivity = 0.225f;
     bool invertMouse = false;
     bool mouseButtonDown = false;
     bool leftMouseDown = false;

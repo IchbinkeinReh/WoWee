@@ -52,6 +52,18 @@ FALLBACK = re.compile(
 NAME = re.compile(r'n == "([a-z0-9_]+)"', re.IGNORECASE)
 DIRECT = re.compile(
     r'storedCVar(Value|Float)\(\s*"([A-Za-z0-9_]+)"\s*,\s*(?:\.\w+\s*=\s*)?"([^"]*)"')
+# The same call with its two arguments in a table: MoveView{In,Out,Left,Right,
+# Up,Down}Start keeps its three rates as `{"cameraYawMoveSpeed", "180"}` rows and
+# reads one of them by index, because which one it wants is only known at
+# runtime. Nothing beside the call names the CVar or its fallback, so the table
+# has to be read - and until this was, the pair was a fallback no check saw. It
+# carried 180 for a CVar GetCVar answered 0.2 for, and the view turned at the one
+# while the interface printed the other.
+#
+# A pair whose second field is not a number is a (CVar, setting) binding or a
+# (setting, field) pair, not a fallback, and is left alone.
+TABLE_READ = re.compile(r'storedCVar(Value|Float)\(\s*\w+\s*\[')
+PAIR = re.compile(r'\{\s*"([A-Za-z0-9_]+)"\s*,\s*"(-?[\d.]+)"\s*\}')
 
 
 SCHEMA = ROOT / "src/ui/settings_schema.cpp"
@@ -166,8 +178,15 @@ def main():
 
     reads = {}
     for path in sorted(list(ROOT.glob("src/**/*.cpp")) + list(ROOT.glob("include/**/*.hpp"))):
-        for kind, name, value in DIRECT.findall(path.read_text(encoding="utf-8")):
+        text = path.read_text(encoding="utf-8")
+        for kind, name, value in DIRECT.findall(text):
             reads.setdefault(name, (value, path.relative_to(ROOT), kind))
+        # Only where a read is actually taken from a table: a file full of
+        # name/string pairs that are not fallbacks at all is not a file to be
+        # mining defaults out of.
+        if TABLE_READ.search(text):
+            for name, value in PAIR.findall(text):
+                reads.setdefault(name, (value, path.relative_to(ROOT), "Float"))
 
     # The panel's own starting values. A row whose store is `cvar:NAME` is a
     # control over that CVar, so its defaultValue is the box the player sees on

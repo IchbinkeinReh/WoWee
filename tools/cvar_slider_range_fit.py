@@ -14,8 +14,8 @@ Both faults that produced this looked fine from either end:
     the client draws, and the value written to the config was clamped back down
     on the next load, which made it permanent.
   * Mouse Sensitivity is a multiplier around 1.0, 0.5 to 1.5. The setting is an
-    amount that sits at 0.2 and stops at 1.0. The slowest setting that slider
-    offered was two and a half times the client's default.
+    amount that stops at 1.0. The slowest setting that slider offered was two
+    and a half times the client's default.
 
 Neither shows up as a slider that does nothing, which is what a check would
 naturally look for: each position wrote a different number. What made them wrong
@@ -41,19 +41,22 @@ nearly black picture, which is this same fault in a control that is not bound
 through kClientCVars. The overrides are read too, or this would compare against
 numbers the client never uses.
 
-It also checks that two sliders over one value offer the same range. One
-setting has two: Mouse Sensitivity and Mouse Look Speed both write this client's
-mouse sensitivity. Fixing the first with a scale while the second passed its
-number through left them disagreeing - one read 1.0 where the other read 0.2,
-and moving either put the other somewhere it could not show. That was a fix for
-this file's own first finding, and it is the reason the check is here.
+It also checks the sliders that share one value. Mouse Sensitivity and Mouse
+Look Speed both write this client's mouse sensitivity, and they do not print the
+same numbers - the look slider is drawn in the degrees the client multiplies by
+0.00125, the sensitivity slider in this client's own amount - so what has to
+match is where each of them *lands*: the range it offers, times the scale on its
+binding. The old fault was a pair that landed apart, one at 0.05 to 1.0 while
+the other handed over 90 to 270, so moving either put the shared value where the
+other had no handle for it.
 
 Canaried two ways: taking the scale off a binding reports that slider's ends
-landing outside what the setting holds, and scaling one of a shared pair without
-redefining its range reports the pair as disagreeing.
+landing outside what the setting holds, and scaling or re-ranging one of a
+shared pair so the two no longer land together reports the pair as disagreeing.
 
-Data/interface is not in the repository, so this skips rather than fails when it
-is absent.
+The extracted interface is not in the repository. Name its directory on the
+command line, or this skips rather than fails when the tree it looks for is
+absent.
 """
 
 import re
@@ -65,7 +68,9 @@ import settings_config_parse  # noqa: E402  (a sibling, not a package)
 from cpp_number import number  # noqa: E402  (same)
 
 ROOT = Path(__file__).resolve().parent.parent
-FRAMEXML = ROOT / "Data/interface/framexml"
+# The extracted interface is installed data, not repository content, and the
+# tree has sat in more than one place; name its directory on the command line.
+FRAMEXML = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface/framexml"
 API = ROOT / "src/addons/lua_system_api.cpp"
 PANEL = ROOT / "src/ui/settings_panel.cpp"
 
@@ -153,13 +158,14 @@ def sharedSettings():
     """setting -> the CVars that write it, where more than one does.
 
     Both the binding table and the branches in applyCVarSideEffects can write a
-    client setting, and one setting is written by both: Mouse Sensitivity and
-    Mouse Look Speed are two sliders over one value.
+    client setting, and one setting is written by two of the table's rows: Mouse
+    Sensitivity and Mouse Look Speed are two sliders over one value.
 
-    A branch is taken as passing its number through unchanged, which is what
-    the one that exists does. A branch that converted would need reading here -
-    weatherDensity divides by three, but it drives a renderer rather than a
-    setting, so it is not in this list.
+    A branch is taken as passing its number through unchanged. None of the
+    shared pairs go through a branch now, so nothing here needs a branch's
+    conversion - weatherDensity divides by three, but it drives a renderer
+    rather than a setting, so it is not in this list. A branch that converted
+    would have to be read here.
     """
     text = API.read_text(encoding="utf-8")
     out = {}

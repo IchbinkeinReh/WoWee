@@ -597,10 +597,19 @@ constexpr SettingDesc kSchema[] = {
      "yards. Lower feels closer to the character; higher looks over it.", "", 1.6f},
     {"idleorbit", "Idle orbit", SettingKind::Bool, 0, 0, 0, "Camera", "",
      "Slowly circle the camera around you while you stand still.", "", 1},
-    {"mousespeed", "Mouse sensitivity", SettingKind::Float, 0.05f, 1.0f, 0.05f, "Camera", "Mouse",
+    // 0.225 is what the game's Mouse Look Speed slider starts at - 180 of its
+    // degrees, times the 0.00125 the client turns the view by for each of them,
+    // and the step is a quarter of a tenth so that number is one of the
+    // positions the slider can hold. The span is wider than either of the
+    // game's two sliders reach, its own included: the look slider tops out at
+    // 0.3375 of this. That is deliberate, as with the Max camera distance row
+    // above it - a config that already sits outside the game's reach stays on
+    // show here rather than snapping to an end.
+    {"mousespeed", "Mouse sensitivity", SettingKind::Float, 0.05f, 1.0f, 0.025f, "Camera", "Mouse",
      "How far the view turns for a given movement of the mouse. The game's\n"
-     "own panel offered this twice, as sensitivity and as look speed, and\n"
-     "both wrote this one value.", "", 0.2f},
+     "own panel had two sliders here: one for how fast the pointer moves,\n"
+     "which this client does not keep, and one for how far the view turns.\n"
+     "This client puts both of them on this one value.", "", 0.225f},
     {"invertmouse", "Invert mouse look", SettingKind::Bool, 0, 0, 0, "Camera", "",
      "Push the mouse forward to look up, as in a flight sim.", "", 0},
     {"gamepad", "Use a controller", SettingKind::Bool, 0, 0, 0, "Camera", "Controller",
