@@ -163,7 +163,14 @@ import re
 import sys
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-FX = os.path.join(ROOT, "Data", "interface", "framexml")
+# The extracted interface is installed data rather than repository content, and
+# this tree has kept it in more than one place - so name its directory. With it
+# away nothing is scanned, and an empty table is what a clean tree prints too.
+IFACE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "Data", "interface")
+if not os.path.isdir(IFACE):
+    print(f"no interface at {IFACE} - name one on the command line")
+    raise SystemExit(2)
+FX = os.path.join(IFACE, "framexml")
 ADDONS = os.path.join(ROOT, "src", "addons")
 
 # Their unanswered names belong to a particular popup, menu or chat command and
@@ -364,7 +371,7 @@ def scan_interface():
     the quest log, the quest tracker, the social frame and the help frame.
     """
     defined_by, calls = {}, collections.defaultdict(set)
-    for dirpath, _, filenames in os.walk(os.path.join(ROOT, "Data", "interface")):
+    for dirpath, _, filenames in os.walk(IFACE):
         if "gluexml" in dirpath.replace("\\", "/").split("/"):
             continue
         for name in filenames:
@@ -441,7 +448,7 @@ def main():
             ready.append(element)
 
     for element, addon in sorted(ADDON_ELEMENTS.items()):
-        root = os.path.join(ROOT, "Data", "interface", "addons", addon)
+        root = os.path.join(IFACE, "addons", addon)
         if not os.path.isdir(root):
             continue
         missing, nfiles = set(), 0
