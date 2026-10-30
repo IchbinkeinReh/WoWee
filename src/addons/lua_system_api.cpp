@@ -6212,6 +6212,12 @@ static int lua_WoweeSettingList(lua_State* L) {
         lua_pushnumber(L, d.defaultValue); lua_setfield(L, -2, "default");
         lua_pushstring(L, d.enabledWhen);  lua_setfield(L, -2, "enabledwhen");
         lua_pushstring(L, d.store);        lua_setfield(L, -2, "store");
+        // What the ray traced lighting makes of it while it is on, where it
+        // makes it moot (rayTracingIgnoredReason); absent otherwise.
+        if (const char* moot = ui::rayTracingIgnoredReason(d.key)) {
+            lua_pushstring(L, moot);
+            lua_setfield(L, -2, "rtignored");
+        }
         // Why this device cannot use it, where it cannot; absent otherwise.
         if (svc && svc->settingUnavailable) {
             const std::string why = svc->settingUnavailable(d.key);

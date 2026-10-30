@@ -1250,6 +1250,63 @@ std::vector<const SettingDesc*> graphicsDefaultRows() {
     return rows;
 }
 
+namespace {
+
+struct RtIgnored {
+    const char* key;
+    const char* reason;
+};
+
+// The graphics settings the ray traced lighting makes moot, each checked in
+// the code rather than guessed.
+//
+// Kept, because the traced path still reads them:
+// - Dynamic Shadows and its distance, resolution and cascades: the shadow
+//   map is still drawn, and the trace takes the lesser of its shadow and the
+//   traced one (rtShadow, and rt_apply.glsli's min(g.map, ...)) - a unit in
+//   its standing pose casts its true pose there.
+// - The map's sun shadow strength (dbgmapsunshadow): shadowParams.y, which
+//   the same min reads.
+// - Ambient, sun, baked light (dbgambient, dbgsun, dbgbakedlight): the
+//   per-frame colours and lightTune.x, which the G-buffer's colour is built
+//   from before the trace scales it.
+// - Specular, normal mapping, fog, sun shafts, light shafts, lens flare,
+//   anti-aliasing, upscaling, view distance, the detail and grass rows: drawn
+//   into the same picture the trace scales, or before or after it.
+//
+// Moot:
+constexpr RtIgnored kRtIgnored[] = {
+    // The terrain's painted shadow (MCSH, blend.a) shows only where neither
+    // the shadow map nor a traced result is: with the map, terrain.frag and
+    // m2.frag's ground cover take the map alone; without it,
+    // mix(baked, traced sun, weight) - and the G-buffer pass draws with a
+    // weight of 1 (rtNeutral), the apply pass laying the traced sun on it.
+    {"dbgterrainshadow",
+     "With ray tracing on, the traced sun shadow (or the shadow map) replaces "
+     "the terrain's painted shadows."},
+    // The round shadows under units are not gathered under the traced
+    // lighting (Renderer, tracedShadows): every unit casts its traced shadow
+    // there, and a blob would be a second one.
+    {"dbgblobshadow",
+     "With ray tracing on, units cast traced shadows and the round shadows "
+     "under them are not drawn."},
+};
+
+}  // namespace
+
+const char* rayTracingIgnoredReason(const std::string& key) {
+    for (const auto& row : kRtIgnored) {
+        if (key == row.key) return row.reason;
+    }
+    return nullptr;
+}
+
+std::vector<std::string> rayTracingIgnoredKeys() {
+    std::vector<std::string> keys;
+    for (const auto& row : kRtIgnored) keys.emplace_back(row.key);
+    return keys;
+}
+
 bool settingNeedsRayTracing(const std::string& key) {
     // Every row on these two pages acts on the traced lights alone.
     for (const auto& row : kSchema) {

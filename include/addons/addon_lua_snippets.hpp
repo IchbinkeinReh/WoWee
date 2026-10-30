@@ -171,9 +171,19 @@ end
 -- The schema states the condition as "shadows" or "upscaling!=2", which says
 -- nothing to a player looking at a slider that will not move. Reported as
 -- "drop downs are greyed out" with no idea which of them were deliberate.
+-- Whether the ray traced lighting runs: asked for, and the device runs it.
+local function rayTracingOn()
+    local rt = byKey["raytracedlighting"]
+    if not rt or (rt.unavailable and rt.unavailable ~= "") then return false end
+    local mode = WoweeGetSetting("raytracedlighting")
+    return mode ~= nil and mode ~= "" and mode ~= "0"
+end
+
 local function waitingOn(setting)
     -- What this device lacks for it comes first: no other setting changes that.
     if setting.unavailable and setting.unavailable ~= "" then return setting.unavailable end
+    -- What the traced lighting makes moot, greyed only while it is on.
+    if setting.rtignored and setting.rtignored ~= "" then return setting.rtignored end
     local test = setting.enabledwhen
     if not test or test == "" then return nil end
     local key, want = test:match("^(.-)!=(.*)$")
@@ -201,6 +211,7 @@ end
 
 local function isEnabled(setting)
     if setting.unavailable and setting.unavailable ~= "" then return false end
+    if setting.rtignored and setting.rtignored ~= "" and rayTracingOn() then return false end
     local test = setting.enabledwhen
     if not test or test == "" then return true end
     local key, want = test:match("^(.-)!=(.*)$")

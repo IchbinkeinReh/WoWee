@@ -751,6 +751,8 @@ void SettingsPanel::drawSchemaCategory(const char* category,
     // Why the ray tracing rows are greyed, where the device cannot run it
     // (rendering/rt_capability.hpp); empty where it can.
     const std::string rtReason = services_.renderer ? services_.renderer->rtUnavailableReason() : std::string();
+    // The traced lighting as it runs: asked for, and the device runs it.
+    const bool rtOn = rtReason.empty() && settingIsOn(settingValue("raytracedlighting"));
     for (std::size_t i = 0; i < count; ++i) {
         const auto& d = schema[i];
         if (std::string(d.category) != category) continue;
@@ -772,7 +774,10 @@ void SettingsPanel::drawSchemaCategory(const char* category,
         // And greyed where this device cannot run what it acts on, with the
         // reason in its tooltip.
         const bool unavailable = !rtReason.empty() && settingNeedsRayTracing(d.key);
-        const bool enabled = !unavailable &&
+        // And greyed while the ray traced lighting is on, for what it makes
+        // moot (rayTracingIgnoredReason) - back as soon as it is off.
+        const char* rtIgnored = rtOn ? rayTracingIgnoredReason(d.key) : nullptr;
+        const bool enabled = !unavailable && !rtIgnored &&
             settingEnabled(d, [this](const std::string& key) { return settingValue(key); });
         if (!enabled) ImGui::BeginDisabled();
         switch (d.kind) {
@@ -842,6 +847,9 @@ void SettingsPanel::drawSchemaCategory(const char* category,
             // The reason first: it is why the control will not move.
             if (d.tooltip[0] != '\0') ImGui::SetTooltip("%s\n\n%s", rtReason.c_str(), d.tooltip);
             else ImGui::SetTooltip("%s", rtReason.c_str());
+        } else if (rtIgnored && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (d.tooltip[0] != '\0') ImGui::SetTooltip("%s\n\n%s", rtIgnored, d.tooltip);
+            else ImGui::SetTooltip("%s", rtIgnored);
         } else if (d.tooltip[0] != '\0' && ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", d.tooltip);
         }

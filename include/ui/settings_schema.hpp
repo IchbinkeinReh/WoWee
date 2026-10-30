@@ -196,6 +196,16 @@ bool settingRange(const std::string& key, float& lo, float& hi);
 /// the settings window and the options panels alike.
 bool settingNeedsRayTracing(const std::string& key);
 
+/// Why a setting does nothing while the ray traced lighting is on, or
+/// nullptr where it still acts then. The two windows grey such a row, with
+/// this in its tooltip, while ray tracing is on (and the device runs it),
+/// and give it back when it is off. Each entry was checked against what the
+/// traced path reads - see the table.
+const char* rayTracingIgnoredReason(const std::string& key);
+
+/// Every key rayTracingIgnoredReason answers for, in table order.
+std::vector<std::string> rayTracingIgnoredKeys();
+
 /// The categories that are graphics: the ones the settings window's Video
 /// tab draws, the Debug Graphics pages with them. One list, so that the login
 /// screen's "Reset to default" and the tab cannot disagree about what a

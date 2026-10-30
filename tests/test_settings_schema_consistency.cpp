@@ -460,3 +460,29 @@ TEST_CASE("the graphics categories are the Video tab's", "[settings][schema]") {
         CHECK(isGraphicsCategory(c) == (onTab.count(c) == 1u));
     }
 }
+
+// What the ray traced lighting makes moot: rows that exist, are graphics
+// settings, and are not themselves the tracing's (those grey the other way,
+// where it cannot run). The list as checked against the traced path - a
+// change to it is a change to what the windows grey, made on purpose.
+TEST_CASE("the settings ray tracing makes moot are known graphics rows", "[settings][schema]") {
+    const auto keys = rayTracingIgnoredKeys();
+    CHECK(keys == std::vector<std::string>{"dbgterrainshadow", "dbgblobshadow"});
+    std::map<std::string, std::string> categoryOf;
+    for (const auto& d : schema()) categoryOf[d.key] = d.category;
+    for (const auto& k : keys) {
+        INFO(k);
+        REQUIRE(categoryOf.count(k) == 1u);
+        CHECK(isGraphicsCategory(categoryOf[k]));
+        CHECK_FALSE(settingNeedsRayTracing(k));
+        const char* why = rayTracingIgnoredReason(k);
+        REQUIRE(why != nullptr);
+        CHECK(std::string(why).find("ray tracing on") != std::string::npos);
+    }
+    // And the ones the traced path still reads are not on it.
+    for (const char* k : {"shadows", "shadowdistance", "shadowresolution", "shadowcascades", "dbgmapsunshadow",
+                          "dbgambient", "dbgsun", "dbgbakedlight", "specular", "normalmapping"}) {
+        INFO(k);
+        CHECK(rayTracingIgnoredReason(k) == nullptr);
+    }
+}
