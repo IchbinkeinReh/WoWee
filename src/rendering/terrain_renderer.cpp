@@ -1407,6 +1407,38 @@ void TerrainRenderer::registerRtChunk(TerrainChunkGPU& gpuChunk, const pipeline:
     src.surfaces.push_back(packRtSurface(albedo, 1.0f));
     src.flags = RtScene::kMeshTerrain;
 
+    // The layers as a traced hit blends them (rt_trace_detail.glsli): each
+    // layer's texture, its alpha map, and where the chunk lies - the one
+    // colour above is what is left where a texture has no pyramid.
+    {
+        RtScene::TerrainLayers layers;
+        auto detailOf = [this](const VkTexture* tex) {
+            return tex && tex != whiteTexture.get() && tex->rtDetail() ? rtScene_->addDetail(*tex->rtDetail())
+                                                                        : RtScene::kInvalid;
+        };
+        layers.details[0] = gpuChunk.envCube ? RtScene::kInvalid : detailOf(gpuChunk.baseTexture);
+        for (int i = 0; i < 3; ++i) {
+            if (i + 1 > gpuChunk.layerCount) break;
+            layers.details[i + 1] = detailOf(gpuChunk.layerTextures[i]);
+            layers.hasLayer[i] = true;
+            if (size_t(i + 1) < chunk.layers.size() && !chunk.layers[size_t(i + 1)].alphaData.empty()) {
+                layers.alpha[i] = &chunk.layers[size_t(i + 1)].alphaData;
+            }
+        }
+        layers.weighted = gpuChunk.weightedLayers;
+        layers.maxX = -1e30f;
+        layers.maxY = -1e30f;
+        for (const auto& p : src.positions) {
+            layers.maxX = std::max(layers.maxX, p.x);
+            layers.maxY = std::max(layers.maxY, p.y);
+        }
+        layers.size = (core::coords::TILE_SIZE / 16.0f);
+        layers.texScale = pipeline::kTerrainTextureRepeatsPerChunk / (core::coords::TILE_SIZE / 16.0f);
+        if (layers.details[0] != RtScene::kInvalid || gpuChunk.layerCount > 0) {
+            src.terrainLayers = RtScene::terrainRecord(layers);
+        }
+    }
+
     gpuChunk.rtMesh = rtScene_->addMesh(std::move(src));
     // Terrain vertices are already in world space.
     gpuChunk.rtInstance = rtScene_->addInstance(gpuChunk.rtMesh, glm::mat4(1.0f));

@@ -79,6 +79,13 @@ struct BLPImage {
     /// read, with the mask all clear.
     bool alphaMask(std::array<uint64_t, 64>& mask) const;
 
+    /// The texture at 64x64, RGBA8 a texel (R in the low byte), rows from
+    /// the top, read from the smallest level of at least 64 (the nearest
+    /// texel of it). What a traced hit is textured by (rt_detail.hpp): the
+    /// ray traced water's reflection of a wall, a tree, the ground. False for
+    /// an image it cannot read.
+    bool thumbnail64(std::array<uint32_t, 64 * 64>& rgba) const;
+
     /// Whether this texture's alpha is a silhouette that has to be honoured.
     ///
     /// Asked by a batch whose material says opaque. Blend mode 0 means the

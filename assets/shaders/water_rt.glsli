@@ -23,6 +23,8 @@
 // - The two by Schlick's Fresnel at the 1.333 interface (F0 0.02); from
 //   under the surface past the critical angle, all reflection.
 
+#include "rt_trace_detail.glsli"
+
 const float RTW_IOR = 1.333;
 const float RTW_F0 = 0.02;
 
@@ -71,6 +73,14 @@ float rtwOnScreen(vec3 hit, vec3 hitNormal, out vec3 color) {
     return w;
 }
 
+// The width in yards of what one pixel's ray covers `t` past the surface at
+// `origin`: the pixel's angle over the whole path from the camera, doubled
+// for the waves' spread of it. Picks the level a hit's texture is read at.
+float rtwFootprint(vec3 origin, float t) {
+    float pixelAngle = 2.0 / (projection[1][1] * float(textureSize(SceneDepth, 0).y));
+    return (length(viewPos.xyz - origin) + t) * pixelAngle * 2.0;
+}
+
 // The reflection along `dir` from `origin`.
 vec3 rtwReflection(vec3 origin, vec3 dir, vec3 toSun, inout uint rng) {
     float t;
@@ -87,6 +97,7 @@ vec3 rtwReflection(vec3 origin, vec3 dir, vec3 toSun, inout uint rng) {
     if (onScreen >= 1.0) return shown;
     bool unit;
     float vis = dot(hn, toSun) > 0.0 && !rtOccludedBy(hit + hn * 0.05, toSun, 400.0, rng, unit) ? 1.0 : 0.0;
+    hs.rgb = rtHitColor(origin, dir, t, rtwFootprint(origin, t), hs.rgb);
     vec3 c = rtwLitHit(hs, hn, toSun, vis);
     // The air between the surface and what it shows.
     float haze = clamp(t / max(fogParams.y, 1.0), 0.0, 1.0);
@@ -115,6 +126,7 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
         float onScreen = rtwOnScreen(hit, hn, shown);
         bed = shown;
         if (onScreen < 1.0) {
+            hs.rgb = rtHitColor(origin, dir, t, rtwFootprint(origin, t), hs.rgb);
             bed = mix(rtwLitHit(hs, hn, toSun, 0.8), shown, onScreen);
         }
         bedFromScreen = onScreen >= 1.0;

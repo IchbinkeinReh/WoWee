@@ -17,7 +17,9 @@
 #define RT_SCENE_SET 1
 #endif
 
-struct RtTriExtra { uvec4 data; };  // three UVs as half2, the mask
+// Three UVs as half2; .w the mask in the low half and the detail texture
+// (rt_trace_detail.glsli) in the high, 0xFFFF for none.
+struct RtTriExtra { uvec4 data; };
 layout(std430, set = RT_SCENE_SET, binding = 6) readonly buffer RtTriExtras { RtTriExtra rtTriExtras[]; };
 layout(std430, set = RT_SCENE_SET, binding = 7) readonly buffer RtMasks { uint rtMasks[]; };
 // A group's box, min and max (RtScene::setGroupBounds); group 0 is none.
@@ -46,6 +48,10 @@ bool rtStructureOnly = false;
 // through leaves; their shadow of the sun is the sun ray's, which they still
 // stop.
 bool rtCutoutsOpen = false;
+// Left by rtClosestEx: the triangle (in rtTris) and the instance it hit
+// last, for rt_trace_detail.glsli.
+uint rtHitTri = 0u;
+uint rtHitInstance = 0u;
 
 // Whether a ray from p passes the instances of `group` by: it starts inside
 // the group's box - on the character the group is, which never shadows or
@@ -66,10 +72,12 @@ bool rtSolidAt(RtTri tri, vec2 bary, inout uint rng) {
     uint extra = floatBitsToUint(tri.v2.w);
     if (extra != 0u) {
         uvec4 e = rtTriExtras[extra - 1u].data;
+        uint mask = e.w & 0xFFFFu;
+        if (mask == 0xFFFFu) return rtRandom(rng) < opacity;
         vec2 uv = unpackHalf2x16(e.x) * (1.0 - bary.x - bary.y) + unpackHalf2x16(e.y) * bary.x +
                   unpackHalf2x16(e.z) * bary.y;
         ivec2 t = ivec2(fract(uv) * 64.0) & 63;
-        uint word = rtMasks[e.w * 128u + uint(t.y) * 2u + uint(t.x >> 5)];
+        uint word = rtMasks[mask * 128u + uint(t.y) * 2u + uint(t.x >> 5)];
         return ((word >> uint(t.x & 31)) & 1u) != 0u;
     }
     return rtRandom(rng) < opacity;

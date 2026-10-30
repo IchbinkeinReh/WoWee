@@ -945,6 +945,7 @@ set(WOWEE_SOURCES
     src/rendering/frustum.cpp
     src/rendering/rt_bvh.cpp
     src/rendering/rt_scene.cpp
+    src/rendering/rt_detail.cpp
     src/rendering/rt_lighting.cpp
     src/rendering/rt_gi_probes.cpp
     src/rendering/performance_hud.cpp
@@ -2692,6 +2693,7 @@ add_executable(wowee_editor
     src/rendering/frustum.cpp
     src/rendering/rt_bvh.cpp
     src/rendering/rt_scene.cpp
+    src/rendering/rt_detail.cpp
     src/rendering/rt_lighting.cpp
     src/rendering/rt_gi_probes.cpp
     src/rendering/volumetric_fog.cpp

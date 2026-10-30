@@ -1128,6 +1128,7 @@ private:
         std::vector<float> surfaces;         // one a triangle
         std::vector<uint32_t> masks;         // one a triangle
         std::vector<uint8_t> uvSet;          // one a triangle: 0 UV0, 1 UV1
+        std::vector<uint32_t> details;       // one a triangle: RtScene::addDetail, kInvalid none
     };
     struct RtCharacter {
         uint64_t seen = 0;

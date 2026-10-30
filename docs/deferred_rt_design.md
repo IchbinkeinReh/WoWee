@@ -309,12 +309,32 @@ height at half what it was first made with by default.
   shows (its depth matches, its face looks at the camera) takes the frame
   drawn under the water there - textured, lit, shadowed, fogged as drawn. The
   outer 3% of the screen blends to the traced colour.
-- Elsewhere the hit is its triangle's one colour (its texture's mean times
-  its tint), lit by the ambient and, past one shadow ray, the sun; a
-  reflection's hit is hazed by the zone's fog over the distance, a refracted
-  one absorbed over its path through the water.
+- Elsewhere the hit is lit by the ambient and, past one shadow ray, the sun;
+  a reflection's hit is hazed by the zone's fog over the distance, a
+  refracted one absorbed over its path through the water. Its colour is
+  `rt_trace_detail.glsli`'s: a model's or a building's triangle by its
+  texture's 64x64 pyramid (`rt_detail.hpp`, RGB565, about 11 KB, set 1
+  binding 10), read at the triangle's UVs (its `RtTriExtra`, kept for every
+  textured triangle; `.w` the mask in the low half, the pyramid in the high)
+  and scaled by the triangle's packed colour over the texture's mean, so
+  tints stay; a terrain chunk by its layers, blended by its alpha maps at
+  16x16 as `terrain.frag` blends them (a record of 272 words, binding 11,
+  named by the mesh's third word). The level is the one whose texels match
+  the pixel's footprint over the whole path.
+- The pyramids are made from the decoded BLP when a texture is uploaded
+  (`VkTexture::rtDetail`), shared by content in an `RtSlotStore`, held by the
+  meshes that use them and freed with the last one once no frame can still
+  trace it; a terrain record goes with its chunk. A log line gives the bytes
+  held whenever they move by a megabyte: around Stormwind about 13 MB of
+  pyramids and 13 MB of terrain records.
 - Debug views 15-17: the reflection alone, what comes through alone, and the
   reflection as traced, without the frame's colour.
+
+The probes' bounce (`rt_gi_trace`) still takes each triangle's one colour.
+Its light is gathered over many rays and frames, where a texture's mean is
+already what the texture gives on average; the terrain's one colour a
+33-yard chunk is where the layer records would change it, and the probe
+trace could include `rt_trace_detail.glsli` at the cost of the lookups.
 
 ## MSAA
 

@@ -51,6 +51,7 @@
 #include <vulkan/vulkan.h>
 
 #include "rendering/rt_bvh.hpp"
+#include "rendering/rt_detail.hpp"
 #include "rendering/rt_range_allocator.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_utils.hpp"
@@ -120,13 +121,48 @@ public:
         /// has it. Others take their surface's opacity as a probability.
         std::vector<glm::vec2> uvs;
         std::vector<uint32_t> masks;  // per triangle; kInvalid for none
+        /// The texture a traced hit is coloured by (addDetail), per triangle
+        /// with `uvs`; kInvalid for none - the triangle's one colour.
+        std::vector<uint32_t> details;  // per triangle; kInvalid for none
+        /// A terrain chunk's layers (terrainRecord), kTerrainRecordWords
+        /// words; empty for none.
+        std::vector<uint32_t> terrainLayers;
         uint32_t flags = 0;  // MeshFlags
     };
+
+    /// A terrain chunk's layers as a traced hit blends them
+    /// (rt_trace_detail.glsli): the four layers' detail slots (kInvalid for
+    /// none), flags (1 weighted, 2/4/8 layer 1/2/3 present), the chunk's
+    /// largest x and y and its size, the texture scale, then its three alpha
+    /// maps at 16x16, a1 | a2 << 8 | a3 << 16 a texel, rows along x from
+    /// the largest.
+    static constexpr uint32_t kTerrainRecordWords = 16 + 16 * 16;
+    struct TerrainLayers {
+        uint32_t details[4] = {kInvalid, kInvalid, kInvalid, kInvalid};
+        bool weighted = false;
+        bool hasLayer[3] = {false, false, false};
+        float maxX = 0.0f, maxY = 0.0f, size = 1.0f, texScale = 1.0f;
+        /// The 64x64 alpha maps of layers 1-3; empty for a layer without one.
+        const std::vector<uint8_t>* alpha[3] = {nullptr, nullptr, nullptr};
+    };
+    [[nodiscard]] static std::vector<uint32_t> terrainRecord(const TerrainLayers& layers);
+
+    /// A texture's pyramid (VkTexture::rtDetail) for MeshSource::details and
+    /// TerrainLayers: the same one given twice is stored once, and it is
+    /// kept while a mesh uses it - freed with the last, or at the next
+    /// update when none took it. kInvalid when the store is full.
+    uint32_t addDetail(const std::vector<uint32_t>& pyramid);
 
     /// A texture's 64x64 visibility (VkTexture::alphaMask), for MeshSource::
     /// masks. The same mask given twice is stored once; masks are kept for
     /// the scene's life - a few hundred bytes each, a few hundred textures.
     uint32_t addAlphaMask(const std::array<uint64_t, 64>& bits);
+    /// What the textures of traced hits hold now, in bytes: the detail
+    /// pyramids and the terrain chunks' layer records.
+    [[nodiscard]] uint64_t detailBytes() const { return details_.bytes(); }
+    [[nodiscard]] uint64_t terrainRecordBytes() const { return terrainRecords_.bytes(); }
+    [[nodiscard]] uint32_t detailCount() const { return details_.live(); }
+    [[nodiscard]] uint32_t terrainRecordCount() const { return terrainRecords_.live(); }
     /// Returns kInvalid for a mesh with no usable triangle.
     MeshId addMesh(MeshSource source);
     void removeMesh(MeshId mesh);
@@ -208,6 +244,10 @@ private:
         VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
         VkDeviceAddress blasAddress = 0;
         bool hasTranslucent = false;
+        // The detail slots its triangles use, each once, and its terrain
+        // record: references held until the mesh goes.
+        std::vector<uint32_t> detailRefs;
+        uint32_t terrainSlot = kInvalid;
     };
     struct Instance {
         bool live = false;
@@ -326,6 +366,16 @@ private:
     uint32_t maskCapacity_ = 0;
     uint32_t masksUploaded_ = 0;
     void uploadMasks(VkCommandBuffer cmd);
+    // The detail pyramids and the terrain records (rt_detail.hpp), and their
+    // GPU copies.
+    RtSlotStore details_{rt_detail::kSlotWords};
+    RtSlotStore terrainRecords_{kTerrainRecordWords};
+    AllocatedBuffer detailBuffer_{};
+    uint32_t detailCapacity_ = 0;
+    AllocatedBuffer terrainBuffer_{};
+    uint32_t terrainCapacity_ = 0;
+    void uploadSlots(VkCommandBuffer cmd, RtSlotStore& store, AllocatedBuffer& buffer, uint32_t& capacity);
+    uint64_t loggedDetailMiB_ = ~0ull;
     AllocatedBuffer meshTable_{};
     uint32_t meshTableCapacity_ = 0;
     bool meshTableDirty_ = true;

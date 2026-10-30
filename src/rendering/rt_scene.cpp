@@ -4,6 +4,7 @@
 
 #include "core/frame_profiler.hpp"
 #include "core/logger.hpp"
+#include "rendering/vk_texture.hpp"
 
 #include <glm/gtc/packing.hpp>
 
@@ -26,6 +27,8 @@ constexpr uint32_t kBindingTriExtras = 6;
 constexpr uint32_t kBindingMasks = 7;
 constexpr uint32_t kBindingDynamicTlas = 8;
 constexpr uint32_t kBindingGroups = 9;
+constexpr uint32_t kBindingDetails = 10;
+constexpr uint32_t kBindingTerrain = 11;
 
 // The software top level begins with three nodes that join the two
 // hierarchies: a root over both, then a copy of each one's root as its two
@@ -157,6 +160,8 @@ bool RtScene::createDescriptors() {
     addBinding(kBindingTriExtras, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     addBinding(kBindingMasks, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     addBinding(kBindingGroups, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    addBinding(kBindingDetails, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    addBinding(kBindingTerrain, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     if (backend_ == Backend::Software) {
         addBinding(kBindingNodes, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         addBinding(kBindingTlasNodes, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
@@ -254,6 +259,10 @@ RtScene::MeshId RtScene::addMesh(MeshSource source) {
     if (!source.oneSided.empty() && source.oneSided.size() != triCount) source.oneSided.clear();
     if (!source.masks.empty() && source.masks.size() != triCount) source.masks.clear();
     if (!source.uvs.empty() && source.uvs.size() != source.positions.size()) source.uvs.clear();
+    if (!source.details.empty() && source.details.size() != triCount) source.details.clear();
+    if (!source.terrainLayers.empty() && source.terrainLayers.size() != kTerrainRecordWords) {
+        source.terrainLayers.clear();
+    }
     RtAabb bounds;
     for (uint32_t idx : source.indices) {
         if (idx >= source.positions.size()) return kInvalid;
@@ -274,6 +283,23 @@ RtScene::MeshId RtScene::addMesh(MeshSource source) {
     m.triCount = static_cast<uint32_t>(triCount);
     m.bounds = bounds;
     m.source = std::move(source);
+    // The textures its triangles are coloured by, held while it lives.
+    auto hold = [&m, this](uint32_t slot) {
+        if (slot == kInvalid) return;
+        if (std::find(m.detailRefs.begin(), m.detailRefs.end(), slot) != m.detailRefs.end()) return;
+        m.detailRefs.push_back(slot);
+        details_.acquire(slot);
+    };
+    for (uint32_t d : m.source.details) hold(d);
+    if (!m.source.terrainLayers.empty()) {
+        for (int l = 0; l < 4; ++l) hold(m.source.terrainLayers[size_t(l)]);
+        m.terrainSlot = terrainRecords_.add(m.source.terrainLayers.data());
+        terrainRecords_.acquire(m.terrainSlot);
+        // The record is in the store; the source need not keep it.
+        m.source.terrainLayers.clear();
+        m.source.terrainLayers.shrink_to_fit();
+        meshTableDirty_ = true;
+    }
     ++liveMeshes_;
     liveTriangles_ += m.triCount;
     if (active_) {
@@ -310,12 +336,20 @@ void RtScene::buildMesh(Mesh& m) {
         // v2.w: 1 + the index of the cutout's UVs and mask in the extras
         // pool, as bits; 0 for none. Local here, made absolute on upload,
         // since the hierarchy build reorders the triangles.
+        // The extra's .w: the mask in the low half, the detail slot in the
+        // high, 0xFFFF for none (rt_trace_alpha.glsli, rt_trace_detail.glsli).
         uint32_t extra = 0;
-        if (!src.uvs.empty() && !src.masks.empty() && src.masks[t] != kInvalid &&
-            src.masks[t] < masks_.size() / 64) {
-            m.extras.emplace_back(glm::packHalf2x16(src.uvs[i0]), glm::packHalf2x16(src.uvs[i1]),
-                                  glm::packHalf2x16(src.uvs[i2]), src.masks[t]);
-            extra = static_cast<uint32_t>(m.extras.size());
+        if (!src.uvs.empty()) {
+            uint32_t mask = 0xFFFFu, detail = 0xFFFFu;
+            if (!src.masks.empty() && src.masks[t] < masks_.size() / 64 && src.masks[t] < 0xFFFFu) {
+                mask = src.masks[t];
+            }
+            if (!src.details.empty() && src.details[t] < 0xFFFFu) detail = src.details[t];
+            if (mask != 0xFFFFu || detail != 0xFFFFu) {
+                m.extras.emplace_back(glm::packHalf2x16(src.uvs[i0]), glm::packHalf2x16(src.uvs[i1]),
+                                      glm::packHalf2x16(src.uvs[i2]), mask | (detail << 16));
+                extra = static_cast<uint32_t>(m.extras.size());
+            }
         }
         tri.v2 = glm::vec4(src.positions[i2], std::bit_cast<float>(extra));
         if (unpackRtSurface(surface).a < 1.0f) m.hasTranslucent = true;
@@ -429,6 +463,13 @@ void RtScene::releaseGpu() {
     destroyBuffer(alloc, maskBuffer_);
     maskCapacity_ = 0;
     masksUploaded_ = 0;
+    // So are the detail pyramids and the terrain records.
+    destroyBuffer(alloc, detailBuffer_);
+    detailCapacity_ = 0;
+    details_.markAllDirty();
+    destroyBuffer(alloc, terrainBuffer_);
+    terrainCapacity_ = 0;
+    terrainRecords_.markAllDirty();
     destroyBuffer(alloc, meshTable_);
     meshTableCapacity_ = 0;
     meshTableDirty_ = true;
@@ -453,6 +494,9 @@ void RtScene::removeMesh(MeshId id) {
     const uint32_t extraOffset = m.extraOffset, extraCount = m.extraCount;
     VkAccelerationStructureKHR blas = m.blas;
     AllocatedBuffer blasBuffer = m.blasBuffer;
+    std::vector<uint32_t> detailRefs = std::move(m.detailRefs);
+    const uint32_t terrainSlot = m.terrainSlot;
+    if (terrainSlot != kInvalid) meshTableDirty_ = true;
     m = Mesh{};
     // The BLAS is destroyed whether or not the scene is still alive by then;
     // the pool ranges and the slot only matter to a scene that is.
@@ -463,10 +507,14 @@ void RtScene::removeMesh(MeshId id) {
     auto destroyAs = pfnDestroyAs_;
     ctx_->deferAfterAllFrameFences([this, alive, epoch, dev, alloc, destroyAs, id, triOffset,
                                     triCount, nodeOffset, nodeCount, extraOffset, extraCount, blas,
-                                    blasBuffer]() mutable {
+                                    blasBuffer, detailRefs, terrainSlot]() mutable {
         if (blas) destroyAs(dev, blas, nullptr);
         destroyBuffer(alloc, blasBuffer);
         if (alive.expired()) return;
+        // Its textures, once no frame can still be tracing it: a slot freed
+        // here is taken by the next texture added.
+        for (uint32_t d : detailRefs) details_.release(d);
+        if (terrainSlot != kInvalid) terrainRecords_.release(terrainSlot);
         if (epoch == gpuEpoch_ && triOffset != RtRangeAllocator::kFailed) triPool_.alloc.release(triOffset, triCount);
         if (epoch == gpuEpoch_ && nodeOffset != RtRangeAllocator::kFailed)
             nodePool_.alloc.release(nodeOffset, nodeCount);
@@ -1127,6 +1175,8 @@ void RtScene::writeDescriptors(FrameResources& fr) {
     VkDescriptorBufferInfo extras = info(extraPool_.buffer);
     VkDescriptorBufferInfo masks = info(maskBuffer_);
     VkDescriptorBufferInfo groups = info(fr.groups);
+    VkDescriptorBufferInfo details = info(detailBuffer_);
+    VkDescriptorBufferInfo terrain = info(terrainBuffer_);
 
     std::vector<VkWriteDescriptorSet> writes;
     auto add = [&](uint32_t binding, const VkDescriptorBufferInfo* bi) {
@@ -1145,6 +1195,8 @@ void RtScene::writeDescriptors(FrameResources& fr) {
     add(kBindingTriExtras, &extras);
     add(kBindingMasks, &masks);
     add(kBindingGroups, &groups);
+    add(kBindingDetails, &details);
+    add(kBindingTerrain, &terrain);
     VkWriteDescriptorSetAccelerationStructureKHR asWrite[2]{};
     if (backend_ == Backend::Software) {
         add(kBindingNodes, &nodes);
@@ -1174,13 +1226,31 @@ void RtScene::writeDescriptors(FrameResources& fr) {
 void RtScene::update(VkCommandBuffer cmd) {
     if (!ctx_ || !active_) return;
     uploadMasks(cmd);
+    details_.collect();
+    uploadSlots(cmd, details_, detailBuffer_, detailCapacity_);
+    uploadSlots(cmd, terrainRecords_, terrainBuffer_, terrainCapacity_);
+    {
+        // What the traced hits' textures hold, when it has moved by a megabyte.
+        const uint64_t bytes = details_.bytes() + terrainRecords_.bytes();
+        if (bytes / (1u << 20) != loggedDetailMiB_) {
+            loggedDetailMiB_ = bytes / (1u << 20);
+            LOG_INFO("RtScene: hit textures ", details_.live(), " detail pyramids in ", details_.capacity(),
+                     " slots (", details_.bytes() >> 10, " KB), ", terrainRecords_.live(),
+                     " terrain records in ", terrainRecords_.capacity(), " slots (", terrainRecords_.bytes() >> 10,
+                     " KB); textures' own copies ", VkTexture::rtDetailBytes() >> 10, " KB");
+        }
+    }
     uploadPending(cmd);
 
     if (meshTableDirty_) {
         meshTableDirty_ = false;
         std::vector<MeshGPU> table(meshes_.size());
         for (size_t i = 0; i < meshes_.size(); ++i) {
-            table[i] = {meshes_[i].nodeOffset, meshes_[i].triOffset, 0, 0};
+            // The third word: 1 + the terrain record, 0 for none.
+            const uint32_t terrain = meshes_[i].live && meshes_[i].terrainSlot != kInvalid
+                                         ? meshes_[i].terrainSlot + 1
+                                         : 0;
+            table[i] = {meshes_[i].nodeOffset, meshes_[i].triOffset, terrain, 0};
         }
         if (!meshTable_.buffer || meshTableCapacity_ < table.size()) {
             if (meshTable_.buffer) {
@@ -1270,6 +1340,91 @@ void RtScene::uploadMasks(VkCommandBuffer cmd) {
     mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
     mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+    VkDependencyInfo dep{};
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    cmdPipelineBarrier2(cmd, dep);
+}
+
+uint32_t RtScene::addDetail(const std::vector<uint32_t>& pyramid) {
+    if (pyramid.size() != rt_detail::kSlotWords) return kInvalid;
+    // The extras keep the slot in 16 bits.
+    if (details_.capacity() >= 0xFFFFu && details_.live() >= details_.capacity()) return kInvalid;
+    const uint32_t slot = details_.add(pyramid.data());
+    return slot < 0xFFFFu ? slot : kInvalid;
+}
+
+std::vector<uint32_t> RtScene::terrainRecord(const TerrainLayers& layers) {
+    std::vector<uint32_t> r(kTerrainRecordWords, 0);
+    for (int l = 0; l < 4; ++l) r[size_t(l)] = layers.details[l];
+    r[4] = (layers.weighted ? 1u : 0u) | (layers.hasLayer[0] ? 2u : 0u) | (layers.hasLayer[1] ? 4u : 0u) |
+           (layers.hasLayer[2] ? 8u : 0u);
+    r[5] = std::bit_cast<uint32_t>(layers.maxX);
+    r[6] = std::bit_cast<uint32_t>(layers.maxY);
+    r[7] = std::bit_cast<uint32_t>(layers.size);
+    r[8] = std::bit_cast<uint32_t>(layers.texScale);
+    // Each 64x64 map at 16x16, the mean of sixteen: 2 yards a texel, which
+    // the reflection's waves blur past; 32x32 held 4 KB a chunk, 51 MB for
+    // the 49 tiles loaded around a city.
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            uint32_t word = 0;
+            for (int l = 0; l < 3; ++l) {
+                const std::vector<uint8_t>* a = layers.alpha[l];
+                if (!a || a->size() < 64 * 64) {
+                    // No map: the layer covers all of the chunk (terrain_renderer).
+                    if (layers.hasLayer[l]) word |= 255u << (8 * l);
+                    continue;
+                }
+                uint32_t sum = 0;
+                for (int dy = 0; dy < 4; ++dy) {
+                    for (int dx = 0; dx < 4; ++dx) sum += (*a)[size_t(y * 4 + dy) * 64 + size_t(x * 4 + dx)];
+                }
+                word |= ((sum + 8) / 16) << (8 * l);
+            }
+            r[16 + size_t(y) * 16 + size_t(x)] = word;
+        }
+    }
+    return r;
+}
+
+void RtScene::uploadSlots(VkCommandBuffer cmd, RtSlotStore& store, AllocatedBuffer& buffer, uint32_t& capacity) {
+    const uint32_t count = store.capacity();
+    if (count == 0) return;
+    const VkDeviceSize slotBytes = VkDeviceSize(store.slotWords()) * sizeof(uint32_t);
+    bool fresh = false;
+    if (!buffer.buffer || capacity < count) {
+        if (buffer.buffer) {
+            VmaAllocator alloc = ctx_->getAllocator();
+            AllocatedBuffer old = buffer;
+            ctx_->deferAfterAllFrameFences([alloc, old]() mutable { destroyBuffer(alloc, old); });
+        }
+        capacity = grownCapacity(capacity, count);
+        buffer = createBuffer(ctx_->getAllocator(), VkDeviceSize(capacity) * slotBytes,
+                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                              VMA_MEMORY_USAGE_GPU_ONLY);
+        ++descriptorGeneration_;
+        fresh = true;
+        if (!buffer.buffer) {
+            capacity = 0;
+            return;
+        }
+    }
+    std::vector<uint32_t> dirty = store.takeDirty();
+    if (fresh) {
+        // A new buffer holds none of them: all of it, in one copy.
+        stage(cmd, buffer.buffer, 0, store.words().data(), VkDeviceSize(count) * slotBytes);
+    } else {
+        if (dirty.empty()) return;
+        for (uint32_t s : dirty) stage(cmd, buffer.buffer, VkDeviceSize(s) * slotBytes, store.slot(s), slotBytes);
+    }
+    VkMemoryBarrier2 mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
     VkDependencyInfo dep{};
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;

@@ -8,6 +8,7 @@
 #include <vk_mem_alloc.h>
 #include <array>
 #include <memory>
+#include <vector>
 #include <string>
 #include <cstdint>
 #include <glm/glm.hpp>
@@ -59,6 +60,12 @@ public:
     /// by uploadBLP for a texture with any transparency; null otherwise.
     /// What the ray traced lighting alpha-tests a cutout by.
     [[nodiscard]] const std::array<uint64_t, 64>* alphaMask() const { return alphaMask_.get(); }
+    /// The texture as a traced hit is textured by (rt_detail::buildPyramid:
+    /// 64x64 down to 1x1, RGB565), taken by uploadBLP; null otherwise - a
+    /// composited skin, a render target. RtScene::addDetail takes it.
+    [[nodiscard]] const std::vector<uint32_t>* rtDetail() const { return rtDetail_.get(); }
+    /// What every texture's rtDetail holds now, in bytes.
+    [[nodiscard]] static uint64_t rtDetailBytes();
 
     /// What every uploadBLP so far actually cost, and what the same textures
     /// would have cost decoded.
@@ -154,6 +161,8 @@ private:
     glm::vec3 averageColor_{1.0f};
     float alphaCoverage_ = 1.0f;
     std::unique_ptr<std::array<uint64_t, 64>> alphaMask_;
+    std::unique_ptr<std::vector<uint32_t>> rtDetail_;
+    void setRtDetail(std::unique_ptr<std::vector<uint32_t>> detail);
 };
 
 } // namespace rendering

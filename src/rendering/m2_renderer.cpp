@@ -2381,8 +2381,23 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
         glm::vec3 albedo = batch.tint;
         float opacity = 1.0f;
         uint32_t mask = RtScene::kInvalid;
+        uint32_t detail = RtScene::kInvalid;
         if (batch.texture) {
             albedo *= batch.texture->averageColor();
+            // What a traced hit is textured by, at the batch's UVs; an
+            // environment-mapped batch has none to read it at.
+            const int coordSource = batch.coordSources & 3;  // 0 UV0, 1 UV1, 2 env
+            if (batch.texture->rtDetail() && coordSource < 2) {
+                detail = rtScene_->addDetail(*batch.texture->rtDetail());
+                if (coordSource == 1) {
+                    const size_t endUv = std::min<size_t>(size_t(batch.indexStart) + batch.indexCount,
+                                                          model.indices.size());
+                    for (size_t i = batch.indexStart; i < endUv; ++i) {
+                        const uint16_t vi = model.indices[i];
+                        if (vi < model.vertices.size()) src.uvs[vi] = model.vertices[vi].texCoords[1];
+                    }
+                }
+            }
             // Cut out where the shadow map cuts it out: an alpha-key batch,
             // and on a model whose shadow is drawn in the foliage pass any
             // batch with alpha (renderShadow's foliage pass binds its
@@ -2418,6 +2433,7 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
             src.surfaces.push_back(surface);
             src.oneSided.push_back(oneSided);
             src.masks.push_back(mask);
+            src.details.push_back(detail);
         }
     }
     if (!animated) {
@@ -2453,6 +2469,7 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
             piece.surfaces.push_back(src.surfaces[t]);
             piece.oneSided.push_back(src.oneSided[t]);
             piece.masks.push_back(src.masks[t]);
+            piece.details.push_back(src.details[t]);
         }
         for (uint32_t t : part.triangles) {
             for (int c = 0; c < 3; ++c) remap[src.indices[t * 3 + c]] = RtScene::kInvalid;

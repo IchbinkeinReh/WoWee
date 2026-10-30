@@ -213,6 +213,8 @@ bool rtClosestEx(vec3 origin, vec3 dir, float tMax, inout uint rng,
     normal = vec3(0.0, 0.0, 1.0);
     surface = vec4(0.0);
     if (!rtTraceScene(origin, dir, t, tri, instIdx, false, rng)) return false;
+    rtHitTri = tri;
+    rtHitInstance = instIdx;
     RtTri hit = rtTris[tri];
     RtInstance inst = rtInstances[instIdx];
     vec3 n = cross(hit.v1.xyz - hit.v0.xyz, hit.v2.xyz - hit.v0.xyz);

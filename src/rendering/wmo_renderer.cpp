@@ -5465,10 +5465,12 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
             glm::vec3 albedo(0.5f);
             float opacity = 1.0f;
             uint32_t mask = RtScene::kInvalid;
+            uint32_t detail = RtScene::kInvalid;
             if (mat < model.materialTextureIndices.size()) {
                 const uint32_t ti = model.materialTextureIndices[mat];
                 if (ti < model.textures.size() && model.textures[ti]) {
                     albedo = model.textures[ti]->averageColor();
+                    if (model.textures[ti]->rtDetail()) detail = rtScene_->addDetail(*model.textures[ti]->rtDetail());
                     if (blend == 1) {
                         // An alpha key - a railing, a lattice, ivy: cut out as
                         // it is drawn.
@@ -5492,6 +5494,7 @@ void WMORenderer::registerRtModel(uint32_t modelId, const ModelData& model) {
                 src.surfaces.push_back(surface);
                 src.oneSided.push_back(oneSided);
                 src.masks.push_back(mask);
+                src.details.push_back(detail);
             }
         }
     }

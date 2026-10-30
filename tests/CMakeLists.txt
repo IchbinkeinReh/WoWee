@@ -1470,6 +1470,10 @@ wowee_add_test(test_rt_lamp_wrap
 wowee_add_test(test_rt_water
     SOURCES test_rt_water.cpp)
 
+# -- test_rt_detail: the textures traced hits are coloured by, and their store.
+wowee_add_test(test_rt_detail
+    SOURCES test_rt_detail.cpp
+            ${CMAKE_SOURCE_DIR}/src/rendering/rt_detail.cpp)
 
 # -- test_rt_min_brightness: the Ray Tracing page's floor on the traced darkening.
 wowee_add_test(test_rt_min_brightness

@@ -1,5 +1,6 @@
 #include "rendering/vk_texture.hpp"
 #include "rendering/vk_context.hpp"
+#include "rendering/rt_detail.hpp"
 #include "core/logger.hpp"
 #include <atomic>
 #include <cmath>
@@ -10,15 +11,32 @@
 namespace wowee {
 namespace rendering {
 
+namespace {
+std::atomic<uint64_t> g_rtDetailBytes{0};
+uint64_t rtDetailSize(const std::unique_ptr<std::vector<uint32_t>>& d) {
+    return d ? uint64_t(d->size()) * sizeof(uint32_t) : 0;
+}
+} // namespace
+
+uint64_t VkTexture::rtDetailBytes() { return g_rtDetailBytes.load(std::memory_order_relaxed); }
+
+void VkTexture::setRtDetail(std::unique_ptr<std::vector<uint32_t>> detail) {
+    g_rtDetailBytes.fetch_sub(rtDetailSize(rtDetail_), std::memory_order_relaxed);
+    rtDetail_ = std::move(detail);
+    g_rtDetailBytes.fetch_add(rtDetailSize(rtDetail_), std::memory_order_relaxed);
+}
+
 VkTexture::~VkTexture() {
     destroy(device_, allocator_);
+    setRtDetail(nullptr);
 }
 
 VkTexture::VkTexture(VkTexture&& other) noexcept
     : image_(other.image_), sampler_(other.sampler_), mipLevels_(other.mipLevels_),
       ownsSampler_(other.ownsSampler_), device_(other.device_),
       allocator_(other.allocator_), averageColor_(other.averageColor_),
-      alphaCoverage_(other.alphaCoverage_), alphaMask_(std::move(other.alphaMask_)) {
+      alphaCoverage_(other.alphaCoverage_), alphaMask_(std::move(other.alphaMask_)),
+      rtDetail_(std::move(other.rtDetail_)) {
     other.image_ = {};
     other.sampler_ = VK_NULL_HANDLE;
     // Source no longer owns the sampler - ownership transferred to this instance
@@ -41,6 +59,8 @@ VkTexture& VkTexture::operator=(VkTexture&& other) noexcept {
         averageColor_ = other.averageColor_;
         alphaCoverage_ = other.alphaCoverage_;
         alphaMask_ = std::move(other.alphaMask_);
+        setRtDetail(nullptr);
+        rtDetail_ = std::move(other.rtDetail_);  // counted already
         other.image_ = {};
         other.sampler_ = VK_NULL_HANDLE;
         other.ownsSampler_ = false;
@@ -279,6 +299,12 @@ bool VkTexture::uploadBLP(VkContext& ctx, const pipeline::BLPImage& image) {
             auto mask = std::make_unique<std::array<uint64_t, 64>>();
             if (image.alphaMask(*mask)) alphaMask_ = std::move(mask);
         }
+        std::unique_ptr<std::vector<uint32_t>> detail;
+        std::array<uint32_t, 64 * 64> thumb;
+        if (image.thumbnail64(thumb)) {
+            detail = std::make_unique<std::vector<uint32_t>>(rt_detail::buildPyramid(thumb, {rgb[0], rgb[1], rgb[2]}));
+        }
+        setRtDetail(std::move(detail));
     }
 
     if (!image.isBlockCompressed()) {

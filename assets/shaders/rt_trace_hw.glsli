@@ -125,7 +125,9 @@ bool rtClosestEx(vec3 origin, vec3 dir, float tMax, inout uint rng,
         prim = rayQueryGetIntersectionPrimitiveIndexEXT(d, true);
     }
     if (!found) return false;
-    RtTri hit = rtTris[rtTriIndex(instIdx, prim)];
+    rtHitTri = rtTriIndex(instIdx, prim);
+    rtHitInstance = instIdx;
+    RtTri hit = rtTris[rtHitTri];
     RtInstance inst = rtInstances[instIdx];
     vec3 n = cross(hit.v1.xyz - hit.v0.xyz, hit.v2.xyz - hit.v0.xyz);
     n = inst.worldToObject[0].xyz * n.x + inst.worldToObject[1].xyz * n.y +

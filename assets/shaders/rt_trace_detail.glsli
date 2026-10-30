@@ -1,0 +1,127 @@
+// A traced hit's texture (rt_detail.hpp): included after a tracer
+// (rt_trace_hw.glsli, rt_trace_sw.glsli), whose rtClosestEx leaves the hit's
+// triangle and instance in rtHitTri and rtHitInstance.
+//
+// - A model's or a building's triangle with a texture (its RtTriExtra's
+//   upper half of .w, 1 + the slot) is its packed colour - the texture's
+//   mean times its tint - times the texel over that mean: the tint and the
+//   lighting stay as they were, and the texture comes back.
+// - A terrain chunk (RtMesh's third word, 1 + its record) is its layers
+//   blended by its alpha maps (at 16x16) as terrain.frag blends them, from
+//   each layer's pyramid at the world-aligned UVs terrain_mesh.cpp gives it.
+// - Anything else keeps its one colour.
+//
+// The pyramids are 64x64 down to 1x1, RGB565 two a word; the level is the
+// one whose texels match `footprint`, the width in yards a texel of the
+// caller's pixel covers there.
+
+layout(std430, set = RT_SCENE_SET, binding = 10) readonly buffer RtDetails { uint rtDetails[]; };
+layout(std430, set = RT_SCENE_SET, binding = 11) readonly buffer RtTerrainRecords { uint rtTerrain[]; };
+
+const uint RT_DETAIL_SLOT_WORDS = 2736u;   // rt_detail::kSlotWords
+const uint RT_TERRAIN_RECORD_WORDS = 272u;  // RtScene::kTerrainRecordWords
+const uint RT_NONE16 = 0xFFFFu;
+
+vec3 rtDetailFetch(uint slot, uint level, ivec2 p) {
+    int side = 64 >> int(level);
+    p = ivec2(p.x & (side - 1), p.y & (side - 1));  // the textures repeat
+    // levelOffset: 4096 + 1024 + ... before `level`.
+    uint base = 0u;
+    for (uint l = 0u, s = 64u; l < level; ++l, s >>= 1u) base += s * s;
+    uint i = base + uint(p.y * side + p.x);
+    uint w = rtDetails[slot * RT_DETAIL_SLOT_WORDS + (i >> 1u)];
+    uint c = (i & 1u) != 0u ? (w >> 16u) : (w & 0xFFFFu);
+    return vec3(float(c & 31u) / 31.0, float((c >> 5u) & 63u) / 63.0, float((c >> 11u) & 31u) / 31.0);
+}
+
+vec3 rtDetailSample(uint slot, vec2 uv, float lod) {
+    uint level = uint(clamp(floor(lod + 0.5), 0.0, 6.0));
+    float side = float(64 >> int(level));
+    vec2 p = uv * side - 0.5;
+    ivec2 i = ivec2(floor(p));
+    vec2 f = fract(p);
+    vec3 a = rtDetailFetch(slot, level, i);
+    vec3 b = rtDetailFetch(slot, level, i + ivec2(1, 0));
+    vec3 c = rtDetailFetch(slot, level, i + ivec2(0, 1));
+    vec3 d = rtDetailFetch(slot, level, i + ivec2(1, 1));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// The hit's weights of v1 and v2, the ray taken into the instance's space.
+vec2 rtHitBary(RtTri tri, RtInstance inst, vec3 origin, vec3 dir) {
+    vec4 o4 = vec4(origin, 1.0), d4 = vec4(dir, 0.0);
+    vec3 o = vec3(dot(inst.worldToObject[0], o4), dot(inst.worldToObject[1], o4), dot(inst.worldToObject[2], o4));
+    vec3 d = vec3(dot(inst.worldToObject[0], d4), dot(inst.worldToObject[1], d4), dot(inst.worldToObject[2], d4));
+    vec3 e1 = tri.v1.xyz - tri.v0.xyz;
+    vec3 e2 = tri.v2.xyz - tri.v0.xyz;
+    vec3 h = cross(d, e2);
+    float a = dot(e1, h);
+    if (abs(a) < 1e-12) return vec2(0.0);
+    float f = 1.0 / a;
+    vec3 s = o - tri.v0.xyz;
+    vec3 q = cross(s, e1);
+    return clamp(vec2(f * dot(s, h), f * dot(d, q)), 0.0, 1.0);
+}
+
+vec3 rtTerrainColor(uint record, vec3 hit, float footprint, vec3 fallback) {
+    uint at = record * RT_TERRAIN_RECORD_WORDS;
+    uint flags = rtTerrain[at + 4u];
+    float maxX = uintBitsToFloat(rtTerrain[at + 5u]);
+    float maxY = uintBitsToFloat(rtTerrain[at + 6u]);
+    float size = uintBitsToFloat(rtTerrain[at + 7u]);
+    float scale = uintBitsToFloat(rtTerrain[at + 8u]);
+    // The alpha maps, 16x16 of the 64x64, bilinear (terrain.frag's LayerUV).
+    vec2 auv = clamp(vec2(maxY - hit.y, maxX - hit.x) / size, 0.0, 1.0);
+    vec2 p = auv * 16.0 - 0.5;
+    ivec2 i0 = clamp(ivec2(floor(p)), ivec2(0), ivec2(15));
+    ivec2 i1 = min(i0 + 1, ivec2(15));
+    vec2 f = clamp(p - vec2(i0), 0.0, 1.0);
+    vec3 a00 = unpackUnorm4x8(rtTerrain[at + 16u + uint(i0.y * 16 + i0.x)]).rgb;
+    vec3 a10 = unpackUnorm4x8(rtTerrain[at + 16u + uint(i0.y * 16 + i1.x)]).rgb;
+    vec3 a01 = unpackUnorm4x8(rtTerrain[at + 16u + uint(i1.y * 16 + i0.x)]).rgb;
+    vec3 a11 = unpackUnorm4x8(rtTerrain[at + 16u + uint(i1.y * 16 + i1.x)]).rgb;
+    vec3 al = mix(mix(a00, a10, f.x), mix(a01, a11, f.x), f.y);
+    float a1 = (flags & 2u) != 0u ? al.r : 0.0;
+    float a2 = (flags & 4u) != 0u ? al.g : 0.0;
+    float a3 = (flags & 8u) != 0u ? al.b : 0.0;
+    vec4 w = (flags & 1u) != 0u
+        ? vec4(1.0 - clamp(a1 + a2 + a3, 0.0, 1.0), a1, a2, a3)
+        : vec4((1.0 - a1) * (1.0 - a2) * (1.0 - a3), a1 * (1.0 - a2) * (1.0 - a3), a2 * (1.0 - a3), a3);
+    vec2 uv = vec2(-hit.y, -hit.x) * scale;
+    float lod = log2(max(footprint * 64.0 * scale, 1.0));
+    vec3 c = vec3(0.0);
+    float used = 0.0;
+    for (uint l = 0u; l < 4u; ++l) {
+        uint slot = rtTerrain[at + l];
+        if (w[l] < 0.002 || slot == 0xFFFFFFFFu) continue;
+        c += rtDetailSample(slot, uv, lod) * w[l];
+        used += w[l];
+    }
+    return used > 0.0 ? c + fallback * (1.0 - used) : fallback;
+}
+
+// The colour of the hit rtClosestEx last found along origin + dir * t, its
+// packed colour `surface` textured.
+vec3 rtHitColor(vec3 origin, vec3 dir, float t, float footprint, vec3 surface) {
+    RtInstance inst = rtInstances[rtHitInstance];
+    uint record = rtMeshes[inst.mesh].pad0;
+    if (record != 0u) return rtTerrainColor(record - 1u, origin + dir * t, footprint, surface);
+    RtTri tri = rtTris[rtHitTri];
+    uint extra = floatBitsToUint(tri.v2.w);
+    if (extra == 0u) return surface;
+    uvec4 e = rtTriExtras[extra - 1u].data;
+    uint slot = e.w >> 16u;
+    if (slot == RT_NONE16) return surface;
+    vec2 bary = rtHitBary(tri, inst, origin, dir);
+    vec2 uv0 = unpackHalf2x16(e.x), uv1 = unpackHalf2x16(e.y), uv2 = unpackHalf2x16(e.z);
+    vec2 uv = uv0 * (1.0 - bary.x - bary.y) + uv1 * bary.x + uv2 * bary.y;
+    // Texels a yard on this triangle: its UV area over its area.
+    float area = length(cross(tri.v1.xyz - tri.v0.xyz, tri.v2.xyz - tri.v0.xyz));
+    vec2 du = uv1 - uv0, dv = uv2 - uv0;
+    float uvArea = abs(du.x * dv.y - du.y * dv.x);
+    float texelsPerYard = 64.0 * sqrt(uvArea / max(area, 1e-8));
+    float lod = log2(max(footprint * texelsPerYard, 1.0));
+    vec3 texel = rtDetailSample(slot, uv, lod);
+    vec3 mean = max(rtDetailFetch(slot, 6u, ivec2(0)), vec3(0.02));
+    return surface * min(texel / mean, vec3(4.0));
+}

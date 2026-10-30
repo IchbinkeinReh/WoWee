@@ -179,6 +179,8 @@ void CharacterRenderer::rtAcquireShape(uint64_t key, const CharacterInstance& in
         const auto& batch = data.batches[bi];
         VkTexture* tex = resolveBatchTexture(inst, gm, batch);
         glm::vec3 albedo(0.5f);
+        uint32_t detail = RtScene::kInvalid;
+        if (tex && tex != whiteTexture_.get() && tex->rtDetail()) detail = rtScene_->addDetail(*tex->rtDetail());
         if (tex && tex != whiteTexture_.get()) {
             const glm::vec3 avg = tex->averageColor();
             // A composited skin is not a BLP and reports white; that is no
@@ -197,6 +199,7 @@ void CharacterRenderer::rtAcquireShape(uint64_t key, const CharacterInstance& in
             shape.surfaces.push_back(surface);
             shape.masks.push_back(mask);
             shape.uvSet.push_back(firstCoord == 1 ? 1 : 0);
+            shape.details.push_back(detail);
         }
     }
     if (shape.triangles.empty()) return;
@@ -223,6 +226,7 @@ void CharacterRenderer::rtAcquireShape(uint64_t key, const CharacterInstance& in
     src.indices = shape.triangles;
     src.surfaces = shape.surfaces;
     src.masks = shape.masks;
+    src.details = shape.details;
     RtAabb box;
     for (uint32_t idx : src.indices) box.grow(src.positions[idx]);
     shape.wholeMin = box.bmin;
@@ -263,6 +267,7 @@ void CharacterRenderer::rtBuildPieces(RtShape& shape, const M2ModelGPU& gm) {
             }
             src.surfaces.push_back(shape.surfaces[t]);
             src.masks.push_back(shape.masks[t]);
+            src.details.push_back(shape.details[t]);
         }
         for (uint32_t t : part.triangles) {
             for (int c = 0; c < 3; ++c) remap[shape.triangles[t * 3 + c]] = RtScene::kInvalid;
@@ -283,6 +288,8 @@ void CharacterRenderer::rtBuildPieces(RtShape& shape, const M2ModelGPU& gm) {
     shape.masks.shrink_to_fit();
     shape.uvSet.clear();
     shape.uvSet.shrink_to_fit();
+    shape.details.clear();
+    shape.details.shrink_to_fit();
 }
 
 void CharacterRenderer::rtReleaseShape(uint64_t key) {

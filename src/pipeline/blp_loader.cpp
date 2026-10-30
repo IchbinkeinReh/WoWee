@@ -768,6 +768,49 @@ bool BLPImage::alphaMask(std::array<uint64_t, 64>& mask) const {
     return true;
 }
 
+bool BLPImage::thumbnail64(std::array<uint32_t, 64 * 64>& rgba) const {
+    rgba.fill(0);
+    if (!isValid()) return false;
+    auto sample = [&](auto texelAt, int w, int h) {
+        for (int y = 0; y < 64; ++y) {
+            const int ty = std::min(h - 1, (y * h) / 64);
+            for (int x = 0; x < 64; ++x) {
+                const int tx = std::min(w - 1, (x * w) / 64);
+                rgba[size_t(y) * 64 + x] = texelAt(tx, ty);
+            }
+        }
+    };
+    auto pack = [](uint32_t r, uint32_t g, uint32_t b, uint32_t a) { return r | (g << 8) | (b << 16) | (a << 24); };
+    if (!isBlockCompressed()) {
+        if (data.size() < size_t(width) * size_t(height) * 4) return false;
+        sample([&](int tx, int ty) {
+            const uint8_t* p = &data[(size_t(ty) * width + tx) * 4];
+            return pack(p[0], p[1], p[2], p[3]);
+        }, width, height);
+        return true;
+    }
+    // As alphaMask: a level of at least 64 where there is one.
+    size_t level = levelAtMost(*this, 64);
+    if (level > 0 && (std::max(1, width >> level) < 64 || std::max(1, height >> level) < 64)) --level;
+    const int w = std::max(1, width >> level), h = std::max(1, height >> level);
+    const std::vector<uint8_t>& blocks = mipmaps[level];
+    const bool dxt1 = compression == BLPCompression::DXT1;
+    const size_t blockBytes = dxt1 ? 8 : 16;
+    const int blocksX = (w + 3) / 4;
+    const int blocksY = (h + 3) / 4;
+    if (blocks.size() < size_t(blocksX) * size_t(blocksY) * blockBytes) return false;
+    sample([&](int tx, int ty) {
+        const uint8_t* block = &blocks[(size_t(ty / 4) * blocksX + tx / 4) * blockBytes];
+        const DxtColorBlock c = decodeDxtColorBlock(block + (dxt1 ? 0 : 8), dxt1);
+        uint8_t alphas[16];
+        blockAlphas(block, compression, c, alphas);
+        const int p = (ty & 3) * 4 + (tx & 3);
+        const int idx = c.indexAt(tx & 3, ty & 3);
+        return pack(c.rgb[idx][0], c.rgb[idx][1], c.rgb[idx][2], alphas[p]);
+    }, w, h);
+    return true;
+}
+
 void BLPImage::averageColor(float rgb[3], float& coverage) const {
     rgb[0] = rgb[1] = rgb[2] = 1.0f;
     coverage = 0.0f;
