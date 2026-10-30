@@ -4370,9 +4370,24 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushstring(L, game::buildItemLink(made, info->quality, info->name, gh->getPlayerLevel()).c_str());
             return 1;
         }},
-                // A recipe link is an |Htrade: hyperlink carrying the whole
-                // skill list, which this client has no reader for - a link it
-                // cannot resolve on the way back in would be worse than none.
+                // A recipe link is not an |Htrade: link; that one is the *list*
+                // link, two rows below. What 0x005db920 writes for a recipe is
+                // "|cffffd000|Henchant:%d|h[%s]|h|r" - the spell id, because the
+                // thing an enchanting recipe makes has no item entry - and when a
+                // formula item exists, "[%s: %s]" puts its name first. The gate is
+                // a flag byte on the trade skill record: 0x20, and only recipes
+                // carrying it get a link at all.
+                //
+                // Two things stand between that and answering here, and they are
+                // why this stays nil rather than guessing at a format. The recipe
+                // list this client keeps is GameHandler::CraftRecipe - spellId,
+                // name, difficulty band, how many the bags allow - and the flag
+                // byte never reaches it, so the set of rows that should be links
+                // is not knowable from here. And an enchant link is drawn as text
+                // here: the chat markup parser knows item, spell, quest and
+                // achievement, so the tooltip the original pops up off that link
+                // is the half that would be missing. Both are reachable, and
+                // neither is a one-line change.
                 {"GetTradeSkillRecipeLink",   [](lua_State* L) -> int { return luaReturnNil(L); }},
                 {"GetTradeSkillReagentItemLink", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
@@ -4396,6 +4411,28 @@ void registerQuestLuaAPI(lua_State* L) {
             }
             return luaReturnNil(L);
         }},
+                // The list link is the |Htrade: one, and it takes no argument:
+                // 0x005dc0b0 hands 0x005db060 the skill line of the open window.
+                // The header it writes is "|cffffd000|Htrade:%d:%d:%d:%I64X:" -
+                // the line, two values taken off the record, and the local
+                // player's guid as hex - and after it a base64 block, six
+                // recipes to a byte over the "ABC…+/" alphabet, each bit saying
+                // whether whoever reads the link could learn that recipe: the
+                // reader's race and class come off the unit blob's bytes at
+                // +0x44 and +0x45. Then "|h[%s]|h|r" closes it.
+                //
+                // IsTradeSkillLinked is the other half of the same feature: with
+                // a window open it pushes the double 1.0 and the skill id that
+                // 0x0067d770 resolves - that one is the tradeskill window
+                // registry, and the branch that matters allocates a fresh window
+                // record, because the skill being shown is one the player does
+                // not have. With no window it pushes two nils. So the pair is
+                // about a linked window - somebody else's profession, opened
+                // off a link in chat - and this client never opens one, which is
+                // why a nil and a false are the right answers rather than
+                // placeholders. Neither dbc folder on this machine holds a Trade
+                // table of any name; the WotLK recipe list is filled by the
+                // realm, so whose list a window shows is the realm's to say.
                 {"GetTradeSkillListLink",     [](lua_State* L) -> int { return luaReturnNil(L); }},
                 {"IsTradeSkillLinked",        [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
                 // The play-time limits, which are the realm's, not this
