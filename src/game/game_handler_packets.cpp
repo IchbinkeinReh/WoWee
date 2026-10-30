@@ -27,6 +27,7 @@
 #include "game/transport_manager.hpp"
 #include "game/opcodes.hpp"
 #include "game/update_field_table.hpp"
+#include "game/zone_manager.hpp"
 #include "game/expansion_profile.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/minimap.hpp"
@@ -3440,7 +3441,7 @@ void GameHandler::registerRemainingOpcodes() {
         if (packet.hasRemaining(7)) {
             const uint32_t bfBattleId = packet.readUInt32();
             bfMgrBattleId_ = bfBattleId;
-            packet.readUInt8();   // unk, always one
+            const uint8_t unkOne = packet.readUInt8();   // unk, always one
             uint8_t isSafe  = packet.readUInt8();
             uint8_t onQueue = packet.readUInt8();
             bfMgrInvitePending_ = false;
@@ -3451,8 +3452,14 @@ void GameHandler::registerRemainingOpcodes() {
             // battlefield!" and, for that byte, "You are in the battlefield
             // queue."
             if (onQueue) addSystemChatMessage(interfaceString("CLEARED_AFK", "You are no longer Away."));
+            // Its fire is "%d%b%b" of the battle id from this packet and the two
+            // leading bytes (00540000.c:7384), not the zone the invite carried.
+            // FrameXML hides four dialogs on this event and reads no argument of
+            // it, so the two extra words change nothing on screen; the battle id
+            // in the first slot is what the client's own queue state is keyed by.
             if (addonEventCallback_)
-                addonEventCallback_("BATTLEFIELD_MGR_ENTERED", {std::to_string(bfMgrZoneId_)});
+                addonEventCallback_("BATTLEFIELD_MGR_ENTERED", {std::to_string(bfBattleId),
+                                                                eventBool(unkOne != 0), eventBool(isSafe != 0)});
             LOG_INFO("SMSG_BATTLEFIELD_MGR_ENTERED: isSafe=", static_cast<int>(isSafe), " onQueue=", static_cast<int>(onQueue));
         }
         packet.skipAll();
@@ -3479,34 +3486,62 @@ void GameHandler::registerRemainingOpcodes() {
                                 {std::to_string(bfId), eventBool(warmup)});
         LOG_INFO("SMSG_BATTLEFIELD_MGR_QUEUE_INVITE: bfId=", bfId);
     };
-    // uint32 battlefieldId + uint32 teamId + uint8 accepted + uint8 loggingEnabled + uint8 result
-    // result: 0=queued, 1=not_in_group, 2=too_high_level, 3=too_low_level,
-    //         4=in_cooldown, 5=queued_other_bf, 6=bf_full
+    // uint32 battleId + uint32 areaId + uint8 accepted + uint8 loggingIn + uint8 warmup
+    //
+    // The trailing byte is no result enum. The comment this handler used to
+    // carry came from the realm's own header ("result: 0=queued, 1=not_in_group,
+    // 2=too_high_level, ...") and the client never reads such a thing: 0x0054b680
+    // reads dword, dword, byte, byte, byte in that order (00540000.c:8850-8854),
+    // and its second dword is an *area* rather than a team - it is compared with
+    // the zone the player stands in and with that zone's AreaTable parent.
     dispatchTable_[Opcode::SMSG_BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE] = [this](network::Packet& packet) {
-        // uint32 battlefieldId + uint32 teamId + uint8 accepted + uint8 loggingEnabled + uint8 result
-        // result: 0=queued, 1=not_in_group, 2=too_high_level, 3=too_low_level,
-        //         4=in_cooldown, 5=queued_other_bf, 6=bf_full
         if (!packet.hasRemaining(11)) {
             packet.skipAll(); return;
         }
-        uint32_t bfId2    = packet.readUInt32();
-        /*uint32_t teamId =*/ packet.readUInt32();
-        uint8_t accepted  = packet.readUInt8();
-        /*uint8_t logging =*/ packet.readUInt8();
-        uint8_t result    = packet.readUInt8();
-        (void)bfId2;
-        (void)result;
-        // The event alone (0x0054b680), and BATTLEFIELD_MGR_QUEUE_REQUEST_
-        // RESPONSE's handler words it; this also printed English ("You have
-        // joined the battlefield queue.", "Battlefield: Level too low.").
-        // The battle id and whether the queue took, in that order - the
-        // interface reads both to say which battlefield answered and how.
+        const uint32_t bfBattleId = packet.readUInt32();
+        const uint32_t bfAreaId   = packet.readUInt32();
+        const bool accepted  = packet.readUInt8() != 0;
+        const bool loggingIn = packet.readUInt8() != 0;
+        // Warmup is the one byte tested against the number one rather than
+        // against zero (`local_7 == '\x01'` at :8863).
+        const bool warmup    = packet.readUInt8() == 1;
+        // The client keeps the battle, its area and whether the queue took as one
+        // state (:8862 -> 0x00549500), and the ENTERED handler above is written
+        // against it. These are the two WoWee keeps.
+        bfMgrBattleId_ = bfBattleId;
+        bfMgrZoneId_   = bfAreaId;
+        // The client's fourth word is whether the area this answer names is the
+        // one the player is in: the zone itself, or the zone's AreaTable parent
+        // (:8856-8861, DAT_00bd080c and its record's +0x08).
+        bool inArea = false;
+        auto* renderer = core::Application::getInstance().getRenderer();
+        if (const auto* texts = renderer ? renderer->getZoneTexts() : nullptr) {
+            inArea = texts->zoneId == bfAreaId;
+            if (!inArea && texts->zoneId != 0) {
+                if (auto* zones = renderer->getZoneManager()) {
+                    if (const auto parent = zones->areaParent(texts->zoneId);
+                        parent && *parent == bfAreaId) inArea = true;
+                }
+            }
+        }
+        // The event alone - 0x0054b680 says nothing else, where this also printed
+        // English ("You have joined the battlefield queue.", "Battlefield: Level
+        // too low."). Its five arguments, in the client's order: battleId,
+        // accepted, warmup, inArea, loggingIn (the "%d%b%b%b%b" at :8863). All
+        // five reach battlefieldframe.lua:60-74, which chooses among four
+        // Wintergrasp dialogs by them and stays silent while the player is
+        // logging back in. Two arguments here left warmup, inArea and loggingIn
+        // nil, so only the plain queued dialog could ever show - and `accepted`
+        // travelled as the number 0, which is *true* in Lua, so a queue the realm
+        // refused showed the dialogs for a queue that took.
         if (addonEventCallback_) {
-            addonEventCallback_("BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE",
-                                {std::to_string(bfId2), std::to_string(accepted)});
+            addonEventCallback_("BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE", {
+                std::to_string(bfBattleId), eventBool(accepted), eventBool(warmup),
+                eventBool(inArea), eventBool(loggingIn)});
         }
         LOG_INFO("SMSG_BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE: accepted=", static_cast<int>(accepted),
-                 " result=", static_cast<int>(result));
+                 " warmup=", static_cast<int>(warmup), " inArea=", static_cast<int>(inArea),
+                 " loggingIn=", static_cast<int>(loggingIn));
         packet.skipAll();
     };
     // uint64 battlefieldGuid + uint8 remove
