@@ -3674,9 +3674,24 @@ void registerActionLuaAPI(lua_State* L) {
                 // GetPetActionSlotUsable(index) → whether the pet can use it
                 //
                 // Read as "if usable then draw it normally, else grey it out",
-                // so an absent answer greyed out every ability the pet has. A
-                // slot holding a spell is usable; an empty one has nothing to
-                // grey.
+                // so an absent answer greyed out every ability the pet has.
+                //
+                // What the slot holds decides the test (0x005d5400 ->
+                // 0x005d3fd0): the type byte, not the low 24 bits, says whether
+                // a slot is a spell at all, and a command or a stance is usable
+                // as such as long as there is a pet. Taking the low bits instead
+                // greyed out Stay and Passive, whose ids are zero - the same
+                // mistake GetPetActionInfo made before it learned to ask
+                // petSlotSpell.
+                //
+                // A slot that holds a spell then goes through the client's own
+                // usability read, and the leg of that read this client can
+                // answer for a pet is what it costs (0x008017e0), the same leg
+                // IsUsableSpell uses for a pet caster. The client asks it of
+                // every pet it has and only refuses when all of them fail the
+                // same way; with the one pet this client tracks, that is the
+                // pet's own answer. Usable is 1, otherwise nothing - the client
+                // pushes 1.0 or nil, never false.
                 // CancelItemTempEnchantment(hand) - drop a weapon imbue
                 //
                 // The interface counts the hands from one and the request from
@@ -3696,8 +3711,16 @@ void registerActionLuaAPI(lua_State* L) {
                 lua_pushboolean(L, 0);
                 return 1;
             }
-            const uint32_t spellId = gh->getPetActionSlot(index - 1) & 0x00FFFFFF;
-            lua_pushboolean(L, spellId != 0 ? 1 : 0);
+            const uint32_t packed = gh->getPetActionSlot(index - 1);
+            auto* pet = resolveUnit(L, "pet");
+            auto* sh = gh->getSpellHandler();
+            bool usable;
+            if (packed == 0)              usable = true;   // nothing in the slot to grey
+            else if (pet == nullptr)      usable = false;
+            else if (const uint32_t spell = petSlotSpell(packed); spell != 0)
+                usable = !sh || sh->enoughPower(spell, *pet);
+            else                          usable = true;   // a command or a stance
+            if (usable) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;
         }},
                 // GetPetActionInfo(index) →
