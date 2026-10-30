@@ -950,6 +950,10 @@ private:
     body_yaw::State characterBody_;
     /// The player's swimming or flying tilt, radians nose up (swim_pitch.hpp).
     float characterSwimPitch_ = 0.0f;
+    /// The player's bank in flight (swim_pitch::stepRoll), and the body yaw
+    /// it was last measured against.
+    float characterRoll_ = 0.0f;
+    float characterRollYaw_ = 0.0f;
     uint32_t characterBodyInstance_ = 0;
 
     // Where the player was, for shaders that react to them moving through the

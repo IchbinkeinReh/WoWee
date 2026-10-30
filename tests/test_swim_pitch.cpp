@@ -69,3 +69,20 @@ TEST_CASE("Swim pitch: another unit takes its packet's pitch at once", "[swim]")
     CHECK(otherUnit(true, false, -0.4f) == 0.0f);   // treading water
     CHECK(otherUnit(false, true, -0.4f) == 0.0f);   // on land
 }
+
+TEST_CASE("Flight roll: banks into the turn, eased, held to 45 degrees", "[swim]") {
+    // Turning left at pi/2 a second, moving forward: toward -0.15 x pi/2.
+    const float target = kRollPerTurnRate * 1.5707964f;
+    const float one = stepRoll(0.0f, 1.5707964f, 1.0f / 60.0f, true);
+    CHECK(one == Catch::Approx(target * (1.5707964f / 60.0f)));
+    // Not moving forward or back, four times as quick.
+    CHECK(stepRoll(0.0f, 1.5707964f, 1.0f / 60.0f, false) == Catch::Approx(4.0f * one));
+    // Converges, and a hard turn stops at 45 degrees.
+    float r = 0.0f;
+    for (int i = 0; i < 2000; ++i) r = stepRoll(r, 1.5707964f, 1.0f / 60.0f, true);
+    CHECK(r == Catch::Approx(target).margin(1e-4));
+    for (int i = 0; i < 2000; ++i) r = stepRoll(r, 20.0f, 1.0f / 60.0f, false);
+    CHECK(r == Catch::Approx(-kQuarterTurn));
+    // Turning right banks the other way.
+    CHECK(stepRoll(0.0f, -1.0f, 1.0f / 60.0f, true) > 0.0f);
+}

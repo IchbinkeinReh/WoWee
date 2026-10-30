@@ -59,6 +59,20 @@ struct Motion {
     return swimmingOrFlying && (m.forward || m.backward || std::abs(current) > kSnap);
 }
 
+/// The roll a flying player banks with as it turns (0x00719b80, flying
+/// only): toward -0.15 x the turn rate (radians a second), eased by
+/// dt x pi/2 - four times that when not moving forward or back - with dt
+/// held to 1/90 .. 1/20 s, and held to 45 degrees either way. Negative is
+/// the left side down, into a turn to the left.
+inline constexpr float kRollPerTurnRate = -0.15f;
+[[nodiscard]] inline float stepRoll(float current, float yawRate, float dt, bool forwardOrBack) {
+    const float target = kRollPerTurnRate * yawRate;
+    float k = std::clamp(dt, 1.0f / 90.0f, 0.05f) * 1.5707964f;
+    if (!forwardOrBack) k *= 4.0f;
+    k = std::clamp(k, 0.0f, 1.0f);
+    return std::clamp(current + k * (target - current), -kQuarterTurn, kQuarterTurn);
+}
+
 /// Another unit's tilt (0x00719a90): its movement pitch as its last packet
 /// gave it, taken at once - no easing - while it swims or flies and moves
 /// forward or back; level otherwise.

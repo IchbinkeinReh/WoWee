@@ -3214,11 +3214,24 @@ void Renderer::update(float deltaTime) {
                 characterSwimPitch_ = 0.0f;
             }
             const float tilt = swim_pitch::active(swimOrFly, motion, characterSwimPitch_) ? characterSwimPitch_ : 0.0f;
+            // Flying, it banks into a turn as well (swim_pitch::stepRoll),
+            // from how fast the body's yaw turned this frame.
+            const bool flyingNow = swimOrFly && (moveFlags & body_yaw::kFlying) != 0;
+            if (flyingNow && deltaTime > 0.0f) {
+                const float turned = body_yaw::wrap(characterBody_.body - characterRollYaw_);
+                characterRoll_ = swim_pitch::stepRoll(characterRoll_, turned / deltaTime, deltaTime,
+                                                      motion.forward || motion.backward);
+            } else {
+                characterRoll_ = 0.0f;
+            }
+            characterRollYaw_ = characterBody_.body;
+            const float roll = swim_pitch::active(swimOrFly, motion, characterSwimPitch_) || std::abs(characterRoll_) > 0.01f
+                                   ? characterRoll_ : 0.0f;
             // The model faces +X: a nose-up pitch turns it about its own Y
             // axis the negative way (CharacterRenderer::getModelMatrix's roll
             // slot, applied after the yaw).
             characterRenderer->setInstanceRotation(characterInstanceId,
-                                                   glm::vec3(0.0f, -tilt, characterBody_.body));
+                                                   glm::vec3(roll, -tilt, characterBody_.body));
         }
         characterRenderer->setInstanceTorsoYaw(characterInstanceId, body.spineYaw, body.headYaw);
 
