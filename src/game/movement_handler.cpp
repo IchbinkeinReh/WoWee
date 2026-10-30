@@ -774,7 +774,10 @@ void MovementHandler::sendMovement(Opcode opcode) {
             // A climb with flight allowed is a take-off, and the client is
             // the one that says so: FLYING goes out on this packet, not a
             // frame later. See setFlightAirborne for the landing.
-            if (movementInfo.flags & static_cast<uint32_t>(MovementFlags::CAN_FLY)) {
+            // Not from the water: a swimmer swims up (0x009898e0 keeps
+            // SWIMMING), and takes off only once out of it.
+            if ((movementInfo.flags & static_cast<uint32_t>(MovementFlags::CAN_FLY)) &&
+                !(movementInfo.flags & static_cast<uint32_t>(MovementFlags::SWIMMING))) {
                 movementInfo.flags |= static_cast<uint32_t>(MovementFlags::FLYING);
             }
             break;

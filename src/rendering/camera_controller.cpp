@@ -3744,13 +3744,25 @@ void CameraController::update(float deltaTime) {
         }
     }
 
-    // Flight ascend/descend transitions (Space = ascend, X = descend while mounted+flying)
+    // Ascend/descend transitions: Space climbs and X sinks while flying -
+    // X only mounted - and while swimming. The client starts and stops
+    // them for a mover swimming or flying (0x009898e0, 0x00989940:
+    // flags & 0x2200000), so a swimmer going up or down tells the server
+    // as a flyer does: MSG_MOVE_START_ASCEND, _START_DESCEND, _STOP_ASCEND.
     if (movementCallback && !externalFollow_) {
+        // Out of the water by a jump this frame: the fall's start cleared
+        // ascending with swimming (0x00988370), and nothing follows it.
+        if (swimJumpPending_) {
+            wasAscending_ = false;
+            wasDescending_ = false;
+        }
         const bool airborne = isFlightAirborne();
-        const bool nowAscending = airborne && spaceHeld && !moverNoStrafe_;
-        const bool nowDescending = airborne && xDown && mounted_ && !moverNoStrafe_;
+        const bool vertical = airborne || (swimming && !swimJumpPending_);
+        const bool nowAscending = vertical && spaceHeld && !moverNoStrafe_;
+        const bool nowDescending = vertical && !nowAscending && xDown && (mounted_ || swimming) &&
+                                   !moverNoStrafe_;
 
-        if (airborne) {
+        if (vertical) {
             if (nowAscending && !wasAscending_) {
                 movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_START_ASCEND));
             } else if (!nowAscending && wasAscending_) {
@@ -3763,7 +3775,7 @@ void CameraController::update(float deltaTime) {
                 movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_STOP_ASCEND));
             }
         } else {
-            // Left flight mode: clear any lingering vertical movement states
+            // Out of the air and the water: clear any lingering vertical movement states
             if (wasAscending_) {
                 movementCallback(static_cast<uint32_t>(game::Opcode::MSG_MOVE_STOP_ASCEND));
             } else if (wasDescending_) {
