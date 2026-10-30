@@ -3895,24 +3895,39 @@ void registerSocialLuaAPI(lua_State* L) {
                 // from the player-state change handler and from the 0x37a case
                 // of the packet dispatcher) reads one byte of the player's
                 // client-side object and branches on it - bit 0x10 set answers
-                // nought, bit 0x08 set with bit 14 of that object's flags dword
+                // nought, bit 0x08 set with bit 14 of that player's status dword
                 // clear starts a 360000 ms countdown, anything else answers -1.
                 // The countdown is then a tick stamp written by FUN_00513a30 and
-                // read back as (stamp - now) / 1000. Which byte that is and what
-                // the two bits mean is not named anywhere: four sites read it,
-                // no write of it turned up, and it is read only for the local
-                // player (0x0071c8f0 checks the handle first).
+                // read back as (stamp - now) / 1000.  Bit 14 of that dword is no
+                // longer unknown - it is the bit IsOutOfBounds below answers, and
+                // nothing in the binary raises it, so the branch comes down to
+                // bit 0x08 of the byte.  Which byte that is and what its bits
+                // mean is still not named anywhere: four sites read it, no write
+                // of it turned up, and it is read only for the local player
+                // (0x0071c8f0 checks the handle first).
                 {"GetReleaseTimeRemaining", [](lua_State* L) -> int {
             lua_pushnumber(L, -1); return 1;
         }},
                 // Asked from an OnUpdate, so this runs on every frame the
                 // popup is up rather than once.
                 //
-                // IsOutOfBounds decides whether the death popup shows the
-                // falling-to-your-death variant, and nothing here says which
-                // it is.
+                // The reference (0x006123c0) answers 1 or nil off one bit of the
+                // local player's own status dword, and that bit is this very API:
+                // taking every "shift and test one bit" of that dword in the
+                // decompile and naming the function around it through the
+                // client's method tables gives bit 1 AFK, 4 ghost, 5 resting, 9
+                // PvP-desired, 12 partial play time, 13 no play time, 14 out of
+                // bounds, 17 taxi benchmark, 18 the PvP timer, 25 XP disabled -
+                // state the client keeps for itself, not a field off the wire.
+                // No instruction carrying 0x4000 into that dword turned up, so in
+                // this build the bit is never raised and the reference answers
+                // nil.
+                //
+                // The one live caller negates it - staticpopup.lua's death popup
+                // asks `IsFalling() and not IsOutOfBounds()` - where nil and
+                // false read the same; nil is kept as the nearer answer.
                 {"IsOutOfBounds", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0); return 1;
+            lua_pushnil(L); return 1;
         }},
                 {"CheckTalentMasterDist", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
