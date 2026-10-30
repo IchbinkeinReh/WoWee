@@ -2701,6 +2701,16 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     if ((partyData.groupType & 0x1) == 0) {
         const bool raid = groupIsRaid(partyData.groupType);
         const uint32_t members = static_cast<uint32_t>(partyData.members.size());
+        // The raid count is written before the party's - 0x00572530 at
+        // 006d0000.c:6985, 0x0052bd60 at :6989 - and the conversion test below
+        // reads the counts as they were *before* this roster.  That is not the
+        // same as "the previous roster": the party emptier 0x0052d6e0 leaves
+        // DAT_00bd1998 alone (its tail at 00520000.c:10367-10377 zeroes the
+        // leader pair and the finder globals and nothing else), so a roster
+        // arriving over an existing party still sees that party's count, and
+        // only the party-store init zeroes it (FUN_0052d0e0, :10004).
+        const uint32_t prevPartyCount = realGroup_.partyCount;
+        const uint32_t prevRaidCount = realGroup_.raidCount;
         realGroup_.raidCount = raid ? (members == 0 ? 0u : members + 1u) : 0u;
         uint32_t party = members;
         if (raid) {
@@ -2709,6 +2719,20 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
         }
         if (party < 5) realGroup_.partyCount = party;
         realGroup_.leader = partyData.leaderGuid;
+        // PARTY_CONVERTED_TO_RAID (621), and 0x006d8870 is the only thing in the
+        // client that raises it.  The decision is taken one line before the raid
+        // count is written and says "a party that had no raid" (`DAT_00bd1998 !=
+        // 0 && DAT_00beb60c == 0` at :6974-6979 - the raid count has to be the
+        // *zero* one, which is what makes this a conversion rather than a raid
+        // that gained a member), and it is checked again against the count that
+        // was just written (:6986), so a raid of none answers nothing.  No
+        // arguments, before the party count is set, and well before the 181 the
+        // tail raises.  Who listens: the calendar's raid-invite button, which
+        // only learns there that the party-to-raid conversion landed and so can
+        // send the invites the party's size had dropped
+        // (blizzard_calendar.lua:4399, :4413).
+        if (raid && prevPartyCount != 0 && prevRaidCount == 0 && realGroup_.raidCount != 0)
+            owner_.fireAddonEvent("PARTY_CONVERTED_TO_RAID", {});
     }
     // The very next call of that same routine is 0x0052c0d0 with the type byte's
     // bit 2 (0x006d8870:6994), the group's *restriction* flag, and it fires
