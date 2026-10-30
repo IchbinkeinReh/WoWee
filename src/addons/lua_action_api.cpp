@@ -258,10 +258,14 @@ using game::pet::petSlotSpell;
 /// whose master is no hunter, answers false, and so does a pet whose creator this
 /// client never got a record for: a failed lookup is false, not unknown.
 ///
-/// Shared because both pet bindings ask it - HasPetUI directly, GetPetHappiness
-/// through the happiness row lookup at 0x0071f390, which is the same predicate
-/// again - and the happiness icon has to agree with what HasPetUI said about it.
-static bool hunterPetOf(game::GameHandler* gh, const game::Unit* pet) {
+/// Shared because more than one binding asks it - HasPetUI directly,
+/// GetPetHappiness through the happiness row lookup at 0x0071f390, which is the
+/// same predicate again, and GetUnitHealthModifier/GetUnitPowerModifier, whose
+/// answer of exactly one is this test and nothing else - and the happiness icon
+/// has to agree with what HasPetUI said about it. Declared in
+/// addons/lua_api_helpers.hpp, which is where the other cross-file pet answers
+/// live; the definition stays here, beside the pet bindings that started it.
+bool hunterPetOf(game::GameHandler* gh, const game::Unit* pet) {
     if (!gh || !pet) return false;
     const uint16_t number = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
     if (number == 0xFFFF || pet->getField(number) == 0) return false;

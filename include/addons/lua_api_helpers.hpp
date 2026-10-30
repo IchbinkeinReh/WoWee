@@ -45,6 +45,14 @@ uint32_t highestKnownRankByName(game::GameHandler* gh, const std::string& name);
 /// nothing happening.
 void openInterfaceQuestLog(game::GameHandler& gh, uint32_t questId);
 
+/// Whether this pet belongs to a hunter (0x0071b630) (lua_action_api.cpp).
+///
+/// Shared across the domain files now, not just within one: the pet bindings ask
+/// it, and so do GetUnitHealthModifier/GetUnitPowerModifier, whose answer of
+/// exactly one is the hunter leg of 0x0071b8d0 - the same predicate, written out
+/// again there rather than reached through happiness.
+bool hunterPetOf(game::GameHandler* gh, const game::Unit* pet);
+
 }  // namespace wowee::addons
 
 extern "C" {

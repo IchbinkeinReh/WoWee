@@ -2359,11 +2359,68 @@ static int lua_GetUnitManaRegenRateFromSpirit(lua_State* L) {
     return 1;
 }
 
-/// GetUnitMaxHealthModifier(unit) → the multiplier on maximum health. One,
-/// because nothing here modifies it - and one rather than zero because the
-/// sheet multiplies by it.
+/// Whether this expansion's field table can answer the pet question at all.
+///
+/// Every table here names UNIT_FIELD_PETNUMBER but cataclysm's, and a layout
+/// that does not cannot say whether a unit is anybody's pet. The two gates below
+/// ask this first and keep the answer these bindings gave before, rather than a
+/// "no" nothing in that layout supports - which matters most for the hunter leg,
+/// since hunterPetOf reads that same field and answers false when it has nowhere
+/// to read it from.
+static bool petFieldsNamed() {
+    return game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER) != 0xFFFF;
+}
+
+/// The gate the three modifier bindings share: the unit is the local player, or
+/// it carries UNIT_FIELD_PETNUMBER. Anything else answers **zero**, not the
+/// neutral one.
+///
+/// The client tests this identically in all three - 0x00612870, 0x006127f0 and
+/// 0x00612900 each read `FUN_004cee50(unit) || blob+0x114 != 0` before they
+/// consult anything. The first half is a guid compare: the eight bytes at the
+/// head of the object record against the current-player slot in thread-local
+/// storage. The second is petnumber, which is also why a warlock's voidwalker
+/// and a death knight's ghoul - neither numbered as a pet - get zero, and the
+/// pet paperdoll's stat tooltip for them says the stat changes nothing.
+static bool modifierTarget(game::GameHandler* gh, const game::Unit* unit) {
+    if (!unit) return false;
+    if (gh && unit->getGuid() == gh->getPlayerGuid()) return true;
+    if (!petFieldsNamed()) return true;
+    return unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER)) != 0;
+}
+
+/// GetUnitHealthModifier and GetUnitPowerModifier: one for a hunter's pet, zero
+/// for every other unit the gate admits, because those two are this client's
+/// whole answer - see the note by their registrations below. Asked of the local
+/// player it is zero as well, which is what the client answers: it goes on to a
+/// creature-template row keyed by the unit's entry, and a player has no entry.
+static double petStatModifier(game::GameHandler* gh, const game::Unit* unit) {
+    if (!petFieldsNamed()) return 1.0;
+    return modifierTarget(gh, unit) && hunterPetOf(gh, unit) ? 1.0 : 0.0;
+}
+
+/// GetUnitMaxHealthModifier(unit) → the multiplier on maximum health.
+///
+/// The unit's own UNIT_FIELD_MAXHEALTHMODIFIER as float bits, plus one:
+/// 0x00612870 is `*(float *)(field blob + 0x22c) + 1.0`, and the client's field
+/// metadata names the blob dword at 0x22c / 4 = 139 UNIT_FIELD_MAXHEALTHMODIFIER
+/// (the descriptor record at .data+0xac6698, whose second dword is the blob
+/// index; the enum comment works that blob dword into wire 145 and shows the
+/// contiguous run it sits at the top of). Whether a 3.3.5 realm writes the field
+/// at all is not settled here, and a field that never arrives reads zero, which
+/// is the one this binding used to answer outright - so what changes is a realm
+/// that does send one, and the character sheet's stamina line
+/// (paperdollframe.lua:280) multiplies by whatever comes back.
+///
+/// Zero for a unit the gate excludes, which is what the client pushes there.
 static int lua_GetUnitMaxHealthModifier(lua_State* L) {
-    lua_pushnumber(L, 1.0);
+    auto* gh = getGameHandler(L);
+    auto* unit = resolveUnit(L, luaL_optstring(L, 1, "player"));
+    if (!modifierTarget(gh, unit)) {
+        lua_pushnumber(L, 0.0);
+        return 1;
+    }
+    lua_pushnumber(L, fieldAsFloat(unit, game::UF::UNIT_FIELD_MAXHEALTHMODIFIER) + 1.0);
     return 1;
 }
 
@@ -4107,12 +4164,43 @@ void registerUnitLuaAPI(lua_State* L) {
                 // PetPaperDollFrame_SetStats and PetExpBar_Update run whenever
                 // it is shown, so with a pet out these raised on opening it.
                 //
-                // The two modifiers are multipliers, so one is the neutral
-                // answer; zero would have read as a pet with no health at all.
+                // 0x006127f0 (health) and 0x00612900 (power) are the same
+                // function eleven lines apart, and each answers 1.0 once the pet
+                // has a UNIT_FIELD_PETNUMBER and its UNIT_FIELD_CREATEDBY pair
+                // casts to a player reading class 3 in byte 1 of
+                // UNIT_FIELD_BYTES_0 - hunterPetOf again, the predicate HasPetUI
+                // and GetPetHappiness ask.
+                //
+                // Everything past that which is not a hunter's pet goes to a
+                // record read out of a DBC row cache by the unit's own key,
+                // taking the float at record+0x34 for health and +0x38 for power,
+                // and zero when there is no record. The key is the entry id: the
+                // other callers of that cache build it as `guid >> 0x18 | (guid &
+                // 0xfffff) << 8`, and the callee (0x0067b6a0, the one whose node
+                // label is "\AUDBCACHECALLBACK\") starts with `if (key == 0)
+                // return 0`, so a player - whose entry is zero - is answered out
+                // of the gate. Which table the rows come from is not pinned down
+                // here; the point is that a 3.3.5 client reads creature
+                // *templates* this way and neither dbc folder on this machine
+                // carries a table under a template name (245 files in the
+                // extracted set, 247 in the install's, and no Creature.dbc among
+                // them), so the record is not there and zero is what the original
+                // client answers on this data.
+                //
+                // Which is visible, and correctly so: the only FrameXML use is the
+                // stamina and intellect lines of the pet paperdoll's stat tooltip
+                // (petpaperdollframe.lua:588-594), so a warlock pet or a death
+                // knight's ghoul says its stamina changes nothing, exactly as the
+                // original does, while a hunter's pet - the pet that frame is
+                // built for - keeps answering one.
                 {"GetUnitHealthModifier",   [](lua_State* L) -> int {
-            lua_pushnumber(L, 1.0); return 1; }},
+            lua_pushnumber(L, petStatModifier(getGameHandler(L),
+                            resolveUnit(L, luaL_optstring(L, 1, "player"))));
+            return 1; }},
                 {"GetUnitPowerModifier",    [](lua_State* L) -> int {
-            lua_pushnumber(L, 1.0); return 1; }},
+            lua_pushnumber(L, petStatModifier(getGameHandler(L),
+                            resolveUnit(L, luaL_optstring(L, 1, "player"))));
+            return 1; }},
                 {"GetPetExperience", [](lua_State* L) -> int {
             // currXP, nextXP - off the pet unit's own fields, not the player's.
             auto* gh = getGameHandler(L);

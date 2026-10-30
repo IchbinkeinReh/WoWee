@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stubbed bindings that a handed-over element actually calls.
+r"""Stubbed bindings that a handed-over element actually calls.
 
 The readiness report counts a name as answered once it is bound, and a stub is
 bound - so `HasPetSpells -> lua_ReturnNil` read as clean while it was hiding
@@ -96,6 +96,37 @@ because WotLK has no skill points - skillframe.lua gates every purchase verb
 on it, which is why BuySkillTier and AddSkillUp are unreachable rather than
 unimplemented. GetCurrentMapDungeonLevel is zero because a map with no floors
 is on floor zero.
+
+THREE THAT WERE STUBS AND ARE NOT (2026-10-30)
+
+GetUnitHealthModifier, GetUnitPowerModifier and GetUnitMaxHealthModifier all
+answered a bare 1.0 and all three are answered from the unit now. The client
+gates them identically - the unit is the local player, or it has a
+UNIT_FIELD_PETNUMBER, and anything else pushes *zero* - and then: max health is
+the unit's own UNIT_FIELD_MAXHEALTHMODIFIER float plus one (0x00612870 at field
+blob +0x22c), and the other two answer one only for a hunter's pet. What is
+left unimplemented is the client's non-hunter leg: it reads a creature template
+out of a DBC row cache keyed by the unit's entry (0x0067b6a0, node label
+"\AUDBCACHECALLBACK\", key `guid >> 0x18 | (guid & 0xfffff) << 8`, and its
+first test is `key == 0` - which is why a player answers zero), and a 3.3.5
+install carries no table under a creature-template name for that cache to read,
+so zero is what this client answers as well.
+
+The multiplier field is a wire field after all; an earlier reading here had
+written it off as client-internal. The client's *unit* descriptor space runs
+contiguous from blob dword 0 up to 141 with no gaps, and its last three records
+name 139/140/141 MAXHEALTHMODIFIER, HOVERHEIGHT and PADDING - the three tail
+unit fields against UNIT_END at 148 - while the record below them,
+POWER_COST_MULTIPLIER at blob 132 covering seven dwords, is this repository's
+own "138". Two spaces are the trap: the *player* space has its own record at blob
+dword 139, and it is PLAYER_VISIBLE_ITEM_3_ENTRYID.
+
+Visible on the pet paperdoll's stat tooltip, whose only use these are: a
+warlock pet or a death knight's ghoul now says its stamina changes nothing,
+which is what the original client says, and a hunter's pet keeps its one.
+
+Recorded so the three are not re-triaged, and so the entry-keyed template cache
+is looked for by name next time rather than rediscovered.
 """
 import re
 import sys

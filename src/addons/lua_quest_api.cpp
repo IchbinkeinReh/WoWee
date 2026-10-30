@@ -4014,6 +4014,18 @@ void registerQuestLuaAPI(lua_State* L) {
                 gh->removeGlyphFromSocket(static_cast<uint32_t>(socket - 1));
             return 0;
         }},
+                // A bare literal, which reads like a stub and is not one: the
+                // original client's binding is a bare literal too. FUN_005b71e0
+                // is `FUN_0084e2a0(param_1, 0x4018000000000000); return 1;` -
+                // one number pushed, and 0x4018000000000000 is the double 6.0.
+                // So the count is not something the client works out of the
+                // GlyphSlot table; six is the answer for every class.
+                //
+                // And this interface never asks. The glyph frame's six slots are
+                // XML-declared buttons, and its only glyph calls are
+                // GetGlyphSocketInfo, so no Lua reaches this name - which is why
+                // the live-stubs sweep does not list it either. Written down so
+                // the literal is not triaged again.
                 {"GetNumGlyphSockets", [](lua_State* L) -> int {
             lua_pushnumber(L, game::GameHandler::MAX_GLYPH_SLOTS);
             return 1;

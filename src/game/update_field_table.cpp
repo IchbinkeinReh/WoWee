@@ -76,6 +76,7 @@ static const UFNameEntry kUFNames[] = {
     {.name = "UNIT_FIELD_NEGSTAT2", .field = UF::UNIT_FIELD_NEGSTAT2},
     {.name = "UNIT_FIELD_NEGSTAT3", .field = UF::UNIT_FIELD_NEGSTAT3},
     {.name = "UNIT_FIELD_NEGSTAT4", .field = UF::UNIT_FIELD_NEGSTAT4},
+    {.name = "UNIT_FIELD_MAXHEALTHMODIFIER", .field = UF::UNIT_FIELD_MAXHEALTHMODIFIER},
     {.name = "UNIT_END", .field = UF::UNIT_END},
     {.name = "UNIT_FIELD_ATTACK_POWER", .field = UF::UNIT_FIELD_ATTACK_POWER},
     {.name = "UNIT_FIELD_RANGED_ATTACK_POWER", .field = UF::UNIT_FIELD_RANGED_ATTACK_POWER},

@@ -54,6 +54,24 @@ enum class UF : uint16_t {
     UNIT_FIELD_STAT2,         // Stamina
     UNIT_FIELD_STAT3,         // Intellect
     UNIT_FIELD_STAT4,         // Spirit
+    /// How much the unit's health pool is scaled by, as float bits - its
+    /// descriptor record is value kind 3, which is float - and
+    /// GetUnitMaxHealthModifier (0x00612870) reads it as `+ 1.0` at blob
+    /// +0x22c, which is 139 * 4. Whether a 3.3.5 realm ever writes it is not
+    /// settled here; a field that never arrives reads zero, and zero plus one is
+    /// the one this binding used to answer unconditionally.
+    ///
+    /// Wire 145. The client's *unit* descriptor space runs contiguous from blob
+    /// dword 0 up to 141, no gaps, and its last three records name 139/140/141
+    /// MAXHEALTHMODIFIER, HOVERHEIGHT and PADDING, against UNIT_END at 148. The
+    /// record below it, POWER_COST_MULTIPLIER at blob 132 covering seven dwords,
+    /// is this table's own "UNIT_FIELD_POWER_COST_MULTIPLIER": 138 - so 145 is
+    /// the dword immediately past that array. Same blob-dword-plus-six rule
+    /// PETNUMBER (69/75), BYTES_0 (17/23), BYTES_1 (68/74) and MAXDAMAGE
+    /// (65/71) agree on; the six is the object space, which ends at blob 5.
+    /// Name the descriptor space before quoting a blob index - the *player*
+    /// space has its own record at 139, and it is PLAYER_VISIBLE_ITEM_3_ENTRYID.
+    UNIT_FIELD_MAXHEALTHMODIFIER,
     UNIT_END,
 
     // Unit combat fields (WotLK: PRIVATE+OWNER - only visible for the player character)
