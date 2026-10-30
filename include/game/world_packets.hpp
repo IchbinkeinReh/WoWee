@@ -770,6 +770,12 @@ enum class ChatType : uint8_t {
     // line in it (0x006d0e10, COMBATLOG_ARENAPOINTSAWARD).
     ARENA_POINTS = 0x32,
     PARTY_LEADER = 0x33,
+    // Also never sent: this is the type the client's own C code posts a raid
+    // mark notice as (0x0050b0f0 hands TARGET_ICON_SET to 0x00509dd0 with
+    // 0x34), and FrameXML's ChatTypeGroup["TARGETICONS"] turns it into
+    // CHAT_MSG_TARGETICONS. The line names its own player in a |Hplayer:|h
+    // link, which is why the chat frame prints it with no sender argument.
+    TARGETICONS = 0x34,
 };
 
 /**
@@ -1720,6 +1726,11 @@ struct RaidTargetUpdateData {
     /// True for the full list, which is authoritative: icons missing from it
     /// are unmarked. False for a single mark being set or cleared.
     bool fullList = false;
+    /// The player who placed the mark, for the single-set form only, and only
+    /// on a WotLK wire - classic/TBC/Turtle omit it, and it is 0 then. The
+    /// client needs it for the "X marks Y with [icon]" chat line (see
+    /// ChatType::TARGETICONS), which a full list never says.
+    uint64_t whoGuid = 0;
     /// icon index (0-7) -> marked GUID, 0 meaning the icon was cleared
     std::vector<std::pair<uint8_t, uint64_t>> marks;
 };

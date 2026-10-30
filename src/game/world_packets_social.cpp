@@ -332,6 +332,7 @@ const char* getChatTypeString(ChatType type) {
         case ChatType::BATTLENET: return "BATTLENET";
         case ChatType::ARENA_POINTS: return "ARENA_POINTS";
         case ChatType::PARTY_LEADER: return "PARTY_LEADER";
+        case ChatType::TARGETICONS: return "TARGETICONS";
         default: return "UNKNOWN";
     }
 }
@@ -1461,9 +1462,12 @@ bool RaidTargetUpdateParser::parse(network::Packet& packet, RaidTargetUpdateData
     // Single set. WotLK: whoGuid + icon + targetGuid (17 bytes); classic/TBC:
     // icon + targetGuid (9). Size tells them apart, so no expansion check is
     // needed and a server that differs from its era still decodes.
+    // The one pair the client reads after it is the mark, and the name of the
+    // player who placed it is what the client's own chat line is built from
+    // (0x0050b0f0), so it is kept rather than stepped over.
     const size_t remaining = packet.getRemainingSize();
     if (remaining >= 17) {
-        packet.readUInt64();  // whoGuid - who placed the mark, not needed
+        data.whoGuid = packet.readUInt64();
     } else if (remaining < 9) {
         return false;
     }

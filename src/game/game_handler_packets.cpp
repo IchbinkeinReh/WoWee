@@ -2072,6 +2072,31 @@ void GameHandler::registerCoreOpcodes() {
         LOG_DEBUG("MSG_RAID_TARGET_UPDATE: fullList=", rtu.fullList,
                   " marks=", rtu.marks.size());
         fireAddonEvent("RAID_TARGET_UPDATE", {});
+
+        // The line the original client makes for itself about a mark someone
+        // placed (0x0050b0f0): TARGET_ICON_SET from GlobalStrings, posted as
+        // chat type 0x34 with no sender argument, because the text carries its
+        // own |Hplayer:...|h[name]|h link and FrameXML's TARGETICONS branch
+        // prints arg1 verbatim. Said only for the single-set form (a full list
+        // is a resync, not an event), only when both the placer and the marked
+        // unit are named by the packet - a clear has no target - and not at all
+        // when the placer's name is not known: 0x0067d770 answers nothing for an
+        // unknown guid and the line is simply never made, so nothing is printed
+        // here either. The marked unit's name is what the client reads off its
+        // own handle for that guid, UNKNOWNOBJECT where there is none.
+        if (rtu.fullList || rtu.whoGuid == 0) return;
+        const std::string setter = lookupName(rtu.whoGuid);
+        if (setter.empty()) return;
+        for (const auto& [icon, guid] : rtu.marks) {
+            if (guid == 0) continue;
+            std::string target = lookupName(guid);
+            if (target.empty()) target = interfaceString("UNKNOWNOBJECT", "Unknown");
+            addLocalChatLine(ChatType::TARGETICONS,
+                interfaceFormat("TARGET_ICON_SET",
+                                "|Hplayer:%1$s|h[%2$s]|h marks %4$s with "
+                                "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_%3$d:0|t.",
+                                {setter, setter, std::to_string(icon + 1), target}));
+        }
     };
 
     // ---- SMSG_CRITERIA_UPDATE ----
