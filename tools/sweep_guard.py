@@ -238,6 +238,13 @@ CHECKS = [
     # (build metadata on Binding, an async-load hint). The one that came out
     # was motionScriptsWhileDisabled, which was not inert: nothing here ever
     # suppressed motion scripts, so every greyed control answered the mouse.
+    #
+    # The check splits that list when the decompile's strings.tsv is its second
+    # argument: five of the fourteen - the two Minimap model attributes and the
+    # three XML namespace ones - are names the 12340 client carries nothing for,
+    # so that client never read them out of the XML either and they are printed
+    # apart. This table runs every sweep with no arguments, so the number checked
+    # here is the unsplit fourteen; the ceiling is against that, not the nine.
     ("declared_vs_read_check.py",
      r"attributes declared, (\d+) the emitter never names", 16,
      "XML attributes the emitter never reads"),
@@ -259,7 +266,11 @@ CHECKS = [
     # Two, and both named: the chat box's input language, which the binding
     # beside it says outright that nothing fires yet, and the tooltip's default
     # anchor. Everything else that once appeared here was the sweep's own
-    # blindness - see the comments in the check.
+    # blindness - see the comments in the check. It read three again for a
+    # moment over OnFinished, which is fired from Lua bootstrap text inside a
+    # .cpp through a runner that takes the name quoted
+    # (`__WoweeRunScriptSlot(a, 'OnFinished')`); the check did not know that
+    # shape, and a sweep blind to one runner reports the whole family dead.
     ("declared_vs_read_check.py",
      r"^(\d+) script type\(s\) declared and never fired", 2,
      "script handlers FrameXML declares that nothing fires"),
