@@ -34,6 +34,9 @@ concurrency:
 
 jobs:
   build:
+    # The site is the upstream project's (kelsidavis.github.io/WoWee); a fork
+    # without Pages switched on only gets a red run from it.
+    if: github.repository == 'kelsidavis/WoWee'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
