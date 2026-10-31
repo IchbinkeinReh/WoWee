@@ -42,6 +42,7 @@
 #include "game/bg_score_defs.hpp"
 #include "game/calendar_month.hpp"
 #include "game/calendar_data.hpp"
+#include "game/lfg_update.hpp"
 #include "game/pet_action.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/ambient_sound_manager.hpp"
@@ -5322,15 +5323,24 @@ static int lua_HasLFGRestrictions(lua_State* L) {
 
 // GetLFGProposal() → proposalExists, typeID, id, name, texture, role,
 //                    hasResponded, totalEncounters, completedEncounters,
-//                    numMembers, isLeader
+//                    numMembers, isLeader, isHoliday
 //
-// Eleven values whether or not there is a proposal: lfdframe reads the eighth
-// on its own with select(8, GetLFGProposal()), and a short return makes that
-// an error rather than an answer of "none".
+// Twelve values, which is what the client returns (0x00554170, `return 0xc`).
+// The count matters twice over: lfdframe reads the eighth and the twelfth to
+// themselves with select(), and a return short of those is an error there and
+// not an answer of "none".  The client answers nothing at all when no proposal
+// is pending - so every caller has to test the first value before it touches
+// another - but each caller in the interface does exactly that, which is why
+// the twelve nils here are only a stand-in for a call FrameXML never makes.
+//
+// The tenth is WoWee's own: the client pushes the constant 5.0 (0x00554170:3510)
+// and lets GetLFGProposalMember answer nil for the empty seats of a five-seat
+// offer.  The real count is the same answer for a full party and a shorter loop
+// for anything else.
 static int lua_GetLFGProposal(lua_State* L) {
     auto* gh = getGameHandler(L);
     const bool pending = gh && gh->getLfgState() == game::LfgState::Proposal;
-    if (!pending) { for (int i = 0; i < 11; ++i) lua_pushnil(L); return 11; }
+    if (!pending) { for (int i = 0; i < 12; ++i) lua_pushnil(L); return 12; }
 
     // Nils here are not survivable, which only showed once the dialog could
     // actually open. LFDDungeonReadyPopup_Update builds a path with
@@ -5344,9 +5354,23 @@ static int lua_GetLFGProposal(lua_State* L) {
         if (d.id == dungeonId) { dungeon = &d; break; }
     }
 
-    // The role the player queued as. The dialog names it and picks its icon
-    // from it, and these are the tokens GetTexCoordsForRole indexes by.
-    const uint8_t roles = gh->getLfgOfferedRoles();
+    // The role the player has in the offered party, which is what the dialog
+    // names and icons: the client scans the proposal's own member rows for the
+    // one flagged self and reads that row's mask (0x00554170:3470-3484).  Not
+    // the local role selection, which is what this read until now - the two
+    // differ for a pre-made party, whose members are offered the role each of
+    // them walks in with rather than what each had ticked in the queue.  The
+    // selection stays as the fallback for a proposal that carries no self row,
+    // which is the case the client's scan leaves a leftover in.
+    const auto& members = gh->getLfgProposalMembers();
+    const auto self = std::find_if(members.begin(), members.end(),
+                                   [](const game::LfgProposalMember& m) { return m.isSelf; });
+    const uint32_t roles = self != members.end() ? self->role
+                                                 : gh->getLfgOfferedRoles();
+    // The same mask's bit 0 is the group leader, which is why the client tests
+    // 2/4/8 for the three role names and 1 on its own for its eleventh value
+    // (0x00554170:3480, :3511).  lfdframe.lua:541 draws the leader mark with it.
+    const bool isLeader = (roles & 0x01) != 0;
     const char* role = (roles & 0x02) ? "TANK"
                      : (roles & 0x04) ? "HEALER"
                                       : "DAMAGER";
@@ -5363,17 +5387,51 @@ static int lua_GetLFGProposal(lua_State* L) {
     lua_pushstring(L, dungeon ? dungeon->texture.c_str() : "");  // 5: texture
     lua_pushstring(L, role);                                     // 6: role
     lua_pushboolean(L, 0);                                       // 7: hasResponded
-    // Encounter progress is not parsed out of the proposal, and zero is the
-    // honest answer - it reads as "nothing cleared yet", which is what a fresh
-    // pop is, and keeps the dialog off its in-progress layout.
-    lua_pushnumber(L, 0);                                        // 8: totalEncounters
-    lua_pushnumber(L, 0);                                        // 9: completedEncounters
+    // Bosses there are and bosses done. The client derives both rather than
+    // reading them: it walks DungeonEncounter.dbc for the offered dungeon's map
+    // and difficulty and counts the rows against the mask the proposal carries
+    // (0x00554170:3483-3500, the same walk countLfgEncounters makes for the raid
+    // browser). Two kinds of row skip that walk - a "Random" row answers nought
+    // bosses, and one with flag bit 2 set, which is the four holiday rows and
+    // nothing else, answers exactly one - and both spell "done" as "the mask is
+    // not empty", so a holiday offer reads as cleared or not rather than partly
+    // cleared. Nothing is answered for either number without an LFGDungeons row
+    // to walk from, which is what the client's own early return leaves the pair
+    // as: nought, since the values are pushed as numbers and not nils.
+    //
+    // These two are what the ready dialog draws its "Bosses Killed: %d of %d"
+    // line from (lfdframe.lua:478,534) and what bounds the boss list its tooltip
+    // builds, so while they were both nought the tooltip was skipped by its own
+    // `if ( numBosses == 0 … )` and GetLFGProposalEncounter never ran.
+    uint32_t totalEncounters = 0, doneEncounters = 0;
+    const uint32_t doneMask = gh->getLfgProposalEncountersDone();
+    if (dungeon) {
+        if (dungeon->typeId == static_cast<uint32_t>(game::LfgTypeId::Random)) {
+            doneEncounters = doneMask != 0 ? 1u : 0u;
+        } else if ((dungeon->flags & 0x04) != 0) {
+            totalEncounters = 1;
+            doneEncounters  = doneMask != 0 ? 1u : 0u;
+        } else {
+            const auto counts = game::countLfgEncounters(gh->getDungeonEncounters(),
+                                                         dungeon->mapId, dungeon->difficulty,
+                                                         doneMask);
+            totalEncounters = counts.total;
+            doneEncounters  = counts.complete;
+        }
+    }
+    lua_pushnumber(L, totalEncounters);                          // 8: totalEncounters
+    lua_pushnumber(L, doneEncounters);                           // 9: completedEncounters
     // The real count now that the roster is parsed - each row is a role icon
     // and a tick, both of which GetLFGProposalMember can answer.
     lua_pushnumber(L, static_cast<double>(gh->getLfgProposalMembers().size()));  // 10
 
-    lua_pushboolean(L, 0);                                       // 11: isLeader
-    return 11;
+    lua_pushboolean(L, isLeader ? 1 : 0);                        // 11: isLeader
+    // Whether this is one of the four seasonal bosses. The client answers it off
+    // flag bit 2 of the dungeon's own row (0x00554170:3505); lfdframe.lua reads
+    // it as the twelfth value and drops the boss tooltip for those offers,
+    // whose single "boss" is not a boss at all.
+    lua_pushboolean(L, dungeon && (dungeon->flags & 0x04) != 0);  // 12: isHoliday
+    return 12;
 }
 
 // GetLFGInfoServer() → inParty, joined, queued, noPartialClear, achievements,

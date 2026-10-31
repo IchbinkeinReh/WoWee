@@ -427,6 +427,13 @@ struct LfgCompletionReward {
 struct LfgDungeon {
     uint32_t id = 0;
     std::string name;
+    /// The flag column between difficulty and type (field 25). Three values in
+    /// this file: nought on the raid and zone rows, three on the dungeon,
+    /// heroic and random rows, and fifteen on the four holiday rows. Bit 2 of it
+    /// is what the client tests to decide a dungeon has one boss rather than a
+    /// list of them (0x00554170:3487 and 3505), and the rows carrying it are
+    /// exactly the groupId 11 four - the same set as `isHoliday` below.
+    uint32_t flags = 0;
     uint32_t minLevel = 0;
     uint32_t maxLevel = 0;
     uint32_t recLevel = 0;      // target level

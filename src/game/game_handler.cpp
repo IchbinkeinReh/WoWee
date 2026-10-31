@@ -3421,14 +3421,20 @@ void GameHandler::loadLfgDungeonDbc() const {
     // grouped with the Burning Crusade raids.
     constexpr uint32_t kMinLevel = 18, kMaxLevel = 19, kTargetLevel = 20;
     constexpr uint32_t kTargetMin = 21, kTargetMax = 22, kMapId = 23;
-    constexpr uint32_t kDifficulty = 24, kTypeId = 26, kFaction = 27;
+    constexpr uint32_t kDifficulty = 24, kFlags = 25, kTypeId = 26, kFaction = 27;
     constexpr uint32_t kTexture = 28, kExpansion = 29, kOrderIndex = 30, kGroupId = 31;
     // 32 through 48 are the description in each locale. Only the holiday rows
     // and a handful of others carry one.
     constexpr uint32_t kDescription = 32;
     // Group 11 is the four seasonal bosses - the Headless Horseman, Ahune,
-    // Coren Direbrew and the Crown Chemical Co. - and nothing else. The file
-    // has no holiday flag of its own; the group is the flag.
+    // Coren Direbrew and the Crown Chemical Co. - and nothing else.
+    //
+    // This used to read "the file has no holiday flag of its own; the group is
+    // the flag", which is wrong: field 25 is a flag column, and bit 2 of it is
+    // set on rows 285-288 and on no other row - the very four that group 11
+    // names. Both spell the same set here, so the group stays the one the
+    // pickers use and the flag is kept for the client's own test, which reads
+    // the bit and not the group (0x00554170:3487).
     constexpr uint32_t kHolidayGroup = 11;
     const bool wideEnough = dbc->getFieldCount() > kGroupId;
     if (!wideEnough) {
@@ -3454,6 +3460,7 @@ void GameHandler::loadLfgDungeonDbc() const {
         d.maxRecLevel = dbc->getUInt32(i, kTargetMax);
         d.mapId       = dbc->getUInt32(i, kMapId);
         d.difficulty  = dbc->getUInt32(i, kDifficulty);
+        d.flags       = dbc->getUInt32(i, kFlags);
         d.typeId      = dbc->getUInt32(i, kTypeId);
         d.faction     = static_cast<int32_t>(dbc->getUInt32(i, kFaction));
         d.texture     = dbc->getString(i, kTexture);
@@ -5090,6 +5097,14 @@ bool GameHandler::isLfgInDungeon() const {
 
 uint32_t GameHandler::getLfgDungeonId() const {
     return socialHandler_ ? socialHandler_->getLfgDungeonId() : 0;
+}
+
+uint32_t GameHandler::getLfgProposalDungeonId() const {
+    return socialHandler_ ? socialHandler_->getLfgProposalDungeonId() : 0;
+}
+
+uint32_t GameHandler::getLfgProposalEncountersDone() const {
+    return socialHandler_ ? socialHandler_->getLfgProposalEncountersDone() : 0;
 }
 
 uint32_t GameHandler::getLfgJoinedListId() const {

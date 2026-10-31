@@ -96,6 +96,18 @@ const game::LfgDungeon* browserDungeon(game::GameHandler* gh) {
     return nullptr;
 }
 
+/// One row of LFGDungeons.dbc by its id - the lookup the client's store does for
+/// the same three names, which bounds the id before it indexes its pointer array
+/// (0x00554380:3546-3549 reading 0x00ad4050/0x00ad404c/0x00ad4060). Null when the
+/// file has no such row, which is also what an id of nought means.
+const game::LfgDungeon* lfgDungeonById(game::GameHandler* gh, uint32_t id) {
+    if (gh == nullptr || id == 0) return nullptr;
+    for (const auto& d : gh->getLfgDungeons()) {
+        if (d.id == id) return &d;
+    }
+    return nullptr;
+}
+
 /// The dungeon finder lists dungeons and the raid browser lists raids, so each
 /// asks for its own half of the same file.
 bool isDungeonSide(const game::LfgDungeon& d) {
@@ -616,20 +628,82 @@ void registerLfgLuaAPI(lua_State* L) {
         const auto& members = gh->getLfgProposalMembers();
         if (index > static_cast<int>(members.size())) return luaReturnNil(L);
         const auto& m = members[static_cast<size_t>(index) - 1];
-        lua_pushboolean(L, 0);                       // 1: isLeader - not sent
+        // The group leader of the offered party, which is not a separate field:
+        // it is bit 0 of the very mask the next value's name comes from
+        // (0x00553000:2519 pushes `roles & 1`, then tests 2/4/8 for the token).
+        lua_pushboolean(L, (m.role & 0x01) ? 1 : 0);  // 1: isLeader
         // The same tokens GetTexCoordsForRole indexes by. The mask is the one
         // SetLFGRoles sends: 2 tank, 4 healer, 8 damage.
         lua_pushstring(L, (m.role & 0x02) ? "TANK"
                         : (m.role & 0x04) ? "HEALER"
                                           : "DAMAGER");   // 2: role
-        lua_pushnil(L);                              // 3: level - not sent
+        // Nought rather than nil, which is what the client answers here
+        // (0x00553000:2527) while leaving the two strings nil: the packet has no
+        // level either, but this one is read as a number by its callers.
+        lua_pushnumber(L, 0);                        // 3: level - not sent
         lua_pushboolean(L, m.answered ? 1 : 0);      // 4: responded
         lua_pushboolean(L, m.accepted ? 1 : 0);      // 5: accepted
         lua_pushnil(L);                              // 6: name - not sent
         lua_pushnil(L);                              // 7: class - not sent
         return 7;
     }},
-    {"GetLFGProposalEncounter", [](lua_State* L) -> int { return luaReturnNil(L); }},
+    // GetLFGProposalEncounter(index) (0x00554440 -> 0x00554380) - one boss of
+    // the dungeon being offered, by its position in DungeonEncounter.dbc. The
+    // client takes the proposal's own slot dword (0x00bea980), masks its type
+    // byte off to get the LFGDungeons row, reads that row's map and difficulty
+    // (record +0x1c and +0x20, the pair the raid browser hands the same table),
+    // and counts that many bosses down out of the encounter table - the walk
+    // lfgEncounterAt already makes, and the third value the mask bit test at
+    // 0x005538b0:3062 does. With no proposal, or with a dungeon the DBC has no
+    // row for, it runs the identical walk with map, difficulty and index all
+    // nought (0x00554380:3553), which matches no row and answers three nils;
+    // that call is reproduced rather than short-circuited so the answer stays
+    // the client's own even if the table ever names map nought.
+    //
+    // The number is required - the client raises "Usage:
+    // GetLFGProposalEncounter(index)" without it (0x00554380:3533) - and a
+    // non-number is what the arg check accepts and the number read turns into
+    // nought, which is the walk past the end of the list.
+    //
+    // The loop this feeds is lfdframe.lua:647-666, and it bounds itself: the
+    // count comes from select(8, GetLFGProposal()), the twelfth value is the
+    // holiday flag, and the handler returns at once when the count is nought or
+    // the flag is set.  So while the eighth was hardcoded this call was dead
+    // rather than wrong - a zero count and a nil name agree with each other -
+    // and only the pair being off together made the proposal's tooltip list no
+    // bosses at all while the raid browser's (SearchLFGGetEncounterResults, over
+    // there) listed them fine.  Nothing else has to arrive first for it to run:
+    // there is no separate boss-count name anywhere, neither in the interface nor
+    // in the binary - GetLFGBosses is not even a string in the executable - and
+    // the count is one of the values above, derived from the same two tables.
+    {"GetLFGProposalEncounter", [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        if (!gh || !lua_isnumber(L, 1))
+            return luaL_error(L, "Usage: GetLFGProposalEncounter(index)");
+        const lua_Integer index = static_cast<lua_Integer>(lua_tonumber(L, 1));
+        const game::LfgDungeon* dungeon
+            = lfgDungeonById(gh, gh->getLfgProposalDungeonId());
+        const uint32_t mapId   = dungeon ? dungeon->mapId        : 0;
+        const uint32_t diff    = dungeon ? dungeon->difficulty   : 0;
+        const uint32_t mask    = dungeon ? gh->getLfgProposalEncountersDone() : 0;
+        // index - 1 as the client passes it, an int counting down: nought or
+        // less counts past the end and answers nothing.
+        const uint32_t which   = dungeon ? static_cast<uint32_t>(index - 1) : 0u;
+        const auto* boss = game::lfgEncounterAt(gh->getDungeonEncounters(),
+                                                mapId, diff, which);
+        if (!boss) {
+            lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+            return 3;
+        }
+        lua_pushstring(L, boss->name.c_str());                   // 1: name
+        // Nil, which is the client's own answer: the spell-icon column of the
+        // DungeonEncounter.dbc on disk is zero in every row, so its lookup
+        // resolves to nothing (0x005538b0:3050-3059, over in the note above
+        // SearchLFGGetEncounterResults).
+        lua_pushnil(L);                                        // 2: texture
+        lua_pushboolean(L, game::lfgEncounterDone(mask, *boss) ? 1 : 0);   // 3: isKilled
+        return 3;
+    }},
     // GetLFGBootProposal() → inProgress, didVote, myVote, targetName,
     //                          totalVotes, bootVotes, timeLeft, reason
     //

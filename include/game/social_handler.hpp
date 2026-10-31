@@ -688,6 +688,17 @@ public:
     [[nodiscard]] uint32_t getLfgDungeonId()       const { return lfgDungeonId_; }
     [[nodiscard]] std::string getCurrentLfgDungeonName() const;
     [[nodiscard]] uint32_t getLfgProposalId()      const { return lfgProposalId_; }
+    /// The proposal's own dungeon, its entry with the type byte masked off. Not
+    /// the same field as `getLfgDungeonId()`, which the queue status, the role
+    /// check and the search results move as well: 0x00bea980 is written by the
+    /// proposal packet alone and cleared with the rest of the proposal, and the
+    /// boss tooltip reads that one (0x00554380).
+    [[nodiscard]] uint32_t getLfgProposalDungeonId() const { return lfgProposalDungeonId_; }
+    /// Which bosses of that dungeon the party has already done. The proposal
+    /// carries it as a dword behind its id - "Completed Mask" in the client's
+    /// own LFGMessage line for this packet - and the tooltip tests one bit per
+    /// encounter against it (0x005538b0:3062).
+    [[nodiscard]] uint32_t getLfgProposalEncountersDone() const { return lfgProposalEncountersDone_; }
     [[nodiscard]] int32_t  getLfgAvgWaitSec()      const { return lfgAvgWaitSec_; }
     /// This player's own estimate, in seconds, or -1 while the server has none.
     [[nodiscard]] int32_t  getLfgMyWaitSec()       const { return lfgMyWaitSec_; }
@@ -1044,6 +1055,12 @@ private:
     LfgCompletionReward lfgCompletionReward_;
     uint32_t lfgDungeonId_    = 0;
     uint32_t lfgProposalId_   = 0;
+    /// The proposal block's own dungeon (0x00bea980, low twenty-four bits) and
+    /// its completed-encounter mask (0x00bea98c). Held beside the proposal
+    /// rather than folded into lfgDungeonId_, which follows four packets and not
+    /// this one - see the two getters above.
+    uint32_t lfgProposalDungeonId_      = 0;
+    uint32_t lfgProposalEncountersDone_ = 0;
     /// The proposal the ready dialog has already been opened for. The server
     /// resends the update as each member answers, and opening again would
     /// reset the countdown and the ticks beside every name.

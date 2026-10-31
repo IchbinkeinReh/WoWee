@@ -2721,6 +2721,11 @@ public:
     /// waiting on it — see SocialHandler::onLfgNameAnswered for what it does.
     void onLfgNameAnswered(uint64_t guid);
     uint32_t getLfgProposalId() const;
+    /// The proposal's dungeon and the bosses of it already done, both read off
+    /// the proposal packet itself - see SocialHandler's two fields for why they
+    /// are kept apart from getLfgDungeonId().
+    uint32_t getLfgProposalDungeonId() const;
+    uint32_t getLfgProposalEncountersDone() const;
     uint8_t  getLfgOfferedRoles() const;
     const std::vector<LfgProposalMember>& getLfgProposalMembers() const;
     const std::unordered_map<uint32_t, uint32_t>& getLfgLocks() const;

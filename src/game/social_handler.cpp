@@ -4881,6 +4881,13 @@ void SocialHandler::handleLfgProposalUpdate(network::Packet& packet) {
     }
     lfgDungeonId_ = dungeonId;
     lfgProposalId_ = proposal.id;
+    // The proposal's own copy of both, which is what the boss tooltip under the
+    // ready dialog reads: 0x00bea980 and 0x00bea98c, written here and cleared
+    // with the proposal. lfgDungeonId_ says which dungeon the player is queued
+    // for, which is a different question whenever a role check or a queue
+    // update has spoken since.
+    lfgProposalDungeonId_ = dungeonId;
+    lfgProposalEncountersDone_ = proposal.encountersDone;
     // Held until a decline below or a queue update ends it (0x0055bdc0,
     // cases 0x361, 0x367, 0x368).
     lfgProposalValid_ = proposal.dungeonEntry != 0;
@@ -4934,6 +4941,11 @@ void SocialHandler::leaveLfgGroup() {
 void SocialHandler::clearLfgProposal() {
     lfgProposalValid_ = false;
     lfgProposalId_ = 0;
+    // The whole proposal block goes, mask and dungeon with it (0x0055bdc0 clears
+    // 0x00bea980 through 0x00bea990 together, and 0x0055d440 does the same on
+    // the way out) - otherwise a boss list outlives the offer it belonged to.
+    lfgProposalDungeonId_ = 0;
+    lfgProposalEncountersDone_ = 0;
     lfgProposalMembers_.clear();
 }
 
@@ -6020,6 +6032,8 @@ void SocialHandler::resetForWorldEntry() {
     lfgProposalId_ = 0;
     shownProposalId_ = 0;
     lfgProposalValid_ = false;
+    lfgProposalDungeonId_ = 0;
+    lfgProposalEncountersDone_ = 0;
     lfgPlayerUpdate_ = LfgUpdateBody{};
     lfgPartyUpdate_ = LfgUpdateBody{};
     lfgPartyLocks_.clear();
