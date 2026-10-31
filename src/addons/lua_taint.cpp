@@ -60,21 +60,75 @@ void leaveScope() {
     if (s.scope < 1) s.scope = 0;
 }
 
-int passErrorThrough(lua_State*) { return 1; }
+// The handler seterrorhandler installed, kept as a reference in the registry
+// and nothing else - the client holds the same thing in DAT_00af5770, and
+// geterrorhandler (0x00817420) is a rawgeti of that one number. The state the
+// reference belongs to is part of the pair: a client that tears the interface
+// down and builds it again builds a new lua_State in which that number names
+// something else or nothing at all.
+lua_State* gHandlerState = nullptr;
+int gHandlerRef = LUA_NOREF;
 
-/// The error handler seterrorhandler installed, or nothing to call.
-///
-/// The client keeps it in a registry reference (DAT_00af576c) and hands it to
-/// every pcall it makes for a script. Here seterrorhandler is the
-/// interface's own, so the handler is asked for through geterrorhandler.
-void pushErrorHandler(lua_State* L) {
-    Quiet quiet;
-    lua_pushstring(L, "geterrorhandler");
-    lua_rawget(L, LUA_GLOBALSINDEX);
-    if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_isfunction(L, -1))
-        return;
-    lua_pop(L, 1);
-    lua_pushcfunction(L, passErrorThrough);
+}  // namespace
+
+int scriptErrorHandler(lua_State* L) {
+    // 0x00819730, the one C function the client refers to once when the state
+    // is made (DAT_00af576c) and hands to every script call it protects. A
+    // message that is not a string - a script that error()ed a table or a
+    // number - is said as "UNKNOWN ERROR"; then whatever handler
+    // seterrorhandler installed runs over the message, and what it returns is
+    // the message the dispatch reports.
+    //
+    // FrameXML installs that handler itself (basiccontrols.xml:
+    // _ERRORMESSAGE), and that is where a script error becomes something on
+    // the screen: under the scriptErrors cvar it puts the text in
+    // BasicScriptErrors and counts them, and at the thousandth it shows
+    // TOO_MANY_LUA_ERRORS instead. The cvar is registered "0" (0x0051dd63), so
+    // none of that is on until the interface is asked for errors - but nothing
+    // here reached the handler at all, so asking changed nothing: the message
+    // went to the log and nowhere else.
+    //
+    // The client calls its handler unprotected, from inside Lua's own error
+    // handling; one that breaks there leaves Lua's "error in error handling"
+    // behind, which costs the destructors of the taint brackets around the
+    // script that broke. A pcall is given here instead: a handler that breaks
+    // says so as its own error, and those brackets still close on the way out.
+    if (!lua_isstring(L, -1)) {
+        lua_pushstring(L, "UNKNOWN ERROR");
+        lua_replace(L, -2);
+    }
+    if (gHandlerState != L || gHandlerRef == LUA_NOREF) return 1;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, gHandlerRef);
+    lua_insert(L, -2);            // the handler goes under the message
+    lua_pcall(L, 1, 1, 0);        // the handler's return takes its place
+    return 1;
+}
+
+namespace {
+
+// seterrorhandler(errfunc) (0x008173c0): the reference is dropped and the new
+// one taken, and only a function is accepted - the client's own complaint
+// otherwise, word for word.
+int lua_seterrorhandler(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TFUNCTION)
+        return luaL_error(L, "Usage: seterrorhandler(errfunc)");
+    Quiet quiet;                  // luaL_ref neither taints nor is tainted
+    if (gHandlerState == L && gHandlerRef != LUA_NOREF)
+        luaL_unref(L, LUA_REGISTRYINDEX, gHandlerRef);
+    lua_pushvalue(L, 1);
+    gHandlerState = L;
+    gHandlerRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    return 0;
+}
+
+// geterrorhandler() (0x00817420) - nil while nobody has installed one, as it
+// is until the interface loads.
+int lua_geterrorhandler(lua_State* L) {
+    if (gHandlerState == L && gHandlerRef != LUA_NOREF)
+        lua_rawgeti(L, LUA_REGISTRYINDEX, gHandlerRef);
+    else
+        lua_pushnil(L);
+    return 1;
 }
 
 }  // namespace
@@ -146,14 +200,30 @@ int pcallHandler(lua_State* L, int nargs, int nresults, int errfunc) {
     Scope outer(0);       // 0x0048ec10
     Scope inner(record);  // 0x00819ea0
     adoptArguments(L, nargs, record);
-    return lua_pcall(L, nargs, nresults, errfunc);
+    return callProtected(L, nargs, nresults, errfunc);
+}
+
+int callProtected(lua_State* L, int nargs, int nresults, int errfunc) {
+    // A caller that names no message handler gets the client's own: 0x00819ea0
+    // puts DAT_00af576c - 0x00819730, held as a reference - under the function
+    // and calls with -(nargs + 2) as its errfunc, so the handler runs while the
+    // brackets above are still open and sees the stack that broke. The slot
+    // comes back off afterwards: lua_pcall leaves the handler where it was for
+    // the next call, and every caller of this one counts the stack around its
+    // own.
+    if (errfunc != 0) return lua_pcall(L, nargs, nresults, errfunc);
+    lua_pushcfunction(L, scriptErrorHandler);
+    const int slot = lua_gettop(L);
+    const int rc = lua_pcall(L, nargs, nresults, slot);
+    lua_remove(L, slot);
+    return rc;
 }
 
 void execute(lua_State* L, const char* text, const char* chunkName, int taint) {
     if (!L || !text) return;
     Scope scope(taint);
     const int base = lua_gettop(L);
-    pushErrorHandler(L);
+    lua_pushcfunction(L, scriptErrorHandler);
     if (luaL_loadbuffer(L, text, std::strlen(text), chunkName ? chunkName : text) == 0)
         lua_pcall(L, 0, 0, base + 1);
     else
@@ -334,7 +404,7 @@ int lua_securecall(lua_State* L) {
             lua_insert(L, 1);
         }
         if (lua_gettop(L) == 0) lua_pushnil(L);
-        pushErrorHandler(L);
+        lua_pushcfunction(L, scriptErrorHandler);
         lua_insert(L, 1);
         if (lua_pcall(L, lua_gettop(L) - 2, LUA_MULTRET, 1) == 0) lua_remove(L, 1);
         else lua_settop(L, -3);
@@ -398,7 +468,7 @@ int lua_SecureHookWrapper(lua_State* L) {
     ts().scope += 1;
     lua_pushvalue(L, lua_upvalueindex(2));
     lua_insert(L, results + 1);
-    pushErrorHandler(L);
+    lua_pushcfunction(L, scriptErrorHandler);
     lua_insert(L, results + 1);
     if (lua_pcall(L, n, 0, results + 1) == 0) lua_settop(L, -2);
     else lua_settop(L, -3);
@@ -413,6 +483,12 @@ void registerLuaApi(lua_State* L) {
     lua_register(L, "forceinsecure", lua_forceinsecure);
     lua_register(L, "securecall", lua_securecall);
     lua_register(L, "hooksecurefunc", lua_hooksecurefunc);
+    // Registered here rather than defined in the bootstrap chunk because the
+    // client's pair (0x008173c0, 0x00817420 - next to scrub and debugstack in
+    // the table at 0x00a44458) is what holds the handler, as a reference: the
+    // handler this file hands to every script call is the one they store.
+    lua_register(L, "seterrorhandler", lua_seterrorhandler);
+    lua_register(L, "geterrorhandler", lua_geterrorhandler);
 }
 
 }  // namespace wowee::addons::taint

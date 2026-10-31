@@ -1109,6 +1109,12 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // itself ticked while the client went on clearing, the panel and the game
     // disagreeing about the same switch.
     else if (n == "deselectonclick") lua_pushstring(L, "1");
+    // Off, as registered (0x0051dd63 pushes the string "0" for it): FrameXML's
+    // error handler - _ERRORMESSAGE, basiccontrols.xml - puts a script error in
+    // BasicScriptErrors only while this says so, and the interface's Advanced
+    // panel is what turns it on. Named here because the handler is now reached
+    // for every script error, and this one switch says whether it shows one.
+    else if (n == "scripterrors") lua_pushstring(L, "0");
     // "Unit shadow LOD": 1, the blob shadows under the units, as the client
     // registers it (0x007e4a40); 0 turns them off.
     else if (n == "shadowlod") lua_pushstring(L, "1");

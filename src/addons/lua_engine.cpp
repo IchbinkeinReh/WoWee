@@ -9365,10 +9365,9 @@ void LuaEngine::registerCoreAPI() {
         // ShoppingTooltip: used by comparison tooltips
         "ShoppingTooltip1 = CreateFrame('Frame', 'ShoppingTooltip1')\n"
         "ShoppingTooltip2 = CreateFrame('Frame', 'ShoppingTooltip2')\n"
-        // Error handling stubs (used by many addons)
-        "local _errorHandler = function(err) return err end\n"
-        "function geterrorhandler() return _errorHandler end\n"
-        "function seterrorhandler(fn) if type(fn)=='function' then _errorHandler=fn end end\n"
+        // geterrorhandler and seterrorhandler are C bindings now (lua_taint's
+        // registerLuaApi), because what they keep is what the client hands to
+        // every script call it protects - a Lua pair of shims could not be that.
         "function debugstack(start, count1, count2) return '' end\n"
         // WoW's own names for indexing the global table, which predate _G being
         // exposed and are still what a good deal of 3.3.5 code is written with.
@@ -13099,7 +13098,12 @@ int luaTracebackHandler(lua_State* L) {
         if (ar.name) { out += " in "; out += ar.name; }
     }
     lua_pushstring(L, out.c_str());
-    return 1;
+    lua_replace(L, 1);   // the message, with the stack folded into it
+    // Then what every other script call does with a message: the interface's
+    // handler gets it, and its return is what the dispatch reports. Without
+    // this leg, an error in a frame script - the commonest kind - went to the
+    // log while the ones from events went to the interface as well.
+    return taint::scriptErrorHandler(L);
 }
 
 /// Loads and runs a chunk with the traceback handler in place. Returns the
