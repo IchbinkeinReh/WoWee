@@ -1044,19 +1044,9 @@ void parseAnimTrack(const std::vector<uint8_t>& data,
             for (const auto& cq : compressed) {
                 // M2 compressed quaternion: offset mapping, NOT simple division
                 // int16 range [-32768..32767] maps to float [-1..1] with offset
-                float fx = (cq.x < 0) ? (cq.x + 32768) / 32767.0f : (cq.x - 32767) / 32767.0f;
-                float fy = (cq.y < 0) ? (cq.y + 32768) / 32767.0f : (cq.y - 32767) / 32767.0f;
-                float fz = (cq.z < 0) ? (cq.z + 32768) / 32767.0f : (cq.z - 32767) / 32767.0f;
-                float fw = (cq.w < 0) ? (cq.w + 32768) / 32767.0f : (cq.w - 32767) / 32767.0f;
-                // M2 on-disk: (x,y,z,w), GLM quat constructor: (w,x,y,z)
-                glm::quat q(fw, fx, fy, fz);
-                float len = glm::length(q);
-                if (len > 0.001f) {
-                    q = q / len;
-                } else {
-                    q = glm::quat(1.0f, 0.0f, 0.0f, 0.0f); // identity
-                }
-                track.sequences[i].quatValues.push_back(q);
+                // Kept as the file has it (PackedQuat), decoded and normalised as
+                // this did when read.
+                track.sequences[i].quatValues.push_back(PackedQuat::fromDisk(cq.x, cq.y, cq.z, cq.w));
             }
         }
     }
@@ -1172,16 +1162,9 @@ void parseAnimTrackVanilla(const std::vector<uint8_t>& data,
             track.sequences[i].quatValues.reserve(keyCount);
             for (uint32_t k = start; k < start + keyCount; k++) {
                 const auto& cq = allCompQuatKeys[k];
-                float fx = (cq.x < 0) ? (cq.x + 32768) / 32767.0f : (cq.x - 32767) / 32767.0f;
-                float fy = (cq.y < 0) ? (cq.y + 32768) / 32767.0f : (cq.y - 32767) / 32767.0f;
-                float fz = (cq.z < 0) ? (cq.z + 32768) / 32767.0f : (cq.z - 32767) / 32767.0f;
-                float fw = (cq.w < 0) ? (cq.w + 32768) / 32767.0f : (cq.w - 32767) / 32767.0f;
-                // M2 on-disk: (x,y,z,w), GLM quat constructor: (w,x,y,z)
-                glm::quat q(fw, fx, fy, fz);
-                float len = glm::length(q);
-                if (len > 0.001f) q = q / len;
-                else q = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-                track.sequences[i].quatValues.push_back(q);
+                // Kept as the file has it (PackedQuat), decoded and normalised as
+                // this did when read.
+                track.sequences[i].quatValues.push_back(PackedQuat::fromDisk(cq.x, cq.y, cq.z, cq.w));
             }
         } else {
             // Vanilla: C4Quaternion - full float[4] per key (XYZW on disk)
@@ -2559,18 +2542,9 @@ void M2Loader::loadAnimFile(const std::vector<uint8_t>& m2Data,
                 auto compressed = readArray<CompressedQuat>(animData, keyOffset, keyCount);
                 seqKeys.quatValues.reserve(compressed.size());
                 for (const auto& cq : compressed) {
-                    float fx = (cq.x < 0) ? (cq.x + 32768) / 32767.0f : (cq.x - 32767) / 32767.0f;
-                    float fy = (cq.y < 0) ? (cq.y + 32768) / 32767.0f : (cq.y - 32767) / 32767.0f;
-                    float fz = (cq.z < 0) ? (cq.z + 32768) / 32767.0f : (cq.z - 32767) / 32767.0f;
-                    float fw = (cq.w < 0) ? (cq.w + 32768) / 32767.0f : (cq.w - 32767) / 32767.0f;
-                    glm::quat q(fw, fx, fy, fz);
-                    float len = glm::length(q);
-                    if (len > 0.001f) {
-                        q = q / len;
-                    } else {
-                        q = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-                    }
-                    seqKeys.quatValues.push_back(q);
+                    // Kept as the file has it (PackedQuat), decoded and normalised as
+                    // this did when read.
+                    seqKeys.quatValues.push_back(PackedQuat::fromDisk(cq.x, cq.y, cq.z, cq.w));
                 }
             }
             patchedTracks++;

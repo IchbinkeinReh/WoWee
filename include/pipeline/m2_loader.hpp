@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <initializer_list>
 #include <vector>
@@ -41,6 +42,51 @@ struct M2Sequence {
     uint16_t aliasNext;             // Alias for next animation
 };
 
+/// A rotation key as M2 files store it: four int16, x y z w, in the M2
+/// offset encoding (v < 0: (v + 32768) / 32767, else (v - 32767) / 32767).
+/// Half the size of a glm::quat, and a character model's keys are mostly
+/// rotations. Read back exactly as the loader used to decode it - the same
+/// arithmetic and the same normalisation - so a key from a file comes out
+/// as the same floats it always did. One made from a glm::quat (a float
+/// track: texture transforms, vanilla models) is rounded to the encoding's
+/// 1/32767 steps.
+struct PackedQuat {
+    int16_t x = 32767, y = 32767, z = 32767, w = -1;  // identity
+
+    PackedQuat() = default;
+    PackedQuat(const glm::quat& q) {  // NOLINT(google-explicit-constructor): keys are written as quats
+        x = encode(q.x);
+        y = encode(q.y);
+        z = encode(q.z);
+        w = encode(q.w);
+    }
+    static PackedQuat fromDisk(int16_t dx, int16_t dy, int16_t dz, int16_t dw) {
+        PackedQuat p;
+        p.x = dx;
+        p.y = dy;
+        p.z = dz;
+        p.w = dw;
+        return p;
+    }
+    [[nodiscard]] glm::quat get() const {
+        glm::quat q(decode(w), decode(x), decode(y), decode(z));
+        const float len = glm::length(q);
+        return len > 0.001f ? q / len : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    }
+    operator glm::quat() const { return get(); }  // NOLINT(google-explicit-constructor)
+
+    static float decode(int16_t v) {
+        return (v < 0) ? static_cast<float>(v + 32768) / 32767.0f : static_cast<float>(v - 32767) / 32767.0f;
+    }
+    static int16_t encode(float c) {
+        if (std::isnan(c)) c = 0.0f;
+        c = c < -1.0f ? -1.0f : (c > 1.0f ? 1.0f : c);
+        const long r = static_cast<long>(c * 32767.0f + (c >= 0.0f ? 0.5f : -0.5f));
+        return static_cast<int16_t>(c >= 0.0f ? r - 32768 : r + 32767);
+    }
+};
+static_assert(sizeof(PackedQuat) == 8, "a packed rotation key is four int16");
+
 // Animation track with per-sequence keyframe data
 struct M2AnimationTrack {
     uint16_t interpolationType = 0; // 0=none, 1=linear, 2=hermite, 3=bezier
@@ -49,7 +95,7 @@ struct M2AnimationTrack {
     struct SequenceKeys {
         std::vector<uint32_t> timestamps;   // Milliseconds
         std::vector<glm::vec3> vec3Values;  // For translation/scale tracks
-        std::vector<glm::quat> quatValues;  // For rotation tracks
+        std::vector<PackedQuat> quatValues; // For rotation tracks (read as glm::quat)
         std::vector<float> floatValues;     // For float tracks (particle emitters)
 
         [[nodiscard]] bool empty() const {
