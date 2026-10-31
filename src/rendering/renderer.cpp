@@ -6913,7 +6913,8 @@ std::vector<std::string> Renderer::memoryReport(const std::vector<MemoryEntry>& 
     if (characterRenderer) characterRenderer->memoryReport(world);
     if (cachedAssetManager) {
         const auto cs = cachedAssetManager->cacheStats();
-        std::snprintf(buf, sizeof(buf), "File cache (%zu files, budget %.0f MB)", cs.fileCount, mb(cs.fileBudget));
+        std::snprintf(buf, sizeof(buf), "File cache (%zu files, budget %.0f MB, %zu hits / %zu reads)", cs.fileCount,
+                      mb(cs.fileBudget), cs.fileHits, cs.fileHits + cs.fileMisses);
         world.push_back({buf, 0, cs.fileBytes});
         std::snprintf(buf, sizeof(buf), "DBC tables (%zu)", cs.dbcCount);
         world.push_back({buf, 0, cs.dbcBytes});

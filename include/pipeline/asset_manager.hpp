@@ -11,6 +11,7 @@
 #include <map>
 #include <unordered_map>
 #include <mutex>
+#include "pipeline/file_lru_cache.hpp"
 #include <shared_mutex>
 
 namespace wowee {
@@ -149,7 +150,7 @@ public:
     /**
      * Get file cache stats
      */
-    [[nodiscard]] size_t getFileCacheSize() const { return fileCacheTotalBytes; }
+    [[nodiscard]] size_t getFileCacheSize() const { return fileCache.bytes(); }
     [[nodiscard]] size_t getFileCacheHits() const { return fileCacheHits; }
     [[nodiscard]] size_t getFileCacheMisses() const { return fileCacheMisses; }
     /// What the two caches hold, for /mem: the raw files kept for reuse and
@@ -158,6 +159,8 @@ public:
         size_t fileBytes = 0;
         size_t fileCount = 0;
         size_t fileBudget = 0;
+        size_t fileHits = 0;
+        size_t fileMisses = 0;
         size_t dbcBytes = 0;
         size_t dbcCount = 0;
     };
@@ -209,23 +212,17 @@ private:
     [[nodiscard]] std::shared_ptr<DBCFile> cachedDBC(const std::string& name) const;
     std::shared_ptr<DBCFile> cacheDBC(const std::string& name, std::shared_ptr<DBCFile> dbc);
 
-    // Guards fileCache, dbcCache, fileCacheTotalBytes, fileCacheAccessCounter, and
+    // Guards fileCache, dbcCache and
     // fileCacheBudget.  Shared lock for read-only cache lookups (readFile cache hit,
     // loadDBC cache hit); exclusive lock for inserts and eviction.
     mutable std::shared_mutex cacheMutex;
     // THREAD-SAFE: protected by cacheMutex (exclusive lock for writes).
     std::unordered_map<std::string, std::shared_ptr<DBCFile>> dbcCache;
 
-    // File cache (LRU, dynamic budget based on system RAM)
-    struct CachedFile {
-        std::vector<uint8_t> data;
-        uint64_t lastAccessTime;
-    };
-    // THREAD-SAFE: protected by cacheMutex (shared_mutex - shared_lock for reads,
-    // exclusive lock_guard for writes/eviction).
-    mutable std::unordered_map<std::string, CachedFile> fileCache;
-    mutable size_t fileCacheTotalBytes = 0;
-    mutable uint64_t fileCacheAccessCounter = 0;
+    // File cache, least recently read out first (file_lru_cache.hpp).
+    // THREAD-SAFE: protected by cacheMutex (shared_lock for lookups,
+    // exclusive lock_guard for inserts and clearing).
+    mutable FileLruCache fileCache;
     // THREAD-SAFE: atomic - incremented from any thread after releasing cacheMutex.
     mutable std::atomic<size_t> fileCacheHits{0};
     mutable std::atomic<size_t> fileCacheMisses{0};

@@ -161,7 +161,7 @@ void AssetManager::shutdown() {
     if (fileCacheHits + fileCacheMisses > 0) {
         float hitRate = static_cast<float>(fileCacheHits) / (fileCacheHits + fileCacheMisses) * 100.0f;
         LOG_INFO("File cache stats: ", fileCacheHits, " hits, ", fileCacheMisses, " misses (",
-                 static_cast<int>(hitRate), "% hit rate), ", fileCacheTotalBytes / 1024 / 1024, " MB cached");
+                 static_cast<int>(hitRate), "% hit rate), ", fileCache.bytes() / 1024 / 1024, " MB cached");
     }
 
     clearCache();
@@ -711,14 +711,14 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
     // Check cache first (shared lock allows concurrent reads)
     {
         std::shared_lock<std::shared_mutex> cacheLock(cacheMutex);
-        auto it = fileCache.find(normalized);
-        if (it != fileCache.end()) {
-            auto data = it->second.data;
+        std::vector<uint8_t> data;
+        if (fileCache.lookup(normalized, data)) {
             cacheLock.unlock();
             fileCacheHits++;
             return data;
         }
     }
+    fileCacheMisses++;
 
     // Read from filesystem (override dir first, then base manifest)
     std::string fsPath = resolveFile(normalized);
@@ -732,27 +732,13 @@ std::vector<uint8_t> AssetManager::readFile(const std::string& path) const {
         return data;
     }
 
-    // Add to cache if within budget
-    size_t fileSize = data.size();
-    if (fileSize > 0 && fileSize < fileCacheBudget / 2) {
+    // Into the cache, the least recently read making room. This was a scan
+    // of the whole map for the oldest insert, and a hit never counted as a
+    // use: first in, first out, so the files read every few seconds - a
+    // city's common textures - were the ones dropped as soon as it filled.
+    {
         std::lock_guard<std::shared_mutex> cacheLock(cacheMutex);
-        // Evict old entries if needed (LRU)
-        while (fileCacheTotalBytes + fileSize > fileCacheBudget && !fileCache.empty()) {
-            auto lru = fileCache.begin();
-            for (auto it = fileCache.begin(); it != fileCache.end(); ++it) {
-                if (it->second.lastAccessTime < lru->second.lastAccessTime) {
-                    lru = it;
-                }
-            }
-            fileCacheTotalBytes -= lru->second.data.size();
-            fileCache.erase(lru);
-        }
-
-        CachedFile cached;
-        cached.data = data;
-        cached.lastAccessTime = ++fileCacheAccessCounter;
-        fileCache[normalized] = std::move(cached);
-        fileCacheTotalBytes += fileSize;
+        fileCache.insert(normalized, data, fileCacheBudget);
     }
 
     return data;
@@ -771,9 +757,11 @@ std::vector<uint8_t> AssetManager::readFileOptional(const std::string& path) con
 AssetManager::CacheStats AssetManager::cacheStats() const {
     std::shared_lock<std::shared_mutex> lock(cacheMutex);
     CacheStats s;
-    s.fileBytes = fileCacheTotalBytes;
+    s.fileBytes = fileCache.bytes();
     s.fileCount = fileCache.size();
     s.fileBudget = fileCacheBudget;
+    s.fileHits = fileCacheHits.load();
+    s.fileMisses = fileCacheMisses.load();
     s.dbcCount = dbcCache.size();
     for (const auto& [name, dbc] : dbcCache) {
         if (dbc) s.dbcBytes += dbc->memoryBytes();
@@ -791,8 +779,6 @@ void AssetManager::clearCache() {
     std::lock_guard<std::shared_mutex> lock(cacheMutex);
     dbcCache.clear();
     fileCache.clear();
-    fileCacheTotalBytes = 0;
-    fileCacheAccessCounter = 0;
     LOG_INFO("Cleared asset cache (DBC + file cache)");
 }
 std::string AssetManager::normalizePath(const std::string& path) const {

@@ -3576,3 +3576,15 @@ wowee_add_test(test_vr_math
             ${CMAKE_SOURCE_DIR}/src/vr/vr_math.cpp
             ${CMAKE_SOURCE_DIR}/src/rendering/camera.cpp
             ${TEST_COMMON_SOURCES})
+
+# ── test_file_lru_cache ────────────────────────────────────────────────
+# The asset manager's file cache: least recently read out first.
+add_executable(test_file_lru_cache
+    test_file_lru_cache.cpp
+    ${TEST_COMMON_SOURCES})
+target_include_directories(test_file_lru_cache PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_file_lru_cache SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_file_lru_cache PRIVATE catch2_main)
+wowee_test_link_glm(test_file_lru_cache)
+add_test(NAME file_lru_cache COMMAND test_file_lru_cache)
+register_test_target(test_file_lru_cache)
