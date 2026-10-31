@@ -281,10 +281,6 @@ static int lua_SetPortraitToTexture(lua_State* L) {
     return 0;
 }
 
-/// Bag calls that do nothing here, answered rather than left to the fallback:
-/// that answers with an object, and an object called as a function raises.
-static int lua_ContainerNoOp(lua_State* L) { (void)L; return 0; }
-
 /// SpellCanTargetItem() - whether something is waiting to be applied to an item.
 ///
 /// This client does have the notion after all: a sharpening stone, an oil, an
@@ -609,6 +605,178 @@ static int lua_GetMerchantItemLink(lua_State* L) {
                                  {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
+}
+
+// ── The vendor cursors ─────────────────────────────────────────────────────
+//
+// Three bindings put the coin bag - `Buy.blp` - under the pointer where the
+// player is about to pay coin, and the same bag with its "cannot" art where
+// they cannot pay. They are reached from a tooltip, not from a click:
+// merchantframe.xml calls ShowMerchantSellCursor from the frame's OnUpdate for
+// as long as `MerchantFrame.itemHover` is set, and containerframe.lua's
+// ContainerFrameItemButton_OnEnter calls ShowContainerSellCursor when the
+// merchant window is open on its sell tab. What is on show is therefore
+// re-decided on every hover, which is the point: the hand changes the moment a
+// coin lands or a bag fills up.
+//
+// The name says "sell" and the test is buying. The cursor is over the
+// merchant's shelf, and the coin bag is the client's way of saying "coin moves
+// the other way from what you usually see".
+
+/// The two guards all three open with (0x005856d0, 0x00585890 and 0x005d8bd0
+/// each start the same way), and the reason they return rather than fall back:
+/// with a guard down the reference touches nothing at all, leaving whatever
+/// cursor was there.
+///
+/// The first guard is that nothing is being carried - `FUN_007fd620`, the
+/// engine's pickup record, which is also what `CursorHasItem` reads. The
+/// second is that the **base** cursor is still the plain glove
+/// (`FUN_00616260() == 1`): the global `ResetCursor` restores, not the current
+/// one. The client replaces that base in exactly two situations, and neither
+/// is a sell cursor. One is the repair hand at a vendor - cursor 17 - which
+/// `ShowRepairCursor` and `InRepairMode` already model as `repairCursorUp()`;
+/// the click paths agree, testing the base against that same 0x11 to decide a
+/// click at a bag is a repair (0x005d0000.c:6798, 0x005d0000.c:7031). The
+/// other is a spell being targeted, which is cursor 2.
+static bool sellCursorAllowed(game::GameHandler* gh) {
+    if (!gh) return false;
+    if (!ui::frameXmlCursorItem().empty()) return false;
+    if (repairCursorUp()) return false;
+    if (gh->isGroundTargeting() || gh->isUnitTargeting()) return false;
+    return true;
+}
+
+/// The player's side of the two PvP counters, read the way the currency tab
+/// reads them: out of PLAYER_FIELD_HONOR_CURRENCY and
+/// PLAYER_FIELD_ARENA_CURRENCY.Absent answers zero, which is also what the
+/// reference's own blob dword holds until a realm writes it - and the extended
+/// cost then fails its test, as it does there.
+static std::pair<uint32_t, uint32_t> pvpCounterBalances(game::GameHandler* gh) {
+    const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    auto read = [player](game::UF field) -> uint32_t {
+        if (!player) return 0;
+        const uint16_t idx = fieldIndex(field);
+        return idx == 0xFFFF ? 0u : player->getField(idx);
+    };
+    return {read(game::UF::PLAYER_FIELD_HONOR_CURRENCY), read(game::UF::PLAYER_FIELD_ARENA_CURRENCY)};
+}
+
+/// Whether the vendor would let this player take the item in `vi`: coin, then
+/// the extended cost's honour, arena points, reagent items and arena rating.
+///
+/// The chain is 0x005856d0's, and it is narrower than the sixth value of
+/// GetMerchantItemInfo, which answers `isUsable`: that one walks level, class,
+/// race, proficiency, skill, spell and reputation
+/// (`game/item_requirements.hpp`); the cursor walks money, the item's required
+/// reputation, and the cost row - and nothing else. An item the player is too
+/// low a level for still wears the plain coin bag, and one they can pay for but
+/// have no reagents for does not.
+static bool vendorPurchasePossible(game::GameHandler* gh, const game::VendorItem& vi) {
+    if (gh->getMoneyCopper() < vi.buyPrice) return false;
+
+    // The item's own reputation standing, which is the one test the reference
+    // makes off the item record (`+0x50`/`+0x54` of the record 0x0067ca30
+    // resolves for the entry, against the rank floors at 0x00a2d2fc).
+    if (const auto* info = gh->getItemInfo(vi.itemId)) {
+        if (info->requiredReputationFaction != 0) {
+            const uint32_t rank = info->requiredReputationRank < 8 ? info->requiredReputationRank : 7u;
+            if (gh->getFactionStanding(info->requiredReputationFaction) <
+                static_cast<int32_t>(game::kItemRepRankFloor[rank])) return false;
+        }
+    }
+
+    const auto* cost = gh->getExtendedCost(vi.extendedCost);
+    if (!cost) return true;   // no cost row at all: coin was the only test, and it passed
+
+    const auto [honor, arena] = pvpCounterBalances(gh);
+    if (cost->honorPoints > honor || cost->arenaPoints > arena) return false;
+
+    // Each thing the row wants besides coin. The reference tests an entry only
+    // when both halves are filled, and counts the item the same way
+    // GetItemCount does (0x00754d00 with no mode).
+    for (int j = 0; j < 5; ++j) {
+        if (cost->itemId[j] == 0 || cost->itemCount[j] == 0) continue;
+        if (gh->getInventory().countItem(cost->itemId[j]) < cost->itemCount[j]) return false;
+    }
+
+    // The arena gate: a rating asked (row +0x38) for a bracket the row names at
+    // all (row +0xc, 0 two, 1 three, 2 five - the same pair
+    // GetMerchantItemArenaRequirement answers with).
+    if (cost->requiredArenaRating != 0 && cost->arenaBracket < 3 &&
+        !gh->meetsArenaRating(cost->requiredArenaRating, cost->arenaBracket)) return false;
+    return true;
+}
+
+// ShowMerchantSellCursor(index) - the coin bag over a vendor's shelf slot.
+//
+// Out of range, or an entry with no item behind it, leaves the pointer alone:
+// 0x005856d0 tests the record and returns without calling the setter at all.
+static int lua_ShowMerchantSellCursor(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ShowMerchantSellCursor(index)");
+    auto* gh = getGameHandler(L);
+    if (!sellCursorAllowed(gh)) return 0;
+    const int index = luaToClientInt(L, 1);
+    const auto& items = gh->getVendorItems().items;
+    if (index < 1 || index > static_cast<int>(items.size())) return 0;
+    const auto& vi = items[index - 1];
+    if (vi.itemId == 0) return 0;
+    ui::frameXmlSetScriptCursor(vendorPurchasePossible(gh, vi)
+                                    ? ui::kCursorKindBuy : ui::kCursorKindBuyError);
+    return 0;
+}
+
+// ShowBuybackSellCursor(index) - the same pair over the buyback list.
+//
+// One test, and it is the realm's price for that ring slot rather than the
+// price the sale was worth: 0x00585890 reads PLAYER_FIELD_BUYBACK_PRICE_1 +
+// (slot - 74) exactly as GetBuybackItemInfo does, and compares it against the
+// money with `price <= money`. A layout naming no such field answers 0, which
+// reads as affordable - there too.
+static int lua_ShowBuybackSellCursor(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ShowBuybackSellCursor(index)");
+    auto* gh = getGameHandler(L);
+    if (!sellCursorAllowed(gh)) return 0;
+    const int index = luaToClientInt(L, 1);
+    const auto* row = index < 1 ? nullptr : gh->buybackRowAt(static_cast<uint32_t>(index - 1));
+    if (!row) return 0;
+    const uint32_t price = gh->buybackFieldPrice(row->wireSlot);
+    ui::frameXmlSetScriptCursor(gh->getMoneyCopper() >= price
+                                    ? ui::kCursorKindBuy : ui::kCursorKindBuyError);
+    return 0;
+}
+
+// ShowContainerSellCursor(bag, slot) - the coin bag, with no test of its own.
+//
+// Selling an item from the bags gives coin whatever else is true of it, so
+// 0x005d8bd0 asks nothing about price or requirements: it resolves the slot,
+// and puts the bag cursor up unless the item carries one flag.
+//
+// That flag is byte +0x394 bit 0 of the item **object**, and it is not a
+// condition the client reads off the wire: it is worked out once, when the
+// object is filled in, from two dwords of the record hanging at object +0xd0
+// (0x00590000.c:7241). Every binding that acts on an item tests it and
+// refuses when it is set - PickupContainerItem (0x005d0000.c:6782),
+// SplitContainerItem (0x005d0000.c:6943), UseContainerItem (0x005d0000.c:7015),
+// SocketContainerItem (0x005d0000.c:7164), GetItemGem, and this one - so it
+// marks an item the player cannot do anything with at all, which is what a
+// keyring's contents are in this expansion. This client keeps no such flag on
+// an item, so the container the interface named is what is tested here: the
+// keyring is the one it addresses as a container and cannot act on. Note that
+// containerframe.lua already takes the keyring branch before it ever gets here
+// (it shows a tooltip and calls CursorUpdate instead), so what the rule guards
+// against is an addon asking directly.
+static int lua_ShowContainerSellCursor(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: ShowContainerSellCursor(index, slot)");
+    auto* gh = getGameHandler(L);
+    if (!sellCursorAllowed(gh)) return 0;
+    const int container = luaToClientInt(L, 1);
+    const int slot = luaToClientInt(L, 2);
+    if (container == kKeyringContainer) return 0;
+    const auto* itemSlot = containerItemSlot(gh->getInventory(), container, slot);
+    if (!itemSlot || itemSlot->empty()) return 0;
+    ui::frameXmlSetScriptCursor(ui::kCursorKindBuy);
+    return 0;
 }
 
 static int lua_CanMerchantRepair(lua_State* L) {
@@ -4720,6 +4888,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetMerchantNumItems",  lua_GetMerchantNumItems},
                 {"GetMerchantItemInfo",  lua_GetMerchantItemInfo},
                 {"GetMerchantItemLink",  lua_GetMerchantItemLink},
+                {"ShowMerchantSellCursor", lua_ShowMerchantSellCursor},
                 {"CanMerchantRepair",    lua_CanMerchantRepair},
                 {"GetContainerItemCooldown",  lua_GetContainerItemCooldown},
                 {"GetItemCooldown",           lua_GetItemCooldown},
@@ -4742,8 +4911,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             }
             return 0;
         }},
-                {"ShowContainerSellCursor", lua_ContainerNoOp},
-                {"ShowBuybackSellCursor", lua_ContainerNoOp},
+                {"ShowContainerSellCursor", lua_ShowContainerSellCursor},
+                {"ShowBuybackSellCursor", lua_ShowBuybackSellCursor},
                 // A left-click on a vendor's item goes here, and it was a
                 // no-op - so at a merchant only right-click bought anything.
                 // The cursor state lives in lua_action_api.cpp with everything

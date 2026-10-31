@@ -5546,46 +5546,16 @@ void registerQuestLuaAPI(lua_State* L) {
             return 1;
         }},
                 // The cursor changes at a vendor: the hand that sells, and the
-                // hammer that repairs. This client draws its own cursor and
-                // has no art switched by name, so these do nothing - which is
-                // what they did before, silently, as unknown globals.
+                // hammer that repairs.
                 //
-                // The names are the client's own table, not file names:
-                // SetCursor (0x005104a0) lays out 52 {name, number} pairs on
-                // the stack - POINT_CURSOR 2, CAST_CURSOR 3, BUY_CURSOR 4 …
-                // VEHICLE_ERROR_CURSOR 0x35 - matches the argument against the
-                // names, and only a miss falls through to 0x00616830, which is
-                // where a path like "Interface\\CURSOR\\Driver" is loaded as a
-                // texture instead; that sets the current cursor (0x00c26de8) to
-                // 0x35 - the number the same table gives VEHICLE_ERROR_CURSOR,
-                // and the one number the setter 0x00616800 refuses to take, so
-                // a named cursor never overwrites a custom-texture one. Both
-                // globals live beside the base cursor 0x00c25de4, the one
-                // ResetCursor (0x00616920)
-                // restores, and a change fires event 0x113 - CURSOR_UPDATE,
-                // which this repository already raises wherever an item
-                // actually moves onto or off the pointer.
-                //
-                // Bound rather than left to the fallback because the fallback
-                // is what makes a typo look like a working call, and because a
-                // window that calls nothing undefined is the measure of
-                // whether it can be handed over.
-                //
-                // What the reference does with this one (0x005856d0) is more
-                // than pick art, and that is worth knowing before anyone wires
-                // a cursor up: it looks the hovered merchant item up, and if
-                // the player's money is under the item's cost it sets cursor
-                // state 0x1d - the "you cannot have this one" hand - and
-                // returns. Otherwise it walks the item's five requirements and
-                // a reputation test (0x005a37b0 on the item's required faction)
-                // and answers 0x1d if any fails, state 3 if none does. The
-                // container version (0x005d8bd0) has no such test: it sets 3
-                // for any item in the bag that is not flagged at record +0x394
-                // bit 0. So a vendor cursor has to re-decide on every hover -
-                // merchantframe.xml calls this from the frame's OnUpdate while
-                // `itemHover` is set, which is what makes the hand change the
-                // moment a bag fills up or a coin lands.
-                {"ShowMerchantSellCursor", [](lua_State* L) -> int { (void)L; return 0; }},
+                // The sell cursor is not here any more - it answers from the
+                // money, the extended-cost row and the reputation the reference
+                // tests, all of which the merchant bindings already read, so it
+                // lives beside them in lua_inventory_api.cpp. What stayed here
+                // is the repair pair, which is state rather than art: the flag
+                // it sets is the base cursor (17) that the client's own click
+                // paths test before treating a click in the bags as a repair,
+                // and the same one all three sell cursors refuse to overwrite.
                 // The merchant's repair-an-item button toggles between these
                 // two and reads the state back through InRepairMode. All three
                 // were stubs, so the button never latched and the per-item

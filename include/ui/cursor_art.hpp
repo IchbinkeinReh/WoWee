@@ -52,6 +52,13 @@ constexpr int kCursorKindNone = 0;
 /// (`param_1 != 0x35` at 0x00616800), because it is the slot a path's picture
 /// goes into - so no name can select it, and only a path can.
 constexpr int kCursorKindCustom = 0x35;
+/// The one pair the reference's own code asks for by number instead of by name:
+/// the coin bag, and its "cannot pay" twin. The merchant and buyback bindings
+/// hand the setter 3 or 29 (0x005856d0, 0x00585890), and the hovered-unit code
+/// reaches the same pair as `base + 26`, which is how every "can't" cursor in
+/// the table sits.
+constexpr int kCursorKindBuy = 3;
+constexpr int kCursorKindBuyError = 29;
 
 /// The art for a kind, as the reference names the file - mixed case and all,
 /// including the entry that is lower case because the art file is. Empty for a
