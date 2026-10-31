@@ -85,11 +85,44 @@ a table this client does not carry and which a guess would get wrong for half
 the classes. Wrong is wrong either way; a made-up formula would merely be
 harder to notice.
 
-Nor a binding whose extra argument is genuinely optional. Most of what is left
-is that: the self-cast flag on UseAction and its two siblings, the show-realm
-flag on GetUnitName, the notify flag on SetCVar. They are listed rather than
+Nor a binding whose extra argument is genuinely optional. Some of what is left
+is that: the show-realm flag on GetUnitName, whose answer is a realm this client
+never has, the exactMatch flag on the three party-assignment names, which every
+caller passes as the one value that flag asks for. They are listed rather than
 filtered because "harmless" is a judgement about each one, and the ceiling is
 there so the next addition is looked at.
+
+WHAT THE SECOND ARGUMENT SPLITS
+
+    tools/binding_arg_coverage_check.py "<the extracted interface>" "<strings.tsv>"
+
+WHAT THE SECOND ARGUMENT SPLITS
+
+    tools/binding_arg_coverage_check.py "<the extracted interface>" "<strings.tsv>"
+
+The installed interface is a post-Cataclysm FrameXML wearing a 30300 tag, so a
+name here could be one that binary never had. Pass the decompile's `strings.tsv`
+and the rows split on whether the client's own strings carry the name, the same
+test framexml_live_stubs.py applies. Run that on 2026-11-01 and it filters one
+row of 47: GetUnitName, which unitframe.lua:468 defines for itself, so what the
+interface calls by that name is its own function and the native binding is
+shadowed before anything can reach it. That the other 46 come back is the useful
+half: GetActiveTalentGroup, GetNumTalentGroups, AddPreviewTalentPoints and the
+rest of the dual-spec talent names read like a feature from a decade later and
+are in the 12340 client after all. Guessing which names are new is worth as much
+here as anywhere else, so the split runs rather than a rule of thumb.
+
+The count the ceiling is held to stays the unsplit one: the split says which
+rows to read, not how many faults there are.
+
+A wide call is not the same as a call that can vary. The binding panel passes
+`KeyBindingFrame.mode` to GetBinding, GetBindingKey, GetBindingAction and
+SetBinding; the two sites that open the panel set that field to 1 and nothing
+else writes it, so the mode argument is a constant - and the client's own Usage
+line ("GetBinding(index[, mode])", 0x0055e8d0) takes 1..4 and defaults to the
+first. Four rows out, one value in. Only reading the call site says so: a
+constant is still an argument as far as a comma count is concerned, and the
+sweep cannot tell a constant from a control.
 """
 import re
 import sys
@@ -102,6 +135,8 @@ ROOT = Path(__file__).resolve().parent.parent
 INTERFACE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
 ADDONS = ROOT / "src/addons"
 HELPERS = ROOT / "include/addons/lua_api_helpers.hpp"
+# The decompile's string table, for the split described in the note above.
+STRINGS = Path(sys.argv[2]) if len(sys.argv) > 2 else None
 
 
 def _top_level_commas(text):
@@ -238,6 +273,28 @@ def main():
         print(f"  passes {passes}, reads {reads}   {name}")
     if not rows:
         print("  (none)")
+
+    if STRINGS and STRINGS.is_file():
+        known = set()
+        with STRINGS.open(errors="ignore") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split("\t", 1)
+                if len(parts) == 2:
+                    known.add(parts[1])
+        absent = sorted(name for _, name, _, _ in rows if name not in known)
+        print()
+        print(f"{len(absent)} of them the 12340 client carries no name for, so the")
+        print("interface is asking that binary about a feature it never had:")
+        for name in absent:
+            print(f"  {name}")
+        print()
+        print(f"{len(rows) - len(absent)} are names the client does carry - those are the")
+        print("ones with an answer to check.")
+    elif STRINGS:
+        print(f"\nno strings file at {STRINGS} - the list is unsplit")
+    else:
+        print("\nnames were not checked against the client binary; pass its decompile's")
+        print("strings.tsv as the second argument to split the list")
     return 0
 
 

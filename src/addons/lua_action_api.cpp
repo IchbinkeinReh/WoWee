@@ -3022,7 +3022,17 @@ int clientImGuiKeyForBinding(const std::string& command) {
     return 0;
 }
 
-// GetBindingKey(command) → key1, key2 (or nil)
+// This whole family - GetBinding, GetBindingKey, GetBindingAction, SetBinding -
+// is called by the binding panel with a mode as its last argument, and the
+// client's own line says so: "Usage: GetBinding(index[, mode])" (0x0055e8d0),
+// which takes 1..4, clamps it, and defaults to the first when the argument is
+// left out. That mode selects one of four binding tables, and this client keeps
+// one table for every mode. It can get away with that because the installed
+// panel only ever asks for one: the two places that open it set
+// KeyBindingFrame.mode = 1 (gamemenuframe.xml:133, macoptionsframe.xml:519) and
+// nothing in the tree changes it again, so mode 1 is the only table either
+// client is pointed at - and a panel with no way to name another mode cannot
+// show the tables this one does not keep.
 static int lua_GetBindingKey(lua_State* L) {
     seedBindingDefaults();
     const std::string command = luaL_checkstring(L, 1);
