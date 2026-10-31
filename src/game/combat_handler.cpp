@@ -100,7 +100,7 @@ std::string petCastFailureMessage(const GameHandler& owner, uint32_t spellId, ui
         }
         case 0x01: return interfaceString("ERR_PET_SPELL_AFFECTING_COMBAT", "Your pet is in combat");
         case 0x17: return interfaceString("ERR_PET_SPELL_DEAD", "Your pet is dead");
-        case 0x38: return interfaceString("ERR_PET_SPELL_NOPATH", "No path available");
+        case 0x38: return interfaceStringAny({"ERR_PET_SPELL_NOPATH", "PET_SPELL_NOPATH"}, "No path available");
         case 0x39: return interfaceString("ERR_PET_SPELL_NOT_BEHIND", "Your pet must be behind its target");
         case 0x43: {
             const auto attrs = owner.getSpellAttributes(spellId);
@@ -1449,7 +1449,7 @@ void CombatHandler::handlePetActionFeedback(network::Packet& packet) {
             break;
         }
         case 4:
-            owner_.addUIError(interfaceString("ERR_PET_SPELL_NOPATH", "No path available"));
+            owner_.addUIError(interfaceStringAny({"ERR_PET_SPELL_NOPATH", "PET_SPELL_NOPATH"}, "No path available"));
             break;
         default:
             break;

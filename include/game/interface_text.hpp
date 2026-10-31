@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,26 @@ std::string interfaceString(const char* key, const char* enUS);
 inline std::string interfaceFormat(const char* key, const char* enUS,
                                    const std::vector<std::string>& args) {
     return chat_channels::luaFormat(interfaceString(key, enUS), args);
+}
+
+/// The first of these names the installed interface carries, or `enUS` when it
+/// carries none of them.
+///
+/// The interface this client installs is not the one build 12340 read its
+/// GlobalStrings out of, and a line survives being re-spelled in between:
+/// 3.3.5's ERR_PET_SPELL_NOPATH is PET_SPELL_NOPATH there, and
+/// ERR_REMOVE_FROM_PVP_QUEUE_FACTION_CHANGE has grown a _NONE suffix.  Asking
+/// only by the 3.3.5 name is not wrong, just mute: interfaceString answers the
+/// English literal it is handed, and the German client reads English in a line
+/// its own interface spells out in German.  The older name goes first, because
+/// a data set built from that build's GlobalStrings does have it and words the
+/// line as this client's era did.
+inline std::string interfaceStringAny(std::initializer_list<const char*> keys,
+                                      const char* enUS) {
+    for (const char* key : keys) {
+        if (std::string text = interfaceString(key, nullptr); !text.empty()) return text;
+    }
+    return enUS ? std::string(enUS) : std::string();
 }
 
 namespace interface_text {

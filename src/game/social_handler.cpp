@@ -56,18 +56,33 @@ std::filesystem::path guildNameCachePath() {
 // words are the interface's ERR_* string with the arguments put in.
 enum class ErrTo { Chat, Info, Error };
 
-void gameError(GameHandler& gh, ErrTo to, const char* key, const char* enUS,
-               const std::vector<std::string>& args = {}) {
-    // Its sound first - the character's line, or the row's named sound -
-    // as 0x005216f0 plays it before the words are made, wherever they go.
-    gh.playGameErrorSound(key);
-    const std::string text = interfaceFormat(key, enUS, args);
+void showGameError(GameHandler& gh, ErrTo to, const std::string& text) {
     if (text.empty()) return;
     switch (to) {
         case ErrTo::Chat:  gh.addSystemChatMessage(text); break;
         case ErrTo::Info:  gh.addUIInfoMessage(text); break;
         case ErrTo::Error: gh.addUIError(text); break;
     }
+}
+
+void gameError(GameHandler& gh, ErrTo to, const char* key, const char* enUS,
+               const std::vector<std::string>& args = {}) {
+    // Its sound first - the character's line, or the row's named sound -
+    // as 0x005216f0 plays it before the words are made, wherever they go.
+    gh.playGameErrorSound(key);
+    showGameError(gh, to, interfaceFormat(key, enUS, args));
+}
+
+/// The same, for a line the interface re-spelled between builds.  The first
+/// name is build 12340's, which is also the row WowError_Strings keys its sound
+/// by, and the ones after it are tried for the words alone: the newer interface
+/// this client installs has some of those lines under another name, and asking
+/// only by the old one prints English where the interface says German.
+void gameError(GameHandler& gh, ErrTo to, std::initializer_list<const char*> keys,
+               const char* enUS) {
+    if (keys.size() == 0) return;
+    gh.playGameErrorSound(*keys.begin());
+    showGameError(gh, to, interfaceStringAny(keys, enUS));
 }
 
 /// A duration in milliseconds as 0x0061a9e0 words it with the
@@ -823,7 +838,8 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
                               "You have been removed from a PvP queue because you have been granted a level."); break;
             case 1: gameError(owner_, ErrTo::Error, "ERR_REMOVE_FROM_PVP_QUEUE_XP_GAIN",
                               "You have been removed from a PvP queue because you changed your experience gain settings."); break;
-            case 2: gameError(owner_, ErrTo::Error, "ERR_REMOVE_FROM_PVP_QUEUE_FACTION_CHANGE",
+            case 2: gameError(owner_, ErrTo::Error, {"ERR_REMOVE_FROM_PVP_QUEUE_FACTION_CHANGE",
+                              "ERR_REMOVE_FROM_PVP_QUEUE_FACTION_CHANGE_NONE"},
                               "You have been removed from a PvP queue because you changed your faction."); break;
             default: break;
         }
@@ -853,6 +869,13 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
                                 "You cannot queue for another battle while queued for a rated arena match"); break;
             case -7:  gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_TEAM_LEFT_QUEUE", "Your team has left the arena queue"); break;
             case -8:  gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_NOT_IN_BATTLEGROUND", "You can't do that in a battleground."); break;
+            // The one refusal in this family the installed interface has no
+            // line for.  It kept JOIN_FAILED, JOIN_RANGE_INDEX and
+            // JOIN_TIMED_OUT and dropped JOIN_XP_GAIN with the XP gain setting
+            // itself, and 3.3.5's wording for it is GlobalStrings.dbc's, which
+            // is not in the extracted data set - so this literal is what even a
+            // German client reads here, where the other rows in this switch ask
+            // for a global the interface does carry and answer in its language.
             case -9:  gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_JOIN_XP_GAIN",
                                 "Cannot join as a group unless all the members of your party have the same XP gain setting."); break;
             case -10: gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_JOIN_RANGE_INDEX",
