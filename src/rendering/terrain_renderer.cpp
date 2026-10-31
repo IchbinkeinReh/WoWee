@@ -352,6 +352,7 @@ void TerrainRenderer::shutdown() {
         if (entry.texture) entry.texture->destroy(device, allocator);
     }
     textureCache.clear();
+    blendTextureKeys_.clear();
     textureCacheBytes_ = 0;
     textureCacheCounter_ = 0;
     failedTextureCache_.clear();
@@ -719,6 +720,7 @@ bool TerrainRenderer::evictTexturesFor(size_t needBytes) {
         if (it == textureCache.end()) continue;
         textureCacheBytes_ -= it->second.approxBytes;
         freedBytes += it->second.approxBytes;
+        blendTextureKeys_.erase(it->second.texture.get());
         retired.push_back(it->second.texture.release());
         textureCache.erase(it);
     }
@@ -913,6 +915,7 @@ VkTexture* TerrainRenderer::createBlendTexture(const std::vector<uint8_t>* const
     evictTexturesFor(kTexels * 4);
     static uint64_t alphaCounter = 0;
     std::string key = "__alpha_" + std::to_string(++alphaCounter);
+    blendTextureKeys_[raw] = key;
     TextureCacheEntry e;
     e.texture = std::move(tex);
     e.approxBytes = kTexels * 4;
@@ -1513,11 +1516,23 @@ void TerrainRenderer::destroyChunkGPU(TerrainChunkGPU& chunk) {
     VkDescriptorPool pool = materialDescPool;
     VkDescriptorSet materialSet = chunk.materialSet;
 
-    // The per-chunk alpha maps are not freed here. They live in the texture
-    // cache like everything else - createBlendTexture puts them there - and
-    // the eviction pass collects them once no chunk points at them. The vector
-    // that used to be released here was never filled by anything, so this loop
-    // had been freeing nothing for as long as it existed.
+    // The chunk's blend texture is its own (createBlendTexture makes one per
+    // chunk under a key nothing looks up), so it goes with the chunk. Left to
+    // the eviction pass it stayed until the cache reached its 4 GB budget:
+    // 16 KB a chunk, 256 chunks a tile, and every tile ever loaded - over a
+    // few zone changes, gigabytes. With host image copy those images sit in
+    // system memory, so it was the process's own memory that climbed.
+    VkTexture* blend = nullptr;
+    if (VkTexture* t = chunk.alphaTextures[0]) {
+        if (auto k = blendTextureKeys_.find(t); k != blendTextureKeys_.end()) {
+            if (auto it = textureCache.find(k->second); it != textureCache.end() && it->second.texture.get() == t) {
+                textureCacheBytes_ -= it->second.approxBytes;
+                blend = it->second.texture.release();
+                textureCache.erase(it);
+            }
+            blendTextureKeys_.erase(k);
+        }
+    }
 
     chunk.vertexBuffer = VK_NULL_HANDLE;
     chunk.vertexAlloc = VK_NULL_HANDLE;
@@ -1532,7 +1547,11 @@ void TerrainRenderer::destroyChunkGPU(TerrainChunkGPU& chunk) {
     chunk.shadowTexture = nullptr;
 
     vkCtx->deferAfterAllFrameFences([device, allocator, vertexBuffer, vertexAlloc, indexBuffer, indexAlloc,
-                                     paramsUBO, paramsAlloc, pool, materialSet]() {
+                                     paramsUBO, paramsAlloc, pool, materialSet, blend]() {
+        if (blend) {
+            blend->destroy(device, allocator);
+            delete blend;
+        }
         if (vertexBuffer) {
             AllocatedBuffer ab{}; ab.buffer = vertexBuffer; ab.allocation = vertexAlloc;
             destroyBuffer(allocator, ab);

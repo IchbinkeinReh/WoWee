@@ -282,6 +282,10 @@ private:
     size_t textureCacheBudgetBytes_ = 4096ull * 1024 * 1024;
     std::unordered_set<std::string> failedTextureCache_;
     std::unordered_set<std::string> loggedTextureLoadFails_;
+    /// Each chunk's blend texture (createBlendTexture) and its cache key. The
+    /// texture is the chunk's alone, so it goes when the chunk does
+    /// (destroyChunkGPU) rather than waiting for the cache to fill.
+    std::unordered_map<const VkTexture*, std::string> blendTextureKeys_;
     /// Cache entries handed out at or after this counter are never evicted.
     ///
     /// A chunk under construction is not in `chunks` yet, so the scan for what
