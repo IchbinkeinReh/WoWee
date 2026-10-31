@@ -2046,15 +2046,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 // stationeryOptions for the whole thing in one place.
                 //
                 // GetStationeryInfo(index) → name, texture, cost, as
-                // mailframe.lua unpacks them: the row's label, the art name it
-                // pastes into STATIONERY_PATH..texture.."1", and a price or nil.
+                // mailframe.lua unpacks them: the row's label, the icon its
+                // popup button draws, and a price or nil.
                 // The client's own version of the triple is two strings and a
                 // number (0x0056df80), the second built as "%s%s%s" from a
                 // StringLookups value, a backslash or nothing, and an item-name
-                // getter - which is why the label and the art are served here
-                // from the two places this interface's consumer can use them:
-                // the item's name for the label, and the table's art column for
-                // the paper. The price is nil for a paper already in the bags,
+                // getter - an icon path - so the label is the item's name and
+                // the texture the item's icon; the table's art column is only
+                // the letter background (GetSelectedStationeryTexture). The
+                // price is nil for a paper already in the bags,
                 // which the frame draws with no price at all, and the vendor's
                 // buy price otherwise - a number this client used to read off
                 // the item query and drop on the floor.
@@ -2067,8 +2067,15 @@ void registerSocialLuaAPI(lua_State* L) {
                     if (index > options.size()) return luaReturnNil(L);
                     const auto& row = options[index - 1];
                     lua_pushstring(L, row.name.c_str());
-                    if (!row.texture.empty()) lua_pushstring(L, row.texture.c_str());
-                    else                      lua_pushnil(L);
+                    // The popup draws this as the row's icon (mailframe.lua:1037,
+                    // StationeryPopupButtonNIcon:SetTexture), so it is the paper's
+                    // item icon (0x0056e520) - not the art name, which only the
+                    // letter background pastes into STATIONERY_PATH.
+                    const auto* item = row.itemId ? gh->getItemInfo(row.itemId) : nullptr;
+                    const std::string icon = item && item->displayInfoId
+                        ? gh->getItemIconPath(item->displayInfoId) : std::string();
+                    if (!icon.empty()) lua_pushstring(L, icon.c_str());
+                    else               lua_pushnil(L);
                     if (row.hasCost) lua_pushnumber(L, row.cost);
                     else             lua_pushnil(L);                 // free
                     return 3;
