@@ -72,8 +72,8 @@ bool questObjectiveSlotLine(GameHandler& gh, const GameHandler::QuestLogEntry& q
                             QuestObjective& out) {
     // The paragraph branch, which every negative number lands in as well.
     if (slot < 0 || slot == 16 || slot == 17) {
-        if (q.objectives.empty()) return false;
-        out.text = q.objectives;
+        if (q.endText.empty()) return false;
+        out.text = q.endText;
         out.type = "event";
         out.finished = q.complete;
         return true;
@@ -124,15 +124,16 @@ bool questObjectiveSlotLine(GameHandler& gh, const GameHandler::QuestLogEntry& q
 std::vector<QuestObjective> questObjectives(GameHandler& gh,
                                             const GameHandler::QuestLogEntry& q) {
     std::vector<QuestObjective> out;
-    // The list opens with the quest's own objectives paragraph - the text the
-    // quest giver wrote under "Objectives:", kept in the record as a 512-byte
-    // buffer at +0x1a24. The walk (0x005e1460) answers it as its first row, under
-    // the kind "event", and calls it finished off the quest slot's own done bit
-    // rather than off any count, which is why a done quest greys the paragraph
-    // out in the log instead of only the lines under it.
-    if (!q.objectives.empty()) {
+    // The list opens with the quest's EndText - an exploration or event
+    // objective's own wording ("Erkundet den Kral"), empty for most quests - kept
+    // in the record as a 512-byte buffer at +0x1a24, after the two 3000-byte
+    // texts. It is not the objectives paragraph: answering that here put the
+    // whole paragraph at the top of every quest's objective list. The walk
+    // (0x005e1460) answers it as its first row, under the kind "event", and calls
+    // it finished off the quest slot's own done bit rather than off any count.
+    if (!q.endText.empty()) {
         QuestObjective line;
-        line.text = q.objectives;
+        line.text = q.endText;
         line.type = "event";
         line.finished = q.complete;
         out.push_back(std::move(line));

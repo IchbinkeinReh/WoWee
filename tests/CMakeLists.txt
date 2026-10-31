@@ -2317,6 +2317,18 @@ target_link_libraries(test_quest_progress PRIVATE catch2_main)
 add_test(NAME quest_progress COMMAND test_quest_progress)
 register_test_target(test_quest_progress)
 
+# ── test_quest_objective_lines ──────────────────────────────
+# The objective list opens with the quest's EndText, not its objectives text.
+add_executable(test_quest_objective_lines
+    test_quest_objective_lines.cpp
+)
+target_include_directories(test_quest_objective_lines PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_quest_objective_lines SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_quest_objective_lines PRIVATE catch2_main)
+wowee_test_link_glm(test_quest_objective_lines)
+add_test(NAME quest_objective_lines COMMAND test_quest_objective_lines)
+register_test_target(test_quest_objective_lines)
+
 # ── ASAN / UBSan for test targets ────────────────────────────
 if(WOWEE_ENABLE_ASAN AND NOT MSVC)
     foreach(_t IN LISTS ALL_TEST_TARGETS)

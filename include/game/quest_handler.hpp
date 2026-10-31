@@ -119,6 +119,13 @@ public:
         std::string description;
         /// Shown once every objective is done, in place of the objective list.
         std::string completionText;
+        /// The quest's EndText, the fourth string of its query response: the
+        /// line an exploration or event objective is written as ("Erkundet den
+        /// Kral"). Empty for most quests. It is the record's 512-byte buffer at
+        /// +0x1a24 - between the two 3000-byte texts (objectives, details) and
+        /// the completed line - which the objective list opens with
+        /// (quest_objectives.hpp).
+        std::string endText;
         /// The spell the quest offers as a reward, or zero.
         uint32_t rewardSpellId = 0;
         uint32_t rewardXPId = 0;  // QuestXP.dbc column; reward XP = that column at this quest's level

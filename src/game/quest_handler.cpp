@@ -1350,6 +1350,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             }
             if (!parsed.completionText.empty()) q.completionText = parsed.completionText;
             if (!parsed.description.empty()) q.description = parsed.description;
+            if (!parsed.endText.empty()) q.endText = parsed.endText;
 
             // Store structured kill/item objectives for later kill-count restoration.
             if (objs.valid) {
