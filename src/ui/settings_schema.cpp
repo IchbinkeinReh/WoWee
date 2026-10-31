@@ -636,10 +636,19 @@ constexpr SettingDesc kSchema[] = {
      "yards. Lower feels closer to the character; higher looks over it.", "", 1.6f},
     {"idleorbit", "Idle orbit", SettingKind::Bool, 0, 0, 0, "Camera", "",
      "Slowly circle the camera around you while you stand still.", "", 1},
-    {"mousespeed", "Mouse sensitivity", SettingKind::Float, 0.05f, 1.0f, 0.05f, "Camera", "Mouse",
+    // 0.225 is what the game's Mouse Look Speed slider starts at - 180 of its
+    // degrees, times the 0.00125 the client turns the view by for each of them,
+    // and the step is a quarter of a tenth so that number is one of the
+    // positions the slider can hold. The span is wider than either of the
+    // game's two sliders reach, its own included: the look slider tops out at
+    // 0.3375 of this. That is deliberate, as with the Max camera distance row
+    // above it - a config that already sits outside the game's reach stays on
+    // show here rather than snapping to an end.
+    {"mousespeed", "Mouse sensitivity", SettingKind::Float, 0.05f, 1.0f, 0.025f, "Camera", "Mouse",
      "How far the view turns for a given movement of the mouse. The game's\n"
-     "own panel offered this twice, as sensitivity and as look speed, and\n"
-     "both wrote this one value.", "", 0.2f},
+     "own panel had two sliders here: one for how fast the pointer moves,\n"
+     "which this client does not keep, and one for how far the view turns.\n"
+     "This client puts both of them on this one value.", "", 0.225f},
     {"invertmouse", "Invert mouse look", SettingKind::Bool, 0, 0, 0, "Camera", "",
      "Push the mouse forward to look up, as in a flight sim.", "", 0},
     {"gamepad", "Use a controller", SettingKind::Bool, 0, 0, 0, "Camera", "Controller",
@@ -694,8 +703,10 @@ constexpr SettingDesc kSchema[] = {
      "Size of the bag windows.", "", 1},
     {"separatebags", "Separate bag windows", SettingKind::Bool, 0, 0, 0, "Interface", "",
      "Open each bag in its own window, rather than all in one.", "", 1},
+    // Off, as the client registers showKeyring (0x00510000 "0"): the original
+    // leaves the keyring button hidden until the player asks for it.
     {"showkeyring", "Show keyring", SettingKind::Bool, 0, 0, 0, "Interface", "",
-     "Show the key ring button beside the bags.", "", 1},
+     "Show the key ring button beside the bags.", "", 0},
     {"freebagslots", "Free space on the backpack", SettingKind::Bool, 0, 0, 0, "Interface", "",
      "Count the empty slots across all your bags on the backpack button.",
      "", 0, "", "cvar:displayFreeBagSlots"},
@@ -716,14 +727,14 @@ constexpr SettingDesc kSchema[] = {
      "if IsAddOnLoaded and IsAddOnLoaded('Blizzard_AchievementUI') "
      "and AchievementFrame_ForceUpdate then AchievementFrame_ForceUpdate() end"},
     {"showitemlevel", "Item level in tooltips", SettingKind::Bool, 0, 0, 0, "Interface", "",
-     "Show an item's level in its tooltip.", "", 1, "", "cvar:showItemLevel"},
+     "Show an item's level in its tooltip.", "", 0, "", "cvar:showItemLevel"},
 
     {"equipmentmanager", "Equipment manager", SettingKind::Bool, 0, 0, 0, "Interface", "Character sheet",
      "Save sets of gear on the character sheet and swap between them\n"
      "in one click.", "", 0, "", "cvar:equipmentManager"},
     {"previewtalents", "Preview talent changes", SettingKind::Bool, 0, 0, 0, "Interface", "",
      "Lay talent points out on the talent sheet before spending them,\n"
-     "and confirm them all at once.", "", 1, "", "cvar:previewTalents"},
+     "and confirm them all at once.", "", 0, "", "cvar:previewTalents"},
 
     // ----------------------------------------------------------------- Minimap
     // Rotate-with-camera was deliberately absent until 2026-09-06: the loader
@@ -731,8 +742,9 @@ constexpr SettingDesc kSchema[] = {
     // at the rotated map on screen. It is a row now, saved like the rest -
     // the game's Display page that offered it is retired, and the minimap's
     // own menu had been turning it within a session all along.
+    // On: the client registers showClock "1" (0x00510000).
     {"minimapclock", "Clock", SettingKind::Bool, 0, 0, 0, "Minimap", "Appearance",
-     "Show the time of day under the minimap.", "", 0},
+     "Show the time of day under the minimap.", "", 1},
     {"minimapsquare", "Square minimap", SettingKind::Bool, 0, 0, 0, "Minimap", "",
      "Draw the minimap as a square rather than a circle.", "", 0},
     {"minimapnpcdots", "Nearby creature dots", SettingKind::Bool, 0, 0, 0, "Minimap", "",
@@ -792,7 +804,7 @@ constexpr SettingDesc kSchema[] = {
      "below a fifth.", "", 1},
     {"screenedgeflash", "Low health edge flash", SettingKind::Bool, 0, 0, 0, "HUD", "",
      "The game's own red flash at the screen's edge while your health\n"
-     "is low - beside the warning above, which is this client's.", "", 0,
+     "is low - beside the warning above, which is this client's.", "", 1,
      "", "cvar:screenEdgeFlash"},
 
     {"buffdurations", "Time left under buffs", SettingKind::Bool, 0, 0, 0, "HUD", "Buffs",
@@ -801,7 +813,7 @@ constexpr SettingDesc kSchema[] = {
      "SHOW_BUFF_DURATIONS = v if BuffFrame_UpdatePositions then BuffFrame_UpdatePositions() end"},
     {"dispellabledebuffs", "Highlight debuffs you can remove", SettingKind::Bool, 0, 0, 0, "HUD", "",
      "Frame the debuffs on your target that one of your spells can\n"
-     "dispel.", "", 1, "", "cvar:showDispelDebuffs", "", "SHOW_DISPELLABLE_DEBUFFS = v"},
+     "dispel.", "", 0, "", "cvar:showDispelDebuffs", "", "SHOW_DISPELLABLE_DEBUFFS = v"},
     {"castablebuffs", "Only buffs you can cast", SettingKind::Bool, 0, 0, 0, "HUD", "",
      "On the target frame, show only the buffs you could cast yourself.",
      "", 0, "", "cvar:showCastableBuffs", "", "SHOW_CASTABLE_BUFFS = v"},
@@ -823,7 +835,7 @@ constexpr SettingDesc kSchema[] = {
     {"secureabilitytoggle", "Ignore a double tap on Attack", SettingKind::Bool, 0, 0, 0,
      "Combat", "",
      "A second press of Attack within half a second is ignored, so a\n"
-     "double tap cannot switch auto-attack straight back off.", "", 0},
+     "double tap cannot switch auto-attack straight back off.", "", 1},
     {"autofacetarget", "Turn to face the target (debug)", SettingKind::Bool, 0, 0, 0,
      "Combat", "",
      "Turn your character toward the target when you start attacking it\n"
@@ -832,7 +844,7 @@ constexpr SettingDesc kSchema[] = {
 
     {"autoselfcast", "Cast helpful spells on yourself", SettingKind::Bool, 0, 0, 0, "Combat", "Casting",
      "A helpful spell cast with no friendly target goes on you, rather\n"
-     "than waiting for one.", "", 0, "", "cvar:autoSelfCast"},
+     "than waiting for one.", "", 1, "", "cvar:autoSelfCast"},
     {"selfcastkey", "Self cast key", SettingKind::Enum, 0, 3, 1, "Combat", "",
      "Hold this while casting to put the spell on yourself, whatever is\n"
      "targeted.", "None|Alt|Ctrl|Shift", 1, "", "click:SELFCAST", "NONE|ALT|CTRL|SHIFT"},
@@ -936,7 +948,7 @@ constexpr SettingDesc kSchema[] = {
      "COMBAT_TEXT_FLOAT_MODE = v "
      "if CombatText_UpdateDisplayedMessages then CombatText_UpdateDisplayedMessages() end"},
     {"fctdodgeparrymiss", "Dodges, parries and misses", SettingKind::Bool, 0, 0, 0, "Combat Text", "",
-     "Say when a swing at you missed, and why.", "", 1, "combattext",
+     "Say when a swing at you missed, and why.", "", 0, "combattext",
      "cvar:fctDodgeParryMiss", "", "COMBAT_TEXT_SHOW_DODGE_PARRY_MISS = v"},
     {"fctdamagereduction", "Damage reduction", SettingKind::Bool, 0, 0, 0, "Combat Text", "",
      "How much of a hit your armour, resistances and absorbs took off.",
@@ -986,7 +998,7 @@ constexpr SettingDesc kSchema[] = {
      "", "cvar:showPartyPets", "", "SHOW_PARTY_PETS = v"},
 
     {"arenaframes", "Arena enemy frames", SettingKind::Bool, 0, 0, 0, "Unit Frames", "Arena",
-     "Frames for the other team in an arena match.", "", 0,
+     "Frames for the other team in an arena match.", "", 1,
      "", "cvar:showArenaEnemyFrames", "", "SHOW_ARENA_ENEMY_FRAMES = v"},
     {"arenapets", "Their pets", SettingKind::Bool, 0, 0, 0, "Unit Frames", "",
      "Frames for the other team's pets as well.", "", 1, "arenaframes",
@@ -997,14 +1009,14 @@ constexpr SettingDesc kSchema[] = {
      "smaller.", "", 0, "", "cvar:fullSizeFocusFrame"},
 
     {"playerstatustext", "On your frame", SettingKind::Bool, 0, 0, 0, "Unit Frames",
-     "Health and power numbers", "Write the numbers on your own health and power bars.", "", 1,
+     "Health and power numbers", "Write the numbers on your own health and power bars.", "", 0,
      "", "cvar:playerStatusText"},
     {"petstatustext", "On your pet's frame", SettingKind::Bool, 0, 0, 0, "Unit Frames", "",
-     "The same on your pet's bars.", "", 1, "", "cvar:petStatusText"},
+     "The same on your pet's bars.", "", 0, "", "cvar:petStatusText"},
     {"partystatustext", "On party frames", SettingKind::Bool, 0, 0, 0, "Unit Frames", "",
-     "The same on each party member's bars.", "", 1, "", "cvar:partyStatusText"},
+     "The same on each party member's bars.", "", 0, "", "cvar:partyStatusText"},
     {"targetstatustext", "On the target frame", SettingKind::Bool, 0, 0, 0, "Unit Frames", "",
-     "The same on your target's bars.", "", 1, "", "cvar:targetStatusText"},
+     "The same on your target's bars.", "", 0, "", "cvar:targetStatusText"},
     {"statustextpercent", "As percentages", SettingKind::Bool, 0, 0, 0, "Unit Frames", "",
      "Percentages rather than the amounts.", "", 0, "", "cvar:statusTextPercentage"},
     {"xpbartext", "On the experience bar", SettingKind::Bool, 0, 0, 0, "Unit Frames", "",
@@ -1020,7 +1032,7 @@ constexpr SettingDesc kSchema[] = {
      "if InterfaceOptionsDisplayPanelShowAggroPercentage_SetFunc then "
      "InterfaceOptionsDisplayPanelShowAggroPercentage_SetFunc() end"},
     {"threatsounds", "Threat sounds", SettingKind::Bool, 0, 0, 0, "Unit Frames", "",
-     "Play a sound as your threat rises to the next level.", "", 0,
+     "Play a sound as your threat rises to the next level.", "", 1,
      "", "cvar:threatPlaySounds"},
 
     // The game draws a portrait once, a still picture of the head
@@ -1051,8 +1063,11 @@ constexpr SettingDesc kSchema[] = {
 
     {"enablemusic", "Enable music", SettingKind::Bool, 0, 0, 0, "Sound", "Music",
      "Off silences the score without disturbing the volume below.", "", 1},
+    // At the level the client registers its music CVar at (Sound_MusicVolume
+    // "0.4" out of 0x004d0000), and ambience below at "0.6" - master and the
+    // effects scale stay at full, as they do there.
     {"musicvolume", "Music volume", SettingKind::Int, 0, 100, 5, "Sound", "",
-     "The zone's music.", "", 30},
+     "The zone's music.", "", 40},
     {"loopmusic", "Play without gaps", SettingKind::Bool, 0, 0, 0, "Sound", "",
      "Start the zone's next track straight away rather than leaving the\n"
      "silence its music sets between them (Sound_ZoneMusicNoDelay).", "", 0},
@@ -1060,7 +1075,7 @@ constexpr SettingDesc kSchema[] = {
     {"enableambience", "Enable ambience", SettingKind::Bool, 0, 0, 0, "Sound", "Ambience",
      "Off silences the world's own noise without disturbing the volumes below.", "", 1},
     {"ambientvolume", "Ambience volume", SettingKind::Int, 0, 100, 5, "Sound", "",
-     "Wind, water, birds and the rest of the world's own noise.", "", 100},
+     "Wind, water, birds and the rest of the world's own noise.", "", 60},
 
     {"npcvoicevolume", "NPC voices", SettingKind::Int, 0, 100, 5, "Sound", "Voices",
      "Greetings, farewells and quest speech from the people you talk to.", "", 100},
@@ -1117,7 +1132,7 @@ constexpr SettingDesc kSchema[] = {
      "", 1},
     {"clicktofocus", "Click anywhere to type", SettingKind::Bool, 0, 0, 0, "Chat", "",
      "A click anywhere in the chat window puts the cursor in the input\n"
-     "box, not only a click on the box.", "", 0, "", "cvar:wholeChatWindowClickable"},
+     "box, not only a click on the box.", "", 1, "", "cvar:wholeChatWindowClickable"},
     {"chatmousescroll", "Scroll with the mouse wheel", SettingKind::Bool, 0, 0, 0, "Chat", "",
      "The wheel scrolls the chat window while the mouse is over it.", "", 1,
      "", "cvar:chatMouseScroll", "",
@@ -1140,7 +1155,7 @@ constexpr SettingDesc kSchema[] = {
      "Say each player's roll on an item, not only who won it.", "", 1,
      "", "cvar:showLootSpam"},
     {"guildmemberalerts", "Guild members coming and going", SettingKind::Bool, 0, 0, 0, "Chat", "",
-     "A line when a guild member logs in or out.", "", 1, "", "cvar:guildMemberNotify"},
+     "A line when a guild member logs in or out.", "", 0, "", "cvar:guildMemberNotify"},
 
     {"joingeneral", "General", SettingKind::Bool, 0, 0, 0, "Chat", "Channels to join",
      "Everyone in your current zone.", "", 1},
@@ -1154,7 +1169,7 @@ constexpr SettingDesc kSchema[] = {
     {"joinlocal", "Local", SettingKind::Bool, 0, 0, 0, "Chat", "",
      "The realm's Local channel, on realms that provide one.", "", 1},
     {"joinguildrecruitment", "GuildRecruitment", SettingKind::Bool, 0, 0, 0, "Chat", "",
-     "Guilds looking for members, and players looking for a guild.", "", 0,
+     "Guilds looking for members, and players looking for a guild.", "", 1,
      "", "cvar:guildRecruitmentChannel"},
     // Speech bubbles were the game's own Social page's, two boxes among chat
     // options FrameXML reads for itself. These two the client reads - the
@@ -1163,7 +1178,7 @@ constexpr SettingDesc kSchema[] = {
      "Float what is said and yelled nearby over the speaker's head.", "", 1},
     {"chatbubblesparty", "Party chat in bubbles", SettingKind::Bool, 0, 0, 0, "Chat", "",
      "Float party and raid chat over the speaker's head as well.",
-     "", 0, "chatbubbles"},
+     "", 1, "chatbubbles"},
 
     // ---------------------------------------------------------------- Gameplay
     {"autoloot", "Auto loot", SettingKind::Bool, 0, 0, 0, "Gameplay", "Looting",
@@ -1175,7 +1190,7 @@ constexpr SettingDesc kSchema[] = {
      "click:AUTOLOOTTOGGLE", "NONE|ALT|CTRL|SHIFT"},
     {"lootatmouse", "Loot window at the mouse", SettingKind::Bool, 0, 0, 0, "Gameplay", "",
      "Open the loot window where the mouse is, rather than in its usual\n"
-     "place.", "", 0, "", "cvar:lootUnderMouse", "", "LOOT_UNDER_MOUSE = v"},
+     "place.", "", 1, "", "cvar:lootUnderMouse", "", "LOOT_UNDER_MOUSE = v"},
     {"autosellgrey", "Sell junk automatically", SettingKind::Bool, 0, 0, 0, "Gameplay", "",
      "Opening any merchant sells every Poor quality item - the grey ones -\n"
      "from your backpack and bags, and adds the coin. Nothing of another\n"
@@ -1205,7 +1220,7 @@ constexpr SettingDesc kSchema[] = {
 
     {"instantquesttext", "Show quest text at once", SettingKind::Bool, 0, 0, 0, "Gameplay", "Quests",
      "Quest text appears whole, rather than being revealed line by\n"
-     "line.", "", 0, "", "cvar:questFadingDisable", "", "QUEST_FADING_DISABLE = v"},
+     "line.", "", 1, "", "cvar:questFadingDisable", "", "QUEST_FADING_DISABLE = v"},
     {"autotrackquests", "Track a quest when you accept it", SettingKind::Bool, 0, 0, 0,
      "Gameplay", "", "A new quest goes straight onto the objectives tracker.", "", 1,
      "", "cvar:autoQuestWatch", "", "AUTO_QUEST_WATCH = v"},

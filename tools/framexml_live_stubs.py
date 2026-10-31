@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stubbed bindings that a handed-over element actually calls.
+r"""Stubbed bindings that a handed-over element actually calls.
 
 The readiness report counts a name as answered once it is bound, and a stub is
 bound - so `HasPetSpells -> lua_ReturnNil` read as clean while it was hiding
@@ -80,14 +80,24 @@ absent and all three were reachable. These two are not.
   * Movie recording. The renderer can capture one frame - Renderer::captureScreenshot
     writes a PNG - and there is no encoder behind it. MovieRecording_* is video.
 
-ABSENT FEATURES, WHICH IS WHAT THE STUB SAYS (28)
+ABSENT FEATURES, WHICH IS WHAT THE STUB SAYS
 
-The world map's debug objects, zone map, battlefield flag and vehicle
-positions, dungeon map floors and Wintergrasp timer; Battle.net and its friend
-list; voice chat and mutes; movie recording; mail stationery; achievement
-comparison; arena opponents; the multi-cast bar's offset; addon memory usage.
-Each is a feature this client does not have, and the stub is the honest shape
-of that.
+Battle.net and its friend list; voice chat and mutes; movie recording;
+achievement comparison; arena opponents; addon memory usage. Each is a feature
+this client does not have, and the stub is the honest shape of that. The world
+map's debug objects and zone maps are listed too, but they are not a feature
+missing here: the shipped client answers none of them as well, one `return 0`
+shared by all three names.
+
+Six rows that this header used to call absent are not (2026-10-31). The
+battlefield flag positions, the vehicles both maps draw pins for, the dungeon
+map's floors, the mail's stationery list and the Wintergrasp countdown are each
+answered now - off the packet or the table behind them, Wintergrasp off world
+states 3801 and 4354 (include/game/world_state_ui.hpp names the ids). The
+multi-cast bar's offset was never a bar state either: the client's binding
+pushes the literal 6 and reads nothing, and this repository now pushes the
+same. It stays on the list because a bare push is what this sweep looks for,
+and that is the right thing for it to look for.
 
 CORRECT ANSWERS THAT LOOK LIKE STUBS (9)
 
@@ -96,6 +106,106 @@ because WotLK has no skill points - skillframe.lua gates every purchase verb
 on it, which is why BuySkillTier and AddSkillUp are unreachable rather than
 unimplemented. GetCurrentMapDungeonLevel is zero because a map with no floors
 is on floor zero.
+
+THREE THAT WERE STUBS AND ARE NOT (2026-10-30)
+
+GetUnitHealthModifier, GetUnitPowerModifier and GetUnitMaxHealthModifier all
+answered a bare 1.0 and all three are answered from the unit now. The client
+gates them identically - the unit is the local player, or it has a
+UNIT_FIELD_PETNUMBER, and anything else pushes *zero* - and then: max health is
+the unit's own UNIT_FIELD_MAXHEALTHMODIFIER float plus one (0x00612870 at field
+blob +0x22c), and the other two answer one only for a hunter's pet. The client's
+non-hunter leg is not a feature this one lacks: it reads the two floats at
++0x34 and +0x38 of the per-entry creature record a query response fills (lookup
+0x0067b6a0, memory-pool label "\AUDBCACHECALLBACK\", keyed by the entry id, and
+its first test is `key == 0` - which is why a player answers zero). A 3.3.5
+creature query carries no float field at all, so those two reads reinterpret an
+id, and a small integer read as IEEE 754 is a denormal: zero, on both sides.
+
+The multiplier field is a wire field after all; an earlier reading here had
+written it off as client-internal. The client's *unit* descriptor space runs
+contiguous from blob dword 0 up to 141 with no gaps, and its last three records
+name 139/140/141 MAXHEALTHMODIFIER, HOVERHEIGHT and PADDING - the three tail
+unit fields against UNIT_END at 148 - while the record below them,
+POWER_COST_MULTIPLIER at blob 132 covering seven dwords, is this repository's
+own "138". Two spaces are the trap: the *player* space has its own record at blob
+dword 139, and it is PLAYER_VISIBLE_ITEM_3_ENTRYID.
+
+Visible on the pet paperdoll's stat tooltip, whose only use these are: a
+warlock pet or a death knight's ghoul now says its stamina changes nothing,
+which is what the original client says, and a hunter's pet keeps its one.
+
+Recorded so the three are not re-triaged, and so that record is looked for by
+its real name next time - it is the answer to a creature query, which is what
+this repository already keeps in its creature info cache, and not a row of a
+table. The pool label that made it look like a DBC row is the reason that was
+wrong for as long as it was.
+
+A COMMENT IS NOT A CALL (2026-10-30)
+
+The file text was grepped raw, so a name mentioned only inside a commented-out
+block counted as reached from a live element. Two rows went, and both are things
+3.3.5 itself deleted rather than anything here: petframe.lua's pet-expiry flash
+block (GetPetTimeRemaining, mentioned twice inside `--`), and the old honour
+progress bar in inspecthonorframe.lua (GetInspectPVPRankProgress, once). Lua
+comments are
+blanked before matching now, long-bracket ones consumed whole and strings left
+alone, and `<!-- -->` in the markup files the same way. 173 stubs, 73 reached -
+one of the 74 counted that day is taken back out by the check two sections down.
+
+ONE THAT IS A QUERY AND NOT A VERB
+
+ForceGossip reads like an instruction and is a question. FUN_0058ab50 casts the
+current gossip target's guid pair to a unit (the same checked cast type 8 that
+the hover-height watcher uses), and answers bit 27 of the flag dword at +0xc of
+the record hung off that unit at +0x964 - the same per-entry creature record the
+pet stat modifiers read at +0x34 and +0x38, and the same accessor family: bits
+2, 4 (inverted), 19, 22, 25, 26 and 27 are each one one-line getter.
+
+gossipframe.lua:12 uses it as `not ForceGossip()` inside the test that clicks a
+lone gossip option for you when there are no quests and one option. So a definite
+no - which is what this client answers - auto-selects, and the original
+auto-selects too for every NPC whose query answer does not set bit 27. That is
+the error direction the stub had backwards, and it is closed: the record is the
+SMSG_CREATURE_QUERY_RESPONSE answer kept per entry, the +0xc flag dword is the
+typeFlags this repository already parses, and bit 27 is ForceGossip. What settled
+that it is a query answer and not a row: fingerprinting all 246 tables for the
+record's shape - a bit field at column 3 and two small floats at columns 13 and
+14 - left nine near misses, none of them keyed by a creature entry: they are the
+sound and spell-chain tables, a vehicle seat, a map overlay, a destructible
+model, a durability level and a scaling-stat distribution. A table this install
+were short of would have shown up there under a creature-template name.
+
+A LIVE ELEMENT IS NOT THE SAME AS A BINDING THE CLIENT EVER HAD (2026-10-30)
+
+The interface tree named on the command line is not the 12340 client's own UI.
+It is the post-Cataclysm layout under a 30300 tag: 115 of its FrameXML XML files
+hold <Frame> definitions and they point at ..\FrameXML\UI.xsd, and a 3.3.5
+FrameXML carries no frame XML and no schema at all. So "reached from a live
+element" is a superset of what the reference client ever reached, and the two
+ways a row can be manufactured are now taken out of the headline count and
+reported under it.
+
+Pass the decompile's `strings.tsv` as the second argument and every reached name
+the executable's own strings do not carry is marked in place and listed: four
+here - AchievementMicroButton_Update (called at blizzard_achievementui.lua:671),
+MutedList_Update (friendsframe.lua:1341), CannotBeResurrected and
+MovieRecording_IsRecording. Nothing in the tree defines those either, so the
+interface is simply asking for functions this client never registered, and
+reading them off the binary is a dead end by construction. With no strings file
+the sweep says so rather than pretending the check ran.
+
+The other direction is a name the interface defines for itself. uiparent.lua:346
+defines InspectAchievements, and a top-level Lua definition lands in the
+interpreter after the native binding is installed, so whatever a panel calls by
+that name is the interface's own function and never our stub - which is better
+than what the stub does, and why the row was manufactured. Only a *global*
+definition counts: `local Name = function` and `Frame.Name = function` are a
+local and a method and neither displaces the global. The binding stays
+registered, because a tree that does not define the name needs it.
+
+That leaves the rows worth reading the decompile over: names the executable
+really does carry, reached from something it draws.
 """
 import re
 import sys
@@ -113,6 +223,11 @@ from pathlib import Path
 # answer is usually about a particular one:
 #
 #     python3 tools/framexml_live_stubs.py ~/wow-1.12/interface
+#
+# The second argument is the reference binary's own string dump (the decompile's
+# strings.tsv), which splits names the client never had from names it did; see
+# the section of this note headed "A live element is not the same as a binding
+# the client ever had".
 ROOT = Path(__file__).resolve().parent.parent
 XML = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
 if not XML.is_dir():
@@ -195,6 +310,70 @@ def _live_files():
 
 OWNED = _live_files()
 
+_LONG_OPEN = re.compile(r"\[(=*)\[")
+
+
+def _strip_lua_comments(text):
+    """Blank out Lua comments, leaving strings alone.
+
+    A commented-out call is not a call: petframe.lua mentions
+    GetPetTimeRemaining twice and both mentions are inside a `--` block left
+    over from the expansion that removed the pet expiry bar. Long-bracket
+    comments (`--[[ ]]`, `--[==[ ]==]`) have to be consumed whole or a `]]` in
+    one ends the comment early, and the string cases have to be skipped or a
+    `"a -- b"` hides every call after it on that line.
+    """
+    out, i, n = [], 0, len(text)
+    while i < n:
+        ch = text[i]
+        if text.startswith("--", i):
+            m = _LONG_OPEN.match(text, i + 2)
+            if m:
+                close = "]" + m.group(1) + "]"
+                k = text.find(close, m.end())
+                i = n if k < 0 else k + len(close)
+            else:
+                k = text.find("\n", i + 2)
+                i = n if k < 0 else k
+            out.append(" ")
+            continue
+        if ch in "\"'":
+            j = i + 1
+            while j < n and text[j] != ch and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+            continue
+        if ch == "[":
+            m = _LONG_OPEN.match(text, i)
+            if m:
+                close = "]" + m.group(1) + "]"
+                k = text.find(close, m.end())
+                j = n if k < 0 else k + len(close)
+                out.append(text[i:j])
+                i = j
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _strip_xml_comments(text):
+    """Blank out `<!-- -->`, which is the same mistake in the markup files."""
+    out, i = [], 0
+    while True:
+        k = text.find("<!--", i)
+        if k < 0:
+            out.append(text[i:])
+            return "".join(out)
+        e = text.find("-->", k + 4)
+        out.append(text[i:k])
+        i = len(text) if e < 0 else e + 3
+
+
+# A comment is not a call, and both file kinds have one.
+STRIP = {".lua": _strip_lua_comments, ".xml": _strip_xml_comments}
+
 bound = {}
 inline_stub = {}
 for f in (ROOT / "src/addons").glob("*.cpp"):
@@ -238,16 +417,90 @@ for f in (ROOT / "src/addons").glob("*.cpp"):
 stubbed = {n for n, impl in bound.items() if impl in STUBS} | set(inline_stub)
 
 hits = {}
+# Every live file's text, kept: a name the interface defines for itself has to
+# be found in it, and the same text was already read for the calls.
+texts = {}
 for fname, element in OWNED.items():
     matches = list(XML.rglob(fname))
     if not matches:
         continue
     text = matches[0].read_text(errors="ignore")
+    strip = STRIP.get(matches[0].suffix)
+    if strip:
+        text = strip(text)
+    texts[fname] = (matches[0], text)
     for name in stubbed:
         if re.search(rf"\b{re.escape(name)}\s*\(", text):
             hits.setdefault(name, []).append(f"{element}:{fname}")
 
+# A name the interface defines for itself is not reached as a binding. The
+# native function is installed into the interpreter before the interface loads,
+# and a top-level `function Name (unit)` in a file that loads afterwards puts the
+# interface's own function there instead, so whichever panel calls the name
+# reaches Lua code and never one of these stubs. Only a global definition
+# counts: `local Name = function` and `Frame.Name = function` are a local and a
+# method, and neither replaces the global the binding sits in.
+#
+# InspectAchievements is one: uiparent.lua:346 defines it, and the UnitPopup
+# menu calls it. It was counted as a stub reached from two live files, and the
+# row was manufactured - the binding is still worth having for a tree that does
+# not define the name, but nothing here is reached by it.
+_GLOBAL_DEF = re.compile(r"^(?:function\s+([A-Za-z_]\w*)|([A-Za-z_]\w*)\s*=\s*function)", re.M)
+
+
+def _provided(name):
+    """Files of the live set that define this name globally."""
+    out = []
+    for fname, (path, text) in texts.items():
+        for m in _GLOBAL_DEF.finditer(text):
+            if (m.group(1) or m.group(2)) == name:
+                out.append(fname)
+                break
+    return out
+
+
+shadowed = {n: _provided(n) for n in list(hits) if _provided(n)}
+for name in shadowed:
+    del hits[name]
+
+# The other half of the "live element" question: an element that reaches a name
+# is not the same as the reference client ever having been asked for it. The
+# interface tree under Data/ is a post-Cataclysm FrameXML tagged 30300 (its XML
+# files carry <Frame> definitions and point at UI.xsd, which a 3.3.5 FrameXML
+# has neither of), so some of these names belong to a UI this executable never
+# ran. The binary is the test: its decompile dumps every string it carries, and
+# a binding name absent from that list was never a binding here.
+STRINGS = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+absent = set()
+if STRINGS and STRINGS.is_file():
+    known = set()
+    with STRINGS.open(errors="ignore") as fh:
+        for line in fh:
+            parts = line.rstrip("\n").split("\t", 1)
+            if len(parts) == 2:
+                known.add(parts[1])
+    absent = {n for n in hits if n not in known}
+elif STRINGS:
+    print(f"no strings file at {STRINGS}\n")
+
 print(f"{len(bound)} bindings, {len(stubbed)} of them stubs, "
       f"{len(hits)} reached from a handed-over element\n")
 for name in sorted(hits, key=lambda n: (-len(hits[n]), n)):
-    print(f"  {name:<34} {bound[name]:<20} {', '.join(sorted(set(hits[name])))}")
+    mark = "  (not in the client binary)" if name in absent else ""
+    print(f"  {name:<34} {bound[name]:<20} {', '.join(sorted(set(hits[name])))}{mark}")
+
+if shadowed:
+    print(f"\n{len(shadowed)} stub{'s' if len(shadowed) != 1 else ''} whose name the "
+          "interface defines for itself, so its own function replaces the binding "
+          "at load and nothing here is reached:")
+    for name, files in sorted(shadowed.items()):
+        print(f"  {name:<34} {', '.join(sorted(files))}")
+
+if STRINGS and STRINGS.is_file():
+    print(f"\n{len(absent)} of the reached names are not in the client's own strings - "
+          "a newer interface asking for a binding this executable never had:")
+    for name in sorted(absent):
+        print(f"  {name}")
+else:
+    print("\nnames were not checked against the client binary; pass its decompile's "
+          "strings.tsv as the second argument to split the list")

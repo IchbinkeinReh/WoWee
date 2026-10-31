@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """C bindings for a name FrameXML defines itself, which therefore never run.
 
-    tools/framexml_lua_override_check.py
+    tools/framexml_lua_override_check.py ["<the extracted interface>"]
 
 WHY THIS FINDS WHAT THE OTHER SWEEPS CANNOT
 
@@ -52,7 +52,10 @@ from lua_binding_scan import binding_bodies
 c_bindings = binding_bodies
 
 ROOT = Path(__file__).resolve().parent.parent
-INTERFACE = ROOT / "Data/interface"
+# The interface root on the command line, the way every other interface sweep
+# takes it; Data/interface is the fallback and is not tracked in the checkout.
+INTERFACE = (Path(sys.argv[1]) if len(sys.argv) > 1
+             else ROOT / "Data/interface")
 ADDONS = ROOT / "src/addons"
 
 #: A body this short is a stub, and FrameXML taking the name costs nothing.
@@ -89,6 +92,14 @@ def lua_definitions():
 
 
 def main():
+    if not INTERFACE.is_dir():
+        # lua_definitions() reads loaded_files(), which answers with an empty
+        # set for a directory that is not there - so the overlap between the
+        # interface and the C bindings comes back empty and the C side alone
+        # makes the counts look like a clean run.
+        print(f"No interface at {INTERFACE} - name the unpacked interface on "
+              "the command line; there is nothing to shadow here.")
+        return 2
     lua = lua_definitions()
     c = c_bindings()
 

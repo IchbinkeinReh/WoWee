@@ -16,7 +16,6 @@
 #include "game/chat_handler.hpp"
 #include "game/difficulty_change.hpp"
 #include "game/reputation_standing.hpp"
-#include "game/stationery.hpp"
 #include "rendering/animation_controller.hpp"
 
 namespace wowee::addons {
@@ -585,33 +584,81 @@ static int lua_GetGuildRosterMOTD(lua_State* L) {
     return 1;
 }
 
+/// The rows of one contact list, in the order the client's own array holds them.
+///
+/// The client keeps a separate fifty-row array per list in its contact store -
+/// ignore at +0xd490, mute at +0xd7c0 - and every change to either ends in the
+/// same qsort with the same comparator: 0x006b3a30 for the ignore array,
+/// 0x006b3b60 for the mute array, both handing the rows to 0x006b3a60. That
+/// comparator resolves each row's name record and compares the "%s-%s" display
+/// names, putting a row whose record cannot be found after the rows that have
+/// one and the empty slots after those. It is a byte compare (strncmp at
+/// 0x006b3b0d, whose two arguments the decompile prints the wrong way round -
+/// the machine code pushes the first row's name first, which is the order the
+/// friends list's own comparator uses too); folding the case here cannot
+/// disagree with it for the capitalised names a realm hands out.
+///
+/// The order is not decorative. GetIgnoreName and GetMuteName index it,
+/// GetSelectedIgnore and GetSelectedMute answer a position in it, and
+/// IgnoreList_Update draws a row from one and unmutes the player named by the
+/// other - so the index and the name have to come out of one order, or the
+/// button takes a different player off the list than the row it was clicked on.
+static std::vector<const game::ContactEntry*> contactRows(game::GameHandler* gh, uint32_t listMask) {
+    std::vector<const game::ContactEntry*> rows;
+    if (!gh) return rows;
+    for (const auto& c : gh->getContacts())
+        if (c.flags & listMask) rows.push_back(&c);
+    std::stable_sort(rows.begin(), rows.end(),
+                     [](const game::ContactEntry* a, const game::ContactEntry* b) {
+        // A row with no name yet sorts last, and two of them keep the order the
+        // realm sent them in - which is what stable_sort is for here.
+        if (a->name.empty() != b->name.empty()) return !a->name.empty();
+        std::string la = a->name, lb = b->name;
+        toLowerInPlace(la); toLowerInPlace(lb);
+        return la < lb;
+    });
+    return rows;
+}
+
+static std::vector<const game::ContactEntry*> ignoredRows(game::GameHandler* gh) {
+    return contactRows(gh, 0x2);
+}
+static std::vector<const game::ContactEntry*> mutedRows(game::GameHandler* gh) {
+    return contactRows(gh, 0x4);
+}
+
 // GetNumIgnores() → count
 static int lua_GetNumIgnores(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnZero(L); }
-    int count = 0;
-    for (const auto& c : gh->getContacts())
-        if (c.isIgnored()) count++;
-    lua_pushnumber(L, count);
+    lua_pushnumber(L, static_cast<lua_Number>(ignoredRows(getGameHandler(L)).size()));
     return 1;
 }
 
-// GetIgnoreName(index) → name
-static int lua_GetIgnoreName(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || index < 1) { return luaReturnNil(L); }
-    int found = 0;
-    for (const auto& c : gh->getContacts()) {
-        if (!c.isIgnored()) continue;
-        if (++found == index) {
-            lua_pushstring(L, c.name.c_str());
-            return 1;
-        }
+// GetIgnoreName(index) → name, one-based into that sorted array.
+//
+// "UNKNOWN" rather than nil for what cannot be answered: 0x006b4620 checks the
+// index against the array, and an index outside it, a row with nothing in it,
+// and a row whose name record the client never got an answer for all reach the
+// same tail - FUN_00819d40("UNKNOWN", -1, 0) and a push. GetMuteName's function
+// ends the same way. A missing argument is the one thing that answers nothing:
+// the client prints "Usage: GetIgnoreName(index)" and returns no values.
+/// The name at a one-based index into one half of the contact store, which is
+/// what GetIgnoreName (0x006b4620) and GetMuteName (0x006b4760) both do - the
+/// two client functions are the same walk over the same sorted array with a
+/// different mask, right down to their tails, so this is one function and the
+/// two bindings name the mask.
+static int pushContactNameAt(lua_State* L, uint32_t listMask) {
+    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+    const auto rows = contactRows(getGameHandler(L), listMask);
+    if (index >= 1 && index <= static_cast<int>(rows.size()) && !rows[index - 1]->name.empty()) {
+        const auto& name = rows[index - 1]->name;
+        lua_pushlstring(L, name.data(), name.size());
+    } else {
+        lua_pushstring(L, "UNKNOWN");
     }
-    lua_pushnil(L);
     return 1;
 }
+
+static int lua_GetIgnoreName(lua_State* L) { return pushContactNameAt(L, 0x2); }
 
 // --- Talent API ---
 
@@ -891,6 +938,13 @@ namespace {
 
 /// Daily quests take a different icon in the list. Protocol-defined, WotLK.
 constexpr uint32_t kQuestFlagsDaily = 0x1000;
+
+/// "Show me this NPC's window even when there is one thing to click." Bit 27 of
+/// the creature type flags - `>> 0x1b & 1` of the flag dword at +0xc of the
+/// record the client hangs off the unit at +0x964 (FUN_00715e10, one of a family
+/// of such getters). Named here rather than spelled out at the one use because
+/// the number is the whole answer and the reason is the comment.
+constexpr uint32_t kTypeFlagForceGossip = 0x08000000;
 
 bool gossipQuestIsAvailable(uint32_t icon) { return game::gossip_quest::iconIsAvailable(icon); }
 /// Taken already, finished or not - which is one list in the gossip window.
@@ -1303,6 +1357,68 @@ static int lua_IsIgnoredContact(lua_State* L) {
     return 1;
 }
 
+/// GetMuteName(index) (0x006b4760), one-based into the mute half of the same
+/// sorted array the ignore list is drawn from - which is why it is the same
+/// function as GetIgnoreName with a different mask.
+static int lua_GetMuteName(lua_State* L) { return pushContactNameAt(L, 0x4); }
+
+/// The row the mute list has selected. The client stores that row's GUID (its
+/// contact store +0xdae8/+0xdaec) rather than its position, and GetSelectedMute
+/// (0x006b4a40) answers the position the GUID has in the sorted array - 0 when
+/// nothing is selected or the row is gone. GetSelectedFriend and
+/// GetSelectedIgnore keep a position here instead, which those two panels never
+/// notice; the mute list is the one drawn from a sorted array, so holding the
+/// GUID is what keeps a selection across the list being reordered underneath it.
+static uint64_t& selectedMuteGuid() { static uint64_t v = 0; return v; }
+
+/// Whether a name is on the mute list, read the way the client's own walks read
+/// it: case-blind against the row's name, and a row with no name never matches.
+static bool muteRowNamed(const game::ContactEntry& c, const std::string& name) {
+    if (!c.isMuted() || c.name.empty() || name.empty()) return false;
+    std::string a = c.name, b = name;
+    toLowerInPlace(a); toLowerInPlace(b);
+    return a == b;
+}
+
+/// The names in the client's console command table that this client can run,
+/// and which `/console` therefore reaches.
+///
+/// FUN_00769100 registers thirty-four names one at a time, and the console
+/// window registers fourteen more in a loop at 0x00766140 (its name table is the
+/// pointer array at 0x00adbae8: fontcolor, bgcolor, highlightcolor, fontsize,
+/// font, consolelines, clear, proportionaltext, spacing, settings, default,
+/// closeconsole, repeat, AppendLogToFile). Cmd_Exec (0x007658a0) answers a line
+/// out of that one table, and FrameXML's SlashCmdList["CONSOLE"] passes it
+/// whatever was typed after `/console` - `/konsole` in deDE, where
+/// SLASH_CONSOLE1 spells it that way - which is how a player without a console
+/// window reaches these names at all. Listed below are the ones this client
+/// reproduced as its own commands, each documented where it is implemented; the
+/// client's own spelling is kept in the comment where it differs.
+///
+/// What is deliberately not here: the graphics and debug knobs, the two
+/// allocator reports and UpdatePOI, because nothing in this client corresponds
+/// to them, and `quit`/`logout`, whose console handlers (0x00768410, 0x006b2030)
+/// are the client's exit and logout flows while this client answers those names
+/// through FrameXML's own /quit and /logout. `reloadui` and
+/// `changePlayerDifficulty` are answered by the binding itself, in front of this
+/// check, because each needs its argument read a particular way.
+///
+/// A name in none of those sets is a miss, and the client's answer to a miss is
+/// the one console line `Unknown command` - printed into a window this client
+/// has not, so nothing is printed here either.
+static bool consoleCommandHere(const std::string& name) {
+    static constexpr const char* const kNames[] = {
+        "cvarlist", "cvar_reset", "cvar_default",  // 0x00767220 / 0x00767840 / 0x007678f0
+        "set", "ver",                              // 0x007681f0 / 0x00768420
+        "pitchlimit",                              // "pitchLimit", 0x005fe400
+        "togglehelm", "togglecloak",               // 0x00407710 / 0x004077c0
+        "memusage", "heapusage2", "setmap",        // all three one stub, 0x008c8de0
+    };
+    for (const char* candidate : kNames)
+        if (name == candidate) return true;
+    return false;
+}
+
 void registerSocialLuaAPI(lua_State* L) {
     static const struct { const char* name; lua_CFunction func; } api[] = {
                 {"BNGetNumFriends",     lua_BNGetNumFriends},
@@ -1614,7 +1730,19 @@ void registerSocialLuaAPI(lua_State* L) {
                 // presence, and picking which voice channel is live.
                 {"GetAutoCompletePresenceID", [](lua_State* L) -> int { return luaReturnNil(L); }},
                 {"SetActiveVoiceChannelBySessionID", [](lua_State* L) -> int { (void)L; return 0; }},
-                {"AddMute",         [](lua_State* L) -> int { (void)L; return 0; }},
+                // AddMute(name) - 0x006b6c30, which hands the argument to
+                // 0x006b62c0. That walks the client's mute array and asks the
+                // realm by NAME (CMSG_ADD_VOICE_IGNORE, 0x3db) only for a name
+                // the walk ran past; a name already on the list gets
+                // ERR_VOICE_IGNORE_ALREADY_S and no request at all. The list
+                // itself changes on the next contact list, so nothing here
+                // answers and nothing here changes.
+                {"AddMute", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const char* name = luaL_optstring(L, 1, "");
+            if (gh && name) gh->addVoiceIgnore(name);
+            return 0;
+        }},
                 {"MutedList_Update", [](lua_State* L) -> int { (void)L; return 0; }},
 
                 // ---- Guild rank permissions ----
@@ -1661,16 +1789,89 @@ void registerSocialLuaAPI(lua_State* L) {
                 // could never run and the tab was empty whatever arrived. The
                 // note that stood here said the request is never made, which
                 // was true of the request and not of the reader.
-                // One realm, so everyone is on it.
+                // UnitIsSameServer("unit","otherUnit") (0x00612670) answers
+                // **nil or true and never false** - the interface reads the nil
+                // as "another server" and writes the name as "Name-Realm". The
+                // two arguments are unit tokens compared case-blindly
+                // (0x0076e780 is _strnicmp); equal tokens are true. Otherwise
+                // each token resolves to a guid (0x0060c1c0 - a guid, not a
+                // realm part of one, contra the note that stood here) and equal
+                // guids are true. Different guids go to the guid-keyed name
+                // cache (0x0067d770), and the pair is same-server only when both
+                // records exist and their strings at +0x34 compare equal
+                // case-sensitively (0x0076e760 is _strncmp, unlike the token
+                // compare above). That string is the server name, and not by
+                // inference: UnitName (0x0060e740) returns `record + 0x34` as its
+                // **second** value, which is the "Name-Realm" half the two call
+                // sites below then compare against this answer. A record whose
+                // string there is empty counts as no record, which is why one
+                // realm answers true for everyone this client can name - the
+                // player's own second return is nil outright - and a known server
+                // that does not match answers nil. Which of the two answers is
+                // asked for is decided by that same field, and here it is never
+                // set: UnitName above pushes the nil second value for every unit
+                // it can name, and the only other way the menu's `server` gets a
+                // value is a name split as "Name-Server" off a typed string
+                // (unitpopup.lua:196-202) - and that path has no `unit` at all, so
+                // the `not unit` test in front of this one answers first.
                 {"UnitIsSameServer", [](lua_State* L) -> int { lua_pushboolean(L, 1); return 1; }},
                 // Recruit-a-Friend summoning, which needs a linked account.
                 {"CanSummonFriend", luaReturnFalse},
                 {"SummonFriend",    [](lua_State* L) -> int { (void)L; return 0; }},
-                // The voice mute list, which cannot have entries without voice.
-                {"GetSelectedMute", [](lua_State* L) -> int { return luaReturnNil(L); }},
-                {"SetSelectedMute", [](lua_State* L) -> int { (void)L; return 0; }},
-                {"GetMuteName",     [](lua_State* L) -> int { return luaReturnNil(L); }},
-                {"DelMute",         [](lua_State* L) -> int { (void)L; return 0; }},
+                // The voice mute list, which is the third list SMSG_CONTACT_LIST
+                // fills (mask bit 0x4) and which the friends panel's mute tab
+                // reads exactly like the ignore tab.
+                //
+                // GetSelectedMute (0x006b4a40) answers the selected row's
+                // position in the sorted list, or 0 - the client's lookup answers
+                // -1 for "no GUID stored, or that GUID is no longer a row" and
+                // the binding adds one to whatever it gets.
+                {"GetSelectedMute", [](lua_State* L) -> int {
+            const uint64_t want = selectedMuteGuid();
+            int answer = 0;
+            if (want != 0) {
+                const auto rows = mutedRows(getGameHandler(L));
+                for (size_t i = 0; i < rows.size(); ++i) {
+                    if (rows[i]->guid != want) continue;
+                    answer = static_cast<int>(i) + 1;
+                    break;
+                }
+            }
+            lua_pushnumber(L, answer);
+            return 1;
+        }},
+                // SetSelectedMute(index) (0x006b4950) stores that row's GUID, and
+                // an index off either end of the array stores nothing at all -
+                // which is why the next GetSelectedMute reads 0 rather than
+                // keeping the row that was selected before.
+                {"SetSelectedMute", [](lua_State* L) -> int {
+            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+            selectedMuteGuid() = 0;
+            if (index >= 1 && index <= 50) {
+                const auto rows = mutedRows(getGameHandler(L));
+                if (index - 1 < static_cast<int>(rows.size()))
+                    selectedMuteGuid() = rows[index - 1]->guid;
+            }
+            return 0;
+        }},
+                // GetNumMutes (0x006b45c0) - however many rows the client's mute
+                // array holds, and always a number: the row count is what an
+                // empty store answers too. The mute tab's own update opens with
+                // it, next to GetNumIgnores and the Battle.net blocked count.
+                {"GetNumMutes", [](lua_State* L) -> int {
+            lua_pushnumber(L, static_cast<lua_Number>(mutedRows(getGameHandler(L)).size()));
+            return 1;
+        }},
+                {"GetMuteName",     lua_GetMuteName},
+                // DelMute(name) - 0x006b7da0 → 0x006b7120, the same walk in the
+                // other direction. It can only ask by GUID (0x3dc), because the
+                // row it found is the only place this client ever had one.
+                {"DelMute", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const char* name = luaL_optstring(L, 1, "");
+            if (gh && name) gh->removeVoiceIgnore(name);
+            return 0;
+        }},
                 // GetGuildBankTabPermissions(tab) → canView, canDeposit,
                 //   canUpdateText, withdrawPerDay, for the rank being edited
                 // (0x005cb560): 1 or nil for the bits view 0x01, deposit 0x02,
@@ -1831,49 +2032,73 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushnil(L);
             return 10;
         }},
-                // Stationery is the letterhead a mail is written on. The list
-                // is empty - GetNumStationeries answers zero from the counting
-                // table in lua_engine.cpp - so the picker has no rows and these
-                // are the calls around it.
+                // Stationery is the paper a letter is written on, and the list
+                // of them is Stationery.dbc itself: the row whose flag bit 0
+                // says a letter needs no bought paper, plus every row whose item
+                // the player is carrying. That is the client's rule, not one
+                // invented here (0x0056fc80 asks its own inventory counts -
+                // 0x00754a20 - for each of the table's seven rows, and keeps the
+                // ones that answer). Which rows a player sees is therefore what
+                // they have bought, and the popup is the only place most of
+                // those items are ever named, so reading the list also asks the
+                // server for the templates. See InventoryHandler::
+                // stationeryOptions for the whole thing in one place.
                 //
-                // Deliberately NOT bound here. That table records every name it
-                // answers for under a "count:" prefix so it stays in the
-                // missing-API report, and binding it explicitly would take it
-                // out - which is the one thing that report exists to prevent.
-                // The stationery list is a real feature this client does not
-                // have, and it should keep saying so.
-                // Stationery is the paper a letter is written on. There is one
-                // - the plain parchment every letter uses unless the player
-                // bought something else - and answering that there are none
-                // left the popup empty with nothing to pick.
-                //
-                // That is not cosmetic. SendMailFrame_CanSend counts three
-                // things before it will enable the Send button, and one of them
-                // is that a stationery has been chosen. With an empty list
-                // there was no way to choose one, so the button could never be
-                // enabled and no letter could be sent at all.
-                //
-                // GetStationeryInfo(index) → name, texture, cost. A nil cost
-                // means free, which is what the frame draws as no price.
+                // GetStationeryInfo(index) → name, texture, cost, as
+                // mailframe.lua unpacks them: the row's label, the art name it
+                // pastes into STATIONERY_PATH..texture.."1", and a price or nil.
+                // The client's own version of the triple is two strings and a
+                // number (0x0056df80), the second built as "%s%s%s" from a
+                // StringLookups value, a backslash or nothing, and an item-name
+                // getter - which is why the label and the art are served here
+                // from the two places this interface's consumer can use them:
+                // the item's name for the label, and the table's art column for
+                // the paper. The price is nil for a paper already in the bags,
+                // which the frame draws with no price at all, and the vendor's
+                // buy price otherwise - a number this client used to read off
+                // the item query and drop on the floor.
                 {"GetStationeryInfo", [](lua_State* L) -> int {
-                    if (static_cast<int>(luaL_optnumber(L, 1, 0)) != 1) return luaReturnNil(L);
-                    lua_pushstring(L, "Default");
-                    // The plain parchment, by the name its art carries:
-                    // STATIONERY_PATH..texture.."1" has to reach a file, and
-                    // "Default" reached none - so the letter being written had
-                    // the same black background the one being read did.
-                    lua_pushstring(L, game::stationeryTexture(1, 0));
-                    lua_pushnil(L);                 // free
+                    auto* gh = getGameHandler(L);
+                    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+                    const uint32_t index = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
+                    if (!inv || index < 1) return luaReturnNil(L);
+                    const auto& options = inv->stationeryOptions();
+                    if (index > options.size()) return luaReturnNil(L);
+                    const auto& row = options[index - 1];
+                    lua_pushstring(L, row.name.c_str());
+                    if (!row.texture.empty()) lua_pushstring(L, row.texture.c_str());
+                    else                      lua_pushnil(L);
+                    if (row.hasCost) lua_pushnumber(L, row.cost);
+                    else             lua_pushnil(L);                 // free
                     return 3;
                 }},
+                // Guarded with `if ( texture )` before being pasted into a path,
+                // so nil leaves the paper that is already up rather than
+                // building a texture name out of nothing. The chosen id is
+                // looked up in the table and not in the offered list, as the
+                // client does (0x0056e170): a paper stays chosen after the last
+                // one of it leaves the bags.
                 {"GetSelectedStationeryTexture", [](lua_State* L) -> int {
-                    lua_pushstring(L, game::stationeryTexture(1, 0));
+                    auto* gh = getGameHandler(L);
+                    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+                    if (!inv) return luaReturnNil(L);
+                    const auto art = inv->stationeryArt(inv->selectedStationery());
+                    if (!art || art->empty()) return luaReturnNil(L);
+                    lua_pushstring(L, art->c_str());
                     return 1;
                 }},
-                // Which one is chosen is the frame's business - it keeps the
-                // index itself and hands it here. Nothing on this side varies
-                // with it while there is only one.
-                {"SelectStationery", [](lua_State* L) -> int { (void)L; return 0; }},
+                // The frame keeps its own highlighted index and hands the choice
+                // here; what lands on this side is the Stationery.dbc id the
+                // send packet carries, which is the part the realm remembers.
+                // Out of range clears it, which is what the client's
+                // SelectStationery does (0x0056e0e0) and what puts the Send
+                // button back under the three-check gate.
+                {"SelectStationery", [](lua_State* L) -> int {
+                    auto* gh = getGameHandler(L);
+                    if (auto* inv = gh ? gh->getInventoryHandler() : nullptr)
+                        inv->selectStationery(static_cast<uint32_t>(luaL_optnumber(L, 1, 0)));
+                    return 0;
+                }},
                 // Guarded with `if ( texture )` before being pasted into a
                 // path, so nil leaves the default parchment rather than
                 // building a texture name out of nothing.
@@ -1924,6 +2149,30 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->castSpell(7355);
             return 0;
         }},
+                // GMReportLag(type) - the help frame's /lagro (helpframe.lua:455),
+                // and the client really does send it. 0x005acf30 casts the local
+                // player's own object (the assert-cast names Player_C.h, size 0x10),
+                // thiscalls that object's vtable slot 0x2c with one out-pointer, and
+                // that fills **three** floats on the stack at ebp-0xc/-0x8/-0x4. The
+                // packet it then writes is CMSG_GM_REPORT_LAG (0x502) as a dword of
+                // the type one below what Lua passes, a dword read at +0xcc off the
+                // object the connection handle reaches (0x004d37e0: handle table
+                // entry, +8, +0xcc - a field of a heap object, not a TLS slot, which
+                // is what an earlier reading of that `fs:0x2c` had it as), then those
+                // three floats: each is loaded with flds and stored with fstps before
+                // the writer (0x0047b160, four bytes at a time) takes it, so 24 bytes
+                // in all. The send call follows at 0x005acfe4.
+                //
+                // That +0xcc dword reaches this site from a `jmp 0x004d37e0` thunk at
+                // 0x006ceaf0, one of the stubs that live in the int3 runs between
+                // blocks - the decompile shows it as `thunk_FUN_004d37e0`, but a grep
+                // for the target address finds no call here.
+                //
+                // Not reproduced, and the layout is written down instead: what the
+                // two floats measure is still unnamed - Player_C's vtable is not
+                // reachable from the static tables - and there is no reader for the
+                // opcode here either, so sending numbers whose meaning is guessed
+                // would only buy a log line nobody can read.
                 {"GMReportLag", [](lua_State* L) -> int { (void)L; return 0; }},
                 {"GMResponseNeedMoreHelp", [](lua_State* L) -> int {
             taint::allowed(L, 0x11);   // see NewGMTicket
@@ -2333,11 +2582,41 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushnumber(L, index);
             return 1;
         }},
-                // Voice chat again: there is none, so nobody is muted or
-                // silenced and asking to mute them does nothing.
-                {"IsMuted",             luaReturnFalse},
+                // IsMuted(name) - 0x006b6cf0: the name is turned into a player
+                // record (0x004fb580, name cache first and a unit token second),
+                // and that player is looked for in the mute array (0x006b5350).
+                // One or nil, never false - the same shape as IsIgnored, which
+                // is the same function over the other array.
+                {"IsMuted",             lua_IsIgnoredContact<0x4>},
+                // UnitIsSilenced and ChannelSilenceVoice stay where they were:
+                // those are voice-chat silencing, a different thing from the mute
+                // list, which is what the wire calls a "voice ignore".
                 {"UnitIsSilenced",      luaReturnFalse},
-                {"AddOrDelMute",        [](lua_State* L) -> int { (void)L; return 0; }},
+                // AddOrDelMute(name) - 0x006b6bd0 → 0x006b6130, the toggle the
+                // raid panels' speaker icon uses. One walk over the mute rows
+                // decides which request to send: found, and that row's GUID goes
+                // out as the unmute; run past the end of the array and the name
+                // goes out as the mute. Neither answer is an error the way
+                // AddMute's and DelMute's are, which is the point of a toggle.
+                //
+                // The argument is read as a name, not as a unit token, because
+                // that is what the client does with it: 0x006b6130 compares the
+                // string it was handed against each row. blizzard_raidui.lua
+                // hands it `unit` (1366) while showing the state from
+                // IsMuted(UnitName(unit)) (1359), and the real client's mute
+                // button sends the literal token out; that stays as it is.
+                {"AddOrDelMute", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const std::string name = luaL_optstring(L, 1, "");
+            if (!gh || name.empty()) return 0;
+            for (const auto& c : gh->getContacts()) {
+                if (!muteRowNamed(c, name)) continue;
+                gh->removeVoiceIgnore(name);
+                return 0;
+            }
+            gh->addVoiceIgnore(name);
+            return 0;
+        }},
                 {"ChannelSilenceVoice", [](lua_State* L) -> int { (void)L; return 0; }},
                 // ChannelSilenceAll / ChannelUnSilenceAll("channel", "name")
                 // (0x00501250, 0x00501400) - see ChatHandler::channelSilenceAll.
@@ -2453,6 +2732,12 @@ void registerSocialLuaAPI(lua_State* L) {
                 // in a battleground. None of the three existed, and
                 // UIParent_OnEvent calls the first of them the moment the
                 // healer is in range.
+                //
+                // The client's whole side of this is two sends and they are the
+                // two here: the query (0x2e2) goes when the healer's guid is
+                // first remembered - not on a timer - and the queue (0x2e3) on
+                // the accept (0x005262d0, a thunk to 0x00524b60, which writes it
+                // with the guid pair it kept).
                 {"AcceptAreaSpiritHeal", [](lua_State* L) -> int {
             if (auto* gh = getGameHandler(L)) gh->queueAreaSpiritHeal();
             return 0;
@@ -2460,7 +2745,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 // There is no opcode for leaving the queue - AzerothCore drops
                 // a player from it when they leave the battleground and at no
                 // other time - so this accepts the click and does nothing,
-                // which is the honest answer rather than a raise.
+                // which is the honest answer rather than a raise. The client
+                // agrees: its cancel (0x0051f710 behind a thunk at 0x00522fa0)
+                // sends no packet either, and what it does instead is tear the
+                // "SPIRIT_HEALER_RELEASE_RED" effect off the player - the visual
+                // the 0x378 packet starts (0x0051f690 -> 0x007f4a00) and which
+                // this client draws no part of. The countdown therefore keeps
+                // running off the server's stamp: 0x00516b90 answers
+                // (stamp - now) / 1000 off one absolute ms stamp, and only a
+                // change of healer guid clears that stamp (0x00523eb0).
                 {"CancelAreaSpiritHeal", [](lua_State* L) -> int { (void)L; return 0; }},
                 {"GetAreaSpiritHealerTime", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
@@ -2804,11 +3097,6 @@ void registerSocialLuaAPI(lua_State* L) {
             pushFlag(q && q->isRepeatable);
             return 3;
         }},
-                // Whether the gossip window must be shown even when there is
-                // one thing to click. The server sends no such flag here, and
-                // the frame reads it as "not ForceGossip()" to decide whether
-                // to go straight to a lone vendor or flight master - which is
-                // what the real client does, so a definite no keeps that.
                 // GuildSetMOTD(text) - what /gmotd does
                 //
                 // The rest of the guild commands were already bound; this one
@@ -3045,8 +3333,42 @@ void registerSocialLuaAPI(lua_State* L) {
             selectedFaction() = static_cast<int>(luaL_checknumber(L, 1));
             return 0;
         }},
+                // ForceGossip() is a question and not an instruction, whatever
+                // the name says. FUN_0058ab50 casts the current gossip target's
+                // guid pair to a unit - the same checked-cast type 8 the hover
+                // height watcher uses - and answers bit 27 of the flag dword at
+                // +0xc of the record hung off that unit at +0x964. That record
+                // is the per-entry creature info a query response fills, which
+                // is what getCreatureInfoCache holds, and the two sides are
+                // reading one field: this repository already names bit 5
+                // (kCreatureTypeFlagMoreAudible, 0x20) and bit 25
+                // (kTypeFlagNoShadowBlob, 0x02000000, which the client reads as
+                // `>> 0x19 & 1` of that same dword), and the client tests the
+                // field across its whole width - `& 0x1f` at one end, bit 27 at
+                // the other. It is not a column of CreatureDisplayInfo.dbc
+                // either: no column of that table carries that bit family, so
+                // the record arrives rather than being looked up locally.
+                //
+                // gossipframe.lua:12 asks `not ForceGossip()` inside the test
+                // that clicks a lone gossip option for you when the window has
+                // one option and no quests, so an NPC whose template sets the
+                // flag keeps its window instead of an instant pick. An entry
+                // with no query record answers no, which is what the client
+                // answers when its +0x964 pointer is null - and that, not a
+                // hardcoded no, is why an ordinary vendor still opens straight
+                // up.
                 {"ForceGossip", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0);
+            auto* gh = getGameHandler(L);
+            bool forced = false;
+            const uint64_t npc = gh ? gh->getCurrentGossip().npcGuid : 0;
+            auto* entity = npc ? gh->getEntityManager().getEntity(npc) : nullptr;
+            if (entity && entity->getType() == game::ObjectType::UNIT) {
+                const auto& creatures = gh->getCreatureInfoCache();
+                const auto it = creatures.find(static_cast<game::Unit*>(entity)->getEntry());
+                if (it != creatures.end())
+                    forced = (it->second.typeFlags & kTypeFlagForceGossip) != 0;
+            }
+            lua_pushboolean(L, forced ? 1 : 0);
             return 1;
         }},
                 {"GetGossipOptions", [](lua_State* L) -> int {
@@ -3102,6 +3424,15 @@ void registerSocialLuaAPI(lua_State* L) {
                 return 0;
             }
             gh->selectGossipOption(opt.id, luaL_optstring(L, 2, ""));
+            // GOSSIP_CONFIRM_CANCEL (282) after the send, which is where the
+            // client raises it - 0x0058af10, just past the write of
+            // CMSG_GOSSIP_SELECT_OPTION (0x17c) - and with no argument at all.
+            // uiparent.lua:935 answers it exactly as it answers GOSSIP_CLOSED:
+            // hide the price dialog and the code dialog both. Without it an
+            // unanswered popup of the other kind stays on screen through the
+            // option that was actually taken, and its button then answers a
+            // conversation that has already moved on.
+            gh->fireAddonEvent("GOSSIP_CONFIRM_CANCEL");
             return 0;
         }},
                 {"GetNumGossipAvailableQuests", [](lua_State* L) -> int {
@@ -3270,7 +3601,37 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh && name && *name) gh->renamePet(name);
             return 0;
         }},
-                {"CanGrantLevel",             [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                // Recruit-a-friend: whether this player may hand a level to that
+                // one (0x0051d230, one unit token, answering 1.0 or nothing -
+                // never false). Its check (0x006de9e0) walks the reasons in
+                // order - no guid at all (8), a guid that names no player (4),
+                // not recruit-a-friend linked (1, the predicate beside
+                // IsReferAFriendLinked), a different faction: both units'
+                // UNIT_FIELD_FACTIONTEMPLATE records resolved and compared at
+                // their own +0xc (5), the target already level 60 or over
+                // (7 - the 60 is pushed into the message as a literal), the
+                // local player's UNIT_FIELD_LEVEL not above the target's (2),
+                // and a target the group code will not act on (6, 0x007293d0,
+                // which tests bits of each unit's UNIT_FIELD_FLAGS at blob
+                // +0xd4) - and the reason numbers are the
+                // very ones the realm reports in SMSG_REFER_A_FRIEND_FAILURE,
+                // which 0x005219e0 turns into the ERR_ line
+                // SocialHandler::registerOpcodes already reproduces.
+                //
+                // What is left is a byte at offset +0x1065 of the block the
+                // local player reaches through +0x1008 - the "no grantable
+                // levels left" counter (3) - and nothing fills it: one
+                // instruction in the whole binary carries that displacement, the
+                // read in the check itself, and this client has no
+                // CMSG_SET_GRANTABLE_LEVELS send of its own either. So the
+                // answer here is nothing, and nothing else, in the reference too
+                // - which is also why the entry the question gates (unitpopup's
+                // RAF_GRANT_LEVEL, greyed out at unitpopup.lua:1141) is greyed
+                // out permanently for every player that client can reach. Only
+                // the pushed value's shape was off: nil, not false. The name
+                // that decides whether that entry is in the menu at all is
+                // IsReferAFriendLinked, one level up (unitpopup.lua:791).
+                {"CanGrantLevel",             [](lua_State* L) -> int { lua_pushnil(L); return 1; }},
                 // Whether that line can be reported: it has to be one this
                 // client still remembers the sender of, and not one of the
                 // player's own.
@@ -3299,8 +3660,25 @@ void registerSocialLuaAPI(lua_State* L) {
             if (difficulty < 2) gh->changePlayerDifficulty(difficulty);
             return 0;
         }},
-                {"IsSilenced",                [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                {"IsDisplayChannelModerator", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                // IsSilenced(name) (0x004ffb50): whether the named player may
+                // not speak in the channel the panel has selected. The name
+                // becomes a guid pair - off a unit object when one answers it,
+                // else from the name alone (0x0060abf0) - and that pair is
+                // looked for in the roster rows the selected channel was filled
+                // with (stride 0x18, guid pair at +8/+0xc, flags byte at +0x10):
+                // a row with bit 0x10 clear answers 1, a row with the bit set
+                // and no row at all both answer nil.
+                //
+                // It is a voice mute, and nothing here has voice chat to mute:
+                // its two consumers are the unit menu's CHAT_SILENCE and
+                // CHAT_UNSILENCE (unitpopup.lua:854,866), and both are hidden
+                // before the question is asked, by IsVoiceChatEnabled() and
+                // GetVoiceStatus(name). IsDisplayChannelModerator is asked by
+                // those same two branches and has a menu of its own elsewhere,
+                // so it is answered for real - in lua_system_api.cpp, beside the
+                // selected-channel state it reads. One name is registered once;
+                // two registrations of it would be settled by load order.
+                {"IsSilenced", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
                 // PromoteToLeader(name) - /promote, /pr, and the unit menu's
                 // "Promote to Leader". The client had no outgoing side for this
                 // at all: SMSG_GROUP_SET_LEADER was handled and CMSG was never
@@ -3333,6 +3711,16 @@ void registerSocialLuaAPI(lua_State* L) {
             setGroupAssistantByName(L, false);
             return 0;
         }},
+                // The click on that greyed entry (0x00523160): one unit token,
+                // 0x006de9e0 asked again, and only a clean answer reaches the
+                // wire - CMSG_GRANT_LEVEL with the grantee's guid in the same
+                // packed guid record the accept half writes (0x00521b00), whose
+                // trailing zero belongs to that record and not to the payload.
+                // A refusal is printed on the spot (0x005219e0 with the reason
+                // and no name) and sends nothing, so with the counter above
+                // forever zero this verb says "You have not earned enough levels
+                // to grant any more." and stops. Nothing here is missing: the
+                // entry that calls it is never clickable.
                 {"GrantLevel",                [](lua_State* L) -> int { (void)L; return 0; }},
                 // Whether the player passes on every loot roll. The setter
                 // accepted and forgot, and the getter beside it answered a
@@ -3423,21 +3811,43 @@ void registerSocialLuaAPI(lua_State* L) {
                 // missing, so the summon popup threw in its OnShow and
                 // ShowResurrectRequest threw before it could show anything -
                 // the handover fixed a duplicate and replaced it with a raise.
+                // The client reads this one out of its guid store on every call
+                // (0x00516510), so a name learned between the request and the
+                // popup still lands in the sentence; an unknown caster answers the
+                // empty string there, which is what this does rather than naming
+                // the guid.
                 {"GetSummonConfirmSummoner", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushstring(L, gh ? gh->getSummonerName().c_str() : "");
+            std::string who = gh ? gh->getSummonerName() : std::string();
+            if (who.empty() && gh) who = gh->lookupName(gh->getSummonerGuid());
+            lua_pushstring(L, who.c_str());
             return 1;
         }},
+                // Whole seconds, because that is what the client answers: it keeps
+                // the request's end as one absolute stamp (`now + the ms length`,
+                // 0x00513bf0) and hands back `(stamp - clock) / 1000` with integer
+                // division (0x005164b0). The popup reads this once in OnShow and
+                // counts down on its own afterwards, then ceils what it prints -
+                // so the fraction WoWee's own timer carries would round the first
+                // sentence a second up from what the client shows.
                 {"GetSummonConfirmTimeLeft", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, gh ? gh->getSummonTimeoutSec() : 0.0f);
+            const float sec = gh ? gh->getSummonTimeoutSec() : 0.0f;
+            lua_pushnumber(L, sec > 0.0f ? static_cast<double>(static_cast<int>(sec)) : 0.0);
             return 1;
         }},
-                // The destination is not carried in what this client parses,
-                // and the popup prints it into a sentence - so an empty string
-                // rather than nil, which would concatenate into a raise.
+                // The destination's name, read from the area the request carried
+                // (kept now, not thrown away with the log line). The popup
+                // formats it into "X is summoning you to Y", so this answers the
+                // empty string rather than nil - nil would concatenate into a
+                // raise - which is also exactly the client's own answer for an id
+                // its AreaTable cache has no row for (0x00516580, and 0x009e14ff
+                // is a bare NUL).
                 {"GetSummonConfirmAreaName", [](lua_State* L) -> int {
-            lua_pushstring(L, ""); return 1;
+            auto* gh = getGameHandler(L);
+            const std::string area = gh ? gh->getAreaName(gh->getSummonAreaId()) : std::string();
+            lua_pushstring(L, area.c_str());
+            return 1;
         }},
                 // Asked every frame by the popup's OnUpdate to grey the accept
                 // button. The server refuses a summon it will not honour, so
@@ -3553,21 +3963,90 @@ void registerSocialLuaAPI(lua_State* L) {
                 // this file, so it was already the one in use. This copy was a
                 // flat false in a single value, dead and one value short of
                 // the contract if it had ever won.
-                // Seconds before the corpse is released automatically. -1 is
-                // WoW's "no timer", which is the branch that prints the release
-                // prompt without a countdown - right for a client that does not
-                // run one.
+                // GetReleaseTimeRemaining (0x00516210) answers one of three
+                // things, and none of them is sent as a countdown: seconds left,
+                // -1 for "nothing will force a release", or nought. UIParent's
+                // PLAYER_DEAD branch shows the death popup on `> 0 or == -1`
+                // (uiparent.lua:488), so nought is the one answer that shows no
+                // popup at all, and the popup's own OnShow takes the value as
+                // its countdown (staticpopup.lua:1130) and swaps in
+                // DEATH_RELEASE_NOTIMER when it hears -1. -1 is the answer here:
+                // the popup shows, prompt and no countdown.
+                //
+                // Which of the three the reference picks is decided at the
+                // player's death rather than at a release. FUN_006dc070 - run
+                // from the local-player branch of the player-state change
+                // handler 0x006dc0f0, and from the 0x37a =
+                // SMSG_FORCED_DEATH_UPDATE case (0x006e0000.c:2494) - branches
+                // on two bits of one byte and one of PLAYER_FLAGS: the byte's
+                // 0x10 answers nought, its 0x08 with PLAYER_FLAGS 0x4000 clear
+                // stamps a 360000 ms countdown, anything else says there is no
+                // timer. The countdown is a tick stamp - FUN_00513a30 writes
+                // clock + duration and forces a stamp of nought to 1 so that the
+                // "no timer" state stays tellable apart from an expired one - and
+                // FUN_00513a60 is what clears it, zeroing the stamp and setting a
+                // byte that the binding then reads as -1000 ms, i.e. -1 seconds.
+                //
+                // Two things this note used to have wrong. The byte is named: it
+                // is PLAYER_FIELD_BYTES' first byte, the field blob's dword at
+                // +0x1064 - index 1197 of update_fields.json, the same blob whose
+                // +8 dword is PLAYER_FLAGS - and WoWee already reads that byte
+                // (cast_checks.hpp:175, spell_handler.cpp:2584). Its other
+                // readers take bit 1 (0x006d0000.c:9716) and bit 2
+                // (0x00730000.c:6651), and 0x00710000.c:11053 hands the whole
+                // byte out. And "no instruction raises PLAYER_FLAGS 0x4000" was
+                // no evidence that half of the branch is dead: the realm writes
+                // PLAYER_FLAGS, as the IsOutOfBounds row below records, so a
+                // player the realm puts out of bounds is exactly the case in
+                // which the reference answers -1 where it would otherwise have
+                // started six minutes. The answer this gives stays -1 - the
+                // realm WoWee plays against sets neither of the two bits, and it
+                // is the only one of the three that shows the death dialog at
+                // all - but the countdown half depends on realm state this client
+                // cannot see, which is also why it is not reproduced here.
                 {"GetReleaseTimeRemaining", [](lua_State* L) -> int {
             lua_pushnumber(L, -1); return 1;
         }},
                 // Asked from an OnUpdate, so this runs on every frame the
                 // popup is up rather than once.
                 //
-                // IsOutOfBounds decides whether the death popup shows the
-                // falling-to-your-death variant, and nothing here says which
-                // it is.
+                // The reference (0x006123c0) answers 1 or nil off one bit of the
+                // local player's own status dword, and that bit is this very API:
+                // taking every "shift and test one bit" of that dword in the
+                // decompile and naming the function around it through the
+                // client's method tables gives bit 1 AFK, 4 ghost, 5 resting, 9
+                // PvP-desired, 12 partial play time, 13 no play time, 14 out of
+                // bounds, 17 taxi benchmark, 18 the PvP timer, 25 XP disabled.
+                //
+                // That dword is the PLAYER_FLAGS update field, reached the way
+                // WoWee's own headers write it - the player object's field blob at
+                // +0x1008, this dword at +8 (cast_checks.hpp:359,
+                // spell_unit_target.hpp:52) - and the bits that list names are the
+                // ones the entity watcher already takes off the wire: resting 0x20,
+                // PvP 0x200, the play-time pair 0x3000, low-level raid 0x10000,
+                // taxi benchmark 0x20000, XP off 0x2000000 (entity_controller.cpp
+                // :1768-1835), with 0x40000 the PvP timer lua_IsPVPTimerRunning
+                // answers. An earlier reading of this row had it the other way
+                // round, as state the client keeps for itself, and took "no
+                // instruction carries 0x4000 into that dword" as proof the bit is
+                // never raised; the writer is the realm, which is just as well
+                // hidden from a scan of the client. So this reads the field the way
+                // its siblings do - pushPlayerFlagBit answers 1 with the bit set
+                // and nil without it, which is the 0x3ff0000000000000 / pushnil
+                // pair the two branches push.
+                //
+                // WoWee's realm never sets 0x4000, so in play the answer is still
+                // nil: nothing here implements out of bounds at all - no test
+                // anywhere compares a position to a map's bounds, and no message
+                // names the state. The binding was the missing half on this side;
+                // the state itself is a realm feature of its own.
+                //
+                // The one live caller negates it - staticpopup.lua's death popup
+                // asks `IsFalling() and not IsOutOfBounds()` at :1171 and disables
+                // both buttons while the player falls unless it is already out of
+                // bounds - where nil and false read the same.
                 {"IsOutOfBounds", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0); return 1;
+            return pushPlayerFlagBit(L, 0x4000);
         }},
                 {"CheckTalentMasterDist", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
@@ -3596,10 +4075,34 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BNGetNumConversationMembers", [](lua_State* L) -> int { lua_pushnumber(L, 0); return 1; }},
                 {"BNGetConversationMemberInfo", [](lua_State* L) -> int { (void)L; return 0; }},
                 {"BNRequestFOFInfo",            [](lua_State* L) -> int { (void)L; return 0; }},
-                // The battleground queue timer, read in a loop from the
-                // minimap's battlefield icon while it is shown.
+                // The battleground invitation's countdown, read in a loop from the
+                // minimap's battlefield icon while a queue is invited
+                // (battlefieldframe.lua:129-150), and the only thing that frame
+                // puts on screen: the lowest expiration among the queues, and the
+                // bare number under it once ten seconds are left.
+                //
+                // The client's body is 0x00549b80: the slot (1 and 2 — its store
+                // is two records 0x40 apart from DAT_00bea4b8), that record's
+                // +0x28 as an absolute millisecond stamp, and the answer
+                // `(stamp - 0x0086ae20()) / 1000` in whole seconds, zero for an
+                // empty or already-past stamp. That stamp is written only by the
+                // status handler for a queue in the invited state — `now + the
+                // length the packet carries`, re-armed on every status tick and
+                // zeroed in every other state (0x0054ae40, 00540000.c:8544-8548) —
+                // and that is a quantity WoWee already parses as
+                // BattlefieldStatusData::inviteTimeoutMs and threw away here, so a
+                // player invited into a battleground never saw it tick down.
+                // A missing or out-of-range index answers 0; the client prints its
+                // usage line for no argument and reads nothing, which the interface
+                // never reaches (every call site is the loop over the queues).
                 {"GetBattlefieldPortExpiration", [](lua_State* L) -> int {
-            lua_pushnumber(L, 0); return 1; }},
+            auto* gh = getGameHandler(L);
+            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+            const int32_t seconds = (gh && index >= 1) ? gh->battlefieldPortExpirationSec(
+                static_cast<size_t>(index - 1)) : 0;
+            lua_pushnumber(L, seconds);
+            return 1;
+        }},
                 // The innkeeper's prompt: CONFIRM_BINDER's accept sends the
                 // reply, and its OnUpdate hides the popup when the player walks
                 // away. Distance to the innkeeper is not tracked, and staying
@@ -3637,13 +4140,12 @@ void registerSocialLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->stopCinematic();
             return 0;
         }},
-                // The other half of RESURRECT_NO_TIMER's OnCancel:
-                // `UnitIsDead("player") and not UnitIsControlling("player")`.
-                // Controlling means driving a vehicle or a possessed creature,
-                // neither of which this client has.
-                {"UnitIsControlling", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0); return 1;
-        }},
+                // UnitIsControlling used to sit here answering false, which the
+                // resurrect popups' OnCancel read as "not driving anything" and
+                // so re-opened the death dialog. It is answered where the
+                // charm-or-summon guid pair is read - lua_unit_api.cpp, beside
+                // UnitIsPossessed - and a name registered in two places is
+                // settled by load order, so it is registered once.
 
                 // ---- What chatframe.lua's slash commands call ----
                 //
@@ -3861,16 +4363,20 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BNListConversation",       [](lua_State* L) -> int { (void)L; return 0; }},
                 {"BNSendConversationMessage",[](lua_State* L) -> int { (void)L; return 0; }},
                 {"BNSendWhisper",            [](lua_State* L) -> int { (void)L; return 0; }},
-                // ConsoleExec(command) - the console, of which two commands are
-                // reachable and worth honouring.
+                // ConsoleExec(command) - the client's console entry point, and
+                // the only one this client has, having no console window. FrameXML
+                // calls it from two of its own slash commands: SlashCmdList
+                // ["RELOAD"] with the single word "reloadui", and SlashCmdList
+                // ["CONSOLE"] with whatever was typed after /console (/konsole),
+                // which is the whole line, command and argument together.
                 //
-                // SlashCmdList["RELOAD"] is ConsoleExec("reloadui") and nothing
-                // else, and this client's chat tries SlashCmdList before its
-                // own registry - so /reload, /reloadui and /rl all landed here
-                // and did nothing while the client's own reload sat behind
-                // them. Routed to the same request ReloadUI makes.
+                // The RELOAD leg: this client's chat tries SlashCmdList before
+                // its own registry, so /reload, /reloadui and /rl all landed here
+                // and did nothing while the client's own reload sat behind them.
+                // Routed to the same request ReloadUI makes.
                 {"ConsoleExec", [](lua_State* L) -> int {
-            std::string cmd(luaL_optstring(L, 1, ""));
+            const std::string typed(luaL_optstring(L, 1, ""));
+            std::string cmd = typed;
             toLowerInPlace(cmd);
             if (cmd == "reloadui") {
                 if (auto* svc = getLuaServices(L); svc && svc->requestReloadUI) {
@@ -3887,6 +4393,31 @@ void registerSocialLuaAPI(lua_State* L) {
                     if (auto* gh = getGameHandler(L)) gh->sendChangePlayerDifficulty(*difficulty);
                 } else {
                     LOG_WARNING("Console: Invalid difficulty");
+                }
+            }
+            // The console's own command table, which the line `/console <name>
+            // [args]` carries here whole. Cut the way Cmd_Exec cuts it
+            // (0x00768900): the command off the front, everything after it as one
+            // argument with the spaces taken off both ends. What the command is
+            // named by is listed above; those names are this client's commands as
+            // well, so they go to the registry rather than being reimplemented
+            // here.
+            //
+            // The argument keeps the case it was typed with while the command is
+            // folded: the client compares a name case-insensitively but stores it
+            // as spelled, so `/console set MyCVar 1` registers `MyCVar` and
+            // answers GetCVar for that spelling from then on. Lowering the whole
+            // line - which is what this binding used to do, and what the two legs
+            // above still do, harmlessly, since neither reads anything but digits
+            // and lowercase letters out of the rest - would have registered
+            // `mycvar` instead.
+            const dc::ConsoleLine command = dc::splitConsoleLine(typed);
+            if (!command.command.empty()) {
+                std::string name(command.command);
+                toLowerInPlace(name);
+                if (consoleCommandHere(name)) {
+                    if (auto* svc = getLuaServices(L); svc && svc->runClientChatCommand)
+                        svc->runClientChatCommand(name, std::string(command.args));
                 }
             }
             return 0;

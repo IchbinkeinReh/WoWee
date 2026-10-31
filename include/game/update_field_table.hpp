@@ -54,6 +54,24 @@ enum class UF : uint16_t {
     UNIT_FIELD_STAT2,         // Stamina
     UNIT_FIELD_STAT3,         // Intellect
     UNIT_FIELD_STAT4,         // Spirit
+    /// How much the unit's health pool is scaled by, as float bits - its
+    /// descriptor record is value kind 3, which is float - and
+    /// GetUnitMaxHealthModifier (0x00612870) reads it as `+ 1.0` at blob
+    /// +0x22c, which is 139 * 4. Whether a 3.3.5 realm ever writes it is not
+    /// settled here; a field that never arrives reads zero, and zero plus one is
+    /// the one this binding used to answer unconditionally.
+    ///
+    /// Wire 145. The client's *unit* descriptor space runs contiguous from blob
+    /// dword 0 up to 141, no gaps, and its last three records name 139/140/141
+    /// MAXHEALTHMODIFIER, HOVERHEIGHT and PADDING, against UNIT_END at 148. The
+    /// record below it, POWER_COST_MULTIPLIER at blob 132 covering seven dwords,
+    /// is this table's own "UNIT_FIELD_POWER_COST_MULTIPLIER": 138 - so 145 is
+    /// the dword immediately past that array. Same blob-dword-plus-six rule
+    /// PETNUMBER (69/75), BYTES_0 (17/23), BYTES_1 (68/74) and MAXDAMAGE
+    /// (65/71) agree on; the six is the object space, which ends at blob 5.
+    /// Name the descriptor space before quoting a blob index - the *player*
+    /// space has its own record at 139, and it is PLAYER_VISIBLE_ITEM_3_ENTRYID.
+    UNIT_FIELD_MAXHEALTHMODIFIER,
     UNIT_END,
 
     // Unit combat fields (WotLK: PRIVATE+OWNER - only visible for the player character)
@@ -378,6 +396,21 @@ enum class UF : uint16_t {
     DYNAMICOBJECT_CASTTIME,
 
     // Item fields
+    /// Who made the item: a guid, low dword first. WotLK only - the older three
+    /// layouts put a CREATED_BY guid ahead of OWNER, which moves everything
+    /// behind it, and those three files are unverifiable from the one server
+    /// here, so nothing is asserted about them and the readers below stop at the
+    /// 0xFFFF this answers for them.
+    ///
+    /// At 10 and 11 here because the client's own item field table (the `.data`
+    /// descriptor block behind the field watchers) counts the item's fields from
+    /// the base: OWNER at nil, CONTAINED two past it, CREATOR four and
+    /// STACK_COUNT eight - and STACK_COUNT is the 14 this layout already carries,
+    /// which puts that base at the OBJECT_END of six every other block is
+    /// written from. The reading window asks about this one: ItemTextGetCreator
+    /// (0x0058a480) reads the guid off the item the page came from and names
+    /// whoever wrote it.
+    ITEM_FIELD_CREATOR,
     ITEM_FIELD_STACK_COUNT,
     ITEM_FIELD_DURABILITY,
     ITEM_FIELD_MAXDURABILITY,

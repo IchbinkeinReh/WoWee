@@ -119,6 +119,28 @@ inline constexpr uint32_t kSeatFlagBEjectable = 0x20;         ///< 0x00613d20, 0
 inline constexpr uint32_t kVehicleFlagPitchLimits = 0x40;
 inline constexpr uint32_t kVehicleFlagAimAngle = 0x400;
 inline constexpr uint32_t kVehicleFlagAimPower = 0x800;
+/// Vehicle.dbc Flags 0x10000000: the vehicle is one the maps draw.
+///
+/// The list is built on the unit side and not by the map at all. Where a unit's
+/// vehicle block is made - CGUnit_C +0xf5c, the same block 0x004f6210 reads back
+/// as its +0xc row - and that row carries this bit, the unit's guid goes onto
+/// the BattlefieldInfo vehicle list (0x00723a2d in 0x007237f0, and 0x007401b0,
+/// both into 0x0054aba0, which takes a guid off the list before putting it back
+/// and stops at 40 entries). GetBattlefieldVehicleInfo answers the vehicle's
+/// type only for a row with the bit, and nil for one without (0x0054c4d0).
+/// Twenty-eight of this install's 412 rows carry it.
+inline constexpr uint32_t kVehicleFlagShownOnMap = 0x10000000;
+
+/// The client's names for a vehicle row's uiLocomotionType (+0x88): the
+/// five-entry string table at 0x00ad6b14, which GetBattlefieldVehicleInfo hands
+/// out as the vehicle's type (0x0054c4d0) and the minimap's icon picker
+/// (0x00581e80) reads the same way. worldmapframe.lua's VEHICLE_TEXTURES is
+/// keyed by these strings - "Idle", which one row here names, is in no texture
+/// table, so that vehicle is hidden rather than drawn wrongly. This install's
+/// column runs 0..4: 401 rows at "Drive", 5 "Fly", 4 "Idle", and one row each
+/// of the two airships, which is what the two 64-pixel icons on the map are.
+inline constexpr std::array<const char*, 5> kUiLocomotionNames{
+    "Drive", "Fly", "Idle", "Airship Horde", "Airship Alliance"};
 
 /// VehicleUIIndicator.dbc (ID, BackgroundTexture) and its VehicleUIIndSeat
 /// rows (ID, VehicleUIIndicatorID, VirtualSeatIndex, XPos, YPos), which

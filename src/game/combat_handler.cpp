@@ -336,8 +336,10 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
             if (topNow != topBefore) {
                 if (topNow) playerTopThreatOn_.insert(unitGuid);
                 else        playerTopThreatOn_.erase(unitGuid);
+                // Registered on (0x00510000 "1"), so losing the top of the
+                // threat list makes a noise until the player turns that off.
                 if (topNow && threatWarningWanted() &&
-                    addons::storedCVarValue("threatPlaySounds", "0") != "0") {
+                    addons::storedCVarValue("threatPlaySounds", "1") != "0") {
                     if (auto* ac = owner_.services().audioCoordinator) {
                         if (auto* sfx = ac->getUiSoundManager()) sfx->playError();
                     }
@@ -1131,13 +1133,20 @@ void CombatHandler::handleUpdateComboPoints(network::Packet& packet) {
     // check; the first thing it calls, 0x005aa470, rewrites the 144 per-slot
     // pairs the buttons are drawn from (DAT_00c1ded8, DAT_00c1dc98) and
     // announces a change with ACTIONBAR_UPDATE_USABLE (0xb2). A form flipping is
-    // UPDATE_SHAPESHIFT_USABLE (0x17a), a button going unusable is a sound
-    // (0x0074d520 0x23), and the rescan's own name SPELL_UPDATE_USABLE (0xf5)
+    // UPDATE_SHAPESHIFT_USABLE (0x17a), a spell of that list becoming affordable
+    // again says so as COMBAT_TEXT_UPDATE("SPELL_ACTIVE", name) - 0x0074d520 is
+    // not a sound: it fires 0x1e4 with "%s%s", the type name being that call's
+    // first argument read out of the combat-text type table at 0xadb820, slot
+    // 0x23 - and the rescan's own name SPELL_UPDATE_USABLE (0xf5)
     // reaches no frame of this interface. WoWee's action flags hold the power
-    // half only (0x0053d1b0, the power-only variant) and IsUsableAction never
-    // looks at the points at all, so a finisher has no way here to be grey for
-    // want of a combo point - and announcing ACTIONBAR_UPDATE_USABLE from this
-    // packet would change nothing until that answer depends on the points.
+    // half only (0x0053d1b0, the power-only variant), which is the half the
+    // buttons actually read: IsUsableAction (0x005a7e60) reads nothing else
+    // either, and a finisher wanting a combo point stays bright on the client's
+    // bar too - the points gate the *cast* (0x0080b5d0, through the per-target
+    // store 0x00513920), which WoWee already checks. What the rescan would add
+    // is the cast-check walk over the slots behind those pairs, so a button can
+    // go grey for the other reasons; announcing ACTIONBAR_UPDATE_USABLE from
+    // this packet only pays once that walk exists.
     owner_.fireAddonEvent("UNIT_COMBO_POINTS", {"player"});
 }
 
@@ -1457,19 +1466,23 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
         const uint8_t castCount = hasCount ? packet.readUInt8() : 0;
         uint32_t spellId   = packet.readUInt32();
         // 0x00806c30: the cast of that count by the player's charm, else
-        // its summon, ends (0x007fecc0).
-        if (hasCount) {
-            if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
-                const auto guidAt = [&](UF f) -> uint64_t {
-                    const uint16_t i = fieldIndex(f);
-                    if (i == 0xFFFF) return 0;
-                    return (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(i + 1))) << 32) |
-                           player->getField(i);
-                };
-                uint64_t pet = guidAt(UF::UNIT_FIELD_CHARM);
-                if (pet == 0) pet = guidAt(UF::UNIT_FIELD_SUMMON);
-                if (pet != 0) owner_.castVisuals().ended(pet, castCount, spellId);
-            }
+        // its summon, ends (0x007fecc0).  That routine is also what raises
+        // the events, and it names the pet - whose own cast bar is bound to
+        // the "pet" token (petframe.lua:182, CastingBarFrame_OnLoad(self,
+        // "pet", false, false)).  Nothing here told that bar anything: a pet
+        // cast the realm refused left its bar running to the end of its own
+        // clock, and the frames listening for a failure saw nothing at all.
+        uint64_t pet = 0;
+        if (auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+            const auto guidAt = [&](UF f) -> uint64_t {
+                const uint16_t i = fieldIndex(f);
+                if (i == 0xFFFF) return 0;
+                return (static_cast<uint64_t>(player->getField(static_cast<uint16_t>(i + 1))) << 32) |
+                       player->getField(i);
+            };
+            pet = guidAt(UF::UNIT_FIELD_CHARM);
+            if (pet == 0) pet = guidAt(UF::UNIT_FIELD_SUMMON);
+            if (pet != 0 && hasCount) owner_.castVisuals().ended(pet, castCount, spellId);
         }
         uint8_t  reason    = (packet.hasRemaining(1))
                                  ? packet.readUInt8() : 0;
@@ -1490,6 +1503,16 @@ void CombatHandler::handlePetCastFailed(network::Packet& packet) {
             // And the player's line for it, where the game error has one.
             if (!errMsg.empty())
                 if (auto* spells = owner_.getSpellHandler()) spells->sayPetCastFailure(spellId, reason);
+        }
+        // The event that same routine raises, which is the reason's choice:
+        // FAILED_QUIET for the three refusals that leave a cast running,
+        // INTERRUPTED for 0x28/0x29, plain FAILED for everything else - and
+        // the stop after it, this being the cast that was shown.
+        if (pet != 0) {
+            const std::string unitId = owner_.guidToUnitId(pet);
+            if (!unitId.empty())
+                if (auto* spells = owner_.getSpellHandler())
+                    spells->raiseCastFailureEvents(unitId, spellId, reason, true);
         }
     }
     packet.skipAll();

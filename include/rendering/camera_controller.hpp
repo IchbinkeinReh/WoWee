@@ -31,8 +31,21 @@ public:
     void releaseMouseCapture();
 
     void setMovementSpeed(float speed) { movementSpeed = speed; }
-    void setMouseSensitivity(float sensitivity) { mouseSensitivity = sensitivity; }
-    [[nodiscard]] float getMouseSensitivity() const { return mouseSensitivity; }
+    /// Both bases at once, on the ratio the shipped look slider keeps between
+    /// them: it writes cameraPitchMoveSpeed as half the yaw it is drawn with,
+    /// and the two factors - 0.00125 against 1/600 - turn that half into two
+    /// thirds in this client's base units.
+    void setMouseLook(float yawDegreesPerMovement) {
+        mouseSensitivity = yawDegreesPerMovement;
+        mousePitchSensitivity = yawDegreesPerMovement * (2.0f / 3.0f);
+    }
+    /// The pitch alone, for a write that names only cameraPitchMoveSpeed - the
+    /// console command, or an addon - where there is no yaw to take a share of.
+    void setMousePitchSensitivity(float sensitivity) { mousePitchSensitivity = sensitivity; }
+    /// Degrees turned per movement of the mouse, aspect pair included, and the
+    /// same for pitch. Out of line because the pair comes off the camera.
+    [[nodiscard]] float getMouseSensitivity() const;
+    [[nodiscard]] float getMousePitchSensitivity() const;
     void setInvertMouse(bool invert) { invertMouse = invert; }
     [[nodiscard]] bool isInvertMouse() const { return invertMouse; }
     /// How far back the camera may be pulled, as a multiple of the original
@@ -614,7 +627,13 @@ private:
     float slowMultiplier = 0.3f;
 
     // Mouse settings
-    float mouseSensitivity = 0.2f;
+    // The base of each axis, before the picture's ratio (see
+    // getMouseSensitivity above). 0.225 is Mouse Look Speed's registered 180
+    // degrees times the 0.00125 the client turns per movement of the mouse
+    // (0x006020b0). 0.15 is where the look slider's pitch lands at that same
+    // default: half its 180, times 1/600.
+    float mouseSensitivity = 0.225f;
+    float mousePitchSensitivity = 0.15f;
     bool invertMouse = false;
     bool mouseButtonDown = false;
     bool leftMouseDown = false;
@@ -723,6 +742,17 @@ public:
     void setPivotHeight(float h) { pivotHeight_ = std::clamp(h, 0.0f, 3.0f); }
     [[nodiscard]] float getPivotHeight() const { return pivotHeight_; }
 
+    /// The console's `pitchLimit` (0x005fe400): how far the view may be tilted,
+    /// in degrees from straight out. Written the way the command writes it - the
+    /// same number on both sides, so `/pitchlimit -45` leaves a maximum below its
+    /// minimum and no pitch inside the range. The client keeps the pair in
+    /// radians; every pitch clamp here works in degrees, so the pair is held
+    /// degrees and the conversion is this setter's.
+    void setPitchLimitDegrees(float degrees) {
+        pitchLimitMaxDeg_ = degrees;
+        pitchLimitMinDeg_ = -degrees;
+    }
+
     /// Where the camera looks, on the character it is following.
     ///
     /// pivotHeight_ is a distance in metres, and a metre is a different part
@@ -815,8 +845,15 @@ private:
     static constexpr float CAM_SPHERE_RADIUS = 0.32f;  // Keep camera farther from geometry to avoid clipping-through surfaces
     static constexpr float COLLISION_FOCUS_RADIUS_THIRD_PERSON = 20.0f;  // Reduced for performance
     static constexpr float COLLISION_FOCUS_RADIUS_FREE_FLY = 20.0f;
-    static constexpr float MIN_PITCH = -88.0f;      // Look almost straight down
-    static constexpr float MAX_PITCH = 88.0f;       // Look almost straight up (WoW standard)
+    /// How far the view may be tilted up and down, in degrees - the client's
+    /// pair at 0x00ad1b4c (max) and 0x00ad1b50 (min), held there in radians and
+    /// initialised to ±0x3fc6d3f2/0xbfffd3f2, which is ±89°. A pair rather than
+    /// two constants because the console's `pitchLimit` command (0x005fe400)
+    /// writes both: +deg into the max, -deg into the min, nothing bounded and
+    /// the sign not taken apart - so a negative argument asks for a range that
+    /// holds no pitch at all, which is what the original asks for as well.
+    float pitchLimitMinDeg_ = -89.0f;
+    float pitchLimitMaxDeg_ = 89.0f;
     glm::vec3* followTarget = nullptr;
     float smoothedCollisionDist_ = -1.0f;           // Asymmetrically-smoothed WMO collision limit (-1 = uninitialised)
     /// The ground's own limit, smoothed before it is combined with the built

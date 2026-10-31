@@ -60,6 +60,11 @@ inline constexpr uint32_t UNIT_DYNFLAG_LOOTABLE         = 0x00000001;
 inline constexpr uint32_t UNIT_DYNFLAG_TAPPED           = 0x00000004;
 inline constexpr uint32_t UNIT_DYNFLAG_TAPPED_BY_PLAYER = 0x00000008;
 inline constexpr uint32_t UNIT_DYNFLAG_DEAD             = 0x00000020;
+// 0x40 is the bit the client asks for when it wants to know whether that unit
+// is recruit-a-friend linked: it reads no other user of it, and nothing else
+// asks for it (0x006d7590, behind IsReferAFriendLinked). Named for that one
+// read; whether a realm sets it is the realm's own decision.
+inline constexpr uint32_t UNIT_DYNFLAG_REFER_A_FRIEND   = 0x00000040;
 
 /// CREATE updates may omit zero-valued health. In that case the dynamic corpse
 /// flags are the authoritative indication that the unit must spawn dead.

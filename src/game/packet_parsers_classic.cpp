@@ -1296,13 +1296,14 @@ network::Packet ClassicPacketParsers::buildSendMail(uint64_t mailboxGuid,
                                                      const std::string& subject,
                                                      const std::string& body,
                                                      uint64_t money, uint64_t cod,
+                                                     uint32_t stationeryId,
                                                      const std::vector<uint64_t>& itemGuids) {
     network::Packet packet(wireOpcode(Opcode::CMSG_SEND_MAIL));
     packet.writeUInt64(mailboxGuid);
     packet.writeString(recipient);
     packet.writeString(subject);
     packet.writeString(body);
-    packet.writeUInt32(0);       // stationery
+    packet.writeUInt32(stationeryId);  // stationery (vanilla had letterheads too)
     packet.writeUInt32(0);       // unknown
     // Vanilla supports only one item attachment (single uint64 GUID)
     uint64_t singleItemGuid = itemGuids.empty() ? 0 : itemGuids[0];
@@ -1498,8 +1499,7 @@ bool parseItemQueryPreWotlk(network::Packet& packet, ItemQueryResponseData& data
     }
 
     data.itemFlags = packet.readUInt32(); // Flags
-    // Vanilla: NO Flags2
-    packet.readUInt32(); // BuyPrice
+    data.buyPrice = packet.readUInt32();  // BuyPrice (Vanilla sends no Flags2)
     data.sellPrice = packet.readUInt32(); // SellPrice
 
     data.inventoryType = packet.readUInt32();

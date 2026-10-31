@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Inline handler bodies naming an argument their signature does not carry.
 
-    tools/framexml_script_args.py
+    tools/framexml_script_args.py ["<the extracted interface>"]
 
 An <OnEnter> body is emitted as a Lua function, and the emitter decides its
 parameter list from the script's name - `self, motion` for OnEnter, `self,
@@ -55,7 +55,10 @@ import sys as _s; _s.path.insert(0, str(Path(__file__).resolve().parent))
 from framexml_source import loaded_files
 
 ROOT = Path(__file__).resolve().parent.parent
-XML = ROOT / "Data/interface"
+# The interface root on the command line, the way every other interface sweep
+# takes it; Data/interface is the fallback and is not tracked in the checkout.
+XML = (Path(sys.argv[1]) if len(sys.argv) > 1
+       else ROOT / "Data/interface")
 EMITTER = ROOT / "src/ui/framexml_emitter.cpp"
 
 #: Parameter names that are also functions everything can reach. A body
@@ -89,6 +92,13 @@ def signatures():
 
 
 def main():
+    if not XML.is_dir():
+        # loaded_files() answers with an empty set for a directory that is not
+        # there, so the emitter's table is read and no handler body is, which
+        # is the report a clean interface gives.
+        print(f"No interface at {XML} - name the unpacked interface on the "
+              "command line; there are no script bodies to read here.")
+        return 2
     table = signatures()
     vocabulary = {p for params in table.values() for p in params}
     default = table[""]

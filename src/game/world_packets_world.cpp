@@ -1967,9 +1967,15 @@ bool BattlefieldStatusPacket::parse(network::Packet& packet, BattlefieldStatusDa
             // the type before this, which is the map id - so the dialog counted
             // down from a map number.
             if (packet.hasRemaining(4)) data.inviteTimeoutMs = packet.readUInt32();
-            // In progress, 0x0054ae40 reads two more: the time the battle has
-            // run, and the arena side byte (0x00bea54a).
+            // In progress, three more fields - and the one that used to be read
+            // first here was the *remaining* time, not the elapsed one: the
+            // client stamps the first as `clock + it` and the second as
+            // `clock - it` (0x0054ae40, 00540000.c:8560-8575). One dword short
+            // and the byte that follows - the arena side, what
+            // GetBattlefieldArenaFaction answers - was read out of the elapsed
+            // dword's low byte instead.
             if (data.statusId == 3 && wotlkFormat) {
+                if (packet.hasRemaining(4)) data.instanceRemainingMs = packet.readUInt32();
                 if (packet.hasRemaining(4)) data.elapsedMs = packet.readUInt32();
                 if (packet.hasRemaining(1)) data.arenaFaction = packet.readUInt8();
             }

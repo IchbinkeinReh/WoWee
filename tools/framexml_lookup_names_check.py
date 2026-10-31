@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Frames this client looks up by name that the interface does not declare.
 
-    tools/framexml_lookup_names_check.py
+    tools/framexml_lookup_names_check.py ["<the extracted interface>"]
+
+Pointed at a checkout, it reads Data/interface, which is not tracked; pass the
+directory the interface was unpacked into. Without either, declared() gets an
+empty set from loaded_files and *every* name this client looks up is reported -
+fourteen of them, including Minimap, which the interface declares at
+minimap.xml:90. A sweep that reports the whole world is reporting itself.
 
 A dozen things are now driven by finding a FrameXML frame by name and handing
 it something: the minimap is told where to be, the world map likewise, and
@@ -34,10 +40,15 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-import sys as _s; _s.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(ROOT / "tools"))
 from framexml_source import loaded_files
 
-XML = ROOT / "Data/interface"
+# The interface this compares against, in the order every other interface
+# sweep takes it: named on the command line, and Data/interface otherwise. The
+# literal has to stay in the source, because sweep_guard reads it to decide
+# that this checkout has nothing to compare and skips the sweep instead of
+# failing it.
+XML = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
 SRC = ROOT / "src"
 
 
@@ -77,6 +88,13 @@ def declared():
 
 
 def main():
+    if not XML.is_dir():
+        # Every name this client looks up is undeclared from here, and that
+        # reads as fourteen faults in the client rather than no interface at
+        # all. Say which it is and stop.
+        print(f"No interface at {XML} - nothing can be compared, "
+              "and a zero here would mean nothing either.")
+        return 2
     wanted = looked_up()
     have = declared()
     missing = {n: f for n, f in wanted.items() if n not in have}

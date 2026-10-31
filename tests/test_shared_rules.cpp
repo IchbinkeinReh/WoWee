@@ -18,6 +18,7 @@
 #include "core/character_paths.hpp"
 #include "game/inventory.hpp"
 #include "game/item_text.hpp"
+#include "game/visible_item_fields.hpp"
 #include "game/world_packets.hpp"
 #include "pipeline/item_textures.hpp"
 #include "pipeline/m2_loader.hpp"
@@ -379,20 +380,27 @@ TEST_CASE("an item's colour by quality", "[item]") {
 }
 
 TEST_CASE("an item hyperlink as 3.3.5a writes one", "[item]") {
-    // Nine fields after "item:": id, enchant, four gems, suffix, unique id and
-    // level. Sixteen places built this by hand; the ones that wrote eight gave
-    // an addon a differently shaped link from the one a shift-click produced.
+    // Nine numbers after "item:", each one named for the field 0x0061e3a0 reads
+    // it out of the item object's field block: the entry, ITEM_FIELD_ENCHANTMENT_
+    // 1_1, the three socket triples (ENCHANTMENT_3_1, _4_1 and _5_1), a hard
+    // zero, ITEM_FIELD_RANDOM_PROPERTIES_ID, ITEM_FIELD_PROPERTY_SEED, and then
+    // a level that is not the item's at all - 0x0061e290 reads UNIT_FIELD_LEVEL
+    // off its own player object and appends it to every link it formats, record
+    // links included.  Sixteen places built this by hand; the ones that wrote
+    // eight gave an addon a differently shaped link from the one a shift-click
+    // produced.
     CHECK(game::itemChatLink(3299, 0, "Fractured Canine") ==
           "|cff9d9d9d|Hitem:3299:0:0:0:0:0:0:0:0|h[Fractured Canine]|h|r");
     CHECK(game::itemChatLink(19019, 4, "Thunderfury") ==
           "|cffa335ee|Hitem:19019:0:0:0:0:0:0:0:0|h[Thunderfury]|h|r");
 
-    SECTION("an enchant and a suffix keep the field count") {
+    SECTION("an enchant, gems and a seed keep the field count") {
         // The guild bank wrote eight fields where everything else wrote nine,
         // dropping the level, so a link from a bank slot had a different shape
         // from the same item linked out of a bag.
-        const std::string link = game::itemChatLink(19019, 4, "Thunderfury", 2504, -37);
-        CHECK(link == "|cffa335ee|Hitem:19019:2504:0:0:0:0:-37:0:0"
+        const game::ItemLinkInstance forged{2504, {3149, 3149, 0}, -37, 12};
+        const std::string link = game::itemChatLink(19019, 4, "Thunderfury", forged, 80);
+        CHECK(link == "|cffa335ee|Hitem:19019:2504:3149:3149:0:0:-37:12:80"
                       "|h[Thunderfury]|h|r");
         const std::string plain = game::itemChatLink(19019, 4, "Thunderfury");
         auto fields = [](const std::string& s) {
@@ -408,6 +416,28 @@ TEST_CASE("an item hyperlink as 3.3.5a writes one", "[item]") {
         CHECK(link.find("|Hitem:1:") != std::string::npos);
         CHECK(link.substr(0, 10) == "|cffffffff");
     }
+}
+
+TEST_CASE("the visible-item pair as the client's record reads it", "[item]") {
+    // 0x006de360 is the only reader these fields have, and it stores three
+    // things: the entry's magnitude at record+0x08, the enchantment dword's low
+    // halfword at +0x0c and its high halfword at +0x10.  The magnitude is what
+    // every consumer sees, so a field of -40546 is item 40546 to the paperdoll,
+    // the link and the model - and the halfwords are the item's own permanent
+    // and temporary enchantments, the same two an item object carries three
+    // dwords apart as ENCHANTMENT_1_1 and ENCHANTMENT_2_1.
+    CHECK(game::visibleItemEntryField(0xFFFF619Eu) == 40546u);   // -40546
+    CHECK(game::visibleItemEntryField(40546u) == 40546u);
+    CHECK(game::visibleItemEntryField(0u) == 0u);
+    // The most negative int32 has no positive partner; negating it in 32 bits
+    // hands back the same bits, which is why this widens first.
+    CHECK(game::visibleItemEntryField(0x80000000u) == 0x80000000u);
+    CHECK(game::visibleItemEnchantField(0x0B100A64u) == 2660u);  // 0x0A64
+    CHECK(game::visibleItemTempEnchantField(0x0B100A64u) == 2832u);
+    // A permanent enchant above 0xFFFF is not representable, and clipping it
+    // rather than carrying the whole dword is what a halfword read does.
+    CHECK(game::visibleItemEnchantField(0x00010002u) == 2u);
+    CHECK(game::visibleItemTempEnchantField(0x00010002u) == 1u);
 }
 
 TEST_CASE("the .skin beside a model", "[m2]") {

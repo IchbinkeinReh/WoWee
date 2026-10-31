@@ -157,6 +157,10 @@ struct LuaServices {
         std::string description;
         int   icon = 0;
         float x = 0.0f, y = 0.0f;   ///< [0,1] across the map being shown
+        /// The point's own flags, as AreaPOI carries them - which is how the
+        /// interface gets to ask whether a pin belongs on a battlefield's
+        /// minimap as well (minimap_blips.hpp, kPoiOnBattleMap).
+        uint32_t flags = 0;
     };
     std::function<std::vector<MapLandmark>()> getMapLandmarks;
 
@@ -211,6 +215,16 @@ struct LuaServices {
     std::function<MapPoiFrame()> getMapPoiFrame;
     std::function<uint32_t()> getMapWorldAreaId;
     std::function<void(uint32_t)> setMapWorldAreaId;
+    /// The floors of the map being shown: how many levels it answers with,
+    /// which of them is showing (zero for none), and choosing one. The world
+    /// map's level dropdown, its arrows, the minimap's floor indicator and the
+    /// quest log's "open this map" all read these.
+    std::function<int()> getMapDungeonLevelCount;
+    std::function<int()> getMapDungeonLevel;
+    std::function<bool(int)> setMapDungeonLevel;
+    /// Whether the map's floors sit below a surface level, which is what the
+    /// level dropdown counts its floor names against.
+    std::function<bool()> mapDungeonUsesTerrainMap;
 
     /// The zone the player is standing in, worked out from the terrain under
     /// them and refreshed every frame.
@@ -250,11 +264,14 @@ struct LuaServices {
     /// Whether looking up drags the view down, for mouseInvertPitch.
     ///
     /// There is deliberately no counterpart for mouseSpeed, which sits beside
-    /// it on the same panel: FrameXML never declares that slider's range -
-    /// neither the control nor OptionsSliderTemplate sets minValue or maxValue
-    /// - so the number it writes has no scale to convert from, and the camera's
-    /// own sensitivity runs 0.05 to 1. Mapping one onto the other would be a
-    /// guess about both ends.
+    /// it on the same panel: it is the pointer's speed, and this client keeps no
+    /// pointer speed of its own - the cursor is the operating system's. The
+    /// slider's range is declared after all (MousePanelOptions gives it 0.5 to
+    /// 1.5 and Mouse Look Speed 90 to 270, interfaceoptionspanels.lua:1622);
+    /// what has no counterpart is anything on the other end of that multiplier.
+    /// The look slider next to it does have one: cameraYawMoveSpeed is bound to
+    /// the same setting in kClientCVars on the client's own 0.00125 between its
+    /// degrees and the camera's.
     /// mouseInvertPitch and gxVSync had a pair each here. Both are rows in
     /// kClientCVars now - the client has settings keys for them, which it did
     /// not when they were written, and a row costs nothing where a pair costs

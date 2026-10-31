@@ -8,6 +8,9 @@ and nothing about that failure is visible: no missing name, no nil, no raise.
 
     tools/declared_vs_read_check.py
 
+    tools/declared_vs_read_check.py ["<the extracted interface>"] \
+        ["<the decompile's strings.tsv>"]
+
 THREE THINGS IT COMPARES
 
 **Attributes the emitter never names.** The chat box says historyLines="32"
@@ -27,11 +30,36 @@ not load, so the bootstrap's values are the only ones there are.
 BOOKTYPE_PET was 1 against "pet": a number compared to a string is false rather
 than an error, so the question was always answered no.
 
-WHAT IT CANNOT SEE
+WHAT AN UNREAD ATTRIBUTE IS WORTH
 
-Whether an unread attribute matters. Most of the remainder have no method
-behind them at all, and a few are XML namespace bookkeeping. Read before
-acting.
+Pass the decompile's `strings.tsv` as the second argument and the list splits the
+way every other interface sweep splits: an attribute the 12340 client carries no
+name for is one that client never read either, so nothing here can be missing it -
+that half is listed apart and left out of the headline count. The match is on the
+whole string, not a substring: `Texture %s: Invalid TexCoords value (horizTile is
+on)` mentions a name without carrying it as a table entry.
+
+What is left has been read, once, on 2026-10-30:
+
+  * `horizTile` / `vertTile` (11 chat border strips and tab middles) - tiling needs
+    a REPEAT sampler, and the UI's sampler is shared and CLAMP_TO_EDGE.
+  * `monochrome` (one font, NumberFont_OutlineThick_Mono_Small) - a rasteriser
+    flag; nothing here renders a font that way.
+  * `rotatesTexture` (two VehicleMenuBar bars) - a bar in a UI this client does
+    not run.
+  * `nonBlocking` - the client's own method pair is `SetNonBlocking` /
+    `GetNonBlocking`, a hint about loading the art without blocking; no drawn
+    difference either way.
+  * `debug` on Binding - build metadata.
+  * `dontSavePosition` on FloatingChatFrameTemplate - about a position store this
+    client does not have.
+  * `bytes` on FontString - the client stores `max - 1` at widget +0xb1
+    (SetMaxBytes 0x009764e0, GetMaxBytes 0x00976580 returns it plus one, -1 for no
+    limit), so `bytes="256"` caps the text at 255 bytes - the same cap the EditBox
+    beside it already gets from `letters="255"`, which is read.
+  * `indented` on a ChatFrameTemplate message FontString - the client has
+    `SetIndentedWordWrap` on six widget classes; the flag changes how a wrapped
+    chat line is laid out, which is text layout this client does in its own way.
 
 THE CVARS, AND THE TEST THAT DECIDES ONE
 
@@ -62,11 +90,18 @@ Three worth naming because they look like faults and are not:
     the branch that scans the currency list and decides, which is what a fresh
     account wants.
 
-The one left undecided is screenEdgeFlash, the full-screen combat flash. Its
-default is plausibly on, LowHealthFrame exists to draw it, and unlike the
-entries above it is reachable from an Interface Options checkbox - so zero
-costs a preference rather than a feature, and turning a full-screen flash on
-from a guess is the wrong way round.
+screenEdgeFlash was the one left undecided, and it is no longer a guess: the
+binary registers it "1" (FUN_00767fc0 at 00510000.c:11283, the default argument
+read back as the string it points at), so it now answers "1" here and the HUD
+row over it starts ticked the same way. What that registration buys is smaller
+than the CVar's name suggests. playerframe.lua calls
+CombatFeedback_StartFullscreenStatus() on PLAYER_REGEN_DISABLED and
+StopFullscreenStatus on PLAYER_REGEN_ENABLED, and those are
+combatfeedback.lua flashing WorldFrame's LowHealthFrame - with no health test
+anywhere in it, and with its alpha forced to 0 by
+`if ( not GetUIPanel("fullscreen") )` while no panel declares frameArea="full".
+So the answer matches the game and changes nothing on screen; this client's own
+low-health pulse is a separate row and stays as it was.
 
 THE SEVENTEEN ATTRIBUTES, READ 2026-08-05
 
@@ -111,7 +146,17 @@ sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
 from framexml_source import without_comments
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-FRAMEXML = ROOT / "Data/interface/framexml"
+# The interface root on the command line - the framexml directory comes off it,
+# so the same argument works for every interface sweep. Data/interface is the
+# fallback and is not tracked; the literal is what tells sweep_guard to skip
+# this one rather than fail it here.
+INTERFACE = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
+             else ROOT / "Data/interface")
+# The decompile's string dump, which says what the 12340 client could read at
+# all. Optional: without it nothing is split out and every unread attribute is
+# counted, which is the honest number for a sweep that cannot tell the two apart.
+STRINGS = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else None
+FRAMEXML = INTERFACE / "framexml"
 EMITTER = ROOT / "src/ui/framexml_emitter.cpp"
 ADDONS = ROOT / "src/addons"
 SRC = ROOT / "src"
@@ -267,10 +312,33 @@ EXPECTED_UNFIRED = {
 
 
 def main():
+    if not FRAMEXML.is_dir():
+        # All three sections compare against the XML. With none to read, each
+        # answers zero, which is the same report a clean tree gives.
+        print(f"No framexml at {FRAMEXML} - name the unpacked interface on "
+              "the command line; there is nothing to compare against here.")
+        return 2
     emitter = EMITTER.read_text(errors="ignore") if EMITTER.exists() else ""
     named = set(re.findall(r'"(\w+)"', emitter))
     attrs = attributes()
     unread = sorted(a for a in attrs if a not in named)
+    # The split every other interface sweep makes. An attribute the 12340 client
+    # carries no name for is one that client never read out of the XML either -
+    # this emitter cannot be missing behaviour the reference never had. Matched on
+    # the whole string: a name mentioned inside "Texture %s: Invalid TexCoords
+    # value (horizTile is on)" is not a table entry carrying that name.
+    unnameable = []
+    if STRINGS and STRINGS.is_file():
+        carried = set()
+        with STRINGS.open(errors="ignore") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) == 2:
+                    carried.add(parts[1])
+        unnameable = [a for a in unread if a not in carried]
+        unread = [a for a in unread if a in carried]
+    elif STRINGS:
+        print(f"no strings file at {STRINGS}\n")
     # Case-insensitively, because the emitter folds an element name to the
     # schema's spelling before it compares - FrameXML's own <Fontstring> is
     # built that way, and a check that did not fold would report it as a gap
@@ -315,16 +383,27 @@ def main():
     # is a quoted name passed to a helper, so a sweep that only knows the C
     # shape calls both dead. It did, for OnFinished and OnAttributeChanged,
     # which is every fading alert banner and every action bar state driver.
-    # Two shapes, because a handler fetched off __scripts is often put in a
+    # Three shapes, because a handler fetched off __scripts is often put in a
     # local first and called on the next line:
     #     local handler = self.__scripts and self.__scripts.OnAttributeChanged
+    # and because the newest of these runners takes the name as a quoted
+    # argument inside the Lua literal, which looks like neither of the first two
+    # and is what fires the animation slots now:
+    #     __WoweeRunScriptSlot(a, 'OnFinished')
+    # A quoted name is a call argument, and only that: the emitter's signature
+    # table holds the same names unquoted (`if (script == "OnFinished") return
+    # "self, requested";`), and a sweep that counted those would call every
+    # script type fired - which is exactly the blindness this check was written
+    # out of. Single quotes cannot come from C++ at all, so a single-quoted one
+    # is Lua source by construction.
     LUA_DISPATCH = re.compile(r'__scripts\.(On[A-Z]\w+)'
-                              r'|\b[a-zA-Z_]\w*[.:](On[A-Z]\w+)\s*[({]')
+                              r'|\b[a-zA-Z_]\w*[.:](On[A-Z]\w+)\s*[({]'
+                              r'|[(,]\s*[\'"](On[A-Z]\w+)[\'"]\s*[,)]')
     fired = set()
     for path in SRC.rglob("*.cpp"):
         text = path.read_text(errors="ignore")
-        for a, b in LUA_DISPATCH.findall(text):
-            fired.add(a or b)
+        for a, b, c in LUA_DISPATCH.findall(text):
+            fired.add(a or b or c)
         for m in OPEN.finditer(text):
             # To the end of the statement, so a call spanning lines is covered
             # and the next one is not.
@@ -343,6 +422,18 @@ def main():
         print(f"  {a:<28} on {', '.join(sorted(attrs[a])[:2])}")
     if not unread:
         print("  (none)")
+    if unnameable:
+        print(f"\n{len(unnameable)} more the emitter never names, which the 12340 "
+              "client carries no name for either - that client never read them "
+              "out of the XML, so there is nothing here to restore:")
+        for a in unnameable:
+            print(f"  {a:<28} on {', '.join(sorted(attrs[a])[:2])}")
+    elif STRINGS and STRINGS.is_file():
+        print("\n(strings.tsv) every unread attribute is one the client names.")
+    else:
+        print("\nPass the decompile's strings.tsv as the second argument and the "
+              "attributes the 12340 client carries no name for come out of that "
+              "count and are listed apart.")
 
     print(f"\n{len(els)} element(s) in the files that load, {len(unhandled)} "
           f"the emitter never names:\n")

@@ -357,19 +357,64 @@ static int lua_GetBuybackItemInfo(lua_State* L) {
     return 6;
 }
 
-/// GetBuybackItemLink(index) - the same row list, and the client resolves the
-/// row to its ring slot exactly as GetBuybackItemInfo does (0x005852c0 reads
-/// the published list, then the item standing in that slot of the player's
-/// store), so an index past the rows answers nothing there rather than a link.
+// GetBuybackItemLink(index) → the row's item link, or **no values at all**
+/// 0x005852c0 reads the published (timestamp-sorted) row list exactly as
+/// GetBuybackItemInfo does - `(&DAT_00bf90f8)[index-1]` behind a count test
+/// against DAT_00bfa3f4 - and then asks the player's own store for the item
+/// standing in that ring slot: the slot has to be below the item count at
+/// object+0x18f0 and one half of the guid pair at +0x18f4 + slot*8 non-zero,
+/// which is what makes a row here a row at all.  The link is the item
+/// **object**'s (0x00754390 → 0x0061e3a0), pushed by FUN_0084e350.
+///
+/// Every other path out of that function **returns without pushing**, and so
+/// does its argument test: FUN_0084df20 failing leaves "Usage:
+/// GetBuybackItemLink(slot)" printed and no values on the stack.  WoWee
+/// answered nil instead, which is a value - and inside another call the two
+/// are not the same thing: `f(GetBuybackItemLink(i))` passes nil, or passes no
+/// argument, and `select('#', ...)` counts one or zero.  merchantframe.lua:432
+/// is the only reader in the shipped interface
+/// (`HandleModifiedItemClick(GetBuybackItemLink(self:GetID()))`, the click
+/// path that links the item in chat), where nil and nothing behave alike, but
+/// an addon testing `if GetBuybackItemLink(i) then` or counting the returns
+/// reads WoWee's nil as an answer the client never gave.  Its sibling
+/// GetBuybackItemInfo *does* answer - six values, the failure tail 0x00585070
+/// pushes - so the two are not interchangeable in either client.
+///
+/// The index conversion is truncation toward zero, not nearest: what
+/// `ROUND((float10)FUN_0084e030(...))` in the decompile really is is an
+/// `fnstcw / or $0xc00 / fldcw / fistpll` sequence at 0x00585311 - control-word
+/// bits 10-11 set to 11, the x87 chop mode - which is luaToClientInt's
+/// `_ftol2` semantics spelled out inline.  Do not read Ghidra's `ROUND` as
+/// round-to-nearest; look for the control-word write in front of it.
 static int lua_GetBuybackItemLink(lua_State* L) {
+    // FUN_0084df20 first: no number, the usage line, and no values.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetBuybackItemLink(slot)");
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || index < 1) { return luaReturnNil(L); }
+    const int index = luaToClientInt(L, 1);
+    if (!gh || index < 1) { return 0; }
     const auto* row = gh->buybackRowAt(static_cast<uint32_t>(index - 1));
-    if (!row) { return luaReturnNil(L); }
+    if (!row) { return 0; }
     const auto& bi = *row;
     const int q = static_cast<int>(bi.item.quality);
-    const std::string link = game::itemChatLink(bi.item.itemId, static_cast<uint32_t>(q), bi.item.name);
+    // The ring slot holds a real item object, and the client's link for it is
+    // the same one GetInventoryItemLink answers: 0x00754390(slot) →
+    // 0x0061e3a0, the object builder, so the enchant and the rolled property
+    // are part of what the row is called - and the property goes into the
+    // link's text through ITEM_SUFFIX_TEMPLATE, for the reason written out by
+    // GetInventoryItemLink's own tail.
+    // One value feeds both the number and the words beside it: 0x0061e290 hands
+    // the property it puts at position seven straight to 0x00706d70, which is
+    // what builds the name.  The object's own fields are what the client's link
+    // is made of - gems and seed included - and the row's copy is only a
+    // fallback, for a ring slot whose item object never arrived.
+    game::ItemLinkInstance inst = gh->itemLinkInstance(bi.item.guid);
+    const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
+                                                        : bi.item.randomPropertyId;
+    inst.randomPropertyId = property;
+    std::string name = bi.item.name;
+    name = gh->itemNameWithProperty(name, property);
+    const std::string link = game::itemChatLink(bi.item.itemId, static_cast<uint32_t>(q),
+                                                name, inst, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -492,7 +537,8 @@ static int lua_GetMerchantItemCostItem(lua_State* L) {
         lua_pushstring(L, info ? gh->getItemIconPath(info->displayInfoId).c_str() : "");
         lua_pushnumber(L, cost->itemCount[j]);
         if (info && !info->name.empty()) {
-    const std::string link = game::itemChatLink(cost->itemId[j], static_cast<uint32_t>(info->quality), info->name);
+    const std::string link = game::itemChatLink(cost->itemId[j], static_cast<uint32_t>(info->quality), info->name,
+                                 {}, gh->getPlayerLevel());
             lua_pushstring(L, link.c_str());
         } else {
             lua_pushnil(L);
@@ -559,7 +605,8 @@ static int lua_GetMerchantItemLink(lua_State* L) {
     const auto* info = gh->getItemInfo(vi.itemId);
     if (!info) { return luaReturnNil(L); }
 
-    const std::string link = game::itemChatLink(vi.itemId, static_cast<uint32_t>(info->quality), info->name);
+    const std::string link = game::itemChatLink(vi.itemId, static_cast<uint32_t>(info->quality), info->name,
+                                 {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -760,7 +807,8 @@ static int lua_GetItemInfo(lua_State* L) {
 
     lua_pushstring(L, info->name.c_str());          // 1: name
     // Build item link with quality-colored text
-    const std::string link = game::itemChatLink(itemId, static_cast<uint32_t>(info->quality), info->name);
+    const std::string link = game::itemChatLink(itemId, static_cast<uint32_t>(info->quality), info->name,
+                                 {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());                         // 2: link
     lua_pushnumber(L, info->quality);                // 3: quality
     lua_pushnumber(L, info->itemLevel);              // 4: iLevel
@@ -1029,7 +1077,7 @@ static int lua_GetContainerItemPurchaseItem(lua_State* L) {
     }
     lua_pushstring(L, gh->getItemIconPath(item->displayInfoId).c_str());
     lua_pushnumber(L, info->items[static_cast<size_t>(index)].second);
-    lua_pushstring(L, game::buildItemLink(itemId, item->quality, item->name).c_str());
+    lua_pushstring(L, game::buildItemLink(itemId, item->quality, item->name, gh->getPlayerLevel()).c_str());
     lua_pushstring(L, item->name.c_str());
     return 4;
 }
@@ -1378,7 +1426,7 @@ void pushItemLinkOrNil(lua_State* L, game::GameHandler* gh, uint32_t itemId) {
     const auto* info = itemId ? gh->getItemInfo(itemId) : nullptr;
     if (!info || info->name.empty()) { lua_pushnil(L); return; }
     const uint32_t quality = info->quality < 8 ? info->quality : 1u;
-    const std::string link = game::itemChatLink(itemId, quality, info->name);
+    const std::string link = game::itemChatLink(itemId, quality, info->name, {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
 }
 
@@ -1520,7 +1568,8 @@ static int lua_GetInboxItemLink(lua_State* L) {
     const auto* att = attachmentAt(mail, static_cast<int>(luaL_optnumber(L, 2, 1)));
     const auto* info = att ? gh->getItemInfo(att->itemId) : nullptr;
     if (!info || info->name.empty()) { return luaReturnNil(L); }
-    const std::string link = game::itemChatLink(att->itemId, static_cast<uint32_t>(info->quality), info->name);
+    const std::string link = game::itemChatLink(att->itemId, static_cast<uint32_t>(info->quality), info->name,
+                                 {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -1623,14 +1672,18 @@ static int lua_GetSendMailItemLink(lua_State* L) {
     if (!att.occupied()) return 0;
     const auto* info = gh->getItemInfo(att.item.itemId);
     std::string name = info ? info->name : ("Item #" + std::to_string(att.item.itemId));
-    if (att.item.randomPropertyId != 0) {
-        const std::string suffix = gh->getRandomPropertyName(att.item.randomPropertyId);
-        if (!suffix.empty()) name += " " + suffix;
-    }
-    const auto [permanentId, temporaryId] = gh->getItemEnchantIds(att.itemGuid);
-    (void)temporaryId;
+    // The attachment is a real item object, so its link is the object builder's
+    // answer and carries what the object says - enchant, gems, property, seed -
+    // with the mail record's property as the fallback for an attachment whose
+    // fields never arrived.  One property feeds the number and the words, the
+    // way 0x0061e290 hands its position-seven value to 0x00706d70.
+    game::ItemLinkInstance inst = gh->itemLinkInstance(att.itemGuid);
+    const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
+                                                        : att.item.randomPropertyId;
+    inst.randomPropertyId = property;
+    name = gh->itemNameWithProperty(name, property);
     const std::string link = game::itemChatLink(att.item.itemId, info ? info->quality : 0, name,
-                                                permanentId, att.item.randomPropertyId);
+                                                inst, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -2245,19 +2298,54 @@ static uint32_t carriedItemMatching(game::GameHandler* gh, lua_State* L, int arg
     return 0;
 }
 
-// GetInventoryItemDurability(slot) → current, maximum
+// The pair both durability bindings answer, and the one gate the client puts in
+// front of it (0x00584ac0 current, 0x00584ae0 maximum - one test each, and the
+// container binding 0x005d7ef0 inlines the same two reads at item+0xd4 blob
+// +0x3c/+0xd8/+0xdc instead of calling them):
 //
-// Absent for an item that cannot be damaged, which is what the durability
-// frame reads to decide whether the slot is worth drawing at all.
+//   bit 3 of ITEM_FIELD_FLAGS answers *zero for both*, and a maximum of zero
+//   makes both bindings return **no values at all** - not nil, not two nils.
+//   So an item carrying that bit reports no durability however full the server
+//   says it is, which is the shape the durability frame keys on when it decides
+//   a slot is not worth drawing. This is the same gate the hyperlink applies to
+//   the six instance numbers and the property (GameHandler::itemLinkInstance) -
+//   what the bit is called is still not pinned, but two independent readers
+//   treat it as "this item has no durability and no rolled detail".
+//
+// Both legs read the item's own fields, worn or carried alike, so the answer is
+// the same either way - the pair is parsed for every tracked item object
+// (entity_controller.cpp:2102), not only the equipped ones.
+//
+// A predicate, and deliberately not a push-and-return helper: a binding whose
+// own body never says `return 2` reads to tools/framexml_short_returns.py as
+// answering nothing against a call site unpacking two.
+static bool answersDurability(game::GameHandler* gh, const game::ItemSlot* sp) {
+    if (sp->empty()) return false;
+    if ((gh->getItemFieldFlags(sp->item.guid) & 0x8u) != 0) return false;
+    return sp->item.maxDurability != 0;
+}
+
+// GetInventoryItemDurability(slot) → current, maximum (0x005ea170)
+//
+// Absent for an item that cannot be damaged, and the client answers that by
+// returning no values rather than a nil, so a caller's `local a, b = ...` sees
+// the same either way but a count of returns does not.
+//
+// It is not the equipment array alone: 0x005e7c00 accepts the same slot lists
+// GetInventoryItemGems gets (see below), which is how the bank's slots reach
+// this. And slot 0 is refused outright - unlike the count and texture bindings,
+// which answer that one out of PLAYER_AMMO_ID - because 0x005e7c00's -1 is
+// tested before the player is even fetched.
 static int lua_GetInventoryItemDurability(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int slotId = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || slotId < 1 || slotId > kEquipSlots) { return luaReturnNil(L); }
-    const auto& sl = gh->getInventory().getEquipSlot(
-        static_cast<game::EquipSlot>(slotId - 1));
-    if (sl.empty() || sl.item.maxDurability == 0) { return luaReturnNil(L); }
-    lua_pushnumber(L, sl.item.curDurability);
-    lua_pushnumber(L, sl.item.maxDurability);
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInventoryItemDurability(slot)");
+    const int slotId = static_cast<int>(lua_tonumber(L, 1));
+    if (slotId == 0) return 0;
+    if (!gh) return 0;
+    const game::ItemSlot* sp = inventorySlotItem(gh->getInventory(), slotId);
+    if (!sp || !answersDurability(gh, sp)) return 0;
+    lua_pushnumber(L, sp->item.curDurability);
+    lua_pushnumber(L, sp->item.maxDurability);
     return 2;
 }
 
@@ -3156,26 +3244,115 @@ static int lua_GetLatestThreeSenders(lua_State* L) {
     return 3;
 }
 
-// What this client does not keep per bag slot: durability and gem sockets.
+// GetContainerItemDurability(bag, slot) → current, maximum (0x005d7ef0)
 //
-// Both are read straight into locals and guarded before use - paperdollframe
-// writes `local broken = ( maxDurability and durability == 0 )`, and the gems
-// are not even unpacked there - so absent is both safe and true. Answering a
-// full bar or three empty sockets would be a claim about an item nobody
-// inspected.
+// Answered nil, nil for as long as the durability pair was blamed on the
+// equipment-only parse - but entity_controller.cpp:2102 fills the pair from the
+// field block of *every* tracked item object, and inventory_handler.cpp:5924
+// maps that same block into the backpack, bag, keyring and bank slots. So the
+// pair was sitting on the slot all along and only the binding was missing.
 //
-// They are bindings rather than parser work, which is worth saying because it
-// was called the other way once: the wire carries this detail and this client
-// parses it only for equipped items, so it looked like a data gap until the
-// caller was read.
+// The client's own bag resolve (0x005d7380) and item lookup (0x00754390) both
+// failing means *no values*, which is not how this binding's gems neighbour
+// behaves - GetContainerItemGems answers three nils for the same missing item.
+// That asymmetry is in the original, and both halves are kept.
 static int lua_GetContainerItemDurability(lua_State* L) {
-    lua_pushnil(L);   // durability
-    lua_pushnil(L);   // maxDurability
+    auto* gh = getGameHandler(L);
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetContainerItemDurability(index, slot)");
+    if (!gh) return 0;
+    const game::ItemSlot* sp = containerItemSlot(gh->getInventory(),
+                                                 static_cast<int>(lua_tonumber(L, 1)),
+                                                 static_cast<int>(lua_tonumber(L, 2)));
+    if (!sp || !answersDurability(gh, sp)) return 0;
+    lua_pushnumber(L, sp->item.curDurability);
+    lua_pushnumber(L, sp->item.maxDurability);
     return 2;
 }
-static int lua_ItemGemsNone(lua_State* L) {
-    lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);   // gem1, gem2, gem3
+
+// GetInventoryItemGems(slot) (0x005ea4f0) and GetContainerItemGems(bag, slot)
+// (0x005d9300) - the gems in an item's three sockets, as item entries.
+//
+// EquipmentManager_GetItemInfoByLocation reads them into gem1, gem2 and gem3
+// (equipmentmanager.lua:280/290) and returns them after the twelve values
+// paperdollframe.lua:1970 unpacks - so nothing on screen draws them today, and
+// what they are had to come from the binding. The socket fields hold no entry;
+// what one holds is an enchantment id, in the same 0xc-spaced triples the
+// hyperlink reads its gems out of (item blob +0x58/+0x64/+0x70). Both bindings
+// put that id through one lookup before pushing anything: the store at
+// DAT_00ad48c0..DAT_00ad48bc indexed by DAT_00ad48d0 - min id, max id and the
+// id-to-row pointer array of one of the client's DBC stores - and then take
+// row+0x44 of whatever it names. That row is the SpellItemEnchantment row this
+// client already reaches for the socketing panel: its +0x38 is a localized
+// name, which 0x005198a0 formats into a two-name message, and its +0x44 is the
+// Src_ItemID column detectEnchantmentGemItemField finds, which getEnchantGemItem
+// already answers GetExistingSocketInfo from. That column is an item entry and
+// not merely a number because other readers of the same row hand it to the item
+// record cache at 0x0067ca30 (0x006de4d0). Three sockets, one number each, nil
+// for a socket whose id is out of that store or whose row names no item - an
+// empty socket has no id at all.
+//
+// The shapes are the client's, and the two differ:
+//
+//   * GetInventoryItemGems prints "Usage: GetInventoryItemGems(slot)" and
+//     returns *no values* when the argument is not a number. 0x005e7c00 then
+//     stores the argument minus one and accepts internal 0..0x16, 0x27..0x42,
+//     0x43..0x49 and 0x56..0x75 besides that -1, which is why the bank is named
+//     at forty and up; a slot outside those lists takes the same usage path.
+//     The list is not copied here: what the two top ranges name is not pinned,
+//     and they are wider than the slots this client resolves through
+//     GetInventoryItem* at all. An unresolvable slot therefore falls to the
+//     empty-slot answer below - the same number of values the refusal gives,
+//     differing only in the printed line.
+//   * Slot 0 arrives as the -1 the client refuses before its player check, with
+//     nothing at all.
+//   * A slot that is named but empty is refused the same way: 0x00754400
+//     (Bag::GetItem, .\Bag_C.cpp:0x2da) answers nothing and the binding returns
+//     nothing. Only when there is no local player at all does it answer three
+//     without looking.
+//   * GetContainerItemGems wants two numbers or it prints its own usage line,
+//     and a bag or slot that names no item still returns three nils rather than
+//     nothing.
+//
+// The inventory leg reaches its three ids through 0x00518b30, which walks
+// 0x0040-anchored triples off the object's block, and the container leg reads
+// +0x58/+0x64/+0x70 of the item's own block directly - the same three the link
+// is built from. Why those two bases are twelve dwords apart is not pinned
+// here; that both hand an enchantment id to the same lookup is what the code
+// rests on, and it is what WoWee's own socket panel already assumes.
+static int pushSocketGems(lua_State* L, game::GameHandler* gh, uint64_t itemGuid) {
+    const auto enchants = gh->getItemSocketEnchantIds(itemGuid);
+    for (int i = 0; i < 3; ++i) {
+        const uint32_t gem = gh->getEnchantGemItem(enchants[static_cast<size_t>(i)]);
+        if (gem == 0) lua_pushnil(L);
+        else lua_pushnumber(L, gem);
+    }
     return 3;
+}
+
+static int lua_GetInventoryItemGems(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInventoryItemGems(slot)");
+    const int slotId = static_cast<int>(lua_tonumber(L, 1));
+    // Lua's slot 0, the -1 the client stores and then refuses before its
+    // player check: no values, not three nils.
+    if (slotId == 0) return 0;
+    if (!gh) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
+    const game::ItemSlot* sp = inventorySlotItem(gh->getInventory(), slotId);
+    if (!sp || sp->empty()) return 0;
+    return pushSocketGems(L, gh, sp->item.guid);
+}
+
+static int lua_GetContainerItemGems(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetContainerItemGems(bag, slot)");
+    if (!gh) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
+    const game::ItemSlot* sp = containerItemSlot(gh->getInventory(),
+                                                 static_cast<int>(lua_tonumber(L, 1)),
+                                                 static_cast<int>(lua_tonumber(L, 2)));
+    if (!sp || sp->empty()) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
+    return pushSocketGems(L, gh, sp->item.guid);
 }
 
 // GetContainerFreeSlots(container [, table]) → the empty slots in that bag.
@@ -3281,7 +3458,7 @@ static int lua_GetContainerItemInfo(lua_State* L) {
     uint32_t q = info ? info->quality : 0;
 
     uint32_t qi = q < 8 ? q : 1u;
-    const std::string link = game::itemChatLink(itemSlot->item.itemId, qi, name);
+    const std::string link = game::itemChatLink(itemSlot->item.itemId, qi, name, {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());  // link
     return 7;
 }
@@ -3308,18 +3485,20 @@ static int lua_GetContainerItemLink(lua_State* L) {
     // Protection" named plain bracers and carried a random-property id of zero,
     // so anything reading the link back - a shift-click into chat, a comparison
     // tooltip - described a different item from the one in the slot.
-    if (itemSlot->item.randomPropertyId != 0) {
-        const std::string suffix = gh->getRandomPropertyName(itemSlot->item.randomPropertyId);
-        if (!suffix.empty()) name += " " + suffix;
-    }
     // The enchant on it goes in the link too, for the same reason the guild
     // bank's does: a link written without one shows an enchanted item as plain.
-    const auto [permanentId, temporaryId] =
-        gh->getItemEnchantIds(gh->getBagItemGuid(container, slot - 1));
-    (void)temporaryId;   // not part of a link; it is not a property of the item
+    // And it comes from the item object now, along with the gems in its sockets
+    // and the seed of its rolled property - the same block 0x0061e3a0 reads.
+    // The temporary enchant is deliberately out: an oil or a sharpening stone is
+    // not a property of the item, and the client has no slot for it in a link.
+    game::ItemLinkInstance inst =
+        gh->itemLinkInstance(gh->getBagItemGuid(container, slot - 1));
+    const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
+                                                        : itemSlot->item.randomPropertyId;
+    inst.randomPropertyId = property;
+    name = gh->itemNameWithProperty(name, property);
     const std::string link = game::itemChatLink(itemSlot->item.itemId, q, name,
-                                                permanentId,
-                                                itemSlot->item.randomPropertyId);
+                                                inst, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -3588,12 +3767,44 @@ static int lua_GetInventoryItemLink(lua_State* L) {
         const auto* info = gh->getItemInfo(ammo);
         if (!info) return luaReturnNil(L);
         const uint32_t qi = info->quality < 8 ? info->quality : 1u;
-        lua_pushstring(L, game::itemChatLink(ammo, qi, info->name).c_str());
+        // No instance numbers - this is the link the client builds from the
+        // record, through 0x0061e360, which is handed zeros for all six - but
+        // the level at the end is not the item's, and 0x0061e290 appends its own
+        // player's level to that link just as much as to an instance one.
+        lua_pushstring(L, game::itemChatLink(ammo, qi, info->name, {},
+                                             gh->getPlayerLevel()).c_str());
         return 1;
     }
     uint32_t itemId = 0;
     std::string name;
     uint32_t q = 1;
+    // What the link says the item is wearing, which the client takes off the
+    // item **object** rather than off its template: FUN_0061e3a0 hands the
+    // builder entry = OBJECT_FIELD_ENTRY, the record's quality, then
+    // 0x0061e290's format "%s|Hitem:%d:%d:%d:%d:%d:%d:%d:%d:%d|h[%s]|h%s" -
+    // entry, enchant, three gems, a hard zero, property, seed, and a level.  The
+    // enchant is item blob +0x40, ITEM_FIELD_ENCHANTMENT_1_1; the three gems are
+    // +0x58/+0x64/+0x70, one per 0xc-spaced triple, which the descriptor records
+    // at 0x00ac4800 name ENCHANTMENT_3_1, _4_1 and _5_1 - the very three sockets
+    // entity_controller already reads, three triples past the enchant; the two
+    // numbers after the zero are +0xd4 RANDOM_PROPERTIES_ID and +0xd0
+    // PROPERTY_SEED, which WoWee keeps as randomPropertyId and suffixFactor.  All
+    // six are read only while bit 3 of the flags at blob +0x3c is clear, and the
+    // level is the viewer's own (0x0061e290 reads it off its own player object,
+    // at unit blob +0xc0 = UNIT_FIELD_LEVEL).  GameHandler::itemLinkInstance
+    // collects the six from the fields WoWee was sent; the record's property is
+    // kept as a fallback for a slot whose item object never arrived.
+    int32_t recordPropertyId = 0;
+    uint64_t itemGuid = 0;
+    // The instance numbers for a unit that is not this character come out of the
+    // client's **record**, and which record depends on which unit it is: the one
+    // in the inspect window has a row the inspect block wrote (0x006cdf30 -
+    // entry, enchant, gems, property and seed in one run), and every other
+    // player in range gets the row 0x006de360 builds straight out of the
+    // visible-item fields, which names the entry and the permanent enchant and
+    // nothing beyond that.  WoWee had only the first - and only its entry - so a
+    // passing player's gear answered nil until an inspect had actually come back.
+    game::ItemLinkInstance record;
     if (uidStr == "player") {
         const auto& inv = gh->getInventory();
         const game::ItemSlot* sp = inventorySlotItem(inv, slotId);
@@ -3604,17 +3815,60 @@ static int lua_GetInventoryItemLink(lua_State* L) {
         const auto* info = gh->getItemInfo(itemId);
         name = info ? info->name : slot.item.name;
         q = info ? info->quality : static_cast<uint32_t>(slot.item.quality);
+        recordPropertyId = slot.item.randomPropertyId;
+        itemGuid = slot.item.guid;
+        // The temporary enchant is deliberately out of all of this: an oil or a
+        // sharpening stone is not a property of the item, and the client's link
+        // has no slot for it.
     } else {
-        itemId = inspectedItemEntry(gh, uidStr, slotId);
-        if (!itemId) { return luaReturnNil(L); }
+        const uint64_t guid = resolveUnitGuid(gh, uidStr);
+        itemId = gh->inspectedItemRecord(guid, slotId - 1, record);
+        if (itemId) {
+            // The name and the colour come from the item cache, which will not
+            // have an entry this client has never seen; asking queues the query.
+            // Nil until it answers is what the client does too - its leg calls
+            // 0x0067ca30 for the item record and returns nothing when that has
+            // no row for the entry yet.
+            gh->ensureItemInfo(itemId);
+        } else if (!gh->visibleItemRecord(guid, slotId - 1, itemId, record)) {
+            return luaReturnNil(L);
+        }
         const auto* info = gh->getItemInfo(itemId);
         if (!info) { return luaReturnNil(L); }
         name = info->name;
         q = info->quality;
+        // The other units' leg is the six-argument builder 0x0061e290, and every
+        // number past the entry comes out of that record: the enchant at +0x0c,
+        // the three socket gems at +0x14/+0x18/+0x1c, then +0x3c read back as a
+        // word (movzwl, which is why a prefix id reaches the link as 655xx) and
+        // +0x40.  What the record holds is what the row carried, which is all of
+        // it for inspected gear and entry plus enchant for a player the fields
+        // alone named.
     }
 
+    // The link's *text* is the record's name put through ITEM_SUFFIX_TEMPLATE:
+    // 0x00706d70(out, size, entry, randomPropertyId) takes the localized name
+    // at record+0x1f4, looks the property up - a positive id in the row range
+    // DAT_00ad3ec4..DAT_00ad3ec0 reading column +0x1c, a negative one in
+    // -DAT_00ad3ee4..DAT_00ad3ee8 reading +0x4 - and formats
+    // "%1$s %2$s".  So the property string goes second, with a space, whether
+    // the DBC calls it a prefix or a suffix; an empty row leaves the bare name.
+    // One property value feeds both the number and the words: 0x0061e290 passes
+    // the position-seven value straight to 0x00706d70, so a link cannot name one
+    // roll of an item and carry another in its numbers.
+    // The item object answers for this character's own gear; a unit that is not
+    // this character was answered from the record above, and mixing the two -
+    // taking an enchant from one row and a property from another - is not a
+    // thing the client has a way to do.
+    game::ItemLinkInstance inst = itemGuid != 0 ? gh->itemLinkInstance(itemGuid) : record;
+    const int32_t property = inst.randomPropertyId != 0 ? inst.randomPropertyId
+                                                        : recordPropertyId;
+    inst.randomPropertyId = property;
+    name = gh->itemNameWithProperty(name, property);
+
     uint32_t qi = q < 8 ? q : 1u;
-    const std::string link = game::itemChatLink(itemId, qi, name);
+    const std::string link = game::itemChatLink(itemId, qi, name, inst,
+                                                gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -4141,7 +4395,7 @@ static int lua_GetLootSlotLink(lua_State* L) {
     if (!info || info->name.empty()) { return luaReturnNil(L); }
 
     uint32_t qi = info->quality < 8 ? info->quality : 1u;
-    const std::string link = game::itemChatLink(item.itemId, qi, info->name);
+    const std::string link = game::itemChatLink(item.itemId, qi, info->name, {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -4245,7 +4499,7 @@ static int lua_GetLootRollItemLink(lua_State* L) {
     const auto* roll = rollFor(gh, static_cast<int>(luaL_optnumber(L, 1, 0)));
     if (!roll) { return luaReturnNil(L); }
     lua_pushstring(L, game::buildItemLink(roll->itemId, roll->itemQuality,
-                                          roll->itemName).c_str());
+                                          roll->itemName, gh->getPlayerLevel()).c_str());
     return 1;
 }
 
@@ -4276,21 +4530,46 @@ static int lua_RollOnLoot(lua_State* L) {
     const int type = static_cast<int>(luaL_optnumber(L, 2, 0));
     if (type < 0 || type > 3) return 0;
 
-    // Rolling for something that will bind asks first. CONFIRM_LOOT_ROLL is
-    // raised by the client rather than the server - uiparent.lua answers it
-    // with the popup whose OK calls ConfirmLootRoll(id, rollType) - so nothing
-    // raised it here and Need on a bind-on-pickup item bound it with no
-    // warning at all, which is the one place this differs from the real client
-    // in a way a player pays for.
+    // Both bindings land in one client routine, 0x006fbc70: RollOnLoot hands it
+    // (rollId, rollType, 0) and ConfirmLootRoll the same with the last one a 1,
+    // which is how it knows the asking has already happened. A roll of anything
+    // but a pass asks first, and what it asks *about* is the type:
     //
-    // Need and Greed only. Both hand the item over and bind it; disenchant
-    // yields the shard and passing yields nothing, so neither asks.
-    if (type == 1 || type == 2) {
+    //   need/greed  the item binds as it changes hands - the entry's binding
+    //               type (+0x178) is 1.
+    //   disenchant  the item is rare or better - the entry's quality (+0x14) is
+    //               over 2. Green and grey are only ever worth their dust, so
+    //               disenchanting one is not a decision; a blue or a purple
+    //               could have been kept, and it is gone either way.
+    //
+    // Both events feed one popup - uiparent.lua:842 and :853 show
+    // CONFIRM_LOOT_ROLL with LOOT_NO_DROP and CONFIRM_DISENCHANT_ROLL with
+    // LOOT_NO_DROP_DISENCHANT - both carrying (rollId, rollType) behind a "%d
+    // %d" (0x009e0e64), and its OK button calls ConfirmLootRoll, which is the
+    // same routine with the asking turned off. Nothing raised either event
+    // here before, so Need on a bind-on-pickup item bound it with no warning.
+    //
+    // The comment that stood here said disenchant "yields the shard and
+    // passing yields nothing, so neither asks" and left type 3 out, which the
+    // routine contradicts: it asks for disenchant too, on quality rather than
+    // on binding. That is the one mistake on this path a player cannot take
+    // back. The quality is the same number the tooltip colours by - the item
+    // tip at 0x006277f0 indexes the quality colour table with this same
+    // +0x14 and fills "ITEM_QUALITY%d_DESC" with it.
+    if (type != 0) {
         const auto* info = gh->getItemInfo(roll->itemId);
-        if (info && info->valid && info->bindType == 1) {
-            gh->fireAddonEvent("CONFIRM_LOOT_ROLL",
-                               {std::to_string(rollId), std::to_string(type)});
-            return 0;
+        if (info && info->valid) {
+            if (type == 3) {
+                if (info->quality > 2) {
+                    gh->fireAddonEvent("CONFIRM_DISENCHANT_ROLL",
+                                       {std::to_string(rollId), std::to_string(type)});
+                    return 0;
+                }
+            } else if (info->bindType == 1) {
+                gh->fireAddonEvent("CONFIRM_LOOT_ROLL",
+                                   {std::to_string(rollId), std::to_string(type)});
+                return 0;
+            }
         }
     }
 
@@ -4802,8 +5081,16 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetContainerFreeSlots", lua_GetContainerFreeSlots},
                 {"GetLatestThreeSenders", lua_GetLatestThreeSenders},
                 {"GetContainerItemDurability", lua_GetContainerItemDurability},
-                {"GetContainerItemGems",  lua_ItemGemsNone},
-                {"GetInventoryItemGems",  lua_ItemGemsNone},
+                // The sockets of a worn or carried item, three item entries.
+                // Both were registered against one stub that answered three
+                // nils, which is why equipmentmanager.lua's
+                // EquipmentManager_GetItemInfo has been passing nothing to
+                // GetItemInfo for gems: the ids the fields hold are
+                // enchantments, and one SpellItemEnchantment hop stands
+                // between them and an entry - the same hop the socketing panel
+                // was built on.
+                {"GetContainerItemGems",  lua_GetContainerItemGems},
+                {"GetInventoryItemGems",  lua_GetInventoryItemGems},
                 {"GetContainerItemInfo",    lua_GetContainerItemInfo},
                 {"GetContainerItemLink",    lua_GetContainerItemLink},
                 {"GetContainerNumFreeSlots", lua_GetContainerNumFreeSlots},
@@ -5193,8 +5480,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             // the guild bank behaves like one from a bag everywhere it is
             // handed on to.
             const std::string link = game::itemChatLink(
-                it.itemEntry, info->quality, info->name, it.enchantId,
-                static_cast<int32_t>(it.randomPropertyId));
+                it.itemEntry, info->quality, info->name, game::ItemLinkInstance{
+                    it.enchantId, {}, static_cast<int32_t>(it.randomPropertyId), 0},
+                gh->getPlayerLevel());
             lua_pushstring(L, link.c_str());
             return 1;
         }},
@@ -5974,11 +6262,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             // alone, and a suffixed item's id is its plain base - so a whole
             // page of "Ring" gave no way to tell one from another, and the
             // stats that tell them apart are the suffix's.
-            if (info && a.randomPropertyId != 0) {
-                const std::string suffix =
-                    gh->getRandomPropertyName(static_cast<int32_t>(a.randomPropertyId));
-                if (!suffix.empty()) name += " " + suffix;
-            }
+            if (info)
+                name = gh->itemNameWithProperty(name, static_cast<int32_t>(a.randomPropertyId));
             std::string icon = (info && info->displayInfoId != 0) ? gh->getItemIconPath(info->displayInfoId) : "";
             uint32_t quality = info ? info->quality : 1;
             lua_pushstring(L, name.c_str());        // name
@@ -6042,7 +6327,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             const auto* info = gh->getItemInfo(itemId);
             if (!info) { return luaReturnNil(L); }
         
-    const std::string link = game::itemChatLink(itemId, static_cast<uint32_t>(info->quality), info->name);
+    const std::string link = game::itemChatLink(itemId, static_cast<uint32_t>(info->quality), info->name,
+                                 {}, gh->getPlayerLevel());
             lua_pushstring(L, link.c_str());
             return 1;
         }},
@@ -6067,8 +6353,62 @@ void registerInventoryLuaAPI(lua_State* L) {
             const auto& inbox = gh->getMailInbox();
             if (index > static_cast<int>(inbox.size())) { return luaReturnNil(L); }
             const auto& mail = inbox[index - 1];
-            lua_pushstring(L, "Interface\\Icons\\INV_Letter_15"); // packageIcon
-            lua_pushstring(L, "Interface\\Icons\\INV_Letter_15"); // stationeryIcon
+            // packageIcon and stationeryIcon, as the client builds them
+            // (0x0056e520).  Both were answered with the same hardcoded
+            // INV_Letter_15, so every row of the inbox carried one and the same
+            // picture whatever was in the letter.
+            //
+            // The client tries a Package.dbc row first - a delivery with an icon
+            // of its own, which is how a COD parcel is drawn.  That half cannot
+            // be done here: which wire dword becomes the record's package id is
+            // not established (the record's tail is packageId, stationeryId,
+            // money, COD, flags, days - not the order they arrive in), and the
+            // Package.dbc in the local dumps is the single test row this table
+            // shipped with (id 2, icon INV_BOX_04), so there would be nothing to
+            // check the answer against either way.  What the code says about the
+            // rest is not in doubt, and is what runs below:
+            //
+            //     more than one attachment -> one fixed display id, 0x1ee9,
+            //     exactly one            -> that item's own icon,
+            //     none                   -> nothing at all, which is what makes
+            //                               InboxFrame hide the icon instead of
+            //                               leaving a placeholder on the row.
+            //
+            // A display row with no icon of its own still answers the question
+            // mark: that fallback lives inside the client's resolver (0x0070a910),
+            // and nothing is answered only when the record lookup fails.
+            const auto mailIcon = [gh](uint32_t displayId) {
+                if (displayId == 0) return std::string();
+                std::string path = gh->getItemIconPath(displayId);
+                if (path.empty()) path = "Interface\\Icons\\INV_Misc_QuestionMark";
+                return path;
+            };
+            std::string packageIcon;
+            if (mail.attachments.size() > 1) {
+                packageIcon = mailIcon(0x1ee9);
+            } else if (mail.attachments.size() == 1) {
+                // By id, not from anything sent with the mail: an attachment is
+                // an item this client may never have seen.
+                const uint32_t entry = mail.attachments[0].itemId;
+                gh->ensureItemInfo(entry);
+                const auto* info = gh->getItemInfo(entry);
+                if (info) packageIcon = mailIcon(info->displayInfoId);
+            }
+            if (packageIcon.empty()) lua_pushnil(L);
+            else lua_pushstring(L, packageIcon.c_str());
+            // The other one is the letter the envelope holds, not its contents:
+            // the Stationery row's item, and that item's icon.  The same seven
+            // rows as GetInboxText's letterhead, and a different value from it -
+            // see game::stationeryItemId.
+            std::string stationeryIcon;
+            const uint32_t stamp = game::stationeryItemId(mail.stationeryId);
+            if (stamp != 0) {
+                gh->ensureItemInfo(stamp);
+                const auto* info = gh->getItemInfo(stamp);
+                if (info) stationeryIcon = mailIcon(info->displayInfoId);
+            }
+            if (stationeryIcon.empty()) lua_pushnil(L);
+            else lua_pushstring(L, stationeryIcon.c_str());
             // Through getMailSenderName, which is what turns a player's guid
             // into a name once the query comes back, and names the auction
             // house, a creature or an object for the other message types. The

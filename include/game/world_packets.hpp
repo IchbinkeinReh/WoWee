@@ -123,10 +123,34 @@ enum class AuthResult : uint8_t {
 };
 
 /**
+ * The account block SMSG_AUTH_RESPONSE sends with the two codes that carry it.
+ *
+ * 0x00464640 - the client's own handler for this message - reads the response
+ * byte and then, only for 0x0C and 0x1B and only with the bytes there to read,
+ * a dword, a byte, a dword and a byte more, into the connection object's
+ * +0x2f24, +0x2f2c, +0x2f28 and +0x2f2d in that read order.  Nothing else in
+ * the client writes those four, which is what makes them the source for
+ * GetBillingTimeRemaining (+0x2f24, 0x004ddbd0), GetBillingPlan (+0x2f2c,
+ * 0x004ddc60), GetBillingTimeRested (+0x2f28, 0x00511c40) and
+ * GetAccountExpansionLevel (+0x2f2d, 0x004ddc20).
+ *
+ * Kept rather than decoded: the gates belong to the bindings, so the plan's
+ * bits and the remaining time's zeroing are applied where they are asked for.
+ */
+struct AccountState {
+    bool present = false;              ///< the response carried the block
+    uint32_t billingTimeRemaining = 0; ///< +0x2f24
+    uint32_t billingTimeRested = 0;    ///< +0x2f28
+    uint8_t billingPlan = 0;           ///< +0x2f2c
+    uint8_t accountExpansion = 0;      ///< +0x2f2d
+};
+
+/**
  * SMSG_AUTH_RESPONSE data (from server)
  */
 struct AuthResponseData {
     AuthResult result;
+    AccountState account;
 
     [[nodiscard]] bool isSuccess() const { return result == AuthResult::OK; }
 };
@@ -754,6 +778,12 @@ enum class ChatType : uint8_t {
     // line in it (0x006d0e10, COMBATLOG_ARENAPOINTSAWARD).
     ARENA_POINTS = 0x32,
     PARTY_LEADER = 0x33,
+    // Also never sent: this is the type the client's own C code posts a raid
+    // mark notice as (0x0050b0f0 hands TARGET_ICON_SET to 0x00509dd0 with
+    // 0x34), and FrameXML's ChatTypeGroup["TARGETICONS"] turns it into
+    // CHAT_MSG_TARGETICONS. The line names its own player in a |Hplayer:|h
+    // link, which is why the chat frame prints it with no sender argument.
+    TARGETICONS = 0x34,
 };
 
 /**
@@ -1101,6 +1131,24 @@ public:
 class DelIgnorePacket {
 public:
     static network::Packet build(uint64_t ignoreGuid);
+};
+
+/**
+ * CMSG_ADD_VOICE_IGNORE / CMSG_DEL_VOICE_IGNORE - the two ends of the voice
+ * mute list, which is what the interface's AddMute and DelMute drive. The pair
+ * is deliberately asymmetric: the client asks to add by NAME (0x006b62c0 hands
+ * the string straight to 0x3db) and to remove by GUID (0x006b7120 finds the row
+ * in its own mute array and hands that row's GUID to 0x3dc), because the row it
+ * already has is the only place the GUID came from.
+ */
+class AddVoiceIgnorePacket {
+public:
+    static network::Packet build(const std::string& playerName);
+};
+
+class DelVoiceIgnorePacket {
+public:
+    static network::Packet build(uint64_t muteGuid);
 };
 
 /** CMSG_COMPLAIN packet builder (player report) */
@@ -1686,6 +1734,11 @@ struct RaidTargetUpdateData {
     /// True for the full list, which is authoritative: icons missing from it
     /// are unmarked. False for a single mark being set or cleared.
     bool fullList = false;
+    /// The player who placed the mark, for the single-set form only, and only
+    /// on a WotLK wire - classic/TBC/Turtle omit it, and it is 0 then. The
+    /// client needs it for the "X marks Y with [icon]" chat line (see
+    /// ChatType::TARGETICONS), which a full list never says.
+    uint64_t whoGuid = 0;
     /// icon index (0-7) -> marked GUID, 0 meaning the icon was cleared
     std::vector<std::pair<uint8_t, uint64_t>> marks;
 };
@@ -2023,6 +2076,9 @@ struct ItemQueryResponseData {
     uint32_t itemClass = 0;
     uint32_t subClass = 0;
     uint32_t displayInfoId = 0;
+    /// +0x14 on the client's entry record - the number it colours an item name
+    /// with and fills "ITEM_QUALITY%d_DESC" from (0x006277f0), and the one a
+    /// disenchant roll is confirmed against (0x006fbc70).
     uint32_t quality = 0;
     uint32_t itemFlags = 0;     // Item flag bitmask (Heroic=0x8, Unique-Equipped=0x1000000)
     /// The template's Sheath: where the weapon hangs put away (1 two-hand,
@@ -2051,6 +2107,12 @@ struct ItemQueryResponseData {
     int32_t intellect = 0;
     int32_t spirit = 0;
     uint32_t sellPrice = 0;
+    /// What a vendor asks for it, in copper. Read off the wire beside
+    /// sellPrice and thrown away until the mail frame's paper-style popup
+    /// needed it: the original client's stationery row prices a paper the
+    /// player is not carrying with this number (0x0056df80 pushes the price at
+    /// item-record +0x20, and answers nil - free - when they are carrying it).
+    uint32_t buyPrice = 0;
     uint32_t itemLevel = 0;
     uint32_t requiredLevel = 0;
     std::string subclassName;
@@ -2068,6 +2130,9 @@ struct ItemQueryResponseData {
         int32_t charges = 0;
     };
     std::array<ItemSpell, 5> spells{};
+    /// +0x178 on the client's entry record: the same word a need/greed roll is
+    /// confirmed against (== 1 at 0x006fbc70) and the word a trade of a rare
+    /// enough bind-on-equip item is confirmed against (0x00588f90).
     uint32_t bindType = 0;      // 0=none, 1=BoP, 2=BoE, 3=BoU, 4=BoQ
     std::string description;    // Flavor/lore text
     uint32_t pageTextId = 0;     // Non-zero: item can be read via CMSG_READ_ITEM + page query
@@ -3443,11 +3508,17 @@ struct BattlefieldStatusData {
     uint32_t timeInQueueMs = 0;    ///< status 1
     uint32_t mapId = 0;            ///< status 2 and 3
     uint32_t inviteTimeoutMs = 0;  ///< status 2 - how long the invitation lasts
-    /// Status 3 only, after the field above (0x0054ae40): how long the
-    /// battle has run, and the side of an arena the player is on - the byte
-    /// GetBattlefieldArenaFaction answers (0x00bea54a).
+    // Status 3's own tail, in the order 0x0054ae40 reads it
+    // (00540000.c:8560-8576): two dwords and a byte. Which dword is which is
+    // settled by what the client makes of each - it turns the first into
+    // `clock + it` and the second into `clock - it`, which can only mean
+    // "time left" and "time already run". Reading one dword and calling it the
+    // elapsed one put the remaining time in that field, left the real elapsed
+    // dword unread, and so fed GetBattlefieldArenaFaction the *low byte of a
+    // dword* rather than the byte behind it.
+    uint32_t instanceRemainingMs = 0;
     uint32_t elapsedMs = 0;
-    uint8_t  arenaFaction = 0;
+    uint8_t  arenaFaction = 0;   ///< the side of an arena (0x00bea54a)
 };
 
 /**
@@ -3667,12 +3738,20 @@ public:
     static network::Packet build(uint64_t mailboxGuid);
 };
 
-/** CMSG_SEND_MAIL packet builder */
+/** CMSG_SEND_MAIL packet builder.
+ *
+ *  `stationeryId` is the Stationery.dbc row the letter is written on - the one
+ *  picked in the compose frame's paper-style popup. The client writes the id it
+ *  is holding and zero when nothing was picked (0x00570910 reads its chosen id
+ *  into `local_18` and puts it at that place in the packet); the realm keeps it
+ *  and hands it back as the received letter's stationeryIcon, so a letter sent
+ *  on picked paper arrives on that paper rather than on the plain one.
+ */
 class SendMailPacket {
 public:
     static network::Packet build(uint64_t mailboxGuid, const std::string& recipient,
                                  const std::string& subject, const std::string& body,
-                                 uint64_t money, uint64_t cod,
+                                 uint64_t money, uint64_t cod, uint32_t stationeryId = 0,
                                  const std::vector<uint64_t>& itemGuids = {});
 };
 
@@ -3875,6 +3954,11 @@ struct AuctionHelloData {
     uint64_t auctioneerGuid = 0;
     /// The house's row in AuctionHouse.dbc (0x0059f000 keeps it at 0x00c0f3f0).
     uint32_t auctionHouseId = 0;
+    /// The house's answer, and the last byte of the packet. 0x0059ff40 opens
+    /// the window only when it is non-zero: a zero raises AUCTION_HOUSE_DISABLED
+    /// (670) and reaches neither 0x0059f000 nor the interaction object behind it,
+    /// so no id is kept and no AUCTION_HOUSE_SHOW is raised. Classic and TBC end
+    /// the packet before this byte, which is why the default is the open answer.
     uint8_t enabled = 1;
 };
 
@@ -4041,10 +4125,16 @@ public:
 
 /// SMSG_INSPECT_TALENT's gear, after the talents (0x006cdf30): a mask of the
 /// nineteen equipment slots filled, then per slot the item, a mask of its
-/// enchantment slots and an id per set bit, the random property (u16), the
+/// enchantment blocks and an id per set bit, the random property (u16), the
 /// creator's packed guid and the suffix factor. True when any slot was read.
+///
+/// `gear` is what the client puts in the same record positions it reads the
+/// visible-item fields into - see visible_item_fields.hpp - so a link for an
+/// inspected unit's gear and a link for gear the fields already named come out
+/// of the same numbers.  The block the mask's bit 1 marks, the temporary
+/// enchant, is read and dropped: an item link has no place for it.
 bool readInspectEnchantments(network::Packet& packet, std::array<uint32_t, 19>& items,
-                             std::array<uint16_t, 19>& permanentEnchants);
+                             std::array<ItemLinkInstance, 19>& gear);
 
 
 } // namespace game

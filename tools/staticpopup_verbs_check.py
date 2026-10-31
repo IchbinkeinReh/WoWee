@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Globals a static popup's buttons call, that nothing answers.
 
-    tools/staticpopup_verbs_check.py
+    tools/staticpopup_verbs_check.py ["<the extracted interface>"]
 
 A static popup is the last thing between a player and an irreversible action:
 "this item will bind to you", "abandon your pet", "log out". Its OnAccept is a
@@ -40,7 +40,10 @@ sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
 from framexml_source import without_comments
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-XML = ROOT / "Data/interface"
+# The interface root on the command line; Data/interface is the fallback and is
+# not tracked in the checkout.
+XML = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
+       else ROOT / "Data/interface")
 ADDONS = ROOT / "src/addons"
 
 
@@ -102,8 +105,14 @@ EXPECTED = {
 
 
 def main():
+    popups = XML / "framexml/staticpopup.lua"
+    if not popups.is_file():
+        # bound_names() would come back with the engine's side only, and every
+        # verb a dialog calls would read unanswered.
+        print(f"No staticpopup.lua at {popups} - the dialogs are not here; "
+              "name the unpacked interface on the command line.")
+        return 2
     bound = bound_names()
-    popups = ROOT / "Data/interface/framexml/staticpopup.lua"
     text = popups.read_text(errors="ignore")
     # Line comments as well as block ones. Blizzard leaves dead calls in
     # these hooks with a note beside them - CAMP's OnAccept carries

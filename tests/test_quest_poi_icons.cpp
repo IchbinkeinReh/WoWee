@@ -64,6 +64,17 @@ struct Quests {
 
 const auto everyQuestInLog = [](int32_t) { return true; };
 
+/// openTargetFor's answer, as two checks rather than one: nothing here knows
+/// how to print a pair, and a failing CHECK that cannot show what it compared
+/// is worse than no check.
+void checkTarget(QuestPoiIconList& list, int32_t questId, const QuestPoiMapView& view,
+                 const Quests& quests, float playerX, float playerY, uint32_t mapId,
+                 uint32_t floor) {
+    const auto got = list.openTargetFor(questId, view, quests.fn(), playerX, playerY);
+    CHECK(got.first == mapId);
+    CHECK(got.second == floor);
+}
+
 }  // namespace
 
 TEST_CASE("A received quest takes a slot with the mean of each area's points", "[quest_poi]") {
@@ -245,4 +256,54 @@ TEST_CASE("The push distance is kept only when not below the overlap distance", 
     CHECK(list.overlapPushDistance() == 18.0f);
     list.setOverlapPushDistance(25.0f);
     CHECK(list.overlapPushDistance() == 25.0f);
+}
+
+TEST_CASE("The map a quest opens to is the area the list picks", "[quest_poi]") {
+    // An area on a map of its own: which WorldMapArea row it belongs to, which
+    // floor of that row, and where its centre is.
+    const auto onMap = [](uint32_t areaId, uint32_t floor, int32_t x, int32_t y, uint32_t map) {
+        QuestPoiArea a;
+        a.objectiveIndex = 0;
+        a.mapId = map;
+        a.worldMapAreaId = areaId;
+        a.floor = floor;
+        a.points = {{x - 1, y}, {x + 1, y}};
+        return a;
+    };
+
+    QuestPoiIconList list;
+    Quests quests;
+    quests.open(10, 1, 0x1u);  // the objective still open
+    list.receive(10, {onMap(20, 2, 100, 100, 1), onMap(21, 4, 900, 900, 1)}, everyQuestInLog);
+
+    // One of the areas is already showing: that is the answer, however far the
+    // player is from it.
+    auto view = zoneView();
+    view.worldMapAreaId = 21;
+    view.dungeonFloor = 4;
+    checkTarget(list, 10, view, quests, 0.0f, 0.0f, 21, 4);
+
+    // Otherwise the floor nearest the one shown wins, and the distance from
+    // the player only breaks a tie - here both floors are one away.
+    view.worldMapAreaId = 14;
+    view.dungeonFloor = 3;
+    checkTarget(list, 10, view, quests, 0.0f, 0.0f, 20, 2);
+    checkTarget(list, 10, view, quests, 900.0f, 900.0f, 21, 4);
+    // And with the floors not equally far off, the distance does not matter.
+    view.dungeonFloor = 0;
+    checkTarget(list, 10, view, quests, 900.0f, 900.0f, 20, 2);
+
+    // An area the shown map is not drawn on answers when nothing else does.
+    quests.open(11, 2, 0x1u);
+    list.receive(11, {onMap(30, 1, 10, 10, 7)}, everyQuestInLog);
+    checkTarget(list, 11, view, quests, 0.0f, 0.0f, 30, 1);
+
+    // An area whose objective is already met is no answer at all, and neither
+    // is a quest the list has never heard of, nor a map with no row shown.
+    quests.open(12, 3, 0x2u);  // objective 0 done, objective 1 open
+    list.receive(12, {onMap(40, 1, 10, 10, 1)}, everyQuestInLog);
+    checkTarget(list, 12, view, quests, 0.0f, 0.0f, 0, 0);
+    checkTarget(list, 99, view, quests, 0.0f, 0.0f, 0, 0);
+    const QuestPoiMapView noMap;
+    checkTarget(list, 10, noMap, quests, 0.0f, 0.0f, 0, 0);
 }

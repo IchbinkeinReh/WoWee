@@ -1,6 +1,7 @@
 #include "game/mirror_image.hpp"
 #include "game/quest_status_requery.hpp"
 #include "game/entity_controller.hpp"
+#include "core/app_clock.hpp"
 #include "core/env_flag.hpp"
 #include "game/game_handler.hpp"
 #include "game/protocol_constants.hpp"
@@ -275,9 +276,11 @@ void EntityController::processOutOfRangeObjects(const std::vector<uint64_t>& gui
         } else if (entity->getType() == ObjectType::PLAYER && owner_.playerDespawnCallbackRef()) {
             owner_.playerDespawnCallbackRef()(guid);
             owner_.otherPlayerVisibleItemEntriesRef().erase(guid);
+            owner_.otherPlayerVisibleItemEnchantsRef().erase(guid);
             owner_.otherPlayerVisibleDirtyRef().erase(guid);
             owner_.otherPlayerMoveTimeMsRef().erase(guid);
             owner_.inspectedPlayerItemEntriesRef().erase(guid);
+            owner_.inspectedPlayerItemInstancesRef().erase(guid);
             owner_.pendingAutoInspectRef().erase(guid);
             owner_.playerLeftSight(guid);
             // Clear pending name query so the query is re-sent when this player
@@ -1786,6 +1789,126 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                     : interfaceString("PVP_TOGGLE_OFF_VERBOSE",
                                       "You will be unflagged for PvP combat after five minutes of non-PvP action in friendly territory."));
             }
+            // The play-time limits, the next pair of bits the same watcher
+            // reads: PLAYER_FLAGS 0x1000 (the tired icon PartialPlayTime puts
+            // up) and 0x2000 (the unhealthy one NoPlayTime puts up). 0x006e0fd0
+            // fires PLAYTIME_CHANGED for either, with no arguments, and
+            // PlayerFrame.lua answers it by re-reading both bindings and
+            // switching the icon - so the event is only what tells the frame
+            // the realm has moved them, and the answer itself comes from the
+            // fields PartialPlayTime and NoPlayTime read.
+            constexpr uint32_t PLAYER_FLAGS_PLAYTIME = 0x00003000;
+            if (!isCreate && last.known && ((last.value ^ val) & PLAYER_FLAGS_PLAYTIME) != 0)
+                pendingEvents_.emit("PLAYTIME_CHANGED", {});
+            // Three more families that same watcher turns into events, each one
+            // a single bit going one way or the other:
+            //
+            //   0x20000 - the taxi benchmark. Set fires ENABLE_TAXI_BENCHMARK
+            //             (523) and clearing it DISABLE_TAXI_BENCHMARK (524),
+            //             which uiparent.lua answers with the framerate
+            //             counter and a system line: that pair is what
+            //             SetTaxiBenchmarkMode - already sending the request
+            //             here - is supposed to look like.
+            //   0x2000000 - XP gain, and inverted: the bit *set* is the realm
+            //             taking XP away, so it answers DISABLE_XP_GAIN (643)
+            //             and its clearing ENABLE_XP_GAIN (642); reputation
+            //             frame's watch bar redraws on either. This is not
+            //             SMSG_TOGGLE_XP_GAIN - the client's handler for that
+            //             (its dispatch's case 0x4ed) only prints "XP Gain
+            //             Enabled/Disabled" to its debug console, which is all
+            //             the log line here reproduces.
+            //   0x10000 - allow low level raid: ENABLE_LOW_LEVEL_RAID (667)
+            //             when set, DISABLE (668) when cleared. The shipped
+            //             interface listens for neither, and the client fires
+            //             them anyway; GetAllowLowLevelRaid answers this bit.
+            //
+            // Unlike the two above, these do fire for a create block. The
+            // client compares against the field it is about to overwrite, and a
+            // player object that has only just been built holds zero, so a
+            // player who logs in with benchmark mode already on their account
+            // gets the counter put up by the create write. Taking zero from
+            // isCreate rather than from this cache is also what stops a
+            // reconnect from comparing against the previous session's flags.
+            const uint32_t prev = isCreate ? 0u : last.value;
+            constexpr uint32_t PLAYER_FLAGS_TAXI_BENCHMARK = 0x00020000;
+            constexpr uint32_t PLAYER_FLAGS_XP_GAIN_OFF    = 0x02000000;
+            constexpr uint32_t PLAYER_FLAGS_LOW_LEVEL_RAID = 0x00010000;
+            if ((prev ^ val) & PLAYER_FLAGS_TAXI_BENCHMARK)
+                pendingEvents_.emit((val & PLAYER_FLAGS_TAXI_BENCHMARK) ? "ENABLE_TAXI_BENCHMARK"
+                                                                       : "DISABLE_TAXI_BENCHMARK", {});
+            if ((prev ^ val) & PLAYER_FLAGS_XP_GAIN_OFF)
+                pendingEvents_.emit((val & PLAYER_FLAGS_XP_GAIN_OFF) ? "DISABLE_XP_GAIN"
+                                                                    : "ENABLE_XP_GAIN", {});
+            if ((prev ^ val) & PLAYER_FLAGS_LOW_LEVEL_RAID)
+                pendingEvents_.emit((val & PLAYER_FLAGS_LOW_LEVEL_RAID) ? "ENABLE_LOW_LEVEL_RAID"
+                                                                       : "DISABLE_LOW_LEVEL_RAID", {});
+            // The same watcher's one non-event leg: 0x006e0fd0 hands the value it
+            // is replacing to 0x006de750 whenever 0x100, 0x200 or 0x40000 moved,
+            // and that routine is the only writer of the deadline object+0x1940.
+            // The realm never sends how long a PvP flag has left; the client makes
+            // up five minutes from the moment it sees the flag, and GetPVPTimer
+            // counts that down for the text under the player portrait. Two rules,
+            // in the client's order: the deadline is cleared while the PvP toggle
+            // bit is on, and otherwise armed only when the 0x40000 bit is not set
+            // or has only just become set - so a toggle going off without the flag
+            // bit moving leaves the countdown exactly where it was, which is the
+            // five-minutes-of-quiet-action the toggle-off message promises.
+            constexpr uint32_t PLAYER_FLAGS_PVP_TIMER_BITS = 0x00040300;  // 0x100 | 0x200 | 0x40000
+            constexpr uint32_t PLAYER_FLAGS_PVP_FLAG       = 0x00040000;  // the decaying flag
+            if ((prev ^ val) & PLAYER_FLAGS_PVP_TIMER_BITS) {
+                int64_t& deadline = owner_.pvpFlagDeadlineMsRef();
+                if (val & PLAYER_FLAGS_IN_PVP)
+                    deadline = 0;
+                else if ((val & PLAYER_FLAGS_PVP_FLAG) == 0 || (prev & PLAYER_FLAGS_PVP_FLAG) == 0)
+                    deadline = static_cast<int64_t>(core::appTimeSeconds() * 1000.0) + 300000;
+            }
+            // ...and the watcher's 0xc00 leg, the helm and cloak switches, which
+            // is not an event of its own but a call to 0x00618110 with mask 3:
+            // that marks the unit's model record dirty and fires
+            // UNIT_PORTRAIT_UPDATE (145) then UNIT_MODEL_CHANGED (146) for the
+            // guid. Nothing in WoWee said either. The model rebuild below is only
+            // half of it: the character sheet's 3D preview (paperdollframe.lua)
+            // rebuilds on UNIT_MODEL_CHANGED for "player" alone, and six frames -
+            // the character sheet's own portrait, the micro-button portrait, the
+            // talent, trade-skill, inspect and achievement frames - redraw on
+            // UNIT_PORTRAIT_UPDATE. Hiding a helm with the character sheet open
+            // left the model and every portrait on screen showing it.
+            //
+            // Gated on the field bits and not on the cache comparison below,
+            // because the client compares the field it is replacing: the local
+            // toggle (SocialHandler::toggleHelm) flips the cache on the way out,
+            // so by the time the realm's echo arrives "did it change" is already
+            // false while the field really did move.
+            constexpr uint32_t PLAYER_FLAGS_HELM_CLOAK_BITS = 0x00000c00;  // 0x400 | 0x800
+            if ((prev ^ val) & PLAYER_FLAGS_HELM_CLOAK_BITS) {
+                pendingEvents_.emit("UNIT_PORTRAIT_UPDATE", {"player"});
+                pendingEvents_.emit("UNIT_MODEL_CHANGED", {"player"});
+            }
+            // A question this branch cannot answer from the decompile, so log the
+            // evidence instead of guessing at it. UnitIsAFK and UnitIsDND answer
+            // from PLAYER_FLAGS 0x1 and 0x2 here, but the client's own two
+            // bindings do not agree with each other: 0x0060cc30 (UnitIsDND) does
+            // read PLAYER_FLAGS 0x2, while 0x0060cba0 (UnitIsAFK) reads **bit 3 of
+            // the unit flags dword** (unit blob +0xd4, which the descriptor
+            // records at 0x00ac624c name UNIT_FIELD_FLAGS), and 0x006dc640 - the
+            // routine the client reaches for a chat line of type 0x17 (AFK) -
+            // prints CLEARED_DND under PLAYER_FLAGS 0x4. So either 0x2 is AFK and
+            // 0x4 is busy, or 0x2 is busy and away lives in the unit flags, and
+            // the two readings cannot both be right.
+            //
+            // Printing both stores together on the same line is what settles it:
+            // type /afk on a live realm and whichever value moves by 0x1, 0x2 or
+            // 0x4 - or whose unit-flags bit 3 lights up - is the answer. Nothing
+            // here acts on the line; the bindings stay as they are until it has
+            // been read.
+            if ((prev ^ val) & 0x0000000f) {
+                const uint16_t ufi = fieldIndex(UF::UNIT_FIELD_FLAGS);
+                auto player = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+                const uint32_t unitFlags = (player && ufi != 0xFFFF) ? player->getField(ufi) : 0u;
+                LOG_INFO("PLAYER_FLAGS low bits moved (", isCreate ? "create" : "update",
+                         "): flags 0x", std::hex, prev, " -> 0x", val, std::dec,
+                         " / unit flags 0x", std::hex, unitFlags, std::dec);
+            }
             // .gm on / .gm off: the server answers quest status for the
             // player as they are now, and an enemy gets none - so a GM who
             // arrived among the other faction's questgivers before turning
@@ -2067,6 +2190,13 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
     auto stackIt = block.fields.find(fieldIndex(UF::ITEM_FIELD_STACK_COUNT));
     auto durIt   = block.fields.find(fieldIndex(UF::ITEM_FIELD_DURABILITY));
     auto maxDurIt= block.fields.find(fieldIndex(UF::ITEM_FIELD_MAXDURABILITY));
+    // Who made the item: two dwords of a guid, low first. The WotLK layout names
+    // the pair; the older three answer 0xFFFF here and the lookup is skipped.
+    const uint16_t creatorField = fieldIndex(UF::ITEM_FIELD_CREATOR);
+    auto creatorLoIt = (creatorField != 0xFFFF)
+        ? block.fields.find(creatorField) : block.fields.end();
+    auto creatorHiIt = (creatorField != 0xFFFF)
+        ? block.fields.find(static_cast<uint16_t>(creatorField + 1u)) : block.fields.end();
     // ITEM_FIELD_FLAGS is 7 fields after STACK_COUNT (DURATION + 5×SPELL_CHARGES = 6, then
     // FLAGS) across every expansion; the enchant block that follows starts at +8.
     const uint16_t flagsField = (fieldIndex(UF::ITEM_FIELD_STACK_COUNT) != 0xFFFF)
@@ -2107,6 +2237,12 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
         if (flagsIt    != block.fields.end()) info.flags                 = flagsIt->second;
         if (randPropIt != block.fields.end()) info.randomPropertyId      = static_cast<int32_t>(randPropIt->second);
         if (seedIt     != block.fields.end()) info.suffixFactor          = seedIt->second;
+        // Both halves out of one block, or neither. A create block carries the
+        // guid whole; filling one half from a previous block and the other from
+        // this one would write a guid the realm never sent.
+        if (creatorLoIt != block.fields.end() && creatorHiIt != block.fields.end())
+            info.creatorGuid = creatorLoIt->second
+                             | (static_cast<uint64_t>(creatorHiIt->second) << 32);
         auto [itemIt, isNew] = owner_.onlineItemsRef().insert_or_assign(block.guid, info);
         // A CREATE_OBJECT that re-sends an already-tracked item with a changed stack
         // count (AzerothCore does this when crafting consumes a reagent) must still
@@ -3061,6 +3197,45 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             if ((oldVal & probe.second) != (now->second & probe.second)) pvpKillsChanged = true;
         }
         if (pvpKillsChanged) pendingEvents_.emit("PLAYER_PVP_KILLS_CHANGED", {});
+        // The rank dword, watched fourth by the very same block: `4, 0x1c, 4`
+        // straight after the three honour counters above, and 0x006e5960 puts the
+        // identical watch on the identical offset again.  Blob dword 7 of a
+        // player's fields is what the client's own descriptor table calls
+        // PLAYER_BYTES_3 (the record at 0x00ac6750), and that table numbers the
+        // player block from blob dword 0 = the first field past UNIT_END, so dword
+        // 7 is wire 155 - the same dword the inebriation code already takes a byte
+        // out of at +0x1d.  The callback is the block's shared raiser rather than
+        // a body of its own: 0x006cddd0 loads the event number out of its own
+        // registration frame ([ebp+0x1c]) and hands it to 0x0081b530 with "%s",
+        // "player", so the notice names its unit and nothing else - exactly how
+        // the XP (0x97), exhaustion (0x18e) and spell-bonus (0xa4) watches in this
+        // block come out, and how PLAYER_DAMAGE_DONE_MODS is raised above.  The
+        // number here is 0x1ce = 462 PLAYER_PVP_RANK_CHANGED, and no other place
+        // in the client names it - the whole event is left over from the expansion
+        // whose realm kept a character's PvP rank in these four bytes.
+        //
+        // Nothing recomputes a rank because of it, and that part is faithful
+        // rather than missing: UnitPVPRank (0x00611c40) resolves its unit token
+        // and then pushes 0 whatever it resolved, GetPVPRankProgress (0x00608560)
+        // is a bare push of 0, and 12340 has no GetMaxPVPRank at all.  What the
+        // three listeners do with the notice is redraw what they can already read:
+        // characterframe.lua:80 sets the character name back through
+        // UnitPVPName("player"), and honorframe.lua:8 and pvpframe.lua:27 call
+        // HonorFrame_Update / PVPHonor_Update, which take their numbers from
+        // GetPVPSessionStats, GetPVPYesterdayStats and GetPVPLifetimeStats - so
+        // the same panel refresh the kills watch already gives this one gives too,
+        // and a realm that moves any of the four bytes - the inebriation byte
+        // being the one WotLK really writes - no longer leaves them showing what
+        // they did when the panel was opened.
+        if (const uint16_t bytes3Idx = fieldIndex(UF::PLAYER_BYTES_3);
+            bytes3Idx != 0xFFFF) {
+            const auto now = block.fields.find(bytes3Idx);
+            if (now != block.fields.end()) {
+                const auto was = lastFields.find(bytes3Idx);
+                if ((was == lastFields.end() ? 0u : was->second) != now->second)
+                    pendingEvents_.emit("PLAYER_PVP_RANK_CHANGED", {"player"});
+            }
+        }
         // The two currency counters.  The client watches both dwords whole -
         // "4, 0x11a4, 4" and "4, 0x11a8, 4" in the registration block at
         // 0x006e5180, which its own descriptor table names
@@ -3801,9 +3976,11 @@ void EntityController::handleDestroyObject(network::Packet& packet) {
                 // Player entities also need renderer cleanup on DESTROY_OBJECT, not just out-of-range.
                 owner_.playerDespawnCallbackRef()(data.guid);
                 owner_.otherPlayerVisibleItemEntriesRef().erase(data.guid);
+                owner_.otherPlayerVisibleItemEnchantsRef().erase(data.guid);
                 owner_.otherPlayerVisibleDirtyRef().erase(data.guid);
                 owner_.otherPlayerMoveTimeMsRef().erase(data.guid);
                 owner_.inspectedPlayerItemEntriesRef().erase(data.guid);
+                owner_.inspectedPlayerItemInstancesRef().erase(data.guid);
                 owner_.pendingAutoInspectRef().erase(data.guid);
                 owner_.playerLeftSight(data.guid);
                 pendingNameQueries.erase(data.guid);
@@ -4015,6 +4192,12 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
     // the name and lets 0x004fb5c0 raise the popup with it. As there, only an
     // answer that found the name ends the wait (0x004fb5c0 clears it on success).
     if (owner_.getChatHandler()) owner_.getChatHandler()->onChannelInviteNameKnown(data.guid);
+    // A channel roster held its two events back for this guid. The client's
+    // callback for those (0x004ffe30) walks the held roster's rows for the guid and
+    // closes one wait per row found - it never checks that an answer named anyone,
+    // so a wait closes here whether or not this response found a name, which is
+    // what keeps a roster from being held by a guid the realm knows nothing about.
+    if (owner_.getChatHandler()) owner_.getChatHandler()->onChannelRosterNameKnown(data.guid);
 }
 
 /// Whether a quest in the log is waiting on this name.

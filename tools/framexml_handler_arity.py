@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Handlers that unpack at the top, against what the client fires.
 
-    tools/framexml_handler_arity.py
+    tools/framexml_handler_arity.py "<the extracted interface>"
 
 framexml_event_arity.py reads what a handler unpacks *inside the branch that
 names an event*, and deliberately skips handlers that unpack once at the top -
@@ -43,7 +43,14 @@ sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
 from framexml_source import without_comments, loaded_files
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-XML = ROOT / "Data/interface"
+# The interface is installed data rather than repository content: name its
+# directory, or there is nothing to read handlers out of. An empty file list is
+# indistinguishable from clean handlers here - the sweep prints "(none)" for
+# both - so the run stops instead.
+XML = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
+if not XML.is_dir():
+    print(f"no interface at {XML} - name one on the command line")
+    raise SystemExit(2)
 SRC = ROOT / "src"
 
 FIRE = re.compile(

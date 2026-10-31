@@ -119,6 +119,11 @@ public:
     void setFriendNote(const std::string& playerName, const std::string& note);
     void addIgnore(const std::string& playerName);
     void removeIgnore(const std::string& playerName);
+    /// The voice mute list: the third list SMSG_CONTACT_LIST fills (mask bit
+    /// 0x4), asked for by name and taken back by GUID. Both answer nothing of
+    /// their own - the list changes when the server sends it again.
+    void addVoiceIgnore(const std::string& playerName);
+    void removeVoiceIgnore(const std::string& playerName);
 
     // Random roll
     void randomRoll(uint32_t minRoll = 1, uint32_t maxRoll = 100);
@@ -135,6 +140,17 @@ public:
     void joinBattlefield(uint64_t battlemasterGuid, uint32_t bgTypeId,
                          uint32_t instanceId, bool asGroup);
     [[nodiscard]] const std::array<BgQueueSlot, 3>& getBgQueues() const { return bgQueues_; }
+    /// Whole seconds left on one queue slot's invitation, 0 for a slot that has
+    /// none running. The client's GetBattlefieldPortExpiration (0x00549b80).
+    [[nodiscard]] int32_t battlefieldPortExpirationSec(size_t slot) const;
+    /// The running instance's two timers, **in milliseconds** - the interface
+    /// divides by 1000 itself (`battlefieldframe.lua:303`,
+    /// `worldstateframe.lua:824`), so answering seconds would run the shutdown
+    /// countdown a thousand times too fast. Both are 0 when there is no
+    /// instance: 0x00549c40 answers 0 for an unset stamp *and* for one already
+    /// behind the clock, 0x00549cd0 for an unset one.
+    [[nodiscard]] int64_t battlefieldInstanceExpirationMs() const;
+    [[nodiscard]] int64_t battlefieldInstanceRunTimeMs() const;
     [[nodiscard]] const std::vector<AvailableBgInfo>& getAvailableBgs() const { return availableBgs_; }
     void requestPvpLog();
     [[nodiscard]] const BgScoreboardData* getBgScoreboard() const {
@@ -680,6 +696,17 @@ public:
     [[nodiscard]] uint32_t getLfgDungeonId()       const { return lfgDungeonId_; }
     [[nodiscard]] std::string getCurrentLfgDungeonName() const;
     [[nodiscard]] uint32_t getLfgProposalId()      const { return lfgProposalId_; }
+    /// The proposal's own dungeon, its entry with the type byte masked off. Not
+    /// the same field as `getLfgDungeonId()`, which the queue status, the role
+    /// check and the search results move as well: 0x00bea980 is written by the
+    /// proposal packet alone and cleared with the rest of the proposal, and the
+    /// boss tooltip reads that one (0x00554380).
+    [[nodiscard]] uint32_t getLfgProposalDungeonId() const { return lfgProposalDungeonId_; }
+    /// Which bosses of that dungeon the party has already done. The proposal
+    /// carries it as a dword behind its id - "Completed Mask" in the client's
+    /// own LFGMessage line for this packet - and the tooltip tests one bit per
+    /// encounter against it (0x005538b0:3062).
+    [[nodiscard]] uint32_t getLfgProposalEncountersDone() const { return lfgProposalEncountersDone_; }
     [[nodiscard]] int32_t  getLfgAvgWaitSec()      const { return lfgAvgWaitSec_; }
     /// This player's own estimate, in seconds, or -1 while the server has none.
     [[nodiscard]] int32_t  getLfgMyWaitSec()       const { return lfgMyWaitSec_; }
@@ -985,6 +1012,20 @@ private:
 
     // Battleground
     std::array<BgQueueSlot, 3> bgQueues_{};
+    /// When each queue slot's invitation stops counting, as the client holds it:
+    /// one absolute stamp per slot, rewritten by every status that still invites
+    /// and empty for every other state (0x0054ae40, the record field at +0x28).
+    std::array<std::chrono::steady_clock::time_point, 3> bgPortExpiry_{};
+    /// The instance's own two stamps, and which queue slot they belong to. Only
+    /// a status that says the battle is running (3) writes them, off the two
+    /// dwords of its tail: the client turns them into `clock + remaining` at
+    /// 0x00bea574 and `clock - elapsed` at 0x00bea578, and records the slot that
+    /// owns the pair at 0x00acd16c. Both are rewritten on every status tick of
+    /// that kind - not only on the way in - and the pair goes with an empty
+    /// record (00540000.c:8510-8517).
+    std::chrono::steady_clock::time_point battlefieldInstanceExpiry_{};
+    std::chrono::steady_clock::time_point battlefieldInstanceStart_{};
+    int32_t battlefieldInstanceSlot_ = -1;
     std::vector<AvailableBgInfo> availableBgs_;
     BgScoreboardData bgScoreboard_;
     std::vector<BgPlayerPosition> bgPlayerPositions_;
@@ -1032,6 +1073,12 @@ private:
     LfgCompletionReward lfgCompletionReward_;
     uint32_t lfgDungeonId_    = 0;
     uint32_t lfgProposalId_   = 0;
+    /// The proposal block's own dungeon (0x00bea980, low twenty-four bits) and
+    /// its completed-encounter mask (0x00bea98c). Held beside the proposal
+    /// rather than folded into lfgDungeonId_, which follows four packets and not
+    /// this one - see the two getters above.
+    uint32_t lfgProposalDungeonId_      = 0;
+    uint32_t lfgProposalEncountersDone_ = 0;
     /// The proposal the ready dialog has already been opened for. The server
     /// resends the update as each member answers, and opening again would
     /// reset the countdown and the ticks beside every name.

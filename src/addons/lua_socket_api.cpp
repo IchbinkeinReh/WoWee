@@ -126,7 +126,7 @@ int pushGemLink(lua_State* L, game::GameHandler* gh, uint32_t gemItemId) {
         gh->ensureItemInfo(gemItemId);
         return 0;
     }
-    lua_pushstring(L, game::buildItemLink(gemItemId, gem->quality, gem->name).c_str());
+    lua_pushstring(L, game::buildItemLink(gemItemId, gem->quality, gem->name, gh->getPlayerLevel()).c_str());
     return 1;
 }
 

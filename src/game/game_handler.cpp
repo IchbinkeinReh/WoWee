@@ -362,6 +362,19 @@ void GameHandler::updateNetworking() {
     // socket below would be a tick later than it needs to be; before it means
     // a line waits one extra tick at most.
     if (chatHandler_) chatHandler_->expireChatAwaitingName();
+    // A channel roster held its events for names that may never be answered. The
+    // client waits as long as it likes (0x00b743d8 is only ever decremented by an
+    // answer); a panel that never hears anything is the worse outcome, so past a
+    // deadline these go out with the names that are in. See
+    // ChatHandler::rosterNameWaits_.
+    if (chatHandler_) chatHandler_->expireChannelRosterWaits();
+    // The calendar's reminders, fifteen minutes before an event the player has
+    // said yes to. On the game clock rather than the app's: what they were
+    // armed against were the server's own dates, and a clock that only server
+    // packets advance is what those are worth.
+    if (!calendarAlarms_.empty()) {
+        if (const std::optional<WowDate> now = getGameDate(); now) sayCalendarAlarms(*now);
+    }
     // The zone channels, once the player has a zone to name them after.
     if (chatHandler_) chatHandler_->updateLoginChannelJoin();
 
@@ -1967,36 +1980,80 @@ void GameHandler::loadTitleNameCache() const {
     const auto* layout = pipeline::getActiveDBCLayout()
         ? pipeline::getActiveDBCLayout()->getLayout("CharTitles") : nullptr;
 
-    uint32_t titleField = layout ? layout->field("Title")    : 2;
-    uint32_t bitField   = layout ? layout->field("TitleBit") : 36;
+    // Two name columns, not one. WotLK's CharTitles row carries the same title
+    // twice, once per gender, and the original client keeps both: its compiled
+    // record (stride 0x14, built from this table at load) holds a male pointer
+    // at +0x08 and a female one at +0x0c, and GetTitleName (FUN_0051b4e0) picks
+    // between them by the unit's gender byte (`if (cVar7 != '\x01')`). The columns
+    // named here are a block's *first* slot in each case, which is where
+    // DBCFile::promoteLocalizedStrings has already copied this locale's text to:
+    // the male block runs 2..17 with its text at 5 and its flags at 18, the
+    // female block 19..34 with its text at 22 and its flags at 35.
+    //
+    // Reading only the male column is not a missing translation - it is the
+    // wrong word. In deDE the two forms differ ("Pirscher %s" and
+    // "Pirscherin %s", "Zornerfüllter Gladiator %s" and "Zornerfüllte
+    // Gladiatorin %s"), so every female player on screen was named in the
+    // masculine.
+    uint32_t titleField  = layout ? layout->field("Title")       : 2;
+    uint32_t bitField    = layout ? layout->field("TitleBit")    : 36;
+    uint32_t femaleField = layout ? layout->tryField("TitleFemale") : 0xFFFFFFFFu;
     if (titleField == 0xFFFFFFFF) titleField = 2;
+    if (femaleField == 0xFFFFFFFF) femaleField = titleField;   // one form, as before
     if (bitField   == 0xFFFFFFFF) bitField   = static_cast<uint32_t>(dbc->getFieldCount() - 1);
 
     for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
         const uint32_t id = dbc->getUInt32(i, 0);   // the row id a quest reward references
-        std::string name = dbc->getString(i, titleField);
-        if (name.empty()) continue;
+        TitleForms forms;
+        forms.male   = dbc->getString(i, titleField);
+        forms.female = dbc->getString(i, femaleField);
+        if (forms.male.empty()) continue;
         // By id for a quest reward (which carries the id), and by mask bit for
         // the worn title (which is a bit off the player's own fields).
-        if (id != 0) titleFormatById_[id] = name;
+        if (id != 0) titleFormatById_[id] = forms;
         uint32_t bit = dbc->getUInt32(i, bitField);
-        if (bit != 0) titleNameCache_[bit] = std::move(name);
+        if (bit != 0) titleNameCache_[bit] = std::move(forms);
     }
     LOG_INFO("CharTitles: loaded ", titleNameCache_.size(), " title names from DBC");
+}
+
+const std::string& GameHandler::titleForm(const TitleForms& forms, uint8_t gender) {
+    // The client's own rule, which is a comparison rather than a lookup: the
+    // gender byte is 1 for female and anything else takes the male form - so an
+    // unknown gender lands on the male form too, which is what the original
+    // client answers for a unit whose fields have not arrived.
+    return (gender == 1 && !forms.female.empty()) ? forms.female : forms.male;
+}
+
+uint8_t GameHandler::titleGenderOf(uint64_t guid) const {
+    uint8_t race = 0, gender = 0, facial = 0;
+    uint32_t appearanceBytes = 0;
+    // The same byte the client reads off the unit object (+0x1008, +0x1c): the
+    // unit's own fields, not the name query's answer, which this client has for
+    // other players and not for itself.
+    if (!getPlayerAppearance(guid, race, gender, appearanceBytes, facial)) return 0xFF;
+    return gender;
 }
 
 std::string GameHandler::getFormattedTitle(uint32_t bit) const {
     loadTitleNameCache();
     auto it = titleNameCache_.find(bit);
-    if (it == titleNameCache_.end() || it->second.empty()) return {};
-    return formatTitleString(it->second);
+    if (it == titleNameCache_.end()) return {};
+    // The local player's own gender: this is the title as they wear it.
+    const std::string& fmt = titleForm(it->second, titleGenderOf(playerGuid));
+    if (fmt.empty()) return {};
+    return formatTitleString(fmt);
 }
 
 std::string GameHandler::getFormattedTitleById(uint32_t id) const {
     loadTitleNameCache();
     auto it = titleFormatById_.find(id);
-    if (it == titleFormatById_.end() || it->second.empty()) return {};
-    return formatTitleString(it->second);
+    if (it == titleFormatById_.end()) return {};
+    // A quest reward carrying a title is being given to the local player, so
+    // the row is read in their form - which is what the announce sentence says.
+    const std::string& fmt = titleForm(it->second, titleGenderOf(playerGuid));
+    if (fmt.empty()) return {};
+    return formatTitleString(fmt);
 }
 
 float GameHandler::critPercentFromGameTable(std::vector<float>& baseCache,
@@ -2130,11 +2187,16 @@ std::string GameHandler::formatTitleStringFor(const std::string& fmt,
 }
 
 std::string GameHandler::getFormattedTitleFor(uint32_t bit,
-                                              const std::string& name) const {
+                                              const std::string& name,
+                                              uint8_t gender) const {
     loadTitleNameCache();
     auto it = titleNameCache_.find(bit);
-    if (it == titleNameCache_.end() || it->second.empty()) return {};
-    return formatTitleStringFor(it->second, name);
+    if (it == titleNameCache_.end()) return {};
+    // The form of the words follows the unit wearing the title, and the name in
+    // the hole follows them - both of them that player's, not the reader's.
+    const std::string& fmt = titleForm(it->second, gender);
+    if (fmt.empty()) return {};
+    return formatTitleStringFor(fmt, name);
 }
 
 void GameHandler::sendSetTitle(int32_t bit) {
@@ -3296,12 +3358,6 @@ void GameHandler::loadDungeonEncounterDbc() const {
         for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
             const uint64_t map = dbc->getUInt32(i, kMapField);
             const uint64_t diff = dbc->getUInt32(i, kDiffField);
-            dungeonEncounterCounts_[(map << 32) | diff]++;
-            // Most instances list their bosses once, under difficulty 0,
-            // and apply to every difficulty. Keeping a per-map total means
-            // a heroic run still has a number to show.
-            dungeonEncounterCounts_[(map << 32) | 0xFFFFFFFFull]++;
-
             LfgEncounterRow row;
             row.mapId = static_cast<uint32_t>(map);
             row.difficulty = static_cast<uint32_t>(diff);
@@ -3316,17 +3372,7 @@ void GameHandler::loadDungeonEncounterDbc() const {
         // be guessed at from the icon id.
     }
 
-    LOG_INFO("DungeonEncounter.dbc: ", dungeonEncounterCounts_.size(),
-             " map/difficulty pairs, ", dungeonEncounters_.size(), " rows");
-}
-
-uint32_t GameHandler::getDungeonEncounterCount(uint32_t mapId, uint32_t difficulty) const {
-    loadDungeonEncounterDbc();
-
-    auto it = dungeonEncounterCounts_.find((static_cast<uint64_t>(mapId) << 32) | difficulty);
-    if (it != dungeonEncounterCounts_.end()) return it->second;
-    it = dungeonEncounterCounts_.find((static_cast<uint64_t>(mapId) << 32) | 0xFFFFFFFFull);
-    return (it != dungeonEncounterCounts_.end()) ? it->second : 0;
+    LOG_INFO("DungeonEncounter.dbc: ", dungeonEncounters_.size(), " rows");
 }
 
 // ---------------------------------------------------------------------------
@@ -3359,14 +3405,20 @@ void GameHandler::loadLfgDungeonDbc() const {
     // grouped with the Burning Crusade raids.
     constexpr uint32_t kMinLevel = 18, kMaxLevel = 19, kTargetLevel = 20;
     constexpr uint32_t kTargetMin = 21, kTargetMax = 22, kMapId = 23;
-    constexpr uint32_t kDifficulty = 24, kTypeId = 26, kFaction = 27;
+    constexpr uint32_t kDifficulty = 24, kFlags = 25, kTypeId = 26, kFaction = 27;
     constexpr uint32_t kTexture = 28, kExpansion = 29, kOrderIndex = 30, kGroupId = 31;
     // 32 through 48 are the description in each locale. Only the holiday rows
     // and a handful of others carry one.
     constexpr uint32_t kDescription = 32;
     // Group 11 is the four seasonal bosses - the Headless Horseman, Ahune,
-    // Coren Direbrew and the Crown Chemical Co. - and nothing else. The file
-    // has no holiday flag of its own; the group is the flag.
+    // Coren Direbrew and the Crown Chemical Co. - and nothing else.
+    //
+    // This used to read "the file has no holiday flag of its own; the group is
+    // the flag", which is wrong: field 25 is a flag column, and bit 2 of it is
+    // set on rows 285-288 and on no other row - the very four that group 11
+    // names. Both spell the same set here, so the group stays the one the
+    // pickers use and the flag is kept for the client's own test, which reads
+    // the bit and not the group (0x00554170:3487).
     constexpr uint32_t kHolidayGroup = 11;
     const bool wideEnough = dbc->getFieldCount() > kGroupId;
     if (!wideEnough) {
@@ -3392,6 +3444,7 @@ void GameHandler::loadLfgDungeonDbc() const {
         d.maxRecLevel = dbc->getUInt32(i, kTargetMax);
         d.mapId       = dbc->getUInt32(i, kMapId);
         d.difficulty  = dbc->getUInt32(i, kDifficulty);
+        d.flags       = dbc->getUInt32(i, kFlags);
         d.typeId      = dbc->getUInt32(i, kTypeId);
         d.faction     = static_cast<int32_t>(dbc->getUInt32(i, kFaction));
         d.texture     = dbc->getString(i, kTexture);
@@ -4552,6 +4605,18 @@ const std::array<GameHandler::BgQueueSlot, 3>& GameHandler::getBgQueues() const 
     return empty;
 }
 
+int32_t GameHandler::battlefieldPortExpirationSec(size_t slot) const {
+    return socialHandler_ ? socialHandler_->battlefieldPortExpirationSec(slot) : 0;
+}
+
+int64_t GameHandler::battlefieldInstanceExpirationMs() const {
+    return socialHandler_ ? socialHandler_->battlefieldInstanceExpirationMs() : 0;
+}
+
+int64_t GameHandler::battlefieldInstanceRunTimeMs() const {
+    return socialHandler_ ? socialHandler_->battlefieldInstanceRunTimeMs() : 0;
+}
+
 const std::vector<GameHandler::AvailableBgInfo>& GameHandler::getAvailableBgs() const {
     if (socialHandler_) return socialHandler_->getAvailableBgs();
     static const std::vector<AvailableBgInfo> empty;
@@ -5024,6 +5089,14 @@ bool GameHandler::isLfgInDungeon() const {
 
 uint32_t GameHandler::getLfgDungeonId() const {
     return socialHandler_ ? socialHandler_->getLfgDungeonId() : 0;
+}
+
+uint32_t GameHandler::getLfgProposalDungeonId() const {
+    return socialHandler_ ? socialHandler_->getLfgProposalDungeonId() : 0;
+}
+
+uint32_t GameHandler::getLfgProposalEncountersDone() const {
+    return socialHandler_ ? socialHandler_->getLfgProposalEncountersDone() : 0;
 }
 
 uint32_t GameHandler::getLfgJoinedListId() const {

@@ -43,28 +43,20 @@ CommentatorState& state() {
 /// The maps SMSG_COMMENTATOR_MAP_INFO would have listed (0x00ace4fc).
 constexpr uint32_t kNumMaps = 0;
 
-/// The player's PLAYER_FLAGS, none without a player.
-std::optional<uint32_t> playerFlags(game::GameHandler* gh) {
-    const auto player = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
-    if (!player) return std::nullopt;
-    const uint16_t i = game::fieldIndex(game::UF::PLAYER_FLAGS);
-    return i != 0xFFFF ? player->getField(i) : 0u;
-}
-
 bool isCommentator(game::GameHandler* gh) {
-    const auto f = playerFlags(gh);
+    const auto f = playerFlagsOf(gh);
     return f && (*f & kCommentator) != 0;
 }
 
 bool isTournament(game::GameHandler* gh) {
-    const auto f = playerFlags(gh);
+    const auto f = playerFlagsOf(gh);
     return f && (*f & kTournament) != 0;
 }
 
 /// 0x006de980: a commentator, either of the tournament or on an arena
 /// map (Map.dbc type 4).
 bool commentatorCamera(game::GameHandler* gh) {
-    const auto f = playerFlags(gh);
+    const auto f = playerFlagsOf(gh);
     return f && (*f & kCommentator) != 0 && ((*f & kTournament) != 0 || gh->currentMapInstanceType() == 4);
 }
 
@@ -132,7 +124,7 @@ int toggleMode(lua_State* L) {
 
 /// CommentatorGetMode (0x00569230): 1 a commentator, 2 of the tournament.
 int getMode(lua_State* L) {
-    const auto f = playerFlags(getGameHandler(L));
+    const auto f = playerFlagsOf(getGameHandler(L));
     int mode = 0;
     if (f && (*f & kCommentator) != 0) mode = 1;
     if (f && (*f & kTournament) != 0) mode = 2;

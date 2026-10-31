@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdlib>
 
 namespace wowee::game {
 
@@ -341,6 +342,59 @@ const QuestPoiIcon* QuestPoiIconList::iconFor(int32_t questId) const {
         if (icon.questId == questId) return &icon;
     }
     return nullptr;
+}
+
+std::pair<uint32_t, uint32_t> QuestPoiIconList::openTargetFor(int32_t questId,
+                                                              const QuestPoiMapView& view,
+                                                              const QuestState& state,
+                                                              float playerX, float playerY) {
+    if (questId < 1) return {};
+    QuestPoiIcon* found = nullptr;
+    for (auto& icon : icons_) {
+        if (icon.questId == questId) {
+            found = &icon;
+            break;
+        }
+    }
+    // 0x005e2b60 asks the map which row is showing first, and only looks at
+    // areas once it has one; with no row shown the quest's own areas tell it
+    // nothing about where to go.
+    if (!found || !view.valid) return {};
+    found->objectiveMask = state ? state(questId).objectiveMask : 0u;
+
+    uint32_t bestMap = 0, bestFloor = 0;
+    int bestFloorDiff = INT32_MAX;
+    float bestDist = FLT_MAX;
+    for (const auto& area : found->areas) {
+        if (!areaSelected(area, found->objectiveMask)) continue;
+        // Already looking at this area's map and floor: that is the answer,
+        // and nothing further is weighed.
+        if (area.worldMapAreaId == view.worldMapAreaId && area.floor == view.dungeonFloor) {
+            return {area.worldMapAreaId, area.floor};
+        }
+        // The floor the player would have to change, and only then how far
+        // the area is from where they stand - both against what is showing.
+        const int floorDiff = std::abs(static_cast<int>(view.dungeonFloor) -
+                                       static_cast<int>(area.floor));
+        const float dx = std::fabs(playerX - static_cast<float>(area.centerX));
+        const float dy = std::fabs(playerY - static_cast<float>(area.centerY));
+        const float dist = dy * dy + dx * dx;
+        if (area.mapId == view.mapId) {
+            if (floorDiff < bestFloorDiff || (floorDiff == bestFloorDiff && dist < bestDist)) {
+                bestFloorDiff = floorDiff;
+                bestDist = dist;
+                bestMap = area.worldMapAreaId;
+                bestFloor = area.floor;
+            }
+        } else if (bestMap == 0) {
+            // An area on some other world map, kept only while nothing else
+            // has been picked - and given the worst score there is, so any
+            // area on this map replaces it.
+            bestMap = area.worldMapAreaId;
+            bestFloor = area.floor;
+        }
+    }
+    return {bestMap, bestFloor};
 }
 
 }  // namespace wowee::game

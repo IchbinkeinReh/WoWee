@@ -1256,3 +1256,47 @@ TEST_CASE("An event's invite flags and status as the calendar keeps them", "[cal
     CHECK(s.flags == 4u);
     CHECK(s.status == calendar_status::kAccepted);
 }
+
+TEST_CASE("Only an event the player said yes to gets a reminder", "[calendar]") {
+    constexpr uint64_t kMe = 0x11;
+    CalendarData cal;
+    CalendarEvent accepted, invited, gone;
+    for (CalendarEvent* ev : {&accepted, &invited, &gone}) {
+        ev->title = "Raid";
+        ev->eventTime.yearSince2000 = 10;
+        ev->eventTime.month = 5;
+        ev->eventTime.day = 2;
+        ev->eventTime.hour = 20;
+        ev->eventTime.minute = 5;
+    }
+    accepted.eventId = 1;
+    invited.eventId = 2;
+    gone.eventId = 3;
+    gone.eventTime.day = 1;      // the day before: already under way
+    cal.events = {accepted, invited, gone};
+    cal.invites = {
+        {1, 11, calendar_status::kAccepted, 0, false, 0x22},
+        {2, 12, calendar_status::kInvited, 0, false, 0x22},
+        {3, 13, calendar_status::kConfirmed, 0, false, 0x22},
+    };
+    WowDate now = accepted.eventTime;
+    now.day = 1; now.hour = 23; now.minute = 59;
+
+    const auto arms = calendarArmAlarms(cal, kMe, &now);
+    // The confirmed one is behind the clock, so arming it could never say
+    // anything; the merely invited one gets no reminder at all, which is what
+    // 0x005b7910 decides at the moment it fires, reading the status byte (+0xa8)
+    // that only accepted (1) and confirmed (3) pass.
+    REQUIRE(arms.size() == 1);
+    CHECK(arms[0].eventId == 1);
+    CHECK(arms[0].title == "Raid");
+    CHECK(arms[0].eventTime.hour == 20);
+    // Fifteen minutes off 20:05, borrowed across the hour (0x005b79b0's
+    // 0xfffffff1 = -15).
+    CHECK(arms[0].at.hour == 19);
+    CHECK(arms[0].at.minute == 50);
+    CHECK(arms[0].at.day == 2);
+
+    // No clock to arm against - no realm date yet - and nothing is armed.
+    CHECK(calendarArmAlarms(cal, kMe, nullptr).empty());
+}

@@ -12,7 +12,7 @@ inside characterframe.xml, and the reference is spelled CharacterFrame.lua
 against a file that is lowercase on disk. Every step of that resolves today,
 and this is what says so tomorrow.
 
-    tools/framexml_load_check.py
+    tools/framexml_load_check.py ["<the extracted interface>"]
 
 THREE THINGS IT CHECKS
 
@@ -34,7 +34,12 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-INTERFACE = ROOT / "Data/interface"
+# Named on the command line, Data/interface otherwise - and that literal stays,
+# since it is what sweep_guard reads to see that this checkout has no interface
+# to walk. Pointed at nothing, check() returns its zeros and the report says
+# one directory and no manifest entries, which is the sweep talking.
+INTERFACE = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
+             else ROOT / "Data/interface")
 
 REFERENCE = re.compile(r'<(Script|Include)\s+file="([^"]+)"')
 
@@ -88,6 +93,12 @@ def check(directory, fallback=None):
 
 
 def main():
+    if not INTERFACE.is_dir():
+        # Nothing to walk, and every count answers zero - the same report a
+        # manifest with no faults gives.
+        print(f"No interface at {INTERFACE} - name the unpacked interface on "
+              "the command line; there is no manifest to resolve here.")
+        return 2
     directories = [INTERFACE / "framexml"]
     addons = INTERFACE / "addons"
     if addons.is_dir():

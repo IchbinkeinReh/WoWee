@@ -465,6 +465,27 @@ static int lua_UnitIsTappedByAllThreatList(lua_State* L) {
     return 1;
 }
 
+// IsReferAFriendLinked(unit) - the recruit-a-friend link (0x0051d1b0). The
+// answer is 1.0 or nothing, never false, and the interface hides the
+// "summon my friend" and "grant that one a level" menu entries on it
+// (unitpopup.lua:787,791) before CanSummonFriend and CanGrantLevel grey them
+// out. The client's predicate (0x006d7590) tries three places: the guid's own
+// object when it names a player - the one a unit token can reach, and the one
+// that answers with a unit field - and then two lists no unit token names, a
+// four-slot table of records found by guid pair (0x0052bee0, stride 0xc4) and
+// the guild's member records (0x005727b0, which hands one back at +0x10), both
+// tested at the word 8 bytes into what they return and there at bit 0x100,
+// with a Battle.net record behind a logged-in test last.
+static int lua_IsReferAFriendLinked(lua_State* L) {
+    auto* unit = resolveUnit(L, luaL_optstring(L, 1, ""));
+    if (unit && dynamic_cast<game::Player*>(unit) &&
+        (unit->getDynamicFlags() & game::UNIT_DYNFLAG_REFER_A_FRIEND) != 0)
+        lua_pushnumber(L, 1.0);
+    else
+        lua_pushnil(L);
+    return 1;
+}
+
 namespace {
 
 /// A unit's standing on a mob's threat list: the status WoW reports, its raw
@@ -1582,6 +1603,31 @@ static int lua_UnitIsCharmed(lua_State* L) {
     lua_pushboolean(L, guidField(gh, guid, game::UF::UNIT_FIELD_CHARMEDBY) != 0);
     return 1;
 }
+/// Whether this unit is driving something (0x00613c90).
+///
+/// The pair it reads is UNIT_FIELD_CHARM, and when that pair is empty
+/// UNIT_FIELD_SUMMON - the same charm-or-summon pair the reaction code and
+/// lua_UnitPlayerOrPetInParty walk. A unit with either naming something answers
+/// **1.0**; anything else answers nil, and false is not an answer this binding
+/// gives. The argument has no default either: the client reads it as a string
+/// that is nil when absent, which resolves to no unit and lands on that nil.
+///
+/// The three places it is reached from are the OnCancel of each resurrect
+/// popup (staticpopup.lua:1205,1231,1255): declining a raise re-opens the death
+/// dialog unless the player is controlling something - and a hunter whose pet is
+/// still fighting is, as is a passenger, whose CHARM names the transport (see
+/// the vehicle note above). Answering false here, as this row did, re-opened the
+/// death dialog for exactly those players.
+static int lua_UnitIsControlling(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const char* uid = luaL_optstring(L, 1, "");
+    const uint64_t guid = gh ? resolveUnitGuid(gh, uid) : 0;
+    uint64_t driven = guidField(gh, guid, game::UF::UNIT_FIELD_CHARM);
+    if (!driven) driven = guidField(gh, guid, game::UF::UNIT_FIELD_SUMMON);
+    if (driven) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
+    return 1;
+}
 static int lua_UnitIsTalking(lua_State* L) { return luaReturnFalse(L); }
 static int lua_UnitInBattleground(lua_State* L) { return luaReturnNil(L); }
 
@@ -1618,33 +1664,77 @@ static int lua_UnitPlayerOrPetInRaid(lua_State* L) {
     return lua_UnitPlayerOrPetInParty(L);
 }
 
-/// Talent points, and the two the interface actually reads: unspent points and
-/// the total spent. The micro button flashes on the first.
-// UnitCharacterPoints(unit) → talent points, primary professions still learnable
+// UnitCharacterPoints(unit) → the two points fields, talent points then skill points
 //
-// Two values. The trainer's confirmation reads the second bare -
-// `if ( cp2 < MAX_LEARNABLE_PROFESSIONS )` - to decide whether it is offering a
-// first profession or a second, so returning one value made confirming a
-// profession an error rather than a question.
-//
-// Two is the limit, and a primary profession is category 11 in SkillLine.dbc,
-// which is the same test isProfessionSpell uses rather than a second opinion
-// about what counts.
+/// 0x00610fb0 answers nothing but two dwords of the player's own field blob:
+/// 0xda0 and 0xda4, the pair the client's descriptor table names
+/// PLAYER_CHARACTER_POINTS1 and PLAYER_CHARACTER_POINTS2 and 0x005e8470 puts
+/// one eight-byte watch over (see the watcher in entity_controller, which is
+/// the only thing in the client that raises CHARACTER_POINTS_CHANGED). Both are
+/// read through the extended-field pointer at object+0x1008 as **signed** ints -
+/// `*(int *)` - and pushed as numbers, and the loop runs `0xda0 → < 0xda8`, so
+/// there are always exactly two values once the argument test is passed.
+///
+/// Two tests decide whether either is anything but 0: the unit has to be
+/// player-typed - `*(object+8 dword 2) >> 4 & 1`, OBJECT_FIELD_TYPE's 0x10 bit,
+/// the same test 0x005ce540 makes through Player_C.h directly - and its guid,
+/// the qword at the head of that same object blob, has to be the local player's.
+/// A player who is not the local player fails the second test and reads 0 for
+/// each value on its own; anything else fails the first and skips the loop, and
+/// both answers are the same two zeroes.
+///
+/// With no argument at all the client prints "Usage: UnitCharacterPoints(
+/// \"unit\")" and leaves **no** values on the stack, as with the other unit
+/// calls that have no default.
+///
+/// WoWee answered this from two of its own tallies: the talent store the talent
+/// packet fills, and a count of primary professions still learnable (SkillLine
+/// .category 11 against a limit of two). The second is not a field at all, and
+/// the first is the wrong one of two stores the client keeps apart - the packet
+/// feeds its talent frame, the fields feed this call. Both readers of the
+/// second value inside WoWee already disagreed with each other:
+/// GameHandler::getSkillPoints() (game_handler_skill_ups.cpp:22) answers that
+/// same 0xda4 dword, and GetAdjustedSkillPoints - 0x005ce540, which reads the
+/// field here and subtracts the pending trainer cost - subtracts the pending
+/// cost from *that*, so the skill window's bar and the number beside it came
+/// from the field while the call above them came from a tally. What the
+/// profession limit was wanted for is blizzard_trainerui.lua:29,
+/// `if ( cp2 < MAX_LEARNABLE_PROFESSIONS )` picking between
+/// PROFESSION_CONFIRMATION1 and 2; MAX_LEARNABLE_PROFESSIONS is 2, and the
+/// tally sat in the same range as a field the realm sends, which is why the
+/// confirmation never looked wrong. chatframe.lua:2607 is the other reader of
+/// the second value, printing LEVEL_UP_SKILL_POINTS with it after the event
+/// says points were gained - the field again, and the same one the watcher
+/// named in its second argument.
 static int lua_UnitCharacterPoints(lua_State* L) {
-    const char* uid = luaL_optstring(L, 1, "player");
+    const char* name = lua_tostring(L, 1);
+    if (!name) return 0;  // the client's usage line: no values at all
     auto* gh = getGameHandler(L);
-    std::string uidStr(uid);
-    toLowerInPlace(uidStr);
-    if (!gh || uidStr != "player") { lua_pushinteger(L, 0); lua_pushinteger(L, 0); return 2; }
 
-    constexpr int kMaxPrimaryProfessions = 2;
-    int known = 0;
-    for (const auto& [skillId, skill] : gh->getPlayerSkills()) {
-        (void)skill;
-        if (gh->getSkillCategory(skillId) == 11) ++known;
+    uint32_t talentPoints = 0;
+    uint32_t skillPoints = 0;
+    if (gh) {
+        std::string uid(name);
+        toLowerInPlace(uid);
+        const uint64_t who = resolveUnitGuid(gh, uid);
+        // The local player, and player-typed: both tests, one answer.  A name
+        // that resolves to another player gets past the first and fails the
+        // second, which is the same pair of zeroes either way.
+        if (who != 0 && who == gh->getPlayerGuid()) {
+            if (auto* unit = resolveUnit(L, name)) {
+                if (const uint16_t idx = game::fieldIndex(game::UF::PLAYER_CHARACTER_POINTS1);
+                    idx != 0xFFFF)
+                    talentPoints = unit->getField(idx);
+                if (const uint16_t idx = game::fieldIndex(game::UF::PLAYER_CHARACTER_POINTS2);
+                    idx != 0xFFFF)
+                    skillPoints = unit->getField(idx);
+            }
+        }
     }
-    lua_pushinteger(L, static_cast<lua_Integer>(gh->getUnspentTalentPoints()));
-    lua_pushinteger(L, std::max(0, kMaxPrimaryProfessions - known));
+    // Signed, as the client reads them: a negative points value is a real
+    // number there, not a wrapped one.
+    lua_pushinteger(L, static_cast<lua_Integer>(static_cast<int32_t>(talentPoints)));
+    lua_pushinteger(L, static_cast<lua_Integer>(static_cast<int32_t>(skillPoints)));
     return 2;
 }
 
@@ -2317,11 +2407,68 @@ static int lua_GetUnitManaRegenRateFromSpirit(lua_State* L) {
     return 1;
 }
 
-/// GetUnitMaxHealthModifier(unit) → the multiplier on maximum health. One,
-/// because nothing here modifies it - and one rather than zero because the
-/// sheet multiplies by it.
+/// Whether this expansion's field table can answer the pet question at all.
+///
+/// Every table here names UNIT_FIELD_PETNUMBER but cataclysm's, and a layout
+/// that does not cannot say whether a unit is anybody's pet. The two gates below
+/// ask this first and keep the answer these bindings gave before, rather than a
+/// "no" nothing in that layout supports - which matters most for the hunter leg,
+/// since hunterPetOf reads that same field and answers false when it has nowhere
+/// to read it from.
+static bool petFieldsNamed() {
+    return game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER) != 0xFFFF;
+}
+
+/// The gate the three modifier bindings share: the unit is the local player, or
+/// it carries UNIT_FIELD_PETNUMBER. Anything else answers **zero**, not the
+/// neutral one.
+///
+/// The client tests this identically in all three - 0x00612870, 0x006127f0 and
+/// 0x00612900 each read `FUN_004cee50(unit) || blob+0x114 != 0` before they
+/// consult anything. The first half is a guid compare: the eight bytes at the
+/// head of the object record against the current-player slot in thread-local
+/// storage. The second is petnumber, which is also why a warlock's voidwalker
+/// and a death knight's ghoul - neither numbered as a pet - get zero, and the
+/// pet paperdoll's stat tooltip for them says the stat changes nothing.
+static bool modifierTarget(game::GameHandler* gh, const game::Unit* unit) {
+    if (!unit) return false;
+    if (gh && unit->getGuid() == gh->getPlayerGuid()) return true;
+    if (!petFieldsNamed()) return true;
+    return unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER)) != 0;
+}
+
+/// GetUnitHealthModifier and GetUnitPowerModifier: one for a hunter's pet, zero
+/// for every other unit the gate admits, because those two are this client's
+/// whole answer - see the note by their registrations below. Asked of the local
+/// player it is zero as well, which is what the client answers: it goes on to a
+/// creature-template row keyed by the unit's entry, and a player has no entry.
+static double petStatModifier(game::GameHandler* gh, const game::Unit* unit) {
+    if (!petFieldsNamed()) return 1.0;
+    return modifierTarget(gh, unit) && hunterPetOf(gh, unit) ? 1.0 : 0.0;
+}
+
+/// GetUnitMaxHealthModifier(unit) → the multiplier on maximum health.
+///
+/// The unit's own UNIT_FIELD_MAXHEALTHMODIFIER as float bits, plus one:
+/// 0x00612870 is `*(float *)(field blob + 0x22c) + 1.0`, and the client's field
+/// metadata names the blob dword at 0x22c / 4 = 139 UNIT_FIELD_MAXHEALTHMODIFIER
+/// (the descriptor record at .data+0xac6698, whose second dword is the blob
+/// index; the enum comment works that blob dword into wire 145 and shows the
+/// contiguous run it sits at the top of). Whether a 3.3.5 realm writes the field
+/// at all is not settled here, and a field that never arrives reads zero, which
+/// is the one this binding used to answer outright - so what changes is a realm
+/// that does send one, and the character sheet's stamina line
+/// (paperdollframe.lua:280) multiplies by whatever comes back.
+///
+/// Zero for a unit the gate excludes, which is what the client pushes there.
 static int lua_GetUnitMaxHealthModifier(lua_State* L) {
-    lua_pushnumber(L, 1.0);
+    auto* gh = getGameHandler(L);
+    auto* unit = resolveUnit(L, luaL_optstring(L, 1, "player"));
+    if (!modifierTarget(gh, unit)) {
+        lua_pushnumber(L, 0.0);
+        return 1;
+    }
+    lua_pushnumber(L, fieldAsFloat(unit, game::UF::UNIT_FIELD_MAXHEALTHMODIFIER) + 1.0);
     return 1;
 }
 
@@ -2623,14 +2770,6 @@ static int lua_StopAttack(lua_State* L) {
     if (auto* gh = getGameHandler(L)) gh->stopAutoAttack();
     return 0;
 }
-
-// GetReleaseTimeRemaining() → milliseconds before the corpse releases itself,
-// or -1 when nothing will force it
-//
-// UIParent asks this the moment the player dies, as `> 0 or == -1`, so an
-// absent answer is an error on every death rather than a popup that does not
-// appear. Nothing here counts down to a forced release, and -1 is the game's
-// own way of saying so.
 
 /// GetNumRaidMembers() → everyone in the raid, this player included, or nought
 /// when the group is not a raid.
@@ -3308,6 +3447,10 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"UnitIsTapped",        lua_UnitIsTapped},
                 {"UnitIsTappedByPlayer", lua_UnitIsTappedByPlayer},
                 {"UnitIsTappedByAllThreatList", lua_UnitIsTappedByAllThreatList},
+                // Not a Unit* name, but it is a unit-field read, so it sits by
+                // the other readers of that same dword. It came over from
+                // lua_system_api.cpp, where it was a flat false.
+                {"IsReferAFriendLinked",  lua_IsReferAFriendLinked},
                 {"UnitIsVisible",       lua_UnitIsVisible},
                 {"UnitGroupRolesAssigned", lua_UnitGroupRolesAssigned},
                 {"UnitCanAttack",       lua_UnitCanAttack},
@@ -3887,6 +4030,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"UnitControllingVehicle", lua_UnitControllingVehicle},
                 {"UnitIsPossessed",     lua_UnitIsPossessed},
                 {"UnitIsCharmed",       lua_UnitIsCharmed},
+                {"UnitIsControlling",   lua_UnitIsControlling},
                 {"UnitIsTalking",       lua_UnitIsTalking},
                 {"UnitInBattleground",  lua_UnitInBattleground},
                 {"UnitPlayerOrPetInParty", lua_UnitPlayerOrPetInParty},
@@ -4065,12 +4209,51 @@ void registerUnitLuaAPI(lua_State* L) {
                 // PetPaperDollFrame_SetStats and PetExpBar_Update run whenever
                 // it is shown, so with a pet out these raised on opening it.
                 //
-                // The two modifiers are multipliers, so one is the neutral
-                // answer; zero would have read as a pet with no health at all.
+                // 0x006127f0 (health) and 0x00612900 (power) are the same
+                // function eleven lines apart, and each answers 1.0 once the pet
+                // has a UNIT_FIELD_PETNUMBER and its UNIT_FIELD_CREATEDBY pair
+                // casts to a player reading class 3 in byte 1 of
+                // UNIT_FIELD_BYTES_0 - hunterPetOf again, the predicate HasPetUI
+                // and GetPetHappiness ask.
+                //
+                // Everything past that which is not a hunter's pet goes to the
+                // per-entry creature record the client keeps for the unit - the
+                // one SMSG_CREATURE_QUERY_RESPONSE fills, which is what
+                // getCreatureInfoCache holds here - taking the float at
+                // record+0x34 for health and +0x38 for power, and zero when
+                // there is no record. The key is the entry id (the cache callee
+                // 0x0067b6a0 opens with `if (key == 0) return 0`, so a player -
+                // entry zero - is answered out of the gate), and the record
+                // matches the query field for field: +0xc is the flags dword a
+                // whole family of getters reads one bit at a time - the same
+                // dword ForceGossip answers bit 27 of - and +0x10, +0x14 and
+                // +0x18 are read as plain dwords, which are the creatureType,
+                // family and rank that follow typeFlags on the wire.
+                //
+                // And a 3.3.5 creature query carries no float at all, so those
+                // two reads reinterpret an id - a rank, a display id - and a
+                // small integer read as IEEE 754 is a denormal, ~1e-38. That is
+                // what the zero is. It is not a gap either: every table of this
+                // install was scanned for the record's shape (a bit field at
+                // dword 3 plus modifier-sized floats at dwords 13 and 14) and
+                // the nine hits are tables keyed by a sound id, a vehicle seat,
+                // an overlay - none keyed by a creature entry - so there is no
+                // template table this client is short of.
+                //
+                // Which is visible, and correctly so: the only FrameXML use is the
+                // stamina and intellect lines of the pet paperdoll's stat tooltip
+                // (petpaperdollframe.lua:588-594), so a warlock pet or a death
+                // knight's ghoul says its stamina changes nothing, exactly as the
+                // original does, while a hunter's pet - the pet that frame is
+                // built for - keeps answering one.
                 {"GetUnitHealthModifier",   [](lua_State* L) -> int {
-            lua_pushnumber(L, 1.0); return 1; }},
+            lua_pushnumber(L, petStatModifier(getGameHandler(L),
+                            resolveUnit(L, luaL_optstring(L, 1, "player"))));
+            return 1; }},
                 {"GetUnitPowerModifier",    [](lua_State* L) -> int {
-            lua_pushnumber(L, 1.0); return 1; }},
+            lua_pushnumber(L, petStatModifier(getGameHandler(L),
+                            resolveUnit(L, luaL_optstring(L, 1, "player"))));
+            return 1; }},
                 {"GetPetExperience", [](lua_State* L) -> int {
             // currXP, nextXP - off the pet unit's own fields, not the player's.
             auto* gh = getGameHandler(L);

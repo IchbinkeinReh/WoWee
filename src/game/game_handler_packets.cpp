@@ -27,6 +27,7 @@
 #include "game/transport_manager.hpp"
 #include "game/opcodes.hpp"
 #include "game/update_field_table.hpp"
+#include "game/zone_manager.hpp"
 #include "game/expansion_profile.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/minimap.hpp"
@@ -305,10 +306,38 @@ void GameHandler::predictedPowerUsability() {
     // 0x005a8d30: the spell each action slot holds against the player's
     // power; ACTIONBAR_UPDATE_USABLE (0xb2) where any flipped.
     bool actions = false;
+    // The rescan that comes with the same power update (0x0053d1b0) walks the
+    // player's spell list (0xbe8e58, eight bytes each: the id, a castable byte
+    // and a power-short byte) rather than the bars, and a spell whose power
+    // shortage lifts speaks on its way out: 0x0074d520(0x23, record + 0x220),
+    // which is COMBAT_TEXT_UPDATE (0x1e4) through the "%s%s" at 0x9e1ad0 - the
+    // first being slot 0x23 of the combat-text type names at 0xadb820, i.e.
+    // "SPELL_ACTIVE", and the record's +0x220 the spell name the cast events
+    // read too (spell_handler.cpp's spellcastArgs). blizzard_combattext.lua:303
+    // draws it as "<name>" in the crit size, gold by its own type table, gated on
+    // COMBAT_TEXT_SHOW_REACTIVES. It speaks on the way back only - a spell
+    // falling short of its cost says nothing - and not for a spell the client's
+    // full rescan (0x0053cf10) had left marked uncastable, which is what that
+    // record's castable byte gates its loop on. WoWee keeps no castable byte:
+    // everything it holds an action for is what IsUsableAction already calls
+    // usable. And it walks the bars the 0x005a8d30 half walks instead of the
+    // spell list, so a spell the player knows but never put on a bar has no line
+    // of its own to announce, and one sitting on two bars says it once.
+    constexpr size_t kAnnouncedMax = 16;
+    uint32_t announced[kAnnouncedMax]{};
+    size_t announcedCount = 0;
     for (size_t i = 0; i < actionBar.size(); ++i) {
         const auto& a = actionBar[i];
-        const bool shortNow = a.type == ActionBarSlot::SPELL && a.id != 0 && !spellHandler_->enoughPower(a.id, *player);
+        const bool held = a.type == ActionBarSlot::SPELL && a.id != 0;
+        const bool shortNow = held && !spellHandler_->enoughPower(a.id, *player);
+        const bool wasShort = actionShortOfPower_[i];
         actions |= power_prediction::noteShort(actionShortOfPower_[i], shortNow);
+        if (!held || !wasShort || shortNow) continue;
+        // One line per spell: the client's list holds each spell once.
+        const auto seen = std::find(announced, announced + announcedCount, a.id);
+        if (seen != announced + announcedCount) continue;
+        if (announcedCount < std::size(announced)) announced[announcedCount++] = a.id;
+        fireAddonEvent("COMBAT_TEXT_UPDATE", {"SPELL_ACTIVE", getSpellName(a.id)});
     }
     if (actions) fireAddonEvent("ACTIONBAR_UPDATE_USABLE", {});
     // The forms the same way, UPDATE_SHAPESHIFT_USABLE (0x17a).
@@ -696,18 +725,13 @@ void GameHandler::registerCoreOpcodes() {
         // server writes (lost ? 0 : 1). This read it as "lost" the other way
         // round, so every title earned was announced and recorded as lost.
         const bool isLost = packet.readUInt32() == 0;
-        loadTitleNameCache();
-        std::string titleStr;
-        auto tit = titleNameCache_.find(titleBit);
-        if (tit != titleNameCache_.end() && !tit->second.empty()) {
-            const std::string& pName = lookupName(playerGuid);
-            const std::string& fmt = tit->second;
-            size_t pos = fmt.find("%s");
-            if (pos != std::string::npos)
-                titleStr = fmt.substr(0, pos) + pName + fmt.substr(pos + 2);
-            else
-                titleStr = fmt;
-        }
+        // The row read in the local player's form with their own name in the
+        // hole, which is getFormattedTitle's job - and it was rewritten here
+        // instead, which is how the female form came to be missed: the helper
+        // had been choosing between the two forms for a while and this path had
+        // not gone through it. An earned title is being given to this player, so
+        // this player's form is the one the sentence says.
+        const std::string titleStr = getFormattedTitle(titleBit);
         // The title with the player's name put in, and nothing at all for a
         // title CharTitles.dbc does not have - the client prints only for a
         // row it finds. This wrote English "Title earned: ...!" or "Title
@@ -883,7 +907,8 @@ void GameHandler::registerCoreOpcodes() {
                 if (!self) args.push_back(lookupName(guid));
                 if (item && item->valid) {
                     key = std::string(self ? "DRUNK_MESSAGE_ITEM_SELF" : "DRUNK_MESSAGE_ITEM_OTHER") + n;
-                    args.push_back(buildItemLink(itemId, item->quality, item->name));
+                    args.push_back(buildItemLink(itemId, item->quality, item->name,
+                                                 getPlayerLevel()));
                 } else {
                     key = std::string(self ? "DRUNK_MESSAGE_SELF" : "DRUNK_MESSAGE_OTHER") + n;
                 }
@@ -2042,6 +2067,31 @@ void GameHandler::registerCoreOpcodes() {
         LOG_DEBUG("MSG_RAID_TARGET_UPDATE: fullList=", rtu.fullList,
                   " marks=", rtu.marks.size());
         fireAddonEvent("RAID_TARGET_UPDATE", {});
+
+        // The line the original client makes for itself about a mark someone
+        // placed (0x0050b0f0): TARGET_ICON_SET from GlobalStrings, posted as
+        // chat type 0x34 with no sender argument, because the text carries its
+        // own |Hplayer:...|h[name]|h link and FrameXML's TARGETICONS branch
+        // prints arg1 verbatim. Said only for the single-set form (a full list
+        // is a resync, not an event), only when both the placer and the marked
+        // unit are named by the packet - a clear has no target - and not at all
+        // when the placer's name is not known: 0x0067d770 answers nothing for an
+        // unknown guid and the line is simply never made, so nothing is printed
+        // here either. The marked unit's name is what the client reads off its
+        // own handle for that guid, UNKNOWNOBJECT where there is none.
+        if (rtu.fullList || rtu.whoGuid == 0) return;
+        const std::string setter = lookupName(rtu.whoGuid);
+        if (setter.empty()) return;
+        for (const auto& [icon, guid] : rtu.marks) {
+            if (guid == 0) continue;
+            std::string target = lookupName(guid);
+            if (target.empty()) target = interfaceString("UNKNOWNOBJECT", "Unknown");
+            addLocalChatLine(ChatType::TARGETICONS,
+                interfaceFormat("TARGET_ICON_SET",
+                                "|Hplayer:%1$s|h[%2$s]|h marks %4$s with "
+                                "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_%3$d:0|t.",
+                                {setter, setter, std::to_string(icon + 1), target}));
+        }
     };
 
     // ---- SMSG_CRITERIA_UPDATE ----
@@ -2616,59 +2666,79 @@ void GameHandler::registerRemainingOpcodes() {
             }
         }
     };
-    // WotLK 3.3.5a format:
-    //   uint8  status  - 6=has open ticket, 3=closed, anything else none
-    // If status == 6 (GMTICKET_STATUS_HASTEXT):
-    //   cstring ticketText
-    //   uint32  ticketAge       (seconds old)
-    //   uint32  daysUntilOld    (days remaining before escalation)
-    //   float   waitTimeHours   (estimated GM wait time)
+    // 0x005ad240 case 0x212 reads the ticket in this order and nothing else:
+    //   uint32 status                    6 = GMTICKET_STATUS_HASTEXT
+    //   uint32                           kept at DAT_00c1e8d0, never fired
+    //   cstring text                     read with a 2000-byte cap
+    //   uint8  category                  the event's first %d
+    //   float  ticketAge                 clamped to >= 0 on the way out
+    //   float  oldestTicketTime
+    //   float  updateTime
+    //   uint8  assignedToGM              the event's first trailing %d
+    //   uint8  openedByGM                ... and its last
+    // and names UPDATE_TICKET with "%d%s%f%f%f%d%d" (005a0000.c:10009).  All
+    // three floats arrive already in days: helpframe.lua:107 spells them out
+    // as "ticketAge - days / oldestTicketTime - days / updateTime - days", so
+    // there is nothing to convert.
+    //
+    // What was read here was a byte status, then the text, then two uint32s
+    // and a float taken as hours.  Little-endian kept the status reading six,
+    // and the string read then took the three zero bytes that follow it in
+    // that dword, so the ticket's own words came back empty and everything
+    // measured from there was whatever the padding said.  The two bytes that
+    // say whether a GM has opened the ticket or taken it up as escalated were
+    // never read at all, so the frame's "opened by a GM" and "escalated"
+    // answers could not appear however much a GM had done either.
     dispatchTable_[Opcode::SMSG_GMTICKET_GETTICKET] = [this](network::Packet& packet) {
-        // WotLK 3.3.5a format:
-        //   uint8  status  - 6=has open ticket, 3=closed, anything else none
-        // If status == 6 (GMTICKET_STATUS_HASTEXT):
-        //   cstring ticketText
-        //   uint32  ticketAge       (seconds old)
-        //   uint32  daysUntilOld    (days remaining before escalation)
-        //   float   waitTimeHours   (estimated GM wait time)
-        if (!packet.hasRemaining(1)) { packet.skipAll(); return; }
-        uint8_t gmStatus = packet.readUInt8();
+        if (!packet.hasRemaining(4)) { packet.skipAll(); return; }
+        const uint32_t gmStatus = packet.readUInt32();
         // Status 6 = GMTICKET_STATUS_HASTEXT - open ticket with text
-        if (gmStatus == 6 && packet.hasRemaining(1)) {
-            gmTicketText_    = packet.readString();
-            uint32_t ageSec  = (packet.hasRemaining(4)) ? packet.readUInt32() : 0;
-            /*uint32_t daysLeft =*/ (packet.hasRemaining(4)) ? packet.readUInt32() : 0;
-            gmTicketWaitHours_ = (packet.hasRemaining(4))
-                ? packet.readFloat() : 0.0f;
+        if (gmStatus == 6 && packet.hasRemaining(4)) {
+            /*uint32_t stamp =*/ packet.readUInt32();
+            gmTicketText_ = packet.readString();
+            const uint32_t category =
+                (packet.hasRemaining(1)) ? packet.readUInt8() : 0;
+            // Only the first of the three floats is clamped, and only the
+            // copy the client fires: a negative age becomes 0 before it is
+            // named, while the other two are passed through as they came.
+            double ticketAge = 0.0;
+            if (packet.hasRemaining(4)) {
+                const float v = packet.readFloat();
+                ticketAge = (v < 0.0f) ? 0.0 : static_cast<double>(v);
+            }
+            auto readDays = [&packet]() {
+                return (packet.hasRemaining(4))
+                    ? static_cast<double>(packet.readFloat()) : 0.0;
+            };
+            const double oldestTicketTime = readDays();
+            const double updateTime = readDays();
+            const uint32_t assignedToGM =
+                (packet.hasRemaining(1)) ? packet.readUInt8() : 0;
+            const uint32_t openedByGM =
+                (packet.hasRemaining(1)) ? packet.readUInt8() : 0;
             gmTicketActive_ = true;
             // UPDATE_TICKET below and no chat line (0x005ad240 case 0x212);
             // this also printed English "You have an open GM ticket ..." on
             // every login.
-            LOG_INFO("SMSG_GMTICKET_GETTICKET: open ticket age=", ageSec,
-                     "s wait=", gmTicketWaitHours_, "h");
+            LOG_INFO("SMSG_GMTICKET_GETTICKET: open ticket age=", ticketAge,
+                     "d oldest=", oldestTicketTime, "d update=", updateTime);
 
-            // The interface measures all of this in days and works the wait out
-            // itself, as (oldestTicketTime - ticketAge). This packet gives the
-            // wait directly, so the oldest time is the age plus it - which
-            // arrives at the same number the server meant.
-            //
             // updateTime says how stale the estimate is; anything over an hour
-            // is treated as no estimate at all, and this one was computed from
-            // the packet that just arrived.
-            const double ageDays = static_cast<double>(ageSec) / 86400.0;
+            // is treated as no estimate at all by the frame reading it, and
+            // this is the number the realm measured it with.
             auto days = [](double v) {
                 char out[32];
                 std::snprintf(out, sizeof(out), "%.6f", v);
                 return std::string(out);
             };
             fireAddonEvent("UPDATE_TICKET", {
-                "1",                                            // category: has one
+                std::to_string(category),
                 gmTicketText_,
-                days(ageDays),
-                days(ageDays + gmTicketWaitHours_ / 24.0),
-                "0",                                            // just measured
-                "0",                                            // not assigned
-                "0",                                            // not opened by a GM
+                days(ticketAge),
+                days(oldestTicketTime),
+                days(updateTime),
+                std::to_string(assignedToGM),
+                std::to_string(openedByGM),
             });
         } else if (gmStatus == 3) {
             gmTicketActive_ = false;
@@ -3318,15 +3388,27 @@ void GameHandler::registerRemainingOpcodes() {
         // packed counter, packed guid, flags, date and two timers - not the
         // fixed sixteen bytes this stepped over them by.
         // The comparison unit's statistics go on its list (0x005b2cb0),
-        // whatever their flags; any other player's are not kept.
+        // whatever their flags; any other player's are not kept. The guard that
+        // decides "the comparison unit" is each record's own guid against the
+        // stored comparison pair, not the guid this packet starts with, so the
+        // counter below is filed under the record's own guid and falls back to the
+        // header's only when a record names nobody.
+        // The latest-updated list keeps its isStatisticCriteria test: that one is
+        // 0x005b0de0's rule about which achievements live in the Statistics tree,
+        // a different question from whose record may be stored.
         const bool comparing = inspectedGuid == achievementComparisonGuid_;
+        std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint64_t>> counters;
         while (packet.hasRemaining(4)) {
             uint32_t id = packet.readUInt32();
             if (id == 0xFFFFFFFF) break;
             CriteriaProgressRecord rec;
             if (!readCriteriaProgressTail(packet, rec)) break;
+            const uint64_t owner = rec.playerGuid ? rec.playerGuid : inspectedGuid;
+            counters[owner].emplace(id, rec.counter);
             if (comparing && isStatisticCriteria(id)) latestUpdatedComparisonStats_.noteComparison(id);
         }
+        for (auto& [owner, perCriteria] : counters)
+            comparisonCriteriaProgress_[owner] = std::move(perCriteria);
         inspectedPlayerAchievements_[inspectedGuid] = std::move(achievements);
         LOG_INFO("SMSG_RESPOND_INSPECT_ACHIEVEMENTS: guid=0x", std::hex, inspectedGuid, std::dec,
                  " achievements=", inspectedPlayerAchievements_[inspectedGuid].size());
@@ -3439,7 +3521,7 @@ void GameHandler::registerRemainingOpcodes() {
         if (packet.hasRemaining(7)) {
             const uint32_t bfBattleId = packet.readUInt32();
             bfMgrBattleId_ = bfBattleId;
-            packet.readUInt8();   // unk, always one
+            const uint8_t unkOne = packet.readUInt8();   // unk, always one
             uint8_t isSafe  = packet.readUInt8();
             uint8_t onQueue = packet.readUInt8();
             bfMgrInvitePending_ = false;
@@ -3450,8 +3532,14 @@ void GameHandler::registerRemainingOpcodes() {
             // battlefield!" and, for that byte, "You are in the battlefield
             // queue."
             if (onQueue) addSystemChatMessage(interfaceString("CLEARED_AFK", "You are no longer Away."));
+            // Its fire is "%d%b%b" of the battle id from this packet and the two
+            // leading bytes (00540000.c:7384), not the zone the invite carried.
+            // FrameXML hides four dialogs on this event and reads no argument of
+            // it, so the two extra words change nothing on screen; the battle id
+            // in the first slot is what the client's own queue state is keyed by.
             if (addonEventCallback_)
-                addonEventCallback_("BATTLEFIELD_MGR_ENTERED", {std::to_string(bfMgrZoneId_)});
+                addonEventCallback_("BATTLEFIELD_MGR_ENTERED", {std::to_string(bfBattleId),
+                                                                eventBool(unkOne != 0), eventBool(isSafe != 0)});
             LOG_INFO("SMSG_BATTLEFIELD_MGR_ENTERED: isSafe=", static_cast<int>(isSafe), " onQueue=", static_cast<int>(onQueue));
         }
         packet.skipAll();
@@ -3478,34 +3566,62 @@ void GameHandler::registerRemainingOpcodes() {
                                 {std::to_string(bfId), eventBool(warmup)});
         LOG_INFO("SMSG_BATTLEFIELD_MGR_QUEUE_INVITE: bfId=", bfId);
     };
-    // uint32 battlefieldId + uint32 teamId + uint8 accepted + uint8 loggingEnabled + uint8 result
-    // result: 0=queued, 1=not_in_group, 2=too_high_level, 3=too_low_level,
-    //         4=in_cooldown, 5=queued_other_bf, 6=bf_full
+    // uint32 battleId + uint32 areaId + uint8 accepted + uint8 loggingIn + uint8 warmup
+    //
+    // The trailing byte is no result enum. The comment this handler used to
+    // carry came from the realm's own header ("result: 0=queued, 1=not_in_group,
+    // 2=too_high_level, ...") and the client never reads such a thing: 0x0054b680
+    // reads dword, dword, byte, byte, byte in that order (00540000.c:8850-8854),
+    // and its second dword is an *area* rather than a team - it is compared with
+    // the zone the player stands in and with that zone's AreaTable parent.
     dispatchTable_[Opcode::SMSG_BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE] = [this](network::Packet& packet) {
-        // uint32 battlefieldId + uint32 teamId + uint8 accepted + uint8 loggingEnabled + uint8 result
-        // result: 0=queued, 1=not_in_group, 2=too_high_level, 3=too_low_level,
-        //         4=in_cooldown, 5=queued_other_bf, 6=bf_full
         if (!packet.hasRemaining(11)) {
             packet.skipAll(); return;
         }
-        uint32_t bfId2    = packet.readUInt32();
-        /*uint32_t teamId =*/ packet.readUInt32();
-        uint8_t accepted  = packet.readUInt8();
-        /*uint8_t logging =*/ packet.readUInt8();
-        uint8_t result    = packet.readUInt8();
-        (void)bfId2;
-        (void)result;
-        // The event alone (0x0054b680), and BATTLEFIELD_MGR_QUEUE_REQUEST_
-        // RESPONSE's handler words it; this also printed English ("You have
-        // joined the battlefield queue.", "Battlefield: Level too low.").
-        // The battle id and whether the queue took, in that order - the
-        // interface reads both to say which battlefield answered and how.
+        const uint32_t bfBattleId = packet.readUInt32();
+        const uint32_t bfAreaId   = packet.readUInt32();
+        const bool accepted  = packet.readUInt8() != 0;
+        const bool loggingIn = packet.readUInt8() != 0;
+        // Warmup is the one byte tested against the number one rather than
+        // against zero (`local_7 == '\x01'` at :8863).
+        const bool warmup    = packet.readUInt8() == 1;
+        // The client keeps the battle, its area and whether the queue took as one
+        // state (:8862 -> 0x00549500), and the ENTERED handler above is written
+        // against it. These are the two WoWee keeps.
+        bfMgrBattleId_ = bfBattleId;
+        bfMgrZoneId_   = bfAreaId;
+        // The client's fourth word is whether the area this answer names is the
+        // one the player is in: the zone itself, or the zone's AreaTable parent
+        // (:8856-8861, DAT_00bd080c and its record's +0x08).
+        bool inArea = false;
+        auto* renderer = core::Application::getInstance().getRenderer();
+        if (const auto* texts = renderer ? renderer->getZoneTexts() : nullptr) {
+            inArea = texts->zoneId == bfAreaId;
+            if (!inArea && texts->zoneId != 0) {
+                if (auto* zones = renderer->getZoneManager()) {
+                    if (const auto parent = zones->areaParent(texts->zoneId);
+                        parent && *parent == bfAreaId) inArea = true;
+                }
+            }
+        }
+        // The event alone - 0x0054b680 says nothing else, where this also printed
+        // English ("You have joined the battlefield queue.", "Battlefield: Level
+        // too low."). Its five arguments, in the client's order: battleId,
+        // accepted, warmup, inArea, loggingIn (the "%d%b%b%b%b" at :8863). All
+        // five reach battlefieldframe.lua:60-74, which chooses among four
+        // Wintergrasp dialogs by them and stays silent while the player is
+        // logging back in. Two arguments here left warmup, inArea and loggingIn
+        // nil, so only the plain queued dialog could ever show - and `accepted`
+        // travelled as the number 0, which is *true* in Lua, so a queue the realm
+        // refused showed the dialogs for a queue that took.
         if (addonEventCallback_) {
-            addonEventCallback_("BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE",
-                                {std::to_string(bfId2), std::to_string(accepted)});
+            addonEventCallback_("BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE", {
+                std::to_string(bfBattleId), eventBool(accepted), eventBool(warmup),
+                eventBool(inArea), eventBool(loggingIn)});
         }
         LOG_INFO("SMSG_BATTLEFIELD_MGR_QUEUE_REQUEST_RESPONSE: accepted=", static_cast<int>(accepted),
-                 " result=", static_cast<int>(result));
+                 " warmup=", static_cast<int>(warmup), " inArea=", static_cast<int>(inArea),
+                 " loggingIn=", static_cast<int>(loggingIn));
         packet.skipAll();
     };
     // uint64 battlefieldGuid + uint8 remove

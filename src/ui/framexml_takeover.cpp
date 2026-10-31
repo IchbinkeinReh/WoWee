@@ -220,12 +220,14 @@ void frameXmlNoteAddOnLoaded(const std::string& addOnName) {
 }
 
 bool frameXmlDrawsCombatText() {
-    // False while the client sends no COMBAT_TEXT_UPDATE, whatever is loaded.
+    // False while the COMBAT_TEXT_UPDATE this client sends carries no numbers,
+    // whatever is loaded.
     //
     // Standing down for Blizzard_CombatText assumed it would draw what this
     // client had stopped drawing. It cannot: every damage and healing number it
-    // shows arrives on COMBAT_TEXT_UPDATE, and this client has never fired that
-    // event once. What it does fire reaches the addon as the bare event name -
+    // shows arrives on COMBAT_TEXT_UPDATE, and the only one this client sends is
+    // the SPELL_ACTIVE line a power rescan raises (predictedPowerUsability) - no
+    // damage, no healing. What it does fire reaches the addon as the bare event name -
     // which is why entering combat still announces itself from the middle of
     // the screen while nothing else does, and why the handover read as working.
     //
@@ -561,11 +563,37 @@ const Check kChecks[] = {
         {UiElement::Social,       "FriendsFrame FriendsFrameTitleText"},
         {UiElement::Trade,        "TradeFrame TradeFrameRecipientNameText"},
         {UiElement::ReadyCheck,   "ReadyCheckFrame ReadyCheckFrameText"},
+        // Only the top frame, for the reason BuffButton1 is left out: the two
+        // slot FontStrings RaidNotice_AddMessage writes into are in the xml and
+        // correctly hidden until a warning is on screen, so naming one says
+        // nothing the frame itself does not already say. RaidWarning had no row
+        // while this client still drew its own banner, and the missing row
+        // outlived the banner: CHAT_MSG_RAID_WARNING is fired for every raid
+        // warning line (chat_handler.cpp), so FrameXML's is the only raid
+        // warning on screen - and an element handed over with no row is one
+        // reportUncheckedElements warns about and
+        // frameXmlReleaseUnbuiltElements cannot hand back.
+        {UiElement::RaidWarning,  "RaidWarningFrame"},
         {UiElement::Taxi,         "TaxiFrame TaxiRouteMap"},
         {UiElement::Stable,       "PetStableFrame"},
         {UiElement::Book,         "ItemTextFrame ItemTextPageText"},
         {UiElement::GameMenu,     "GameMenuFrame GameMenuButtonLogout"},
         {UiElement::Help,         "HelpFrame TicketStatusFrame"},
+        // Both halves of one element: the objective bar that sits on screen
+        // during a battleground and the final scoreboard that replaces it. They
+        // come from the same file, WorldStateFrame.xml, which framexml.toc
+        // loads at line 122 - so neither is load-on-demand, and a row here is
+        // what says whether that file arrived at all. No row existed while this
+        // client still drew its own scoreboard; the scoreboard bindings are all
+        // answered now, out of the parsed log (social_handler.cpp's
+        // PvpLogDataParser, which UPDATE_BATTLEFIELD_SCORE was added to tell),
+        // and FrameXML's is the only one there is.
+        //
+        // The player rows are not named: they are per-battleground and filled
+        // from that store, which is a question for the bindings, not for the
+        // frame tree.
+        {UiElement::BattlegroundScore,
+                                  "WorldStateScoreFrame WorldStateAlwaysUpFrame"},
         {UiElement::Totems,       "TotemFrame MultiCastActionBarFrame"},
         {UiElement::UiErrors,     "UIErrorsFrame"},
 

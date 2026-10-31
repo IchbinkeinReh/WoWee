@@ -5,6 +5,7 @@
 #include "game/entity.hpp"
 #include "game/game_handler.hpp"
 #include "game/update_field_table.hpp"
+#include "game/visible_item_fields.hpp"   // visibleItemEntryField
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "rendering/character_renderer.hpp"
@@ -115,8 +116,11 @@ std::optional<ms::Item> EntitySpawner::heldItem(const game::Entity& entity, uint
     // UNIT_FLAG_DISARMED, UNIT_FLAG2_DISARM_OFFHAND).
     uint32_t entry = 0;
     if (entity.getType() == game::ObjectType::PLAYER) {
+        // The client asks for its visible-item **record** here (0x006de360), and
+        // that record holds the entry's magnitude - a flagged field, most often
+        // a negative one, is the same item to everything that reads the record.
         const int base = gameHandler_->visibleItemEntryBaseRef();
-        if (base >= 0) entry = entity.getField(static_cast<uint16_t>(base + static_cast<int>((kSlotMainHand + hand) * 2)));
+        if (base >= 0) entry = game::visibleItemEntryField(entity.getField(static_cast<uint16_t>(base + static_cast<int>((kSlotMainHand + hand) * 2))));
     } else {
         const uint16_t slot = game::fieldIndex(game::UF::UNIT_VIRTUAL_ITEM_SLOT_ID);
         if (slot != 0xFFFF) entry = entity.getField(static_cast<uint16_t>(slot + hand));
@@ -267,7 +271,7 @@ uint32_t EntitySpawner::impactColumn(const game::Entity& target) const {
         if (target.getGuid() != gameHandler_->getPlayerGuid()) return 0;
         const int base = gameHandler_->visibleItemEntryBaseRef();
         if (base < 0) return 0;
-        const auto chest = meleeItem(target.getField(static_cast<uint16_t>(base + static_cast<int>(kSlotChest * 2))));
+        const auto chest = meleeItem(game::visibleItemEntryField(target.getField(static_cast<uint16_t>(base + static_cast<int>(kSlotChest * 2)))));
         if (!chest || chest->itemClass != ms::kClassArmor) return 0;
         const auto it = meleeMaterialFlags_.find(chest->material);
         return ms::playerImpactColumn(it != meleeMaterialFlags_.end() ? it->second : 0u);

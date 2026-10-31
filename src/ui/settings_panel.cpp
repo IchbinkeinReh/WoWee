@@ -418,7 +418,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
             renderer->setShadowDistance(pendingShadowDistance);
             // Read non-volume settings from actual state (volumes come from saved settings)
             if (auto* cameraController = renderer->getCameraController()) {
-                cameraController->setMouseSensitivity(pendingMouseSensitivity);
+                cameraController->setMouseLook(pendingMouseSensitivity);
                 cameraController->setInvertMouse(pendingInvertMouse);
                 cameraController->setPivotHeight(pendingPivotHeight);
                 cameraController->setIdleOrbitEnabled(pendingIdleCameraOrbit);
@@ -1562,7 +1562,7 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
     } else if (key == "camerashake") {
         if (cameraController) cameraController->setShakeScale(pendingCameraShake);
     } else if (key == "mousespeed") {
-        if (cameraController) cameraController->setMouseSensitivity(pendingMouseSensitivity);
+        if (cameraController) cameraController->setMouseLook(pendingMouseSensitivity);
     } else if (key == "cameramaxdistance") {
         if (cameraController) {
             cameraController->setMaxDistanceFactor(cameraDistanceFactor(pendingCameraMaxDistance));

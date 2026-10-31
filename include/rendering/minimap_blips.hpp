@@ -170,6 +170,12 @@ constexpr Cell poiIconCell(int icon, int textureWidth) {
 constexpr uint32_t kPoiOnMinimap = 0x1;
 constexpr uint32_t kPoiShowIcon = 0x2;
 constexpr uint32_t kPoiArrowIndoors = 0x100;
+/// The point is drawn on a battlefield's minimap as well: 0x00545a30 answers
+/// this bit as GetMapLandmarkInfo's seventh value, and the battlefield minimap's
+/// own frame file hides every pin that answers false for it. Nothing on the
+/// regular minimap reads the bit, which is why it sits beside the three that do
+/// rather than being invented at the world map.
+constexpr uint32_t kPoiOnBattleMap = 0x200;
 
 /// An AreaPOI's icon (0x00581e80): with a world state, Icon[value - 1] for a
 /// value of 1 to 9 and Icon[0] for any other; without one, Icon[0]. -1 while

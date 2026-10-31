@@ -29,6 +29,12 @@ the sweep can still report a name that appears nowhere at all. It cannot show
 the reader test is calibrated, because a test that counts too much still
 reports a name it never sees. Widening what counts as a reader is checked by
 the finding count, not by the canary.
+
+The extracted interface is installed data, not repository content, and it has
+sat in more than one place: name its directory on the command line. With a
+missing directory the check fails rather than reporting zero dead settings,
+because "0 of 0 declared" and "nothing is dead" are the same line otherwise -
+which is how this one read nothing at all for a while.
 """
 
 import argparse
@@ -219,10 +225,24 @@ def readers(extra_snippets):
 
 
 def main():
+    global PANELS, LUA_ROOTS
     ap = argparse.ArgumentParser()
     ap.add_argument("--canary", action="store_true")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("interface", nargs="?", default=str(PANELS),
+                    help="the directory of the extracted interface; it is installed "
+                         "data rather than repository content, so the default may "
+                         "not be where it is")
     args = ap.parse_args()
+
+    PANELS = Path(args.interface)
+    LUA_ROOTS = [PANELS.parent]
+    if not PANELS.is_dir():
+        # The controls are what everything here hangs on, and with the directory
+        # away there are none - which prints exactly like a clean tree.
+        print(f"{PANELS} is not a directory, so no control was declared and none "
+              "could be checked. Name the extracted interface directory.")
+        return 1
 
     controls = declared_controls()
     uvars = uvar_map()
@@ -260,6 +280,13 @@ def main():
           f"({len(handled)} more are dead and taken off the panels)")
     for cvar, where in dead:
         print(f"  {cvar:38s} {where}")
+
+    # "0 of 0" is the same silence as "nothing is dead", and it came out of a
+    # default interface path that no longer exists once already.
+    if total == 0:
+        print("no control was declared - the parse stopped matching rather than "
+              "finding nothing dead.")
+        return 1
 
     if args.canary:
         if not any(c == "woweecanarysettingnoreader" for c, _ in dead):

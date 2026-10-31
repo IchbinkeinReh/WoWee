@@ -3101,11 +3101,7 @@ static void fillItemTooltip(wowee::ui::Widget* w, const game::ItemDef& item,
     // ItemRandomSuffix.dbc row here. The client's own bag window has appended
     // it all along; the tooltip FrameXML asks for showed the base name, so the
     // same item read differently depending on which window was open.
-    title.left = item.name;
-    if (item.randomPropertyId != 0 && gh) {
-        const std::string suffix = gh->getRandomPropertyName(item.randomPropertyId);
-        if (!suffix.empty()) title.left += " " + suffix;
-    }
+    title.left = gh ? gh->itemNameWithProperty(item.name, item.randomPropertyId) : item.name;
     // WoW's quality colours, which are most of what an item tooltip says at a
     // glance - an epic reads as purple before anyone reads the words.
     // The client's own table rather than a fourth copy. This used to carry its
@@ -3517,11 +3513,33 @@ int lua_Tooltip_SetInventoryItem(lua_State* L) {
     // it is one entry per equipment slot.
     if (uid != "player" && slot > 19) { lua_pushboolean(L, 0); return 1; }
     if (uid != "player") {
+        // 0x0062e050's other-unit leg reads the same record GetInventoryItemLink
+        // reads, so which row answers depends on which unit this is: the one in
+        // the inspect window has the row the inspect block wrote, and any other
+        // player in range gets the row built out of the visible-item fields.
+        // Asking the inspect cache alone - which is what this did - answered
+        // false for every player but the inspected one, so hovering the gear of
+        // someone walking past produced nothing at all.
         const uint64_t guid = wowee::addons::resolveUnitGuid(gh, uid);
-        auto& cache = gh->inspectedPlayerItemEntriesRef();
-        auto it = guid ? cache.find(guid) : cache.end();
-        const uint32_t entry = (it != cache.end()) ? it->second[static_cast<size_t>(slot - 1)] : 0;
-        lua_pushboolean(L, fillItemTooltipById(L, gh, entry) ? 1 : 0);
+        game::ItemLinkInstance record;
+        uint32_t entry = gh->inspectedItemRecord(guid, slot - 1, record);
+        if (entry == 0) gh->visibleItemRecord(guid, slot - 1, entry, record);
+        if (!fillItemTooltipById(L, gh, entry)) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        // The suffix and its stat lines, from the row's own property and seed -
+        // the pair the tooltip feeder reads at record+0x3c and record+0x40.  The
+        // word there is a *signed* one for the tooltip (movswl of record+0x3c at
+        // 0x0062e424) where the link read it with movzwl, so a prefix id names
+        // itself here and prints as 655xx in the link.  That is not an
+        // inconsistency worth inventing; it is what the two readers do.
+        game::ItemDef def;
+        def.itemId = entry;
+        def.randomPropertyId = static_cast<int32_t>(static_cast<int16_t>(record.randomPropertyId));
+        def.suffixFactor = record.seed;
+        appendRandomSuffix(w, gh, def);
+        lua_pushboolean(L, 1);
         return 1;
     }
 
@@ -9945,7 +9963,10 @@ void LuaEngine::installMissingApiFallback() {
         "  'GetNumPoints','GetNumQuestItemDrops','GetNumQuestItems',\n"
         "  'GetNumQuestLogRewardFactions',\n"
         "  'GetNumRandomDungeons',\n"
-        "  'GetNumStationeries',\n"
+        // 'GetNumStationeries' is out of this list: the mail frame's paper-style
+        // popup now has a real list, built from Stationery.dbc by
+        // InventoryHandler::stationeryOptions and counted by the binding in the
+        // system table. Zero here would be the answer that hid the feature.
         "  'GetNumTitles','GetNumTooltips','GetNumTrackingTypes',\n"
         "  'GetNumVoiceSessionMembersBySessionID',\n"
         "  'GetNumDungeonMapLevels','GetNumMapOverlays','GetNumVoiceSessions',\n"

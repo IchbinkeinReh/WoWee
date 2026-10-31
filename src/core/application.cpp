@@ -1154,6 +1154,7 @@ bool Application::initialize() {
                 m.icon = static_cast<int>(l.iconType);
                 m.x = l.x;
                 m.y = l.y;
+                m.flags = l.flags;
                 out.push_back(std::move(m));
             }
             return out;
@@ -1222,6 +1223,22 @@ bool Application::initialize() {
         };
         luaSvc.setMapWorldAreaId = [r = renderer.get()](uint32_t id) {
             if (auto* wmap = r ? r->getWorldMap() : nullptr) wmap->showWorldMapArea(id);
+        };
+        luaSvc.getMapDungeonLevelCount = [r = renderer.get()]() -> int {
+            auto* wmap = r ? r->getWorldMap() : nullptr;
+            return wmap ? wmap->dungeonLevelCount() : 0;
+        };
+        luaSvc.getMapDungeonLevel = [r = renderer.get()]() -> int {
+            auto* wmap = r ? r->getWorldMap() : nullptr;
+            return wmap ? wmap->currentDungeonLevel() : 0;
+        };
+        luaSvc.setMapDungeonLevel = [r = renderer.get()](int level) -> bool {
+            auto* wmap = r ? r->getWorldMap() : nullptr;
+            return wmap && wmap->selectDungeonLevel(level);
+        };
+        luaSvc.mapDungeonUsesTerrainMap = [r = renderer.get()]() -> bool {
+            const auto* wmap = r ? r->getWorldMap() : nullptr;
+            return wmap && wmap->dungeonUsesTerrainMap();
         };
         luaSvc.getLiveZoneId = [r = renderer.get()]() -> uint32_t {
             return r ? r->getCurrentZoneId() : 0u;

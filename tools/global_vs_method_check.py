@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Globals FrameXML calls that exist here only as a widget method.
 
-    tools/global_vs_method_check.py
+    tools/global_vs_method_check.py "<the extracted interface>"
+
+The interface is installed data rather than repository content, so the default
+below is often not where it is.  The canary below is what catches a run that
+parsed nothing: with no FrameXML text the bare-call set is empty, and that looks
+like the clean answer rather than the broken one.
 
 WHY THIS IS NOT COVERED BY THE UNBOUND-GLOBAL SWEEP
 
@@ -64,7 +69,7 @@ from framexml_provides import (  # noqa: E402
     globals_provided, widget_methods_provided)
 
 ROOT = Path(__file__).resolve().parent.parent
-INTERFACE = ROOT / "Data/interface"
+INTERFACE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
 
 
 def interface():
@@ -81,6 +86,10 @@ def interface():
 
 
 def main():
+    if not INTERFACE.is_dir():
+        print(f"{INTERFACE} is not a directory - name the extracted interface "
+              "directory on the command line.")
+        return 2
     # Both sides through framexml_provides, which is the one implementation of
     # "does the client answer this name". Rolling them here missed 407 globals
     # - everything registered through the bootstrap or the counting table

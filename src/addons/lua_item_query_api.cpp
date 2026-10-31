@@ -731,7 +731,7 @@ int getItemGem(lua_State* L) {
     const auto* info = gem != 0 ? gh->getItemInfo(gem) : nullptr;
     if (!info) return 0;
     lua_pushstring(L, info->name.c_str());
-    lua_pushstring(L, game::itemChatLink(gem, info->quality, info->name).c_str());
+    lua_pushstring(L, game::itemChatLink(gem, info->quality, info->name, {}, gh->getPlayerLevel()).c_str());
     return 2;
 }
 

@@ -7,7 +7,12 @@ raises, so the gap is loud. This asks whether its events arrive, and the failure
 is silent: the frame simply sits there, or shows what it was drawn with, or
 never opens at all.
 
-    tools/framexml_event_gap.py
+    tools/framexml_event_gap.py "<the extracted interface>"
+
+The interface is installed data rather than repository content, so the default
+path below is often not where it is. A missing directory is not the same as an
+empty gap list - with nothing registered, "never sent: 0" is the line a fully
+covered client prints - so the run stops instead.
 
 Eleven real bugs came out of this after the call side had gone quiet - a mail
 frame that hung after sending, bag cooldown swirls that never drew, an
@@ -25,8 +30,25 @@ So the second table below is the one to read first: events with no sender whose
 source message the client *already handles*. Those are two working halves with
 nothing in between, and they are nearly always real.
 
-TWO THINGS THIS CANNOT DECIDE
------------------------------
+THINGS THIS CANNOT DECIDE
+-------------------------
+* **A name spelled differently from the string is invisible to the fire-call
+  patterns.** UPDATE_LFG_LIST read as a gap for weeks while sitting in the "read
+  these first" table beside the two real ones: the call passes
+  `std::string(kLfgListChangedEvent)`, and the string lives in
+  `include/game/lfg_update.hpp` under that other spelling. `viaConstants()` now
+  resolves that pair across both source roots and prints the two halves, so the
+  send is counted and checkable rather than assumed.
+
+* **A name kept in a variable is invisible to the fire-call patterns.** The
+  calendar's reader fills a list of signal structs and one call raises whatever
+  that list holds, so not one of its ten event names sits next to a fire call and
+  all ten read as gaps. They get their own table rather than being folded into
+  either side. What that table now says depends on whether the tree contains a
+  call that raises a struct's `event` field at all (`walkers()`): if it does, the
+  names are proven sends - the fire site is printed with them, because the rule
+  cannot tell one signal struct from another, only that the shape matches.
+
 * **"Never fired" can mean "something else is fired in its place."**
   SMSG_QUESTGIVER_QUEST_LIST was sending GOSSIP_SHOW where QUEST_GREETING
   belonged, so the gossip frame opened over the quest list. Read the handler.
@@ -54,10 +76,17 @@ TWO THINGS THIS CANNOT DECIDE
 
 import os
 import re
+import sys
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-INTERFACE = os.path.join(ROOT, "Data", "interface")
+#: Name the extracted interface on the command line; see the docstring.
+INTERFACE = (sys.argv[1] if len(sys.argv) > 1
+             else os.path.join(ROOT, "Data", "interface"))
 SRC = os.path.join(ROOT, "src")
+#: Headers, which the fire-call scans below do not need and the constant
+#: resolution does: this tree spells an event name once in a header
+#: (include/game/lfg_update.hpp) and fires it by that name from src/.
+INCLUDE = os.path.join(ROOT, "include")
 
 EVENT = r'"([A-Z][A-Z0-9_]{3,})"'
 
@@ -112,6 +141,149 @@ def sent():
                 names |= set(re.findall(
                     r'(?<![\w.])' + re.escape(alias) + r'\(\s*' + EVENT, src))
     return names
+
+
+#: Where a function keeps the event name it was handed: a signal struct's
+#: `event` field, or the first field of a struct it appends to a list of them.
+STORE_FIELD = r'\.\s*event\s*=\s*(\w+)\s*[;,]'
+STORE_INIT = r'(?:push_back|emplace_back)\(\{\s*(\w+)\s*[,}]'
+#: A definition at the start of a line: its name, its parameters, and where its
+#: body begins. Approximate on purpose - the body only has to reach the next
+#: definition, which is how these helpers are written in this tree.
+DEFINITION = re.compile(
+    r'(?m)^[A-Za-z_][\w:<>,\s*&\[\]]*?\b(\w+)\s*\(([^)]*)\)\s*\{')
+#: The same two shapes holding a literal rather than a variable.
+HELD_LITERAL = (r'(?:push_back|emplace_back)\(\{\s*' + EVENT,
+                r'\.\s*event\s*=\s*' + EVENT)
+
+
+def held():
+    """Events carried to the fire call in a variable, so the name is never next to it.
+
+    `sent()` reads names that sit inside a fire call. The calendar does not
+    write like that: its packet reader fills a list of `CalendarSignal`s
+    (calendar_data.cpp), and one `fireAddonEvent(signal.event, signal.args)`
+    in game_handler_callbacks.cpp raises whatever that list holds. Not one of
+    its ten events is next to a fire call, and all ten came back as gaps -
+    CALENDAR_UPDATE_EVENT was in the "read these first" table, above the two
+    real ones, for months.
+
+    So take the two shapes that hold a name: a struct appended with the name as
+    its first field, or a field named `event`; and the helpers that put a
+    parameter of their own into one of those, whose call sites are then read
+    for literals. What this finds is not counted as sent - it is printed as its
+    own table, to be checked by hand, because a name in a list is only raised
+    if something walks that list.
+    """
+    helpers, direct = set(), set()
+    texts = []
+    for dirpath, _, filenames in os.walk(SRC):
+        for name in filenames:
+            if not name.endswith((".cpp", ".hpp")):
+                continue
+            try:
+                src = open(os.path.join(dirpath, name),
+                           encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            texts.append(src)
+            for pattern in HELD_LITERAL:
+                direct |= set(re.findall(pattern, src))
+            defs = []
+            for match in DEFINITION.finditer(src):
+                params = set()
+                for part in match.group(2).split(","):
+                    part = part.strip().rstrip("=").split("=")[0].strip()
+                    if part:
+                        params.add(part.replace("*", " ").split()[-1].lstrip("&"))
+                defs.append((match.group(1), params, match.start(), match.end()))
+            for i, (fname, params, _start, bodyStart) in enumerate(defs):
+                body = src[bodyStart:defs[i + 1][2] if i + 1 < len(defs) else len(src)]
+                for pattern in (STORE_FIELD, STORE_INIT):
+                    for match in re.finditer(pattern, body):
+                        if match.group(1) in params:
+                            helpers.add(fname)
+    for src in texts:
+        for helper in helpers:
+            # The literal anywhere in the call's argument list - say(ctx, "NAME")
+            # hands it over as the second one.
+            direct |= set(re.findall(
+                r'(?<![\w.])' + re.escape(helper) + r'\s*\([^;{}]{0,120}?' + EVENT, src))
+    return direct
+
+
+#: A fire call whose first argument is a struct's field instead of a name:
+#: `fireAddonEvent(signal.event, signal.args)` (game_handler_callbacks.cpp:5160
+#: and :5213 raise everything the calendar reader appended). One such call turns
+#: every name stored in that shape into a send - which is why `held` reports the
+#: site rather than a warning.
+WALKER = re.compile(r'(?:fireAddonEvent|addonEventCallback[A-Za-z_]*(?:\(\))?)'
+                    r'\(\s*[\w_][\w_.-]*\s*\.\s*event')
+
+
+def walkers():
+    """Where this client raises whatever a list of signal structs holds."""
+    sites = []
+    for dirpath, _, filenames in os.walk(SRC):
+        for name in filenames:
+            if not name.endswith((".cpp", ".hpp")):
+                continue
+            path = os.path.join(dirpath, name)
+            for n, line in enumerate(open(path, encoding="utf-8",
+                                          errors="ignore"), 1):
+                if WALKER.search(line):
+                    sites.append((os.path.relpath(path, SRC), n, line.strip()))
+    return sites
+
+
+#: A fire call whose first argument is a named constant instead of a literal:
+#:     owner_.addonEventCallbackRef()(std::string(kLfgListChangedEvent), {});
+#: (social_handler.cpp:5234).  UPDATE_LFG_LIST came back a gap - in the "read
+#: these first" table, beside the two real ones - for the same reason the
+#: calendar names did: the name sits nowhere near the call, in a header, under a
+#: different spelling.
+CONST_ARG = re.compile(r'(?:fireAddonEvent|addonEventCallback[A-Za-z_]*(?:\(\))?)'
+                       r'\(\s*(?:std::string(?:_view)?\s*\(\s*)?([A-Za-z_]\w*)\s*[,)]')
+#: The other half of the same name: the declaration that gives a constant its
+#: string.  Only a declaration counts - a plain assignment to a local says
+#: nothing about what the fire call passes.
+CONST_DEF = re.compile(r'\b(?:constexpr|const)\b[^=;]{0,90}?\b([A-Za-z_]\w*)\s*=\s*'
+                       + EVENT)
+
+
+def viaConstants():
+    """Events fired by constant name, and the two sites that make that claim.
+
+    Returns (names, sites) where a site is (event, constant, file, line of the
+    fire call).  A name is credited only when the file's call and some header's
+    declaration agree on the same identifier, so the pair is checkable by hand.
+    """
+    def sources():
+        for root in (SRC, INCLUDE):
+            for dirpath, _, filenames in os.walk(root):
+                for name in filenames:
+                    if not name.endswith((".cpp", ".hpp")):
+                        continue
+                    path = os.path.join(dirpath, name)
+                    yield path, open(path, encoding="utf-8", errors="ignore").read()
+
+    definitions = {}
+    for _, src in sources():
+        for match in CONST_DEF.finditer(src):
+            definitions.setdefault(match.group(1), match.group(2))
+
+    names, sites = set(), []
+    for path, src in sources():
+        for match in CONST_ARG.finditer(src):
+            constant = match.group(1)
+            if constant not in definitions:
+                continue
+            event = definitions[constant]
+            names.add(event)
+            line = src[:match.start()].count("\n") + 1
+            root = INCLUDE if path.startswith(INCLUDE) else SRC
+            sites.append((event, constant, os.path.relpath(path, root), line))
+    return names, sites
 
 
 def chat_family():
@@ -224,18 +396,36 @@ def shares_tokens(event, body):
 
 
 def main():
+    if not os.path.isdir(INTERFACE):
+        # Nothing to register the events, so nothing can be missing from them:
+        # the run would print the same lines a fully covered client prints.
+        print(f"{INTERFACE} is not a directory - name the extracted interface "
+              "directory on the command line.")
+        return 2
     where, fired = registered(), sent()
+    byConstant, constantSites = viaConstants()
+    fired |= byConstant
+    # `&` binds looser than `-`, so the parentheses are not decoration.
+    inHand = (held() & set(where)) - fired
     opcodes, skipped = handled_opcodes()
 
-    # Battle.net has no counterpart on a 3.3.5 server.
-    gap = sorted(e for e in where if e not in fired and not e.startswith("BN_"))
+    # Battle.net has no counterpart on a 3.3.5 server. Held names are out of the
+    # gap list too, but they get their own table below: a name stored in a list
+    # is only an event if something walks the list, so they are reported rather
+    # than believed.
+    gap = sorted(e for e in where
+                 if e not in fired and e not in inHand and not e.startswith("BN_"))
 
     def squash(name):
         return name.replace("_", "")
 
     backed = []
     for event in gap:
-        for opcode in opcodes:
+        # Shortest first, then by name: several opcodes can match one event by
+        # the token rule (SMSG_VOICE_SESSION_LEAVE, _ENABLE and
+        # _ROSTER_UPDATE all back VOICE_SESSIONS_UPDATE), and walking a set made
+        # the line the check prints change between runs of the same tree.
+        for opcode in sorted(opcodes, key=lambda n: (len(n), n)):
             body = opcode[len("SMSG_"):]
             if squash(body) == squash(event) or squash(event) in squash(body) \
                     or shares_tokens(event, body):
@@ -259,7 +449,7 @@ def main():
     # no handler at all. Worth seeing, and worth not being told to read first.
     onlySkipped = []
     for event in gap:
-        for opcode in skipped:
+        for opcode in sorted(skipped, key=lambda n: (len(n), n)):
             body = opcode[len("SMSG_"):]
             if squash(body) == squash(event) or squash(event) in squash(body) \
                     or shares_tokens(event, body):
@@ -271,6 +461,40 @@ def main():
               "which is\na decision rather than a gap:")
         for event, opcode in onlySkipped:
             print(f"  {event:<38} {opcode}")
+
+    if inHand:
+        sites = walkers()
+        print()
+        if sites:
+            # The rule is only about shapes: a name handed to a helper that
+            # appends it as the first field of a struct, and a call somewhere
+            # that fires a struct's `event` field. That is the calendar's whole
+            # route, verified by hand, and it is what the names below are being
+            # believed on - so the site is printed and the claim is checkable.
+            print(f"{len(inHand)} more are written as an event name in this client's source, "
+                  "never\nnext to a fire call, and are counted as sent because this call "
+                  "raises\nwhatever the list holds:")
+            for path, n, line in sites:
+                print(f"  {path}:{n}  {line}")
+            for event in sorted(inHand):
+                print(f"  {event}")
+        else:
+            print(f"{len(inHand)} more are written as an event name in this client's source, "
+                  "but never\nnext to a fire call - and nothing in this tree fires a struct's "
+                  "`event` field\neither, so nothing raises them. A gap unless something "
+                  "walks the list:")
+            for event in sorted(inHand):
+                print(f"  {event}")
+
+    if constantSites:
+        # Counted as sent, and shown rather than trusted: the pair is a fire
+        # call naming a constant and the declaration that gives it its string,
+        # so both halves can be looked at.
+        print()
+        print(f"{len(byConstant)} more are fired by a named constant instead of a literal, "
+              "and are\ncounted as sent on these two halves:")
+        for event, constant, path, line in sorted(set(constantSites)):
+            print(f"  {event:<38} {constant:<28} {path}:{line}")
 
     ours, theirs = chat_family()
     unnamed = sorted(theirs - ours)
@@ -288,4 +512,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

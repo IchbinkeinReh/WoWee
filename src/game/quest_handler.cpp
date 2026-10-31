@@ -520,7 +520,17 @@ static QuestQueryTextCandidate pickBestQuestQueryTexts(const std::vector<uint8_t
 }
 
 struct QuestQueryObjectives {
-    struct Kill { int32_t npcOrGoId; uint32_t required; uint32_t sourceItem = 0; };
+    struct Kill {
+        int32_t npcOrGoId;
+        uint32_t required;
+        /// The item that record hands over, and how many of it are wanted. The
+        /// reference keeps the two as parallel four-dword arrays in its quest
+        /// record (+0x1c74 and +0x1c84) and reads them as inventory: the
+        /// special-item finder 0x005e0da0, the leaderboard's intermediate-item
+        /// line 0x005e1460, and the item-drop pair 0x005e20a0.
+        uint32_t sourceItem = 0;
+        uint32_t sourceCount = 0;
+    };
     struct Item { uint32_t itemId; uint32_t required; };
     std::array<Kill, 4> kills{};
     std::array<Item, 6> items{};
@@ -602,6 +612,7 @@ static QuestQueryObjectives tryParseQuestObjectivesAt(const std::vector<uint8_t>
             out.kills[i].npcOrGoId = decodeQuestNpcOrGo(kill.npcOrGoId);
             out.kills[i].required  = kill.required;
             out.kills[i].sourceItem = kill.itemDrop;
+            out.kills[i].sourceCount = kill.itemDropCount;
             if (!plausibleQuestObjective(out.kills[i].npcOrGoId, out.kills[i].required))
                 return {};
         }
@@ -1348,6 +1359,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     q.killObjectives[i].npcOrGoId = objs.kills[i].npcOrGoId;
                     q.killObjectives[i].required  = objs.kills[i].required;
                     q.objectiveSourceItems[i] = objs.kills[i].sourceItem;
+                    q.objectiveSourceCounts[i] = objs.kills[i].sourceCount;
                     q.objectiveTexts[i] = objs.texts[i];
                     if (objs.kills[i].npcOrGoId != 0 && objs.kills[i].required != 0) {
                         validKillKeys.insert(static_cast<uint32_t>(

@@ -203,25 +203,36 @@ public:
     [[nodiscard]] std::string helpText() const override { return "Toggle combat log"; }
 };
 
-// --- /helm, /helmet, /showhelm ---
+// --- /helm, /helmet, /showhelm, /togglehelm ---
 class HelmCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         ctx.gameHandler.toggleHelm();
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"helm", "helmet", "showhelm"}; }
+    /// The last of these is the name the original registers - the console
+    /// command table (`FUN_00769100("togglehelm", 0x00407710, 4, 0)`, where the
+    /// 4 says "slash command"), and the same table gives the cloak one as
+    /// `togglecloak`. The shorter names are this client's own.
+    [[nodiscard]] std::vector<std::string> aliases() const override {
+        return {"helm", "helmet", "showhelm", "togglehelm"};
+    }
     [[nodiscard]] std::string helpText() const override { return "Toggle helmet visibility"; }
 };
 
-// --- /cloak, /showcloak ---
+// --- /cloak, /showcloak, /togglecloak ---
 class CloakCommand : public IChatCommand {
 public:
     ChatCommandResult execute(ChatCommandContext& ctx) override {
         ctx.gameHandler.toggleCloak();
         return {};
     }
-    [[nodiscard]] std::vector<std::string> aliases() const override { return {"cloak", "showcloak"}; }
+    /// `togglecloak` is the name the original's console command table registers
+    /// (`FUN_00769100("togglecloak", 0x004077c0, 4, 0)`); see HelmCommand for
+    /// the same pair.
+    [[nodiscard]] std::vector<std::string> aliases() const override {
+        return {"cloak", "showcloak", "togglecloak"};
+    }
     [[nodiscard]] std::string helpText() const override { return "Toggle cloak visibility"; }
 };
 

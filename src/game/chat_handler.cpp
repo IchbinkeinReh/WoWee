@@ -325,6 +325,91 @@ bool ChatHandler::dropAsSpam(const MessageChatData& data) {
     return true;
 }
 
+namespace {
+/// Which guid 0x0050be70 puts to the ignore-list test for a line of this type,
+/// and whether it puts one at all. It asks about the guid the type reads for the
+/// far side of the line: the header's sender for most types, and for the
+/// creature-spoken types and the Battle.net line the guid read in the body.
+/// The battleground announcements and the achievement lines are not asked about.
+enum class IgnoreSide : uint8_t { none, sender, body };
+IgnoreSide ignoreSideFor(ChatType type) {
+    switch (type) {
+        case ChatType::MONSTER_SAY:
+        case ChatType::MONSTER_PARTY:
+        case ChatType::MONSTER_YELL:
+        case ChatType::MONSTER_WHISPER:
+        case ChatType::MONSTER_EMOTE:
+        case ChatType::RAID_BOSS_EMOTE:
+        case ChatType::RAID_BOSS_WHISPER:
+        case ChatType::BATTLENET:
+            return IgnoreSide::body;
+        case ChatType::BG_SYSTEM_NEUTRAL:
+        case ChatType::BG_SYSTEM_ALLIANCE:
+        case ChatType::BG_SYSTEM_HORDE:
+        case ChatType::ACHIEVEMENT:
+        case ChatType::GUILD_ACHIEVEMENT:
+            return IgnoreSide::none;
+        default:
+            return IgnoreSide::sender;
+    }
+}
+} // namespace
+
+bool ChatHandler::dropAsIgnored(const MessageChatData& data) {
+    // An ignored player is silenced by the client, not by the realm: 0x0050be70
+    // runs the same list the channel invite popup runs, by the same guid, and
+    // leaves the line unseen when they are on it. Only a channel invite had ever
+    // been gated by the list here, so an ignored player went on talking in the
+    // chat window, a name was still queried for them, and the realm was never
+    // told about the line either.
+    //
+    // A monster's guid is never on a list of players, so the body half of the
+    // test only ever bites for the Battle.net line; it is kept because the
+    // reader runs it there too, and it says what it says about a line aimed at
+    // someone ignored.
+    const IgnoreSide side = ignoreSideFor(data.type);
+    if (side == IgnoreSide::none) return false;
+    const uint64_t guid = side == IgnoreSide::body ? data.receiverGuid : data.senderGuid;
+    // A line with nobody on that side is not on the list (0x006b52e0 answers no
+    // for a zero guid before it looks).
+    if (guid == 0 || owner_.ignoreListGuidsRef().count(guid) == 0) return false;
+
+    // The creature-spoken branch asks the list and nothing else.
+    if (side == IgnoreSide::body) return true;
+
+    // The general branch does not ask at all for a line with the GM tag bit set
+    // (0x04, the same byte that reads "AFK" at 0x01, "DND" at 0x02 and "DEV" at
+    // 0x10), and three of its types keep their line whatever the list says: the
+    // echo of one's own whisper, the ignored-player line and the restricted one.
+    if ((data.chatTag & 0x4u) != 0) return false;
+    if (data.type == ChatType::WHISPER_INFORM || data.type == ChatType::IGNORED ||
+        data.type == ChatType::RESTRICTED) return false;
+
+    // A dropped whisper is still a reply target: the reader pushes the sender
+    // onto its whisper list before any of these tests (0x004fb710), so /r after
+    // an ignored whisper goes back to the one who sent it. Only the guid is
+    // known here - the name is what the drop stops this from querying, and the
+    // reply resolves it from the cache the same way.
+    if (data.type == ChatType::WHISPER && data.senderGuid != 0)
+        owner_.lastWhisperSenderGuidRef() = data.senderGuid;
+
+    // The whisper is reported to the realm first (0x00500180, 0x225): the
+    // sender's guid in the same two words the chat packet carried it in, then a
+    // byte this branch passes as 0. The reader skips the report only when the
+    // language word is -1, which is the value an addon line carries here; and
+    // the foreign whisper (0x08), which the reader tests on the sender and then
+    // makes an ordinary whisper, is merged with these by the parser's own
+    // rewrite, so it rides the whisper's report rather than going without one.
+    if (data.type == ChatType::WHISPER && data.language != ChatLanguage::ADDON &&
+        owner_.getSocket() && wireOpcode(Opcode::CMSG_CHAT_IGNORED) != 0xFFFF) {
+        network::Packet pkt(wireOpcode(Opcode::CMSG_CHAT_IGNORED));
+        pkt.writeUInt64(data.senderGuid);
+        pkt.writeUInt8(0);
+        owner_.getSocket()->send(pkt);
+    }
+    return true;
+}
+
 void ChatHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_MESSAGECHAT] = [this](network::Packet& packet) {
         if (owner_.getState() == WorldState::IN_WORLD) handleMessageChat(packet);
@@ -531,10 +616,12 @@ void ChatHandler::registerOpcodes(DispatchTable& table) {
     };
 
     table[Opcode::SMSG_CHANNEL_LIST] = [this](network::Packet& p) { handleChannelList(p); };
-    // Add and update carry the same fields and mean the same thing to a
-    // roster that keys on the guid.
-    table[Opcode::SMSG_USERLIST_ADD] = [this](network::Packet& p) { handleUserlistAdd(p); };
-    table[Opcode::SMSG_USERLIST_UPDATE] = [this](network::Packet& p) { handleUserlistAdd(p); };
+    // Add (0x3f0 -> 0x00504130) and update (0x3f2 -> 0x00500380) are separate
+    // routines in the client and answer differently - the one appends, the
+    // other only changes a row it already has - but they read the same fields,
+    // so one reader with the kind carried through is as far as they merge.
+    table[Opcode::SMSG_USERLIST_ADD] = [this](network::Packet& p) { handleUserlistAdd(p, UserlistChange::add); };
+    table[Opcode::SMSG_USERLIST_UPDATE] = [this](network::Packet& p) { handleUserlistAdd(p, UserlistChange::update); };
     table[Opcode::SMSG_USERLIST_REMOVE] = [this](network::Packet& p) { handleUserlistRemove(p); };
 }
 
@@ -654,6 +741,11 @@ void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& 
     LOG_DEBUG("INCOMING CHAT: type=", static_cast<int>(data.type),
              " (", getChatTypeString(data.type), ") sender=0x", std::hex, data.senderGuid, std::dec,
              " '", data.senderName, "' msg='", data.message.substr(0, 60), "'");
+
+    // Before anything else the line is asked about, and before a name is asked
+    // for: the reader tests its own ignore list as soon as the body is read, and
+    // reads no name for a line it is about to drop.
+    if (dropAsIgnored(data)) return;
 
     // WoW servers echo successful outgoing whispers as WHISPER_INFORM, but the
     // client already creates a local WHISPER_INFORM row immediately on send.
@@ -1012,10 +1104,11 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
                        data.type == ChatType::MONSTER_PARTY);
         // Party Chat Bubbles, a separate box beside the one for say and yell,
         // and read by nothing until now: party lines never floated over anyone
-        // whichever way it was set. Off unless asked for, as it ships, since a
-        // five-person group talking is a lot of text over the fight.
+        // whichever way it was set. Registered on beside chatBubbles at
+        // 0x00510000, so a party's lines float over its members until the box
+        // is unticked.
         if (!bubble && (data.type == ChatType::PARTY || data.type == ChatType::RAID)) {
-            bubble = addons::storedCVarValue("chatBubblesParty", "0") != "0";
+            bubble = addons::storedCVarValue("chatBubblesParty", "1") != "0";
         }
         if (bubble) {
             bool isYell = (data.type == ChatType::YELL || data.type == ChatType::MONSTER_YELL);
@@ -1244,6 +1337,12 @@ void ChatHandler::handleTextEmote(network::Packet& packet) {
         LOG_WARNING("Failed to parse SMSG_TEXT_EMOTE");
         return;
     }
+
+    // The other line of an ignored player's, and the only other place the list
+    // is consulted on what comes in over the wire: 0x00504070 reads the guid,
+    // asks the same question of it and returns before the line is made. The
+    // animation itself is a separate packet and is left alone, as there.
+    if (data.senderGuid != 0 && owner_.ignoreListGuidsRef().count(data.senderGuid)) return;
 
     // The player's own emote, as the server echoes it, is the line the chat
     // shows for it - "You wave at Bob." This returned here, on the reading that
@@ -1663,6 +1762,25 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
         return n;
     };
 
+    // The channel store's changes are also a notice.  0x00504840 rebuilds the
+    // display list its rows come out of and, when its caller hands it a 1,
+    // raises CHANNEL_UI_UPDATE with nothing at all (line 4032: the fire is
+    // `FUN_0081b530(0x222, 0)`, and 0x222 = 546); the four callers that do hand
+    // it one are the store's own join (0x00507880), pending/leaving
+    // (0x00507900), leave (0x00507a30) and free (0x005093f0) routines, each of
+    // which ends in 0x00505d40, which is the refresh with that 1.  The other
+    // three call sites pass 0 - a query refreshing for itself - so the notice
+    // belongs to the changes and not to the reading.  It is raised once per
+    // change, however many rows one routine moved, and channelframe.lua:20,33
+    // answers it with ChannelFrame_Update(), which reads the whole store back:
+    // without it the Channels panel kept the list it had when it was opened.
+    bool storeChanged = false;   // already told, for a notice that moves two parts
+    const auto noteChannelStore = [&] {
+        if (storeChanged || !owner_.addonEventCallbackRef()) return;
+        storeChanged = true;
+        owner_.addonEventCallbackRef()("CHANNEL_UI_UPDATE", {});
+    };
+
     // 0x0050e120: every notice is a word handed to the interface, which
     // finds CHAT_<word>_NOTICE in its own strings. This client used to write
     // its own English sentence for each instead.
@@ -1733,11 +1851,14 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
         // player into another zone's channel of the same row: YOU_CHANGED.
         const cc::Slot* before = channelSlots_.find(data.zoneChannelId, data.channelName);
         notice = cc::noticeFor(type, before && !before->pending);
-        if (channelSlots_.joined(data.zoneChannelId, data.channelName, data.instanceId,
-                                 data.channelFlags)) {
-            zoneChannelMask_ |= cc::maskBit(data.zoneChannelId);
-        }
+        const bool newly = channelSlots_.joined(data.zoneChannelId, data.channelName,
+                                                data.instanceId, data.channelFlags);
+        if (newly) zoneChannelMask_ |= cc::maskBit(data.zoneChannelId);
         slotId = data.zoneChannelId;
+        // 0x00507880's own test is the record's in-use flag: the refresh runs
+        // when the store already had this channel - the pending slot a join
+        // request left behind - and not at all for a name it never heard of.
+        if (before != nullptr || newly) noteChannelStore();
     } else if (data.notifyType == ChannelNotifyType::YOU_LEFT) {
         // A constant channel the server takes away with the zone - Trade on
         // leaving a city - is SUSPENDED and keeps its number; one the player
@@ -1747,6 +1868,11 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
         channelSlots_.left(data.zoneChannelId, data.channelName);
         slotId = data.zoneChannelId;
         ownedChannels_.erase(data.channelName);
+        // Case 0x03 hands the row to 0x00507900, which marks it leaving and
+        // ends in the refresh - and that is inside the case, before the line
+        // the switch writes on the way out.  The channel suspending with its
+        // number kept (SUSPENDED) is the same leg.
+        noteChannelStore();
     } else {
         notice = cc::noticeFor(type);
     }
@@ -1779,6 +1905,12 @@ void ChatHandler::handleChannelNotify(network::Packet& packet) {
         channelSlots_.clear(slotId, data.channelName);
         ownedChannels_.erase(data.channelName);
         refreshJoinedChannels();
+        // The notices that free a slot are the ones 0x0050e120 hands to
+        // 0x00507a30 - `if (local_18 != 0)` at 11354, past the line it wrote at
+        // 11353 - and that routine ends in the refresh too.  For a leave this
+        // is the second of the two legs and the notice was already told when
+        // the row moved.
+        noteChannelStore();
     }
 }
 
@@ -1864,8 +1996,10 @@ void ChatHandler::updateLoginChannelJoin() {
 
     // Guild Recruitment (0x00507d30, run at the end of the login join): with
     // the interface's option on, joined by a player in no guild. It has no
-    // switch of this client's own; the CVar is the option.
-    if (addons::storedCVarValue("guildRecruitmentChannel", "0") != "0" && !owner_.isInGuild()) {
+    // switch of this client's own; the CVar is the option - and it is
+    // registered on (0x00510000 "1", with 0x00512750 as its setter), so a
+    // player in no guild is in the channel from the first login.
+    if (addons::storedCVarValue("guildRecruitmentChannel", "1") != "0" && !owner_.isInGuild()) {
         for (const auto& r : rows) {
             if (r.flags & chat_channels::kFlagGuildRecruitment) {
                 joinChannel(r.shortcut);
@@ -2049,6 +2183,165 @@ void ChatHandler::replyToLastWhisper(const std::string& message) {
 // Moved opcode handlers (from GameHandler::registerOpcodeHandlers)
 // ============================================================
 
+namespace {
+/// Order the panel's member list is drawn in. 0x00503990 ends its roster fill
+/// with `_qsort(rows, count, 0x18, 0x004fb0f0)` - before the count and roster
+/// events are raised - and that comparator never looks at a row's position: it
+/// resolves each row's guid to the client's player record and compares the
+/// *names*, answering that a row with no record goes after every named one
+/// rather than among them. So the list is alphabetical with the unresolved at
+/// the bottom, not in the order the server sent.
+///
+/// The client's compare is the locale one at 0x0076ec80, which folds case and
+/// collates a German name the way the client's own list shows it; only ASCII is
+/// folded here, which sorts an umlaut elsewhere. Stable, so members whose names
+/// do not sort apart stay in the order the roster arrived.
+///
+/// Holding the unresolved rows back is the half that is not here: the client
+/// counts them (DAT_00b743d8), raises no count or roster event while the count
+/// stands, and asks the name store for each guid - when the last answer comes
+/// back its callback (0x004ffe30) sorts and raises both then. Nothing here is
+/// waiting on a name that has not arrived, so both events go out either way.
+void sortChannelRoster(std::vector<ChannelMember>& roster) {
+    const auto folded = [](const std::string& s) {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s)
+            out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        return out;
+    };
+    std::stable_sort(roster.begin(), roster.end(),
+                     [&](const ChannelMember& a, const ChannelMember& b) {
+        if (a.nameKnown != b.nameKnown) return a.nameKnown;
+        return folded(a.name) < folded(b.name);
+    });
+}
+} // namespace
+
+/// The channel's own flag byte, which three packet bodies carry and all three
+/// write the same way (0x00503990 with the roster, 0x00500380 beside a
+/// member's own flags, and 0x00504130/0x005042f0 doing the same compare and
+/// write): it
+/// lands on the slot's +0x90, the very byte YOU_JOINED left, and the channel
+/// is looked up in the display list *first* - a channel that is not listed
+/// keeps the byte it had rather than quietly absorbing the new one, so the
+/// next answer still knows it moved once it is listed. Only then, and only
+/// when the byte actually changed, is CHANNEL_FLAGS_UPDATED (552) raised, with
+/// nothing but that display index.
+///
+/// The panel listens for it (channelframe.lua:13) and answers by re-showing the
+/// channel's dropdown, but only for the channel whose menu is open (:25,
+/// `arg1 == ChannelListDropDown.clicked`) - which is how a player sees that the
+/// channel they right-clicked turned moderated, passworded or voiced while that
+/// menu sat open.
+///
+/// The client raises it a second time when a roster fill reaches the row that
+/// is the player's own, because the voice bits it folded into that row (0x20,
+/// 0x40, 0x80) come from its own voice session rather than from the wire and
+/// may have moved a moment ago. Nothing here keeps voice state, so that row
+/// would answer exactly as it did the first time; the second fire is not here.
+void ChatHandler::noteChannelFlags(const std::string& chanName, uint8_t chanFlags) {
+    if (chanName.empty()) return;
+    chat_channels::Slot* slot = channelSlots_.byName(chanName);
+    if (slot == nullptr) return;
+    const int idx = getChannelIndex(chanName);
+    if (idx <= 0 || slot->flags == chanFlags) return;
+    slot->flags = chanFlags;
+    owner_.fireAddonEvent("CHANNEL_FLAGS_UPDATED", {std::to_string(idx)});
+}
+
+/// Ask for the names of the rows that have none, and hold the panel's events.
+///
+/// 0x00503990 does not fill the roster and announce it: for every row it looks the
+/// guid up through 0x0067d770 **with 0x004ffe30 as the request's callback**, and a
+/// row that has no name yet raises the counter it checks at the end. The two
+/// events are raised only when that counter is at zero, and the callback that
+/// closes the last one re-sorts the rows first - so the list the player is shown
+/// is the one with the names in it, sorted once, rather than one with "(unknown)"
+/// in the middle of it that then reorders itself.
+///
+/// The callback closes a wait on the **answer**, not on a name: 0x004ffe30 walks
+/// the rows for the guid, returns without touching the counter when it is not
+/// among them, and otherwise takes one off. A guid the realm knows nothing about
+/// therefore still closes its wait, which is what keeps a roster from being held
+/// by it forever.
+void ChatHandler::holdRosterForNames(const std::string& chanName,
+                                     const std::vector<ChannelMember>& roster) {
+    RosterNameWait wait;
+    for (const auto& m : roster) {
+        if (m.nameKnown || m.guid == 0) continue;
+        wait.guids.insert(m.guid);
+        owner_.queryPlayerName(m.guid);
+    }
+    if (wait.guids.empty()) {
+        rosterNameWaits_.erase(chanName);
+        return;
+    }
+    wait.deadline = core::appTimeSeconds() + kRosterNameWaitSeconds;
+    rosterNameWaits_[chanName] = std::move(wait);
+}
+
+void ChatHandler::fireChannelRosterEvents(const std::string& chanName) {
+    // By display index, not by name. ChannelRoster_Update and
+    // ChannelList_CountUpdate both take a position in the channel list -
+    // _G["ChannelButton"..id] is how the second finds its row, and the first is
+    // called elsewhere with GetSelectedDisplayChannel(), which is an index. A
+    // name built "ChannelButtonGeneral", which is nothing, so neither the
+    // roster nor the count ever redrew.
+    const int displayIndex = getChannelIndex(chanName);
+    if (displayIndex <= 0) return;
+    auto it = channelRosters_.find(chanName);
+    const std::string idx = std::to_string(displayIndex);
+    const std::string count = std::to_string(it == channelRosters_.end() ? 0 : it->second.size());
+    // Both carry the count. The roster one is 0x004ffe30's
+    // event(548, "%d%d", displayIndex, members) - ChannelRoster_Update reads only
+    // the first of the two, but the client passes both from the same registers it
+    // has just stored at (&DAT_00b74464)[index*8].
+    owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx, count});
+    owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE", {idx, count});
+}
+
+void ChatHandler::onChannelRosterNameKnown(uint64_t guid) {
+    if (guid == 0 || rosterNameWaits_.empty()) return;
+    // Asked after the name is cached, the same way the invite hook is.
+    const std::string name = owner_.lookupName(guid);
+    for (auto wit = rosterNameWaits_.begin(); wit != rosterNameWaits_.end();) {
+        auto rit = channelRosters_.find(wit->first);
+        if (rit == channelRosters_.end()) {
+            wit = rosterNameWaits_.erase(wit);
+            continue;
+        }
+        auto mit = std::find_if(rit->second.begin(), rit->second.end(),
+                               [&](const ChannelMember& m) { return m.guid == guid; });
+        if (mit == rit->second.end()) { ++wit; continue; }   // 0x004ffe30's scan
+        if (!mit->nameKnown && !name.empty()) {
+            mit->name = name;
+            mit->nameKnown = true;
+        }
+        if (wit->second.guids.erase(guid) == 0) { ++wit; continue; }
+        if (!wit->second.guids.empty()) { ++wit; continue; }
+        // The last answer for that channel: sort with the names in, then tell the
+        // panel, which is what 0x004ffe30 does in that order.
+        const std::string chanName = wit->first;
+        wit = rosterNameWaits_.erase(wit);
+        sortChannelRoster(rit->second);
+        fireChannelRosterEvents(chanName);
+    }
+}
+
+void ChatHandler::expireChannelRosterWaits() {
+    if (rosterNameWaits_.empty()) return;
+    const double now = core::appTimeSeconds();
+    for (auto it = rosterNameWaits_.begin(); it != rosterNameWaits_.end();) {
+        if (now < it->second.deadline) { ++it; continue; }
+        const std::string chanName = it->first;
+        LOG_WARNING("Channel: no names for \"", chanName, "\" within ",
+                    kRosterNameWaitSeconds, "s - showing the roster without them");
+        it = rosterNameWaits_.erase(it);
+        fireChannelRosterEvents(chanName);
+    }
+}
+
 void ChatHandler::handleChannelList(network::Packet& packet) {
     // A channel type byte comes first - Channel::List writes `uint8(1)` before
     // the name - and this read the name straight from it. The stray byte does
@@ -2073,9 +2366,11 @@ void ChatHandler::handleChannelList(network::Packet& packet) {
     }
     std::string chanName = packet.readString();
     if (!packet.hasRemaining(5)) return;
-    /*uint8_t chanFlags =*/ packet.readUInt8();
+    const uint8_t chanFlags = packet.readUInt8();
     uint32_t memberCount = packet.readUInt32();
     memberCount = std::min(memberCount, 200u);
+
+    noteChannelFlags(chanName, chanFlags);   // before a single member is read
 
     // The server's own member flags. What was here read 0x01 as moderator and
     // 0x02 as muted, so the channel's owner was announced as its moderator and
@@ -2117,7 +2412,7 @@ void ChatHandler::handleChannelList(network::Packet& packet) {
             if (player && !player->getName().empty()) m.name = player->getName();
         }
         if (m.name.empty()) m.name = owner_.lookupName(m.guid);
-        if (m.name.empty()) m.name = "(unknown)";
+        if (m.name.empty()) { m.name = "(unknown)"; m.nameKnown = false; }
 
         if (forChat) {
             const char* mark = (memberFlags & 0x01) ? "*" : (memberFlags & 0x02) ? "@"
@@ -2134,28 +2429,19 @@ void ChatHandler::handleChannelList(network::Packet& packet) {
         roster.push_back(std::move(m));
     }
     flushListLine();
+    // Sorted after the chat lines were written, which is where the client's
+    // sort sits too: /chatwho prints the server's order, the panel draws the
+    // sorted one.
+    sortChannelRoster(roster);
 
     channelRosters_[chanName] = std::move(roster);
-    // Both, because the panel redraws its member list on the first and its
-    // member count on the second, and it registers for each separately.
-    //
-    // By display index, not by name. ChannelRoster_Update and
-    // ChannelList_CountUpdate both take a position in the channel list -
-    // _G["ChannelButton"..id] is how the second finds its row, and the first is
-    // called elsewhere with GetSelectedDisplayChannel(), which is an index. A
-    // name built "ChannelButtonGeneral", which is nothing, so neither the
-    // roster nor the count ever redrew.
-    const int displayIndex = getChannelIndex(chanName);
-    if (displayIndex > 0) {
-        const std::string idx = std::to_string(displayIndex);
-        const std::string count = std::to_string(channelRosters_[chanName].size());
-        // Both carry the count. The roster one is 0x004ffe30's
-        // event(548, "%d%d", displayIndex, members) - ChannelRoster_Update reads
-        // only the first of the two, but the client passes both from the same
-        // registers it has just stored at (&DAT_00b74464)[index*8].
-        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx, count});
-        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE", {idx, count});
-    }
+    // The panel redraws its member list on CHANNEL_ROSTER_UPDATE and its member
+    // count on CHANNEL_COUNT_UPDATE, and it registers for each separately - but
+    // the fill does not raise either while a row is still named after nobody. See
+    // holdRosterForNames for the counter that holds them back.
+    holdRosterForNames(chanName, channelRosters_[chanName]);
+    if (rosterNameWaits_.find(chanName) == rosterNameWaits_.end())
+        fireChannelRosterEvents(chanName);
 }
 
 
@@ -2173,8 +2459,15 @@ void ChatHandler::handleChannelList(network::Packet& packet) {
 ///
 ///   ADD, UPDATE  guid(8) playerFlags(1) channelFlags(1) count(4) name
 ///   REMOVE       guid(8)                channelFlags(1) count(4) name
+///
+/// Only the add lists anyone. The update (0x00500380) and the remove
+/// (0x005042f0) both walk the rows looking for the guid and `return` out of the
+/// whole handler when it is not among them - no row made, no count, no roster
+/// event - so a promotion, a mute or a leaving for a member this client never
+/// listed is simply dropped. The add (0x00504130) is the one that appends, and
+/// it appends before it does anything else.
 void ChatHandler::applyUserlistChange(const std::string& chanName, uint64_t guid,
-                                      uint8_t memberFlags, bool removing) {
+                                      uint8_t memberFlags, UserlistChange change) {
     if (chanName.empty()) return;
     // The same bits the full list reads, and the same trap: 0x01 is the owner
     // and 0x02 the moderator, not the other way round.
@@ -2183,14 +2476,21 @@ void ChatHandler::applyUserlistChange(const std::string& chanName, uint64_t guid
     auto it = std::find_if(roster.begin(), roster.end(),
                            [&](const ChannelMember& m) { return m.guid == guid; });
 
-    if (removing) {
-        if (it != roster.end()) roster.erase(it);
+    if (change == UserlistChange::remove) {
+        // 0x005042f0 walks the rows and returns out of the handler when the guid
+        // is not there, so a leaving nobody listed says nothing at all - not
+        // even the two events below, which the client raises only past the scan.
+        if (it == roster.end()) return;
+        roster.erase(it);
     } else {
         if (it == roster.end()) {
+            // The update (0x00500380) scans the same way and bails: it changes a
+            // member, it does not announce one. Only the add gets this far.
+            if (change != UserlistChange::add) return;
             ChannelMember m;
             m.guid = guid;
             m.name = owner_.lookupName(guid);
-            if (m.name.empty()) m.name = "(unknown)";
+            if (m.name.empty()) { m.name = "(unknown)"; m.nameKnown = false; }
             roster.push_back(std::move(m));
             it = roster.end() - 1;
         }
@@ -2199,32 +2499,50 @@ void ChatHandler::applyUserlistChange(const std::string& chanName, uint64_t guid
         it->muted     = (memberFlags & kMuted) != 0;
     }
 
-    // By display index, for the reason spelled out in handleChannelList: both
-    // of these take a position in the channel list, not a name.
-    const int displayIndex = getChannelIndex(chanName);
-    if (displayIndex > 0) {
-        const std::string idx = std::to_string(displayIndex);
-        const std::string count = std::to_string(roster.size());
-        owner_.fireAddonEvent("CHANNEL_ROSTER_UPDATE", {idx, count});
-        owner_.fireAddonEvent("CHANNEL_COUNT_UPDATE", {idx, count});
-    }
+    // One order for the panel's rows: a joiner lands at the end of the wire's
+    // list while the rows around it are the sorted ones from the last full
+    // roster, and the panel asks for a member by position.
+    sortChannelRoster(roster);
+
+    // The add (0x00504130) appends the row and then asks for **its** guid through
+    // 0x0067d770 with 0x004ffe30 as the answer's callback: a guid it has no name
+    // for raises that counter and raises neither event, and it is the callback -
+    // not the packet - that re-sorts the rows and raises both. So a join is not
+    // announced as a row named after nobody that the panel then has to move once
+    // the name lands.
+    //
+    // The update (0x00500380) and the remove (0x005042f0) look nothing up - they
+    // change or move a row that is already there, name included - and raise both
+    // events straight past their scans, wait or no wait.
+    if (change == UserlistChange::add)
+        holdRosterForNames(chanName, roster);
+    if (change != UserlistChange::add ||
+        rosterNameWaits_.find(chanName) == rosterNameWaits_.end())
+        fireChannelRosterEvents(chanName);
 }
 
-void ChatHandler::handleUserlistAdd(network::Packet& packet) {
+void ChatHandler::handleUserlistAdd(network::Packet& packet, UserlistChange change) {
     if (!packet.hasRemaining(14)) return;
     const uint64_t guid = packet.readUInt64();
     const uint8_t memberFlags = packet.readUInt8();
-    packet.readUInt8();    // the channel's own flags
+    const uint8_t chanFlags = packet.readUInt8();  // the channel's own flags
     packet.readUInt32();   // how many are in it now
-    applyUserlistChange(packet.readString(), guid, memberFlags, /*removing=*/false);
+    const std::string chanName = packet.readString();
+    // The channel's byte goes onto the slot before the member row is touched,
+    // which is the order 0x00500380 reads them in - and it is what a menu that
+    // is already open is waiting to hear about.
+    noteChannelFlags(chanName, chanFlags);
+    applyUserlistChange(chanName, guid, memberFlags, change);
 }
 
 void ChatHandler::handleUserlistRemove(network::Packet& packet) {
     if (!packet.hasRemaining(13)) return;
     const uint64_t guid = packet.readUInt64();
-    packet.readUInt8();    // the channel's own flags
+    const uint8_t chanFlags = packet.readUInt8();  // the channel's own flags
     packet.readUInt32();   // how many are in it now
-    applyUserlistChange(packet.readString(), guid, 0, /*removing=*/true);
+    const std::string chanName = packet.readString();
+    noteChannelFlags(chanName, chanFlags);         // same order as the add
+    applyUserlistChange(chanName, guid, 0, UserlistChange::remove);
 }
 
 // ============================================================

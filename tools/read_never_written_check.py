@@ -25,9 +25,10 @@ WHAT IT COMPARES
 Fields of the structs in world_packets.hpp and handler_types.hpp against every
 member access in the tree, split into reads and writes.
 
-WHAT COUNTS AS A WRITE, AND THE THREE WAYS THAT GOES WRONG
+WHAT COUNTS AS A WRITE, AND THE FOUR WAYS THAT GOES WRONG
 
-All three were hit while writing this and all three read as findings:
+All four were hit while writing this or shortly after, and all four read as
+findings:
 
   * A container is filled, not assigned. `attachments`, `auctions`, `spells`
     and twenty more are only ever push_back'd, and reading `=` alone reported
@@ -79,6 +80,15 @@ EXPECTED = {
 MEMBER = re.compile(r"(?:\.|->)\s*(\w+)")
 ASSIGN = re.compile(r"(?:\.|->)\s*(\w+)\s*(?:=[^=]|\+=|-=|\|=|\[)"
                     r"|^\s*(\w+)\s*=[^=]", re.M)
+# A write through a subobject writes the objects it passes through on the way
+# there, and ASSIGN only sees the link beside the operator.  Without this,
+# `response.account.present = true` credited `present` and left `account` looking
+# unread-from-any-writer, while AuthResponseParser::parse fills four of its
+# members three lines apart.  The chain has to hang off a name for this to say
+# anything - a link written through `(*p).x.y =` or `a[i].x.y =` credits `x` by
+# ASSIGN alone - which is why the rule below is the whole chain and not a split
+# of whatever the line happens to hold.
+UPPER = re.compile(r"\b(\w+)((?:\s*(?:\.|->)\s*\w+){2,})\s*(?:=[^=]|\+=|-=|\|=|\[)")
 MUTATE = re.compile(r"(?:\.|->)\s*(\w+)\s*\.\s*"
                     r"(?:push_back|emplace_back|emplace|insert|resize|assign|clear)")
 
@@ -118,6 +128,13 @@ def scan(fields, skip=None):
             n = m.group(1) or m.group(2)
             if n in fields:
                 written[n] += 1
+        # ... and the links above it.  The root is not credited: it is a local,
+        # a parameter, or a member of some other struct, and naming it would
+        # credit a write to whatever field shares its name.
+        for m in UPPER.finditer(s):
+            for name in MEMBER.finditer(m.group(2)):
+                if name.group(1) in fields:
+                    written[name.group(1)] += 1
         for m in MUTATE.finditer(s):
             if m.group(1) in fields:
                 written[m.group(1)] += 1

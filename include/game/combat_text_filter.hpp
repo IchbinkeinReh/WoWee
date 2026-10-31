@@ -44,7 +44,10 @@ inline CombatTextFilterRule combatTextFilterFor(CombatTextEntry::Type type,
         case T::IMMUNE: case T::RESIST: case T::DEFLECT: case T::REFLECT:
         case T::INTERRUPT: case T::DISPEL: case T::STEAL: case T::ABSORB: {
             const bool onTarget = (dstGuid != 0 && dstGuid == targetGuid);
-            return onTarget ? CombatTextFilterRule{.cvar = "fctSpellMechanics", .fallback = "1"}
+            // Both halves registered off at 0x00510000: the line saying a
+            // spell was absorbed, reflected or stolen is opt-in on your own
+            // target as well as on anyone else.
+            return onTarget ? CombatTextFilterRule{.cvar = "fctSpellMechanics", .fallback = "0"}
                             : CombatTextFilterRule{.cvar = "fctSpellMechanicsOther", .fallback = "0"};
         }
         // A pet's swing is its own row, and it is answered before the damage

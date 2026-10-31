@@ -833,7 +833,7 @@ bool Renderer::initialize(core::Window* win) {
     // Create camera controller
     cameraController = std::make_unique<CameraController>(camera.get());
     cameraController->setUseWoWSpeed(true);  // Use realistic WoW movement speed
-    cameraController->setMouseSensitivity(0.15f);
+    cameraController->setMouseLook(0.15f);
 
     // Create performance HUD
     performanceHUD = std::make_unique<PerformanceHUD>();

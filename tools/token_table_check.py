@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Token strings this client answers that no FrameXML table has a key for.
 
-    tools/token_table_check.py
+    tools/token_table_check.py "<the extracted interface>"
+
+The interface is installed data rather than repository content, so the default
+below is often not where it is.  With no interface read there is no token table
+to key against, and every name below would report as answered.
 
 WHY THIS FINDS WHAT THE OTHER SWEEPS CANNOT
 
@@ -56,7 +60,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-INTERFACE = ROOT / "Data/interface"
+INTERFACE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
 # Token tables live wherever the code that answers with them does; both files
 # are searched so a table can sit beside its subject rather than in one bucket.
 SOURCES = [ROOT / "include/addons/lua_api_helpers.hpp",
@@ -133,6 +137,10 @@ def table_keyed_by_binding():
 
 
 def main():
+    if not INTERFACE.is_dir():
+        print(f"{INTERFACE} is not a directory - name the extracted interface "
+              "directory on the command line.")
+        return 2
     rows = []
     checked = 0
     for c_name, tables in PAIRS:

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game/item_text.hpp"   // ItemLinkInstance - the numbers an item link carries
+#include "game/visible_item_fields.hpp"   // the visible-item pair as the client's record reads it
 #include "game/mirror_image.hpp"
 #include "game/rune_state.hpp"
 #include "game/spell_history.hpp"
@@ -115,6 +117,13 @@ struct ContactEntry {
 
     [[nodiscard]] bool isFriend() const { return (flags & 0x1) != 0; }
     [[nodiscard]] bool isIgnored() const { return (flags & 0x2) != 0; }
+    /// The third list that mask carries. The client keeps it as its own array
+    /// (FriendList +0xd7c0, fifty rows) beside the friend and ignore arrays, and
+    /// the mute tab of the friends panel, IsMuted and the raid UI's speaker icon
+    /// all read it. It is the voice mute list - the wire asks for it by name and
+    /// takes it back by GUID - which is why text chat keeps going through the
+    /// ignore list and never looks at this bit.
+    [[nodiscard]] bool isMuted() const { return (flags & 0x4) != 0; }
     [[nodiscard]] bool isOnline()  const { return (status & 0x01) != 0; }
 };
 
@@ -544,6 +553,14 @@ public:
         return randomPropertyNameResolver_ ? randomPropertyNameResolver_(id) : std::string{};
     }
 
+    /// What an item is *called* wherever a rolled property is known: the plain
+    /// name with the property beside it through ITEM_SUFFIX_TEMPLATE.  The
+    /// client has one routine for this - 0x00706d70, which is handed the same
+    /// property id that 0x0061e290 puts at a link's seventh number, so the
+    /// number in a link and the words around it are read from one place.  A
+    /// property the tables cannot name leaves the name alone, as it does there.
+    std::string itemNameWithProperty(const std::string& name, int32_t randomPropertyId) const;
+
     // Random-suffix/property stat bonuses. Given the item's signed randomPropertyId and its
     // suffixFactor (ITEM_FIELD_PROPERTY_SEED), returns the rolled {statType, value} pairs a
     // green/blue item gains from "of the Bear" etc. statType uses the ITEM_MOD codes shared
@@ -796,6 +813,10 @@ public:
     void addIgnore(const std::string& playerName) override;
     void removeIgnore(const std::string& playerName) override;
     const std::unordered_map<std::string, uint64_t>& getIgnoreCache() const override { return ignoreCache; }
+    // The voice mute list, which the wire names "voice ignore" (CMSG 0x3DB and
+    // 0x3DC) while the interface calls every binding around it Mute.
+    void addVoiceIgnore(const std::string& playerName);
+    void removeVoiceIgnore(const std::string& playerName);
 
     // Random roll
     void randomRoll(uint32_t minRoll = 1, uint32_t maxRoll = 100);
@@ -816,6 +837,12 @@ public:
     void joinBattlefield(uint64_t battlemasterGuid, uint32_t bgTypeId,
                          uint32_t instanceId, bool asGroup);
     const std::array<BgQueueSlot, 3>& getBgQueues() const override;
+    /// Whole seconds a queue slot's invitation still has, 0 when none is running.
+    int32_t battlefieldPortExpirationSec(size_t slot) const;
+    /// A running battleground's own two timers in ms, 0 when there is no
+    /// instance - see SocialHandler's declarations for why ms.
+    int64_t battlefieldInstanceExpirationMs() const;
+    int64_t battlefieldInstanceRunTimeMs() const;
     const std::vector<AvailableBgInfo>& getAvailableBgs() const override;
 
     // BG scoreboard (aliased from handler_types.hpp)
@@ -924,7 +951,6 @@ public:
     bool hasActiveGmTicket() const { return gmTicketActive_; }
     const std::string& getGmTicketText() const { return gmTicketText_; }
     bool isGmSupportAvailable() const { return gmSupportAvailable_; }
-    float getGmTicketWaitHours() const { return gmTicketWaitHours_; }
 
     // Battlefield Manager (Wintergrasp)
     bool hasBfMgrInvite()  const { return bfMgrInvitePending_; }
@@ -2528,6 +2554,12 @@ public:
     // ---- Summon ----
     bool hasPendingSummonRequest() const { return pendingSummonRequest_; }
     const std::string& getSummonerName() const { return summonerName_; }
+    /// The cast request's guid, kept so a name that arrived after the request can
+    /// still be read - the client's binding reads its name store on every call.
+    uint64_t getSummonerGuid() const { return summonerGuid_; }
+    /// The AreaTable id of the place the summon would land the player in, as the
+    /// request named it; 0 when the popup has no destination to show.
+    uint32_t getSummonAreaId() const { return summonAreaId_; }
     float getSummonTimeoutSec() const { return summonTimeoutSec_; }
     void acceptSummon();
     /// A player gone from the world here: a group member's stats are asked
@@ -2561,6 +2593,9 @@ public:
         uint8_t  bag         = 0xFF;   // 0xFF = not set
         uint8_t  bagSlot     = 0xFF;
         bool     occupied    = false;
+        /// The offer's own words about this copy: enchant, gems, rolled
+        /// property and its seed.  See InventoryHandler::TradeSlot.
+        ItemLinkInstance inst;
     };
 
     TradeStatus getTradeStatus() const;
@@ -2573,6 +2608,9 @@ public:
     const std::array<TradeSlot, TRADE_SLOT_COUNT>& getPeerTradeSlots() const;
     uint64_t getMyTradeGold() const;
     uint64_t getPeerTradeGold() const;
+    /// The enchant spell one side's offer names, keyed by the extended packet's
+    /// own discriminator (true = this player's own offer).
+    uint32_t getTradeEnchantSpell(bool ownSide) const;
 
     void acceptTradeRequest();   // respond to incoming SMSG_TRADE_STATUS(1) with CMSG_BEGIN_TRADE
     /// Take back an acceptance, leaving the trade open.
@@ -2663,13 +2701,13 @@ public:
     std::string getCurrentLfgDungeonName() const;
     std::string getMapName(uint32_t mapId) const;
 
-    /// How many boss encounters a map has, for the "%d of %d bosses" line.
-    /// Counted from DungeonEncounter.dbc, which is the only place the total
-    /// lives - the server sends which are done and never how many there are.
-    uint32_t getDungeonEncounterCount(uint32_t mapId, uint32_t difficulty) const;
-    /// That same table, row by row and in the order the file stores it, which is
-    /// the order the raid browser walks it for a row's boss list and its tooltip
-    /// (countLfgEncounters and lfgEncounterAt).
+    /// DungeonEncounter.dbc's rows, in the order the file stores them, which is
+    /// the order the client walks them for a boss list, a tooltip and the
+    /// "%d of %d bosses" line - countLfgEncounters and lfgEncounterAt do that
+    /// walk. The total of a map/difficulty pair lives in no message: the server
+    /// says which bosses are done, as a mask, and counting the pair's rows is
+    /// the only way to a total - so the rows are what is kept rather than a
+    /// per-pair tally, which is also what makes both numbers come from one walk.
     const std::vector<LfgEncounterRow>& getDungeonEncounters() const {
         loadDungeonEncounterDbc();
         return dungeonEncounters_;
@@ -2687,6 +2725,11 @@ public:
     /// waiting on it — see SocialHandler::onLfgNameAnswered for what it does.
     void onLfgNameAnswered(uint64_t guid);
     uint32_t getLfgProposalId() const;
+    /// The proposal's dungeon and the bosses of it already done, both read off
+    /// the proposal packet itself - see SocialHandler's two fields for why they
+    /// are kept apart from getLfgDungeonId().
+    uint32_t getLfgProposalDungeonId() const;
+    uint32_t getLfgProposalEncountersDone() const;
     uint8_t  getLfgOfferedRoles() const;
     const std::vector<LfgProposalMember>& getLfgProposalMembers() const;
     const std::unordered_map<uint32_t, uint32_t>& getLfgLocks() const;
@@ -2823,6 +2866,14 @@ public:
     uint32_t getItemIdByGuid(uint64_t guid) const {
         auto it = onlineItems_.find(guid);
         return it == onlineItems_.end() ? 0u : it->second.entry;
+    }
+    /// Who made an item this client has seen: the guid off its creator field,
+    /// captured when the item's block arrived. Zero for an item it does not
+    /// know, for one the realm wrote no creator into, and in the layouts that
+    /// do not name the field.
+    uint64_t getItemCreatorByGuid(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        return it == onlineItems_.end() ? 0u : it->second.creatorGuid;
     }
     bool supportsEquipmentSets() const;
     void useEquipmentSet(uint32_t setId);
@@ -3428,8 +3479,13 @@ public:
     ///
     /// getFormattedTitle above answers for the local player, because the row
     /// it reads is a sentence with the reader's name in it. Anyone else needs
-    /// their own name in that hole, which is all this adds.
-    std::string getFormattedTitleFor(uint32_t bit, const std::string& name) const;
+    /// their own name in that hole, and their own form of the words: which of
+    /// the two the row says them in follows that unit's gender byte, exactly as
+    /// it does in the original client's GetTitleName. Pass 1 for a female unit
+    /// and anything else - 0, or 0xFF when the fields have not arrived - for the
+    /// male form, which is what the client itself falls back to.
+    std::string getFormattedTitleFor(uint32_t bit, const std::string& name,
+                                     uint8_t gender) const;
     /// Send CMSG_SET_TITLE to activate a title (bit >= 0) or clear it (bit = -1).
     void sendSetTitle(int32_t bit);
 
@@ -3744,6 +3800,22 @@ public:
     const std::unordered_map<uint32_t, uint32_t>* getInspectedPlayerAchievements(uint64_t guid) const {
         auto it = inspectedPlayerAchievements_.find(guid);
         return (it != inspectedPlayerAchievements_.end()) ? &it->second : nullptr;
+    }
+
+    /// How far the comparison unit has got in each statistic, criteria id to the
+    /// counter, from the second half of SMSG_RESPOND_INSPECT_ACHIEVEMENTS. Null
+    /// when no reply named that guid.
+    ///
+    /// The reference keeps these on one list (0x00acfdc4) holding the comparison
+    /// unit's criteria records, and a record only reaches it when the guid the
+    /// record itself names is the comparison unit's - 0x005b2cb0 tests that pair
+    /// (DAT_00c1f458 and DAT_00c1f45c) first and returns without storing when it
+    /// differs, so the packet header's guid is not what decides. Keying the store
+    /// by that guid is the same rule with the guid left visible: a lookup asks
+    /// for the comparison unit and can never pick up another player's numbers.
+    const std::unordered_map<uint32_t, uint64_t>* getComparisonCriteriaProgress(uint64_t guid) const {
+        auto it = comparisonCriteriaProgress_.find(guid);
+        return (it != comparisonCriteriaProgress_.end()) ? &it->second : nullptr;
     }
 
     /// The statistics most recently updated, newest first: the player's
@@ -4490,6 +4562,72 @@ public:
         if (it == onlineItems_.end()) return {};
         return it->second.socketEnchantIds;
     }
+    /// The six instance numbers a link for this item carries, as the client
+    /// reads them off the item **object** (0x0061e3a0; the offsets and the field
+    /// names are written out beside itemChatLink).  Empty for an item WoWee has
+    /// never had a field block for - a template link, which is what the client
+    /// builds through 0x0061e360 for its ammo square and for a unit it is
+    /// looking at rather than its own character.
+    ///
+    /// The realm's flag bit 3 is the client's own test, applied here rather than
+    /// in the formatter so that a link built from a record which never carried
+    /// flags - a guild bank slot, a mail attachment - is not gated on a bit it
+    /// was never sent.  What that flag means is not pinned; what it does is:
+    /// with it set the client writes zero for the enchant, all three gems, the
+    /// property and the seed.
+    ItemLinkInstance itemLinkInstance(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        if (it == onlineItems_.end()) return {};
+        const auto& item = it->second;
+        if (item.flags & 0x8u) return {};
+        ItemLinkInstance inst;
+        inst.enchantId        = item.permanentEnchantId;
+        inst.gems             = item.socketEnchantIds;
+        inst.randomPropertyId = item.randomPropertyId;
+        inst.seed             = item.suffixFactor;   // ITEM_FIELD_PROPERTY_SEED
+        return inst;
+    }
+    /// The row for one slot of another player's gear, out of the visible-item
+    /// fields alone: 0x006de360's **fallback** record, which the client builds
+    /// whenever its inspected-record cache is not for the unit being asked about
+    /// - which is every player in range who is not the one in the inspect window.
+    /// So a link, a tooltip and a model for a passing player are answered from
+    /// these fields with no inspect request at all, and the two numbers the pair
+    /// can name are the entry and the permanent enchant; the gems, the property
+    /// and the seed stay zero because the fields do not carry them (see
+    /// visible_item_fields.hpp for the pair and the record layout).
+    ///
+    /// False for a slot the fields say is empty, which is what the client's own
+    /// callers test - `record+0x08 != 0` - before they read anything else.
+    /// Inspected gear is the richer row and asks for
+    /// inspectedPlayerItemInstancesRef() instead; the two are never mixed, just
+    /// as the client uses one record or the other.
+    bool visibleItemRecord(uint64_t guid, int slot, uint32_t& entry,
+                           ItemLinkInstance& inst) const {
+        if (slot < 0 || slot >= 19) return false;
+        const auto it = otherPlayerVisibleItemEntries_.find(guid);
+        if (it == otherPlayerVisibleItemEntries_.end()) return false;
+        entry = visibleItemEntryField(it->second[static_cast<size_t>(slot)]);
+        if (entry == 0) return false;
+        ItemLinkInstance row;
+        const auto eit = otherPlayerVisibleItemEnchants_.find(guid);
+        if (eit != otherPlayerVisibleItemEnchants_.end()) {
+            row.enchantId = visibleItemEnchantField(eit->second[static_cast<size_t>(slot)]);
+        }
+        inst = row;
+        return true;
+    }
+    /// The inspected unit's row for a slot: the entry the inspect stream named
+    /// and the instance numbers that came in the same block.  Empty entry when
+    /// nothing has been inspected for that unit.
+    uint32_t inspectedItemRecord(uint64_t guid, int slot, ItemLinkInstance& inst) const {
+        if (slot < 0 || slot >= 19) return 0;
+        const auto it = inspectedPlayerItemEntries_.find(guid);
+        if (it == inspectedPlayerItemEntries_.end()) return 0;
+        const auto instIt = inspectedPlayerItemInstances_.find(guid);
+        if (instIt != inspectedPlayerItemInstances_.end()) inst = instIt->second[static_cast<size_t>(slot)];
+        return it->second[static_cast<size_t>(slot)];
+    }
     uint64_t getVendorGuid() const;
 
     /**
@@ -4628,8 +4766,10 @@ public:
     auto& onlineEquipDirtyRef() { return onlineEquipDirty_; }
     auto& onlineItemsRef() { return onlineItems_; }
     auto& inspectedPlayerItemEntriesRef() { return inspectedPlayerItemEntries_; }
+    auto& inspectedPlayerItemInstancesRef() { return inspectedPlayerItemInstances_; }
     auto& otherPlayerVisibleDirtyRef() { return otherPlayerVisibleDirty_; }
     auto& otherPlayerVisibleItemEntriesRef() { return otherPlayerVisibleItemEntries_; }
+    auto& otherPlayerVisibleItemEnchantsRef() { return otherPlayerVisibleItemEnchants_; }
     auto& otherPlayerMoveTimeMsRef() { return otherPlayerMoveTimeMs_; }
     auto& pendingItemPushNotifsRef() { return pendingItemPushNotifs_; }
     auto& pendingItemQueriesRef() { return pendingItemQueries_; }
@@ -4653,6 +4793,15 @@ public:
         return unit == petComboTarget_ ? petComboPoints_ : 0;
     }
     auto& isRestingRef() { return isResting_; }
+    /// The account block of the last SMSG_AUTH_RESPONSE, for the three
+    /// bindings that read it (GetBillingTimeRemaining, GetBillingPlan and
+    /// GetBillingTimeRested). Empty - all zero, `present` false - until a
+    /// response carried one.
+    auto& accountStateRef() { return accountState_; }
+    const AccountState& accountState() const { return accountState_; }
+    /// The PvP flag's decay deadline (0 = none), the client's object+0x1940.
+    auto& pvpFlagDeadlineMsRef() { return pvpFlagDeadlineMs_; }
+    int64_t pvpFlagDeadlineMs() const { return pvpFlagDeadlineMs_; }
     auto& playerArenaPointsRef() { return playerArenaPoints_; }
     auto& playerArmorRatingRef() { return playerArmorRating_; }
     auto& playerBlockPctRef() { return playerBlockPct_; }
@@ -4789,6 +4938,7 @@ public:
     auto& pendingSummonRequestRef() { return pendingSummonRequest_; }
     auto& summonerGuidRef() { return summonerGuid_; }
     auto& summonerNameRef() { return summonerName_; }
+    auto& summonAreaIdRef() { return summonAreaId_; }
     auto& summonTimeoutSecRef() { return summonTimeoutSec_; }
     auto& bfMgrInvitePendingRef() { return bfMgrInvitePending_; }
 
@@ -4940,7 +5090,13 @@ public:
     void rebuildOnlineInventory();
     void maybeDetectVisibleItemLayout();
     void updateOtherPlayerVisibleItems(uint64_t guid, const FlatFieldMap& fields);
-    void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries);
+    /// Inspected gear, cached by slot: the entries and - where the realm sent
+    /// them in the inspect block - what each of those items is wearing.  Rows
+    /// without instances are the older shape (Classic's SMSG_INSPECT, and the
+    /// cores whose payload is fixed-size records), which is why the second
+    /// argument can be left out.
+    void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries,
+                                       const std::array<ItemLinkInstance, 19>& instances = {});
     void detectInventorySlotBases(const FlatFieldMap& fields);
     bool applyInventoryFields(const FlatFieldMap& fields, bool initial = false);
     void extractContainerFields(uint64_t containerGuid, const FlatFieldMap& fields);
@@ -5228,6 +5384,10 @@ public:
         uint32_t flags = 0;              // ITEM_FIELD_FLAGS (bit 0x1 = soulbound)
         int32_t  randomPropertyId = 0;   // ITEM_FIELD_RANDOM_PROPERTIES_ID (signed)
         uint32_t suffixFactor = 0;       // ITEM_FIELD_PROPERTY_SEED (random-suffix stat scale)
+        /// ITEM_FIELD_CREATOR: who made the item, as a guid. Zero when the realm
+        /// wrote no creator - which is most items - and in the layouts older than
+        /// WotLK, which do not name the field.
+        uint64_t creatorGuid = 0;
     };
     bool isHostileFaction(uint32_t factionTemplateId) const {
         if (const int atWar = factionAtWarLive(factionTemplateId); atWar >= 0) return atWar == 1;
@@ -5668,11 +5828,21 @@ private:
     int visibleItemStride_ = 2;
     bool visibleItemLayoutVerified_ = false;  // true once heuristic confirms/overrides default
     std::unordered_map<uint64_t, std::array<uint32_t, 19>> otherPlayerVisibleItemEntries_;
+    // The dword beside each entry - PLAYER_VISIBLE_ITEM_n_ENCHANTMENT, read at
+    // base + slot*2 + 1.  0x006de360 splits it in half: the low halfword is the
+    // permanent enchant the item link carries second, the high halfword the
+    // temporary one the record keeps at +0x10.
+    std::unordered_map<uint64_t, std::array<uint32_t, 19>> otherPlayerVisibleItemEnchants_;
     std::unordered_set<uint64_t> otherPlayerVisibleDirty_;
     std::unordered_map<uint64_t, uint32_t> otherPlayerMoveTimeMs_;
 
     // Inspect fallback (when visible item fields are missing/unreliable)
     std::unordered_map<uint64_t, std::array<uint32_t, 19>> inspectedPlayerItemEntries_;
+    // What that gear is wearing, in the same nineteen slots.  The inspect
+    // stream carries it (readInspectEnchantments) and 0x006cdf30 writes it into
+    // the same record the visible-item fields are read into, so the numbers are
+    // not an addition to the entry but part of the one row.
+    std::unordered_map<uint64_t, std::array<ItemLinkInstance, 19>> inspectedPlayerItemInstances_;
     std::unordered_set<uint64_t> pendingAutoInspect_;
     float inspectRateLimit_ = 0.0f;
 
@@ -5858,6 +6028,7 @@ private:
     bool        pendingSummonRequest_ = false;
     uint64_t    summonerGuid_         = 0;
     std::string summonerName_;
+    uint32_t    summonAreaId_         = 0;
     float       summonTimeoutSec_     = 0.0f;
 
     // Who results (last SMSG_WHO response)
@@ -6065,8 +6236,23 @@ private:
 
     // Title cache: maps titleBit → title string (lazy-loaded from CharTitles.dbc)
     // The strings use "%s" as a player-name placeholder (e.g. "Commander %s", "%s the Explorer").
-    mutable std::unordered_map<uint32_t, std::string> titleNameCache_;
-    mutable std::unordered_map<uint32_t, std::string> titleFormatById_;  // CharTitles id -> format
+    //
+    // WotLK's row holds each title twice, and both are kept: the male form and
+    // the female one. Which is said is decided per unit by its gender byte, the
+    // same test the original client's GetTitleName makes. An expansion whose
+    // table names only one column gets that one in both slots.
+    struct TitleForms {
+        std::string male;
+        std::string female;
+    };
+    /// The form to say for a unit of this gender: 1 is female, and anything
+    /// else - including 0xFF, an answer not read from anywhere - is male.
+    static const std::string& titleForm(const TitleForms& forms, uint8_t gender);
+    /// A unit's gender byte off its own fields, or 0xFF when it is not a player
+    /// or its fields have not arrived.
+    [[nodiscard]] uint8_t titleGenderOf(uint64_t guid) const;
+    mutable std::unordered_map<uint32_t, TitleForms> titleNameCache_;
+    mutable std::unordered_map<uint32_t, TitleForms> titleFormatById_;  // CharTitles id -> forms
     mutable bool titleNameCacheLoaded_ = false;
     // Combat game tables for the stat flyout: per-class base crit, and the
     // per-class-per-level Agility ratio (11 classes × 100 levels).
@@ -6162,6 +6348,9 @@ private:
     // Per-player achievement data from SMSG_RESPOND_INSPECT_ACHIEVEMENTS
     // Key: inspected player's GUID; value: set of earned achievement IDs
     std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>> inspectedPlayerAchievements_;
+    // The same reply's criteria records, keyed by the guid each record names:
+    // see getComparisonCriteriaProgress.
+    std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint64_t>> comparisonCriteriaProgress_;
     LatestCriteriaList latestUpdatedStats_;
     LatestCriteriaList latestUpdatedComparisonStats_;
     /// A criteria record as 0x005b2520 takes it: a statistic not flagged
@@ -6191,11 +6380,8 @@ private:
     mutable std::unordered_map<uint32_t, uint32_t> mapInstanceTypeCache_;
     mutable std::unordered_map<uint32_t, uint32_t> mapFlagsCache_;
     mutable bool mapNameCacheLoaded_ = false;
-    // (mapId, difficulty) -> encounter count, and the same map with no
-    // difficulty-specific rows under a difficulty of 0xFFFFFFFF.
-    mutable std::unordered_map<uint64_t, uint32_t> dungeonEncounterCounts_;
-    /// The same file's rows, kept because the raid browser needs the bosses
-    /// themselves and not just how many of a map/difficulty pair there are.
+    /// DungeonEncounter.dbc's rows: the bosses themselves, and the walk the
+    /// counts come from.
     mutable std::vector<LfgEncounterRow> dungeonEncounters_;
     mutable bool dungeonEncounterCacheLoaded_ = false;
     void loadDungeonEncounterDbc() const;
@@ -6256,6 +6442,14 @@ private:
     uint32_t playerNextLevelXp_ = 0;
     uint32_t playerRestedXp_ = 0;
     bool isResting_ = false;
+    /// The account block SMSG_AUTH_RESPONSE sent with the result, which is
+    /// what the billing bindings answer from - see AccountState.
+    AccountState accountState_;
+    /// When the realm's PvP flag stops decaying, in app-clock milliseconds, or
+    /// zero for "no timer running" - the client keeps this per object at
+    /// object+0x1940 and only the local player's is ever read. See the write in
+    /// the PLAYER_FLAGS watch (0x006de750) and the answer in GetPVPTimer.
+    int64_t pvpFlagDeadlineMs_ = 0;
     uint32_t serverPlayerLevel_ = 1;
 
     // ---- Server time tracking (for deterministic celestial/sky systems) ----
@@ -6503,7 +6697,6 @@ private:
     // ---- GM Ticket state (SMSG_GMTICKET_GETTICKET / SMSG_GMTICKET_SYSTEMSTATUS) ----
     bool        gmTicketActive_    = false;  ///< True when an open ticket exists on the server
     std::string gmTicketText_;               ///< Text of the open ticket (from SMSG_GMTICKET_GETTICKET)
-    float       gmTicketWaitHours_ = 0.0f;  ///< Server-estimated wait time in hours
     bool        gmSupportAvailable_ = true; ///< GM support system online (SMSG_GMTICKET_SYSTEMSTATUS)
 
     // ---- Battlefield Manager state (WotLK Wintergrasp / outdoor battlefields) ----
@@ -6583,6 +6776,17 @@ private:
                              const std::vector<std::string>& args = {});
     /// The whole calendar, as of the server's last answer to a request for it.
     CalendarData calendarData_;
+    /// The reminders armed against that calendar, re-armed by every calendar
+    /// packet that lands. The client keeps one scheduled callback per event
+    /// record (its handle at `+0xc0`, armed by 0x005b79b0); these are the same
+    /// set, recomputed, rather than a timer list.
+    std::vector<CalendarAlarm> calendarAlarms_;
+    /// Recompute them off `calendarData_` as it now stands, against the game
+    /// clock (0x005b79b0, which every path that stores an event record calls).
+    void armCalendarAlarms();
+    /// Say the reminders that come due at `now`, and forget every one whose
+    /// moment has gone past - whether it was said or not.
+    void sayCalendarAlarms(const WowDate& now);
     /// One event in full, as of the last one opened.
     CalendarEventDetail calendarEventDetail_;
 

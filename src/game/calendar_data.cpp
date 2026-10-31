@@ -343,12 +343,16 @@ const char* calendarTypeForFlags(uint32_t flags) {
     return "PLAYER";
 }
 
+/// Minutes since an arbitrary epoch, for ordering two dates. Whole minutes, so
+/// two dates inside the same minute compare equal - which is what the
+/// fifteen-minute reminder leans on.
+int64_t calendarMinuteKey(const WowDate& date) {
+    return dayNumber(date.fullYear(), date.month, date.day) * 1440 + date.hour * 60 + date.minute;
+}
+
 namespace {
 
-/// Minutes since an arbitrary epoch, for ordering two dates.
-int64_t minuteKey(const WowDate& d) {
-    return dayNumber(d.fullYear(), d.month, d.day) * 1440 + d.hour * 60 + d.minute;
-}
+inline int64_t minuteKey(const WowDate& d) { return calendarMinuteKey(d); }
 
 CalendarEvent* findEvent(CalendarData& cal, uint64_t eventId) {
     for (auto& ev : cal.events)
@@ -1130,6 +1134,32 @@ CalendarInviteState calendarInviteState(const CalendarData& data, const Calendar
         (ev.flags & calendar_flag::kInvitesLocked) == 0)
         s.flags |= 1u;
     return s;
+}
+
+std::vector<CalendarAlarm> calendarArmAlarms(const CalendarData& data, uint64_t player,
+                                             const WowDate* now) {
+    using namespace calendar_status;
+    std::vector<CalendarAlarm> arms;
+    if (!now) return arms;   // no game clock: the client has nothing to arm against either
+    for (const auto& ev : data.events) {
+        // The record's own status byte (+0xa8), which is what the client looks
+        // at again when the alarm goes off - not at parse time.
+        const CalendarInviteState st = calendarInviteState(data, ev, player, now);
+        if (!st.kept) continue;
+        if (st.status != kAccepted && st.status != kConfirmed) continue;
+        // An event already begun is not armed: its moment can never come round
+        // again, and the client's scheduler matches the moment rather than
+        // passing it, so it would simply never fire.
+        if (calendarTimePassed(ev.eventTime, now)) continue;
+        CalendarAlarm alarm;
+        alarm.eventId = ev.eventId;
+        alarm.title = ev.title;
+        alarm.eventTime = ev.eventTime;
+        // 0x005b79b0: the record's time, less the fifteen minutes it shifts by.
+        alarm.at = addMinutes(ev.eventTime, -15);
+        arms.push_back(std::move(alarm));
+    }
+    return arms;
 }
 
 bool calendarDateAddable(const WowDate& date, const WowDate* now) {

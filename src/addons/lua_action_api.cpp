@@ -2,6 +2,10 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "game/item_text.hpp"
 #include "game/equip_slot_fit.hpp"
+// For the cursor's own sounds: the coordinator reaches the manager that asks a
+// SoundEntries row by name, which is how the client asks them.
+#include "audio/audio_coordinator.hpp"
+#include "audio/ui_sound_manager.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -159,12 +163,42 @@ static void clearCursorItem(lua_State* L);
 static const game::EquipmentSetInfo* equipmentSetById(game::GameHandler* gh, uint32_t setId);
 static std::string equipmentSetIcon(const game::EquipmentSetInfo* set);
 
+/// What the cursor sounds like going up and going down.
+///
+/// The client asks for both by name, and asks them in the routine that moves
+/// the cursor rather than in one place it all passes through: every pickup
+/// plays INTERFACESOUND_CURSORGRABOBJECT just after it sets the cursor kind
+/// (0x00520960:426, 0x00520a80:505, 0x00520be0:527, 0x00520c60:566,
+/// 0x00520dc0:614), and ClearCursor plays the sound of the kind it is putting
+/// down in its switch over that kind (0x00519280: the item kinds at :7790 and
+/// the shared tail at :7818 ask INTERFACESOUND_CURSORDROPOBJECT, while the
+/// money cursor asks LOOTWINDOWCOINSOUND at :7771 instead - the same row its
+/// pickup asks at 00520000.c:360, the coin being a different sound on both
+/// sides; the kind that hands an item back to the world, 1, plays nothing).
+/// All three names are rows of SoundEntries.dbc, which is how they are asked
+/// here too.
+static void askCursorSound(lua_State* L, CursorType type, bool pickedUp) {
+    // Silent while the interface is building itself, as PlaySound is.
+    if (LuaEngine::uiSoundsSuppressed()) return;
+    auto* svc = getLuaServices(L);
+    auto* ac = svc ? svc->audioCoordinator : nullptr;
+    auto* sfx = ac ? ac->getUiSoundManager() : nullptr;
+    if (!sfx) return;
+    if (type == CursorType::MONEY) {
+        sfx->playByName("LOOTWINDOWCOINSOUND");
+        return;
+    }
+    sfx->playByName(pickedUp ? "INTERFACESOUND_CURSORGRABOBJECT"
+                             : "INTERFACESOUND_CURSORDROPOBJECT");
+}
+
 static void setCursorType(lua_State* L, CursorType type) {
     if (s_cursorType == type) return;
     // Putting anything down forgets the guild bank split. It rides on the
     // cursor between the pickup and the drop, and a leftover would be applied
     // to the next withdrawal - a stack the player never asked to divide.
     if (type != CursorType::GUILDBANK) s_cursorSplit = 0;
+    const CursorType prevType = s_cursorType;
     const bool wasCarrying = (s_cursorType != CursorType::NONE);
     const bool nowCarrying = (type != CursorType::NONE);
     s_cursorType = type;
@@ -172,7 +206,18 @@ static void setCursorType(lua_State* L, CursorType type) {
     auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
     if (!engine) return;
+    // Which side of the announcement the sound sits on follows the client:
+    // ClearCursor plays the drop inside its switch and raises CURSOR_UPDATE
+    // (event 275) at its tail afterwards (00510000.c:7768-7830), while a
+    // pickup's grab comes after the ClearCursor call that made the
+    // announcement (00520000.c:523-530). A carried kind changing straight to
+    // another carried kind - clicking an action button while a bag item is on
+    // the cursor - is the client's ClearCursor followed by a pickup, so it
+    // plays both, the old kind's drop before the announcement and the new
+    // kind's grab after it.
+    if (wasCarrying) askCursorSound(L, prevType, false);
     engine->fireEvent("CURSOR_UPDATE", {});
+    if (nowCarrying) askCursorSound(L, type, true);
     // Picking something up shows the empty slots of the action bars, so there
     // is somewhere visible to drop it; putting it down hides them again. Every
     // action button registers for both and neither was ever fired, so dragging
@@ -204,6 +249,42 @@ static std::optional<PetActionRef> petActionRef(game::GameHandler* gh, int slot)
     return PetActionRef{static_cast<uint32_t>(i), gh->getPetActionSlot(i)};
 }
 using game::pet::petSlotSpell;
+/// Whether this pet belongs to a hunter (0x0071b630).
+///
+/// Asked of the pet, never of the player: the pet's own UNIT_FIELD_PETNUMBER has
+/// to be non-zero - that is what makes a pet a pet rather than a guardian to the
+/// client - and the unit its UNIT_FIELD_CREATEDBY pair names has to be a player
+/// reading class 3 in byte 1 of UNIT_FIELD_BYTES_0. So a warlock's voidwalker,
+/// whose master is no hunter, answers false, and so does a pet whose creator this
+/// client never got a record for: a failed lookup is false, not unknown.
+///
+/// Shared because more than one binding asks it - HasPetUI directly,
+/// GetPetHappiness through the happiness row lookup at 0x0071f390, which is the
+/// same predicate again, and GetUnitHealthModifier/GetUnitPowerModifier, whose
+/// answer of exactly one is this test and nothing else - and the happiness icon
+/// has to agree with what HasPetUI said about it. Declared in
+/// addons/lua_api_helpers.hpp, which is where the other cross-file pet answers
+/// live; the definition stays here, beside the pet bindings that started it.
+bool hunterPetOf(game::GameHandler* gh, const game::Unit* pet) {
+    if (!gh || !pet) return false;
+    const uint16_t number = game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER);
+    if (number == 0xFFFF || pet->getField(number) == 0) return false;
+    // The creator guid's high half lives one index above the low half.
+    const uint16_t by = game::fieldIndex(game::UF::UNIT_FIELD_CREATEDBY);
+    if (by == 0xFFFF) return false;
+    const uint64_t creator =
+        pet->getField(by)
+        | (static_cast<uint64_t>(pet->getField(static_cast<uint16_t>(by + 1))) << 32);
+    uint8_t classId = 0;
+    if (auto owner = gh->getEntityManager().getEntity(creator)) {
+        const uint32_t bytes0 =
+            owner->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
+        classId = static_cast<uint8_t>((bytes0 >> 8) & 0xFF);
+    }
+    if (classId == 0 && creator == gh->getPlayerGuid()) classId = gh->getPlayerClass();
+    if (classId == 0) classId = gh->lookupPlayerClass(creator);
+    return classId == 3;   // hunter
+}
 /// The global naming a pet command's or stance's icon (0x005a97f0:
 /// "PET_%s_TEXTURE"), nothing for anything else.
 static const char* petTokenTexture(uint32_t packed) {
@@ -825,10 +906,11 @@ static int lua_IsCurrentAction(lua_State* L) {
     return 1;
 }
 
-// IsUsableAction(slot) → usable, notEnoughMana
+// IsUsableAction(slot) → (1, nil) usable, (nil, 1) its power is short,
+// (nil, nil) everything else. Never a pair of no's - see the shapes below.
 static int lua_IsUsableAction(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushboolean(L, 0); lua_pushboolean(L, 0); return 2; }
+    if (!gh) { lua_pushnil(L); lua_pushnil(L); return 2; }
     int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
     if (const auto ref = petActionRef(gh, slot)) {
         // 0x005a9e20 for a pet's slot: its spell is cast by the pet
@@ -843,8 +925,12 @@ static int lua_IsUsableAction(lua_State* L) {
             if (!pet) {
                 usable = false;
             } else {
-                const auto data = gh->getSpellData(spell);
-                if (data.manaCost > 0 && gh->unitPower(*pet, data.powerType) < static_cast<int32_t>(data.manaCost)) {
+                auto* sh = gh->getSpellHandler();
+                if (sh && !sh->enoughPower(spell, *pet)) {
+                    // The same test, one answer: the pet affords the spell of
+                    // its own power, and enoughPower() is what spells 0x008017e0
+                    // in both directions (the pet's runic energy, a vehicle's
+                    // steam, health under a -2 cost).
                     usable = false;
                     noPower = true;
                 }
@@ -856,8 +942,10 @@ static int lua_IsUsableAction(lua_State* L) {
     }
     const auto& bar = gh->getActionBar();
     if (slot < 0 || slot >= static_cast<int>(bar.size()) || bar[slot].isEmpty()) {
-        lua_pushboolean(L, 0);
-        lua_pushboolean(L, 0);
+        // The client's third shape: its slot test runs to 144 and an empty or
+        // out-of-range slot reads (nil, nil), never a pair of no's.
+        lua_pushnil(L);
+        lua_pushnil(L);
         return 2;
     }
     const auto& action = bar[slot];
@@ -869,27 +957,50 @@ static int lua_IsUsableAction(lua_State* L) {
     // Folding it in here painted the icon dark grey for the whole of every
     // cooldown, because ActionButton_UpdateUsable has three branches and
     // "not usable, mana is fine" is the one that means unusable.
+    // The client answers this one without computing anything at all: 0x005a7e60
+    // reads two precomputed per-slot arrays - DAT_00c1ded8 (the slot's action is
+    // there to be used) and DAT_00c1dc98 (its power is short) - over slots 1 to
+    // 144, and turns the pair into exactly three shapes: usable and affordable
+    // (1, nil), affordable-but-out-of-power (nil, 1), and everything else - an
+    // empty slot, a slot number off the bar, an action that is not there to be
+    // used - (nil, nil). No shape is (false, false), and combo points are not
+    // among the tests: they gate the *cast* (0x0080b5d0 on AttributesEx
+    // 0x100000|0x400000 against 0x00513920's per-target store), which is why a
+    // finisher with no points on its target sits bright on the client's bar and
+    // only fails when pressed.
     bool usable = true;
-    bool noMana = false;
+    bool noPower = false;
     if (action.type == game::ActionBarSlot::SPELL) {
         usable = gh->getKnownSpells().count(action.id) > 0;
-        // Check power cost
         if (usable && action.id != 0) {
-            auto spellData = gh->getSpellData(action.id);
-            if (spellData.manaCost > 0) {
-                auto pe = gh->getEntityManager().getEntity(gh->getPlayerGuid());
-                if (pe) {
-                    auto* unit = dynamic_cast<game::Unit*>(pe.get());
-                    if (unit && gh->unitPower(*unit, unit->getPowerType()) < static_cast<int32_t>(spellData.manaCost)) {
-                        noMana = true;
-                        usable = false;
-                    }
-                }
+            const auto pe = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+            const auto* unit = pe ? dynamic_cast<game::Unit*>(pe.get()) : nullptr;
+            // The client has one cost test, 0x008017e0, and it is the same one
+            // behind the button and behind the flags the button is drawn from.
+            // Asking it here rather than writing a second copy of it matters:
+            // the flags ACTIONBAR_UPDATE_USABLE announces are kept by
+            // enoughPower(), so a hand-rolled manaCost compare here could call
+            // an action affordable while the rescan that repaints the icon
+            // called it short - and that test reads the power type the *spell*
+            // names (0x0071c2e0), not the caster's current one, and takes the
+            // cost after its modifiers, not the template's number.
+            auto* sh = gh->getSpellHandler();
+            if (unit && sh && !sh->enoughPower(action.id, *unit)) {
+                noPower = true;
+                usable = false;
             }
         }
     }
-    lua_pushboolean(L, usable ? 1 : 0);
-    lua_pushboolean(L, noMana ? 1 : 0);
+    if (usable) {
+        lua_pushnumber(L, 1.0);
+        lua_pushnil(L);
+    } else if (noPower) {
+        lua_pushnil(L);
+        lua_pushnumber(L, 1.0);
+    } else {
+        lua_pushnil(L);
+        lua_pushnil(L);
+    }
     return 2;
 }
 
@@ -2453,38 +2564,113 @@ static int lua_SetModifiedClick(lua_State* L) {
 // live here. The peer's side is read-only: a trade slot of theirs can be looked
 // at and not touched, so clicking one does nothing rather than pretending.
 
-static int pushTradeSlot(lua_State* L, game::GameHandler* gh,
-                         const game::GameHandler::TradeSlot& slot) {
-    if (!slot.occupied || slot.itemId == 0) { return luaReturnNil(L); }
+// The two info bindings answer a fixed shape, and the shapes are not the same
+// length.  0x00587eb0 (this player's side) answers five values - name, icon,
+// count, then a number, then the enchant slot's spell name - and 0x00587c60
+// (the partner's side) answers six, with the client's usability answer between
+// the number and the enchantment.  FrameXML reads that fourth of ours as
+// isUsable on one half of the window and quality on the other
+// (tradeframe.lua:68 and :96), but it is the same value both times: the item
+// record's quality, which the client reads out of its record cache at +0x14
+// through a gate at +0x28 and answers -1 when the gate says there is none.  The
+// container binding 0x005d7a90 reads the same pair for the value FrameXML calls
+// quality.  Neither half has a usability flag in that place at all.
+static void pushTradeItemLead(lua_State* L, game::GameHandler* gh,
+                              const game::GameHandler::TradeSlot& slot) {
     const auto* info = gh->getItemInfo(slot.itemId);
-    lua_pushstring(L, info ? info->name.c_str() : "");
+    // The name the client shows is the record's with the rolled property beside
+    // it: 0x00706d70(buf, size, entry, propertyId) is what both legs call, and
+    // the property it takes is the row's own, so an item traded with "of the
+    // Bear" on it is named with those words - and coloured, in the link, by the
+    // record's quality rather than by anything the roll would suggest.
+    const std::string name = info
+        ? gh->itemNameWithProperty(info->name, slot.inst.randomPropertyId)
+        : std::string{};
+    lua_pushstring(L, name.c_str());
     lua_pushstring(L, gh->getItemIconPath(
         info && info->displayInfoId ? info->displayInfoId : slot.displayId).c_str());
     lua_pushnumber(L, slot.stackCount);
-    lua_pushboolean(L, 1);       // isUsable
-    lua_pushnil(L);              // enchantment: not carried by the trade packet
-    return 5;
+    lua_pushnumber(L, info ? static_cast<double>(info->quality) : -1.0);
+}
+
+// The enchant slot's text, which only ever answers for the seventh slot.  Both
+// legs ask for the *other* side's spell, and the swap is the client's rather
+// than a slip in one call site: 0x00704680 writes the packet's side byte
+// straight into 0xca0ff0 + side*4, and side 0 is the half whose slots the client
+// keeps item objects for (the parser's own-side branch, `local_5 == 0`), while
+// 0x00587eb0 reads back index 1 and 0x00587c60 index 0.  The watcher agrees with
+// the readers: 0x00586dc0 compares 0x00703c50(0) against 0xbfa668 and fires
+// TRADE_TARGET_ITEM_CHANGED for slot 7 when it moves, and 0x00703c50(1) against
+// 0xbfa66c for TRADE_PLAYER_ITEM_CHANGED.  Each half of the window names the
+// enchantment the other half offered.
+static void pushTradeEnchantment(lua_State* L, game::GameHandler* gh, bool ownSide) {
+    const uint32_t spell = gh->getTradeEnchantSpell(!ownSide);
+    if (spell == 0) { lua_pushnil(L); return; }
+    // A spell id with no record answers nothing, which is what 0x004cfd20
+    // returning nil leaves the binding to push.
+    const std::string& name = gh->getSpellName(spell);
+    if (name.empty()) { lua_pushnil(L); return; }
+    lua_pushstring(L, name.c_str());
+}
+
+// An empty slot - and a bad index, which falls off the end of the client's
+// arrays into the same tail - answers its own empty shape and not a lone nil:
+// nil, nil, 0, 0 and nil, or nil, nil, 0, 0, nil, nil on the partner's side.
+static int pushTradeItemEmpty(lua_State* L, bool partnerSide) {
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
+    lua_pushnil(L);
+    if (partnerSide) lua_pushnil(L);
+    return partnerSide ? 6 : 5;
 }
 
 static int lua_GetTradePlayerItemInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
+    if (!gh) return 0;
     const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) { return luaReturnNil(L); }
-    return pushTradeSlot(L, gh, gh->getMyTradeSlots()[i - 1]);
+    if (i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) return pushTradeItemEmpty(L, false);
+    const auto& slot = gh->getMyTradeSlots()[i - 1];
+    if (!slot.occupied || slot.itemId == 0) return pushTradeItemEmpty(L, false);
+    pushTradeItemLead(L, gh, slot);
+    if (i - 1 == game::GameHandler::TRADE_SLOT_NONTRADED) pushTradeEnchantment(L, gh, true);
+    else lua_pushnil(L);
+    return 5;
 }
 
 static int lua_GetTradeTargetItemInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
+    if (!gh) return 0;
     const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) { return luaReturnNil(L); }
-    return pushTradeSlot(L, gh, gh->getPeerTradeSlots()[i - 1]);
+    if (i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) return pushTradeItemEmpty(L, true);
+    const auto& slot = gh->getPeerTradeSlots()[i - 1];
+    if (!slot.occupied || slot.itemId == 0) return pushTradeItemEmpty(L, true);
+    pushTradeItemLead(L, gh, slot);
+    // The partner's half is the only one with a usability answer, and it is nil
+    // and not false when the item fails - 0x006dc3f0 measures the record's
+    // required level, class and race against this player and 0x00587c60 pushes
+    // nothing when it says no.  WoWee has no such measure for an item it was
+    // never offered, so it keeps answering the usable answer, which is what the
+    // client gives for an item that meets its requirements.
+    lua_pushboolean(L, 1);
+    if (i - 1 == game::GameHandler::TRADE_SLOT_NONTRADED) pushTradeEnchantment(L, gh, false);
+    else lua_pushnil(L);
+    return 6;
 }
 
 static int pushTradeLink(lua_State* L, game::GameHandler* gh,
                          const game::GameHandler::TradeSlot& slot) {
     const auto* info = (gh && slot.occupied) ? gh->getItemInfo(slot.itemId) : nullptr;
     if (!info || info->name.empty()) { return luaReturnNil(L); }
-    const std::string link = game::itemChatLink(slot.itemId, static_cast<uint32_t>(info->quality), info->name);
+    // The row's own instance numbers, not an empty set: 0x0061e290 is handed
+    // the enchant, the three gems, the property and the seed from the trade row
+    // (0xca0b80 + 0x0c, 0x10, 0x40 and 0x3c), and the tooltip the trade window
+    // asks for is built from this link.  A traded item that was enchanted,
+    // socketed or rolled would otherwise read as its plain template.
+    const std::string name = gh->itemNameWithProperty(info->name, slot.inst.randomPropertyId);
+    const std::string link = game::itemChatLink(slot.itemId, static_cast<uint32_t>(info->quality),
+                                                name, slot.inst, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());
     return 1;
 }
@@ -2503,12 +2689,20 @@ static int lua_GetTradeTargetItemLink(lua_State* L) {
     return pushTradeLink(L, gh, gh->getPeerTradeSlots()[i - 1]);
 }
 
-// ClickTradeButton(slot) - put what is held into the slot, or take back what is
-// already there when nothing is held
+// ClickTradeButton(slot [, rightButton]) - put what is held into the slot, or
+// take back what is already there when nothing is held
 static int lua_ClickTradeButton(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
     if (!gh || i < 1 || i > game::GameHandler::TRADE_SLOT_COUNT) return 0;
+    // The client answers this one click with two different requests (0x005879d0),
+    // and which one it sends is decided by the second argument: tradeframe.xml's
+    // OnMouseUp handler hands it `button == "RightButton"`, and staticpopup.lua
+    // hands the enchant slot a true.  The test there is on the value and not on
+    // whether anything was passed (0x0084e0b0 answers 0 for an absent argument and
+    // for a false one alike), so a left click through that same handler takes the
+    // first leg, which is what makes this a boolean and not an argument count.
+    const bool rightButton = lua_toboolean(L, 2) != 0;
     uint8_t srcBag = 0, srcSlot = 0;
     // Through the same translation as every other send. This passed FrameXML's
     // own numbering straight to the server - bags counted 0 to 4 and slots from
@@ -2516,11 +2710,39 @@ static int lua_ClickTradeButton(lua_State* L) {
     // 255 with an absolute slot, or a worn bag's equipment slot with a 0-based
     // index inside it. The server finds no item at the slot it was given and
     // answers TRADE_STATUS_TRADE_CANCELED, so offering an item ended the trade.
+    if (rightButton) {
+        // A right click takes the offered item back and asks nothing of what the
+        // cursor holds: the second leg reads the slot, clears it (0x007041a0,
+        // opcode 0x11e with the slot byte) and puts the item away, and never
+        // reaches the code that would place the held item.  Which of the two
+        // requests went out was all this got wrong - it offered what was held,
+        // so right-clicking a filled slot added to the trade instead of taking
+        // the slot's occupant back.  It asked whether the slot holds something
+        // first, and that gate is deliberately not reproduced: this client's own
+        // seven slots are filled from the server's extended update, so a slot it
+        // had not heard of yet would answer "nothing to take" and the take-back
+        // would never be sent at all.
+        //
+        // What the leg also does locally - the item leaving its row on the table
+        // and the client's own marker on it going away (0x00707020) - is the
+        // server's move to make here, and there is no core to compare against:
+        // WOWEE_SERVER_SRC is unset, so which core answers which verb stays
+        // unobserved either way.
+        gh->clearTradeItem(static_cast<uint8_t>(i - 1));
+        return 0;
+    }
     if (s_cursorType == CursorType::ITEM && s_cursorBag >= 0 &&
         cursorWireSlot(srcBag, srcSlot)) {
         gh->setTradeItem(static_cast<uint8_t>(i - 1), srcBag, srcSlot);
         clearCursorItem(L);
     } else {
+        // The first leg is more than the send: whatever the row held goes onto
+        // the cursor afterwards (0x00520770, handed the row's previous item), and
+        // on a swap the displaced item rides the cursor as well instead of going
+        // back into the bag it came from.  Not reproduced - a trade row has no
+        // place in this client's cursor numbering, and nothing behind it sends
+        // such an item anywhere once it is let go, so the item would ride the
+        // cursor and vanish on the drop instead of going where the server put it.
         gh->clearTradeItem(static_cast<uint8_t>(i - 1));
     }
     return 0;
@@ -3199,7 +3421,8 @@ void registerActionLuaAPI(lua_State* L) {
                 return 0;
             }
             lua_pushstring(L, info->name.c_str());
-            lua_pushstring(L, game::buildItemLink(m->result.item, info->quality, info->name).c_str());
+            lua_pushstring(L, game::buildItemLink(m->result.item, info->quality, info->name,
+                                                  gh->getPlayerLevel()).c_str());
             return 2;
         }},
                 // SetMacroSpell(index or name, spell [, unit]) (0x00567320) and
@@ -3418,7 +3641,16 @@ void registerActionLuaAPI(lua_State* L) {
                 // ToggleGameMenu's first branch, which runs when UIParent is
                 // hidden - out of the way until someone hides the interface,
                 // and then on the only path that brings it back.
-                // ConsoleAddMessage is the sink for FrameXML's debug print.
+                // ConsoleAddMessage is the sink for FrameXML's debug print:
+                // ConsolePrint (uiparent.lua:3550) joins its arguments and hands
+                // the result straight over, and in this tree the only thing that
+                // calls ConsolePrint is lfgframe.lua's LFGDebug. The client runs
+                // the line through its console line routine 0x007653b0 under the
+                // fixed format "%s" at 0x009e0e50 - which is what keeps a '%' in
+                // the Lua string text rather than a conversion - and that is the
+                // routine the console's own output goes through as well. There
+                // is no console window drawn here, so there is nothing to add a
+                // line to.
                 {"SetUIVisibility",   [](lua_State* L) -> int { (void)L; return 0; }},
                 {"ConsoleAddMessage", [](lua_State* L) -> int { (void)L; return 0; }},
                 // GetCurrentBindingSet() - which set SaveBindings should write.
@@ -3499,11 +3731,15 @@ void registerActionLuaAPI(lua_State* L) {
                 // whether it is a hunter's. PetFrame_SetHappiness reads the
                 // second to decide whether to draw the happiness icon, and one
                 // return left it nil.
+                //
+                // The second is that predicate on the pet handle, and the pet
+                // handle is what 0x005d3960 asks it of - not the player.
                 {"HasPetUI", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const bool has = gh && gh->hasPet();
             lua_pushboolean(L, has ? 1 : 0);
-            lua_pushboolean(L, 0);   // hunter pet: not distinguished yet
+            const bool hunterPet = hunterPetOf(gh, resolveUnit(L, "pet"));
+            lua_pushboolean(L, hunterPet ? 1 : 0);
             return 2;
         }},
                 // Happiness, for a hunter's pet only. Nil is the honest answer
@@ -3567,11 +3803,26 @@ void registerActionLuaAPI(lua_State* L) {
                 // nothing to its own maximum. The three faces are the thirds of
                 // that range, and the damage each is worth - three quarters,
                 // normal, a quarter more - is the game's, not a guess.
+                //
+                // And always two, even for the answer that has no happiness:
+                // 0x005d3b00's one failure tail pushes nil and then the double
+                // 100.0, so "no happiness" still carries a damage figure - the
+                // 100% of an unmeasured pet. PetFrame_SetHappiness never gets
+                // that far (it returns on the nil) but the second value is not
+                // something the binding withholds.
+                //
+                // And only a hunter's pet has any: the row this is read out of
+                // is fetched through 0x0071f390, which is the hunter-pet
+                // predicate again, so a warlock pet - which does carry
+                // happiness as a power, the realm sends it - gets the failure
+                // answer rather than a level.
                 {"GetPetHappiness", [](lua_State* L) -> int {
             auto* pet = resolveUnit(L, "pet");
-            if (!pet) { lua_pushnil(L); return 1; }
+            if (!pet || !hunterPetOf(getGameHandler(L), pet)) {
+                lua_pushnil(L); lua_pushnumber(L, 100); return 2;
+            }
             const uint32_t maxHappiness = pet->getMaxPowerByType(4);
-            if (maxHappiness == 0) { lua_pushnil(L); return 1; }
+            if (maxHappiness == 0) { lua_pushnil(L); lua_pushnumber(L, 100); return 2; }
 
             const uint32_t happiness = pet->getPowerByType(4);
             const int level = (happiness * 3 >= maxHappiness * 2) ? 3
@@ -3591,9 +3842,24 @@ void registerActionLuaAPI(lua_State* L) {
                 // GetPetActionSlotUsable(index) → whether the pet can use it
                 //
                 // Read as "if usable then draw it normally, else grey it out",
-                // so an absent answer greyed out every ability the pet has. A
-                // slot holding a spell is usable; an empty one has nothing to
-                // grey.
+                // so an absent answer greyed out every ability the pet has.
+                //
+                // What the slot holds decides the test (0x005d5400 ->
+                // 0x005d3fd0): the type byte, not the low 24 bits, says whether
+                // a slot is a spell at all, and a command or a stance is usable
+                // as such as long as there is a pet. Taking the low bits instead
+                // greyed out Stay and Passive, whose ids are zero - the same
+                // mistake GetPetActionInfo made before it learned to ask
+                // petSlotSpell.
+                //
+                // A slot that holds a spell then goes through the client's own
+                // usability read, and the leg of that read this client can
+                // answer for a pet is what it costs (0x008017e0), the same leg
+                // IsUsableSpell uses for a pet caster. The client asks it of
+                // every pet it has and only refuses when all of them fail the
+                // same way; with the one pet this client tracks, that is the
+                // pet's own answer. Usable is 1, otherwise nothing - the client
+                // pushes 1.0 or nil, never false.
                 // CancelItemTempEnchantment(hand) - drop a weapon imbue
                 //
                 // The interface counts the hands from one and the request from
@@ -3613,8 +3879,16 @@ void registerActionLuaAPI(lua_State* L) {
                 lua_pushboolean(L, 0);
                 return 1;
             }
-            const uint32_t spellId = gh->getPetActionSlot(index - 1) & 0x00FFFFFF;
-            lua_pushboolean(L, spellId != 0 ? 1 : 0);
+            const uint32_t packed = gh->getPetActionSlot(index - 1);
+            auto* pet = resolveUnit(L, "pet");
+            auto* sh = gh->getSpellHandler();
+            bool usable;
+            if (packed == 0)              usable = true;   // nothing in the slot to grey
+            else if (pet == nullptr)      usable = false;
+            else if (const uint32_t spell = petSlotSpell(packed); spell != 0)
+                usable = !sh || sh->enoughPower(spell, *pet);
+            else                          usable = true;   // a command or a stance
+            if (usable) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;
         }},
                 // GetPetActionInfo(index) →

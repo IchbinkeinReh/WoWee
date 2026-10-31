@@ -2,6 +2,7 @@
 
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
+#include "game/item_text.hpp"      // ItemLinkInstance - what a trade row's link carries
 #include "game/inventory.hpp"
 #include "game/handler_types.hpp"
 #include "network/packet.hpp"
@@ -20,6 +21,27 @@ namespace wowee {
 namespace game {
 
 class GameHandler;
+
+/// One row of the paper-style list the mail compose frame offers.
+struct StationeryOption {
+    /// Stationery.dbc's row id, which is what CMSG_SEND_MAIL carries and what
+    /// the realm hands back on the letter this one wrote.
+    uint32_t id = 0;
+    /// The item the paper is sold as, and the thing the player has to be
+    /// carrying to be offered the row at all - unless its flag says otherwise.
+    uint32_t itemId = 0;
+    /// Stationery.dbc's art column, pasted into Interface\Stationery\..1 and ..2.
+    std::string texture;
+    /// That item's name, empty until its query answer lands.
+    std::string name;
+    /// What a vendor asks for it, in copper - only when the player is not
+    /// carrying one.
+    uint32_t cost = 0;
+    /// False draws no price at all, which is how the client marks a paper the
+    /// player already has.
+    bool hasCost = false;
+    bool owned = false;
+};
 
 class InventoryHandler {
 public:
@@ -69,6 +91,46 @@ public:
         uint32_t displayId   = 0;
         uint32_t stackCount  = 0;
         uint64_t itemGuid    = 0;
+        /// What the offer said about *this copy* of the item: the permanent
+        /// enchant, the three socketed gems, the rolled property and its seed.
+        /// The extended packet carries all six per slot - the client keeps them
+        /// in the row it mirrors for the partner's half (0xca0b80, 0x50 bytes a
+        /// slot) and answers its link and its name from them, so a traded item
+        /// that was enchanted, socketed or rolled reads as itself.
+        ItemLinkInstance inst;
+        /// The rest of the row the packet lays down for a slot.  Nothing in the
+        /// window reads any of it; 0x00586dc0 keeps a copy of each of these
+        /// words for the partner's half (0xbfa400 through 0xbfa5c0) and compares
+        /// the next offer against that copy, so an offer whose durability,
+        /// charge count, lock or maker moved is a slot that changed and the
+        /// slot's frame is told about it.
+        uint64_t creatorGuid     = 0;
+        uint64_t giftCreatorGuid = 0;
+        uint32_t wrapped         = 0;
+        uint32_t charges         = 0;
+        uint32_t lockId          = 0;
+        uint32_t maxDurability   = 0;
+        uint32_t durability      = 0;
+
+        /// The words a slot row is compared with - seventeen of the row's twenty
+        /// dwords: everything but the display id (+0x04), which the client
+        /// neither mirrors nor compares, and the two spare dwords (+0x1c, +0x2c)
+        /// that a slot's row fills with zeroes.
+        [[nodiscard]] bool sameOffer(const TradeSlot& other) const {
+            return itemId == other.itemId
+                && stackCount == other.stackCount
+                && inst.enchantId == other.inst.enchantId
+                && inst.gems == other.inst.gems
+                && inst.randomPropertyId == other.inst.randomPropertyId
+                && inst.seed == other.inst.seed
+                && creatorGuid == other.creatorGuid
+                && giftCreatorGuid == other.giftCreatorGuid
+                && wrapped == other.wrapped
+                && charges == other.charges
+                && lockId == other.lockId
+                && maxDurability == other.maxDurability
+                && durability == other.durability;
+        }
     };
 
     TradeStatus getTradeStatus() const { return tradeStatus_; }
@@ -83,6 +145,14 @@ public:
     const std::array<TradeSlot, TRADE_SLOT_COUNT>& getPeerTradeSlots() const { return peerTradeSlots_; }
     uint64_t getMyTradeGold() const { return myTradeGold_; }
     uint64_t getPeerTradeGold() const { return peerTradeGold_; }
+    /// The spell an offer's enchant slot names: the extended packet's last
+    /// header dword, which 0x00704680 reads straight into 0xca0ff0 + side*4.
+    /// Keyed by the packet's own discriminator (true = this player's offer).
+    /// The trade window's bindings read the *other* side's - see
+    /// lua_GetTradePlayerItemInfo for why that is the client and not a slip.
+    uint32_t getTradeEnchantSpell(bool ownSide) const {
+        return tradeEnchantSpell_[ownSide ? 0 : 1];
+    }
     void acceptTradeRequest();
     void declineTradeRequest();
     void acceptTrade();
@@ -412,6 +482,34 @@ public:
     /// Put paper in the compose frame, so its Send button can be enabled.
     void selectDefaultStationery();
 
+    /// The papers on offer, rebuilt from Stationery.dbc on every read.
+    ///
+    /// The client's rule, from MailInfo.cpp: a row is offered when its flag bit
+    /// 0 is set - the paper a letter can be written on without buying anything
+    /// - or when the player is carrying the item that row is sold as
+    /// (0x0056fc80, which asks 0x00754a20 how many of the item the bags hold).
+    /// It caches that list and rebuilds it when an inventory change or an item
+    /// query says the answer may have changed; with seven rows in the table,
+    /// reading it fresh cannot go stale and costs nothing worth naming.
+    ///
+    /// The order is the client's too (its qsort comparator 0x0056dd00): papers
+    /// already in the bags first, then the rest by their item's name.
+    const std::vector<StationeryOption>& stationeryOptions();
+
+    /// The chosen paper, as the Stationery.dbc id the send packet carries.
+    uint32_t selectedStationery() const { return selectedStationery_; }
+
+    /// Choose by the popup's one-based index. Out of range clears the choice,
+    /// which is what SelectStationery does (0x0056e0e0), and clearing it is what
+    /// disables the Send button again (SendMailFrame_CanSend counts it).
+    void selectStationery(uint32_t index);
+
+    /// One row of Stationery.dbc by id, offered or not. A choice outlives the
+    /// reason it was offered - the paper can be sold out of the bags after it
+    /// was picked - and the client reads the art out of the table for the chosen
+    /// id rather than out of its list (0x0056e170).
+    std::optional<std::string> stationeryArt(uint32_t id) const;
+
     /// Say why a letter is not going out, and tell the compose frame so it
     /// puts its Send button back.
     void refuseSend(const std::string& reason, const char* logLine);
@@ -644,7 +742,10 @@ public:
     void fireEquipSlotEvents();
     void maybeDetectVisibleItemLayout();
     void updateOtherPlayerVisibleItems(uint64_t guid, const FlatFieldMap& fields);
-    void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries);
+    /// The entries and, from WotLK's inspect block, the instance numbers that
+    /// came with them - see GameHandler::cacheInspectedPlayerEquipment.
+    void cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries,
+                                       const std::array<ItemLinkInstance, 19>& instances = {});
     void emitOtherPlayerEquipment(uint64_t guid);
     /// The same resolution, answered rather than announced - see the
     /// definition for why both shapes exist.
@@ -784,6 +885,17 @@ private:
     std::array<TradeSlot, TRADE_SLOT_COUNT> peerTradeSlots_{};
     uint64_t myTradeGold_   = 0;
     uint64_t peerTradeGold_ = 0;
+    /// 0xca0ff0 and 0xca0ff4: the enchant spell each side's offer names.
+    uint32_t tradeEnchantSpell_[2] = {};
+    /// What the window has already been told, per side and per slot: the rows
+    /// the last offers announced and the enchant spells they announced with
+    /// them.  0x00586dc0 keeps exactly this, beside the partner's mirrored
+    /// display (0xbfa400 through 0xbfa5c0, and 0xbfa668 / 0xbfa66c for the two
+    /// spells), and fires the slot's changed-event off the difference - which is
+    /// the only way a slot taken off the table by being left out of the packet
+    /// reaches the window at all.
+    std::array<TradeSlot, TRADE_SLOT_COUNT> shownTradeSlots_[2]{};
+    uint32_t shownTradeEnchantSpell_[2] = {};
 
     // ---- Loot state ----
     bool lootWindowOpen_ = false;
@@ -890,6 +1002,13 @@ private:
     int selectedMailIndex_ = -1;
     bool showMailCompose_ = false;
     bool hasNewMail_ = false;
+    /// The paper the next letter is written on - a Stationery.dbc row id, or 0
+    /// for none, which is also what the client sends when nothing was picked
+    /// (MailInfo.cpp's DAT_00beb1cc).
+    uint32_t selectedStationery_ = 0;
+    /// Kept as a member only so the bindings can read it through a reference;
+    /// rebuilt in full on every read.
+    std::vector<StationeryOption> stationeryOptions_;
     std::array<MailAttachSlot, MAIL_MAX_ATTACHMENTS> mailAttachments_{};
 
     // ---- Bank state ----

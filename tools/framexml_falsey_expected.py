@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Bindings that answer "" or 0 where the interface tests for nothing.
 
-    tools/framexml_falsey_expected.py
+    tools/framexml_falsey_expected.py "<the extracted interface>"
+
+The interface is installed data rather than repository content, so the default
+below is often not where it is.  With nothing parsed there is no tested name to
+compare, and the run stops instead of printing what a client with every binding
+answering a real value prints.
 
 WHY THIS FINDS WHAT THE OTHER SWEEPS CANNOT
 
@@ -46,7 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from framexml_source import loaded_files, without_comments  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-INTERFACE = ROOT / "Data/interface"
+INTERFACE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
 ADDONS = ROOT / "src/addons"
 
 #: Answering a falsey-looking constant is right for these, checked once.
@@ -159,6 +164,10 @@ def constant_falsey_bindings():
 
 
 def main():
+    if not INTERFACE.is_dir():
+        print(f"{INTERFACE} is not a directory - name the extracted interface "
+              "directory on the command line.")
+        return 2
     tested = tested_directly()
     falsey = constant_falsey_bindings()
     rows = sorted((n, w) for n, w in falsey.items()

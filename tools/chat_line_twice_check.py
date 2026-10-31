@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Chat lines this client writes that the interface also writes.
 
-    tools/chat_line_twice_check.py
+    tools/chat_line_twice_check.py ["<the extracted interface>"]
 
 WHY
 
@@ -18,6 +18,13 @@ never uses for that event at all.
 
 Seven events in chatframe.lua write their own line. Three of them were
 duplicated this way: ZONE_UNDER_ATTACK, PLAYER_LEVEL_UP and GUILD_MOTD.
+
+The guard is what separates a doubled line from a guarded one, and the test
+usually sits in the *header* of the block, not in the block: `if
+(!ui::frameXmlOwns(ui::UiElement::Chat)) { addSystemChatMessage(...); }`. Walk
+out only the braces and the guard is outside what was read, which reported
+ZONE_UNDER_ATTACK - the one handler written with a comment explaining that it
+stopped doubling - the first time this sweep had an interface to read.
 
 WHAT IT DOES
 
@@ -40,7 +47,11 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-CHATFRAME = ROOT / "Data/interface/framexml/chatframe.lua"
+# The interface root on the command line like every other interface sweep; the
+# chat window comes off it. Data/interface is the fallback and is not tracked.
+INTERFACE = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
+             else ROOT / "Data/interface")
+CHATFRAME = INTERFACE / "framexml/chatframe.lua"
 SOURCES = sorted((ROOT / "src/game").glob("*.cpp"))
 
 # The calls that put a line in front of the player.
@@ -68,7 +79,21 @@ def events_the_interface_writes(text):
 
 
 def enclosing_block(text, at):
-    """The braced block the offset sits in, walked out from it."""
+    """The braced block the offset sits in, walked out from it, with the header
+    that opens it prepended.
+
+    The header is the part that carries the guard. The fix for the doubled zone
+    warning is spelled
+
+        if (!ui::frameXmlOwns(ui::UiElement::Chat)) {
+            addSystemChatMessage(...);
+        }
+
+    and the innermost block - the one this walks out - holds the call and not
+    the test. Reading the body alone reported the one handler whose comment
+    says out loud that it stopped doubling, which made this sweep's single row
+    about the sweep itself.
+    """
     depth, start = 0, None
     for i in range(at, -1, -1):
         if text[i] == "}":
@@ -80,6 +105,18 @@ def enclosing_block(text, at):
             depth -= 1
     if start is None:
         return ""
+    # Back over the control header, which ends at whatever statement or block
+    # came before it - a `;`, or the brace of the block before or around it.
+    # `:` is deliberately not one of them: `if (!ui::frameXmlOwns(...)) {` stops
+    # at its own first `::` if it is, and the guard is then outside what came
+    # back, which is the miss this whole walk exists to close. Capped because a
+    # header with no boundary in front of it means the walk has run past
+    # something this cannot tell where to stop.
+    head = max(0, start - 500)
+    for i in range(start - 1, head - 1, -1):
+        if text[i] in ";}{" :
+            head = i + 1
+            break
     depth, end = 0, len(text)
     for i in range(start, len(text)):
         if text[i] == "{":
@@ -89,12 +126,14 @@ def enclosing_block(text, at):
             if depth == 0:
                 end = i
                 break
-    return text[start:end]
+    return text[head:end]
 
 
 def main():
     if not CHATFRAME.exists():
-        print("No chatframe.lua. Nothing can be compared - do not believe a zero.")
+        print(f"No chatframe.lua at {CHATFRAME}. Nothing can be compared - do "
+              "not believe a zero. Name the unpacked interface on the command "
+              "line.")
         return 1
 
     events = events_the_interface_writes(CHATFRAME.read_text(encoding="utf-8"))

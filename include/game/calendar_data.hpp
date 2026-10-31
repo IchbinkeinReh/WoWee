@@ -253,6 +253,37 @@ struct CalendarInviteState {
 CalendarInviteState calendarInviteState(const CalendarData& data, const CalendarEvent& ev, uint64_t player,
                                         const WowDate* now);
 
+/// An event the client has its fifteen-minute reminder armed for.
+struct CalendarAlarm {
+    uint64_t eventId = 0;
+    std::string title;      ///< what the reminder names, straight off the row
+    WowDate eventTime;      ///< the row's own time
+    WowDate at;             ///< that time less fifteen minutes
+};
+
+/// Which of a calendar's events the client arms a reminder for, and when each
+/// goes off.
+///
+/// `0x005b79b0` does it for an event record - and every path that stores one
+/// calls it: the calendar list, an event added, an event updated. It unpacks
+/// the record's time (`+0x88`), shifts it by `0xfffffff1` = **-15** minutes,
+/// and schedules a callback at the result, keeping its handle at `+0xc0` and
+/// clearing it when the callback has run.
+///
+/// That callback (`0x005b7910`) says nothing unless the record's **invitation
+/// status** byte - `+0xa8`, the same one `calendarInviteState` reports - reads
+/// 1 or 3: accepted or confirmed. An event merely invited to, or declined, or
+/// a guild event signed up for, gets no reminder; the client keeps its
+/// calendar quietly for the events the player has said yes to.
+///
+/// `now` is the game clock again, and an event already begun is not armed:
+/// the client's scheduler matches the *pattern* of the moment
+/// (`0x0076c890` compares two time templates field by field, a negative field
+/// being a wildcard), so an alarm whose moment has passed does not go off
+/// late - it never goes off.
+std::vector<CalendarAlarm> calendarArmAlarms(const CalendarData& data, uint64_t player,
+                                             const WowDate* now);
+
 /// The calendarType string the interface is handed for an event's flags
 /// (0x005b7fd0).
 const char* calendarTypeForFlags(uint32_t flags);
@@ -406,6 +437,11 @@ bool calendarDateAddable(const WowDate& date, const WowDate* now);
 /// 0x0076ccc0 against the game clock: whether `when` is now or past, to the
 /// minute. False with the clock not known.
 bool calendarTimePassed(const WowDate& when, const WowDate* now);
+
+/// Whole minutes since an arbitrary epoch, for ordering two of the server's
+/// dates - what `calendarTimePassed` compares, and what a reminder compares
+/// its own moment against. Two dates inside the same minute compare equal.
+int64_t calendarMinuteKey(const WowDate& date);
 
 /// A date moved on by whole minutes, weekday and all - what 0x0076c3f0 does
 /// to the date it is handed.

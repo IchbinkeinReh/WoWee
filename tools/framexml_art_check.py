@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Art the interface asks for that is not in this install.
 
-    tools/framexml_art_check.py
+    tools/framexml_art_check.py ["<the install's Data root>"]
+
+The root named on the command line is the one that *holds* `interface` - the
+Data root of the install, `…/WoWee/Data/expansions/wotlk` for the extracted
+client - because the art paths FrameXML asks for are relative to that and not
+to `interface`: `file="interface\\talentframe\\ui-talentframe-spectab"`.
 
 A missing texture is not an error anywhere. The frame is built, laid out and
 drawn, and the part of it that should have art is simply not there - a button
@@ -60,7 +65,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # skip it where there is none. A path in separate components is invisible
 # to that check, and the sweep then runs on CI, finds nothing, and is
 # failed for reporting nothing.
-DATA = ROOT / "Data"
+# The install's Data root on the command line, which is where `interface` and
+# the art beside it live; ROOT/Data is the fallback and is not tracked in the
+# checkout. _NEEDS stays a literal of the fallback path so that sweep_guard can
+# still see what this sweep cannot run without.
+DATA = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data"
 _NEEDS = ROOT / "Data/interface"   # what this sweep cannot run without
 INTERFACE = DATA / "interface"
 RENDERER = ROOT / "src/ui/widget_renderer.cpp"
@@ -133,6 +142,14 @@ def references():
 
 
 def main():
+    if not INTERFACE.is_dir():
+        # Both halves come from the same directory: on_disk() walks it and
+        # loaded_files() reads it. With it missing, the first is empty and the
+        # second collects no requests either, so the report is "0 art paths
+        # referenced, 0 missing" - which is what a clean install says too.
+        print(f"No interface at {INTERFACE} - name the install's Data root on "
+              "the command line; there is no art to compare against here.")
+        return 2
     have = on_disk()
     swaps = folder_swaps()
     refs = references()

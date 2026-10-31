@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Widget no-ops whose answer someone reads.
 
-    tools/framexml_noop_returns.py
+    tools/framexml_noop_returns.py ["<the extracted interface>"]
 
 THE GAP THIS FILLS
 
@@ -72,7 +72,10 @@ import sys as _s; _s.path.insert(0, str(Path(__file__).resolve().parent))
 from framexml_source import loaded_files
 
 ROOT = Path(__file__).resolve().parent.parent
-XML = ROOT / "Data/interface"
+# The interface root on the command line, the way every other interface sweep
+# takes it; Data/interface is the fallback and is not tracked in the checkout.
+XML = (Path(sys.argv[1]) if len(sys.argv) > 1
+       else ROOT / "Data/interface")
 
 #: Consuming the answer in one of these raises when the answer is nil.
 #:
@@ -128,6 +131,13 @@ def close_paren(text, open_at):
 
 
 def main():
+    if not XML.is_dir():
+        # loaded_files() answers with an empty set for a directory that is not
+        # there, so there are no bodies to scan and the two tiers come back
+        # empty - which is what a clean interface looks like.
+        print(f"No interface at {XML} - name the unpacked interface on the "
+              "command line; there are no calls to read here.")
+        return 2
     # Only files the loader opens - GlueXML is refused by name and its
     # calls say nothing about this client.
     files = sorted(loaded_files(XML))

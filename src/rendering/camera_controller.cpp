@@ -3402,7 +3402,7 @@ void CameraController::update(float deltaTime) {
     nowPitchKeys_ = pitchKeysPitch ? pitchKeys : 0;
     if (pitchKeysPitch) {
         const float pitched = float(pitchKeys) * 180.0f * deltaTime;
-        pitch = glm::clamp(pitch + pitched, MIN_PITCH, MAX_PITCH);
+        pitch = glm::clamp(pitch + pitched, pitchLimitMinDeg_, pitchLimitMaxDeg_);
         if (isFlightAirborne())
             flightPitchDeg_ = glm::clamp(flightPitchDeg_ + pitched, -90.0f, 90.0f);
         camera->setRotation(yaw, pitch);
@@ -3818,8 +3818,31 @@ void CameraController::update(float deltaTime) {
         const float swayYaw = std::sin(intoxicationTime_ * 1.35f) * 2.5f * intoxication_ * shakeScale_;
         const float swayPitch = std::sin(intoxicationTime_ * 1.8f + 0.7f) * 1.6f * intoxication_ * shakeScale_;
         camera->setRotation(yaw + swayYaw,
-                            glm::clamp(pitch + swayPitch, MIN_PITCH, MAX_PITCH));
+                            glm::clamp(pitch + swayPitch, pitchLimitMinDeg_, pitchLimitMaxDeg_));
     }
+}
+
+/// The client's aspect pair, as multipliers rather than as divisors.
+///
+/// `FUN_0047c020` divides the two mouse deltas by `p/√(p²+1)` and `1/√(p²+1)`
+/// before the gains are applied, with `p` the resolution's ratio - 4/3 unless
+/// `widescreen` says otherwise (`FUN_0047bf90` is what installs the pair, from
+/// `FUN_0050f7c0`, which `sscanf`s `gxResolution` as `"%d%c%d"`). Carrying the
+/// division across to the gains gives these two multipliers, which is why the
+/// original's pitch turns *faster* than its yaw on a wide picture and slower on
+/// a square one, at the same registered 180 and 90.
+float CameraController::getMouseSensitivity() const {
+    const float aspect = camera ? camera->getAspectRatio() : 0.0f;
+    if (!(aspect > 0.0f)) return mouseSensitivity;
+    const float root = std::sqrt(aspect * aspect + 1.0f);
+    return mouseSensitivity * (root / aspect);
+}
+
+/// The pitch half of the pair above: multiplied by √(p²+1) instead.
+float CameraController::getMousePitchSensitivity() const {
+    const float aspect = camera ? camera->getAspectRatio() : 0.0f;
+    if (!(aspect > 0.0f)) return mousePitchSensitivity;
+    return mousePitchSensitivity * std::sqrt(aspect * aspect + 1.0f);
 }
 
 void CameraController::processMouseMotion(const SDL_MouseMotionEvent& event) {
@@ -3857,7 +3880,9 @@ void CameraController::processMouseMotion(const SDL_MouseMotionEvent& event) {
     // SDL yrel > 0 = mouse moved DOWN. In WoW, mouse-down = look down = pitch decreases.
     // invertMouse flips to flight-sim style (mouse-down = look up).
     const float invert = invertMouse ? 1.0f : -1.0f;
-    lookBy(-event.xrel * mouseSensitivity, event.yrel * mouseSensitivity * invert);
+    // Each axis on its own gain, the picture's ratio inside both.
+    lookBy(-event.xrel * getMouseSensitivity(),
+           event.yrel * getMousePitchSensitivity() * invert);
 }
 
 void CameraController::startViewMove(int direction, float speed, float rate) {
@@ -3976,9 +4001,9 @@ void CameraController::lookBy(float yawDegrees, float pitchDegrees) {
     // 0x005ffc20: where the pitch eases from and to move with it, each held
     // to the limits, and the ease goes on from there.
     // WoW-style pitch limits: can look almost straight down, limited upward
-    pitch = glm::clamp(pitch + pitchDegrees, MIN_PITCH, MAX_PITCH);
+    pitch = glm::clamp(pitch + pitchDegrees, pitchLimitMinDeg_, pitchLimitMaxDeg_);
     if (viewPitch_.easing()) {
-        viewPitch_.shift(pitchDegrees, MIN_PITCH, MAX_PITCH);
+        viewPitch_.shift(pitchDegrees, pitchLimitMinDeg_, pitchLimitMaxDeg_);
         pitch = viewPitch_.value;
     }
     if (camera) camera->setRotation(yaw, pitch);
@@ -4378,7 +4403,7 @@ void CameraController::applyLookDelta(float dxPixels, float dyPixels) {
     if (!enabled || !camera || introActive) return;
 
     const float invert = invertMouse ? 1.0f : -1.0f;
-    lookBy(-dxPixels * mouseSensitivity, dyPixels * mouseSensitivity * invert);
+    lookBy(-dxPixels * getMouseSensitivity(), dyPixels * getMousePitchSensitivity() * invert);
 }
 
 void CameraController::processMouseWheel(float delta) {
@@ -4464,7 +4489,7 @@ CameraController::ViewPose CameraController::currentViewPose() const {
 void CameraController::goToViewPose(const ViewPose& pose, float seconds) {
     viewMovedByPlayer_ = false;
     const float distance = clampedZoomDistance(pose.distance);
-    const float toPitch = glm::clamp(-pose.pitch, MIN_PITCH, MAX_PITCH);
+    const float toPitch = glm::clamp(-pose.pitch, pitchLimitMinDeg_, pitchLimitMaxDeg_);
     // The yaw from the facing, taken to within half a turn of where it goes.
     const float fromYaw = pose.yaw + std::remainder((yaw - facingYaw) - pose.yaw, 360.0f);
     if (seconds <= 0.0f) {

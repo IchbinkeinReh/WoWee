@@ -182,7 +182,9 @@ public:
     bool pendingCharacterSpeech = true;
 
     // ---- Pending camera / controls ----
-    float pendingMouseSensitivity = 0.2f;
+    // Degrees of view per movement of the mouse; 0.225 is the game's own Mouse
+    // Look Speed start of 180 of its degrees times its 0.00125 per unit.
+    float pendingMouseSensitivity = 0.225f;
     bool pendingInvertMouse = false;
     bool pendingGamepadEnabled = true;
     float pendingGamepadLookSpeed = 180.0f;   // degrees a second at full stick

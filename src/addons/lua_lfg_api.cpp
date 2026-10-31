@@ -96,6 +96,18 @@ const game::LfgDungeon* browserDungeon(game::GameHandler* gh) {
     return nullptr;
 }
 
+/// One row of LFGDungeons.dbc by its id - the lookup the client's store does for
+/// the same three names, which bounds the id before it indexes its pointer array
+/// (0x00554380:3546-3549 reading 0x00ad4050/0x00ad404c/0x00ad4060). Null when the
+/// file has no such row, which is also what an id of nought means.
+const game::LfgDungeon* lfgDungeonById(game::GameHandler* gh, uint32_t id) {
+    if (gh == nullptr || id == 0) return nullptr;
+    for (const auto& d : gh->getLfgDungeons()) {
+        if (d.id == id) return &d;
+    }
+    return nullptr;
+}
+
 /// The dungeon finder lists dungeons and the raid browser lists raids, so each
 /// asks for its own half of the same file.
 bool isDungeonSide(const game::LfgDungeon& d) {
@@ -616,20 +628,82 @@ void registerLfgLuaAPI(lua_State* L) {
         const auto& members = gh->getLfgProposalMembers();
         if (index > static_cast<int>(members.size())) return luaReturnNil(L);
         const auto& m = members[static_cast<size_t>(index) - 1];
-        lua_pushboolean(L, 0);                       // 1: isLeader - not sent
+        // The group leader of the offered party, which is not a separate field:
+        // it is bit 0 of the very mask the next value's name comes from
+        // (0x00553000:2519 pushes `roles & 1`, then tests 2/4/8 for the token).
+        lua_pushboolean(L, (m.role & 0x01) ? 1 : 0);  // 1: isLeader
         // The same tokens GetTexCoordsForRole indexes by. The mask is the one
         // SetLFGRoles sends: 2 tank, 4 healer, 8 damage.
         lua_pushstring(L, (m.role & 0x02) ? "TANK"
                         : (m.role & 0x04) ? "HEALER"
                                           : "DAMAGER");   // 2: role
-        lua_pushnil(L);                              // 3: level - not sent
+        // Nought rather than nil, which is what the client answers here
+        // (0x00553000:2527) while leaving the two strings nil: the packet has no
+        // level either, but this one is read as a number by its callers.
+        lua_pushnumber(L, 0);                        // 3: level - not sent
         lua_pushboolean(L, m.answered ? 1 : 0);      // 4: responded
         lua_pushboolean(L, m.accepted ? 1 : 0);      // 5: accepted
         lua_pushnil(L);                              // 6: name - not sent
         lua_pushnil(L);                              // 7: class - not sent
         return 7;
     }},
-    {"GetLFGProposalEncounter", [](lua_State* L) -> int { return luaReturnNil(L); }},
+    // GetLFGProposalEncounter(index) (0x00554440 -> 0x00554380) - one boss of
+    // the dungeon being offered, by its position in DungeonEncounter.dbc. The
+    // client takes the proposal's own slot dword (0x00bea980), masks its type
+    // byte off to get the LFGDungeons row, reads that row's map and difficulty
+    // (record +0x1c and +0x20, the pair the raid browser hands the same table),
+    // and counts that many bosses down out of the encounter table - the walk
+    // lfgEncounterAt already makes, and the third value the mask bit test at
+    // 0x005538b0:3062 does. With no proposal, or with a dungeon the DBC has no
+    // row for, it runs the identical walk with map, difficulty and index all
+    // nought (0x00554380:3553), which matches no row and answers three nils;
+    // that call is reproduced rather than short-circuited so the answer stays
+    // the client's own even if the table ever names map nought.
+    //
+    // The number is required - the client raises "Usage:
+    // GetLFGProposalEncounter(index)" without it (0x00554380:3533) - and a
+    // non-number is what the arg check accepts and the number read turns into
+    // nought, which is the walk past the end of the list.
+    //
+    // The loop this feeds is lfdframe.lua:647-666, and it bounds itself: the
+    // count comes from select(8, GetLFGProposal()), the twelfth value is the
+    // holiday flag, and the handler returns at once when the count is nought or
+    // the flag is set.  So while the eighth was hardcoded this call was dead
+    // rather than wrong - a zero count and a nil name agree with each other -
+    // and only the pair being off together made the proposal's tooltip list no
+    // bosses at all while the raid browser's (SearchLFGGetEncounterResults, over
+    // there) listed them fine.  Nothing else has to arrive first for it to run:
+    // there is no separate boss-count name anywhere, neither in the interface nor
+    // in the binary - GetLFGBosses is not even a string in the executable - and
+    // the count is one of the values above, derived from the same two tables.
+    {"GetLFGProposalEncounter", [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        if (!gh || !lua_isnumber(L, 1))
+            return luaL_error(L, "Usage: GetLFGProposalEncounter(index)");
+        const lua_Integer index = static_cast<lua_Integer>(lua_tonumber(L, 1));
+        const game::LfgDungeon* dungeon
+            = lfgDungeonById(gh, gh->getLfgProposalDungeonId());
+        const uint32_t mapId   = dungeon ? dungeon->mapId        : 0;
+        const uint32_t diff    = dungeon ? dungeon->difficulty   : 0;
+        const uint32_t mask    = dungeon ? gh->getLfgProposalEncountersDone() : 0;
+        // index - 1 as the client passes it, an int counting down: nought or
+        // less counts past the end and answers nothing.
+        const uint32_t which   = dungeon ? static_cast<uint32_t>(index - 1) : 0u;
+        const auto* boss = game::lfgEncounterAt(gh->getDungeonEncounters(),
+                                                mapId, diff, which);
+        if (!boss) {
+            lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+            return 3;
+        }
+        lua_pushstring(L, boss->name.c_str());                   // 1: name
+        // Nil, which is the client's own answer: the spell-icon column of the
+        // DungeonEncounter.dbc on disk is zero in every row, so its lookup
+        // resolves to nothing (0x005538b0:3050-3059, over in the note above
+        // SearchLFGGetEncounterResults).
+        lua_pushnil(L);                                        // 2: texture
+        lua_pushboolean(L, game::lfgEncounterDone(mask, *boss) ? 1 : 0);   // 3: isKilled
+        return 3;
+    }},
     // GetLFGBootProposal() → inProgress, didVote, myVote, targetName,
     //                          totalVotes, bootVotes, timeLeft, reason
     //
@@ -740,7 +814,7 @@ void registerLfgLuaAPI(lua_State* L) {
             const auto* info = gh->getItemInfo(item.itemId);
             if (!info || !info->valid) return luaReturnNil(L);
             lua_pushstring(L, game::buildItemLink(item.itemId, info->quality,
-                                                  info->name).c_str());
+                                                  info->name, gh->getPlayerLevel()).c_str());
             return 1;
         }
         return luaReturnNil(L);
@@ -850,34 +924,108 @@ void registerLfgLuaAPI(lua_State* L) {
         }
         return luaReturnNil(L);
     }},
-    // Per-boss lockouts inside a raid the character is saved to. The saved
-    // instance list has no encounter breakdown in it.
-    {"GetInstanceLockTimeRemainingEncounter", [](lua_State* L) -> int { return luaReturnNil(L); }},
+    // GetInstanceLockTimeRemainingEncounter(encounterIndex) → name, texture, isKilled
+    //
+    // The boss list the bind-or-leave dialog draws over its own text. What the
+    // note here used to say - that the saved-instance list has no encounter
+    // breakdown in it - is true of the listing of the *other* instances a
+    // character is locked to, and beside the point: this is the instance the
+    // character is standing in, whose bosses come from the very table the queue
+    // proposal's list and the raid browser's tooltip walk, joined on the
+    // realm-told map and difficulty pair instead of an offered dungeon's.
+    // 0x00516410 hands 0x005538b0 0x00bd088c and 0x00bd0894, which are what
+    // GetInstanceInfo and GetDungeonDifficulty answer from (a difficulty of
+    // SMSG_INSTANCE_DIFFICULTY's own, from nought).
+    //
+    // Answering nils was not a blank list either: InstanceLock_OnEnter
+    // (lfrframe.lua:684-700) walks `for i = 1, encountersTotal` the moment the
+    // mask names one boss down, and calls
+    // `GameTooltip:AddDoubleLine(nil, BOSS_ALIVE, …)` on the name that never
+    // came back - the handler the dialog itself registers, so hovering it
+    // raised a Lua error rather than saying nothing.
+    //
+    // 0x00513b90 hands out (milliseconds left, mask, previously-saved) and
+    // zeroes all three once the countdown has run out, and past that the client
+    // still walks the table, with map 0, difficulty 0, index 0 and an empty
+    // mask - a row the table has none of, which is the three nils either way.
+    // WoWee's prompt state lapses on the same countdown
+    // (social_handler.cpp:6038-6045), so one test says both.
+    {"GetInstanceLockTimeRemainingEncounter", [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        // The client's check is of the argument *count*, and every caller in the
+        // interface passes a loop counter; the miss is its own string.
+        if (!gh || !lua_isnumber(L, 1))
+            return luaL_error(L, "Usage: GetInstanceLockTimeRemainingEncounter(encounterIndex)");
+        const lua_Integer index = static_cast<lua_Integer>(lua_tonumber(L, 1));
+        float secondsLeft = 0.0f;
+        bool previouslySaved = false;
+        uint32_t completedMask = 0;
+        const bool prompt = gh->getInstanceLockPrompt(secondsLeft, previouslySaved, completedMask);
+        // index - 1 as the client passes it: nought or less counts down past the
+        // end of the instance's rows and answers nothing.
+        const auto* boss = prompt
+            ? game::lfgEncounterAt(gh->getDungeonEncounters(), gh->getCurrentMapId(),
+                                   gh->getInstanceDifficulty(),
+                                   static_cast<uint32_t>(index - 1))
+            : nullptr;
+        if (!boss) {
+            lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+            return 3;
+        }
+        lua_pushstring(L, boss->name.c_str());   // 1: name, in the file's own order
+        // Nil, which is the client's own answer: the spell-icon column of the
+        // DungeonEncounter.dbc on disk is zero in every row, so its store lookup
+        // resolves to nothing (0x005538b0:3050-3059).
+        lua_pushnil(L);                          // 2: texture
+        lua_pushboolean(L, game::lfgEncounterDone(completedMask, *boss) ? 1 : 0);   // 3: isKilled
+        return 3;
+    }},
     // The countdown on the bind-or-leave dialog, read every frame by its
     // OnUpdate. A zero closes the dialog, which is what should happen when
     // there is nothing pending.
+    //
+    // Four values, and the last two are derived rather than sent (0x00516340 →
+    // 0x00553830): one walk of the encounter table over this instance's map and
+    // difficulty counts the total, and among just those rows the ones whose bit
+    // the mask names count as done. The packet says which bosses are done, as a
+    // mask, and never how many there are, so neither number has a source of its
+    // own. Counting the mask's set bits, as this did, counts bosses the table
+    // does not name as done: the pair decides which rows belong to the instance
+    // at all, and where none do the client answers nought bosses killed while a
+    // population count of the mask answers as many as the realm ticked.
     {"GetInstanceLockTimeRemaining", [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
         float secondsLeft = 0.0f;
         bool previouslySaved = false;
         uint32_t completedMask = 0;
-        if (!gh || !gh->getInstanceLockPrompt(secondsLeft, previouslySaved, completedMask)) {
-            lua_pushnumber(L, 0);
-            lua_pushboolean(L, 0);
-            lua_pushinteger(L, 0);
-            lua_pushinteger(L, 0);
-            return 4;
-        }
-        // The mask says which encounters are done; its population count is how
-        // many, and the total comes from the map's own encounter list.
-        uint32_t complete = 0;
-        for (uint32_t bit = completedMask; bit; bit &= bit - 1) ++complete;
-        const uint32_t total = gh->getDungeonEncounterCount(gh->getCurrentMapId(),
-                                                            gh->getInstanceDifficulty());
-        lua_pushnumber(L, secondsLeft);
+        const bool prompt = gh && gh->getInstanceLockPrompt(secondsLeft, previouslySaved, completedMask);
+        // The pair is matched exactly, as 0x00553830 matches it: both fields of
+        // the row against both of the instance's, with no "difficulty 0 means
+        // every difficulty" fallback - and the file does not need one. Trial of
+        // the Crusader, map 649, carries its five bosses at each of 0, 1, 2 and
+        // 3; an instance filed under 0 and 1 alone - Naxxramas at 533, fifteen
+        // rows at each - is one the client answers no bosses at for a
+        // difficulty its own file never lists it at.
+        //
+        // The walk also runs with no prompt pending: past the expiry
+        // 0x00516340 zeroes the countdown, the mask and the saved flag and still
+        // asks for the pair, so a dialog that outlives its own countdown keeps
+        // this map's boss count and loses only the killed half of it, which is
+        // the empty mask doing that rather than a second branch.
+        const auto counts = gh
+            ? game::countLfgEncounters(gh->getDungeonEncounters(), gh->getCurrentMapId(),
+                                       gh->getInstanceDifficulty(), prompt ? completedMask : 0u)
+            : game::LfgEncounterCounts{};
+        // Whole seconds: the client divides its milliseconds by 1000 as
+        // integers. WoWee's countdown is a frame-decayed float, and the dialog
+        // takes SecondsToTime(ceil(lockTimeleft)) of what it is handed
+        // (staticpopup.lua:2452,2467), so a fraction displays as the second up.
+        lua_pushnumber(L, static_cast<double>(static_cast<uint32_t>(secondsLeft)));
         lua_pushboolean(L, previouslySaved ? 1 : 0);
-        lua_pushinteger(L, static_cast<lua_Integer>(total));
-        lua_pushinteger(L, static_cast<lua_Integer>(complete));
+        // Both as numbers, which is what the client pushes them as (0x0084e2a0):
+        // the OnUpdate hands them straight to string.format's BOSSES_KILLED.
+        lua_pushnumber(L, static_cast<double>(counts.total));
+        lua_pushnumber(L, static_cast<double>(counts.complete));
         return 4;
     }},
     // Accept and be saved to the instance, or decline and go to the graveyard.
@@ -891,8 +1039,28 @@ void registerLfgLuaAPI(lua_State* L) {
     // answering yes would grey out a queue the server would have allowed.
     {"UnitHasLFGDeserter",       luaReturnFalse},
     {"UnitHasLFGRandomCooldown", luaReturnFalse},
-    // Filling an empty slot in a party already inside. Needs the party's own
-    // queue state, which is not tracked.
+    // CanPartyLFGBackfill() and GetPartyLFGBackfillInfo() (0x005556d0) - the row
+    // the queue frame puts up when the group the player just joined is itself
+    // queued, offering to go on queued with it (lfdframe.lua:124-135).
+    //
+    // Most of it was already being read. The roster handler 0x006d8870 takes the
+    // party's queue block inside its `groupType & 8` branch as one byte and a
+    // dword (0x006d88d1, 0x006d88e2): the dword is the packed dungeon entry this
+    // client keeps as lfgDungeonEntry - id behind 0xffffff, type in the byte
+    // above - and the byte, which this client reads and drops, is kept by the
+    // client at 0x00bd1989, where the gate tests bit 1 of it. The three answers
+    // all come off LFGDungeons.dbc through that entry's id: the row's name, its
+    // id, and its type - the same field 0x00554170 compares against 6 for a
+    // random offer, and the value the interface names typeID and never reads.
+    //
+    // What is missing is the first of the three tests, and it is not in the
+    // packet: 0x0052bd60 is handed a number the handler counts out over its four
+    // member slots by comparing each against the guids of the roster it is
+    // replacing (the block at 0x00bd1948), and the gate wants that tally in 1..3.
+    // So it is a diff across two rosters rather than a field, and answering the
+    // pair from the entry alone - which is everything else it takes - would offer
+    // to continue a queue the group is not in. PartyLFGStartBackfill is this
+    // notice's own button.
     {"CanPartyLFGBackfill",      luaReturnFalse},
     {"GetPartyLFGBackfillInfo",  [](lua_State* L) -> int { return luaReturnNil(L); }},
     {"PartyLFGStartBackfill",    luaReturnNothing},

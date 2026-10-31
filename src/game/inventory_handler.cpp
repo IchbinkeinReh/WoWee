@@ -204,17 +204,6 @@ std::vector<PendingAuctionLine>& pendingAuctionLines() {
     return lines;
 }
 
-/// The item as the auction lines name it (0x00706d70): its plain name, with
-/// a random suffix put on through ITEM_SUFFIX_TEMPLATE. No link.
-std::string auctionItemName(const GameHandler& owner, const std::string& name, int32_t randomProp) {
-    if (randomProp != 0) {
-        const std::string suffix = owner.getRandomPropertyName(randomProp);
-        if (!suffix.empty())
-            return interfaceFormat("ITEM_SUFFIX_TEMPLATE", "%s %s", {name, suffix});
-    }
-    return name;
-}
-
 /// ERR_AUCTION_SOLD_S, _EXPIRED_S, _OUTBID_S, _WON_S and _REMOVED_S, which
 /// the game error table sends as system chat - now if the item's name is
 /// known, else when its query answers.
@@ -223,7 +212,7 @@ void auctionItemLine(GameHandler& owner, uint32_t itemEntry, int32_t randomProp,
     const ItemQueryResponseData* info = owner.getItemInfo(itemEntry);
     if (info && !info->name.empty()) {
         owner.addSystemChatMessage(interfaceFormat(key, enUS,
-            {auctionItemName(owner, info->name, randomProp)}));
+            {owner.itemNameWithProperty(info->name, randomProp)}));
         return;
     }
     pendingAuctionLines().push_back({itemEntry, randomProp, key, enUS});
@@ -611,7 +600,8 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         uint32_t allPassQuality = allPassInfo ? allPassInfo->quality : 1u;
         // LOOT_ROLL_ALL_PASSED as CHAT_MSG_LOOT (0x006fb470).
         owner_.addLocalChatLine(ChatType::LOOT, interfaceFormat("LOOT_ROLL_ALL_PASSED", "Everyone passed on: %s",
-            {buildItemLink(itemId, allPassQuality, allPassName)}));
+            {buildItemLink(itemId, allPassQuality, allPassName,
+                           owner_.getPlayerLevel())}));
         endLootRoll(passedGuid, passedSlot);
     };
 
@@ -683,13 +673,9 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             owner_.ensureItemInfo(itemId);
             return;
         }
-        std::string itemName = info->name;
-        if (randomProp != 0) {
-            std::string suffix = owner_.getRandomPropertyName(randomProp);
-            if (!suffix.empty()) itemName += " " + suffix;
-        }
+        std::string itemName = owner_.itemNameWithProperty(info->name, randomProp);
         uint32_t quality = info->quality;
-        std::string link = buildItemLink(itemId, quality, itemName);
+        std::string link = buildItemLink(itemId, quality, itemName, owner_.getPlayerLevel());
         // LOOT_ITEM_SELF, LOOT_ITEM_PUSHED_SELF or LOOT_ITEM_CREATED_SELF (and
         // their _MULTIPLE) as CHAT_MSG_LOOT, as 0x00523900 picks them from the
         // packet's flags - and none when the server says not to show it. This
@@ -1647,12 +1633,14 @@ void InventoryHandler::handleLootRoll(network::Packet& packet) {
 std::string InventoryHandler::rollItemLink(uint32_t itemId, int32_t randomProp) {
     owner_.ensureItemInfo(itemId);
     auto* info = owner_.getItemInfo(itemId);
-    std::string itemName = (info && !info->name.empty()) ? info->name : ("Item #" + std::to_string(itemId));
-    if (randomProp != 0) {
-        std::string suffix = owner_.getRandomPropertyName(randomProp);
-        if (!suffix.empty()) itemName += " " + suffix;
-    }
-    return buildItemLink(itemId, info ? info->quality : 1u, itemName);
+    // The link's own text, so through the client's name builder rather than a
+    // joined space: a rolled property is put beside the name by
+    // ITEM_SUFFIX_TEMPLATE, which is how 0x00706d70 does it for every link and
+    // chat line that knows the id.
+    std::string itemName = owner_.itemNameWithProperty(
+        (info && !info->name.empty()) ? info->name : ("Item #" + std::to_string(itemId)),
+        randomProp);
+    return buildItemLink(itemId, info ? info->quality : 1u, itemName, owner_.getPlayerLevel());
 }
 
 void InventoryHandler::handleLootRollWon(network::Packet& packet) {
@@ -3167,6 +3155,25 @@ void InventoryHandler::swapBagSlots(int srcBagIndex, int dstBagIndex) {
         uint8_t dstSlot = static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT + dstBagIndex);
         LOG_INFO("swapBagSlots: bag ", srcBagIndex, " (slot ", (int)srcSlot,
                  ") <-> bag ", dstBagIndex, " (slot ", (int)dstSlot, ")");
+        // The client chooses its verb by which sides are on the character.  Its
+        // tail tests both sides' bag numbers and both sides' guids against the
+        // player's own (0x6dfb5e..0x6dfb72) and only on the character-both-sides
+        // path writes CMSG_SWAP_INV_ITEM (push $0x10d at 0x6dfb74) - the opcode
+        // dword plus exactly two slot bytes.  A disassembly is worth having for
+        // that one: the second byte looks missing in the decompile because it is
+        // emitted by the *other* branch's leg, reached from `push %ecx` at
+        // 0x6dfb90 by `jmp 0x6dfbf1`, which lands just past that leg's
+        // `push %edx` at 0x6dfbf0 so the shared write at 0x6dfbf4 emits the
+        // value already pushed.  A bag on either side takes the leg at 0x6dfbbc
+        // instead: four bytes, bag slot bag slot, each bag number read back from
+        // 0x006d29f0, which answers 0xff for a container that is not a bag.  The
+        // build below is that second shape with 0xff in both bag places - the
+        // bytes the client would have sent here, under the other opcode.
+        //
+        // Which cores answer which verb has not been compared: there is no server
+        // checkout on this machine (WOWEE_SERVER_SRC is unset), and
+        // WOWEE_NET_LOG_SWAP_ITEM is there for the day there is one.  So the send
+        // stays as it is.
         auto packet = SwapItemPacket::build(255, dstSlot, 255, srcSlot);
         owner_.getSocket()->send(packet);
     }
@@ -3592,15 +3599,88 @@ void InventoryHandler::selectDefaultStationery() {
     // successfully. So the first letter of a session could never be sent - the
     // button was disabled before it was ever pressed, which is exactly what the
     // input log shows and what "mail not being sent" turned out to be.
+    //
+    // The click is the interface's own - SendMailFrame_Reset ends with it - and
+    // it goes through SelectStationery, so the id it lands on is recorded by the
+    // binding and this side does not have to know which paper that was.
     owner_.runInterfaceCommand(
         "if StationeryPopupFrame and not StationeryPopupFrame.selectedIndex then "
         "StationeryPopupButton_OnClick(nil, 1) end");
+}
+
+const std::vector<StationeryOption>& InventoryHandler::stationeryOptions() {
+    stationeryOptions_.clear();
+    auto* am = owner_.services().assetManager;
+    if (!am || !am->isInitialized()) return stationeryOptions_;
+    auto dbc = am->loadDBCOptional("Stationery.dbc");
+    // ID, ItemID, art name (a string column), flags. The flags are an int: read
+    // as a string offset they hand back whatever the previous column's name
+    // happens to start with at that number.
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 4) return stationeryOptions_;
+
+    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+        StationeryOption o;
+        o.id = dbc->getUInt32(r, 0);
+        o.itemId = dbc->getUInt32(r, 1);
+        o.texture = dbc->getString(r, 2);
+        const bool freebie = (dbc->getUInt32(r, 3) & 1u) != 0u;
+        o.owned = o.itemId != 0 && owner_.getInventory().countItem(o.itemId) > 0;
+        if (!freebie && !o.owned) continue;
+
+        // The row is labelled with the item's own name and priced with what a
+        // vendor asks for it. The client asks for that template the way a
+        // tooltip miss does - a paper the player has never seen is named for
+        // the first time in this popup, so the query usually has to be sent.
+        const auto* info = o.itemId ? owner_.getItemInfo(o.itemId) : nullptr;
+        if (!info) {
+            if (o.itemId) owner_.queryItemInfo(o.itemId, 0);
+        } else {
+            o.name = info->name;
+            // A paper already in the bags is drawn with no price at all: the
+            // client reads the price off the item record only when both its
+            // counts of that item are zero (0x0056df80).
+            o.hasCost = !o.owned;
+            o.cost = info->buyPrice;
+        }
+        stationeryOptions_.push_back(std::move(o));
+    }
+
+    // The client's order (0x0056dd00): papers already in the bags ahead of
+    // those merely offered, then by the item's name. Ahead of both it puts the
+    // rows that have art, which here is all seven - so that half of the
+    // comparison has nothing to order and is not restated.
+    std::stable_sort(stationeryOptions_.begin(), stationeryOptions_.end(),
+                     [](const StationeryOption& a, const StationeryOption& b) {
+        if (a.owned != b.owned) return a.owned;
+        return a.name < b.name;
+    });
+    return stationeryOptions_;
+}
+
+void InventoryHandler::selectStationery(uint32_t index) {
+    const auto& options = stationeryOptions();
+    selectedStationery_ = (index >= 1 && index <= options.size()) ? options[index - 1].id : 0;
+}
+
+std::optional<std::string> InventoryHandler::stationeryArt(uint32_t id) const {
+    if (id == 0) return std::nullopt;
+    auto* am = owner_.services().assetManager;
+    if (!am || !am->isInitialized()) return std::nullopt;
+    auto dbc = am->loadDBCOptional("Stationery.dbc");
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 4) return std::nullopt;
+    const int32_t row = dbc->findRecordById(id);
+    if (row < 0) return std::nullopt;
+    return dbc->getString(static_cast<uint32_t>(row), 2);
 }
 
 void InventoryHandler::closeMailbox() {
     mailboxOpen_ = false;
     mailboxGuid_ = 0;
     showMailCompose_ = false;
+    // The client's MailInfo reset clears the chosen paper with the rest of the
+    // mail store (0x00571530 zeroes the count, the choice and the draft money
+    // together), so the next letter starts with no paper picked.
+    selectedStationery_ = 0;
     clearMailAttachments();
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_CLOSED", {});
     // A look for mail held over while it was open goes out now, with nothing
@@ -3699,9 +3779,11 @@ void InventoryHandler::sendMail(const std::string& recipient, const std::string&
         refuseSend("This realm's mail carries one item per letter.", "too many attachments");
         return;
     }
-    auto packet = owner_.getPacketParsers()->buildSendMail(mailboxGuid_, recipient, subject, body, money, cod, itemGuids);
+    auto packet = owner_.getPacketParsers()->buildSendMail(mailboxGuid_, recipient, subject, body,
+                                                           money, cod, selectedStationery_, itemGuids);
     LOG_INFO("sendMail: to='", recipient, "' subject='", subject, "' money=", money,
-             " attachments=", itemGuids.size(), " mailboxGuid=", mailboxGuid_);
+             " attachments=", itemGuids.size(), " stationery=", selectedStationery_,
+             " mailboxGuid=", mailboxGuid_);
     owner_.getSocket()->send(packet);
     clearMailAttachments();
 }
@@ -3735,10 +3817,18 @@ void InventoryHandler::noteMailAttachRefundable(int attachIndex) {
     if (refund->playedSincePurchase >= kRefundWindow) return;   // window is over
     if (!owner_.addonEventCallbackRef()) return;
     const auto* info = owner_.getItemInfo(att.item.itemId);
+    // The attachment is an item this client has fields for, so its link is the
+    // instance link - and the property in the numbers is the same one the words
+    // carry, which is how 0x0061e290 feeds its position-seven value to
+    // 0x00706d70 rather than letting the two disagree.
+    const game::ItemLinkInstance inst = owner_.itemLinkInstance(att.itemGuid);
+    std::string linkName = owner_.itemNameWithProperty(
+        info ? info->name : att.item.name, inst.randomPropertyId);
     owner_.addonEventCallbackRef()(
         "MAIL_LOCK_SEND_ITEMS",
         {std::to_string(attachIndex + 1),
-         info ? game::buildItemLink(att.item.itemId, info->quality, info->name)
+         info ? game::itemChatLink(att.item.itemId, info->quality, linkName, inst,
+                                   owner_.getPlayerLevel())
               : att.item.name});
 }
 
@@ -4503,6 +4593,21 @@ void InventoryHandler::handleAuctionHello(network::Packet& packet) {
     // needed the same expansion difference written a second time to.
     AuctionHelloData data;
     if (!AuctionHelloParser::parse(packet, data)) return;
+    if (data.enabled == 0) {
+        // That byte is the house's answer and not a formality: 0x0059ff40 opens
+        // the window only when it is non-zero. A zero never reaches 0x0059f000,
+        // so the client takes no interaction object (that is 0x0051fce0, called
+        // from inside 0x0059f000 - which is also why the gossip window stays
+        // standing, its close being part of that), keeps no house id, and raises
+        // no AUCTION_HOUSE_SHOW (415). What it raises instead is
+        // AUCTION_HOUSE_DISABLED (670) with no argument at all, and
+        // uiparent.lua:955 answers that with StaticPopup_Show
+        // ("AUCTION_HOUSE_DISABLED"): the house is closed at the moment, try
+        // again later. A realm that would not open the house showed it open here
+        // with nothing in it, over a gossip window the real client never closed.
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("AUCTION_HOUSE_DISABLED", {});
+        return;
+    }
     openAuctionHouse(data.auctioneerGuid);
     auctionHouseId_ = data.auctionHouseId;
     if (owner_.isGossipWindowOpen()) owner_.closeGossip();   // if 0x00512e60 has not already
@@ -4754,6 +4859,20 @@ void InventoryHandler::resetTradeState() {
     peerTradeSlots_ = {};
     myTradeGold_ = 0;
     peerTradeGold_ = 0;
+    // The client zeroes both enchant spells where it opens the window (0x007044a0
+    // case 2, alongside the memset of the seven slots); either way the next
+    // offer brings its own.
+    tradeEnchantSpell_[0] = 0;
+    tradeEnchantSpell_[1] = 0;
+    // And what was announced of them.  The client zeroes the display it
+    // compares against beside the slots themselves (0x005870a0, which clears
+    // 0xbfa400 through 0xbfa674 when the window opens and when it closes), so
+    // the next trade starts with nothing announced rather than with the last
+    // one's rows still matching.
+    shownTradeSlots_[0] = {};
+    shownTradeSlots_[1] = {};
+    shownTradeEnchantSpell_[0] = 0;
+    shownTradeEnchantSpell_[1] = 0;
     tradeSelfAccepted_ = false;
     tradePartnerAccepted_ = false;
 }
@@ -4827,6 +4946,35 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             tradeStatus_ = TradeStatus::Open;
             tradeSelfAccepted_ = false;
             tradePartnerAccepted_ = false;
+            // The table starts empty.  Status 2 (0x007044a0 case 2) zeroes the
+            // row store of both halves - _memset(0xca0b80, 0, 0x460), all
+            // fourteen rows - along with the gold each side has down
+            // (0xca0b74, 0xca0b78) and both enchant spells (0xca0ff0,
+            // 0xca0ff4), and 0x005870a0 clears beside them the mirrored display
+            // the window answers from (0xbfa400 through 0xbfa5d8) and this
+            // half's item guids and counts (0xbfa5dc through 0xbfa654).  Status
+            // 8 zeroes the rows and the gold the same way when a trade
+            // completes, which is what keeps a finished trade from leaving
+            // anything behind.
+            //
+            // It does leave something behind here.  The reset that closes a
+            // window is not reached by a completed trade - the final
+            // SMSG_TRADE_STATUS_EXTENDED may arrive after the completion and
+            // reads the state - and here the rows are exactly what the window
+            // answers from.  So the next window opened showing the last trade's
+            // items in both halves, with their names, quantities and links, and
+            // this player still holding the gold they had put down, for as long
+            // as the realm stayed quiet about those slots.
+            myTradeSlots_ = {};
+            peerTradeSlots_ = {};
+            myTradeGold_ = 0;
+            peerTradeGold_ = 0;
+            tradeEnchantSpell_[0] = 0;
+            tradeEnchantSpell_[1] = 0;
+            shownTradeSlots_[0] = {};
+            shownTradeSlots_[1] = {};
+            shownTradeEnchantSpell_[0] = 0;
+            shownTradeEnchantSpell_[1] = 0;
             // TRADE_SHOW opens with the other player (0x005873e0 ->
             // 0x005870a0 -> 0x0051fce0): the one who asked, or the one
             // asked (0x00703c10, set by 0x00703cf0 or BEGIN_TRADE).
@@ -4949,7 +5097,9 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
     //   uint32 slotCount      seven, twice
     //   uint32 slotCount
     //   uint32 gold           the *header* carries it, not the tail
-    //   uint32 spell          cast on the lowest slot's item
+    //   uint32 spell          the enchant slot's spell: 0x00704680 keeps it at
+    //                         0xca0ff0 + side*4, and 0x00703c50 reads it back to
+    //                         name the enchant slot.  Nothing casts it.
     //   per slot (seven of them):
     //     uint8  slotIndex
     //     uint32 entry, displayId, stackCount, wrapped
@@ -4982,11 +5132,15 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
     const uint32_t slotCount = packet.readUInt32();
     /*uint32_t slotCount2 =*/ packet.readUInt32();
     const uint32_t gold = packet.readUInt32();
-    /*uint32_t spell     =*/ packet.readUInt32();
+    const uint32_t spell = packet.readUInt32();
 
     // Zero is this player's own offer, which is the side myTradeSlots_ holds.
     const bool ownSide = (traderData == 0);
     auto& slots = ownSide ? myTradeSlots_ : peerTradeSlots_;
+
+    // Kept by side, exactly as the packet says it, and read back the other way
+    // round - which is the client's own mix-up, not a translation of it.
+    tradeEnchantSpell_[ownSide ? 0 : 1] = spell;
 
     uint32_t count = slotCount;
     if (count > TRADE_SLOT_COUNT) count = TRADE_SLOT_COUNT;
@@ -5001,34 +5155,51 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
         if (!packet.hasRemaining(kSlotBytes)) { packet.skipAll(); break; }
         const uint8_t slotNum = packet.readUInt8();
         if (slotNum < TRADE_SLOT_COUNT) mentioned[slotNum] = true;
-        const uint32_t itemId    = packet.readUInt32();
-        const uint32_t displayId = packet.readUInt32();
-        const uint32_t stackCnt  = packet.readUInt32();
-        /*uint32_t wrapped     =*/ packet.readUInt32();
-        /*uint64_t giftCreator =*/ packet.readUInt64();
-        /*uint32_t permEnchant =*/ packet.readUInt32();
-        for (int g = 0; g < 3; ++g) packet.readUInt32();   // socket enchants
-        /*uint64_t creator     =*/ packet.readUInt64();
-        /*uint32_t charges     =*/ packet.readUInt32();
-        /*uint32_t suffixFactor=*/ packet.readUInt32();
-        /*int32_t randomProp   =*/ packet.readUInt32();
-        /*uint32_t lockId      =*/ packet.readUInt32();
-        /*uint32_t maxDur      =*/ packet.readUInt32();
-        /*uint32_t durability  =*/ packet.readUInt32();
+        const uint32_t itemId      = packet.readUInt32();
+        const uint32_t displayId   = packet.readUInt32();
+        const uint32_t stackCnt    = packet.readUInt32();
+        const uint32_t wrapped     = packet.readUInt32();
+        const uint64_t giftCreator = packet.readUInt64();
+        const uint32_t permEnchant = packet.readUInt32();
+        std::array<uint32_t, 3> gems{};
+        for (int g = 0; g < 3; ++g) gems[g] = packet.readUInt32();   // socket enchants
+        const uint64_t creator     = packet.readUInt64();
+        const uint32_t charges     = packet.readUInt32();
+        const uint32_t suffixFactor = packet.readUInt32();
+        const int32_t randomProp  = static_cast<int32_t>(packet.readUInt32());
+        const uint32_t lockId     = packet.readUInt32();
+        const uint32_t maxDur     = packet.readUInt32();
+        const uint32_t durability = packet.readUInt32();
 
         if (slotNum < TRADE_SLOT_COUNT) {
-            slots[slotNum].itemId = itemId;
-            slots[slotNum].displayId = displayId;
-            slots[slotNum].stackCount = stackCnt;
+            TradeSlot offer;
+            offer.itemId = itemId;
+            offer.displayId = displayId;
+            offer.stackCount = stackCnt;
+            offer.wrapped = wrapped;
+            offer.giftCreatorGuid = giftCreator;
+            offer.creatorGuid = creator;
+            offer.charges = charges;
+            offer.lockId = lockId;
+            offer.maxDurability = maxDur;
+            offer.durability = durability;
+            // The client puts these four - and nothing else of the row's - into
+            // the link it answers for a traded item: 0x0061e290(entry, quality,
+            // row+0x0c, row+0x10..0x18, row+0x40, row+0x3c).  The seed is the
+            // suffix factor, exactly as itemLinkInstance reads it off an item
+            // object, and the property is the same one that decorates the name.
+            offer.inst = ItemLinkInstance{permEnchant, gems, randomProp, suffixFactor};
+            slots[slotNum] = offer;
         }
         if (itemId != 0) owner_.ensureItemInfo(itemId);
     }
     packet.skipAll();
     for (int slot = 0; slot < TRADE_SLOT_COUNT; ++slot) {
         if (mentioned[static_cast<size_t>(slot)]) continue;
-        slots[slot].itemId = 0;
-        slots[slot].displayId = 0;
-        slots[slot].stackCount = 0;
+        // The whole row, not just what the window shows: an empty slot is an
+        // empty row for the comparison below, and a row left half-cleared would
+        // read as unchanged the next time the slot is filled with what survived.
+        slots[slot] = {};
     }
 
     uint64_t& side = ownSide ? myTradeGold_ : peerTradeGold_;
@@ -5037,6 +5208,53 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
 
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("TRADE_UPDATE", {});
+        // A slot whose offer moved is named to the window on its own.
+        //
+        // The partner's half is decided by comparison: 0x00586dc0 holds a copy
+        // of every word of the row it last announced (0xbfa400 through
+        // 0xbfa5c0) and fires TRADE_TARGET_ITEM_CHANGED for a row that differs
+        // from the one the new packet brought - seventeen words, everything the
+        // row holds but the display id and two spare dwords.  This half is
+        // announced by the routines that put an item on the table and take one
+        // off it - 0x005869a0 when a slot is filled and 0x00586410 when it is
+        // emptied, both with slot+1 - which the client reaches through the item
+        // on its cursor, guid and all, and this client reaches through the
+        // packet, because a packet is the only thing that has ever filled this
+        // half.  Either way: one event per slot whose offer changed, same
+        // argument, and a slot emptied by being left out of the packet says the
+        // same thing as one emptied by an empty row.
+        //
+        // The copy is only brought up to date where something moved, as the
+        // client updates its own display only inside the branch that fired.
+        auto& shown = shownTradeSlots_[ownSide ? 0 : 1];
+        for (int slot = 0; slot < TRADE_SLOT_COUNT; ++slot) {
+            auto& last = shown[static_cast<size_t>(slot)];
+            const auto& live = slots[static_cast<size_t>(slot)];
+            if (live.sameOffer(last)) continue;
+            last = live;
+            owner_.addonEventCallbackRef()(
+                ownSide ? "TRADE_PLAYER_ITEM_CHANGED" : "TRADE_TARGET_ITEM_CHANGED",
+                {std::to_string(slot + 1)});
+        }
+
+        // The enchant slot's spell is a header dword, not a row, so there is no
+        // row to compare it with: the client keeps the value it last announced
+        // for each side (0xbfa668 for the one at 0xca0ff0, 0xbfa66c for the one
+        // at 0xca0ff4) and names the enchant slot itself when one of them moved.
+        // Both sides are checked on every offer, whichever one the packet
+        // described, and the index a spell sits at is the index its own offer
+        // wrote - which is the same crossing the window's item bindings already
+        // answer through (see getTradeEnchantSpell): the side that this packet
+        // says is this player's fires the *partner's* event.
+        for (int spellIndex = 0; spellIndex < 2; ++spellIndex) {
+            const size_t i = static_cast<size_t>(spellIndex);
+            if (shownTradeEnchantSpell_[i] == tradeEnchantSpell_[i]) continue;
+            shownTradeEnchantSpell_[i] = tradeEnchantSpell_[i];
+            owner_.addonEventCallbackRef()(
+                spellIndex == 0 ? "TRADE_TARGET_ITEM_CHANGED" : "TRADE_PLAYER_ITEM_CHANGED",
+                {std::to_string(TRADE_SLOT_COUNT)});
+        }
+
         // The trade window's own refresh redraws the item slots and nothing
         // else; the two money frames listen for this and only this. Without it
         // the gold on the table stays at whatever it read when the window
@@ -5051,6 +5269,13 @@ void InventoryHandler::handleTradeStatusExtended(network::Packet& packet) {
         if (goldChanged) {
             owner_.addonEventCallbackRef()(
                 ownSide ? "PLAYER_TRADE_MONEY" : "TRADE_MONEY_CHANGED", {});
+            // PLAYER_MONEY rides along with this player's own leg and with
+            // nothing else (0x00586dc0 fires 0x138 and then 0xa3, never either
+            // one alone; the partner's leg, 0x137, stands by itself).  What
+            // changed is the gold on the table rather than the purse, and the
+            // client refreshes the purse frames anyway - the same event the
+            // money field's own watcher raises.
+            if (ownSide) owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
         }
     }
 }
@@ -5439,7 +5664,7 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                 if (it->itemEntry != data.entry) { ++it; continue; }
                 if (!data.name.empty())
                     owner_.addSystemChatMessage(interfaceFormat(it->key, it->enUS,
-                        {auctionItemName(owner_, data.name, it->randomProp)}));
+                        {owner_.itemNameWithProperty(data.name, it->randomProp)}));
                 it = waiting.erase(it);
             }
         }
@@ -5447,12 +5672,11 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         // Flush any deferred loot notifications waiting on this item's name/quality.
         for (auto it = owner_.pendingItemPushNotifsRef().begin(); it != owner_.pendingItemPushNotifsRef().end(); ) {
             if (it->itemId == data.entry) {
-                std::string itemName = data.name.empty() ? ("item #" + std::to_string(data.entry)) : data.name;
-                if (it->randomProp != 0) {
-                    std::string suffix = owner_.getRandomPropertyName(it->randomProp);
-                    if (!suffix.empty()) itemName += " " + suffix;
-                }
-                std::string link = buildItemLink(data.entry, data.quality, itemName);
+                std::string itemName = owner_.itemNameWithProperty(
+                    data.name.empty() ? ("item #" + std::to_string(data.entry)) : data.name,
+                    it->randomProp);
+                std::string link = buildItemLink(data.entry, data.quality, itemName,
+                                                 owner_.getPlayerLevel());
                 // The same line the immediate path prints (0x00523900).
                 const interface_text::ItemPush push{.self = it->self, .received = it->received,
                     .created = it->created, .showInChat = it->showInChat, .count = it->count};
@@ -6495,10 +6719,21 @@ void InventoryHandler::updateOtherPlayerVisibleItems(uint64_t guid, const FlatFi
     if (base < 0 || stride <= 0) return; // Defensive: should never happen with defaults.
 
     std::array<uint32_t, 19> newEntries{};
+    std::array<uint32_t, 19> newEnchants{};
     for (int s = 0; s < 19; s++) {
         uint16_t idx = static_cast<uint16_t>(base + s * stride);
         auto it = fields.find(idx);
-        if (it != fields.end()) newEntries[s] = it->second;
+        if (it != fields.end()) newEntries[s] = visibleItemEntryField(it->second);
+        // The dword beside the entry, the enchantment half of the pair.  Only at
+        // stride 2, which is the layout rather than a guess: 0x006de360 reads the
+        // pair as `block + 0x21c + slot*8`, eight bytes a slot, and the descriptor
+        // records at 0x00ac4800 name ENTRYID then ENCHANTMENT with nothing between
+        // them.  A layout the heuristic settled on with another stride has no pair
+        // to read - `idx + 1` would be the next slot's entry - so it stays blank.
+        if (stride == 2) {
+            const auto eit = fields.find(static_cast<uint16_t>(idx + 1));
+            if (eit != fields.end()) newEnchants[s] = eit->second;
+        }
     }
 
     int nonZero = 0;
@@ -6581,6 +6816,12 @@ void InventoryHandler::updateOtherPlayerVisibleItems(uint64_t guid, const FlatFi
         old = newEntries;
         changed = true;
     }
+    // Kept beside the entries because that is the pair they arrive in.  Not
+    // folded into `changed`: the entry is what redresses a model, and an
+    // enchantment change on the player's own weapon arrives through the item
+    // object rather than this table.  GameHandler::visibleItemRecord answers
+    // these two together, as the client's fallback record does.
+    owner_.otherPlayerVisibleItemEnchantsRef()[guid] = newEnchants;
     // The helm and cloak switches dress the model too (0x006e0fd0).
     {
         auto fit = fields.find(fieldIndex(UF::PLAYER_FLAGS));
@@ -6630,10 +6871,17 @@ void InventoryHandler::updateOtherPlayerVisibleItems(uint64_t guid, const FlatFi
     }
 }
 
-void InventoryHandler::cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries) {
+void InventoryHandler::cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries,
+                                                     const std::array<ItemLinkInstance, 19>& instances) {
     if (guid == 0) return;
 
     owner_.inspectedPlayerItemEntriesRef()[guid] = itemEntries;
+    // One row per slot, entry and instance together: 0x006cdf30 reads them out
+    // of the inspect block in one run and writes them into one 72-byte record,
+    // so splitting them across two writes would be the client's row in name only.
+    // Written even when empty, so a re-inspect that answers with less clears what
+    // the last one left behind instead of pairing old numbers with new entries.
+    owner_.inspectedPlayerItemInstancesRef()[guid] = instances;
 
     std::array<uint32_t, 19> displayIds{};
     std::array<uint8_t, 19> invTypes{};

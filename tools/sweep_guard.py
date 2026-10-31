@@ -238,6 +238,13 @@ CHECKS = [
     # (build metadata on Binding, an async-load hint). The one that came out
     # was motionScriptsWhileDisabled, which was not inert: nothing here ever
     # suppressed motion scripts, so every greyed control answered the mouse.
+    #
+    # The check splits that list when the decompile's strings.tsv is its second
+    # argument: five of the fourteen - the two Minimap model attributes and the
+    # three XML namespace ones - are names the 12340 client carries nothing for,
+    # so that client never read them out of the XML either and they are printed
+    # apart. This table runs every sweep with no arguments, so the number checked
+    # here is the unsplit fourteen; the ceiling is against that, not the nine.
     ("declared_vs_read_check.py",
      r"attributes declared, (\d+) the emitter never names", 16,
      "XML attributes the emitter never reads"),
@@ -259,7 +266,11 @@ CHECKS = [
     # Two, and both named: the chat box's input language, which the binding
     # beside it says outright that nothing fires yet, and the tooltip's default
     # anchor. Everything else that once appeared here was the sweep's own
-    # blindness - see the comments in the check.
+    # blindness - see the comments in the check. It read three again for a
+    # moment over OnFinished, which is fired from Lua bootstrap text inside a
+    # .cpp through a runner that takes the name quoted
+    # (`__WoweeRunScriptSlot(a, 'OnFinished')`); the check did not know that
+    # shape, and a sweep blind to one runner reports the whole family dead.
     ("declared_vs_read_check.py",
      r"^(\d+) script type\(s\) declared and never fired", 2,
      "script handlers FrameXML declares that nothing fires"),
@@ -369,13 +380,22 @@ CHECKS = [
     ("framexml_art_check.py",
      r"^(\d+) not in this install", 1,
      "art the interface asks for that this install does not have"),
-    # CVAR_UPDATE carries the CVar's label, not its name, and the two are
-    # different spellings - so a mapping that cannot produce a label the
-    # interface tests for is a branch that can never be taken. Silently: a
-    # string that is not equal to another string is not an error.
+    # What a CVar change is announced as is SetCVar's third argument, and the
+    # interface's settings tables carry that pair (`cvar = "buffDurations",
+    # event = "SHOW_BUFF_DURATION_TEXT"`). A change made in this client's own
+    # settings window has no panel to supply it, so it announces from kNamed -
+    # and every row here was a setting whose CVar moved while the frames waiting
+    # for the announcement sat, because the transform answered BUFF_DURATIONS and
+    # the listeners compare SHOW_BUFF_DURATION_TEXT.
     ("framexml_cvar_label_check.py",
-     r"^(\d+) that no CVar name here would produce", 1,
-     "CVAR_UPDATE labels the interface tests for that nothing can produce"),
+     r"^(\d+) pair\(s\) this client would announce as something else", 0,
+     "CVAR_UPDATE announcements disagreeing with what the interface declares"),
+    # A label compared in the interface and passed by nobody is a dead branch
+    # there too, so it is only a gap where this client cannot reach it either:
+    # a setting this window drives whose frame never hears about it.
+    ("framexml_cvar_label_check.py",
+     r"(\d+) of them unreachable here as well", 0,
+     "CVAR_UPDATE labels the interface compares that this client cannot announce"),
     # The same question the event-arity sweeps ask, one layer down: an inline
     # <OnX> body is a function whose parameter list the emitter decides from
     # the script's name, and a body naming something that list does not carry
@@ -475,6 +495,28 @@ CHECKS = [
     ("dbc_layout_check.py",
      r"^(\d+) field\(s\) naming a column the file does not have", 0,
      "DBC field indices naming a column the file does not have"),
+    # The same layouts naming a column that exists and answers no string in any
+    # record - the in-range half of the problem, which the line above cannot see
+    # at all. One row, read and kept: Spell.SpellFamilyName = 208 is not a string
+    # in 3.3.5 but the spell's family *id*, a small integer, and only became a
+    # localised name in a later expansion. The name ends in "Name" and the column
+    # does not hold one, which is the mistake this section can make; it is pinned
+    # rather than filtered out, because the filter would be as much of a guess as
+    # the name was and a second such row is worth reading.
+    #
+    # Twenty-two other rows went the first time this was written, all of them the
+    # same false alarm: DBCFile::promoteLocalizedStrings copies a non-enUS file's
+    # text back to each localised block's first column before anything reads it,
+    # so CharTitles.Title = 2 and Spell.Name = 136 read correctly out of columns
+    # that are zero in the file. That rule is ported into the sweep, which is
+    # what makes this line worth having: the two columns it does not explain are
+    # findings. That is also how the male/female split in CharTitles.dbc turned
+    # up - and reading only the male column named every female player by the male
+    # form of her title, which in German is a different word.
+    ("dbc_layout_check.py",
+     r"^(\d+) field\(s\) naming a column the file does have, which answers no "
+     "string at all", 1,
+     "DBC field indices naming an in-range column that answers no string"),
     # Packet handlers that change this client's own model, tell the player in
     # chat, and tell the interface nothing - the shape that produces a bug
     # correct after a relog and wrong until then. Twenty, each read once: what
@@ -504,16 +546,24 @@ CHECKS = [
     # arrived as a letter with the raw colon-separated body in it. A field
     # nobody reads usually means a branch nobody runs.
     #
-    # Five were answered the day it was written and
-    # both were live - a loot row the player cannot take drawing as ordinary
-    # loot, and a group invite the server had already refused raising the
-    # accept popup. Both sat next to a comment saying the data was unavailable,
-    # which is the shape this exists to catch.
+    # Two of them were live the day it was written - a loot row the player
+    # cannot take drawing as ordinary loot, and a group invite the server had
+    # already refused raising the accept popup. Both sat next to a comment
+    # saying the data was unavailable, which is the shape this exists to catch.
+    # The rest of the set are fields checked once and found correctly unread,
+    # each with its reason on its own line in the tool.
+    #
+    # Zero as of 2026-10-30. The last three were a melee swing's per-entry
+    # integer damage and the count that sizes its run - neither reaches a log
+    # line in either client, since the amount shown is the total ahead of the
+    # run and the only per-entry sums are the absorb and resist arrays, capped
+    # at two entries - and an auction mail's lot id, which names an item
+    # instance the mail list never describes.
     #
     # The tool carries its own canary, because two separate mistakes make it
     # report a clean zero while seeing nothing at all.
     ("parsed_never_read_check.py",
-     r"^(\d+) parsed and never read", 3,
+     r"^(\d+) parsed and never read", 0,
      "packet fields stored by the parser and read by nobody"),
     # The mirror of the row above: a field every reader agrees on and no writer
     # ever fills, so they all agree on the declaration's initialiser. Zero,

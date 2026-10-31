@@ -694,7 +694,19 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         readyCheckDeadline_.reset();
         readyCheckInitiatorGuid_ = 0;
         readyCheckAnswers_.clear();
-        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("READY_CHECK_FINISHED", {});
+        // The one argument is the flag the original sends, and sending nothing
+        // was a line of chat nobody earned.  readycheck.lua unpacks it as
+        // `local preempted = ...`, and when it is *not* set and the viewer is
+        // not the one who started the check, that handler adds
+        // READY_CHECK_YOU_WERE_AFK to the chat frame.  The original raises this
+        // event from one site only (0x00574880, at 00570000.c:3384) and always
+        // with the format "%d" and the value 1 - it fires when an answer turns
+        // up from somebody who is not in the check it is tracking, which ends
+        // that check without blaming anyone for being away.  Whether a player
+        // was AFK is its own timer's business (0x00573390), and nothing here
+        // knows it either, so the flag goes out as the client sends it.
+        if (owner_.addonEventCallbackRef())
+            owner_.addonEventCallbackRef()("READY_CHECK_FINISHED", {"1"});
     };
     table[Opcode::SMSG_RAID_INSTANCE_INFO] = [this](network::Packet& packet) { handleRaidInstanceInfo(packet); };
 
@@ -1062,6 +1074,23 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         const uint32_t completedMask = packet.readUInt32();
         const uint8_t previouslySaved = packet.readUInt8();
 
+        // 0x00513b20 branches on the countdown instead of storing it: with
+        // milliseconds left it stamps clock + duration, keeps the mask and the
+        // saved flag, and says INSTANCE_LOCK_START (0x278); with none it clears
+        // all three and says INSTANCE_LOCK_STOP (0x279). A zero-length query is
+        // the realm *withdrawing* the question, not a question with no time on
+        // it, and this announced a START either way - which re-opened the dialog
+        // the realm had just taken away, and left the prompt active for a frame
+        // until the lapse tick closed it (below, where the same STOP is said).
+        if (timerMs == 0) {
+            instanceLock_ = InstanceLockPrompt{};
+            LOG_INFO("SMSG_INSTANCE_LOCK_WARNING_QUERY: withdrawn, ",
+                     previouslySaved ? "was" : "was not", " previously saved, mask 0x",
+                     std::hex, completedMask, std::dec);
+            owner_.fireAddonEvent("INSTANCE_LOCK_STOP", {});
+            return;
+        }
+
         instanceLock_.active = true;
         instanceLock_.secondsLeft = static_cast<float>(timerMs) / 1000.0f;
         instanceLock_.previouslySaved = (previouslySaved != 0);
@@ -1182,8 +1211,22 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         handleUpdateLfgList(packet);
     };
     table[Opcode::SMSG_OPEN_LFG_DUNGEON_FINDER] = [this](network::Packet& packet) {
+        // One uint32: the dungeon the server means. The client (0x005528d0,
+        // registered for this opcode at 0x006b0b80(0x515,…)) reads it and raises
+        // LFG_OPEN_FROM_GOSSIP with it, and lfdframe.lua:91 does the rest from
+        // that one number - marks LFDParentFrame.fromGossip, which is what
+        // closes the window again when the gossip that asked for it closes
+        // (LFDParentFrame's own GOSSIP_CLOSED handler), shows the panel, and
+        // sets LFDQueueFrame.type to that dungeon so the panel opens on it
+        // rather than on the random queue. Opening the window here instead threw
+        // the number away and left the window belonging to nobody.
+        uint32_t dungeonId = 0;
+        if (packet.hasRemaining(4)) dungeonId = packet.readUInt32();
         packet.skipAll();
-        if (owner_.openLfgCallbackRef()) owner_.openLfgCallbackRef()();
+        if (owner_.addonEventCallbackRef()) {
+            owner_.addonEventCallbackRef()("LFG_OPEN_FROM_GOSSIP",
+                                           {std::to_string(dungeonId)});
+        }
     };
 
     // ---- Arena ----
@@ -1317,7 +1360,13 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
         std::array<uint32_t, 19> items{};
         std::array<uint16_t, 19> enchantIds{};
         if (parseInspectEquipmentPayload(packet, guid, items, enchantIds)) {
-            owner_.cacheInspectedPlayerEquipment(guid, items);
+            // These cores' fixed-size records carry one enchant per slot and
+            // nothing else, so the row has the permanent enchant and no gems,
+            // property or seed - the shape WotLK's inspect block also leaves
+            // when a mask bit is clear.
+            std::array<ItemLinkInstance, 19> gear{};
+            for (size_t s = 0; s < gear.size(); ++s) gear[s].enchantId = enchantIds[s];
+            owner_.cacheInspectedPlayerEquipment(guid, items, gear);
 
             auto entity = owner_.getEntityManager().getEntity(guid);
             std::string playerName = "Target";
@@ -1498,8 +1547,8 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
 
     // BuildEnchantmentsInfoData, as 0x006cdf30 reads it.
     std::array<uint32_t, 19> itemEntries{};
-    std::array<uint16_t, 19> enchantIds{};
-    const bool sawGear = readInspectEnchantments(packet, itemEntries, enchantIds);
+    std::array<ItemLinkInstance, 19> gear{};
+    const bool sawGear = readInspectEnchantments(packet, itemEntries, gear);
 
     // A different player means the honour figures in hand are somebody else's.
     // The fields here are assigned one at a time rather than as a whole struct,
@@ -1524,7 +1573,11 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
     inspectResult_.talentTreePoints  = {};
     inspectResult_.talentGroups      = talentGroupCount;
     inspectResult_.activeTalentGroup = activeTalentGroup;
-    inspectResult_.enchantIds        = enchantIds;
+    // The permanent enchant of each slot, which is what the inspect window's
+    // own row keeps; the gems, the property and the seed the same block
+    // carried go to the gear cache, where the links and tooltips ask for them.
+    for (size_t s = 0; s < gear.size(); ++s)
+        inspectResult_.enchantIds[s] = static_cast<uint16_t>(gear[s].enchantId);
     inspectResult_.talentRanks       = std::move(inspectTalents);
     inspectResult_.classId           = owner_.lookupPlayerClass(guid);
 
@@ -1534,7 +1587,7 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
     // paperdoll however well equipped they were.
     if (sawGear) {
         inspectResult_.itemEntries = itemEntries;
-        owner_.cacheInspectedPlayerEquipment(guid, itemEntries);
+        owner_.cacheInspectedPlayerEquipment(guid, itemEntries, gear);
     } else {
         auto gearIt = owner_.inspectedPlayerItemEntriesRef().find(guid);
         inspectResult_.itemEntries =
@@ -1715,6 +1768,59 @@ void SocialHandler::removeIgnore(const std::string& playerName) {
     // SMSG_FRIEND_STATUS before updating its cache.)
     owner_.ignoreListGuidsRef().erase(it->second);
     LOG_INFO("Sent remove ignore request for: ", playerName);
+}
+
+/// A name as the contact lists match one. Both mute walks compare with
+/// 0x0076ea40 - case-blind, against the "%s-%s" display name the record cache
+/// holds - so the row a player typed differs from the row the realm sent only in
+/// case. Rows whose name was never resolved are not compared at all: the walk
+/// skips them when the record lookup answers nothing.
+static bool sameMuteName(const std::string& a, const std::string& b) {
+    if (a.empty() || b.empty()) return false;
+    return a.size() == b.size() &&
+           std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+               return std::tolower(static_cast<unsigned char>(x)) ==
+                      std::tolower(static_cast<unsigned char>(y));
+           });
+}
+
+// AddMute (0x006b6c30 → 0x006b62c0). The walk over the client's own mute array
+// decides the whole thing: a name it finds gets ERR_VOICE_IGNORE_ALREADY_S
+// naming that row (0x005216f0(0x239, record) → ERR_VOICE_IGNORE_ALREADY_S, the
+// 569th row of the error table) and the request is never sent; only a walk that
+// runs past all fifty rows sends, and it sends the NAME (0x3db).
+void SocialHandler::addVoiceIgnore(const std::string& playerName) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (playerName.empty()) return;
+    for (const auto& c : owner_.contactsRef()) {
+        if (!c.isMuted()) continue;
+        if (!sameMuteName(c.name, playerName)) continue;
+        gameError(owner_, ErrTo::Chat, "ERR_VOICE_IGNORE_ALREADY_S",
+                  "%s is already muted.", {c.name});
+        return;
+    }
+    auto packet = AddVoiceIgnorePacket::build(playerName);
+    owner_.getSocket()->send(packet);
+    LOG_INFO("Sent mute request for: ", playerName);
+}
+
+// DelMute (0x006b7da0 → 0x006b7120) is the same walk the other way: found, and
+// that row's GUID goes out as 0x3dc - the client has no name to send, because
+// the row is the only place a GUID for that player was ever given to it. Not
+// found, and ERR_VOICE_IGNORE_NOT_FOUND (0x005216f0(0x238)) with no packet.
+// Neither path touches the array: the mute list is the realm's, and it changes
+// when the next SMSG_CONTACT_LIST says it did.
+void SocialHandler::removeVoiceIgnore(const std::string& playerName) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (playerName.empty()) return;
+    for (const auto& c : owner_.contactsRef()) {
+        if (!c.isMuted() || !sameMuteName(c.name, playerName)) continue;
+        auto packet = DelVoiceIgnorePacket::build(c.guid);
+        owner_.getSocket()->send(packet);
+        LOG_INFO("Sent unmute request for: ", playerName);
+        return;
+    }
+    gameError(owner_, ErrTo::Chat, "ERR_VOICE_IGNORE_NOT_FOUND", "Player not found.");
 }
 
 void SocialHandler::randomRoll(uint32_t minRoll, uint32_t maxRoll) {
@@ -2638,6 +2744,16 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     if ((partyData.groupType & 0x1) == 0) {
         const bool raid = groupIsRaid(partyData.groupType);
         const uint32_t members = static_cast<uint32_t>(partyData.members.size());
+        // The raid count is written before the party's - 0x00572530 at
+        // 006d0000.c:6985, 0x0052bd60 at :6989 - and the conversion test below
+        // reads the counts as they were *before* this roster.  That is not the
+        // same as "the previous roster": the party emptier 0x0052d6e0 leaves
+        // DAT_00bd1998 alone (its tail at 00520000.c:10367-10377 zeroes the
+        // leader pair and the finder globals and nothing else), so a roster
+        // arriving over an existing party still sees that party's count, and
+        // only the party-store init zeroes it (FUN_0052d0e0, :10004).
+        const uint32_t prevPartyCount = realGroup_.partyCount;
+        const uint32_t prevRaidCount = realGroup_.raidCount;
         realGroup_.raidCount = raid ? (members == 0 ? 0u : members + 1u) : 0u;
         uint32_t party = members;
         if (raid) {
@@ -2646,6 +2762,20 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
         }
         if (party < 5) realGroup_.partyCount = party;
         realGroup_.leader = partyData.leaderGuid;
+        // PARTY_CONVERTED_TO_RAID (621), and 0x006d8870 is the only thing in the
+        // client that raises it.  The decision is taken one line before the raid
+        // count is written and says "a party that had no raid" (`DAT_00bd1998 !=
+        // 0 && DAT_00beb60c == 0` at :6974-6979 - the raid count has to be the
+        // *zero* one, which is what makes this a conversion rather than a raid
+        // that gained a member), and it is checked again against the count that
+        // was just written (:6986), so a raid of none answers nothing.  No
+        // arguments, before the party count is set, and well before the 181 the
+        // tail raises.  Who listens: the calendar's raid-invite button, which
+        // only learns there that the party-to-raid conversion landed and so can
+        // send the invites the party's size had dropped
+        // (blizzard_calendar.lua:4399, :4413).
+        if (raid && prevPartyCount != 0 && prevRaidCount == 0 && realGroup_.raidCount != 0)
+            owner_.fireAddonEvent("PARTY_CONVERTED_TO_RAID", {});
     }
     // The very next call of that same routine is 0x0052c0d0 with the type byte's
     // bit 2 (0x006d8870:6994), the group's *restriction* flag, and it fires
@@ -3288,7 +3418,10 @@ void SocialHandler::handleGuildEvent(network::Packet& packet) {
             // the roster's online state is still kept in step.
             const bool on = data.eventType == GuildEvent::SIGNED_ON;
             if (data.numStrings >= 1) (void)guildMemberOnlineTransition(data.strings[0], on);
-            if (data.numStrings >= 1 && addons::storedCVarValue("guildMemberNotify", "1") != "0" &&
+            // Registered off (0x00510000 "0" - "Receive notification when guild
+            // members log on/off"), so the arrival line is the player's to ask
+            // for; the friends-list notices above are not behind it.
+            if (data.numStrings >= 1 && addons::storedCVarValue("guildMemberNotify", "0") != "0" &&
                 data.strings[0] != ownName(owner_) && !owner_.friendsCacheRef().count(data.strings[0])) {
                 msg = on ? interfaceFormat("ERR_FRIEND_ONLINE_SS", "|Hplayer:%s|h[%s]|h has come online.",
                                            {data.strings[0], data.strings[0]})
@@ -3899,6 +4032,18 @@ void SocialHandler::handleContactList(network::Packet& packet) {
             auto nit = owner_.getPlayerNameCache().find(guid);
             if (nit != owner_.getPlayerNameCache().end()) owner_.friendsCacheRef()[nit->second] = guid;
             else owner_.queryPlayerName(guid);
+        } else if (owner_.getPlayerNameCache().find(guid) == owner_.getPlayerNameCache().end()) {
+            // The ignore and mute branches of that same loop ask for the name
+            // too (FUN_007df6f0(hi, lo, 0) in front of every row's record
+            // lookup, 0x006b7dd0). Not asking left both lists holding rows with
+            // nothing to print, for any player this client had not already met -
+            // and the mute list's own comparator counts a row with no name as
+            // one it cannot place, so it sorts last and answers UNKNOWN. The
+            // client defers the row's EVENT to the name-query callback; this
+            // fires the event for the list as it stands and the name is in the
+            // cache for the next one, which the friends panel asks for every
+            // time it redraws.
+            owner_.queryPlayerName(guid);
         }
         ContactEntry entry;
         entry.guid = guid; entry.flags = flags; entry.note = std::move(note);
@@ -3909,10 +4054,15 @@ void SocialHandler::handleContactList(network::Packet& packet) {
     }
     // The one name the client raises for a contact list, 342 again (the ignore
     // and mute lists have their own, 343 and 344, and the mask says which of
-    // them this list carried).
+    // them this list carried). All three are the tail of the same handler: it
+    // qsorts each list the mask named and raises that list's event behind it
+    // (0x156, 0x157, 0x158 at 0x006b7dd0's end), and skips the raise for a list
+    // whose rows still had a name query outstanding - the row's own query
+    // callback raises it once the word arrives instead.
     if (owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
         if (owner_.lastContactListMaskRef() & 0x2) owner_.addonEventCallbackRef()("IGNORELIST_UPDATE", {});
+        if (owner_.lastContactListMaskRef() & 0x4) owner_.addonEventCallbackRef()("MUTELIST_UPDATE", {});
     }
 }
 
@@ -4160,8 +4310,49 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
             bgQueues_[queueSlot].queueTimeReceivedAt = std::chrono::steady_clock::now();
         }
         if (statusId == 2 && !wasInvite) { bgQueues_[queueSlot].inviteTimeout = inviteTimeout; bgQueues_[queueSlot].inviteReceivedTime = std::chrono::steady_clock::now(); }
+        // The invitation's end as one absolute stamp per slot, which is how the
+        // client holds it: the status handler writes `now + the length the packet
+        // carries` for a queue that is invited (0x0054ae40, 00540000.c:8544-8548)
+        // — on every status tick, not only on the way in — and zeroes the field
+        // for every other state, and for an invitation whose length came as zero.
+        // GetBattlefieldPortExpiration answers from nothing else.
+        if (queueSlot < bgPortExpiry_.size()) {
+            if (statusId == 2 && status.inviteTimeoutMs != 0)
+                bgPortExpiry_[queueSlot] = std::chrono::steady_clock::now() +
+                                           std::chrono::milliseconds(status.inviteTimeoutMs);
+            else
+                bgPortExpiry_[queueSlot] = {};
+        }
     } else {
         statusChanged = true;
+    }
+
+    // The instance's own countdown and its own clock, both made off the two
+    // dwords of a running status' tail and both rewritten on every tick of that
+    // kind, exactly as the client does it: `clock + remaining` and
+    // `clock - elapsed`, so the two timers it later reads are elapsed wall time
+    // and not a value that only moves when the server says so
+    // (0x0054ae40, 00540000.c:8560-8575). A dword of nought is no stamp at all,
+    // which is how a battle with no end time answers nothing rather than
+    // counting down from the clock's own reading.
+    //
+    // One pair for the whole client, with the slot that owns it remembered the
+    // way 0x00acd16c does: a status of another kind for that slot leaves the
+    // pair alone - only an empty record, the zero the server sends when the
+    // player leaves a queue, takes the pair with it (00540000.c:8510-8517).
+    if (statusId == 3) {
+        const auto now = std::chrono::steady_clock::now();
+        battlefieldInstanceExpiry_ = status.instanceRemainingMs
+            ? now + std::chrono::milliseconds(status.instanceRemainingMs)
+            : std::chrono::steady_clock::time_point{};
+        battlefieldInstanceStart_ = status.elapsedMs
+            ? now - std::chrono::milliseconds(status.elapsedMs)
+            : std::chrono::steady_clock::time_point{};
+        battlefieldInstanceSlot_ = static_cast<int32_t>(queueSlot);
+    } else if (statusId == 0 && battlefieldInstanceSlot_ == static_cast<int32_t>(queueSlot)) {
+        battlefieldInstanceExpiry_ = {};
+        battlefieldInstanceStart_  = {};
+        battlefieldInstanceSlot_   = -1;
     }
 
     // Said in the log only. The original answers a status with
@@ -4180,6 +4371,42 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     // prompt never came up however long the player had waited for it.
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("UPDATE_BATTLEFIELD_STATUS", {std::to_string(queueSlot + 1)});
+}
+
+int64_t SocialHandler::battlefieldInstanceExpirationMs() const {
+    // `stamp - clock`, and nought once the stamp is behind the clock - the
+    // client tests the difference's sign before it answers (0x00549c40), so a
+    // battle that has already ended reads as no timer at all rather than as a
+    // negative one the frame would print as "-1:-1".
+    if (battlefieldInstanceExpiry_ == std::chrono::steady_clock::time_point{}) return 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= battlefieldInstanceExpiry_) return 0;
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        battlefieldInstanceExpiry_ - now).count();
+}
+
+int64_t SocialHandler::battlefieldInstanceRunTimeMs() const {
+    // `clock - stamp`, which is the elapsed dword put back onto the clock when
+    // the status arrived (0x00549cd0 reads DAT_00bea578). The scoreboard counts
+    // this up on its own between status ticks, so a stale pair that only moves
+    // with the packet would print a frozen run time.
+    if (battlefieldInstanceStart_ == std::chrono::steady_clock::time_point{}) return 0;
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - battlefieldInstanceStart_).count();
+}
+
+int32_t SocialHandler::battlefieldPortExpirationSec(size_t slot) const {
+    // The client's answer is `(stamp - clock) / 1000` in whole seconds, and zero
+    // when the stamp is empty or already behind the clock (0x00549b80: the slot
+    // must be 1 or 2 — its store is two records 0x40 apart from DAT_00bea4b8 —
+    // and its +0x28 non-zero). WoWee keeps three slots for the older expansions'
+    // FrameXML, so the bound is the array's own.
+    if (slot >= bgPortExpiry_.size()) return 0;
+    const auto& expiry = bgPortExpiry_[slot];
+    if (expiry == std::chrono::steady_clock::time_point{}) return 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= expiry) return 0;
+    return static_cast<int32_t>(std::chrono::duration_cast<std::chrono::seconds>(expiry - now).count());
 }
 
 void SocialHandler::handleBattlefieldList(network::Packet& packet) {
@@ -4721,6 +4948,13 @@ void SocialHandler::handleLfgProposalUpdate(network::Packet& packet) {
     }
     lfgDungeonId_ = dungeonId;
     lfgProposalId_ = proposal.id;
+    // The proposal's own copy of both, which is what the boss tooltip under the
+    // ready dialog reads: 0x00bea980 and 0x00bea98c, written here and cleared
+    // with the proposal. lfgDungeonId_ says which dungeon the player is queued
+    // for, which is a different question whenever a role check or a queue
+    // update has spoken since.
+    lfgProposalDungeonId_ = dungeonId;
+    lfgProposalEncountersDone_ = proposal.encountersDone;
     // Held until a decline below or a queue update ends it (0x0055bdc0,
     // cases 0x361, 0x367, 0x368).
     lfgProposalValid_ = proposal.dungeonEntry != 0;
@@ -4774,6 +5008,11 @@ void SocialHandler::leaveLfgGroup() {
 void SocialHandler::clearLfgProposal() {
     lfgProposalValid_ = false;
     lfgProposalId_ = 0;
+    // The whole proposal block goes, mask and dungeon with it (0x0055bdc0 clears
+    // 0x00bea980 through 0x00bea990 together, and 0x0055d440 does the same on
+    // the way out) - otherwise a boss list outlives the offer it belonged to.
+    lfgProposalDungeonId_ = 0;
+    lfgProposalEncountersDone_ = 0;
     lfgProposalMembers_.clear();
 }
 
@@ -5860,6 +6099,8 @@ void SocialHandler::resetForWorldEntry() {
     lfgProposalId_ = 0;
     shownProposalId_ = 0;
     lfgProposalValid_ = false;
+    lfgProposalDungeonId_ = 0;
+    lfgProposalEncountersDone_ = 0;
     lfgPlayerUpdate_ = LfgUpdateBody{};
     lfgPartyUpdate_ = LfgUpdateBody{};
     lfgPartyLocks_.clear();
@@ -6135,6 +6376,15 @@ void SocialHandler::handleSummonRequest(network::Packet& packet) {
     owner_.summonerGuidRef()        = packet.readUInt64();
     uint32_t zoneId             = packet.readUInt32();
     uint32_t timeoutMs          = packet.readUInt32();
+    // The request names where the player would land, as an AreaTable id. The
+    // client keeps all of it - the guid pair, this id, and `now + the length it
+    // was given` as one stamp (0x00513bf0, which then fires CONFIRM_SUMMON) - and
+    // GetSummonConfirmAreaName (0x00516580) answers that id back as the row's
+    // localized name (the name column of the AreaTable record it looks the id up
+    // in, +0x2c), or the empty string for an id with no row (0x009e14ff holds a
+    // bare NUL). The popup prints the name into a sentence, so an id kept only
+    // for the log left the player reading "summoning you to ."
+    owner_.summonAreaIdRef()        = zoneId;
     owner_.summonTimeoutSecRef()    = timeoutMs / 1000.0f;
     owner_.pendingSummonRequestRef()= true;
 
@@ -6145,16 +6395,20 @@ void SocialHandler::handleSummonRequest(network::Packet& packet) {
     if (owner_.summonerNameRef().empty()) {
         owner_.summonerNameRef() = owner_.lookupName(owner_.summonerGuidRef());
     }
-    if (owner_.summonerNameRef().empty()) {
-        char tmp[32];
-        std::snprintf(tmp, sizeof(tmp), "0x%llX",
-                      static_cast<unsigned long long>(owner_.summonerGuidRef()));
-        owner_.summonerNameRef() = tmp;
-    }
+    // Nothing to invent when neither the unit nor the name cache knows the
+    // caster: GetSummonConfirmSummoner (0x00516510) reads its guid store on every
+    // call and answers the empty string when the guid has no record there - and
+    // asks that store *without* the flag that would query the server for the name
+    // (0x0067d770 queues a query only through that flag). A guid printed as a
+    // name is a name the realm never gave; the binding asks again per call, so a
+    // name learned in the meantime still reaches the sentence.
+    char guidText[32];
+    std::snprintf(guidText, sizeof(guidText), "0x%llX",
+                  static_cast<unsigned long long>(owner_.summonerGuidRef()));
 
     // CONFIRM_SUMMON and its popup, which names the summoner and the place;
     // no chat line (0x006d8680). This printed "X is summoning you to Y.".
-    LOG_INFO("SMSG_SUMMON_REQUEST: summoner=", owner_.summonerNameRef(),
+    LOG_INFO("SMSG_SUMMON_REQUEST: summoner=", owner_.summonerNameRef(), " guid=", guidText,
              " zoneId=", zoneId, " timeout=", owner_.summonTimeoutSecRef(), "s");
     owner_.fireAddonEvent("CONFIRM_SUMMON", {});
 }

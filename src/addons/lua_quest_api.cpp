@@ -16,6 +16,7 @@
 #include "game/quest_poi_icons.hpp"
 #include "game/quest_rewards.hpp"
 #include "game/glyph_socket.hpp"
+#include "game/interface_text.hpp"
 #include "game/spell_mods.hpp"
 #include "game/trainer_service_list.hpp"
 #include "ui/chat/chat_utils.hpp"
@@ -38,6 +39,13 @@ namespace wowee::addons {
 static uint32_t questFrameFlags(game::GameHandler* gh) {
     auto* qh = gh ? gh->getQuestHandler() : nullptr;
     return qh ? qh->getQuestFrameFlags() : 0;
+}
+
+/// What the realm said beside the auth response, or an empty block before one
+/// has ever arrived. The billing bindings below answer from this.
+static const game::AccountState& accountStateOf(game::GameHandler* gh) {
+    static const game::AccountState none;
+    return gh ? gh->accountState() : none;
 }
 
 // ── The quest log is a list of headers with quests under them ───────────────
@@ -1004,6 +1012,23 @@ static game::QuestPoiIconList::QuestState questPoiStateFn(game::GameHandler* gh)
     return [gh, rows](int32_t questId) { return questPoiState(gh, *rows, questId); };
 }
 
+// Which map a quest wants shown, and on which floor. Declared in
+// lua_api_helpers.hpp because the reader is the world map's own binding, while
+// the answer comes off this list and the map this is laid out on.
+//
+// The questPOI switch is not consulted: 0x005e2b60 does not consult it either,
+// and with the switch off the areas were never asked for, so the list answers
+// zeroes on its own.
+std::pair<uint32_t, uint32_t> questPoiOpenTarget(lua_State* L, int32_t questId) {
+    auto* gh = getGameHandler(L);
+    auto* list = questPoiList(gh);
+    if (!list) return {};
+    // The player's position in server coordinates, the axes the points use -
+    // the same pair QuestPOIUpdateIcons weighs its marks with.
+    const auto& mi = gh->getMovementInfo();
+    return list->openTargetFor(questId, questPoiMapView(L), questPoiStateFn(gh), mi.y, mi.x);
+}
+
 /// QuestMapUpdateAllQuests() (0x005e63d0) → how many quests have an area on
 /// the map shown. Zero at a continent: only a zone or a dungeon floor counts.
 static int lua_QuestMapUpdateAllQuests(lua_State* L) {
@@ -1106,28 +1131,44 @@ static int lua_SetPOIIconOverlapPushDistance(lua_State* L) {
     return 0;
 }
 
-/// GetQuestPOILeaderBoard(objectiveIndex, questId) → the objective's text and
-/// counts, the same as the quest log's version - except that this one is given
-/// a quest id where that one takes a log index. Aliasing the two would look
-/// right and read the wrong quest, so the id is turned into an index here.
+/// GetQuestPOILeaderBoard(objectiveIndex, questId) → the line for one of the
+/// quest's objective *slots*, which is what a map pin's objective index names.
+/// This is not the log's reader with a quest id in place of a log index, and
+/// aliasing the two reads the wrong line: the reference gives this one its own
+/// walker, which addresses the quest's arrays by slot and never counts the lines
+/// the log shows (game::questObjectiveSlotLine). The quest is named by its id
+/// here, where every other log reader is handed an index.
 static int lua_GetQuestPOILeaderBoard(lua_State* L) {
     auto* gh = getGameHandler(L);
+    // The client's own usage line for this one names the other binding: its
+    // argument check and its message were copied over and never corrected.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetQuestLogLeaderBoard(index)");
     const uint32_t questId = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
-    if (!gh || questId == 0) { return luaReturnNil(L); }
-    const auto rows = questRows(gh);
-    int index = 0;
-    for (size_t i = 0; i < rows.size(); ++i) {
-        if (rows[i].quest && rows[i].quest->questId == questId) {
-            index = static_cast<int>(i) + 1;
-            break;
-        }
+    if (!gh) {
+        lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+        return 3;
     }
-    if (index == 0) { return luaReturnNil(L); }
-    lua_pushvalue(L, 1);            // objective index, unchanged
-    lua_pushnumber(L, index);       // the log index the other one wants
-    lua_replace(L, 2);
-    lua_replace(L, 1);
-    return lua_GetQuestLogLeaderBoard(L);
+    const game::GameHandler::QuestLogEntry* q = nullptr;
+    for (const auto& entry : gh->getQuestLog()) {
+        if (entry.questId == questId) { q = &entry; break; }
+    }
+    // An id the log does not hold - zero included - is not a miss there. The walk
+    // takes the quest the log has selected instead, the way every other reader
+    // takes a zero index to mean the same thing.
+    if (!q) q = selectedLogEntry(gh);
+    if (!q) {
+        lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+        return 3;
+    }
+    game::QuestObjective line;
+    if (!game::questObjectiveSlotLine(*gh, *q, static_cast<int>(lua_tointeger(L, 1)), line)) {
+        lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+        return 3;
+    }
+    lua_pushstring(L, line.text.c_str());
+    lua_pushstring(L, line.type);
+    lua_pushboolean(L, line.finished ? 1 : 0);
+    return 3;
 }
 
 /// The objective's line, its kind and whether it is done - through the one
@@ -1149,6 +1190,100 @@ static int lua_GetQuestLogLeaderBoard(lua_State* L) {
     lua_pushstring(L, line.text.c_str());
     lua_pushstring(L, line.type);
     lua_pushboolean(L, line.finished ? 1 : 0);
+    return 3;
+}
+
+// GetNumQuestItemDrops(questLogIndex) → how many of the quest's items the player
+// is still short of, and GetQuestLogItemDrop(dropIndex, questLogIndex) → one of
+// them: its line, its kind and whether it is met.
+//
+// Both read the quest's *source items* - the four the kill records name, what a
+// quest hands over for an objective (WoWee's objectiveSourceItems, with the
+// counts it now also keeps in objectiveSourceCounts). The reference holds them as
+// two parallel four-dword arrays, +0x1c74 and +0x1c84, and reads them straight
+// off the inventory: the special-item finder 0x005e0da0 falls back to them when
+// the quest's own item - the dword at +0x4c, kept here as sourceItemId - is not
+// being carried; the leaderboard (0x005e1460) gives a slot of its own to each one
+// the quest is not complete for, worded QUEST_INTERMEDIATE_ITEMS_NEEDED; and
+// GetAbandonQuestItems (0x005e3d60) lists them for the "you will lose these"
+// confirm. That is a different family from the six *required* items the wire
+// carries alongside them (+0x1c44 and +0x1c5c there, itemObjectives here), which
+// are the objectives the leaderboard counts "x/y" for.
+//
+// The two halves of this pair disagree with each other, and that is worth
+// spelling out because it is what reproducing them means. 0x005e4260 counts a
+// slot only when it names an item, when that item is not the quest's own unless
+// more than one of it is wanted, and when the player is carrying none of it
+// (0x00754d00(itemId, 8), the inventory count). 0x005e60d0 → 0x005e20a0 then
+// walks the same four slots with neither test, skipping only the empty ones. So a
+// quest with three of these items, one of them carried, answers two for the count
+// and still hands out the first two slots as its lines. The interface loops to the
+// count, so tidying the walk to match would change which line gets read.
+//
+// The line is QUEST_ITEMS_NEEDED in the interface's own wording - the item's
+// name, the carried count clamped to the wanted one, and the wanted count; the
+// second answer is the client's fixed string "item" (0x009f6f44, in that block
+// beside "monster", "player" and "reputation"), and the third is whether carried
+// reached wanted. The other wording the routine holds,
+// QUEST_ITEMS_NEEDED_NOPROGRESS, is only used when the caller's context clears a
+// flag the binding always sets, so it is never the one on screen.
+
+static int lua_GetNumQuestItemDrops(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const int questIdx = static_cast<int>(luaL_optnumber(L, 1,
+        gh ? gh->getSelectedQuestLogIndex() : 0));
+    if (!gh || questIdx < 1) return luaReturnZero(L);
+    const auto* q = questAtRow(gh, questIdx);
+    if (!q) return luaReturnZero(L);
+    int count = 0;
+    for (size_t i = 0; i < q->objectiveSourceItems.size(); ++i) {
+        const uint32_t item = q->objectiveSourceItems[i];
+        if (item < 1) continue;
+        // The quest's own item with one of it wanted is the item the quest hands
+        // over, not one that has to be found; and one already carried is not
+        // missing.
+        if (item == q->sourceItemId && q->objectiveSourceCounts[i] <= 1) continue;
+        if (gh->countItemInBags(item) != 0) continue;
+        ++count;
+    }
+    lua_pushnumber(L, count);
+    return 1;
+}
+
+static int lua_GetQuestLogItemDrop(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const int dropIdx = static_cast<int>(luaL_optnumber(L, 1, 0));
+    const int questIdx = static_cast<int>(luaL_optnumber(L, 2,
+        gh ? gh->getSelectedQuestLogIndex() : 0));
+    if (!gh || dropIdx < 1 || questIdx < 1) {
+        lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+        return 3;
+    }
+    const auto* q = questAtRow(gh, questIdx);
+    if (!q) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
+    int seen = 0;
+    for (size_t i = 0; i < q->objectiveSourceItems.size(); ++i) {
+        const uint32_t item = q->objectiveSourceItems[i];
+        if (item < 1) continue;             // an empty slot is not one of the drops
+        if (++seen != dropIdx) continue;
+        const uint32_t wanted = q->objectiveSourceCounts[i];
+        const uint32_t have = gh->countItemInBags(item);
+        const uint32_t shown = have > wanted ? wanted : have;
+        // A name still out on its query is the empty string the reference
+        // formats with; it is asked for again here, so the next pass of the
+        // list has the word instead.
+        std::string name;
+        const auto* info = gh->getItemInfo(item);
+        if (info && !info->name.empty()) name = info->name;
+        else gh->queryItemInfo(item, 0);
+        lua_pushstring(L, game::interfaceFormat(
+            "QUEST_ITEMS_NEEDED", "%s (%d/%d)",
+            {name, std::to_string(shown), std::to_string(wanted)}).c_str());
+        lua_pushstring(L, "item");                        // 2: type
+        lua_pushboolean(L, wanted <= have ? 1 : 0);       // 3: finished
+        return 3;
+    }
+    lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
     return 3;
 }
 
@@ -1199,7 +1334,7 @@ static int lua_GetQuestLogSpecialItemInfo(lua_State* L) {
     if (!info || info->name.empty()) { return luaReturnNil(L); }
 
     const uint32_t quality = info->quality < 8 ? info->quality : 1u;
-    const std::string link = game::itemChatLink(item.itemId, quality, info->name);
+    const std::string link = game::itemChatLink(item.itemId, quality, info->name, {}, gh->getPlayerLevel());
     lua_pushstring(L, link.c_str());                                        // 1: link
 
     // A nil texture is an empty slot to the interface, and the button draws
@@ -3068,7 +3203,7 @@ static int lua_GetQuestLogItemLink(lua_State* L) {
             if (name.empty()) break;
             lua_pushstring(L, game::buildItemLink(r.itemId,
                                                   info ? info->quality : 1u,
-                                                  name).c_str());
+                                                  name, gh->getPlayerLevel()).c_str());
             return 1;
         }
         return luaReturnNil(L);
@@ -3365,7 +3500,7 @@ static int lua_GetQuestItemLink(lua_State* L) {
         if (name.empty()) { return luaReturnNil(L); }
         lua_pushstring(L, game::buildItemLink(r.itemId,
                                               info ? info->quality : 1u,
-                                              name).c_str());
+                                              name, gh->getPlayerLevel()).c_str());
         return 1;
     }
     return luaReturnNil(L);
@@ -3498,9 +3633,10 @@ void registerQuestLuaAPI(lua_State* L) {
                 return 1;
             }
             // Only where the interface actually draws this line: a quest the
-            // server has called complete, or one with nothing countable in it,
-            // which the tracker treats as complete itself. Anything else keeps
-            // the empty answer the API promises.
+            // server has called complete, or one whose objective list is empty,
+            // which the tracker reads as complete itself - it asks
+            // "numObjectives == 0" of this very count. Anything else keeps the
+            // empty answer the API promises.
             const int objectives = game::questObjectiveCount(*q);
             const bool drawnAsComplete = q->complete || objectives == 0;
             if (!drawnAsComplete) { lua_pushstring(L, ""); return 1; }
@@ -3563,11 +3699,74 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushstring(L, title.c_str());
             return 1;
         }},
-                // A page really has no author on this wire -
-                // SMSG_ITEM_TEXT_QUERY_RESPONSE is an id and the words - and
-                // the frame drops the "from" line on a nil, which is honest
-                // where an invented name would not be.
-                {"ItemTextGetCreator",  [](lua_State* L) -> int { return luaReturnNil(L); }},
+                // Nil is still the answer for a page this client cannot name an
+                // author for, and the frame drops the "from" line on a nil - which
+                // is honest where an invented name would not be. What *was* not
+                // honest is the reason this used to carry ("a page has no
+                // author on this wire, SMSG_ITEM_TEXT_QUERY_RESPONSE is an id
+                // and the words"). True of that response, wrong as an answer:
+                // the client (0x0058a480) never reads the page-text reply here.
+                // It starts from the same pair of globals the material binding
+                // reads (DAT_00bfc948/DAT_00bfc94c) - the guid of whatever the page
+                // was opened from - and asks 0x004d4db0 for it *as a different type*
+                // than that one does (2 against 1; the ".\ItemTextFrame.cpp", 243
+                // behind the call is the call site, not the class). It then reads a
+                // record hanging off the object at +0xd4, refuses when that
+                // record's +0x10/+0x14 are both zero, and hands the pair to
+                // 0x0067d770 with a callback - which answers the record's payload at
+                // +0x20, and the binding pushes that as a string.
+                //
+                // That cache is not the item query cache the material path goes
+                // through (0x00c5d828): these records keep their loaded flag at
+                // +0x178 and their key pair at +0x170/+0x174, and a miss queues a
+                // query that is an opcode plus that pair - plus a second pair when
+                // the cache's +0x44 byte is set (0x00668ce0). So the author is
+                // looked up *by guid*, in a cache whose payload is a name. The
+                // callback (0x0058a450) only repaints: it compares the guid it was
+                // queued with against the page still on screen and refreshes it,
+                // and 0x0070c880 is the same repaint from the other side, fired when
+                // a unit's record lands. Which value feeds that key pair is the open
+                // half - under one ABI reading +0x10 is the cache and +0x14 the id,
+                // under another the two are the guid pair itself.
+                //
+                // The piece that was missing is upstream of the binding: nothing
+                // read ITEM_FIELD_CREATOR, the guid an item's own update block
+                // carries (10 and 11 in the WotLK layout, low dword first), and the
+                // only creator guids kept anywhere were the trade window's rows
+                // (0x00704680). That field is read now and kept beside the entry,
+                // and the page's subject has been kept as a guid all along -
+                // setBookObject is this window's pair of globals.
+                //
+                // What that guid *names* is the half that cannot be settled here,
+                // and the reference has its own packet for it: its cache queries a
+                // guid pair (0x00668ce0 writes an opcode and one pair, and a second
+                // pair when the cache's +0x44 byte is set), so the author is looked
+                // up by the realm, which has the name in its own tables long after
+                // the creature that wrote the letter went away. The only names in
+                // this client's opcode table that fit that shape are
+                // CMSG_ITEM_NAME_QUERY and its response (0x2C4/0x2C5), which nothing
+                // here sends - an inference, not a read, since the binary carries no
+                // opcode names to compare against.
+                //
+                // So this answers from what is already known: the name held for that
+                // guid, a cached player name or a unit standing in view, and for a
+                // player guid still unknown it asks the name query it already sends
+                // for an unresolved chat sender. A creature out of sight stays nil,
+                // and the frame drops the "from" line - which is the same answer a
+                // page with no creator at all gets.
+                {"ItemTextGetCreator", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return luaReturnNil(L);
+            const uint64_t creator = gh->getItemCreatorByGuid(gh->getBookObject());
+            if (creator == 0) return luaReturnNil(L);
+            const std::string& name = gh->lookupName(creator);
+            if (name.empty()) {
+                if (game::vehicle::isPlayerGuid(creator)) gh->queryPlayerName(creator);
+                return luaReturnNil(L);
+            }
+            lua_pushstring(L, name.c_str());
+            return 1;
+        }},
                 // The material is carried, and the claim that it was not stood
                 // beside the line discarding it: the item query's four
                 // post-description words are PageText, LanguageID,
@@ -3650,6 +3849,8 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"SetPOIIconOverlapDistance", lua_SetPOIIconOverlapDistance},
                 {"SetPOIIconOverlapPushDistance", lua_SetPOIIconOverlapPushDistance},
                 {"GetQuestPOILeaderBoard",  lua_GetQuestPOILeaderBoard},
+                {"GetNumQuestItemDrops",    lua_GetNumQuestItemDrops},
+                {"GetQuestLogItemDrop",     lua_GetQuestLogItemDrop},
                 {"ExpandQuestHeader",       lua_ExpandQuestHeader},
                 {"CollapseQuestHeader",     lua_CollapseQuestHeader},
                 {"GetQuestLogSpecialItemInfo", lua_GetQuestLogSpecialItemInfo},
@@ -3922,13 +4123,95 @@ void registerQuestLuaAPI(lua_State* L) {
                 // files because it is the frame's own art. The same set backs
                 // ItemTextGetMaterial, which does answer.
                 //
-                // What is missing is a source, not a texture. A book's material
-                // is on the item or the game object that opened it;
-                // SMSG_QUESTGIVER_QUEST_DETAILS carries no such field, and the
-                // quest giver's own is not the quest's. Answering from the
-                // giver would be a guess dressed as data, and the caller's
-                // substitution of Parchment is what nearly every quest wants.
-                {"GetQuestBackgroundMaterial", [](lua_State* L) -> int { return luaReturnNil(L); }},
+                // What is missing is a source, not a texture - and the source is
+                // not on the quest at all. The reference's binding (0x0058c990)
+                // and ItemTextGetMaterial's (0x00589c90, confirmed by its entry in
+                // the binding table) are the same twenty-odd lines in two files,
+                // QuestFrame.cpp:0x48d and ItemTextFrame.cpp:0x102, and they start
+                // from a guid: each window keeps its subject as a pair of globals
+                // (DAT_00c0d648/c0d64c for the quest window, DAT_00bfc948/bfc94c
+                // for the page window) naming *whatever opened it*, and 0x004d4db0
+                // turns that guid into
+                // an object of the type its third argument names - which is why the
+                // same globals get cast as two different types in two different
+                // bindings. Two outside readers say the pair is a guid and not a
+                // pointer: 0x0070c880 compares the page window's against a unit's
+                // guid to decide whether the page on screen should be redrawn, and
+                // 0x006cda70 writes the quest window's from the guid a packet
+                // starts with, through the record-cache machinery that re-enters
+                // when the record lands.
+                //
+                // So the "flag word" at record +8 is OBJECT_FIELD_TYPE and the id
+                // at record +0xc is OBJECT_FIELD_ENTRY, and the two bits tested are
+                // the client's own object-kind bits: 0x2 for an item, 0x20 for a
+                // game object.
+                //
+                // Bit 1 is the item path, and it is the one ItemTextGetMaterial
+                // answers with: the entry is resolved through the item query cache
+                // (`mov ecx, 0x00c5d828` before the call) and one word of the
+                // record's payload (+0x188) is the page material - the same word
+                // this file already reads off the item query and keeps.
+                //
+                // Bit 5 is a game object, and it reads no item: 0x00710300 answers
+                // a material id off the object itself - a byte at
+                // *(obj + 0xd0) + 0x2d picks one of 36 lists and asks where the
+                // number 17 sits in it (0x00746190 is that position search: count
+                // at DAT_00a36f34 + list*0x10, values from PTR_DAT_00a36f38[list*4],
+                // -1 when the number is not in it, which is what the caller's
+                // "index < 0x18" refuses), and the answer is
+                // **(obj + 0x1a4) + 0x14 + index*4. A page opened from a tablet or
+                // a board asks the object it came from what it is written on;
+                // which word of that object's own record holds it is still open.
+                //
+                // Either id then goes through one lookup, and the shape of it
+                // says what the table is: 0 < v, DAT_00ad4320 <= v <=
+                // DAT_00ad431c, then *(DAT_00ad4330 + (v - min)*4) for a *row
+                // pointer* and the name at row + 4. PageTextMaterial.dbc - seven
+                // rows of two fields, id and name, ids 1..7 - reached through an
+                // array of row pointers rather than by record stride, with the
+                // bounds written in as the load ran (0xad431c and 0xad4320 sit
+                // side by side holding 0xffffffff and 0x0fffffff in .data, which
+                // is a min/max pair before anything has been seen, not a range).
+                //
+                // The window's subject guid is the one the details packet names -
+                // parsed here as QuestDetailsData::npcGuid - and the client's bit
+                // test says it expects that guid to be able to name an item or a
+                // game object, which is the shape a quest opened from one has: a
+                // bounty hunt posted on a board, a quest started by a letter. The
+                // kind test is reproduced off what is known here rather than off
+                // the field word - the guid naming one of the client's own items,
+                // or naming a game object entity - and each branch then answers
+                // from a record already kept: the item query's page material, or
+                // the two words of a game object template that the reading window
+                // already reads off the same tablet. Reproducing the client's own
+                // object arithmetic - that list-indexed word at **(obj + 0x1a4) +
+                // 0x14 - would risk the two windows naming different backings for
+                // one board, which is the disagreement the interface would show.
+                //
+                // An id outside PageTextMaterial.dbc's seven rows answers nothing,
+                // as the reference's bounds test answers nothing: the caller
+                // substitutes row 1, Parchment, and QuestFrame_GetMaterial draws
+                // the frame's own art for it.
+                {"GetQuestBackgroundMaterial", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return luaReturnNil(L);
+            const uint64_t subject = gh->getQuestDetails().npcGuid;
+            uint32_t material = 0;
+            if (const uint32_t entry = gh->getItemIdByGuid(subject); entry != 0) {
+                const auto* info = gh->getItemInfo(entry);
+                material = info ? info->pageMaterial : 0u;
+            } else if (auto entity = gh->getEntityManager().getEntity(subject);
+                       entity && entity->getType() == game::ObjectType::GAMEOBJECT) {
+                const auto* go = gh->getCachedGameObjectInfo(
+                    std::static_pointer_cast<game::GameObject>(entity)->getEntry());
+                if (go && go->type == 9) material = go->data[2];
+                else if (go && go->type == 10) material = go->data[9];
+            }
+            const std::string& name = gh->getPageTextMaterialName(material);
+            if (name.empty()) return luaReturnNil(L);
+            lua_pushstring(L, name.c_str());
+            return 1;
+        }},
                 // Whether the quest is flagged PvP, and whether the giver
                 // opened it without being asked. Neither is parsed from the
                 // quest packets here, and false is what the interface does
@@ -3958,17 +4241,40 @@ void registerQuestLuaAPI(lua_State* L) {
             if (questFrameFlags(getGameHandler(L)) & 0x8000u) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;
         }},
-                // QuestGetAutoAccept() stays false, and that is the answer
-                // rather than a gap: QUEST_FLAGS_AUTO_ACCEPT is 0x80000 and
-                // AzerothCore's own note beside it says no 3.3.5a quest
-                // carries it. The flag is parsed now, so if one ever does this
-                // can read it from the same place.
-                {"QuestGetAutoAccept", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                // Shown when a reward is confirmed without one being picked.
-                // The message belongs to the server in the real client; there
-                // is nothing to say here, and the call is made for its effect
-                // rather than its answer.
-                {"QuestChooseRewardError", [](lua_State* L) -> int { (void)L; return 0; }},
+                // QuestGetAutoAccept() (0x0058c430) reads bit 0x80000 of the
+                // flags word the frame is showing and answers 1 or nil - the
+                // same shape as QuestIsDaily and QuestIsWeekly beside it, and
+                // the same word. In practice the answer is still nil for every
+                // 3.3.5a quest: AzerothCore's own note beside its
+                // QUEST_FLAGS_AUTO_ACCEPT says no quest in the 3.3.5a data
+                // carries the bit. What changes is where the answer comes
+                // from: it used to be a literal, so a core that does flag a
+                // quest (a cata-ish quest table, or a custom one) would still
+                // have shown its Accept button and its full frame border,
+                // while the caller hides QuestFrameDeclineButton and sets
+                // QuestFrame.autoQuest on the strength of this one bit.
+                {"QuestGetAutoAccept", [](lua_State* L) -> int {
+            if (questFrameFlags(getGameHandler(L)) & 0x80000u) lua_pushnumber(L, 1); else lua_pushnil(L);
+            return 1;
+        }},
+                // Shown when a reward is confirmed without one being picked
+                // (questframe.lua's QuestRewardCompleteButton_OnClick asks when
+                // itemChoice is 0 and the quest offers a choice).  Nothing was
+                // said, so the button looked simply dead.  The client's is not a
+                // server message after all: 0x0058c3a0 has no decompiled body,
+                // and disassembled it is only "push 0xa5; call 0x005216f0" - the
+                // show-a-game-error routine, which reads that id out of the table
+                // at 0x00ac8af0 (key, kind, sound, vocal, chat type).  Row 0xa5
+                // says ERR_QUEST_MUST_CHOOSE through UI_ERROR_MESSAGE, no spoken
+                // line, and the sound it names (see audio/vocal_error.hpp, which
+                // already knows which sound that is).
+                {"QuestChooseRewardError", [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) {
+                gh->addUIError(game::interfaceString("ERR_QUEST_MUST_CHOOSE", "You must select a reward."));
+                gh->playGameErrorSound("ERR_QUEST_MUST_CHOOSE");
+            }
+            return 0;
+        }},
                 {"GetQuestItemLink",        lua_GetQuestItemLink},
                 {"GetQuestSpellLink",       lua_GetQuestSpellLink},
                 {"GetQuestMoneyToGet",   lua_GetQuestMoneyToGet},
@@ -3997,6 +4303,22 @@ void registerQuestLuaAPI(lua_State* L) {
                 gh->removeGlyphFromSocket(static_cast<uint32_t>(socket - 1));
             return 0;
         }},
+                // A bare literal, which reads like a stub and is not one: the
+                // original client's binding is a bare literal too. FUN_005b71e0
+                // is `FUN_0084e2a0(param_1, 0x4018000000000000); return 1;` -
+                // one number pushed, and 0x4018000000000000 is the double 6.0.
+                // So the count is not something the client works out of the
+                // GlyphSlot table; six is the answer for every class. The
+                // number is loaded from 0x00a0b708, and the same function is
+                // what the binding table gives GetMultiCastBarOffset: two
+                // bindings each pushing that one pooled double, folded into
+                // one body. See the note there.
+                //
+                // And this interface never asks. The glyph frame's six slots are
+                // XML-declared buttons, and its only glyph calls are
+                // GetGlyphSocketInfo, so no Lua reaches this name - which is why
+                // the live-stubs sweep does not list it either. Written down so
+                // the literal is not triaged again.
                 {"GetNumGlyphSockets", [](lua_State* L) -> int {
             lua_pushnumber(L, game::GameHandler::MAX_GLYPH_SLOTS);
             return 1;
@@ -4338,12 +4660,27 @@ void registerQuestLuaAPI(lua_State* L) {
             gh->ensureItemInfo(made);
             const auto* info = gh->getItemInfo(made);
             if (!info || !info->valid) return luaReturnNil(L);
-            lua_pushstring(L, game::buildItemLink(made, info->quality, info->name).c_str());
+            lua_pushstring(L, game::buildItemLink(made, info->quality, info->name, gh->getPlayerLevel()).c_str());
             return 1;
         }},
-                // A recipe link is an |Htrade: hyperlink carrying the whole
-                // skill list, which this client has no reader for - a link it
-                // cannot resolve on the way back in would be worse than none.
+                // A recipe link is not an |Htrade: link; that one is the *list*
+                // link, two rows below. What 0x005db920 writes for a recipe is
+                // "|cffffd000|Henchant:%d|h[%s]|h|r" - the spell id, because the
+                // thing an enchanting recipe makes has no item entry - and when a
+                // formula item exists, "[%s: %s]" puts its name first. The gate is
+                // a flag byte on the trade skill record: 0x20, and only recipes
+                // carrying it get a link at all.
+                //
+                // Two things stand between that and answering here, and they are
+                // why this stays nil rather than guessing at a format. The recipe
+                // list this client keeps is GameHandler::CraftRecipe - spellId,
+                // name, difficulty band, how many the bags allow - and the flag
+                // byte never reaches it, so the set of rows that should be links
+                // is not knowable from here. And an enchant link is drawn as text
+                // here: the chat markup parser knows item, spell, quest and
+                // achievement, so the tooltip the original pops up off that link
+                // is the half that would be missing. Both are reachable, and
+                // neither is a one-line change.
                 {"GetTradeSkillRecipeLink",   [](lua_State* L) -> int { return luaReturnNil(L); }},
                 {"GetTradeSkillReagentItemLink", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
@@ -4362,16 +4699,97 @@ void registerQuestLuaAPI(lua_State* L) {
                 const auto* info = gh->getItemInfo(r.itemId);
                 if (!info || !info->valid) return luaReturnNil(L);
                 lua_pushstring(L,
-                    game::buildItemLink(r.itemId, info->quality, info->name).c_str());
+                    game::buildItemLink(r.itemId, info->quality, info->name, gh->getPlayerLevel()).c_str());
                 return 1;
             }
             return luaReturnNil(L);
         }},
+                // The list link is the |Htrade: one, and it takes no argument:
+                // 0x005dc0b0 hands 0x005db060 the skill line of the open window.
+                // The header it writes is "|cffffd000|Htrade:%d:%d:%d:%I64X:" -
+                // the line, two values taken off the record, and the local
+                // player's guid as hex - and after it a base64 block, six
+                // recipes to a byte over the "ABC…+/" alphabet, each bit saying
+                // whether whoever reads the link could learn that recipe: the
+                // reader's race and class come off the unit blob's bytes at
+                // +0x44 and +0x45. Then "|h[%s]|h|r" closes it.
+                //
+                // IsTradeSkillLinked (0x005da310) is the other half of the same
+                // feature, and it takes no argument either. It answers **two**
+                // values: with a linked window open (its own state dword at
+                // 0x00c235e4) it pushes the double 1.0 and then a name - the one
+                // the guid-keyed name cache (0x0067d770, the same one the item
+                // creator page walks, and which queues a realm query for a guid it
+                // has never heard of) answers for the guid pair the link stored at
+                // 0x00c23598/0x00c2359c, pushed by the C-string pusher, so a name
+                // the cache cannot fill comes back nil. Not a skill id: whose
+                // profession the window shows is the second value. Which guid the
+                // consumer recovers from a link is not proven by the binary beyond
+                // the header above carrying a player guid as %I64X; the state and
+                // the pair it reads are.
+                //
+                // With no linked window it pushes two nils. This row pushes one
+                // false, which is falsy the same way and leaves FrameXML's second
+                // local nil: the value count only matters to a caller using
+                // select("#", …). It stays a stub because this client never opens a
+                // linked window - the consume side is parsing the |Htrade: link,
+                // decoding its six-recipes-to-a-byte block and showing somebody
+                // else's profession, and that is what would set the state. Neither
+                // dbc folder on this machine holds a Trade table of any name; the
+                // WotLK recipe list is filled by the realm, so whose list a window
+                // shows is the realm's to say.
                 {"GetTradeSkillListLink",     [](lua_State* L) -> int { return luaReturnNil(L); }},
                 {"IsTradeSkillLinked",        [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                {"NoPlayTime",                [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                {"PartialPlayTime",           [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                {"GetBillingTimeRested",      [](lua_State* L) -> int { lua_pushnumber(L, 0); return 1; }},
+                // The play-time limits, which are the realm's, not this
+                // client's to decide: 0x0051cb30 PartialPlayTime answers
+                // PLAYER_FLAGS 0x1000 and 0x0051cba0 NoPlayTime answers 0x2000,
+                // each of them as the number 1 or as nothing - the client
+                // pushes nil both for a clear bit and for no local player. Both
+                // are one test deep in PlayerFrame_UpdatePlaytime, which puts up
+                // the tired or the unhealthy icon accordingly, and the tooltip
+                // either one builds asks GetBillingTimeRested how many hours
+                // have already been rested.
+                {"NoPlayTime",                [](lua_State* L) -> int { return pushPlayerFlagBit(L, 0x2000); }},
+                {"PartialPlayTime",           [](lua_State* L) -> int { return pushPlayerFlagBit(L, 0x1000); }},
+                // That tooltip's hours, and the two figures beside it that only
+                // the login interface asks for here. All three answer the block
+                // the realm sent with the auth response (see AccountState), and
+                // the client renders them straight out of it:
+                //
+                //   GetBillingTimeRested (0x00511c40) - the dword, unsigned.
+                //   GetBillingTimeRemaining (0x004ddbd0) - the dword before it,
+                //     unsigned, and *zeroed* when the plan byte carries bit 1
+                //     (0x004ddbd0 tests it and answers 0 for the whole thing).
+                //   GetBillingPlan (0x004ddc60) - not the byte: the byte masked
+                //     with 0x16, and that mapping turned into one of five
+                //     numbers, with 3 for "none of those bits".
+                //
+                // Each answers a number even with nothing to answer from, which
+                // is what the client does when its connection has never seen
+                // the block - it reads zeroed memory.
+                {"GetBillingTimeRested", [](lua_State* L) -> int {
+            lua_pushnumber(L, static_cast<double>(accountStateOf(getGameHandler(L)).billingTimeRested));
+            return 1;
+        }},
+                {"GetBillingTimeRemaining", [](lua_State* L) -> int {
+            const auto& a = accountStateOf(getGameHandler(L));
+            const uint32_t remaining = (a.billingPlan & 0x02) ? 0u : a.billingTimeRemaining;
+            lua_pushnumber(L, static_cast<double>(remaining));
+            return 1;
+        }},
+                {"GetBillingPlan", [](lua_State* L) -> int {
+            const uint8_t plan = accountStateOf(getGameHandler(L)).billingPlan;
+            int answer = 0;
+            switch (plan & 0x16) {
+                case 0x00: answer = 3; break;
+                case 0x02: answer = 1; break;
+                case 0x04: answer = 2; break;
+                case 0x10: answer = 4; break;
+                default: break;   // a combination of them, which answers 0
+            }
+            lua_pushnumber(L, answer);
+            return 1;
+        }},
                 // Filters and sub-classes: panel state, kept so it reads back.
                 // The trade skill window's two filter dropdowns. Both answered
                 // nothing and both are spread straight into a vararg call -
@@ -4812,7 +5230,7 @@ void registerQuestLuaAPI(lua_State* L) {
             gh->ensureItemInfo(item);
             const auto* info = gh->getItemInfo(item);
             if (!info || !info->valid) return luaReturnNil(L);
-            lua_pushstring(L, game::buildItemLink(item, info->quality, info->name).c_str());
+            lua_pushstring(L, game::buildItemLink(item, info->quality, info->name, gh->getPlayerLevel()).c_str());
             return 1;
         }},
                 {"GetTrainerGreetingText", [](lua_State* L) -> int {
@@ -5072,10 +5490,41 @@ void registerQuestLuaAPI(lua_State* L) {
                 // has no art switched by name, so these do nothing - which is
                 // what they did before, silently, as unknown globals.
                 //
+                // The names are the client's own table, not file names:
+                // SetCursor (0x005104a0) lays out 52 {name, number} pairs on
+                // the stack - POINT_CURSOR 2, CAST_CURSOR 3, BUY_CURSOR 4 …
+                // VEHICLE_ERROR_CURSOR 0x35 - matches the argument against the
+                // names, and only a miss falls through to 0x00616830, which is
+                // where a path like "Interface\\CURSOR\\Driver" is loaded as a
+                // texture instead; that sets the current cursor (0x00c26de8) to
+                // 0x35 - the number the same table gives VEHICLE_ERROR_CURSOR,
+                // and the one number the setter 0x00616800 refuses to take, so
+                // a named cursor never overwrites a custom-texture one. Both
+                // globals live beside the base cursor 0x00c25de4, the one
+                // ResetCursor (0x00616920)
+                // restores, and a change fires event 0x113 - CURSOR_UPDATE,
+                // which this repository already raises wherever an item
+                // actually moves onto or off the pointer.
+                //
                 // Bound rather than left to the fallback because the fallback
                 // is what makes a typo look like a working call, and because a
                 // window that calls nothing undefined is the measure of
                 // whether it can be handed over.
+                //
+                // What the reference does with this one (0x005856d0) is more
+                // than pick art, and that is worth knowing before anyone wires
+                // a cursor up: it looks the hovered merchant item up, and if
+                // the player's money is under the item's cost it sets cursor
+                // state 0x1d - the "you cannot have this one" hand - and
+                // returns. Otherwise it walks the item's five requirements and
+                // a reputation test (0x005a37b0 on the item's required faction)
+                // and answers 0x1d if any fails, state 3 if none does. The
+                // container version (0x005d8bd0) has no such test: it sets 3
+                // for any item in the bag that is not flagged at record +0x394
+                // bit 0. So a vendor cursor has to re-decide on every hover -
+                // merchantframe.xml calls this from the frame's OnUpdate while
+                // `itemHover` is set, which is what makes the hand change the
+                // moment a bag fills up or a coin lands.
                 {"ShowMerchantSellCursor", [](lua_State* L) -> int { (void)L; return 0; }},
                 // The merchant's repair-an-item button toggles between these
                 // two and reads the state back through InRepairMode. All three
@@ -5422,11 +5871,59 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushnumber(L, on.yearSince2000);
             return 4;
         }},
-                // Their statistics, which the reply does carry counters for and
-                // this client walks past to reach the end of the packet. Left
-                // as the dash until those are kept: a zero would read as a
-                // player who has never done the thing.
-                {"GetComparisonStatistic",         [](lua_State* L) -> int { lua_pushstring(L, "--"); return 1; }},
+                // GetComparisonStatistic(achievementID) → one string (0x005b5e70).
+                //
+                // The number is the other player's, and it was already on the
+                // wire: the second half of SMSG_RESPOND_INSPECT_ACHIEVEMENTS
+                // carries a counter per criteria, which the reply handler used to
+                // parse and drop on the floor while it walked the list to stay in
+                // step. Those counters are kept now (getComparisonCriteriaProgress
+                // and its store guard, which is the client's own), so the panel's
+                // friend column reads the same criterion the player column does -
+                // the reference walks the achievement's criteria chain and hands
+                // the result to the shared formatter 0x005b0ea0, and for the
+                // single-criterion statistic this panel draws, sum, largest and
+                // "how many met their threshold" - the three aggregations it picks
+                // between off a flag dword this note does not pin down - all answer
+                // with that one counter.
+                //
+                // The formatter is the part still missing, and it is not a
+                // number-to-string: it renders the same counter as money or as the
+                // date it last moved (0x005b0ea0 reads the record's own date at
+                // +0x4c and a per-day rate over 0x15180 seconds) depending on those
+                // same flag bits, so a money or date statistic gets the bare number
+                // here. What the reference never does is answer with a dash: a
+                // statistic nobody has done is a zero, and no value at all comes
+                // back only when the id names no achievement row - the one case
+                // FrameXML turns into "--" itself
+                // (blizzard_achievementui.lua:2658-2660). So a missing record
+                // answers "0" below rather than a dash. The dash stays for the one
+                // case the reference does answer with no value - an id the criteria
+                // table has no rows for - with the caveat that an achievement which
+                // has no criteria of its own looks the same from here and gets a
+                // zero from the reference. The local half above (GetStatistic) makes
+                // the same choices, which keeps the two columns of one row in step.
+                {"GetComparisonStatistic", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh || lua_gettop(L) < 1)
+                return luaL_error(L, "Usage: GetComparisonStatistic(achievementID)");
+            const auto id = static_cast<uint32_t>(lua_tonumber(L, 1));
+            gh->ensureAchievementCriteriaLoaded();
+            const auto& list = gh->getAchievementCriteria(id);
+            if (list.empty()) { lua_pushstring(L, "--"); return 1; }
+            const auto* progress = gh->getComparisonCriteriaProgress(
+                gh->getAchievementComparisonGuid());
+            uint64_t value = 0;
+            if (progress) {
+                const auto pit = progress->find(list[0].id);
+                if (pit != progress->end()) value = pit->second;
+            }
+            // One string, which is what the client pushes (FUN_0084e350), and an
+            // empty store is a zero rather than a gap: that is what the reference's
+            // walk over an empty list hands to its formatter.
+            lua_pushstring(L, std::to_string(value).c_str());
+            return 1;
+        }},
                 {"GetComparisonAchievementPoints", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) { lua_pushnumber(L, 0); return 1; }

@@ -65,6 +65,7 @@
   "CharTitles": {
     "ID": 0,
     "Title": 2,
+    "TitleFemale": 19,
     "TitleBit": 36
   },
   "CharacterFacialHairStyles": {

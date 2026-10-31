@@ -88,16 +88,27 @@ enum class UiElement {
     /// twice. The large one is what retail shows, so this is handed over
     /// rather than suppressed.
     ZoneText,
-    /// Three more found by the unaccounted-frame sweep. Each has a working
-    /// counterpart this client draws, and the first two are live duplicates:
-    /// TRADE_SHOW and READY_CHECK are both fired, so FrameXML raised its
-    /// window beside the client's own every time.
+    /// Three more found by the unaccounted-frame sweep, and back then all three
+    /// were live duplicates: TRADE_SHOW, READY_CHECK and a raid warning line
+    /// each reached FrameXML's window while this client drew its own beside it.
+    /// None of the three counterparts is left - `clientDraws` is false for every
+    /// one of them - so the duplicate is gone because the drawing was deleted,
+    /// not because it is gated, and there is no suppression row for any of them
+    /// to take FrameXML's window away in the same way.
     ///
-    /// RaidWarning is the exception and is named anyway. Its frames cannot
-    /// appear today because CHAT_MSG_RAID_WARNING is never fired - but this
-    /// client draws raid warnings from the chat history rather than from the
-    /// event, so firing it later would put a second banner on screen with
-    /// nothing to say why.
+    /// RaidWarning was named on the strength of being unreachable, and that was
+    /// wrong: CHAT_MSG_RAID_WARNING has been fired the whole time. Every chat
+    /// line that is accepted goes to the interface under "CHAT_MSG_" plus its
+    /// type string (chat_handler.cpp's chatEventNameFor), and "RAID_WARNING" is
+    /// one of those strings (world_packets_social.cpp) - on both paths, the
+    /// server's line and the local row a typed /rw makes, which is the one that
+    /// matters since a warning the player sent comes back with the player's own
+    /// guid on it and is dropped as an echo. FrameXML's RaidWarningFrame
+    /// registers that event and its RaidNotice_* live in raidwarning.lua, which
+    /// framexml.toc loads. What was removed was this client's own centred
+    /// banner, which read the chat history instead of the event; only the
+    /// whisper sound that was played from inside that walk is still here
+    /// (combat_ui.cpp).
     Trade,
     ReadyCheck,
     RaidWarning,

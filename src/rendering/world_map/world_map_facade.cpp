@@ -136,6 +136,14 @@ struct WorldMapFacade::Impl {
     glm::vec3 entrancePos{0.0f};   // render space, while showingEntrance
     uint32_t entranceMapId = 0;
 
+    // Which floor of the area being shown is selected, as the client holds it:
+    // the id of the DungeonMap row, or -1 for none (DAT_00accf0c). One value
+    // for the whole map, and every move to another area puts that area's own
+    // default back in its place - which is why it is keyed by the area id and
+    // reset on the ask rather than from each navigation path.
+    int dungeonLevelRowId = -1;
+    uint32_t dungeonLevelAreaId = 0;
+
     DataRepository data;
     ViewStateMachine viewState;
     CompositeRenderer compositor;
@@ -811,6 +819,19 @@ std::string WorldMapFacade::zoneNameAtMapPoint(float u, float v) const {
     return zones[static_cast<size_t>(idx)].areaName;
 }
 
+// The WorldMapArea row the view is standing on. A continent view is standing on
+// its map's own row, which is the row the client keeps for the map it is
+// showing; a zone view is standing on whatever was chosen. World and cosmic
+// level have no row, and the client answers those with DAT_00accf10 at -1 - no
+// floor count, no level, nothing to choose.
+static const Zone* shownAreaRow(const std::vector<Zone>& zones,
+                                ViewLevel level, int continentIdx, int zoneIdx) {
+    const int idx = level == ViewLevel::CONTINENT ? continentIdx
+                  : level == ViewLevel::ZONE      ? zoneIdx : -1;
+    if (idx < 0 || idx >= static_cast<int>(zones.size())) return nullptr;
+    return &zones[static_cast<size_t>(idx)];
+}
+
 bool WorldMapFacade::clickMapPoint(float u, float v) {
     const int idx = zoneAtMapPoint(u, v);
     if (idx < 0) return false;
@@ -820,6 +841,23 @@ bool WorldMapFacade::clickMapPoint(float u, float v) {
 }
 
 void WorldMapFacade::zoomOutOneLevel() {
+    // From a floor, this is not a step out of the map at all: the floor's own
+    // row names the area it belongs to, and the client shows that (0x00546a90
+    // reads the row selected in DAT_00accf0c and hands its field seven to the
+    // same lookup a SetMapByID goes through). Stepping the whole map out from
+    // here would leave the world view where a zone map had been.
+    if (impl_->dungeonLevelRowId > 0) {
+        const Zone* area = shownAreaRow(impl_->data.zones(), impl_->viewState.currentLevel(),
+                                        impl_->viewState.continentIdx(),
+                                        impl_->viewState.currentZoneIdx());
+        if (area) {
+            for (const auto& f : area->dungeonFloors) {
+                if (static_cast<int32_t>(f.rowId) != impl_->dungeonLevelRowId) continue;
+                if (f.worldMapAreaId != 0 && showWorldMapArea(f.worldMapAreaId)) return;
+                break;
+            }
+        }
+    }
     impl_->userMapOverride = true;
     impl_->applyZoom(impl_->viewState.zoomOut());
 }
@@ -902,6 +940,7 @@ std::vector<WorldMapFacade::Landmark> WorldMapFacade::currentLandmarks() const {
         mark.name = poi.name;
         mark.description = poi.description;
         mark.iconType = poi.iconType;
+        mark.flags = poi.flags;
         mark.x = uv.x;
         mark.y = uv.y;
         out.push_back(std::move(mark));
@@ -1765,6 +1804,91 @@ bool WorldMapFacade::showAreaZone(uint32_t areaTableId) {
         return true;
     }
     return false;
+}
+
+int WorldMapFacade::dungeonLevelCount() {
+    const auto& zones = impl_->data.zones();
+    const Zone* area = shownAreaRow(zones, impl_->viewState.currentLevel(),
+                                    impl_->viewState.continentIdx(),
+                                    impl_->viewState.currentZoneIdx());
+    if (!area) return 0;
+
+    // The distinct floor numbers of every floor row on the area's map, which is
+    // the bitmask the client builds (0x00546190) - two rows can describe one
+    // floor, as both Argent Coliseum maps do.
+    std::vector<uint32_t> floors;
+    for (const auto& f : area->dungeonFloors) {
+        if (f.floorIndex != 0 &&
+            std::find(floors.begin(), floors.end(), f.floorIndex) == floors.end()) {
+            floors.push_back(f.floorIndex);
+        }
+    }
+    // The areas whose default floor is -1 answer one level more than they have
+    // rows, and that level is "no floor" - the level the client hands to
+    // 0x00547a70 as zero and stores as -1.
+    if (area->defaultDungeonFloorRowId == -1) floors.push_back(0);
+    return static_cast<int>(floors.size());
+}
+
+int WorldMapFacade::currentDungeonLevel() {
+    const auto& zones = impl_->data.zones();
+    const Zone* area = shownAreaRow(zones, impl_->viewState.currentLevel(),
+                                    impl_->viewState.continentIdx(),
+                                    impl_->viewState.currentZoneIdx());
+    if (!area) return 0;
+
+    if (impl_->dungeonLevelAreaId != area->wmaID) {
+        impl_->dungeonLevelAreaId = area->wmaID;
+        impl_->dungeonLevelRowId = area->defaultDungeonFloorRowId;
+    }
+    const int surface = area->defaultDungeonFloorRowId == -1 ? 1 : 0;
+    if (impl_->dungeonLevelRowId <= 0) return surface;   // none selected
+    for (const auto& f : area->dungeonFloors) {
+        if (static_cast<int32_t>(f.rowId) == impl_->dungeonLevelRowId)
+            return static_cast<int>(f.floorIndex) + surface;
+    }
+    return surface;
+}
+
+bool WorldMapFacade::selectDungeonLevel(int level) {
+    const auto& zones = impl_->data.zones();
+    const Zone* area = shownAreaRow(zones, impl_->viewState.currentLevel(),
+                                    impl_->viewState.continentIdx(),
+                                    impl_->viewState.currentZoneIdx());
+    if (!area) return false;
+
+    // The shift goes the other way here, the same one 0x00547b80 makes on its
+    // way in: level one of an area with a surface level is no floor at all.
+    const int surface = area->defaultDungeonFloorRowId == -1 ? 1 : 0;
+    const int floor = level - surface;
+    if (floor < 0 || (surface == 0 && floor == 0)) return false;
+
+    // Keep the current selection in place across a level-0 pick on an area that
+    // has not been looked at yet, so the reset below starts from where it was.
+    if (impl_->dungeonLevelAreaId != area->wmaID) {
+        impl_->dungeonLevelAreaId = area->wmaID;
+        impl_->dungeonLevelRowId = area->defaultDungeonFloorRowId;
+    }
+    if (floor == 0) {
+        impl_->dungeonLevelRowId = -1;
+        return true;
+    }
+    // The floor has to be one this map actually has - the client's scan of the
+    // rows (0x00547a70) walks off the end and changes nothing otherwise.
+    for (const auto& f : area->dungeonFloors) {
+        if (static_cast<int>(f.floorIndex) == floor) {
+            impl_->dungeonLevelRowId = static_cast<int>(f.rowId);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool WorldMapFacade::dungeonUsesTerrainMap() const {
+    const Zone* area = shownAreaRow(impl_->data.zones(), impl_->viewState.currentLevel(),
+                                    impl_->viewState.continentIdx(),
+                                    impl_->viewState.currentZoneIdx());
+    return area && area->defaultDungeonFloorRowId == -1;
 }
 
 bool WorldMapFacade::canZoomOut() const {

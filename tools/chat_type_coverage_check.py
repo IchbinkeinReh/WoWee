@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Chat types FrameXML can hand SendChatMessage that it does not map.
 
-    tools/chat_type_coverage_check.py
+    tools/chat_type_coverage_check.py "<the extracted interface>"
+
+The interface is installed data rather than repository content, so the default
+below is often not where it is.  A directory that is not there is not the same
+as nothing missing - with nothing parsed the sendable set is empty, and the run
+stops instead of printing what a fully mapped client prints.
 
 WHY THIS IS WORTH A SWEEP
 
@@ -58,7 +63,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from framexml_source import loaded_files, without_comments  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-INTERFACE = ROOT / "Data/interface"
+INTERFACE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
 BINDING = ROOT / "src/addons/lua_social_api.cpp"
 
 
@@ -79,6 +84,12 @@ def mapped_types():
 
 
 def main():
+    if not INTERFACE.is_dir():
+        # Nothing parsed, so nothing unmapped: the run would print the same
+        # lines a fully mapped client prints.
+        print(f"{INTERFACE} is not a directory - name the extracted interface "
+              "directory on the command line.")
+        return 2
     sendable = sendable_types()
     mapped = mapped_types()
 

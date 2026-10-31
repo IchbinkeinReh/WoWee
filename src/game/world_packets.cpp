@@ -330,6 +330,7 @@ bool AuthChallengeParser::parse(network::Packet& packet, AuthChallengeData& data
 bool AuthResponseParser::parse(network::Packet& packet, AuthResponseData& response) {
     // SMSG_AUTH_RESPONSE format:
     // uint8 result
+    // [the account block below, for the two codes that carry it]
 
     if (packet.getSize() < 1) {
         LOG_ERROR("SMSG_AUTH_RESPONSE packet too small: ", packet.getSize(), " bytes");
@@ -339,7 +340,39 @@ bool AuthResponseParser::parse(network::Packet& packet, AuthResponseData& respon
     uint8_t resultCode = packet.readUInt8();
     response.result = static_cast<AuthResult>(resultCode);
 
+    // OK (0x0C) and WAIT_QUEUE (0x1B) are the only two results the original
+    // client reads past for (0x00464640: `if (code == 12) {} else if (code !=
+    // 27) goto done;`), and the four reads it then makes are a dword, a byte,
+    // a dword and a byte. The bytes are asked for by size rather than by the
+    // client's own test, which is a length computation over its buffer object
+    // - it holds five fewer available bytes for anything but 0x1B, because
+    // 0x1B carries five more behind this block (a queue position and a byte,
+    // into +0x2f1c and +0x2f20), and those belong to a login queue this client
+    // has no part in.
+    const bool carrying = resultCode == static_cast<uint8_t>(AuthResult::OK) ||
+                          resultCode == static_cast<uint8_t>(AuthResult::WAIT_QUEUE);
+    if (carrying && packet.hasRemaining(10)) {
+        response.account.present = true;
+        response.account.billingTimeRemaining = packet.readUInt32();
+        response.account.billingPlan = packet.readUInt8();
+        response.account.billingTimeRested = packet.readUInt32();
+        response.account.accountExpansion = packet.readUInt8();
+    }
+
     LOG_INFO("Parsed SMSG_AUTH_RESPONSE: ", getAuthResultString(response.result));
+    // Worth writing down, because it is the only way to learn what the realm
+    // actually sends beside the result: every binding reading these has
+    // answered a constant here until now, and a block that is absent reads as
+    // the same zeros as one that says nothing.
+    if (response.account.present) {
+        LOG_INFO("  account block: remaining ", response.account.billingTimeRemaining,
+                 ", plan 0x", std::hex, static_cast<unsigned>(response.account.billingPlan),
+                 ", rested ", std::dec, response.account.billingTimeRested,
+                 ", expansion ", static_cast<unsigned>(response.account.accountExpansion));
+    } else if (carrying) {
+        LOG_INFO("  no account block in the response: ", packet.getRemainingSize(),
+                 " bytes after the result");
+    }
 
     return true;
 }

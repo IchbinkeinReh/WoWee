@@ -83,6 +83,63 @@ constexpr std::string_view gameError(uint8_t result, const SpellRow& spell) {
     return "ERR_SPELL_FAILED_S";
 }
 
+/// Which of the four spellcast events a failure's result raises (0x007fecc0).
+///
+/// Every packet that ends a cast - SMSG_CAST_RESULT, SMSG_CAST_FAILED,
+/// SMSG_SPELL_FAILURE, SMSG_SPELL_FAILED_OTHER, SMSG_PET_CAST_FAILED, and
+/// SMSG_SPELL_GO when the cast went off - runs through that one routine, and it
+/// picks the event by the reason number rather than by which packet arrived:
+///
+///   0x18 CHARMED, 0x1b DONT_REPORT, 0x69 SPELL_IN_PROGRESS - the three
+///   refusals that leave a cast running - raise FAILED_QUIET;
+///   0x28 INTERRUPTED, 0x29 INTERRUPTED_COMBAT raise INTERRUPTED;
+///   0xbb raises SUCCEEDED;
+///   anything else raises plain FAILED.
+///
+/// 0xbb is no result at all: SMSG_SPELL_GO pushes it as a literal (0x0080e74f)
+/// for a cast that went off, and it is one past the last name 0x007fcca0 has -
+/// that table stops at 186, SPELL_FAILED_TARGET_CANNOT_BE_RESURRECTED - so the
+/// client's own number list runs out exactly where its "went off" sentinel
+/// begins.  The names of the other five are that same table's.
+///
+/// The distinction is not cosmetic: CastingBarFrame registers START, STOP,
+/// FAILED, INTERRUPTED, DELAYED and the three channel events
+/// (castingbarframe.lua:6-13), and not FAILED_QUIET, which is what keeps the
+/// bar of a spell still running up when the realm refuses a second attempt at
+/// it beside the first.  The chat window's cast-sequence managers do listen for
+/// it (chatframe.lua:727,797,942), and it is a failure the combat log and the
+/// error line report just the same - 0x00807f10 gives all three of these the
+/// default ERR_SPELL_FAILED_S - so the difference is entirely in what the event
+/// tells the frames watching the cast.
+enum class CastEvent { Failed, FailedQuiet, Interrupted, Succeeded };
+
+constexpr CastEvent castEvent(uint8_t result) {
+    switch (result) {
+    case 0x18:  // SPELL_FAILED_CHARMED
+    case 0x1b:  // SPELL_FAILED_DONT_REPORT
+    case 0x69:  // SPELL_FAILED_SPELL_IN_PROGRESS
+        return CastEvent::FailedQuiet;
+    case 0x28:  // SPELL_FAILED_INTERRUPTED
+    case 0x29:  // SPELL_FAILED_INTERRUPTED_COMBAT
+        return CastEvent::Interrupted;
+    case 0xbb:  // the "it went off" sentinel, past the end of the name table
+        return CastEvent::Succeeded;
+    default:
+        return CastEvent::Failed;
+    }
+}
+
+/// The interface name that event is raised under.
+constexpr std::string_view castEventName(CastEvent event) {
+    switch (event) {
+    case CastEvent::FailedQuiet: return "UNIT_SPELLCAST_FAILED_QUIET";
+    case CastEvent::Interrupted: return "UNIT_SPELLCAST_INTERRUPTED";
+    case CastEvent::Succeeded:   return "UNIT_SPELLCAST_SUCCEEDED";
+    case CastEvent::Failed: break;
+    }
+    return "UNIT_SPELLCAST_FAILED";
+}
+
 /// The game error a pet's failed cast is shown through (0x00805610, from
 /// SMSG_PET_CAST_FAILED): the pet's own ERR_PET_SPELL_* lines, the cooldown
 /// line by the ability flag alone, NO_POWER's as the player's, and

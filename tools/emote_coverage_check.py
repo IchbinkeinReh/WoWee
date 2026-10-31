@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Emote tokens FrameXML can send that DoEmote cannot answer.
 
-    tools/emote_coverage_check.py
+    tools/emote_coverage_check.py "<the extracted interface>" [emotestext.dbc]
+
+The interface is installed data rather than repository content, and so is the
+DBC - name the interface directory, and its expansion's dbfilesclient beside it
+is found from there.  A directory that is not there is not the same as nothing
+missing: with no interface parsed there are no tokens to compare, and the run
+stops rather than printing what a fully covered client prints.
 
 WHAT THIS IS FOR
 
@@ -47,16 +53,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from framexml_source import loaded_files  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-DBC = ROOT / "Data/db/emotestext.dbc"
-INTERFACE = ROOT / "Data/interface"
+INTERFACE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
 BINDING = ROOT / "src/addons/lua_social_api.cpp"
+
+
+def dbc_path():
+    """Where EmotesText.dbc is being read from this run.
+
+    An extracted expansion lays its two trees out beside each other
+    (…/wotlk/interface and …/wotlk/dbfilesclient), so naming the interface finds
+    the table; the repository's own Data/db copy comes first because that is
+    where a curated one would live.
+    """
+    if len(sys.argv) > 2:
+        return Path(sys.argv[2])
+    candidates = [ROOT / "Data/db/emotestext.dbc",
+                  INTERFACE.parent / "dbfilesclient/emotestext.dbc"]
+    for cand in candidates:
+        if cand.exists():
+            return cand
+    return candidates[0]
+
+
+DBC_PATH = dbc_path()
 
 
 def dbc_commands():
     """Command names out of EmotesText.dbc, read as parseEmoteCommands does."""
-    if not DBC.exists():
+    if not DBC_PATH.exists():
         return None
-    data = DBC.read_bytes()
+    data = DBC_PATH.read_bytes()
     if len(data) < 20 or data[:4] != b"WDBC":
         return None
     _, records, fields, rec_size, _ = struct.unpack("<4sIIII", data[:20])
@@ -91,13 +117,21 @@ def framexml_tokens():
 
 
 def main():
+    if not INTERFACE.is_dir():
+        # No interface parsed means no tokens to compare, and the run would
+        # print the same lines a client with every emote answers.
+        print(f"{INTERFACE} is not a directory - name the extracted interface "
+              "directory on the command line.")
+        return 2
     tokens = framexml_tokens()
     commands = dbc_commands()
     uses_registry = "getEmoteDbcId" in BINDING.read_text(errors="ignore")
 
     if commands is None:
-        print("emotestext.dbc not readable here - nothing to compare")
-        return 0
+        # And without the table, every token reads as unanswered.
+        print(f"{DBC_PATH} is not a readable EmotesText.dbc - name the table as "
+              "the second argument.")
+        return 2
 
     print(f"{len(tokens)} EMOTEn_TOKEN values, {len(commands)} command names in "
           f"emotestext.dbc, DoEmote "

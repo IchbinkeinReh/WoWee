@@ -78,6 +78,22 @@ public:
     [[nodiscard]] uint64_t opponent(size_t slot) const { return slot < kSlots ? opponents_[slot] : 0; }
     [[nodiscard]] uint64_t pet(size_t slot) const { return slot < kSlots ? pets_[slot].pet : 0; }
 
+    /// GetNumArenaOpponents' answer: 0x00549630 walks the five slots and **stops at
+    /// the first one whose **two guid pairs are both empty** - the opponent's pair
+    /// at 0x00be9f48 and the pet's at 0x00be9ef8, sixteen bytes a slot, and the
+    /// pet's *owner* pair is not part of the test. So it is a prefix length rather
+    /// than a tally: an opponent destroyed in slot 2 of five cuts it to 1 even with
+    /// three still in sight. Both consumers use it as an index into the enemy
+    /// panel - `uiparent.lua:1927` anchors the watch frame to
+    /// `"ArenaEnemyFrame"..numArenaOpponents`, `blizzard_arenaui.lua:315` to
+    /// `"ArenaEnemyFrame"..numOpps.."PetFrame"` - which is what makes the walk stop
+    /// instead of count: the client is asking which is the last frame it has.
+    [[nodiscard]] size_t numOpponents() const {
+        size_t n = 0;
+        while (n < kSlots && (opponents_[n] != 0 || pets_[n].pet != 0)) ++n;
+        return n;
+    }
+
 private:
     static std::string token(const char* kind, size_t slot) { return kind + std::to_string(slot + 1); }
     /// 0x0054b840 and 0x0054b920: "seen", and "unseen" for one not in sight.

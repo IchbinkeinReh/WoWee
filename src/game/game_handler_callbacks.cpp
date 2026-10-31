@@ -300,6 +300,11 @@ void GameHandler::handleAuthResponse(network::Packet& packet) {
         return;
     }
 
+    // Kept for the whole session, as the client keeps it: 0x00464640 stores
+    // the block on the connection object and the billing bindings read it back
+    // there long after the response itself has been dealt with.
+    accountStateRef() = response.account;
+
     if (!response.isSuccess()) {
         std::string reason = std::string("Authentication failed: ") +
                            getAuthResultString(response.result);
@@ -1411,6 +1416,7 @@ const std::array<GameHandler::TradeSlot, GameHandler::TRADE_SLOT_COUNT>& GameHan
             converted[i].displayId = src[i].displayId;
             converted[i].stackCount = src[i].stackCount;
             converted[i].itemGuid = src[i].itemGuid;
+            converted[i].inst = src[i].inst;
             converted[i].occupied = (src[i].itemId != 0);
         }
         return converted;
@@ -1426,6 +1432,7 @@ const std::array<GameHandler::TradeSlot, GameHandler::TRADE_SLOT_COUNT>& GameHan
             converted[i].displayId = src[i].displayId;
             converted[i].stackCount = src[i].stackCount;
             converted[i].itemGuid = src[i].itemGuid;
+            converted[i].inst = src[i].inst;
             converted[i].occupied = (src[i].itemId != 0);
         }
         return converted;
@@ -1437,6 +1444,16 @@ uint64_t GameHandler::getMyTradeGold() const {
 }
 uint64_t GameHandler::getPeerTradeGold() const {
     return inventoryHandler_ ? inventoryHandler_->getPeerTradeGold() : peerTradeGold_;
+}
+uint32_t GameHandler::getTradeEnchantSpell(bool ownSide) const {
+    return inventoryHandler_ ? inventoryHandler_->getTradeEnchantSpell(ownSide) : 0;
+}
+
+std::string GameHandler::itemNameWithProperty(const std::string& name, int32_t randomPropertyId) const {
+    if (randomPropertyId == 0 || name.empty()) return name;
+    const std::string property = getRandomPropertyName(randomPropertyId);
+    if (property.empty()) return name;
+    return interfaceFormat("ITEM_SUFFIX_TEMPLATE", "%s %s", {name, property});
 }
 
 bool GameHandler::supportsEquipmentSets() const {
@@ -2051,6 +2068,14 @@ void GameHandler::removeIgnore(const std::string& playerName) {
     if (socialHandler_) socialHandler_->removeIgnore(playerName);
 }
 
+void GameHandler::addVoiceIgnore(const std::string& playerName) {
+    if (socialHandler_) socialHandler_->addVoiceIgnore(playerName);
+}
+
+void GameHandler::removeVoiceIgnore(const std::string& playerName) {
+    if (socialHandler_) socialHandler_->removeVoiceIgnore(playerName);
+}
+
 void GameHandler::faceCanonicalYaw(float canonicalYaw) {
     movementInfo.orientation = canonicalYaw;
 
@@ -2489,8 +2514,9 @@ void GameHandler::updateOtherPlayerVisibleItems(uint64_t guid, const FlatFieldMa
     if (inventoryHandler_) inventoryHandler_->updateOtherPlayerVisibleItems(guid, fields);
 }
 
-void GameHandler::cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries) {
-    if (inventoryHandler_) inventoryHandler_->cacheInspectedPlayerEquipment(guid, itemEntries);
+void GameHandler::cacheInspectedPlayerEquipment(uint64_t guid, const std::array<uint32_t, 19>& itemEntries,
+                                                const std::array<ItemLinkInstance, 19>& instances) {
+    if (inventoryHandler_) inventoryHandler_->cacheInspectedPlayerEquipment(guid, itemEntries, instances);
 }
 
 void GameHandler::emitOtherPlayerEquipment(uint64_t guid) {
@@ -5100,6 +5126,12 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
     // An event sent in full is the open one now, in place of a new one
     // (0x005bed20).
     if (which == CalendarPacket::SendEvent) calendarDraftOpen_ = false;
+    // Every path that stores an event record re-arms that record's
+    // fifteen-minutes-before reminder (0x005b79b0, called by the calendar list,
+    // by an event added and by an event updated - and by the last two with the
+    // status byte carried over from the record being replaced, which is how an
+    // event answered since the calendar was last read still gets one).
+    armCalendarAlarms();
     // The list ordered before it is announced, once every name is in: an
     // event sent in full, or a guild's or arena team's list, by status
     // (0x005f2c00, 0x005f2f90: 0x005f1980(3, 0)); an invitee added, by the
@@ -5137,6 +5169,40 @@ void GameHandler::handleCalendarPacket(CalendarPacket which, network::Packet& pa
     if (ctx.askNumPending && isInWorld() && socket) {
         network::Packet ask(wireOpcode(Opcode::CMSG_CALENDAR_GET_NUM_PENDING));
         socket->send(ask);
+    }
+}
+
+void GameHandler::armCalendarAlarms() {
+    const std::optional<WowDate> now = getGameDate();
+    // No game date, nothing to arm against: the times the calendar sends are
+    // the server's own, and without a clock of the server's they cannot be
+    // placed at all. The same holds for what is still ahead in the calendar
+    // (calendarInviteState, the pending invites).
+    calendarAlarms_ = calendarArmAlarms(calendarData_, playerGuid, now ? &*now : nullptr);
+}
+
+void GameHandler::sayCalendarAlarms(const WowDate& now) {
+    const int64_t nowKey = calendarMinuteKey(now);
+    for (auto it = calendarAlarms_.begin(); it != calendarAlarms_.end();) {
+        const int64_t dueKey = calendarMinuteKey(it->at);
+        if (dueKey > nowKey) { ++it; continue; }
+        if (dueKey == nowKey) {
+            // 0x005b7910. The title is the row's own; the two numbers are the
+            // event's hour and minute, which is what the interface calls them
+            // and what it ignores - the words, with the fifteen minutes in
+            // them, are FrameXML's (CALENDAR_EVENT_ALARM_MESSAGE, printed by
+            // gametime.lua:175 into the chat frame in the system colour).
+            fireAddonEvent("CALENDAR_EVENT_ALARM",
+                           {it->title, std::to_string(it->eventTime.hour),
+                            std::to_string(it->eventTime.minute)});
+        }
+        // Past that minute, it is not said late. The client's scheduler matches
+        // the moment rather than passing it (0x0076c890 compares two time
+        // patterns field by field, a negative field being a wildcard), so an
+        // alarm armed for a moment already gone - a calendar opened ten minutes
+        // before its event, say - stays silent for good rather than printing
+        // "begins in 15 minutes" about an event already under way.
+        it = calendarAlarms_.erase(it);
     }
 }
 

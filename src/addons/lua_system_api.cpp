@@ -20,6 +20,7 @@
 #include "game/battleground_flag.hpp"
 #include "game/minimap_tracking.hpp"
 #include "game/known_titles.hpp"
+#include "game/movement_handler.hpp"   // the client-control table, for GetBattlefieldVehicleInfo's seventh value
 #include "core/open_url.hpp"
 #include "core/version.hpp"
 #include "core/config_paths.hpp"
@@ -29,6 +30,7 @@
 #include "game/opcode_table.hpp"
 #include "network/packet.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "addons/lua_api_registrations.hpp"
 #include "addons/chat_color_table.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/chat_window_background.hpp"
@@ -42,6 +44,7 @@
 #include "game/bg_score_defs.hpp"
 #include "game/calendar_month.hpp"
 #include "game/calendar_data.hpp"
+#include "game/lfg_update.hpp"
 #include "game/pet_action.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/ambient_sound_manager.hpp"
@@ -62,6 +65,7 @@
 #include "game/expansion_profile.hpp"
 #include "core/coordinates.hpp"
 #include "rendering/minimap_zoom.hpp"
+#include "rendering/minimap_blips.hpp"
 #include "rendering/world_map/coordinate_projection.hpp"
 #include "core/local_time.hpp"
 
@@ -664,6 +668,21 @@ static CVarFileSnapshot& cvarFileSnapshot() {
     return snapshot;
 }
 
+/// What each CVar held when this session read its file, kept apart from the
+/// store because the store moves and this does not.
+///
+/// It is the client's "startup value": the string its cvar object holds at
+/// +0x4c, which `cvar_reset` (0x00767840) puts back and `cvarlist` (0x00767220)
+/// prints in parentheses. The client takes it from Config.wtf as each CVar is
+/// registered and never refreshes it, so resetting the same CVar twice lands on
+/// the same value however many times it was changed in between - and a name that
+/// Config.wtf did not mention has no startup value at all, which is why the
+/// reset falls back to the registered default rather than to nothing.
+static std::unordered_map<std::string, std::string>& cvarStartupValues() {
+    static std::unordered_map<std::string, std::string> values;
+    return values;
+}
+
 /// Where the CVars live between runs.
 ///
 /// Its own file rather than settings.cfg, which this client's own panel writes
@@ -703,7 +722,27 @@ static void loadStoredCVars() {
         std::string key = line.substr(0, eq);
         toLowerInPlace(key);
         cvarStore()[key] = line.substr(eq + 1);
+        // The same string twice, for two questions that are not the same: what
+        // the CVar is now, and what it was when the session started.
+        cvarStartupValues()[key] = line.substr(eq + 1);
         ++loaded;
+    }
+    // Mouse Look Speed was stored in this client's own units until now: the
+    // number written was the degrees-per-movement the camera was handed, so a
+    // config from before the two were separated says 0.2 where the CVar means
+    // 180. Read back as it stands it multiplies by 0.00125 again and the view
+    // stops turning, so anything under the shipped slider's own minimum of 90
+    // can only be the old scale and is converted - which keeps the rate that
+    // config had rather than replacing it with this build's default. Not saved
+    // from here: the conversion is the same every time it runs over that line,
+    // and the next CVar change writes the store anyway.
+    if (auto it = cvarStore().find("camerayawmovespeed"); it != cvarStore().end()) {
+        const float stored = std::atof(it->second.c_str());
+        if (stored > 0.0f && stored < 90.0f) {
+            const std::string moved = ui::settingNumberText(stored / 0.00125);
+            it->second = moved;
+            cvarStartupValues()["camerayawmovespeed"] = moved;
+        }
     }
     LOG_INFO("CVars: loaded ", loaded, " from ", cvarStorePath());
 }
@@ -948,7 +987,14 @@ static std::unordered_set<std::string>& reregisteredClientCVars() {
     return names;
 }
 
-static void pushCvarDefault(lua_State* L, const std::string& n) {
+/// `stated`, when given, comes back false for a name this chain does not name.
+/// The "0" at the end of it is a stand-in for an unanswered CVar rather than a
+/// value the client registered the CVar with, and the CVar listing has to tell
+/// the two apart: it prints `(default "0")` only where the client actually holds
+/// a default string on the object (+0x40 null means print nothing).
+static void pushCvarDefault(lua_State* L, const std::string& n,
+                            bool* stated = nullptr) {
+    if (stated) *stated = true;
     // A CVar an addon registered has the default it was registered with.
     if (auto it = scriptRegisteredCVars().find(n); it != scriptRegisteredCVars().end()) {
         lua_pushstring(L, it->second.c_str());
@@ -980,10 +1026,16 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // other value has to be stated before it rather than after.
     if (n == "sound_enablesoundwhengameisinbg") lua_pushstring(L, "0");
     else if (n.rfind("sound_enable", 0) == 0) lua_pushstring(L, "1");
-    else if (n == "sound_mastervolume" || n == "sound_musicvolume" ||
-             n == "sound_ambiencevolume") {
-        lua_pushstring(L, "1");
-    }
+    // Master at full, but the client registers its other three scales at
+    // different levels (0x004d0000): music 0.4 and ambience 0.6 against master
+    // and effects at 1.0. Answering full for all of them put the Sound panel's
+    // Music and Ambience sliders at their top on a fresh profile and made the
+    // zone's music as loud as the effects over it, which is what the original
+    // does not do. The settings behind those two rows are the same numbers as
+    // percentages; see the Sound page of the schema.
+    else if (n == "sound_mastervolume") lua_pushstring(L, "1");
+    else if (n == "sound_musicvolume") lua_pushstring(L, "0.4");
+    else if (n == "sound_ambiencevolume") lua_pushstring(L, "0.6");
     // Both at their maximum, because this client has no lower setting to be
     // at. miniaudio mixes every voice it is given at the device's own rate:
     // there is no channel cap to raise and no quality tier to pick. Falling
@@ -1009,11 +1061,17 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // 0x004d0000's registration: "32" (0x009e21dc), the real voices the
     // sound engine is set up with (audio/voice_priority.hpp).
     else if (n == "sound_numchannels") lua_pushstring(L, "32");
-    else if (n == "sound_outputquality") lua_pushstring(L, "2");
+    // As registered ("1"); this client mixes every voice it is given, so which
+    // quality tier the original would have asked its backend for changes
+    // nothing here - it is answered because cvarlist prints it.
+    else if (n == "sound_outputquality") lua_pushstring(L, "1");
     else if (n == "uiscale") lua_pushstring(L, "1");
     // The tracking menu's own entry, by name; none (0x0057e070).
     else if (n == "minimaptrackedinfo") lua_pushstring(L, "");
-    else if (n == "useuiscale") lua_pushstring(L, "1");
+    // Off, as registered (0x00520000 "0", setter FUN_005237e0): the scale the
+    // interface uses is the one its own code picks for the resolution, and the
+    // "Use UI Scale" checkbox is what makes uiscale override that.
+    else if (n == "useuiscale") lua_pushstring(L, "0");
     else if (n == "screenwidth" || n == "gxresolution") {
         auto* svc = getLuaServices(L);
         auto* win = svc ? svc->window : nullptr;
@@ -1057,23 +1115,30 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // defaults to. Unset it fell to zero, so the checkbox would have shown the
     // numbers switched off while they were drawn.
     else if (n == "enablecombattext") lua_pushstring(L, "1");
-    // The three kinds this client draws. All on, which is what it did before
-    // any of them were read; unset they fell to zero, which would have shown
-    // every one of these boxes unticked while the numbers were on screen.
-    else if (n == "fctdamage" || n == "fcthealing" ||
-             n == "fctdodgeparrymiss") lua_pushstring(L, "1");
+    // Damage and healing on, which is what this client drew before either was
+    // read; unset they fell to zero, which would have shown the boxes unticked
+    // while the numbers were on screen. Dodges, parries and misses are the one
+    // of the three the client registers off (0x00510000), so a fresh profile
+    // does not say why a swing missed until the player asks it to.
+    else if (n == "fctdamage" || n == "fcthealing") lua_pushstring(L, "1");
+    else if (n == "fctdodgeparrymiss") lua_pushstring(L, "0");
     // Names over players on both sides are on; over creatures and critters
     // off (0x007e6150).
     else if (n == "unitnameenemyplayername" || n == "unitnamefriendlyplayername")
         lua_pushstring(L, "1");
     else if (n == "unitnamenpc" || n == "unitnamenoncombatcreaturename")
         lua_pushstring(L, "0");
-    // Off, as the real client has it: bars start unlocked and a player who
-    // wants them held down says so.
-    else if (n == "lockactionbars") lua_pushstring(L, "0");
-    // On, which is what the tooltip has always drawn. Unset it fell to zero,
-    // and that would have taken the line away the moment anything read it.
-    else if (n == "showitemlevel") lua_pushstring(L, "1");
+    // Locked, as the client registers it (0x00510000 "1"). Interface Options
+    // declares 0 for the same name in its uvarInfo table, but that table never
+    // writes the CVar on load - InterfaceOptionsFrame_LoadUVars only calls
+    // SetCVar when the player has already changed the global - so the engine's
+    // registration is what a fresh account runs on, and a player who wants the
+    // bars free unlocks them.
+    else if (n == "lockactionbars") lua_pushstring(L, "1");
+    // Off, as registered. The level is this client's own line to draw and it
+    // has always drawn it; the row stays in the schema, and the original's
+    // fresh profile has the checkbox unticked.
+    else if (n == "showitemlevel") lua_pushstring(L, "0");
     // Off: trades arrive as they always have unless the player says otherwise.
     else if (n == "blocktrades") lua_pushstring(L, "0");
     // On, which is what the aura icons have always drawn.
@@ -1086,14 +1151,15 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // On, as the real client has it: coming back and talking takes the flag
     // off rather than leaving it for the player to notice.
     else if (n == "autoclearafk") lua_pushstring(L, "1");
-    // On, which is what has always been announced.
-    else if (n == "guildmembernotify") lua_pushstring(L, "1");
+    // Off, as registered (0x00510000): a guild member arriving or leaving is
+    // announced only to the player who asked for it.
+    else if (n == "guildmembernotify") lua_pushstring(L, "0");
     // Off, as the real client has it: attacking an ally does nothing unless
     // the player has asked for it to mean assist.
     else if (n == "assistattack") lua_pushstring(L, "0");
-    // Off, as the real client has it: the threat indicator is drawn either
-    // way, and the noise is opt-in.
-    else if (n == "threatplaysounds") lua_pushstring(L, "0");
+    // On, as registered (0x00510000 "1"): losing the top of the threat list
+    // makes a noise unless the player has turned that off.
+    else if (n == "threatplaysounds") lua_pushstring(L, "1");
     // Two that were relying on the generic zero rather than saying so. Both
     // want off, so the behaviour was right - but by coincidence, and the rule
     // this file keeps proving is that a value nobody registers is a value
@@ -1106,13 +1172,15 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "autostand") lua_pushstring(L, "1");
     else if (n == "autounshift") lua_pushstring(L, "1");
     else if (n == "colorblindmode") lua_pushstring(L, "0");
-    // Off, as the real client has it: a second press stops the swing unless
-    // the player has asked to be protected from that.
-    else if (n == "secureabilitytoggle") lua_pushstring(L, "0");
-    // Quest titles on the world map colour by difficulty out of the box, and a
-    // quest whose progress changes starts being watched - both on in the real
-    // client. The other two are opt-in there and stay opt-in here.
-    else if (n == "mapquestdifficulty") lua_pushstring(L, "1");
+    // On, as registered (0x00510000 "1" - "Whether you should be protected
+    // against accidentally double-clicking an aura"). The client's own version
+    // of that protection is the half-second guard on the Attack button, so a
+    // fresh profile has the guard up and the row unticks it.
+    else if (n == "secureabilitytoggle") lua_pushstring(L, "1");
+    // A quest whose progress changes starts being watched (autoQuestWatch "1"),
+    // but quest titles on the world map are not coloured by difficulty until the
+    // player says so (mapQuestDifficulty registered "0", 0x00510000).
+    else if (n == "mapquestdifficulty") lua_pushstring(L, "0");
     else if (n == "autoquestprogress") lua_pushstring(L, "1");
     else if (n == "consolidatebuffs") lua_pushstring(L, "0");
     else if (n == "watchframewidth") lua_pushstring(L, "0");
@@ -1125,13 +1193,15 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // Reaction, not class, is what a world-space bar is for here; the setting
     // is offered and honoured, but green stays the default.
     else if (n == "showclasscolorinnameplate") lua_pushstring(L, "0");
-    // The Combat Text panel's own filters. Effects on units other than your
-    // target are off in the real client; everything else here is on.
+    // The Combat Text panel's own filters, each as 0x00510000 registers it:
+    // spell mechanics on the player's own target registered "0" as are the
+    // same events on anyone else, so the line saying a swing was absorbed or
+    // reflected is opt-in at both ends.
     else if (n == "combatdamage") lua_pushstring(L, "1");
     else if (n == "combathealing") lua_pushstring(L, "1");
     else if (n == "combatlogperiodicspells") lua_pushstring(L, "1");
     else if (n == "petmeleedamage") lua_pushstring(L, "1");
-    else if (n == "fctspellmechanics") lua_pushstring(L, "1");
+    else if (n == "fctspellmechanics") lua_pushstring(L, "0");
     else if (n == "fctspellmechanicsother") lua_pushstring(L, "0");
     // Camera Following Style and Camera Following Speed (degrees a second),
     // at the client's own defaults as wow.exe registers them: "4"
@@ -1139,11 +1209,43 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // like any other CVar; nothing here reads either.
     else if (n == "camerasmoothstyle") lua_pushstring(L, "4");
     else if (n == "camerayawsmoothspeed") lua_pushstring(L, "180");
+    // The same group's other rates, and the window a view blend is held to.
+    // These are not left for the generic stand-in because this client does
+    // read them: SetView's blend times itself by distance /
+    // cameraDistanceSmoothSpeed and pitch / cameraPitchSmoothSpeed and then
+    // clamps to cameraSmoothTimeMin and cameraSmoothTimeMax (0x00603330 ->
+    // 0x00600e00, 0x00601190), and MoveView{In,Out,Up,Down}Start move at
+    // cameraDistanceMoveSpeed yards and cameraPitchMoveSpeed degrees a second
+    // (0x005ff080 ff.). Each of those reads names the same fallback the client
+    // registers, so the answer has to be that number or GetCVar shows one
+    // value while the camera moves at another.
+    else if (n == "cameradistancesmoothspeed") lua_pushstring(L, "8.33");
+    else if (n == "camerapitchsmoothspeed") lua_pushstring(L, "45");
+    else if (n == "camerasmoothtimemin") lua_pushstring(L, "0.1");
+    else if (n == "camerasmoothtimemax") lua_pushstring(L, "2.0");
+    else if (n == "cameradistancemovespeed") lua_pushstring(L, "8.33");
+    else if (n == "camerapitchmovespeed") lua_pushstring(L, "90");
+    // Whether a view the player has moved still blends (Controls > "Camera
+    // Following Style"'s second style). Registered "0" like the rest of the
+    // group, and read by refreshViewSmoothing, so it is said here for the same
+    // reason as the rates above - the read and the answer are one number.
+    else if (n == "cameracustomviewsmoothing") lua_pushstring(L, "0");
     // Titles on player names, as the real client shows them.
     else if (n == "unitnameplayerpvptitle") lua_pushstring(L, "1");
-    // Cast bars over enemy nameplates are on; party lines float only if asked.
+    // Cast bars over enemy nameplates are on, and so are bubbles over the
+    // party's heads (0x00510000 registers chatBubblesParty "1" beside
+    // chatBubbles "1"). The row unticks them for a player who does not want
+    // their raid's conversation floating over the boss.
     else if (n == "showvkeycastbar") lua_pushstring(L, "1");
-    else if (n == "chatbubblesparty") lua_pushstring(L, "0");
+    else if (n == "chatbubblesparty") lua_pushstring(L, "1");
+    // Clicking anywhere in a chat window starts typing, on, as 0x00510000
+    // registers it. Nothing in the C++ reads the name: the shipped FrameXML
+    // does, and only while chatStyle is "im" - the always-visible chat box - so
+    // this is one of the rows whose whole effect is in the interface's own
+    // click handling. Answered because the Chat page has the row on the CVar,
+    // and a row showing "off" over a game that behaves as "on" is the kind of
+    // disagreement this file keeps having to fix.
+    else if (n == "wholechatwindowclickable") lua_pushstring(L, "1");
     // Pets and guardians plated on both sides; pets named, guardians not
     // (0x00511xxx, 0x007e6150).
     else if (n == "nameplateshowenemypets") lua_pushstring(L, "1");
@@ -1161,17 +1263,33 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // Plates may overlap; "0" is the old never-overlapping placement
     // (0x00511xxx registers it "1").
     else if (n == "nameplateallowoverlap") lua_pushstring(L, "1");
-    // Spam filtering is on (the checkbox in front of it reads "Disable Spam
-    // Filter"), and mature language filtering is off, as they ship.
+    // Both on, as registered (0x00510000): spam is filtered and so is mature
+    // language, each behind a checkbox worded as a switch-off.
     else if (n == "spamfilter") lua_pushstring(L, "1");
-    else if (n == "profanityfilter") lua_pushstring(L, "0");
+    else if (n == "profanityfilter") lua_pushstring(L, "1");
     // Off, as it ships: a zone track stops at its end and the next one starts
     // when the zone asks for it.
     else if (n == "sound_zonemusicnodelay") lua_pushstring(L, "0");
-    // The mouse speed this client starts at.
-    else if (n == "camerayawmovespeed") lua_pushstring(L, "0.2");
-    // Not joined unless asked for, as it ships.
-    else if (n == "guildrecruitmentchannel") lua_pushstring(L, "0");
+    // Mouse Look Speed, counted the way the client counts it. It registers 180,
+    // and the view turns 0.00125 degrees per movement of the mouse for each
+    // degree of that number (0x006020b0 - which first divides the two deltas by
+    // a factor pair built from the resolution's own ratio, 0x0047c020 and
+    // 0x0047bf90 reading 0x0050f7c0, which sscanf's gxResolution). This client
+    // keeps one sensitivity number, measured in degrees per movement, so the
+    // kClientCVars entry below carries the 0.00125 between the two and the
+    // setting behind it starts at 180 * 0.00125 = 0.225.
+    //
+    // Answering the setting's own number here instead - which is what this line
+    // used to do - made the Mouse Look Speed slider offer this client's scale
+    // rather than its own, and left MoveViewLeft/Right reading the same name as
+    // degrees a second: a player who had ever touched the slider got a view that
+    // turned 0.2 degrees a second.
+    else if (n == "camerayawmovespeed") lua_pushstring(L, "180");
+    // Joined by default: 0x00510000 registers it "1" and gives it a setter
+    // (0x00512750), because the channel is how a guild finds its next member -
+    // a player in no guild is in it from the first login and leaves by unticking
+    // the row, which is what that setter is for.
+    else if (n == "guildrecruitmentchannel") lua_pushstring(L, "1");
     // Combat log entries are kept 300 seconds unless set (0x0074d9e0).
     else if (n == "combatlogretentiontime") lua_pushstring(L, "300");
 
@@ -1182,14 +1300,20 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // meant for a value the player has changed - on the very first login,
     // before anyone has touched the panel.
     //
-    // Every value here is copied from that table rather than chosen. It is the
-    // interface's own statement of what each setting starts as, and a default
-    // invented next to it would be a second answer to a question already
-    // answered a few lines away in the file this reads.
+    // The interface's uvarInfo table names these CVars and gives each a
+    // default of its own, and for several of them that default is not what the
+    // client registers (lockActionBars, lootUnderMouse, questFadingDisable,
+    // displayWorldPVPObjectives...). The engine's registration is the one a
+    // fresh profile runs on: InterfaceOptionsFrame_LoadUVars compares
+    // GetCVar against the table's default and only calls SetCVar when the
+    // player has already changed the global, so on the first login nothing in
+    // FrameXML writes any of these. What follows is therefore the registered
+    // string, not the table's, and where the two differ the table is answered
+    // by that comparison rather than by GetCVar.
     else if (n == "alwaysshowactionbars") lua_pushstring(L, "0");
     else if (n == "autoquestwatch") lua_pushstring(L, "1");
     else if (n == "combattextfloatmode") lua_pushstring(L, "1");
-    else if (n == "displayworldpvpobjectives") lua_pushstring(L, "2");
+    else if (n == "displayworldpvpobjectives") lua_pushstring(L, "1");
     else if (n == "fctauras") lua_pushstring(L, "0");
     else if (n == "fctcombatstate") lua_pushstring(L, "0");
     else if (n == "fctcombopoints") lua_pushstring(L, "0");
@@ -1202,9 +1326,10 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     else if (n == "fctreactives") lua_pushstring(L, "0");
     else if (n == "fctrepchanges") lua_pushstring(L, "0");
     else if (n == "hidepartyinraid") lua_pushstring(L, "0");
-    else if (n == "lootundermouse") lua_pushstring(L, "0");
-    else if (n == "questfadingdisable") lua_pushstring(L, "0");
+    else if (n == "lootundermouse") lua_pushstring(L, "1");
+    else if (n == "questfadingdisable") lua_pushstring(L, "1");
     else if (n == "removechatdelay") lua_pushstring(L, "0");
+    else if (n == "showarenaenemyframes") lua_pushstring(L, "1");
     else if (n == "showarenaenemycastbar") lua_pushstring(L, "1");
     else if (n == "showarenaenemypets") lua_pushstring(L, "1");
     else if (n == "showpartybackground") lua_pushstring(L, "0");
@@ -1239,33 +1364,48 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // as off by accident and reading as off on purpose look identical from
     // Lua and are not the same thing to whoever reads this next.
     else if (n == "equipmentmanager") lua_pushstring(L, "0");
-    // On, which is the default interfaceoptionsframe itself declares for it:
-    // `["SHOW_DISPELLABLE_DEBUFFS"] = { default = "1", ... }`. Answering
-    // nothing read as off and contradicted that, so the party frames showed
-    // every debuff on a member rather than the ones this character can lift.
+    // Off, as 0x00510000 registers it - "Show only Debuffs that the player can
+    // dispel. Only applies to raids." Interface Options declares 1 for it in
+    // uvarInfo, but that table never writes the CVar on load (see the note
+    // above its own block), so the registration decides what a fresh account
+    // runs: every debuff is listed until a raider ticks the box.
     //
     // Answered only now that it drives something. UnitDebuff took the "RAID"
     // filter FrameXML passes and ignored it, so turning this on before would
     // have claimed a filter that does not filter - which is worse than the
     // wrong default, because it reads as working.
-    else if (n == "showdispeldebuffs") lua_pushstring(L, "1");
+    else if (n == "showdispeldebuffs") lua_pushstring(L, "0");
     // Off, also as declared. It asks the same "RAID" filter of *buffs* - only
     // the ones this character could cast - and that half is not implemented,
     // so this stays where the real client leaves it rather than being turned
     // on into a filter that would not filter.
     else if (n == "showcastablebuffs") lua_pushstring(L, "0");
-    // The numbers on a unit frame's bars. A stock 3.3.5 client keeps these off
-    // and shows them on mouseover; on this one they are wanted permanently,
-    // which is what the Status Text interface option turns on.
+    // The numbers on a unit frame's bars. Off, as 0x00510000 registers each of
+    // the four: a stock client writes them only while the mouse is over the
+    // bar, and the four Status Text checkboxes are what write them permanently.
+    // They were answered "1" here for a while, which showed the numbers from
+    // the first login - the same kind of switch that previewTalents and
+    // showKeyring had, and the same reason to leave it to the player.
     // The unit frames each ask about their own, not about "statusText" - the
-    // player frame's bars carry cvar = "playerStatusText". Defaulting only the
-    // general one left every bar's numbers hidden, correct text and all.
+    // player frame's bars carry cvar = "playerStatusText" - so answering only
+    // the general one leaves every bar's numbers hidden, correct text and all.
     else if (n == "statustext" || n == "playerstatustext" ||
              n == "targetstatustext" || n == "petstatustext" ||
              n == "partystatustext") {
-        lua_pushstring(L, "1");
+        lua_pushstring(L, "0");
     }
     else if (n == "statustextpercentage") lua_pushstring(L, "0");
+    // The game's own red edge, on: 0x00510000 registers "1". Nothing in the C++
+    // reads this one - it is the shipped FrameXML that does. playerframe.lua
+    // calls CombatFeedback_StartFullscreenStatus() as PLAYER_REGEN_DISABLED
+    // goes out and StopFullscreenStatus as PLAYER_REGEN_ENABLED does, and those
+    // two are combatfeedback.lua calling LowHealthFrame_StartFlashing(0.7, 0.7)
+    // and LowHealthFrame_StopFlashing() on WorldFrame's own LowHealthFrame. So
+    // with this answered "0" - which the generic stand-in did - a player stood
+    // in combat at half health with no edge at all, and the interface's own
+    // checkbox for it had never been touched. This client's low-health pulse is
+    // a separate setting and stays as it was; the game's flash is not it.
+    else if (n == "screenedgeflash") lua_pushstring(L, "1");
     // Which stat category each column of the character sheet shows. These are
     // not preferences with a sensible fallback - UpdatePaperdollStats compares
     // the value against five names and fills the column from whichever matches,
@@ -1274,15 +1414,20 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // panels below the model with no error anywhere to say why: the code ran to
     // completion and simply had nothing to write.
     //
-    // The two names below are what a fresh 3.3.5 account has.
+    // The pair registered as the empty string (0x00510000), which paperdollframe
+    // notices on load and replaces - `if ( GetCVar("playerStatLeftDropdown") ==
+    // "" ... )` then SetCVar to base stats and melee combat. Answering the two
+    // names here skips that write and lands on the same sheet the original ends
+    // up with; the original's Defaults button would put "" back and FrameXML
+    // would write the names again.
     else if (n == "playerstatleftdropdown")  lua_pushstring(L, "PLAYERSTAT_BASE_STATS");
     else if (n == "playerstatrightdropdown") lua_pushstring(L, "PLAYERSTAT_MELEE_COMBAT");
-    // Whether a conversation opens in its own window or in the chat frame.
-    // "0" already behaved as "inline" - the only test is against "popout" -
-    // so this changes nothing today. It is written out because the value is a
-    // name rather than a number, which is the case where falling through to
-    // "0" is luck rather than a default.
-    else if (n == "conversationmode") lua_pushstring(L, "inline");
+    // Whether a conversation opens in its own window or in the chat frame -
+    // registered "popout" (0x00510000 gives the string straight to the
+    // registrar, with "popout" and "inline" named in its help text). "0"
+    // behaved as "inline", because the only test is against "popout", so this
+    // is the first time the name is answered at all.
+    else if (n == "conversationmode") lua_pushstring(L, "popout");
     // Who last spoke to you as a GM, and empty means nobody has.
     //
     // uiparent.lua does `if ( lastTalkedToGM ~= "" )` at login and, when that
@@ -1293,33 +1438,22 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // The empty string is not a placeholder here - it is the value the client
     // stores until a GM actually writes.
     else if (n == "lasttalkedtogm") lua_pushstring(L, "");
-    // On, as a stock client has them. Each of these gates something off
-    // entirely when it reads false, so "0" is not a quiet preference - it is
-    // the feature missing with no way to ask for it back.
-    //
-    //   chatMouseScroll  the chat frame only calls EnableMouseWheel(true)
-    //                    inside this test, so the wheel did nothing over chat
-    //   showKeyring      MainMenuBar_UpdateKeyRing only ever calls
-    //                    KeyRingButton:Show() inside it, so the keyring was
-    //                    unreachable despite the slots being tracked
-    // On, as WotLK has it - and everything behind it is built.
-    //
-    // This was left off last time for being untested, on the grounds that
-    // turning it on changes what clicking a talent does. Checking rather than
-    // assuming: all four preview functions are implemented, not stubbed -
-    // AddPreviewTalentPoints stages against the real max rank,
-    // GetGroupPreviewTalentPointsSpent totals the staging map,
-    // LearnPreviewTalents sends one request per rank, and
+    // Off, as WotLK registers it (0x00510000, with the setter LAB_005127d0).
+    // The staging flow behind it is all built - AddPreviewTalentPoints stages
+    // against the real max rank, GetGroupPreviewTalentPointsSpent totals the
+    // staging map, LearnPreviewTalents sends one request per rank,
     // ResetGroupPreviewTalentPoints clears it and fires the event the frame
-    // redraws on. GetTalentInfo already answers previewRank and the
-    // preview-aware availability flag.
-    //
-    // So the staging flow was written deliberately and then reached by
-    // nothing, because the CVar that gates every one of those eight call
-    // sites answered false.
-    else if (n == "previewtalents") lua_pushstring(L, "1");
+    // redraws on, and GetTalentInfo answers previewRank - so the feature is
+    // there for the player who ticks the row; the original leaves the ticking
+    // to them, on the talent sheet's own "Talent Preview" checkbox.
+    else if (n == "previewtalents") lua_pushstring(L, "0");
+    // On, as registered (chatMouseScroll "1"). The chat frame only calls
+    // EnableMouseWheel(true) inside that test, so "0" was not a quiet
+    // preference - it was the wheel doing nothing over chat.
     else if (n == "chatmousescroll") lua_pushstring(L, "1");
-    else if (n == "showkeyring")     lua_pushstring(L, "1");
+    // Off, as registered ("0", 0x00510000): the keyring button beside the bags
+    // is opt-in behind the Filters dropdown, both in the original and here.
+    else if (n == "showkeyring")     lua_pushstring(L, "0");
     // The quest tracker's filter, and it is not a preference - it is a bitmask
     // fed to bit.band. watchframe.lua starts it at 0 on load and then, on
     // VARIABLES_LOADED, overwrites it with tonumber(GetCVar("trackerFilter")).
@@ -1431,7 +1565,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n) {
     // (guildShowOffline() starts true, and the roster it is given holds
     // everyone); the default answered "0" against a list that shows them.
     else if (n == "guildshowoffline") lua_pushstring(L, "1");
-    else lua_pushstring(L, "0");
+    // Nothing stated this name: the stand-in, and the one answer here that is not
+    // something the client registered the CVar with.
+    else { lua_pushstring(L, "0"); if (stated) *stated = false; }
 }
 
 
@@ -1470,14 +1606,20 @@ struct ClientCVarBinding {
 constexpr ClientCVarBinding kClientCVars[] = {
     {"farclip",              "viewdistance"},
     // Mouse Sensitivity. Its shipped range is 0.5 to 1.5, a multiplier around
-    // 1.0, and this client's sensitivity is an amount that runs 0.05 to 1.0 -
-    // so passed through unchanged the slowest setting that slider offered was
-    // two and a half times this client's default. Its range is redefined in
-    // kCVarRanges rather than converted here, which is what farclip and
-    // cameraYawMoveSpeed do, and it has to be: Mouse Look Speed writes this
-    // same setting through that route, so a scale on this one alone would have
-    // the two sliders disagree about the value they share.
+    // 1.0 for the pointer, and this client's sensitivity is an amount that runs
+    // 0.05 to 1.0 - so passed through unchanged the slowest setting that slider
+    // offered was two and a half times this client's default. The pointer's own
+    // speed is not something this client keeps, so the slider drives the look
+    // rate directly and is drawn on that rate's scale instead (kCVarRanges);
+    // Mouse Look Speed reads the same setting in its own units below.
     {"mousespeed",           "mousespeed"},
+    // Mouse Look Speed, which is the setting above counted the way the client
+    // counts it: it turns the view cameraYawMoveSpeed * 0.00125 degrees per
+    // movement of the mouse (0x006020b0), so its shipped 90..270 slider is
+    // 0.1125..0.3375 of this client's degrees. Scaled through the table rather
+    // than converted at one call site, so GetCVar, the shipped slider, the
+    // console and the setting are one number in each of its two units.
+    {"camerayawmovespeed",   "mousespeed",  0.00125},
     {"showclock",            "minimapclock"},
     {"nameplateshowfriends", "friendlyplates"},
     // Not gxWindow: it is the fullscreen row the other way round, which a scale
@@ -1842,37 +1984,91 @@ static int lua_GetCVarAbsoluteMax(lua_State* L) {
     return cvarAbsoluteBound(L, true, "Usage: GetCVarAbsoluteMax(\"cvar\")");
 }
 
-/// What CVAR_UPDATE carries as its first argument: the CVar's *label*, not its
-/// name. The two are different spellings of the same setting, and FrameXML uses
-/// both within two lines of each other -
+/// The payload this client announces a CVar change with, for the changes *it*
+/// makes - its own settings window, which is not one of FrameXML's panels.
 ///
-///     if ( (event == "CVAR_UPDATE") and (arg1 == "SHOW_TARGET_CASTBAR") ) then
-///         if ( GetCVar("showTargetCastbar") == "0") then
+/// A change the interface makes needs none of this: SetCVar's third argument is
+/// the announcement and the binding forwards it (see lua_SetCVar), so a panel
+/// that declares `event = "SHOW_BUFF_DURATION_TEXT"` gets heard as that. What is
+/// written here is what this window announces instead, and it is only ever as
+/// right as the pairs below: FrameXML's settings tables say what a CVar is
+/// announced as, in two places -
 ///
-/// - so there is no ambiguity about which belongs where. Firing the name meant
-/// every consumer in the interface compared a camelCase name against an
-/// upper-case label and took the other branch, silently: the health and mana
-/// numbers on unit frames never appeared or disappeared, the free-bag-slots
-/// count never switched on, and the target and focus cast bars never followed
-/// their setting.
+///     ["REMOVE_CHAT_DELAY"] = { default = "0", cvar = "removeChatDelay",
+///                               event = "REMOVE_CHAT_DELAY_TEXT" }
 ///
-/// Mostly the label is the name in upper snake case, and where it is not,
-/// FrameXML states the pair itself: the status-text bars set self.cvar and
-/// self.cvarLabel on consecutive lines of their OnLoad, and the rest are named
-/// in the comparisons that read them. The real client keeps this mapping in a
-/// CVar registry inside the binary, which is not something this client has, so
-/// what is written here is what the interface itself says.
+/// in interfaceoptionsframe.lua, and self.cvar beside self.cvarLabel in the
+/// status-text bars' OnLoad. Framing this as a name-to-label mapping the binary
+/// was assumed to hold was what made it wrong: the transform below answers
+/// BUFF_DURATIONS for buffDurations, and every listener compares
+/// SHOW_BUFF_DURATION_TEXT, so a change made in this window reached the CVar and
+/// never the frames listening for it. tools/framexml_cvar_label_check.py reads
+/// those declarations and reports where this table disagrees with them.
+///
+/// The transform is the fallback for the CVars that have no declared pair, where
+/// the only evidence of what the interface expects is the comparison itself:
+/// `arg1 == "DISPLAY_FREE_BAG_SLOTS"` has no settings table entry beside it, and
+/// a window-driven change to displayFreeBagSlots is the only way that setting
+/// ever moves here.
 static std::string cvarLabelFor(const std::string& name) {
-    // The ones the transform below would get wrong. Every entry is a pair
-    // FrameXML writes down somewhere.
+    // The pairs FrameXML declares, which the transform below would get wrong.
     static const std::pair<const char*, const char*> kNamed[] = {
-        {"playerstatustext",     "STATUS_TEXT_PLAYER"},
-        {"partystatustext",      "STATUS_TEXT_PARTY"},
-        {"petstatustext",        "STATUS_TEXT_PET"},
-        {"targetstatustext",     "STATUS_TEXT_TARGET"},
-        {"statustextpercentage", "STATUS_TEXT_PERCENT"},
-        {"showcastabledebuffs",  "SHOW_CASTABLE_DEBUFFS_TEXT"},
-        {"showarenaenemyframes", "SHOW_ARENA_ENEMY_FRAMES_TEXT"},
+        // The status-text bars, which set both halves in their OnLoad.
+        {"playerstatustext",       "STATUS_TEXT_PLAYER"},
+        {"partystatustext",        "STATUS_TEXT_PARTY"},
+        {"petstatustext",          "STATUS_TEXT_PET"},
+        {"targetstatustext",       "STATUS_TEXT_TARGET"},
+        // Compared in TextStatusBar_OnEvent with no declaration beside it; the
+        // percent text has no checkbox of its own, which is why.
+        {"statustextpercentage",   "STATUS_TEXT_PERCENT"},
+        // interfaceoptionsframe.lua's table, which is where the panels that use
+        // the old SetBinding-style rows say what each CVar is announced as.
+        {"alwaysshowactionbars",   "ALWAYS_SHOW_MULTIBARS_TEXT"},
+        {"autolootdefault",        "AUTO_LOOT_DEFAULT_TEXT"},
+        {"autoquestwatch",         "AUTO_QUEST_WATCH_TEXT"},
+        {"buffdurations",          "SHOW_BUFF_DURATION_TEXT"},
+        {"displayworldpvpobjectives", "WORLD_PVP_OBJECTIVES_DISPLAY"},
+        {"enablecombattext",       "SHOW_COMBAT_TEXT_TEXT"},
+        {"fctauras",               "COMBAT_TEXT_SHOW_AURAS_TEXT"},
+        {"fctcombatstate",         "COMBAT_TEXT_SHOW_COMBAT_STATE_TEXT"},
+        {"fctcombopoints",         "COMBAT_TEXT_SHOW_COMBO_POINTS_TEXT"},
+        {"fctdamagereduction",     "COMBAT_TEXT_SHOW_RESISTANCES_TEXT"},
+        {"fctdodgeparrymiss",      "COMBAT_TEXT_SHOW_DODGE_PARRY_MISS_TEXT"},
+        {"fctenergygains",         "COMBAT_TEXT_SHOW_ENERGIZE_TEXT"},
+        {"fctfriendlyhealers",     "COMBAT_TEXT_SHOW_FRIENDLY_NAMES_TEXT"},
+        {"fcthonorgains",          "COMBAT_TEXT_SHOW_HONOR_GAINED_TEXT"},
+        {"fctlowmanahealth",       "COMBAT_TEXT_SHOW_LOW_HEALTH_MANA_TEXT"},
+        {"fctperiodicenergygains", "COMBAT_TEXT_SHOW_PERIODIC_ENERGIZE_TEXT"},
+        {"fctreactives",           "COMBAT_TEXT_SHOW_REACTIVES_TEXT"},
+        {"fctrepchanges",          "COMBAT_TEXT_SHOW_REPUTATION_TEXT"},
+        {"hidepartyinraid",        "HIDE_PARTY_INTERFACE_TEXT"},
+        {"lockactionbars",         "LOCK_ACTIONBAR_TEXT"},
+        {"lootundermouse",         "LOOT_UNDER_MOUSE_TEXT"},
+        {"questfadingdisable",     "SHOW_QUEST_FADING_TEXT"},
+        {"removechatdelay",        "REMOVE_CHAT_DELAY_TEXT"},
+        {"showarenaenemycastbar",  "SHOW_ARENA_ENEMY_CASTBAR_TEXT"},
+        {"showarenaenemyframes",   "SHOW_ARENA_ENEMY_FRAMES_TEXT"},
+        {"showarenaenemypets",     "SHOW_ARENA_ENEMY_PETS_TEXT"},
+        {"showcastablebuffs",      "SHOW_CASTABLE_BUFFS_TEXT"},
+        {"showcastabledebuffs",    "SHOW_CASTABLE_DEBUFFS_TEXT"},
+        {"showdispeldebuffs",      "SHOW_DISPELLABLE_DEBUFFS_TEXT"},
+        {"shownewbietips",         "SHOW_NEWBIE_TIPS_TEXT"},
+        {"showpartybackground",    "SHOW_PARTY_BACKGROUND_TEXT"},
+        {"showpartypets",          "SHOW_PARTY_PETS_TEXT"},
+        {"showtargetoftarget",     "SHOW_TARGET_OF_TARGET_TEXT"},
+        {"targetoftargetmode",     "SHOW_TARGET_OF_TARGET_STATE"},
+        // Not a label at all: the one writer of chatStyle announces it as its
+        // own name (interfaceoptionspanels.lua:962), and floatingchatframe's
+        // Click-anywhere button compares exactly that.
+        {"chatstyle",              "chatStyle"},
+        // Compared by that same Click-anywhere button, and declared nowhere:
+        // the social panel row for this CVar names its text and no event, so
+        // the original client never announces it and the button only ever
+        // updates from the chatStyle change beside it. This window drives the
+        // CVar (settings_schema.cpp), and the comparison says what the frame is
+        // waiting for, so that is what this announces - under the transform it
+        // would be WHOLE_CHAT_WINDOW_CLICKABLE, which nothing reads.
+        {"wholechatwindowclickable", "CHAT_WHOLE_WINDOW_CLICKABLE"},
     };
     std::string key(name);
     toLowerInPlace(key);
@@ -1986,17 +2182,25 @@ static void applyCVarSideEffects(lua_State* L, const std::string& key,
             svc->setClientSetting("fullscreen", value == "0" ? "1" : "0");
         }
     }
-    // Mouse Look Speed. Named cameraYawMoveSpeed, which is what it turns, but
-    // the control is the mouse slider on the Mouse panel - and this client has
-    // that setting already, so it goes there rather than to the camera, one
-    // value with two controls.
-    //
-    // The range is redefined below to the one the client's own slider uses,
-    // for the same reason farclip's is: passing a number through unchanged
-    // beats converting between two scales that were never the same.
-    if (key == "camerayawmovespeed") {
-        if (auto* svc = getLuaServices(L); svc && svc->setClientSetting) {
-            svc->setClientSetting("mousespeed", value);
+    // Mouse Look Speed needs nothing here: it is bound to the mouse sensitivity
+    // setting in kClientCVars with the client's own 0.00125 between the two
+    // units, and that table converts in both directions. Handled here it passed
+    // its number through unchanged, which only stayed safe because the shipped
+    // slider was redrawn on this client's scale - on its own 90 to 270 it would
+    // have handed the camera 90 degrees per movement of the mouse.
+    // Pitch, for the writes that name only it - the console's SetCVar, an addon.
+    // The shipped slider never writes this name on its own (it writes it as half
+    // its own value, and the yaw row above takes that share through the
+    // setting), so this is the whole of what such a write does: the client turns
+    // 1/600 of a degree per movement of the mouse per unit of it (0x006020b0).
+    // Touching the look slider afterwards takes the pitch back to its share, as
+    // moving that slider in the original writes its half of the pair too.
+    if (key == "camerapitchmovespeed") {
+        if (auto* svc = getLuaServices(L); svc && svc->getCameraController) {
+            if (auto* cc = svc->getCameraController()) {
+                cc->setMousePitchSensitivity(
+                    static_cast<float>(std::atof(value.c_str())) * 0.0016666667f);
+            }
         }
     }
     // Loop Music. The checkbox says Loop Music and the CVar behind it says
@@ -2184,6 +2388,162 @@ void applyStoredCVarSideEffects(lua_State* L) {
     LOG_INFO("CVars: applied ", cvarStore().size(), " stored values");
 }
 
+/// What GetCVar answers for an already lower-cased name.
+///
+/// The listing and the two console setters read through this rather than out of
+/// the store, because the store is only one of the places an answer comes from:
+/// the interface's own scale, the client settings behind the kClientCVars
+/// bindings and the switches the game handler keeps each answer for themselves.
+/// A listing that read the map would print values the panels are not using,
+/// which is the disagreement this file keeps having to chase down.
+static std::string cVarAnswer(lua_State* L, const std::string& lower) {
+    lua_pushstring(L, lower.c_str());
+    lua_GetCVar(L);
+    const char* v = lua_tostring(L, -1);
+    std::string out = v ? v : "";
+    lua_pop(L, 1);
+    return out;
+}
+
+/// The default string the client holds on the CVar object (+0x40), or false when
+/// it states none for the name.
+static bool cVarStatedDefault(lua_State* L, const std::string& lower, std::string& out) {
+    bool stated = false;
+    pushCvarDefault(L, lower, &stated);
+    const char* v = lua_tostring(L, -1);
+    const bool answered = stated && v != nullptr;
+    if (answered) out = v;
+    lua_pop(L, 1);
+    return answered;
+}
+
+/// The console commands' write: the store, the file, and back into whatever
+/// reads the CVar - and nothing else. No CVAR_UPDATE, because the client's
+/// reset path assigns the CVar's own string (0x0047cf80) and raises no event;
+/// see the note on resetStoredCVar in the header.
+static void writeCVarFromConsole(lua_State* L, const std::string& lower,
+                                 const std::string& target) {
+    // And before any of it, for a CVar registered read-only - the `>> 2 & 1` test
+    // both setters make on the registration flags (kCVarReadOnly). Bit 8, which
+    // the interface's SetCVar treats as read-only as well, is not part of that
+    // test, so it is not part of this one either.
+    if (auto flags = clientCVarFlags(lower); flags && (*flags & kCVarReadOnly)) return;
+    // 0x00766990 and 0x00766a20 both stop short when the value the CVar already
+    // has is the one they were about to write, and compare case-insensitively
+    // doing it (0x0076e780 is the A-Z fold - not the case-sensitive compare
+    // 0x00767220 uses to decide which parentheticals to print).
+    std::string current = cVarAnswer(L, lower);
+    std::string wanted = target;
+    toLowerInPlace(current);
+    toLowerInPlace(wanted);
+    if (current == wanted) return;
+    cvarStore()[lower] = target;
+    saveStoredCVars();
+    applyCVarSideEffects(L, lower, target);
+}
+
+void setCVarFromConsole(lua_State* L, const std::string& name, const std::string& value) {
+    if (!L || name.empty()) return;
+    // The client's lookup of the name is the case-insensitive one (0x0055f4d0),
+    // and a lookup that fails is not an error here: 0x007681f0 goes on to
+    // register the name with no flags and assign the value anyway. The store is
+    // the same kind of list, so writing the key is the registration.
+    std::string lower = name;
+    toLowerInPlace(lower);
+    writeCVarFromConsole(L, lower, value);
+}
+
+std::vector<CVarConsoleRow> cVarConsoleRows(lua_State* L) {
+    std::vector<CVarConsoleRow> rows;
+    if (!L) return rows;
+    // The client walks one linked list of every CVar object it owns, so the
+    // listing is every name in it: the client's own, the ones RegisterCVar made,
+    // and every name a config line or a SetCVar mentioned - the client registers
+    // those as it reads them too (0x007681f0), with no flags. Hidden CVars
+    // included: the list is the client's own inventory, not what an addon may
+    // ask about, so GetCVarInfo's reticence about a hidden name does not reach
+    // it.
+    std::vector<std::pair<std::string, std::string>> names;  // spelling, key
+    std::unordered_set<std::string> seen;
+    const auto add = [&](std::string spelling, std::string key) {
+        if (!seen.insert(key).second) return;
+        names.emplace_back(std::move(spelling), std::move(key));
+    };
+    for (std::string_view registered : clientCVarNames()) {
+        std::string key(registered);
+        toLowerInPlace(key);
+        add(std::string(registered), std::move(key));   // the client's own spelling
+    }
+    for (const auto& [key, value] : scriptRegisteredCVars()) add(key, key);
+    for (const auto& [key, value] : cvarStore()) add(key, key);
+    // Alphabetically, which is this table's order rather than the client's
+    // registration order; see clientCVarNames.
+    std::sort(names.begin(), names.end(),
+              [](const auto& a, const auto& b) { return a.second < b.second; });
+
+    rows.reserve(names.size());
+    for (const auto& [spelling, key] : names) {
+        CVarConsoleRow row;
+        row.name = spelling;
+        row.value = cVarAnswer(L, key);
+        // Both halves are left empty when they are not to be printed: no default
+        // string on the object at all (this client states one per name it has
+        // looked at, and the stand-in at the end of that chain is not one), or
+        // the same string the CVar already has. That compare is case-sensitive in
+        // the client, unlike the setters' - so a value differing only in case is
+        // listed as changed, and no write is made for it.
+        std::string def;
+        if (cVarStatedDefault(L, key, def) && def != row.value) row.defaultValue = def;
+        if (auto it = cvarStartupValues().find(key);
+            it != cvarStartupValues().end() && it->second != row.value) {
+            row.resetValue = it->second;
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+bool cVarConsoleHas(const std::string& name) {
+    std::string key(name);
+    toLowerInPlace(key);
+    // The client's lookup (0x0055f4d0) is a hash table keyed on the lower-cased
+    // name compared case-insensitively, and it answers for a hidden CVar as
+    // readily as for any other - unlike SetCVar's own lookup, which hides those.
+    return clientCVarFlags(key).has_value() || scriptRegisteredCVars().count(key) ||
+           cvarStore().count(key);
+}
+
+void resetStoredCVar(lua_State* L, const std::string& name) {
+    if (!L) return;
+    std::string key(name);
+    toLowerInPlace(key);
+    // +0x4c then +0x40: the startup value, or the registered default for a name
+    // this session's file did not mention. Neither is not "set it to nothing" -
+    // 0x00766990 returns without writing at all.
+    if (auto it = cvarStartupValues().find(key); it != cvarStartupValues().end()) {
+        writeCVarFromConsole(L, key, it->second);
+        return;
+    }
+    std::string def;
+    if (cVarStatedDefault(L, key, def)) writeCVarFromConsole(L, key, def);
+}
+
+void restoreCVarDefault(lua_State* L, const std::string& name) {
+    if (!L) return;
+    std::string key(name);
+    toLowerInPlace(key);
+    // The mirror: 0x00766a20 reads +0x40 first and +0x4c only when there is no
+    // registered default to put back.
+    std::string def;
+    if (cVarStatedDefault(L, key, def)) {
+        writeCVarFromConsole(L, key, def);
+        return;
+    }
+    if (auto it = cvarStartupValues().find(key); it != cvarStartupValues().end()) {
+        writeCVarFromConsole(L, key, it->second);
+    }
+}
+
 /// Report the controls kRemovedControlsLua could not find.
 ///
 /// An entry there naming nothing is a bug in the list rather than a state of
@@ -2225,14 +2585,36 @@ static int lua_SetCVar(lua_State* L) {
     // moves, and most of those calls set the value it already has.
     if (changed) saveStoredCVars();
     applyCVarSideEffects(L, key, value);
-    // Announced, because nine frames listen for it - the options panels redraw
-    // themselves from this rather than from the click that caused it.
-    // Through the engine in the registry, which is where it puts itself; the
-    // event tables are its business rather than this file's.
+    // What is announced is the caller's *third argument*, not a spelling of the
+    // name. SetCVar's binding in the binary (FUN_00514c10, and the fire at
+    // 0x00514cff) tests that argument for being a string or a number
+    // (FUN_0084df60 - the argument slot's type against 3 and 4) and raises
+    // CVAR_UPDATE only when it is, with that argument itself: the interface's
+    // panels pass the label their own settings table declares, and a SetCVar
+    // called without one says nothing to anyone. Inferring a label instead was
+    // guessing at a payload the caller had already chosen: SetCVar("chatStyle",
+    // v, "chatStyle") - the only writer floatingchatframe's Click-anywhere
+    // button answers to - arrived as CHAT_STYLE and matched nothing, and the
+    // thirty-plus pairs FrameXML spells out (buffDurations is announced as
+    // SHOW_BUFF_DURATION_TEXT) arrived as BUFF_DURATIONS and matched nothing
+    // either. lua_isstring answers true for a number, which is the binary's
+    // rule: both types announce.
+    //
+    // The second event argument is this client's rather than the binary's. That
+    // fire pushes one string under a "%s%s" format (0x009e1ad0), so the `value`
+    // every FrameXML handler unpacks - TextStatusBar_OnEvent branches on it -
+    // reads past the argument list. Sending the value is the answer the
+    // handlers were written for; matching what the stack happened to hold is
+    // not something worth reproducing.
+    //
+    // Through the engine in the registry, which is where the event puts itself;
+    // the event tables are its business rather than this file's.
+    if (!lua_isstring(L, 3)) return 0;
+    const std::string payload = lua_tostring(L, 3);
     lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
     auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
-    if (engine) engine->fireEvent("CVAR_UPDATE", {cvarLabelFor(name), value});
+    if (engine) engine->fireEvent("CVAR_UPDATE", {payload, value});
     return 0;
 }
 
@@ -2752,7 +3134,7 @@ static int lua_GetMapZones(lua_State* L) {
     return 0;
 }
 
-// GetNumMapLandmarks() → 0 (no landmark data exposed yet)
+// GetNumMapLandmarks() → how many pins the map being shown has
 static int lua_GetNumMapLandmarks(lua_State* L) {
     auto* svc = getLuaServices(L);
     lua_pushnumber(L, (svc && svc->getMapLandmarks)
@@ -2765,6 +3147,36 @@ static int lua_GetNumMapLandmarks(lua_State* L) {
 /// The area POIs on whatever the map is showing. Answered zero of them while
 /// the client had them loaded from AreaPOI.dbc and was drawing them on its own
 /// map, so FrameXML's map came up with no pins on it at all.
+///
+/// The pins FrameXML draws here are the same rows the reference draws - AreaPOI
+/// - but it reaches them its own way, and the way says what is missing.  Its
+/// list is rebuilt inside the routine that *changes* the shown map (0x00546310,
+/// which fills 0x00be8ee0 entries of id, x, y and two kind dwords, stride 0x14)
+/// from a copy of the AreaPOI rows: 0x00ad3118 records at 0x00ad312c, stride
+/// 0x58 - twenty-two dwords, which is why the stride is not the file's 216-byte
+/// record size: the client's copy stops after the map link and has the localised
+/// string blocks folded in.  Field for field the reads land on AreaPOI's own
+/// columns: +0x40 the flags, +0x44 the area id, +0x48 the name, +0x4c the
+/// description, +0x50 a world state, +0x54 the map link, and the nine Icon
+/// columns from +0x8.
+///
+/// What it does with them: 0x005445f0 projects the row into the map's space and
+/// one that lands outside is not in the list; the area id has to be at least 1
+/// and resolve through the index at 0x00ad3154 to a row whose +0x28 is negative
+/// or whose +0xc answers at 0x00546150; and a row naming a world state is in the
+/// list only while that state is satisfied (0x00548d10), the same rule the
+/// minimap already follows (minimap_blips.hpp, areaPoiIcon).  Read back out at
+/// 0x00545a30 the icon comes from that state's value minus one, clamped to the
+/// nine - and in this install's AreaPOI.dbc every row reads zero for the state
+/// column, of all 738 rows, so the reference takes Icon[0] like this does.  The
+/// flag word answers bit 0x200 as the seventh value.
+///
+/// Alongside them the reference keeps one record per map built from the player's
+/// own position, and a second kind of entry - marked in the entry's third dword,
+/// and the only kind ClickLandmark walks - answered from a table it looks an id
+/// up in, with a fixed textureIndex of 6, no description, and no link.  That
+/// table (0x00ad4f0c rows, 0x00ad4f20, stride 0x44) is still unnamed: its rows
+/// carry a map's id second and up to four area ids third to sixth.
 static int lua_GetMapLandmarkInfo(lua_State* L) {
     auto* svc = getLuaServices(L);
     const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
@@ -2780,15 +3192,23 @@ static int lua_GetMapLandmarkInfo(lua_State* L) {
     lua_pushnumber(L, m.icon);                  // 3: textureIndex
     lua_pushnumber(L, m.x);                     // 4: x across the map
     lua_pushnumber(L, m.y);                     // 5: y down the map
-    // A landmark that leads to another map. Nothing here links one to another,
-    // and nil is what a plain point of interest answers.
+    // A landmark that leads to another map - AreaPOI's map link column, +0x54
+    // of the client's record, and a per-row number in the file (its first rows
+    // carry 1, 12, 26, 40, 49, 63 there).  Still nil, deliberately: answering
+    // it sends worldmapframe.lua's WorldMapPOI_OnClick down its ClickLandmark
+    // branch instead of the plain map click, and ClickLandmark does nothing
+    // here yet - the table it walks to turn a link into a map is the unnamed
+    // one above.  So the link waits for the verb.
     lua_pushnil(L);                             // 6: mapLinkID
     // Whether the battlefield minimap shows it too. Seven values, not six:
-    // blizzard_battlefieldminimap.lua gates every pin on this one, so a nil
-    // here is a battle map with no points of interest on it at all. AreaPOI
-    // carries no such flag, and a landmark worth drawing on the world map is
-    // worth drawing on the smaller one.
-    lua_pushboolean(L, 1);                      // 7: showInBattleMap
+    // blizzard_battlefieldminimap.lua gates every pin on this one, so a false
+    // there hides it on the smaller map - and the flag is AreaPOI's own, bit
+    // 0x200 of the word the client reads at +0x40.  This install's file has the
+    // bit set for 681 of its 738 rows and clear for 57, so the always-true
+    // answer here was not a safe default but a different list: 57 pins the
+    // reference does not draw on that window were drawn here.
+    lua_pushboolean(L, (m.flags & rendering::minimap_blips::kPoiOnBattleMap) != 0
+        ? 1 : 0);                               // 7: showInBattleMap
     return 7;
 }
 
@@ -3620,6 +4040,115 @@ static int lua_GetBattlefieldFlagPosition(lua_State* L) {
     lua_pushnumber(L, 0.0);
     lua_pushstring(L, "");
     return 3;
+}
+
+/// GetNumBattlefieldVehicles() / GetBattlefieldVehicleInfo(index)
+///
+/// The vehicles the world map and the battleground minimap draw their pins for.
+/// Both loops ask for a count, then walk it, and hide whatever answers no
+/// position - so "no vehicles" is an answer those windows act on, and the
+/// answer they had here for years.
+///
+/// The client's list is unit-side and is never sent: see
+/// game::vehicle::kVehicleFlagShownOnMap for how a guid gets onto it and off
+/// again. Asking the units in view says the same set here; the client keeps its
+/// entries in the order the units came onto it, while these come back by guid,
+/// which is stable between frames. Both callers draw every entry the count
+/// admits rather than holding one entry to one slot, so nothing that is drawn
+/// moves because the order changed. The client stops at 40 (0x0054aba0); the
+/// same stop is kept here.
+static std::vector<uint64_t> battlefieldVehicleGuids(game::GameHandler* gh) {
+    std::vector<uint64_t> out;
+    if (!gh) return out;
+    const auto* tables = gh->vehicleRoster().tables();
+    if (!tables) return out;
+    for (const auto& [guid, entity] : gh->getEntityManager().getEntities()) {
+        const uint32_t vehicleId = gh->vehicleRoster().vehicleId(guid);
+        if (vehicleId == 0) continue;
+        const auto* row = tables->vehicle(vehicleId);
+        if (!row || (row->flags & game::vehicle::kVehicleFlagShownOnMap) == 0) continue;
+        out.push_back(guid);
+    }
+    std::ranges::sort(out);
+    if (out.size() > 40) out.resize(40);
+    return out;
+}
+
+static int lua_GetNumBattlefieldVehicles(lua_State* L) {
+    lua_pushnumber(L, static_cast<double>(battlefieldVehicleGuids(getGameHandler(L)).size()));
+    return 1;
+}
+
+/// Eight values, in the client's order (0x0054c4d0): the place on the map now
+/// showing, the unit's name, whether it is driven, what kind of vehicle it is,
+/// which way it faces, whether the local player is the one driving it, and
+/// whether it is still about.
+///
+/// No position is no answer at all - the client looks both coordinates up
+/// before it pushes anything and returns zero values when either fails, and
+/// worldmapframe.lua tests `if ( vehicleX and … )` and hides the pin.
+///
+/// The three that are not straight reads of the unit:
+///
+///   4 (isPossessed) picks the "Occupied" half of the texture pair. The client
+///     reads a bit of its own there - the byte at +0xd7 of the unit block that
+///     also carries the creator guid, read five times over in the decompile and
+///     written nowhere it shows - so the seats are asked instead: anyone sitting
+///     in one of them counts as driving it. An airship nobody drives stays
+///     unoccupied, which is the case the two maps show most.
+///
+///   7 (isPlayer) is the client's "+0xa30 0x400", whether the client controls
+///     that unit (0x00714ac0) - which is how a vehicle the player is standing
+///     in is not drawn a second time on top of the player's own marker. It is
+///     not a check of the guid's type, and WoWee has the same bit already:
+///     MovementHandler's client-control table, which SMSG_CLIENT_CONTROL_UPDATE
+///     fills.
+///
+///   6 is the facing. worldmapframe.lua hands it straight to SetRotation, so it
+///     is given in the same system the player arrow's facing is given in -
+///     GetPlayerFacing's converted one - and not raw.
+static int lua_GetBattlefieldVehicleInfo(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    auto* svc = getLuaServices(L);
+    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+    if (!gh || !svc || index < 1) return luaReturnNil(L);
+    const auto guids = battlefieldVehicleGuids(gh);
+    if (index > static_cast<int>(guids.size())) return luaReturnNil(L);
+    const uint64_t guid = guids[static_cast<size_t>(index) - 1];
+    auto entity = gh->getEntityManager().getEntity(guid);
+    if (!entity) return luaReturnNil(L);
+
+    float u = 0.0f, v = 0.0f;
+    if (!svc->mapUVForWorldPos ||
+        !svc->mapUVForWorldPos(entity->getX(), entity->getY(), entity->getZ(), u, v)) {
+        return luaReturnNil(L);
+    }
+
+    const uint32_t vehicleId = gh->vehicleRoster().vehicleId(guid);
+    const auto* row = gh->vehicleRoster().tables() ? gh->vehicleRoster().tables()->vehicle(vehicleId)
+                                                   : nullptr;
+    bool occupied = false;
+    for (uint32_t seat = 0; seat < game::vehicle::kSeatCount && !occupied; ++seat) {
+        occupied = gh->vehicleRoster().occupant(guid, static_cast<uint8_t>(seat)) != 0;
+    }
+    auto* mh = gh->getMovementHandler();
+
+    lua_pushnumber(L, u);                                   // 1: x across the map
+    lua_pushnumber(L, v);                                   // 2: y down the map
+    lua_pushstring(L, entity->getName().c_str());           // 3: unitName
+    lua_pushboolean(L, occupied ? 1 : 0);                   // 4: isPossessed
+    if (row && row->uiLocomotionType < game::vehicle::kUiLocomotionNames.size()) {
+        lua_pushstring(L, game::vehicle::kUiLocomotionNames[row->uiLocomotionType]);
+    } else {
+        lua_pushnil(L);                                     // 5: vehicleType
+    }
+    lua_pushnumber(L, core::coords::canonicalToPlayerFacing(entity->getOrientation()));
+                                                            // 6: orientation
+    lua_pushboolean(L, mh && mh->unitHasClientControl(guid) ? 1 : 0);  // 7: isPlayer
+    // The client asks its dead-or-ghost vtable slot (+0x128) and inverts it;
+    // no health is how that reads here, the same test UnitIsDeadOrGhost makes.
+    lua_pushboolean(L, entity->getHealth() != 0 ? 1 : 0);   // 8: isAlive
+    return 8;
 }
 
 // ---- Chat window settings ----
@@ -4905,15 +5434,24 @@ static int lua_HasLFGRestrictions(lua_State* L) {
 
 // GetLFGProposal() → proposalExists, typeID, id, name, texture, role,
 //                    hasResponded, totalEncounters, completedEncounters,
-//                    numMembers, isLeader
+//                    numMembers, isLeader, isHoliday
 //
-// Eleven values whether or not there is a proposal: lfdframe reads the eighth
-// on its own with select(8, GetLFGProposal()), and a short return makes that
-// an error rather than an answer of "none".
+// Twelve values, which is what the client returns (0x00554170, `return 0xc`).
+// The count matters twice over: lfdframe reads the eighth and the twelfth to
+// themselves with select(), and a return short of those is an error there and
+// not an answer of "none".  The client answers nothing at all when no proposal
+// is pending - so every caller has to test the first value before it touches
+// another - but each caller in the interface does exactly that, which is why
+// the twelve nils here are only a stand-in for a call FrameXML never makes.
+//
+// The tenth is WoWee's own: the client pushes the constant 5.0 (0x00554170:3510)
+// and lets GetLFGProposalMember answer nil for the empty seats of a five-seat
+// offer.  The real count is the same answer for a full party and a shorter loop
+// for anything else.
 static int lua_GetLFGProposal(lua_State* L) {
     auto* gh = getGameHandler(L);
     const bool pending = gh && gh->getLfgState() == game::LfgState::Proposal;
-    if (!pending) { for (int i = 0; i < 11; ++i) lua_pushnil(L); return 11; }
+    if (!pending) { for (int i = 0; i < 12; ++i) lua_pushnil(L); return 12; }
 
     // Nils here are not survivable, which only showed once the dialog could
     // actually open. LFDDungeonReadyPopup_Update builds a path with
@@ -4927,9 +5465,23 @@ static int lua_GetLFGProposal(lua_State* L) {
         if (d.id == dungeonId) { dungeon = &d; break; }
     }
 
-    // The role the player queued as. The dialog names it and picks its icon
-    // from it, and these are the tokens GetTexCoordsForRole indexes by.
-    const uint8_t roles = gh->getLfgOfferedRoles();
+    // The role the player has in the offered party, which is what the dialog
+    // names and icons: the client scans the proposal's own member rows for the
+    // one flagged self and reads that row's mask (0x00554170:3470-3484).  Not
+    // the local role selection, which is what this read until now - the two
+    // differ for a pre-made party, whose members are offered the role each of
+    // them walks in with rather than what each had ticked in the queue.  The
+    // selection stays as the fallback for a proposal that carries no self row,
+    // which is the case the client's scan leaves a leftover in.
+    const auto& members = gh->getLfgProposalMembers();
+    const auto self = std::find_if(members.begin(), members.end(),
+                                   [](const game::LfgProposalMember& m) { return m.isSelf; });
+    const uint32_t roles = self != members.end() ? self->role
+                                                 : gh->getLfgOfferedRoles();
+    // The same mask's bit 0 is the group leader, which is why the client tests
+    // 2/4/8 for the three role names and 1 on its own for its eleventh value
+    // (0x00554170:3480, :3511).  lfdframe.lua:541 draws the leader mark with it.
+    const bool isLeader = (roles & 0x01) != 0;
     const char* role = (roles & 0x02) ? "TANK"
                      : (roles & 0x04) ? "HEALER"
                                       : "DAMAGER";
@@ -4946,17 +5498,51 @@ static int lua_GetLFGProposal(lua_State* L) {
     lua_pushstring(L, dungeon ? dungeon->texture.c_str() : "");  // 5: texture
     lua_pushstring(L, role);                                     // 6: role
     lua_pushboolean(L, 0);                                       // 7: hasResponded
-    // Encounter progress is not parsed out of the proposal, and zero is the
-    // honest answer - it reads as "nothing cleared yet", which is what a fresh
-    // pop is, and keeps the dialog off its in-progress layout.
-    lua_pushnumber(L, 0);                                        // 8: totalEncounters
-    lua_pushnumber(L, 0);                                        // 9: completedEncounters
+    // Bosses there are and bosses done. The client derives both rather than
+    // reading them: it walks DungeonEncounter.dbc for the offered dungeon's map
+    // and difficulty and counts the rows against the mask the proposal carries
+    // (0x00554170:3483-3500, the same walk countLfgEncounters makes for the raid
+    // browser). Two kinds of row skip that walk - a "Random" row answers nought
+    // bosses, and one with flag bit 2 set, which is the four holiday rows and
+    // nothing else, answers exactly one - and both spell "done" as "the mask is
+    // not empty", so a holiday offer reads as cleared or not rather than partly
+    // cleared. Nothing is answered for either number without an LFGDungeons row
+    // to walk from, which is what the client's own early return leaves the pair
+    // as: nought, since the values are pushed as numbers and not nils.
+    //
+    // These two are what the ready dialog draws its "Bosses Killed: %d of %d"
+    // line from (lfdframe.lua:478,534) and what bounds the boss list its tooltip
+    // builds, so while they were both nought the tooltip was skipped by its own
+    // `if ( numBosses == 0 … )` and GetLFGProposalEncounter never ran.
+    uint32_t totalEncounters = 0, doneEncounters = 0;
+    const uint32_t doneMask = gh->getLfgProposalEncountersDone();
+    if (dungeon) {
+        if (dungeon->typeId == static_cast<uint32_t>(game::LfgTypeId::Random)) {
+            doneEncounters = doneMask != 0 ? 1u : 0u;
+        } else if ((dungeon->flags & 0x04) != 0) {
+            totalEncounters = 1;
+            doneEncounters  = doneMask != 0 ? 1u : 0u;
+        } else {
+            const auto counts = game::countLfgEncounters(gh->getDungeonEncounters(),
+                                                         dungeon->mapId, dungeon->difficulty,
+                                                         doneMask);
+            totalEncounters = counts.total;
+            doneEncounters  = counts.complete;
+        }
+    }
+    lua_pushnumber(L, totalEncounters);                          // 8: totalEncounters
+    lua_pushnumber(L, doneEncounters);                           // 9: completedEncounters
     // The real count now that the roster is parsed - each row is a role icon
     // and a tick, both of which GetLFGProposalMember can answer.
     lua_pushnumber(L, static_cast<double>(gh->getLfgProposalMembers().size()));  // 10
 
-    lua_pushboolean(L, 0);                                       // 11: isLeader
-    return 11;
+    lua_pushboolean(L, isLeader ? 1 : 0);                        // 11: isLeader
+    // Whether this is one of the four seasonal bosses. The client answers it off
+    // flag bit 2 of the dungeon's own row (0x00554170:3505); lfdframe.lua reads
+    // it as the twelfth value and drops the boss tooltip for those offers,
+    // whose single "boss" is not a boss at all.
+    lua_pushboolean(L, dungeon && (dungeon->flags & 0x04) != 0);  // 12: isHoliday
+    return 12;
 }
 
 // GetLFGInfoServer() → inParty, joined, queued, noPartialClear, achievements,
@@ -5003,26 +5589,11 @@ static int lua_GetLFGRoleUpdate(lua_State* L) {
     return 3;
 }
 
-/// The player's PLAYER_FLAGS, or none without a player.
-static std::optional<uint32_t> playerFlagsOf(game::GameHandler* gh) {
-    const auto player = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
-    if (!player) return std::nullopt;
-    const uint16_t i = game::fieldIndex(game::UF::PLAYER_FLAGS);
-    return i != 0xFFFF ? player->getField(i) : 0u;
-}
-
-/// 1 when the player's PLAYER_FLAGS carry the bit, nil otherwise.
-static int pushPlayerFlag(lua_State* L, uint32_t bit) {
-    const auto flags = playerFlagsOf(getGameHandler(L));
-    if (flags && (*flags & bit)) lua_pushnumber(L, 1); else lua_pushnil(L);
-    return 1;
-}
-
 // GetAllowLowLevelRaid() (0x0051d5a0): PLAYER_FLAGS 0x10000.
-static int lua_GetAllowLowLevelRaid(lua_State* L) { return pushPlayerFlag(L, 0x10000); }
+static int lua_GetAllowLowLevelRaid(lua_State* L) { return pushPlayerFlagBit(L, 0x10000); }
 
 // GetTaxiBenchmarkMode() (0x0051d100): PLAYER_FLAGS 0x20000.
-static int lua_GetTaxiBenchmarkMode(lua_State* L) { return pushPlayerFlag(L, 0x20000); }
+static int lua_GetTaxiBenchmarkMode(lua_State* L) { return pushPlayerFlagBit(L, 0x20000); }
 
 /// A request of one opcode and one byte, the way the client's setters build
 /// them.
@@ -5245,14 +5816,37 @@ static int lua_GetTrackedAchievements(lua_State* L) {
     return static_cast<int>(tracked.size());
 }
 
-// The PvP flag's countdown. The client knows whether the flag is set but not
-// how long it has left, so the timer is reported as not running and the player
-// frame hides the text rather than showing a number it cannot compute.
-static int lua_IsPVPTimerRunning(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+// IsPVPTimerRunning() - 0x0051bd60. Not the countdown: the test is the realm's
+// PvP flag bit in PLAYER_FLAGS (0x40000) and nothing else, so a player who is
+// flagged answers 1 even after their time is up and GetPVPTimer has started
+// answering 999. Without a local player it is the usual nil, not false.
+static int lua_IsPVPTimerRunning(lua_State* L) { return pushPlayerFlagBit(L, 0x00040000); }
 
-// Never reached while the above answers false, but playerframe reads it on the
-// line after and a missing global there would raise before the branch is taken.
-static int lua_GetPVPTimer(lua_State* L) { lua_pushnumber(L, 0); return 1; }
+// GetPVPTimer() - 0x0051bd00, which is 0x006de7a0's remaining time plus a second.
+// The realm never sends the remaining time; the client works it out from a
+// deadline it arms itself when the flag bit arrives (0x006de750, five minutes
+// from the moment the flag is seen), which is what the PLAYER_FLAGS watch keeps
+// in pvpFlagDeadlineMs_. So the answer is the full five minutes whenever the
+// flag bit is clear, whatever is left of it while it runs, and 999 once the
+// deadline has passed - and 0 with no local player, where the client skips the
+// extra second because it never calls the countdown at all.
+static int lua_GetPVPTimer(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const auto flags = playerFlagsOf(gh);
+    double ms = 0;
+    if (flags) {
+        if ((*flags & 0x00040000) == 0) {
+            ms = 300000;
+        } else {
+            const int64_t deadline = gh->pvpFlagDeadlineMs();
+            const auto now = static_cast<int64_t>(core::appTimeSeconds() * 1000.0);
+            ms = (deadline != 0 && now < deadline) ? static_cast<double>(deadline - now) : -1.0;
+        }
+        ms += 1000;
+    }
+    lua_pushnumber(L, ms);
+    return 1;
+}
 
 // GetCurrentArenaSeason() → the season number, or NO_ARENA_SEASON.
 //
@@ -6356,7 +6950,15 @@ static void writeStoredSetting(lua_State* L, const ui::SettingDesc& row, const s
     if (store.rfind("cvar:", 0) == 0) {
         lua_pushstring(L, store.c_str() + 5);
         lua_pushstring(L, stored.c_str());
-        callGlobal(L, "SetCVar", 2);
+        // The third argument is what the change is announced as, and without
+        // one the write is silent: the binary fires CVAR_UPDATE only for a
+        // SetCVar that was given that argument. A panel of the interface's
+        // chooses it from its own settings table; this window is not one of
+        // those panels, so it chooses it here, from the pairs the interface
+        // declares (cvarLabelFor). A row whose CVar nobody announces is a row
+        // whose change only the `after` chunk below can make visible.
+        lua_pushstring(L, cvarLabelFor(store.c_str() + 5).c_str());
+        callGlobal(L, "SetCVar", 3);
     } else if (store.rfind("click:", 0) == 0) {
         lua_pushstring(L, store.c_str() + 6);
         lua_pushstring(L, stored.c_str());
@@ -6550,12 +7152,24 @@ constexpr CVarRange kCVarRanges[] = {
     // 4. The page that slider was on is retired, but this is the range any
     // control over the CVar is drawn with.
     {"texturefilteringmode", 0.0f, 4.0f},
-    // Mouse Look Speed, over the range this client's own mouse slider uses.
-    {"camerayawmovespeed", 0.05f, 1.0f},
-    // Mouse Sensitivity, which writes the same setting as Mouse Look Speed
-    // above and so has to offer the same range. Shipped as 0.5 to 1.5, a
-    // multiplier around 1.0, against a setting that sits at 0.2 and stops at 1.
-    {"mousespeed", 0.05f, 1.0f},
+    // Mouse Look Speed, on the scale the CVar itself is measured in - the
+    // shipped Mouse panel slider offers 90 to 270 and the client reads that as
+    // degrees (0x006020b0 turns the view value * 0.00125 degrees per movement of
+    // the mouse). The binding above converts it into this client's degrees per
+    // movement, so the slider is drawn on its own numbers again instead of being
+    // bent to the setting's scale, which is what let a 90 hand over a 90.
+    {"camerayawmovespeed", 90.0f, 270.0f},
+    // Mouse Sensitivity, the same setting in the units this client's own camera
+    // counts it in. Shipped as 0.5 to 1.5, a multiplier around 1.0 for the
+    // pointer, which this client does not keep: the slider moves the view, so it
+    // is drawn on the view's range and its slowest setting was 2.5x the default.
+    //
+    // Those two numbers are Mouse Look Speed's 90 and 270 times the 0.00125
+    // between the two scales. The two sliders write one value, so what they
+    // reach has to be the same span - otherwise one can put the shared value
+    // where the other has no handle for it, which is what this table's own
+    // first finding was, seen from the other control.
+    {"mousespeed", 0.1125f, 0.3375f},
     // Max camera distance, as a multiple of the original client's limit. The
     // shipped table stops at 2; this client has always been willing to go
     // further, and did it through a checkbox of its own until this slider was
@@ -7049,21 +7663,30 @@ void registerSystemLuaAPI(lua_State* L) {
                 // PVPBattlegroundFrame_OnShow calls it and a nil global raises
                 // as the panel opens.
                 {"SortBGList",               lua_ReturnNothing},
-                // Stationery for a letter. None is carried, and the picker
-                // draws the default when the count is zero - which it could
-                // not do while the count raised.
-                // One: the plain parchment. Zero left the stationery popup
-                // empty, and SendMailFrame_CanSend will not enable the Send
-                // button until a stationery has been picked - so with none to
-                // pick, no letter could be sent. See GetStationeryInfo.
+                // How many papers the compose frame offers. That is Stationery
+                // .dbc filtered by the client's own rule - the row whose flag
+                // says no paper need be bought, plus every row whose item is
+                // lying about in the bags - so the count is that list's length
+                // and nothing else.
+                //
+                // It used to answer one: the plain parchment. A popup with
+                // nothing in it cannot be clicked, and SendMailFrame_CanSend
+                // will not enable the Send button until a paper is picked, so
+                // the honest zero at the time was what stopped letters going
+                // out at all. See InventoryHandler::stationeryOptions.
                 {"GetNumStationeries",       [](lua_State* L) -> int {
-                    lua_pushnumber(L, 1);
+                    auto* gh = getGameHandler(L);
+                    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+                    const size_t count = inv ? inv->stationeryOptions().size() : 0;
+                    lua_pushnumber(L, static_cast<lua_Number>(count));
                     return 1;
                 }},
-                // Voice mutes, which this client has no voice chat to keep.
-                // Read while the ignore list is drawn, so a nil global took
-                // the whole ignore tab with it.
-                {"GetNumMutes",              lua_ReturnZero},
+                // GetNumMutes used to answer zero here, because the ignore tab's
+                // update reads it on a line of its own with nothing guarding it
+                // and an unbound global took the whole tab with it. The real
+                // count is bound in the social table, where the rest of the mute
+                // list is - and this table registers after that one, so leaving
+                // the stub here would have hidden it again.
                 {"IsInLFGDungeon",           lua_IsInLFGDungeon},
                 {"LFGTeleport",              lua_LFGTeleport},
                 {"IsBattlefieldArena",       lua_IsBattlefieldArena},
@@ -7354,7 +7977,24 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, 0);
             return 1;
         }},
-                {"GetNumArenaOpponents",     lua_ReturnZero},
+                // How many of the five arena opponent slots are filled - which the
+                // client answers as a prefix, not a tally: 0x0054a2c0 takes its
+                // number from 0x00549630, a walk that stops at the first slot whose
+                // opponent pair (0x00be9f48) and pet pair (0x00be9ef8) are both
+                // empty, the owner pair not counted. Both consumers then use it as
+                // an index into "ArenaEnemyFrame"..N, so the frame the watch list
+                // and the enemy background anchor under is the last one the panel
+                // has rather than the highest one with a unit in it. Arena rosters
+                // are filled as opponents come into sight (arenaRoster_, which also
+                // names them arena1..5 / arenapet1..5 for resolveUnit), and this
+                // answered zero outside an arena as much as inside one - which hid
+                // the enemy background and left the watch frame under the minimap
+                // cluster in a fight where the panel was up.
+                {"GetNumArenaOpponents", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, static_cast<double>(gh ? gh->arenaRoster().numOpponents() : 0));
+            return 1;
+        }},
                 {"GetCurrentMultisampleFormat", lua_GetCurrentMultisampleFormat},
                 // These hand back a list, not a value: the caller walks it with
                 // select("#", ...) and reads it in groups. One number makes the
@@ -7594,9 +8234,17 @@ void registerSystemLuaAPI(lua_State* L) {
                 // not how many are owned. paperdollframe.lua walks
                 // 1..GetNumTitles() calling IsTitleKnown on each. The client
                 // answers its CharTitles table's bound plus one (0x005165e0,
-                // DAT_00ad337c + 1); this answers the three 64-bit groups of
-                // PLAYER_FIELD_KNOWN_TITLES, which covers every bit the mask
-                // has - a few ids more to ask about, every one answered.
+                // DAT_00ad337c + 1), and this install's table has 142 rows, so
+                // that client asks about 1..143; this answers the three 64-bit
+                // groups of PLAYER_FIELD_KNOWN_TITLES, 192, which is every bit
+                // the mask can hold and 49 more than the table has rows for.
+                // Asking about those 49 is harmless the way the loop is written:
+                // GetTitleName is only reached behind IsTitleKnown, and the mask
+                // has no bit set for a title that does not exist. It is the one
+                // shape in which that would not be harmless - a realm setting a
+                // bit with no row behind it - and then strtrim(GetTitleName(i))
+                // raises on the nil, which is why the extra reach is recorded
+                // here rather than tuned to 143.
                 {"GetNumTitles", [](lua_State* L) -> int {
             lua_pushnumber(L, game::kKnownTitleCount); return 1;
         }},
@@ -7697,8 +8345,30 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, leadsAParty ? 1 : 0);
             return 1;
         }},
-                {"GetBattlefieldInstanceExpiration", lua_ReturnZero},
-                {"GetBattlefieldInstanceRunTime",    lua_ReturnZero},
+                // The instance's own two clocks, answered in **milliseconds**:
+                // battlefieldframe.lua keeps `GetBattlefieldInstanceExpiration()
+                // /1000` as its shutdown timer (:303) and the scoreboard prints
+                // SecondsToTime(GetBattlefieldInstanceRunTime()/1000) beside
+                // "Time elapsed" (worldstateframe.lua:824), so each divides the
+                // seconds out itself and answering seconds would count the
+                // shutdown down a thousand times too fast.
+                //
+                // Both are stamps, not values: the status packet's two tail
+                // dwords went onto the client's clock as `clock + remaining` and
+                // `clock - elapsed` (0x0054ae40), which is what lets them keep
+                // running on their own between the server's periodic ticks -
+                // WoWee was answering nought for both, so a battle in progress
+                // had no shutdown timer and a scoreboard time of 0:00.
+                {"GetBattlefieldInstanceExpiration", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? gh->battlefieldInstanceExpirationMs() : 0);
+            return 1;
+        }},
+                {"GetBattlefieldInstanceRunTime", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? gh->battlefieldInstanceRunTimeMs() : 0);
+            return 1;
+        }},
                 // The aspect ratio the Mac options panel builds its recording
                 // resolution from: `"640x"..floor(640*ratio)`. Answering the
                 // window's own ratio is both truthful and what makes that read
@@ -8097,7 +8767,8 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, 0);
             return 1;
         }},
-                {"IsReferAFriendLinked",     lua_ReturnFalse},
+                // IsReferAFriendLinked moved to lua_unit_api.cpp: it is one bit
+                // of UNIT_DYNAMIC_FLAGS (0x40) read off the guid's own object.
                 {"IsStereoVideoAvailable",   lua_ReturnFalse},
                 {"IsVoiceChatEnabled",       lua_ReturnFalse},
                 // False always, which is what disabled the zoom-out button at
@@ -8110,6 +8781,9 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, can ? 1 : 0);
             return 1;
         }},
+                // False, which is what the client answers - a shared 3-byte
+                // `return 0` for this name and GetMapDebugObjectInfo; the note
+                // sits at GetNumMapDebugObjects.
                 {"HasDebugZoneMap",          lua_ReturnFalse},
                 // IsDesaturateSupported() (0x00511fb0): 1 where the device
                 // can draw a texture desaturated (0x00483290), as every one
@@ -8118,7 +8792,19 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, 1);
             return 1;
         }},
-                {"CanQueueForWintergrasp",   lua_ReturnFalse},
+                // Whether Wintergrasp queueing is on offer, which is the
+                // battleground frame's timer icon and its tooltip. 0x00543600
+                // answers the number 1 when world state 4375 holds a non-zero
+                // value and nil otherwise - never false, which is what stood
+                // here; the interface only tests it for truth, so both read
+                // the same there, but the world state is the thing deciding it.
+                {"CanQueueForWintergrasp", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh || gh->getWorldState(game::world_state_ui::kWintergraspQueueState).value_or(0) == 0)
+                return luaReturnNil(L);
+            lua_pushnumber(L, 1.0);
+            return 1;
+        }},
                 {"ConvertToRaid",            lua_ReturnNothing},
                 {"FillLocalizedClassList",   lua_ReturnNothing},
                 // Sends the request rather than doing nothing. The reply is
@@ -8166,6 +8852,18 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetNumMapOverlays",        lua_GetNumMapOverlays},
+                // The debug-object trio (this, GetMapDebugObjectInfo and
+                // HasDebugZoneMap) - and the reference answers "none" for all
+                // three, in the shipped binary and not by any table:
+                // GetNumMapDebugObjects is one call that pushes the number 0
+                // (0x00608560), and a single 3-byte `return 0` answers the other
+                // two names, reached from both entries of its method table
+                // (0x008e5250 at 0x00acd02c and 0x00acd03c). Nothing anywhere in
+                // the executable names a table they could read, and none is in
+                // this install's dbfilesclient, so worldmapframe.lua's
+                // NUM_WORLDMAP_DEBUG_OBJECTS loop - which fills the frames it
+                // then walks for a pin and a tooltip - never ran there either.
+                // Zero is not a stand-in here; it is what the client says.
                 {"GetNumMapDebugObjects",    lua_ReturnZero},
                 // How many team mates the battleground has reported. The loop
                 // that draws them does not use this - it walks to
@@ -8190,8 +8888,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // giving these the projection, not just filling them in.
                 {"GetCorpseMapPosition",     lua_GetBattlefieldPosition},
                 {"GetDeathReleasePosition",  lua_GetBattlefieldPosition},
-                {"GetNumBattlefieldVehicles", lua_ReturnZero},
-                {"GetBattlefieldVehicleInfo", lua_ReturnNil},
+                {"GetNumBattlefieldVehicles", lua_GetNumBattlefieldVehicles},
+                {"GetBattlefieldVehicleInfo", lua_GetBattlefieldVehicleInfo},
                 {"GetChatWindowInfo",        lua_GetChatWindowInfo},
                 // What a chat window listens to, and the whole reason chat
                 // shows anything. ChatFrame_OnLoad registers a chat frame for
@@ -8318,11 +9016,45 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetBattlefieldFlagPosition",     lua_GetBattlefieldFlagPosition},
                 // Time left on a loot roll that is not running, which
                 // GroupLootFrame compares against a bar range at once.
-                {"GetNumDungeonMapLevels",   lua_ReturnZero},
-                // Bar offsets, added to a page number the line they
-                // are read on. No bonus or multi-cast bar is showing,
-                // and that is zero rather than nothing.
-                {"GetMultiCastBarOffset",    lua_ReturnZero},
+                // How many levels the map being shown has, which is all that
+                // shows or hides the world map's level dropdown and its two
+                // arrows (WorldMapLevelDropDown_Update). Answering none had both
+                // hidden everywhere - including on Northrend, whose map has two.
+                //
+                // 0x00546190 counts the distinct floor numbers of every
+                // DungeonMap.dbc row on the shown area's *map* - the floors
+                // belong to the map, not to the area, so every Northrend zone
+                // answers two and a Kalimdor zone none - and adds a level of its
+                // own for the areas whose WorldMapArea default floor is the -1
+                // that means "a surface sits above these floors".
+                {"GetNumDungeonMapLevels", [](lua_State* L) -> int {
+            auto* svc = getLuaServices(L);
+            lua_pushnumber(L, svc && svc->getMapDungeonLevelCount
+                                 ? svc->getMapDungeonLevelCount() : 0);
+            return 1;
+        }},
+                // Which page a multi-cast button reads its actions from, added
+                // to NUM_ACTIONBAR_PAGES by ActionButton_CalculateAction for a
+                // button whose buttonType is MULTICASTACTIONBUTTON
+                // (actionbutton.lua:146). It is not a state and was never read
+                // as one: the client's binding (0x005b71e0) is one fldl of the
+                // double 6.0 at 0x00a0b708 and a push of it - nothing read
+                // first. So those nine buttons sit on page 12, slots 133..141,
+                // bar on screen or not; the zero here did not mean "no
+                // multi-cast bar", it put them on page 6, on top of the main
+                // bar's own buttons. WoWee draws that bar itself (the Totems
+                // takeover covers MultiCastActionBarFrame), so this only
+                // decides where a FrameXML-side button looks.
+                //
+                // The same address is what the table hands GetNumGlyphSockets,
+                // whose body here is six as well (lua_quest_api.cpp): the
+                // linker folded two bindings that each push the one pooled
+                // 6.0, so both sixes are the client's own number and not a
+                // count either of them works out.
+                {"GetMultiCastBarOffset", [](lua_State* L) -> int {
+            lua_pushnumber(L, 6.0);
+            return 1;
+        }},
                 // Which extra action bar the current form or stance uses.
                 // actionbutton.lua adds it to NUM_ACTIONBAR_PAGES to pick the
                 // page a bonus button reads from, so a flat zero left a druid
@@ -8339,7 +9071,20 @@ void registerSystemLuaAPI(lua_State* L) {
                 {"GetNumBattlegroundTypes",  lua_GetNumBattlegroundTypes},
                 {"GetBattlegroundInfo",      lua_GetBattlegroundInfo},
                 {"RequestBattlegroundInstanceInfo", lua_RequestBattlegroundInstanceInfo},
-                {"GetCurrentMapDungeonLevel", lua_ReturnZero},
+                // Which of those levels is showing, one-based, or zero for
+                // none - the number the dropdown lights, the quest log passes on
+                // to open a map (questlogframe.lua) and the battlefield minimap
+                // picks its art with. 0x00544fc0 reads the DungeonMap row the
+                // map has selected and answers its floor, shifted up by one for
+                // the areas that carry a surface level - where no selection
+                // answers one rather than none, which is what the arrows count
+                // on: they step from one to two and never back off the bottom.
+                {"GetCurrentMapDungeonLevel", [](lua_State* L) -> int {
+            auto* svc = getLuaServices(L);
+            lua_pushnumber(L, svc && svc->getMapDungeonLevel
+                                 ? svc->getMapDungeonLevel() : 0);
+            return 1;
+        }},
                 {"Sound_GameSystem_GetNumOutputDrivers", lua_Sound_GetNumOutputDrivers},
                 {"Sound_ChatSystem_GetNumInputDrivers",  lua_ReturnZero},
                 {"Sound_ChatSystem_GetNumOutputDrivers", lua_ReturnZero},
@@ -8358,7 +9103,22 @@ void registerSystemLuaAPI(lua_State* L) {
                 // ever looked selected however many times it was clicked.
                 {"GetSelectedSkill", [](lua_State* L) -> int {
             lua_pushnumber(L, selectedSkill()); return 1; }},
-                {"DungeonUsesTerrainMap",    lua_ReturnFalse},
+                // Whether the floors being named sit under a surface level,
+                // which decides whether the level dropdown names its entries by
+                // the floor or by one below it (WorldMapLevelDropDown_Initialize
+                // looks the label up as DUNGEON_FLOOR_<map><n> either way).
+                // 0x00544c40 asks one question of the area being shown: is its
+                // default floor the -1 that also adds a level above the floors.
+                // Two maps in 3.3.5 answer it, and the rest answer nothing - not
+                // false, which is what a flat answer here said for all of them.
+                {"DungeonUsesTerrainMap", [](lua_State* L) -> int {
+            auto* svc = getLuaServices(L);
+            if (svc && svc->mapDungeonUsesTerrainMap && svc->mapDungeonUsesTerrainMap()) {
+                lua_pushboolean(L, 1);
+                return 1;
+            }
+            return 0;
+        }},
                 // GetChannelDisplayInfo(i) → name, header, collapsed,
                 //   channelNumber, count, active, category, voiceEnabled,
                 //   voiceActive
@@ -8560,6 +9320,50 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, gh->ownsChatChannel(joined[static_cast<size_t>(sel) - 1]) ? 1 : 0);
             return 1;
         }},
+                // IsDisplayChannelModerator() (0x004ffae0): the same channel
+                // lookup as the binding above and one flag test wider - the
+                // byte is read as & 3 instead of & 1, so the owner counts here.
+                //
+                // The byte itself is the local player's own row of that
+                // channel's roster: the roster walk copies the whole thing, wire
+                // flags and the three bits the client ORs on for itself at
+                // 0x20/0x40/0x80 (00500000.c:3186-3220, none of which & 1 or & 3
+                // can see), and does it into one global only for the row whose
+                // guid pair matches the local player's. Whose channel that byte
+                // describes is therefore whichever roster arrived last, and a
+                // channel switch can leave it behind; reading the selected
+                // channel's own roster says what is meant and cannot go stale.
+                // The roster only exists once something asked for it, which the
+                // panel does with GetNumChannelMembers when a row is clicked -
+                // before the menu that asks this is built.
+                //
+                // The reference tests one dword of the channel record first and
+                // answers nil when it reads above -1. No instruction carries
+                // that address but the two bindings themselves, so it is not
+                // modelled here - the same call the binding above made.
+                //
+                // Outside voice chat this is reached for one thing: the "Invite"
+                // entry a custom channel's row menu gets (channelframe.lua:459),
+                // which leads to InviteToChannel. The unit menu asks it twice
+                // more (unitpopup.lua:853,865), both under IsVoiceChatEnabled()
+                // and GetVoiceStatus(), which are answered no, so those two stay
+                // out of reach either way.
+                {"IsDisplayChannelModerator", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            const int sel = selectedDisplayChannel();
+            if (!gh || sel < 1) return luaReturnNil(L);
+            const auto& joined = gh->getJoinedChannels();
+            if (sel > static_cast<int>(joined.size())) return luaReturnNil(L);
+            const uint64_t self = gh->getPlayerGuid();
+            bool moderator = false;
+            for (const auto& m : gh->getChannelRoster(joined[static_cast<size_t>(sel) - 1])) {
+                if (m.guid != self) continue;
+                moderator = m.owner || m.moderator;
+                break;
+            }
+            lua_pushboolean(L, moderator ? 1 : 0);
+            return 1;
+        }},
                 {"SetSelectedDisplayChannel", [](lua_State* L) -> int {
             selectedDisplayChannel() = static_cast<int>(luaL_optnumber(L, 1, 0));
             return 0;
@@ -8612,7 +9416,31 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, 0);                      // 6: enabled (voice)
             return 6;
         }},
-                {"GetWintergraspWaitTime",   lua_ReturnNil},
+                // The countdown the Wintergrasp zone-info line and the
+                // battleground frame's timer both print, in whole seconds.
+                //
+                // 0x005435a0 asks 0x00548d10 for two world states. It looks at
+                // 3801 first: absent or zero, the binding returns without
+                // pushing anything, which is the nil both lines test. Then
+                // 4354 minus the world state clock - time() shifted by whatever
+                // SMSG_WORLD_STATE_UI_TIMER_UPDATE said the server's time is
+                // (0x005486e0 sets the shift, 0x00548700 reads through it) -
+                // and the record holds an absolute epoch second, so the
+                // difference is the time left. The result is clamped at zero,
+                // and an absent 4354 counts as a zero value rather than as
+                // missing, so that answers 0: the battleground frame's
+                // WINTERGRASP_IN_PROGRESS branch.
+                {"GetWintergraspWaitTime", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return luaReturnNil(L);
+            if (gh->getWorldState(game::world_state_ui::kWintergraspTrackedState).value_or(0) == 0)
+                return luaReturnNil(L);
+            const int64_t endsAt = static_cast<int32_t>(
+                gh->getWorldState(game::world_state_ui::kWintergraspNextBattleState).value_or(0));
+            const int64_t left = endsAt - gh->worldStateNow();
+            lua_pushnumber(L, static_cast<double>(left < 0 ? 0 : left));
+            return 1;
+        }},
                 {"GetNumWorldStateUI",       lua_GetNumWorldStateUI},
                 {"GetWorldStateUIInfo",      lua_GetWorldStateUIInfo},
                 // Whether the player is standing on a world PvP objective.
@@ -8648,6 +9476,19 @@ void registerSystemLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->requestBattlefieldPositions();
             return 0;
         }},
+                // Re-positions four arrow actors the client keeps for itself,
+                // which are not the arrows this interface draws. 0x00545fe0 is
+                // a thunk onto 0x005449f0: it walks four objects held at
+                // 0x00be8ee8, 0x00be8ef0, 0x00be8eec and 0x00be8ef4, updates one
+                // only while it exists, holds something at +0x2a0 and a
+                // 0x00824f00(0, 0) lookup succeeds, and the same routine copies
+                // what the unit's vtable slot 0x34 answers - the facing, of the
+                // same pair that answers a map position - into each object's
+                // float at +0x328. One of the four is built around
+                // "Interface\\Minimap\\MinimapArrow.mdx". The player arrow and
+                // the quest pins this tree moves are named frames, and the two
+                // verbs for those (ShowWorldMapArrowFrame and
+                // PositionWorldMapArrowFrame, above) are both answered.
                 {"UpdateWorldMapArrowFrames",   lua_ReturnNothing},
                 {"SetSelectedSkill", [](lua_State* L) -> int {
             selectedSkill() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},
@@ -8750,9 +9591,11 @@ void registerSystemLuaAPI(lua_State* L) {
             return 0;
         }},
                 // Zoom out one step. SetMapZoom answers the continent and
-                // cosmic cases beside it; this is the dungeon-floor and cosmic
-                // step, and neither is reachable while GetNumDungeonMapLevels
-                // answers none.
+                // cosmic cases beside it, and FrameXML only reaches this one
+                // once a dungeon level is showing - which is what the three
+                // floor bindings now let it pick. From a floor the map does not
+                // step out a level at all: it shows the area that floor's own
+                // row belongs to.
                 {"ZoomOut", [](lua_State* L) -> int {
             auto* svc = getLuaServices(L);
             if (svc && svc->zoomMapOut) svc->zoomMapOut();
@@ -8770,38 +9613,98 @@ void registerSystemLuaAPI(lua_State* L) {
             fireWorldMapUpdate(L);
             return 0;
         }},
-                {"SetDungeonMapLevel",  lua_ReturnNothing},
+                // The level dropdown's pick and its two arrows, which hand the
+                // level straight over. It is one-based, one past the floor for
+                // the areas that carry a surface level (there, level one is no
+                // floor at all - the client stores -1 for it), and a level that
+                // no floor row of this map answers changes nothing whatever
+                // (0x00547b80, then the row scan at 0x00547a70).
+                //
+                // Nothing is answered either way. What the client does after a
+                // pick that took is re-run its whole map refresh (0x0050f490 ->
+                // 0x00546310), which is the update below.
+                {"SetDungeonMapLevel", [](lua_State* L) -> int {
+            auto* svc = getLuaServices(L);
+            const int level = static_cast<int>(luaL_optnumber(L, 1, 0));
+            if (svc && svc->setMapDungeonLevel && svc->setMapDungeonLevel(level))
+                fireWorldMapUpdate(L);
+            return 0;
+        }},
+                // ClickLandmark(mapLinkID) - clicking a pin that leads
+                // somewhere.  0x00546ef0 looks the link up by key in a table of
+                // its own (key range 0x00ad36e4..0x00ad36e0, key to row at
+                // 0x00ad36f4), then walks the *other* list the map change built:
+                // 0x00546310 fills a second array alongside the pins -
+                // 0x00be8ee4 ids at 0x00be8f2c - by going over the table at
+                // 0x00ad4f0c rows / 0x00ad4f20 (stride 0x44), keeping a row
+                // whose second dword is the map being shown and, of the
+                // up-to-four ids in its dwords 2..5, the first that lands on a
+                // row with +0x28 at zero or above whose +0xc answers at
+                // 0x00546100 for this player.  What is stored is that row's own
+                // id.  Clicking then looks each stored id up at 0x00ad4edc and
+                // wants the row it finds to have its second dword equal the
+                // clicked link's second dword, and hands the map-change routine
+                // that row's first dword with the link as its third argument -
+                // which is how a pin opens a map instead of a tooltip.  Neither
+                // table is named; AreaGroup.dbc's shape (an id, a map, four area
+                // ids) is the nearest thing to the 0x44-stride one and it is not
+                // it, being 8 fields and 32-byte records.  And no pin answered
+                // here carries a mapLinkID, so nothing is clickable yet.
+                //
+                // Two steps of 0x00546ef0 are worth having written down for
+                // whoever names that table: the argument is checked against the
+                // WorldMapLink table's own id range first (0x00ad36e4 below,
+                // 0x00ad36e0 above, the index array at 0x00ad36f4) and a link
+                // outside it answers nothing at all rather than a failed lookup;
+                // and the map-change routine is then called as
+                // 0x00546310(-2, area id, link id).  That routine is the world
+                // map's one way to change what is shown - twenty-three call sites
+                // across the map code, five of them passing the same -2 - so an
+                // answer here has somewhere to go; it is the id table, not the
+                // missing verb, that holds this up.
                 {"ClickLandmark",       lua_ReturnNothing},
-                // Landmark rows, which GetNumMapLandmarks already reports none
-                // of. Bound so that stays true if it ever reports some.
+                // The pins on the shown map: counted by GetNumMapLandmarks and
+                // described by GetMapLandmarkInfo, whose note above is where the
+                // reference's own families are worked out.
                 {"GetMapLandmarkInfo",  lua_GetMapLandmarkInfo},
                 {"GetMapOverlayInfo",   lua_GetMapOverlayInfo},
-                // Which map a quest's objectives are on, and what a quest item
-                // drops from. Both are read while building the map's quest
-                // list; nil is "not on this map", which is what the list does
-                // with a quest it cannot place.
-                // Which map a quest wants opened, and on which dungeon floor.
-                // Nothing here tracks either, and the answer for "none" is a
-                // pair of zeroes rather than nil because that is what the
-                // caller tests: WorldMap_OpenToQuest asks `if ( mapID ~= 0 )`
-                // and then `if ( floorNumber ~= 0 )`, and nil ~= 0 is true in
-                // Lua - so answering nil ran both branches, on the path the
-                // quest tracker takes every time a tracked quest is clicked.
-                // SetMapByID drops a zero id and SetDungeonMapLevel does
-                // nothing at all, so it was inert; it was inert by luck.
+                // Which map a quest wants opened, and on which dungeon floor
+                // (0x005e56c0 -> 0x005e2b60). Chosen off the quest POI list -
+                // the areas the server sent for the quests in the log - and
+                // against the map that is showing, which is why FrameXML shows
+                // WorldMapFrame before asking: with the map closed the answer
+                // is the pair of zeroes. Those zeroes are also what "no such
+                // map" answers with, and it is a pair of zeroes rather than
+                // nil because that is what the caller tests:
+                // WorldMap_OpenToQuest asks `if ( mapID ~= 0 )` and then
+                // `if ( floorNumber ~= 0 )`, and nil ~= 0 is true in Lua - so
+                // answering nil ran both branches, on the path the quest
+                // tracker takes every time a tracked quest is clicked.
+                //
+                // What is not here is the reference's last resort: with no
+                // area listed for the quest it walks the quest's zone up its
+                // AreaTable parents and opens the WorldMapArea row of the
+                // top of that chain at floor 0, which needs both tables where
+                // this has only the POI list. So a quest the server gave no
+                // points of interest for leaves the map where it was.
                 {"GetQuestWorldMapAreaID", [](lua_State* L) -> int {
-            lua_pushnumber(L, 0);   // mapID
-            lua_pushnumber(L, 0);   // floorNumber
+            if (!lua_isnumber(L, 1)) {
+                return luaL_error(L, "Usage: GetQuestWorldMapAreaID(questID)");
+            }
+            const auto [mapId, floorNumber] =
+                questPoiOpenTarget(L, static_cast<int32_t>(lua_tonumber(L, 1)));
+            lua_pushnumber(L, mapId);      // a WorldMapArea id
+            lua_pushnumber(L, floorNumber);  // a DungeonMap floor
             return 2; }},
-                {"GetQuestLogItemDrop",    lua_ReturnNil},
-                // How many of those there are. Unbound, so the world map's
-                // quest tooltip called a nil global and raised - the guard
-                // beneath it reads the count and would have taken the right
-                // branch, but the call never got that far. Zero, matching the
-                // reader above, which has no item drops to describe.
-                {"GetNumQuestItemDrops",   lua_ReturnZero},
+                // GetNumQuestItemDrops and GetQuestLogItemDrop are registered
+                // with the rest of the quest log's readers (lua_quest_api.cpp):
+                // both are asked about a quest log index, and the quest's items
+                // live with its objectives rather than with the map.
                 // Two debug readers, for the zone-map overlay Blizzard ships
-                // switched off. Nothing here has a debug zone map at all.
+                // switched off. Nothing here has a debug zone map at all, and
+                // the client agrees: one 3-byte `return 0` stands behind both
+                // GetMapDebugObjectInfo and HasDebugZoneMap in its method table
+                // (0x008e5250) - see the note at GetNumMapDebugObjects.
                 {"GetDebugZoneMap",        lua_ReturnNil},
                 {"GetMapDebugObjectInfo",  lua_ReturnNil},
                 {"GetTrackingTexture",  lua_GetTrackingTexture},
@@ -9150,6 +10053,17 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, gh ? gh->getChosenTitleBit() : -1);
             return 1;
         }},
+                // GetTitleName(titleMaskID) - the client's own usage line, and
+                // the argument is a bit of the known-titles mask rather than a
+                // CharTitles row id. The two are not the same number in this
+                // table (the row with id 155 carries bit 122), and the title
+                // list hands the same loop index to IsTitleKnown, which reads a
+                // mask bit, and to this, and works - so this one matches on the
+                // bit, which is the TitleBit column and not the first one.
+                //
+                // The words come back in the gender of the player whose title
+                // list this is, which is the local player: the client's
+                // GetTitleName reads its own object's gender byte.
                 {"GetTitleName", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             int bit = static_cast<int>(luaL_checknumber(L, 1));
@@ -9297,6 +10211,33 @@ void registerSystemLuaAPI(lua_State* L) {
             if (guid) gh->inspectUnit(guid);
             return 0;
         }},
+                // ClearInspectPlayer() (0x005e7890) drops the client's inspect
+                // record: a guid pair at DAT_00c24220, six more fields behind
+                // it, and a call out to the talent code with the emptied pair -
+                // 0x005c9f70, which checks that pair as a talent record
+                // (TalentInfo.cpp line 0x4b3) and refreshes the inspected
+                // talents only when it names someone. It has to clear, because
+                // that store is one slot wide - the inspect frame's whole state
+                // is "whatever is in it", so leaving it filled would leave the
+                // next player's window showing the last player's gear.
+                //
+                // Nothing here is one slot wide. The inspected gear and the
+                // inspected achievements are both maps keyed by the player's
+                // guid, and the readers go through the unit they are asked
+                // about, which is also how a hover tooltip over a bystander
+                // gets the gear that player is wearing. Clearing on window
+                // close would therefore not reset a stale window; it would
+                // delete data that is still being read, and the next hover
+                // would need a fresh inspect request for a player who is
+                // standing right there. So there is nothing to clear, and the
+                // no-op is the answer rather than a gap.
+                //
+                // Nor is there an event to raise in its place. The guid pair the
+                // reference hands its talent code is the one it has just zeroed,
+                // so that call fails its own checked cast and never reaches the
+                // panel or the interface: ClearInspectPlayer raises no script
+                // event at all, which was the other half of the gap it looked
+                // like.
                 {"ClearInspectPlayer", [](lua_State* L) -> int {
             (void)L;
             return 0;
@@ -10616,7 +11557,28 @@ void registerSystemLuaAPI(lua_State* L) {
                 // `newLevel < MAX_PLAYER_LEVEL` then raised on every level gained.
                 // On the earlier two it simply came out an expansion too high,
                 // and a level 60 was never treated as capped.
+                // ... and it comes from the account, not from the client.  The
+                // binding beside it answers the expansion this build speaks;
+                // this one answers the byte the realm chose for *this* account,
+                // which is the only thing that ever writes the client's +0x2f2d
+                // (0x004ddc20 reads that and nothing else).  The two agree for
+                // an upgraded account and part company for a trial one: the
+                // realm sends 0 there, and MAX_PLAYER_LEVEL_TABLE[0] is 60, so
+                // a trial character caps at 60 in the original and at 80 here.
+                // Clamping is deliberately not done - a byte outside 0..2 makes
+                // the table read nil in the original too, and that is what it
+                // should do here.
                 {"GetAccountExpansionLevel", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (gh && gh->accountState().present) {
+                lua_pushnumber(L, gh->accountState().accountExpansion);
+                return 1;
+            }
+            // No block in the response - the result was neither OK nor the
+            // queue - so the realm never said anything about the account.  The
+            // original would be reading a zero it never filled; there is no
+            // session to notice that in, and the build's own expansion is the
+            // least wrong answer to give a frame that is asking.
             lua_pushnumber(L, expansionLevelZeroBased(L));
             return 1;
         }},

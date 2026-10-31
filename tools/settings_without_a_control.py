@@ -48,8 +48,12 @@ def main():
             rows.add(m.group(1))
 
     text = CVARS.read_text(encoding="utf-8")
-    at = text.find("kClientCVars")
-    block = text[at:at + 6000] if at != -1 else ""
+    # The table, not the name: the name is written in prose as often as it is
+    # declared, and a paragraph above the declaration would otherwise be the
+    # 6000 characters read as the whole table.
+    at = text.find("kClientCVars[] = {")
+    end = text.find("};", at) if at != -1 else -1
+    block = text[at:end] if at != -1 and end != -1 else ""
     driven = set(re.findall(r'\{(?:\.\w+\s*=\s*)?"[a-z0-9_]+",\s*(?:\.\w+\s*=\s*)?"([a-z0-9_]+)"', block))
 
     if len(bound) < MIN_BOUND or len(rows) < MIN_ROWS or len(driven) < MIN_CVARS:

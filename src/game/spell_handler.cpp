@@ -745,6 +745,23 @@ std::vector<std::string> SpellHandler::spellcastArgs(const std::string& unitId,
     return {unitId, name, rank, std::to_string(spellId)};
 }
 
+// Every packet that ends a cast raises its event through 0x007fecc0, which
+// picks it by the reason byte rather than by which packet arrived - see
+// cast_failure::castEvent.  Until now this choice existed nowhere: a refusal
+// of a spell already running (SPELL_IN_PROGRESS) was reported here as plain
+// FAILED with a STOP, which is what CastingBarFrame registers, so the bar of
+// the cast still running came down even though the client leaves it up (its
+// event for that reason is FAILED_QUIET, which that frame does not register).
+void SpellHandler::raiseCastFailureEvents(const std::string& unitId, uint32_t spellId,
+                                          uint8_t reason, bool firingStop) const {
+    if (!owner_.addonEventCallbackRef()) return;
+    const std::string event(cast_failure::castEventName(cast_failure::castEvent(reason)));
+    owner_.addonEventCallbackRef()(event, spellcastArgs(unitId, spellId));
+    // The stop is not part of that event: 0x007fecc0 fires it only when the
+    // cast count and spell the packet carries are the shown cast's own.
+    if (firingStop) owner_.addonEventCallbackRef()("UNIT_SPELLCAST_STOP", spellcastArgs(unitId, spellId));
+}
+
 void SpellHandler::requestPetName(uint64_t petGuid) {
     if (petGuid == 0 || !owner_.getSocket()) return;
     if (owner_.getState() != WorldState::IN_WORLD) return;
@@ -857,6 +874,15 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
     // SMSG_EQUIPMENT_SET_LIST - owned by InventoryHandler::registerOpcodes
 
     // ---- Cast result / spell visuals / cooldowns / modifiers ----
+    // Not a packet that arrives at all, in any expansion shipped here: no
+    // Data/expansions/opcodes.json names SMSG_CAST_RESULT, and the alias
+    // (Data/opcodes/aliases.json, baked into opcode_aliases_generated.inc)
+    // resolves the *other* way - an expansion json that spelled the packet
+    // CAST_RESULT would be read as SMSG_CAST_FAILED and go to
+    // handleCastFailed above.  So the logical opcode has no wire value,
+    // fromWire never answers it, and handleCastResult below is never called.
+    // Its two spellcast events are therefore not the ones the player's failed
+    // cast raises; they are left in place until that handler goes.
     table[Opcode::SMSG_CAST_RESULT] = [this](network::Packet& p) { handleCastResult(p); };
     table[Opcode::SMSG_SPELL_FAILED_OTHER] = [this](network::Packet& p) { handleSpellFailedOther(p); };
     table[Opcode::SMSG_CLEAR_COOLDOWN] = [this](network::Packet& p) { handleClearCooldown(p); };
@@ -1592,8 +1618,10 @@ int32_t SpellHandler::moddedCooldown(uint32_t spellId, int32_t ms) const {
 }
 
 bool SpellHandler::petToggleHeld(uint32_t spellId) const {
-    // 0x00809100: the cvar, then the pet's list (0x00d3f5ac + 24*1).
-    return addons::storedCVarValue("secureAbilityToggle", "0") != "0" &&
+    // 0x00809100: the cvar, then the pet's list (0x00d3f5ac + 24*1). The
+    // client registers it on (0x00510000 "1"), so the guard is up until the
+    // player turns it off.
+    return addons::storedCVarValue("secureAbilityToggle", "1") != "0" &&
            petHistory_.startedRecently(spellId, historyNowMs());
 }
 
@@ -1698,9 +1726,10 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
             if (owner_.isAutoAttacking()) {
                 // Ability Toggle, which the panel describes exactly: protection
                 // from turning an ability off by hitting its button twice in a
-                // short space of time. Offered, and read by nothing - so a
-                // double-tap on Attack has always stopped the swing that the
-                // first tap started.
+                // short space of time. The client registers it on (0x00510000
+                // "1" - "Whether you should be protected against accidentally
+                // double-clicking an aura"), so a fresh profile has the guard up
+                // and unticks the row to stop the swing on a double tap.
                 //
                 // The guard is on the second press rather than on the state:
                 // stopping deliberately a second later is what the button is
@@ -1711,7 +1740,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
                 constexpr long kToggleGuardMs = 500;
                 if (autoAttackToggledAt_.time_since_epoch().count() != 0 &&
                     since < kToggleGuardMs &&
-                    addons::storedCVarValue("secureAbilityToggle", "0") != "0") {
+                    addons::storedCVarValue("secureAbilityToggle", "1") != "0") {
                     return;
                 }
                 owner_.stopAutoAttack();
@@ -3728,12 +3757,13 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     // 0x005216f0 -> 0x00986d00).
     if (!errMsg.empty()) sayCastFailure(data.spellId, data.result);
 
-    // Not for a cast refused beside the running one: its bar goes on.
+    // The event goes for any refusal at all, and which one is the reason's
+    // doing (0x007fecc0): CHARMED, DONT_REPORT and SPELL_IN_PROGRESS - the
+    // three that leave a cast running - say FAILED_QUIET, which the cast bar
+    // does not listen for.  Only the stop waits for anything: not for a cast
+    // refused beside the running one, whose bar goes on.
+    raiseCastFailureEvents("player", data.spellId, data.result, !otherCast);
     if (otherCast) return;
-    if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_FAILED", spellcastArgs("player", data.spellId));
-        owner_.addonEventCallbackRef()("UNIT_SPELLCAST_STOP", spellcastArgs("player", data.spellId));
-    }
     if (owner_.spellCastFailedCallbackRef()) owner_.spellCastFailedCallbackRef()(data.spellId);
 }
 
@@ -6370,11 +6400,15 @@ void SpellHandler::handleSpellFailedOther(network::Packet& packet) {
         ? (packet.hasRemaining(8) ? packet.readUInt64() : 0)
         : packet.readPackedGuid();
     // 0x00806ad0: castCount, spellId, result - the caster's shown cast ends
-    // where it is this one (0x007fecc0).
+    // where it is this one (0x007fecc0).  The result is read here too: that
+    // same routine picks the event off it, and this packet named nothing but
+    // FAILED before, for every reason.
+    uint8_t failOtherResult = 0;
     if (!tbcLike2 && failOtherGuid != 0 && packet.hasRemaining(5)) {
         const size_t at = packet.getReadPos();
         const uint8_t castCount = packet.readUInt8();
         const uint32_t spellId = packet.readUInt32();
+        if (packet.hasRemaining(1)) failOtherResult = packet.readUInt8();
         packet.setReadPos(at);
         owner_.castVisuals().ended(failOtherGuid, castCount, spellId);
     }
@@ -6390,10 +6424,8 @@ void SpellHandler::handleSpellFailedOther(network::Packet& packet) {
             std::string unitId;
             if (failOtherGuid == owner_.getTargetGuid())     unitId = "target";
             else if (failOtherGuid == owner_.focusGuidRef()) unitId = "focus";
-            if (!unitId.empty()) {
-                owner_.fireAddonEvent("UNIT_SPELLCAST_FAILED", spellcastArgs(unitId, failedSpellId));
-                owner_.fireAddonEvent("UNIT_SPELLCAST_STOP",   spellcastArgs(unitId, failedSpellId));
-            }
+            if (!unitId.empty())
+                raiseCastFailureEvents(unitId, failedSpellId, failOtherResult, true);
         }
     }
     packet.skipAll();
@@ -6621,6 +6653,13 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
         ? (packet.hasRemaining(8) ? packet.readUInt64() : 0)
         : packet.readPackedGuid();
     // Classic omits the castCount byte; TBC and WotLK include it
+    //
+    // 0x007fecc0 picks the event by the reason, not by which packet this is:
+    // this named INTERRUPTED for every failure, the plain ones included, which
+    // the client reports as FAILED, and never once the quiet leg.  Where no
+    // reason byte could be read there is nothing to choose on, and the old
+    // notice stands.
+    std::string failureEvent = "UNIT_SPELLCAST_INTERRUPTED";
     const size_t remainingFields = isClassic ? 5u : 6u;  // spellId(4)+reason(1) [+castCount(1)]
     if (packet.hasRemaining(remainingFields)) {
         const uint8_t failCastCount = isClassic ? 0 : packet.readUInt8();
@@ -6642,15 +6681,16 @@ void SpellHandler::handleSpellFailure(network::Packet& packet) {
         // came with SMSG_CAST_FAILED. This put "Spell: reason" on screen and
         // in chat a second time.
         (void)failSpellId;
-        (void)failReason;
+        failureEvent = std::string(
+            cast_failure::castEventName(cast_failure::castEvent(failReason)));
     }
-    // Fire UNIT_SPELLCAST_INTERRUPTED for Lua addons
+    // And the event that failure is, for the frames watching the cast
     if (owner_.addonEventCallbackRef()) {
         auto unitId = (failGuid == 0) ? std::string("player") : owner_.guidToUnitId(failGuid);
         if (!unitId.empty()) {
             uint32_t spellId = 0;
             if (const auto* st = getUnitCastState(failGuid)) spellId = st->spellId;
-            owner_.fireAddonEvent("UNIT_SPELLCAST_INTERRUPTED", spellcastArgs(unitId, spellId));
+            owner_.fireAddonEvent(failureEvent, spellcastArgs(unitId, spellId));
             owner_.fireAddonEvent("UNIT_SPELLCAST_STOP", spellcastArgs(unitId, spellId));
         }
     }
