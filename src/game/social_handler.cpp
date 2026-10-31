@@ -4260,6 +4260,22 @@ void SocialHandler::handleLogoutComplete(network::Packet& /*packet*/) {
 // Battleground Handlers
 // ============================================================
 
+// Nothing here is reset on entering a world, and that is the client's own
+// behaviour rather than a shortcut taken here: the queue block (two records 0x40
+// apart from 0x00bea4b8, plus the selected-slot marker at 0x00acd16c and the
+// running-battle pair) is written in exactly two places: the registration
+// function 0x0054e720, which zeroes all of it once at startup on the way past
+// its FUN_006b0b80 opcode registrations, and the SMSG_BATTLEFIELD_STATUS handler
+// 0x0054ae40, itself holding two clear branches - the whole-record zero at
+// 00540000.c:8501-8517, and the running-battle pair alone at :8621-8626. No
+// transfer or world-entry path touches it, because the realm re-sends every slot's status
+// on a zone change and the empty record - the one whose two leading dwords are
+// both zero - is what takes a slot's state with it, port-expiration stamp
+// included (00540000.c:8501-8517). Leaving these standing across a zone change
+// is therefore what the reference does with the same realm; clearing them here
+// would answer "no queue" in the seconds between a transfer and the status that
+// follows it.
+
 void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     BattlefieldStatusData status;
     if (!BattlefieldStatusPacket::parse(packet, status, isClassicLikeExpansion(),
