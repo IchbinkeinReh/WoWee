@@ -13,6 +13,8 @@
 
 #include <cstddef>
 
+#include "core/platform.hpp"
+
 // Whether an executable image is mapped MAP_JIT here. Apple's hardened runtime
 // refuses an anonymous PROT_EXEC mapping without it; an emulated build copies
 // the image into the emulator instead of running it, so it never asks for
@@ -20,8 +22,16 @@
 // this one answer, because a window opened over memory that is not MAP_JIT
 // calls a JIT API this process was never entitled to use, and that call traps
 // the process rather than returning a failure.
-#if defined(__APPLE__) && !defined(HAVE_UNICORN)
+#if defined(WOWEE_MACOS) && !defined(HAVE_UNICORN)
     #define WOWEE_MAP_JIT 1
+#endif
+
+// Where an image is never executed natively: emulated, or on iOS, which allows
+// no writable-and-executable memory at all (no JIT entitlement for an app
+// outside the App Store's few). There it is mapped read-write, as the
+// emulated build maps it, and the native path is simply never taken.
+#if defined(HAVE_UNICORN) || defined(WOWEE_IOS)
+    #define WOWEE_IMAGE_NOT_EXECUTED 1
 #endif
 
 #if defined(WOWEE_MAP_JIT) && (defined(__aarch64__) || defined(__arm64__))

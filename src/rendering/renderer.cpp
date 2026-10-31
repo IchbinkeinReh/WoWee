@@ -1,4 +1,5 @@
 #include "rendering/swim_pitch.hpp"
+#include "core/platform.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/shadow_sun.hpp"
 #include "rendering/rt_lamp_wrap.hpp"
@@ -870,7 +871,7 @@ bool Renderer::initialize(core::Window* win) {
         // 64 MB the pair at 2048 (see shadowAtlasWidth).
         //
         // A phone starts lower again: its GPU memory is the system's memory.
-#ifdef __ANDROID__
+#ifdef WOWEE_MOBILE
         constexpr const char* kDefaultShadowLevel = "1";   // 1024, 8 MB the pair a cascade
 #else
         constexpr const char* kDefaultShadowLevel = "2";   // 2048, 32 MB the pair a cascade
@@ -6784,7 +6785,7 @@ bool Renderer::startPassAblation() {
 }
 
 void Renderer::setLowCostShading(bool on) {
-#ifdef __ANDROID__
+#ifdef WOWEE_MOBILE
     // A phone's GPU spends its frame in the terrain's fragment shader even on
     // Low; nothing turns the cheap paths off there.
     on = true;

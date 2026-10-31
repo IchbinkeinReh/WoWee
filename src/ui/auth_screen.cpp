@@ -1,4 +1,5 @@
 #include "ui/auth_screen.hpp"
+#include "core/platform.hpp"
 #include "rendering/rt_memory_guard.hpp"
 #include "core/rt_session_marker.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -1016,7 +1017,7 @@ void AuthScreen::renderCard(auth::AuthHandler& authHandler, float screenW, float
             col.gap(px(kRowGap));
         }
 
-#ifndef __ANDROID__
+#ifndef WOWEE_MOBILE
         // Where the game data is read from, and a way to choose. The heading
         // and the link share a row, and the path wraps under them: the card is
         // already the tallest thing on the screen with this section open.

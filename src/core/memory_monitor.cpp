@@ -8,6 +8,10 @@
 #include <windows.h>
 #include <psapi.h>
 #elif defined(__APPLE__)
+#include "core/platform.hpp"
+#ifdef WOWEE_IOS
+#include <os/proc.h>
+#endif
 #include <mach/mach.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
@@ -128,6 +132,13 @@ size_t MemoryMonitor::getAvailableRAM() const {
     }
     return totalRAM_ / 2;
 #elif defined(__APPLE__)
+#ifdef WOWEE_IOS
+    // What this app may still allocate before the system ends it: iOS gives
+    // each app a limit far below the device's memory (a 6 GB phone lets a
+    // game have some 3 GB), and exceeding it is a kill, not a swap. The free
+    // pages below would answer with the device's memory instead.
+    if (const size_t left = os_proc_available_memory(); left > 0) return left;
+#endif
     // hw.usermem is a 32-bit kernel sysctl on macOS: on systems with ≥16 GB RAM
     // the value overflows signed int32, truncating to ~2 GB and causing false
     // severe-pressure reports.  Use the Mach VM statistics API instead, which

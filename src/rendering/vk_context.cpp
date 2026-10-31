@@ -3,6 +3,7 @@
 #include <thread>
 #include <mutex>
 #include "rendering/vk_context.hpp"
+#include "core/platform.hpp"
 
 #include <fstream>
 #include "rendering/vk_utils.hpp"
@@ -483,6 +484,12 @@ bool VkContext::createInstance([[maybe_unused]] SDL_Window* window) {
     // The headset's runtime creates the instance and the device
     // (XR_KHR_vulkan_enable2): vk-bootstrap calls both through this.
     vkb::InstanceBuilder builder{vr::Runtime::get().instanceProcAddr()};
+#elif defined(WOWEE_IOS)
+    // MoltenVK is linked into the app (an iOS app may load no other code), so
+    // there is no libvulkan for vk-bootstrap to open: it is handed MoltenVK's
+    // own entry point. The portability enumeration and subset it enables for
+    // MoltenVK on its own, as on macOS.
+    vkb::InstanceBuilder builder{vkGetInstanceProcAddr};
 #else
     vkb::InstanceBuilder builder;
 #endif

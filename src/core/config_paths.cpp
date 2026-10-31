@@ -1,6 +1,7 @@
 #include "core/config_paths.hpp"
 
 #include "core/logger.hpp"
+#include "core/platform.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -45,6 +46,11 @@ std::string perUserConfigDir() {
 #if defined(_WIN32)
     const char* appdata = std::getenv("APPDATA");
     return appdata ? std::string(appdata) + "\\wowee" : ".";
+#elif defined(WOWEE_IOS)
+    // An iOS app may write only inside its container's Documents, Library
+    // and tmp; ~/.wowee is beside them, at the container's root.
+    const char* home = std::getenv("HOME");
+    return home ? std::string(home) + "/Library/Application Support/wowee" : ".";
 #else
     const char* home = std::getenv("HOME");
     return home ? std::string(home) + "/.wowee" : ".";

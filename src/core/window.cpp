@@ -1,4 +1,5 @@
 #include "core/window.hpp"
+#include "core/platform.hpp"
 
 #include <algorithm>
 
@@ -10,7 +11,7 @@
 #include "rendering/vk_context.hpp"
 #include <SDL3/SDL_vulkan.h>
 #include <cstdlib>
-#ifdef __APPLE__
+#ifdef WOWEE_MACOS
 #include "core/macos_platform.hpp"
 #include <filesystem>
 #include <mach-o/dyld.h>
@@ -20,7 +21,7 @@
 namespace wowee {
 namespace core {
 
-#ifdef __APPLE__
+#ifdef WOWEE_MACOS
 namespace {
 
 std::string bundledMoltenVkManifest() {
@@ -62,13 +63,13 @@ Window::~Window() {
 bool Window::initialize() {
     LOG_INFO("Initializing window: ", config.title);
 
-#ifdef __APPLE__
+#ifdef WOWEE_MACOS
     // Before SDL_Init spins up NSApplication: holding a key should repeat it,
     // not open the accent chooser over the game.
     disablePressAndHoldAccents();
 #endif
 
-#ifdef __ANDROID__
+#ifdef WOWEE_MOBILE
     // Without this the manifest's screenOrientation does not survive: SDL calls
     // setOrientation itself when it creates the window, and with no hint and a
     // resizable window it asks for FULL_USER, which follows the phone's own
@@ -112,7 +113,7 @@ bool Window::initialize() {
     // pre-instance enumeration unless told otherwise.  Setting this env var
     // makes the loader include portability ICDs so SDL's VK_KHR_surface check
     // succeeds.
-#ifdef __APPLE__
+#ifdef WOWEE_MACOS
     setEnvVar("VK_LOADER_ENABLE_PORTABILITY_DRIVERS", "1", /*overwrite=*/false);
     // Probe for MoltenVK's ICD JSON if VK_ICD_FILENAMES isn't already set.
     // Without it the Vulkan loader can't find MoltenVK and SDL's pre-instance
@@ -157,7 +158,7 @@ bool Window::initialize() {
 #endif
     if (!vulkanLoaded) {
         LOG_ERROR("Failed to load Vulkan library: ", SDL_GetError());
-#ifdef __APPLE__
+#ifdef WOWEE_MACOS
         LOG_ERROR("On macOS, install Vulkan via Homebrew:  brew install vulkan-loader molten-vk");
         LOG_ERROR("Or source the LunarG SDK setup script before running:  source $VULKAN_SDK/setup-env.sh");
 #else
@@ -188,7 +189,7 @@ bool Window::initialize() {
     if (config.fullscreen) {
         flags |= SDL_WINDOW_FULLSCREEN;
     }
-#ifdef __ANDROID__
+#ifdef WOWEE_MOBILE
     // A phone has no windows to be one of. Fullscreen is also what makes SDL
     // put the activity in immersive mode, which is what hides the navigation
     // bar; without it the client draws into 2272x954 of a 2424x1080 panel and

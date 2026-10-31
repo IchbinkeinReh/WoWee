@@ -1,4 +1,5 @@
 #include "rendering/rt_rays.hpp"
+#include "core/platform.hpp"
 #include "rendering/rt_min_brightness.hpp"
 #include "rendering/rt_normal_blend.hpp"
 #include "game/group_defines.hpp"
@@ -2184,7 +2185,7 @@ void GameScreen::loadSettings() {
     // where ImGui has no display size yet - wrote the 0 it started with. Either
     // put a phone at native resolution for good.
     const auto applyMobileRenderScale = [this]() {
-#ifdef __ANDROID__
+#ifdef WOWEE_MOBILE
         if (settingsPanel_.upscalingChosen_) return;
         if (!ImGui::GetCurrentContext() || ImGui::GetIO().DisplaySize.x <= 0.0f) return;
         const ImGuiIO& io = ImGui::GetIO();

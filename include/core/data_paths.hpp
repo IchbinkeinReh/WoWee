@@ -19,6 +19,8 @@
  * here.
  */
 
+#include "core/platform.hpp"
+
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -45,7 +47,13 @@ inline std::filesystem::path userDataRoot() {
 #else
     const char* home = std::getenv("HOME");
     if (home == nullptr || *home == '\0') return {};
-#ifdef __APPLE__
+#if defined(WOWEE_IOS)
+    // The app's own Documents folder, which the Files app and Finder show
+    // (UIFileSharingEnabled, LSSupportsOpeningDocumentsInPlace in the
+    // Info.plist): the player copies an extraction in there. HOME is the
+    // app's container on iOS.
+    return fs::path(home) / "Documents";
+#elif defined(__APPLE__)
     return fs::path(home) / "Library" / "Application Support" / "Wowee" / "Data";
 #else
     // The XDG base directory spec, which is what a Linux or BSD desktop expects

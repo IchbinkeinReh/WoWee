@@ -664,7 +664,7 @@ bool WardenModule::parseExecutableFormat(const std::vector<uint8_t>& exeData) {
                     moduleMemory_ = VirtualAlloc(nullptr, imageSize, MEM_COMMIT | MEM_RESERVE,
                                                  PAGE_EXECUTE_READWRITE);
                     #else
-                    #ifdef HAVE_UNICORN
+                    #ifdef WOWEE_IMAGE_NOT_EXECUTED
                     const int mmapProt = PROT_READ | PROT_WRITE;
                     const int mmapFlags = MAP_PRIVATE | MAP_ANONYMOUS;
                     #elif defined(WOWEE_MAP_JIT)
@@ -733,7 +733,7 @@ bool WardenModule::parseExecutableFormat(const std::vector<uint8_t>& exeData) {
         // emulator's address space, so we only need read/write access here.
         // Native execution paths (non-Unicorn) need PROT_EXEC; on macOS this
         // requires MAP_JIT due to hardened-runtime restrictions.
-        #ifdef HAVE_UNICORN
+        #ifdef WOWEE_IMAGE_NOT_EXECUTED
             int mmapProt  = PROT_READ | PROT_WRITE;
             int mmapFlags = MAP_PRIVATE | MAP_ANONYMOUS;
         #elif defined(WOWEE_MAP_JIT)

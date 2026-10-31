@@ -18,6 +18,7 @@
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
+#include "core/platform.hpp"
 
 namespace wowee {
 namespace core {
@@ -42,6 +43,10 @@ std::filesystem::path perUserLogDir() {
 #if defined(_WIN32)
     if (const char* local = std::getenv("LOCALAPPDATA"); local && *local) {
         return std::filesystem::path(local) / "Wowee" / "logs";
+    }
+#elif defined(WOWEE_IOS)
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        return std::filesystem::path(home) / "Documents" / "logs";
     }
 #elif defined(__APPLE__)
     if (const char* home = std::getenv("HOME"); home && *home) {

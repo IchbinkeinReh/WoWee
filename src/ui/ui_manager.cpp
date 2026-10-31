@@ -1,4 +1,5 @@
 #include "ui/ui_manager.hpp"
+#include "core/platform.hpp"
 #include <cstring>
 #include "pipeline/asset_manager.hpp"
 #include "ui/imgui_theme.hpp"
@@ -65,7 +66,7 @@ namespace {
 /// too small to read and far too small to hit.
 ///
 /// 1.0 everywhere else, where the layouts are already the right size.
-#ifdef __ANDROID__
+#ifdef WOWEE_MOBILE
 /// The shortest the interface can be, in the units its layouts are written in.
 ///
 /// The client's dialogs are sized in pixels against a desktop monitor, and the
@@ -77,7 +78,7 @@ constexpr float kMinLogicalHeight = 620.0f;
 #endif
 
 float interfaceScale([[maybe_unused]] SDL_Window* window) {
-#ifdef __ANDROID__
+#ifdef WOWEE_MOBILE
     // SDL3 dropped SDL_GetDisplayDPI and answers with a content scale
     // instead, which is the same number this was deriving: dpi over
     // Android's 160 baseline is what the platform already calls 1x.

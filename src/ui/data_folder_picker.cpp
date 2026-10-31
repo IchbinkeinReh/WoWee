@@ -1,4 +1,5 @@
 #include "ui/data_folder_picker.hpp"
+#include "core/platform.hpp"
 
 #include "core/config_paths.hpp"
 #include "core/data_paths.hpp"
@@ -34,7 +35,7 @@ bool DataFolderPicker::isOpen() const {
 }
 
 void DataFolderPicker::open([[maybe_unused]] SDL_Window* window) {
-#ifdef __ANDROID__
+#ifdef WOWEE_MOBILE
     // Chosen before the client starts; see DataFolderActivity.
     return;
 #else

@@ -1,4 +1,5 @@
 #include "core/character_component.hpp"
+#include "core/platform.hpp"
 #include "ui/game_screen.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "ui/ui_texture_load.hpp"
@@ -497,7 +498,7 @@ void GameScreen::feedWorldMap(game::GameHandler& gameHandler,
 }
 
 void GameScreen::renderTouchChatButton([[maybe_unused]] game::GameHandler& gameHandler) {
-#ifdef __ANDROID__
+#ifdef WOWEE_MOBILE
     // The chat box opens on Enter or a slash, and a phone has neither key. The
     // on-screen keyboard comes up by itself once an edit box has focus (see
     // the text input handling in UIManager), so opening the box is all this
@@ -590,7 +591,7 @@ void GameScreen::renderWorldMap(game::GameHandler& gameHandler) {
     int screenH = window ? window->getHeight() : 720;
     wm->render(playerPos, screenW, screenH, playerYaw);
 
-#ifdef __ANDROID__
+#ifdef WOWEE_MOBILE
     // A close button a finger can find. On a desktop the map closes with M or
     // Escape, and hosted in FrameXML's frame it has no title bar and so no X
     // of its own - which on a phone, with no keyboard, was a map that opened

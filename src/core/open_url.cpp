@@ -1,4 +1,5 @@
 #include "core/open_url.hpp"
+#include "core/platform.hpp"
 
 #if defined(_WIN32)
 // Guarded, because the build already defines it: CMakeLists adds
@@ -10,6 +11,8 @@
 #  endif
 #  include <windows.h>
 #  include <shellapi.h>
+#elif defined(WOWEE_IOS)
+#  include <SDL3/SDL_misc.h>
 #elif defined(__APPLE__)
 #  include <spawn.h>
 #  include <sys/wait.h>
@@ -51,6 +54,8 @@ bool openExternalUrl(const std::string& url) {
     HINSTANCE rc = ShellExecuteA(nullptr, "open", url.c_str(),
                                  nullptr, nullptr, SW_SHOWNORMAL);
     return reinterpret_cast<INT_PTR>(rc) > 32;
+#elif defined(WOWEE_IOS)
+    return SDL_OpenURL(url.c_str());
 #else
 #  if defined(__APPLE__)
     const char* opener = "/usr/bin/open";

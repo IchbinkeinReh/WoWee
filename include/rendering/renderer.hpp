@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rendering/rt_memory_guard.hpp"
+#include "core/platform.hpp"
 #include "rendering/memory_report.hpp"
 #include <optional>
 #include "rendering/rt_rays.hpp"
@@ -576,7 +577,7 @@ private:
     /// setTextureMagnification's mode, handed to the shaders in viewPos.w.
     int textureMagnification_ = 1;
     /// setLowCostShading; see there.
-#ifdef __ANDROID__
+#ifdef WOWEE_MOBILE
     bool lowCostShading_ = true;
 #else
     bool lowCostShading_ = false;
