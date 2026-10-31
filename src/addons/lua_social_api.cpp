@@ -3968,11 +3968,31 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushstring(L, area.c_str());
             return 1;
         }},
-                // Asked every frame by the popup's OnUpdate to grey the accept
-                // button. The server refuses a summon it will not honour, so
-                // the client does not second-guess it.
+                // Asked every frame by the summon popup's OnUpdate, which
+                // greys the accept button on `UnitAffectingCombat("player") or
+                // (not PlayerCanTeleport())`. The client does second-guess the
+                // realm here, off one dword: 0x0060d8f0 casts the local player
+                // object, reads UNIT_FIELD_FLAGS (blob +0xd4, wire 0x3b - the
+                // same dword GetPVPDesired two rows above reads 0x1000 out of),
+                // and answers true only while none of 0x40000, 0x400000 and
+                // 0x800000 stands - the three states a character is not in
+                // control of their own movement in, which this repository
+                // already names stunned / confused / fleeing (pet_action.hpp,
+                // appearance_composer.cpp). A summon landing on a character in
+                // one of them would drop them wherever the spell put them, so
+                // the popup waits out the crowd control instead of offering the
+                // button; a flat true here offered it anyway.
                 {"PlayerCanTeleport", [](lua_State* L) -> int {
-            lua_pushboolean(L, 1); return 1;
+            auto* gh = getGameHandler(L);
+            const uint16_t flags = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+            const auto e = gh && flags != 0xFFFF
+                               ? gh->getEntityManager().getEntity(gh->getPlayerGuid())
+                               : nullptr;
+            if (!e) { lua_pushboolean(L, 0); return 1; }
+            constexpr uint32_t kOutOfControl = 0x40000u | 0x400000u | 0x800000u;
+            const bool can = (e->getField(flags) & kOutOfControl) == 0;
+            lua_pushboolean(L, can ? 1 : 0);
+            return 1;
         }},
                 // Which of three resurrect popups to raise. Both false picks
                 // RESURRECT_NO_TIMER, the plain "accept?" prompt, which is the
