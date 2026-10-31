@@ -6320,7 +6320,7 @@ namespace rendering {
 void CharacterRenderer::memoryReport(std::vector<MemoryEntry>& out) const {
     VmaAllocator alloc = vkCtx_ ? vkCtx_->getAllocator() : VK_NULL_HANDLE;
     uint64_t gpu = 0, cpu = 0, inst = 0, bones = 0, geom = 0, anim = 0, empty = 0, idle = 0;
-    size_t idleCount = 0;
+    size_t idleCount = 0, idleEvictable = 0;
     std::unordered_set<uint32_t> used;
     for (const auto& [iid, i] : instances) {
         (void)iid;
@@ -6329,6 +6329,7 @@ void CharacterRenderer::memoryReport(std::vector<MemoryEntry>& out) const {
     for (const auto& [id, m] : models) {
         if (!used.count(id)) {
             ++idleCount;
+            if (evictableModelIds_.count(id)) ++idleEvictable;
             idle += m2ModelBytes(m.data);
         }
         gpu += allocationBytes(alloc, m.vertexAlloc) + allocationBytes(alloc, m.indexAlloc);
@@ -6354,8 +6355,8 @@ void CharacterRenderer::memoryReport(std::vector<MemoryEntry>& out) const {
                   "Character models: the whole M2 kept (vertices %.0f MB, bones %.0f MB of which empty keys %.0f MB)",
                   double(geom) / 1048576.0, double(anim) / 1048576.0, double(empty) / 1048576.0);
     out.push_back({name, 0, cpu});
-    std::snprintf(name, sizeof(name), "  (of those, %zu models with no instance: %.0f MB)", idleCount,
-                  double(idle) / 1048576.0);
+    std::snprintf(name, sizeof(name), "  (of those, %zu models with no instance: %.0f MB; %zu unloaded when idle)",
+                  idleCount, double(idle) / 1048576.0, idleEvictable);
     out.push_back({name, 0, 0});
     std::snprintf(name, sizeof(name), "Character instances (%zu)", instances.size());
     out.push_back({name, 0, inst});
@@ -6363,6 +6364,60 @@ void CharacterRenderer::memoryReport(std::vector<MemoryEntry>& out) const {
     std::snprintf(name, sizeof(name), "Character textures (%zu, %zu composites)", textureCache.size(),
                   compositeCache_.size());
     out.push_back({name, static_cast<uint64_t>(textureCacheBytes_), 0});
+}
+
+}  // namespace rendering
+}  // namespace wowee
+
+namespace wowee {
+namespace rendering {
+
+void CharacterRenderer::cleanupUnusedModels(std::chrono::seconds grace) {
+    if (evictableModelIds_.empty()) return;
+    std::unordered_set<uint32_t> used;
+    used.reserve(instances.size());
+    for (const auto& [instanceId, inst] : instances) {
+        (void)instanceId;
+        used.insert(inst.modelId);
+        for (const auto& wa : inst.weaponAttachments) {
+            used.insert(wa.weaponModelId);
+            for (const auto& fx : wa.effects) used.insert(fx.effectModelId);
+        }
+    }
+    const auto now = std::chrono::steady_clock::now();
+    size_t unloaded = 0;
+    for (auto it = evictableModelIds_.begin(); it != evictableModelIds_.end();) {
+        const uint32_t id = *it;
+        auto model = models.find(id);
+        if (model == models.end()) {  // gone by another path (a map change)
+            modelUnusedSince_.erase(id);
+            it = evictableModelIds_.erase(it);
+            continue;
+        }
+        if (used.count(id)) {
+            modelUnusedSince_.erase(id);
+            ++it;
+            continue;
+        }
+        auto [since, started] = modelUnusedSince_.try_emplace(id, now);
+        if (!started && now - since->second >= grace) {
+            // Through the frame fences, as every streaming unload: the frames
+            // still in flight may draw from the buffers. No wait for the
+            // device, so nothing to see in the frame time either.
+            destroyModelGPU(model->second, /*defer=*/true);
+            models.erase(model);
+            modelUnusedSince_.erase(since);
+            reapedModelIds_.push_back(id);
+            it = evictableModelIds_.erase(it);
+            ++unloaded;
+            continue;
+        }
+        ++it;
+    }
+    if (unloaded > 0) {
+        LOG_INFO("Character models: unloaded ", unloaded, " unused for ", grace.count(), " s, ",
+                 models.size(), " remain");
+    }
 }
 
 }  // namespace rendering

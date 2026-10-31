@@ -32,6 +32,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <atomic>
+#include <chrono>
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
@@ -445,6 +446,27 @@ public:
     // cached across despawn/respawn on purpose. Buffers are destroyed via the
     // frame-fence deferral path; shared textures stay in the cache.
     void unloadModelIfUnused(uint32_t modelId);
+
+    /// A model cleanupUnusedModels may unload once no instance has drawn it
+    /// for its grace period: a creature display's, which the spawner loads
+    /// again - off the main thread - when the display is next seen. Not a
+    /// mount's (loaded on the main thread) nor anything per instance.
+    void setModelEvictable(uint32_t modelId, bool evictable) {
+        if (evictable) {
+            evictableModelIds_.insert(modelId);
+        } else {
+            evictableModelIds_.erase(modelId);
+            modelUnusedSince_.erase(modelId);
+        }
+    }
+    /// Unloads the evictable models no instance has used for `grace`. Their
+    /// ids go to drainReapedModelIds(), for the owners that cache them.
+    void cleanupUnusedModels(std::chrono::seconds grace);
+    [[nodiscard]] std::vector<uint32_t> drainReapedModelIds() {
+        std::vector<uint32_t> out;
+        out.swap(reapedModelIds_);
+        return out;
+    }
 
     /// An instance riding another one's attachment point - a helm, a
     /// shoulder, a weapon or a weapon's enchant visual - with the alpha its
@@ -1023,6 +1045,11 @@ private:
     std::unordered_map<uint32_t, M2ModelGPU> models;
     std::unordered_map<std::string, uint32_t> sharedItemModels_;
     std::unordered_set<uint32_t> sharedItemModelIds_;
+    // cleanupUnusedModels: the models it may unload, since when each has had
+    // no instance, and what it unloaded since the owners last asked.
+    std::unordered_set<uint32_t> evictableModelIds_;
+    std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> modelUnusedSince_;
+    std::vector<uint32_t> reapedModelIds_;
     std::unordered_set<uint32_t> attachedScratch_;  // refreshInteriorLights' per-frame scratch
     uint32_t lightRefreshFrame_ = 0;  ///< refreshInteriorLights' turn counter
     std::unordered_map<uint32_t, CharacterInstance> instances;

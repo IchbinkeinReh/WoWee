@@ -94,6 +94,7 @@ void EntitySpawner::update() {
     };
     if (assetPrefetch_) assetPrefetch_->pump();
     stage(0);
+    forgetUnloadedModels();
     processPlayerSpawnQueue();
     stage(1);
     processCreatureSpawnQueue();
@@ -3238,6 +3239,31 @@ void EntitySpawner::memoryReport(std::vector<rendering::MemoryEntry>& out) const
     out.push_back({name, 0, tex});
     std::snprintf(name, sizeof(name), "Spawner: weapon models kept (%zu)", attachmentModelData_.size());
     out.push_back({name, 0, models});
+}
+
+}  // namespace core
+}  // namespace wowee
+
+namespace wowee {
+namespace core {
+
+void EntitySpawner::forgetUnloadedModels() {
+    auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!cr) return;
+    const std::vector<uint32_t> reaped = cr->drainReapedModelIds();
+    if (reaped.empty()) return;
+    const std::unordered_set<uint32_t> gone(reaped.begin(), reaped.end());
+    for (auto it = displayIdModelCache_.begin(); it != displayIdModelCache_.end();) {
+        if (gone.count(it->second)) {
+            // Its skins were applied to the model that went: apply them to
+            // the next one.
+            displayIdTexturesApplied_.erase(it->first);
+            it = displayIdModelCache_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (uint32_t id : reaped) modelIdIsWolfLike_.erase(id);
 }
 
 }  // namespace core

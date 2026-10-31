@@ -48,6 +48,10 @@ class EntitySpawner {
 public:
     /// The decoded textures and parsed models it keeps between spawns, for /mem.
     void memoryReport(std::vector<rendering::MemoryEntry>& out) const;
+    /// Drops the display cache's entries for the creature models the
+    /// character renderer unloaded as unused, so the next creature of that
+    /// display loads its model again (off the main thread).
+    void forgetUnloadedModels();
 
     EntitySpawner(rendering::Renderer* renderer,
                   pipeline::AssetManager* assetManager,

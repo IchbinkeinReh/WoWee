@@ -3443,6 +3443,20 @@ void Renderer::update(float deltaTime) {
         if (m2Renderer) {
             m2Renderer->cleanupUnusedModels();
         }
+        // A creature display's model five minutes after the last creature
+        // drawn with it went: long enough that walking off and straight back
+        // finds it still loaded, and the spawner loads it again in the
+        // background if not (EntitySpawner::forgetUnloadedModels).
+        if (characterRenderer) {
+            // A test hook (with WOWEE_AUTO_LUA only): WOWEE_MODEL_UNLOAD_SECONDS
+            // shortens the wait, so a scripted run can see a model go and come back.
+            static const long graceSeconds = [] {
+                const char* lua = std::getenv("WOWEE_AUTO_LUA");
+                const char* v = std::getenv("WOWEE_MODEL_UNLOAD_SECONDS");
+                return (lua && *lua && v && *v) ? std::max(1L, std::atol(v)) : 300L;
+            }();
+            characterRenderer->cleanupUnusedModels(std::chrono::seconds(graceSeconds));
+        }
         modelCleanupTimer = 0.0f;
     }
 

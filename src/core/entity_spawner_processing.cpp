@@ -179,6 +179,7 @@ void EntitySpawner::processAsyncCreatureResults(bool unlimited) {
             displayIdPredecodedTextures_[result.displayId] = std::move(result.predecodedTextures);
         }
         displayIdModelCache_[result.displayId] = result.modelId;
+        charRenderer->setModelEvictable(result.modelId, true);
         pendingCreatureSpawnGuids_.erase(result.guid);
         creatureSpawnRetryDeadlines_.erase(result.guid);
 
@@ -1612,6 +1613,8 @@ void EntitySpawner::processPendingMount() {
     auto cacheIt = displayIdModelCache_.find(mountDisplayId);
     if (cacheIt != displayIdModelCache_.end()) {
         modelId = cacheIt->second;
+        // A mount is loaded on the main thread: kept, not unloaded when idle.
+        if (auto* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr) cr->setModelEvictable(modelId, false);
     } else {
         modelId = nextCreatureModelId_++;
 
@@ -1958,6 +1961,7 @@ bool EntitySpawner::loadRemoteMountModel(uint32_t displayId, uint32_t& modelId,
     auto cached = displayIdModelCache_.find(displayId);
     if (cached != displayIdModelCache_.end() && cr->getModelData(cached->second)) {
         modelId = cached->second;
+        cr->setModelEvictable(modelId, false);  // a mount: kept (see above)
     } else {
         auto m2Data = assetManager_->readFile(modelPath);
         if (m2Data.empty()) return false;
