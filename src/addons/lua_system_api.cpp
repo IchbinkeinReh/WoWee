@@ -8740,7 +8740,8 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, 0);
             return 1;
         }},
-                {"IsReferAFriendLinked",     lua_ReturnFalse},
+                // IsReferAFriendLinked moved to lua_unit_api.cpp: it is one bit
+                // of UNIT_DYNAMIC_FLAGS (0x40) read off the guid's own object.
                 {"IsStereoVideoAvailable",   lua_ReturnFalse},
                 {"IsVoiceChatEnabled",       lua_ReturnFalse},
                 // False always, which is what disabled the zoom-out button at

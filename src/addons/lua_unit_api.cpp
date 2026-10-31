@@ -465,6 +465,27 @@ static int lua_UnitIsTappedByAllThreatList(lua_State* L) {
     return 1;
 }
 
+// IsReferAFriendLinked(unit) - the recruit-a-friend link (0x0051d1b0). The
+// answer is 1.0 or nothing, never false, and the interface hides the
+// "summon my friend" and "grant that one a level" menu entries on it
+// (unitpopup.lua:787,791) before CanSummonFriend and CanGrantLevel grey them
+// out. The client's predicate (0x006d7590) tries three places: the guid's own
+// object when it names a player - the one a unit token can reach, and the one
+// that answers with a unit field - and then two lists no unit token names, a
+// four-slot table of records found by guid pair (0x0052bee0, stride 0xc4) and
+// the guild's member records (0x005727b0, which hands one back at +0x10), both
+// tested at the word 8 bytes into what they return and there at bit 0x100,
+// with a Battle.net record behind a logged-in test last.
+static int lua_IsReferAFriendLinked(lua_State* L) {
+    auto* unit = resolveUnit(L, luaL_optstring(L, 1, ""));
+    if (unit && dynamic_cast<game::Player*>(unit) &&
+        (unit->getDynamicFlags() & game::UNIT_DYNFLAG_REFER_A_FRIEND) != 0)
+        lua_pushnumber(L, 1.0);
+    else
+        lua_pushnil(L);
+    return 1;
+}
+
 namespace {
 
 /// A unit's standing on a mob's threat list: the status WoW reports, its raw
@@ -3424,6 +3445,10 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"UnitIsTapped",        lua_UnitIsTapped},
                 {"UnitIsTappedByPlayer", lua_UnitIsTappedByPlayer},
                 {"UnitIsTappedByAllThreatList", lua_UnitIsTappedByAllThreatList},
+                // Not a Unit* name, but it is a unit-field read, so it sits by
+                // the other readers of that same dword. It came over from
+                // lua_system_api.cpp, where it was a flat false.
+                {"IsReferAFriendLinked",  lua_IsReferAFriendLinked},
                 {"UnitIsVisible",       lua_UnitIsVisible},
                 {"UnitGroupRolesAssigned", lua_UnitGroupRolesAssigned},
                 {"UnitCanAttack",       lua_UnitCanAttack},
