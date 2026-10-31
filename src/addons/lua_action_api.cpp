@@ -3641,7 +3641,16 @@ void registerActionLuaAPI(lua_State* L) {
                 // ToggleGameMenu's first branch, which runs when UIParent is
                 // hidden - out of the way until someone hides the interface,
                 // and then on the only path that brings it back.
-                // ConsoleAddMessage is the sink for FrameXML's debug print.
+                // ConsoleAddMessage is the sink for FrameXML's debug print:
+                // ConsolePrint (uiparent.lua:3550) joins its arguments and hands
+                // the result straight over, and in this tree the only thing that
+                // calls ConsolePrint is lfgframe.lua's LFGDebug. The client runs
+                // the line through its console line routine 0x007653b0 under the
+                // fixed format "%s" at 0x009e0e50 - which is what keeps a '%' in
+                // the Lua string text rather than a conversion - and that is the
+                // routine the console's own output goes through as well. There
+                // is no console window drawn here, so there is nothing to add a
+                // line to.
                 {"SetUIVisibility",   [](lua_State* L) -> int { (void)L; return 0; }},
                 {"ConsoleAddMessage", [](lua_State* L) -> int { (void)L; return 0; }},
                 // GetCurrentBindingSet() - which set SaveBindings should write.

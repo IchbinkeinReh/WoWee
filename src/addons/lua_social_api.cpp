@@ -2133,13 +2133,21 @@ void registerSocialLuaAPI(lua_State* L) {
                 // GMReportLag(type) - the help frame's /lagro (helpframe.lua:455),
                 // and the client really does send it. 0x005acf30 casts the local
                 // player's own object (the assert-cast names Player_C.h, size 0x10),
-                // calls that object's vtable slot 0x2c to fill two stack floats, and
-                // writes CMSG_GM_REPORT_LAG (0x502) as a dword of the type one below
-                // what Lua passes, a dword read at +0xcc off the object the
-                // connection handle reaches (0x004d37e0: handle table entry, +8,
-                // +0xcc - a field of a heap object, not a TLS slot, which is what an
-                // earlier reading of that `fs:0x2c` had it as), and then the two
-                // floats as floats. The flush follows at 0x005acfe4.
+                // thiscalls that object's vtable slot 0x2c with one out-pointer, and
+                // that fills **three** floats on the stack at ebp-0xc/-0x8/-0x4. The
+                // packet it then writes is CMSG_GM_REPORT_LAG (0x502) as a dword of
+                // the type one below what Lua passes, a dword read at +0xcc off the
+                // object the connection handle reaches (0x004d37e0: handle table
+                // entry, +8, +0xcc - a field of a heap object, not a TLS slot, which
+                // is what an earlier reading of that `fs:0x2c` had it as), then those
+                // three floats: each is loaded with flds and stored with fstps before
+                // the writer (0x0047b160, four bytes at a time) takes it, so 24 bytes
+                // in all. The send call follows at 0x005acfe4.
+                //
+                // That +0xcc dword reaches this site from a `jmp 0x004d37e0` thunk at
+                // 0x006ceaf0, one of the stubs that live in the int3 runs between
+                // blocks - the decompile shows it as `thunk_FUN_004d37e0`, but a grep
+                // for the target address finds no call here.
                 //
                 // Not reproduced, and the layout is written down instead: what the
                 // two floats measure is still unnamed - Player_C's vtable is not
@@ -3933,17 +3941,37 @@ void registerSocialLuaAPI(lua_State* L) {
                 // decompile and naming the function around it through the
                 // client's method tables gives bit 1 AFK, 4 ghost, 5 resting, 9
                 // PvP-desired, 12 partial play time, 13 no play time, 14 out of
-                // bounds, 17 taxi benchmark, 18 the PvP timer, 25 XP disabled -
-                // state the client keeps for itself, not a field off the wire.
-                // No instruction carrying 0x4000 into that dword turned up, so in
-                // this build the bit is never raised and the reference answers
-                // nil.
+                // bounds, 17 taxi benchmark, 18 the PvP timer, 25 XP disabled.
+                //
+                // That dword is the PLAYER_FLAGS update field, reached the way
+                // WoWee's own headers write it - the player object's field blob at
+                // +0x1008, this dword at +8 (cast_checks.hpp:359,
+                // spell_unit_target.hpp:52) - and the bits that list names are the
+                // ones the entity watcher already takes off the wire: resting 0x20,
+                // PvP 0x200, the play-time pair 0x3000, low-level raid 0x10000,
+                // taxi benchmark 0x20000, XP off 0x2000000 (entity_controller.cpp
+                // :1768-1835), with 0x40000 the PvP timer lua_IsPVPTimerRunning
+                // answers. An earlier reading of this row had it the other way
+                // round, as state the client keeps for itself, and took "no
+                // instruction carries 0x4000 into that dword" as proof the bit is
+                // never raised; the writer is the realm, which is just as well
+                // hidden from a scan of the client. So this reads the field the way
+                // its siblings do - pushPlayerFlagBit answers 1 with the bit set
+                // and nil without it, which is the 0x3ff0000000000000 / pushnil
+                // pair the two branches push.
+                //
+                // WoWee's realm never sets 0x4000, so in play the answer is still
+                // nil: nothing here implements out of bounds at all - no test
+                // anywhere compares a position to a map's bounds, and no message
+                // names the state. The binding was the missing half on this side;
+                // the state itself is a realm feature of its own.
                 //
                 // The one live caller negates it - staticpopup.lua's death popup
-                // asks `IsFalling() and not IsOutOfBounds()` - where nil and
-                // false read the same; nil is kept as the nearer answer.
+                // asks `IsFalling() and not IsOutOfBounds()` at :1171 and disables
+                // both buttons while the player falls unless it is already out of
+                // bounds - where nil and false read the same.
                 {"IsOutOfBounds", [](lua_State* L) -> int {
-            lua_pushnil(L); return 1;
+            return pushPlayerFlagBit(L, 0x4000);
         }},
                 {"CheckTalentMasterDist", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
