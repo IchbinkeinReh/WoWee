@@ -545,8 +545,9 @@ constexpr SettingGerman kGerman[] = {
      nullptr, nullptr, nullptr},
     {"mousespeed",
      "Mausempfindlichkeit",
-     "Wie weit sich die Sicht bei einer Mausbewegung dreht. Das eigene Fenster des Spiels bot dies "
-     "zweimal an, als Empfindlichkeit und als Blicktempo, und beide schrieben diesen einen Wert.",
+     "Wie weit sich die Sicht bei einer Mausbewegung dreht. Das eigene Fenster des Spiels hatte hier "
+     "zwei Regler: einen dafür, wie schnell sich der Zeiger bewegt, den dieser Client nicht kennt, "
+     "und einen dafür, wie weit sich die Sicht dreht. Dieser Client legt beide auf diesen einen Wert.",
      nullptr, "MOUSE_SENSITIVITY", nullptr},
     {"invertmouse",
      "Maus umkehren",
