@@ -2507,31 +2507,28 @@ int lua_Tooltip_SetAction(lua_State* L) {
 ///              OnHyperlinkEnter and no OnHyperlinkClick, so its lines are
 ///              never hovered as links, and nothing in this tree writes a
 ///              |Hunit link either.
-///   achievement: a real gap, and the one hyperlink hover in this tree that
-///              answers nothing where the reference answers. The client writes
-///              these links itself: GetAchievementLink (0x005b6110) walks the
-///              achievement's criteria against the player's own criteria
-///              records and hands the result to 0x0061bff0, which writes
+///   achievement: filled below. The client writes these links itself:
+///              GetAchievementLink (0x005b6110) walks the achievement's
+///              criteria against the player's own criteria records and hands
+///              the result to 0x0061bff0, which writes
 ///              "%s|Hachievement:%d:%016I64X:%d:%d:%d:%d:%u:%u:%u:%u|h[%s]|h%s"
 ///              - "|cffffff00", the id, the earner's guid as sixteen hex
-///              digits, whether it is complete, the month and the day of the
-///              date it was earned, each written one higher than it is held,
-///              and the two-digit year, then four unsigned numbers of which
-///              the first two are the
-///              criteria-complete bits split over two dwords (the tooltip
+///              digits, whether that player has it, the month and the day it
+///              was earned on, each of that pair written one higher than it is
+///              held, the year since 2000, then four unsigned numbers holding
+///              the criteria-complete bits over sixteen bytes (the tooltip
 ///              masks them against the criteria list one bit per criterion,
 ///              0x00627220), and the achievement's title. Reading one back
 ///              needs no query of the realm - the tooltip takes the title and
-///              the description out of Achievement.dbc and fills the
-///              description's numbers from the link, names each criterion from
+///              the description out of Achievement.dbc, hands the description's
+///              substitution the link's own numbers, names each criterion from
 ///              Achievement_Criteria.dbc, and looks the earner up by guid
 ///              through the name cache 0x0067d770 for its completed and
-///              in-progress lines - the completed one prints the date off
-///              ACHIEVEMENT_TOOLTIP_COMPLETE. GetAchievementLink itself is
-///              implemented here and the interface calls it
-///              (blizzard_achievementui.lua:952, watchframe.lua:97), so the
-///              link is in chat; what is missing is the builder, and the
-///              all-zero fields this file writes into one.
+///              in-progress lines, the completed one printing the date off
+///              ACHIEVEMENT_TOOLTIP_COMPLETE. The interface calls the binding
+///              (blizzard_achievementui.lua:952, watchframe.lua:97), so these
+///              links are in chat; what used to be missing was the builder,
+///              and the all-zero fields this file wrote into a link.
 ///   glyph:     filled below.
 ///
 /// One enchant line, named by id, in the green the real client uses.
@@ -2605,6 +2602,186 @@ static bool fillGlyphLinkTooltip(lua_State* L, wowee::ui::Widget* w, game::GameH
     return true;
 }
 
+/// One of the interface's global strings, filled through Lua's own
+/// string.format.
+///
+/// The client fills them with its own formatter (0x00579590 over the GetText at
+/// 0x00819d40), which knows both the positional "%1$s" form and widths. This
+/// engine has the same pair, on the Lua side: string.format was rewritten to
+/// take "%N$" (see the bootstrap). Going through it rather than splicing here is
+/// what makes the achievement tooltip's "%3$02d.%2$d.20%4$02d" read
+/// "09.10.2009" and not "9.10.2009" - a splice that reads the "0" as the
+/// conversion character prints the specifier itself. A format and its arguments
+/// disagreeing leaves the line as the interface wrote it, which is what
+/// SetFormattedText settles for on the same grounds.
+static std::string formatGlobal(lua_State* L, const std::string& format,
+                                const std::vector<std::string>& args) {
+    if (!L) return format;
+    lua_getglobal(L, "string");
+    lua_getfield(L, -1, "format");
+    lua_remove(L, -2);
+    lua_pushlstring(L, format.data(), format.size());
+    for (const auto& a : args) lua_pushstring(L, a.c_str());
+    if (lua_pcall(L, static_cast<int>(args.size()) + 1, 1, 0) != 0) {
+        lua_pop(L, 1);
+        return format;
+    }
+    const char* s = lua_tostring(L, -1);
+    const std::string out = s ? s : "";
+    lua_pop(L, 1);
+    return out;
+}
+
+/// An achievement named by a link, filled the way the reference client fills
+/// one - its achievement branch (0x00627220) of SetHyperlink.
+///
+/// Nothing here asks the realm what it is looking at: every number the tooltip
+/// needs came in through the link, which is the point of a link (see
+/// GetAchievementLink, which writes it). The line order and the colours are the
+/// client's, read out of its own .data: the title in white (0xad2d30), a blank
+/// line, the completed or in-progress line in green (0xad2d40), another blank,
+/// the description in white with the wrap flag set - the one line of prose on
+/// the tooltip - a third blank, and then the criteria, two to a line, each grey
+/// (0xad2d54) until its bit says otherwise and then green (0xad2d58), a lone
+/// last one drawn on the left with the same colour twice over.
+///
+/// The criteria come from the four numbers the link carries: bit i of the first
+/// is criterion i, the second takes 32..63, and the walk stops at 128. Four
+/// fields of 0xffffffff is a different answer, and the client reads it as one:
+/// that is what GetAchievementLink writes when the achievement has no criteria
+/// at all, and the tooltip then lists none rather than listing none as done.
+/// Which criteria the client walks is gated on a bit of the criteria row - bit
+/// one of its eleventh column, a test 0x005b61ee uses for the same list - and
+/// that column is zero in every row of the table this client loads, so nothing
+/// is ever filtered out here either way.
+static bool fillAchievementLinkTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
+                                       const std::string& link, size_t colon) {
+    size_t at = colon + 1;
+    // The link's fields, in the order the writer pushed them. All but the guid
+    // are decimal; the guid is the sixteen hex digits "%016I64X" printed.
+    auto field = [&link, &at](bool hex) {
+        uint64_t v = 0;
+        const unsigned base = hex ? 16u : 10u;
+        for (; at < link.size(); ++at) {
+            const char c = link[at];
+            unsigned d;
+            if (c >= '0' && c <= '9') d = static_cast<unsigned>(c - '0');
+            else if (hex && c >= 'a' && c <= 'f') d = static_cast<unsigned>(c - 'a') + 10u;
+            else if (hex && c >= 'A' && c <= 'F') d = static_cast<unsigned>(c - 'A') + 10u;
+            else break;
+            if (d >= base) break;
+            v = v * base + d;
+        }
+        if (at < link.size() && link[at] == ':') ++at;
+        return v;
+    };
+    const uint32_t id       = static_cast<uint32_t>(field(false));
+    const uint64_t earnerGuid = field(true);
+    const uint32_t completed  = static_cast<uint32_t>(field(false));
+    // The month before the day, as GetAchievementInfo also hands them over and
+    // as the tooltip's own string asks for them; both are already one-based,
+    // and the year is the short one, with the interface's string putting the
+    // "20" in front of it.
+    const uint32_t month    = static_cast<uint32_t>(field(false));
+    const uint32_t day      = static_cast<uint32_t>(field(false));
+    const uint32_t year     = static_cast<uint32_t>(field(false));
+    uint32_t mask[4] = {};
+    for (auto& m : mask) m = static_cast<uint32_t>(field(false));
+
+    gh->ensureAchievementNamesLoaded();
+    const std::string& title = gh->getAchievementName(id);
+    if (title.empty()) return false;
+
+    constexpr float white[3]   = {1.0f, 1.0f, 1.0f};
+    constexpr float green[3]   = {0.0f, 1.0f, 0.0f};
+    constexpr float grey[3]    = {0.502f, 0.502f, 0.502f};
+    constexpr float met[3]     = {0.251f, 0.753f, 0.251f};
+    constexpr float gap[3]     = {0.0f, 0.824f, 1.0f};  // never read: the text is a space
+
+    auto push = [&w](std::string left, const float* lc, std::string right, const float* rc) {
+        wowee::ui::Widget::TooltipLine t;
+        t.left = std::move(left);
+        t.right = std::move(right);
+        t.lc[0] = lc[0]; t.lc[1] = lc[1]; t.lc[2] = lc[2]; t.lc[3] = 1.0f;
+        t.rc[0] = rc[0]; t.rc[1] = rc[1]; t.rc[2] = rc[2]; t.rc[3] = 1.0f;
+        w->tooltipLines.push_back(std::move(t));
+    };
+
+    w->isTooltip = true;
+    w->tooltipLines.clear();
+
+    // The earner is whoever the link names, not whoever is reading it, so the
+    // name comes out of the guid through the name cache - and an unknown one is
+    // asked for and left to the next refresh, which is what the client's own
+    // name callback does: it refills the tooltip when the answer lands, and the
+    // UpdateTooltip this binding installs is the same chance taken a different
+    // way. Until then the line says GetText("UNKNOWN"), as the client's does.
+    std::string earner;
+    if (earnerGuid != 0) {
+        // Through the entity/name lookup rather than the name-query map alone:
+        // a link the achievement panel writes names the local player, whose own
+        // guid was never name-queried, and the client's cache has it because the
+        // client asked for its own name at login.
+        earner = gh->lookupName(earnerGuid);
+        if (earner.empty()) gh->queryPlayerName(earnerGuid);
+    }
+    if (earner.empty()) earner = globalOr(L, "UNKNOWN", "Unknown");
+
+    push(title, white, "", white);
+    push(" ", gap, "", gap);
+    if (completed) {
+        // The client's own date, in its own words. Which of the pair is the day
+        // and which the month comes out of the order 0x00627220 hands them to
+        // the string in - it passes the month where the string asks for %2 and
+        // the day where it asks for %3, and this interface's deDE line puts them
+        // the other way round in the sentence, "am 09.10.2009", with the century
+        // spelled out in front of the two-digit year.
+        push(formatGlobal(L,
+                          globalOr(L, "ACHIEVEMENT_TOOLTIP_COMPLETE",
+                                   "Achievement earned by %1$s on %2$d/%3$d/%4$02d."),
+                          {earner, std::to_string(month), std::to_string(day),
+                           std::to_string(year)}),
+             green, "", green);
+    } else {
+        push(formatGlobal(L,
+                          globalOr(L, "ACHIEVEMENT_TOOLTIP_IN_PROGRESS",
+                                   "Achievement in progress for %s"),
+                          {earner}),
+             green, "", green);
+    }
+    push(" ", gap, "", gap);
+    push(gh->getAchievementDescription(id), white, "", white);
+    w->tooltipLines.back().wrap = true;
+    push(" ", gap, "", gap);
+
+    const bool carries = !(mask[0] == 0xFFFFFFFFu && mask[1] == 0xFFFFFFFFu &&
+                           mask[2] == 0xFFFFFFFFu && mask[3] == 0xFFFFFFFFu);
+    if (carries) {
+        gh->ensureAchievementCriteriaLoaded();
+        const auto& criteria = gh->getAchievementCriteria(id);
+        std::string left;
+        const float* leftColour = grey;
+        for (size_t i = 0; i < criteria.size() && i < 128; ++i) {
+            // A criterion with nothing to say is passed over rather than put in
+            // a column: the client's own test is on the record it could not
+            // find, and a row whose description the DBC leaves empty still
+            // takes a slot there and leaves its partner on the line below.
+            if (criteria[i].description.empty()) continue;
+            const bool done = (mask[i / 32] >> (i % 32)) & 1u;
+            if (left.empty()) {
+                left = criteria[i].description;
+                leftColour = done ? met : grey;
+                continue;
+            }
+            push(std::move(left), leftColour, criteria[i].description, done ? met : grey);
+            left.clear();
+            leftColour = grey;
+        }
+        if (!left.empty()) push(std::move(left), leftColour, "", leftColour);
+    }
+    return true;
+}
+
 int lua_Tooltip_SetHyperlink(lua_State* L) {
     auto* w = widgetOf(L, 1);
     auto* gh = wowee::addons::getGameHandler(L);
@@ -2662,6 +2839,8 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
         filled = fillQuestTooltip(w, gh, id);
     else if (kind == "glyph")
         filled = fillGlyphLinkTooltip(L, w, gh, link, colon);
+    else if (kind == "achievement")
+        filled = fillAchievementLinkTooltip(L, w, gh, link, colon);
 
     // Kept whole, so the refresh below rebuilds the item that was linked
     // rather than the template behind it, and set even when nothing could be

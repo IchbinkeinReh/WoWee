@@ -23,6 +23,7 @@
 #include "core/logger.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <algorithm>
@@ -6037,6 +6038,42 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushnumber(L, gh ? gh->getTotalAchievementPoints() : 0);
             return 1;
         }},
+                // GetAchievementLink(achievementID) (0x005b6110), which the
+                // achievement panel's shift-click puts in chat
+                // (blizzard_achievementui.lua:952) and the watch frame's own
+                // button writes (watchframe.lua:97).
+                //
+                // The writer is 0x0061bff0, "%s|Hachievement:%d:%016I64X:%d:%d:
+                // %d:%d:%u:%u:%u:%u|h[%s]|h%s": "|cffffff00", the id, the
+                // earner's guid as sixteen hex digits - the local player's own,
+                // since the binding reads it out of the client's Player object
+                // (the 0x10 checked cast at 0x005b619c) and nobody else's -
+                // whether that player has it, the month and the day it was
+                // earned on, the year since 2000, then four unsigned numbers,
+                // then the title and "|r". The order of that pair is not a
+                // coin flip: the parser on the other end (0x0062de9e) puts the
+                // first of them where the tooltip's string asks for the month,
+                // and the enUS wording of that string is the American
+                // "%2$d/%3$d" month-before-day.
+                //
+                // The client's own record holds the month and the day one lower
+                // than it writes them, which is why its writer can tell "not
+                // earned" from "1 January" at all; the unpacker this file reads
+                // the date through hands them over already raised, so they go
+                // in as they come. An achievement nobody has earned unpacks to
+                // 1 January 2000 either way, and the tooltip never reads a date
+                // from a link whose completed flag is clear.
+                //
+                // Those four are one bitmask over a hundred and twenty-eight
+                // criteria: bit i of the first says criterion i is done, the
+                // second takes 32..63, and so on. The binding builds it at
+                // 0x005b61ee by walking the achievement's criteria against the
+                // player's own progress records, a criterion counting as done
+                // once its counter has reached its quantity; and an achievement
+                // with no criteria at all gets 0xffffffff in every one, which is
+                // what tells the tooltip reading the link back (0x00627220) that
+                // the link carries no criteria state at all - it lists none,
+                // rather than listing them all as done.
                 {"GetAchievementLink", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
@@ -6044,8 +6081,38 @@ void registerQuestLuaAPI(lua_State* L) {
             gh->ensureAchievementNamesLoaded();
             const std::string& name = gh->getAchievementName(id);
             if (name.empty()) return luaReturnNil(L);
-            std::string link = "|cffffff00|Hachievement:" + std::to_string(id) +
-                               ":0:0:0:0:0:0:0:0:0|h[" + name + "]|h|r";
+
+            const bool earned = gh->getEarnedAchievements().count(id) != 0;
+            // Month, day, year as the comment above says they go: the unpacker
+            // hands the pair over already one-based, so nothing raises them here.
+            const game::WowDate on =
+                game::unpackWowPackedTime(gh->getAchievementDate(id));
+
+            gh->ensureAchievementCriteriaLoaded();
+            const auto& criteria = gh->getAchievementCriteria(id);
+            const auto& progress = gh->getCriteriaProgress();
+            uint32_t mask[4] = {0u, 0u, 0u, 0u};
+            if (criteria.empty()) {
+                mask[0] = mask[1] = mask[2] = mask[3] = 0xFFFFFFFFu;
+            } else {
+                for (size_t i = 0; i < criteria.size() && i < 128; ++i) {
+                    const auto it = progress.find(criteria[i].id);
+                    if (it == progress.end() || it->second < criteria[i].quantity) continue;
+                    mask[i / 32] |= 1u << (i % 32);
+                }
+            }
+
+            char guid[24];
+            std::snprintf(guid, sizeof(guid), "%016llX",
+                          static_cast<unsigned long long>(gh->getPlayerGuid()));
+            std::string link = "|cffffff00|Hachievement:" + std::to_string(id) + ":" + guid +
+                               ":" + (earned ? "1" : "0") +
+                               ":" + std::to_string(on.month) +
+                               ":" + std::to_string(on.day) +
+                               ":" + std::to_string(on.yearSince2000) +
+                               ":" + std::to_string(mask[0]) + ":" + std::to_string(mask[1]) +
+                               ":" + std::to_string(mask[2]) + ":" + std::to_string(mask[3]) +
+                               "|h[" + name + "]|h|r";
             lua_pushstring(L, link.c_str());
             return 1;
         }},
