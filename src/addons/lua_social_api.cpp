@@ -3601,7 +3601,37 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh && name && *name) gh->renamePet(name);
             return 0;
         }},
-                {"CanGrantLevel",             [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                // Recruit-a-friend: whether this player may hand a level to that
+                // one (0x0051d230, one unit token, answering 1.0 or nothing -
+                // never false). Its check (0x006de9e0) walks the reasons in
+                // order - no guid at all (8), a guid that names no player (4),
+                // not recruit-a-friend linked (1, the predicate beside
+                // IsReferAFriendLinked), a different faction: both units'
+                // UNIT_FIELD_FACTIONTEMPLATE records resolved and compared at
+                // their own +0xc (5), the target already level 60 or over
+                // (7 - the 60 is pushed into the message as a literal), the
+                // local player's UNIT_FIELD_LEVEL not above the target's (2),
+                // and a target the group code will not act on (6, 0x007293d0,
+                // which tests bits of each unit's UNIT_FIELD_FLAGS at blob
+                // +0xd4) - and the reason numbers are the
+                // very ones the realm reports in SMSG_REFER_A_FRIEND_FAILURE,
+                // which 0x005219e0 turns into the ERR_ line
+                // SocialHandler::registerOpcodes already reproduces.
+                //
+                // What is left is a byte at offset +0x1065 of the block the
+                // local player reaches through +0x1008 - the "no grantable
+                // levels left" counter (3) - and nothing fills it: one
+                // instruction in the whole binary carries that displacement, the
+                // read in the check itself, and this client has no
+                // CMSG_SET_GRANTABLE_LEVELS send of its own either. So the
+                // answer here is nothing, and nothing else, in the reference too
+                // - which is also why the entry the question gates (unitpopup's
+                // RAF_GRANT_LEVEL, greyed out at unitpopup.lua:1141) is greyed
+                // out permanently for every player that client can reach. Only
+                // the pushed value's shape was off: nil, not false. The name
+                // that decides whether that entry is in the menu at all is
+                // IsReferAFriendLinked, one level up (unitpopup.lua:791).
+                {"CanGrantLevel",             [](lua_State* L) -> int { lua_pushnil(L); return 1; }},
                 // Whether that line can be reported: it has to be one this
                 // client still remembers the sender of, and not one of the
                 // player's own.
@@ -3681,6 +3711,16 @@ void registerSocialLuaAPI(lua_State* L) {
             setGroupAssistantByName(L, false);
             return 0;
         }},
+                // The click on that greyed entry (0x00523160): one unit token,
+                // 0x006de9e0 asked again, and only a clean answer reaches the
+                // wire - CMSG_GRANT_LEVEL with the grantee's guid in the same
+                // packed guid record the accept half writes (0x00521b00), whose
+                // trailing zero belongs to that record and not to the payload.
+                // A refusal is printed on the spot (0x005219e0 with the reason
+                // and no name) and sends nothing, so with the counter above
+                // forever zero this verb says "You have not earned enough levels
+                // to grant any more." and stops. Nothing here is missing: the
+                // entry that calls it is never clickable.
                 {"GrantLevel",                [](lua_State* L) -> int { (void)L; return 0; }},
                 // Whether the player passes on every loot roll. The setter
                 // accepted and forgot, and the getter beside it answered a
