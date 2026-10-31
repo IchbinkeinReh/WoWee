@@ -18,6 +18,8 @@
 //     player has answered - the victim arrives as a guid, not a name.
 //   * The role check knows which dungeons it is for and how many are
 //     answering it.
+//   * The deserter and cooldown marks are what they are in the client: one aura
+//     looked for on that unit, by spell id, with nothing else consulted.
 //   * The proposal's per-member detail and party backfill are NOT modelled. They
 //     answer empty, and each says why where it is bound. The raid browser's search
 //     is modelled — the rows, how they pair up, how they sort, the bosses they count
@@ -117,6 +119,35 @@ bool isDungeonSide(const game::LfgDungeon& d) {
 }
 bool isRaidSide(const game::LfgDungeon& d) {
     return d.typeId == static_cast<uint32_t>(game::LfgTypeId::Raid);
+}
+
+/// UnitHasLFGDeserter and UnitHasLFGRandomCooldown, which are the same question
+/// asked of two different spells. The client looks the unit up and then asks one
+/// thing of it: does its aura list hold 0x11581 = 71041 ("Deserter") or
+/// 0x116a0 = 71328 ("Random Dungeon Cooldown") - 0x00555840 and 0x00555760,
+/// LFGInfo.cpp:0x10b4 and 0x1083. For the local player the ask goes to its own
+/// aura block (0x007282a0), and for anybody else to the array of spell ids
+/// behind 0x00513c30, at most 0x40 of them. Nothing else about the unit enters
+/// it: no level, no queue state, no server verb.
+template <uint32_t spellId>
+int lua_UnitHasLfgDebuff(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return luaReturnFalse(L);
+    std::string uid = luaL_optstring(L, 1, "player");
+    toLowerInPlace(uid);
+    const std::vector<game::AuraSlot>* auras = nullptr;
+    if (uid == "player")      auras = &gh->getPlayerAuras();
+    else if (uid == "target") auras = &gh->getTargetAuras();
+    else if (const uint64_t guid = resolveUnitGuid(gh, uid); guid != 0)
+        auras = gh->getUnitAuras(guid);
+    if (auras) {
+        for (const auto& aura : *auras) {
+            if (aura.spellId == spellId) { lua_pushboolean(L, 1); return 1; }
+        }
+    }
+    // A unit whose auras have never arrived is answered no, which is what an
+    // empty aura list means everywhere else in this file.
+    return luaReturnFalse(L);
 }
 
 /// Which dungeons the player has ticked, and which headers are folded up.
@@ -1034,11 +1065,19 @@ void registerLfgLuaAPI(lua_State* L) {
         if (auto* gh = getGameHandler(L)) gh->respondInstanceLock(lua_toboolean(L, 1) != 0);
         return 0;
     }},
-    // Whether the character is sitting out a deserter or random-dungeon
-    // cooldown. Both are auras; this client does not check for them, and
-    // answering yes would grey out a queue the server would have allowed.
-    {"UnitHasLFGDeserter",       luaReturnFalse},
-    {"UnitHasLFGRandomCooldown", luaReturnFalse},
+    // Whether a unit is sitting out a deserter or a random-dungeon cooldown.
+    //
+    // Both are one aura (lua_UnitHasLfgDebuff above). They used to answer no
+    // outright, which looked safe - "answering yes would grey out a queue the
+    // server would have allowed" - but nothing these two answer greys anything
+    // out. The only caller is lfdframe.lua:951-1031, over `party1`..`party4`:
+    // the queue frame's own list names each member and writes READY under the
+    // name in green, or DESERTER or ON COOLDOWN in red, and shows that list over
+    // the random-difficulty frame too when somebody is desertering. Whether a
+    // queue may start is the realm's to say, and it says the same whatever this
+    // answers here.
+    {"UnitHasLFGDeserter",       lua_UnitHasLfgDebuff<71041>},
+    {"UnitHasLFGRandomCooldown", lua_UnitHasLfgDebuff<71328>},
     // CanPartyLFGBackfill() and GetPartyLFGBackfillInfo() (0x005556d0) - the row
     // the queue frame puts up when the group the player just joined is itself
     // queued, offering to go on queued with it (lfdframe.lua:124-135).
