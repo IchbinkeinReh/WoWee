@@ -4131,19 +4131,45 @@ void registerQuestLuaAPI(lua_State* L) {
                 // side by side holding 0xffffffff and 0x0fffffff in .data, which
                 // is a min/max pair before anything has been seen, not a range).
                 //
-                // The route is settled, then, and what is left is arithmetic. The
-                // window's subject guid is the one the details packet names -
+                // The window's subject guid is the one the details packet names -
                 // parsed here as QuestDetailsData::npcGuid - and the client's bit
                 // test says it expects that guid to be able to name an item or a
-                // game object, which is the shape a quest opened from one has. The
-                // item case is within reach: the page material comes off the item
-                // query, which is parsed and kept. The game-object case is one
-                // word of that object's own record, and that word is not pinned
-                // yet. Nil stays until both are answerable: the caller substitutes
-                // PageTextMaterial row 1, Parchment, and that is what nearly every
-                // quest would name anyway, whereas a guess draws stone around a
-                // quest that has nothing to do with stone.
-                {"GetQuestBackgroundMaterial", [](lua_State* L) -> int { return luaReturnNil(L); }},
+                // game object, which is the shape a quest opened from one has: a
+                // bounty hunt posted on a board, a quest started by a letter. The
+                // kind test is reproduced off what is known here rather than off
+                // the field word - the guid naming one of the client's own items,
+                // or naming a game object entity - and each branch then answers
+                // from a record already kept: the item query's page material, or
+                // the two words of a game object template that the reading window
+                // already reads off the same tablet. Reproducing the client's own
+                // object arithmetic - that list-indexed word at **(obj + 0x1a4) +
+                // 0x14 - would risk the two windows naming different backings for
+                // one board, which is the disagreement the interface would show.
+                //
+                // An id outside PageTextMaterial.dbc's seven rows answers nothing,
+                // as the reference's bounds test answers nothing: the caller
+                // substitutes row 1, Parchment, and QuestFrame_GetMaterial draws
+                // the frame's own art for it.
+                {"GetQuestBackgroundMaterial", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return luaReturnNil(L);
+            const uint64_t subject = gh->getQuestDetails().npcGuid;
+            uint32_t material = 0;
+            if (const uint32_t entry = gh->getItemIdByGuid(subject); entry != 0) {
+                const auto* info = gh->getItemInfo(entry);
+                material = info ? info->pageMaterial : 0u;
+            } else if (auto entity = gh->getEntityManager().getEntity(subject);
+                       entity && entity->getType() == game::ObjectType::GAMEOBJECT) {
+                const auto* go = gh->getCachedGameObjectInfo(
+                    std::static_pointer_cast<game::GameObject>(entity)->getEntry());
+                if (go && go->type == 9) material = go->data[2];
+                else if (go && go->type == 10) material = go->data[9];
+            }
+            const std::string& name = gh->getPageTextMaterialName(material);
+            if (name.empty()) return luaReturnNil(L);
+            lua_pushstring(L, name.c_str());
+            return 1;
+        }},
                 // Whether the quest is flagged PvP, and whether the giver
                 // opened it without being asked. Neither is parsed from the
                 // quest packets here, and false is what the interface does
