@@ -85,9 +85,10 @@ bool questObjectiveSlotLine(GameHandler& gh, const GameHandler::QuestLogEntry& q
         // earlier slot, and an empty slot - id zero - matches the first empty
         // one, which is why the answer is a line with no name in it rather than
         // nothing at all.
-        size_t chosen = slot;
-        for (size_t i = 0; i < q.killObjectives.size() && i < slot; ++i) {
-            if (q.killObjectives[i].npcOrGoId != q.killObjectives[slot].npcOrGoId) continue;
+        const size_t wanted = static_cast<size_t>(slot);
+        size_t chosen = wanted;
+        for (size_t i = 0; i < q.killObjectives.size() && i < wanted; ++i) {
+            if (q.killObjectives[i].npcOrGoId != q.killObjectives[wanted].npcOrGoId) continue;
             chosen = i;
             break;
         }

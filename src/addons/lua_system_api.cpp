@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 #include "game/chat_handler.hpp"
+#include "game/inventory_handler.hpp"
 #include "game/group_defines.hpp"
 #include "game/battleground_flag.hpp"
 #include "game/minimap_tracking.hpp"
@@ -4116,7 +4117,9 @@ static int lua_GetBattlefieldVehicleInfo(lua_State* L) {
     if (index > static_cast<int>(guids.size())) return luaReturnNil(L);
     const uint64_t guid = guids[static_cast<size_t>(index) - 1];
     auto entity = gh->getEntityManager().getEntity(guid);
-    if (!entity) return luaReturnNil(L);
+    // A vehicle is a unit, and its name and health are the unit's.
+    if (!entity || !entity->isUnit()) return luaReturnNil(L);
+    const auto* unit = static_cast<const game::Unit*>(entity.get());
 
     float u = 0.0f, v = 0.0f;
     if (!svc->mapUVForWorldPos ||
@@ -4135,7 +4138,7 @@ static int lua_GetBattlefieldVehicleInfo(lua_State* L) {
 
     lua_pushnumber(L, u);                                   // 1: x across the map
     lua_pushnumber(L, v);                                   // 2: y down the map
-    lua_pushstring(L, entity->getName().c_str());           // 3: unitName
+    lua_pushstring(L, unit->getName().c_str());             // 3: unitName
     lua_pushboolean(L, occupied ? 1 : 0);                   // 4: isPossessed
     if (row && row->uiLocomotionType < game::vehicle::kUiLocomotionNames.size()) {
         lua_pushstring(L, game::vehicle::kUiLocomotionNames[row->uiLocomotionType]);
@@ -4147,7 +4150,7 @@ static int lua_GetBattlefieldVehicleInfo(lua_State* L) {
     lua_pushboolean(L, mh && mh->unitHasClientControl(guid) ? 1 : 0);  // 7: isPlayer
     // The client asks its dead-or-ghost vtable slot (+0x128) and inverts it;
     // no health is how that reads here, the same test UnitIsDeadOrGhost makes.
-    lua_pushboolean(L, entity->getHealth() != 0 ? 1 : 0);   // 8: isAlive
+    lua_pushboolean(L, unit->getHealth() != 0 ? 1 : 0);     // 8: isAlive
     return 8;
 }
 

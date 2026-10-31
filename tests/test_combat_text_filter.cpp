@@ -60,7 +60,9 @@ TEST_CASE("effects are read against the unit they landed on", "[combattext]") {
     const auto onTarget = ruleFor(T::IMMUNE, true, kPlayer, kTarget);
     REQUIRE(onTarget.cvar != nullptr);
     CHECK(std::string(onTarget.cvar) == "fctSpellMechanics");
-    CHECK(std::string(onTarget.fallback) == "1");
+    // Registered off too (0x00510000 "0"): the line is opt-in on your target
+    // as well as on anyone else.
+    CHECK(std::string(onTarget.fallback) == "0");
 
     const auto elsewhere = ruleFor(T::IMMUNE, true, kPlayer, kOther);
     REQUIRE(elsewhere.cvar != nullptr);

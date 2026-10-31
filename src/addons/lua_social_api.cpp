@@ -14,6 +14,7 @@
 #include "addons/chat_color_table.hpp"
 #include "addons/lua_taint.hpp"
 #include "game/chat_handler.hpp"
+#include "game/inventory_handler.hpp"
 #include "game/difficulty_change.hpp"
 #include "game/reputation_standing.hpp"
 #include "rendering/animation_controller.hpp"
@@ -3361,10 +3362,11 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             bool forced = false;
             const uint64_t npc = gh ? gh->getCurrentGossip().npcGuid : 0;
-            auto* entity = npc ? gh->getEntityManager().getEntity(npc) : nullptr;
+            const std::shared_ptr<game::Entity> entity =
+                npc ? gh->getEntityManager().getEntity(npc) : nullptr;
             if (entity && entity->getType() == game::ObjectType::UNIT) {
                 const auto& creatures = gh->getCreatureInfoCache();
-                const auto it = creatures.find(static_cast<game::Unit*>(entity)->getEntry());
+                const auto it = creatures.find(static_cast<game::Unit*>(entity.get())->getEntry());
                 if (it != creatures.end())
                     forced = (it->second.typeFlags & kTypeFlagForceGossip) != 0;
             }
