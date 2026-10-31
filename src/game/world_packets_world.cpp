@@ -489,7 +489,7 @@ bool GroupListParser::parse(network::Packet& packet, GroupListData& data,
     constexpr uint8_t kGroupTypeRestricted = 0x04;
     if (hasRoles && (data.groupType & kGroupTypeLfgFields)) {
         if (rem() < 5) return false;
-        packet.readUInt8();  // lfg state
+        data.lfgState = packet.readUInt8();
         data.lfgDungeonEntry = packet.readUInt32();
     }
     data.lfgRestricted = (data.groupType & kGroupTypeRestricted) != 0;
