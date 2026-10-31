@@ -965,8 +965,28 @@ void registerLfgLuaAPI(lua_State* L) {
     // answering yes would grey out a queue the server would have allowed.
     {"UnitHasLFGDeserter",       luaReturnFalse},
     {"UnitHasLFGRandomCooldown", luaReturnFalse},
-    // Filling an empty slot in a party already inside. Needs the party's own
-    // queue state, which is not tracked.
+    // CanPartyLFGBackfill() and GetPartyLFGBackfillInfo() (0x005556d0) - the row
+    // the queue frame puts up when the group the player just joined is itself
+    // queued, offering to go on queued with it (lfdframe.lua:124-135).
+    //
+    // Most of it was already being read. The roster handler 0x006d8870 takes the
+    // party's queue block inside its `groupType & 8` branch as one byte and a
+    // dword (0x006d88d1, 0x006d88e2): the dword is the packed dungeon entry this
+    // client keeps as lfgDungeonEntry - id behind 0xffffff, type in the byte
+    // above - and the byte, which this client reads and drops, is kept by the
+    // client at 0x00bd1989, where the gate tests bit 1 of it. The three answers
+    // all come off LFGDungeons.dbc through that entry's id: the row's name, its
+    // id, and its type - the same field 0x00554170 compares against 6 for a
+    // random offer, and the value the interface names typeID and never reads.
+    //
+    // What is missing is the first of the three tests, and it is not in the
+    // packet: 0x0052bd60 is handed a number the handler counts out over its four
+    // member slots by comparing each against the guids of the roster it is
+    // replacing (the block at 0x00bd1948), and the gate wants that tally in 1..3.
+    // So it is a diff across two rosters rather than a field, and answering the
+    // pair from the entry alone - which is everything else it takes - would offer
+    // to continue a queue the group is not in. PartyLFGStartBackfill is this
+    // notice's own button.
     {"CanPartyLFGBackfill",      luaReturnFalse},
     {"GetPartyLFGBackfillInfo",  [](lua_State* L) -> int { return luaReturnNil(L); }},
     {"PartyLFGStartBackfill",    luaReturnNothing},
