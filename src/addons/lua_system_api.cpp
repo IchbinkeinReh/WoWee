@@ -10173,11 +10173,13 @@ void registerSystemLuaAPI(lua_State* L) {
         }},
                 // ClearInspectPlayer() (0x005e7890) drops the client's inspect
                 // record: a guid pair at DAT_00c24220, six more fields behind
-                // it, and a call that releases the record itself. It has to,
-                // because that store is one slot wide - the inspect frame's
-                // whole state is "whatever is in it", so leaving it filled
-                // would leave the next player's window showing the last
-                // player's gear.
+                // it, and a call out to the talent code with the emptied pair -
+                // 0x005c9f70, which checks that pair as a talent record
+                // (TalentInfo.cpp line 0x4b3) and refreshes the inspected
+                // talents only when it names someone. It has to clear, because
+                // that store is one slot wide - the inspect frame's whole state
+                // is "whatever is in it", so leaving it filled would leave the
+                // next player's window showing the last player's gear.
                 //
                 // Nothing here is one slot wide. The inspected gear and the
                 // inspected achievements are both maps keyed by the player's
@@ -10189,6 +10191,13 @@ void registerSystemLuaAPI(lua_State* L) {
                 // would need a fresh inspect request for a player who is
                 // standing right there. So there is nothing to clear, and the
                 // no-op is the answer rather than a gap.
+                //
+                // Nor is there an event to raise in its place. The guid pair the
+                // reference hands its talent code is the one it has just zeroed,
+                // so that call fails its own checked cast and never reaches the
+                // panel or the interface: ClearInspectPlayer raises no script
+                // event at all, which was the other half of the gap it looked
+                // like.
                 {"ClearInspectPlayer", [](lua_State* L) -> int {
             (void)L;
             return 0;
