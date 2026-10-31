@@ -1074,6 +1074,23 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         const uint32_t completedMask = packet.readUInt32();
         const uint8_t previouslySaved = packet.readUInt8();
 
+        // 0x00513b20 branches on the countdown instead of storing it: with
+        // milliseconds left it stamps clock + duration, keeps the mask and the
+        // saved flag, and says INSTANCE_LOCK_START (0x278); with none it clears
+        // all three and says INSTANCE_LOCK_STOP (0x279). A zero-length query is
+        // the realm *withdrawing* the question, not a question with no time on
+        // it, and this announced a START either way - which re-opened the dialog
+        // the realm had just taken away, and left the prompt active for a frame
+        // until the lapse tick closed it (below, where the same STOP is said).
+        if (timerMs == 0) {
+            instanceLock_ = InstanceLockPrompt{};
+            LOG_INFO("SMSG_INSTANCE_LOCK_WARNING_QUERY: withdrawn, ",
+                     previouslySaved ? "was" : "was not", " previously saved, mask 0x",
+                     std::hex, completedMask, std::dec);
+            owner_.fireAddonEvent("INSTANCE_LOCK_STOP", {});
+            return;
+        }
+
         instanceLock_.active = true;
         instanceLock_.secondsLeft = static_cast<float>(timerMs) / 1000.0f;
         instanceLock_.previouslySaved = (previouslySaved != 0);
