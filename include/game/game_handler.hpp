@@ -3488,6 +3488,18 @@ public:
                                      uint8_t gender) const;
     /// Send CMSG_SET_TITLE to activate a title (bit >= 0) or clear it (bit = -1).
     void sendSetTitle(int32_t bit);
+    /// How many rows CharTitles.dbc has, or 0 when the table has not been read.
+    ///
+    /// This is a table bound, not a reach: what the original client's
+    /// GetNumTitles answers is this count plus one (0x005165e0 pushes
+    /// `DAT_00ad337c + 1`, and that same global is what its CharTitles row scans
+    /// run `<` against). The paperdoll title list loops 1..GetNumTitles, so on
+    /// that client a bit set above the row count is never even asked about,
+    /// however wide the known-titles mask is.
+    uint32_t charTitlesRowCount() const {
+        loadTitleNameCache();
+        return charTitlesRows_;
+    }
 
     // Area discovery callback - fires when SMSG_EXPLORATION_EXPERIENCE is received
     using AreaDiscoveryCallback = std::function<void(const std::string& areaName, uint32_t xpGained)>;
@@ -6254,6 +6266,9 @@ private:
     mutable std::unordered_map<uint32_t, TitleForms> titleNameCache_;
     mutable std::unordered_map<uint32_t, TitleForms> titleFormatById_;  // CharTitles id -> forms
     mutable bool titleNameCacheLoaded_ = false;
+    /// The row count the table itself has, kept apart from the cache: the cache
+    /// drops the rows with no name in them, the count says how many there were.
+    mutable uint32_t charTitlesRows_ = 0;
     // Combat game tables for the stat flyout: per-class base crit, and the
     // per-class-per-level Agility ratio (11 classes × 100 levels).
     mutable std::vector<float> gtMeleeCritBase_;

@@ -289,8 +289,10 @@ TEST_CASE("CurrencyCategory's flags and promoted name columns", "[updatefields][
 // the run are the farsight unit, and the currency pair is the two after it.
 TEST_CASE("The known-titles run is six dwords before the known-currency pair",
           "[updatefields][titles]") {
-    // The size the sheet sizes its loop to (GetNumTitles) and the size the
-    // addressing below divides the run into are one number.
+    // The width the addressing below divides the run into. It is not the number
+    // the sheet loops to - GetNumTitles answers the CharTitles table's row count
+    // plus one instead, which is smaller - but the run is what kKnownTitleCount
+    // counts, and a run narrower than that would leave the last group unread.
     static_assert(wowee::game::kKnownTitleCount == 192);
 
     UpdateFieldTable table;

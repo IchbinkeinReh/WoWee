@@ -1977,6 +1977,12 @@ void GameHandler::loadTitleNameCache() const {
     auto dbc = am->loadDBC("CharTitles.dbc");
     if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 5) return;
 
+    // The table's own bound, counted before anything below is skipped: this is
+    // the number the original client keeps next to its CharTitles rows
+    // (`DAT_00ad337c`, compared `<` by its row scans) and the number
+    // GetNumTitles pushes plus one.
+    charTitlesRows_ = dbc->getRecordCount();
+
     const auto* layout = pipeline::getActiveDBCLayout()
         ? pipeline::getActiveDBCLayout()->getLayout("CharTitles") : nullptr;
 

@@ -4347,9 +4347,10 @@ void registerUnitLuaAPI(lua_State* L) {
                 // asks `IsTitleKnown(i) ~= 0` and false compares unequal to
                 // zero - which is the trap that made this a zero rather than a
                 // false in the first place. The loop asking it runs
-                // 1..GetNumTitles, and GetNumTitles answers 192, which is the
-                // whole space the six dwords cover (kKnownTitleCount), so every
-                // title id the mask can name comes through here.
+                // 1..GetNumTitles, which is the CharTitles table's row count
+                // plus one and not the whole space the six dwords cover, so an
+                // id past the table is one the sheet never asks about; every id
+                // the table has a row for comes through here.
                 {"IsTitleKnown",            [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int bit = static_cast<int>(luaL_optnumber(L, 1, -1));

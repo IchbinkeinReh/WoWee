@@ -8253,21 +8253,36 @@ void registerSystemLuaAPI(lua_State* L) {
                 //
                 // GetNumTitles() - how many title ids there are to ask about,
                 // not how many are owned. paperdollframe.lua walks
-                // 1..GetNumTitles() calling IsTitleKnown on each. The client
-                // answers its CharTitles table's bound plus one (0x005165e0,
-                // DAT_00ad337c + 1), and this install's table has 142 rows, so
-                // that client asks about 1..143; this answers the three 64-bit
-                // groups of PLAYER_FIELD_KNOWN_TITLES, 192, which is every bit
-                // the mask can hold and 49 more than the table has rows for.
-                // Asking about those 49 is harmless the way the loop is written:
-                // GetTitleName is only reached behind IsTitleKnown, and the mask
-                // has no bit set for a title that does not exist. It is the one
-                // shape in which that would not be harmless - a realm setting a
-                // bit with no row behind it - and then strtrim(GetTitleName(i))
-                // raises on the nil, which is why the extra reach is recorded
-                // here rather than tuned to 143.
+                // 1..GetNumTitles() calling IsTitleKnown on each, and reaches
+                // strtrim(GetTitleName(i)) behind that test.
+                //
+                // The client answers its CharTitles table's row count plus one
+                // (0x005165e0 pushes DAT_00ad337c + 1, and that same global is
+                // the exclusive bound of that table's row scans), which is a
+                // table bound rather than the reach of the known-titles mask.
+                // This install's table has 142 rows, so that client asks about
+                // 1..143 even though the three 64-bit groups of
+                // PLAYER_FIELD_KNOWN_TITLES reach 192.
+                //
+                // Answering the mask reach instead - which is what this did -
+                // costs nothing in the common case: the mask holds no bit for a
+                // title that does not exist, so the extra 49 iterations were 49
+                // IsTitleKnown answers of no. It is not nothing in the one
+                // shape where a realm does set a bit above the row count: the
+                // reference never asks about that title, and this asked, handed
+                // back the nil no row is behind it, and strtrim raised. Asking
+                // the same number asks about that title neither place, which is
+                // also what the reference does with it: unreachable through the
+                // title list.
+                //
+                // While the table has not been read at all - no assets yet -
+                // the mask reach stays the answer, which beats a bound of one.
                 {"GetNumTitles", [](lua_State* L) -> int {
-            lua_pushnumber(L, game::kKnownTitleCount); return 1;
+            auto* gh = getGameHandler(L);
+            const uint32_t rows = gh ? gh->charTitlesRowCount() : 0u;
+            lua_pushnumber(L, rows != 0 ? static_cast<double>(rows + 1)
+                                        : static_cast<double>(game::kKnownTitleCount));
+            return 1;
         }},
                 {"GetNumCompanions", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
