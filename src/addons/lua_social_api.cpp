@@ -1789,12 +1789,31 @@ void registerSocialLuaAPI(lua_State* L) {
                 // could never run and the tab was empty whatever arrived. The
                 // note that stood here said the request is never made, which
                 // was true of the request and not of the reader.
-                // UnitIsSameServer("unit","otherUnit") (0x00612670) takes two
-                // units, compares the realm part of their guids, and on a
-                // mismatch still allows the pair on one byte of the cached
-                // player record - the cross-realm friend. One realm here, so
-                // everyone is on it and true is what that comparison answers
-                // for every unit this client can name.
+                // UnitIsSameServer("unit","otherUnit") (0x00612670) answers
+                // **nil or true and never false** - the interface reads the nil
+                // as "another server" and writes the name as "Name-Realm". The
+                // two arguments are unit tokens compared case-blindly
+                // (0x0076e780 is _strnicmp); equal tokens are true. Otherwise
+                // each token resolves to a guid (0x0060c1c0 - a guid, not a
+                // realm part of one, contra the note that stood here) and equal
+                // guids are true. Different guids go to the guid-keyed name
+                // cache (0x0067d770), and the pair is same-server only when both
+                // records exist and their strings at +0x34 compare equal
+                // case-sensitively (0x0076e760 is _strncmp, unlike the token
+                // compare above). That string is the server name, and not by
+                // inference: UnitName (0x0060e740) returns `record + 0x34` as its
+                // **second** value, which is the "Name-Realm" half the two call
+                // sites below then compare against this answer. A record whose
+                // string there is empty counts as no record, which is why one
+                // realm answers true for everyone this client can name - the
+                // player's own second return is nil outright - and a known server
+                // that does not match answers nil. Which of the two answers is
+                // asked for is decided by that same field, and here it is never
+                // set: UnitName above pushes the nil second value for every unit
+                // it can name, and the only other way the menu's `server` gets a
+                // value is a name split as "Name-Server" off a typed string
+                // (unitpopup.lua:196-202) - and that path has no `unit` at all, so
+                // the `not unit` test in front of this one answers first.
                 {"UnitIsSameServer", [](lua_State* L) -> int { lua_pushboolean(L, 1); return 1; }},
                 // Recruit-a-Friend summoning, which needs a linked account.
                 {"CanSummonFriend", luaReturnFalse},
