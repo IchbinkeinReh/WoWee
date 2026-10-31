@@ -9367,16 +9367,10 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, mapId);      // a WorldMapArea id
             lua_pushnumber(L, floorNumber);  // a DungeonMap floor
             return 2; }},
-                // What a quest item drops from, read while building the map's
-                // quest list; nil is "not on this map", which is what the list
-                // does with a quest it cannot place.
-                {"GetQuestLogItemDrop",    lua_ReturnNil},
-                // How many of those there are. Unbound, so the world map's
-                // quest tooltip called a nil global and raised - the guard
-                // beneath it reads the count and would have taken the right
-                // branch, but the call never got that far. Zero, matching the
-                // reader above, which has no item drops to describe.
-                {"GetNumQuestItemDrops",   lua_ReturnZero},
+                // GetNumQuestItemDrops and GetQuestLogItemDrop are registered
+                // with the rest of the quest log's readers (lua_quest_api.cpp):
+                // both are asked about a quest log index, and the quest's items
+                // live with its objectives rather than with the map.
                 // Two debug readers, for the zone-map overlay Blizzard ships
                 // switched off. Nothing here has a debug zone map at all.
                 {"GetDebugZoneMap",        lua_ReturnNil},

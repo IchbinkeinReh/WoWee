@@ -159,7 +159,14 @@ public:
         uint32_t sourceItemId = 0;
         /// The kill records' source items (ReqSourceId, the cache's +0x1c74):
         /// what a quest hands over for an objective, not an objective itself.
+        /// The reference does read them as inventory, though - the item-drop
+        /// pair and the leaderboard's intermediate-item line both count how many
+        /// the player carries - which is what the counts beside them are for.
         std::array<uint32_t, 4> objectiveSourceItems{};
+        /// How many of each source item is wanted (ReqSourceCount, the cache's
+        /// +0x1c84). Carried alongside rather than paired up, because the
+        /// reference's arrays are parallel in the record too.
+        std::array<uint32_t, 4> objectiveSourceCounts{};
         /// ObjectiveText1-4: the name the log gives a kill or object slot
         /// instead of its target's (GetQuestLogLeaderBoard, 0x005e1460).
         std::array<std::string, 4> objectiveTexts{};

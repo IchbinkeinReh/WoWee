@@ -1177,6 +1177,100 @@ static int lua_GetQuestLogLeaderBoard(lua_State* L) {
     return 3;
 }
 
+// GetNumQuestItemDrops(questLogIndex) → how many of the quest's items the player
+// is still short of, and GetQuestLogItemDrop(dropIndex, questLogIndex) → one of
+// them: its line, its kind and whether it is met.
+//
+// Both read the quest's *source items* - the four the kill records name, what a
+// quest hands over for an objective (WoWee's objectiveSourceItems, with the
+// counts it now also keeps in objectiveSourceCounts). The reference holds them as
+// two parallel four-dword arrays, +0x1c74 and +0x1c84, and reads them straight
+// off the inventory: the special-item finder 0x005e0da0 falls back to them when
+// the quest's own item - the dword at +0x4c, kept here as sourceItemId - is not
+// being carried; the leaderboard (0x005e1460) gives a slot of its own to each one
+// the quest is not complete for, worded QUEST_INTERMEDIATE_ITEMS_NEEDED; and
+// GetAbandonQuestItems (0x005e3d60) lists them for the "you will lose these"
+// confirm. That is a different family from the six *required* items the wire
+// carries alongside them (+0x1c44 and +0x1c5c there, itemObjectives here), which
+// are the objectives the leaderboard counts "x/y" for.
+//
+// The two halves of this pair disagree with each other, and that is worth
+// spelling out because it is what reproducing them means. 0x005e4260 counts a
+// slot only when it names an item, when that item is not the quest's own unless
+// more than one of it is wanted, and when the player is carrying none of it
+// (0x00754d00(itemId, 8), the inventory count). 0x005e60d0 → 0x005e20a0 then
+// walks the same four slots with neither test, skipping only the empty ones. So a
+// quest with three of these items, one of them carried, answers two for the count
+// and still hands out the first two slots as its lines. The interface loops to the
+// count, so tidying the walk to match would change which line gets read.
+//
+// The line is QUEST_ITEMS_NEEDED in the interface's own wording - the item's
+// name, the carried count clamped to the wanted one, and the wanted count; the
+// second answer is the client's fixed string "item" (0x009f6f44, in that block
+// beside "monster", "player" and "reputation"), and the third is whether carried
+// reached wanted. The other wording the routine holds,
+// QUEST_ITEMS_NEEDED_NOPROGRESS, is only used when the caller's context clears a
+// flag the binding always sets, so it is never the one on screen.
+
+static int lua_GetNumQuestItemDrops(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const int questIdx = static_cast<int>(luaL_optnumber(L, 1,
+        gh ? gh->getSelectedQuestLogIndex() : 0));
+    if (!gh || questIdx < 1) return luaReturnZero(L);
+    const auto* q = questAtRow(gh, questIdx);
+    if (!q) return luaReturnZero(L);
+    int count = 0;
+    for (size_t i = 0; i < q->objectiveSourceItems.size(); ++i) {
+        const uint32_t item = q->objectiveSourceItems[i];
+        if (item < 1) continue;
+        // The quest's own item with one of it wanted is the item the quest hands
+        // over, not one that has to be found; and one already carried is not
+        // missing.
+        if (item == q->sourceItemId && q->objectiveSourceCounts[i] <= 1) continue;
+        if (gh->countItemInBags(item) != 0) continue;
+        ++count;
+    }
+    lua_pushnumber(L, count);
+    return 1;
+}
+
+static int lua_GetQuestLogItemDrop(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const int dropIdx = static_cast<int>(luaL_optnumber(L, 1, 0));
+    const int questIdx = static_cast<int>(luaL_optnumber(L, 2,
+        gh ? gh->getSelectedQuestLogIndex() : 0));
+    if (!gh || dropIdx < 1 || questIdx < 1) {
+        lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+        return 3;
+    }
+    const auto* q = questAtRow(gh, questIdx);
+    if (!q) { lua_pushnil(L); lua_pushnil(L); lua_pushnil(L); return 3; }
+    int seen = 0;
+    for (size_t i = 0; i < q->objectiveSourceItems.size(); ++i) {
+        const uint32_t item = q->objectiveSourceItems[i];
+        if (item < 1) continue;             // an empty slot is not one of the drops
+        if (++seen != dropIdx) continue;
+        const uint32_t wanted = q->objectiveSourceCounts[i];
+        const uint32_t have = gh->countItemInBags(item);
+        const uint32_t shown = have > wanted ? wanted : have;
+        // A name still out on its query is the empty string the reference
+        // formats with; it is asked for again here, so the next pass of the
+        // list has the word instead.
+        std::string name;
+        const auto* info = gh->getItemInfo(item);
+        if (info && !info->name.empty()) name = info->name;
+        else gh->queryItemInfo(item, 0);
+        lua_pushstring(L, game::interfaceFormat(
+            "QUEST_ITEMS_NEEDED", "%s (%d/%d)",
+            {name, std::to_string(shown), std::to_string(wanted)}).c_str());
+        lua_pushstring(L, "item");                        // 2: type
+        lua_pushboolean(L, wanted <= have ? 1 : 0);       // 3: finished
+        return 3;
+    }
+    lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+    return 3;
+}
+
 // ExpandQuestHeader(index) / CollapseQuestHeader(index) - fold a zone away.
 //
 // The index is a display index naming a header row, and zero means every header
@@ -3685,6 +3779,8 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"SetPOIIconOverlapDistance", lua_SetPOIIconOverlapDistance},
                 {"SetPOIIconOverlapPushDistance", lua_SetPOIIconOverlapPushDistance},
                 {"GetQuestPOILeaderBoard",  lua_GetQuestPOILeaderBoard},
+                {"GetNumQuestItemDrops",    lua_GetNumQuestItemDrops},
+                {"GetQuestLogItemDrop",     lua_GetQuestLogItemDrop},
                 {"ExpandQuestHeader",       lua_ExpandQuestHeader},
                 {"CollapseQuestHeader",     lua_CollapseQuestHeader},
                 {"GetQuestLogSpecialItemInfo", lua_GetQuestLogSpecialItemInfo},
