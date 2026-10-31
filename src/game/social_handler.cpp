@@ -2388,9 +2388,39 @@ void SocialHandler::disbandArenaTeam(uint32_t teamId) {
     owner_.getSocket()->send(packet);
 }
 
+// A letter reported (0x0056faf0). Type 0 of CMSG_COMPLAIN is mail, and the
+// three values after the sender are ones the server logs and ignores: a zero,
+// the mail's own id, and another zero.
+//
+// What the reference does around that packet:
+//
+//   It refuses when the realm has no complaint system on - the byte of
+//   SMSG_FEATURE_SYSTEM_STATUS, the client's 0xbceffc, which the answer to a
+//   complaint can switch off again - and when no mailbox stands open in front of
+//   the player (that guid pair at 0x00beb030), because the inbox it re-reads
+//   below is addressed to that object.
+//
+//   It refuses a sender this session has already reported, and answers that with
+//   the interface's own line and no packet at all. The list it reads is the one
+//   every report verb writes into - the calendar's, the chat line's and this one
+//   - and it is not the realm's ignore roster beside it. Filling it is the same
+//   call's job as reporting: the sender goes in at the head before the packet is
+//   built, which is why a second report of the same letter says so rather than
+//   sending again.
+//
+//   It asks for the letters again afterwards: CMSG_GET_MAIL_LIST to the mailbox
+//   the window is open at. The letter just reported may not be among them any
+//   more, and the mail frame is still looking at it.
 void SocialHandler::reportMailSpam(uint64_t senderGuid, uint32_t mailId) {
     if (senderGuid == 0) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (!owner_.complaintsEnabled()) return;
+    if (!owner_.isMailboxOpen()) return;
+    if (owner_.reportedBeforeOrNote(senderGuid)) {
+        owner_.addSystemChatMessage(
+            interfaceString("COMPLAINT_ADDED", "Complaint Registered."));
+        return;
+    }
     network::Packet packet(wireOpcode(Opcode::CMSG_COMPLAIN));
     packet.writeUInt8(0);              // 0 = mail, 1 = chat
     packet.writeUInt64(senderGuid);
@@ -2398,6 +2428,7 @@ void SocialHandler::reportMailSpam(uint64_t senderGuid, uint32_t mailId) {
     packet.writeUInt32(mailId);
     packet.writeUInt32(0);
     owner_.getSocket()->send(packet);
+    owner_.refreshMailList();
 }
 
 void SocialHandler::leaveGroup() {

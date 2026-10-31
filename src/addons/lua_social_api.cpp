@@ -1381,6 +1381,36 @@ static bool muteRowNamed(const game::ContactEntry& c, const std::string& name) {
     return a == b;
 }
 
+/// Whether a letter can be reported as spam at all - the reference's 0x0056fa70,
+/// which CanComplainInboxItem (0x005713c0) answers with and which its own verb
+/// (0x0056faf0) asks again before it sends anything. That first asks the index
+/// against the client's own count of its letters, which is the row lookup both
+/// bindings below do; of the letter itself it asks four things:
+///
+///   Its mail type is 0 - a player's letter. The other types name an auction
+///   house, a creature or an object, and none of those can be reported.
+///
+///   Its flag dword has no 0x2 in it. This client's own parse reads `read` out
+///   of 0x1 of that same dword; 0x2 is the bit the header info answers back as
+///   `wasReturned` - that answer takes 0x2 or 0x200 - and the complaint gate
+///   tests 0x2 alone.
+///
+///   It is not an invoice: mail template 61, the same value the header info
+///   builds its isInvoice answer from.
+///
+///   It did not come from this player, and its sender is nobody on the friends
+///   list - the client walks its own hundred friend rows for that guid
+///   (0x006b3920).
+bool mailIsComplainable(game::GameHandler* gh, const game::MailMessage& mail) {
+    if (mail.messageType != 0) return false;
+    if ((mail.flags & 0x2) != 0) return false;
+    if (mail.mailTemplateId == 0x3d) return false;
+    if (mail.senderGuid == gh->getPlayerGuid()) return false;
+    for (const auto& contact : gh->getContacts())
+        if (contact.isFriend() && contact.guid == mail.senderGuid) return false;
+    return true;
+}
+
 /// The names in the client's console command table that this client can run,
 /// and which `/console` therefore reaches.
 ///
@@ -1603,17 +1633,19 @@ void registerSocialLuaAPI(lua_State* L) {
                 // invite the dialog was showing, and this client only ever
                 // holds one.
                 {"DeclineInvite",       lua_DeclineGroup},
-                // ComplainInboxItem(index) - reporting a mail as spam.
-                //
-                // Type 0 is mail, and the three values after the sender are
-                // the ones the server logs and ignores: a zero, the mail's own
-                // id, and another zero.
+                // ComplainInboxItem(index) - reporting a letter as spam. The
+                // reference asks the same question here that CanComplainInboxItem
+                // answers, before it reports anything: a row the button would
+                // never have offered is not reported here either. What happens
+                // next - which reports it refuses, whose report it remembers,
+                // and the inbox it asks for again - is at reportMailSpam.
                 {"ComplainInboxItem", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
             if (!gh) return 0;
             const auto& inbox = gh->getMailInbox();
             if (index < 0 || index >= static_cast<int>(inbox.size())) return 0;
+            if (!mailIsComplainable(gh, inbox[index])) return 0;
             gh->reportMailSpam(inbox[index].senderGuid, inbox[index].messageId);
             return 0;
         }},
@@ -2156,12 +2188,28 @@ void registerSocialLuaAPI(lua_State* L) {
                         inv->selectStationery(static_cast<uint32_t>(luaL_optnumber(L, 1, 0)));
                     return 0;
                 }},
-                // Guarded with `if ( texture )` before being pasted into a
-                // path, so nil leaves the default parchment rather than
-                // building a texture name out of nothing.
-                // Reporting a mail as spam needs a GM channel this client does
-                // not have, so no mail can be complained about.
-                {"CanComplainInboxItem", luaReturnFalse},
+                // CanComplainInboxItem(index) - whether this letter can be
+                // reported as spam, which is the whole of what puts the Report
+                // Spam button under an open letter: mailframe.lua's
+                // OpenMail_Update enables and shows OpenMailReportSpamButton on
+                // this call alone, and hides it on a false answer.
+                //
+                // Answered as the client answers it (0x005713c0): the number 1,
+                // or false - and false for an index the inbox does not have, and
+                // for no player at all, where the reference's own cast to the
+                // player comes back null and its predicate stops right there.
+                {"CanComplainInboxItem", [](lua_State* L) -> int {
+                    auto* gh = getGameHandler(L);
+                    const int index = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
+                    bool can = false;
+                    if (gh) {
+                        const auto& inbox = gh->getMailInbox();
+                        if (index >= 0 && index < static_cast<int>(inbox.size()))
+                            can = mailIsComplainable(gh, inbox[index]);
+                    }
+                    if (can) lua_pushnumber(L, 1); else lua_pushboolean(L, 0);
+                    return 1;
+                }},
                 // Turning a letter into a keepable item. Called from the mail
                 // frame's XML rather than its Lua, which is why a scan of the
                 // Lua alone never reported it.

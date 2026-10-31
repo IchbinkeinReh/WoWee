@@ -1189,6 +1189,19 @@ public:
     void arenaTeamSetLeader(uint32_t teamId, const std::string& name);
     void disbandArenaTeam(uint32_t teamId);
     void reportMailSpam(uint64_t senderGuid, uint32_t mailId);
+    /// Whether the realm runs the complaint system at all: the byte of
+    /// SMSG_FEATURE_SYSTEM_STATUS (0xbceffc), which the client's report verbs
+    /// refuse without.
+    [[nodiscard]] bool complaintsEnabled() const { return complaintSystemStatus_ != 0; }
+    /// The report list every report verb shares (read at 0x006b3700, written at
+    /// 0x006b3750): has this player been reported already this session, and if
+    /// not, that they now have been - newest first, thirty-two deep, the oldest
+    /// dropped. True when they had been, which is the point where each verb
+    /// prints COMPLAINT_ADDED and sends nothing instead. The list sits beside
+    /// the ignore roster in the client (FriendList +0xdaf0 and +0xd490) but is
+    /// not part of it: the two ignore walks consult it only under a report mode
+    /// (0x006b52e0, 0x006b5350 with DAT_00bceffc == 2) this client has never had.
+    bool reportedBeforeOrNote(uint64_t guid);
     /// Take the glyph out of a socket. Zero-based slot, as the server counts.
     void removeGlyphFromSocket(uint32_t slot);
     /// Rename a charter the player is carrying. The petition is an item, so it

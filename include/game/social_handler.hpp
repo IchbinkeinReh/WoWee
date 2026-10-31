@@ -383,8 +383,8 @@ public:
     void arenaTeamRemove(uint32_t teamId, const std::string& name);
     void arenaTeamSetLeader(uint32_t teamId, const std::string& name);
     void disbandArenaTeam(uint32_t teamId);
-    /// Report a mail as spam. Type 0 of CMSG_COMPLAIN; the three values after
-    /// the sender are a zero, the mail's own id, and another zero.
+    /// Report a letter as spam. Which reports it refuses, and what it does
+    /// around the packet, is at the definition.
     void reportMailSpam(uint64_t senderGuid, uint32_t mailId);
     void leaveGroup();
     /// A worldport to `mapId`: the party's finder dungeon is forgotten,

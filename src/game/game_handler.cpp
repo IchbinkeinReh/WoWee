@@ -4257,6 +4257,15 @@ void GameHandler::calendarRemoveOpenInvite(size_t index) {
     setCalendarActionPending(true);
 }
 
+bool GameHandler::reportedBeforeOrNote(uint64_t guid) {
+    if (std::find(complainedGuids_.begin(), complainedGuids_.end(), guid) !=
+        complainedGuids_.end())
+        return true;
+    complainedGuids_.push_front(guid);
+    if (complainedGuids_.size() > 32) complainedGuids_.pop_back();
+    return false;
+}
+
 bool GameHandler::calendarCanComplain(uint64_t eventId) const {
     if (calendarActionPending_ || complaintSystemStatus_ == 0) return false;
     if (!entityController_->getEntityManager().getEntity(playerGuid)) return false;
@@ -4278,11 +4287,7 @@ void GameHandler::calendarComplain(uint64_t eventId) {
     for (const auto& invite : calendarData_.invites)
         if (invite.eventId == eventId) ownInviteId = invite.inviteId;
     const uint64_t maker = event->creatorGuid;
-    const bool already = std::find(complainedGuids_.begin(), complainedGuids_.end(), maker) !=
-                         complainedGuids_.end();
-    if (!already) {
-        complainedGuids_.push_front(maker);
-        if (complainedGuids_.size() > 32) complainedGuids_.pop_back();
+    if (!reportedBeforeOrNote(maker)) {
         // CMSG_CALENDAR_COMPLAIN: the maker, the event, the player's invite.
         network::Packet packet(wireOpcode(Opcode::CMSG_CALENDAR_COMPLAIN));
         packet.writeUInt64(maker);
