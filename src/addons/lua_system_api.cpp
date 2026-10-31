@@ -7950,7 +7950,24 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, 0);
             return 1;
         }},
-                {"GetNumArenaOpponents",     lua_ReturnZero},
+                // How many of the five arena opponent slots are filled - which the
+                // client answers as a prefix, not a tally: 0x0054a2c0 takes its
+                // number from 0x00549630, a walk that stops at the first slot whose
+                // opponent pair (0x00be9f48) and pet pair (0x00be9ef8) are both
+                // empty, the owner pair not counted. Both consumers then use it as
+                // an index into "ArenaEnemyFrame"..N, so the frame the watch list
+                // and the enemy background anchor under is the last one the panel
+                // has rather than the highest one with a unit in it. Arena rosters
+                // are filled as opponents come into sight (arenaRoster_, which also
+                // names them arena1..5 / arenapet1..5 for resolveUnit), and this
+                // answered zero outside an arena as much as inside one - which hid
+                // the enemy background and left the watch frame under the minimap
+                // cluster in a fight where the panel was up.
+                {"GetNumArenaOpponents", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, static_cast<double>(gh ? gh->arenaRoster().numOpponents() : 0));
+            return 1;
+        }},
                 {"GetCurrentMultisampleFormat", lua_GetCurrentMultisampleFormat},
                 // These hand back a list, not a value: the caller walks it with
                 // select("#", ...) and reads it in groups. One number makes the
