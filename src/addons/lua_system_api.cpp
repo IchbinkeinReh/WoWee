@@ -10218,10 +10218,19 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, 0);
             return 1;
         }},
-                // UnitPVPRank(unit) - the old honour rank, which no WotLK
-                // server sends; GetPVPRankInfo is fed from it and handles zero.
+                // UnitPVPRank(unit) - 0x00611c40. It makes sure the argument is
+                // a string, resolves the unit it names, then pushes 0 whatever
+                // that resolved to: an unknown token and a unit standing right
+                // there answer the same. The rank ladder left the client itself
+                // rather than going unsent by the realm, which is why nothing
+                // here can look a rank up; PLAYER_PVP_RANK_CHANGED, still raised
+                // off the four bytes that used to carry one, recomputes nothing
+                // either (see entity_controller.cpp). honourframe.lua feeds the 0
+                // to GetPVPRankInfo, which answers nothing for it, and the panel
+                // reads NONE with no badge - as it does under the reference.
                 {"UnitPVPRank", [](lua_State* L) -> int {
-            (void)L;
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: UnitPVPRank(\"unit\")");
             lua_pushnumber(L, 0);
             return 1;
         }},
