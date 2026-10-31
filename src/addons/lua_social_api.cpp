@@ -3905,30 +3905,46 @@ void registerSocialLuaAPI(lua_State* L) {
                 // flat false in a single value, dead and one value short of
                 // the contract if it had ever won.
                 // GetReleaseTimeRemaining (0x00516210) answers one of three
-                // things, none of them off the wire: seconds left of a
-                // countdown, -1 for "nothing will force a release", or nought.
-                // UIParent's PLAYER_DEAD branch shows the death popup on
-                // `> 0 or == -1`, so nought is the single answer that shows no
-                // popup at all, and the popup's own OnShow swaps in
-                // DEATH_RELEASE_NOTIMER when it hears -1. -1 is the answer for
-                // a client that runs no forced release: the popup shows, with
-                // the prompt and no countdown.
+                // things, and none of them is sent as a countdown: seconds left,
+                // -1 for "nothing will force a release", or nought. UIParent's
+                // PLAYER_DEAD branch shows the death popup on `> 0 or == -1`
+                // (uiparent.lua:488), so nought is the one answer that shows no
+                // popup at all, and the popup's own OnShow takes the value as
+                // its countdown (staticpopup.lua:1130) and swaps in
+                // DEATH_RELEASE_NOTIMER when it hears -1. -1 is the answer here:
+                // the popup shows, prompt and no countdown.
                 //
                 // Which of the three the reference picks is decided at the
-                // player's death rather than at a release: FUN_006dc070 (run
-                // from the player-state change handler and from the 0x37a case
-                // of the packet dispatcher) reads one byte of the player's
-                // client-side object and branches on it - bit 0x10 set answers
-                // nought, bit 0x08 set with bit 14 of that player's status dword
-                // clear starts a 360000 ms countdown, anything else answers -1.
-                // The countdown is then a tick stamp written by FUN_00513a30 and
-                // read back as (stamp - now) / 1000.  Bit 14 of that dword is no
-                // longer unknown - it is the bit IsOutOfBounds below answers, and
-                // nothing in the binary raises it, so the branch comes down to
-                // bit 0x08 of the byte.  Which byte that is and what its bits
-                // mean is still not named anywhere: four sites read it, no write
-                // of it turned up, and it is read only for the local player
-                // (0x0071c8f0 checks the handle first).
+                // player's death rather than at a release. FUN_006dc070 - run
+                // from the local-player branch of the player-state change
+                // handler 0x006dc0f0, and from the 0x37a =
+                // SMSG_FORCED_DEATH_UPDATE case (0x006e0000.c:2494) - branches
+                // on two bits of one byte and one of PLAYER_FLAGS: the byte's
+                // 0x10 answers nought, its 0x08 with PLAYER_FLAGS 0x4000 clear
+                // stamps a 360000 ms countdown, anything else says there is no
+                // timer. The countdown is a tick stamp - FUN_00513a30 writes
+                // clock + duration and forces a stamp of nought to 1 so that the
+                // "no timer" state stays tellable apart from an expired one - and
+                // FUN_00513a60 is what clears it, zeroing the stamp and setting a
+                // byte that the binding then reads as -1000 ms, i.e. -1 seconds.
+                //
+                // Two things this note used to have wrong. The byte is named: it
+                // is PLAYER_FIELD_BYTES' first byte, the field blob's dword at
+                // +0x1064 - index 1197 of update_fields.json, the same blob whose
+                // +8 dword is PLAYER_FLAGS - and WoWee already reads that byte
+                // (cast_checks.hpp:175, spell_handler.cpp:2584). Its other
+                // readers take bit 1 (0x006d0000.c:9716) and bit 2
+                // (0x00730000.c:6651), and 0x00710000.c:11053 hands the whole
+                // byte out. And "no instruction raises PLAYER_FLAGS 0x4000" was
+                // no evidence that half of the branch is dead: the realm writes
+                // PLAYER_FLAGS, as the IsOutOfBounds row below records, so a
+                // player the realm puts out of bounds is exactly the case in
+                // which the reference answers -1 where it would otherwise have
+                // started six minutes. The answer this gives stays -1 - the
+                // realm WoWee plays against sets neither of the two bits, and it
+                // is the only one of the three that shows the death dialog at
+                // all - but the countdown half depends on realm state this client
+                // cannot see, which is also why it is not reproduced here.
                 {"GetReleaseTimeRemaining", [](lua_State* L) -> int {
             lua_pushnumber(L, -1); return 1;
         }},
