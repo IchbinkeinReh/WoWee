@@ -189,11 +189,19 @@ bool RtScene::createDescriptors() {
     li.pBindings = bindings.data();
     if (vkCreateDescriptorSetLayout(dev, &li, nullptr, &setLayout_) != VK_SUCCESS) return false;
 
+    // Counted off the layout rather than written down beside it: the pool
+    // fell two storage buffers short when the detail and terrain bindings
+    // came in, which desktop drivers let pass and Adreno refuses - the set
+    // allocation failed and the client quit at start on a phone.
+    uint32_t storageCount = 0, asCount = 0;
+    for (const auto& b : bindings) {
+        if (b.descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) storageCount += b.descriptorCount;
+        else asCount += b.descriptorCount;
+    }
     std::vector<VkDescriptorPoolSize> sizes;
-    sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                     (backend_ == Backend::Software ? 8u : 6u) * MAX_FRAMES_IN_FLIGHT});
-    if (backend_ == Backend::Hardware) {
-        sizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 2u * MAX_FRAMES_IN_FLIGHT});
+    sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, storageCount * MAX_FRAMES_IN_FLIGHT});
+    if (asCount != 0) {
+        sizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, asCount * MAX_FRAMES_IN_FLIGHT});
     }
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
