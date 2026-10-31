@@ -37,6 +37,19 @@ WHAT IT CANNOT SEE
 A sweep that runs, exits zero, and reports a number that means nothing -
 framexml_bool_vs_number's nil arm was exactly that on the day it was written.
 Only reintroducing the fault finds those.
+
+The near relation, and seven of them fell out of one grep on 2026-10-31: a
+sweep whose subject is absent says so in words and exits 0 anyway. Neither
+this tool nor sweep_guard catches those. This one runs a tool and reads only
+whether it raised, so a clean zero is a pass; sweep_guard skips a sweep whose
+input is missing rather than running it and reading its number, which is
+honest about the guard's own blindness but means the sweep is exercised by
+nobody but the person running it by hand - and there the zero is what that
+person reads, not the line above it. "framexml_run or an extracted interface
+is missing - no control was built." exited 0 while that was true. The idiom
+is dead_setting_check's: the absence has to reach the exit code as well as
+the report, because "0 problems" and "nothing looked for any" are otherwise
+one and the same output.
 """
 import re
 import subprocess

@@ -182,8 +182,10 @@ def sharedSettings():
 
 def main():
     if not FRAMEXML.is_dir():
+        # Not zero, which is what the branch below already says for the same
+        # nothing-read: an unreadable chain fails, so an absent one cannot pass.
         print("the extracted interface is missing - no slider was compared.")
-        return 0
+        return 1
 
     ranges, binds, flds = sliderRanges(), bindings(), fields()
     clmp = settings_config_parse.rangesByMember()

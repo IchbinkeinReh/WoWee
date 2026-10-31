@@ -68,8 +68,11 @@ PAIRS = (re.compile(r'default\s*=\s*"([^"]*)"\s*,\s*cvar\s*=\s*"([^"]*)"'),
 
 def main():
     if not API.is_file() or not FRAMEXML.is_dir():
+        # Not zero: "nothing compared" reads as a pass unless the exit says it
+        # did not happen. The interface named here has been a directory that
+        # moved once already, which is how this branch got believed.
         print("the extracted interface is missing - nothing compared.")
-        return 0
+        return 1
 
     blizzard = {}
     for path in sorted(FRAMEXML.glob("*.lua")):

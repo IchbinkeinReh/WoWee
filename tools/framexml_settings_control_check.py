@@ -562,8 +562,14 @@ def clientCVarPairs():
 
 def main():
     if not RUNNER.is_file() or not DATA.is_dir() or not INTERFACE.is_dir():
+        # Not zero. Building no control is not the same finding as no control
+        # breaking, and a green exit is what a caller reads: this printed
+        # "no control was built" and exited 0, which is a pass. sweep_guard
+        # skips this script outright when the runner is not built, so the exit
+        # code only reaches a run from the command line - and there, a zero is
+        # believed without looking at the line above it.
         print("framexml_run or an extracted interface is missing - no control was built.")
-        return 0
+        return 1
 
     # The probe is built from the table it checks, which means a row deleted
     # from kClientCVars is one fewer check rather than a failure. The floor is
