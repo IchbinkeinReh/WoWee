@@ -127,7 +127,13 @@ void AssetManager::setupFileCacheBudget() {
     // hold and a good way to be killed the moment it goes to the background.
     const size_t defaultMaxBudgetBytes = 384ull * 1024ull * 1024ull;
 #else
-    const size_t defaultMaxBudgetBytes = 12288ull * 1024ull * 1024ull;  // 12 GB max for file cache
+    // 1 GB on the desktop, where it was 12 GB. The files are loose on disk,
+    // so the system's own file cache already keeps the recent ones in memory
+    // - this cache is a second copy of them in the process, and it only ever
+    // filled up: three-eighths of free memory (8.5 GB on a 32 GB machine),
+    // reached over a session of zone changes. What it saves on a re-read is a
+    // copy out of the system's cache. WOWEE_FILE_CACHE_MAX_MB still raises it.
+    const size_t defaultMaxBudgetBytes = 1024ull * 1024ull * 1024ull;
 #endif
     const size_t maxBudgetBytes = (envMaxMB > 0)
         ? (envMaxMB * 1024ull * 1024ull)
