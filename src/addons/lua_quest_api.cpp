@@ -3607,9 +3607,10 @@ void registerQuestLuaAPI(lua_State* L) {
                 return 1;
             }
             // Only where the interface actually draws this line: a quest the
-            // server has called complete, or one with nothing countable in it,
-            // which the tracker treats as complete itself. Anything else keeps
-            // the empty answer the API promises.
+            // server has called complete, or one whose objective list is empty,
+            // which the tracker reads as complete itself - it asks
+            // "numObjectives == 0" of this very count. Anything else keeps the
+            // empty answer the API promises.
             const int objectives = game::questObjectiveCount(*q);
             const bool drawnAsComplete = q->complete || objectives == 0;
             if (!drawnAsComplete) { lua_pushstring(L, ""); return 1; }

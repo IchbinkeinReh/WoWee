@@ -35,6 +35,19 @@ std::string targetName(GameHandler& gh, int32_t npcOrGoId) {
 std::vector<QuestObjective> questObjectives(GameHandler& gh,
                                             const GameHandler::QuestLogEntry& q) {
     std::vector<QuestObjective> out;
+    // The list opens with the quest's own objectives paragraph - the text the
+    // quest giver wrote under "Objectives:", kept in the record as a 512-byte
+    // buffer at +0x1a24. The walk (0x005e1460) answers it as its first row, under
+    // the kind "event", and calls it finished off the quest slot's own done bit
+    // rather than off any count, which is why a done quest greys the paragraph
+    // out in the log instead of only the lines under it.
+    if (!q.objectives.empty()) {
+        QuestObjective line;
+        line.text = q.objectives;
+        line.type = "event";
+        line.finished = q.complete;
+        out.push_back(std::move(line));
+    }
     for (const auto& kill : q.killObjectives) {
         if (!isQuestObjective(kill.npcOrGoId, kill.required)) continue;
         const uint32_t key = static_cast<uint32_t>(std::abs(kill.npcOrGoId));
@@ -67,6 +80,42 @@ std::vector<QuestObjective> questObjectives(GameHandler& gh,
         line.type = "item";
         line.finished = current >= item.required;
         out.push_back(std::move(line));
+    }
+    // Then one line for each item the quest hands over for an objective - the
+    // kill records' source items (objectiveSourceItems, the cache's +0x1c74),
+    // worded QUEST_INTERMEDIATE_ITEMS_NEEDED: the name and how many are carried,
+    // "Warmark Page: (2)". Only while the quest is not met - the walk gates its
+    // four-slot loop on 0x005e0ea0(index, 1) answering 0, the client working out
+    // for itself whether every objective is satisfied, where this reads the bit
+    // the realm sets for the same thing.
+    //
+    // The count does not know these lines at all, and that is the reference's
+    // own arithmetic rather than a gap to close; see the note in
+    // game/quest_objectives.hpp. A quest with source items and a reputation
+    // objective therefore loses its last line to the interface's loop, which is
+    // what the client on the other end of the wire does too.
+    if (!q.complete) {
+        for (const uint32_t item : q.objectiveSourceItems) {
+            if (item < 1) continue;
+            // Carried rather than tracked: the reference asks the inventory
+            // (0x00754d00(itemId, 8)) for the number, and the line is finished
+            // as soon as one of them is in the bags.
+            const uint32_t held = gh.countItemInBags(item);
+            std::string name;
+            const auto* info = gh.getItemInfo(item);
+            if (info && !info->name.empty()) {
+                name = info->name;
+            } else {
+                gh.queryItemInfo(item, 0);
+                name = questUnknownName();
+            }
+            QuestObjective line;
+            line.text = interfaceFormat("QUEST_INTERMEDIATE_ITEMS_NEEDED", "%s: (%d)",
+                                        {name, std::to_string(held)});
+            line.type = "item";
+            line.finished = held > 0;
+            out.push_back(std::move(line));
+        }
     }
     // Then the players slain, or else the reputation (0x005e1460 answers
     // the one and returns).
