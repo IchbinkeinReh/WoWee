@@ -404,12 +404,16 @@ static int pushPlayerFlagPredicate(lua_State* L, uint32_t bit) {
     return 1;
 }
 
+// PLAYER_FLAGS 0x1 is the group leader, 0x2 away and 0x4 busy. These read 0x1
+// and 0x2, one bit low, so a group leader answered as away and an away player
+// as busy. The client's own away test reads 0x2 (0x0060cc30), and its chat
+// path for the busy notices reads 0x4 (0x006dc640).
 static int lua_UnitIsAFK(lua_State* L) {
-    return pushPlayerFlagPredicate(L, 0x01);
+    return pushPlayerFlagPredicate(L, 0x02);
 }
 
 static int lua_UnitIsDND(lua_State* L) {
-    return pushPlayerFlagPredicate(L, 0x02);
+    return pushPlayerFlagPredicate(L, 0x04);
 }
 
 // UnitPlayerControlled(unit) - true for players and player-controlled pets
