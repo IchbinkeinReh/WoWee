@@ -1,6 +1,7 @@
 #include "ui/framexml_takeover.hpp"
 
 #include "core/logger.hpp"
+#include "ui/cursor_art.hpp"
 
 #include <array>
 #include <atomic>
@@ -151,6 +152,27 @@ std::string gCursorItem;
 
 void frameXmlSetCursorItem(const std::string& iconPath) { gCursorItem = iconPath; }
 const std::string& frameXmlCursorItem() { return gCursorItem; }
+
+namespace {
+/// The cursor a script asked for: a kind out of the reference's own list, plus
+/// the path it named when the kind is the custom one. The reference holds the
+/// same pair, the kind at 0x00c26de8 and the last path it loaded at
+/// 0x00c25cd0. Main thread only, like the item the cursor carries.
+int gScriptCursorKind = kCursorKindNone;
+std::string gScriptCursorPath;
+} // namespace
+
+void frameXmlSetScriptCursor(int kind, std::string path) {
+    // Two setters in the reference over one number. The named one (0x00616800)
+    // refuses 0x35, which is the slot a path's picture goes into, so no name
+    // reaches past 52 and a caller choosing a kind by name cannot ask for the
+    // custom one. The path one (0x00616830) writes that slot itself, which is
+    // what `path` is for here.
+    gScriptCursorKind = kind;
+    gScriptCursorPath = kind == kCursorKindCustom ? std::move(path) : std::string();
+}
+int frameXmlScriptCursorKind() { return gScriptCursorKind; }
+const std::string& frameXmlScriptCursorPath() { return gScriptCursorPath; }
 
 namespace {
 std::function<bool(uint8_t&, uint8_t&)> gCursorHeldSlot;

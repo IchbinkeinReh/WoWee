@@ -20,6 +20,8 @@
 #include "game/spell_mods.hpp"
 #include "game/trainer_service_list.hpp"
 #include "ui/chat/chat_utils.hpp"
+#include "ui/cursor_art.hpp"
+#include "ui/framexml_takeover.hpp"
 #include "core/logger.hpp"
 
 #include <cmath>
@@ -5480,10 +5482,40 @@ void registerQuestLuaAPI(lua_State* L) {
             else lua_pushnil(L);
             return 1;
         }},
-                
-                // SetCursor(art) - the pointer's own image, which this client
-                // does not change.
-                {"SetCursor", [](lua_State* L) -> int { (void)L; return 0; }},
+                // SetCursor(art) - the pointer's own picture, from either one of
+                // the client's named cursors or a texture path: 0x005104a0
+                // strcmp's the argument against its fifty-two names, and only if
+                // none of them matches does it hand the string to the path
+                // setter (0x00616830). That test is case-sensitive, so the same
+                // name in lower case is a path by then, and a path is what the
+                // vehicle bar passes anyway (`Interface\CURSOR\vehichleCursor`,
+                // extension left off because the client's own texture opener adds
+                // it - see cursorPathForCustom).
+                //
+                // nil hands the pointer back, which is the same call
+                // ResetCursor() makes.
+                //
+                // What the reference does with a path it cannot open is raise a
+                // Lua error and leave a blank picture in the cursor's slot, which
+                // is what this interface's only such call gets:
+                // floatingchatframe.xml's SetCursor("UI-Cursor-Size"), a texture
+                // name out of a newer client's texture set, with no file for it
+                // in this one. Here the pointer is simply left alone.
+                {"SetCursor", [](lua_State* L) -> int {
+                    if (!lua_isstring(L, 1)) {
+                        ui::frameXmlSetScriptCursor(ui::kCursorKindNone);
+                        return 0;
+                    }
+                    const char* art = lua_tostring(L, 1);
+                    const int kind = ui::cursorKindForName(art);
+                    if (kind != ui::kCursorKindNone) {
+                        ui::frameXmlSetScriptCursor(kind);
+                    } else {
+                        ui::frameXmlSetScriptCursor(ui::kCursorKindCustom,
+                                                   ui::cursorPathForCustom(art));
+                    }
+                    return 0;
+                }},
                 // How long until the daily quests reset, which the quest log
                 // prints in a tooltip through SecondsToTime. A nil there is
                 // arithmetic on nothing rather than a blank line.

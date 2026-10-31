@@ -25,6 +25,9 @@
 // every element here: see frameXmlOwns, which answers false for all of them
 // when nothing was loaded.
 
+// The kinds frameXmlSetScriptCursor takes are the ones that header names.
+#include "ui/cursor_art.hpp"
+
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -331,6 +334,30 @@ bool frameXmlDrawsCombatText();
 /// the main thread.
 void frameXmlSetCursorItem(const std::string& iconPath);
 const std::string& frameXmlCursorItem();
+
+/// The cursor a script asked for, in the reference's own terms: a kind out of
+/// its named list (ui/cursor_art.hpp), or the custom kind with the texture path
+/// that argument carried. The none kind means no cursor of the script's, and
+/// the pointer is then whatever hovering the world makes it - which is what
+/// `SetCursor(nil)` and `ResetCursor()` ask for.
+///
+/// Kept rather than uploaded. The reference builds the picture into the OS
+/// cursor at the moment the kind changes (0x006162c0 memcpys a `0x1000`-byte
+/// image); this client draws the pointer's art over its own window every frame,
+/// which is what its hover cursors already do.
+///
+/// One number, kept differently. The reference stores the kind the script asked
+/// for in the same global the hovered-unit code writes, and restores it on a
+/// hover change, so a script cursor there lasts until something is hovered. That
+/// is not reproducible here: this client recomputes what the pointer is over
+/// every frame, so "last writer wins" would drop the script's cursor in the same
+/// frame it was set. The script's cursor is instead kept until the script gives
+/// it back, which is the pairing the interface is written against -
+/// uiparent.lua's CursorUpdate asks for INSPECT_CURSOR while the ctrl key is
+/// held over an item and calls ResetCursor when it is not.
+void frameXmlSetScriptCursor(int kind, std::string path = {});
+int frameXmlScriptCursorKind();
+const std::string& frameXmlScriptCursorPath();
 
 /// Where the item on FrameXML's cursor came from, in the server's flat slot
 /// space, and how to put it down again.

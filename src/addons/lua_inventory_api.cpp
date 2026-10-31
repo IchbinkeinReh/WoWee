@@ -4237,10 +4237,20 @@ static int lua_PutItemInBackpack(lua_State* L) {
     return 1;
 }
 
-/// ResetCursor() - put the pointer back to the ordinary arrow. This client
-/// does not change the cursor for interface state, so there is nothing to
-/// undo; it exists because the interface calls it on every mouse-leave.
-static int lua_ResetCursor(lua_State* L) { (void)L; return 0; }
+/// ResetCursor() - hand the pointer back from whatever cursor a script put on
+/// it (SetCursor). Nothing to do with the item the cursor is carrying: the
+/// binding is FUN_00616920, which only restores the cursor kind, and it is the
+/// very call SetCursor(nil) makes (`call 0x616920` at 0x0051086c).
+///
+/// The interface calls it constantly - after every drag (containerframe, bank,
+/// trade, loot), after every tooltip (gametooltip, merchantframe, paperdoll),
+/// and from uiparent.lua's CursorUpdate as the other half of a pair with
+/// SetCursor("INSPECT_CURSOR").
+static int lua_ResetCursor(lua_State* L) {
+    (void)L;
+    wowee::ui::frameXmlSetScriptCursor(wowee::ui::kCursorKindNone);
+    return 0;
+}
 
 /// Coin as words, for the name of the money slot: "1 Gold, 20 Silver".
 /// Empty denominations are left out rather than shown as zero.
