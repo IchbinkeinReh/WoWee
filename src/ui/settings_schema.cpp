@@ -211,6 +211,16 @@ constexpr SettingDesc kSchema[] = {
      "ahead, a floor underfoot. Costs little on any modern card, and\n"
      "applies to textures loaded from here on.",
      "Off|2x|4x|8x|16x", 4},
+    // Off by default: a composited skin goes through an encoder and comes
+    // back with BC1/BC3's loss - close, not the same. The DXT files that
+    // stay in their own blocks are exact.
+    {"texturecompression", "Texture compression", SettingKind::Bool, 0, 0, 0, "Detail", "",
+     "Keep character textures compressed on the graphics card: the\n"
+     "game's own DXT files as they are, and the skins the client\n"
+     "paints together encoded the same way - a quarter to an eighth\n"
+     "of the memory. Those skins lose a little detail. Applies to\n"
+     "textures loaded from here on: everything after the next\n"
+     "loading screen.", "", 0},
     // Its own switch rather than riding on fog thickness: the distance fog
     // is the zone's haze and costs nothing, this is a compute pass every
     // frame, and a player may want either without the other. Here, with the

@@ -764,7 +764,12 @@ void SettingsPanel::drawSchemaCategory(const char* category,
         // can see both that the setting exists and what it waits on.
         // And greyed where this device cannot run what it acts on, with the
         // reason in its tooltip.
-        const bool unavailable = !rtReason.empty() && settingNeedsRayTracing(d.key);
+        // The texture compression row likewise, on a device with no BC formats.
+        std::string unavailableReason = settingNeedsRayTracing(d.key) ? rtReason : std::string();
+        if (unavailableReason.empty() && std::string(d.key) == "texturecompression" && services_.renderer) {
+            unavailableReason = services_.renderer->textureCompressionUnavailableReason();
+        }
+        const bool unavailable = !unavailableReason.empty();
         // And greyed while the ray traced lighting is on, for what it makes
         // moot (rayTracingIgnoredReason) - back as soon as it is off.
         const char* rtIgnored = rtOn ? rayTracingIgnoredReason(d.key) : nullptr;
@@ -836,8 +841,8 @@ void SettingsPanel::drawSchemaCategory(const char* category,
         }
         if (unavailable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
             // The reason first: it is why the control will not move.
-            if (d.tooltip[0] != '\0') ImGui::SetTooltip("%s\n\n%s", rtReason.c_str(), d.tooltip);
-            else ImGui::SetTooltip("%s", rtReason.c_str());
+            if (d.tooltip[0] != '\0') ImGui::SetTooltip("%s\n\n%s", unavailableReason.c_str(), d.tooltip);
+            else ImGui::SetTooltip("%s", unavailableReason.c_str());
         } else if (rtIgnored && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
             if (d.tooltip[0] != '\0') ImGui::SetTooltip("%s\n\n%s", rtIgnored, d.tooltip);
             else ImGui::SetTooltip("%s", rtIgnored);
@@ -938,6 +943,7 @@ constexpr const char* kGraphicsPresetKeys[] = {
     "lensflare", "sharpstars", "sunshafts", "lightshafts", "fogskyblend",
     "specular",
     "environmentdetail", "groundclutterdistance", "particledensity", "weatherdetail",
+    "texturecompression",
 };
 
 /// Every graphics setting that has to reach something when it is loaded.
@@ -975,7 +981,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     // Moved off the game's own Effects panel, so this list is now what
     // applies them at startup; the cvar store used to do it.
     "groundclutterdistance", "particledensity", "weatherdetail",
-    "environmentdetail", "texturefiltering", "texturemagnification",
+    "environmentdetail", "texturefiltering", "texturemagnification", "texturecompression",
     // The sound switches off the game's own panel. The stored cvars are
     // replayed at startup and reach them that way too, but a setting whose
     // only route in is the cvar behind it is one rename away from silence.
@@ -1035,6 +1041,7 @@ void SettingsPanel::applyGraphicsPreset(GraphicsPreset preset) {
         pendingGroundClutterDistance = p.groundClutterDistance;
         pendingParticleDensity       = p.particleDensity;
         pendingWeatherDetail         = p.weatherDetail;
+        pendingTextureCompression    = p.textureCompression;
         // Each one goes to the thing it affects through the one function that
         // knows where that is, rather than through a second copy of the same
         // renderer calls written out here.
@@ -1093,6 +1100,7 @@ SettingsPanel::GraphicsPreset SettingsPanel::matchingGraphicsPreset() const {
             std::abs(pendingGroundClutterDistance - p.groundClutterDistance) <= 10 &&
             std::abs(pendingParticleDensity - p.particleDensity) <= 5 &&
             pendingWeatherDetail == p.weatherDetail &&
+            pendingTextureCompression == p.textureCompression &&
             // As with shadows: a preset that grows no grass says nothing about
             // how dense, how tall or how far it would have been.
             (!p.grass || (std::abs(pendingGrassDensity - p.grassDensity) <= 5 &&
@@ -1248,6 +1256,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "shadowresolution",  .asInt   = &SettingsPanel::pendingShadowResolution},
     {.key = "shadowcascades",    .asInt   = &SettingsPanel::pendingShadowCascades},
     {.key = "specular",          .asBool  = &SettingsPanel::pendingSpecular},
+    {.key = "texturecompression", .asBool = &SettingsPanel::pendingTextureCompression},
     {.key = "antialiasing",      .asInt   = &SettingsPanel::pendingAntiAliasing},
     {.key = "fxaa",              .asBool  = &SettingsPanel::pendingFXAA},
     {.key = "normalmapping",     .asBool  = &SettingsPanel::pendingNormalMapping},
@@ -1535,6 +1544,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
             if (auto* m2 = renderer->getM2Renderer())
                 m2->setEnvironmentDetail(static_cast<float>(pendingEnvironmentDetail) / 100.0f);
         }
+    } else if (key == "texturecompression") {
+        if (renderer) renderer->setTextureCompression(pendingTextureCompression);
     } else if (key == "texturefiltering") {
         // Levels rather than a sample count, each step doubling: 0 is off
         // and 4 is the 16x every desktop card stops at.

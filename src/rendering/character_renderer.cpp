@@ -19,6 +19,7 @@
 #include "core/frame_profiler.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/model_memory.hpp"
+#include "pipeline/bc_encode.hpp"
 #include <cstdio>
 #include "rendering/shadow_params.hpp"
 #include "rendering/normal_map.hpp"
@@ -1000,8 +1001,16 @@ VkTexture* CharacterRenderer::loadTexture(const std::string& path, uint32_t texF
             predecodedBLPCache_->erase(pit);
         }
     }
+    // With texture compression on, a DXT file goes up in its own blocks: the
+    // file's bytes and its own mip levels, nothing decoded. Not one that takes
+    // the magenta colour key, which edits the pixels; not a palette or ARGB
+    // file, which the loader decodes whatever is asked.
+    const bool keepBlocks = textureCompressionActive() && !shouldApplyMagentaKey(key);
+    if (keepBlocks && blpImage.isValid() && !blpImage.isBlockCompressed()) {
+        blpImage = pipeline::BLPImage{};  // decoded by a worker: read the blocks instead
+    }
     if (!blpImage.isValid()) {
-        blpImage = assetManager->loadTexture(key);
+        blpImage = assetManager->loadTexture(key, keepBlocks);
     }
     if (!blpImage.isValid()) {
         // Cache misses briefly to avoid repeated expensive MPQ/disk probes.
@@ -1035,16 +1044,27 @@ VkTexture* CharacterRenderer::loadTexture(const std::string& path, uint32_t texF
     }
 
     bool hasAlpha = false;
-    for (size_t i = 3; i < blpImage.data.size(); i += 4) {
-        if (blpImage.data[i] != 255) {
-            hasAlpha = true;
-            break;
+    auto tex = std::make_unique<VkTexture>();
+    if (blpImage.isBlockCompressed()) {
+        hasAlpha = blpImage.hasTransparency();
+        if (!tex->uploadBlocks(*vkCtx_, blpImage)) {
+            // The device would not take the format after all: decoded, as before.
+            blpImage = assetManager->loadTexture(key, false);
+            applyMagentaKeyIfNeeded(blpImage, key);
+        } else {
+            approxBytes = blpImage.approxUploadBytes();
         }
     }
-
-    auto tex = std::make_unique<VkTexture>();
-    tex->upload(*vkCtx_, blpImage.data.data(), blpImage.width, blpImage.height,
-                VK_FORMAT_R8G8B8A8_UNORM, true);
+    if (!blpImage.isBlockCompressed()) {
+        for (size_t i = 3; i < blpImage.data.size(); i += 4) {
+            if (blpImage.data[i] != 255) {
+                hasAlpha = true;
+                break;
+            }
+        }
+        const size_t uploadedBytes = uploadPixels(*tex, blpImage.data, blpImage.width, blpImage.height, hasAlpha);
+        if (uploadedBytes) approxBytes = uploadedBytes;
+    }
     // M2Texture flags: bit 0 repeats U, bit 1 repeats V; otherwise clamped,
     // as the client samples them. Characters always repeated.
     tex->createSampler(vkCtx_->getDevice(), VK_FILTER_LINEAR,
@@ -1576,7 +1596,7 @@ VkTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& 
 
     // Upload composite to GPU via VkTexture
     auto tex = std::make_unique<VkTexture>();
-    tex->upload(*vkCtx_, composite.data(), width, height, VK_FORMAT_R8G8B8A8_UNORM, true);
+    const size_t uploadedBytes = uploadPixels(*tex, composite, width, height, hasAlpha);
     tex->createSampler(vkCtx_->getDevice(), VK_FILTER_LINEAR, VK_FILTER_LINEAR,
                        VK_SAMPLER_ADDRESS_MODE_REPEAT);
 
@@ -1587,7 +1607,7 @@ VkTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& 
     // held by active render instances.
     TextureCacheEntry e;
     e.texture = std::move(tex);
-    e.approxBytes = approxTextureBytesWithMips(width, height);
+    e.approxBytes = uploadedBytes ? uploadedBytes : approxTextureBytesWithMips(width, height);
     e.lastUse = ++textureCacheCounter_;
     e.hasAlpha = hasAlpha;
     texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha};
@@ -1610,6 +1630,36 @@ VkTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& 
 
     core::Logger::getInstance().info("Composite texture created: ", width, "x", height, " from ", layerPaths.size(), " layers");
     return texPtr;
+}
+
+bool CharacterRenderer::textureCompressionActive() const {
+    return textureCompression_ && vkCtx_ && vkCtx_->isBlockCompressionSupported();
+}
+
+size_t CharacterRenderer::uploadPixels(VkTexture& tex, const std::vector<uint8_t>& rgba, int width,
+                                          int height, bool hasAlpha) {
+    if (textureCompressionActive()) {
+        const auto levels = pipeline::encodeBCWithMips(rgba.data(), width, height, hasAlpha);
+        std::vector<const uint8_t*> data;
+        std::vector<uint32_t> sizes;
+        size_t bytes = 0;
+        for (const auto& level : levels.mips) {
+            data.push_back(level.data());
+            sizes.push_back(static_cast<uint32_t>(level.size()));
+            bytes += level.size();
+        }
+        const VkFormat format = hasAlpha ? VK_FORMAT_BC3_UNORM_BLOCK : VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+        if (!data.empty() && tex.uploadMips(*vkCtx_, data.data(), sizes.data(), static_cast<uint32_t>(data.size()),
+                                            static_cast<uint32_t>(width), static_cast<uint32_t>(height), format)) {
+            return bytes;
+        }
+        // Fall through to RGBA8 if the device refused it.
+    }
+    if (!tex.upload(*vkCtx_, rgba.data(), static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                    VK_FORMAT_R8G8B8A8_UNORM, true)) {
+        return 0;
+    }
+    return approxTextureBytesWithMips(width, height);
 }
 
 void CharacterRenderer::clearCompositeCache() {
@@ -1903,7 +1953,7 @@ VkTexture* CharacterRenderer::compositeWithRegions(const std::string& basePath,
 
     // Upload to GPU via VkTexture
     auto tex = std::make_unique<VkTexture>();
-    tex->upload(*vkCtx_, composite.data(), width, height, VK_FORMAT_R8G8B8A8_UNORM, true);
+    const size_t uploadedBytes = uploadPixels(*tex, composite, width, height, hasAlpha);
     tex->createSampler(vkCtx_->getDevice(), VK_FILTER_LINEAR, VK_FILTER_LINEAR,
                        VK_SAMPLER_ADDRESS_MODE_REPEAT);
 
@@ -1914,7 +1964,7 @@ VkTexture* CharacterRenderer::compositeWithRegions(const std::string& basePath,
     // would invalidate pointers currently bound to active instances.
     TextureCacheEntry entry;
     entry.texture = std::move(tex);
-    entry.approxBytes = approxTextureBytesWithMips(width, height);
+    entry.approxBytes = uploadedBytes ? uploadedBytes : approxTextureBytesWithMips(width, height);
     entry.lastUse = ++textureCacheCounter_;
     entry.hasAlpha = hasAlpha;
     texturePropsByPtr_[texPtr] = {.hasAlpha = hasAlpha};

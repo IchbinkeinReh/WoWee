@@ -451,6 +451,13 @@ public:
     /// for its grace period: a creature display's, which the spawner loads
     /// again - off the main thread - when the display is next seen. Not a
     /// mount's (loaded on the main thread) nor anything per instance.
+    /// The Texture compression setting: character textures loaded from here
+    /// on go to the GPU in block formats - a file's own DXT blocks as they
+    /// are, a composited skin encoded to BC1/BC3 (pipeline/bc_encode.hpp).
+    /// Off where the device samples no BC formats.
+    void setTextureCompression(bool on) { textureCompression_ = on; }
+    [[nodiscard]] bool textureCompressionActive() const;
+
     void setModelEvictable(uint32_t modelId, bool evictable) {
         if (evictable) {
             evictableModelIds_.insert(modelId);
@@ -1048,6 +1055,13 @@ private:
     // cleanupUnusedModels: the models it may unload, since when each has had
     // no instance, and what it unloaded since the owners last asked.
     std::unordered_set<uint32_t> evictableModelIds_;
+    bool textureCompression_ = false;
+    /// A texture as RGBA8 pixels - a composite, or a file that is not DXT
+    /// (palette, ARGB) or was decoded for its colour key - uploaded with its
+    /// mip chain: encoded to BC1/BC3 with texture compression on, else as
+    /// RGBA8. Returns the bytes it took, 0 if the upload failed.
+    size_t uploadPixels(VkTexture& tex, const std::vector<uint8_t>& rgba, int width, int height,
+                           bool hasAlpha);
     std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> modelUnusedSince_;
     std::vector<uint32_t> reapedModelIds_;
     std::unordered_set<uint32_t> attachedScratch_;  // refreshInteriorLights' per-frame scratch

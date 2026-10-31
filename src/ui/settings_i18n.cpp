@@ -133,6 +133,13 @@ constexpr SettingGerman kGerman[] = {
      "Wie weit hinaus Doodads - Kisten, Büsche, Lampen, Zäune - weiter gezeichnet werden, in "
      "Prozent. Niedriger leert zuerst die mittlere Entfernung.",
      nullptr, "ENVIRONMENT_DETAIL", nullptr},
+    {"texturecompression",
+     "Texturkompression",
+     "Charaktertexturen komprimiert auf der Grafikkarte halten: die DXT-Dateien des Spiels, wie "
+     "sie sind, und die Häute, die der Client zusammensetzt, auf dieselbe Weise kodiert - ein "
+     "Viertel bis ein Achtel des Speichers. Diese Häute verlieren etwas Detail. Gilt für ab jetzt "
+     "geladene Texturen: alles nach dem nächsten Ladebildschirm.",
+     nullptr, nullptr, nullptr},
     {"texturefiltering",
      "Texturenfilter",
      "Wie scharf Texturen bleiben, wenn man sie flach ansieht - eine Straße voraus, ein Boden "

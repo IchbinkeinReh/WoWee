@@ -3593,3 +3593,18 @@ register_test_target(test_file_lru_cache)
 # M2AnimationTrack::SequenceTable: a record only where a sequence has keys.
 wowee_add_test(test_m2_sequence_table
     SOURCES test_m2_sequence_table.cpp)
+
+# ── test_bc_encode ─────────────────────────────────────────────────────
+# The block encoder behind the Texture compression setting, checked through
+# the BLP loader's own DXT decoder.
+add_executable(test_bc_encode
+    test_bc_encode.cpp
+    ${TEST_COMMON_SOURCES}
+    ${CMAKE_SOURCE_DIR}/src/pipeline/bc_encode.cpp
+    ${CMAKE_SOURCE_DIR}/src/pipeline/blp_loader.cpp)
+target_include_directories(test_bc_encode PRIVATE ${TEST_INCLUDE_DIRS})
+target_include_directories(test_bc_encode SYSTEM PRIVATE ${TEST_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(test_bc_encode PRIVATE catch2_main)
+wowee_test_link_glm(test_bc_encode)
+add_test(NAME bc_encode COMMAND test_bc_encode)
+register_test_target(test_bc_encode)

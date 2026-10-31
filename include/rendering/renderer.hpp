@@ -872,7 +872,15 @@ public:
     void setClientSpecular(bool on) { pendingClientSpecular_ = on; }
     [[nodiscard]] bool clientSpecular() const { return clientSpecular_; }
 
+    /// The Texture compression setting: character textures loaded from here
+    /// on in block formats (CharacterRenderer::setTextureCompression).
+    void setTextureCompression(bool on);
+    /// Why the setting can do nothing on this device - it samples no BC
+    /// formats, as most phones' GPUs do not - or empty where it can.
+    [[nodiscard]] std::string textureCompressionUnavailableReason(bool german = false) const;
+
 private:
+    bool textureCompression_ = false;
     void applyMsaaChange();
     bool updateSkyboxLayers();
     uint32_t loadSkyboxModel(const std::string& path);

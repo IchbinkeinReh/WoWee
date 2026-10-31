@@ -313,7 +313,11 @@ bool VkTexture::uploadBLP(VkContext& ctx, const pipeline::BLPImage& image) {
                       static_cast<uint32_t>(image.height),
                       VK_FORMAT_R8G8B8A8_UNORM, true);
     }
+    return uploadBlocks(ctx, image);
+}
 
+bool VkTexture::uploadBlocks(VkContext& ctx, const pipeline::BLPImage& image) {
+    if (!image.isValid() || !image.isBlockCompressed()) return false;
     VkFormat format = VK_FORMAT_UNDEFINED;
     switch (image.compression) {
         case pipeline::BLPCompression::DXT1: format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK; break;

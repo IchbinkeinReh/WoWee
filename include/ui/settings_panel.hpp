@@ -149,6 +149,7 @@ public:
     /// The client's 'specular' option, off by default as its cvar is
     /// (0x0078e1a0). Takes effect at the next start. See Renderer::setClientSpecular.
     bool pendingSpecular = false;
+    bool pendingTextureCompression = false;
     int pendingBrightness = 50; // 0-100, maps to 0.0-2.0 (50 = 1.0 default)
 
     // ---- Pending audio settings ----

@@ -51,6 +51,12 @@ public:
     /// block format, so a caller can fall back to loading it decoded.
     bool uploadBLP(VkContext& ctx, const pipeline::BLPImage& image);
 
+    /// The block half of uploadBLP alone: a kept-compressed BLP's levels as
+    /// BC1/BC2/BC3, and nothing taken from its pixels (no average colour,
+    /// mask or ray traced detail). False for an image that is not block
+    /// compressed or a format the device cannot sample.
+    bool uploadBlocks(VkContext& ctx, const pipeline::BLPImage& image);
+
     /// Mean colour of the visible texels and the fraction that are visible,
     /// taken by uploadBLP (BLPImage::averageColor). White and fully covered
     /// for a texture that came in any other way.

@@ -2139,6 +2139,9 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
         std::string reason;
         if (!rtReason.empty() && settingNeedsRayTracing(key)) {
             reason = rtReason;
+        } else if (key == "texturecompression" && services_.renderer &&
+                   !services_.renderer->textureCompressionUnavailableReason(german).empty()) {
+            reason = services_.renderer->textureCompressionUnavailableReason(german);
         } else if (const char* moot = rtOn ? rayTracingIgnoredText(key, german) : nullptr) {
             reason = moot;
         } else if (!settingEnabled(d, read)) {

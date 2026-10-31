@@ -5398,6 +5398,7 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         if (!characterRenderer->initialize(vkCtx, perFrameSetLayout, assetManager))
             LOG_ERROR("CharacterRenderer initialization failed");
         characterRenderer->setRtScene(rtScene_.get());
+        characterRenderer->setTextureCompression(textureCompression_);
         if (shadowRenderPass != VK_NULL_HANDLE) {
             if (!characterRenderer->initializeShadow(shadowRenderPass))
                 LOG_WARNING("Character shadow pipeline initialization failed");
@@ -6397,6 +6398,17 @@ void Renderer::recordShadowPass(const ShadowPlan& plan, bool onWorker) {
 
 VkImageView Renderer::getNeutralRtLightingView() const {
     return rtLighting_ ? rtLighting_->neutralView() : VK_NULL_HANDLE;
+}
+
+void Renderer::setTextureCompression(bool on) {
+    textureCompression_ = on;
+    if (characterRenderer) characterRenderer->setTextureCompression(on);
+}
+
+std::string Renderer::textureCompressionUnavailableReason(bool german) const {
+    if (!vkCtx || vkCtx->isBlockCompressionSupported()) return {};
+    return german ? "Dieses Gerät kann keine BC-Texturen lesen."
+                  : "This device cannot sample BC textures.";
 }
 
 std::string Renderer::rtUnavailableReason(bool german) const {
