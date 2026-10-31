@@ -567,6 +567,37 @@ for (const auto& [guid, entity] : entityController_->getEntityManager().getEntit
 }
 }
 
+// 0x005e64d0: watch a quest, optionally only until `durationSeconds` from now.
+// A stamp of 0 means no expiry, which is also how the client spells a
+// permanent watch -- it keeps the column and skips it in the sweep with `0 <`.
+void GameHandler::addQuestWatch(uint32_t questId, int32_t durationSeconds) {
+    const auto now = static_cast<int32_t>(std::time(nullptr));
+    if (isQuestTracked(questId)) {
+        // Re-adding a watch never changes the tracker's membership, so it
+        // announces nothing; and a watch with no expiry ignores the duration
+        // entirely (the client returns as soon as it sees the 0 stamp).
+        const auto it = questWatchExpiry_.find(questId);
+        if (it != questWatchExpiry_.end())
+            it->second = durationSeconds ? now + durationSeconds : 0;
+        return;
+    }
+    if (!setQuestTracked(questId, true)) return;
+    if (durationSeconds) questWatchExpiry_[questId] = now + durationSeconds;
+}
+
+// 0x005dfef0: drop every watch whose stamp has been reached. The client fires
+// its QUEST_LOG_UPDATE inside the loop, so two watches expiring in one sweep
+// redraw the tracker twice; going through setQuestTracked gets both halves.
+size_t GameHandler::expireQuestWatches() {
+    if (questWatchExpiry_.empty()) return 0;
+    const auto now = static_cast<int32_t>(std::time(nullptr));
+    std::vector<uint32_t> expired;
+    for (const auto& [questId, expiry] : questWatchExpiry_)
+        if (expiry > 0 && expiry <= now) expired.push_back(questId);
+    for (uint32_t questId : expired) setQuestTracked(questId, false);
+    return expired.size();
+}
+
 void GameHandler::updateTimers(float deltaTime) {
     if (spellHandler_) spellHandler_->updateTimers(deltaTime);
     // Misses whose missile has landed (0x00700e20).
@@ -607,6 +638,16 @@ void GameHandler::updateTimers(float deltaTime) {
                 ++it;
             }
         }
+    }
+
+    // Expire the timed quest watches (0x005dfef0, driven by the client's own
+    // periodic player update). The stamps are unix seconds, so the sweep runs
+    // once a second rather than once a frame; a watch added with
+    // MAX_QUEST_WATCH_TIME comes off five minutes later either way.
+    questWatchSweepTimer_ += deltaTime;
+    if (questWatchSweepTimer_ >= 1.0f) {
+        questWatchSweepTimer_ = 0.0f;
+        expireQuestWatches();
     }
 
     // Announce the corpse-proximity crossing. FrameXML answers CORPSE_IN_RANGE
@@ -1385,6 +1426,9 @@ void GameHandler::loadCharacterConfig() {
     // These selections are per-character. Clear the previous character's
     // values even when the new character has no saved config yet.
     trackedQuestIds_.clear();
+    // The watch stamps are wall-clock and are deliberately not saved (see
+    // questWatchExpiry_), so a new character starts with none at all.
+    questWatchExpiry_.clear();
 
     std::string path = getCharacterConfigDir() + "/" + ch->name + ".cfg";
     std::ifstream in(path);

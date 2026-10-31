@@ -802,13 +802,20 @@ static int lua_GetQuestIndexForWatch(lua_State* L) {
     return 1;
 }
 
-// AddQuestWatch(questLogIndex) - add a quest to the watch list
+// AddQuestWatch(questLogIndex, durationSeconds) - add a quest to the watch
+// list. The second argument is optional and only QuestLogFrame passes one
+// (MAX_QUEST_WATCH_TIME, 300, on the AUTO_QUEST_PROGRESS path): 0x005e67c0
+// reads it when there is a number there and hands 0 otherwise to 0x005e64d0,
+// which watches the quest until that many seconds from now, or for as long as
+// it stays in the log when the call left it out.
 static int lua_AddQuestWatch(lua_State* L) {
     auto* gh = getGameHandler(L);
     int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) return 0;
+    int duration = 0;
+    if (lua_isnumber(L, 2)) duration = static_cast<int>(lua_tonumber(L, 2));
     if (const auto* q = questAtRow(gh, index)) {
-        gh->setQuestTracked(q->questId, true);
+        gh->addQuestWatch(q->questId, duration);
     }
     return 0;
 }

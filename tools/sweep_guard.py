@@ -761,8 +761,13 @@ CHECKS = [
     # stopped being no-ops, and both ignore the same trailing exactMatch flag
     # PromoteToLeader beside them does. They match exactly, which is the
     # behaviour that flag asks for and the only value the unit popup passes.
+    # Forty-eight: AddQuestWatch takes its duration now. 0x005e64d0 keeps an
+    # expiry beside the watch list and 0x005dfef0 drops a watch once it is in
+    # the past, which is what AUTO_QUEST_PROGRESS means: QuestLog_OnEvent
+    # re-watches a quest whose objectives moved with MAX_QUEST_WATCH_TIME, so
+    # the tracker lets go of it five minutes later without being asked.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 55,
+     r"^(\d+) binding\(s\) read fewer arguments", 48,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,

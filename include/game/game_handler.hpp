@@ -2972,9 +2972,20 @@ public:
     void shareQuestWithParty(uint32_t questId);  // CMSG_PUSHQUESTTOPARTY
     bool requestQuestQuery(uint32_t questId, bool force = false);
     bool isQuestTracked(uint32_t questId) const { return trackedQuestIds_.count(questId) > 0; }
-    void setQuestTracked(uint32_t questId, bool tracked) {
-        const bool changed = tracked ? trackedQuestIds_.insert(questId).second
-                                     : trackedQuestIds_.erase(questId) > 0;
+    /// The tracker never holds more than this many quests: 0x005e64d0 appends
+    /// only while its count is under 0x19, and MAX_WATCHABLE_QUESTS says 25.
+    static constexpr size_t kMaxQuestWatches = 25;
+    /// Returns whether the tracker's membership changed, which is what decides
+    /// the announcement below -- a watch getting a new expiry is not a change.
+    bool setQuestTracked(uint32_t questId, bool tracked) {
+        bool changed = false;
+        if (tracked) {
+            changed = trackedQuestIds_.size() < kMaxQuestWatches
+                   && trackedQuestIds_.insert(questId).second;
+        } else if (trackedQuestIds_.erase(questId)) {
+            questWatchExpiry_.erase(questId);
+            changed = true;
+        }
         if (changed) {
             saveCharacterConfig();
             // WatchFrame is purely event-driven and never polls native state,
@@ -2983,7 +2994,25 @@ public:
             // button, which calls WatchFrame_Update() directly).
             fireAddonEvent("QUEST_LOG_UPDATE", {});
         }
+        return changed;
     }
+    /// AddQuestWatch with its second argument (0x005e67c0 hands the duration
+    /// to 0x005e64d0): the quest comes back off the tracker this many seconds
+    /// from now. QuestLogFrame passes MAX_QUEST_WATCH_TIME, which is 300, when
+    /// AUTO_QUEST_PROGRESS is on -- a quest tracked from the log untracks
+    /// itself five minutes later. A call without the argument, which is what
+    /// every other caller of AddQuestWatch makes, watches it as long as it
+    /// stays in the log.
+    ///
+    /// On an already-watched quest the client's three rules, in its order: a
+    /// watch with no expiry keeps it whatever the new duration says, an
+    /// expiring one takes the new stamp, and a duration-less re-add is what
+    /// clears the expiry and makes the watch permanent.
+    void addQuestWatch(uint32_t questId, int32_t durationSeconds);
+    /// 0x005dfef0, which the client runs off its periodic player update: every
+    /// watch whose stamp has been reached comes off, one QUEST_LOG_UPDATE per
+    /// dropped quest rather than one for the sweep. Returns how many came off.
+    size_t expireQuestWatches();
     const std::unordered_set<uint32_t>& getTrackedQuestIds() const;
     /// The quests whose objective areas the world map shades.
     ///
@@ -6185,6 +6214,15 @@ private:
     // to the QuestHandler - and has been removed.
     std::unordered_set<uint32_t> pendingQuestQueryIds_;
     std::unordered_set<uint32_t> trackedQuestIds_;
+    /// When each tracked quest stops being tracked, as unix seconds; 0 for
+    /// never. This is the third column of the client's watch list (0xc23680
+    /// holds quest id, stamp, and a sort key). A watch this client added by
+    /// itself -- the auto-track on quest accept -- has no row here at all,
+    /// which is the same as a stamp of 0. Not saved with the ids: the stamp is
+    /// wall-clock, and one read back days later would drop the tracker as soon
+    /// as the world loaded, while the client's own list never outlives a run.
+    std::unordered_map<uint32_t, int32_t> questWatchExpiry_;
+    float questWatchSweepTimer_ = 0.0f;
     std::unordered_set<uint32_t> blobQuestIds_;
     bool pendingLoginQuestResync_ = false;
     float pendingLoginQuestResyncTimeout_ = 0.0f;
