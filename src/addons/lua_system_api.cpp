@@ -8736,6 +8736,9 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, can ? 1 : 0);
             return 1;
         }},
+                // False, which is what the client answers - a shared 3-byte
+                // `return 0` for this name and GetMapDebugObjectInfo; the note
+                // sits at GetNumMapDebugObjects.
                 {"HasDebugZoneMap",          lua_ReturnFalse},
                 // IsDesaturateSupported() (0x00511fb0): 1 where the device
                 // can draw a texture desaturated (0x00483290), as every one
@@ -8792,6 +8795,18 @@ void registerSystemLuaAPI(lua_State* L) {
             return 1;
         }},
                 {"GetNumMapOverlays",        lua_GetNumMapOverlays},
+                // The debug-object trio (this, GetMapDebugObjectInfo and
+                // HasDebugZoneMap) - and the reference answers "none" for all
+                // three, in the shipped binary and not by any table:
+                // GetNumMapDebugObjects is one call that pushes the number 0
+                // (0x00608560), and a single 3-byte `return 0` answers the other
+                // two names, reached from both entries of its method table
+                // (0x008e5250 at 0x00acd02c and 0x00acd03c). Nothing anywhere in
+                // the executable names a table they could read, and none is in
+                // this install's dbfilesclient, so worldmapframe.lua's
+                // NUM_WORLDMAP_DEBUG_OBJECTS loop - which fills the frames it
+                // then walks for a pin and a tooltip - never ran there either.
+                // Zero is not a stand-in here; it is what the client says.
                 {"GetNumMapDebugObjects",    lua_ReturnZero},
                 // How many team mates the battleground has reported. The loop
                 // that draws them does not use this - it walks to
@@ -9562,7 +9577,10 @@ void registerSystemLuaAPI(lua_State* L) {
                 // both are asked about a quest log index, and the quest's items
                 // live with its objectives rather than with the map.
                 // Two debug readers, for the zone-map overlay Blizzard ships
-                // switched off. Nothing here has a debug zone map at all.
+                // switched off. Nothing here has a debug zone map at all, and
+                // the client agrees: one 3-byte `return 0` stands behind both
+                // GetMapDebugObjectInfo and HasDebugZoneMap in its method table
+                // (0x008e5250) - see the note at GetNumMapDebugObjects.
                 {"GetDebugZoneMap",        lua_ReturnNil},
                 {"GetMapDebugObjectInfo",  lua_ReturnNil},
                 {"GetTrackingTexture",  lua_GetTrackingTexture},
