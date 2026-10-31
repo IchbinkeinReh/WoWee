@@ -482,15 +482,18 @@ public:
     /// Put paper in the compose frame, so its Send button can be enabled.
     void selectDefaultStationery();
 
-    /// The papers on offer, rebuilt from Stationery.dbc on every read.
+    /// The papers on offer, re-evaluated on every read from Stationery.dbc's
+    /// rows, which are read once.
     ///
     /// The client's rule, from MailInfo.cpp: a row is offered when its flag bit
     /// 0 is set - the paper a letter can be written on without buying anything
     /// - or when the player is carrying the item that row is sold as
     /// (0x0056fc80, which asks 0x00754a20 how many of the item the bags hold).
     /// It caches that list and rebuilds it when an inventory change or an item
-    /// query says the answer may have changed; with seven rows in the table,
-    /// reading it fresh cannot go stale and costs nothing worth naming.
+    /// query says the answer may have changed. Here the table's rows are kept
+    /// (stationeryRows_) and only what can change - whether the paper is in the
+    /// bags, and its item's name and price - is read on each call; a paper's
+    /// item is asked for once, not once per call while the answer is on its way.
     ///
     /// The order is the client's too (its qsort comparator 0x0056dd00): papers
     /// already in the bags first, then the rest by their item's name.
@@ -1007,8 +1010,24 @@ private:
     /// (MailInfo.cpp's DAT_00beb1cc).
     uint32_t selectedStationery_ = 0;
     /// Kept as a member only so the bindings can read it through a reference;
-    /// rebuilt in full on every read.
+    /// rebuilt on every read from the rows below.
     std::vector<StationeryOption> stationeryOptions_;
+    /// Stationery.dbc as the popup needs it, read once: id, the item it is sold
+    /// as, its art and whether a letter may be written on it without buying it.
+    struct StationeryRow {
+        uint32_t id = 0;
+        uint32_t itemId = 0;
+        std::string texture;
+        bool freebie = false;
+    };
+    mutable std::vector<StationeryRow> stationeryRows_;
+    mutable bool stationeryRowsLoaded_ = false;
+    /// The papers' items already asked for, so a template on its way is not
+    /// asked for again by every call of the popup's bindings.
+    std::unordered_set<uint32_t> stationeryItemsQueried_;
+    /// Reads the rows the first time they are wanted. False while there is no
+    /// table to read.
+    bool loadStationeryRows() const;
     std::array<MailAttachSlot, MAIL_MAX_ATTACHMENTS> mailAttachments_{};
 
     // ---- Bank state ----

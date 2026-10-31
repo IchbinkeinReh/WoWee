@@ -3608,24 +3608,39 @@ void InventoryHandler::selectDefaultStationery() {
         "StationeryPopupButton_OnClick(nil, 1) end");
 }
 
-const std::vector<StationeryOption>& InventoryHandler::stationeryOptions() {
-    stationeryOptions_.clear();
+bool InventoryHandler::loadStationeryRows() const {
+    if (stationeryRowsLoaded_) return true;
     auto* am = owner_.services().assetManager;
-    if (!am || !am->isInitialized()) return stationeryOptions_;
+    if (!am || !am->isInitialized()) return false;
     auto dbc = am->loadDBCOptional("Stationery.dbc");
     // ID, ItemID, art name (a string column), flags. The flags are an int: read
     // as a string offset they hand back whatever the previous column's name
     // happens to start with at that number.
-    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 4) return stationeryOptions_;
-
+    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 4) return false;
+    stationeryRows_.clear();
     for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+        StationeryRow row;
+        row.id = dbc->getUInt32(r, 0);
+        row.itemId = dbc->getUInt32(r, 1);
+        row.texture = dbc->getString(r, 2);
+        row.freebie = (dbc->getUInt32(r, 3) & 1u) != 0u;
+        stationeryRows_.push_back(std::move(row));
+    }
+    stationeryRowsLoaded_ = true;
+    return true;
+}
+
+const std::vector<StationeryOption>& InventoryHandler::stationeryOptions() {
+    stationeryOptions_.clear();
+    if (!loadStationeryRows()) return stationeryOptions_;
+
+    for (const StationeryRow& row : stationeryRows_) {
         StationeryOption o;
-        o.id = dbc->getUInt32(r, 0);
-        o.itemId = dbc->getUInt32(r, 1);
-        o.texture = dbc->getString(r, 2);
-        const bool freebie = (dbc->getUInt32(r, 3) & 1u) != 0u;
+        o.id = row.id;
+        o.itemId = row.itemId;
+        o.texture = row.texture;
         o.owned = o.itemId != 0 && owner_.getInventory().countItem(o.itemId) > 0;
-        if (!freebie && !o.owned) continue;
+        if (!row.freebie && !o.owned) continue;
 
         // The row is labelled with the item's own name and priced with what a
         // vendor asks for it. The client asks for that template the way a
@@ -3633,7 +3648,10 @@ const std::vector<StationeryOption>& InventoryHandler::stationeryOptions() {
         // the first time in this popup, so the query usually has to be sent.
         const auto* info = o.itemId ? owner_.getItemInfo(o.itemId) : nullptr;
         if (!info) {
-            if (o.itemId) owner_.queryItemInfo(o.itemId, 0);
+            // Once: the bindings read this list several times a frame while the
+            // popup is drawn, and the answer is already on its way.
+            if (o.itemId && stationeryItemsQueried_.insert(o.itemId).second)
+                owner_.queryItemInfo(o.itemId, 0);
         } else {
             o.name = info->name;
             // A paper already in the bags is drawn with no price at all: the
@@ -3664,13 +3682,11 @@ void InventoryHandler::selectStationery(uint32_t index) {
 
 std::optional<std::string> InventoryHandler::stationeryArt(uint32_t id) const {
     if (id == 0) return std::nullopt;
-    auto* am = owner_.services().assetManager;
-    if (!am || !am->isInitialized()) return std::nullopt;
-    auto dbc = am->loadDBCOptional("Stationery.dbc");
-    if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 4) return std::nullopt;
-    const int32_t row = dbc->findRecordById(id);
-    if (row < 0) return std::nullopt;
-    return dbc->getString(static_cast<uint32_t>(row), 2);
+    if (!loadStationeryRows()) return std::nullopt;
+    for (const StationeryRow& row : stationeryRows_) {
+        if (row.id == id) return row.texture;
+    }
+    return std::nullopt;
 }
 
 void InventoryHandler::closeMailbox() {
@@ -3681,6 +3697,8 @@ void InventoryHandler::closeMailbox() {
     // mail store (0x00571530 zeroes the count, the choice and the draft money
     // together), so the next letter starts with no paper picked.
     selectedStationery_ = 0;
+    // A paper's item that never answered is asked for again at the next mailbox.
+    stationeryItemsQueried_.clear();
     clearMailAttachments();
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("MAIL_CLOSED", {});
     // A look for mail held over while it was open goes out now, with nothing
