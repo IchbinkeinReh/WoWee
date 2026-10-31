@@ -3695,24 +3695,35 @@ void registerQuestLuaAPI(lua_State* L) {
                 // author on this wire, SMSG_ITEM_TEXT_QUERY_RESPONSE is an id
                 // and the words"). True of that response, wrong as an answer:
                 // the client (0x0058a480) never reads the page-text reply here.
-                // It keeps the *item the page was opened from* in two globals
-                // (DAT_00bfc948/DAT_00bfc94c), type-checks it as an item
-                // (".\ItemTextFrame.cpp", 243), refuses when the two dwords at
-                // its field blob +0x10/+0x14 are both zero, and resolves the
-                // name out of a record cache at 0xc5d938 whose reader callback
-                // is 0x0058a450. So the author is an instance fact, sitting in
-                // the item's own fields.
+                // It starts from the same pair of globals the material binding
+                // reads (DAT_00bfc948/DAT_00bfc94c) - the guid of whatever the page
+                // was opened from - and asks 0x004d4db0 for it *as a different type*
+                // than that one does (2 against 1; the ".\ItemTextFrame.cpp", 243
+                // behind the call is the call site, not the class). It then reads a
+                // record hanging off the object at +0xd4, refuses when that
+                // record's +0x10/+0x14 are both zero, and hands the pair to
+                // 0x0067d770 with a callback - which answers the record's payload at
+                // +0x20, and the binding pushes that as a string.
                 //
-                // Which two dwords feed that cache is the open half: with the
-                // established rule (blob dword 8 = ITEM_FIELD_STACK_COUNT, 15 =
-                // the flags whose bit 3 gates durability), +0x10/+0x14 are the
-                // pair *ahead* of the entry fields - the owner and what holds
-                // it - and the cache that answers a name for them is not the
-                // item record cache at 0xc5d828. Either way the piece WoWee is
-                // missing is upstream of the binding: no create-packet string
-                // block is parsed at all (nothing reads ITEM_FIELD_CREATOR), so
-                // no name is available to push, and the book's source is kept
-                // as a title string rather than as an item to ask.
+                // That cache is not the item query cache the material path goes
+                // through (0x00c5d828): these records keep their loaded flag at
+                // +0x178 and their key pair at +0x170/+0x174, and a miss queues a
+                // query that is an opcode plus that pair - plus a second pair when
+                // the cache's +0x44 byte is set (0x00668ce0). So the author is
+                // looked up *by guid*, in a cache whose payload is a name. The
+                // callback (0x0058a450) only repaints: it compares the guid it was
+                // queued with against the page still on screen and refreshes it,
+                // and 0x0070c880 is the same repaint from the other side, fired when
+                // a unit's record lands. Which value feeds that key pair is the open
+                // half - under one ABI reading +0x10 is the cache and +0x14 the id,
+                // under another the two are the guid pair itself.
+                //
+                // Either way the piece WoWee is missing is upstream of the binding:
+                // nothing reads ITEM_FIELD_CREATOR - no create-packet creator word
+                // or string block is parsed at all, the only creator guids kept
+                // anywhere are the trade window's rows (0x00704680) - and the book's
+                // source is kept as a title string rather than as an item or a unit
+                // to ask.
                 {"ItemTextGetCreator",  [](lua_State* L) -> int { return luaReturnNil(L); }},
                 // The material is carried, and the claim that it was not stood
                 // beside the line discarding it: the item query's four
@@ -4070,33 +4081,45 @@ void registerQuestLuaAPI(lua_State* L) {
                 // files because it is the frame's own art. The same set backs
                 // ItemTextGetMaterial, which does answer.
                 //
-                // What is missing is a source, not a texture - and the source
-                // is not on the quest. The reference's binding (0x0058c990) and
-                // ItemTextGetMaterial's (0x00589c90, confirmed by its entry in
-                // the binding table) are the same twenty-odd lines of code in
-                // two files, QuestFrame.cpp:0x48d and ItemTextFrame.cpp:0x102:
-                // one bit of the frame object's record flag word (+8) says which
-                // of *two different kinds* of answer to take.
+                // What is missing is a source, not a texture - and the source is
+                // not on the quest at all. The reference's binding (0x0058c990)
+                // and ItemTextGetMaterial's (0x00589c90, confirmed by its entry in
+                // the binding table) are the same twenty-odd lines in two files,
+                // QuestFrame.cpp:0x48d and ItemTextFrame.cpp:0x102, and they start
+                // from a guid: each window keeps its subject as a pair of globals
+                // (DAT_00c0d648/c0d64c for the quest window, DAT_00bfc948/bfc94c
+                // for the page window) naming *whatever opened it*, and 0x004d4db0
+                // turns that guid into
+                // an object of the type its third argument names - which is why the
+                // same globals get cast as two different types in two different
+                // bindings. Two outside readers say the pair is a guid and not a
+                // pointer: 0x0070c880 compares the page window's against a unit's
+                // guid to decide whether the page on screen should be redrawn, and
+                // 0x006cda70 writes the quest window's from the guid a packet
+                // starts with, through the record-cache machinery that re-enters
+                // when the record lands.
+                //
+                // So the "flag word" at record +8 is OBJECT_FIELD_TYPE and the id
+                // at record +0xc is OBJECT_FIELD_ENTRY, and the two bits tested are
+                // the client's own object-kind bits: 0x2 for an item, 0x20 for a
+                // game object.
                 //
                 // Bit 1 is the item path, and it is the one ItemTextGetMaterial
-                // answers with: the record's own item id (+0xc) is resolved
-                // through the item record cache - `mov ecx, 0x00c5d828` before
-                // the call, which is that cache and not the 0x00c5d938 one
-                // ItemTextGetCreator goes through - and one word of the item
-                // record (+0x188) is the material. That word is the page
-                // material this file already reads off the item query and keeps,
-                // and ItemTextGetMaterial above is that read done for a book.
+                // answers with: the entry is resolved through the item query cache
+                // (`mov ecx, 0x00c5d828` before the call) and one word of the
+                // record's payload (+0x188) is the page material - the same word
+                // this file already reads off the item query and keeps.
                 //
-                // Bit 5 is not another item: it answers a material id straight
-                // out of the frame object itself - a list of them at
-                // **(obj + 0x1a4) + 0x14, indexed by the position of the number
-                // 17 in one of 36 lists, the list picked by a byte at
-                // *(obj + 0xd0) + 0x2d. That position search is 0x00746190,
-                // which counts entries at DAT_00a36f34 + list*0x10 out of
-                // PTR_DAT_00a36f38[list*4] and answers -1 for a list the number
-                // is not in; the caller's "index < 0x18" is that refusal. So a
-                // quest window that is not about an item asks its own layout for
-                // a default, and nothing here says what feeds that list.
+                // Bit 5 is a game object, and it reads no item: 0x00710300 answers
+                // a material id off the object itself - a byte at
+                // *(obj + 0xd0) + 0x2d picks one of 36 lists and asks where the
+                // number 17 sits in it (0x00746190 is that position search: count
+                // at DAT_00a36f34 + list*0x10, values from PTR_DAT_00a36f38[list*4],
+                // -1 when the number is not in it, which is what the caller's
+                // "index < 0x18" refuses), and the answer is
+                // **(obj + 0x1a4) + 0x14 + index*4. A page opened from a tablet or
+                // a board asks the object it came from what it is written on;
+                // which word of that object's own record holds it is still open.
                 //
                 // Either id then goes through one lookup, and the shape of it
                 // says what the table is: 0 < v, DAT_00ad4320 <= v <=
@@ -4108,17 +4131,18 @@ void registerQuestLuaAPI(lua_State* L) {
                 // side by side holding 0xffffffff and 0x0fffffff in .data, which
                 // is a min/max pair before anything has been seen, not a range).
                 //
-                // Which item the quest window's record keeps at +0xc is the
-                // unsettled half, and it is narrower than it looked: the offer
-                // packet carries no item id at all (QuestDetailsData has the
-                // text, the flags, the money, the XP and the rewards, and
-                // nothing else numeric that could be one), so the frame learns
-                // it away from the quest - from whatever opened the window, as
-                // the item text frame does. Nil stays until that is pinned: the
-                // caller substitutes PageTextMaterial row 1, Parchment, and that
-                // is what nearly every quest would name anyway, whereas a guess
-                // draws marble or bronze around a quest that has nothing to do
-                // with either.
+                // The route is settled, then, and what is left is arithmetic. The
+                // window's subject guid is the one the details packet names -
+                // parsed here as QuestDetailsData::npcGuid - and the client's bit
+                // test says it expects that guid to be able to name an item or a
+                // game object, which is the shape a quest opened from one has. The
+                // item case is within reach: the page material comes off the item
+                // query, which is parsed and kept. The game-object case is one
+                // word of that object's own record, and that word is not pinned
+                // yet. Nil stays until both are answerable: the caller substitutes
+                // PageTextMaterial row 1, Parchment, and that is what nearly every
+                // quest would name anyway, whereas a guess draws stone around a
+                // quest that has nothing to do with stone.
                 {"GetQuestBackgroundMaterial", [](lua_State* L) -> int { return luaReturnNil(L); }},
                 // Whether the quest is flagged PvP, and whether the giver
                 // opened it without being asked. Neither is parsed from the
