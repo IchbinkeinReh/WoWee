@@ -40,6 +40,12 @@ public:
      * Get record count
      */
     uint32_t getRecordCount() const { return recordCount; }
+    /// What the table holds in memory: its records, its strings and the id
+    /// lookup once built. For /mem.
+    [[nodiscard]] size_t memoryBytes() const {
+        return recordData.capacity() + stringBlock.capacity() +
+               idToIndexCache.size() * (sizeof(uint32_t) * 2 + 16);
+    }
 
     /**
      * Get field count (number of 32-bit fields per record)

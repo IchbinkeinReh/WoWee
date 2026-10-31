@@ -37,6 +37,13 @@ class AudioEngine {
 public:
     static AudioEngine& instance();
 
+    /// The decoded sounds kept for replay, for /mem.
+    struct DecodedCacheStats {
+        size_t sounds = 0;
+        uint64_t bytes = 0;
+    };
+    static DecodedCacheStats decodedCacheStats();
+
     ~AudioEngine();
 
     // Initialization

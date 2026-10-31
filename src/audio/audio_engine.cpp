@@ -184,6 +184,17 @@ static bool decodeWavCached(const std::vector<uint8_t>& wavData, DecodedWavCache
 
 } // namespace
 
+AudioEngine::DecodedCacheStats AudioEngine::decodedCacheStats() {
+    DecodedCacheStats s;
+    std::shared_lock<std::shared_mutex> readLock(gDecodedWavCacheMutex);
+    s.sounds = gDecodedWavCache.size();
+    for (const auto& [key, e] : gDecodedWavCache) {
+        (void)key;
+        if (e.pcmData) s.bytes += e.pcmData->capacity();
+    }
+    return s;
+}
+
 AudioEngine& AudioEngine::instance() {
     static AudioEngine instance;
     return instance;

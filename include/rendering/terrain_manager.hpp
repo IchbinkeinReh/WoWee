@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rendering/memory_report.hpp"
+
 #include "core/coordinates.hpp"
 #include "core/work_batch.hpp"
 #include "pipeline/adt_loader.hpp"
@@ -400,6 +402,8 @@ public:
      * Get statistics
      */
     [[nodiscard]] int getLoadedTileCount() const { return static_cast<int>(loadedTiles.size()); }
+    /// The memory it holds, by owner, for /mem.
+    void memoryReport(std::vector<MemoryEntry>& out) const;
     [[nodiscard]] int getPendingTileCount() const { return static_cast<int>(pendingTiles.size()); }
     [[nodiscard]] int getReadyQueueCount() const { return static_cast<int>(readyQueue.size()); }
     /** Total unfinished tiles (worker threads + ready queue + finalizing) */

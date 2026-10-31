@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rendering/memory_report.hpp"
+
 #include <cmath>
 
 #include "rendering/vk_shader.hpp"
@@ -184,6 +186,8 @@ public:
     void clearShadowMap() {}
 
     [[nodiscard]] int getChunkCount() const { return static_cast<int>(chunks.size()); }
+    /// The memory it holds, by owner, for /mem.
+    void memoryReport(std::vector<MemoryEntry>& out) const;
     [[nodiscard]] int getRenderedChunkCount() const { return renderedChunks; }
     /// How far the furthest chunk drawn this frame was, for the diagnostic that
     /// compares it against the doodads. See Renderer::logViewDistanceDiag.

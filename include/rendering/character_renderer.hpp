@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rendering/memory_report.hpp"
+
 #include "rendering/vk_shader.hpp"
 #include "rendering/shadow_params.hpp"
 #include "rendering/blob_shadow.hpp"
@@ -490,6 +492,8 @@ public:
     bool getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& outTransform) const;
 
     [[nodiscard]] size_t getInstanceCount() const { return instances.size(); }
+    /// The memory it holds, by owner, for /mem.
+    void memoryReport(std::vector<MemoryEntry>& out) const;
 
     // Fog/lighting/shadow are now in per-frame UBO - keep stubs for callers that haven't been updated
     void setFog(const glm::vec3&, float, float) {}

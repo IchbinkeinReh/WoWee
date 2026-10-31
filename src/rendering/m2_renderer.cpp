@@ -2,6 +2,7 @@
 #include "rendering/depth_convention.hpp"
 #include "rendering/placement_transform.hpp"
 #include "rendering/m2_renderer.hpp"
+#include "rendering/model_memory.hpp"
 #include "rendering/rt_bvh.hpp"
 #include "rendering/rt_point_lights.hpp"
 #include "rendering/rt_rigid_parts.hpp"
@@ -2867,3 +2868,60 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
 
 } // namespace rendering
 } // namespace wowee
+
+namespace wowee {
+namespace rendering {
+
+void M2Renderer::memoryReport(std::vector<MemoryEntry>& out) const {
+    VmaAllocator alloc = vkCtx_ ? vkCtx_->getAllocator() : VK_NULL_HANDLE;
+    uint64_t gpu = 0, anim = 0, particles = 0, collision = 0, other = 0, ubo = 0;
+    size_t ubos = 0;
+    for (const auto& [id, m] : models) {
+        (void)id;
+        gpu += allocationBytes(alloc, m.vertexAlloc) + allocationBytes(alloc, m.indexAlloc);
+        for (const auto& b : m.batches) {
+            if (b.materialUBOAlloc) {
+                ubo += allocationBytes(alloc, b.materialUBOAlloc);
+                ++ubos;
+            }
+        }
+        anim += bonesBytes(m.bones) + vectorBytes(m.sequences) + tracksBytes(m.colorRGBTracks) +
+                tracksBytes(m.colorAlphaTracks) + tracksBytes(m.textureWeightTracks) +
+                vectorBytes(m.globalSequenceDurations) + vectorBytes(m.textureTransforms);
+        for (const auto& tt : m.textureTransforms) {
+            anim += trackBytes(tt.translation) + trackBytes(tt.rotation) + trackBytes(tt.scale);
+        }
+        particles += emittersBytes(m.particleEmitters) + vectorBytes(m.ribbonEmitters) +
+                     vectorBytes(m.particleSplines);
+        for (const auto& r : m.ribbonEmitters) {
+            particles += trackBytes(r.colorTrack) + trackBytes(r.alphaTrack) +
+                         trackBytes(r.heightAboveTrack) + trackBytes(r.heightBelowTrack) +
+                         trackBytes(r.visibilityTrack) + trackBytes(r.texSlotTrack);
+        }
+        const auto& c = m.collision;
+        collision += vectorBytes(c.vertices) + vectorBytes(c.indices) + vectorBytes(c.normals) +
+                     vectorBytes(c.triBounds) + vectorBytes(c.cellFloorTris) + vectorBytes(c.cellWallTris);
+        for (const auto& cell : c.cellFloorTris) collision += vectorBytes(cell);
+        for (const auto& cell : c.cellWallTris) collision += vectorBytes(cell);
+        other += vectorBytes(m.batches) + vectorBytes(m.attachments) + vectorBytes(m.lights) +
+                 vectorBytes(m.glowPatches) + vectorBytes(m.rtPieces) + vectorBytes(m.events);
+    }
+    uint64_t inst = vectorBytes(instances);
+    for (const auto& i : instances) inst += vectorBytes(i.boneMatrices) + vectorBytes(i.rtPieceInstances);
+    char name[192];
+    std::snprintf(name, sizeof(name), "Doodad models (%zu): geometry", models.size());
+    out.push_back({name, gpu, 0});
+    std::snprintf(name, sizeof(name), "Doodad material buffers (%zu, host-visible)", ubos);
+    out.push_back({name, ubo, 0});
+    out.push_back({"Doodad models: animation", 0, anim});
+    out.push_back({"Doodad models: particles and ribbons", 0, particles});
+    out.push_back({"Doodad models: collision", 0, collision});
+    out.push_back({"Doodad models: batches and the rest", 0, other});
+    std::snprintf(name, sizeof(name), "Doodad instances (%zu)", instances.size());
+    out.push_back({name, 0, inst});
+    std::snprintf(name, sizeof(name), "Doodad textures (%zu)", textureCache.size());
+    out.push_back({name, static_cast<uint64_t>(textureCacheBytes_), 0});
+}
+
+}  // namespace rendering
+}  // namespace wowee

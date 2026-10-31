@@ -6,6 +6,7 @@
 #include "game/game_services.hpp"
 #include "pipeline/blp_loader.hpp"
 #include "rendering/blob_shadow.hpp"
+#include "rendering/memory_report.hpp"
 #include "rendering/melee_sound.hpp"
 #include "rendering/unit_model_events.hpp"
 #include "rendering/animation/body_yaw.hpp"
@@ -45,6 +46,9 @@ class Application;
 
 class EntitySpawner {
 public:
+    /// The decoded textures and parsed models it keeps between spawns, for /mem.
+    void memoryReport(std::vector<rendering::MemoryEntry>& out) const;
+
     EntitySpawner(rendering::Renderer* renderer,
                   pipeline::AssetManager* assetManager,
                   game::GameHandler* gameHandler,

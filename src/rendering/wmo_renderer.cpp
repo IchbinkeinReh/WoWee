@@ -8,6 +8,8 @@
 #include "rendering/wmo_vertex.hpp"
 #include "rendering/shadow_params.hpp"
 #include "rendering/wmo_renderer.hpp"
+#include "rendering/model_memory.hpp"
+#include <cstdio>
 #include "pipeline/wmo_doodad_light.hpp"
 #include "rendering/day_night.hpp"
 #include "rendering/rt_bvh.hpp"
@@ -5658,3 +5660,56 @@ void WMORenderer::collectRtLights(const glm::vec3& eye, float range,
 
 } // namespace rendering
 } // namespace wowee
+
+namespace wowee {
+namespace rendering {
+
+void WMORenderer::memoryReport(std::vector<MemoryEntry>& out) const {
+    VmaAllocator alloc = vkCtx_ ? vkCtx_->getAllocator() : VK_NULL_HANDLE;
+    uint64_t gpu = 0, collision = 0, other = 0, ubo = 0;
+    size_t groups = 0, ubos = 0;
+    for (const auto& [id, m] : loadedModels) {
+        (void)id;
+        groups += m.groups.size();
+        other += vectorBytes(m.groups) + vectorBytes(m.lights) + vectorBytes(m.glows) +
+                 vectorBytes(m.bakedGlows) + vectorBytes(m.windowGlows) + vectorBytes(m.doodadTemplates) +
+                 vectorBytes(m.textures) + vectorBytes(m.textureNames) + vectorBytes(m.portals) +
+                 vectorBytes(m.portalVertices) + vectorBytes(m.portalRefs) + vectorBytes(m.fogs);
+        for (const auto& g : m.groups) {
+            gpu += allocationBytes(alloc, g.vertexAlloc) + allocationBytes(alloc, g.indexAlloc);
+            other += vectorBytes(g.batches) + vectorBytes(g.mergedBatches);
+            for (const auto& mb : g.mergedBatches) {
+                if (mb.materialUBOAlloc) {
+                    ubo += allocationBytes(alloc, mb.materialUBOAlloc);
+                    ++ubos;
+                }
+            }
+            collision += vectorBytes(g.collisionVertices) + vectorBytes(g.collisionNormals) +
+                         vectorBytes(g.collisionUVs) + vectorBytes(g.collisionIndices) +
+                         vectorBytes(g.collisionColors) + vectorBytes(g.triBounds) +
+                         vectorBytes(g.triNormals) + vectorBytes(g.triMopyFlags) +
+                         vectorBytes(g.triMaterials) + vectorBytes(g.triVisited) +
+                         vectorBytes(g.cellTriangles) + vectorBytes(g.cellFloorTriangles) +
+                         vectorBytes(g.cellWallTriangles);
+            for (const auto& c : g.cellTriangles) collision += vectorBytes(c);
+            for (const auto& c : g.cellFloorTriangles) collision += vectorBytes(c);
+            for (const auto& c : g.cellWallTriangles) collision += vectorBytes(c);
+        }
+    }
+    uint64_t inst = vectorBytes(instances);
+    for (const auto& i : instances) inst += vectorBytes(i.worldGroupBounds) + vectorBytes(i.doodads);
+    char name[192];
+    std::snprintf(name, sizeof(name), "Building models (%zu, %zu groups): geometry", loadedModels.size(), groups);
+    out.push_back({name, gpu, 0});
+    std::snprintf(name, sizeof(name), "Building material buffers (%zu, host-visible)", ubos);
+    out.push_back({name, ubo, 0});
+    out.push_back({"Building models: collision", 0, collision});
+    out.push_back({"Building models: batches and the rest", 0, other});
+    std::snprintf(name, sizeof(name), "Building instances (%zu)", instances.size());
+    out.push_back({name, 0, inst});
+    std::snprintf(name, sizeof(name), "Building textures (%zu)", textureCache.size());
+    out.push_back({name, static_cast<uint64_t>(textureCacheBytes_), 0});
+}
+
+}  // namespace rendering
+}  // namespace wowee

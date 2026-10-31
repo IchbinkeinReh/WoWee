@@ -18,6 +18,8 @@
 #include "rendering/depth_convention.hpp"
 #include "core/frame_profiler.hpp"
 #include "rendering/character_renderer.hpp"
+#include "rendering/model_memory.hpp"
+#include <cstdio>
 #include "rendering/shadow_params.hpp"
 #include "rendering/normal_map.hpp"
 #include "rendering/m2_track_sampler.hpp"
@@ -6311,3 +6313,57 @@ void CharacterRenderer::recreatePipelines() {
 
 } // namespace rendering
 } // namespace wowee
+
+namespace wowee {
+namespace rendering {
+
+void CharacterRenderer::memoryReport(std::vector<MemoryEntry>& out) const {
+    VmaAllocator alloc = vkCtx_ ? vkCtx_->getAllocator() : VK_NULL_HANDLE;
+    uint64_t gpu = 0, cpu = 0, inst = 0, bones = 0, geom = 0, anim = 0, empty = 0, idle = 0;
+    size_t idleCount = 0;
+    std::unordered_set<uint32_t> used;
+    for (const auto& [iid, i] : instances) {
+        (void)iid;
+        used.insert(i.modelId);
+    }
+    for (const auto& [id, m] : models) {
+        if (!used.count(id)) {
+            ++idleCount;
+            idle += m2ModelBytes(m.data);
+        }
+        gpu += allocationBytes(alloc, m.vertexAlloc) + allocationBytes(alloc, m.indexAlloc);
+        cpu += m2ModelBytes(m.data) + vectorBytes(m.bindPose) + vectorBytes(m.rtStandPose) +
+               vectorBytes(m.textureIds) + vectorBytes(m.sortedBatchIndices);
+        geom += vectorBytes(m.data.vertices) + vectorBytes(m.data.indices);
+        anim += bonesBytes(m.data.bones);
+        for (const auto& b : m.data.bones) {
+            empty += emptyKeysBytes(b.translation) + emptyKeysBytes(b.rotation) + emptyKeysBytes(b.scale);
+        }
+    }
+    for (const auto& [id, i] : instances) {
+        (void)id;
+        for (const auto a : i.boneAlloc) bones += allocationBytes(alloc, a);
+        inst += sizeof(i) + vectorBytes(i.boneMatrices) + vectorBytes(i.boneArm) +
+                vectorBytes(i.keyBoneAnimations) + vectorBytes(i.boneKeyBoneAnimation) +
+                vectorBytes(i.weaponAttachments);
+    }
+    char name[192];
+    std::snprintf(name, sizeof(name), "Character models (%zu): geometry", models.size());
+    out.push_back({name, gpu, 0});
+    std::snprintf(name, sizeof(name),
+                  "Character models: the whole M2 kept (vertices %.0f MB, bones %.0f MB of which empty keys %.0f MB)",
+                  double(geom) / 1048576.0, double(anim) / 1048576.0, double(empty) / 1048576.0);
+    out.push_back({name, 0, cpu});
+    std::snprintf(name, sizeof(name), "  (of those, %zu models with no instance: %.0f MB)", idleCount,
+                  double(idle) / 1048576.0);
+    out.push_back({name, 0, 0});
+    std::snprintf(name, sizeof(name), "Character instances (%zu)", instances.size());
+    out.push_back({name, 0, inst});
+    out.push_back({"Character bone buffers (host-visible)", bones, 0});
+    std::snprintf(name, sizeof(name), "Character textures (%zu, %zu composites)", textureCache.size(),
+                  compositeCache_.size());
+    out.push_back({name, static_cast<uint64_t>(textureCacheBytes_), 0});
+}
+
+}  // namespace rendering
+}  // namespace wowee

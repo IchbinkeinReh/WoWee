@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rendering/rt_memory_guard.hpp"
+#include "rendering/memory_report.hpp"
 #include <optional>
 #include "rendering/rt_rays.hpp"
 #include "rendering/day_night.hpp"
@@ -700,7 +701,9 @@ public:
     [[nodiscard]] std::string qualitySummary() const;
     /// The memory report /mem prints: the process, the Vulkan heaps, and
     /// the ray tracing's owners. One line each.
-    [[nodiscard]] std::vector<std::string> memoryReport() const;
+    /// The /mem report. `extra`: owners the renderer cannot see (the Lua
+    /// state, the audio caches), listed with the world's.
+    [[nodiscard]] std::vector<std::string> memoryReport(const std::vector<MemoryEntry>& extra = {}) const;
     /// The memory in use and to spare now (rt_memory_guard.hpp). Overridden
     /// for testing by WOWEE_FAKE_GPU_FREE_MB (the graphics budget left),
     /// WOWEE_FAKE_AVAIL_MB (the system's available RAM) and WOWEE_FAKE_UNIFIED.

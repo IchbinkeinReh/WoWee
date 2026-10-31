@@ -762,6 +762,19 @@ std::vector<uint8_t> AssetManager::readFileOptional(const std::string& path) con
     return readFile(path);
 }
 
+AssetManager::CacheStats AssetManager::cacheStats() const {
+    std::shared_lock<std::shared_mutex> lock(cacheMutex);
+    CacheStats s;
+    s.fileBytes = fileCacheTotalBytes;
+    s.fileCount = fileCache.size();
+    s.fileBudget = fileCacheBudget;
+    s.dbcCount = dbcCache.size();
+    for (const auto& [name, dbc] : dbcCache) {
+        if (dbc) s.dbcBytes += dbc->memoryBytes();
+    }
+    return s;
+}
+
 void AssetManager::clearDBCCache() {
     std::lock_guard<std::shared_mutex> lock(cacheMutex);
     dbcCache.clear();

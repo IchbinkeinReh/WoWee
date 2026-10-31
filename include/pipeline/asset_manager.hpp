@@ -152,6 +152,16 @@ public:
     [[nodiscard]] size_t getFileCacheSize() const { return fileCacheTotalBytes; }
     [[nodiscard]] size_t getFileCacheHits() const { return fileCacheHits; }
     [[nodiscard]] size_t getFileCacheMisses() const { return fileCacheMisses; }
+    /// What the two caches hold, for /mem: the raw files kept for reuse and
+    /// the DBC tables, with how many of each and the file cache's budget.
+    struct CacheStats {
+        size_t fileBytes = 0;
+        size_t fileCount = 0;
+        size_t fileBudget = 0;
+        size_t dbcBytes = 0;
+        size_t dbcCount = 0;
+    };
+    [[nodiscard]] CacheStats cacheStats() const;
 
     /**
      * Clear all cached resources

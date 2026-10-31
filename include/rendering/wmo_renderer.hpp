@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rendering/memory_report.hpp"
+
 #include "audio/zone_ambience.hpp"
 #include "rendering/minimap_indoor.hpp"
 #include "rendering/collision_geometry.hpp"
@@ -294,6 +296,8 @@ public:
      */
     uint32_t getInstanceCount() const { return instances.size(); }
     size_t getLoadedModelCount() const { return loadedModels.size(); }
+    /// The memory it holds, by owner, for /mem.
+    void memoryReport(std::vector<MemoryEntry>& out) const;
 
     /**
      * Remove models that have no instances referencing them

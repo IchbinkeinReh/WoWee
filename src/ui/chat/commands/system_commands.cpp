@@ -8,13 +8,18 @@
 #include "addons/addon_manager.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "addons/lua_engine.hpp"
+#include "audio/audio_coordinator.hpp"
+#include "audio/audio_engine.hpp"
+#include "audio/music_manager.hpp"
 #include "core/application.hpp"
+#include "core/entity_spawner.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "ui/chat/chat_utils.hpp"
 #include "ui/chat/client_gps.hpp"
 #include "core/coordinates.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/vk_context.hpp"
 #include "rendering/lighting_manager.hpp"
 #include "core/frame_profiler.hpp"
 #include "core/logger.hpp"
@@ -26,6 +31,10 @@
 #include <cstdlib>
 #include <string>
 #include <string_view>
+
+extern "C" {
+#include <lua.h>
+}
 
 namespace wowee { namespace ui {
 
@@ -418,7 +427,39 @@ public:
                 chat_utils::makeSystemMessage("Memory: the system's low-memory signal, simulated."));
             return {};
         }
-        for (const std::string& line : renderer->memoryReport()) {
+        // "/mem dump": every allocation the Vulkan allocator holds, to a file.
+        if (ctx.args.find("dump") != std::string::npos) {
+            if (auto* vk = renderer->getVkContext()) {
+                const std::string path = vk->dumpAllocatorJson();
+                LOG_WARNING("/mem: allocator dumped to ", path.empty() ? std::string("(failed)") : path);
+            }
+        }
+        std::vector<rendering::MemoryEntry> extra;
+        if (auto* addons = ctx.services.addonManager) {
+            if (auto* engine = addons->getLuaEngine(); engine && engine->getState()) {
+                lua_State* L = engine->getState();
+                // "/mem gc": a full collection first, so the figure is what the
+                // state holds rather than what it has not yet collected.
+                if (ctx.args.find("gc") != std::string::npos) lua_gc(L, LUA_GCCOLLECT, 0);
+                const uint64_t kb = static_cast<uint64_t>(lua_gc(L, LUA_GCCOUNT, 0));
+                const uint64_t rest = static_cast<uint64_t>(lua_gc(L, LUA_GCCOUNTB, 0));
+                extra.push_back({"Lua state", 0, kb * 1024 + rest});
+            }
+        }
+        {
+            const auto wav = audio::AudioEngine::decodedCacheStats();
+            char name[192];
+            std::snprintf(name, sizeof(name), "Decoded sounds (%zu)", wav.sounds);
+            extra.push_back({name, 0, wav.bytes});
+            if (auto* coord = ctx.services.audioCoordinator) {
+                if (auto* music = coord->getMusicManager()) {
+                    std::snprintf(name, sizeof(name), "Music files kept (%zu)", music->cachedMusicCount());
+                    extra.push_back({name, 0, music->cachedMusicBytes()});
+                }
+            }
+        }
+        if (auto* spawner = core::Application::getInstance().getEntitySpawner()) spawner->memoryReport(extra);
+        for (const std::string& line : renderer->memoryReport(extra)) {
             ctx.gameHandler.addLocalChatMessage(chat_utils::makeSystemMessage(line));
             LOG_WARNING("/mem: ", line);
         }
@@ -426,7 +467,7 @@ public:
     }
     [[nodiscard]] std::vector<std::string> aliases() const override { return {"mem"}; }
     [[nodiscard]] std::string helpText() const override {
-        return "Show the client's memory: process, Vulkan heaps, ray tracing by part (/mem low: simulate low memory)";
+        return "Show the client's memory: process, Vulkan heaps, ray tracing by part (/mem low: simulate low memory; /mem gc: collect Lua garbage first; /mem dump: allocator to a file)";
     }
 };
 

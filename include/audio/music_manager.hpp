@@ -104,6 +104,20 @@ private:
 
     std::unordered_map<std::string, std::shared_ptr<const std::vector<uint8_t>>> musicDataCache_;
 
+public:
+    /// The music files kept in memory (still encoded), for /mem.
+    [[nodiscard]] size_t cachedMusicCount() const { return musicDataCache_.size(); }
+    [[nodiscard]] uint64_t cachedMusicBytes() const {
+        uint64_t b = 0;
+        for (const auto& [path, data] : musicDataCache_) {
+            (void)path;
+            if (data) b += data->capacity();
+        }
+        return b;
+    }
+
+private:
+
     /// A SoundEntries row as the music plays it (0x004c6a40): its files
     /// (DirectoryBase and File), their Freq, VolumeFloat, and whether Flags
     /// loops it; and the file played last (0x004cbac0 keeps it).

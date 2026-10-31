@@ -6878,7 +6878,7 @@ void Renderer::rtMemoryGuard() {
     }
 }
 
-std::vector<std::string> Renderer::memoryReport() const {
+std::vector<std::string> Renderer::memoryReport(const std::vector<MemoryEntry>& extra) const {
     std::vector<std::string> lines;
     char buf[256];
     auto mb = [](uint64_t b) { return double(b) / (1024.0 * 1024.0); };
@@ -6904,6 +6904,38 @@ std::vector<std::string> Renderer::memoryReport() const {
             lines.emplace_back(buf);
         }
     }
+    // Everything else that holds memory, by owner.
+    std::vector<MemoryEntry> world;
+    if (terrainRenderer) terrainRenderer->memoryReport(world);
+    if (terrainManager) terrainManager->memoryReport(world);
+    if (m2Renderer) m2Renderer->memoryReport(world);
+    if (wmoRenderer) wmoRenderer->memoryReport(world);
+    if (characterRenderer) characterRenderer->memoryReport(world);
+    if (cachedAssetManager) {
+        const auto cs = cachedAssetManager->cacheStats();
+        std::snprintf(buf, sizeof(buf), "File cache (%zu files, budget %.0f MB)", cs.fileCount, mb(cs.fileBudget));
+        world.push_back({buf, 0, cs.fileBytes});
+        std::snprintf(buf, sizeof(buf), "DBC tables (%zu)", cs.dbcCount);
+        world.push_back({buf, 0, cs.dbcBytes});
+    }
+    if (vkCtx) {
+        const auto us = vkCtx->uploadStats();
+        std::snprintf(buf, sizeof(buf), "Upload staging (%zu buffers, %zu batches in flight, %zu deferred frees)",
+                      us.stagingBuffers, us.batchesInFlight, us.deferredCleanups);
+        world.push_back({buf, us.stagingBytes, 0});
+    }
+    world.insert(world.end(), extra.begin(), extra.end());
+    uint64_t worldGpu = 0, worldCpu = 0;
+    for (const auto& e : world) {
+        worldGpu += e.gpuBytes;
+        worldCpu += e.cpuBytes;
+        std::snprintf(buf, sizeof(buf), "  %s: GPU %.1f MB, CPU %.1f MB", e.name.c_str(), mb(e.gpuBytes),
+                      mb(e.cpuBytes));
+        lines.emplace_back(buf);
+    }
+    std::snprintf(buf, sizeof(buf), "World and caches in all: GPU %.0f MB, CPU %.0f MB", mb(worldGpu), mb(worldCpu));
+    lines.emplace_back(buf);
+
     std::vector<MemoryEntry> owners;
     if (rtScene_) rtScene_->memoryReport(owners);
     if (rtLighting_) rtLighting_->memoryReport(owners);
@@ -6918,6 +6950,29 @@ std::vector<std::string> Renderer::memoryReport() const {
     }
     std::snprintf(buf, sizeof(buf), "Ray tracing in all: GPU %.0f MB, CPU %.0f MB (lighting %s)", mb(gpuSum),
                   mb(cpuSum), rtLighting_ && rtLighting_->active() ? "on" : "off");
+    lines.emplace_back(buf);
+    // What the private bytes hold that no line above names. GPU memory in a
+    // host heap counts toward private bytes too on most drivers, so it is
+    // taken off as well.
+    uint64_t hostHeap = 0;
+    if (vkCtx && vkCtx->getAllocator()) {
+        const VkPhysicalDeviceMemoryProperties* props = nullptr;
+        vmaGetMemoryProperties(vkCtx->getAllocator(), &props);
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+        vmaGetHeapBudgets(vkCtx->getAllocator(), budgets);
+        for (uint32_t h = 0; props && h < props->memoryHeapCount; ++h) {
+            if ((props->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0) {
+                hostHeap += budgets[h].statistics.blockBytes;
+            }
+        }
+    }
+    const uint64_t named = worldCpu + cpuSum + hostHeap;
+    // Resident is the fairer measure: on Windows the driver charges part of
+    // the device-local memory to the process's private bytes as well.
+    std::snprintf(buf, sizeof(buf),
+                  "Not named above: resident %.0f MB, private %.0f MB (host heap blocks %.0f MB taken off)",
+                  pm.residentBytes > named ? mb(pm.residentBytes - named) : 0.0,
+                  pm.privateBytes > named ? mb(pm.privateBytes - named) : 0.0, mb(hostHeap));
     lines.emplace_back(buf);
     return lines;
 }

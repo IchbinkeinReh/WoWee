@@ -1,4 +1,6 @@
 #include "rendering/terrain_manager.hpp"
+#include "rendering/model_memory.hpp"
+#include <cstdio>
 #include "pipeline/detail_doodad_shade.hpp"
 #include "rendering/m2_view_distance.hpp"
 #include "pipeline/wmo_doodad_light.hpp"
@@ -2689,3 +2691,31 @@ int8_t TerrainManager::mapBigAlpha() {
 
 } // namespace rendering
 } // namespace wowee
+
+namespace wowee {
+namespace rendering {
+
+void TerrainManager::memoryReport(std::vector<MemoryEntry>& out) const {
+    uint64_t adt = 0, mesh = 0, rest = 0;
+    for (const auto& [coord, tile] : loadedTiles) {
+        (void)coord;
+        if (!tile) continue;
+        adt += adtBytes(tile->terrain);
+        mesh += terrainMeshBytes(tile->mesh);
+        rest += vectorBytes(tile->wmoInstanceIds) + vectorBytes(tile->wmoUniqueIds) +
+                vectorBytes(tile->m2InstanceIds) + vectorBytes(tile->doodadUniqueIds) +
+                vectorBytes(tile->detailChunks);
+    }
+    for (const auto& [key, c] : collisionTiles_) {
+        (void)key;
+        rest += vectorBytes(c.triangles);
+    }
+    char name[192];
+    std::snprintf(name, sizeof(name), "Terrain tiles (%zu): parsed ADT kept", loadedTiles.size());
+    out.push_back({name, 0, adt});
+    out.push_back({"Terrain tiles: built mesh kept", 0, mesh});
+    out.push_back({"Terrain tiles: the rest", 0, rest});
+}
+
+}  // namespace rendering
+}  // namespace wowee

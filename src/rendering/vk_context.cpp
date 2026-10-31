@@ -4075,6 +4075,40 @@ void VkContext::waitAllUploads() {
     inFlightBatches_.clear();
 }
 
+std::string VkContext::dumpAllocatorJson() const {
+    if (!allocator) return {};
+    char* statsJson = nullptr;
+    vmaBuildStatsString(allocator, &statsJson, VK_TRUE);
+    if (!statsJson) return {};
+    static int counter = 0;
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("wowee-vma-" + std::to_string(++counter) + ".json");
+    std::string written;
+    if (std::ofstream out(path); out) {
+        out << statsJson;
+        written = path.string();
+    }
+    vmaFreeStatsString(allocator, statsJson);
+    return written;
+}
+
+VkContext::UploadStats VkContext::uploadStats() const {
+    UploadStats s;
+    for (const auto& b : batchStagingBuffers_) {
+        s.stagingBytes += b.info.size;
+        ++s.stagingBuffers;
+    }
+    for (const auto& batch : inFlightBatches_) {
+        for (const auto& b : batch.stagingBuffers) {
+            s.stagingBytes += b.info.size;
+            ++s.stagingBuffers;
+        }
+    }
+    s.batchesInFlight = inFlightBatches_.size();
+    for (const auto& q : deferredCleanup_) s.deferredCleanups += q.size();
+    return s;
+}
+
 void VkContext::deferStagingCleanup(AllocatedBuffer staging) {
     batchStagingBuffers_.push_back(staging);
 }

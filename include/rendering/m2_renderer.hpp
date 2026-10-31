@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/memory_report.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/client_ribbon.hpp"
 #include "rendering/spatial_grid.hpp"
@@ -888,6 +889,10 @@ public:
     // Stats
     [[nodiscard]] bool isInitialized() const { return initialized_; }
     [[nodiscard]] uint32_t getModelCount() const { return static_cast<uint32_t>(models.size()); }
+    /// What the doodads hold, for /mem: the models' geometry on the GPU and
+    /// their animation, particle and collision data kept on the CPU, the
+    /// instances, and the texture cache.
+    void memoryReport(std::vector<MemoryEntry>& out) const;
     [[nodiscard]] uint32_t getInstanceCount() const { return static_cast<uint32_t>(instances.size()); }
     [[nodiscard]] uint32_t getTotalTriangleCount() const;
     [[nodiscard]] uint32_t getDrawCallCount() const { return lastDrawCallCount; }

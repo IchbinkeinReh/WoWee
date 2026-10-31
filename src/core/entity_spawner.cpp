@@ -3,6 +3,8 @@
 #include "core/character_component.hpp"
 #include "core/item_attachments.hpp"
 #include "core/weapon_attachment.hpp"
+#include "rendering/model_memory.hpp"
+#include <cstdio>
 #include "rendering/m2_model_classifier.hpp"
 #include "core/appearance_composer.hpp"
 #include "pipeline/char_sections.hpp"
@@ -3206,3 +3208,33 @@ void EntitySpawner::spawnOnlineCreature(uint64_t guid, uint32_t displayId, float
 
 } // namespace core
 } // namespace wowee
+
+namespace wowee {
+namespace core {
+
+void EntitySpawner::memoryReport(std::vector<rendering::MemoryEntry>& out) const {
+    uint64_t tex = 0;
+    size_t texCount = 0;
+    for (const auto& [displayId, textures] : displayIdPredecodedTextures_) {
+        (void)displayId;
+        for (const auto& [path, img] : textures) {
+            (void)path;
+            ++texCount;
+            tex += rendering::vectorBytes(img.data) + rendering::vectorBytes(img.mipmaps);
+            for (const auto& m : img.mipmaps) tex += rendering::vectorBytes(m);
+        }
+    }
+    uint64_t models = 0;
+    for (const auto& [path, m] : attachmentModelData_) {
+        (void)path;
+        if (m) models += rendering::m2ModelBytes(*m);
+    }
+    char name[192];
+    std::snprintf(name, sizeof(name), "Spawner: decoded textures waiting (%zu)", texCount);
+    out.push_back({name, 0, tex});
+    std::snprintf(name, sizeof(name), "Spawner: weapon models kept (%zu)", attachmentModelData_.size());
+    out.push_back({name, 0, models});
+}
+
+}  // namespace core
+}  // namespace wowee

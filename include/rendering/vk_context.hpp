@@ -189,6 +189,20 @@ public:
     void deferRawStagingCleanup(VkBuffer buffer, VkDeviceMemory memory);
     void freeRawStaging();
     void deferStagingCleanup(AllocatedBuffer staging);
+    /// For /mem: staging buffers the upload batches still hold (the one being
+    /// built and those in flight), how many batches are in flight, and how
+    /// many deferred destructions are queued across the frame slots.
+    struct UploadStats {
+        uint64_t stagingBytes = 0;
+        size_t stagingBuffers = 0;
+        size_t batchesInFlight = 0;
+        size_t deferredCleanups = 0;
+    };
+    [[nodiscard]] UploadStats uploadStats() const;
+    /// Write the allocator's detailed statistics (every allocation, with its
+    /// size and usage) to a JSON file, for /mem dump. Returns the path, or
+    /// empty when it could not be written.
+    std::string dumpAllocatorJson() const;
     void pollUploadBatches();    // Check completed async uploads, free staging buffers
     void waitAllUploads();       // Block until all in-flight uploads complete
 

@@ -2,6 +2,8 @@
 #include "rendering/depth_convention.hpp"
 #include "rendering/shadow_params.hpp"
 #include "rendering/terrain_renderer.hpp"
+#include "rendering/model_memory.hpp"
+#include <cstdio>
 #include "rendering/rt_scene.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_texture.hpp"
@@ -1594,3 +1596,23 @@ void TerrainRenderer::calculateBoundingSphere(TerrainChunkGPU& gpuChunk,
 
 } // namespace rendering
 } // namespace wowee
+
+namespace wowee {
+namespace rendering {
+
+void TerrainRenderer::memoryReport(std::vector<MemoryEntry>& out) const {
+    VmaAllocator alloc = vkCtx ? vkCtx->getAllocator() : VK_NULL_HANDLE;
+    uint64_t gpu = 0;
+    for (const auto& c : chunks) {
+        gpu += allocationBytes(alloc, c.vertexAlloc) + allocationBytes(alloc, c.indexAlloc) +
+               allocationBytes(alloc, c.paramsAlloc);
+    }
+    char name[192];
+    std::snprintf(name, sizeof(name), "Terrain chunks (%zu): geometry", chunks.size());
+    out.push_back({name, gpu, vectorBytes(chunks)});
+    std::snprintf(name, sizeof(name), "Terrain textures (%zu)", textureCache.size());
+    out.push_back({name, static_cast<uint64_t>(textureCacheBytes_), 0});
+}
+
+}  // namespace rendering
+}  // namespace wowee
