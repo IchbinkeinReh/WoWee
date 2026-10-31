@@ -721,7 +721,9 @@ public:
         return r;
     }
     /// The system said it is short of memory (SDL_EVENT_LOW_MEMORY: Android's
-    /// onLowMemory, and onTrimMemory at its critical levels).
+    /// onLowMemory, and onTrimMemory at its critical levels; iOS's memory
+    /// warning). The next update frees what loads again on its own: the asset
+    /// file cache and the creature models nothing draws.
     void noteSystemLowMemory();
     uint32_t getShadowMapSize() const { return SHADOW_MAP_SIZE; }
     void setViewDistance(float distance);
@@ -1170,6 +1172,7 @@ private:
     double rtLastRamCheck_ = 0.0;
     double rtOfferAgainAt_ = 0.0;
     std::atomic<double> systemLowAt_{-1e9};  // set from the event watcher, maybe off the main thread
+    double systemLowFreedAt_ = -1e9;         // the warning update() last acted on
 public:
     /// The Debug Graphics views of the ray traced water: its reflection
     /// alone, and what comes up through it alone.

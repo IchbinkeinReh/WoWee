@@ -176,6 +176,11 @@ public:
      */
     void clearDBCCache();
 
+    /// Drops the file cache alone, for the system's low-memory warning: every
+    /// file in it is read again from disk when next asked for. The DBCs stay,
+    /// since what holds one expects it to.
+    void clearFileCache();
+
 
     /**
      * Resolve a normalized WoW path to its on-disk location. Checks the

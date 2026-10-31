@@ -782,6 +782,13 @@ void AssetManager::clearCache() {
     fileCache.clear();
     LOG_INFO("Cleared asset cache (DBC + file cache)");
 }
+
+void AssetManager::clearFileCache() {
+    std::lock_guard<std::shared_mutex> lock(cacheMutex);
+    const size_t bytes = fileCache.bytes();
+    fileCache.clear();
+    LOG_INFO("Cleared asset file cache (", bytes / (1024 * 1024), " MB)");
+}
 std::string AssetManager::normalizePath(const std::string& path) const {
     std::string normalized = path;
     std::replace(normalized.begin(), normalized.end(), '/', '\\');

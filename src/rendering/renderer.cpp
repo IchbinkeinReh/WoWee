@@ -3434,6 +3434,18 @@ void Renderer::update(float deltaTime) {
     // Periodic cache hygiene: drop model GPU data no longer referenced by active instances.
     static float modelCleanupTimer = 0.0f;
     modelCleanupTimer += deltaTime;
+    // The system asked for memory back (iOS's memory warning, Android's
+    // onTrimMemory): a phone ends an app that ignores it. Once per warning,
+    // the file cache goes and the cleanup runs now, letting go of every
+    // creature model nothing draws rather than only those unused for five
+    // minutes. All of it loads again when it is next needed.
+    const double lowAt = systemLowAt_.load();
+    const bool freeForSystem = lowAt > systemLowFreedAt_;
+    if (freeForSystem) {
+        systemLowFreedAt_ = lowAt;
+        if (cachedAssetManager) cachedAssetManager->clearFileCache();
+        modelCleanupTimer = 5.0f;
+    }
     if (modelCleanupTimer >= 5.0f) {
         // Both can wait for the device to go idle when there is something to
         // free, which shows up as a worst-case spike every five seconds.
@@ -3456,7 +3468,8 @@ void Renderer::update(float deltaTime) {
                 const char* v = std::getenv("WOWEE_MODEL_UNLOAD_SECONDS");
                 return (lua && *lua && v && *v) ? std::max(1L, std::atol(v)) : 300L;
             }();
-            characterRenderer->cleanupUnusedModels(std::chrono::seconds(graceSeconds));
+            characterRenderer->cleanupUnusedModels(
+                std::chrono::seconds(freeForSystem ? 0L : graceSeconds));
         }
         modelCleanupTimer = 0.0f;
     }
