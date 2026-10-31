@@ -553,6 +553,12 @@ constexpr SettingGerman kGerman[] = {
      "Maus umkehren",
      "Maus nach vorn schieben, um nach oben zu sehen, wie in einem Flugsimulator.",
      nullptr, "INVERT_MOUSE", nullptr},
+    {"invertyaw",
+     "Maus waagerecht umkehren",
+     "Maus nach rechts bewegen, um nach links zu schauen. Nur für die Maus: "
+     "Controller, Touchscreen und Headset drehen die Sicht jeweils auf ihre "
+     "eigene Weise.",
+     nullptr, nullptr, nullptr},
     {"gamepad",
      "Controller verwenden",
      "Einen angeschlossenen Controller bewegen, schauen, anvisieren und zaubern lassen. Der linke "

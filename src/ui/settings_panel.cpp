@@ -420,6 +420,7 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
             if (auto* cameraController = renderer->getCameraController()) {
                 cameraController->setMouseLook(pendingMouseSensitivity);
                 cameraController->setInvertMouse(pendingInvertMouse);
+                cameraController->setInvertYaw(pendingInvertYaw);
                 cameraController->setPivotHeight(pendingPivotHeight);
                 cameraController->setIdleOrbitEnabled(pendingIdleCameraOrbit);
                 cameraController->setMaxDistanceFactor(cameraDistanceFactor(pendingCameraMaxDistance));
@@ -1278,6 +1279,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "pivotheight",     .asFloat = &SettingsPanel::pendingPivotHeight},
     {.key = "idleorbit",       .asBool  = &SettingsPanel::pendingIdleCameraOrbit},
     {.key = "invertmouse",     .asBool  = &SettingsPanel::pendingInvertMouse},
+    {.key = "invertyaw",       .asBool  = &SettingsPanel::pendingInvertYaw},
     {.key = "gamepad",          .asBool  = &SettingsPanel::pendingGamepadEnabled},
     {.key = "gamepadlookspeed", .asFloat = &SettingsPanel::pendingGamepadLookSpeed},
     {.key = "gamepadinvertlook", .asBool = &SettingsPanel::pendingGamepadInvertLook},
@@ -1585,6 +1587,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         }
     } else if (key == "invertmouse") {
         if (cameraController) cameraController->setInvertMouse(pendingInvertMouse);
+    } else if (key == "invertyaw") {
+        if (cameraController) cameraController->setInvertYaw(pendingInvertYaw);
     } else if (key == "gamepad") {
         ui::gamepadControls().setEnabled(pendingGamepadEnabled);
     } else if (key == "gamepadlookspeed") {

@@ -162,7 +162,7 @@ void GameScreen::reapplySettingsAfterGpuRebuild(rendering::Renderer* renderer) {
     // list above does not carry them, because at startup the camera is given
     // them by the stored CVars instead.
     for (const char* key : {"fov", "camerashake", "mousespeed", "cameramaxdistance",
-                            "pivotheight", "idleorbit", "invertmouse"}) {
+                            "pivotheight", "idleorbit", "invertmouse", "invertyaw"}) {
         panel.applySettingSideEffects(key);
     }
 }
@@ -343,6 +343,7 @@ void GameScreen::applyCameraControlSettings() {
     if (auto* cam = renderer->getCameraController()) {
         cam->setMouseLook(settingsPanel_.pendingMouseSensitivity);
         cam->setInvertMouse(settingsPanel_.pendingInvertMouse);
+        cam->setInvertYaw(settingsPanel_.pendingInvertYaw);
         cam->setPivotHeight(settingsPanel_.pendingPivotHeight);
         cam->setIdleOrbitEnabled(settingsPanel_.pendingIdleCameraOrbit);
         cam->setShakeScale(settingsPanel_.pendingCameraShake);

@@ -48,6 +48,13 @@ public:
     [[nodiscard]] float getMousePitchSensitivity() const;
     void setInvertMouse(bool invert) { invertMouse = invert; }
     [[nodiscard]] bool isInvertMouse() const { return invertMouse; }
+    /// The yaw's own switch, which the original client keeps apart from the
+    /// pitch's: its mouse-look handler turns the view with
+    /// -(mouseInvertYaw ? -1 : 1 * yawDelta) and tips it with
+    /// (mouseInvertPitch ? -1 : 1 * pitchDelta) two calls later (0x006020b0),
+    /// so neither cvar says anything about the other axis.
+    void setInvertYaw(bool invert) { invertYaw = invert; }
+    [[nodiscard]] bool isInvertYaw() const { return invertYaw; }
     /// How far back the camera may be pulled, as a multiple of the original
     /// client's own limit.
     ///
@@ -635,6 +642,7 @@ private:
     float mouseSensitivity = 0.225f;
     float mousePitchSensitivity = 0.15f;
     bool invertMouse = false;
+    bool invertYaw = false;
     bool mouseButtonDown = false;
     bool leftMouseDown = false;
     bool rightMouseDown = false;

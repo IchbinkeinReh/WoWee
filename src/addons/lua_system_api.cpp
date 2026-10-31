@@ -1667,6 +1667,13 @@ constexpr ClientCVarBinding kClientCVars[] = {
     // added. It has now, so they are rows like the rest.
     {"gxvsync",              "vsync"},
     {"mouseinvertpitch",     "invertmouse"},
+    // The pair's other half, which the game never put on a slider: its
+    // mouse-look handler signs the yaw delta by this CVar and nothing else
+    // does (0x006020b0), so the row this points at is the only way to reach it
+    // besides typing the name. Bound rather than read at the look site so the
+    // panel, the console, an addon's SetCVar and settings.cfg all land on one
+    // value, as every other row here does.
+    {"mouseinvertyaw",       "invertyaw"},
     // The client keeps this one and pushes it at the game handler each frame,
     // so writing the setting is what makes the checkbox stick across a session
     // as well as within one. The branch it replaces wrote the handler directly

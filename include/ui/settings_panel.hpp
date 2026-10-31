@@ -186,6 +186,7 @@ public:
     // Look Speed start of 180 of its degrees times its 0.00125 per unit.
     float pendingMouseSensitivity = 0.225f;
     bool pendingInvertMouse = false;
+    bool pendingInvertYaw = false;
     bool pendingGamepadEnabled = true;
     float pendingGamepadLookSpeed = 180.0f;   // degrees a second at full stick
     bool pendingGamepadInvertLook = false;

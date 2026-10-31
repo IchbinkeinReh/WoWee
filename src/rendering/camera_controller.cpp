@@ -3880,8 +3880,13 @@ void CameraController::processMouseMotion(const SDL_MouseMotionEvent& event) {
     // SDL yrel > 0 = mouse moved DOWN. In WoW, mouse-down = look down = pitch decreases.
     // invertMouse flips to flight-sim style (mouse-down = look up).
     const float invert = invertMouse ? 1.0f : -1.0f;
+    // Yaw has its own switch and its own cvar (mouseInvertYaw), signed at the
+    // same place the pitch is. Only here: the controller's other look caller,
+    // applyLookDelta, is the pad, the touch screen and the headset, and each of
+    // those names its own axes before asking for the turn.
+    const float invertY = invertYaw ? 1.0f : -1.0f;
     // Each axis on its own gain, the picture's ratio inside both.
-    lookBy(-event.xrel * getMouseSensitivity(),
+    lookBy(event.xrel * getMouseSensitivity() * invertY,
            event.yrel * getMousePitchSensitivity() * invert);
 }
 
