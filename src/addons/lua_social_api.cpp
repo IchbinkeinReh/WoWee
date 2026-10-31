@@ -1816,8 +1816,57 @@ void registerSocialLuaAPI(lua_State* L) {
                 // (unitpopup.lua:196-202) - and that path has no `unit` at all, so
                 // the `not unit` test in front of this one answers first.
                 {"UnitIsSameServer", [](lua_State* L) -> int { lua_pushboolean(L, 1); return 1; }},
-                // Recruit-a-Friend summoning, which needs a linked account.
-                {"CanSummonFriend", luaReturnFalse},
+                // Recruit-a-Friend summoning: the summon half of the feature
+                // CanGrantLevel was adjudicated against above, and each row here
+                // is what the reference client already does on a realm that never
+                // taught it the summon spell.
+                //
+                // CanSummonFriend (0x0051d2b0) turns its one unit token into a
+                // guid (0x0060c1c0) and asks 0x006d7630, pushing 1.0 when that
+                // answers 0 and nothing at all otherwise - never false.
+                // 0x006d7630 answers in this order: no guid (8); the linked test
+                // behind IsReferAFriendLinked failing (1); a guid in neither the
+                // party (0x0052c680) nor the guild roster (0x005726f0) (9); then
+                // off whatever record the guid has - a friend row (0x0052bee0) or
+                // a guild row (0x005727b0), or the unit's own fields when it is a
+                // player - offline (row +0x8 bit 0 clear; 13), level 61 or over
+                // (row +0x18 as a word, UNIT_FIELD_LEVEL at blob +0xc0 for a
+                // player; 10), and a summon cooldown still running (11). The leg
+                // that answers here is the second, and it is one bit:
+                // UNIT_DYNAMIC_FLAGS 0x40, the same read IsReferAFriendLinked now
+                // makes in lua_unit_api.cpp, which no realm of this client's asks
+                // for. So nil rather than the flat false that stood here: same
+                // truthiness, and the shape the client pushes.
+                //
+                // SummonFriend (0x00523260) re-asks that gate. A refusal other
+                // than 9 or 13 is said on the spot by 0x005219e0, which picks the
+                // line out of the same ERR_REFER_A_FRIEND_* table this repository
+                // already carries for the server's SMSG_REFER_A_FRIEND_FAILURE;
+                // 9 and 13 ask the guid-keyed name cache (0x0067d770) first and
+                // say it once the name arrives. Neither is reachable through the
+                // UI here in any case - unitpopup.lua:787 hides both menu entries
+                // unless IsReferAFriendLinked answers.
+                //
+                // A clean answer casts a spell: the summonee is made the target
+                // (0x00518dc0) if they are not already, DAT_00be7d88 is cast at
+                // them (0x0080da40 -> 0x0080cce0), and the target is put back.
+                // DAT_00be7d88 is no constant, and nothing in the client names
+                // it: it is the id of whichever spell the client was *taught*,
+                // recorded in the SMSG_LEARNED_SPELL path (handler 0x006e7d60 ->
+                // 0x006e7b00 -> 0x00542030) for a row carrying 0x98 in one
+                // particular column of the spell record, read at offset 0x11c
+                // there and again by the cooldown query 0x00807980, which refuses
+                // a spell carrying 0x4e or 0x2f in it, while 0x006e7b00 compares
+                // the same column against 0x28, 0x3c, 0x65 and 0x9b - a column of
+                // effect ids, whose name the binary never states. Nothing else
+                // writes the global, so where no such spell is taught the id stays
+                // 0, 0x0080cce0 fails to fetch the row of spell 0 and returns
+                // without writing a packet: the no-op this row is, packet for
+                // packet. GetSummonFriendCooldown reads its numbers for that same
+                // id out of the same store the gate's cooldown leg asks
+                // (0x00809000, store 0), so all three names hang off one spell the
+                // realm would have to supply - see lua_system_api.cpp.
+                {"CanSummonFriend", [](lua_State* L) -> int { lua_pushnil(L); return 1; }},
                 {"SummonFriend",    [](lua_State* L) -> int { (void)L; return 0; }},
                 // The voice mute list, which is the third list SMSG_CONTACT_LIST
                 // fills (mask bit 0x4) and which the friends panel's mute tab

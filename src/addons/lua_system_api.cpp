@@ -3813,10 +3813,6 @@ static int32_t& layoutMode() {
 }
 
 
-/// A cooldown that is not running: start and duration both zero. Two values,
-/// because the caller adds them together on the next line -
-/// local start, duration = GetSummonFriendCooldown(); start + duration - and
-/// one of them missing is arithmetic on nil.
 /// The resolutions this client offers, as "WIDTHxHEIGHT" strings, and which of
 /// them is current. One entry - the window as it actually is - because this
 /// client does not enumerate modes.
@@ -4996,10 +4992,25 @@ static int lua_LoadAddOn(lua_State* L) {
     return 2;
 }
 
+/// A cooldown that is not running. Three values, in the order the reference
+/// client's GetSummonFriendCooldown (0x00511d30) pushes them: start, duration,
+/// and a third the caller ignores - FrameXML reads the first two and adds them
+/// (`local start, duration = GetSummonFriendCooldown(); start + duration`), so
+/// one of them missing is arithmetic on nil.
+///
+/// The client asks its own cooldown store for the spell id it was taught
+/// (0x00809000, whose instructions push the three outputs in the order
+/// duration, start, enabled and so hand back start and duration swapped unless
+/// the caller swaps them back), and that store sets enabled to 1 before it looks
+/// anything up - so a client holding no such spell still answers "enabled", with
+/// 0 and 0 for the times. Hence the third value here: 0, 0, 1 and not 0, 0.
+/// See the CanSummonFriend row in lua_social_api.cpp for why no realm of this
+/// client's ever supplies that spell id.
 static int lua_ReturnNoCooldown(lua_State* L) {
     lua_pushnumber(L, 0.0);
     lua_pushnumber(L, 0.0);
-    return 2;
+    lua_pushnumber(L, 1.0);
+    return 3;
 }
 
 /// Alliance or Horde for the player, and the same for anyone else until this
