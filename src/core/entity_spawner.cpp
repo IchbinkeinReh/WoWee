@@ -324,6 +324,10 @@ void EntitySpawner::resetAllState() {
     nonRenderableCreatureDisplayIds_.clear();
     displayIdModelCache_.clear();
     displayIdTexturesApplied_.clear();
+    // Decoded skins waiting for their display's first spawn. Left here, every
+    // map change carried them on, and a zone-hopping session piled up hundreds
+    // of megabytes of textures no spawn would ever ask for.
+    displayIdPredecodedTextures_.clear();
     charSectionsCache_.clear();
     charSectionsCacheBuilt_ = false;
     // The asset tree may differ next time - a failure is not carried over.

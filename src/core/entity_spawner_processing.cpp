@@ -172,8 +172,10 @@ void EntitySpawner::processAsyncCreatureResults(bool unlimited) {
                             " preDecoded=", result.predecodedTextures.size());
             }
         }
-        // Save remaining pre-decoded textures (display skins) for spawnOnlineCreature
-        if (!result.predecodedTextures.empty()) {
+        // Save remaining pre-decoded textures (display skins) for spawnOnlineCreature.
+        // Not once the display's skins are applied: applyCreatureDisplayTextures,
+        // the only reader, runs once per display, so they would wait for ever.
+        if (!result.predecodedTextures.empty() && !displayIdTexturesApplied_.count(result.displayId)) {
             displayIdPredecodedTextures_[result.displayId] = std::move(result.predecodedTextures);
         }
         displayIdModelCache_[result.displayId] = result.modelId;
