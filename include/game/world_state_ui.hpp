@@ -59,6 +59,21 @@ inline std::vector<size_t> shownRows(const std::vector<Row>& rows, const Place& 
     return out;
 }
 
+/// The world states the two Wintergrasp bindings read, by number.
+///
+/// Both server packets fill one map with bare id/value pairs - SMSG_INIT_WORLD_STATES
+/// 0x2c2 a ushort count and that many pairs (0x00526530 case 0x2c2, looping 0x00526984),
+/// SMSG_UPDATE_WORLD_STATE 0x2c3 a single pair (case 0x2c3) - and each record's value
+/// sits at +0x18, which is what 0x00548d10 hands back and every reader tests. Nothing
+/// on the wire names them, so which number means what is client knowledge, and these
+/// three are all this client asks for by literal.
+///
+/// 3801 is also the StateVariable of one WorldStateUI.dbc row (id 212 in this
+/// install's copy, and none of the 153 rows carries either of the other two).
+inline constexpr uint32_t kWintergraspTrackedState = 3801;     ///< 0xed9, whether Wintergrasp is being tracked at all
+inline constexpr uint32_t kWintergraspNextBattleState = 4354;  ///< 0x1102, when the next battle starts, in the world state clock's own seconds
+inline constexpr uint32_t kWintergraspQueueState = 4375;       ///< 0x1117, whether queueing for it is offered
+
 /// A world state's value, 0 for one not known (0x00548d10).
 using StateValue = std::function<uint32_t(uint32_t)>;
 

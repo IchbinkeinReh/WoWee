@@ -80,14 +80,24 @@ absent and all three were reachable. These two are not.
   * Movie recording. The renderer can capture one frame - Renderer::captureScreenshot
     writes a PNG - and there is no encoder behind it. MovieRecording_* is video.
 
-ABSENT FEATURES, WHICH IS WHAT THE STUB SAYS (28)
+ABSENT FEATURES, WHICH IS WHAT THE STUB SAYS
 
-The world map's debug objects, zone map, battlefield flag and vehicle
-positions, dungeon map floors and Wintergrasp timer; Battle.net and its friend
-list; voice chat and mutes; movie recording; mail stationery; achievement
-comparison; arena opponents; the multi-cast bar's offset; addon memory usage.
-Each is a feature this client does not have, and the stub is the honest shape
-of that.
+Battle.net and its friend list; voice chat and mutes; movie recording;
+achievement comparison; arena opponents; addon memory usage. Each is a feature
+this client does not have, and the stub is the honest shape of that. The world
+map's debug objects and zone maps are listed too, but they are not a feature
+missing here: the shipped client answers none of them as well, one `return 0`
+shared by all three names.
+
+Six rows that this header used to call absent are not (2026-10-31). The
+battlefield flag positions, the vehicles both maps draw pins for, the dungeon
+map's floors, the mail's stationery list and the Wintergrasp countdown are each
+answered now - off the packet or the table behind them, Wintergrasp off world
+states 3801 and 4354 (include/game/world_state_ui.hpp names the ids). The
+multi-cast bar's offset was never a bar state either: the client's binding
+pushes the literal 6 and reads nothing, and this repository now pushes the
+same. It stays on the list because a bare push is what this sweep looks for,
+and that is the right thing for it to look for.
 
 CORRECT ANSWERS THAT LOOK LIKE STUBS (9)
 

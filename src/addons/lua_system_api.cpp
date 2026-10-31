@@ -8747,7 +8747,19 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, 1);
             return 1;
         }},
-                {"CanQueueForWintergrasp",   lua_ReturnFalse},
+                // Whether Wintergrasp queueing is on offer, which is the
+                // battleground frame's timer icon and its tooltip. 0x00543600
+                // answers the number 1 when world state 4375 holds a non-zero
+                // value and nil otherwise - never false, which is what stood
+                // here; the interface only tests it for truth, so both read
+                // the same there, but the world state is the thing deciding it.
+                {"CanQueueForWintergrasp", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh || gh->getWorldState(game::world_state_ui::kWintergraspQueueState).value_or(0) == 0)
+                return luaReturnNil(L);
+            lua_pushnumber(L, 1.0);
+            return 1;
+        }},
                 {"ConvertToRaid",            lua_ReturnNothing},
                 {"FillLocalizedClassList",   lua_ReturnNothing},
                 // Sends the request rather than doing nothing. The reply is
@@ -8976,10 +8988,28 @@ void registerSystemLuaAPI(lua_State* L) {
                                  ? svc->getMapDungeonLevelCount() : 0);
             return 1;
         }},
-                // Bar offsets, added to a page number the line they
-                // are read on. No bonus or multi-cast bar is showing,
-                // and that is zero rather than nothing.
-                {"GetMultiCastBarOffset",    lua_ReturnZero},
+                // Which page a multi-cast button reads its actions from, added
+                // to NUM_ACTIONBAR_PAGES by ActionButton_CalculateAction for a
+                // button whose buttonType is MULTICASTACTIONBUTTON
+                // (actionbutton.lua:146). It is not a state and was never read
+                // as one: the client's binding (0x005b71e0) is one fldl of the
+                // double 6.0 at 0x00a0b708 and a push of it - nothing read
+                // first. So those nine buttons sit on page 12, slots 133..141,
+                // bar on screen or not; the zero here did not mean "no
+                // multi-cast bar", it put them on page 6, on top of the main
+                // bar's own buttons. WoWee draws that bar itself (the Totems
+                // takeover covers MultiCastActionBarFrame), so this only
+                // decides where a FrameXML-side button looks.
+                //
+                // The same address is what the table hands GetNumGlyphSockets,
+                // whose body here is six as well (lua_quest_api.cpp): the
+                // linker folded two bindings that each push the one pooled
+                // 6.0, so both sixes are the client's own number and not a
+                // count either of them works out.
+                {"GetMultiCastBarOffset", [](lua_State* L) -> int {
+            lua_pushnumber(L, 6.0);
+            return 1;
+        }},
                 // Which extra action bar the current form or stance uses.
                 // actionbutton.lua adds it to NUM_ACTIONBAR_PAGES to pick the
                 // page a bonus button reads from, so a flat zero left a druid
@@ -9341,7 +9371,31 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, 0);                      // 6: enabled (voice)
             return 6;
         }},
-                {"GetWintergraspWaitTime",   lua_ReturnNil},
+                // The countdown the Wintergrasp zone-info line and the
+                // battleground frame's timer both print, in whole seconds.
+                //
+                // 0x005435a0 asks 0x00548d10 for two world states. It looks at
+                // 3801 first: absent or zero, the binding returns without
+                // pushing anything, which is the nil both lines test. Then
+                // 4354 minus the world state clock - time() shifted by whatever
+                // SMSG_WORLD_STATE_UI_TIMER_UPDATE said the server's time is
+                // (0x005486e0 sets the shift, 0x00548700 reads through it) -
+                // and the record holds an absolute epoch second, so the
+                // difference is the time left. The result is clamped at zero,
+                // and an absent 4354 counts as a zero value rather than as
+                // missing, so that answers 0: the battleground frame's
+                // WINTERGRASP_IN_PROGRESS branch.
+                {"GetWintergraspWaitTime", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return luaReturnNil(L);
+            if (gh->getWorldState(game::world_state_ui::kWintergraspTrackedState).value_or(0) == 0)
+                return luaReturnNil(L);
+            const int64_t endsAt = static_cast<int32_t>(
+                gh->getWorldState(game::world_state_ui::kWintergraspNextBattleState).value_or(0));
+            const int64_t left = endsAt - gh->worldStateNow();
+            lua_pushnumber(L, static_cast<double>(left < 0 ? 0 : left));
+            return 1;
+        }},
                 {"GetNumWorldStateUI",       lua_GetNumWorldStateUI},
                 {"GetWorldStateUIInfo",      lua_GetWorldStateUIInfo},
                 // Whether the player is standing on a world PvP objective.

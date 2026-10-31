@@ -4298,7 +4298,11 @@ void registerQuestLuaAPI(lua_State* L) {
                 // is `FUN_0084e2a0(param_1, 0x4018000000000000); return 1;` -
                 // one number pushed, and 0x4018000000000000 is the double 6.0.
                 // So the count is not something the client works out of the
-                // GlyphSlot table; six is the answer for every class.
+                // GlyphSlot table; six is the answer for every class. The
+                // number is loaded from 0x00a0b708, and the same function is
+                // what the binding table gives GetMultiCastBarOffset: two
+                // bindings each pushing that one pooled double, folded into
+                // one body. See the note there.
                 //
                 // And this interface never asks. The glyph frame's six slots are
                 // XML-declared buttons, and its only glyph calls are
