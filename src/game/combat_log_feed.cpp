@@ -73,6 +73,15 @@ int32_t powerDivisor(uint32_t powerType) {
     return powerType < 7 ? kDivisors[powerType] : 1;
 }
 
+/// 0x007fe4b0: the token an ENERGIZE amount travels with. Not display words -
+/// the client hands these upper-case names to the interface and lets it pick
+/// the text, and past the seventh power it hands an empty string.
+const char* powerToken(uint32_t powerType) {
+    static constexpr const char* kTokens[7] = {"MANA", "RAGE", "FOCUS", "ENERGY",
+                                               "HAPPINESS", "RUNES", "RUNIC_POWER"};
+    return powerType < 7 ? kTokens[powerType] : "";
+}
+
 /// 0x00a2d394: the school each environmental type's damage is of.
 uint32_t environmentalSchool(uint32_t type) {
     static constexpr uint32_t kSchoolBit[7] = {0, 0, 0, 2, 3, 2, 5};
@@ -421,8 +430,13 @@ void CombatLogFeed::noteCombatText(const cl::Entry& e) {
     // name never arrives is dropped without one, and an entry held back for a
     // replay says its piece late - what the client's replay does not, since it
     // runs the same builders over records it is only remembering.
-    if (e.dst.guid == 0 || e.dst.guid != activePlayer()) return;
-
+    //
+    // Two builders compare the caster instead, and both of those raises are
+    // about the caster itself: 0x007519e0 is the cast's own finish (called at
+    // 0x0080ec6c out of 0x0080e1b0, and handed the guid read out of the cast
+    // record at +0x14), and 0x00750b60's second raise is gated in the source
+    // on the pair its caller hands it first - the caster's, read at 0x006d3383
+    // - because that one is the power the caster pulled out of the other unit.
     const auto raise = [this](size_t type, std::vector<cl::Arg> payload) {
         std::vector<cl::Arg> args;
         args.reserve(payload.size() + 1);
@@ -433,6 +447,33 @@ void CombatLogFeed::noteCombatText(const cl::Entry& e) {
         // why the amounts go out as numbers. The interface compares them.
         owner_.fireAddonEventValues("COMBAT_TEXT_UPDATE", args);
     };
+
+    if (e.src.guid != 0 && e.src.guid == activePlayer()) {
+        switch (e.event) {
+            case cl::Event::SpellCastSuccess:
+                // AttributesEx6 0x40 (the record's +0x28, the same word 0x00752710
+                // reads at entry): the raise wants it set, and the buff of a spell
+                // that has it set does not raise SPELL_AURA_START below.
+                if (const auto rec = spell(e.spellId); rec && (rec->attrEx6 & 0x40u) != 0)
+                    raise(0x1e, {cl::Arg::str(rec->name)});
+                break;
+            case cl::Event::SpellDrain:
+            case cl::Event::SpellLeech:
+            case cl::Event::SpellPeriodicDrain:
+            case cl::Event::SpellPeriodicLeech:
+                // 0x00750b60's second raise: what the caster kept, spelled as a
+                // gain, and only a leech's is spelled as a periodic one.
+                if (e.power.extraAmount != 0)
+                    raise(e.event == cl::Event::SpellPeriodicLeech ? 0x1d : 0x1c,
+                          {cl::Arg::num(e.power.extraAmount),
+                           cl::Arg::str(powerToken(e.power.powerType))});
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (e.dst.guid == 0 || e.dst.guid != activePlayer()) return;
 
     switch (e.event) {
         case cl::Event::SwingDamage:
@@ -511,11 +552,89 @@ void CombatLogFeed::noteCombatText(const cl::Entry& e) {
             // so a slow tick announces itself here where the client does not.
             break;
         }
+        case cl::Event::SpellInterrupt: {
+            // 0x007523d0, called at 0x006d3430: the guid pair compared is the one
+            // read for the log entry itself (the effect's target), and what is
+            // printed is the spell that was lost rather than the one that
+            // stopped it - this record's extra spell, the second of the two the
+            // builder was handed.
+            const auto stopped = spell(e.extraSpellId);
+            if (stopped && !stopped->name.empty())
+                raise(0x00, {cl::Arg::str(stopped->name)});  // INTERRUPT
+            break;
+        }
+        case cl::Event::SpellAuraApplied:
+        case cl::Event::SpellAuraRemoved: {
+            // 0x00752710: the aura's own unit is whose record this is (its guid
+            // pair comes out of the object at +8), and the payload is the spell's
+            // name alone. A dose is not told at all - 0x00752860, which makes the
+            // applied/removed dose pair, raises nothing.
+            const auto rec = spell(e.spellId);
+            if (!rec || rec->name.empty()) break;
+            const auto name = cl::Arg::str(rec->name);
+            if (e.event == cl::Event::SpellAuraRemoved)
+                raise(e.auraDebuff ? 0x20 : 0x1f, {name});
+            else if (e.auraDebuff)
+                raise(0x22, {name});
+            else if ((rec->attrEx6 & 0x40u) == 0)
+                raise(0x21, {name});
+            break;
+        }
+        case cl::Event::SpellDispel:
+        case cl::Event::SpellStolen: {
+            // 0x00752930, called from 0x006ce2b0: the pair compared is the guid
+            // read first out of the packet - the victim, which is the order this
+            // client parses the packet in too - and the name is the aura that came
+            // off, again the record's extra spell.
+            const auto removed = spell(e.extraSpellId);
+            if (removed && !removed->name.empty())
+                raise(0x28, {cl::Arg::str(removed->name)});  // SPELL_DISPELLED
+            break;
+        }
+        case cl::Event::SpellAuraBroken:
+        case cl::Event::SpellAuraBrokenSpell: {
+            // 0x00752a40, the same packet handler under the other opcode: a
+            // control the damage ended carries the same name, and here the aura
+            // spell is the record's own, the breaking spell its extra.
+            const auto rec = spell(e.spellId);
+            if (rec && !rec->name.empty())
+                raise(0x28, {cl::Arg::str(rec->name)});  // SPELL_DISPELLED
+            break;
+        }
+        case cl::Event::SpellExtraAttacks: {
+            // 0x00752520, called at 0x006d33dd with the same pair read for the
+            // entry: the spell's name and how many swings were added, which the
+            // log carries as the record's amount.
+            const auto rec = spell(e.spellId);
+            if (rec && !rec->name.empty())
+                raise(0x29, {cl::Arg::str(rec->name), cl::Arg::num(e.amount)});  // EXTRA_ATTACKS
+            break;
+        }
+        case cl::Event::SpellEnergize:
+        case cl::Event::SpellPeriodicEnergize:
+            // 0x00750a90: the amount already divided by the power's divisor, and
+            // the power's token after it.
+            raise(e.event == cl::Event::SpellPeriodicEnergize ? 0x1d : 0x1c,
+                  {cl::Arg::num(e.power.amount), cl::Arg::str(powerToken(e.power.powerType))});
+            break;
+        case cl::Event::SpellDrain:
+        case cl::Event::SpellLeech:
+        case cl::Event::SpellPeriodicDrain:
+        case cl::Event::SpellPeriodicLeech:
+            // 0x00750b60's first raise, for the unit the power came out of: the
+            // same ENERGIZE name with the amount negated, and - as the code
+            // stands - never the periodic spelling, whatever the subevent.
+            if (e.power.amount != 0)
+                raise(0x1c, {cl::Arg::num(-e.power.amount),
+                             cl::Arg::str(powerToken(e.power.powerType))});
+            break;
         default:
-            // Auras, an interrupt, a dispel and extra attacks are raised the
-            // same way from 0x00752710, 0x007523d0, 0x00752930 and 0x00751433 -
-            // names with a spell behind them, which this hook is the place for
-            // and has not been given yet.
+            // What is left is what the client raises somewhere this hook never
+            // sees: FACTION, HONOR_GAINED and ARENA_POINTS_GAINED come out of the
+            // reputation and honour paths (0x0050b6d0, 0x0050b8c0, 0x006d0e10)
+            // and fill no combat log entry, the ENCHANTMENT pair has no raiser at
+            // all, and SPELL_ACTIVE comes from the power bars (0x00530000), which
+            // is the one raise this client already had.
             break;
     }
 }
