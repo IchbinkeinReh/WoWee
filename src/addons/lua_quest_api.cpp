@@ -4704,18 +4704,30 @@ void registerQuestLuaAPI(lua_State* L) {
                 // reader's race and class come off the unit blob's bytes at
                 // +0x44 and +0x45. Then "|h[%s]|h|r" closes it.
                 //
-                // IsTradeSkillLinked is the other half of the same feature: with
-                // a window open it pushes the double 1.0 and the skill id that
-                // 0x0067d770 resolves - that one is the tradeskill window
-                // registry, and the branch that matters allocates a fresh window
-                // record, because the skill being shown is one the player does
-                // not have. With no window it pushes two nils. So the pair is
-                // about a linked window - somebody else's profession, opened
-                // off a link in chat - and this client never opens one, which is
-                // why a nil and a false are the right answers rather than
-                // placeholders. Neither dbc folder on this machine holds a Trade
-                // table of any name; the WotLK recipe list is filled by the
-                // realm, so whose list a window shows is the realm's to say.
+                // IsTradeSkillLinked (0x005da310) is the other half of the same
+                // feature, and it takes no argument either. It answers **two**
+                // values: with a linked window open (its own state dword at
+                // 0x00c235e4) it pushes the double 1.0 and then a name - the one
+                // the guid-keyed name cache (0x0067d770, the same one the item
+                // creator page walks, and which queues a realm query for a guid it
+                // has never heard of) answers for the guid pair the link stored at
+                // 0x00c23598/0x00c2359c, pushed by the C-string pusher, so a name
+                // the cache cannot fill comes back nil. Not a skill id: whose
+                // profession the window shows is the second value. Which guid the
+                // consumer recovers from a link is not proven by the binary beyond
+                // the header above carrying a player guid as %I64X; the state and
+                // the pair it reads are.
+                //
+                // With no linked window it pushes two nils. This row pushes one
+                // false, which is falsy the same way and leaves FrameXML's second
+                // local nil: the value count only matters to a caller using
+                // select("#", …). It stays a stub because this client never opens a
+                // linked window - the consume side is parsing the |Htrade: link,
+                // decoding its six-recipes-to-a-byte block and showing somebody
+                // else's profession, and that is what would set the state. Neither
+                // dbc folder on this machine holds a Trade table of any name; the
+                // WotLK recipe list is filled by the realm, so whose list a window
+                // shows is the realm's to say.
                 {"GetTradeSkillListLink",     [](lua_State* L) -> int { return luaReturnNil(L); }},
                 {"IsTradeSkillLinked",        [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
                 // The play-time limits, which are the realm's, not this
