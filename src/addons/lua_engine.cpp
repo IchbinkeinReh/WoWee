@@ -9368,7 +9368,9 @@ void LuaEngine::registerCoreAPI() {
         // geterrorhandler and seterrorhandler are C bindings now (lua_taint's
         // registerLuaApi), because what they keep is what the client hands to
         // every script call it protects - a Lua pair of shims could not be that.
-        "function debugstack(start, count1, count2) return '' end\n"
+        // debugstack went to a C binding the same way: walking the call stack is
+        // something a Lua function cannot do, its own frame being the only one it
+        // can see, and Blizzard_DebugTools reads that stack for every error.
         // WoW's own names for indexing the global table, which predate _G being
         // exposed and are still what a good deal of 3.3.5 code is written with.
         // Blizzard_DebugTools calls getglobal at file scope and failed to load

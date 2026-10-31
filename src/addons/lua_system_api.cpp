@@ -9252,10 +9252,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 // SMSG_TRIGGER_MOVIE is answered with CMSG_COMPLETE_MOVIE at
                 // once - so nothing.
                 {"GameMovieFinished",        lua_ReturnNothing},
-                // debuglocals([level]) (0x00819a60): the locals only inside the
-                // error handler's call (0x00d3f79c, set around it by
-                // 0x00819730), which this client never makes - so nothing.
-                {"debuglocals",              lua_ReturnNothing},
                 // ReplaceTradeEnchant() (0x00510b80 -> 0x0080c5f0): only with
                 // an enchant waiting on the trade window's slot (0x00d3f4e0
                 // 0x4010), which this client never puts there - so nothing.

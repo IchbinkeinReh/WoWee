@@ -1,5 +1,6 @@
 #include "addons/lua_taint.hpp"
 
+#include <cstdio>
 #include <cstring>
 #include <unordered_map>
 
@@ -69,6 +70,13 @@ void leaveScope() {
 lua_State* gHandlerState = nullptr;
 int gHandlerRef = LUA_NOREF;
 
+// Written 1 on the line before the client calls that handler and back to 0 on
+// the line after it (0x00819730, DAT_00d3f79c - set and cleared in place, with
+// nothing else in the binary touching it). debuglocals reads it and answers
+// nothing outside that window: the frame whose locals it would name belongs to
+// a call that has already unwound.
+bool gInErrorHandler = false;
+
 }  // namespace
 
 int scriptErrorHandler(lua_State* L) {
@@ -100,7 +108,9 @@ int scriptErrorHandler(lua_State* L) {
     if (gHandlerState != L || gHandlerRef == LUA_NOREF) return 1;
     lua_rawgeti(L, LUA_REGISTRYINDEX, gHandlerRef);
     lua_insert(L, -2);            // the handler goes under the message
+    gInErrorHandler = true;       // the window debuglocals answers in
     lua_pcall(L, 1, 1, 0);        // the handler's return takes its place
+    gInErrorHandler = false;
     return 1;
 }
 
@@ -128,6 +138,217 @@ int lua_geterrorhandler(lua_State* L) {
         lua_rawgeti(L, LUA_REGISTRYINDEX, gHandlerRef);
     else
         lua_pushnil(L);
+    return 1;
+}
+
+// debugstack([thread,] start [, count1 [, count2]]) (0x008178f0).
+//
+// The other half of what the error handler shows: Blizzard_DebugTools'
+// ScriptErrorsFrame_OnError does `local stack = debugstack(DEBUGLOCALS_LEVEL)`
+// and puts the result on the frame's "Stack:" line, and here that answered an
+// empty string, so the frame said what broke and nothing about where it was
+// reached from. Written from the same shape as lua_GenTraces - Lua's own
+// luaG_traceback, which is where the client's three wording strings come from:
+//
+//     <short_src>:[<line>:] <what it is>\n
+//
+// with the tail naming a named function (`in function \`Foo\''), a chunk
+// (in main chunk), a C or tail frame (` ?', which is what makes the familiar
+// `[C]: ?` line), or an anonymous one by where it was defined
+// (in function <src:linedefined>). start is 1 measured from the caller unless
+// a thread names the state, in which case it is 0; count1 is 12 levels and
+// count2 the 10 levels still worth showing after the ellipsis - and the
+// ellipsis is skipped entirely when what is left is short enough that hiding it
+// would hide more than it saves.
+int lua_debugstack(lua_State* L) {
+    lua_State* target = L;
+    int start = 1, count1 = 12, count2 = 10;
+    if (lua_type(L, 1) == LUA_TTHREAD) {
+        target = lua_tothread(L, 1);
+        lua_remove(L, 1);
+        start = 0;
+    }
+    // Each number at index 1 in turn, consumed from the front the way the
+    // client re-reads that one index: the first value that is not a number
+    // stays, because from there on it is the prefix instead of a count.
+    int* const counts[] = {&start, &count1, &count2};
+    for (int* count : counts) {
+        if (!lua_isnumber(L, 1)) break;
+        *count = static_cast<int>(lua_tointeger(L, 1));
+        lua_remove(L, 1);
+    }
+    // Anything left is a prefix the client concatenates in front of the trace;
+    // a value that is not one is handed straight back. The empty seed is what
+    // a trace with no levels at all returns.
+    if (lua_gettop(L) == 0) lua_pushliteral(L, "");
+    else if (!lua_isstring(L, 1)) return 1;
+
+    lua_Debug ar;
+    if (!lua_getstack(target, start, &ar)) { lua_concat(L, lua_gettop(L)); return 1; }
+    int level = start;
+    const int cutoff = start + count1;
+    bool mayEllipsis = true;
+    do {
+        int next = level + 1;
+        if (cutoff < next && mayEllipsis) {
+            mayEllipsis = false;
+            if (lua_getstack(target, next + count2, &ar)) {
+                lua_pushliteral(L, "...\n");
+                while (lua_getstack(target, next + 1 + count2, &ar)) ++next;
+            } else {
+                next = level;    // barely past the cut: show them all instead
+            }
+        } else if (lua_getinfo(target, "Sn", &ar)) {
+            std::string line(ar.short_src);
+            line += ":";
+            if (ar.currentline > 0) line += std::to_string(ar.currentline) + ":";
+            const char namewhat = ar.namewhat[0];
+            const char what = ar.what[0];
+            if (namewhat == 'f' || namewhat == 'g' ||
+                namewhat == 'l' || namewhat == 'm')
+                line += std::string(" in function `") + (ar.name ? ar.name : "") + "'";
+            else if (what == 'm') line += " in main chunk";
+            else if (what == 'C' || what == 't') line += " ?";
+            else
+                line += " in function <" + std::string(ar.source) + ":" +
+                        std::to_string(ar.linedefined) + ">";
+            line += "\n";
+            lua_pushstring(L, line.c_str());
+        }
+        level = next;
+    } while (lua_getstack(target, level, &ar));
+    lua_concat(L, lua_gettop(L));
+    return 1;
+}
+
+// How wide the client's buffer for one debuglocals answer is: 0x1000, a stack
+// buffer memset to zero at 0x00819a60 and appended to line by line, so a
+// function with more to say than that gets the front of the list.
+constexpr size_t kLocalsRoom = 0x1000;
+
+// One line of that answer, for the value sitting at the top of the stack
+// (0x00819300, which neither pops the value nor counts it). `depth` is the
+// indent: 0 for a local or an upvalue of the frame being reported, 1 for an
+// entry of a table that is one.
+void localLine(lua_State* L, const char* name, int depth, std::string& out) {
+    const std::string pad(depth, ' ');
+    const int type = lua_type(L, -1);
+    const char* text = nullptr;
+    switch (type) {
+    case LUA_TNIL:
+        out += pad + name + " = nil\n";
+        return;
+    case LUA_TBOOLEAN:
+        out += pad + name + (lua_toboolean(L, -1) ? " = true\n" : " = false\n");
+        return;
+    case LUA_TLIGHTUSERDATA:
+    case LUA_TUSERDATA:
+        out += pad + name + " = <userdata>\n";
+        return;
+    case LUA_TNUMBER:
+    case LUA_TSTRING:
+        // lua_tostring says a number in this Lua - it converts the slot in
+        // place, which is how a value gets Lua's own "%.14g". The quotes are
+        // what tells a string from a number, and they go on the string.
+        text = lua_tostring(L, -1);
+        out += pad + name + " = ";
+        if (type == LUA_TSTRING)
+            out += std::string("\"") + (text ? text : "") + "\"\n";
+        else
+            out += std::string(text ? text : "") + "\n";
+        return;
+    case LUA_TTABLE: {
+        // The client reads t[0] first and, when that holds a lightuserdata,
+        // prints what it points at in place of "<table>" - a way its own
+        // tables carry a size. Key 0 is just a key in this Lua (luaH_getnum),
+        // and nothing here puts a lightuserdata there, so every table is a
+        // plain one.
+        out += pad + name + " = <table> {\n";
+        if (depth == 0) {
+            // Only a top-level table is walked, and only one level down: the
+            // recursive call is made at indent 1, where a table prints its
+            // own braces and nothing between them.
+            lua_pushnil(L);
+            while (lua_next(L, -2) != 0) {
+                char key[32];
+                if (lua_isnumber(L, -2)) {
+                    std::snprintf(key, sizeof key, "%d",
+                                  static_cast<int>(lua_tonumber(L, -2)));
+                    localLine(L, key, 1, out);
+                } else {
+                    // A key that is not a number is said the way a value is;
+                    // only one with no wording at all - a function, say -
+                    // falls back on its type name.
+                    text = lua_tostring(L, -2);
+                    localLine(L, text ? text
+                                      : lua_typename(L, lua_type(L, -2)), 1, out);
+                }
+                lua_pop(L, 1);        // the value; the key is the cursor
+            }
+        }
+        out += pad + "}\n";
+        return;
+    }
+    case LUA_TFUNCTION: {
+        // ">nS": the copy pushed here is the one getinfo reads and drops, so
+        // the value stays for the caller to pop. 'n' gives a name only for a
+        // function found by walking the stack, so in practice every line this
+        // produces is the unnamed one - which is the branch the client's own
+        // wording spends more room on, and both are kept.
+        lua_pushvalue(L, -1);
+        lua_Debug ar;
+        if (lua_getinfo(L, ">nS", &ar)) {
+            const std::string where = std::string(ar.source) + ":" +
+                                      std::to_string(ar.linedefined);
+            if (ar.name)
+                out += pad + name + " = " + ar.name + "() defined " + where + "\n";
+            else
+                out += pad + name + " = <function> defined " + where + "\n";
+        } else {
+            out += pad + name + " = <function>\n";
+        }
+        return;
+    }
+    default:
+        out += pad + name + " = <" + lua_typename(L, type) + ">\n";
+        return;
+    }
+}
+
+// debuglocals([level]) (0x00819a60): the "Locals:" line of the same error
+// frame, one line per local and then per upvalue of one frame, with a
+// top-level table's entries listed under it. The level is counted the way
+// debugstack counts it - 1 being the frame above the one that asked - and the
+// client clamps anything below that to 1 rather than answering nothing.
+int lua_debuglocals(lua_State* L) {
+    if (!gInErrorHandler) return 0;    // nothing at all, as the client answers
+    double wanted = 1;
+    if (lua_isnumber(L, 1)) wanted = lua_tonumber(L, 1);
+    // Rounded, not cut off: the client turns the number into an int through
+    // the rounding conversion, so 3.5 names the fourth frame and not the
+    // third.
+    int level = static_cast<int>(wanted + (wanted < 0 ? -0.5 : 0.5));
+    if (level < 1) level = 1;
+    if (!lua_checkstack(L, LUA_MINSTACK)) return 0;
+    std::string out;
+    lua_Debug ar;
+    if (lua_getstack(L, level, &ar)) {
+        const char* name;
+        for (int i = 1; (name = lua_getlocal(L, &ar, i)) != nullptr; ++i) {
+            localLine(L, name, 0, out);
+            lua_pop(L, 1);
+        }
+        // "f" over a frame's record pushes that frame's function, which is
+        // what its upvalues are read from; then it comes back off.
+        lua_getinfo(L, "f", &ar);
+        for (int i = 1; (name = lua_getupvalue(L, -1, i)) != nullptr; ++i) {
+            localLine(L, name, 0, out);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    if (out.size() > kLocalsRoom) out.resize(kLocalsRoom);
+    lua_pushstring(L, out.c_str());
     return 1;
 }
 
@@ -484,11 +705,18 @@ void registerLuaApi(lua_State* L) {
     lua_register(L, "securecall", lua_securecall);
     lua_register(L, "hooksecurefunc", lua_hooksecurefunc);
     // Registered here rather than defined in the bootstrap chunk because the
-    // client's pair (0x008173c0, 0x00817420 - next to scrub and debugstack in
-    // the table at 0x00a44458) is what holds the handler, as a reference: the
-    // handler this file hands to every script call is the one they store.
+    // client's pair (the entries at 0x00a44458 and 0x00a44460, 0x008173c0 and
+    // 0x00817420) is what holds the handler, as a reference: the handler this
+    // file hands to every script call is the one they store.
     lua_register(L, "seterrorhandler", lua_seterrorhandler);
     lua_register(L, "geterrorhandler", lua_geterrorhandler);
+    // Two entries further along the same table (0x00a44480 and 0x00a44488) are
+    // debugstack and debuglocals, and a script error frame reads both off the
+    // error it was given - the first for its "Stack:" line, the second for
+    // "Locals:". A Lua pair of shims could give either of them an answer; only
+    // C can see the frames and the values they hold.
+    lua_register(L, "debugstack", lua_debugstack);
+    lua_register(L, "debuglocals", lua_debuglocals);
 }
 
 }  // namespace wowee::addons::taint
