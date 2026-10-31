@@ -2858,6 +2858,14 @@ public:
         auto it = onlineItems_.find(guid);
         return it == onlineItems_.end() ? 0u : it->second.entry;
     }
+    /// Who made an item this client has seen: the guid off its creator field,
+    /// captured when the item's block arrived. Zero for an item it does not
+    /// know, for one the realm wrote no creator into, and in the layouts that
+    /// do not name the field.
+    uint64_t getItemCreatorByGuid(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        return it == onlineItems_.end() ? 0u : it->second.creatorGuid;
+    }
     bool supportsEquipmentSets() const;
     void useEquipmentSet(uint32_t setId);
     /// ignoredSlotMask: bit i set leaves equipment slot i out of the set.
@@ -5348,6 +5356,10 @@ public:
         uint32_t flags = 0;              // ITEM_FIELD_FLAGS (bit 0x1 = soulbound)
         int32_t  randomPropertyId = 0;   // ITEM_FIELD_RANDOM_PROPERTIES_ID (signed)
         uint32_t suffixFactor = 0;       // ITEM_FIELD_PROPERTY_SEED (random-suffix stat scale)
+        /// ITEM_FIELD_CREATOR: who made the item, as a guid. Zero when the realm
+        /// wrote no creator - which is most items - and in the layouts older than
+        /// WotLK, which do not name the field.
+        uint64_t creatorGuid = 0;
     };
     bool isHostileFaction(uint32_t factionTemplateId) const {
         if (const int atWar = factionAtWarLive(factionTemplateId); atWar >= 0) return atWar == 1;

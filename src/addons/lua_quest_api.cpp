@@ -3689,9 +3689,10 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushstring(L, title.c_str());
             return 1;
         }},
-                // Nil today, and the frame drops the "from" line on a nil -
-                // which is honest where an invented name would not be. What is
-                // *not* honest is the reason this used to carry ("a page has no
+                // Nil is still the answer for a page this client cannot name an
+                // author for, and the frame drops the "from" line on a nil - which
+                // is honest where an invented name would not be. What *was* not
+                // honest is the reason this used to carry ("a page has no
                 // author on this wire, SMSG_ITEM_TEXT_QUERY_RESPONSE is an id
                 // and the words"). True of that response, wrong as an answer:
                 // the client (0x0058a480) never reads the page-text reply here.
@@ -3718,13 +3719,44 @@ void registerQuestLuaAPI(lua_State* L) {
                 // half - under one ABI reading +0x10 is the cache and +0x14 the id,
                 // under another the two are the guid pair itself.
                 //
-                // Either way the piece WoWee is missing is upstream of the binding:
-                // nothing reads ITEM_FIELD_CREATOR - no create-packet creator word
-                // or string block is parsed at all, the only creator guids kept
-                // anywhere are the trade window's rows (0x00704680) - and the book's
-                // source is kept as a title string rather than as an item or a unit
-                // to ask.
-                {"ItemTextGetCreator",  [](lua_State* L) -> int { return luaReturnNil(L); }},
+                // The piece that was missing is upstream of the binding: nothing
+                // read ITEM_FIELD_CREATOR, the guid an item's own update block
+                // carries (10 and 11 in the WotLK layout, low dword first), and the
+                // only creator guids kept anywhere were the trade window's rows
+                // (0x00704680). That field is read now and kept beside the entry,
+                // and the page's subject has been kept as a guid all along -
+                // setBookObject is this window's pair of globals.
+                //
+                // What that guid *names* is the half that cannot be settled here,
+                // and the reference has its own packet for it: its cache queries a
+                // guid pair (0x00668ce0 writes an opcode and one pair, and a second
+                // pair when the cache's +0x44 byte is set), so the author is looked
+                // up by the realm, which has the name in its own tables long after
+                // the creature that wrote the letter went away. The only names in
+                // this client's opcode table that fit that shape are
+                // CMSG_ITEM_NAME_QUERY and its response (0x2C4/0x2C5), which nothing
+                // here sends - an inference, not a read, since the binary carries no
+                // opcode names to compare against.
+                //
+                // So this answers from what is already known: the name held for that
+                // guid, a cached player name or a unit standing in view, and for a
+                // player guid still unknown it asks the name query it already sends
+                // for an unresolved chat sender. A creature out of sight stays nil,
+                // and the frame drops the "from" line - which is the same answer a
+                // page with no creator at all gets.
+                {"ItemTextGetCreator", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return luaReturnNil(L);
+            const uint64_t creator = gh->getItemCreatorByGuid(gh->getBookObject());
+            if (creator == 0) return luaReturnNil(L);
+            const std::string& name = gh->lookupName(creator);
+            if (name.empty()) {
+                if (game::vehicle::isPlayerGuid(creator)) gh->queryPlayerName(creator);
+                return luaReturnNil(L);
+            }
+            lua_pushstring(L, name.c_str());
+            return 1;
+        }},
                 // The material is carried, and the claim that it was not stood
                 // beside the line discarding it: the item query's four
                 // post-description words are PageText, LanguageID,

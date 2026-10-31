@@ -2190,6 +2190,13 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
     auto stackIt = block.fields.find(fieldIndex(UF::ITEM_FIELD_STACK_COUNT));
     auto durIt   = block.fields.find(fieldIndex(UF::ITEM_FIELD_DURABILITY));
     auto maxDurIt= block.fields.find(fieldIndex(UF::ITEM_FIELD_MAXDURABILITY));
+    // Who made the item: two dwords of a guid, low first. The WotLK layout names
+    // the pair; the older three answer 0xFFFF here and the lookup is skipped.
+    const uint16_t creatorField = fieldIndex(UF::ITEM_FIELD_CREATOR);
+    auto creatorLoIt = (creatorField != 0xFFFF)
+        ? block.fields.find(creatorField) : block.fields.end();
+    auto creatorHiIt = (creatorField != 0xFFFF)
+        ? block.fields.find(static_cast<uint16_t>(creatorField + 1u)) : block.fields.end();
     // ITEM_FIELD_FLAGS is 7 fields after STACK_COUNT (DURATION + 5×SPELL_CHARGES = 6, then
     // FLAGS) across every expansion; the enchant block that follows starts at +8.
     const uint16_t flagsField = (fieldIndex(UF::ITEM_FIELD_STACK_COUNT) != 0xFFFF)
@@ -2230,6 +2237,12 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
         if (flagsIt    != block.fields.end()) info.flags                 = flagsIt->second;
         if (randPropIt != block.fields.end()) info.randomPropertyId      = static_cast<int32_t>(randPropIt->second);
         if (seedIt     != block.fields.end()) info.suffixFactor          = seedIt->second;
+        // Both halves out of one block, or neither. A create block carries the
+        // guid whole; filling one half from a previous block and the other from
+        // this one would write a guid the realm never sent.
+        if (creatorLoIt != block.fields.end() && creatorHiIt != block.fields.end())
+            info.creatorGuid = creatorLoIt->second
+                             | (static_cast<uint64_t>(creatorHiIt->second) << 32);
         auto [itemIt, isNew] = owner_.onlineItemsRef().insert_or_assign(block.guid, info);
         // A CREATE_OBJECT that re-sends an already-tracked item with a changed stack
         // count (AzerothCore does this when crafting consumes a reagent) must still

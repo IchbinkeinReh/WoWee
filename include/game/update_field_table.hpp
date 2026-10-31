@@ -396,6 +396,21 @@ enum class UF : uint16_t {
     DYNAMICOBJECT_CASTTIME,
 
     // Item fields
+    /// Who made the item: a guid, low dword first. WotLK only - the older three
+    /// layouts put a CREATED_BY guid ahead of OWNER, which moves everything
+    /// behind it, and those three files are unverifiable from the one server
+    /// here, so nothing is asserted about them and the readers below stop at the
+    /// 0xFFFF this answers for them.
+    ///
+    /// At 10 and 11 here because the client's own item field table (the `.data`
+    /// descriptor block behind the field watchers) counts the item's fields from
+    /// the base: OWNER at nil, CONTAINED two past it, CREATOR four and
+    /// STACK_COUNT eight - and STACK_COUNT is the 14 this layout already carries,
+    /// which puts that base at the OBJECT_END of six every other block is
+    /// written from. The reading window asks about this one: ItemTextGetCreator
+    /// (0x0058a480) reads the guid off the item the page came from and names
+    /// whoever wrote it.
+    ITEM_FIELD_CREATOR,
     ITEM_FIELD_STACK_COUNT,
     ITEM_FIELD_DURABILITY,
     ITEM_FIELD_MAXDURABILITY,
