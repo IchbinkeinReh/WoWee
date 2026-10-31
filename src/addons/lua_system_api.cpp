@@ -20,6 +20,7 @@
 #include "game/battleground_flag.hpp"
 #include "game/minimap_tracking.hpp"
 #include "game/known_titles.hpp"
+#include "game/movement_handler.hpp"   // the client-control table, for GetBattlefieldVehicleInfo's seventh value
 #include "core/open_url.hpp"
 #include "core/version.hpp"
 #include "core/config_paths.hpp"
@@ -4038,6 +4039,115 @@ static int lua_GetBattlefieldFlagPosition(lua_State* L) {
     lua_pushnumber(L, 0.0);
     lua_pushstring(L, "");
     return 3;
+}
+
+/// GetNumBattlefieldVehicles() / GetBattlefieldVehicleInfo(index)
+///
+/// The vehicles the world map and the battleground minimap draw their pins for.
+/// Both loops ask for a count, then walk it, and hide whatever answers no
+/// position - so "no vehicles" is an answer those windows act on, and the
+/// answer they had here for years.
+///
+/// The client's list is unit-side and is never sent: see
+/// game::vehicle::kVehicleFlagShownOnMap for how a guid gets onto it and off
+/// again. Asking the units in view says the same set here; the client keeps its
+/// entries in the order the units came onto it, while these come back by guid,
+/// which is stable between frames. Both callers draw every entry the count
+/// admits rather than holding one entry to one slot, so nothing that is drawn
+/// moves because the order changed. The client stops at 40 (0x0054aba0); the
+/// same stop is kept here.
+static std::vector<uint64_t> battlefieldVehicleGuids(game::GameHandler* gh) {
+    std::vector<uint64_t> out;
+    if (!gh) return out;
+    const auto* tables = gh->vehicleRoster().tables();
+    if (!tables) return out;
+    for (const auto& [guid, entity] : gh->getEntityManager().getEntities()) {
+        const uint32_t vehicleId = gh->vehicleRoster().vehicleId(guid);
+        if (vehicleId == 0) continue;
+        const auto* row = tables->vehicle(vehicleId);
+        if (!row || (row->flags & game::vehicle::kVehicleFlagShownOnMap) == 0) continue;
+        out.push_back(guid);
+    }
+    std::ranges::sort(out);
+    if (out.size() > 40) out.resize(40);
+    return out;
+}
+
+static int lua_GetNumBattlefieldVehicles(lua_State* L) {
+    lua_pushnumber(L, static_cast<double>(battlefieldVehicleGuids(getGameHandler(L)).size()));
+    return 1;
+}
+
+/// Eight values, in the client's order (0x0054c4d0): the place on the map now
+/// showing, the unit's name, whether it is driven, what kind of vehicle it is,
+/// which way it faces, whether the local player is the one driving it, and
+/// whether it is still about.
+///
+/// No position is no answer at all - the client looks both coordinates up
+/// before it pushes anything and returns zero values when either fails, and
+/// worldmapframe.lua tests `if ( vehicleX and … )` and hides the pin.
+///
+/// The three that are not straight reads of the unit:
+///
+///   4 (isPossessed) picks the "Occupied" half of the texture pair. The client
+///     reads a bit of its own there - the byte at +0xd7 of the unit block that
+///     also carries the creator guid, read five times over in the decompile and
+///     written nowhere it shows - so the seats are asked instead: anyone sitting
+///     in one of them counts as driving it. An airship nobody drives stays
+///     unoccupied, which is the case the two maps show most.
+///
+///   7 (isPlayer) is the client's "+0xa30 0x400", whether the client controls
+///     that unit (0x00714ac0) - which is how a vehicle the player is standing
+///     in is not drawn a second time on top of the player's own marker. It is
+///     not a check of the guid's type, and WoWee has the same bit already:
+///     MovementHandler's client-control table, which SMSG_CLIENT_CONTROL_UPDATE
+///     fills.
+///
+///   6 is the facing. worldmapframe.lua hands it straight to SetRotation, so it
+///     is given in the same system the player arrow's facing is given in -
+///     GetPlayerFacing's converted one - and not raw.
+static int lua_GetBattlefieldVehicleInfo(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    auto* svc = getLuaServices(L);
+    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
+    if (!gh || !svc || index < 1) return luaReturnNil(L);
+    const auto guids = battlefieldVehicleGuids(gh);
+    if (index > static_cast<int>(guids.size())) return luaReturnNil(L);
+    const uint64_t guid = guids[static_cast<size_t>(index) - 1];
+    auto entity = gh->getEntityManager().getEntity(guid);
+    if (!entity) return luaReturnNil(L);
+
+    float u = 0.0f, v = 0.0f;
+    if (!svc->mapUVForWorldPos ||
+        !svc->mapUVForWorldPos(entity->getX(), entity->getY(), entity->getZ(), u, v)) {
+        return luaReturnNil(L);
+    }
+
+    const uint32_t vehicleId = gh->vehicleRoster().vehicleId(guid);
+    const auto* row = gh->vehicleRoster().tables() ? gh->vehicleRoster().tables()->vehicle(vehicleId)
+                                                   : nullptr;
+    bool occupied = false;
+    for (uint32_t seat = 0; seat < game::vehicle::kSeatCount && !occupied; ++seat) {
+        occupied = gh->vehicleRoster().occupant(guid, static_cast<uint8_t>(seat)) != 0;
+    }
+    auto* mh = gh->getMovementHandler();
+
+    lua_pushnumber(L, u);                                   // 1: x across the map
+    lua_pushnumber(L, v);                                   // 2: y down the map
+    lua_pushstring(L, entity->getName().c_str());           // 3: unitName
+    lua_pushboolean(L, occupied ? 1 : 0);                   // 4: isPossessed
+    if (row && row->uiLocomotionType < game::vehicle::kUiLocomotionNames.size()) {
+        lua_pushstring(L, game::vehicle::kUiLocomotionNames[row->uiLocomotionType]);
+    } else {
+        lua_pushnil(L);                                     // 5: vehicleType
+    }
+    lua_pushnumber(L, core::coords::canonicalToPlayerFacing(entity->getOrientation()));
+                                                            // 6: orientation
+    lua_pushboolean(L, mh && mh->unitHasClientControl(guid) ? 1 : 0);  // 7: isPlayer
+    // The client asks its dead-or-ghost vtable slot (+0x128) and inverts it;
+    // no health is how that reads here, the same test UnitIsDeadOrGhost makes.
+    lua_pushboolean(L, entity->getHealth() != 0 ? 1 : 0);   // 8: isAlive
+    return 8;
 }
 
 // ---- Chat window settings ----
@@ -8706,8 +8816,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // giving these the projection, not just filling them in.
                 {"GetCorpseMapPosition",     lua_GetBattlefieldPosition},
                 {"GetDeathReleasePosition",  lua_GetBattlefieldPosition},
-                {"GetNumBattlefieldVehicles", lua_ReturnZero},
-                {"GetBattlefieldVehicleInfo", lua_ReturnNil},
+                {"GetNumBattlefieldVehicles", lua_GetNumBattlefieldVehicles},
+                {"GetBattlefieldVehicleInfo", lua_GetBattlefieldVehicleInfo},
                 {"GetChatWindowInfo",        lua_GetChatWindowInfo},
                 // What a chat window listens to, and the whole reason chat
                 // shows anything. ChatFrame_OnLoad registers a chat frame for
