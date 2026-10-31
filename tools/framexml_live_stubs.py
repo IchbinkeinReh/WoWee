@@ -236,7 +236,22 @@ if not XML.is_dir():
 
 STUBS = {"lua_ReturnNil", "lua_ReturnZero", "lua_ReturnFalse", "lua_ReturnNothing",
          "lua_ReturnTrue", "lua_ReturnEmptyString", "lua_ContainerNoOp",
-         "lua_ContainerFalse", "lua_NoOp", "lua_Noop"}
+         "lua_ContainerFalse", "lua_NoOp", "lua_Noop",
+         # Four more spellings of the same body, missing from this set until
+         # 2026-10-31 and so invisible here: luaReturnFalse (lua_api_helpers.hpp
+         # :133, no underscore) is lua_ReturnFalse under another name, and
+         # lua_BNNothing / lua_BNZero / lua_BNFalse (lua_social_api.cpp:682-684)
+         # are the Battle.net rows' own flat no-ops - the Battle.net system this
+         # header already calls absent, reached through a helper name rather than
+         # an inline lambda, which is how its other BN rows did get listed.
+         #
+         # Left out on purpose: lua_compiledOutNothing answers nothing because
+         # the shipped client's body for those names was compiled out of it
+         # (0x008e5250, one function registered under all of them), so there is
+         # nothing missing to find; and lua_BNNilRow pushes nils with the arity
+         # the row readers unpack, which is the same absence said at the right
+         # width rather than a body that does nothing.
+         "luaReturnFalse", "lua_BNNothing", "lua_BNZero", "lua_BNFalse"}
 
 # The FrameXML files that belong to a handed-over element, which is all of them.
 # Derived from the takeover file rather than written out, and mapped to files
@@ -378,7 +393,13 @@ bound = {}
 inline_stub = {}
 for f in (ROOT / "src/addons").glob("*.cpp"):
     s = f.read_text(errors="ignore")
-    for m in re.finditer(r'\{(?:\.\w+\s*=\s*)?"([A-Za-z0-9_]+)",\s*(?:\.\w+\s*=\s*)?(?:&)?\s*(lua_[A-Za-z0-9_]+)\}', s):
+    # `lua_` was required here, which silently dropped every binding registered
+    # through a helper spelled without the underscore - `luaReturnFalse` at that,
+    # seven rows, and they were invisible to this tool rather than answered: a
+    # name that never reaches `bound` cannot be listed as a stub even after its
+    # spelling joined STUBS. The prefix is now `lua` and the set does the
+    # deciding, so an implementation name that is not a stub simply is not in it.
+    for m in re.finditer(r'\{(?:\.\w+\s*=\s*)?"([A-Za-z0-9_]+)",\s*(?:\.\w+\s*=\s*)?(?:&)?\s*(lua[A-Za-z0-9_]+)\}', s):
         bound[m.group(1)] = m.group(2)
     # The inline form. A binding registered as a lambda in the table is the
     # same binding to Lua, but only the named shared stubs - lua_ReturnNil and
