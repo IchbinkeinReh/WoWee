@@ -215,6 +215,19 @@ def main():
             if name == "operator" or re.search(
                     r"\b(?:static|constexpr|enum|using|typedef)\b", decl_line):
                 continue
+            # A statement verb where the type would be: the type half of the
+            # regex accepts any word, so `return charTitlesRows_;` parses as a
+            # member `charTitlesRows_` of type `return`. That is harmless while
+            # the captured word is a local (`return out;` gives `out`), and
+            # fatal when it names a member the class really does read: the
+            # accessor's own line was the only read, was skipped as the
+            # declaration, and the member was reported dead. 1158 of this
+            # scan's 18960 matches are such statements; the underscore rule
+            # below is what kept all of them but one quiet.
+            if decl_line.lstrip().split(None, 1)[0].rstrip(":") in \
+                    ("return", "throw", "co_return", "delete", "new", "case",
+                     "else", "static_assert", "do", "try"):
+                continue
             if not is_write_only(name, header, decl_line, scope):
                 continue
             line = text.count("\n", 0, m.start()) + 1
