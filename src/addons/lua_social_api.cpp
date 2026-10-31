@@ -1776,6 +1776,18 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh && name) gh->addVoiceIgnore(name);
             return 0;
         }},
+                // MutedList_Update() is not a client binding at all: the name
+                // is in the 12340 binary nowhere (not in its strings, and no
+                // entry in any method table), because in the interface the
+                // client was shipped with it is a Lua function - the one that
+                // fills the squelch frame's rows of muted names. This tree has
+                // no SquelchFrame anywhere and draws the ignore list itself
+                // (friendsframe.lua:451 reads the count, :541 the names), yet
+                // friendsframe.lua:1341 still calls the old name from
+                // FriendsFrameMuteButton_OnClick. Nothing here has a list to
+                // fill, and without a binding the press would raise - visibly
+                // so now, since an error a script raises goes to the handler
+                // the interface installs.
                 {"MutedList_Update", [](lua_State* L) -> int { (void)L; return 0; }},
 
                 // ---- Guild rank permissions ----

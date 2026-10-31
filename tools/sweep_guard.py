@@ -693,6 +693,18 @@ CHECKS = [
     # which do consult something - a Lua global, a C++ static - just not the
     # game handler.
     #
+    # Down to sixty-three on 2026-10-31, and the drop is the sweep's own reach
+    # narrowing rather than sixty-five stubs being answered: what it calls a
+    # stub now is a body that reduces to pushes, which counts GetMultiCastBar-
+    # Offset (six, because the client's binding is a bare literal) and leaves
+    # the BN family, the voice family and the debug zone map listed as they
+    # were. Two names did leave for good: debugstack and debuglocals, which
+    # answer their frames and values from C now instead of a Lua stub.
+    #
+    # Read that list before raising this number again. Rows like
+    # GetMultiCastBarOffset and IsMacClient are already the client's answer;
+    # what they ask is for a body that happens to be trivial, not for work.
+    #
     # The thirty-nine above were each read. The hundred and fifty-six that
     # joined them have not been, and saying so is the point of writing it here.
     # Two are worth naming: GetQuestLogCompletionText answers "" and
@@ -702,7 +714,7 @@ CHECKS = [
     # the packet that does carry them is the turn-in one, which arrives only
     # when the player is already standing at the NPC.
     ("framexml_live_stubs.py",
-     r"^\d+ bindings, \d+ of them stubs, (\d+) reached from a handed-over element", 128,
+     r"^\d+ bindings, \d+ of them stubs, (\d+) reached from a handed-over element", 63,
      "stubs reachable from an element FrameXML draws"),
     # Bindings that read fewer arguments than the interface passes. The only
     # sweep here that asks whether an answer used everything it was told -
