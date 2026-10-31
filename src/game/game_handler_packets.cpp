@@ -3407,6 +3407,10 @@ void GameHandler::registerRemainingOpcodes() {
             counters[owner].emplace(id, rec.counter);
             if (comparing && isStatisticCriteria(id)) latestUpdatedComparisonStats_.noteComparison(id);
         }
+        // Only the comparison at hand is kept, as the client keeps one
+        // comparison pair: every inspected player's full criteria list piled up
+        // here for the rest of the session otherwise.
+        comparisonCriteriaProgress_.clear();
         for (auto& [owner, perCriteria] : counters)
             comparisonCriteriaProgress_[owner] = std::move(perCriteria);
         inspectedPlayerAchievements_[inspectedGuid] = std::move(achievements);
