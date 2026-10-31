@@ -2130,6 +2130,22 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->castSpell(7355);
             return 0;
         }},
+                // GMReportLag(type) - the help frame's /lagro (helpframe.lua:455),
+                // and the client really does send it. 0x005acf30 casts the local
+                // player's own object (the assert-cast names Player_C.h, size 0x10),
+                // calls that object's vtable slot 0x2c to fill two stack floats, and
+                // writes CMSG_GM_REPORT_LAG (0x502) as a dword of the type one below
+                // what Lua passes, a dword read at +0xcc off the object the
+                // connection handle reaches (0x004d37e0: handle table entry, +8,
+                // +0xcc - a field of a heap object, not a TLS slot, which is what an
+                // earlier reading of that `fs:0x2c` had it as), and then the two
+                // floats as floats. The flush follows at 0x005acfe4.
+                //
+                // Not reproduced, and the layout is written down instead: what the
+                // two floats measure is still unnamed - Player_C's vtable is not
+                // reachable from the static tables - and there is no reader for the
+                // opcode here either, so sending numbers whose meaning is guessed
+                // would only buy a log line nobody can read.
                 {"GMReportLag", [](lua_State* L) -> int { (void)L; return 0; }},
                 {"GMResponseNeedMoreHelp", [](lua_State* L) -> int {
             taint::allowed(L, 0x11);   // see NewGMTicket
