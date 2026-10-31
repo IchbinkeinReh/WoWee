@@ -11,6 +11,7 @@
 #include "core/character_paths.hpp"
 #include "ui/settings_schema.hpp"
 #include "ui/settings_i18n.hpp"
+#include "rendering/camera_smooth.hpp"
 #include "pipeline/m2_asset_loader.hpp"
 #include "core/coordinates.hpp"
 #include "core/app_clock.hpp"
@@ -3948,9 +3949,20 @@ void Application::applyServerMovementState(float deltaTime) {
     // (SMSG_MONSTER_MOVE, 0x0073c8e0) - Charge's run among them - and the
     // keys do not move it meanwhile. Held one frame past its end, for the
     // player to be put where it ends.
+    //
+    // The player as the unit the camera looks at, as 0x00606f90 asks it, not
+    // as the active mover. Fear and charm take the player's control first
+    // (SMSG_CLIENT_CONTROL_UPDATE 0), and that leaves no mover at all
+    // (0x0072cca0) - so a feared player's runs were taken for nobody's: the
+    // character stood where the fear found it while the server ran it about,
+    // and the camera never took its Fear state. A seat moves its passenger
+    // (the vehicle's transport), not a spline of the player's.
     const uint64_t playerGuid = gameHandler ? gameHandler->getPlayerGuid() : 0;
-    const bool carriedBySpline = gameHandler && !onTaxi && gameHandler->activeMover() == playerGuid &&
-                                 gameHandler->onMoveSpline(playerGuid);
+    const bool seatedPassenger = entitySpawner_ && entitySpawner_->localPassengerState().has_value();
+    const bool carriedBySpline =
+        gameHandler && rendering::camera_smooth::playerOnServerSpline(gameHandler->onMoveSpline(playerGuid), onTaxi,
+                                                                      seatedPassenger, gameHandler->cameraTarget(),
+                                                                      playerGuid);
     const bool splineCarried = carriedBySpline || playerSplineLastFrame_;
     playerSplineLastFrame_ = carriedBySpline;
     if (renderer && renderer->getCameraController()) {

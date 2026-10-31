@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace wowee {
 namespace rendering {
@@ -76,6 +77,13 @@ constexpr float kTimeMin = 0.1f;
 constexpr float kTimeMax = 2.0f;
 /// The eases' own threshold, 0.001 radians (0x00601190, 0x00601410).
 constexpr float kAtRest = 0.001f * 57.29578f;
+/// How far the way a spline-carried character faces has to turn to be a new
+/// direction for the Fear state. The client sets the unit's facing to its
+/// spline's at once, so any change is a new one there; this client turns the
+/// character toward it over a few frames, and taking each of those small
+/// steps as new restarted the state's 0.4 s delay every frame, so the camera
+/// never moved while the character turned.
+constexpr float kFearNewFacing = 10.0f;
 
 /// What to do with the camera when the controls change.
 struct Plan {
@@ -129,6 +137,22 @@ inline Plan plan(State state, float yawFromFacing, float pitch, bool freelook, b
     }
     p.seconds = std::clamp(longest, kTimeMin, kTimeMax);
     return p;
+}
+
+/// Whether the Fear state's ease starts afresh: when none was planned yet
+/// for this spline, or the way the character faces has turned to a new
+/// direction since (kFearNewFacing).
+inline bool fearPlansAgain(bool planned, float facingDeg, float plannedFacingDeg) {
+    return !planned || std::fabs(std::remainder(facingDeg - plannedFacingDeg, 360.0f)) >= kFearNewFacing;
+}
+
+/// Whether the player is carried by a server spline as the camera sees it
+/// (0x00606f90): the unit the camera looks at - the player, not through a
+/// far sight - on a move spline, and not a flight path's nor a seat's. The
+/// active mover does not come into it: fear and charm take the player's
+/// control first, and that leaves no mover (0x0072cca0).
+inline bool playerOnServerSpline(bool onSpline, bool onTaxi, bool seated, uint64_t cameraTarget, uint64_t player) {
+    return onSpline && !onTaxi && !seated && player != 0 && cameraTarget == player;
 }
 
 }  // namespace camera_smooth

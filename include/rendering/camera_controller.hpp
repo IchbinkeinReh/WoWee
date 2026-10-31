@@ -682,6 +682,9 @@ private:
     bool releasedByLeft_ = false;
     /// Start (or stop) the follow smoothing for the controls' state.
     void startFollowSmoothing(camera_smooth::State state, bool pitchFree);
+    /// The Fear state's ease, planned for a character carried by a server
+    /// spline: afresh whenever the way it faces changes.
+    void followServerSpline();
     bool viewMovedByPlayer_ = false;
     /// The six view movements (+0x160: two bits each, started and stopped).
     struct ViewMove {

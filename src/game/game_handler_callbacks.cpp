@@ -1205,6 +1205,10 @@ uint64_t GameHandler::activeMover() const {
     return movementHandler_ ? movementHandler_->activeMover() : playerGuid;
 }
 
+uint64_t GameHandler::cameraTarget() const {
+    return movementHandler_ ? movementHandler_->cameraTarget() : playerGuid;
+}
+
 bool GameHandler::onMoveSpline(uint64_t guid) {
     return movementHandler_ && movementHandler_->onMoveSpline(guid);
 }

@@ -3095,6 +3095,10 @@ void CameraController::update(float deltaTime) {
 
     // During taxi flights, skip movement logic but keep camera orbit/zoom controls.
     if (externalFollow_) {
+        // Carried by a server spline, the character is followed here and not
+        // below - so this is where the Fear state is planned. It was only in
+        // the path below, which a spline never reaches, and never ran.
+        if (thirdPerson && serverMoved_ && !yawFollowsVehicleCamera_) followServerSpline();
         // Cancel any active intro/idle orbit so mouse panning works during taxi.
         // The intro handling code (below) is unreachable during externalFollow_.
         introActive = false;
@@ -3490,26 +3494,12 @@ void CameraController::update(float deltaTime) {
                 startFollowSmoothing(camera_smooth::stateFor(move, strafe, turnKeys, rightMouseDown),
                                      swimming || isFlightAirborne());
         }
-        // Carried by a server spline - feared, charmed, charging (Fear,
-        // camera_smooth::stateFor): 0x00606f90 asks 0x00602760 again every
-        // frame, and the ease to behind the character starts afresh, after
-        // its 0.4 s, whenever the way it faces changes - a fleeing
-        // character's every turn - and is otherwise left to run (0x00601410
-        // returns at once for the same one). The camera holds its own yaw
-        // meanwhile (0x006019b0) rather than turning with the facing. When
-        // the spline lets go, the controls' state is planned again
+        // Carried by a server spline, the Fear state (followServerSpline).
+        // When the spline lets go, the controls' state is planned again
         // (0x00602eb0); standing still, the eases stop where they are.
         const bool fearNow = thirdPerson && serverMoved_ && !yawFollowsVehicleCamera_;
         if (fearNow) {
-            const bool held = leftMouseDown || rightMouseDown;
-            const bool newFacing = !fearPlanned_ || std::fabs(std::remainder(facingYaw - fearFacing_, 360.0f)) >=
-                                                        camera_smooth::kAtRest;
-            if (!held && newFacing) {
-                fearFacing_ = facingYaw;
-                fearPlanned_ = true;
-                viewYaw_.startMs = viewYaw_.endMs;
-                startFollowSmoothing(camera_smooth::State::Fear, swimming || isFlightAirborne());
-            }
+            followServerSpline();
         } else if (fearPlanned_) {
             fearPlanned_ = false;
             if (thirdPerson)
@@ -3925,6 +3915,22 @@ void CameraController::stepViewMoves() {
             default: break;
         }
     }
+}
+
+void CameraController::followServerSpline() {
+    // Carried by a server spline - feared, charmed, charging (Fear,
+    // camera_smooth::stateFor): 0x00606f90 asks 0x00602760 again every
+    // frame, and the ease to behind the character starts afresh, after its
+    // 0.4 s, whenever the way it faces changes - a fleeing character's every
+    // turn - and is otherwise left to run (0x00601410 returns at once for the
+    // same one). The camera holds its own yaw meanwhile (0x006019b0) rather
+    // than turning with the facing.
+    const bool held = leftMouseDown || rightMouseDown;
+    if (held || !camera_smooth::fearPlansAgain(fearPlanned_, facingYaw, fearFacing_)) return;
+    fearFacing_ = facingYaw;
+    fearPlanned_ = true;
+    viewYaw_.startMs = viewYaw_.endMs;
+    startFollowSmoothing(camera_smooth::State::Fear, swimming || isFlightAirborne());
 }
 
 void CameraController::startFollowSmoothing(camera_smooth::State state, bool pitchFree) {

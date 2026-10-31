@@ -3978,6 +3978,9 @@ public:
     /// The unit the client moves (DAT_00ca1238): the player, a vehicle it
     /// drives, or none.
     uint64_t activeMover() const;
+    /// The unit the camera looks at: the player, or its PLAYER_FARSIGHT
+    /// object where that is in view.
+    uint64_t cameraTarget() const;
     /// The object the listener is (0x007450b0): the active mover where it
     /// is a unit, else the player - and for the player, with far sight on
     /// (+0x1858 0x1), the PLAYER_FARSIGHT object where it is there.

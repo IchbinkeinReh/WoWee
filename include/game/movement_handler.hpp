@@ -68,6 +68,9 @@ public:
     /// player, a unit the server gave it control of - a vehicle it drives, a
     /// unit it possesses - or none (0). movementInfo is that unit's movement.
     [[nodiscard]] uint64_t activeMover() const;
+    /// The unit the camera looks through (the camera's +0x88): the farsight
+    /// object in view, else the player.
+    [[nodiscard]] uint64_t cameraTarget() const;
     /// Whether CMSG_FAR_SIGHT has said the player looks through its far
     /// sight object (+0x1858 0x1).
     [[nodiscard]] bool farSightAnnounced() const { return farSightAnnounced_; }
@@ -328,9 +331,6 @@ private:
     void handleClientControlUpdate(network::Packet& packet);
     /// 0x0072cca0 for a unit in view.
     void applyControlUpdate(uint64_t guid, bool allow);
-    /// The unit the camera looks through (the camera's +0x88): the farsight
-    /// object in view, else the player.
-    [[nodiscard]] uint64_t cameraTarget() const;
     [[nodiscard]] uint64_t playerFarsight() const;
     /// A unit's move spline from its monster move (+0xbc, 0x0098c770), and
     /// whether it still runs: not let go (+0x20 0x400) nor run out.

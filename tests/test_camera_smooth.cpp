@@ -85,3 +85,28 @@ TEST_CASE("Fear eases behind after 0.4 s, ten times slower", "[camera][smooth]")
     // A mouse button holding the camera holds it in fear too.
     CHECK_FALSE(plan(State::Fear, 90.0f, 15.0f, true, false).easeYaw);
 }
+
+TEST_CASE("a feared player is on its spline though it has no mover", "[camera][smooth]") {
+    // Fear takes the player's control first and leaves no active mover; the
+    // spline is still the player's, and the camera still looks at it.
+    constexpr uint64_t player = 0xc;
+    CHECK(playerOnServerSpline(true, false, false, player, player));
+    // Not without a spline, on a flight path, in a seat, or looking through
+    // a far sight object.
+    CHECK_FALSE(playerOnServerSpline(false, false, false, player, player));
+    CHECK_FALSE(playerOnServerSpline(true, true, false, player, player));
+    CHECK_FALSE(playerOnServerSpline(true, false, true, player, player));
+    CHECK_FALSE(playerOnServerSpline(true, false, false, 0x1234, player));
+}
+
+TEST_CASE("the Fear ease starts again for a new direction, not for each step of a turn",
+          "[camera][smooth]") {
+    CHECK(fearPlansAgain(false, 10.0f, 10.0f));
+    // The character turning toward the spline's way a little each frame.
+    CHECK_FALSE(fearPlansAgain(true, 10.4f, 10.0f));
+    CHECK_FALSE(fearPlansAgain(true, 19.0f, 10.0f));
+    // A new run the other way.
+    CHECK(fearPlansAgain(true, 100.0f, 10.0f));
+    CHECK_FALSE(fearPlansAgain(true, -176.0f, 175.0f));  // 9 degrees across the wrap
+    CHECK(fearPlansAgain(true, -170.0f, 170.0f));
+}
