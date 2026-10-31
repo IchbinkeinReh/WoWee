@@ -1121,6 +1121,11 @@ void EntityController::applyPlayerShapeshiftForm(const UpdateBlock& block) {
 void EntityController::markPlayerDead(const char* source) {
     owner_.playerDeadRef() = true;
     owner_.releasedSpiritRef() = false;
+    // The release countdown is stamped here, not asked for later: the original
+    // decides it in the same breath as the death (FUN_006dc070 beside the rest
+    // of 0x006dc0f0), and the interface reads it from its PLAYER_DEAD handler,
+    // which this fires further out.
+    owner_.decideReleaseTimer();
     // owner_.movementInfoRef() is canonical (x=north, y=west); corpseX_/Y_ are
     // raw server coords (x=west, y=north) - swap axes.
     owner_.corpseXRef()     = owner_.movementInfoRef().y;

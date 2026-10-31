@@ -2395,6 +2395,17 @@ public:
     bool isPlayerDead() const { return playerDead_; }
     bool isPlayerGhost() const { return releasedSpirit_; }
     bool showDeathDialog() const { return playerDead_ && !releasedSpirit_; }
+    /// What GetReleaseTimeRemaining answers: a countdown in seconds, -1 for
+    /// "nothing will force a release", or nought for "nothing has decided yet".
+    /// The reference's UIParent shows the death popup on `> 0 or == -1`, so
+    /// nought is the one answer that shows no popup at all.
+    int32_t releaseTimeRemainingSec() const;
+    /// Re-decide that, which is what the reference does at the death and at
+    /// nothing else: see GameHandler::decideReleaseTimer in the .cpp for what
+    /// it reads. This runs wherever this client notices the player becoming
+    /// dead, and the state it writes survives a resurrect exactly as the
+    /// original's does - the interface only ever asks it while dead.
+    void decideReleaseTimer();
     /// The graveyard a release would send the player to, in canonical space.
     /// False when the server has not named one, or has withdrawn it.
     bool getDeathReleaseLocation(uint32_t& mapId, glm::vec3& canonical) const {
@@ -6588,6 +6599,15 @@ private:
     uint32_t currentMountDisplayId_ = 0;
     uint32_t mountAuraSpellId_ = 0;       // Spell ID of the aura that caused mounting (for CMSG_CANCEL_AURA fallback)
     bool playerDead_ = false;
+    /// DAT_00bd0848: the steady-ms tick a forced release would happen at, 0 when
+    /// nothing has promised one. Paired with the byte below, these two are the
+    /// whole state behind GetReleaseTimeRemaining - the countdown itself is
+    /// never sent, it is a duration stamped at the death.
+    uint64_t releaseStampMs_ = 0;
+    /// DAT_00bd084c: the client's own "no timer" answer, kept apart from a stamp
+    /// because a stamp that has run out and one that was never started have to
+    /// stay two different answers (0 and -1).
+    bool releaseNoTimer_ = false;
     std::array<uint8_t, 10> gmSurveyRanks_{};        ///< DAT_00c1e8c4
     std::array<std::string, 10> gmSurveyComments_{}; ///< DAT_00c1e8d8
     std::string gmSurveyComment_;                    ///< DAT_00c1e900

@@ -4070,13 +4070,24 @@ void registerSocialLuaAPI(lua_State* L) {
                 // PLAYER_FLAGS, as the IsOutOfBounds row below records, so a
                 // player the realm puts out of bounds is exactly the case in
                 // which the reference answers -1 where it would otherwise have
-                // started six minutes. The answer this gives stays -1 - the
-                // realm WoWee plays against sets neither of the two bits, and it
-                // is the only one of the three that shows the death dialog at
-                // all - but the countdown half depends on realm state this client
-                // cannot see, which is also why it is not reproduced here.
+                // started six minutes.
+                //
+                // All three answers are answered from here, off the pair
+                // GameHandler::decideReleaseTimer writes at a death - see that
+                // function for what it reads and for the stamp-forced-to-1 trick
+                // that keeps -1 and 0 apart. On the realm WoWee plays against
+                // neither of the two bits is set, so the answer in practice is
+                // still the -1 it always gave; what changed is that the
+                // countdown and the nought are reachable at all, and that a
+                // character which has not died answers nought the way the
+                // original's zeroed pair does. The decision is stamped before
+                // PLAYER_DEAD is fired, which is when the interface asks.
                 {"GetReleaseTimeRemaining", [](lua_State* L) -> int {
-            lua_pushnumber(L, -1); return 1;
+            auto* gh = getGameHandler(L);
+            // With no game handler there has been no death to decide at, and a
+            // pair nobody has written is the reference's start-up state: nought.
+            lua_pushnumber(L, gh ? gh->releaseTimeRemainingSec() : 0);
+            return 1;
         }},
                 // Asked from an OnUpdate, so this runs on every frame the
                 // popup is up rather than once.

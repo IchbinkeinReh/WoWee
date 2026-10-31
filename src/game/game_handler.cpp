@@ -3060,6 +3060,59 @@ uint32_t GameHandler::getPlayerMaxLevel() const {
     return player->getField(field);
 }
 
+// What GetReleaseTimeRemaining (0x00516210) answers was decided before it was
+// asked, at the death, and by nobody else: the only writers of the pair are
+// FUN_00513a30 and FUN_00513a60, which one routine calls (FUN_006dc070, reached
+// from the local-player branch of the player-death handler 0x006dc0f0 and from
+// the 0x37a = SMSG_FORCED_DEATH_UPDATE case at 0x006e0000.c:2497), and the
+// zeroing of both at the client's own start-up (00520000.c:8083), which is why a
+// player who has not died answers nought. What that routine reads is two bits of
+// PLAYER_FIELD_BYTES' first byte and one of PLAYER_FLAGS:
+//
+//   bit 0x10                        the release is immediate: a stamp of now,
+//                                   which the binding below turns into nought
+//   bit 0x08, with PLAYER_FLAGS     six minutes from the death - and the flags
+//   0x4000 (out of bounds) clear    half is why a player the realm has put out
+//                                   of bounds gets -1 instead
+//   anything else                   nothing will force a release, the -1 answer
+//
+// The stamp is a tick plus a duration, and a stamp that lands on nought is
+// forced to 1 so that "no timer" and "timer spent" stay two answers apart - the
+// same trick this file's calendarClockMs copied for the calendar's own stamp.
+void GameHandler::decideReleaseTimer() {
+    const auto player = getEntityManager().getEntity(getPlayerGuid());
+    const uint16_t bytesIndex = fieldIndex(UF::PLAYER_FIELD_BYTES);
+    const uint16_t flagsIndex = fieldIndex(UF::PLAYER_FLAGS);
+    const uint32_t bytes = (player && bytesIndex != 0xFFFF)
+                               ? player->getField(bytesIndex) & 0xFFu : 0u;
+    const uint32_t flags = (player && flagsIndex != 0xFFFF)
+                               ? player->getField(flagsIndex) : 0u;
+    const uint64_t now = static_cast<uint64_t>(TransportManager::nowSteadyMs());
+
+    if (bytes & 0x10) {
+        releaseStampMs_ = now == 0 ? 1 : now;
+        releaseNoTimer_ = false;
+    } else if ((bytes & 0x08) != 0 && (flags & 0x4000) == 0) {
+        releaseStampMs_ = now + 360000;
+        releaseNoTimer_ = false;
+    } else {
+        releaseStampMs_ = 0;
+        releaseNoTimer_ = true;
+    }
+}
+
+// The binding's own arithmetic: -1 while the "no timer" byte stands, otherwise
+// what is left of the stamp in whole seconds, and nought for a player that has
+// no stamp or has spent one (0x00516210 divides after the sign test, so a spent
+// stamp answers 0 and never a negative countdown).
+int32_t GameHandler::releaseTimeRemainingSec() const {
+    if (releaseNoTimer_) return -1;
+    if (releaseStampMs_ == 0) return 0;
+    const int64_t left = static_cast<int64_t>(releaseStampMs_) -
+                         TransportManager::nowSteadyMs();
+    return left > 0 ? static_cast<int32_t>(left / 1000) : 0;
+}
+
 uint32_t GameHandler::getSelfResSpellId() const {
     // The soulstone is a field, not a message.  HasSoulstone (0x0051acd0) takes
     // the local player and reads +0x106c of its field blob - blob dword 1051,
