@@ -1223,9 +1223,17 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
         uint32_t dungeonId = 0;
         if (packet.hasRemaining(4)) dungeonId = packet.readUInt32();
         packet.skipAll();
-        if (owner_.addonEventCallbackRef()) {
-            owner_.addonEventCallbackRef()("LFG_OPEN_FROM_GOSSIP",
-                                           {std::to_string(dungeonId)});
+        // That flow is FrameXML's from end to end, the gossip window included -
+        // so it is the interface's only while the interface draws the gossip.
+        // Otherwise the gossip is this client's own window, and so is the
+        // dungeon finder it opens: the one the callback brings up, as before.
+        if (ui::frameXmlOwns(ui::UiElement::Gossip)) {
+            if (owner_.addonEventCallbackRef()) {
+                owner_.addonEventCallbackRef()("LFG_OPEN_FROM_GOSSIP",
+                                               {std::to_string(dungeonId)});
+            }
+        } else if (owner_.openLfgCallbackRef()) {
+            owner_.openLfgCallbackRef()();
         }
     };
 
