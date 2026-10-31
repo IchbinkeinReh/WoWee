@@ -9431,6 +9431,19 @@ void registerSystemLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->requestBattlefieldPositions();
             return 0;
         }},
+                // Re-positions four arrow actors the client keeps for itself,
+                // which are not the arrows this interface draws. 0x00545fe0 is
+                // a thunk onto 0x005449f0: it walks four objects held at
+                // 0x00be8ee8, 0x00be8ef0, 0x00be8eec and 0x00be8ef4, updates one
+                // only while it exists, holds something at +0x2a0 and a
+                // 0x00824f00(0, 0) lookup succeeds, and the same routine copies
+                // what the unit's vtable slot 0x34 answers - the facing, of the
+                // same pair that answers a map position - into each object's
+                // float at +0x328. One of the four is built around
+                // "Interface\\Minimap\\MinimapArrow.mdx". The player arrow and
+                // the quest pins this tree moves are named frames, and the two
+                // verbs for those (ShowWorldMapArrowFrame and
+                // PositionWorldMapArrowFrame, above) are both answered.
                 {"UpdateWorldMapArrowFrames",   lua_ReturnNothing},
                 {"SetSelectedSkill", [](lua_State* L) -> int {
             selectedSkill() = static_cast<int>(luaL_optnumber(L, 1, 0)); return 0; }},

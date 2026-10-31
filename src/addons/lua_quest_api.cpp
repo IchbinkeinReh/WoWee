@@ -5468,6 +5468,22 @@ void registerQuestLuaAPI(lua_State* L) {
                 // has no art switched by name, so these do nothing - which is
                 // what they did before, silently, as unknown globals.
                 //
+                // The names are the client's own table, not file names:
+                // SetCursor (0x005104a0) lays out 52 {name, number} pairs on
+                // the stack - POINT_CURSOR 2, CAST_CURSOR 3, BUY_CURSOR 4 …
+                // VEHICLE_ERROR_CURSOR 0x35 - matches the argument against the
+                // names, and only a miss falls through to 0x00616830, which is
+                // where a path like "Interface\\CURSOR\\Driver" is loaded as a
+                // texture instead; that sets the current cursor (0x00c26de8) to
+                // 0x35 - the number the same table gives VEHICLE_ERROR_CURSOR,
+                // and the one number the setter 0x00616800 refuses to take, so
+                // a named cursor never overwrites a custom-texture one. Both
+                // globals live beside the base cursor 0x00c25de4, the one
+                // ResetCursor (0x00616920)
+                // restores, and a change fires event 0x113 - CURSOR_UPDATE,
+                // which this repository already raises wherever an item
+                // actually moves onto or off the pointer.
+                //
                 // Bound rather than left to the fallback because the fallback
                 // is what makes a typo look like a working call, and because a
                 // window that calls nothing undefined is the measure of
