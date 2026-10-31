@@ -620,10 +620,13 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
                 ImGui::Spacing();
 
                 if (ImGui::Button("Restore Video Defaults", ImVec2(-1, 0))) {
-                    // Three categories, because the settings window puts on one
-                    // tab what the options panels put on three.
-                    for (const char* category : {"Graphics", "Shadows", "Detail", "Water", "Ray Tracing", "Upscaling", "Display"}) {
-                        restoreSchemaDefaults(category);
+                    // Every graphics page this tab draws but the Debug ones, read
+                    // off the schema: the list was written out here, and Grass -
+                    // its switch, density, height and distance - was left off it
+                    // when that page was added, so the button put everything
+                    // back but the grass.
+                    for (const std::string& category : videoDefaultCategories()) {
+                        restoreSchemaDefaults(category.c_str());
                     }
                     // Only the resolution is outside the schema now: it is the
                     // window's size rather than a quality setting, and applying
@@ -876,6 +879,18 @@ void SettingsPanel::restoreDefaultResolution() {
     // Saved from now on, so the next start opens at it rather than at
     // whatever the file last said.
     displaySettingsLoaded_ = true;
+}
+
+std::vector<std::string> SettingsPanel::videoDefaultCategories() {
+    std::vector<std::string> out;
+    std::size_t count = 0;
+    const auto* schema = clientSettingsSchema(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::string category = schema[i].category;
+        if (!isGraphicsCategory(category) || category.rfind("Debug", 0) == 0) continue;
+        if (std::find(out.begin(), out.end(), category) == out.end()) out.push_back(category);
+    }
+    return out;
 }
 
 void SettingsPanel::restoreSchemaDefaults(const char* category) {

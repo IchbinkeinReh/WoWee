@@ -674,3 +674,31 @@ TEST_CASE("resetting the graphics resets the resolution to the first-run size", 
     CHECK(resBody.find("applyResolution") != std::string::npos);
     CHECK(panel.find("kDefaultResW") == std::string::npos);
 }
+
+TEST_CASE("Restore Video Defaults puts back every graphics page but the Debug ones", "[settings]") {
+    // Its list of pages was written out by hand and left Grass off it. It is
+    // read off the schema now, so a page added there is restored here too.
+    const std::string panel = wowee::test::slurp("src/ui/settings_panel.cpp");
+    REQUIRE(panel.size() > 1000);
+    const size_t button = panel.find("\"Restore Video Defaults\"");
+    REQUIRE(button != std::string::npos);
+    const std::string body = panel.substr(button, 1200);
+    CHECK(body.find("videoDefaultCategories()") != std::string::npos);
+    CHECK(body.find("\"Shadows\"") == std::string::npos);
+
+    const size_t fn = panel.find("SettingsPanel::videoDefaultCategories()");
+    REQUIRE(fn != std::string::npos);
+    const std::string fnBody = panel.substr(fn, panel.find("\n}\n", fn) - fn);
+    CHECK(fnBody.find("isGraphicsCategory") != std::string::npos);
+    CHECK(fnBody.find("\"Debug\"") != std::string::npos);
+
+    // And Grass is a graphics page, with its four rows.
+    CHECK(wowee::ui::isGraphicsCategory("Grass"));
+    std::size_t count = 0;
+    const wowee::ui::SettingDesc* rows = wowee::ui::clientSettingsSchema(count);
+    int grass = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (std::string(rows[i].category) == "Grass") ++grass;
+    }
+    CHECK(grass == 4);
+}

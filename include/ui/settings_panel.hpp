@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.h>
 #include <algorithm>
 #include <string>
+#include <vector>
 #include <functional>
 #include <cstdint>
 
@@ -439,6 +440,9 @@ public:
     /// of them was free to disagree with the value the client actually starts
     /// with, which is the same list a fourth time.
     void restoreSchemaDefaults(const char* category);
+    /// What Restore Video Defaults puts back: every graphics category of the
+    /// schema but the Debug pages, in schema order.
+    [[nodiscard]] static std::vector<std::string> videoDefaultCategories();
 
     /// Apply the persisted global ImGui window scale without compounding ratios.
     void applyWindowUiScale();
