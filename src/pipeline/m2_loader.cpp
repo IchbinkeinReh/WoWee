@@ -1060,6 +1060,9 @@ void parseAnimTrack(const std::vector<uint8_t>& data,
             }
         }
     }
+    // The sequences skipped above (in an .anim file, out of range, unreadable)
+    // keep no record (M2AnimationTrack::SequenceTable).
+    track.sequences.dropEmpty();
 }
 
 // Vanilla M2 range: indices into flat timestamp/key arrays for a given sequence
@@ -1194,6 +1197,7 @@ void parseAnimTrackVanilla(const std::vector<uint8_t>& data,
             }
         }
     }
+    track.sequences.dropEmpty();
 }
 
 // What an FBlock's keys are.
@@ -2575,6 +2579,10 @@ void M2Loader::loadAnimFile(const std::vector<uint8_t>& m2Data,
         patchTrack(db.translation, bone.translation, TrackType::VEC3);
         patchTrack(db.rotation, bone.rotation, TrackType::QUAT_COMPRESSED);
         patchTrack(db.scale, bone.scale, TrackType::VEC3);
+        // A track this file had nothing for keeps no record for it.
+        bone.translation.sequences.dropEmpty();
+        bone.rotation.sequences.dropEmpty();
+        bone.scale.sequences.dropEmpty();
     }
 
     core::Logger::getInstance().debug("Loaded .anim for sequence ", sequenceIndex,

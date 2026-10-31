@@ -19,8 +19,8 @@ namespace wowee::rendering {
 /// themselves, which cost their own size even when every array in them is
 /// empty.
 inline uint64_t trackBytes(const pipeline::M2AnimationTrack& t) {
-    uint64_t b = vectorBytes(t.sequences);
-    for (const auto& s : t.sequences) {
+    uint64_t b = t.sequences.slotBytes() + vectorBytes(t.sequences.records());
+    for (const auto& s : t.sequences.records()) {
         b += vectorBytes(s.timestamps) + vectorBytes(s.vec3Values) + vectorBytes(s.quatValues) +
              vectorBytes(s.floatValues);
     }
@@ -31,7 +31,7 @@ inline uint64_t trackBytes(const pipeline::M2AnimationTrack& t) {
 /// four empty vectors each.
 inline uint64_t emptyKeysBytes(const pipeline::M2AnimationTrack& t) {
     uint64_t b = 0;
-    for (const auto& s : t.sequences) {
+    for (const auto& s : t.sequences.records()) {
         if (s.timestamps.empty() && s.vec3Values.empty() && s.quatValues.empty() && s.floatValues.empty()) {
             b += sizeof(s);
         }

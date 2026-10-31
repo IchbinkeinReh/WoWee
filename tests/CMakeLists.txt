@@ -3588,3 +3588,8 @@ target_link_libraries(test_file_lru_cache PRIVATE catch2_main)
 wowee_test_link_glm(test_file_lru_cache)
 add_test(NAME file_lru_cache COMMAND test_file_lru_cache)
 register_test_target(test_file_lru_cache)
+
+# ── test_m2_sequence_table ─────────────────────────────────────────────
+# M2AnimationTrack::SequenceTable: a record only where a sequence has keys.
+wowee_add_test(test_m2_sequence_table
+    SOURCES test_m2_sequence_table.cpp)

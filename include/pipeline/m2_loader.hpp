@@ -51,8 +51,99 @@ struct M2AnimationTrack {
         std::vector<glm::vec3> vec3Values;  // For translation/scale tracks
         std::vector<glm::quat> quatValues;  // For rotation tracks
         std::vector<float> floatValues;     // For float tracks (particle emitters)
+
+        [[nodiscard]] bool empty() const {
+            return timestamps.empty() && vec3Values.empty() && quatValues.empty() && floatValues.empty();
+        }
     };
-    std::vector<SequenceKeys> sequences;    // One per animation sequence
+
+    /// The keys by animation sequence, one entry per sequence of the model,
+    /// indexed as a vector of SequenceKeys was. Only the sequences that have
+    /// keys hold a record: most of a character's bones are still in most of
+    /// its sequences, and a record is four vectors - 96 bytes - each, empty or
+    /// not (a humanoid model carried some 4,500 empty ones; the city's
+    /// characters, 50 to 120 MB of them). The rest cost a two-byte slot.
+    ///
+    /// Reading an absent sequence gives an empty record. Writing through the
+    /// non-const operator[] makes one; dropEmpty() takes back any left empty.
+    class SequenceTable {
+    public:
+        [[nodiscard]] size_t size() const { return slots_.size(); }
+        [[nodiscard]] bool empty() const { return slots_.empty(); }
+        void resize(size_t n) {
+            for (size_t i = n; i < slots_.size(); ++i) {
+                if (slots_[i] != kNone) keys_[slots_[i]] = SequenceKeys{};
+            }
+            slots_.resize(n, kNone);
+            dropEmpty();
+        }
+        void clear() {
+            slots_.clear();
+            keys_.clear();
+        }
+        void push_back(SequenceKeys k) {
+            slots_.push_back(kNone);
+            if (!k.empty()) {
+                slots_.back() = static_cast<uint16_t>(keys_.size());
+                keys_.push_back(std::move(k));
+            }
+        }
+        [[nodiscard]] const SequenceKeys& operator[](size_t i) const {
+            const uint16_t s = slots_[i];
+            return s == kNone ? emptyKeys() : keys_[s];
+        }
+        SequenceKeys& operator[](size_t i) {
+            uint16_t& s = slots_[i];
+            if (s == kNone) {
+                s = static_cast<uint16_t>(keys_.size());
+                keys_.emplace_back();
+            }
+            return keys_[s];
+        }
+        /// Takes back the records that hold no keys.
+        void dropEmpty() {
+            size_t kept = 0;
+            std::vector<uint16_t> remap(keys_.size(), kNone);
+            for (size_t k = 0; k < keys_.size(); ++k) {
+                if (keys_[k].empty()) continue;
+                if (kept != k) keys_[kept] = std::move(keys_[k]);
+                remap[k] = static_cast<uint16_t>(kept++);
+            }
+            keys_.resize(kept);
+            keys_.shrink_to_fit();
+            for (uint16_t& s : slots_) {
+                if (s != kNone) s = remap[s];
+            }
+        }
+        /// The records that hold keys, for whoever counts them.
+        [[nodiscard]] const std::vector<SequenceKeys>& records() const { return keys_; }
+        [[nodiscard]] size_t slotBytes() const { return slots_.capacity() * sizeof(uint16_t); }
+
+        /// Every sequence in order, absent ones as empty records.
+        class const_iterator {
+        public:
+            const_iterator(const SequenceTable* t, size_t i) : t_(t), i_(i) {}
+            const SequenceKeys& operator*() const { return (*t_)[i_]; }
+            const_iterator& operator++() { ++i_; return *this; }
+            bool operator!=(const const_iterator& o) const { return i_ != o.i_; }
+            bool operator==(const const_iterator& o) const { return i_ == o.i_; }
+        private:
+            const SequenceTable* t_;
+            size_t i_;
+        };
+        [[nodiscard]] const_iterator begin() const { return {this, 0}; }
+        [[nodiscard]] const_iterator end() const { return {this, slots_.size()}; }
+
+    private:
+        static constexpr uint16_t kNone = 0xFFFF;
+        static const SequenceKeys& emptyKeys() {
+            static const SequenceKeys none;
+            return none;
+        }
+        std::vector<uint16_t> slots_;     // per sequence: its record, or kNone
+        std::vector<SequenceKeys> keys_;  // the records that hold keys
+    };
+    SequenceTable sequences;    // One per animation sequence
 
     [[nodiscard]] bool hasData() const { return !sequences.empty(); }
 };
