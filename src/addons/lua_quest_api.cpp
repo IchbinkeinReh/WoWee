@@ -4073,22 +4073,48 @@ void registerQuestLuaAPI(lua_State* L) {
                 // What is missing is a source, not a texture - and the source
                 // is not on the quest. The reference's binding (0x0058c990) and
                 // ItemTextGetMaterial's (0x00589c90, confirmed by its entry in
-                // the binding table) are the same eight lines of code in two
-                // files: a bit of the frame's record's flag word says which of
-                // two item ids to take - the record's own +0xc, or one fetched
-                // from elsewhere - the id is resolved through the item cache,
-                // and one word of the item record (+0x188) indexes
-                // PageTextMaterial.dbc, whose name is what the caller pastes
-                // between "ItemText-" and "-TopLeft". That word is the page
-                // material this file already reads off the item query, and
-                // ItemTextGetMaterial above is the same read done for a book
-                // rather than for a quest. So a quest *about a readable item*
-                // draws that item's backing, and answering nil is wrong for it.
+                // the binding table) are the same twenty-odd lines of code in
+                // two files, QuestFrame.cpp:0x48d and ItemTextFrame.cpp:0x102:
+                // one bit of the frame object's record flag word (+8) says which
+                // of *two different kinds* of answer to take.
                 //
-                // Which bit that is, and which of the quest's items the record
-                // keeps at +0xc, is still unsettled - the quest detail packet
-                // carries required and reward items, and nothing here says which
-                // of them the frame stores. Nil stays until that is pinned: the
+                // Bit 1 is the item path, and it is the one ItemTextGetMaterial
+                // answers with: the record's own item id (+0xc) is resolved
+                // through the item record cache - `mov ecx, 0x00c5d828` before
+                // the call, which is that cache and not the 0x00c5d938 one
+                // ItemTextGetCreator goes through - and one word of the item
+                // record (+0x188) is the material. That word is the page
+                // material this file already reads off the item query and keeps,
+                // and ItemTextGetMaterial above is that read done for a book.
+                //
+                // Bit 5 is not another item: it answers a material id straight
+                // out of the frame object itself - a list of them at
+                // **(obj + 0x1a4) + 0x14, indexed by the position of the number
+                // 17 in one of 36 lists, the list picked by a byte at
+                // *(obj + 0xd0) + 0x2d. That position search is 0x00746190,
+                // which counts entries at DAT_00a36f34 + list*0x10 out of
+                // PTR_DAT_00a36f38[list*4] and answers -1 for a list the number
+                // is not in; the caller's "index < 0x18" is that refusal. So a
+                // quest window that is not about an item asks its own layout for
+                // a default, and nothing here says what feeds that list.
+                //
+                // Either id then goes through one lookup, and the shape of it
+                // says what the table is: 0 < v, DAT_00ad4320 <= v <=
+                // DAT_00ad431c, then *(DAT_00ad4330 + (v - min)*4) for a *row
+                // pointer* and the name at row + 4. PageTextMaterial.dbc - seven
+                // rows of two fields, id and name, ids 1..7 - reached through an
+                // array of row pointers rather than by record stride, with the
+                // bounds written in as the load ran (0xad431c and 0xad4320 sit
+                // side by side holding 0xffffffff and 0x0fffffff in .data, which
+                // is a min/max pair before anything has been seen, not a range).
+                //
+                // Which item the quest window's record keeps at +0xc is the
+                // unsettled half, and it is narrower than it looked: the offer
+                // packet carries no item id at all (QuestDetailsData has the
+                // text, the flags, the money, the XP and the rewards, and
+                // nothing else numeric that could be one), so the frame learns
+                // it away from the quest - from whatever opened the window, as
+                // the item text frame does. Nil stays until that is pinned: the
                 // caller substitutes PageTextMaterial row 1, Parchment, and that
                 // is what nearly every quest would name anyway, whereas a guess
                 // draws marble or bronze around a quest that has nothing to do
