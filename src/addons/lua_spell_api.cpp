@@ -1259,6 +1259,27 @@ static int lua_GetSpellTexture(lua_State* L) {
 
 // GetItemInfo(itemId) -> name, link, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture, vendorPrice
 
+/// GetSpellLink(spellId [, bookType]) - the spell link, and a second value this
+/// does not answer.
+///
+/// The reference (0x005408e0) always returns two. The first is this one, built
+/// the same way; the second is nil unless the spell belongs to a trade skill,
+/// in which case it is a whole other link that 0x005db060 writes:
+/// "|cffffd000|Htrade:%d:%d:%d:%I64X:" with the spell, two numbers taken off
+/// the trade-skill record that spell resolves to, the player's own guid as hex,
+/// and then the recipes of that skill base64'd six to a byte - a "which of this
+/// smith's list can you actually make" mask, one bit test per recipe against the
+/// player's known spells. spellbookframe.lua:372 unpacks that pair and prefers
+/// the second: shift-clicking a recipe in the spell book links the *trade
+/// skill*, not the spell.
+///
+/// That second link is out of reach here for the reason the three
+/// GetTradeSkill*Link names are - it is built off a trade-skill record list, and
+/// neither dbc folder on this machine holds a Trade table of any name, as the
+/// GetTradeSkillListLink row a few files over also records. Answering one value
+/// rather than the pair costs nothing in this interface tree: every other caller
+/// takes the first value alone (blizzard_combatlog, petpaperdollframe,
+/// vehiclemenubar).
 static int lua_GetSpellLink(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
