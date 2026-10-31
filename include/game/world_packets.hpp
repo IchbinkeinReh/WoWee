@@ -3500,11 +3500,17 @@ struct BattlefieldStatusData {
     uint32_t timeInQueueMs = 0;    ///< status 1
     uint32_t mapId = 0;            ///< status 2 and 3
     uint32_t inviteTimeoutMs = 0;  ///< status 2 - how long the invitation lasts
-    /// Status 3 only, after the field above (0x0054ae40): how long the
-    /// battle has run, and the side of an arena the player is on - the byte
-    /// GetBattlefieldArenaFaction answers (0x00bea54a).
+    // Status 3's own tail, in the order 0x0054ae40 reads it
+    // (00540000.c:8560-8576): two dwords and a byte. Which dword is which is
+    // settled by what the client makes of each - it turns the first into
+    // `clock + it` and the second into `clock - it`, which can only mean
+    // "time left" and "time already run". Reading one dword and calling it the
+    // elapsed one put the remaining time in that field, left the real elapsed
+    // dword unread, and so fed GetBattlefieldArenaFaction the *low byte of a
+    // dword* rather than the byte behind it.
+    uint32_t instanceRemainingMs = 0;
     uint32_t elapsedMs = 0;
-    uint8_t  arenaFaction = 0;
+    uint8_t  arenaFaction = 0;   ///< the side of an arena (0x00bea54a)
 };
 
 /**

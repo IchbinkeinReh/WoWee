@@ -4310,6 +4310,34 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
         statusChanged = true;
     }
 
+    // The instance's own countdown and its own clock, both made off the two
+    // dwords of a running status' tail and both rewritten on every tick of that
+    // kind, exactly as the client does it: `clock + remaining` and
+    // `clock - elapsed`, so the two timers it later reads are elapsed wall time
+    // and not a value that only moves when the server says so
+    // (0x0054ae40, 00540000.c:8560-8575). A dword of nought is no stamp at all,
+    // which is how a battle with no end time answers nothing rather than
+    // counting down from the clock's own reading.
+    //
+    // One pair for the whole client, with the slot that owns it remembered the
+    // way 0x00acd16c does: a status of another kind for that slot leaves the
+    // pair alone - only an empty record, the zero the server sends when the
+    // player leaves a queue, takes the pair with it (00540000.c:8510-8517).
+    if (statusId == 3) {
+        const auto now = std::chrono::steady_clock::now();
+        battlefieldInstanceExpiry_ = status.instanceRemainingMs
+            ? now + std::chrono::milliseconds(status.instanceRemainingMs)
+            : std::chrono::steady_clock::time_point{};
+        battlefieldInstanceStart_ = status.elapsedMs
+            ? now - std::chrono::milliseconds(status.elapsedMs)
+            : std::chrono::steady_clock::time_point{};
+        battlefieldInstanceSlot_ = static_cast<int32_t>(queueSlot);
+    } else if (statusId == 0 && battlefieldInstanceSlot_ == static_cast<int32_t>(queueSlot)) {
+        battlefieldInstanceExpiry_ = {};
+        battlefieldInstanceStart_  = {};
+        battlefieldInstanceSlot_   = -1;
+    }
+
     // Said in the log only. The original answers a status with
     // UPDATE_BATTLEFIELD_STATUS and no line (0x0054ae40) - the queue icon and
     // the "enter battle" popup are the interface's. This printed "Queued for
@@ -4326,6 +4354,28 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     // prompt never came up however long the player had waited for it.
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("UPDATE_BATTLEFIELD_STATUS", {std::to_string(queueSlot + 1)});
+}
+
+int64_t SocialHandler::battlefieldInstanceExpirationMs() const {
+    // `stamp - clock`, and nought once the stamp is behind the clock - the
+    // client tests the difference's sign before it answers (0x00549c40), so a
+    // battle that has already ended reads as no timer at all rather than as a
+    // negative one the frame would print as "-1:-1".
+    if (battlefieldInstanceExpiry_ == std::chrono::steady_clock::time_point{}) return 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= battlefieldInstanceExpiry_) return 0;
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        battlefieldInstanceExpiry_ - now).count();
+}
+
+int64_t SocialHandler::battlefieldInstanceRunTimeMs() const {
+    // `clock - stamp`, which is the elapsed dword put back onto the clock when
+    // the status arrived (0x00549cd0 reads DAT_00bea578). The scoreboard counts
+    // this up on its own between status ticks, so a stale pair that only moves
+    // with the packet would print a frozen run time.
+    if (battlefieldInstanceStart_ == std::chrono::steady_clock::time_point{}) return 0;
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - battlefieldInstanceStart_).count();
 }
 
 int32_t SocialHandler::battlefieldPortExpirationSec(size_t slot) const {

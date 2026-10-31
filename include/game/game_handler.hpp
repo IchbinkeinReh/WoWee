@@ -839,6 +839,10 @@ public:
     const std::array<BgQueueSlot, 3>& getBgQueues() const override;
     /// Whole seconds a queue slot's invitation still has, 0 when none is running.
     int32_t battlefieldPortExpirationSec(size_t slot) const;
+    /// A running battleground's own two timers in ms, 0 when there is no
+    /// instance - see SocialHandler's declarations for why ms.
+    int64_t battlefieldInstanceExpirationMs() const;
+    int64_t battlefieldInstanceRunTimeMs() const;
     const std::vector<AvailableBgInfo>& getAvailableBgs() const override;
 
     // BG scoreboard (aliased from handler_types.hpp)

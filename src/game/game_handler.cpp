@@ -4625,6 +4625,14 @@ int32_t GameHandler::battlefieldPortExpirationSec(size_t slot) const {
     return socialHandler_ ? socialHandler_->battlefieldPortExpirationSec(slot) : 0;
 }
 
+int64_t GameHandler::battlefieldInstanceExpirationMs() const {
+    return socialHandler_ ? socialHandler_->battlefieldInstanceExpirationMs() : 0;
+}
+
+int64_t GameHandler::battlefieldInstanceRunTimeMs() const {
+    return socialHandler_ ? socialHandler_->battlefieldInstanceRunTimeMs() : 0;
+}
+
 const std::vector<GameHandler::AvailableBgInfo>& GameHandler::getAvailableBgs() const {
     if (socialHandler_) return socialHandler_->getAvailableBgs();
     static const std::vector<AvailableBgInfo> empty;

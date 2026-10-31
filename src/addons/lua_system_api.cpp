@@ -8191,8 +8191,30 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, leadsAParty ? 1 : 0);
             return 1;
         }},
-                {"GetBattlefieldInstanceExpiration", lua_ReturnZero},
-                {"GetBattlefieldInstanceRunTime",    lua_ReturnZero},
+                // The instance's own two clocks, answered in **milliseconds**:
+                // battlefieldframe.lua keeps `GetBattlefieldInstanceExpiration()
+                // /1000` as its shutdown timer (:303) and the scoreboard prints
+                // SecondsToTime(GetBattlefieldInstanceRunTime()/1000) beside
+                // "Time elapsed" (worldstateframe.lua:824), so each divides the
+                // seconds out itself and answering seconds would count the
+                // shutdown down a thousand times too fast.
+                //
+                // Both are stamps, not values: the status packet's two tail
+                // dwords went onto the client's clock as `clock + remaining` and
+                // `clock - elapsed` (0x0054ae40), which is what lets them keep
+                // running on their own between the server's periodic ticks -
+                // WoWee was answering nought for both, so a battle in progress
+                // had no shutdown timer and a scoreboard time of 0:00.
+                {"GetBattlefieldInstanceExpiration", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? gh->battlefieldInstanceExpirationMs() : 0);
+            return 1;
+        }},
+                {"GetBattlefieldInstanceRunTime", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            lua_pushnumber(L, gh ? gh->battlefieldInstanceRunTimeMs() : 0);
+            return 1;
+        }},
                 // The aspect ratio the Mac options panel builds its recording
                 // resolution from: `"640x"..floor(640*ratio)`. Answering the
                 // window's own ratio is both truthful and what makes that read
