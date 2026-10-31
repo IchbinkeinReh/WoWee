@@ -3358,12 +3358,6 @@ void GameHandler::loadDungeonEncounterDbc() const {
         for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
             const uint64_t map = dbc->getUInt32(i, kMapField);
             const uint64_t diff = dbc->getUInt32(i, kDiffField);
-            dungeonEncounterCounts_[(map << 32) | diff]++;
-            // Most instances list their bosses once, under difficulty 0,
-            // and apply to every difficulty. Keeping a per-map total means
-            // a heroic run still has a number to show.
-            dungeonEncounterCounts_[(map << 32) | 0xFFFFFFFFull]++;
-
             LfgEncounterRow row;
             row.mapId = static_cast<uint32_t>(map);
             row.difficulty = static_cast<uint32_t>(diff);
@@ -3378,17 +3372,7 @@ void GameHandler::loadDungeonEncounterDbc() const {
         // be guessed at from the icon id.
     }
 
-    LOG_INFO("DungeonEncounter.dbc: ", dungeonEncounterCounts_.size(),
-             " map/difficulty pairs, ", dungeonEncounters_.size(), " rows");
-}
-
-uint32_t GameHandler::getDungeonEncounterCount(uint32_t mapId, uint32_t difficulty) const {
-    loadDungeonEncounterDbc();
-
-    auto it = dungeonEncounterCounts_.find((static_cast<uint64_t>(mapId) << 32) | difficulty);
-    if (it != dungeonEncounterCounts_.end()) return it->second;
-    it = dungeonEncounterCounts_.find((static_cast<uint64_t>(mapId) << 32) | 0xFFFFFFFFull);
-    return (it != dungeonEncounterCounts_.end()) ? it->second : 0;
+    LOG_INFO("DungeonEncounter.dbc: ", dungeonEncounters_.size(), " rows");
 }
 
 // ---------------------------------------------------------------------------

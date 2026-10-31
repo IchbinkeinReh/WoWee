@@ -2701,13 +2701,13 @@ public:
     std::string getCurrentLfgDungeonName() const;
     std::string getMapName(uint32_t mapId) const;
 
-    /// How many boss encounters a map has, for the "%d of %d bosses" line.
-    /// Counted from DungeonEncounter.dbc, which is the only place the total
-    /// lives - the server sends which are done and never how many there are.
-    uint32_t getDungeonEncounterCount(uint32_t mapId, uint32_t difficulty) const;
-    /// That same table, row by row and in the order the file stores it, which is
-    /// the order the raid browser walks it for a row's boss list and its tooltip
-    /// (countLfgEncounters and lfgEncounterAt).
+    /// DungeonEncounter.dbc's rows, in the order the file stores them, which is
+    /// the order the client walks them for a boss list, a tooltip and the
+    /// "%d of %d bosses" line - countLfgEncounters and lfgEncounterAt do that
+    /// walk. The total of a map/difficulty pair lives in no message: the server
+    /// says which bosses are done, as a mask, and counting the pair's rows is
+    /// the only way to a total - so the rows are what is kept rather than a
+    /// per-pair tally, which is also what makes both numbers come from one walk.
     const std::vector<LfgEncounterRow>& getDungeonEncounters() const {
         loadDungeonEncounterDbc();
         return dungeonEncounters_;
@@ -6358,11 +6358,8 @@ private:
     mutable std::unordered_map<uint32_t, uint32_t> mapInstanceTypeCache_;
     mutable std::unordered_map<uint32_t, uint32_t> mapFlagsCache_;
     mutable bool mapNameCacheLoaded_ = false;
-    // (mapId, difficulty) -> encounter count, and the same map with no
-    // difficulty-specific rows under a difficulty of 0xFFFFFFFF.
-    mutable std::unordered_map<uint64_t, uint32_t> dungeonEncounterCounts_;
-    /// The same file's rows, kept because the raid browser needs the bosses
-    /// themselves and not just how many of a map/difficulty pair there are.
+    /// DungeonEncounter.dbc's rows: the bosses themselves, and the walk the
+    /// counts come from.
     mutable std::vector<LfgEncounterRow> dungeonEncounters_;
     mutable bool dungeonEncounterCacheLoaded_ = false;
     void loadDungeonEncounterDbc() const;

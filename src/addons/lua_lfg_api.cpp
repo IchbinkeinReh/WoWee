@@ -924,34 +924,108 @@ void registerLfgLuaAPI(lua_State* L) {
         }
         return luaReturnNil(L);
     }},
-    // Per-boss lockouts inside a raid the character is saved to. The saved
-    // instance list has no encounter breakdown in it.
-    {"GetInstanceLockTimeRemainingEncounter", [](lua_State* L) -> int { return luaReturnNil(L); }},
+    // GetInstanceLockTimeRemainingEncounter(encounterIndex) → name, texture, isKilled
+    //
+    // The boss list the bind-or-leave dialog draws over its own text. What the
+    // note here used to say - that the saved-instance list has no encounter
+    // breakdown in it - is true of the listing of the *other* instances a
+    // character is locked to, and beside the point: this is the instance the
+    // character is standing in, whose bosses come from the very table the queue
+    // proposal's list and the raid browser's tooltip walk, joined on the
+    // realm-told map and difficulty pair instead of an offered dungeon's.
+    // 0x00516410 hands 0x005538b0 0x00bd088c and 0x00bd0894, which are what
+    // GetInstanceInfo and GetDungeonDifficulty answer from (a difficulty of
+    // SMSG_INSTANCE_DIFFICULTY's own, from nought).
+    //
+    // Answering nils was not a blank list either: InstanceLock_OnEnter
+    // (lfrframe.lua:684-700) walks `for i = 1, encountersTotal` the moment the
+    // mask names one boss down, and calls
+    // `GameTooltip:AddDoubleLine(nil, BOSS_ALIVE, …)` on the name that never
+    // came back - the handler the dialog itself registers, so hovering it
+    // raised a Lua error rather than saying nothing.
+    //
+    // 0x00513b90 hands out (milliseconds left, mask, previously-saved) and
+    // zeroes all three once the countdown has run out, and past that the client
+    // still walks the table, with map 0, difficulty 0, index 0 and an empty
+    // mask - a row the table has none of, which is the three nils either way.
+    // WoWee's prompt state lapses on the same countdown
+    // (social_handler.cpp:6038-6045), so one test says both.
+    {"GetInstanceLockTimeRemainingEncounter", [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        // The client's check is of the argument *count*, and every caller in the
+        // interface passes a loop counter; the miss is its own string.
+        if (!gh || !lua_isnumber(L, 1))
+            return luaL_error(L, "Usage: GetInstanceLockTimeRemainingEncounter(encounterIndex)");
+        const lua_Integer index = static_cast<lua_Integer>(lua_tonumber(L, 1));
+        float secondsLeft = 0.0f;
+        bool previouslySaved = false;
+        uint32_t completedMask = 0;
+        const bool prompt = gh->getInstanceLockPrompt(secondsLeft, previouslySaved, completedMask);
+        // index - 1 as the client passes it: nought or less counts down past the
+        // end of the instance's rows and answers nothing.
+        const auto* boss = prompt
+            ? game::lfgEncounterAt(gh->getDungeonEncounters(), gh->getCurrentMapId(),
+                                   gh->getInstanceDifficulty(),
+                                   static_cast<uint32_t>(index - 1))
+            : nullptr;
+        if (!boss) {
+            lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+            return 3;
+        }
+        lua_pushstring(L, boss->name.c_str());   // 1: name, in the file's own order
+        // Nil, which is the client's own answer: the spell-icon column of the
+        // DungeonEncounter.dbc on disk is zero in every row, so its store lookup
+        // resolves to nothing (0x005538b0:3050-3059).
+        lua_pushnil(L);                          // 2: texture
+        lua_pushboolean(L, game::lfgEncounterDone(completedMask, *boss) ? 1 : 0);   // 3: isKilled
+        return 3;
+    }},
     // The countdown on the bind-or-leave dialog, read every frame by its
     // OnUpdate. A zero closes the dialog, which is what should happen when
     // there is nothing pending.
+    //
+    // Four values, and the last two are derived rather than sent (0x00516340 →
+    // 0x00553830): one walk of the encounter table over this instance's map and
+    // difficulty counts the total, and among just those rows the ones whose bit
+    // the mask names count as done. The packet says which bosses are done, as a
+    // mask, and never how many there are, so neither number has a source of its
+    // own. Counting the mask's set bits, as this did, counts bosses the table
+    // does not name as done: the pair decides which rows belong to the instance
+    // at all, and where none do the client answers nought bosses killed while a
+    // population count of the mask answers as many as the realm ticked.
     {"GetInstanceLockTimeRemaining", [](lua_State* L) -> int {
         auto* gh = getGameHandler(L);
         float secondsLeft = 0.0f;
         bool previouslySaved = false;
         uint32_t completedMask = 0;
-        if (!gh || !gh->getInstanceLockPrompt(secondsLeft, previouslySaved, completedMask)) {
-            lua_pushnumber(L, 0);
-            lua_pushboolean(L, 0);
-            lua_pushinteger(L, 0);
-            lua_pushinteger(L, 0);
-            return 4;
-        }
-        // The mask says which encounters are done; its population count is how
-        // many, and the total comes from the map's own encounter list.
-        uint32_t complete = 0;
-        for (uint32_t bit = completedMask; bit; bit &= bit - 1) ++complete;
-        const uint32_t total = gh->getDungeonEncounterCount(gh->getCurrentMapId(),
-                                                            gh->getInstanceDifficulty());
-        lua_pushnumber(L, secondsLeft);
+        const bool prompt = gh && gh->getInstanceLockPrompt(secondsLeft, previouslySaved, completedMask);
+        // The pair is matched exactly, as 0x00553830 matches it: both fields of
+        // the row against both of the instance's, with no "difficulty 0 means
+        // every difficulty" fallback - and the file does not need one. Trial of
+        // the Crusader, map 649, carries its five bosses at each of 0, 1, 2 and
+        // 3; an instance filed under 0 and 1 alone - Naxxramas at 533, fifteen
+        // rows at each - is one the client answers no bosses at for a
+        // difficulty its own file never lists it at.
+        //
+        // The walk also runs with no prompt pending: past the expiry
+        // 0x00516340 zeroes the countdown, the mask and the saved flag and still
+        // asks for the pair, so a dialog that outlives its own countdown keeps
+        // this map's boss count and loses only the killed half of it, which is
+        // the empty mask doing that rather than a second branch.
+        const auto counts = gh
+            ? game::countLfgEncounters(gh->getDungeonEncounters(), gh->getCurrentMapId(),
+                                       gh->getInstanceDifficulty(), prompt ? completedMask : 0u)
+            : game::LfgEncounterCounts{};
+        // Whole seconds: the client divides its milliseconds by 1000 as
+        // integers. WoWee's countdown is a frame-decayed float, and the dialog
+        // takes SecondsToTime(ceil(lockTimeleft)) of what it is handed
+        // (staticpopup.lua:2452,2467), so a fraction displays as the second up.
+        lua_pushnumber(L, static_cast<double>(static_cast<uint32_t>(secondsLeft)));
         lua_pushboolean(L, previouslySaved ? 1 : 0);
-        lua_pushinteger(L, static_cast<lua_Integer>(total));
-        lua_pushinteger(L, static_cast<lua_Integer>(complete));
+        // Both as numbers, which is what the client pushes them as (0x0084e2a0):
+        // the OnUpdate hands them straight to string.format's BOSSES_KILLED.
+        lua_pushnumber(L, static_cast<double>(counts.total));
+        lua_pushnumber(L, static_cast<double>(counts.complete));
         return 4;
     }},
     // Accept and be saved to the instance, or decline and go to the graveyard.
