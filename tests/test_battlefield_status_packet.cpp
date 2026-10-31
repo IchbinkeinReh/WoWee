@@ -251,4 +251,7 @@ TEST_CASE("an arena under way says which side the player is on",
     CHECK(d.mapId == 559u);
     CHECK(d.elapsedMs == 45000u);
     CHECK(d.arenaFaction == 1);
+    // The first dword is the time left, not an invitation's length.
+    CHECK(d.instanceRemainingMs == 120000u);
+    CHECK(d.inviteTimeoutMs == 0u);
 }
