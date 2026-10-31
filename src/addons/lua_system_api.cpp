@@ -9622,6 +9622,18 @@ void registerSystemLuaAPI(lua_State* L) {
                 // ids) is the nearest thing to the 0x44-stride one and it is not
                 // it, being 8 fields and 32-byte records.  And no pin answered
                 // here carries a mapLinkID, so nothing is clickable yet.
+                //
+                // Two steps of 0x00546ef0 are worth having written down for
+                // whoever names that table: the argument is checked against the
+                // WorldMapLink table's own id range first (0x00ad36e4 below,
+                // 0x00ad36e0 above, the index array at 0x00ad36f4) and a link
+                // outside it answers nothing at all rather than a failed lookup;
+                // and the map-change routine is then called as
+                // 0x00546310(-2, area id, link id).  That routine is the world
+                // map's one way to change what is shown - twenty-three call sites
+                // across the map code, five of them passing the same -2 - so an
+                // answer here has somewhere to go; it is the id table, not the
+                // missing verb, that holds this up.
                 {"ClickLandmark",       lua_ReturnNothing},
                 // The pins on the shown map: counted by GetNumMapLandmarks and
                 // described by GetMapLandmarkInfo, whose note above is where the
