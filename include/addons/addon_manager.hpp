@@ -43,6 +43,11 @@ public:
 
 
     void fireEvent(const std::string& event, const std::vector<std::string>& args = {});
+    /// An event whose arguments keep their Lua types. COMBAT_TEXT_UPDATE's do:
+    /// its payload is compared by the interface (`arg3 > 0`), and Lua 5.1
+    /// raises on a string meeting a number there rather than coercing, so the
+    /// amounts have to go out as the numbers the client's %d pushed.
+    void fireEventValues(const std::string& event, const std::vector<game::combat_log::Arg>& args);
     /// A combat log entry announced: COMBAT_LOG_EVENT when a filter took it,
     /// then COMBAT_LOG_EVENT_UNFILTERED (0x0074f910).
     void fireCombatLogEvent(const std::vector<game::combat_log::Arg>& args, bool filtered);

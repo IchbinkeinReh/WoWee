@@ -1430,6 +1430,14 @@ bool Application::initialize() {
                 [this](const std::vector<game::combat_log::Arg>& args, bool filtered) {
                     if (addonManager_ && addonsLoaded_) addonManager_->fireCombatLogEvent(args, filtered);
                 });
+            // The same route for an event whose arguments are not all strings.
+            // COMBAT_TEXT_UPDATE is the one that needs it: its payload is
+            // compared (`arg3 > 0`), and a numeric string there does not
+            // compare, it raises.
+            gameHandler->setAddonEventValuesCallback(
+                [this](const std::string& event, const std::vector<game::combat_log::Arg>& args) {
+                    if (addonManager_ && addonsLoaded_) addonManager_->fireEventValues(event, args);
+                });
             // How a keybinding reaches the frame that replaced this client's own
             // window. Without it, a key toggled a window nothing draws.
             gameHandler->setInterfaceCommandCallback([this](const std::string& lua) {

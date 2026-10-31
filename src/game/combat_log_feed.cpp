@@ -1,5 +1,6 @@
 #include "game/combat_log_feed.hpp"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -26,6 +27,35 @@ namespace cl = combat_log;
 namespace {
 
 int64_t clientNowMs() { return static_cast<int64_t>(core::appTimeSeconds() * 1000.0); }
+
+/// 0x00adb820: COMBAT_TEXT_UPDATE's type names, at the index the client's six
+/// raisers hand them - `(&PTR_s_INTERRUPT_00adb820)[i]` is how the decompile
+/// spells it, and the index is what a record handler decides on. Kept whole,
+/// because which rows exist and which are never used is part of the
+/// measurement: nothing in the log builders raises the ENCHANTMENT pair,
+/// ENERGIZE's family comes from 0x00750a90 and 0x00750b60, SPELL_ACTIVE from
+/// the power bars, and FACTION, HONOR_GAINED and ARENA_POINTS_GAINED from the
+/// reputation and honour paths, none of which fill a combat log entry.
+constexpr std::array<const char*, 48> kCombatTextTypes = {{
+    "INTERRUPT", "DAMAGE_CRIT", "DAMAGE", "MISS", "DODGE", "PARRY", "EVADE", "IMMUNE",
+    "DEFLECT", "REFLECT", "RESIST", "BLOCK", "ABSORB", "SPELL_DAMAGE_CRIT", "SPELL_DAMAGE",
+    "SPELL_MISS", "SPELL_DODGE", "SPELL_PARRY", "SPELL_EVADE", "SPELL_IMMUNE", "SPELL_DEFLECT",
+    "SPELL_REFLECT", "SPELL_RESIST", "SPELL_BLOCK", "SPELL_ABSORB", "ENCHANTMENT_REMOVED",
+    "ENCHANTMENT_ADDED", "PERIODIC_HEAL", "ENERGIZE", "PERIODIC_ENERGIZE", "SPELL_CAST",
+    "SPELL_AURA_END", "SPELL_AURA_END_HARMFUL", "SPELL_AURA_START", "SPELL_AURA_START_HARMFUL",
+    "SPELL_ACTIVE", "FACTION", "HEAL_CRIT", "HEAL", "DAMAGE_SHIELD", "SPELL_DISPELLED",
+    "EXTRA_ATTACKS", "SPLIT_DAMAGE", "HONOR_GAINED", "PERIODIC_HEAL_ABSORB", "HEAL_CRIT_ABSORB",
+    "HEAL_ABSORB", "ARENA_POINTS_GAINED",
+}};
+
+/// 0x00750550's jump table: the miss reason to the type it raises. No SPELL_
+/// row is chosen here - the second block of the name table is the first shifted
+/// by twelve, so a spell miss is this index plus 0x0c and nothing else decides.
+/// Reason 8 is the client's own duplicate of 7 (its switch folds both to
+/// IMMUNE); 0 raises nothing.
+constexpr std::array<uint8_t, 12> kMissCombatTypes = {
+    0, 3, 0x0a, 4, 5, 0x0b, 6, 7, 7, 8, 0x0c, 9,
+};
 
 uint64_t guidField(const Entity& e, UF low) {
     const uint16_t idx = fieldIndex(low);
@@ -96,6 +126,7 @@ CombatLogFeed::CombatLogFeed(GameHandler& owner) : owner_(owner) {
     hooks.announce = [this](const cl::Entry& entry, bool filtered) {
         if (owner_.combatLogEventCallbackRef()) owner_.combatLogEventCallbackRef()(argsOf(entry), filtered);
         if (loggingCombat_) writeLogLine(entry);
+        noteCombatText(entry);
     };
     log_.setHooks(std::move(hooks));
     log_.reset(clientNowMs(), static_cast<int64_t>(std::time(nullptr)));
@@ -373,6 +404,121 @@ cl::Entry& CombatLogFeed::create(cl::Event event, uint64_t src, uint64_t dst, co
 }
 
 void CombatLogFeed::commit(uint32_t delayMs) { log_.commit(delayMs); }
+
+void CombatLogFeed::noteCombatText(const cl::Entry& e) {
+    // 0x0074d430: every raise below sits behind one test - the record's other
+    // side is this character. Each of these builders takes that guid second:
+    // 0x00751c40's and 0x00752de0's second argument is the pair 0x00750660 and
+    // 0x00752de0 compare, 0x00751b80's is the pair handed to 0x00750500 as its
+    // `this` (0x00751c0c), and 0x00750860 compares its third argument, the
+    // healed unit, while printing its second - so the column the interface
+    // draws is what happens to the player, not what the player does to a mob.
+    // The numbers over the world are the other feature, and they show both.
+    //
+    // The client raises these when it makes the record, before the entry's
+    // names have necessarily arrived; they are raised here once the entry is
+    // announced, which is the same place the log event goes out. An entry whose
+    // name never arrives is dropped without one, and an entry held back for a
+    // replay says its piece late - what the client's replay does not, since it
+    // runs the same builders over records it is only remembering.
+    if (e.dst.guid == 0 || e.dst.guid != activePlayer()) return;
+
+    const auto raise = [this](size_t type, std::vector<cl::Arg> payload) {
+        std::vector<cl::Arg> args;
+        args.reserve(payload.size() + 1);
+        args.push_back(cl::Arg::str(kCombatTextTypes[type]));
+        for (auto& arg : payload) args.push_back(std::move(arg));
+        // 0x0081b530(0x1e4, ...): the type name first, then the payload, one
+        // Lua value per conversion in the raiser's format string - which is
+        // why the amounts go out as numbers. The interface compares them.
+        owner_.fireAddonEventValues("COMBAT_TEXT_UPDATE", args);
+    };
+
+    switch (e.event) {
+        case cl::Event::SwingDamage:
+        case cl::Event::RangeDamage:
+        case cl::Event::SpellDamage:
+        case cl::Event::SpellPeriodicDamage:
+        case cl::Event::DamageShield:
+        case cl::Event::DamageSplit: {
+            // 0x00750660, and the same chain in the swing builder (a blocked
+            // swing at 0x00751485, an absorbed one at 0x0075149f, a critical
+            // hit at 0x007514b7, the plain hit at 0x007514c8): what took the
+            // number off decides, and only one name goes out.
+            // 0x00750557: the SPELL_ names come from the subevent, not from the
+            // spell. Only a record the log filed as SpellDamage (9) gets them,
+            // so a periodic hit - which the client files as 34 and this one
+            // matches - reads as a plain one here too.
+            const bool spell = e.event == cl::Event::SpellDamage;
+            if (e.damage.resisted > 0)
+                raise(spell ? 0x16 : 0x0a,
+                      {cl::Arg::num(e.damage.amount), cl::Arg::num(e.damage.resisted)});
+            else if (e.damage.blocked > 0)
+                raise(spell ? 0x17 : 0x0b,
+                      {cl::Arg::num(e.damage.amount), cl::Arg::num(e.damage.blocked)});
+            else if (e.damage.absorbed > 0)
+                raise(spell ? 0x18 : 0x0c,
+                      {cl::Arg::num(e.damage.amount), cl::Arg::num(e.damage.absorbed)});
+            else if (e.damage.critical)
+                raise(spell ? 0x0d : 0x01, {cl::Arg::num(e.damage.amount)});
+            else if (e.event == cl::Event::DamageShield)
+                raise(0x27, {cl::Arg::num(e.damage.amount)});  // 0x00750660 tests 40, its own row
+            else
+                raise(spell ? 0x0e : 0x02, {cl::Arg::num(e.damage.amount)});
+            if (e.event == cl::Event::DamageSplit)
+                // 0x00752de0 raises its own name over the damage one, after
+                // handing the record to 0x00750660: a split shows the piece and
+                // the whole.
+                raise(0x2a, {cl::Arg::num(e.damage.amount)});
+            break;
+        }
+        case cl::Event::SwingMissed:
+        case cl::Event::RangeMissed:
+        case cl::Event::SpellMissed:
+        case cl::Event::SpellPeriodicMissed:
+        case cl::Event::DamageShieldMissed: {
+            if (e.missType >= kMissCombatTypes.size() || kMissCombatTypes[e.missType] == 0) return;
+            // The word alone, never the amount: 0x00751e1f and its two siblings
+            // are the same decision made inside the spell damage builder for the
+            // hit that got nothing through - it files the miss with the reason
+            // the value says (resisted, then blocked, then absorbed), raises
+            // SPELL_RESIST / SPELL_BLOCK / SPELL_ABSORB for a record logged as
+            // SpellMissed and the plain word for any other, and raises nothing
+            // when none of the three is set. 0x00750550's switch is that rule
+            // with the reasons a dodge or a dodge-like one brings.
+            raise(kMissCombatTypes[e.missType] +
+                      (e.event == cl::Event::SpellMissed ? 0x0c : 0),
+                  {});
+            break;
+        }
+        case cl::Event::SpellHeal:
+        case cl::Event::SpellPeriodicHeal: {
+            // 0x00750860: the healer's name, the amount, and what was soaked
+            // up when there was any. Periodic first, and a periodic heal is
+            // never asked whether it was critical.
+            const bool periodic = e.event == cl::Event::SpellPeriodicHeal;
+            if (e.heal.absorbed != 0)
+                raise(periodic ? 0x2c : (e.heal.critical ? 0x2d : 0x2e),
+                      {cl::Arg::str(e.src.name.value_or(unknownName())),
+                       cl::Arg::num(e.heal.amount), cl::Arg::num(e.heal.absorbed)});
+            else
+                raise(periodic ? 0x1b : (e.heal.critical ? 0x25 : 0x26),
+                      {cl::Arg::str(e.src.name.value_or(unknownName())),
+                       cl::Arg::num(e.heal.amount)});
+            // Unported: 0x00750860 also stays quiet for a periodic heal whose
+            // spell row says the next tick is more than thirty seconds off. The
+            // row it reads is addressed from 0x00ad4830 and has not been named,
+            // so a slow tick announces itself here where the client does not.
+            break;
+        }
+        default:
+            // Auras, an interrupt, a dispel and extra attacks are raised the
+            // same way from 0x00752710, 0x007523d0, 0x00752930 and 0x00751433 -
+            // names with a spell behind them, which this hook is the place for
+            // and has not been given yet.
+            break;
+    }
+}
 
 void CombatLogFeed::playerNameAnswered(uint64_t guid, const std::string& name, const std::string& realm,
                                        bool found) {

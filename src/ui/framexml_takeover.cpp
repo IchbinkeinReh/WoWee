@@ -235,29 +235,39 @@ void frameXmlNoteAddOnLoaded(const std::string& addOnName) {
         gLoadedAddOns.insert(lower);
     }
     if (lower == "blizzard_combattext") {
-        gCombatTextAddOn.store(true, std::memory_order_relaxed);
-        LOG_INFO("FrameXML: Blizzard_CombatText loaded; this client's floating "
-                 "combat text stands down");
+        // Nothing stands down when this arrives. The addon's column and this
+        // client's numbers over the world are different features and the
+        // client it is modelled on runs both; frameXmlDrawsCombatText keeps the
+        // reason at the draw.
+        LOG_INFO("FrameXML: Blizzard_CombatText loaded; its column joins the "
+                 "combat text drawn over the world");
     }
 }
 
 bool frameXmlDrawsCombatText() {
-    // False while the COMBAT_TEXT_UPDATE this client sends carries no numbers,
-    // whatever is loaded.
+    // False, and no longer waiting to change.
     //
-    // Standing down for Blizzard_CombatText assumed it would draw what this
-    // client had stopped drawing. It cannot: every damage and healing number it
-    // shows arrives on COMBAT_TEXT_UPDATE, and the only one this client sends is
-    // the SPELL_ACTIVE line a power rescan raises (predictedPowerUsability) - no
-    // damage, no healing. What it does fire reaches the addon as the bare event name -
-    // which is why entering combat still announces itself from the middle of
-    // the screen while nothing else does, and why the handover read as working.
+    // This used to return gCombatTextAddOn the moment the addon loaded, on the
+    // reading that the column beside the player frame and the numbers over the
+    // world are one feature wearing two skins, and that handing the event over
+    // means standing these down. The event is sent now - every combat record
+    // whose destination is the character raises it, the way the client does it
+    // from its own record handlers behind 0x0074d430 - and the reading is still
+    // wrong.
     //
-    // The two are not the same element either. Blizzard's is a column beside
-    // the player frame; this client's is drawn in the world at whoever dealt or
-    // took the damage. Restoring COMBAT_TEXT_UPDATE would put a second copy of
-    // the numbers in that column, not on top of these, and this returns to
-    // gCombatTextAddOn on the day it is sent.
+    // The two are different features and the client runs both. What it raises
+    // names what happened *to* the character - the destination guid is what its
+    // 0x0074d430 tests, in the damage handler and in the heal one, where the
+    // name it hands along is the healer's. The numbers over the world are the
+    // engine's own floating combat text: a different set of cvars
+    // (enableCombatText and the fct filters this still does not read), drawn
+    // over whoever dealt or took the damage, and gated by nothing that knows an
+    // add-on is drawing a column somewhere else. Loading the add-on is the
+    // player asking for one more thing to be shown, not for the other to stop.
+    //
+    // The function stays because a load-on-demand addon is a gate no UiElement
+    // can describe - it arrives mid-run - and this is the shape
+    // framexml_ungated_draws.py needs to see here.
     return false;
 }
 

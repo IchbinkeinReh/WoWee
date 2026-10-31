@@ -3924,6 +3924,20 @@ public:
     void fireAddonEvent(const std::string& event, const std::vector<std::string>& args = {}) {
         if (addonEventCallback_) addonEventCallback_(event, args);
     }
+    /// The same, with arguments that keep the type the client's format string
+    /// gives them. It matters for an event the interface *compares*:
+    /// COMBAT_TEXT_UPDATE's payload is tested as `arg3 > 0`, and Lua 5.1
+    /// raises rather than coerces when a string meets a number there, so
+    /// sending "120" where the client pushed %d would turn a fight into a
+    /// script error on every hit.
+    using AddonEventValuesCallback =
+        std::function<void(const std::string&, const std::vector<combat_log::Arg>&)>;
+    void setAddonEventValuesCallback(AddonEventValuesCallback cb) {
+        addonEventValuesCallback_ = std::move(cb);
+    }
+    void fireAddonEventValues(const std::string& event, const std::vector<combat_log::Arg>& args) {
+        if (addonEventValuesCallback_) addonEventValuesCallback_(event, args);
+    }
     // Convenience: invoke a callback with a sound manager obtained from the renderer.
     template<typename ManagerGetter, typename Callback>
     void withSoundManager(ManagerGetter getter, Callback cb) {
@@ -5692,6 +5706,7 @@ private:
     // Chat (state lives in ChatHandler; callbacks remain here for cross-domain access)
     ChatBubbleCallback chatBubbleCallback_;
     AddonEventCallback addonEventCallback_;
+    AddonEventValuesCallback addonEventValuesCallback_;
     CombatLogEventCallback combatLogEventCallback_;
     InterfaceCommand   interfaceCommand_;
     InterfaceQuery     interfaceQuery_;
