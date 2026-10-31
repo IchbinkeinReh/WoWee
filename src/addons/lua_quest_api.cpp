@@ -5395,6 +5395,25 @@ void registerQuestLuaAPI(lua_State* L) {
             return trainerFold(L, true);
         }},
                 // GetGlyphLink(socket [, talentGroup]) → hyperlink, or nil
+                //
+                // What travels in the link is not the socket's number nor the
+                // glyph's spell. The client's binding (0x005b7740) takes the
+                // socket's *GlyphSlot.dbc* id out of PLAYER_FIELD_GLYPH_SLOTS_1
+                // (+0x122c of the player's fields, +4 per one-based socket) and
+                // the glyph's *GlyphProperties.dbc* id out of the per-socket
+                // cache the client keeps for both specs (0x005c5770), and hands
+                // the pair to 0x0061e650, which looks both rows up - by those
+                // two ids - and writes them into
+                // "%s|Hglyph:%d:%d|h[%s]|h%s" unchanged, colour and all
+                // ("|cff66bbff" leading, "|r" trailing, exactly as here). The
+                // name inside the brackets is the GlyphProperties row's *spell*
+                // name: the row's SpellID (+4) fetched out of the Spell table,
+                // because the properties id and the spell id are different
+                // numbers and only one of them names anything. A glyph whose
+                // spell cannot be named therefore answers no link at all rather
+                // than a link called "Glyph", which is what the panel would
+                // otherwise insert into chat; and the pair is read back in the
+                // same order by SetHyperlink - see the glyph branch there.
                 {"GetGlyphLink", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
@@ -5403,14 +5422,22 @@ void registerQuestLuaAPI(lua_State* L) {
                 lua_pushnil(L);
                 return 1;
             }
+            std::array<uint32_t, 6> slotIds{}, inFields{};
+            uint32_t enabled = 0;
+            if (!gh->getGlyphSocketFields(slotIds, inFields, enabled)) {
+                lua_pushnil(L);
+                return 1;
+            }
             const auto& glyphs = (spec >= 1 && spec <= 2)
                 ? gh->getGlyphs(static_cast<uint8_t>(spec - 1)) : gh->getGlyphs();
-            const uint16_t glyphId = glyphs[index - 1];
-            if (glyphId == 0) { lua_pushnil(L); return 1; }
-            std::string name = gh->getSpellName(glyphId);
-            if (name.empty()) name = "Glyph";
-            const std::string link = "|cff66bbff|Hglyph:" + std::to_string(index) +
-                                     ":" + std::to_string(glyphId) + "|h[" + name +
+            const size_t i = static_cast<size_t>(index - 1);
+            const uint32_t propertiesId = glyphs[i];
+            if (propertiesId == 0) { lua_pushnil(L); return 1; }
+            gh->ensureGlyphPropertiesLoaded();
+            const std::string name = gh->getSpellName(gh->getGlyphSpellId(propertiesId));
+            if (name.empty()) { lua_pushnil(L); return 1; }
+            const std::string link = "|cff66bbff|Hglyph:" + std::to_string(slotIds[i]) +
+                                     ":" + std::to_string(propertiesId) + "|h[" + name +
                                      "]|h|r";
             lua_pushstring(L, link.c_str());
             return 1;

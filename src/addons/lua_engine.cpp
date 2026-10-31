@@ -2481,6 +2481,59 @@ int lua_Tooltip_SetAction(lua_State* L) {
 /// A link is "kind:id:more:fields", and only the kind and the first number are
 /// needed to fill one. A whole "|cff...|Hitem:1234:...|h[Name]|h|r" is accepted
 /// too, because that is the shape a link pulled out of chat arrives in.
+///
+/// The chain this mirrors (0x0062dae0) tests ten prefixes - item, enchant,
+/// dance, spell, unit, quest, talent, trade, achievement, glyph - and prints
+/// "%s:SetHyperlink(): Unknown link type" past the last. Where the kinds this
+/// file does not fill stand:
+///
+///   trade:     the tradeskill *list* link, which the client does not answer
+///              with a tooltip at all: 0x005de300 parses the skill id, two
+///              numbers, the owner's guid and then a base64 mask of six recipes
+///              to the byte, and fills its own TradeSkillFrame from them. It is
+///              blocked for the same reason the three GetTradeSkill*Link names
+///              are - there is no Tradeskill table in either dbc folder to
+///              resolve a recipe against.
+///   dance:     a spell visual kit's name (0x00575d70 loads the kit and draws
+///              it). Nothing writes such a link: the client carries no "|Hdance"
+///              format string anywhere in it, and neither does this interface,
+///              so there is no producer to be reached through.
+///   unit:      the link the combat log writes for a source or a destination -
+///              TEXT_MODE_A_STRING_SOURCE_UNIT / _DEST_UNIT,
+///              "%s|Hunit:%s:%s|h%s|h" - which the client answers with a whole
+///              unit tooltip built off the guid (0x0074d120 parses the two hex
+///              halves, 0x00621070 draws them). Out of reach twice over here:
+///              this interface's combat log window registers no
+///              OnHyperlinkEnter and no OnHyperlinkClick, so its lines are
+///              never hovered as links, and nothing in this tree writes a
+///              |Hunit link either.
+///   achievement: a real gap, and the one hyperlink hover in this tree that
+///              answers nothing where the reference answers. The client writes
+///              these links itself: GetAchievementLink (0x005b6110) walks the
+///              achievement's criteria against the player's own criteria
+///              records and hands the result to 0x0061bff0, which writes
+///              "%s|Hachievement:%d:%016I64X:%d:%d:%d:%d:%u:%u:%u:%u|h[%s]|h%s"
+///              - "|cffffff00", the id, the earner's guid as sixteen hex
+///              digits, whether it is complete, the month and the day of the
+///              date it was earned, each written one higher than it is held,
+///              and the two-digit year, then four unsigned numbers of which
+///              the first two are the
+///              criteria-complete bits split over two dwords (the tooltip
+///              masks them against the criteria list one bit per criterion,
+///              0x00627220), and the achievement's title. Reading one back
+///              needs no query of the realm - the tooltip takes the title and
+///              the description out of Achievement.dbc and fills the
+///              description's numbers from the link, names each criterion from
+///              Achievement_Criteria.dbc, and looks the earner up by guid
+///              through the name cache 0x0067d770 for its completed and
+///              in-progress lines - the completed one prints the date off
+///              ACHIEVEMENT_TOOLTIP_COMPLETE. GetAchievementLink itself is
+///              implemented here and the interface calls it
+///              (blizzard_achievementui.lua:952, watchframe.lua:97), so the
+///              link is in chat; what is missing is the builder, and the
+///              all-zero fields this file writes into one.
+///   glyph:     filled below.
+///
 /// One enchant line, named by id, in the green the real client uses.
 ///
 /// Shared by the two things that know an enchant by different means: an
@@ -2496,6 +2549,60 @@ static void appendEnchantLineById(wowee::ui::Widget* w, game::GameHandler* gh,
     line.lc[0] = 0.0f; line.lc[1] = 1.0f; line.lc[2] = 0.0f; line.lc[3] = 1.0f;
     line.rc[0] = line.rc[1] = line.rc[2] = line.rc[3] = 1.0f;
     w->tooltipLines.push_back(std::move(line));
+}
+
+/// A glyph named by a link, filled the way the reference client fills one.
+///
+/// Its glyph branch - the last of SetHyperlink's ten prefixes - parses both of
+/// the link's numbers and calls the very builder the glyph panel's own
+/// GameTooltip:SetGlyph calls (0x00625d00 → 0x00622ba0); only the arguments
+/// differ, and the link carries both numbers because GetGlyphLink wrote them
+/// (see there): the socket's GlyphSlot id first, then the glyph's
+/// GlyphProperties id. That builder answers, in order, the glyph's spell name
+/// in the header colour, then "MAJOR_GLYPH" or "MINOR_GLYPH" off the GlyphSlot
+/// row's Type (+0x04: anything nonzero is a minor glyph, and a socket whose row
+/// is missing counts as major), then the spell's description - all of it off
+/// the two numbers, with no player and no socket consulted, which is the point
+/// of a link: the glyph describes itself to whoever hovers it, in someone
+/// else's chat. The "right click to remove it" hint the builder also knows is
+/// gated on an argument the panel passes as zero and the link path as one, so
+/// it belongs to the panel; and its GLYPH_LOCKED, GLYPH_INACTIVE and
+/// GLYPH_EMPTY_DESC lines are what a socket with nothing in it answers, which a
+/// link never is.
+///
+/// The name and description here are the whole spell tooltip, because that is
+/// what SetGlyph already settles for (lua_Tooltip_SetGlyph): one builder for
+/// both paths rather than a second that can drift away from the first.
+static bool fillGlyphLinkTooltip(lua_State* L, wowee::ui::Widget* w, game::GameHandler* gh,
+                                 const std::string& link, size_t colon) {
+    auto number = [&link](size_t& at) {
+        uint32_t v = 0;
+        for (; at < link.size() && link[at] >= '0' && link[at] <= '9'; ++at)
+            v = v * 10 + static_cast<uint32_t>(link[at] - '0');
+        return v;
+    };
+    size_t at = colon + 1;
+    const uint32_t slotId = number(at);
+    uint32_t propertiesId = 0;
+    if (at < link.size() && link[at] == ':') propertiesId = number(++at);
+    // The second number is the one that names the tooltip: the properties row
+    // holds the spell, and the slot row only ever adds the major/minor line.
+    if (propertiesId == 0) return false;
+    gh->ensureGlyphPropertiesLoaded();
+    const uint32_t spellId = gh->getGlyphSpellId(propertiesId);
+    if (spellId == 0 || !fillSpellTooltip(L, w, gh, spellId)) return false;
+    uint32_t type = 0;
+    const bool minor = gh->getGlyphSlotType(slotId, type) && type != 0;
+    wowee::ui::Widget::TooltipLine line;
+    line.left = globalOr(L, minor ? "MINOR_GLYPH" : "MAJOR_GLYPH",
+                         minor ? "Minor Glyph" : "Major Glyph");
+    // The client's own colour for the line, 0xffbb66ff. The client puts this
+    // line between the name and the description; here the spell tooltip is
+    // filled whole first, so it lands after both.
+    line.lc[0] = 1.0f; line.lc[1] = 0.733f; line.lc[2] = 0.4f; line.lc[3] = 1.0f;
+    line.rc[0] = line.rc[1] = line.rc[2] = line.rc[3] = 1.0f;
+    w->tooltipLines.push_back(std::move(line));
+    return true;
 }
 
 int lua_Tooltip_SetHyperlink(lua_State* L) {
@@ -2521,7 +2628,11 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     uint32_t id = 0;
     for (size_t i = colon + 1; i < link.size() && link[i] >= '0' && link[i] <= '9'; ++i)
         id = id * 10 + static_cast<uint32_t>(link[i] - '0');
-    if (id == 0) { lua_pushboolean(L, 0); return 1; }
+    // Zero means "nothing named" for every kind but one: a glyph link leads
+    // with the socket's GlyphSlot id, and the number that names the tooltip is
+    // its second field (0x00622ba0 finds the row by that one, and treats a
+    // missing or zero slot row as a case of its own rather than as a failure).
+    if (id == 0 && kind != "glyph") { lua_pushboolean(L, 0); return 1; }
 
     // The enchant, which an item link carries as its second field and this
     // walked past. A linked weapon read as a plain one wherever a link is
@@ -2549,6 +2660,8 @@ int lua_Tooltip_SetHyperlink(lua_State* L) {
     }
     else if (kind == "quest")
         filled = fillQuestTooltip(w, gh, id);
+    else if (kind == "glyph")
+        filled = fillGlyphLinkTooltip(L, w, gh, link, colon);
 
     // Kept whole, so the refresh below rebuilds the item that was linked
     // rather than the template behind it, and set even when nothing could be
