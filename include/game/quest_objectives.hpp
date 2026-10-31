@@ -69,6 +69,19 @@ inline int questObjectiveCount(const GameHandler::QuestLogEntry& q) {
     return count;
 }
 
+/// One objective by its slot rather than by its place in the list, which is what
+/// a world-map pin's objective index names. The reference keeps this reader
+/// altogether separate (0x005e58c0, behind GetQuestPOILeaderBoard at 0x005e6650,
+/// which hands the number over without the -1 GetQuestLogLeaderBoard's binding
+/// applies): 0-3 the four kill slots, 4-9 the six item slots, 16 and 17 - and
+/// every negative number - the quest's objectives paragraph. Slots 10-13 name the
+/// items the quest hands over and 14-15 run one array past them into their counts;
+/// both answer nothing, because the row builder those slots call (0x005e2630)
+/// looks the id up among the quest's six required items. Players slain and the
+/// reputation have no slot at all. False is the three nils the binding pushes.
+bool questObjectiveSlotLine(GameHandler& gh, const GameHandler::QuestLogEntry& q, int slot,
+                            QuestObjective& out);
+
 /// Every objective the quest carries, in the log's order. A name still out on
 /// its query is asked for again, and is a space until it answers, as the
 /// client has it - see questObjectiveLine.

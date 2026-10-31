@@ -30,7 +30,95 @@ std::string targetName(GameHandler& gh, int32_t npcOrGoId) {
     return info->name;
 }
 
+/// One kill or object slot, written as the log writes it. Split out because the
+/// world-map pin's reader asks for the same line by slot rather than by row.
+QuestObjective killObjectiveLine(GameHandler& gh, const GameHandler::QuestLogEntry& q, size_t slot) {
+    const auto& kill = q.killObjectives[slot];
+    const uint32_t key = static_cast<uint32_t>(std::abs(kill.npcOrGoId));
+    uint32_t current = 0;
+    if (auto it = q.killCounts.find(key); it != q.killCounts.end()) current = it->second.first;
+    const bool isObject = kill.npcOrGoId < 0;
+    QuestObjective line;
+    line.text = questObjectiveLine(q.objectiveTexts[slot], targetName(gh, kill.npcOrGoId), isObject,
+                                   current, kill.required, interfaceString);
+    line.type = isObject ? "object" : "monster";
+    line.finished = current >= kill.required;
+    return line;
+}
+
+QuestObjective itemObjectiveLine(GameHandler& gh, const GameHandler::QuestLogEntry& q, size_t slot) {
+    const auto& item = q.itemObjectives[slot];
+    uint32_t current = 0;
+    if (auto it = q.itemCounts.find(item.itemId); it != q.itemCounts.end()) current = it->second;
+    // By name; the number stands in while the item query is out, and the
+    // answer lands with a QUEST_LOG_UPDATE behind it.
+    std::string name;
+    const auto* info = gh.getItemInfo(item.itemId);
+    if (info && !info->name.empty()) {
+        name = info->name;
+    } else {
+        gh.queryItemInfo(item.itemId, 0);
+    }
+    QuestObjective line;
+    line.text = questItemObjectiveLine(name, current, item.required, interfaceString);
+    line.type = "item";
+    line.finished = current >= item.required;
+    return line;
+}
+
 }  // namespace
+
+bool questObjectiveSlotLine(GameHandler& gh, const GameHandler::QuestLogEntry& q, int slot,
+                            QuestObjective& out) {
+    // The paragraph branch, which every negative number lands in as well.
+    if (slot < 0 || slot == 16 || slot == 17) {
+        if (q.objectives.empty()) return false;
+        out.text = q.objectives;
+        out.type = "event";
+        out.finished = q.complete;
+        return true;
+    }
+    if (slot < 4) {
+        // The reference hands its builder (0x005e2370) the id the slot names and
+        // that builder then looks the id up from the first slot on, taking the
+        // first match: a quest repeating an id answers the repeat from the
+        // earlier slot, and an empty slot - id zero - matches the first empty
+        // one, which is why the answer is a line with no name in it rather than
+        // nothing at all.
+        size_t chosen = slot;
+        for (size_t i = 0; i < q.killObjectives.size() && i < slot; ++i) {
+            if (q.killObjectives[i].npcOrGoId != q.killObjectives[slot].npcOrGoId) continue;
+            chosen = i;
+            break;
+        }
+        out = killObjectiveLine(gh, q, chosen);
+        return true;
+    }
+    if (slot < 16) {
+        // Slots 4-9 name the six required items; 10-13 the items the quest hands
+        // over; and 14-15 run one array past those into their counts, so the
+        // number looked up there is a wanted count standing in as an item id. All
+        // of them go through one search (0x005e2630): the id has to name one of
+        // the six required items, and the slot holding the quest's own item is
+        // skipped unless more than one of it is wanted - which is why a
+        // handed-over item answers nothing unless it happens also to be asked for.
+        const uint32_t wanted =
+            slot < 10 ? q.itemObjectives[slot - 4].itemId
+                      : (slot < 14 ? q.objectiveSourceItems[slot - 10]
+                                   : q.objectiveSourceCounts[slot - 14]);
+        for (size_t i = 0; i < q.itemObjectives.size(); ++i) {
+            const auto& item = q.itemObjectives[i];
+            if (item.itemId != wanted) continue;
+            if (item.itemId == q.sourceItemId && item.required <= 1) continue;
+            out = itemObjectiveLine(gh, q, i);
+            return true;
+        }
+        return false;
+    }
+    // 18 and up. This reader has no players-slain and no reputation line: those
+    // exist only in the log's list.
+    return false;
+}
 
 std::vector<QuestObjective> questObjectives(GameHandler& gh,
                                             const GameHandler::QuestLogEntry& q) {
@@ -48,38 +136,16 @@ std::vector<QuestObjective> questObjectives(GameHandler& gh,
         line.finished = q.complete;
         out.push_back(std::move(line));
     }
-    for (const auto& kill : q.killObjectives) {
-        if (!isQuestObjective(kill.npcOrGoId, kill.required)) continue;
-        const uint32_t key = static_cast<uint32_t>(std::abs(kill.npcOrGoId));
-        uint32_t current = 0;
-        if (auto it = q.killCounts.find(key); it != q.killCounts.end()) current = it->second.first;
-        const bool isObject = kill.npcOrGoId < 0;
-        QuestObjective line;
-        const size_t slot = static_cast<size_t>(&kill - q.killObjectives.data());
-        line.text = questObjectiveLine(q.objectiveTexts[slot], targetName(gh, kill.npcOrGoId), isObject,
-                                       current, kill.required, interfaceString);
-        line.type = isObject ? "object" : "monster";
-        line.finished = current >= kill.required;
-        out.push_back(std::move(line));
+    for (size_t slot = 0; slot < q.killObjectives.size(); ++slot) {
+        if (!isQuestObjective(q.killObjectives[slot].npcOrGoId, q.killObjectives[slot].required))
+            continue;
+        out.push_back(killObjectiveLine(gh, q, slot));
     }
-    for (const auto& item : q.itemObjectives) {
-        if (!isQuestObjective(static_cast<int32_t>(item.itemId), item.required)) continue;
-        uint32_t current = 0;
-        if (auto it = q.itemCounts.find(item.itemId); it != q.itemCounts.end()) current = it->second;
-        // By name; the number stands in while the item query is out, and the
-        // answer lands with a QUEST_LOG_UPDATE behind it.
-        std::string name;
-        const auto* info = gh.getItemInfo(item.itemId);
-        if (info && !info->name.empty()) {
-            name = info->name;
-        } else {
-            gh.queryItemInfo(item.itemId, 0);
-        }
-        QuestObjective line;
-        line.text = questItemObjectiveLine(name, current, item.required, interfaceString);
-        line.type = "item";
-        line.finished = current >= item.required;
-        out.push_back(std::move(line));
+    for (size_t slot = 0; slot < q.itemObjectives.size(); ++slot) {
+        if (!isQuestObjective(static_cast<int32_t>(q.itemObjectives[slot].itemId),
+                              q.itemObjectives[slot].required))
+            continue;
+        out.push_back(itemObjectiveLine(gh, q, slot));
     }
     // Then one line for each item the quest hands over for an objective - the
     // kill records' source items (objectiveSourceItems, the cache's +0x1c74),

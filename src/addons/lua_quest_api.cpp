@@ -1131,28 +1131,44 @@ static int lua_SetPOIIconOverlapPushDistance(lua_State* L) {
     return 0;
 }
 
-/// GetQuestPOILeaderBoard(objectiveIndex, questId) → the objective's text and
-/// counts, the same as the quest log's version - except that this one is given
-/// a quest id where that one takes a log index. Aliasing the two would look
-/// right and read the wrong quest, so the id is turned into an index here.
+/// GetQuestPOILeaderBoard(objectiveIndex, questId) → the line for one of the
+/// quest's objective *slots*, which is what a map pin's objective index names.
+/// This is not the log's reader with a quest id in place of a log index, and
+/// aliasing the two reads the wrong line: the reference gives this one its own
+/// walker, which addresses the quest's arrays by slot and never counts the lines
+/// the log shows (game::questObjectiveSlotLine). The quest is named by its id
+/// here, where every other log reader is handed an index.
 static int lua_GetQuestPOILeaderBoard(lua_State* L) {
     auto* gh = getGameHandler(L);
+    // The client's own usage line for this one names the other binding: its
+    // argument check and its message were copied over and never corrected.
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetQuestLogLeaderBoard(index)");
     const uint32_t questId = static_cast<uint32_t>(luaL_optnumber(L, 2, 0));
-    if (!gh || questId == 0) { return luaReturnNil(L); }
-    const auto rows = questRows(gh);
-    int index = 0;
-    for (size_t i = 0; i < rows.size(); ++i) {
-        if (rows[i].quest && rows[i].quest->questId == questId) {
-            index = static_cast<int>(i) + 1;
-            break;
-        }
+    if (!gh) {
+        lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+        return 3;
     }
-    if (index == 0) { return luaReturnNil(L); }
-    lua_pushvalue(L, 1);            // objective index, unchanged
-    lua_pushnumber(L, index);       // the log index the other one wants
-    lua_replace(L, 2);
-    lua_replace(L, 1);
-    return lua_GetQuestLogLeaderBoard(L);
+    const game::GameHandler::QuestLogEntry* q = nullptr;
+    for (const auto& entry : gh->getQuestLog()) {
+        if (entry.questId == questId) { q = &entry; break; }
+    }
+    // An id the log does not hold - zero included - is not a miss there. The walk
+    // takes the quest the log has selected instead, the way every other reader
+    // takes a zero index to mean the same thing.
+    if (!q) q = selectedLogEntry(gh);
+    if (!q) {
+        lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+        return 3;
+    }
+    game::QuestObjective line;
+    if (!game::questObjectiveSlotLine(*gh, *q, static_cast<int>(lua_tointeger(L, 1)), line)) {
+        lua_pushnil(L); lua_pushnil(L); lua_pushnil(L);
+        return 3;
+    }
+    lua_pushstring(L, line.text.c_str());
+    lua_pushstring(L, line.type);
+    lua_pushboolean(L, line.finished ? 1 : 0);
+    return 3;
 }
 
 /// The objective's line, its kind and whether it is done - through the one
