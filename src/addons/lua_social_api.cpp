@@ -2648,6 +2648,19 @@ void registerSocialLuaAPI(lua_State* L) {
                 // UnitIsSilenced and ChannelSilenceVoice stay where they were:
                 // those are voice-chat silencing, a different thing from the mute
                 // list, which is what the wire calls a "voice ignore".
+                //
+                // Answering no is unreachable, which is why it stays a no.
+                // 0x004fccf0 resolves the *name* it is handed to a voice roster
+                // record and reads bit 8 of that record's flags through
+                // 0x007db600 - state with no packet behind it here - and every
+                // consumer asks from behind the voice switch: unitpopup.lua
+                // hides each of the six SILENCE and UNSILENCE entries it builds
+                // for party, raid and battleground when
+                // `not IsVoiceChatEnabled() or not GetVoiceStatus(name)`, and
+                // blizzard_raidui.lua's pullout entry sits inside its own
+                // IsVoiceChatEnabled() block (1331, asking at 1377).  This
+                // client answers IsVoiceChatEnabled false, so the menus that
+                // would ask this one do not offer them at all.
                 {"UnitIsSilenced",      luaReturnFalse},
                 // AddOrDelMute(name) - 0x006b6bd0 → 0x006b6130, the toggle the
                 // raid panels' speaker icon uses. One walk over the mute rows
