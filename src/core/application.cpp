@@ -6554,6 +6554,18 @@ void Application::render() {
             // showed through the bags and the auction house.
             });
             runRenderStage("addonWidgets/layout", [&] {
+            // The display's safe area, in the window units DisplaySize is
+            // in. The whole window everywhere but a phone with a notch.
+            if (SDL_Window* sdlWin = window ? window->getSDLWindow() : nullptr) {
+                SDL_Rect safe{};
+                int winW = 0, winH = 0;
+                if (SDL_GetWindowSafeArea(sdlWin, &safe) && SDL_GetWindowSize(sdlWin, &winW, &winH) &&
+                    safe.w > 0 && safe.h > 0) {
+                    engine->widgets().setSafeArea(
+                        static_cast<float>(safe.x), static_cast<float>(winW - safe.x - safe.w),
+                        static_cast<float>(safe.y), static_cast<float>(winH - safe.y - safe.h));
+                }
+            }
             widgetRenderer_.layout(engine->widgets(), io.DisplaySize.x, io.DisplaySize.y);
             });
 

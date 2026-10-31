@@ -813,12 +813,21 @@ void WidgetTree::layout(float pixelW, float pixelH) {
     // it is created before any XML is read, so it has none, and a frame with
     // no anchors is not displayed. Its own shown flag still decides whether
     // anything under it is, which is the whole point of it being a frame.
+    //
+    // Inside the safe area, where the display has one: in landscape an
+    // iPhone's notch covers one side and its home indicator the bottom.
     if (Widget* ui = get(uiParentId_); ui && ui != &rootW) {
-        ui->left = 0.0f;
-        ui->bottom = 0.0f;
-        if (ui->rectW != screenW || ui->rectH != screenH) markResizePending(ui->id);
-        ui->rectW = screenW;
-        ui->rectH = screenH;
+        const float toUnits = (uiScale_ > 0.0f) ? 1.0f / uiScale_ : 1.0f;
+        const float insetL = safeLeft_ * toUnits, insetR = safeRight_ * toUnits;
+        const float insetT = safeTop_ * toUnits, insetB = safeBottom_ * toUnits;
+        const float uiW = std::max(1.0f, screenW - insetL - insetR);
+        const float uiH = std::max(1.0f, screenH - insetT - insetB);
+        if (ui->left != insetL || ui->bottom != insetB) ++layoutGeneration_;
+        ui->left = insetL;
+        ui->bottom = insetB;
+        if (ui->rectW != uiW || ui->rectH != uiH) markResizePending(ui->id);
+        ui->rectW = uiW;
+        ui->rectH = uiH;
         const bool uiVisible = rootW.visible && ui->shown;
         if (uiVisible && (!ui->visibleChain || !ui->visible)) ++visibilityRaises_;
         ui->visibleChain = uiVisible;

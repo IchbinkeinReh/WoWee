@@ -903,6 +903,15 @@ public:
     /// 1528-tall window and at double on a 384-tall one.
     void layout(float pixelW, float pixelH);
 
+    /// What the display covers at each edge (a phone's notch and rounded
+    /// corners, its home indicator), in the units layout() is given. UIParent
+    /// keeps inside it, so the interface anchored to it is not under the
+    /// notch; the screen itself, and what is parented to it, still fill
+    /// everything. Zero on a desktop.
+    void setSafeArea(float left, float right, float top, float bottom) {
+        safeLeft_ = left; safeRight_ = right; safeTop_ = top; safeBottom_ = bottom;
+    }
+
     /// Resolve one widget's rect now, if anything has moved since it was last
     /// resolved.
     ///
@@ -1238,6 +1247,7 @@ private:
     /// references valid when it grows, which is the guarantee this needs.
     float uiScale_ = 1.0f;
     float userScale_ = 1.0f;
+    float safeLeft_ = 0.0f, safeRight_ = 0.0f, safeTop_ = 0.0f, safeBottom_ = 0.0f;
     std::vector<uint32_t> scrollFrames_;
     /// Which unit each portrait texture is showing, and the reverse. Two maps
     /// rather than one because both questions are asked every frame: the draw
