@@ -5849,11 +5849,59 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushnumber(L, on.yearSince2000);
             return 4;
         }},
-                // Their statistics, which the reply does carry counters for and
-                // this client walks past to reach the end of the packet. Left
-                // as the dash until those are kept: a zero would read as a
-                // player who has never done the thing.
-                {"GetComparisonStatistic",         [](lua_State* L) -> int { lua_pushstring(L, "--"); return 1; }},
+                // GetComparisonStatistic(achievementID) → one string (0x005b5e70).
+                //
+                // The number is the other player's, and it was already on the
+                // wire: the second half of SMSG_RESPOND_INSPECT_ACHIEVEMENTS
+                // carries a counter per criteria, which the reply handler used to
+                // parse and drop on the floor while it walked the list to stay in
+                // step. Those counters are kept now (getComparisonCriteriaProgress
+                // and its store guard, which is the client's own), so the panel's
+                // friend column reads the same criterion the player column does -
+                // the reference walks the achievement's criteria chain and hands
+                // the result to the shared formatter 0x005b0ea0, and for the
+                // single-criterion statistic this panel draws, sum, largest and
+                // "how many met their threshold" - the three aggregations it picks
+                // between off a flag dword this note does not pin down - all answer
+                // with that one counter.
+                //
+                // The formatter is the part still missing, and it is not a
+                // number-to-string: it renders the same counter as money or as the
+                // date it last moved (0x005b0ea0 reads the record's own date at
+                // +0x4c and a per-day rate over 0x15180 seconds) depending on those
+                // same flag bits, so a money or date statistic gets the bare number
+                // here. What the reference never does is answer with a dash: a
+                // statistic nobody has done is a zero, and no value at all comes
+                // back only when the id names no achievement row - the one case
+                // FrameXML turns into "--" itself
+                // (blizzard_achievementui.lua:2658-2660). So a missing record
+                // answers "0" below rather than a dash. The dash stays for the one
+                // case the reference does answer with no value - an id the criteria
+                // table has no rows for - with the caveat that an achievement which
+                // has no criteria of its own looks the same from here and gets a
+                // zero from the reference. The local half above (GetStatistic) makes
+                // the same choices, which keeps the two columns of one row in step.
+                {"GetComparisonStatistic", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh || lua_gettop(L) < 1)
+                return luaL_error(L, "Usage: GetComparisonStatistic(achievementID)");
+            const auto id = static_cast<uint32_t>(lua_tonumber(L, 1));
+            gh->ensureAchievementCriteriaLoaded();
+            const auto& list = gh->getAchievementCriteria(id);
+            if (list.empty()) { lua_pushstring(L, "--"); return 1; }
+            const auto* progress = gh->getComparisonCriteriaProgress(
+                gh->getAchievementComparisonGuid());
+            uint64_t value = 0;
+            if (progress) {
+                const auto pit = progress->find(list[0].id);
+                if (pit != progress->end()) value = pit->second;
+            }
+            // One string, which is what the client pushes (FUN_0084e350), and an
+            // empty store is a zero rather than a gap: that is what the reference's
+            // walk over an empty list hands to its formatter.
+            lua_pushstring(L, std::to_string(value).c_str());
+            return 1;
+        }},
                 {"GetComparisonAchievementPoints", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) { lua_pushnumber(L, 0); return 1; }

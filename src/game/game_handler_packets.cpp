@@ -3388,15 +3388,27 @@ void GameHandler::registerRemainingOpcodes() {
         // packed counter, packed guid, flags, date and two timers - not the
         // fixed sixteen bytes this stepped over them by.
         // The comparison unit's statistics go on its list (0x005b2cb0),
-        // whatever their flags; any other player's are not kept.
+        // whatever their flags; any other player's are not kept. The guard that
+        // decides "the comparison unit" is each record's own guid against the
+        // stored comparison pair, not the guid this packet starts with, so the
+        // counter below is filed under the record's own guid and falls back to the
+        // header's only when a record names nobody.
+        // The latest-updated list keeps its isStatisticCriteria test: that one is
+        // 0x005b0de0's rule about which achievements live in the Statistics tree,
+        // a different question from whose record may be stored.
         const bool comparing = inspectedGuid == achievementComparisonGuid_;
+        std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint64_t>> counters;
         while (packet.hasRemaining(4)) {
             uint32_t id = packet.readUInt32();
             if (id == 0xFFFFFFFF) break;
             CriteriaProgressRecord rec;
             if (!readCriteriaProgressTail(packet, rec)) break;
+            const uint64_t owner = rec.playerGuid ? rec.playerGuid : inspectedGuid;
+            counters[owner].emplace(id, rec.counter);
             if (comparing && isStatisticCriteria(id)) latestUpdatedComparisonStats_.noteComparison(id);
         }
+        for (auto& [owner, perCriteria] : counters)
+            comparisonCriteriaProgress_[owner] = std::move(perCriteria);
         inspectedPlayerAchievements_[inspectedGuid] = std::move(achievements);
         LOG_INFO("SMSG_RESPOND_INSPECT_ACHIEVEMENTS: guid=0x", std::hex, inspectedGuid, std::dec,
                  " achievements=", inspectedPlayerAchievements_[inspectedGuid].size());

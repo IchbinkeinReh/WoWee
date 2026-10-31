@@ -3802,6 +3802,22 @@ public:
         return (it != inspectedPlayerAchievements_.end()) ? &it->second : nullptr;
     }
 
+    /// How far the comparison unit has got in each statistic, criteria id to the
+    /// counter, from the second half of SMSG_RESPOND_INSPECT_ACHIEVEMENTS. Null
+    /// when no reply named that guid.
+    ///
+    /// The reference keeps these on one list (0x00acfdc4) holding the comparison
+    /// unit's criteria records, and a record only reaches it when the guid the
+    /// record itself names is the comparison unit's - 0x005b2cb0 tests that pair
+    /// (DAT_00c1f458 and DAT_00c1f45c) first and returns without storing when it
+    /// differs, so the packet header's guid is not what decides. Keying the store
+    /// by that guid is the same rule with the guid left visible: a lookup asks
+    /// for the comparison unit and can never pick up another player's numbers.
+    const std::unordered_map<uint32_t, uint64_t>* getComparisonCriteriaProgress(uint64_t guid) const {
+        auto it = comparisonCriteriaProgress_.find(guid);
+        return (it != comparisonCriteriaProgress_.end()) ? &it->second : nullptr;
+    }
+
     /// The statistics most recently updated, newest first: the player's
     /// (0x00acfda8) and the comparison unit's (0x00acfdcc) - see
     /// game/latest_criteria.hpp.
@@ -6329,6 +6345,9 @@ private:
     // Per-player achievement data from SMSG_RESPOND_INSPECT_ACHIEVEMENTS
     // Key: inspected player's GUID; value: set of earned achievement IDs
     std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>> inspectedPlayerAchievements_;
+    // The same reply's criteria records, keyed by the guid each record names:
+    // see getComparisonCriteriaProgress.
+    std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint64_t>> comparisonCriteriaProgress_;
     LatestCriteriaList latestUpdatedStats_;
     LatestCriteriaList latestUpdatedComparisonStats_;
     /// A criteria record as 0x005b2520 takes it: a statistic not flagged
