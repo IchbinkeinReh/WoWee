@@ -4100,13 +4100,12 @@ void registerSocialLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->stopCinematic();
             return 0;
         }},
-                // The other half of RESURRECT_NO_TIMER's OnCancel:
-                // `UnitIsDead("player") and not UnitIsControlling("player")`.
-                // Controlling means driving a vehicle or a possessed creature,
-                // neither of which this client has.
-                {"UnitIsControlling", [](lua_State* L) -> int {
-            lua_pushboolean(L, 0); return 1;
-        }},
+                // UnitIsControlling used to sit here answering false, which the
+                // resurrect popups' OnCancel read as "not driving anything" and
+                // so re-opened the death dialog. It is answered where the
+                // charm-or-summon guid pair is read - lua_unit_api.cpp, beside
+                // UnitIsPossessed - and a name registered in two places is
+                // settled by load order, so it is registered once.
 
                 // ---- What chatframe.lua's slash commands call ----
                 //

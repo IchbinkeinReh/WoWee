@@ -1582,6 +1582,31 @@ static int lua_UnitIsCharmed(lua_State* L) {
     lua_pushboolean(L, guidField(gh, guid, game::UF::UNIT_FIELD_CHARMEDBY) != 0);
     return 1;
 }
+/// Whether this unit is driving something (0x00613c90).
+///
+/// The pair it reads is UNIT_FIELD_CHARM, and when that pair is empty
+/// UNIT_FIELD_SUMMON - the same charm-or-summon pair the reaction code and
+/// lua_UnitPlayerOrPetInParty walk. A unit with either naming something answers
+/// **1.0**; anything else answers nil, and false is not an answer this binding
+/// gives. The argument has no default either: the client reads it as a string
+/// that is nil when absent, which resolves to no unit and lands on that nil.
+///
+/// The three places it is reached from are the OnCancel of each resurrect
+/// popup (staticpopup.lua:1205,1231,1255): declining a raise re-opens the death
+/// dialog unless the player is controlling something - and a hunter whose pet is
+/// still fighting is, as is a passenger, whose CHARM names the transport (see
+/// the vehicle note above). Answering false here, as this row did, re-opened the
+/// death dialog for exactly those players.
+static int lua_UnitIsControlling(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const char* uid = luaL_optstring(L, 1, "");
+    const uint64_t guid = gh ? resolveUnitGuid(gh, uid) : 0;
+    uint64_t driven = guidField(gh, guid, game::UF::UNIT_FIELD_CHARM);
+    if (!driven) driven = guidField(gh, guid, game::UF::UNIT_FIELD_SUMMON);
+    if (driven) lua_pushnumber(L, 1.0);
+    else lua_pushnil(L);
+    return 1;
+}
 static int lua_UnitIsTalking(lua_State* L) { return luaReturnFalse(L); }
 static int lua_UnitInBattleground(lua_State* L) { return luaReturnNil(L); }
 
@@ -3978,6 +4003,7 @@ void registerUnitLuaAPI(lua_State* L) {
                 {"UnitControllingVehicle", lua_UnitControllingVehicle},
                 {"UnitIsPossessed",     lua_UnitIsPossessed},
                 {"UnitIsCharmed",       lua_UnitIsCharmed},
+                {"UnitIsControlling",   lua_UnitIsControlling},
                 {"UnitIsTalking",       lua_UnitIsTalking},
                 {"UnitInBattleground",  lua_UnitInBattleground},
                 {"UnitPlayerOrPetInParty", lua_UnitPlayerOrPetInParty},
