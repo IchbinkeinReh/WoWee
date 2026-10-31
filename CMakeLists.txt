@@ -273,10 +273,26 @@ endif()
 #
 # SDL3 installs its headers as <SDL3/SDL.h>, which is the spelling the sources
 # use, so unlike the SDL2 build there is no include shim to arrange here.
-if(ANDROID)
+if(ANDROID OR IOS)
     include(FetchContent)
-    set(SDL_SHARED ON  CACHE BOOL "" FORCE)   # SDLActivity loads libSDL3.so
-    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+    if(IOS)
+        # One binary: an iOS app links SDL in.
+        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+        set(SDL_STATIC ON  CACHE BOOL "" FORCE)
+        # Libraries and headers from the iPhoneOS SDK and the prefixes named
+        # (OpenSSL's), never the build Mac's own: a Homebrew zlib or StormLib
+        # is a macOS library and fails the link. The NDK's toolchain file does
+        # this for Android.
+        set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+        set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+        set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+        if(OPENSSL_ROOT_DIR)
+            list(APPEND CMAKE_FIND_ROOT_PATH "${OPENSSL_ROOT_DIR}")
+        endif()
+    else()
+        set(SDL_SHARED ON  CACHE BOOL "" FORCE)   # SDLActivity loads libSDL3.so
+        set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+    endif()
     set(SDL_TEST   OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(SDL3
         GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
@@ -284,7 +300,7 @@ if(ANDROID)
         GIT_SHALLOW    TRUE)
     FetchContent_MakeAvailable(SDL3)
 
-    # Header-only, and there is no system copy to find on Android.
+    # Header-only, and there is no system copy to find on Android or iOS.
     FetchContent_Declare(glm
         GIT_REPOSITORY https://github.com/g-truc/glm.git
         GIT_TAG        1.0.1
@@ -292,21 +308,42 @@ if(ANDROID)
     FetchContent_MakeAvailable(glm)
     include_directories(${glm_SOURCE_DIR})
 
-    # log is Android's logging, which Catch2 writes through as well as this
-    # client; android carries ANativeWindow and the asset manager. Directory
-    # scope, so every target below gets them without being named.
-    link_libraries(log android)
+    if(ANDROID)
+        # log is Android's logging, which Catch2 writes through as well as this
+        # client; android carries ANativeWindow and the asset manager. Directory
+        # scope, so every target below gets them without being named.
+        link_libraries(log android)
 
-    # miniaudio's OpenSL and AAudio backends are only compiled on Android, and
-    # they have unused parameters that this build treats as errors. It is
-    # vendored, so the warning is turned off for the one unit that compiles it
-    # rather than patched out of the header.
-    set_source_files_properties(src/audio/audio_engine.cpp PROPERTIES
-                                COMPILE_OPTIONS "-Wno-unused-parameter")
+        # miniaudio's OpenSL and AAudio backends are only compiled on Android, and
+        # they have unused parameters that this build treats as errors. It is
+        # vendored, so the warning is turned off for the one unit that compiles it
+        # rather than patched out of the header.
+        set_source_files_properties(src/audio/audio_engine.cpp PROPERTIES
+                                    COMPILE_OPTIONS "-Wno-unused-parameter")
+    endif()
 else()
     find_package(SDL3 REQUIRED CONFIG)
 endif()
-find_package(Vulkan QUIET)
+if(IOS)
+    # An iOS app loads no code of its own beyond its binary, so there is no
+    # Vulkan loader: MoltenVK is linked in, and vk-bootstrap is handed its
+    # vkGetInstanceProcAddr (VkContext::createInstance). The static library
+    # and the headers come from MoltenVK's release package
+    # (tools/build-ios-deps.sh prints both paths).
+    set(WOWEE_MOLTENVK_LIB "" CACHE FILEPATH "MoltenVK.xcframework/ios-arm64/libMoltenVK.a")
+    set(WOWEE_VULKAN_INCLUDE_DIR "" CACHE PATH "The include directory holding vulkan/vulkan.h")
+    if(NOT EXISTS "${WOWEE_MOLTENVK_LIB}" OR NOT EXISTS "${WOWEE_VULKAN_INCLUDE_DIR}/vulkan/vulkan.h")
+        message(FATAL_ERROR "iOS needs MoltenVK: run tools/build-ios-deps.sh and pass "
+                            "-DWOWEE_MOLTENVK_LIB and -DWOWEE_VULKAN_INCLUDE_DIR as it says.")
+    endif()
+    add_library(Vulkan::Vulkan INTERFACE IMPORTED)
+    set_target_properties(Vulkan::Vulkan PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${WOWEE_VULKAN_INCLUDE_DIR}"
+        INTERFACE_LINK_LIBRARIES "${WOWEE_MOLTENVK_LIB};-framework Metal;-framework QuartzCore;-framework IOSurface;-framework UIKit;-framework Foundation;-framework CoreGraphics")
+    set(Vulkan_FOUND TRUE)
+else()
+    find_package(Vulkan QUIET)
+endif()
 if(NOT Vulkan_FOUND)
     # For Windows cross-compilation the host pkg-config finds the Linux libvulkan-dev
     # and injects /usr/include as an INTERFACE_INCLUDE_DIRECTORY, which causes
@@ -408,7 +445,7 @@ if(WIN32)
 else()
     find_package(PkgConfig REQUIRED)
 endif()
-if(ANDROID)
+if(ANDROID OR IOS)
     # Not through pkg-config. There is no Android FFmpeg to find and the host's
     # copy answers with the host's include path, which puts glibc headers in
     # front of the NDK sysroot and fails on the first system header. The same
@@ -1259,7 +1296,7 @@ set(WOWEE_HEADERS
 # equivalent (press-and-hold accents).  window.cpp calls into it, so every
 # target that compiles window.cpp must link it.
 set(WOWEE_MACOS_SOURCES)
-if(APPLE)
+if(APPLE AND NOT IOS)
     enable_language(OBJCXX)
     set(WOWEE_MACOS_SOURCES src/core/macos_platform.mm)
 endif()
@@ -1317,6 +1354,21 @@ endif()
 # an executable link asks for a main that no longer exists.
 if(ANDROID)
     add_library(wowee SHARED ${WOWEE_SOURCES} ${WOWEE_HEADERS} ${WOWEE_PLATFORM_SOURCES} ${WOWEE_MACOS_SOURCES})
+elseif(IOS)
+    add_executable(wowee MACOSX_BUNDLE ${WOWEE_SOURCES} ${WOWEE_HEADERS} ${WOWEE_PLATFORM_SOURCES})
+    set_target_properties(wowee PROPERTIES
+        OUTPUT_NAME Wowee
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in
+        MACOSX_BUNDLE_GUI_IDENTIFIER com.wowee.client
+        MACOSX_BUNDLE_BUNDLE_NAME Wowee
+        MACOSX_BUNDLE_EXECUTABLE_NAME Wowee
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER com.wowee.client
+        XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET 15.0
+        # iPhone and iPad.
+        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+        XCODE_ATTRIBUTE_ENABLE_BITCODE NO)
 else()
     add_executable(wowee ${WOWEE_SOURCES} ${WOWEE_HEADERS} ${WOWEE_PLATFORM_SOURCES} ${WOWEE_MACOS_SOURCES})
 endif()
@@ -1674,7 +1726,9 @@ add_custom_command(TARGET wowee POST_BUILD
 
 # Symlink Data/ next to the executable so expansion profiles, opcode tables,
 # and other runtime data files are found when running from the build directory.
-if(NOT WIN32)
+# Copied on iOS, where "next to the executable" is inside the app bundle and a
+# link would point at the machine that built it.
+if(NOT WIN32 AND NOT IOS)
     add_custom_command(TARGET wowee POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E create_symlink
             ${CMAKE_CURRENT_SOURCE_DIR}/Data
@@ -2129,7 +2183,7 @@ if(TARGET wowee AND STORMLIB_LIBRARY AND STORMLIB_INCLUDE_DIR AND EXISTS ${IMGUI
         tools/asset_extract/open_format_emitter.cpp
     )
     # The same per-platform choice the window makes, for the same reasons.
-    if(APPLE)
+    if(APPLE AND NOT IOS)
         target_sources(wowee PRIVATE tools/asset_manager/folder_picker_mac.mm)
         # SKIP_PRECOMPILE_HEADERS: the client's objcxx PCH is built without
         # ARC and this file needs it on, which the compiler refuses to mix.

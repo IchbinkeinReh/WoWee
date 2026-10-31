@@ -467,6 +467,76 @@ jobs:
         path: android/app/build/outputs/apk/release/*.apk
         if-no-files-found: error
 
+  build-ios:
+    name: Build (iOS arm64, unsigned)
+    runs-on: macos-latest
+
+    # The same client as the Android one, built for iPhone and iPad through
+    # MoltenVK. Unsigned: CODE_SIGNING_ALLOWED=NO, so the .ipa installs only
+    # once something re-signs it (a developer account, AltStore, Sideloadly).
+    # Not in the release's needs until it has run green for a while.
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: true
+        fetch-depth: 0
+
+    - name: Install host tools
+      # glslc for the shaders; the rest of the dependencies are built for iOS
+      # below, not taken from Homebrew.
+      run: brew install shaderc
+
+    - name: Cache OpenSSL and MoltenVK for iOS
+      id: cache-ios-deps
+      uses: actions/cache@v4
+      with:
+        path: build-ios-deps
+        key: ios-deps-${{ hashFiles('tools/build-ios-deps.sh') }}
+
+    - name: Build OpenSSL, fetch MoltenVK
+      run: tools/build-ios-deps.sh
+
+    - name: Configure
+      run: |
+        set -a; . build-ios-deps/paths.env; set +a
+        cmake -S . -B build-ios -G Xcode \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+          -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DWOWEE_BUILD_TESTS=OFF \
+          -DOPENSSL_ROOT_DIR="$OPENSSL_ROOT_DIR" \
+          -DOPENSSL_USE_STATIC_LIBS=ON \
+          -DWOWEE_MOLTENVK_LIB="$WOWEE_MOLTENVK_LIB" \
+          -DWOWEE_VULKAN_INCLUDE_DIR="$WOWEE_VULKAN_INCLUDE_DIR"
+
+    - name: Build
+      run: |
+        xcodebuild -project build-ios/wowee.xcodeproj -target wowee \
+          -configuration Release -sdk iphoneos \
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+          -quiet
+
+    - name: Package the .ipa
+      run: |
+        APP="$(find build-ios -path '*Release-iphoneos/Wowee.app' -type d | head -1)"
+        test -n "$APP" && test -x "$APP/Wowee"
+        # assets/ and Data/ are copied in by the target's post-build steps;
+        # the addons go beside them, where the addon search looks.
+        test -d "$APP/assets" && test -d "$APP/Data"
+        cp -R addons "$APP/"
+        rm -rf "$APP/assets/Original Music"
+        mkdir -p Payload
+        cp -R "$APP" Payload/
+        zip -qry wowee-ios-arm64-unsigned.ipa Payload
+
+    - name: Upload .ipa
+      uses: actions/upload-artifact@v5
+      with:
+        name: wowee-ios-arm64-ipa
+        path: wowee-ios-arm64-unsigned.ipa
+        if-no-files-found: error
+
   # Every push to master publishes what the builds above made as a GitHub
   # release of its own, tagged with the run and the commit, and marked as the
   # latest - so the newest build is always the one the release page offers.
