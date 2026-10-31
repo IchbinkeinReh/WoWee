@@ -1149,7 +1149,11 @@ static int lua_GetActionCooldown(lua_State* L) {
 
 // UseAction(slot, unit, button) - activate action bar slot (1-indexed)
 //
-// The second argument is a unit, and it was ignored. securetemplates is the
+// "Usage: UseAction(slot, [, target] [, button])" is the client's own line
+// (0x005ac000), and both optionals are read: the unit for a spell or item,
+// the mouse button for a macro.
+//
+// The second argument is a unit, and it was once ignored. securetemplates is the
 // only caller and it passes what the button's own attributes resolved to:
 // nil for an ordinary click, and "player" when the self-cast modifier is
 // held - which is the whole of how self-casting works. Dropping it meant
@@ -1207,8 +1211,23 @@ static int lua_UseAction(lua_State* L) {
         // it (0x005abbc0 -> 0x005ae660).
         if (const auto* set = equipmentSetById(gh, action.id))
             gh->fireAddonEvent("WEAR_EQUIPMENT_SET", {set->name});
+    } else if (action.type == game::ActionBarSlot::MACRO && action.id != 0) {
+        // A macro on the bar runs its body: 0x005abbc0 sends a macro slot to
+        // 0x005648d0 and then to 0x00566dc0, which is the same entry RunMacro
+        // uses and asks the same gate (0x00564db0, kind 3). The keyboard path
+        // has always run the bar's macros; the mouse path became the
+        // interface's button, and clicking a macro icon did nothing at all.
+        auto* svc = getLuaServices(L);
+        if (!svc || !svc->runMacroText || !taint::allowed(L, 3)) return 0;
+        const std::string body = gh->getMacroText(action.id);
+        if (body.empty()) return 0;
+        // The button this click came with is the macro's button, which is what
+        // GetRunningMacroButton answers and the third argument of this binding
+        // (0x00566dc0 forwards it to the gate beside the handle).
+        RunningMacroScope running(static_cast<int>(action.id),
+                                  lua_isstring(L, 3) ? lua_tostring(L, 3) : nullptr);
+        svc->runMacroText(body);
     }
-    // Macro execution requires GameScreen context; not available from pure Lua API
     return 0;
 }
 

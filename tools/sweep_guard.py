@@ -766,8 +766,11 @@ CHECKS = [
     # the past, which is what AUTO_QUEST_PROGRESS means: QuestLog_OnEvent
     # re-watches a quest whose objectives moved with MAX_QUEST_WATCH_TIME, so
     # the tracker lets go of it five minutes later without being asked.
+    # Forty-seven: UseAction's mouse button as well, which is only a macro's
+    # -- but that is the click path to a macro icon, and clicking one had
+    # nothing behind it while the hotkey for the same icon ran it.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 48,
+     r"^(\d+) binding\(s\) read fewer arguments", 47,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,

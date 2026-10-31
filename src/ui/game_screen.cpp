@@ -20,6 +20,7 @@
 #include "core/application.hpp"
 #include "core/appearance_composer.hpp"
 #include "addons/addon_manager.hpp"
+#include "addons/lua_api_helpers.hpp"   // RunningMacroScope - what a macro run records
 #include "ui/link_hit.hpp"
 #include "core/coordinates.hpp"
 #include "game/transport_manager.hpp"
@@ -2016,7 +2017,17 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     } else if (bar[slotIdx].type == game::ActionBarSlot::ITEM && bar[slotIdx].id != 0) {
                         gameHandler.useItemById(bar[slotIdx].id);
                     } else if (bar[slotIdx].type == game::ActionBarSlot::MACRO) {
-                        chatPanel_.executeMacroText(gameHandler, gameHandler.getMacroText(bar[slotIdx].id));
+                        const std::string& body = gameHandler.getMacroText(bar[slotIdx].id);
+                        if (!body.empty()) {
+                            // The hotkey path records the macro it is running,
+                            // as 0x005abbc0 -> 0x00566dc0 -> 0x00564db0 records
+                            // one run from a button: GetRunningMacro and
+                            // GetRunningMacroButton answer it while it runs,
+                            // and no mouse button came with a key press.
+                            const RunningMacroScope running(
+                                static_cast<int>(bar[slotIdx].id), nullptr);
+                            chatPanel_.executeMacroText(gameHandler, body);
+                        }
                     }
                 }
             }
