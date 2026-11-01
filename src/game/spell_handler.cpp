@@ -5167,6 +5167,16 @@ void SpellHandler::resetTalentState() {
     unspentTalentPoints_[0] = 0;
     unspentTalentPoints_[1] = 0;
     activeTalentSpec_ = 0;
+    // The next character's SMSG_TALENTS_INFO says its own count; until then it
+    // has none, as the reference answers before the packet arrives.
+    talentGroupCount_ = 0;
+}
+
+uint8_t SpellHandler::getTalentGroupCount() const {
+    // SMSG_TALENTS_INFO, which carries the count, is a WotLK packet: a Classic
+    // or TBC realm never sends one, and there one spec is all there is.
+    if (isPreWotlk()) return 1;
+    return talentGroupCount_;
 }
 
 void SpellHandler::clearUnitCaches() {

@@ -291,8 +291,9 @@ public:
     [[nodiscard]] uint8_t getActiveTalentSpec() const { return activeTalentSpec_; }
     /// The realm's own count of this player's specs, not a guess from whether
     /// the second list happens to have anything in it: a second spec that is
-    /// paid for and still empty is a spec the player has.
-    [[nodiscard]] uint8_t getTalentGroupCount() const { return talentGroupCount_; }
+    /// paid for and still empty is a spec the player has. Before WotLK there is
+    /// no such count on the wire, and every character has the one spec.
+    [[nodiscard]] uint8_t getTalentGroupCount() const;
     [[nodiscard]] uint8_t getUnspentTalentPoints() const { return unspentTalentPoints_[activeTalentSpec_]; }
     [[nodiscard]] uint8_t getUnspentTalentPoints(uint8_t spec) const { return spec < 2 ? unspentTalentPoints_[spec] : 0; }
     [[nodiscard]] const std::unordered_map<uint32_t, uint8_t>& getLearnedTalents() const { return learnedTalents_[activeTalentSpec_]; }
