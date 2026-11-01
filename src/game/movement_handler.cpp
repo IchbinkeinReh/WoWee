@@ -313,6 +313,7 @@ void MovementHandler::registerOpcodes(DispatchTable& table) {
     for (auto op : { Opcode::MSG_MOVE_TELEPORT, Opcode::MSG_MOVE_TELEPORT_ACK }) {
         table[op] = [this](network::Packet& packet) { handleTeleportAck(packet); };
     }
+    table[Opcode::SMSG_TRANSFER_PENDING] = [this](network::Packet& packet) { handleTransferPending(packet); };
     table[Opcode::SMSG_NEW_WORLD] = [this](network::Packet& packet) { handleNewWorld(packet); };
 
     // Taxi
@@ -2549,6 +2550,23 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
     }
 }
 
+// The map, and the transport entry and the map it leaves from only when the
+// player goes with a transport (a ship that crosses to another map). A
+// teleport from a transport has none: the server took the player off it.
+void MovementHandler::handleTransferPending(network::Packet& packet) {
+    transferPendingOnTransport_ = false;
+    if (!packet.hasRemaining(4)) { packet.skipAll(); return; }
+    const uint32_t pendingMapId = packet.readUInt32();
+    if (packet.hasRemaining(8)) {
+        const uint32_t transportEntry = packet.readUInt32();
+        const uint32_t transportMapId = packet.readUInt32();
+        transferPendingOnTransport_ = true;
+        LOG_INFO("SMSG_TRANSFER_PENDING: map ", pendingMapId, " on transport ", transportEntry,
+                 " from map ", transportMapId);
+    }
+    packet.skipAll();
+}
+
 void MovementHandler::handleNewWorld(network::Packet& packet) {
     if (!packet.hasRemaining(20)) {
         LOG_WARNING("SMSG_NEW_WORLD too short");
@@ -2560,8 +2578,23 @@ void MovementHandler::handleNewWorld(network::Packet& packet) {
     float serverY = packet.readFloat();
     float serverZ = packet.readFloat();
     float orientation = packet.readFloat();
-    const bool crossMapTransportTransfer = owner_.isOnTransport() &&
+    // A ride to another map is one the server said goes with the transport
+    // (SMSG_TRANSFER_PENDING). Anything else - a GM teleport, a hearthstone,
+    // a portal from a tram car - is a world position, and the player is
+    // off the transport: the client destroys the player object on every
+    // SMSG_NEW_WORLD (0x00403b70 -> 0x004d6750) and only a transport block
+    // puts it back on one. Kept on, the next map's transport with the same
+    // guid took the player: a teleport to Thunder Bluff from the Deeprun
+    // Tram landed them on a Kalimdor lift, in Dustwallow Marsh.
+    const bool travelsWithTransport = transferPendingOnTransport_;
+    transferPendingOnTransport_ = false;
+    const bool crossMapTransportTransfer = travelsWithTransport && owner_.isOnTransport() &&
         mapId != owner_.getCurrentMapId();
+    if (!crossMapTransportTransfer && owner_.isOnTransport()) {
+        owner_.clearPlayerTransport();
+        owner_.playerTransportStickyGuidRef() = 0;
+        owner_.playerTransportStickyTimerRef() = 0.0f;
+    }
     if (crossMapTransportTransfer) {
         // While riding a cross-continent transport, SMSG_NEW_WORLD carries the
         // player's transport-local coordinates. They are not a world position

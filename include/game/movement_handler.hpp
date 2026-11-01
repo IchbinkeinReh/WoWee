@@ -326,6 +326,7 @@ private:
     /// (0x00741xxx -> 0x0073ed10).
     void moverEvent(Opcode op, uint32_t flagsBefore, bool launchedBefore);
     void handleTeleportAck(network::Packet& packet);
+    void handleTransferPending(network::Packet& packet);
     void handleNewWorld(network::Packet& packet);
     void handleShowTaxiNodes(network::Packet& packet);
     void handleClientControlUpdate(network::Packet& packet);
@@ -383,6 +384,9 @@ private:
     int heartbeatLogCount_ = 0;  // periodic position audit counter
     uint32_t lastAreaTriggerId_ = 0;
     uint32_t postTransferReturnAreaTriggerId_ = 0;
+    // The last SMSG_TRANSFER_PENDING named a transport: the player goes to
+    // the next map on it, and SMSG_NEW_WORLD carries their place on its deck.
+    bool transferPendingOnTransport_ = false;
     // Previous checkAreaTriggers() sample for swept-path testing (canonical
     // coords). Mounted speed covers ~3 yd per 0.25s check, enough to straddle
     // small portal boxes when only the instantaneous position is tested.
