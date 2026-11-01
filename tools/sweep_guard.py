@@ -1766,10 +1766,18 @@ SENTENCES = [
      "lands inside the range its setting holds",
      "a Blizzard slider handing over a number its setting has no room for"),
     # And the same defaults against the game's own tables, which declare one
-    # beside each CVar their panels drive. Two differ on purpose and are named
-    # in the script with the reason; this is for a third nobody decided on.
+    # beside each CVar their panels drive. Six differ on purpose and are named
+    # in the script with where the registration says so; this is for a seventh
+    # nobody decided on.
+    #
+    # The sentence was out of date: the sweep reworded its clean line - it names
+    # how many of the compared names are the registered disagreements now - and
+    # this still asked for "matches the game's own, but for", which the current
+    # output does not contain. A stale SENTENCES entry fails loudly rather than
+    # silently, so it would have read as a broken sweep the day someone
+    # installed an interface to read; it has never run anywhere that has one.
     ("cvar_default_vs_blizzard.py",
-     "matches the game's own, but for",
+     "matches the game's own;",
      "a default differing from the game's own with no reason recorded"),
     ("cvar_default_agreement.py",
      "answers the interface the same way",
