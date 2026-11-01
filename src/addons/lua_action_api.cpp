@@ -1982,19 +1982,15 @@ static int lua_PickupContainerItem(lua_State* L) {
 // does, and this is entirely about the cursor: an item in hand goes into a row
 // of the letter, and an empty hand takes one off it.
 //
-// The first argument is a row of the client's own attachment array, counted
-// from zero, and not a button number.  The array is sixteen rows long, twelve
-// of which a letter can hold, and this verb addresses it directly: no argument
-// at all becomes -1, which 0x0056fff0 answers by walking rows from zero to the
-// first empty one, and a number is written as that row and only that row when
-// it is one of the twelve.  The getters of the same squares are one higher -
-// 0x00570750 subtracts one from its argument before it reads a row - so the
-// click and GetSendMailItem sit a row apart, and it is that walk over the
-// rows, plus the -1, that says which of the two spellings is the array's own.
-// mailframe.lua hands self:GetID() and mailframe.xml numbers its buttons from
-// one, which is the newer buttons showing through: the 3.3.5 buttons can only
-// have handed the row number, since nothing on this side of the call adjusts
-// it.
+// The first argument is the button's number, counted from one like the getters
+// (mailframe.lua hands self:GetID(), and mailframe.xml numbers the buttons 1 to
+// 12). 0x00570550 subtracts one before it rounds - `fsubl 0x9e23f8` (1.0)
+// straight after the lua_tonumber at 0x0057056e, the same subtraction
+// GetSendMailItem's 0x00570750 makes; the decompile drops it with the x87
+// stack. The array is sixteen rows long, twelve of which a letter can hold: no
+// argument at all becomes -1, which 0x0056fff0 answers by walking rows from
+// zero to the first empty one, and a number is written as that row and only
+// that row when it is one of the twelve.
 //
 // The second argument is which half runs, and it is a Lua truth rather than a
 // number (0x0084e0b0 is lua_toboolean) - mailframe.lua spells it
@@ -2003,7 +1999,7 @@ static int lua_ClickSendMailItemButton(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
 
-    const int row = lua_isnumber(L, 1) ? static_cast<int>(std::lround(lua_tonumber(L, 1))) : -1;
+    const int row = lua_isnumber(L, 1) ? static_cast<int>(std::lround(lua_tonumber(L, 1) - 1.0)) : -1;
     const bool rightClick = lua_toboolean(L, 2) != 0;
     const auto& rows = gh->getMailAttachments();
 
