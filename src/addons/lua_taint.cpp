@@ -433,8 +433,12 @@ int callProtected(lua_State* L, int nargs, int nresults, int errfunc) {
     // the next call, and every caller of this one counts the stack around its
     // own.
     if (errfunc != 0) return lua_pcall(L, nargs, nresults, errfunc);
+    // Under the function, not on top: lua_pcall calls whatever sits nargs + 1
+    // below the top, so a handler pushed last turned the call into one of the
+    // first argument with the rest and the handler as its arguments.
+    const int slot = lua_gettop(L) - nargs;
     lua_pushcfunction(L, scriptErrorHandler);
-    const int slot = lua_gettop(L);
+    lua_insert(L, slot);
     const int rc = lua_pcall(L, nargs, nresults, slot);
     lua_remove(L, slot);
     return rc;

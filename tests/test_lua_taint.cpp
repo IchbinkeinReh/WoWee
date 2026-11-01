@@ -285,6 +285,31 @@ TEST_CASE("A handler runs under the taint of whoever set it", "[taint]") {
     CHECK(f.globalString("handlerTaint") == "SomeAddon");
 }
 
+TEST_CASE("A handler is called with its arguments, and an error leaves the stack as it was", "[taint]") {
+    Fixture f;
+    f.run("function TwoArgs(a, b) sum = a + b end", 0);
+    f.run("function Raises() error('boom') end", 0);
+    const int base = lua_gettop(f.L);
+    {
+        taint::Quiet quiet;
+        lua_getglobal(f.L, "TwoArgs");
+        lua_pushnumber(f.L, 2);
+        lua_pushnumber(f.L, 3);
+    }
+    REQUIRE(taint::pcallHandler(f.L, 2, 0, 0) == 0);
+    CHECK(lua_gettop(f.L) == base);
+    CHECK(f.globalString("sum") == "5");
+    {
+        taint::Quiet quiet;
+        lua_getglobal(f.L, "Raises");
+    }
+    REQUIRE(taint::pcallHandler(f.L, 0, 0, 0) != 0);
+    // The message, where the function was; the handler's slot is gone.
+    CHECK(lua_gettop(f.L) == base + 1);
+    CHECK(lua_isstring(f.L, -1));
+    lua_settop(f.L, base);
+}
+
 TEST_CASE("The bracket puts everything back", "[taint]") {
     Fixture f;
     const lua_TaintState before = *lua_taintstate();
