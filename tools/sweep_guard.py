@@ -1623,8 +1623,38 @@ CHECKS += [
     ("framexml_contract_check.py",
      r"^(\d+) arity, \d+ return-count", 0,
      "bindings needing an argument the interface calls bare"),
+    # The third number on that same line. It is graded separately because it
+    # moved twice today for opposite reasons: widening the sweep to the loader's
+    # whole file list (the addon handlers and the XML script bodies were not
+    # being read at all) produced a candidate nobody had ever seen, and it then
+    # proved to be manufactured - the calendar's handler tests two events in one
+    # branch and re-tests one of them around the unpack, so the argument read
+    # belongs to GUILD_ROSTER_UPDATE, which this client fires with one, while
+    # the sweep charged it to PLAYER_GUILD_UPDATE, which it fires with none.
+    # Canaried after the fix rather than before: an unpack of two names from
+    # PLAYER_GUILD_UPDATE written into minimap.lua took the line 0 -> 1, and the
+    # file went back byte for byte.
+    ("framexml_contract_check.py",
+     r"return-count, (\d+) event candidates", 0,
+     "an event handler unpacking more names than the client ever fires"),
+    # One, and it is the same adjudication as the MovieRecording rows under
+    # framexml_api_gap above: minimap.xml's tooltip OnUpdate concatenates
+    # MovieRecording_GetTime, which nothing answers. It runs only inside
+    # MiniMapRecordingButton, declared hidden="true", whose only Show() in the
+    # tree is behind MovieRecording_IsRecording() - which this client answers
+    # false - so the button never appears, its OnEnter never sets
+    # MINIMAP_RECORDING_INDICATOR_ON, and the body never runs. The name is not
+    # in the executable either: the stem "MovieRecording" does not occur in
+    # Wow.exe at all.
+    #
+    # The count moved from 0 to 1 because the sweep grew eyes, not because the
+    # tree grew a fault. It read `framexml/*.lua` and `addons/*/*.lua` before, so
+    # it read no `.xml` at all - and 162 of the 343 files the loader opens are
+    # XML, every script body in them a Lua chunk the client installs. Canaried
+    # on the new half: a fault written into minimap.xml's OnUpdate body took the
+    # line 1 -> 2, and the file went back byte for byte.
     ("framexml_nil_use_check.py",
-     r"^(\d+) missing functions used where nil raises", 0,
+     r"^(\d+) missing functions used where nil raises", 1,
      "missing functions used where nil raises"),
     ("framexml_method_check.py",
      r"^(\d+) methods called that neither the metatable nor the known set", 0,

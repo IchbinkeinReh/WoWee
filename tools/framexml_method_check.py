@@ -37,6 +37,19 @@ if it is any of:
 
 Run it after any batch of widget work. A hit that survives all five is a real
 call on nil.
+
+**The interface's widget calls live in its XML as much as in its Lua.** A frame
+declared in `minimap.xml` carries its `OnClick` and `OnUpdate` bodies as
+attributes and element text, the loader installs each one as a Lua chunk, and
+`self:SetZoom()` inside that body is exactly as much a call on nil as the same
+line in a `.lua`. Reading only `.lua` saw 187 files out of the 343 the client
+opens. Both halves are read now, from the loader's own answer, and the two
+numbers separate the change: the old globs knew 2445 names, the loader's `.lua`
+files alone give 2443 (six of the old names came from the five FrameXML files
+no Include reaches), and the loader's XML on top of that gives 2484. So 41
+methods are installed by bodies that were invisible. The findings stayed at 0,
+because none of those 41 is called from an XML body either. Same measurement shape as framexml_nil_use_check.py, where the XML half is
+what found a fault; here it found none, and that is a result, not a shrug.
 """
 import re, sys, pathlib, collections
 
@@ -110,9 +123,22 @@ if not INTERFACE.is_dir():
     print(f"{INTERFACE} is not a directory - name the extracted interface "
           "directory on the command line.")
     raise SystemExit(2)
-for _f in list(INTERFACE.glob("framexml/*.lua")) + \
-          list(INTERFACE.glob("addons/*/*.lua")):
-    _t = _f.read_text(errors="ignore")
+# Naming the FrameXML folder rather than the interface above it means the same
+# interface to a reader; loaded_files() walks the .toc from the folder above.
+if INTERFACE.name.lower() == "framexml":
+    INTERFACE = INTERFACE.parent
+# Which files the client opens, from the one place that knows, in both kinds.
+# The loader installs every XML script body as a Lua chunk, so the bodies are
+# call sites and definition sites, not markup. Both globs this replaced read
+# `.lua` only: `framexml/*.lua` and `addons/*/*.lua` under the named directory,
+# 187 files out of 343, and every one of the 162 XML files invisible.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from framexml_source import loaded_files  # noqa: E402
+
+FILES = sorted(p for p in loaded_files(INTERFACE)
+               if p.suffix.lower() in (".lua", ".xml"))
+for _f in FILES:
+    _t = _f.read_text(encoding="utf-8", errors="ignore")
     interface_defined |= set(re.findall(r'\bfunction\s+[\w.]+[:.](\w+)\s*\(', _t))
     # `self.Desaturate = AchievementIcon_Desaturate` - assigned to a named
     # function, not an inline one. Requiring `= function` missed every method
@@ -129,8 +155,7 @@ for _f in list(INTERFACE.glob("framexml/*.lua")) + \
     interface_defined |= set(re.findall(r'[\w.\]\[]+\.(\w+)\s*=\s*[\w.]+\s*\(', _t))
 answered |= interface_defined
 
-interface = INTERFACE
-files = list(interface.glob("framexml/*.lua")) + list(interface.glob("addons/*/*.lua"))
+files = FILES
 
 # obj:Method( - a real method call. Not obj.Method, which is a field read.
 CALL = re.compile(r'(?<![\w."\'])([A-Za-z_]\w*)\s*:\s*([A-Z]\w*)\s*\(')
@@ -140,7 +165,7 @@ GUARD = re.compile(r'\b([A-Za-z_]\w*)\.([A-Z]\w*)\b')
 
 hits = collections.defaultdict(list)
 for f in files:
-    lines = f.read_text(errors="ignore").splitlines()
+    lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
     guarded = {}          # (obj, meth) -> line it was tested on
     for i, line in enumerate(lines, 1):
         if "if" in line or "and" in line or "or" in line:
@@ -170,7 +195,8 @@ for f in files:
 # SetMaxLetters is safe because SetMaxLetters exists; reading `horizTile` and
 # emitting SetHorizTile would not be.
 EMITTED = re.compile(r'\+\s*":([A-Z]\w*)\("')
-emitter = (REPO / "src" / "ui" / "framexml_emitter.cpp").read_text(errors="ignore")
+emitter = (REPO / "src" / "ui" / "framexml_emitter.cpp").read_text(
+    encoding="utf-8", errors="ignore")
 for meth in sorted(set(EMITTED.findall(emitter))):
     if meth in answered or meth.startswith("On"):
         continue
@@ -186,6 +212,9 @@ if not answered:
     print("Found no widget methods at all, which cannot be right - the "
           "metatable parse broke rather than every method disappearing.")
     raise SystemExit(1)
+print(f"scanned {len(files)} file(s) the loader opens - "
+      f"{sum(1 for f in files if f.suffix.lower() == '.lua')} .lua, "
+      f"{sum(1 for f in files if f.suffix.lower() == '.xml')} .xml")
 print(f"\n{len(answered)} widget method(s) this client answers, checked "
       f"against what the interface calls")
 print(f"\n{len(hits)} methods called that neither the metatable nor the known set answers")

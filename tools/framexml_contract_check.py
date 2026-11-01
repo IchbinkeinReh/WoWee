@@ -43,8 +43,11 @@ ROOT = Path(__file__).resolve().parent.parent
 # parsed and the run stops rather than printing what a fully conforming client
 # prints.
 INTERFACE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
+if INTERFACE.name.lower() == "framexml":
+    # Naming the FrameXML folder means the same interface to a reader, and the
+    # loader's answer starts from the folder above it.
+    INTERFACE = INTERFACE.parent
 FRAMEXML = INTERFACE / "framexml"
-ADDONS = INTERFACE / "addons"
 BINDINGS = ROOT / "src" / "addons"
 GAME = ROOT / "src" / "game"
 
@@ -67,8 +70,28 @@ NAMED_FN = re.compile(r"static int lua_(\w+)\s*\(lua_State\* L\)\s*\{(?:\.\w+\s*
 LAMBDA_FN = re.compile(r'\{(?:\.\w+\s*=\s*)?"(\w+)",\s*(?:\.\w+\s*=\s*)?\[\]\(lua_State\* L\)\s*->\s*int\s*\{')
 
 
-def luaSources():
-    return sorted(FRAMEXML.glob("*.lua")) + sorted(ADDONS.glob("*/*.lua"))
+def interfaceSources():
+    """Every interface file the client loads, in both kinds.
+
+    Three rules used to build their own list with two globs - `framexml/*.lua`
+    and `addons/*/*.lua` - and read 187 files out of the 343 the loader opens.
+    For the arity and return-count rules that cost six phantom files' calls -
+    five FrameXML files no .toc Include reaches and one addon file beside them -
+    and nothing else. For the event
+    rule it cost the addons outright: that loop globbed `framexml/*.lua` only,
+    so a handler in a load-on-demand panel could not be seen at all. And no
+    rule read a single `.xml`, which is 162 of the 343 files: the loader
+    installs every script body in one as a Lua chunk, and those bodies call
+    bindings with too few arguments and unpack events exactly like the Lua does.
+
+    Measured across the change: 187 files before, 343 after; 0 arity candidates
+    either way, 2 return-count either way, 1 event candidate where the old scan
+    had none. That one turned out to be manufactured - see checkEventArgs - so
+    the count is back to zero, but the file set is why it appeared.
+    """
+    from framexml_source import loaded_files
+    return sorted(p for p in loaded_files(INTERFACE)
+                  if p.suffix.lower() in (".lua", ".xml"))
 
 
 def stripComments(text):
@@ -137,9 +160,9 @@ def bindingBodies():
 def checkArity():
     """Bindings that require argument one where the interface passes none."""
     bare = set()
-    for p in luaSources():
+    for p in interfaceSources():
         bare |= set(re.findall(r"(?<![:.\w])([A-Z][A-Za-z0-9_]{2,})\s*\(\s*\)",
-                               stripComments(p.read_text(errors="ignore"))))
+                               stripComments(p.read_text(encoding="utf-8", errors="ignore"))))
     hits = []
     for name, body, where in bindingBodies():
         if name in bare and CHECKS_ARG1.search(body):
@@ -154,8 +177,8 @@ def checkArity():
 def checkReturns():
     """Bindings returning fewer values than the interface unpacks."""
     want = {}
-    for p in luaSources():
-        t = stripComments(p.read_text(errors="ignore"))
+    for p in interfaceSources():
+        t = stripComments(p.read_text(encoding="utf-8", errors="ignore"))
         # `local a, b = Foo()` and the plain `a, b = Foo()` beside it. The
         # second form is 234 lines in FrameXML alone - the achievement summary
         # unpacks its counts that way - and looking only for `local` walked
@@ -204,17 +227,30 @@ def checkEventArgs():
             fired[m.group(1)] = max(fired.get(m.group(1), 0), n)
 
     hits = {}
-    for p in sorted(FRAMEXML.glob("*.lua")):
-        t = p.read_text(errors="ignore")
+    for p in interfaceSources():
+        t = stripComments(p.read_text(encoding="utf-8", errors="ignore"))
         # Stop at the next branch: a fixed window crossed into the following
         # elseif once and blamed the wrong event for its argument.
         for m in re.finditer(r'event\s*==\s*"(\w+)"\s*\)?\s*then(.*?)(?:\n\s*(?:elseif|end)\b)',
                              t, re.S):
             name, body = m.group(1), m.group(2)
-            if name not in fired or name in hits:
-                continue
             u = re.search(r"local\s+([A-Za-z_][\w\s,]*?)\s*=\s*\.\.\.", body)
             if not u:
+                continue
+            # A branch head like
+            #
+            #     elseif ( event == "GUILD_ROSTER_UPDATE" or event == "PLAYER_GUILD_UPDATE" ) then
+            #         if ( event == "GUILD_ROSTER_UPDATE" ) then
+            #             local arg1 = ...;
+            #
+            # matches on the second name — the first fails the pattern's `then`
+            # and the scanner moves on — and the unpack is charged to it. The
+            # re-test directly above the unpack says whose argument it actually
+            # is, and PLAYER_GUILD_UPDATE was reported for one it never reads.
+            guard = re.findall(r'if\s*\(?\s*event\s*==\s*"(\w+)"', body[:u.start()])
+            if guard:
+                name = guard[-1]
+            if name not in fired or name in hits:
                 continue
             want = len([x for x in u.group(1).split(",") if x.strip()])
             if want > fired[name]:
@@ -227,6 +263,12 @@ def main():
         print(f"{FRAMEXML} is not a directory - name the extracted interface "
               "directory on the command line.")
         return 2
+    files = interfaceSources()
+    # What was read, printed before what was found: "none" from 343 files and
+    # "none" from no files at all are the same three characters on a terminal.
+    print(f"scanned {len(files)} file(s) the loader opens - "
+          f"{sum(1 for f in files if f.suffix.lower() == '.lua')} .lua, "
+          f"{sum(1 for f in files if f.suffix.lower() == '.xml')} .xml\n")
     arity = checkArity()
     returns = checkReturns()
     events = checkEventArgs()
