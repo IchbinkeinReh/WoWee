@@ -716,6 +716,35 @@ CHECKS = [
     ("framexml_live_stubs.py",
      r"^\d+ bindings, \d+ of them stubs, (\d+) reached from a handed-over element", 63,
      "stubs reachable from an element FrameXML draws"),
+    # FrameXML calls a name nobody defines. Four, and none of them is work.
+    #
+    # This sweep had no entry here and no encoding on its reads, so on a
+    # Windows checkout it died in its first loop - `open()` over the addons'
+    # C++ defaults to the console codepage, and the first 0x9d byte in a source
+    # comment raised before it had looked at anything. It had been dead for
+    # however long those comments have held that byte, and nothing noticed,
+    # because a sweep that is not in this file cannot fail.
+    #
+    # The four: LOCAL_Function_Environment_Manager is FrameXML's own, and
+    # MovieRecording_IsCodecSupported, MovieRecording_GetProgress and the whole
+    # MovieRecording family are absent from the executable - the byte stem
+    # "MovieRecording" does not occur in it at all.
+    #
+    # CalendarNewArenaTeamEvent is the interesting one and it is not missing.
+    # The name occurs exactly once in the image, inside
+    # "Usage: CalendarNewArenaTeamEvent(index)" at 0x00a18f08, and the only
+    # instruction carrying that address is the raise at the top of
+    # 0x005bce60, which is the handler registered for
+    # CalendarMassInviteArenaTeam: Blizzard's own copy-paste, a Usage line
+    # naming a verb that does not exist.  The calendar block of the binding
+    # table (.data 0x00ad00e0..0x00ad0178) has CalendarNewEvent,
+    # CalendarNewGuildEvent, CalendarNewGuildAnnouncement and
+    # CalendarMassInviteArenaTeam, and no arena-event entry.  WoWee carries the
+    # same wrong Usage line for the same reason, so the two agree; what this
+    # sweep reports here is a string in a binary, not an API.
+    ("framexml_api_gap.py",
+     r"^genuinely missing API\s*:\s*(\d+)$", 4,
+     "names FrameXML calls that nothing in the tree or the bindings defines"),
     # Bindings that read fewer arguments than the interface passes. The only
     # sweep here that asks whether an answer used everything it was told -
     # every other one asks whether a name is answered, and these names all are.

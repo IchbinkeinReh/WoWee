@@ -495,7 +495,7 @@ STRINGS = Path(sys.argv[2]) if len(sys.argv) > 2 else None
 absent = set()
 if STRINGS and STRINGS.is_file():
     known = set()
-    with STRINGS.open(errors="ignore") as fh:
+    with STRINGS.open(encoding="utf-8", errors="ignore") as fh:
         for line in fh:
             parts = line.rstrip("\n").split("\t", 1)
             if len(parts) == 2:

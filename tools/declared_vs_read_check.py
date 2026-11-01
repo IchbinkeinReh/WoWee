@@ -330,7 +330,7 @@ def main():
     unnameable = []
     if STRINGS and STRINGS.is_file():
         carried = set()
-        with STRINGS.open(errors="ignore") as fh:
+        with STRINGS.open(encoding="utf-8", errors="ignore") as fh:
             for line in fh:
                 parts = line.rstrip("\n").split("\t")
                 if len(parts) == 2:
