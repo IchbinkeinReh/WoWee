@@ -381,12 +381,17 @@ inline constexpr const char* kLootMethodTokens[] = {
 };
 inline constexpr uint8_t kNumLootMethods = 5;
 
-/// The wire value for a token, or zero - free-for-all - for one not known,
-/// which is what the if-chain's fall-through did.
-inline uint8_t lootMethodFromToken(const std::string& lower) {
+/// The wire value for a token, or -1 for one the client does not know.
+///
+/// Answering free-for-all for a miss - which is what the if-chain this replaces
+/// fell through to - is not a no-op: "SetLootMethod('master', Bob)" mistyped as
+/// "master LootMethod" became a request to give the whole group free-for-all
+/// loot. 0x0052dc20 compares the five names case-blind and raises "Invalid loot
+/// method" for anything else, so the miss has to be visible to the caller.
+inline int lootMethodFromToken(const std::string& lower) {
     for (uint8_t i = 0; i < kNumLootMethods; ++i)
         if (lower == kLootMethodTokens[i]) return i;
-    return 0;
+    return -1;
 }
 
 /// UnitRace returns the display name first and this *file name* second, and the

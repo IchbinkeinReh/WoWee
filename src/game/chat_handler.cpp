@@ -2560,17 +2560,16 @@ void ChatHandler::updateGmTicket(const std::string& text) {
     LOG_INFO("Updated GM ticket text");
 }
 
-void ChatHandler::submitGmTicket(const std::string& text) {
+void ChatHandler::submitGmTicket(const std::string& text, bool needResponse, bool needMoreHelp) {
     if (!owner_.isInWorld()) return;
 
-    // CMSG_GMTICKET_CREATE:
+    // CMSG_GMTICKET_CREATE, as 0x005ac8f0 writes it:
     //   uint32  mapId
     //   float   x, y, z          (server coords, no facing)
     //   string  message
-    //   uint32  needResponse
-    //   uint8   needMoreHelp
-    //   uint32  count            - how many chat-log timestamps follow
-    //   uint32  decompressedSize - the zlib'd chat log after it, if any
+    //   uint32  reply bits       - 1, or 0x11 when a reply is asked for
+    //   uint8   more help        - 1 for the "I need more help" variant
+    //   uint32  count, count dwords, uint32 len, len bytes
     //
     // The comment above these writes described a layout in the other order,
     // opening with the text and carrying a facing the server does not read,
@@ -2585,22 +2584,31 @@ void ChatHandler::submitGmTicket(const std::string& text) {
     //
     // The prefix through the message is what all three read: a 1.12 and a
     // 2.4.3 server take mapId, x, y, z and the message and stop there. The
-    // four fields after it are 3.x, and the asymmetry is what decides this -
+    // fields after it are 3.x, and the asymmetry is what decides this -
     // a WotLK server that does not get them reads off the end of the buffer
     // and drops the whole request, while a vanilla or TBC one simply leaves
     // them unread. Trailing bytes nobody reads cost nothing; missing ones
     // cost the ticket. So there is nothing to gate on the expansion here, and
     // a gate would be a second thing to keep right.
     //
-    // The chat log is a client-side transcript this client does not keep, so
-    // both of its lengths go across as zero, which is how the real client
-    // sends a ticket raised outside a conversation.
+    // Two things the reference gates on its own ticket state, which this client
+    // does not carry: creating one is refused while one is open (DAT_00c1e8d0),
+    // and the more-help variant is refused unless a GM answer is in hand
+    // (DAT_00c1e8d4).  SMSG_GMRESPONSE_RECEIVED (0x4ef) writes both of those
+    // bytes, and SMSG_GMTICKET_DELETETICKET (0x218) and
+    // SMSG_GMRESPONSE_STATUS_UPDATE (0x4f1) clear them.
+    // hasActiveGmTicket() is only the first of those half, and only as fresh as
+    // the last SMSG_GMTICKET_GETTICKET, so neither gate is applied here: the
+    // realm decides instead, and a ticket raised twice is a server-side miss
+    // rather than a request that silently never went out.
     //
     // The place is the player's on the wire (0x005ac8f0): the canonical one
     // went out as it was, X and Y the wrong way round.
     const auto& me = owner_.movementInfoRef();
-    owner_.getSocket()->send(GmTicketCreatePacket::build(owner_.currentMapIdRef(), me.x, me.y, me.z, text));
-    LOG_INFO("Submitted GM ticket: '", text, "'");
+    owner_.getSocket()->send(GmTicketCreatePacket::build(owner_.currentMapIdRef(), me.x, me.y, me.z,
+                                                         text, needResponse, needMoreHelp));
+    LOG_INFO("Submitted GM ticket: '", text, "' response=", needResponse ? "asked" : "not asked",
+             " moreHelp=", needMoreHelp ? "yes" : "no");
 }
 
 void ChatHandler::handleMotd(network::Packet& packet) {

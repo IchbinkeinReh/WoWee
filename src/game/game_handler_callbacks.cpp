@@ -3525,8 +3525,8 @@ void GameHandler::submitGmSurvey() {
     gmSurveyComment_.clear();
 }
 
-void GameHandler::submitGmTicket(const std::string& text) {
-    if (chatHandler_) chatHandler_->submitGmTicket(text);
+void GameHandler::submitGmTicket(const std::string& text, bool needResponse, bool needMoreHelp) {
+    if (chatHandler_) chatHandler_->submitGmTicket(text, needResponse, needMoreHelp);
 }
 
 void GameHandler::updateGmTicket(const std::string& text) {

@@ -136,7 +136,9 @@ public:
     void replyToLastWhisper(const std::string& message);
 
     // ---- Methods moved from GameHandler ----
-    void submitGmTicket(const std::string& text);
+    /// CMSG_GMTICKET_CREATE: the text, whether a reply is asked for, and
+    /// whether this is the "I need more help" variant of a ticket answered.
+    void submitGmTicket(const std::string& text, bool needResponse, bool needMoreHelp);
     /// Replace the text of the ticket already open.
     void updateGmTicket(const std::string& text);
 

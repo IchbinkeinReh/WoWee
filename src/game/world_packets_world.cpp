@@ -1081,17 +1081,28 @@ std::vector<BattlegroundPlayerPositionData> BattlegroundPlayerPositionsParser::p
 }
 
 network::Packet GmTicketCreatePacket::build(uint32_t mapId, float canonicalX, float canonicalY, float canonicalZ,
-                                            const std::string& text) {
+                                            const std::string& text, bool needResponse, bool needMoreHelp) {
     network::Packet pkt(wireOpcode(Opcode::CMSG_GMTICKET_CREATE));
     pkt.writeUInt32(mapId);
     pkt.writeFloat(canonicalY);  // the wire's x
     pkt.writeFloat(canonicalX);  // the wire's y
     pkt.writeFloat(canonicalZ);
     pkt.writeString(text);
-    pkt.writeUInt32(1);  // needResponse = yes
-    pkt.writeUInt8(0);   // needMoreHelp = no
-    pkt.writeUInt32(0);  // no chat-log timestamps
-    pkt.writeUInt32(0);  // and so no compressed chat log
+    // 0x005ac8f0: `(-(needResponse != 0) & 0x10) + 1` - 1, or 0x11 with the
+    // reply asked for. Not a boolean: 1 is what "no reply" looks like.
+    pkt.writeUInt32(1u | (needResponse ? 0x10u : 0u));
+    pkt.writeUInt8(needMoreHelp ? 1 : 0);
+    // What follows is a count, that many dwords, then a length and that many
+    // bytes. The client fills all three from a ring of sixty records of 0x5f0
+    // bytes each: for every one of them with something at +0x3c it appends the
+    // text there and a separator to a joined string, and a `now - <a dword read
+    // at +0x17b8>` beside it - an offset that lands outside such a record, so
+    // the decompile is not reading what it looks like and what the ring holds
+    // was not pinned down here. Nothing like that is kept on this side, so the
+    // count and the length both go across as zero, which is the same shape
+    // with nothing in it.
+    pkt.writeUInt32(0);
+    pkt.writeUInt32(0);
     return pkt;
 }
 

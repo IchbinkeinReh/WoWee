@@ -910,8 +910,19 @@ CHECKS = [
     # first place.  What stays unmodelled in that family, said at the bindings:
     # pet talents answer nil or zero as they did, and a preview staged for the
     # inactive spec is a state nothing here carries.
+    #
+    # Five more went with the group and inspect cluster: CanInspect's showError,
+    # NewGMTicket's needResponse, and the third argument of GetPartyAssignment,
+    # SetLootMethod and - through the same helper - SetPartyAssignment.  The
+    # argument sweep counts reach, not correctness, so what that cluster also
+    # fixed is not in this number at all: /maintank Bob, SetLootMethod("master",
+    # "Bob") and GetPartyAssignment("MAINTANK", name, 1) all named nobody before,
+    # because they resolved unit tokens only, and the four verbs' group and
+    # leader gates, the taint gate ClearPartyAssignment should not ask (Set
+    # asks it, Clear does not), and "no member named means the sender" were
+    # wrong with every argument read.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 28,
+     r"^(\d+) binding\(s\) read fewer arguments", 23,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,

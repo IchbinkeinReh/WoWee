@@ -3188,10 +3188,23 @@ public:
 
 /// CMSG_GMTICKET_CREATE: the map and the player's place - on the wire, so
 /// the canonical place is turned back - then the text and the fields after.
+///
+/// The word after the text is not a boolean. 0x005ac8f0 writes
+/// `1 + (needResponse ? 0x10 : 0)`, so it is a set of bits with the low one
+/// always on: asking for a reply sets bit 0x10 rather than turning the word
+/// from 0 to 1. Writing 1 for "yes" - which is what these writes did - is
+/// therefore the same ticket as asking for no reply at all, and the help
+/// frame's checkbox never reached the realm.
+///
+/// The byte after it is the "I need more help" variant of the same request:
+/// 0x005ad150 sends the ticket text again with that byte set, which is how the
+/// panel under a GM's answer reopens the ticket instead of opening a second
+/// one. Both go out through opcode 0x205; the byte is the only thing that
+/// tells them apart.
 class GmTicketCreatePacket {
 public:
     static network::Packet build(uint32_t mapId, float canonicalX, float canonicalY, float canonicalZ,
-                                 const std::string& text);
+                                 const std::string& text, bool needResponse, bool needMoreHelp);
 };
 
 /** CMSG_QUESTGIVER_QUERY_QUEST packet builder */

@@ -10152,23 +10152,78 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, t.personalRating);
             return 8;
         }},
-                // CanInspect(unit [, showError]) - a player other than a
-                // corpse, which is as much as this client can judge; the server
-                // refuses the rest and the reply simply does not arrive.
+                // CanInspect(unit [, showError]) - 0x00522710. The answer is
+                // 0x00520410's: the unit has to be a player object, the player
+                // may not be allowed to attack them (0x00729740, and the
+                // `push %edi; mov %esi,%ecx` at 0x005227a1 says which way round
+                // the pair goes - the player asking about the unit, so a hostile
+                // player cannot be inspected), and the two have to be within
+                // 30 yards: the three squared axis differences against 900.0,
+                // which is the float at DAT_00ac8a6c.
+                //
+                // showError says nothing about the answer. It decides whether
+                // the reason is told to the player first, and which row of the
+                // game error table tells it - and which of the two complaints an
+                // unresolved unit gets depends on the argument's own text, so
+                // the text is read before it is thrown away. "target", or no
+                // text at all, is "no target selected"; anything else is
+                // "unknown unit". That is the case-blind compare 0x0076e780 does
+                // at 0x00522816, which the lower-casing the token is looked up
+                // in its own name already gives the same judgement as.
                 {"CanInspect", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* uid = luaL_optstring(L, 1, "target");
+            const bool showError = lua_toboolean(L, 2) != 0;
             if (!gh) { lua_pushboolean(L, 0); return 1; }
+            const auto complain = [&](const server_notice::GameError& why) {
+                if (showError) gh->sayGameError(why);
+            };
             std::string uidStr(uid);
             for (char& c : uidStr) {
                 c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             }
+            const bool namedNobody = uidStr.empty() || uidStr == "target";
+            const auto nobodyHere = [&] {
+                complain(namedNobody ? server_notice::kNoTarget
+                                     : server_notice::kUnitNotFound);
+            };
             const uint64_t guid = resolveUnitGuid(gh, uidStr);
-            if (guid == 0) { lua_pushboolean(L, 0); return 1; }
+            if (guid == 0) {
+                nobodyHere();
+                lua_pushboolean(L, 0);
+                return 1;
+            }
             // High word 0x0000 marks a player guid in this range; creatures
-            // carry 0xF13/0xF14 and cannot be inspected at all.
+            // carry 0xF13/0xF14 and cannot be inspected at all. That is this
+            // client's way of asking the flag test at 0x00522792, which reads
+            // bit 0x10 of the object's own type flags.
             const bool isPlayer = ((guid >> 48) & 0xFFFF) == 0;
-            lua_pushboolean(L, isPlayer ? 1 : 0);
+            if (!isPlayer || gh->unitMayAttack(gh->getPlayerGuid(), guid)) {
+                complain(server_notice::kInspectInvalidTarget);
+                lua_pushboolean(L, 0);
+                return 1;
+            }
+            // A unit this client has no object for is the one thing the
+            // reference cannot express: its step from the text to the object
+            // (0x0060c1f0) has no answer in that case either, and the answer it
+            // gives there is the complaint above - so it is used here too rather
+            // than reporting somebody unseen as somebody out of range.
+            auto& em = gh->getEntityManager();
+            const auto mine = em.getEntity(gh->getPlayerGuid());
+            const auto theirs = em.getEntity(guid);
+            if (!mine || !theirs) {
+                nobodyHere();
+                lua_pushboolean(L, 0);
+                return 1;
+            }
+            const float dx = mine->getX() - theirs->getX();
+            const float dy = mine->getY() - theirs->getY();
+            const float dz = mine->getZ() - theirs->getZ();
+            constexpr float kInspectRange = 30.0f;  // squared, as the compare is
+            const bool reachable =
+                dx * dx + dy * dy + dz * dz <= kInspectRange * kInspectRange;
+            if (!reachable) complain(server_notice::kInspectOutOfRange);
+            lua_pushboolean(L, reachable ? 1 : 0);
             return 1;
         }},
                 // Honour data for an inspected player is not in the reply this

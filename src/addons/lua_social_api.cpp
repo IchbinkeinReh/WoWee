@@ -395,6 +395,79 @@ bool npcWithinInteractRange(game::GameHandler* gh, uint64_t npcGuid) {
     return dx * dx + dy * dy + dz * dz <= kInteractionDistance * kInteractionDistance;
 }
 
+/// Whose group roster entry the text names, which is how `0x00520190` answers
+/// the group verbs: the unit tokens first, and then the text matched case-blind
+/// against the group's own list - the party's members besides the player when it
+/// is a party, the whole raid roster when it is a raid (`0x0052bc50` gives the
+/// four, `DAT_00beb568` the roster). `exact` is the verb's exactMatch argument:
+/// with it the whole name has to match, without it the client compares
+/// `strlen(text)` characters and so "/maintank Bo" is Bob.
+///
+/// The group's list and not the units nearby is what it searches, and that cuts
+/// both ways: a member logged out, or a town away, is still nameable, and a
+/// stranger standing right here is not nameable at all - which is the complaint
+/// the verb makes rather than a request sent for the wrong person.
+///
+/// Two things are not modelled. The reference keeps the *nearest* of the members
+/// a prefix could mean (`0x0051ffe0` compares each candidate's distance and
+/// replaces only a worse one), and a text with a '-' in it is matched against
+/// each member's "Name-Realm" spelling (`0x0076e6e0(text, '-')` picks which of
+/// the two the compare uses). This takes the first member in roster order and
+/// compares bare names, so the answers differ only for a prefix two members
+/// share, and never for a realm-qualified name.
+uint64_t resolveGroupMember(game::GameHandler* gh, const std::string& text, bool exact) {
+    if (!gh || text.empty()) return 0;
+    std::string lower = text;
+    toLowerInPlace(lower);
+    if (const uint64_t byToken = resolveUnitGuid(gh, lower)) return byToken;
+    const auto& pd = gh->getPartyData();
+    const bool raid = game::groupIsRaid(pd.groupType);
+    for (const auto& m : pd.members) {
+        if (m.guid == 0 || m.name.empty()) continue;
+        if (!raid && m.guid == gh->getPlayerGuid()) continue;  // see above: the party list
+        std::string name = m.name;
+        toLowerInPlace(name);
+        if (exact ? name == lower : name.compare(0, lower.size(), lower) == 0) return m.guid;
+    }
+    return 0;
+}
+
+/// Whether the player is the one who may change the group's loot rules: the
+/// leader, and nothing else (0x0052dc20 and 0x0052de60 compare only the leader,
+/// and let the realm refuse anybody else). The assignment pair is looser - see
+/// maySetPartyAssignment.
+bool isGroupLeader(game::GameHandler* gh) {
+    return gh && gh->getPartyData().leaderGuid != 0 &&
+           gh->getPartyData().leaderGuid == gh->getPlayerGuid();
+}
+
+/// Whether the player may set the group's assignments: the leader, or a raid
+/// officer (0x0052e1b0 asks 0x00572740, which reads each raid member's rank and
+/// accepts one of rank 1 or above - an assistant - and only insists on the
+/// leader for rank 0). WoWee keeps that rank as the roster flag's assistant bit,
+/// which is what UnitIsRaidOfficer reads too. A party has no raid roster to be
+/// an officer of, so there it is the leader alone.
+bool maySetPartyAssignment(game::GameHandler* gh) {
+    if (!gh) return false;
+    const auto& pd = gh->getPartyData();
+    if (pd.members.empty() && pd.memberCount == 0) return false;
+    if (pd.leaderGuid != 0 && pd.leaderGuid == gh->getPlayerGuid()) return true;
+    if (!game::groupIsRaid(pd.groupType)) return false;
+    for (const auto& m : pd.members)
+        if (m.guid == gh->getPlayerGuid()) return (m.flags & 0x01) != 0;
+    return false;
+}
+
+/// Whether the group has any members at all, which is what the three verbs
+/// check before anything else (`DAT_00bd1948/194c` - the party's first slot -
+/// and the raid roster count, all empty). WoWee has one member list for both,
+/// and a group the realm says is empty reports no members in it.
+bool inAGroup(game::GameHandler* gh) {
+    if (!gh) return false;
+    const auto& pd = gh->getPartyData();
+    return !pd.members.empty() || pd.memberCount != 0;
+}
+
 /// Which arena team a one-based index names, or zero for none.
 ///
 /// The interface counts teams 1, 2, 3 for the three bracket sizes and passes
@@ -1221,16 +1294,32 @@ static int lua_GetGMTicket(lua_State* L) {
 }
 
 // NewGMTicket(text, needResponse) → opens one
+// NewGMTicket(ticketDescription, needResponse)
+//
+// needResponse is the whole second half of the request: 0x005ad080 forwards it
+// to the sender 0x005ac8f0, which writes `1 + (needResponse ? 0x10 : 0)` after
+// the text (see GmTicketCreatePacket), so the three buttons that set it - "have
+// me contacted", "don't contact me", and the default - are three different
+// tickets on the wire. It used to be read and thrown away, with the packet
+// saying 1, which is what "no reply wanted" looks like: the checkbox decided
+// nothing.
+//
+// The reference checks the arguments *before* the taint gate, and it wants that
+// argument to be a boolean: 0x0084deb0 answers argument 2's type tag, and
+// anything other than boolean raises the Usage line and sends nothing. The help
+// frame always passes a boolean (helpframe.lua:43 starts it at true and its
+// three buttons set true or false), so insisting costs nothing and matches what
+// the reference does to anything else.
 static int lua_NewGMTicket(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const char* text = luaL_checkstring(L, 1);
+    if (!lua_isboolean(L, 2))
+        return luaL_error(L, "Usage: NewGMTicket(ticketDescription, needResponse)");
     // The ticket verbs ask the taint check (0x005ad080, 0x005ad0f0,
     // 0x005ad150: kind 0x11, refused to insecure code).
     if (!taint::allowed(L, 0x11)) return 0;
-    // needResponse is not carried by the packet this client sends, so it is
-    // read and dropped rather than quietly changing what is submitted.
-    gh->submitGmTicket(text);
+    gh->submitGmTicket(text, lua_toboolean(L, 2) != 0, false);
     return 0;
 }
 
@@ -2434,8 +2523,27 @@ void registerSocialLuaAPI(lua_State* L) {
                 // opcode here either, so sending numbers whose meaning is guessed
                 // would only buy a log line nobody can read.
                 {"GMReportLag", [](lua_State* L) -> int { (void)L; return 0; }},
+                // GMResponseNeedMoreHelp(ticketDescription) - the button under
+                // a GM's answer that says the answer did not settle it.
+                //
+                // Not a different request: 0x005ad150 calls the same sender as
+                // NewGMTicket with its two choices fixed - asking for a reply,
+                // and the "more help" byte set - and that byte is the only
+                // thing on the wire between the two (opcode 0x205 either way).
+                // Unbound, the button the help frame puts up did nothing at all:
+                // the answer stayed answered and the ticket stayed closed.
+                //
+                // The reference refuses when no GM answer is in hand, which it
+                // knows from a flag only SMSG_GMRESPONSE_RECEIVED sets; this
+                // client fires that event and keeps no state from it, so the
+                // request goes out whenever the button is pressed and the realm
+                // decides. That is the same shape as NewGMTicket's own
+                // already-open refusal - see ChatHandler::submitGmTicket.
                 {"GMResponseNeedMoreHelp", [](lua_State* L) -> int {
-            taint::allowed(L, 0x11);   // see NewGMTicket
+            auto* gh = getGameHandler(L);
+            const char* text = luaL_optstring(L, 1, "");
+            if (!taint::allowed(L, 0x11)) return 0;   // see NewGMTicket
+            if (gh && text && *text) gh->submitGmTicket(text, true, true);
             return 0;
         }},
                 // GetGMStatus() - ask whether the ticket queue is open.
@@ -2698,87 +2806,245 @@ void registerSocialLuaAPI(lua_State* L) {
                 // both write CMSG_LOOT_METHOD, which carries all three settings
                 // at once - so each resends the other two as they stand rather
                 // than clearing them.
+                //
+                // 0x0052dc20 leads with the group gates - no group, then not the
+                // leader - before it reads the argument at all, and an unknown
+                // method is a Lua error rather than a method: the five names are
+                // compared case-blind and anything else raises "Invalid loot
+                // method". Falling through to free-for-all answered a typo as
+                // though the player had asked for it.
+                //
+                // "master" with nobody named is its own complaint (0xfc), and a
+                // name the group does not have is 0x51 with the name put into it.
+                // That is what the roster search is for: the loot master has to
+                // be somebody in the group, and saying so beats choosing a person
+                // the argument never named - which is what the old fallback to
+                // the player did.
                 {"SetLootMethod", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            std::string method(luaL_optstring(L, 1, ""));
+            if (!inAGroup(gh)) { gh->sayGameError(server_notice::kNotInGroup); return 0; }
+            if (!isGroupLeader(gh)) { gh->sayGameError(server_notice::kNotLeader); return 0; }
+            if (!lua_isstring(L, 1) && !lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetLootMethod(\"method\" [,master])");
+            std::string method(lua_tostring(L, 1));
             toLowerInPlace(method);
-            const uint8_t m = lootMethodFromToken(method);
+            const int m = lootMethodFromToken(method);
+            if (m < 0) return luaL_error(L, "Invalid loot method");
 
             const auto& pd = gh->getPartyData();
             uint64_t masterGuid = 0;
             if (m == 2) {
                 // The second argument is a unit id or a name, depending on who
-                // is calling - the loot dropdown passes a name.
-                const char* who = luaL_optstring(L, 2, nullptr);
-                if (who && *who) {
-                    for (const auto& mem : pd.members) {
-                        if (mem.name == who) { masterGuid = mem.guid; break; }
-                    }
-                    if (masterGuid == 0) masterGuid = gh->getPlayerGuid();
+                // is calling - the loot dropdown passes a name - and both are
+                // what 0x00520190 takes, so it is tried as a token first.
+                if (!lua_isstring(L, 2) && !lua_isnumber(L, 2)) {
+                    gh->sayGameError(server_notice::kSpecifyMasterLooter);
+                    return 0;
+                }
+                const char* who = lua_tostring(L, 2);
+                if (!who || !*who) {
+                    gh->sayGameError(server_notice::kSpecifyMasterLooter);
+                    return 0;
+                }
+                // Arg 3 is the exactMatch flag here too (0x00815500(L,3,0)),
+                // which the loot dropdown never passes and /loot does not either.
+                masterGuid = resolveGroupMember(gh, who, lua_toboolean(L, 3) != 0);
+                // The resolver searched the group's list, but its token step can
+                // still name somebody outside it - "target" at a stranger - and
+                // the reference confirms membership afterwards (0x0052c680 for
+                // the party, 0x005726f0 for the raid) and answers the same 0x51.
+                const bool inGroup = masterGuid != 0 &&
+                    (masterGuid == gh->getPlayerGuid() ||
+                     std::any_of(pd.members.begin(), pd.members.end(),
+                                 [&](const auto& mem) { return mem.guid == masterGuid; }));
+                if (!inGroup) {
+                    gh->sayGameError(server_notice::kTargetNotInGroupS, {who});
+                    return 0;
                 }
             }
-            gh->setLootMethod(m, masterGuid, pd.lootThreshold);
+            gh->setLootMethod(static_cast<uint8_t>(m), masterGuid, pd.lootThreshold);
             return 0;
         }},
+                // 0x0052de60: the same two group gates first, and this pair has
+                // no raid-officer escape - an assistant may set the assignments
+                // (0x0052e1b0 lets its rank through) and may not move the loot
+                // threshold. Then the number: 2..6, and a number outside that is
+                // the Lua error rather than a clipped quality.
                 {"SetLootThreshold", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const auto quality = static_cast<uint8_t>(luaL_optnumber(L, 1, 2));
+            if (!inAGroup(gh)) { gh->sayGameError(server_notice::kNotInGroup); return 0; }
+            if (!isGroupLeader(gh)) { gh->sayGameError(server_notice::kNotLeader); return 0; }
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetLooThreshold(threshold)");  // sic, as 0x0052de60 spells it
+            const int quality = static_cast<int>(lua_tonumber(L, 1));  // 0x0088b9c0's integer of the same read
+            if (quality < 2 || quality > 6)
+                return luaL_error(L, "SetLootThreshold(): threshold must be between %d and %d", 2, 6);
             const auto& pd = gh->getPartyData();
-            gh->setLootMethod(pd.lootMethod, pd.looterGuid, quality);
+            gh->setLootMethod(pd.lootMethod, pd.looterGuid, static_cast<uint8_t>(quality));
             return 0;
         }},
                 // GetPartyAssignment(assignment, unit) → whether that unit
                 // holds it. The flags come with the group list.
+                //
+                // Three things the reading of it missed, all of them 0x0052ca00
+                // and its raid twin 0x00572950:
+                //
+                //   * The second argument is a name as much as a unit token, and
+                //     the third is exactMatch - see resolveGroupMember. Answering
+                //     false for "whoever the interface named" is how the raid
+                //     frames and the right-click menu lost the tick they were
+                //     drawing: unitpopup.lua passes the member's name.
+                //   * With no second argument it does not answer a yes-or-no at
+                //     all: it returns the *numbers* of the members who hold the
+                //     assignment, numbered as the client numbers them - a raid by
+                //     its roster from one, a party by its four slots, which are
+                //     the members besides the player and are what the flag array
+                //     it walks (DAT_00bd0cff, indices 1 to 4) is indexed by.
+                //   * A name the group does not have is not a false: it is row
+                //     0x51 with the name in it and **no return values**, which is
+                //     why the caller's `if GetPartyAssignment(...) then` sees nil
+                //     rather than a no.
+                //
+                // An assignment of neither name raises, as it does there
+                // ("GetPartyAssignment(): Invalid party assignment"), rather than
+                // answering no for a spelling the client does not have.
                 {"GetPartyAssignment", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            std::string what(luaL_optstring(L, 1, ""));
-            const char* unit = luaL_optstring(L, 2, "");
+            if (!gh) return 0;
+            if (!lua_isstring(L, 1) && !lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetPartyAssignment(\"assignment\" [,\"raidmember\"] [,exactMatch])");
+            std::string what(lua_tostring(L, 1));
             toLowerInPlace(what);
-            if (!gh || !unit || !*unit) return luaReturnFalse(L);
             const uint8_t bit = (what == "maintank") ? 0x02
                               : (what == "mainassist") ? 0x04 : 0x00;
-            if (bit == 0) return luaReturnFalse(L);
-            std::string uid(unit);
-            toLowerInPlace(uid);
-            const uint64_t guid = resolveUnitGuid(gh, uid);
-            if (guid == 0) return luaReturnFalse(L);
-            for (const auto& mem : gh->getPartyData().members) {
+            if (bit == 0) return luaL_error(L, "GetPartyAssignment(): Invalid party assignment");
+
+            const auto& pd = gh->getPartyData();
+            const bool raid = game::groupIsRaid(pd.groupType);
+            if (!lua_isstring(L, 2) && !lua_isnumber(L, 2)) {
+                // Every member holding it is a return value, and the roster is
+                // longer than Lua's default stack: the client asks for room
+                // before each push (0x0084dab0 inside the loop), which is what
+                // lets a 25-man roster answer all of its holders at all.
+                if (!lua_checkstack(L, static_cast<int>(pd.members.size()))) return 0;
+                int held = 0;
+                if (raid) {
+                    for (size_t i = 0; i < pd.members.size(); ++i)
+                        if (pd.members[i].flags & bit)
+                            { lua_pushnumber(L, static_cast<lua_Number>(i + 1)); ++held; }
+                } else {
+                    int slot = 0;
+                    for (const auto& mem : pd.members) {
+                        if (mem.guid == 0 || mem.guid == gh->getPlayerGuid()) continue;
+                        if (++slot > 4) break;   // the client only has four slots to walk
+                        if (mem.flags & bit) { lua_pushnumber(L, slot); ++held; }
+                    }
+                }
+                return held;
+            }
+            const char* who = lua_tostring(L, 2);
+            const uint64_t guid = resolveGroupMember(gh, who ? who : "", lua_toboolean(L, 3) != 0);
+            if (guid == 0) {
+                gh->sayGameError(server_notice::kTargetNotInGroupS, {who ? who : ""});
+                return 0;
+            }
+            for (const auto& mem : pd.members) {
                 if (mem.guid == guid) { lua_pushboolean(L, (mem.flags & bit) ? 1 : 0); return 1; }
             }
-            return luaReturnFalse(L);
+            // A token that named somebody outside the roster: the reference reads
+            // the flags of the unit it resolved, finds none, and answers no.
+            lua_pushboolean(L, 0);
+            return 1;
         }},
-                // Both ask the taint check first (0x0052e1b0, and 0x0052e400 ->
-                // 0x0052df40: kind 4, refused to insecure code).
+                // The pair, and the two are not the same shape. Set is
+                // 0x0052e1b0 and asks the taint check (kind 4); Clear is
+                // 0x0052e400 -> 0x0052df40(0) and does not - the shared body
+                // tests its own argument first (`if (param_1 == 0 || taint(4))`)
+                // and only runs the check for the applying half. Both then want a
+                // group (0x50) and the leader, or a raid officer (0x54 with
+                // 0x00572740, which accepts a raid roster rank of 1 or above).
+                //
+                // The member argument is optional, and "nobody named" is not the
+                // same as "anybody": the reference resolves nothing and sends a
+                // guid of nought, which the realm reads as the sender - so
+                // SetPartyAssignment("MAINTANK") is the player marking themselves,
+                // and it used to do nothing at all here. Named, it is a token or a
+                // name in the group (0x00520190 with mode 6, the raid roster
+                // included, and arg 3 as exactMatch). Not found, the complaint is
+                // "unknown unit" (0x13a) or "no target" (199) for the word
+                // "target" - not 0x51: the group gates have already passed, so the
+                // only thing wrong is that the text names nobody this client knows.
+                //
+                // Two things it does here are not modelled. The unresolved path
+                // first tries the text against players outside the group
+                // (0x00520190 with type mask 8 and no candidate list) and answers
+                // row 0x1d2, ERR_MEETING_STONE_TARGET_NOT_IN_PARTY, if it finds
+                // one - which this client has no way to tell a name from. And
+                // 0x0052bae0 refuses a second change inside 0x2ee ticks of the last
+                // (DAT_00bd199c, the tick it stamped), quietly and with no line;
+                // the realm throttles these itself.
                 {"SetPartyAssignment", [](lua_State* L) -> int {
             if (!taint::allowed(L, 4)) return 0;
             auto* gh = getGameHandler(L);
-            std::string what(luaL_optstring(L, 1, ""));
-            const char* unit = luaL_optstring(L, 2, "");
+            if (!gh) return 0;
+            if (!inAGroup(gh)) { gh->sayGameError(server_notice::kNotInGroup); return 0; }
+            if (!maySetPartyAssignment(gh)) { gh->sayGameError(server_notice::kNotLeader); return 0; }
+            if (!lua_isstring(L, 1) && !lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: %s(\"assignment\" [,\"raidmember\"] [,exactMatch])",
+                                  "SetPartyAssignment");
+            std::string what(lua_tostring(L, 1));
             toLowerInPlace(what);
-            if (!gh || !unit || !*unit) return 0;
             const int assignment = (what == "maintank") ? 0 : (what == "mainassist") ? 1 : -1;
-            if (assignment < 0) return 0;
-            std::string uid(unit);
-            toLowerInPlace(uid);
-            const uint64_t guid = resolveUnitGuid(gh, uid);
-            if (guid) gh->setPartyAssignment(static_cast<uint8_t>(assignment), guid, true);
+            if (assignment < 0) return luaL_error(L, "Invalid Party assignment");
+            uint64_t guid = 0;
+            if (lua_isstring(L, 2) || lua_isnumber(L, 2)) {
+                std::string who(lua_tostring(L, 2) ? lua_tostring(L, 2) : "");
+                guid = resolveGroupMember(gh, who, lua_toboolean(L, 3) != 0);
+                if (guid == 0) {
+                    // "target", or nothing at all, is the other complaint - and
+                    // compared case-blind, as it is in 0x0052e1b0 and 0x0052df40.
+                    std::string lower = who;
+                    toLowerInPlace(lower);
+                    gh->sayGameError(lower.empty() || lower == "target"
+                                         ? server_notice::kNoTarget
+                                         : server_notice::kUnitNotFound);
+                    return 0;
+                }
+            }
+            gh->setPartyAssignment(static_cast<uint8_t>(assignment), guid, true);
             return 0;
         }},
                 {"ClearPartyAssignment", [](lua_State* L) -> int {
-            if (!taint::allowed(L, 4)) return 0;
+            // No taint check: see SetPartyAssignment for why the pair differs.
             auto* gh = getGameHandler(L);
-            std::string what(luaL_optstring(L, 1, ""));
-            const char* unit = luaL_optstring(L, 2, "");
+            if (!gh) return 0;
+            if (!inAGroup(gh)) { gh->sayGameError(server_notice::kNotInGroup); return 0; }
+            if (!maySetPartyAssignment(gh)) { gh->sayGameError(server_notice::kNotLeader); return 0; }
+            if (!lua_isstring(L, 1) && !lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: %s(\"assignment\" [,\"raidmember\"] [,exactMatch])",
+                                  "ClearPartyAssignment");
+            std::string what(lua_tostring(L, 1));
             toLowerInPlace(what);
-            if (!gh || !unit || !*unit) return 0;
             const int assignment = (what == "maintank") ? 0 : (what == "mainassist") ? 1 : -1;
-            if (assignment < 0) return 0;
-            std::string uid(unit);
-            toLowerInPlace(uid);
-            const uint64_t guid = resolveUnitGuid(gh, uid);
-            if (guid) gh->setPartyAssignment(static_cast<uint8_t>(assignment), guid, false);
+            if (assignment < 0) return luaL_error(L, "Invalid Party assignment");
+            uint64_t guid = 0;
+            if (lua_isstring(L, 2) || lua_isnumber(L, 2)) {
+                std::string who(lua_tostring(L, 2) ? lua_tostring(L, 2) : "");
+                guid = resolveGroupMember(gh, who, lua_toboolean(L, 3) != 0);
+                if (guid == 0) {
+                    // "target", or nothing at all, is the other complaint - and
+                    // compared case-blind, as it is in 0x0052e1b0 and 0x0052df40.
+                    std::string lower = who;
+                    toLowerInPlace(lower);
+                    gh->sayGameError(lower.empty() || lower == "target"
+                                         ? server_notice::kNoTarget
+                                         : server_notice::kUnitNotFound);
+                    return 0;
+                }
+            }
+            gh->setPartyAssignment(static_cast<uint8_t>(assignment), guid, false);
             return 0;
         }},
                 // ---- Raid group management ----
@@ -2828,7 +3094,11 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetRaidRosterSelection(index)");
             auto* gh = getGameHandler(L);
             const int64_t index = std::llround(lua_tonumber(L, 1)) - 1;
-            const auto* raid = gh && gh->getPartyData().groupType == 1 ? &gh->getPartyData().members : nullptr;
+            // Which group is a raid is what game::groupIsRaid exists to answer;
+            // `== 1` is the old convention and reads a WotLK raid (type 2) as no
+            // raid at all, which is why the roster had nothing to select.
+            const auto* raid = (gh && game::groupIsRaid(gh->getPartyData().groupType))
+                                   ? &gh->getPartyData().members : nullptr;
             raidRosterSelection() = (raid && index >= 0 && index < static_cast<int64_t>(raid->size()))
                                         ? (*raid)[static_cast<size_t>(index)].guid : 0;
             return 0;
@@ -2836,7 +3106,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GetRaidRosterSelection", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             int index = 0;
-            if (gh && raidRosterSelection() != 0 && gh->getPartyData().groupType == 1) {
+            if (gh && raidRosterSelection() != 0 && game::groupIsRaid(gh->getPartyData().groupType)) {
                 const auto& raid = gh->getPartyData().members;
                 for (size_t i = 0; i < raid.size(); ++i) {
                     if (raid[i].guid == raidRosterSelection()) { index = static_cast<int>(i) + 1; break; }

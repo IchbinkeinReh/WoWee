@@ -925,7 +925,11 @@ public:
     void declineGuildInvite();
 
     // GM Ticket
-    void submitGmTicket(const std::string& text);
+    /// NewTicket text, whether the player asked for a reply, and whether this
+    /// is the "I need more help" variant - the two callers of one sender
+    /// (0x005ad080 forwards the argument it was given, 0x005ad150 presses both
+    /// of them), both through 0x005ac8f0.
+    void submitGmTicket(const std::string& text, bool needResponse, bool needMoreHelp);
     /// The GM survey's answers (0x005ac260, 0x005ac2d0) and their submit
     /// (0x005acd50).
     void setGmSurveyAnswer(uint32_t question, uint8_t rank, const std::string& comment);

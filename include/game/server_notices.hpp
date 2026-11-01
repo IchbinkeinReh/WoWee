@@ -122,6 +122,61 @@ inline ReadItemFailure readItemFailure(uint8_t reason) {
     return ReadItemFailure::Close;
 }
 
+// The group verbs' own refusals. These are not from a server packet: each is a
+// handler of Wow.exe pushing a row of the table before it asks the realm for
+// anything, and the row it pushes is how the player learns which of the ways
+// the argument went wrong it was.
+//
+// `0x00520190` is the resolver they all use, and it is the reason the argument
+// of these verbs is a *name* as much as a unit token: it tries the unit tokens
+// first and then matches the text, case-blind, against the group's own list.
+// An argument that names nobody in the group is the row below, with the text
+// put in where the name would be.
+//
+// Which verb pushes which row is written next to each, and the three verbs
+// that write CMSG_LOOT_METHOD (0x0052dc20 SetLootMethod, 0x0052de60
+// SetLootThreshold) and CMSG_SET_GROUP_MEMBER_FLAGS (0x0052e1b0
+// Set/ClearPartyAssignment) all three lead with the same two: no group at all,
+// and not the leader. Only the assignment pair lets a raid officer through as
+// well as the leader (0x00572740), which is the difference between the loot
+// rules and the assignments - an assistant may set main assist, and may not
+// say who picks up the loot.
+//
+// An empty `enUS` says the words were not taken from anywhere: every key here
+// is in the installed interface, which words the line when it is loaded, and
+// with no interface there is nothing to word it with. Making up 3.3.5's English
+// would be a guess printed as a quotation.
+inline constexpr GameError kNotInGroup{  // 0x0052dc20, 0x0052de60, 0x0052e1b0: no group at all
+    0x50, "ERR_NOT_IN_GROUP", "", Line::Chat};
+inline constexpr GameError kTargetNotInGroupS{
+    // 0x0052ca00, 0x00572950 (GetPartyAssignment), 0x0052dc20 (SetLootMethod),
+    // 0x0052d9c0, 0x0052daf0 (the assist marks): the argument names nobody
+    0x51, "ERR_TARGET_NOT_IN_GROUP_S", "", Line::Chat};
+inline constexpr GameError kNotLeader{  // 0x0052dc20, 0x0052de60, 0x0052e1b0: not the group leader
+    0x54, "ERR_NOT_LEADER", "", Line::Chat};
+inline constexpr GameError kSpecifyMasterLooter{  // 0x0052dc20: "master" with no name given
+    0xfc, "ERR_SPECIFY_MASTER_LOOTER", "", Line::Error};
+
+// The two complaints a verb makes when its unit argument names nobody, which
+// are the same two rows over and over: the unit token resolving to nothing and
+// that token being the word "target" are different rows, which is how "no target
+// selected" and "unknown unit" are two different complaints rather than one.
+// CanInspect (0x00522710) and the assignment pair (0x0052e1b0, 0x0052df40) both
+// end their unresolved paths here, and the assignment pair's Usage strings name
+// the argument "raidmember" for the same reason.
+inline constexpr GameError kNoTarget{    // row 199: the token was "target", or nothing
+    0xc7, "ERR_GENERIC_NO_TARGET", "You have no target.", Line::Error};
+inline constexpr GameError kUnitNotFound{  // row 0x13a: any other token, resolved nowhere
+    0x13a, "ERR_UNIT_NOT_FOUND", "", Line::Error};
+
+// CanInspect(unit, showError)'s other two, from 0x00522710, and all four of its
+// rows say Line::Error - the red line - and are only raised when showError was
+// asked for.
+inline constexpr GameError kInspectInvalidTarget{  // row 0x13c: not a player, or somebody you may attack
+    0x13c, "ERR_INVALID_INSPECT_TARGET", "", Line::Error};
+inline constexpr GameError kInspectOutOfRange{  // row 0x86: a player, further than 30 yards
+    0x86, "ERR_OUT_OF_RANGE", "Out of range.", Line::Error};
+
 } // namespace server_notice
 } // namespace game
 } // namespace wowee
