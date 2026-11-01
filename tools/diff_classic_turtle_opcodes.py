@@ -21,7 +21,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
-from opcode_map_utils import canonicalize, load_opcode_map
+# The script's own directory is not on the path under -I, which is how every
+# tool here is run - the opcode maps are the player's extracted data. See
+# validate_opcode_maps.py for the same fix and why neither had it.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from opcode_map_utils import canonicalize, load_opcode_map  # noqa: E402
 
 
 RE_OPCODE_NAME = re.compile(r"^(?:CMSG|SMSG|MSG)_[A-Z0-9_]+$")

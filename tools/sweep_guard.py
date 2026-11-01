@@ -848,6 +848,47 @@ CHECKS = [
     ("framexml_for_limit_check.py",
      r"^(\d+) unprovided global\(s\) in a for-limit", 0,
      "a missing name used as a numeric for-limit, where nil raises"),
+    # The quieter twin of that fault: a missing *CVar* is not a raise, it is a
+    # branch never taken. An unknown name answers "0", UpdatePaperdollStats
+    # compares against five category names, and the character sheet grew two
+    # empty panels under the model with nothing anywhere saying why. 22 CVars in
+    # the files the loader opens are compared against a literal and every one is
+    # answered explicitly. Canaried the same afternoon its file list was fixed:
+    # a dropdown compared against BYCLASS/BYNAME, written into
+    # actionbutton.lua, goes 0 -> 1, and the file goes back byte for byte.
+    #
+    # Pinning it needed the same fix as the entry above, because it carried the
+    # same bug: two globs below the named directory, so naming FrameXML read 135
+    # of the 181 files the loader opens with every load-on-demand panel closed -
+    # and a name-valued CVar is a settings-panel thing, and half the settings
+    # panels are addons. Measured on this install, the wider scan changes no
+    # count: 22 either way. A sweep reading half the tree reports zero twice as
+    # confidently as it reports the truth.
+    ("framexml_cvar_check.py",
+     r"^(\d+) whose default \"0\" can never match", 0,
+     "a CVar whose default can never match the literals FrameXML compares it against"),
+    # Events the interface registers a handler for that this client never sends.
+    # 510 registered, 164 silent - a backlog count rather than a bar, pinned so
+    # that a name going quiet or a wire being added shows up as the number
+    # moving rather than as someone re-reading two hundred lines.
+    #
+    # The line this sweep prints first - "0 of 164 have a handler already", a
+    # packet parsed into a handler that never raises the event - is the one worth
+    # holding at zero, and it is not pinned: a zero line earns a ceiling by being
+    # canaried, and canarying this one means writing a packet handler into the C++
+    # for a message that has no wire, which is a change to the client rather than
+    # a scratch fault in a file this reads. Read that line by hand; the tool
+    # counts it out for you either way.
+    #
+    # What sits outside the 164 is worth knowing before reading it. Two names the
+    # report prints are adjudicated as a decision rather than a gap (the voice
+    # pair, whose packet is read and dropped by a skip handler), and six calendar
+    # names are counted as *sent* only because they reach the interface through a
+    # list of signal structs - a scan that looks for a name next to a fire call
+    # would put all six in this number and read the rise as six regressions.
+    ("framexml_event_gap.py",
+     r"^never sent\s*:\s*(\d+)", 164,
+     "events FrameXML registers a handler for that this client never sends"),
     # Bindings that read fewer arguments than the interface passes. The only
     # sweep here that asks whether an answer used everything it was told -
     # every other one asks whether a name is answered, and these names all are.

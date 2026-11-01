@@ -113,6 +113,17 @@ def main():
             # __file__. Under ctest the working directory is the build tree,
             # and eight of them could not find Data/ from there - which is a
             # fact about how they are invoked, not about whether they work.
+            # Not -I, and this was tried. -I drops the user site-packages
+            # directory as well as the paths, and rt_flicker.py imports numpy
+            # from there: measured, the same run that adds -I turns one sweep
+            # that works into "No module named 'numpy'". The isolation the rule
+            # is for is about the *directory an interpreter starts in* - the
+            # extracted data tree, where a planted json.py outranks the real
+            # one - and this check already sets the working directory to the
+            # repository, which is not a directory anyone extracted anything
+            # into. A tool that hand-runs under -I needs its own directory on
+            # sys.path for a sibling import; two of them had lost that line and
+            # are fixed in the tools themselves, not by changing this run.
             done = subprocess.run([sys.executable, str(path)],
                                   cwd=str(TOOLS.parent),
                                   capture_output=True, text=True, timeout=300)
