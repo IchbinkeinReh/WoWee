@@ -521,11 +521,22 @@ jobs:
 
     - name: Package the .ipa
       run: |
-        APP="$(find build-ios -path '*Release-iphoneos/Wowee.app' -type d | head -1)"
-        test -n "$APP" && test -x "$APP/Wowee"
+        # Wherever the generator put it (CMake's output directory, not
+        # Xcode's Release-iphoneos).
+        APP="$(find build-ios -name 'Wowee.app' -type d -prune | head -1)"
+        if [ -z "$APP" ] || [ ! -x "$APP/Wowee" ]; then
+          echo "No Wowee.app with its executable under build-ios" >&2
+          find build-ios -name '*.app' >&2
+          exit 1
+        fi
+        echo "App bundle: $APP"
         # assets/ and Data/ are copied in by the target's post-build steps;
         # the addons go beside them, where the addon search looks.
-        test -d "$APP/assets" && test -d "$APP/Data"
+        if [ ! -d "$APP/assets" ] || [ ! -d "$APP/Data" ]; then
+          echo "assets/ or Data/ missing from $APP" >&2
+          ls "$APP" >&2
+          exit 1
+        fi
         cp -R addons "$APP/"
         rm -rf "$APP/assets/Original Music"
         mkdir -p Payload
