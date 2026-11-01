@@ -36,7 +36,14 @@ static int os_pushresult (lua_State *L, int i, const char *filename) {
 
 
 static int os_execute (lua_State *L) {
+#if defined(LUA_NO_SYSTEM)
+  /* WoWee: iOS has no system(); os.execute fails there, as it would on a
+     host without a shell. */
+  (void)luaL_optstring(L, 1, NULL);
+  lua_pushinteger(L, -1);
+#else
   lua_pushinteger(L, system(luaL_optstring(L, 1, NULL)));
+#endif
   return 1;
 }
 

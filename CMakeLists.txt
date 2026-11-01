@@ -1351,6 +1351,11 @@ if(ANDROID)
     # it. The bound is wrong, not the read.
     target_compile_options(lua51 PRIVATE -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0)
 endif()
+if(IOS)
+    # The iOS SDK marks system() unavailable; loslib.c's os.execute fails
+    # instead.
+    target_compile_definitions(lua51 PRIVATE LUA_NO_SYSTEM)
+endif()
 
 # Create executable
 # On Android the client is a shared library, not a program: SDLActivity loads
