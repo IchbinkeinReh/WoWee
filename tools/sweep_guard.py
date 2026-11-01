@@ -1474,6 +1474,47 @@ CHECKS = [
     ("duplicate_block_check.py",
      r"^(\d+) file pair\(s\) sharing code", 0,
      "unjudged pairs of files sharing a block of code"),
+    # The same fact as a data table, which the block checker above says outright
+    # it cannot see: 627 tables of four or more items with three or more distinct
+    # values, of which ten are written out in more than one file and six more are
+    # settled here with a reason.
+    #
+    # Most of the ten are one fact in two or three places and drift the way two
+    # copies always drift: the 187-entry spell-failure table in both combat_handler
+    # and spell_handler, the grey-level gap in three places (two kGreyGap and a
+    # kGreyRange), the reputation rank floors, the six resistances twice, the
+    # power token names in three places, the five Horde race ids in three places -
+    # two of those three in the same translation unit. Two are the same *shape*
+    # rather than the same fact, and reading each is what tells them apart: the
+    # 0|1|2|0|2|3 that celestial's draw order and weather's share, and a
+    # quarter-extent initializer that appears twice in the screen effects pair.
+    #
+    # One came down today: the 29-entry inventory-type table was a namespace
+    # table in the item-query bindings and a function-local one in the inventory
+    # bindings, both 29 entries in the same order, one naming a tooltip slot and
+    # the other driving IsEquippedItemType's matching - so a slot added to one and
+    # not the other would have had the tooltip name a slot the matcher could not
+    # answer. It is kLuaInvTypes in lua_api_helpers.hpp now, beside the other
+    # shared tables, and both bindings read it.
+    ("duplicate_table_check.py",
+     r"^(\d+) written out in more than one file", 10,
+     "data tables written out in more than one file"),
+    # The same drift question one level smaller: a magic number survives a
+    # rewording that the block scan would miss, which is how one spell id came to
+    # sit in five differently-formatted lists of druid forms, three of them the
+    # trio the stance bar walks. 1382 distinctive literals in the tree, 92 of them
+    # written out in three or more files.
+    #
+    # Read the rows as questions, not as a backlog: the widest one today, 0x2000
+    # in twenty files, is kTypeGuardian in one block of combat_log.hpp,
+    # kMissAbsorbed ten lines later, and the flag a fall counts as far in
+    # entity.hpp - three flag spaces the tool cannot tell apart because it reads
+    # values and nothing else. So this ceiling is for the count moving, and the
+    # tool's header now says outright that the top of its list is not all signal -
+    # the claim that it was is what let a row like that pass as found work.
+    ("repeated_literal_check.py",
+     r"^(\d+) written out in three or more files", 92,
+     "distinctive literals written out in three or more files"),
 ]
 
 # Prose rather than a count: the chunk checker says one of two sentences.
@@ -1637,6 +1678,17 @@ SENTENCES = [
     # printing a word. Both are written out in the tool's own header, and the
     # second is the trap building-wowee-locally already records for ordinary
     # builds - it just took a compile for the sweep to fall into it.
+    # File-format knowledge that has to live in one place: the four decodes this
+    # tree has actually duplicated (the ADT layer alpha, the chunk-under-a-point
+    # lookup, and two others), each with a pattern only that knowledge produces,
+    # so a hit anywhere else is a second copy or a new caller that should go
+    # through the owner. Four pieces, and the all-clear is that each lives in one
+    # place - which is what it cost to learn: the alpha decode had three copies
+    # and the fix that filled a four-bit alpha map's unpainted last row went into
+    # the one the grass uses while the ground kept drawing the strip.
+    ("format_knowledge_check.py",
+     "Each lives in one place.",
+     "a file-format decode that exists in more than one file"),
     ("unicorn_stub_check.py",
      "translation unit(s) compile without Unicorn",
      "the Warden stub branch still parses without Unicorn"),
