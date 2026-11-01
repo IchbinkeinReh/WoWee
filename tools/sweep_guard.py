@@ -745,6 +745,23 @@ CHECKS = [
     ("framexml_api_gap.py",
      r"^genuinely missing API\s*:\s*(\d+)$", 4,
      "names FrameXML calls that nothing in the tree or the bindings defines"),
+    # The same question for methods reached through the widget metatable rather
+    # than through _G. Four, and all four are dump.lua's writer object, which
+    # nothing in the tree constructs - `/dump` has no way in.
+    #
+    # Eight until today: the sweep could not see a method installed by
+    # assignment, so FrameXML's `self.Collapse = AchievementButton_Collapse`,
+    # `self.Expand = AchievementButton_Expand`, `context.Write = DevTools_Write`
+    # and `self.SetDisplayValue = self.SetValue` all read as raising. The rule
+    # and what it deliberately leaves out are written out in the sweep's own
+    # header; the one name there worth remembering is SetDisplayValue, which is
+    # not API at all - the string does not occur in Wow.exe once, and the panels
+    # that never assign it guard the call with `if (slider.SetDisplayValue)`.
+    # Adding it to the engine would be inventing a method the reference client
+    # never had.
+    ("framexml_unbound_widget_methods.py",
+     r"^(\d+) widget methods called that answer nil", 4,
+     "frame:Method() calls that no binding and no FrameXML assignment answers"),
     # Bindings that read fewer arguments than the interface passes. The only
     # sweep here that asks whether an answer used everything it was told -
     # every other one asks whether a name is answered, and these names all are.
