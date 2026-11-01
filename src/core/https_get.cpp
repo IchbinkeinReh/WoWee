@@ -152,7 +152,9 @@ HttpsResponse httpsGet(const std::string& host, const std::string& path,
     const std::unique_ptr<SSL, void (*)(SSL*)> sslGuard(ssl, SSL_free);
 
     SSL_set_tlsext_host_name(ssl, host.c_str());   // SNI
-    SSL_set1_host(ssl, host.c_str());              // and check the name matches
+    // and check the name matches (what SSL_set1_host did; it is deprecated
+    // since OpenSSL 4.0)
+    X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), host.c_str(), 0);
     SSL_set_fd(ssl, static_cast<int>(sock));
 
     if (SSL_connect(ssl) != 1) {
