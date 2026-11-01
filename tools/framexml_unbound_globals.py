@@ -10,12 +10,18 @@ its own hand-written file list, so this one maps nothing: it reports the file
 each name is called from and lets the reader decide whether that file is on
 screen.
 
-THE THIRTY-SIX IT REPORTS TODAY, EVERY ONE OPENED
+THE NAMES IT REPORTS, EVERY ONE OPENED
 
 Not grouped and dismissed - opened. Grouping is how five wrong claims survived
 in this file's neighbours: "the refund window is server state this client is
 never sent" was written once and cited four times, and it was one request away
 the whole time.
+
+The counts on the bullets are from the session that opened all thirty-six of
+them; the report names what it has today (seven, measured 2026-11-01), and the
+bullets are why each family is what it is. One bullet had gone stale against the
+code it describes, and it is rewritten below rather than dropped, because it is
+the one that shows how a claim like this rots.
 
   * Voice chat (5). AzerothCore's handlers read the request and throw it away;
     no SMSG_VOICE_* is ever sent. Verified in VoiceChatHandler.cpp.
@@ -29,8 +35,18 @@ the whole time.
     argument, which is not sent.
   * The refund window's client-side verbs (4). Refunds themselves are
     implemented; these end a window rather than read one.
-  * The calendar (3). LoadAddOn refuses Blizzard_Calendar by name, and
-    ToggleCalendar tests for Calendar_Toggle before calling it.
+  * The calendar (3 then, 1 now) - and this is the bullet that rotted. It read
+    "LoadAddOn refuses Blizzard_Calendar by name", which was true when it was
+    written and is not any more: the addon loads, because there is a calendar
+    behind it now (lua_system_api.cpp:4972 says so outright, and keeps the old
+    note in outline). So its files are in the input set like any other addon's,
+    and the one name left from that family, CalendarNewArenaTeamEvent, is a
+    header's own Usage line rather than a call - the copy-paste the api_gap
+    sweep settled. Nothing about the calendar is excused by a load refusal any
+    more, and three tools still said it was: this one,
+    framexml_reachable_globals' header, and framexml_run.cpp, which declines the
+    addon "as the client does" and so has never loaded in the harness what every
+    player loads in the game.
   * Skill-point purchase (3). WotLK has none, and skillframe.lua gates every
     one of these on GetAdjustedSkillPoints, which is correctly zero.
   * Recruit-a-friend (2), Battle.net (1), trade-window enchanting (2), and

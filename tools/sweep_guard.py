@@ -820,6 +820,34 @@ CHECKS = [
     ("interface_text_keys.py",
      r"^(\d+) asks the interface has no line for", 1,
      "text keys the C++ asks the interface for that it has no line for"),
+    # The one shape of a missing name that raises instead of coming up empty: a
+    # numeric `for` whose limit is nil ("'for' limit must be a number"), which
+    # takes the handler around the loop down with it. GetNumTrackingTypes was
+    # unbound that way, and the minimap's tracking menu went dead rather than
+    # blank - a button that does nothing and no error on screen.
+    #
+    # Pinning this was refused once, on the record, because the sweep "cannot
+    # fail": a fault written into a loaded interface file stayed clean. That was
+    # the tool reading half the tree. Its own globs - `*.lua` and
+    # `addons/*/*.lua` below whatever path was named - read the addons and never
+    # the core when pointed at the interface, and the core and never the addons
+    # when pointed at FrameXML: 52 files one way, 135 the other, against the 181
+    # the loader opens. The fault stayed invisible because the file it sat in
+    # was on the closed half. It asks the loader which files it opens now, and
+    # the same test - `local count = GetNumWoweeCanaryThings()` with a loop over
+    # it, plus the direct form - goes 0 -> 2 appended to actionbutton.lua, both
+    # forms reported, the file restored byte for byte afterwards. A zero is
+    # pinnable when the sweep can fail; that is the whole test of one.
+    #
+    # Zero today. The 49 `for i = 1, select(" ", ...) do` sites in the loaded
+    # files are excused by the interpreter's own name set rather than by the
+    # interface mentioning `select` in restrictedenvironment.lua - which it does
+    # (`select = select;`, a key of RESTRICTED_FUNCTIONS_SCOPE), and excusing
+    # forty-nine loops on the strength of that one line is how this sweep was
+    # clean before it was reading everything.
+    ("framexml_for_limit_check.py",
+     r"^(\d+) unprovided global\(s\) in a for-limit", 0,
+     "a missing name used as a numeric for-limit, where nil raises"),
     # Bindings that read fewer arguments than the interface passes. The only
     # sweep here that asks whether an answer used everything it was told -
     # every other one asks whether a name is answered, and these names all are.
@@ -1524,12 +1552,18 @@ CHECKS = [
 #
 # Each of these three was canaried before it was pinned: the defect it claims
 # to catch was written into a live interface file and each count went 0 -> 1.
-# Two others were written up alongside them and are *not* here -
-# framexml_nil_arithmetic's zero line and framexml_for_limit_check's sentence
-# both stayed clean with their own fault sitting in a loaded file, so pinning
-# them would have added two guards that cannot fail. (nil_arithmetic still
-# earns its keep by hand: the line that found the calendar bug is its "carriers
-# a live file reaches", which is 1 rather than 0 and so has no ceiling to pin.)
+# One of the written-up sweeps is still *not* here: framexml_nil_arithmetic's
+# zero line stayed clean with its own fault sitting in a loaded file, so
+# pinning it would add a guard that cannot fail. (It still earns its keep by
+# hand: the line that found the calendar bug is its "carriers a live file
+# reaches", which is 1 rather than 0 and so has no ceiling to pin.)
+#
+# framexml_for_limit_check was in that same sentence until 2026-11-01 and moved
+# into the table above, canary and all. The reason it could not fail turned out
+# to be a bug in the sweep - it read half the tree whichever way its path was
+# named - and a fault sitting on the unread half reads exactly like a sweep that
+# cannot fail. Worth remembering as the shape of the mistake: "this check can
+# never fire" and "this check is not looking" look identical from here.
 CHECKS += [
     ("framexml_contract_check.py",
      r"^(\d+) arity, \d+ return-count", 0,
