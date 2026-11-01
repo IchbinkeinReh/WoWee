@@ -4076,6 +4076,11 @@ public:
                                   uint32_t stackCount, uint32_t bid,
                                   uint32_t buyout, uint32_t duration,
                                   bool preWotlk = false);
+    /// WotLK: one auction drawn from several items - each (guid, count) a bag
+    /// object and how many of it go in, as 0x0059ba80 writes them.
+    static network::Packet build(uint64_t auctioneerGuid,
+                                  const std::vector<std::pair<uint64_t, uint32_t>>& sources,
+                                  uint32_t bid, uint32_t buyout, uint32_t duration);
 };
 
 /** CMSG_AUCTION_PLACE_BID packet builder */

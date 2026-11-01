@@ -1903,6 +1903,11 @@ void GameHandler::auctionSellItem(int backpackIndex, uint32_t bid,
     if (inventoryHandler_) inventoryHandler_->auctionSellItem(backpackIndex, bid, buyout, duration);
 }
 
+void GameHandler::auctionSellItems(const std::vector<std::pair<uint64_t, uint32_t>>& sources,
+                                   uint32_t bid, uint32_t buyout, uint32_t duration) {
+    if (inventoryHandler_) inventoryHandler_->auctionSellItems(sources, bid, buyout, duration);
+}
+
 void GameHandler::auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, uint32_t bid,
                                         uint32_t buyout, uint32_t duration) {
     if (inventoryHandler_) inventoryHandler_->auctionSellItemByGuid(itemGuid, stackCount, bid, buyout, duration);

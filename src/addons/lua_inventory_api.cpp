@@ -3892,6 +3892,35 @@ static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
     return nullptr;
 }
 
+/// One bag object an auction can draw from: its guid and how many it holds.
+struct AuctionSource {
+    uint64_t guid = 0;
+    uint32_t count = 0;
+};
+
+/// The items StartAuction draws its stacks from (0x0059f640 walking the bags
+/// with 0x0059f5a0): every carried item of that id, in the walk's order -
+/// the backpack, then the bags - until they hold `needed`. At most 200, as
+/// the reference keeps them.
+static std::vector<AuctionSource> auctionSources(game::GameHandler* gh, uint32_t itemId,
+                                                 uint64_t needed) {
+    std::vector<AuctionSource> out;
+    uint64_t total = 0;
+    const auto& inv = gh->getInventory();
+    auto take = [&](const game::ItemSlot& s, uint64_t guid) {
+        if (total >= needed || out.size() >= 200) return;
+        if (s.empty() || s.item.itemId != itemId || guid == 0) return;
+        const uint32_t count = s.item.stackCount ? s.item.stackCount : 1;
+        out.push_back({guid, count});
+        total += count;
+    };
+    for (int i = 0; i < inv.getBackpackSize(); ++i)
+        take(inv.getBackpackSlot(i), gh->getBackpackItemGuid(i));
+    for (int b = 0; b < game::Inventory::NUM_BAG_SLOTS; ++b)
+        for (int s = 0; s < inv.getBagSize(b); ++s) take(inv.getBagSlot(b, s), gh->getBagItemGuid(b, s));
+    return out;
+}
+
 /// GetInventoryItemCount(unit, slot) → how many are in that equipped slot.
 ///
 /// Stackable equipped things - thrown weapons - and the bank window's own bag
@@ -6152,11 +6181,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             // otherwise raises AUCTION_MULTISELL_START with the count and posts
             // one ordinary CMSG_AUCTION_SELL_ITEM per stack, walking a
             // stacks-left counter (FUN_0059ba80). There is no multisell opcode
-            // on its wire at all, which is why the opcode map names none, and the
-            // itemCount field the request builder pins to 1 belongs to the other
-            // trick that routine has: naming several bag objects as the sources
-            // of one auction when the items are split across them. That last one
-            // this client still does not do.
+            // on its wire at all, which is why the opcode map names none. Each
+            // request names its sources: the bag objects, out of every one
+            // carried of that item, that make up that one auction's count.
             // An absent fourth is 0 there - it writes the zero into the request
             // and lets the realm answer for it - while this client's send path
             // has always turned a zero count into one; an absent fifth is 1 and
@@ -6166,7 +6193,14 @@ void registerInventoryLuaAPI(lua_State* L) {
             uint32_t stacks = static_cast<uint32_t>(luaL_optnumber(L, 5, 1));
             if (stack == 0) stack = 1;
             if (stacks == 0) stacks = 1;
-            if (uint64_t(stack) * stacks > item->item.stackCount) {
+            // The sources: every stack of that item the player carries, not the
+            // one in the slot - five stacks of twenty herbs post as five
+            // auctions of twenty, each drawn from whichever bags hold them.
+            std::vector<AuctionSource> sources =
+                auctionSources(gh, item->item.itemId, uint64_t(stack) * stacks);
+            uint64_t carried = 0;
+            for (const auto& s : sources) carried += s.count;
+            if (uint64_t(stack) * stacks > carried) {
                 // Row 0x2d4, said before any of them go out - the reference
                 // (0x0059f640) asks whether the source items cover
                 // stacks*stackSize and posts nothing when they do not. What it
@@ -6185,11 +6219,25 @@ void registerInventoryLuaAPI(lua_State* L) {
             if (stacks > 1)
                 gh->fireAddonEvent("AUCTION_MULTISELL_START", {std::to_string(stacks)});
             for (uint32_t posted = 0; posted < stacks; ++posted) {
-                gh->auctionSellItemByGuid(guid, stack, bid, buy, dur);
+                // One auction's worth, taken from the end of the list as
+                // 0x0059ba80 takes it: whole items first, then part of the
+                // next, which keeps the rest of it for the auctions after.
+                std::vector<std::pair<uint64_t, uint32_t>> parts;
+                uint32_t left = stack;
+                while (left > 0 && !sources.empty()) {
+                    AuctionSource& s = sources.back();
+                    const uint32_t used = std::min(left, s.count);
+                    parts.emplace_back(s.guid, used);
+                    s.count -= used;
+                    left -= used;
+                    if (s.count == 0) sources.pop_back();
+                }
+                if (left > 0) break;   // counted above, so not reached
+                gh->auctionSellItems(parts, bid, buy, dur);
                 // The reference drives its stepper off the answer to each post,
                 // so its posts are spaced out; these go together. Nothing on the
-                // wire asks for spacing - each request names the same source
-                // guid with its own count, and the server works down the stack.
+                // wire asks for spacing - each request names its own sources and
+                // counts, worked out here as the server will take them.
                 //
                 // The third of its events, AUCTION_MULTISELL_FAILURE, is raised
                 // by the routine that gives a multisell up (0x0059ab20, which

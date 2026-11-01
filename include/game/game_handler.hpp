@@ -4441,6 +4441,8 @@ public:
                        const std::vector<AuctionSortKey>& sort = {});
     void auctionSellItem(int backpackIndex, uint32_t bid,
                          uint32_t buyout, uint32_t duration);
+    void auctionSellItems(const std::vector<std::pair<uint64_t, uint32_t>>& sources, uint32_t bid,
+                          uint32_t buyout, uint32_t duration);
     void auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, uint32_t bid,
                                uint32_t buyout, uint32_t duration);
     void auctionPlaceBid(uint32_t auctionId, uint32_t amount);

@@ -708,6 +708,23 @@ network::Packet AuctionSellItemPacket::build(
     return p;
 }
 
+network::Packet AuctionSellItemPacket::build(
+    uint64_t auctioneerGuid, const std::vector<std::pair<uint64_t, uint32_t>>& sources,
+    uint32_t bid, uint32_t buyout, uint32_t duration)
+{
+    network::Packet p(wireOpcode(Opcode::CMSG_AUCTION_SELL_ITEM));
+    p.writeUInt64(auctioneerGuid);
+    p.writeUInt32(static_cast<uint32_t>(sources.size()));
+    for (const auto& [guid, count] : sources) {
+        p.writeUInt64(guid);
+        p.writeUInt32(count);
+    }
+    p.writeUInt32(bid);
+    p.writeUInt32(buyout);
+    p.writeUInt32(duration);
+    return p;
+}
+
 network::Packet AuctionPlaceBidPacket::build(uint64_t auctioneerGuid, uint32_t auctionId, uint32_t amount) {
     network::Packet p(wireOpcode(Opcode::CMSG_AUCTION_PLACE_BID));
     p.writeUInt64(auctioneerGuid);

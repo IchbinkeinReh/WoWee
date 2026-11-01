@@ -258,3 +258,20 @@ TEST_CASE("a flag carrier in sight is placed where it is, else where the packet 
     CHECK(offMap->x == Catch::Approx(0.1f));
     CHECK_FALSE(bg_flag::mapPosition(std::nullopt, glm::vec2(-1.0f, 0.0f), project));
 }
+
+TEST_CASE("an auction drawn from several bag items names each with its count", "[wire_positions]") {
+    // CMSG_AUCTION_SELL_ITEM (WotLK): the auctioneer, how many sources, each
+    // source's guid and count, then the bid, the buyout and the minutes.
+    const std::vector<std::pair<uint64_t, uint32_t>> sources{{0x11, 12}, {0x22, 8}};
+    auto pkt = AuctionSellItemPacket::build(0xABCDull, sources, 100, 500, 720);
+    CHECK(pkt.readUInt64() == 0xABCDull);
+    CHECK(pkt.readUInt32() == 2);
+    CHECK(pkt.readUInt64() == 0x11);
+    CHECK(pkt.readUInt32() == 12);
+    CHECK(pkt.readUInt64() == 0x22);
+    CHECK(pkt.readUInt32() == 8);
+    CHECK(pkt.readUInt32() == 100);
+    CHECK(pkt.readUInt32() == 500);
+    CHECK(pkt.readUInt32() == 720);
+    CHECK(pkt.getRemainingSize() == 0);
+}

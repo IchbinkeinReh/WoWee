@@ -4536,6 +4536,18 @@ void InventoryHandler::auctionSellItem(int backpackIndex, uint32_t bid,
     owner_.getSocket()->send(packet);
 }
 
+void InventoryHandler::auctionSellItems(const std::vector<std::pair<uint64_t, uint32_t>>& sources,
+                                        uint32_t bid, uint32_t buyout, uint32_t duration) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
+    if (sources.empty()) return;
+    // Before WotLK the request names one item and no count.
+    if (isPreWotlk()) {
+        auctionSellItemByGuid(sources.front().first, sources.front().second, bid, buyout, duration);
+        return;
+    }
+    owner_.getSocket()->send(AuctionSellItemPacket::build(auctioneerGuid_, sources, bid, buyout, duration));
+}
+
 void InventoryHandler::auctionSellItemByGuid(uint64_t itemGuid, uint32_t stackCount, uint32_t bid,
                                              uint32_t buyout, uint32_t duration) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || auctioneerGuid_ == 0) return;
