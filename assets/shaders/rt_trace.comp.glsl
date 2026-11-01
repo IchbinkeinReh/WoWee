@@ -159,6 +159,13 @@ float rtHardShadowVis(float s) {
 // about a quarter of a ground triangle's edge (4.17 yards), the height of a
 // rounded surface over the chord of it.
 const float RT_TERMINATOR_LIFT = 1.0;
+// The kinds of light that are a glow rather than a lamp (rt_lights::Source:
+// Unit 4, Emissive 5, Particle 6), and how far over its centre a glow is
+// taken to shine from (rtLightAim).
+const int RT_LIGHT_KIND_UNIT = 4;
+const int RT_LIGHT_KIND_EMISSIVE = 5;
+const int RT_LIGHT_KIND_PARTICLE = 6;
+const float RT_GLOW_LIFT = 1.0;
 // How far a ray leaving a triangle turned from its light has to go to be off
 // it: a ground triangle's longest edge, about three yards.
 const float RT_TERMINATOR_REACH = 3.0;
@@ -171,6 +178,25 @@ const float RT_TERMINATOR_REACH = 3.0;
 // it from 20.
 const float RT_LAMP_DETAIL_LOW = 0.05;
 const float RT_LAMP_DETAIL_HIGH = 0.34;
+
+// Where a light shines from, for the faces it reaches and its shadow rays.
+// A lamp from its point. A glow - a unit's light, a glowing surface, a
+// cloud of particles - is a volume of light, not the point at its centre:
+// the Dreadsteed's burning hooves put theirs a hand's width over the
+// ground, so the ground took it at a few degrees, every triangle tilted a
+// little away was left dark and every bump between cut the rest, and the
+// orange round the mount came out in the terrain's triangles. It shines
+// from the top of its volume (RT_GLOW_LIFT over the centre): the ground's
+// own grain no longer turns from it or stands in its way, while anything
+// that stands up between - a crate, a wall, a leg - still does.
+vec3 rtLightAim(RtPointLight light) {
+    vec3 at = light.positionEnd.xyz;
+    int kind = int(light.storey.w + 0.5);
+    if (kind == RT_LIGHT_KIND_UNIT || kind == RT_LIGHT_KIND_EMISSIVE || kind == RT_LIGHT_KIND_PARTICLE) {
+        at.z += RT_GLOW_LIFT;
+    }
+    return at;
+}
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -297,7 +323,7 @@ void main() {
     uint lightCount = uint(pass.params.z + 0.5);
     for (uint i = 0u; i < lightCount; ++i) {
         RtPointLight light = rtPointLights[i];
-        vec3 toLight = light.positionEnd.xyz - p;
+        vec3 toLight = rtLightAim(light) - p;
         float d2 = dot(toLight, toLight);
         float end = abs(light.positionEnd.w);
         if (d2 >= end * end) continue;
@@ -357,13 +383,13 @@ void main() {
         // hillside laid the same hard triangles over its light.
         vec3 lampOrigin = origin;
         {
-            vec3 dir = normalize(light.positionEnd.xyz - p);
+            vec3 dir = normalize(rtLightAim(light) - p);
             if (dot(shadingN, dir) > 0.0) {
                 float bend = length(cross(n, shadingN));
                 lampOrigin += shadingN * (RT_TERMINATOR_LIFT * bend * (1.0 - clamp(dot(n, dir), 0.0, 1.0)));
             }
         }
-        vec3 toLight = light.positionEnd.xyz + jitter - lampOrigin;
+        vec3 toLight = rtLightAim(light) + jitter - lampOrigin;
         float d = length(toLight);
         // Short of the light by the standoff, and by the jitter's reach so a
         // point picked at the source's edge does not land inside the lamp.
@@ -371,8 +397,11 @@ void main() {
         if (d > 1e-3 && reach > 0.0) {
             // The units cast their shadows near them (rtUnitShadowReach).
             bool byUnit;
+            // And never the unit that carries the light (rtLampEnd).
             rtUnitReach = rtUnitShadowReach(d, rng);
+            rtLampEnd = light.positionEnd.xyz;
             pointVis = rtOccludedBy(lampOrigin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
+            rtLampEnd = vec3(1e30);
             rtUnitReach = 1e30;
             unitHit = unitHit || byUnit;
             // Stopped by the ground or a building - a floor, a wall: the

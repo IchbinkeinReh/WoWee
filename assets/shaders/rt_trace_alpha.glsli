@@ -34,6 +34,16 @@ bool rtSkipUnits = false;
 // The point lights' shadow rays (rt_trace.comp) keep a unit's shadow to the
 // stretch of floor or wall near it.
 float rtUnitReach = 1e30;
+// Set by the caller for one point light's ray: where its light is. A unit
+// whose box holds it carries the light - a mount's burning mane and hooves,
+// a staff's glow - and does not shadow it: its rigid traced pieces round the
+// light cut wedges out of the ground it lights (the Dreadsteed in Thunder
+// Bluff).
+vec3 rtLampEnd = vec3(1e30);
+// How far outside its box a unit still counts as carrying a light: the box
+// stands a little off the floor, and a glow's light is taken from above its
+// centre (rtLightAim).
+const float RT_CARRIED_LIGHT_SLACK = 1.0;
 // Set by rtOccludedByStructure for one ray in the software tracer: only the
 // ground and the buildings stop it (the hardware tracer's ray mask).
 bool rtStructureOnly = false;
@@ -61,7 +71,10 @@ bool rtInGroup(uint group, vec3 p) {
     if (rtSkipUnits) return true;
     vec3 lo = rtGroups[group * 2u].xyz;
     vec3 hi = rtGroups[group * 2u + 1u].xyz;
-    return all(greaterThanEqual(p, lo)) && all(lessThanEqual(p, hi));
+    if (all(greaterThanEqual(p, lo)) && all(lessThanEqual(p, hi))) return true;
+    // Nor the light it carries (rtLampEnd).
+    return all(greaterThanEqual(rtLampEnd, lo - RT_CARRIED_LIGHT_SLACK)) &&
+           all(lessThanEqual(rtLampEnd, hi + RT_CARRIED_LIGHT_SLACK));
 }
 
 // bary: the hit's weights of v1 and v2.
