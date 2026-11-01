@@ -344,5 +344,24 @@ std::array<std::string, 5> resolveEnchantItemVisuals(uint32_t enchantId,
     return resolveItemVisualModels(visualId, itemVisuals, itemVisualEffects);
 }
 
+uint32_t playerWeaponItemVisual(uint32_t displayItemVisual, uint32_t permanentEnchant, uint32_t temporaryEnchant,
+                                const DBCFile* spellItemEnchantment, const DBCFile* itemVisuals,
+                                const DBCFieldMap* sieL) {
+    if (displayItemVisual != 0 && itemVisuals && itemVisuals->findRecordById(displayItemVisual) >= 0) {
+        return displayItemVisual;
+    }
+    if (!spellItemEnchantment) return 0;
+    const uint32_t visualField = detectEnchantmentItemVisualField(spellItemEnchantment, sieL);
+    for (const uint32_t enchant : {permanentEnchant, temporaryEnchant}) {
+        if (enchant == 0) continue;
+        const int32_t row = spellItemEnchantment->findRecordById(enchant);
+        if (row < 0) continue;
+        if (const uint32_t visual = spellItemEnchantment->getUInt32(static_cast<uint32_t>(row), visualField)) {
+            return visual;
+        }
+    }
+    return 0;
+}
+
 } // namespace pipeline
 } // namespace wowee

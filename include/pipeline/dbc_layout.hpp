@@ -225,5 +225,16 @@ std::array<std::string, 5> resolveItemVisualModels(uint32_t itemVisualId,
                                                    const DBCFile* itemVisuals,
                                                    const DBCFile* itemVisualEffects);
 
+/**
+ * The ItemVisuals.dbc id another player's weapon shows (0x00759050, put on
+ * by 0x006e1290 for the main and off hand): the display's own where
+ * ItemVisuals has that row, else the permanent enchant's, else the
+ * temporary one's - the two halves of PLAYER_VISIBLE_ITEM_n_ENCHANTMENT.
+ * 0 for none.
+ */
+uint32_t playerWeaponItemVisual(uint32_t displayItemVisual, uint32_t permanentEnchant, uint32_t temporaryEnchant,
+                                const DBCFile* spellItemEnchantment, const DBCFile* itemVisuals,
+                                const DBCFieldMap* sieL);
+
 } // namespace pipeline
 } // namespace wowee

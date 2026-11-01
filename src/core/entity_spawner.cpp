@@ -828,12 +828,25 @@ bool EntitySpawner::dressUnitWeapons(uint32_t instanceId, const UnitWeaponEntrie
         if (!art.textureName.empty()) texturePath = dir + art.textureName + ".blp";
         if (!charRenderer->attachWeapon(instanceId, point, model, nextWeaponModelId_++, texturePath)) continue;
         // The display's own item visual - a staff's glowing crystal - which
-        // the client puts on any unit's item model, a creature's included,
-        // where no enchant names another (ItemDisplayInfo column 23).
-        attachDisplayItemVisual(instanceId, point,
-                                displayDbc->getUInt32(static_cast<uint32_t>(rec), kItemDisplayItemVisualColumn));
+        // the client puts on any unit's item model, a creature's included
+        // (ItemDisplayInfo column 23); a player's main and off hand show
+        // their enchant's instead where the display has none (0x006e1290).
+        uint32_t visual = displayDbc->getUInt32(static_cast<uint32_t>(rec), kItemDisplayItemVisualColumn);
+        if (dress.isPlayer && i < 2) visual = playerWeaponVisual(visual, slots.enchants[i]);
+        attachDisplayItemVisual(instanceId, point, visual);
     }
     return true;
+}
+
+uint32_t EntitySpawner::playerWeaponVisual(uint32_t displayVisual, uint32_t enchantField) const {
+    if (!assetManager_) return displayVisual;
+    auto sie = assetManager_->loadDBC("SpellItemEnchantment.dbc");
+    auto visuals = assetManager_->loadDBC("ItemVisuals.dbc");
+    const auto* sieL =
+        pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("SpellItemEnchantment") : nullptr;
+    return pipeline::playerWeaponItemVisual(
+        displayVisual, game::visibleItemEnchantField(enchantField), game::visibleItemTempEnchantField(enchantField),
+        sie && sie->isLoaded() ? sie.get() : nullptr, visuals && visuals->isLoaded() ? visuals.get() : nullptr, sieL);
 }
 
 void EntitySpawner::attachDisplayItemVisual(uint32_t instanceId, uint32_t point, uint32_t itemVisualId) {
@@ -914,6 +927,9 @@ std::optional<EntitySpawner::UnitWeaponEntries> EntitySpawner::unitWeaponEntries
         const auto* visible = gameHandler_->getOtherPlayerVisibleEquipment(guid);
         if (!visible) return std::nullopt;
         out.entries = {(*visible)[15], (*visible)[16], (*visible)[17]};
+        if (const auto* enchants = gameHandler_->getOtherPlayerVisibleEnchants(guid)) {
+            out.enchants = {(*enchants)[15], (*enchants)[16], (*enchants)[17]};
+        }
     } else if (virtualItems != 0xFFFF) {
         for (uint16_t i = 0; i < 3; ++i) out.entries[i] = entity.getField(static_cast<uint16_t>(virtualItems + i));
     } else if (virtualDisplays != 0xFFFF && virtualInfoIndex != 0xFFFF) {
@@ -1238,6 +1254,7 @@ void EntitySpawner::updateUnitWeapons(int attaches) {
         if (!slots) return;
         const auto& entries = slots->entries;
         const auto& info = slots->info;
+        const auto& enchants = slots->enchants;
         // What else 0x0072dbc0 reads: the disarm bits (0x00718fc0) and
         // whether the animation playing dresses the off hand (0x00721ed0).
         const uint32_t unitFlags = flagsIndex != 0xFFFF ? entity->getField(flagsIndex) & kUnitFlagDisarmed : 0;
@@ -1248,7 +1265,7 @@ void EntitySpawner::updateUnitWeapons(int attaches) {
         auto [it, fresh] = unitWeaponsShown_.try_emplace(guid);
         UnitWeaponsShown& shown = it->second;
         if (!fresh && shown.instanceId == instanceId && shown.modelId == modelId && shown.entries == entries &&
-            shown.info == info && shown.sheathState == state && shown.unitFlags == unitFlags && shown.unitFlags2 == unitFlags2 &&
+            shown.info == info && shown.enchants == enchants && shown.sheathState == state && shown.unitFlags == unitFlags && shown.unitFlags2 == unitFlags2 &&
             shown.offHandFollowsAnimation == followsAnim) {
             return;
         }
@@ -1286,6 +1303,7 @@ void EntitySpawner::updateUnitWeapons(int attaches) {
                  .modelId = modelId,
                  .entries = entries,
                  .info = info,
+                 .enchants = enchants,
                  .sheathState = state,
                  .unitFlags = unitFlags,
                  .unitFlags2 = unitFlags2,

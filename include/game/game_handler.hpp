@@ -783,6 +783,11 @@ public:
         auto it = otherPlayerVisibleItemEntries_.find(guid);
         return (it != otherPlayerVisibleItemEntries_.end()) ? &it->second : nullptr;
     }
+    /// The PLAYER_VISIBLE_ITEM_n_ENCHANTMENT dwords beside those entries.
+    const std::array<uint32_t, 19>* getOtherPlayerVisibleEnchants(uint64_t guid) const {
+        auto it = otherPlayerVisibleItemEnchants_.find(guid);
+        return (it != otherPlayerVisibleItemEnchants_.end()) ? &it->second : nullptr;
+    }
 
     // Server info commands
     void queryServerTime(bool announce = false);

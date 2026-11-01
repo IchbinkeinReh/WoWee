@@ -983,6 +983,9 @@ private:
     /// item model at `point`.
     static constexpr uint32_t kItemDisplayItemVisualColumn = 23;
     void attachDisplayItemVisual(uint32_t instanceId, uint32_t point, uint32_t itemVisualId);
+    /// What a player's main or off hand shows on top of its display's own
+    /// visual: an enchant's, where the display has none (0x00759050).
+    uint32_t playerWeaponVisual(uint32_t displayVisual, uint32_t enchantField) const;
     /// The model of the game object a held ground-targeted spell summons, at
     /// the cursor's place (0x0080cce0 -> 0x007fe9e0, drawn by 0x004f66c0).
     void syncGroundTargetModel();
@@ -995,6 +998,7 @@ private:
         uint32_t modelId = 0;
         std::array<uint32_t, 3> entries{};
         std::array<uint32_t, 6> info{};
+        std::array<uint32_t, 3> enchants{};
         uint8_t sheathState = 0;
         uint32_t unitFlags = 0;
         uint32_t unitFlags2 = 0;
@@ -1026,6 +1030,9 @@ private:
     struct UnitWeaponEntries {
         std::array<uint32_t, 3> entries{};
         std::array<uint32_t, 6> info{};
+        /// A player's: each weapon's PLAYER_VISIBLE_ITEM_n_ENCHANTMENT, whose
+        /// enchants can give it an item visual (0x006e1290).
+        std::array<uint32_t, 3> enchants{};
         bool byDisplay = false;
     };
     std::optional<UnitWeaponEntries> unitWeaponEntries(uint64_t guid, const game::Entity& entity,

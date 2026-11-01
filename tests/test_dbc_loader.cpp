@@ -454,6 +454,34 @@ TEST_CASE("resolveEnchantItemVisuals walks enchant to effect model paths", "[dbc
     for (const auto& m : none) REQUIRE(m.empty());
 }
 
+// Another player's weapon (0x00759050): the display's own visual where
+// ItemVisuals has it, else the permanent enchant's, else the temporary one's.
+TEST_CASE("playerWeaponItemVisual prefers the display, then the permanent enchant", "[dbc][enchant]") {
+    using namespace wowee::pipeline;
+    std::vector<uint32_t> crusader(38, 0), oil(38, 0), plain(38, 0);
+    crusader[0] = 1900;
+    crusader[31] = 61;
+    oil[0] = 2629;
+    oil[31] = 28;
+    plain[0] = 3790;
+    auto sieData = buildSyntheticDBC(3, 38, {crusader, oil, plain}, std::string(1, '\0'));
+    DBCFile sie;
+    REQUIRE(sie.load(sieData));
+    auto visualData = buildSyntheticDBC(2, 6, {{28, 1, 0, 0, 0, 0}, {164, 2, 0, 0, 0, 0}}, std::string(1, '\0'));
+    DBCFile visuals;
+    REQUIRE(visuals.load(visualData));
+
+    // A staff's own glow stays whatever is on it.
+    REQUIRE(playerWeaponItemVisual(164, 1900, 2629, &sie, &visuals, nullptr) == 164);
+    // A display visual ItemVisuals does not have counts as none.
+    REQUIRE(playerWeaponItemVisual(999, 1900, 0, &sie, &visuals, nullptr) == 61);
+    // The permanent enchant before the temporary one, and past one with none.
+    REQUIRE(playerWeaponItemVisual(0, 1900, 2629, &sie, &visuals, nullptr) == 61);
+    REQUIRE(playerWeaponItemVisual(0, 3790, 2629, &sie, &visuals, nullptr) == 28);
+    REQUIRE(playerWeaponItemVisual(0, 0, 0, &sie, &visuals, nullptr) == 0);
+    REQUIRE(playerWeaponItemVisual(0, 3790, 0, &sie, &visuals, nullptr) == 0);
+}
+
 TEST_CASE("Spell.dbc's timing columns come from the file's shape", "[dbc][spell]") {
     // The three columns move together as the record grows, and which shape an
     // install has is a property of the file rather than of the expansion being
