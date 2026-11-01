@@ -23,6 +23,7 @@
 #include "game/item_requirements.hpp"
 #include "game/item_stat_text.hpp"
 #include "game/reputation_standing.hpp"
+#include "game/server_notices.hpp"
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -1173,6 +1174,43 @@ static int lua_PickupTradeMoney(lua_State* L) {
     return 0;
 }
 
+// Two hours, counted in played seconds - which is why it is played time and
+// not wall-clock: logging out does not run it down. Both of the two readers
+// below read the same test, `0 < (record+0x38 - playedNow) + 0x1c20`.
+static constexpr uint32_t kRefundWindow = 2 * 60 * 60;
+
+/// Which item the three refund verbs mean, in either of the two spellings they
+/// accept for one argument pair.
+///
+/// All three read one more argument than these took: 0x0084e030 followed by
+/// 0x0088b9c0 turns arg 3 - arg 4 for the item getter - into the isEquipped
+/// flag, and when it is set the *second* argument stops being a slot in a bag
+/// and becomes a slot of the character pane. The client's own guard is
+/// `0x12 < slot - 1U`, so 1..19, the same Lua numbering the equip verbs in
+/// lua_action_api.cpp use. The first argument is still read and still has to
+/// be a number; the equipped branch simply never uses it.
+///
+/// The interface reaches that branch from the character pane rather than the
+/// bags: paperdollframe.lua:1241 hands the paperdoll button to
+/// MerchantFrame_SetRefundItem(self, 1), and merchantframe.lua:387 then asks
+/// the price question about what is being worn. A worn item carries a purchase
+/// record exactly like a bagged one, because the record hangs off the item and
+/// not off where it is kept.
+///
+/// Two gates the two getters apply to the item itself are not modelled: both
+/// pass it through 0x00708ac0, which asks whether bit 0xd of one of its
+/// properties is set - the same bit GetContainerItemGems gates a gem reading
+/// on, and what the bit names is not pinned here - and compare its guid
+/// against a pair the merchant path fills as the out-parameter of its own item
+/// lookups. Neither decides an answer when only one item can match the
+/// arguments.
+static uint64_t refundItemGuid(game::GameHandler* gh, int bag, int slot, bool isEquipped) {
+    if (!gh) return 0;
+    if (!isEquipped) return containerSlotGuid(gh, bag, slot);
+    if (slot < 1 || slot > 19) return 0;
+    return gh->getEquipSlotGuid(slot - 1);
+}
+
 // GetContainerItemPurchaseInfo(bag, slot, isEquipped) →
 //   money, honorPoints, arenaPoints, itemCount, refundSec
 //
@@ -1188,66 +1226,103 @@ static int lua_GetContainerItemPurchaseInfo(lua_State* L) {
     //
     // containerframe.lua treats a nil fifth return as "not refundable" and
     // stops, so answering nothing while the question is in flight is the
-    // correct thing rather than a placeholder.
+    // correct thing rather than a placeholder. The reference (0x005d8d80)
+    // answers *no values at all* for every refusal it makes - no local player,
+    // no item at the place named, no record on it, window run down - and the
+    // branches below follow it. Unpacked into containerframe.lua:632's five
+    // locals, no values and five nils both leave refundSec nil, so what the
+    // change buys is the argument the refusal was made of.
     auto* gh = getGameHandler(L);
-    const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-    const uint64_t guid = gh ? containerSlotGuid(gh, bag, slot) : 0;
-    if (!gh || guid == 0) { for (int i = 0; i < 5; ++i) lua_pushnil(L); return 5; }
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetContainerItemPurchaseInfo(index, slot[, isEquipped])");
+    if (!gh) return 0;
+    const uint64_t guid = refundItemGuid(gh,
+                                         static_cast<int>(lua_tonumber(L, 1)),
+                                         static_cast<int>(lua_tonumber(L, 2)),
+                                         lua_toboolean(L, 3) != 0);
+    if (guid == 0) return 0;
 
     const auto* info = gh->getItemRefundInfo(guid);
     if (!info) {
         gh->requestItemRefundInfo(guid);
-        for (int i = 0; i < 5; ++i) lua_pushnil(L);
-        return 5;
+        return 0;
     }
 
     // Two hours of played time, which is what the server counts down. Past it
-    // there is no window left, and nil is how that is said.
-    constexpr uint32_t kRefundWindow = 2 * 60 * 60;
+    // there is no window left, and the answer is nothing.
+    if (info->playedSincePurchase >= kRefundWindow) return 0;
+
+    // Not a sum of the quantities. The client walks the five cost slots at
+    // record+0x20 and counts the ones holding anything - `0 < piVar1[8]`
+    // through `piVar1[0xc]` - because what the count feeds is a loop over
+    // entries: containerframe.lua:658 runs `for i=1, itemCount` and asks the
+    // getter for entry i each time. Summing the units instead counted the
+    // badges, not the entries: a purchase whose third cost was three of one
+    // badge reported three entries and the loop went asking two that name
+    // nothing.
     uint32_t itemCount = 0;
-    for (const auto& cost : info->items) if (cost.first != 0) itemCount += cost.second;
+    for (const auto& cost : info->items) if (cost.second > 0) ++itemCount;
 
     lua_pushnumber(L, info->money);
     lua_pushnumber(L, info->honor);
     lua_pushnumber(L, info->arena);
     lua_pushnumber(L, itemCount);
-    if (info->playedSincePurchase < kRefundWindow)
-        lua_pushnumber(L, kRefundWindow - info->playedSincePurchase);
-    else
-        lua_pushnil(L);
+    lua_pushnumber(L, kRefundWindow - info->playedSincePurchase);
     return 5;
 }
 
 // GetContainerItemPurchaseItem(bag, slot, index, isEquipped) →
-//   texture, quantity, link, name
+//   texture, quantity, link
 //
 // The items that would come back with a refund - a badge or a mark, whatever
 // the vendor charged besides money. Reached only once the call above reports a
 // live window, which it does now.
+//
+// Three values and not the four this pushed: 0x005d8f70 answers an icon path
+// (nil when it cannot name one), the quantity that entry carries, and a link
+// built from the entry's item id - the link alone is nil when the record
+// lookup fails, after the question has been asked. containerframe.lua:659
+// unpacks exactly those three; the fourth here was a name the link already
+// holds.
+//
+// The index counts entries rather than naming a slot. The client walks the
+// five ids at record+0xc, steps over the ones that name no item, and stops
+// when its running count reaches `index - 1` - so index 2 is the second entry
+// with something in it, which is the same item slot 2 only while the record
+// arrives packed.
 static int lua_GetContainerItemPurchaseItem(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-    const int index = static_cast<int>(luaL_optnumber(L, 3, 1)) - 1;
-    const uint64_t guid = gh ? containerSlotGuid(gh, bag, slot) : 0;
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: ContainerItemPurchaseItem(bag, slot, itemIndex[, isEquipped])");
+    if (!gh) return 0;
+    const uint64_t guid = refundItemGuid(gh,
+                                         static_cast<int>(lua_tonumber(L, 1)),
+                                         static_cast<int>(lua_tonumber(L, 2)),
+                                         lua_toboolean(L, 4) != 0);
     const auto* info = guid ? gh->getItemRefundInfo(guid) : nullptr;
-    if (!info || index < 0 || index >= 5 || info->items[static_cast<size_t>(index)].first == 0) {
-        for (int i = 0; i < 4; ++i) lua_pushnil(L);
-        return 4;
+    if (!info) return 0;
+    // The same window test as the call above, and the same answer once it has
+    // run out: nothing at all.
+    if (info->playedSincePurchase >= kRefundWindow) return 0;
+    const int wanted = static_cast<int>(lua_tonumber(L, 3)) - 1;
+    for (size_t entry = 0, seen = 0; entry < info->items.size(); ++entry) {
+        if (info->items[entry].first == 0) continue;
+        if (seen++ != wanted) continue;
+        const uint32_t itemId = info->items[entry].first;
+        const auto* item = gh->getItemInfo(itemId);
+        if (!item || !item->valid) {
+            gh->ensureItemInfo(itemId);
+            lua_pushnil(L);
+            lua_pushnumber(L, info->items[entry].second);
+            lua_pushnil(L);
+            return 3;
+        }
+        lua_pushstring(L, gh->getItemIconPath(item->displayInfoId).c_str());
+        lua_pushnumber(L, info->items[entry].second);
+        lua_pushstring(L, game::buildItemLink(itemId, item->quality, item->name, gh->getPlayerLevel()).c_str());
+        return 3;
     }
-    const uint32_t itemId = info->items[static_cast<size_t>(index)].first;
-    const auto* item = gh->getItemInfo(itemId);
-    if (!item || !item->valid) {
-        gh->ensureItemInfo(itemId);
-        for (int i = 0; i < 4; ++i) lua_pushnil(L);
-        return 4;
-    }
-    lua_pushstring(L, gh->getItemIconPath(item->displayInfoId).c_str());
-    lua_pushnumber(L, info->items[static_cast<size_t>(index)].second);
-    lua_pushstring(L, game::buildItemLink(itemId, item->quality, item->name, gh->getPlayerLevel()).c_str());
-    lua_pushstring(L, item->name.c_str());
-    return 4;
+    return 0;   // the walk found no entry with that ordinal
 }
 
 // ---- Currency tab (Blizzard_TokenUI) ----
@@ -5003,14 +5078,38 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // ---- Currency tab ----
                 {"GetContainerItemPurchaseInfo", lua_GetContainerItemPurchaseInfo},
                 {"GetContainerItemPurchaseItem", lua_GetContainerItemPurchaseItem},
-                // ContainerRefundItemPurchase(bag, slot) - the Accept on
-                // "hand this back for what you paid". It sat on a popup that
-                // could not be raised, because the call above answered nil.
+                // ContainerRefundItemPurchase(bag, slot, isEquipped) - the
+                // Accept on "hand this back for what you paid". It sat on a
+                // popup that could not be raised, because the call above
+                // answered nil.
                 {"ContainerRefundItemPurchase", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-            if (gh) gh->refundItem(containerSlotGuid(gh, bag, slot));
+            // 0x005d91b0 wants two numbers before anything else, and reads the
+            // same third argument the two getters read.
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: ContainerRefundItemPurchase(index, slot[, isEquipped])");
+            if (!gh) return 0;
+            const uint64_t guid = refundItemGuid(gh,
+                                                 static_cast<int>(lua_tonumber(L, 1)),
+                                                 static_cast<int>(lua_tonumber(L, 2)),
+                                                 lua_toboolean(L, 3) != 0);
+            // Three things have to hold for the packet to go out: an item at
+            // that place, a purchase record on it, and a merchant standing
+            // open to hand it back to. The client's third test is its own
+            // merchant guid pair (DAT_00bfa3e8/ec), filled when the window
+            // opens and cleared when it closes, which is what WoWee keeps as
+            // the vendor list's guid.
+            auto* inv = gh->getInventoryHandler();
+            if (guid != 0 && gh->getItemRefundInfo(guid) != nullptr && inv
+                    && inv->getVendorGuid() != 0) {
+                gh->refundItem(guid);
+                return 0;
+            }
+            // Every refusal above ends the same way, with row 0xc said out loud
+            // - including an argument pair that names nothing, which is what
+            // the argument check cannot catch.
+            gh->sayGameError(server_notice::kInternalBagError);
+            gh->playGameErrorSound(server_notice::kInternalBagError.key);
             return 0;
         }},
                 // PickupPlayerMoney(amount) - the coin pickup dialog's Okay.

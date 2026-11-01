@@ -935,8 +935,25 @@ CHECKS = [
     # answer - which needed a follow state that names a guid rather than "whatever
     # is targeted", since following the resolver's answer does not make it the
     # target first.
+    #
+    # Three more went with the refund trio, and they were the same argument
+    # under a different name: GetContainerItemPurchaseInfo, GetContainerItem-
+    # PurchaseItem and ContainerRefundItemPurchase all take isEquipped, which
+    # turns their second argument from a slot in a bag into a slot of the
+    # character pane, and none of the three read it.  Reading it is again the
+    # small half.  What that trio was also doing wrong is not in this number:
+    # the Info binding counted the *units* of what was paid and handed the
+    # figure to a loop over entries, the item getter answered a fourth value the
+    # client pushes no fourth of (three calls push the icon, the quantity and
+    # the link, and objdump of 0x005d8f70's tail shows no fourth), and it
+    # treated the index as a slot in the record instead of an ordinal among the
+    # entries that name an item; and the refund verb sent its packet whatever
+    # the state of the world was, where the client refuses - with game error
+    # 0xc - unless the item carries a purchase record and a merchant window is
+    # standing open.  The three Usage lines those bindings never raise are also
+    # not in the count; those are what the argument check itself prints.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 17,
+     r"^(\d+) binding\(s\) read fewer arguments", 14,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,

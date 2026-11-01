@@ -171,6 +171,14 @@ inline constexpr GameError kNoTarget{    // row 199: the token was "target", or 
 inline constexpr GameError kUnitNotFound{  // row 0x13a: any other token, resolved nowhere
     0x13a, "ERR_UNIT_NOT_FOUND", "", Line::Error};
 
+// ContainerRefundItemPurchase (0x005d91b0) ends every refusal with this row:
+// nothing where it was asked, no purchase record on what it found, or no
+// merchant window standing open to hand the item back to.  Row 0xc, and like
+// the bag rows around it it has no vocal half - the sound call finds nothing
+// to say and comes back quiet.
+inline constexpr GameError kInternalBagError{
+    0xc, "ERR_INTERNAL_BAG_ERROR", "", Line::Error};
+
 // CanInspect(unit, showError)'s other two, from 0x00522710, and all four of its
 // rows say Line::Error - the red line - and are only raised when showError was
 // asked for.
