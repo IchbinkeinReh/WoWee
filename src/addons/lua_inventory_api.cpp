@@ -6157,18 +6157,29 @@ void registerInventoryLuaAPI(lua_State* L) {
             // trick that routine has: naming several bag objects as the sources
             // of one auction when the items are split across them. That last one
             // this client still does not do.
+            // An absent fourth is 0 there - it writes the zero into the request
+            // and lets the realm answer for it - while this client's send path
+            // has always turned a zero count into one; an absent fifth is 1 and
+            // a written 0 is 0, which takes the one-auction branch either way.
             uint32_t stack = static_cast<uint32_t>(
                 luaL_optnumber(L, 4, item->item.stackCount ? item->item.stackCount : 1));
             uint32_t stacks = static_cast<uint32_t>(luaL_optnumber(L, 5, 1));
-            // A missing fifth is 1 there and a written 0 is 0, which takes the
-            // same single-auction branch either way; both are one auction here.
             if (stack == 0) stack = 1;
             if (stacks == 0) stacks = 1;
             if (uint64_t(stack) * stacks > item->item.stackCount) {
-                // Row 0x2d4, said before any of them go out - the reference asks
-                // whether the sources can cover stacks*stackSize and posts
-                // nothing when they cannot.
+                // Row 0x2d4, said before any of them go out - the reference
+                // (0x0059f640) asks whether the source items cover
+                // stacks*stackSize and posts nothing when they do not. What it
+                // then does is the part that was not obvious: it empties the
+                // pending item anyway, through 0x0059a560, the routine every
+                // path out of StartAuction ends in. So the player who typed
+                // "5 stacks" beside a stack of twenty has to put the item back,
+                // and the two calls below are that routine's pair - the raise it
+                // makes is script event 0x1a1, NEW_AUCTION_UPDATE, with no
+                // arguments.
                 gh->sayGameError(server_notice::kAuctionNotEnoughItems);
+                auctionSellSlot() = AuctionSellSlot{};
+                fireAuctionSellUpdate(gh);
                 return 0;
             }
             if (stacks > 1)
@@ -6180,11 +6191,16 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // wire asks for spacing - each request names the same source
                 // guid with its own count, and the server works down the stack.
                 //
-                // The third of its events, AUCTION_MULTISELL_FAILURE, is what a
-                // step raises when it cannot be satisfied and the block frame is
-                // left waiting on an answer that will not come. This has no such
-                // step: the only refusal it can see is the one above, made
-                // before the first of them and before the bar goes up.
+                // The third of its events, AUCTION_MULTISELL_FAILURE, is raised
+                // by the routine that gives a multisell up (0x0059ab20, which
+                // also empties the pending item): the stepper calls it when the
+                // source records it was walking run out under one more stack
+                // (0x0059ba80, 0x0059ab20 at its 0x59bc06), and so does the
+                // handler that tears the auction house state down while a
+                // multisell stands open (0x0059f150). Neither state this client
+                // can reach - its sources are one sell slot and its posts all
+                // go out together - so that name stays unfired, and the last
+                // UPDATE below is what hides the bar instead.
                 if (stacks > 1)
                     gh->fireAddonEvent("AUCTION_MULTISELL_UPDATE",
                                        {std::to_string(posted + 1), std::to_string(stacks)});
