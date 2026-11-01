@@ -6306,7 +6306,22 @@ void registerInventoryLuaAPI(lua_State* L) {
             // stackCount) and the number of stacks at totalCount / stackSize.
             auto* gh = getGameHandler(L);
             const auto* held = auctionSellItemSlot(gh);
-            if (!held) { auctionSellSlot() = AuctionSellSlot{}; return luaReturnNil(L); }
+            if (!held) {
+                // An empty slot is not a bare nil (0x0059f760): no name or
+                // texture, a count of 1, quality -1, no canUse, and zeros.
+                // The sell tab's NEW_AUCTION_UPDATE handler indexes
+                // ITEM_QUALITY_COLORS with the quality, which has a -1 row
+                // and no nil one - so after a post emptied the slot it raised
+                // "attempt to index local 'color'".
+                auctionSellSlot() = AuctionSellSlot{};
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnumber(L, 1);
+                lua_pushnumber(L, -1);
+                lua_pushnil(L);
+                for (int i = 0; i < 4; ++i) lua_pushnumber(L, 0);
+                return 9;
+            }
             const auto& s = *held;
             const auto* info = gh->getItemInfo(s.item.itemId);
             const uint32_t inStack = s.item.stackCount ? s.item.stackCount : 1;
