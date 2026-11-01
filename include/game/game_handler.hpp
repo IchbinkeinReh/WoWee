@@ -4367,8 +4367,10 @@ public:
         uint8_t srcSlot = 0;
         [[nodiscard]] bool occupied() const { return itemGuid != 0; }
     };
-    bool attachItemFromBackpack(int backpackIndex);
-    bool attachItemFromBag(int bagIndex, int slotIndex);
+    /// The row of the letter the item goes into, or -1 for "the first row with
+    /// room" - the same choice InventoryHandler::attachAt makes.
+    bool attachItemFromBackpack(int backpackIndex, int attachIndex = -1);
+    bool attachItemFromBag(int bagIndex, int slotIndex, int attachIndex = -1);
     bool detachMailAttachment(int attachIndex);
     void clearMailAttachments();
     const std::array<MailAttachSlot, 12>& getMailAttachments() const;

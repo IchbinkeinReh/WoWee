@@ -519,11 +519,13 @@ public:
 
     void sendMail(const std::string& recipient, const std::string& subject,
                   const std::string& body, uint64_t money, uint64_t cod = 0);
-    bool attachItemFromBackpack(int backpackIndex);
+    /// Which row the item goes into: `attachIndex` names one of the letter's
+    /// rows, or -1 takes the first one with room.  See attachAt.
+    bool attachItemFromBackpack(int backpackIndex, int attachIndex = -1);
     /// Raise MAIL_LOCK_SEND_ITEMS when the attachment still has a refund
     /// window, which posting it ends.
     void noteMailAttachRefundable(int attachIndex);
-    bool attachItemFromBag(int bagIndex, int slotIndex);
+    bool attachItemFromBag(int bagIndex, int slotIndex, int attachIndex = -1);
     bool detachMailAttachment(int attachIndex);
     void clearMailAttachments();
 
@@ -1029,6 +1031,18 @@ private:
     /// table to read.
     bool loadStationeryRows() const;
     std::array<MailAttachSlot, MAIL_MAX_ATTACHMENTS> mailAttachments_{};
+
+    /// Write one attachment row, which is all either attach path does once it
+    /// has found the item.
+    ///
+    /// `attachIndex` names a row, or -1 means "the first one with room", which
+    /// is exactly how 0x0056fff0 chooses: handed -1 it walks rows from zero to
+    /// the first empty one, and handed anything else it writes only that row,
+    /// refusing when it is not one of the letter's.  Writing clears any other
+    /// row holding the same item first - 0x0056d290 - which is what stops one
+    /// item riding on a letter twice.
+    bool attachAt(int attachIndex, uint64_t itemGuid, const game::ItemDef& item,
+                  uint8_t srcBag, uint8_t srcSlot);
 
     // ---- Bank state ----
     bool bankOpen_ = false;

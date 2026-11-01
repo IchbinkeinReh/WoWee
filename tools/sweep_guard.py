@@ -952,6 +952,56 @@ CHECKS = [
     # 0xc - unless the item carries a purchase record and a merchant window is
     # standing open.  The three Usage lines those bindings never raise are also
     # not in the count; those are what the argument check itself prints.
+    #
+    # One more went with the letter being written.  ClickSendMailItemButton read
+    # one of the two arguments mailframe.lua hands it, and the second is which
+    # button: 0x0084e0b0 is lua_toboolean, and the interface spells it
+    # `button == "RightButton"`.  A right click hands one row of the letter back
+    # and asks nothing of the cursor; a left click, or no second argument, is the
+    # cursor's half.  Those two had been swapped, because the binding branched on
+    # whether the cursor held an item: right-clicking while carrying something
+    # attached instead of taking anything back, and left-clicking a filled square
+    # emptied it where the client picks that item up onto the cursor.  The first
+    # argument went with the branch: the row is an index into the client's own
+    # array, counted from zero, and -1 means "whichever row is free" -
+    # 0x0056fff0 walks rows from zero when handed -1 and otherwise writes just the
+    # row it was handed - while GetSendMailItem and its siblings subtract one from
+    # theirs (0x00570750), so the two spellings are a row apart by design and the
+    # row walk says which is the array's own.  Reading a row number as a button
+    # number wrote one row under the square that was clicked.  The installed tree
+    # hands self:GetID() and numbers its buttons from one, which is newer
+    # FrameXML through a 30300 tag: 3.3.5's buttons can only have handed the row
+    # number, since nothing on either side adjusts it.  A row outside the twelve
+    # and a letter already full are game error 0x248 over there and were a silent
+    # no here.
+    #
+    # What the rest of this count is made of, for whoever goes down the list.
+    # Two rows are the installed interface asking about an argument the 12340
+    # client never reads at all: StartAuction's fifth (0x0059f990 raises "Usage:
+    # StartAuction(minBid, buyoutPrice, runTime, count)" and takes four), and
+    # LearnTalent's fourth (0x005c80e0 reads three, and its Usage line names
+    # three).  Three more are arguments a comma count cannot see: CancelUnitBuff's
+    # filter changes place with the form it is used in, which is written out at
+    # the binding, SetPortraitToTexture forwards its second with lua_pushvalue,
+    # and CastPetAction takes its target through castPetSlot.  GetUnitName is the row
+    # that is not the client's binding at all.  The rest are real and open:
+    # JoinPermanentChannel's chat-frame index and isStatic, JoinBattlefield's
+    # third argument behind an arena queue this client has no packet for,
+    # GetBinding, GetBindingKey, GetBindingAction and SetBinding behind a binding
+    # store that has no mode, and CastSpell's third, which has not been read in
+    # the binary yet.
+    #
+    # The number below did not move with the row closed above, and the printed
+    # line this pattern reads is worth spelling out: the sweep prints every
+    # counted row and *then* says how many of them the 12340 client carries no
+    # name for, and the last two calibrations recorded the second figure rather
+    # than the first (17 where that message reported 18, 14 where it reported 15)
+    # - one under, by however many rows are newer than this client, which on this
+    # tree is the single GetUnitName row.  On a checkout with Data/interface,
+    # where this sweep runs instead of being skipped, that reads as over ceiling.
+    # Closing ClickSendMailItemButton takes the printed count from 15 to 14, and
+    # 14 is what is recorded here: the printed figure at last, the same value as
+    # before for an unrelated reason.
     ("binding_arg_coverage_check.py",
      r"^(\d+) binding\(s\) read fewer arguments", 14,
      "bindings that ignore an argument the interface passes"),

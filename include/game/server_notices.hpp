@@ -179,6 +179,13 @@ inline constexpr GameError kUnitNotFound{  // row 0x13a: any other token, resolv
 inline constexpr GameError kInternalBagError{
     0xc, "ERR_INTERNAL_BAG_ERROR", "", Line::Error};
 
+// The attach half of ClickSendMailItemButton (0x0056fff0) ends with this row
+// when the square it was handed is not one of the letter's twelve, and with the
+// same row when it was handed "anywhere" and every row is filled already.  Row
+// 0x248; unlike the bag rows above it this one has a vocal half (0x44).
+inline constexpr GameError kMailInvalidAttachmentSlot{
+    0x248, "ERR_MAIL_INVALID_ATTACHMENT_SLOT", "", Line::Error};
+
 // CanInspect(unit, showError)'s other two, from 0x00522710, and all four of its
 // rows say Line::Error - the red line - and are only raised when showError was
 // asked for.

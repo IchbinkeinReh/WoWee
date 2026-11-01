@@ -1600,12 +1600,12 @@ void GameHandler::sendMail(const std::string& recipient, const std::string& subj
     if (inventoryHandler_) inventoryHandler_->sendMail(recipient, subject, body, money, cod);
 }
 
-bool GameHandler::attachItemFromBackpack(int backpackIndex) {
-    return inventoryHandler_ && inventoryHandler_->attachItemFromBackpack(backpackIndex);
+bool GameHandler::attachItemFromBackpack(int backpackIndex, int attachIndex) {
+    return inventoryHandler_ && inventoryHandler_->attachItemFromBackpack(backpackIndex, attachIndex);
 }
 
-bool GameHandler::attachItemFromBag(int bagIndex, int slotIndex) {
-    return inventoryHandler_ && inventoryHandler_->attachItemFromBag(bagIndex, slotIndex);
+bool GameHandler::attachItemFromBag(int bagIndex, int slotIndex, int attachIndex) {
+    return inventoryHandler_ && inventoryHandler_->attachItemFromBag(bagIndex, slotIndex, attachIndex);
 }
 
 bool GameHandler::detachMailAttachment(int attachIndex) {

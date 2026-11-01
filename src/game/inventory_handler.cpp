@@ -3850,27 +3850,49 @@ void InventoryHandler::noteMailAttachRefundable(int attachIndex) {
               : att.item.name});
 }
 
-bool InventoryHandler::attachItemFromBackpack(int backpackIndex) {
+/// Which row of the letter an item lands in, then the write itself.
+///
+/// The rows are counted from zero here exactly as the client counts its own:
+/// the verb that drops an item onto a particular square hands the row number
+/// straight over, and the one that drops it anywhere hands -1.
+bool InventoryHandler::attachAt(int attachIndex, uint64_t itemGuid, const game::ItemDef& item,
+                                uint8_t srcBag, uint8_t srcSlot) {
+    const int limit = maxSendableMailAttachments();
+    int row = attachIndex;
+    if (row < 0) {
+        row = 0;
+        while (row < limit && mailAttachments_[static_cast<size_t>(row)].occupied()) ++row;
+    }
+    if (row >= limit) return false;   // that row is not one the letter has
+    // One item cannot ride on a letter twice: writing a row clears any other
+    // row holding the same item (0x0056d290 does the same walk before its own
+    // write, and skips the row being written).
+    for (int other = 0; other < limit; ++other) {
+        if (other != row && mailAttachments_[static_cast<size_t>(other)].itemGuid == itemGuid)
+            mailAttachments_[static_cast<size_t>(other)] = MailAttachSlot{};
+    }
+    auto& att = mailAttachments_[static_cast<size_t>(row)];
+    att = MailAttachSlot{};
+    att.itemGuid = itemGuid;
+    att.item = item;
+    att.srcBag = srcBag;
+    att.srcSlot = srcSlot;
+    noteMailAttachRefundable(row);
+    notifyMailComposeChanged();
+    return true;
+}
+
+bool InventoryHandler::attachItemFromBackpack(int backpackIndex, int attachIndex) {
     if (backpackIndex < 0 || backpackIndex >= owner_.inventoryRef().getBackpackSize()) return false;
     const auto& slot = owner_.inventoryRef().getBackpackSlot(backpackIndex);
     if (slot.empty()) return false;
     uint64_t itemGuid = owner_.backpackSlotGuidsRef()[backpackIndex];
     if (itemGuid == 0) return false;
-    for (int i = 0; i < maxSendableMailAttachments(); ++i) {
-        if (!mailAttachments_[i].occupied()) {
-            mailAttachments_[i].itemGuid = itemGuid;
-            mailAttachments_[i].item = slot.item;
-            mailAttachments_[i].srcBag = 0xFF;
-            mailAttachments_[i].srcSlot = static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + backpackIndex);
-            noteMailAttachRefundable(i);
-            notifyMailComposeChanged();
-            return true;
-        }
-    }
-    return false;
+    return attachAt(attachIndex, itemGuid, slot.item, 0xFF,
+                    static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + backpackIndex));
 }
 
-bool InventoryHandler::attachItemFromBag(int bagIndex, int slotIndex) {
+bool InventoryHandler::attachItemFromBag(int bagIndex, int slotIndex, int attachIndex) {
     if (bagIndex < 0 || bagIndex >= owner_.inventoryRef().NUM_BAG_SLOTS) return false;
     if (slotIndex < 0 || slotIndex >= owner_.inventoryRef().getBagSize(bagIndex)) return false;
     const auto& slot = owner_.inventoryRef().getBagSlot(bagIndex, slotIndex);
@@ -3882,22 +3904,19 @@ bool InventoryHandler::attachItemFromBag(int bagIndex, int slotIndex) {
     if (slotIndex >= static_cast<int>(it->second.numSlots)) return false;
     uint64_t itemGuid = it->second.slotGuids[slotIndex];
     if (itemGuid == 0) return false;
-    for (int i = 0; i < maxSendableMailAttachments(); ++i) {
-        if (!mailAttachments_[i].occupied()) {
-            mailAttachments_[i].itemGuid = itemGuid;
-            mailAttachments_[i].item = slot.item;
-            mailAttachments_[i].srcBag = static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT + bagIndex);
-            mailAttachments_[i].srcSlot = static_cast<uint8_t>(slotIndex);
-            noteMailAttachRefundable(i);
-            notifyMailComposeChanged();
-            return true;
-        }
-    }
-    return false;
+    return attachAt(attachIndex, itemGuid, slot.item,
+                    static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT + bagIndex),
+                    static_cast<uint8_t>(slotIndex));
 }
 
+/// Emptying one row of the letter.
+///
+/// An empty row answers false, because the client's click only clears a row it
+/// found something in: it reads the row's item guid first and comes back having
+/// done nothing when that is zero.
 bool InventoryHandler::detachMailAttachment(int attachIndex) {
     if (attachIndex < 0 || attachIndex >= MAIL_MAX_ATTACHMENTS) return false;
+    if (!mailAttachments_[static_cast<size_t>(attachIndex)].occupied()) return false;
     mailAttachments_[attachIndex] = MailAttachSlot{};
     notifyMailComposeChanged();
     return true;
