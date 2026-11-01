@@ -5,6 +5,7 @@
 // blur field, the "special" fog's seed noise and fade, and the wave texture.
 // ScreenEffects draws from these; Renderer keeps the State.
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -387,7 +388,8 @@ public:
             // 0x007e9670: the ramp counts down from 3 s.
             float ramp = 1.0f;
             if (fogRamp_ > 0.0f) {
-                ramp = 1.0f - fogRamp_ * 0.33333334f;
+                // Not below 0: fused into an FMA (arm64), 3 s gives -3e-8.
+                ramp = std::max(0.0f, 1.0f - fogRamp_ * 0.33333334f);
                 fogRamp_ -= dt;
                 if (fogRamp_ < 0.0f) fogRamp_ = 0.0f;
             }
