@@ -304,6 +304,11 @@ void WorldEntryCallbackHandler::setupCallbacks() {
         // it runs after the current packet handler returns instead of recursing
         // from `SMSG_LOGIN_VERIFY_WORLD` / `SMSG_NEW_WORLD`.
         LOG_DEBUG("Queued world entry: map ", mapId, " pos=(", x, ", ", y, ", ", z, ")");
+        // Turned now, not when the load runs: until then every frame writes
+        // the character's yaw back into the movement info, and the load read
+        // the old facing from it - a teleport to another map kept the way the
+        // player faced before it, whatever the server said.
+        faceServerOrientation();
         if (worldLoader_) worldLoader_->setPendingEntry(mapId, x, y, z);
     });
 
