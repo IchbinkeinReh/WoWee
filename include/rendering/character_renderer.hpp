@@ -794,6 +794,11 @@ private:
         // even though its transform comes from the parent; it is drawn by its
         // own materials, as any M2.
         bool isEffectModel = false;
+        // An item worn or held whose model has emitters (Perdition's Blade's
+        // embers, a shoulder's mist): its animation runs as an effect's does,
+        // so the emitters' tracks are read in its first sequence and its
+        // global sequences move. The rest stay still, as they always have.
+        bool animatesAttached = false;
 
         // A scene rather than a character: the glue-screen backdrops. Two things
         // follow. Their origin can sit hundreds of units from their geometry, so

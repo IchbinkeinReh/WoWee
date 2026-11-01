@@ -2913,8 +2913,11 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
         }
 
         // Skip weapon instances for animation - their transforms are set by parent
-        // bones. Enchant visuals are the exception: they are pure animated FX.
-        if (inst.hasOverrideModelMatrix && !inst.isEffectModel && inst.seatParent == 0 && !inst.seatFlight) continue;
+        // bones. Enchant visuals are the exception: they are pure animated FX;
+        // and so are the items whose emitters need their tracks read.
+        if (inst.hasOverrideModelMatrix && !inst.isEffectModel && !inst.animatesAttached && inst.seatParent == 0 &&
+            !inst.seatFlight)
+            continue;
 
         float distSq = glm::distance2(inst.position, cameraPos);
         if (distSq > animUpdateRadiusSq && !inst.isSceneModel) continue;
@@ -3309,6 +3312,9 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos, cons
             }
             weapIt->second.overrideModelMatrix = weaponMat;
             weapIt->second.hasOverrideModelMatrix = true;
+            // One that animates is distance-culled by its position, as an
+            // effect is (below): its wielder's, not the origin it was made at.
+            if (weapIt->second.animatesAttached) weapIt->second.position = instance.position;
 
             // Enchant visuals ride the weapon, offset to their attachment point on it.
             for (const auto& fx : wa.effects) {
@@ -5939,6 +5945,14 @@ bool CharacterRenderer::attachWeapon(uint32_t charInstanceId, uint32_t attachmen
         weapIt->second.opacity = charInstance.opacity;
         weapIt->second.kitAlpha = weapIt->second.kitAlphaTo = charInstance.kitAlpha;
         weapIt->second.cameraAlpha = charInstance.cameraAlpha;
+        // The client animates every model it attaches; here only those whose
+        // emitters need it. Left at sequence -1 their particle twins read every
+        // per-sequence track as zero and emitted nothing - Dasreh's flaming
+        // dagger and the mist under his shoulders were never drawn.
+        if (const auto mIt = models.find(weaponModelId); mIt != models.end()) {
+            const auto& data = mIt->second.data;
+            weapIt->second.animatesAttached = !data.particleEmitters.empty() || !data.ribbonEmitters.empty();
+        }
     }
 
     // Store attachment on parent character instance
