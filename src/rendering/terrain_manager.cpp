@@ -1315,10 +1315,15 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
             size_t liquidGroupsLoaded = 0;
             while (ft.wmoInstanceIndex < pending->wmoModels.size() && created < kWmoInstancesPerStep) {
                 auto& wmoReady = pending->wmoModels[ft.wmoInstanceIndex];
-                // Skip duplicates and unloaded models
-                if (wmoReady.uniqueId != 0 && placedWmoIds.count(wmoReady.uniqueId)) {
+                // Skip duplicates and unloaded models. Only on a first visit:
+                // a WMO this step placed itself is in placedWmoIds already,
+                // and coming back for its next liquid groups it read as a
+                // duplicate - so a building with more than four liquid groups
+                // kept its first four. Undercity's canal slime (groups 52 on)
+                // was never loaded.
+                if (ft.wmoLiquidGroupIndex == 0 && wmoReady.uniqueId != 0 &&
+                    placedWmoIds.count(wmoReady.uniqueId)) {
                     ft.wmoInstanceIndex++;
-                    ft.wmoLiquidGroupIndex = 0;
                     continue;
                 }
                 if (!wmoRenderer->isModelLoaded(wmoReady.modelId)) {
