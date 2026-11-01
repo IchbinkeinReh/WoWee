@@ -2023,7 +2023,7 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                             // one run from a button: GetRunningMacro and
                             // GetRunningMacroButton answer it while it runs,
                             // and no mouse button came with a key press.
-                            const RunningMacroScope running(
+                            const addons::RunningMacroScope running(
                                 static_cast<int>(bar[slotIdx].id), nullptr);
                             chatPanel_.executeMacroText(gameHandler, body);
                         }
