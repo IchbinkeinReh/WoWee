@@ -11,20 +11,28 @@ So walk it. Every FrameXML function that calls an unbound global is a carrier;
 anything calling a carrier is a carrier. Report the ones a live file reaches,
 with the chain.
 
-THE ONE IT REPORTS TODAY, AND WHY IT IS NOT A FAULT
+WHAT IT REPORTS TODAY: NOTHING, AND WHY THAT MOVED
 
-Calendar_Toggle, reached from ToggleCalendar in uiparent.lua - which tests for
-it first:
+Measured 2026-11-01: three of 3788 FrameXML functions call something unbound,
+and none of the three sits in a file a live file reaches. The list is empty.
+
+For as long as this header described a name, the name was Calendar_Toggle,
+reached from ToggleCalendar in uiparent.lua - which tests for it first:
 
     function ToggleCalendar()
         Calendar_LoadUI();
         if ( Calendar_Toggle ) then Calendar_Toggle(); end
     end
 
-Calendar_Toggle exists only once Blizzard_Calendar has loaded, and LoadAddOn
-refuses that addon by name, so the guard is what makes the minimap's date
-button do nothing instead of raising. The report cannot see a guard on the
-name it is reporting.
+The claim under it was that LoadAddOn refuses Blizzard_Calendar by name, so the
+guard is what keeps the minimap's date button from raising. That refusal was
+lifted once there was a calendar behind it (lua_system_api.cpp:4972), and
+Calendar_Toggle is a function of an addon that now loads - so the walk finds it
+defined and the report has nothing to say. The header is rewritten rather than
+quietly trimmed because the refusal is what three tools were reasoning from,
+and two of them still are: see framexml_unbound_globals.py's calendar bullet and
+framexml_run.cpp, which declined the addon in the harness "as the client does"
+until the same afternoon.
 
 It read two hundred and two before it stopped reading files the loader never
 opens - GlueXML, and the handful in framexml/ that no manifest lists. A report

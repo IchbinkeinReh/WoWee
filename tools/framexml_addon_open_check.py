@@ -100,8 +100,10 @@ PIECE = (
 
 def main():
     if not RUNNER.is_file() or not DATA.is_dir() or not INTERFACE.is_dir():
+        # Not zero: every addon opened cleanly and no addon was opened print
+        # the same report, and only the exit code tells them apart.
         print("framexml_run or Data is missing - nothing opened.")
-        return 0
+        return 1
 
     lua = ["local out = {}"]
     for addon, frame in PANELS:

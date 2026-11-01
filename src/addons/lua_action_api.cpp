@@ -12,6 +12,8 @@
 // For fireEvent: paging has to reach the frames as well as the addons.
 #include "addons/lua_engine.hpp"
 #include "game/inventory_slots.hpp"
+// For the row complaint ClickSendMailItemButton ends with.
+#include "game/server_notices.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "ui/keybinding_manager.hpp"
 #include "ui/gamepad_controls.hpp"
@@ -1149,7 +1151,11 @@ static int lua_GetActionCooldown(lua_State* L) {
 
 // UseAction(slot, unit, button) - activate action bar slot (1-indexed)
 //
-// The second argument is a unit, and it was ignored. securetemplates is the
+// "Usage: UseAction(slot, [, target] [, button])" is the client's own line
+// (0x005ac000), and both optionals are read: the unit for a spell or item,
+// the mouse button for a macro.
+//
+// The second argument is a unit, and it was once ignored. securetemplates is the
 // only caller and it passes what the button's own attributes resolved to:
 // nil for an ordinary click, and "player" when the self-cast modifier is
 // held - which is the whole of how self-casting works. Dropping it meant
@@ -1207,8 +1213,23 @@ static int lua_UseAction(lua_State* L) {
         // it (0x005abbc0 -> 0x005ae660).
         if (const auto* set = equipmentSetById(gh, action.id))
             gh->fireAddonEvent("WEAR_EQUIPMENT_SET", {set->name});
+    } else if (action.type == game::ActionBarSlot::MACRO && action.id != 0) {
+        // A macro on the bar runs its body: 0x005abbc0 sends a macro slot to
+        // 0x005648d0 and then to 0x00566dc0, which is the same entry RunMacro
+        // uses and asks the same gate (0x00564db0, kind 3). The keyboard path
+        // has always run the bar's macros; the mouse path became the
+        // interface's button, and clicking a macro icon did nothing at all.
+        auto* svc = getLuaServices(L);
+        if (!svc || !svc->runMacroText || !taint::allowed(L, 3)) return 0;
+        const std::string body = gh->getMacroText(action.id);
+        if (body.empty()) return 0;
+        // The button this click came with is the macro's button, which is what
+        // GetRunningMacroButton answers and the third argument of this binding
+        // (0x00566dc0 forwards it to the gate beside the handle).
+        RunningMacroScope running(static_cast<int>(action.id),
+                                  lua_isstring(L, 3) ? lua_tostring(L, 3) : nullptr);
+        svc->runMacroText(body);
     }
-    // Macro execution requires GameScreen context; not available from pure Lua API
     return 0;
 }
 
@@ -1954,35 +1975,100 @@ static int lua_PickupContainerItem(lua_State* L) {
 }
 
 // PickupInventoryItem(slot) - picks up an equipped item
-// ClickSendMailItemButton(index, isRightClick) - attach what is held to the
+// ClickSendMailItemButton(row, isRightClick) - attach what is held to the
 // letter, or take an attachment back.
 //
 // Lives here rather than with the other mail functions because the cursor
-// does, and this is entirely about the cursor: carrying an item means attach
-// it, carrying nothing means the slot clicked gives its item back to the bags.
-// The attachment index is optional - the drop handler calls this with no
-// arguments at all, meaning "attach to wherever there is room", which is what
-// attachItemFrom* already does.
+// does, and this is entirely about the cursor: an item in hand goes into a row
+// of the letter, and an empty hand takes one off it.
+//
+// The first argument is a row of the client's own attachment array, counted
+// from zero, and not a button number.  The array is sixteen rows long, twelve
+// of which a letter can hold, and this verb addresses it directly: no argument
+// at all becomes -1, which 0x0056fff0 answers by walking rows from zero to the
+// first empty one, and a number is written as that row and only that row when
+// it is one of the twelve.  The getters of the same squares are one higher -
+// 0x00570750 subtracts one from its argument before it reads a row - so the
+// click and GetSendMailItem sit a row apart, and it is that walk over the
+// rows, plus the -1, that says which of the two spellings is the array's own.
+// mailframe.lua hands self:GetID() and mailframe.xml numbers its buttons from
+// one, which is the newer buttons showing through: the 3.3.5 buttons can only
+// have handed the row number, since nothing on this side of the call adjusts
+// it.
+//
+// The second argument is which half runs, and it is a Lua truth rather than a
+// number (0x0084e0b0 is lua_toboolean) - mailframe.lua spells it
+// `button == "RightButton"`, and a left click or a drop simply leaves it nil.
 static int lua_ClickSendMailItemButton(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
 
-    if (s_cursorType == CursorType::ITEM) {
-        // The cursor counts the backpack as bag zero and the worn bags from
-        // one, with slots from one; the attach functions count both from zero.
-        const bool attached = (s_cursorBag == 0)
-            ? gh->attachItemFromBackpack(s_cursorSlot - 1)
-            : (s_cursorBag > 0
-                   ? gh->attachItemFromBag(s_cursorBag - 1, s_cursorSlot - 1)
-                   : false);
-        if (attached) clearCursorItem(L);
+    const int row = lua_isnumber(L, 1) ? static_cast<int>(std::lround(lua_tonumber(L, 1))) : -1;
+    const bool rightClick = lua_toboolean(L, 2) != 0;
+    const auto& rows = gh->getMailAttachments();
+
+    if (rightClick) {
+        // A right click hands one row back, and the click reads the row before
+        // it hands anything: an empty row - or an index that is not a number,
+        // which is not a row either - leaves the letter exactly as it was.  The
+        // client reads its sixteen rows but only clears the twelve a letter
+        // holds, and rows past those were zeroed with the rest.  Handing the
+        // item back over there is an item update for something this model never
+        // took away.
+        if (row < 0 || row >= static_cast<int>(rows.size())) return 0;
+        gh->detachMailAttachment(row);
         return 0;
     }
 
-    // Nothing held: the click takes an attachment off the letter. Without an
-    // index there is nothing to take off, since the caller meant a drop.
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (index >= 1) gh->detachMailAttachment(index - 1);
+    if (s_cursorType == CursorType::ITEM) {
+        // Something in hand: it goes into that row, or into the first row with
+        // room when the caller meant a drop.  The cursor counts the backpack as
+        // bag zero and the worn bags from one, with slots from one; the attach
+        // functions count both from zero.  What had been in the row would come
+        // back out onto the cursor over there (0x00520770 runs after the row is
+        // written); an attachment never left its bag square here, so the row
+        // simply changes hands and there is nothing to hand over.
+        const bool attached = (s_cursorBag == 0)
+            ? gh->attachItemFromBackpack(s_cursorSlot - 1, row)
+            : (s_cursorBag > 0
+                   ? gh->attachItemFromBag(s_cursorBag - 1, s_cursorSlot - 1, row)
+                   : false);
+        if (attached) {
+            clearCursorItem(L);
+            return 0;
+        }
+        // "That is not one of the letter's squares", which is what a row
+        // outside the twelve and a letter already full both come down to.  Over
+        // there that complaint sits past a wall of checks on the item itself,
+        // each ending in a row of the error table (0x19, 0x177, 0x178, 0x179,
+        // 0x17a, 0x2a6) none of which is asked here, and the cursor over there
+        // names an item whatever square it came from.  So the words are said
+        // only for the two sources these attach paths can read at all: a
+        // backpack square or a bag square, where it is the row and not the item
+        // that failed.
+        if (s_cursorBag >= 0) {
+            gh->sayGameError(game::server_notice::kMailInvalidAttachmentSlot);
+            gh->playGameErrorSound(game::server_notice::kMailInvalidAttachmentSlot.key);
+        }
+        return 0;
+    }
+
+    // Nothing in hand: the click takes the row's item off the letter and onto
+    // the cursor.  Here that is the row emptied and the item picked up out of
+    // the bag square it has been standing in the whole time, which is the same
+    // two changes in the same two places.
+    if (row < 0 || row >= static_cast<int>(rows.size())) return 0;
+    const auto& att = rows[static_cast<size_t>(row)];
+    if (!att.occupied()) return 0;
+    // A row keeps the wire position it came from; the cursor and FrameXML
+    // number a bag 0 for the backpack and 1 up for the worn bags, slots from 1.
+    const bool fromBackpack = (att.srcBag == 0xFF);
+    const int bag = fromBackpack ? 0
+                                 : att.srcBag - game::Inventory::FIRST_BAG_EQUIP_SLOT + 1;
+    const int slot = fromBackpack ? att.srcSlot - game::Inventory::NUM_EQUIP_SLOTS + 1
+                                  : att.srcSlot + 1;
+    gh->detachMailAttachment(row);
+    pickupFromContainerSlot(L, gh, bag, slot);
     return 0;
 }
 
@@ -3003,7 +3089,17 @@ int clientImGuiKeyForBinding(const std::string& command) {
     return 0;
 }
 
-// GetBindingKey(command) → key1, key2 (or nil)
+// This whole family - GetBinding, GetBindingKey, GetBindingAction, SetBinding -
+// is called by the binding panel with a mode as its last argument, and the
+// client's own line says so: "Usage: GetBinding(index[, mode])" (0x0055e8d0),
+// which takes 1..4, clamps it, and defaults to the first when the argument is
+// left out. That mode selects one of four binding tables, and this client keeps
+// one table for every mode. It can get away with that because the installed
+// panel only ever asks for one: the two places that open it set
+// KeyBindingFrame.mode = 1 (gamemenuframe.xml:133, macoptionsframe.xml:519) and
+// nothing in the tree changes it again, so mode 1 is the only table either
+// client is pointed at - and a panel with no way to name another mode cannot
+// show the tables this one does not keep.
 static int lua_GetBindingKey(lua_State* L) {
     seedBindingDefaults();
     const std::string command = luaL_checkstring(L, 1);

@@ -37,6 +37,19 @@ WHAT IT CANNOT SEE
 A sweep that runs, exits zero, and reports a number that means nothing -
 framexml_bool_vs_number's nil arm was exactly that on the day it was written.
 Only reintroducing the fault finds those.
+
+The near relation, and seven of them fell out of one grep on 2026-10-31: a
+sweep whose subject is absent says so in words and exits 0 anyway. Neither
+this tool nor sweep_guard catches those. This one runs a tool and reads only
+whether it raised, so a clean zero is a pass; sweep_guard skips a sweep whose
+input is missing rather than running it and reading its number, which is
+honest about the guard's own blindness but means the sweep is exercised by
+nobody but the person running it by hand - and there the zero is what that
+person reads, not the line above it. "framexml_run or an extracted interface
+is missing - no control was built." exited 0 while that was true. The idiom
+is dead_setting_check's: the absence has to reach the exit code as well as
+the report, because "0 problems" and "nothing looked for any" are otherwise
+one and the same output.
 """
 import re
 import subprocess
@@ -100,6 +113,17 @@ def main():
             # __file__. Under ctest the working directory is the build tree,
             # and eight of them could not find Data/ from there - which is a
             # fact about how they are invoked, not about whether they work.
+            # Not -I, and this was tried. -I drops the user site-packages
+            # directory as well as the paths, and rt_flicker.py imports numpy
+            # from there: measured, the same run that adds -I turns one sweep
+            # that works into "No module named 'numpy'". The isolation the rule
+            # is for is about the *directory an interpreter starts in* - the
+            # extracted data tree, where a planted json.py outranks the real
+            # one - and this check already sets the working directory to the
+            # repository, which is not a directory anyone extracted anything
+            # into. A tool that hand-runs under -I needs its own directory on
+            # sys.path for a sibling import; two of them had lost that line and
+            # are fixed in the tools themselves, not by changing this run.
             done = subprocess.run([sys.executable, str(path)],
                                   cwd=str(TOOLS.parent),
                                   capture_output=True, text=True, timeout=300)

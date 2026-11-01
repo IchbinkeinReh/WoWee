@@ -8,6 +8,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "core/application.hpp"
 #include "game/inventory_slots.hpp"
+#include "game/inventory_handler.hpp"
 #include "game/equip_slot_fit.hpp"
 #include "game/known_currencies.hpp"
 #include "game/currency_categories.hpp"
@@ -23,6 +24,7 @@
 #include "game/item_requirements.hpp"
 #include "game/item_stat_text.hpp"
 #include "game/reputation_standing.hpp"
+#include "game/server_notices.hpp"
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -35,6 +37,9 @@
 #include <string_view>
 
 namespace wowee::addons {
+
+// The game-error rows below are named bare, as they are inside game/.
+namespace server_notice = game::server_notice;
 
 static std::string itemClassDisplayName(game::GameHandler* gh, uint32_t itemClass);
 static std::string itemSubclassDisplayName(game::GameHandler* gh, uint32_t itemClass, uint32_t subClass,
@@ -280,10 +285,6 @@ static int lua_SetPortraitToTexture(lua_State* L) {
     lua_call(L, 2, 0);
     return 0;
 }
-
-/// Bag calls that do nothing here, answered rather than left to the fallback:
-/// that answers with an object, and an object called as a function raises.
-static int lua_ContainerNoOp(lua_State* L) { (void)L; return 0; }
 
 /// SpellCanTargetItem() - whether something is waiting to be applied to an item.
 ///
@@ -611,6 +612,178 @@ static int lua_GetMerchantItemLink(lua_State* L) {
     return 1;
 }
 
+// ── The vendor cursors ─────────────────────────────────────────────────────
+//
+// Three bindings put the coin bag - `Buy.blp` - under the pointer where the
+// player is about to pay coin, and the same bag with its "cannot" art where
+// they cannot pay. They are reached from a tooltip, not from a click:
+// merchantframe.xml calls ShowMerchantSellCursor from the frame's OnUpdate for
+// as long as `MerchantFrame.itemHover` is set, and containerframe.lua's
+// ContainerFrameItemButton_OnEnter calls ShowContainerSellCursor when the
+// merchant window is open on its sell tab. What is on show is therefore
+// re-decided on every hover, which is the point: the hand changes the moment a
+// coin lands or a bag fills up.
+//
+// The name says "sell" and the test is buying. The cursor is over the
+// merchant's shelf, and the coin bag is the client's way of saying "coin moves
+// the other way from what you usually see".
+
+/// The two guards all three open with (0x005856d0, 0x00585890 and 0x005d8bd0
+/// each start the same way), and the reason they return rather than fall back:
+/// with a guard down the reference touches nothing at all, leaving whatever
+/// cursor was there.
+///
+/// The first guard is that nothing is being carried - `FUN_007fd620`, the
+/// engine's pickup record, which is also what `CursorHasItem` reads. The
+/// second is that the **base** cursor is still the plain glove
+/// (`FUN_00616260() == 1`): the global `ResetCursor` restores, not the current
+/// one. The client replaces that base in exactly two situations, and neither
+/// is a sell cursor. One is the repair hand at a vendor - cursor 17 - which
+/// `ShowRepairCursor` and `InRepairMode` already model as `repairCursorUp()`;
+/// the click paths agree, testing the base against that same 0x11 to decide a
+/// click at a bag is a repair (0x005d0000.c:6798, 0x005d0000.c:7031). The
+/// other is a spell being targeted, which is cursor 2.
+static bool sellCursorAllowed(game::GameHandler* gh) {
+    if (!gh) return false;
+    if (!ui::frameXmlCursorItem().empty()) return false;
+    if (repairCursorUp()) return false;
+    if (gh->isGroundTargeting() || gh->isUnitTargeting()) return false;
+    return true;
+}
+
+/// The player's side of the two PvP counters, read the way the currency tab
+/// reads them: out of PLAYER_FIELD_HONOR_CURRENCY and
+/// PLAYER_FIELD_ARENA_CURRENCY.Absent answers zero, which is also what the
+/// reference's own blob dword holds until a realm writes it - and the extended
+/// cost then fails its test, as it does there.
+static std::pair<uint32_t, uint32_t> pvpCounterBalances(game::GameHandler* gh) {
+    const auto player = gh->getEntityManager().getEntity(gh->getPlayerGuid());
+    auto read = [player](game::UF field) -> uint32_t {
+        if (!player) return 0;
+        const uint16_t idx = fieldIndex(field);
+        return idx == 0xFFFF ? 0u : player->getField(idx);
+    };
+    return {read(game::UF::PLAYER_FIELD_HONOR_CURRENCY), read(game::UF::PLAYER_FIELD_ARENA_CURRENCY)};
+}
+
+/// Whether the vendor would let this player take the item in `vi`: coin, then
+/// the extended cost's honour, arena points, reagent items and arena rating.
+///
+/// The chain is 0x005856d0's, and it is narrower than the sixth value of
+/// GetMerchantItemInfo, which answers `isUsable`: that one walks level, class,
+/// race, proficiency, skill, spell and reputation
+/// (`game/item_requirements.hpp`); the cursor walks money, the item's required
+/// reputation, and the cost row - and nothing else. An item the player is too
+/// low a level for still wears the plain coin bag, and one they can pay for but
+/// have no reagents for does not.
+static bool vendorPurchasePossible(game::GameHandler* gh, const game::VendorItem& vi) {
+    if (gh->getMoneyCopper() < vi.buyPrice) return false;
+
+    // The item's own reputation standing, which is the one test the reference
+    // makes off the item record (`+0x50`/`+0x54` of the record 0x0067ca30
+    // resolves for the entry, against the rank floors at 0x00a2d2fc).
+    if (const auto* info = gh->getItemInfo(vi.itemId)) {
+        if (info->requiredReputationFaction != 0) {
+            const uint32_t rank = info->requiredReputationRank < 8 ? info->requiredReputationRank : 7u;
+            if (gh->getFactionStanding(info->requiredReputationFaction) <
+                static_cast<int32_t>(game::kItemRepRankFloor[rank])) return false;
+        }
+    }
+
+    const auto* cost = gh->getExtendedCost(vi.extendedCost);
+    if (!cost) return true;   // no cost row at all: coin was the only test, and it passed
+
+    const auto [honor, arena] = pvpCounterBalances(gh);
+    if (cost->honorPoints > honor || cost->arenaPoints > arena) return false;
+
+    // Each thing the row wants besides coin. The reference tests an entry only
+    // when both halves are filled, and counts the item the same way
+    // GetItemCount does (0x00754d00 with no mode).
+    for (int j = 0; j < 5; ++j) {
+        if (cost->itemId[j] == 0 || cost->itemCount[j] == 0) continue;
+        if (gh->getInventory().countItem(cost->itemId[j]) < cost->itemCount[j]) return false;
+    }
+
+    // The arena gate: a rating asked (row +0x38) for a bracket the row names at
+    // all (row +0xc, 0 two, 1 three, 2 five - the same pair
+    // GetMerchantItemArenaRequirement answers with).
+    if (cost->requiredArenaRating != 0 && cost->arenaBracket < 3 &&
+        !gh->meetsArenaRating(cost->requiredArenaRating, cost->arenaBracket)) return false;
+    return true;
+}
+
+// ShowMerchantSellCursor(index) - the coin bag over a vendor's shelf slot.
+//
+// Out of range, or an entry with no item behind it, leaves the pointer alone:
+// 0x005856d0 tests the record and returns without calling the setter at all.
+static int lua_ShowMerchantSellCursor(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ShowMerchantSellCursor(index)");
+    auto* gh = getGameHandler(L);
+    if (!sellCursorAllowed(gh)) return 0;
+    const int index = luaToClientInt(L, 1);
+    const auto& items = gh->getVendorItems().items;
+    if (index < 1 || index > static_cast<int>(items.size())) return 0;
+    const auto& vi = items[index - 1];
+    if (vi.itemId == 0) return 0;
+    ui::frameXmlSetScriptCursor(vendorPurchasePossible(gh, vi)
+                                    ? ui::kCursorKindBuy : ui::kCursorKindBuyError);
+    return 0;
+}
+
+// ShowBuybackSellCursor(index) - the same pair over the buyback list.
+//
+// One test, and it is the realm's price for that ring slot rather than the
+// price the sale was worth: 0x00585890 reads PLAYER_FIELD_BUYBACK_PRICE_1 +
+// (slot - 74) exactly as GetBuybackItemInfo does, and compares it against the
+// money with `price <= money`. A layout naming no such field answers 0, which
+// reads as affordable - there too.
+static int lua_ShowBuybackSellCursor(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ShowBuybackSellCursor(index)");
+    auto* gh = getGameHandler(L);
+    if (!sellCursorAllowed(gh)) return 0;
+    const int index = luaToClientInt(L, 1);
+    const auto* row = index < 1 ? nullptr : gh->buybackRowAt(static_cast<uint32_t>(index - 1));
+    if (!row) return 0;
+    const uint32_t price = gh->buybackFieldPrice(row->wireSlot);
+    ui::frameXmlSetScriptCursor(gh->getMoneyCopper() >= price
+                                    ? ui::kCursorKindBuy : ui::kCursorKindBuyError);
+    return 0;
+}
+
+// ShowContainerSellCursor(bag, slot) - the coin bag, with no test of its own.
+//
+// Selling an item from the bags gives coin whatever else is true of it, so
+// 0x005d8bd0 asks nothing about price or requirements: it resolves the slot,
+// and puts the bag cursor up unless the item carries one flag.
+//
+// That flag is byte +0x394 bit 0 of the item **object**, and it is not a
+// condition the client reads off the wire: it is worked out once, when the
+// object is filled in, from two dwords of the record hanging at object +0xd0
+// (0x00590000.c:7241). Every binding that acts on an item tests it and
+// refuses when it is set - PickupContainerItem (0x005d0000.c:6782),
+// SplitContainerItem (0x005d0000.c:6943), UseContainerItem (0x005d0000.c:7015),
+// SocketContainerItem (0x005d0000.c:7164), GetItemGem, and this one - so it
+// marks an item the player cannot do anything with at all, which is what a
+// keyring's contents are in this expansion. This client keeps no such flag on
+// an item, so the container the interface named is what is tested here: the
+// keyring is the one it addresses as a container and cannot act on. Note that
+// containerframe.lua already takes the keyring branch before it ever gets here
+// (it shows a tooltip and calls CursorUpdate instead), so what the rule guards
+// against is an addon asking directly.
+static int lua_ShowContainerSellCursor(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: ShowContainerSellCursor(index, slot)");
+    auto* gh = getGameHandler(L);
+    if (!sellCursorAllowed(gh)) return 0;
+    const int container = luaToClientInt(L, 1);
+    const int slot = luaToClientInt(L, 2);
+    if (container == kKeyringContainer) return 0;
+    const auto* itemSlot = containerItemSlot(gh->getInventory(), container, slot);
+    if (!itemSlot || itemSlot->empty()) return 0;
+    ui::frameXmlSetScriptCursor(ui::kCursorKindBuy);
+    return 0;
+}
+
 static int lua_CanMerchantRepair(lua_State* L) {
     auto* gh = getGameHandler(L);
     lua_pushboolean(L, gh && gh->getVendorItems().canRepair ? 1 : 0);
@@ -836,19 +1009,9 @@ static int lua_GetItemInfo(lua_State* L) {
     lua_pushnumber(L, info->maxStack > 0 ? info->maxStack : 1); // 8: maxStack
     // 9: equipSlot - WoW inventoryType to INVTYPE string
     {
-        static constexpr const char* kInvTypes[] = {
-            "", "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER",
-            "INVTYPE_BODY", "INVTYPE_CHEST", "INVTYPE_WAIST", "INVTYPE_LEGS",
-            "INVTYPE_FEET", "INVTYPE_WRIST", "INVTYPE_HAND", "INVTYPE_FINGER",
-            "INVTYPE_TRINKET", "INVTYPE_WEAPON", "INVTYPE_SHIELD",
-            "INVTYPE_RANGED", "INVTYPE_CLOAK", "INVTYPE_2HWEAPON",
-            "INVTYPE_BAG", "INVTYPE_TABARD", "INVTYPE_ROBE",
-            "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPONOFFHAND", "INVTYPE_HOLDABLE",
-            "INVTYPE_AMMO", "INVTYPE_THROWN", "INVTYPE_RANGEDRIGHT",
-            "INVTYPE_QUIVER", "INVTYPE_RELIC"
-        };
+        // One table for both directions of this fact - see kLuaInvTypes.
         uint32_t invType = info->inventoryType;
-        lua_pushstring(L, invType < 29 ? kInvTypes[invType] : "");
+        lua_pushstring(L, invType < kNumInvTypes ? kLuaInvTypes[invType] : "");
     }
     // 10: texture (icon path from ItemDisplayInfo.dbc)
     if (info->displayInfoId != 0) {
@@ -1005,6 +1168,43 @@ static int lua_PickupTradeMoney(lua_State* L) {
     return 0;
 }
 
+// Two hours, counted in played seconds - which is why it is played time and
+// not wall-clock: logging out does not run it down. Both of the two readers
+// below read the same test, `0 < (record+0x38 - playedNow) + 0x1c20`.
+static constexpr uint32_t kRefundWindow = 2 * 60 * 60;
+
+/// Which item the three refund verbs mean, in either of the two spellings they
+/// accept for one argument pair.
+///
+/// All three read one more argument than these took: 0x0084e030 followed by
+/// 0x0088b9c0 turns arg 3 - arg 4 for the item getter - into the isEquipped
+/// flag, and when it is set the *second* argument stops being a slot in a bag
+/// and becomes a slot of the character pane. The client's own guard is
+/// `0x12 < slot - 1U`, so 1..19, the same Lua numbering the equip verbs in
+/// lua_action_api.cpp use. The first argument is still read and still has to
+/// be a number; the equipped branch simply never uses it.
+///
+/// The interface reaches that branch from the character pane rather than the
+/// bags: paperdollframe.lua:1241 hands the paperdoll button to
+/// MerchantFrame_SetRefundItem(self, 1), and merchantframe.lua:387 then asks
+/// the price question about what is being worn. A worn item carries a purchase
+/// record exactly like a bagged one, because the record hangs off the item and
+/// not off where it is kept.
+///
+/// Two gates the two getters apply to the item itself are not modelled: both
+/// pass it through 0x00708ac0, which asks whether bit 0xd of one of its
+/// properties is set - the same bit GetContainerItemGems gates a gem reading
+/// on, and what the bit names is not pinned here - and compare its guid
+/// against a pair the merchant path fills as the out-parameter of its own item
+/// lookups. Neither decides an answer when only one item can match the
+/// arguments.
+static uint64_t refundItemGuid(game::GameHandler* gh, int bag, int slot, bool isEquipped) {
+    if (!gh) return 0;
+    if (!isEquipped) return containerSlotGuid(gh, bag, slot);
+    if (slot < 1 || slot > 19) return 0;
+    return gh->getEquipSlotGuid(slot - 1);
+}
+
 // GetContainerItemPurchaseInfo(bag, slot, isEquipped) →
 //   money, honorPoints, arenaPoints, itemCount, refundSec
 //
@@ -1020,66 +1220,103 @@ static int lua_GetContainerItemPurchaseInfo(lua_State* L) {
     //
     // containerframe.lua treats a nil fifth return as "not refundable" and
     // stops, so answering nothing while the question is in flight is the
-    // correct thing rather than a placeholder.
+    // correct thing rather than a placeholder. The reference (0x005d8d80)
+    // answers *no values at all* for every refusal it makes - no local player,
+    // no item at the place named, no record on it, window run down - and the
+    // branches below follow it. Unpacked into containerframe.lua:632's five
+    // locals, no values and five nils both leave refundSec nil, so what the
+    // change buys is the argument the refusal was made of.
     auto* gh = getGameHandler(L);
-    const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-    const uint64_t guid = gh ? containerSlotGuid(gh, bag, slot) : 0;
-    if (!gh || guid == 0) { for (int i = 0; i < 5; ++i) lua_pushnil(L); return 5; }
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: GetContainerItemPurchaseInfo(index, slot[, isEquipped])");
+    if (!gh) return 0;
+    const uint64_t guid = refundItemGuid(gh,
+                                         static_cast<int>(lua_tonumber(L, 1)),
+                                         static_cast<int>(lua_tonumber(L, 2)),
+                                         lua_toboolean(L, 3) != 0);
+    if (guid == 0) return 0;
 
     const auto* info = gh->getItemRefundInfo(guid);
     if (!info) {
         gh->requestItemRefundInfo(guid);
-        for (int i = 0; i < 5; ++i) lua_pushnil(L);
-        return 5;
+        return 0;
     }
 
     // Two hours of played time, which is what the server counts down. Past it
-    // there is no window left, and nil is how that is said.
-    constexpr uint32_t kRefundWindow = 2 * 60 * 60;
+    // there is no window left, and the answer is nothing.
+    if (info->playedSincePurchase >= kRefundWindow) return 0;
+
+    // Not a sum of the quantities. The client walks the five cost slots at
+    // record+0x20 and counts the ones holding anything - `0 < piVar1[8]`
+    // through `piVar1[0xc]` - because what the count feeds is a loop over
+    // entries: containerframe.lua:658 runs `for i=1, itemCount` and asks the
+    // getter for entry i each time. Summing the units instead counted the
+    // badges, not the entries: a purchase whose third cost was three of one
+    // badge reported three entries and the loop went asking two that name
+    // nothing.
     uint32_t itemCount = 0;
-    for (const auto& cost : info->items) if (cost.first != 0) itemCount += cost.second;
+    for (const auto& cost : info->items) if (cost.second > 0) ++itemCount;
 
     lua_pushnumber(L, info->money);
     lua_pushnumber(L, info->honor);
     lua_pushnumber(L, info->arena);
     lua_pushnumber(L, itemCount);
-    if (info->playedSincePurchase < kRefundWindow)
-        lua_pushnumber(L, kRefundWindow - info->playedSincePurchase);
-    else
-        lua_pushnil(L);
+    lua_pushnumber(L, kRefundWindow - info->playedSincePurchase);
     return 5;
 }
 
 // GetContainerItemPurchaseItem(bag, slot, index, isEquipped) →
-//   texture, quantity, link, name
+//   texture, quantity, link
 //
 // The items that would come back with a refund - a badge or a mark, whatever
 // the vendor charged besides money. Reached only once the call above reports a
 // live window, which it does now.
+//
+// Three values and not the four this pushed: 0x005d8f70 answers an icon path
+// (nil when it cannot name one), the quantity that entry carries, and a link
+// built from the entry's item id - the link alone is nil when the record
+// lookup fails, after the question has been asked. containerframe.lua:659
+// unpacks exactly those three; the fourth here was a name the link already
+// holds.
+//
+// The index counts entries rather than naming a slot. The client walks the
+// five ids at record+0xc, steps over the ones that name no item, and stops
+// when its running count reaches `index - 1` - so index 2 is the second entry
+// with something in it, which is the same item slot 2 only while the record
+// arrives packed.
 static int lua_GetContainerItemPurchaseItem(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-    const int index = static_cast<int>(luaL_optnumber(L, 3, 1)) - 1;
-    const uint64_t guid = gh ? containerSlotGuid(gh, bag, slot) : 0;
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3))
+        return luaL_error(L, "Usage: ContainerItemPurchaseItem(bag, slot, itemIndex[, isEquipped])");
+    if (!gh) return 0;
+    const uint64_t guid = refundItemGuid(gh,
+                                         static_cast<int>(lua_tonumber(L, 1)),
+                                         static_cast<int>(lua_tonumber(L, 2)),
+                                         lua_toboolean(L, 4) != 0);
     const auto* info = guid ? gh->getItemRefundInfo(guid) : nullptr;
-    if (!info || index < 0 || index >= 5 || info->items[static_cast<size_t>(index)].first == 0) {
-        for (int i = 0; i < 4; ++i) lua_pushnil(L);
-        return 4;
+    if (!info) return 0;
+    // The same window test as the call above, and the same answer once it has
+    // run out: nothing at all.
+    if (info->playedSincePurchase >= kRefundWindow) return 0;
+    const int wanted = static_cast<int>(lua_tonumber(L, 3)) - 1;
+    for (size_t entry = 0, seen = 0; entry < info->items.size(); ++entry) {
+        if (info->items[entry].first == 0) continue;
+        if (seen++ != wanted) continue;
+        const uint32_t itemId = info->items[entry].first;
+        const auto* item = gh->getItemInfo(itemId);
+        if (!item || !item->valid) {
+            gh->ensureItemInfo(itemId);
+            lua_pushnil(L);
+            lua_pushnumber(L, info->items[entry].second);
+            lua_pushnil(L);
+            return 3;
+        }
+        lua_pushstring(L, gh->getItemIconPath(item->displayInfoId).c_str());
+        lua_pushnumber(L, info->items[entry].second);
+        lua_pushstring(L, game::buildItemLink(itemId, item->quality, item->name, gh->getPlayerLevel()).c_str());
+        return 3;
     }
-    const uint32_t itemId = info->items[static_cast<size_t>(index)].first;
-    const auto* item = gh->getItemInfo(itemId);
-    if (!item || !item->valid) {
-        gh->ensureItemInfo(itemId);
-        for (int i = 0; i < 4; ++i) lua_pushnil(L);
-        return 4;
-    }
-    lua_pushstring(L, gh->getItemIconPath(item->displayInfoId).c_str());
-    lua_pushnumber(L, info->items[static_cast<size_t>(index)].second);
-    lua_pushstring(L, game::buildItemLink(itemId, item->quality, item->name, gh->getPlayerLevel()).c_str());
-    lua_pushstring(L, item->name.c_str());
-    return 4;
+    return 0;   // the walk found no entry with that ordinal
 }
 
 // ---- Currency tab (Blizzard_TokenUI) ----
@@ -4237,10 +4474,20 @@ static int lua_PutItemInBackpack(lua_State* L) {
     return 1;
 }
 
-/// ResetCursor() - put the pointer back to the ordinary arrow. This client
-/// does not change the cursor for interface state, so there is nothing to
-/// undo; it exists because the interface calls it on every mouse-leave.
-static int lua_ResetCursor(lua_State* L) { (void)L; return 0; }
+/// ResetCursor() - hand the pointer back from whatever cursor a script put on
+/// it (SetCursor). Nothing to do with the item the cursor is carrying: the
+/// binding is FUN_00616920, which only restores the cursor kind, and it is the
+/// very call SetCursor(nil) makes (`call 0x616920` at 0x0051086c).
+///
+/// The interface calls it constantly - after every drag (containerframe, bank,
+/// trade, loot), after every tooltip (gametooltip, merchantframe, paperdoll),
+/// and from uiparent.lua's CursorUpdate as the other half of a pair with
+/// SetCursor("INSPECT_CURSOR").
+static int lua_ResetCursor(lua_State* L) {
+    (void)L;
+    wowee::ui::frameXmlSetScriptCursor(wowee::ui::kCursorKindNone);
+    return 0;
+}
 
 /// Coin as words, for the name of the money slot: "1 Gold, 20 Silver".
 /// Empty denominations are left out rather than shown as zero.
@@ -4710,6 +4957,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"GetMerchantNumItems",  lua_GetMerchantNumItems},
                 {"GetMerchantItemInfo",  lua_GetMerchantItemInfo},
                 {"GetMerchantItemLink",  lua_GetMerchantItemLink},
+                {"ShowMerchantSellCursor", lua_ShowMerchantSellCursor},
                 {"CanMerchantRepair",    lua_CanMerchantRepair},
                 {"GetContainerItemCooldown",  lua_GetContainerItemCooldown},
                 {"GetItemCooldown",           lua_GetItemCooldown},
@@ -4732,8 +4980,8 @@ void registerInventoryLuaAPI(lua_State* L) {
             }
             return 0;
         }},
-                {"ShowContainerSellCursor", lua_ContainerNoOp},
-                {"ShowBuybackSellCursor", lua_ContainerNoOp},
+                {"ShowContainerSellCursor", lua_ShowContainerSellCursor},
+                {"ShowBuybackSellCursor", lua_ShowBuybackSellCursor},
                 // A left-click on a vendor's item goes here, and it was a
                 // no-op - so at a merchant only right-click bought anything.
                 // The cursor state lives in lua_action_api.cpp with everything
@@ -4824,14 +5072,38 @@ void registerInventoryLuaAPI(lua_State* L) {
                 // ---- Currency tab ----
                 {"GetContainerItemPurchaseInfo", lua_GetContainerItemPurchaseInfo},
                 {"GetContainerItemPurchaseItem", lua_GetContainerItemPurchaseItem},
-                // ContainerRefundItemPurchase(bag, slot) - the Accept on
-                // "hand this back for what you paid". It sat on a popup that
-                // could not be raised, because the call above answered nil.
+                // ContainerRefundItemPurchase(bag, slot, isEquipped) - the
+                // Accept on "hand this back for what you paid". It sat on a
+                // popup that could not be raised, because the call above
+                // answered nil.
                 {"ContainerRefundItemPurchase", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const int slot = static_cast<int>(luaL_optnumber(L, 2, 0));
-            if (gh) gh->refundItem(containerSlotGuid(gh, bag, slot));
+            // 0x005d91b0 wants two numbers before anything else, and reads the
+            // same third argument the two getters read.
+            if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+                return luaL_error(L, "Usage: ContainerRefundItemPurchase(index, slot[, isEquipped])");
+            if (!gh) return 0;
+            const uint64_t guid = refundItemGuid(gh,
+                                                 static_cast<int>(lua_tonumber(L, 1)),
+                                                 static_cast<int>(lua_tonumber(L, 2)),
+                                                 lua_toboolean(L, 3) != 0);
+            // Three things have to hold for the packet to go out: an item at
+            // that place, a purchase record on it, and a merchant standing
+            // open to hand it back to. The client's third test is its own
+            // merchant guid pair (DAT_00bfa3e8/ec), filled when the window
+            // opens and cleared when it closes, which is what WoWee keeps as
+            // the vendor list's guid.
+            auto* inv = gh->getInventoryHandler();
+            if (guid != 0 && gh->getItemRefundInfo(guid) != nullptr && inv
+                    && inv->getVendorGuid() != 0) {
+                gh->refundItem(guid);
+                return 0;
+            }
+            // Every refusal above ends the same way, with row 0xc said out loud
+            // - including an argument pair that names nothing, which is what
+            // the argument check cannot catch.
+            gh->sayGameError(server_notice::kInternalBagError);
+            gh->playGameErrorSound(server_notice::kInternalBagError.key);
             return 0;
         }},
                 // PickupPlayerMoney(amount) - the coin pickup dialog's Okay.
@@ -5870,13 +6142,69 @@ void registerInventoryLuaAPI(lua_State* L) {
             uint64_t guid = 0;
             const auto* item = auctionSellItemSlot(gh, &guid);
             if (!item || guid == 0) return 0;
-            // The fourth argument is the size of one stack; the fifth is how
-            // many such stacks to post, which this sends one of - the request
-            // builder writes a single item and posting several would be a
-            // several-item list.
-            const uint32_t stack = static_cast<uint32_t>(
+            // The fourth argument is the size of one stack and the fifth is how
+            // many such stacks to post - and this used to read the fifth and
+            // send one, on the assumption that posting several would need a
+            // several-item request. The reference client's own StartAuction
+            // (0x0059f990, the handler the method table hangs after the name)
+            // says otherwise: it reads a fifth with a default of 1, refuses with
+            // ERR_AUCTION_ENOUGH_ITEMS when the total does not fit the item, and
+            // otherwise raises AUCTION_MULTISELL_START with the count and posts
+            // one ordinary CMSG_AUCTION_SELL_ITEM per stack, walking a
+            // stacks-left counter (FUN_0059ba80). There is no multisell opcode
+            // on its wire at all, which is why the opcode map names none, and the
+            // itemCount field the request builder pins to 1 belongs to the other
+            // trick that routine has: naming several bag objects as the sources
+            // of one auction when the items are split across them. That last one
+            // this client still does not do.
+            // An absent fourth is 0 there - it writes the zero into the request
+            // and lets the realm answer for it - while this client's send path
+            // has always turned a zero count into one; an absent fifth is 1 and
+            // a written 0 is 0, which takes the one-auction branch either way.
+            uint32_t stack = static_cast<uint32_t>(
                 luaL_optnumber(L, 4, item->item.stackCount ? item->item.stackCount : 1));
-            gh->auctionSellItemByGuid(guid, stack, bid, buy, dur);
+            uint32_t stacks = static_cast<uint32_t>(luaL_optnumber(L, 5, 1));
+            if (stack == 0) stack = 1;
+            if (stacks == 0) stacks = 1;
+            if (uint64_t(stack) * stacks > item->item.stackCount) {
+                // Row 0x2d4, said before any of them go out - the reference
+                // (0x0059f640) asks whether the source items cover
+                // stacks*stackSize and posts nothing when they do not. What it
+                // then does is the part that was not obvious: it empties the
+                // pending item anyway, through 0x0059a560, the routine every
+                // path out of StartAuction ends in. So the player who typed
+                // "5 stacks" beside a stack of twenty has to put the item back,
+                // and the two calls below are that routine's pair - the raise it
+                // makes is script event 0x1a1, NEW_AUCTION_UPDATE, with no
+                // arguments.
+                gh->sayGameError(server_notice::kAuctionNotEnoughItems);
+                auctionSellSlot() = AuctionSellSlot{};
+                fireAuctionSellUpdate(gh);
+                return 0;
+            }
+            if (stacks > 1)
+                gh->fireAddonEvent("AUCTION_MULTISELL_START", {std::to_string(stacks)});
+            for (uint32_t posted = 0; posted < stacks; ++posted) {
+                gh->auctionSellItemByGuid(guid, stack, bid, buy, dur);
+                // The reference drives its stepper off the answer to each post,
+                // so its posts are spaced out; these go together. Nothing on the
+                // wire asks for spacing - each request names the same source
+                // guid with its own count, and the server works down the stack.
+                //
+                // The third of its events, AUCTION_MULTISELL_FAILURE, is raised
+                // by the routine that gives a multisell up (0x0059ab20, which
+                // also empties the pending item): the stepper calls it when the
+                // source records it was walking run out under one more stack
+                // (0x0059ba80, 0x0059ab20 at its 0x59bc06), and so does the
+                // handler that tears the auction house state down while a
+                // multisell stands open (0x0059f150). Neither state this client
+                // can reach - its sources are one sell slot and its posts all
+                // go out together - so that name stays unfired, and the last
+                // UPDATE below is what hides the bar instead.
+                if (stacks > 1)
+                    gh->fireAddonEvent("AUCTION_MULTISELL_UPDATE",
+                                       {std::to_string(posted + 1), std::to_string(stacks)});
+            }
             auctionSellSlot() = AuctionSellSlot{};
             fireAuctionSellUpdate(gh);
             return 0;

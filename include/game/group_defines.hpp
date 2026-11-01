@@ -125,6 +125,21 @@ struct GroupListData {
     /// whether there is one (0x0052c310). 0 for any other group, and for
     /// none - leaving or losing the group forgets it (0x0052d6e0).
     uint32_t lfgDungeonEntry = 0;
+    /// WotLK: the byte that five begins with, read only when the type byte's bit
+    /// 3 is set (0x006d88d1). The client keeps it at 0xbd1989 for a group that has
+    /// members (006d0000.c:7069); which of the header's four bytes lands in which
+    /// of the three globals 0xbd1988/1989/198a is not readable in the decompile,
+    /// where the byte slots have been renamed three times over, but the
+    /// instructions are (0x006d8f7a loads the flags, the roles and this one out of
+    /// their stack slots and 0x006d8f83/0x006d8f8e/0x006d8f9b store them), and the
+    /// one read under bit 3 is the one that lands in 0xbd1989. A group whose type
+    /// byte has no bit 3 stores the nought that slot is set to before the read
+    /// (0x006d88c4), and the party's emptier zeroes the byte along with the entry
+    /// (00520000.c:10372-10375). What reads it is one test: bit 1
+    /// has to be **clear** for CanPartyLFGBackfill (0x00553170), so it is the
+    /// realm's word on whether this party's queue can still be filled out with
+    /// strangers. It was read and thrown away.
+    uint8_t lfgState = 0;
     /// WotLK: bit 2 of the same type byte, and **not** a finder flag — it is the
     /// group's restriction. The client hands it to 0x0052c0d0, which keeps it in
     /// 0xbd19a8 and fires PARTY_LFG_RESTRICTED whenever the stored state and the

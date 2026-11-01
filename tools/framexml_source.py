@@ -53,26 +53,97 @@ def without_comments_or_strings(text):
                        + m.group(0)[-1], text)
 
 
+# ── Names the interpreter itself installs ────────────────────────────────────
+
+#: Globals a sweep should never report as unbound, because no binding provides
+#: them and no FrameXML file defines them: they come from the Lua 5.1 this
+#: project builds (extern/lua-5.1.5) and that lua_engine opens.
+#:
+#: Read off the interpreter and the engine, not off a recollection of Lua:
+#:
+#:   * the base table, extern/lua-5.1.5/src/lbaselib.c:448-471, plus ipairs and
+#:     pairs and newproxy, which luaopen_base installs by hand a few lines
+#:     later (lbaselib.c:633-644) - ipairs and pairs are not in the table above,
+#:     and a list written from memory tends to forget that
+#:   * only the libraries lua_engine.cpp:6791-6794 opens - base, table, string,
+#:     math, and `coroutine' as a side of luaopen_base (lbaselib.c:650). io, os,
+#:     debug and package are deliberately not opened, so `os`, `io`, `debug`,
+#:     `require` are NOT in this set. A FrameXML call of `os.date` reaches a
+#:     binding or the missing-API fallback, and a sweep is right to ask which
+#:   * four base names are nil'd back out again, lua_engine.cpp:6803-6805:
+#:     dofile, loadfile, load, collectgarbage. They are in the interpreter's
+#:     table and not in the running game, so they are not here either - listing
+#:     them would hide a call that really does fall through.
+#:
+#: `loadstring` survives that removal, which is why it is here: the list nils
+#: out `load`, not `loadstring`.
+#:
+#: Two sweeps (framexml_unbound_globals.py, framexml_reachable_globals.py) carry
+#: their own wider list of this size, adding FrameXML's own aliases - format,
+#: strsub, tinsert, wipe, abs, ceil - which the engine's bootstrap defines rather
+#: than the interpreter. Those two count names this one must not excuse, so the
+#: lists are deliberately not merged; only the interpreter half is shared.
+INTERPRETER_GLOBALS = frozenset({
+    "assert", "error", "gcinfo", "getfenv", "getmetatable", "ipairs",
+    "loadstring", "newproxy", "next", "pairs", "pcall", "print", "rawequal",
+    "rawget", "rawset", "select", "setfenv", "setmetatable", "tonumber",
+    "tostring", "type", "unpack", "xpcall",
+    "coroutine", "math", "string", "table",
+})
+
+
 # ── Which files the loader actually reaches ──────────────────────────────────
 
 _REFERENCE = re.compile(r'<(?:Script|Include)\s+file="([^"]+)"', re.I)
 
-#: An addon LoadAddOn answers "DISABLED" for. There is a second place a file
-#: can fail to load from, and it is not a manifest: lua_system_api's LoadAddOn
-#: refuses Blizzard_Calendar outright, because the calendar's own globals are
-#: unbound and letting the addon load turns the minimap's date button into a
-#: raise. Its files sit in an addon folder with a manifest of their own, so
-#: nothing about the folder says they never run.
+#: An addon the binding refuses, should one ever be refused again. There is a
+#: second way a file can fail to load besides a manifest: `LoadAddOn` can answer
+#: one by name and hand back "DISABLED".
+#:
+#: **Nothing is refused today, and this matches nothing on purpose.** The name
+#: this was written against was Blizzard_Calendar, refused while its verbs were
+#: unbound so that the minimap's date button did nothing instead of raising. The
+#: refusal was lifted once a calendar was behind it - `lua_system_api.cpp:4972`
+#: says so, and the note that stood there is kept in that file rather than
+#: repeated here - so the empty set this answers now is the truth and not a
+#: broken lookup. It stays because a refusal is a thing the loader can still do,
+#: and a sweep that scans a refused addon is a sweep reporting faults in files
+#: that never run.
+#:
+#: Three tools reasoned from that refusal and are corrected on the same day as
+#: this note: `framexml_unbound_globals.py` excused a family of calendar names
+#: by it, `framexml_reachable_globals.py` built its one reported name on it, and
+#: `framexml_run.cpp` declined the addon in the harness "as the client does" and
+#: so never loaded in the harness what every player loads in the game. They are
+#: named here because the next refusal will be reasoned about the same way, and
+#: a rule read out of a stale comment is how all three got it wrong.
 _REFUSED = re.compile(r'strcmp\(name,\s*"(\w+)"\)\s*==\s*0(?:(?!strcmp).){0,400}?"DISABLED"',
                       re.S)
 
 
-def _refused_addons(root):
-    """Lowercased names of addons the client declines to load."""
-    source = pathlib.Path(root) / "src/addons/lua_system_api.cpp"
-    if not source.is_file():
-        return set()
-    return {m.lower() for m in _REFUSED.findall(source.read_text(errors="ignore"))}
+def _refused_addons(root=None):
+    """Lowercased names of addons the client declines to load.
+
+    The loader being modelled lives in *this repository*, so this looks next to
+    this file first and only then at the root it was handed. Deriving it from
+    the interface alone answered nothing on any machine where the interface is
+    the extracted copy - which is all of them, since `Data/interface` has never
+    existed here (`Data` holds `expansions` and `opcodes`) and two levels up from
+    `…/Data/expansions/wotlk/interface` is `…/Local/WoWee`, which carries no
+    source at all. That is a latent rather than a live wrong answer today,
+    because nothing is refused: had a name been refused, the lookup would have
+    missed it and every sweep would have gone on scanning the refused addon's
+    files.
+    """
+    candidates = [pathlib.Path(__file__).resolve().parent.parent]
+    if root is not None:
+        candidates.append(pathlib.Path(root))
+    for candidate in candidates:
+        source = candidate / "src/addons/lua_system_api.cpp"
+        if source.is_file():
+            return {m.lower()
+                    for m in _REFUSED.findall(source.read_text(errors="ignore"))}
+    return set()
 
 
 def loaded_files(interface):

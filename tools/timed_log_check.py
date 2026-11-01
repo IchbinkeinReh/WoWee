@@ -59,6 +59,19 @@ SETTLED = {
         "A frame that takes too long is not a state that persists - it is one "
         "frame, and the next one is measured fresh. The rate limit is there to "
         "keep a bad second from filling the log, not to stand in for a count.",
+    # The guard here *is* a comparison against the previous occurrence; it is
+    # just written as a member (`lastFoliageCasters_` read into foliageWas) and
+    # compared with a computed delta, so DISTINCT cannot see it. And the line
+    # reports a fault that persists by nature: the shadow count swinging is what
+    # a blinking shadow looks like frame after frame, and the second is there so
+    # one flickering forest cannot fill the log while it is being diagnosed.
+    ("src/rendering/m2_renderer_render.cpp", "Shadow casters swung"):
+        "Compared against the previous frame's caster count, two lines ago.",
+    # Five lines in a whole process, under an environment flag, each naming its
+    # own try number, because the retry counter is the bound and it counts out.
+    # The counter is a member of a block the sweep reads as a bare clock.
+    ("src/ui/auth_screen.cpp", "WOWEE_AUTO_LOGIN"):
+        "autoLoginTries < 5: the bound is the counter, not the clock.",
 }
 
 
@@ -74,7 +87,11 @@ def main() -> int:
     files = 0
     for path in sorted((ROOT / "src").rglob("*.cpp")):
         files += 1
-        lines = path.read_text(errors="ignore").split("\n")
+        # utf-8 named: these sources are utf-8 and the default on a Windows
+        # console is not, so a German comment decodes as cp1252 and the five
+        # bytes it leaves undefined vanish under errors="ignore" - the line
+        # stays the same length but its text is not what was written.
+        lines = path.read_text(encoding="utf-8", errors="ignore").split("\n")
         for i, line in enumerate(lines):
             if not LOUD.search(line):
                 continue

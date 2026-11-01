@@ -7245,11 +7245,29 @@ void Renderer::renderVolumetricFog() {
     volumetricFog_->record(currentCmd, frame, perFrameDescSets[frame], in);
     if (vkCtx) vkCtx->gpuMark(currentCmd, "volumetric fog");
 
-    // What it was built from, every few seconds, for the report that says the
-    // fog is too thick or missing: INFO, so it costs nothing unless asked for.
+    // What it was built from, and again only when that changed.
+    //
+    // The clock on its own wrote the same three numbers every five seconds for
+    // the whole session - some 700 identical lines an hour in a build that logs
+    // at INFO - which is the shape timed_log_check exists to find. The first
+    // line still says what the fog was built from; after that it speaks when one
+    // of the three moved, which is the only thing that made the old ones worth
+    // reading again. The five seconds stays: extinction eases toward its target
+    // frame by frame, so "it changed" is continuously true while it settles.
+    //
+    // NaN to start, so the first frame counts as a change without needing a
+    // flag beside it.
     static double lastFogLog = 0.0;
-    if (globalTime - lastFogLog > 5.0) {
+    static float lastExtinctionLogged = std::numeric_limits<float>::quiet_NaN();
+    static float lastTargetLogged = std::numeric_limits<float>::quiet_NaN();
+    static float lastLayerBaseLogged = std::numeric_limits<float>::quiet_NaN();
+    if ((fogExtinction_ != lastExtinctionLogged || target != lastTargetLogged ||
+         fogLayerBase_ != lastLayerBaseLogged) &&
+        globalTime - lastFogLog > 5.0) {
         lastFogLog = globalTime;
+        lastExtinctionLogged = fogExtinction_;
+        lastTargetLogged = target;
+        lastLayerBaseLogged = fogLayerBase_;
         LOG_INFO("volumetricFog: extinction=", fogExtinction_, "/yd (target ", target,
                  ") layerBase=", fogLayerBase_);
     }

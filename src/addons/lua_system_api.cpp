@@ -47,6 +47,7 @@
 #include "game/calendar_data.hpp"
 #include "game/lfg_update.hpp"
 #include "game/pet_action.hpp"
+#include "game/server_notices.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/audio_coordinator.hpp"
@@ -71,6 +72,9 @@
 #include "core/local_time.hpp"
 
 namespace wowee::addons {
+
+// The game-error rows below are named bare, as they are inside game/.
+namespace server_notice = game::server_notice;
 
 // CombatLog_Object_IsA(unitFlags, mask) - does a combat log unit match a filter.
 //
@@ -1109,6 +1113,12 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // itself ticked while the client went on clearing, the panel and the game
     // disagreeing about the same switch.
     else if (n == "deselectonclick") lua_pushstring(L, "1");
+    // Off, as registered (0x0051dd63 pushes the string "0" for it): FrameXML's
+    // error handler - _ERRORMESSAGE, basiccontrols.xml - puts a script error in
+    // BasicScriptErrors only while this says so, and the interface's Advanced
+    // panel is what turns it on. Named here because the handler is now reached
+    // for every script error, and this one switch says whether it shows one.
+    else if (n == "scripterrors") lua_pushstring(L, "0");
     // "Unit shadow LOD": 1, the blob shadows under the units, as the client
     // registers it (0x007e4a40); 0 turns them off.
     else if (n == "shadowlod") lua_pushstring(L, "1");
@@ -1667,6 +1677,13 @@ constexpr ClientCVarBinding kClientCVars[] = {
     // added. It has now, so they are rows like the rest.
     {"gxvsync",              "vsync"},
     {"mouseinvertpitch",     "invertmouse"},
+    // The pair's other half, which the game never put on a slider: its
+    // mouse-look handler signs the yaw delta by this CVar and nothing else
+    // does (0x006020b0), so the row this points at is the only way to reach it
+    // besides typing the name. Bound rather than read at the look site so the
+    // panel, the console, an addon's SetCVar and settings.cfg all land on one
+    // value, as every other row here does.
+    {"mouseinvertyaw",       "invertyaw"},
     // The client keeps this one and pushes it at the game handler each frame,
     // so writing the setting is what makes the checkbox stick across a session
     // as well as within one. The branch it replaces wrote the handler directly
@@ -3813,10 +3830,6 @@ static int32_t& layoutMode() {
 }
 
 
-/// A cooldown that is not running: start and duration both zero. Two values,
-/// because the caller adds them together on the next line -
-/// local start, duration = GetSummonFriendCooldown(); start + duration - and
-/// one of them missing is arithmetic on nil.
 /// The resolutions this client offers, as "WIDTHxHEIGHT" strings, and which of
 /// them is current. One entry - the window as it actually is - because this
 /// client does not enumerate modes.
@@ -4996,10 +5009,25 @@ static int lua_LoadAddOn(lua_State* L) {
     return 2;
 }
 
+/// A cooldown that is not running. Three values, in the order the reference
+/// client's GetSummonFriendCooldown (0x00511d30) pushes them: start, duration,
+/// and a third the caller ignores - FrameXML reads the first two and adds them
+/// (`local start, duration = GetSummonFriendCooldown(); start + duration`), so
+/// one of them missing is arithmetic on nil.
+///
+/// The client asks its own cooldown store for the spell id it was taught
+/// (0x00809000, whose instructions push the three outputs in the order
+/// duration, start, enabled and so hand back start and duration swapped unless
+/// the caller swaps them back), and that store sets enabled to 1 before it looks
+/// anything up - so a client holding no such spell still answers "enabled", with
+/// 0 and 0 for the times. Hence the third value here: 0, 0, 1 and not 0, 0.
+/// See the CanSummonFriend row in lua_social_api.cpp for why no realm of this
+/// client's ever supplies that spell id.
 static int lua_ReturnNoCooldown(lua_State* L) {
     lua_pushnumber(L, 0.0);
     lua_pushnumber(L, 0.0);
-    return 2;
+    lua_pushnumber(L, 1.0);
+    return 3;
 }
 
 /// Alliance or Horde for the player, and the same for anyone else until this
@@ -6533,10 +6561,29 @@ static int lua_SetSelectedBattlefield(lua_State* L) {
     return 0;
 }
 
-// JoinBattlefield(index, asGroup, isArena) - queue for it.
+// JoinBattlefield(index, asGroup, isRated) - queue for it.
 //
 // The index names an instance of the selected battleground, and zero means the
 // first available one - which is what both join buttons pass.
+//
+// The client reads all three of them (0x0054d990 takes arg 1 as a number and
+// hands args 2 and 3 over through FUN_00815500(L,2,0) and FUN_00815500(L,3,0)
+// to FUN_0054cc70(index - 1, isGroup, isRated)), and the third one is read by
+// the queue worker only on the arena path: the worker picks the opcode with
+// `(-isArena & 0x6a) + 0x2ee`, so 0x2ee CMSG_BATTLEMASTER_JOIN becomes 0x358
+// CMSG_BATTLEMASTER_JOIN_ARENA, and the two packets differ in more than the
+// number - the arena one is guid, then a *byte* for the bracket index instead
+// of the instance dword, then the group byte, then the rated byte. Nothing
+// here can take that branch: the worker decides it before looking at any
+// argument, by reading the selected type id out of a table of battleground
+// records and testing record +0x24 == 4. That table is filled at load time and
+// nothing on this client's wire writes it - objdump over the whole image finds
+// the record array referenced from eight sites, all of them inside this same
+// battleground code, and SMSG_BATTLEFIELD_LIST's reader (0x0054e390) consumes
+// guid, from-where byte, type dword, two level bytes, one flag byte, three
+// reward dwords, an optional second reward block, then the running instances -
+// no type field in it. So an arena queue is a missing table plus a missing
+// packet, and the third argument has nowhere honest to go.
 static int lua_JoinBattlefield(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
@@ -8235,21 +8282,36 @@ void registerSystemLuaAPI(lua_State* L) {
                 //
                 // GetNumTitles() - how many title ids there are to ask about,
                 // not how many are owned. paperdollframe.lua walks
-                // 1..GetNumTitles() calling IsTitleKnown on each. The client
-                // answers its CharTitles table's bound plus one (0x005165e0,
-                // DAT_00ad337c + 1), and this install's table has 142 rows, so
-                // that client asks about 1..143; this answers the three 64-bit
-                // groups of PLAYER_FIELD_KNOWN_TITLES, 192, which is every bit
-                // the mask can hold and 49 more than the table has rows for.
-                // Asking about those 49 is harmless the way the loop is written:
-                // GetTitleName is only reached behind IsTitleKnown, and the mask
-                // has no bit set for a title that does not exist. It is the one
-                // shape in which that would not be harmless - a realm setting a
-                // bit with no row behind it - and then strtrim(GetTitleName(i))
-                // raises on the nil, which is why the extra reach is recorded
-                // here rather than tuned to 143.
+                // 1..GetNumTitles() calling IsTitleKnown on each, and reaches
+                // strtrim(GetTitleName(i)) behind that test.
+                //
+                // The client answers its CharTitles table's row count plus one
+                // (0x005165e0 pushes DAT_00ad337c + 1, and that same global is
+                // the exclusive bound of that table's row scans), which is a
+                // table bound rather than the reach of the known-titles mask.
+                // This install's table has 142 rows, so that client asks about
+                // 1..143 even though the three 64-bit groups of
+                // PLAYER_FIELD_KNOWN_TITLES reach 192.
+                //
+                // Answering the mask reach instead - which is what this did -
+                // costs nothing in the common case: the mask holds no bit for a
+                // title that does not exist, so the extra 49 iterations were 49
+                // IsTitleKnown answers of no. It is not nothing in the one
+                // shape where a realm does set a bit above the row count: the
+                // reference never asks about that title, and this asked, handed
+                // back the nil no row is behind it, and strtrim raised. Asking
+                // the same number asks about that title neither place, which is
+                // also what the reference does with it: unreachable through the
+                // title list.
+                //
+                // While the table has not been read at all - no assets yet -
+                // the mask reach stays the answer, which beats a bound of one.
                 {"GetNumTitles", [](lua_State* L) -> int {
-            lua_pushnumber(L, game::kKnownTitleCount); return 1;
+            auto* gh = getGameHandler(L);
+            const uint32_t rows = gh ? gh->charTitlesRowCount() : 0u;
+            lua_pushnumber(L, rows != 0 ? static_cast<double>(rows + 1)
+                                        : static_cast<double>(game::kKnownTitleCount));
+            return 1;
         }},
                 {"GetNumCompanions", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
@@ -9213,10 +9275,6 @@ void registerSystemLuaAPI(lua_State* L) {
                 // SMSG_TRIGGER_MOVIE is answered with CMSG_COMPLETE_MOVIE at
                 // once - so nothing.
                 {"GameMovieFinished",        lua_ReturnNothing},
-                // debuglocals([level]) (0x00819a60): the locals only inside the
-                // error handler's call (0x00d3f79c, set around it by
-                // 0x00819730), which this client never makes - so nothing.
-                {"debuglocals",              lua_ReturnNothing},
                 // ReplaceTradeEnchant() (0x00510b80 -> 0x0080c5f0): only with
                 // an enchant waiting on the trade window's slot (0x00d3f4e0
                 // 0x4010), which this client never puts there - so nothing.
@@ -10117,23 +10175,78 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, t.personalRating);
             return 8;
         }},
-                // CanInspect(unit [, showError]) - a player other than a
-                // corpse, which is as much as this client can judge; the server
-                // refuses the rest and the reply simply does not arrive.
+                // CanInspect(unit [, showError]) - 0x00522710. The answer is
+                // 0x00520410's: the unit has to be a player object, the player
+                // may not be allowed to attack them (0x00729740, and the
+                // `push %edi; mov %esi,%ecx` at 0x005227a1 says which way round
+                // the pair goes - the player asking about the unit, so a hostile
+                // player cannot be inspected), and the two have to be within
+                // 30 yards: the three squared axis differences against 900.0,
+                // which is the float at DAT_00ac8a6c.
+                //
+                // showError says nothing about the answer. It decides whether
+                // the reason is told to the player first, and which row of the
+                // game error table tells it - and which of the two complaints an
+                // unresolved unit gets depends on the argument's own text, so
+                // the text is read before it is thrown away. "target", or no
+                // text at all, is "no target selected"; anything else is
+                // "unknown unit". That is the case-blind compare 0x0076e780 does
+                // at 0x00522816, which the lower-casing the token is looked up
+                // in its own name already gives the same judgement as.
                 {"CanInspect", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* uid = luaL_optstring(L, 1, "target");
+            const bool showError = lua_toboolean(L, 2) != 0;
             if (!gh) { lua_pushboolean(L, 0); return 1; }
+            const auto complain = [&](const server_notice::GameError& why) {
+                if (showError) gh->sayGameError(why);
+            };
             std::string uidStr(uid);
             for (char& c : uidStr) {
                 c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             }
+            const bool namedNobody = uidStr.empty() || uidStr == "target";
+            const auto nobodyHere = [&] {
+                complain(namedNobody ? server_notice::kNoTarget
+                                     : server_notice::kUnitNotFound);
+            };
             const uint64_t guid = resolveUnitGuid(gh, uidStr);
-            if (guid == 0) { lua_pushboolean(L, 0); return 1; }
+            if (guid == 0) {
+                nobodyHere();
+                lua_pushboolean(L, 0);
+                return 1;
+            }
             // High word 0x0000 marks a player guid in this range; creatures
-            // carry 0xF13/0xF14 and cannot be inspected at all.
+            // carry 0xF13/0xF14 and cannot be inspected at all. That is this
+            // client's way of asking the flag test at 0x00522792, which reads
+            // bit 0x10 of the object's own type flags.
             const bool isPlayer = ((guid >> 48) & 0xFFFF) == 0;
-            lua_pushboolean(L, isPlayer ? 1 : 0);
+            if (!isPlayer || gh->unitMayAttack(gh->getPlayerGuid(), guid)) {
+                complain(server_notice::kInspectInvalidTarget);
+                lua_pushboolean(L, 0);
+                return 1;
+            }
+            // A unit this client has no object for is the one thing the
+            // reference cannot express: its step from the text to the object
+            // (0x0060c1f0) has no answer in that case either, and the answer it
+            // gives there is the complaint above - so it is used here too rather
+            // than reporting somebody unseen as somebody out of range.
+            auto& em = gh->getEntityManager();
+            const auto mine = em.getEntity(gh->getPlayerGuid());
+            const auto theirs = em.getEntity(guid);
+            if (!mine || !theirs) {
+                nobodyHere();
+                lua_pushboolean(L, 0);
+                return 1;
+            }
+            const float dx = mine->getX() - theirs->getX();
+            const float dy = mine->getY() - theirs->getY();
+            const float dz = mine->getZ() - theirs->getZ();
+            constexpr float kInspectRange = 30.0f;  // squared, as the compare is
+            const bool reachable =
+                dx * dx + dy * dy + dz * dz <= kInspectRange * kInspectRange;
+            if (!reachable) complain(server_notice::kInspectOutOfRange);
+            lua_pushboolean(L, reachable ? 1 : 0);
             return 1;
         }},
                 // Honour data for an inspected player is not in the reply this
@@ -10185,10 +10298,19 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, 0);
             return 1;
         }},
-                // UnitPVPRank(unit) - the old honour rank, which no WotLK
-                // server sends; GetPVPRankInfo is fed from it and handles zero.
+                // UnitPVPRank(unit) - 0x00611c40. It makes sure the argument is
+                // a string, resolves the unit it names, then pushes 0 whatever
+                // that resolved to: an unknown token and a unit standing right
+                // there answer the same. The rank ladder left the client itself
+                // rather than going unsent by the realm, which is why nothing
+                // here can look a rank up; PLAYER_PVP_RANK_CHANGED, still raised
+                // off the four bytes that used to carry one, recomputes nothing
+                // either (see entity_controller.cpp). honourframe.lua feeds the 0
+                // to GetPVPRankInfo, which answers nothing for it, and the panel
+                // reads NONE with no badge - as it does under the reference.
                 {"UnitPVPRank", [](lua_State* L) -> int {
-            (void)L;
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: UnitPVPRank(\"unit\")");
             lua_pushnumber(L, 0);
             return 1;
         }},

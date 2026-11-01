@@ -7,6 +7,28 @@ between, and concatenation is a third raising context that neither covered:
 "text"..nil is an error in Lua, not the empty string.
 
     tools/framexml_nil_use_check.py ["<the extracted interface>"]
+
+**XML is scanned as well as Lua, and that is where its one finding lives.**
+minimap.xml's minimap tooltip OnUpdate reads
+
+    GameTooltip:SetText(MOVIE_RECORDING_RECORDING..MovieRecording_GetTime());
+
+and MovieRecording_GetTime is a name nothing answers. It is reported and not
+fixed: the frame that runs that body is `MiniMapRecordingButton`, declared
+`hidden="true"`, and the only Show() anywhere for it is behind
+`MovieRecording_IsRecording()`, which this client answers false, so the
+indicator never appears, its OnEnter never sets MINIMAP_RECORDING_INDICATOR_ON,
+and the body never runs. It is also one member of a family the executable does
+not contain at all - the byte stem "MovieRecording" does not occur in Wow.exe -
+which is the same adjudication sweep_guard records for
+MovieRecording_IsCodecSupported and MovieRecording_GetProgress. A stub would
+have made the count go to zero without changing what any player sees, which is
+how a sweep gets talked out of having eyes.
+
+Reading only `.lua` is what the header used to do, and this is the second sweep
+in a row whose blindness was half the tree: a FrameXML `.xml` is not markup to
+the client, it is Lua - every `<OnLoad>`, `<OnEvent>`, `<OnUpdate>` and
+`<OnClick>` body is a chunk the loader installs and runs.
 """
 import re, pathlib, collections, sys
 
@@ -29,8 +51,30 @@ if not root.is_dir():
     print(f"No interface at {root} - name the unpacked interface on the "
           "command line; there are no bodies to scan here.")
     sys.exit(2)
-files = list(root.glob("framexml/*.lua")) + list(root.glob("addons/*/*.lua"))
-texts = {f: f.read_text(errors="ignore") for f in files}
+# Either spelling of the path means the same interface to a reader; loaded_files
+# walks the .toc from the folder above FrameXML, so the step has to happen.
+if root.name.lower() == "framexml":
+    root = root.parent
+# Which files the client loads, from the one place that knows, and both kinds.
+#
+# This used to glob `framexml/*.lua` and `addons/*/*.lua` under the named
+# directory. For `.lua` that was nearly right - it found every loaded Lua file -
+# but it read five files the client never opens (focusframe.lua and its
+# friends, on disk and reached by no Include, whose faults get reported as work)
+# and it read not one `.xml`. The XML is not markup to this client: the loader
+# installs each script body as a Lua chunk, so the bodies are exactly as live
+# as the `.lua` files, and 162 of the 343 files the loader opens are XML.
+#
+# Measured across the change: 187 files read before, 343 after; 6984 known names
+# before, 6955 after (the phantom files were contributing definitions nothing
+# calls); 0 findings before, 1 after - the one described in the header, which is
+# unreachable and pinned in sweep_guard with the chain that makes it so.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from framexml_source import loaded_files  # noqa: E402
+
+files = sorted(p for p in loaded_files(root)
+               if p.suffix.lower() in (".lua", ".xml"))
+texts = {f: f.read_text(encoding="utf-8", errors="ignore") for f in files}
 
 csrc = "\n".join(p.read_text(errors="ignore")
                  for p in (REPO / "src" / "addons").glob("*.cpp"))
@@ -119,6 +163,11 @@ if not known:
     print("Found no known bindings at all, which cannot be right - the "
           "registration parse broke rather than every binding vanishing.")
     raise SystemExit(1)
+# What it read, in the same report as what it found: "0 findings" from a scan of
+# 343 files and "0 findings" from a scan of none look the same on the terminal.
+print(f"scanned {len(files)} file(s) the loader opens - "
+      f"{sum(1 for f in files if f.suffix.lower() == '.lua')} .lua, "
+      f"{sum(1 for f in files if f.suffix.lower() == '.xml')} .xml")
 print(f"\n{len(known)} name(s) the interface may call, checked against "
       f"what this client answers")
 print(f"\n{len(hits)} missing functions used where nil raises")

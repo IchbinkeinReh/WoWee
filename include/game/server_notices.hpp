@@ -122,6 +122,97 @@ inline ReadItemFailure readItemFailure(uint8_t reason) {
     return ReadItemFailure::Close;
 }
 
+// The group verbs' own refusals. These are not from a server packet: each is a
+// handler of Wow.exe pushing a row of the table before it asks the realm for
+// anything, and the row it pushes is how the player learns which of the ways
+// the argument went wrong it was.
+//
+// `0x00520190` is the resolver they all use, and it is the reason the argument
+// of these verbs is a *name* as much as a unit token: it tries the unit tokens
+// first and then matches the text, case-blind, against the group's own list.
+// An argument that names nobody in the group is the row below, with the text
+// put in where the name would be.
+//
+// Which verb pushes which row is written next to each, and the three verbs
+// that write CMSG_LOOT_METHOD (0x0052dc20 SetLootMethod, 0x0052de60
+// SetLootThreshold) and CMSG_SET_GROUP_MEMBER_FLAGS (0x0052e1b0
+// Set/ClearPartyAssignment) all three lead with the same two: no group at all,
+// and not the leader. Only the assignment pair lets a raid officer through as
+// well as the leader (0x00572740), which is the difference between the loot
+// rules and the assignments - an assistant may set main assist, and may not
+// say who picks up the loot.
+//
+// An empty `enUS` says the words were not taken from anywhere: every key here
+// is in the installed interface, which words the line when it is loaded, and
+// with no interface there is nothing to word it with. Making up 3.3.5's English
+// would be a guess printed as a quotation.
+inline constexpr GameError kNotInGroup{  // 0x0052dc20, 0x0052de60, 0x0052e1b0: no group at all
+    0x50, "ERR_NOT_IN_GROUP", "", Line::Chat};
+inline constexpr GameError kTargetNotInGroupS{
+    // 0x0052ca00, 0x00572950 (GetPartyAssignment), 0x0052dc20 (SetLootMethod),
+    // 0x0052d9c0, 0x0052daf0 (the assist marks): the argument names nobody
+    0x51, "ERR_TARGET_NOT_IN_GROUP_S", "", Line::Chat};
+inline constexpr GameError kNotLeader{  // 0x0052dc20, 0x0052de60, 0x0052e1b0: not the group leader
+    0x54, "ERR_NOT_LEADER", "", Line::Chat};
+inline constexpr GameError kSpecifyMasterLooter{  // 0x0052dc20: "master" with no name given
+    0xfc, "ERR_SPECIFY_MASTER_LOOTER", "", Line::Error};
+
+// The two complaints a verb makes when its unit argument names nobody, which
+// are the same two rows over and over: the unit token resolving to nothing and
+// that token being the word "target" are different rows, which is how "no target
+// selected" and "unknown unit" are two different complaints rather than one.
+// CanInspect (0x00522710) and the assignment pair (0x0052e1b0, 0x0052df40) both
+// end their unresolved paths here, and the assignment pair's Usage strings name
+// the argument "raidmember" for the same reason. FollowUnit (0x005224c0) picks
+// between the two with a test of its own: the text is compared against the word
+// "target", and anything else that resolved nowhere is the unknown-unit row.
+inline constexpr GameError kNoTarget{    // row 199: the token was "target", or nothing
+    0xc7, "ERR_GENERIC_NO_TARGET", "You have no target.", Line::Error};
+inline constexpr GameError kUnitNotFound{  // row 0x13a: any other token, resolved nowhere
+    0x13a, "ERR_UNIT_NOT_FOUND", "", Line::Error};
+
+// ContainerRefundItemPurchase (0x005d91b0) ends every refusal with this row:
+// nothing where it was asked, no purchase record on what it found, or no
+// merchant window standing open to hand the item back to.  Row 0xc, and like
+// the bag rows around it it has no vocal half - the sound call finds nothing
+// to say and comes back quiet.
+inline constexpr GameError kInternalBagError{
+    0xc, "ERR_INTERNAL_BAG_ERROR", "", Line::Error};
+
+// The attach half of ClickSendMailItemButton (0x0056fff0) ends with this row
+// when the square it was handed is not one of the letter's twelve, and with the
+// same row when it was handed "anywhere" and every row is filled already.  Row
+// 0x248; unlike the bag rows above it this one has a vocal half (0x44).
+inline constexpr GameError kMailInvalidAttachmentSlot{
+    0x248, "ERR_MAIL_INVALID_ATTACHMENT_SLOT", "", Line::Error};
+
+// StartAuction's own refusal, pushed by 0x0059f990 before it asks the realm for
+// anything: it reads the stacks-per-auction and the number-of-stacks arguments
+// and asks whether the source items can cover stackSize*numStacks, and says this
+// and posts nothing when they cannot. The two arguments are not tested against
+// each other - a stack size nobody claimed and a stack count nobody covered are
+// the same complaint - which is why the wording is about the total. Row 0x2d4.
+inline constexpr GameError kAuctionNotEnoughItems{
+    0x2d4, "ERR_AUCTION_ENOUGH_ITEMS", "", Line::Error};
+
+// The join's own complaint, and the one thing the first of CMSG_JOIN_CHANNEL's
+// two bytes is put to use for in this client: 0x005076b0 takes a new channel
+// row out of ten, finds none, and says this only when the join's first byte was
+// nought - that is, only when somebody asked for the channel in front of them.
+// The client's own joins (the login mask, guild recruitment, a channel put back
+// after a relogin) set that byte to 1 and are silent about it. Row 0x1ba, and
+// row 0x1ba has no vocal half either (0x44).
+inline constexpr GameError kTooManyChatChannels{
+    0x1ba, "ERR_TOO_MANY_CHAT_CHANNELS", "", Line::Chat};
+
+// CanInspect(unit, showError)'s other two, from 0x00522710, and all four of its
+// rows say Line::Error - the red line - and are only raised when showError was
+// asked for.
+inline constexpr GameError kInspectInvalidTarget{  // row 0x13c: not a player, or somebody you may attack
+    0x13c, "ERR_INVALID_INSPECT_TARGET", "", Line::Error};
+inline constexpr GameError kInspectOutOfRange{  // row 0x86: a player, further than 30 yards
+    0x86, "ERR_OUT_OF_RANGE", "Out of range.", Line::Error};
+
 } // namespace server_notice
 } // namespace game
 } // namespace wowee

@@ -1361,10 +1361,28 @@ CameraController::FloorSample CameraController::sampleFloorUnderFeet(const glm::
         // wanted here is which test the instance fails, or whether it is a
         // candidate at all.
         if (!groundH && m2Renderer) {
+            // Once per place, and the clock only as a floor under that.
+            //
+            // The interval on its own was no bound at all: standing over an
+            // Undercity lift shaft is a condition that *holds*, so the same
+            // sentence with the same feet height arrived every five seconds for
+            // as long as the player stood there, which is how this block was
+            // meant to name one deck and ended up naming the same deck a
+            // hundred times. What makes the line worth reading again is a
+            // different place, so the yard square underneath has to change; the
+            // interval stays because a player walking along the edge of a hole
+            // changes place every frame.
             static std::chrono::steady_clock::time_point lastNoFloorDump{};
+            static int lastNoFloorX = std::numeric_limits<int>::min();
+            static int lastNoFloorY = std::numeric_limits<int>::min();
+            const int placeX = static_cast<int>(std::lround(targetPos.x));
+            const int placeY = static_cast<int>(std::lround(targetPos.y));
             const auto nowNoFloor = std::chrono::steady_clock::now();
-            if (nowNoFloor - lastNoFloorDump > std::chrono::seconds(5)) {
+            if ((placeX != lastNoFloorX || placeY != lastNoFloorY) &&
+                nowNoFloor - lastNoFloorDump > std::chrono::seconds(5)) {
                 lastNoFloorDump = nowNoFloor;
+                lastNoFloorX = placeX;
+                lastNoFloorY = placeY;
                 // The centre pick's answer, not the final one: the recovery
                 // passes in groundFollowedCharacter run after this and often
                 // find a floor the one ray missed. Said plainly because the
@@ -3880,8 +3898,13 @@ void CameraController::processMouseMotion(const SDL_MouseMotionEvent& event) {
     // SDL yrel > 0 = mouse moved DOWN. In WoW, mouse-down = look down = pitch decreases.
     // invertMouse flips to flight-sim style (mouse-down = look up).
     const float invert = invertMouse ? 1.0f : -1.0f;
+    // Yaw has its own switch and its own cvar (mouseInvertYaw), signed at the
+    // same place the pitch is. Only here: the controller's other look caller,
+    // applyLookDelta, is the pad, the touch screen and the headset, and each of
+    // those names its own axes before asking for the turn.
+    const float invertY = invertYaw ? 1.0f : -1.0f;
     // Each axis on its own gain, the picture's ratio inside both.
-    lookBy(-event.xrel * getMouseSensitivity(),
+    lookBy(event.xrel * getMouseSensitivity() * invertY,
            event.yrel * getMousePitchSensitivity() * invert);
 }
 

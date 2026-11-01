@@ -3,6 +3,7 @@
 #include "game/shapeshift_forms.hpp"
 #include "game/battleground_flag.hpp"
 #include "game/game_utils.hpp"
+#include "game/grey_triviality.hpp"
 #include "game/bg_score_defs.hpp"
 #include "game/pvp_flags.hpp"
 #include "rendering/selection_circle.hpp"
@@ -30,16 +31,15 @@ static int lua_UnitName(lua_State* L) {
     // is the one answer about an object that would have been right, and giving
     // it while UnitExists says no is a unit that half exists.
     // A Mirror Image (aura 279) answers its caster's name (0x0072a000).
-    auto* ghName = getGameHandler(L);
-    const std::string shown = unit && ghName ? ghName->shownUnitName(*unit) : unit ? unit->getName() : std::string{};
+    auto* gh = getGameHandler(L);
+    std::string uidStr(uid);
+    toLowerInPlace(uidStr);
+    const uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
+    const std::string shown = unit && gh ? gh->shownUnitName(*unit) : unit ? unit->getName() : std::string{};
     if (unit && !shown.empty()) {
         lua_pushstring(L, shown.c_str());
     } else {
         // Fallback: party member name for out-of-range members
-        auto* gh = getGameHandler(L);
-        std::string uidStr(uid);
-        toLowerInPlace(uidStr);
-        uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
         const auto* pm = findRosterMember(gh, guid);
         if (pm && !pm->name.empty()) {
             lua_pushstring(L, pm->name.c_str());
@@ -80,7 +80,22 @@ static int lua_UnitName(lua_State* L) {
             lua_pushnil(L);
         }
     }
-    lua_pushnil(L);  // the realm: none for one's own
+    // The other half of the pair: the server the player came from. It was
+    // hardcoded nil, so a cross-realm member was named without the realm that
+    // made the name theirs - and this is the only place that realm reaches
+    // Lua at all, since the name query answer that carried it
+    // (getCachedPlayerRealm, the +0x34 of 0x0072a000's record) had no other
+    // reader among the bindings. 0x0060e740 answers two values and takes the
+    // realm from that record, so a player on one's own server - whose query
+    // answer names no realm - gets nil here, as they do there.
+    //
+    // The token "player" answers nil too, by a test that runs before any unit
+    // is resolved: that function compares the argument's own text against
+    // "player" and returns the local player's name with a nil second value.
+    std::string realm;
+    if (gh && uidStr != "player") realm = gh->getCachedPlayerRealm(guid);
+    if (realm.empty()) lua_pushnil(L);
+    else lua_pushstring(L, realm.c_str());
     return 2;
 }
 
@@ -121,8 +136,7 @@ static int lua_UnitHealthMax(lua_State* L) {
 /// 0x007fde00: what a power is shown over - rage and runic power in tenths,
 /// happiness in thousandths (table 0x00af5220).
 static uint32_t powerDivisor(int type) {
-    static constexpr uint32_t kDivisor[7] = {1, 10, 1, 1, 1000, 1, 10};
-    return type >= 0 && type < 7 ? kDivisor[type] : 1;
+    return type >= 0 && type < 7 ? kPowerDivisors[type] : 1;
 }
 
 /// UnitPower(unit, powerType) - the second argument names *which* bar.
@@ -3307,7 +3321,6 @@ static int lua_UnitIsFeignDeath(lua_State* L) {
 /// level 99. 1 or nil.
 static int lua_UnitIsTrivial(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsTrivial(\"unit\")");
-    static constexpr int kGreyGap[20] = {4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8};
     auto* gh = getGameHandler(L);
     auto* unit = resolveUnit(L, lua_tostring(L, 1));
     bool trivial = false;
@@ -3316,10 +3329,8 @@ static int lua_UnitIsTrivial(lua_State* L) {
         if (me) {
             const int playerLevel = static_cast<int>(me->getLevel());
             const int gap = playerLevel - static_cast<int>(unit->getLevel());
-            if (gap > 0) {
-                const unsigned band = static_cast<unsigned>(playerLevel / 5);
-                trivial = band < 20 ? gap > kGreyGap[band] : gap > 8;
-            }
+            if (gap > 0)
+                trivial = gap > game::triviality::greyGap(static_cast<uint32_t>(playerLevel));
         }
     }
     if (trivial) lua_pushnumber(L, 1); else lua_pushnil(L);
@@ -4347,9 +4358,10 @@ void registerUnitLuaAPI(lua_State* L) {
                 // asks `IsTitleKnown(i) ~= 0` and false compares unequal to
                 // zero - which is the trap that made this a zero rather than a
                 // false in the first place. The loop asking it runs
-                // 1..GetNumTitles, and GetNumTitles answers 192, which is the
-                // whole space the six dwords cover (kKnownTitleCount), so every
-                // title id the mask can name comes through here.
+                // 1..GetNumTitles, which is the CharTitles table's row count
+                // plus one and not the whole space the six dwords cover, so an
+                // id past the table is one the sheet never asks about; every id
+                // the table has a row for comes through here.
                 {"IsTitleKnown",            [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int bit = static_cast<int>(luaL_optnumber(L, 1, -1));

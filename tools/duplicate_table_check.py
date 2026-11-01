@@ -104,7 +104,12 @@ def tables():
         for path in sorted(root.rglob("*")):
             if path.suffix not in (".cpp", ".hpp", ".h"):
                 continue
-            text = re.sub(r"//[^\n]*", "", path.read_text(errors="ignore"))
+            # utf-8 named: these sources are utf-8 and the Windows default is
+            # not, so a comment's umlaut arrives as cp1252 and the bytes that
+            # spelling leaves undefined vanish - which changes the text the
+            # table patterns below are matched against.
+            text = re.sub(r"//[^\n]*", "",
+                          path.read_text(encoding="utf-8", errors="ignore"))
             for m in DECL.finditer(text):
                 items = [i.strip() for i in m.group(2).split(",") if i.strip()]
                 if len(items) < MIN_ITEMS:

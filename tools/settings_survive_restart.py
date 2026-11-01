@@ -116,8 +116,10 @@ def run(lua):
 
 def main():
     if not RUNNER.is_file() or not INTERFACE.is_dir():
+        # Not zero: no restart made is the one result this script can never
+        # legitimately produce, since restarting is the whole of what it checks.
         print("framexml_run or an extracted interface is missing - no restart was made.")
-        return 0
+        return 1
 
     # From nothing, or the first run is reading a store some other run left.
     shutil.rmtree(CONFIG_ROOT, ignore_errors=True)

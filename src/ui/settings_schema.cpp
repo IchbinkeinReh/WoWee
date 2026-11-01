@@ -661,6 +661,13 @@ constexpr SettingDesc kSchema[] = {
      "This client puts both of them on this one value.", "", 0.225f},
     {"invertmouse", "Invert mouse look", SettingKind::Bool, 0, 0, 0, "Camera", "",
      "Push the mouse forward to look up, as in a flight sim.", "", 0},
+    // The yaw half of that pair. The game's own panel never had a row for it -
+    // mouseInvertYaw is a CVar its console answers to and nothing else - so
+    // this row has no Blizzard label of its own to borrow, and the row is what
+    // makes the CVar something a player can find rather than a name to type.
+    {"invertyaw", "Invert yaw mouse look", SettingKind::Bool, 0, 0, 0, "Camera", "",
+     "Move the mouse right to turn left. Only the mouse: a controller, a\n"
+     "touch screen and a headset each turn the view their own way.", "", 0},
     {"gamepad", "Use a controller", SettingKind::Bool, 0, 0, 0, "Camera", "Controller",
      "Let a connected controller move, look, target and cast. The left stick\n"
      "walks, the right stick looks, the triggers zoom, and the face buttons\n"

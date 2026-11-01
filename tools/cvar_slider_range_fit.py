@@ -66,11 +66,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import settings_config_parse  # noqa: E402  (a sibling, not a package)
 from cpp_number import number  # noqa: E402  (same)
+from framexml_source import loaded_files  # noqa: E402  (same)
 
 ROOT = Path(__file__).resolve().parent.parent
 # The extracted interface is installed data, not repository content, and the
 # tree has sat in more than one place; name its directory on the command line.
 FRAMEXML = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface/framexml"
+# Either spelling of the path names the same interface, and the loader's answer
+# starts at the folder above FrameXML.
+INTERFACE = FRAMEXML.parent if FRAMEXML.name.lower() == "framexml" else FRAMEXML
 API = ROOT / "src/addons/lua_system_api.cpp"
 PANEL = ROOT / "src/ui/settings_panel.cpp"
 
@@ -86,8 +90,14 @@ def sliderRanges():
     client never uses.
     """
     out = {}
-    for path in sorted(FRAMEXML.glob("*.lua")):
-        text = path.read_text(errors="ignore")
+    # The files the client loads, from the one place that knows, in both kinds -
+    # see cvar_default_vs_blizzard.py, which had the same glob and the same
+    # before-and-after numbers. A slider declared in a file no .toc Include
+    # reaches is a slider the client never draws, and comparing its range
+    # against a setting is comparing a range that is never offered.
+    for path in sorted(p for p in loaded_files(INTERFACE)
+                       if p.suffix.lower() in (".lua", ".xml")):
+        text = path.read_text(encoding="utf-8", errors="ignore")
         for m in re.finditer(
                 r'(\w+)\s*=\s*\{[^}]*minValue\s*=\s*([-\d.]+)[^}]*maxValue\s*=\s*([-\d.]+)[^}]*\}',
                 text):
@@ -182,8 +192,10 @@ def sharedSettings():
 
 def main():
     if not FRAMEXML.is_dir():
+        # Not zero, which is what the branch below already says for the same
+        # nothing-read: an unreadable chain fails, so an absent one cannot pass.
         print("the extracted interface is missing - no slider was compared.")
-        return 0
+        return 1
 
     ranges, binds, flds = sliderRanges(), bindings(), fields()
     clmp = settings_config_parse.rangesByMember()

@@ -149,12 +149,34 @@ CHECKS = [
      "sound samples read from disk that nothing plays"),
     # A checkbox that saves its CVar, reads it back, and changes nothing looks
     # exactly like one that works - it remembers what you chose. 69 of the 198
-    # controls in the option panels had no reader at all; 14 of those are
-    # honestly greyed with a reason, and this counts the rest. The ceiling
-    # comes down as they are implemented or greyed, and must never go up: a new
-    # control wired to nothing is the thing being watched for.
+    # controls in the option panels once had no reader at all; 14 of those were
+    # honestly greyed with a reason and the rest have since been implemented or
+    # greyed, which is what the ceiling was there to follow down. Zero today, so
+    # the bar is at zero: a new control wired to nothing is the thing being
+    # watched for, and a ratchet left a slot of slack open reports it a control
+    # late.
+    #
+    # The tool also stopped deciding which files count from a folder name, which
+    # is the only reason its numbers could have moved here. Its panel scan globbed
+    # FrameXML's own folder and could not see an options panel the newer interface
+    # keeps in an addon; its mention scan walked the whole interface tree, 73
+    # files more than the client opens (gluexml's 57, the twelve FrameXML files no
+    # .toc Include reaches, lcdxml's two, one addon frame's two), so a CVar whose
+    # only reader is in a file this client never installs read as alive. Measured,
+    # both lists give the same 198 declared CVars and the same zero findings: the
+    # arena panel's CVar is declared on a FrameXML panel as well, and the
+    # never-loaded focusframe.xml declares names that are declared elsewhere too.
+    #
+    # What did move is reach. Naming the interface folder rather than its framexml
+    # subfolder used to declare no controls at all, because the uvar map and the
+    # panel scan were both reached by joining a remembered file name onto the
+    # named directory; both spellings print the same line now, and --canary - the
+    # planted name nothing reads - passes from either. Note that the guard runs
+    # its tools with no arguments, and this one's default is a repository path
+    # that does not exist, so on a machine without an installed interface it is
+    # one of the skipped rows and this ceiling is for the machine that has one.
     ("dead_setting_check.py",
-     r"^settings with no reader and still on a panel: (\d+) of", 1,
+     r"^settings with no reader and still on a panel: (\d+) of", 0,
      "option panel controls whose CVar nothing reads"),
     # Both halves still write to the chat window. The handler adds a line and
     # fires the event; chatframe.lua's own branch formats the same fact from
@@ -240,13 +262,19 @@ CHECKS = [
     # suppressed motion scripts, so every greyed control answered the mouse.
     #
     # The check splits that list when the decompile's strings.tsv is its second
-    # argument: five of the fourteen - the two Minimap model attributes and the
-    # three XML namespace ones - are names the 12340 client carries nothing for,
-    # so that client never read them out of the XML either and they are printed
-    # apart. This table runs every sweep with no arguments, so the number checked
-    # here is the unsplit fourteen; the ceiling is against that, not the nine.
+    # argument: six of the fifteen - the two Minimap model attributes, the three
+    # XML namespace ones and ScrollingMessageFrame's `fade` - are names the 12340
+    # client carries nothing for, so that client never read them out of the XML
+    # either and they are printed apart. This table runs every sweep with no
+    # arguments, so the number checked here is the unsplit fifteen; the ceiling is
+    # against that, not the nine.
+    #
+    # Fifteen, where it was fourteen until the sweep read the files the client
+    # loads. One attribute left the list (`debug` on Binding, which is in
+    # bindings.xml, a file no .toc Include reaches) and two arrived with the
+    # addon frames, which is why the ceiling moved down rather than up.
     ("declared_vs_read_check.py",
-     r"attributes declared, (\d+) the emitter never names", 16,
+     r"attributes declared, (\d+) the emitter never names", 15,
      "XML attributes the emitter never reads"),
     # The other half. An attribute the emitter ignores is a wrong value on a
     # frame; an element it ignores is a frame, region or animation that never
@@ -274,8 +302,33 @@ CHECKS = [
     ("declared_vs_read_check.py",
      r"^(\d+) script type\(s\) declared and never fired", 2,
      "script handlers FrameXML declares that nothing fires"),
+    # Thirty-seven, where it was twenty-four until the sweep read the files the
+    # client loads: the population went 68 -> 88 names, and the un-mapped list
+    # gained thirteen and lost none - AchievementMenuClose/Open, the three
+    # AlarmClockWarning*, BarberShop_Sit, Barbershop_Haircut, GM_ChatWarning,
+    # the four Glyph_Major*/Minor*, and GuildBankOpenBag.  Those live in the
+    # addon frames and in XML script bodies, the two halves of the interface the
+    # globs could not see.  Nothing was fixed and no sound was found missing, so
+    # this is the same list with longer reach - which is only a harmless way for
+    # a ceiling to move if what the count means was measured, so it was.
+    #
+    # "No hand-written mapping" is not "silent".  PlaySound resolves the name
+    # through SoundEntries.dbc case-folded on both sides - ui_sound_manager.cpp
+    # upper-cases the table's names as it reads them and upper-cases the key as
+    # it looks one up - so 87 of the 88 names the interface asks for reach a row
+    # and play.  That is also why `Barbershop_Haircut` is not a miss even though
+    # the table spells its row `BarberShop_Haircut`: the difference is case, and
+    # neither side keeps case.
+    #
+    # The one name with no row is `AlarmClockWarning1`.  The 3.3.5 table has
+    # AlarmClockWarning2 and AlarmClockWarning3 and no Warning1, and the
+    # reference binary carries no `AlarmClockWarning` bytes at all - which is the
+    # test that settles it: the client whose behaviour this reproduces never
+    # asked for that sound either, so it is the newer interface calling a row
+    # that only a later table has.  Nothing is missing here, and the ceiling is
+    # a bar on the count, not a list of things to implement.
     ("declared_vs_read_check.py",
-     r"sound names asked for, (\d+) with no hand-written mapping", 24,
+     r"sound names asked for, (\d+) with no hand-written mapping", 37,
      "UI sounds with no hand-written mapping (the dbc answers most of them)"),
     # "Read as off" is exact, and was checked rather than assumed: pushCvarDefault
     # ends in a catch-all answering "0", so an unlisted CVar comes back "0" and
@@ -288,12 +341,23 @@ CHECKS = [
     # there is no statement of the default anywhere in the tree, and a number
     # invented here would be a behaviour change wearing the clothes of a fix.
     #
-    # Two things do read as off wrongly and neither is reachable: the CVars for
+    # Two things read as off wrongly and neither is reachable: the CVars for
     # movie recording and for voice chat, both features this client does not
     # have. MacOptionsFrame was shown and updated to check the first of those -
     # it draws without raising, so the arithmetic worry there is not real.
+    #
+    # Seven, and the number written here had been left where it was introduced
+    # while the list shrank underneath it. The whole list today is
+    # MovieRecordingCompression, Framerate, GUI, Icon, Quality and Width - the
+    # six above - plus lfgDebug. A ceiling of 41 against a measured 7 is not a
+    # bar: it would have let 34 new unanswered CVars through without saying so.
+    #
+    # Re-pinned against the loader rather than guessed from it. Reading the
+    # interface through loaded_files() named 81 CVars instead of 77 and left the
+    # misses exactly these seven, which is worth recording because the other
+    # numbers on that tool all moved.
     ("declared_vs_read_check.py",
-     r"CVars named, (\d+) the client never answers", 41,
+     r"CVars named, (\d+) the client never answers", 7,
      "CVars the client never answers, so they read as off"),
     # The half of that list that raises rather than reading as off. A CVar the
     # interface only tests survives answering nothing - the branch behind it
@@ -583,10 +647,24 @@ CHECKS = [
     # which is the one question about it that reading either side cannot
     # settle.
     #
-    # Zero across 172 files and 2369 frames. It matters because a dropped frame
+    # Zero across 162 files and 2298 frames. It matters because a dropped frame
     # raises nothing: the handlers that touch it die on a nil index somewhere
     # else entirely, and what the player sees is a panel that is present and
     # does nothing - the shape of several reports this week.
+    #
+    # Those two counts used to read 172 and 2369, because the file list was
+    # `iface.rglob("*.xml")` with gluexml cut out by name. Cutting gluexml was the
+    # right idea reached the wrong way: the walk also covered lcdxml's two layout
+    # files, the seven FrameXML files no Include reaches (bindings, focusframe,
+    # minigameframe, opacitysliderframe, petpopup, questtimerframe, tictactoeframe)
+    # and one addon frame's manifest-less file. 71 named frames in those ten files
+    # were being compared against the emitter - a dropped one there would have
+    # been printed in the same list as a dropped frame the client really asks for,
+    # which is how a real finding gets lost among findings nobody can act on. The
+    # loader's chain answers the question instead of a path pattern, and the
+    # verdict is unchanged at zero either way, which was measured rather than
+    # assumed - a population shrinking by ten files is also what a blinded sweep
+    # looks like.
     #
     # Needs the framexml_emit target; it says so and stops rather than
     # reporting a clean zero it did not earn.
@@ -604,6 +682,63 @@ CHECKS = [
     # windows raised by three events this client fires, beside two popups
     # social_panel.cpp draws from the same packets. They are
     # UiElement::Petition now.
+    #
+    # Fifty-seven, where the read list was thirty-eight, because the check could
+    # not see windows declared in the interface's addon files: it globbed
+    # FrameXML's folder, and the half that looked for addons looked at a
+    # repository path rather than at the interface being checked. The nineteen
+    # that arrived are all of them, and none has been adjudicated yet -
+    # ArenaEnemyFrames, AuctionDressUpFrame, AuctionProgressFrame,
+    # BackpackTokenFrame, BarberShopBannerFrame, BattlefieldMinimap,
+    # BattlefieldMinimapTab, CalendarFrame, EventTraceFrame, GMChatFrame,
+    # GMChatStatusFrame, GMSurveyFrame, GuildBankPopupFrame, ItemSocketingFrame,
+    # KeyBindingFrame, MacroFrame, MacroPopupFrame, StopwatchFrame,
+    # TimeManagerFrame.
+    #
+    # Each is one of two questions, and they are opposite answers: this client
+    # draws that window itself, in which case FrameXML's copy has to be
+    # suppressed or the player sees two; or it does not, and the window is
+    # FrameXML's to draw. Do not lower this ceiling to make it green; answering
+    # the question for one of them is what lowers it.
+    #
+    # Naming a frame in the takeover file settles the first of those and nothing
+    # else. What decides whether such a window's calls answer at all is the
+    # missing-API fallback in lua_engine.cpp: every unknown PascalCase global
+    # answers a no-op object, except the ones in `__WoweeLoadOnDemandFrames`,
+    # which answer nil so FrameXML's `if ( not MacroFrame ) then
+    # MacroFrame_LoadUI() end` asks for the addon instead of reading "already
+    # loaded". Six of these are in that list today - ArenaEnemyFrames,
+    # BattlefieldMinimap, BattlefieldMinimapTab, KeyBindingFrame, MacroFrame,
+    # TimeManagerFrame - and the tool now says which, next to the name.
+    #
+    # The list carries that evidence because a list of 57 bare names is a list
+    # nobody reads: each line names the strongest thing this checkout already
+    # knows about the window, out of four. The load-on-demand list; the frame
+    # name in the C++ that feeds it ("hides OpenMailFrame when not"); the
+    # window's own routine (`ItemSocketingFrame_LoadUI` in lua_socket_api.cpp);
+    # or its base name's routine, which is the weak one and is labelled weak -
+    # `ChatFrame_` credits ChatFrame7 without any line being about ChatFrame7.
+    # Measured on this tree: 6 / 6 / 18 / 27. The 27 named nowhere are the work.
+    # The count itself did not move, so the 57 is still the bar; what moved is
+    # whether the list can be read. Canary on the evidence, in memory: ask for
+    # OpenMailFrame, GroupLootFrame1, ItemSocketingFrame and a name invented for
+    # the test, and the three real ones get three different tiers while the
+    # invented one gets "nothing in this client's code mentions it".
+    #
+    # The row is graded against the count the tool now prints, which it did not
+    # use to print - the list came out with no number on it. The check also had
+    # no argument of its own, so on a machine without the interface in the
+    # repository it read nothing and printed "0 top-level windows" plus every
+    # suppressed name as one "no XML declares", exit 0; it now stops and says so,
+    # and the source names `Data/interface` in one piece so the guard can see
+    # that this is one of the sweeps that needs an installed interface. Its
+    # second half had the same fault in miniature: with no XML the inherits
+    # check printed "0 templates and font objects inherited; 0 declared.
+    # Every inherits= resolves." - a clean verdict from a run that had opened no
+    # file, on the command line that had just been told nothing was read.
+    ("framexml_window_check.py",
+     r"^(\d+) neither owned nor suppressed", 57,
+     "top-level windows no one has decided draws them"),
     #
     # So the ceiling guards a list that has been read the right way once, on
     # 2026-08-05, with the result written into the tool's docstring: fifteen
@@ -693,20 +828,223 @@ CHECKS = [
     # which do consult something - a Lua global, a C++ static - just not the
     # game handler.
     #
+    # Down to sixty-three on 2026-10-31, and the drop is the sweep's own reach
+    # narrowing rather than sixty-five stubs being answered: what it calls a
+    # stub now is a body that reduces to pushes, which counts GetMultiCastBar-
+    # Offset (six, because the client's binding is a bare literal) and leaves
+    # the BN family, the voice family and the debug zone map listed as they
+    # were. Two names did leave for good: debugstack and debuglocals, which
+    # answer their frames and values from C now instead of a Lua stub.
+    #
+    # Read that list before raising this number again. Rows like
+    # GetMultiCastBarOffset and IsMacClient are already the client's answer;
+    # what they ask is for a body that happens to be trivial, not for work.
+    #
     # The thirty-nine above were each read. The hundred and fifty-six that
     # joined them have not been, and saying so is the point of writing it here.
-    # Two are worth naming: GetQuestLogCompletionText answers "" and
-    # GetQuestLogRequiredMoney answers 0, both to the quest log and the tracker.
-    # Those two are real, and answering them needs SMSG_QUEST_QUERY_RESPONSE
-    # parsed further than it is - the quest log entry carries neither field, and
-    # the packet that does carry them is the turn-in one, which arrives only
-    # when the player is already standing at the NPC.
+    #
+    # The two names this entry used to hold up as the real work in the list are
+    # gone from the report, which is why they are written out here one last
+    # time rather than left to be re-found. GetQuestLogCompletionText reads the
+    # fifth string of SMSG_QUEST_QUERY_RESPONSE - the quest log entry does carry
+    # it, and the walk that skipped it is what made this look unanswerable -
+    # and falls back to the quest's own objectives sentence, because the tracker
+    # and the world map pin draw this line whether or not it is empty.
+    # GetQuestLogRequiredMoney reads rewardMoney negated, the same reading
+    # quest_rewards.hpp's questDialogMoney() applies: a money requirement is a
+    # negative reward. Whether the core behind this actually sends one is a
+    # server-side question, WOWEE_SERVER_SRC is unset here, and so that half is
+    # unverified - it is not listed, which only means its body calls something.
     ("framexml_live_stubs.py",
-     r"^\d+ bindings, \d+ of them stubs, (\d+) reached from a handed-over element", 128,
+     r"^\d+ bindings, \d+ of them stubs, (\d+) reached from a handed-over element", 63,
      "stubs reachable from an element FrameXML draws"),
+    # Log lines whose only bound is a clock: guarded by a static timestamp and a
+    # difference against it, which bounds the rate and not the total, so any
+    # condition that *holds* writes the same sentence for as long as it holds.
+    # Zero today, and the four this used to report are in the tool with their
+    # reasons: two were fixed (the no-floor dump now fires once per yard square
+    # under the player, the fog readout once per change in the three numbers it
+    # prints), and two were the sweep reading a member-held previous value and a
+    # counting-out retry counter as a bare clock.
+    #
+    # Ceiling 0 on purpose. A new row here is a new line that will not stop
+    # printing while its condition holds, which is the bug class this exists for
+    # - not a count allowed to drift.
+    ("timed_log_check.py",
+     r"^(\d+) log line\(s\) bounded by a clock and nothing else", 0,
+     "log lines spaced by a clock and bounded by nothing else"),
+    # FrameXML calls a name nobody defines. Four, and none of them is work.
+    #
+    # This sweep had no entry here and no encoding on its reads, so on a
+    # Windows checkout it died in its first loop - `open()` over the addons'
+    # C++ defaults to the console codepage, and the first 0x9d byte in a source
+    # comment raised before it had looked at anything. It had been dead for
+    # however long those comments have held that byte, and nothing noticed,
+    # because a sweep that is not in this file cannot fail.
+    #
+    # The four: LOCAL_Function_Environment_Manager is FrameXML's own, and
+    # MovieRecording_IsCodecSupported, MovieRecording_GetProgress and the whole
+    # MovieRecording family are absent from the executable - the byte stem
+    # "MovieRecording" does not occur in it at all.
+    #
+    # CalendarNewArenaTeamEvent is the interesting one and it is not missing.
+    # The name occurs exactly once in the image, inside
+    # "Usage: CalendarNewArenaTeamEvent(index)" at 0x00a18f08, and the only
+    # instruction carrying that address is the raise at the top of
+    # 0x005bce60, which is the handler registered for
+    # CalendarMassInviteArenaTeam: Blizzard's own copy-paste, a Usage line
+    # naming a verb that does not exist.  The calendar block of the binding
+    # table (.data 0x00ad00e0..0x00ad0178) has CalendarNewEvent,
+    # CalendarNewGuildEvent, CalendarNewGuildAnnouncement and
+    # CalendarMassInviteArenaTeam, and no arena-event entry.  WoWee carries the
+    # same wrong Usage line for the same reason, so the two agree; what this
+    # sweep reports here is a string in a binary, not an API.
+    ("framexml_api_gap.py",
+     r"^genuinely missing API\s*:\s*(\d+)$", 4,
+     "names FrameXML calls that nothing in the tree or the bindings defines"),
+    # The same question for methods reached through the widget metatable rather
+    # than through _G. Four, and all four are dump.lua's writer object, which
+    # nothing in the tree constructs - `/dump` has no way in.
+    #
+    # Eight until today: the sweep could not see a method installed by
+    # assignment, so FrameXML's `self.Collapse = AchievementButton_Collapse`,
+    # `self.Expand = AchievementButton_Expand`, `context.Write = DevTools_Write`
+    # and `self.SetDisplayValue = self.SetValue` all read as raising. The rule
+    # and what it deliberately leaves out are written out in the sweep's own
+    # header; the one name there worth remembering is SetDisplayValue, which is
+    # not API at all - the string does not occur in Wow.exe once, and the panels
+    # that never assign it guard the call with `if (slider.SetDisplayValue)`.
+    # Adding it to the engine would be inventing a method the reference client
+    # never had.
+    ("framexml_unbound_widget_methods.py",
+     r"^(\d+) widget methods called that answer nil", 4,
+     "frame:Method() calls that no binding and no FrameXML assignment answers"),
+    # The _G half of the same question, one level further out: which globals
+    # FrameXML calls that neither a binding nor its own tree defines. Seven, and
+    # the sweep's own split says none of them is a raise waiting to happen -
+    # zero are reached from a function that runs on its own, so every one needs
+    # a player to open something first.
+    #
+    # CalendarNewArenaTeamEvent is the copy-paste Usage line the api_gap entry
+    # above settled. Five are the MovieRecording family, and four of those five
+    # are asked from macoptionsframe.xml and .lua - the Mac options frame, which
+    # this loader never opens - in a client that has no movie recorder at all;
+    # "MovieRecording" does not occur in the exe. The seventh,
+    # VoiceChatButton_OnEvent, is a script handler on a voice chat button, and
+    # the voice family is absent on purpose.
+    #
+    # Seven here against four there, and the two numbers are not comparable:
+    # this sweep subtracts every name FrameXML defines itself, which retires
+    # LOCAL_Function_Environment_Manager, and it counts a *handler attribute* as
+    # a call, which admits VoiceChatButton_OnEvent.
+    ("framexml_unbound_globals.py",
+     r"^(\d+) called and nowhere defined", 7,
+     "globals FrameXML calls that neither the bindings nor FrameXML itself defines"),
+    # Text keys the C++ hands to the interface that have no line in it. One:
+    # ERR_BATTLEGROUND_JOIN_XP_GAIN, from social_handler.cpp's arena-queue
+    # refusal switch, case -9 - "cannot join as a group unless every party
+    # member has the same XP gain setting". The interface kept its neighbours in
+    # that family (JOIN_FAILED, JOIN_RANGE_INDEX, JOIN_TIMED_OUT) and dropped
+    # this one along with the XP-gain setting it belonged to, and 3.3.5's
+    # wording is GlobalStrings.dbc's, which is nowhere on these drives. So the
+    # row's second argument - an English literal - is what even a German client
+    # reads there, while its neighbours answer in the client's language.
+    #
+    # Nothing to fix and plenty to watch: a row added asking for a key the tree
+    # *does* carry, and answered by its literal anyway, is the bug this reads.
+    ("interface_text_keys.py",
+     r"^(\d+) asks the interface has no line for", 1,
+     "text keys the C++ asks the interface for that it has no line for"),
+    # The one shape of a missing name that raises instead of coming up empty: a
+    # numeric `for` whose limit is nil ("'for' limit must be a number"), which
+    # takes the handler around the loop down with it. GetNumTrackingTypes was
+    # unbound that way, and the minimap's tracking menu went dead rather than
+    # blank - a button that does nothing and no error on screen.
+    #
+    # Pinning this was refused once, on the record, because the sweep "cannot
+    # fail": a fault written into a loaded interface file stayed clean. That was
+    # the tool reading half the tree. Its own globs - `*.lua` and
+    # `addons/*/*.lua` below whatever path was named - read the addons and never
+    # the core when pointed at the interface, and the core and never the addons
+    # when pointed at FrameXML: 52 files one way, 135 the other, against the 181
+    # the loader opens. The fault stayed invisible because the file it sat in
+    # was on the closed half. It asks the loader which files it opens now, and
+    # the same test - `local count = GetNumWoweeCanaryThings()` with a loop over
+    # it, plus the direct form - goes 0 -> 2 appended to actionbutton.lua, both
+    # forms reported, the file restored byte for byte afterwards. A zero is
+    # pinnable when the sweep can fail; that is the whole test of one.
+    #
+    # Zero today. The 49 `for i = 1, select(" ", ...) do` sites in the loaded
+    # files are excused by the interpreter's own name set rather than by the
+    # interface mentioning `select` in restrictedenvironment.lua - which it does
+    # (`select = select;`, a key of RESTRICTED_FUNCTIONS_SCOPE), and excusing
+    # forty-nine loops on the strength of that one line is how this sweep was
+    # clean before it was reading everything.
+    ("framexml_for_limit_check.py",
+     r"^(\d+) unprovided global\(s\) in a for-limit", 0,
+     "a missing name used as a numeric for-limit, where nil raises"),
+    # The quieter twin of that fault: a missing *CVar* is not a raise, it is a
+    # branch never taken. An unknown name answers "0", UpdatePaperdollStats
+    # compares against five category names, and the character sheet grew two
+    # empty panels under the model with nothing anywhere saying why. 22 CVars in
+    # the files the loader opens are compared against a literal and every one is
+    # answered explicitly. Canaried the same afternoon its file list was fixed:
+    # a dropdown compared against BYCLASS/BYNAME, written into
+    # actionbutton.lua, goes 0 -> 1, and the file goes back byte for byte.
+    #
+    # Pinning it needed the same fix as the entry above, because it carried the
+    # same bug: two globs below the named directory, so naming FrameXML read 135
+    # of the 181 files the loader opens with every load-on-demand panel closed -
+    # and a name-valued CVar is a settings-panel thing, and half the settings
+    # panels are addons. Measured on this install, the wider scan changes no
+    # count: 22 either way. A sweep reading half the tree reports zero twice as
+    # confidently as it reports the truth.
+    ("framexml_cvar_check.py",
+     r"^(\d+) whose default \"0\" can never match", 0,
+     "a CVar whose default can never match the literals FrameXML compares it against"),
+    # Events the interface registers a handler for that this client never sends.
+    # 510 registered, 164 silent - a backlog count rather than a bar, pinned so
+    # that a name going quiet or a wire being added shows up as the number
+    # moving rather than as someone re-reading two hundred lines.
+    #
+    # The line this sweep prints first - "0 of 164 have a handler already", a
+    # packet parsed into a handler that never raises the event - is the one worth
+    # holding at zero, and it is not pinned: a zero line earns a ceiling by being
+    # canaried, and canarying this one means writing a packet handler into the C++
+    # for a message that has no wire, which is a change to the client rather than
+    # a scratch fault in a file this reads. Read that line by hand; the tool
+    # counts it out for you either way.
+    #
+    # What sits outside the 164 is worth knowing before reading it. Two names the
+    # report prints are adjudicated as a decision rather than a gap (the voice
+    # pair, whose packet is read and dropped by a skip handler), and six calendar
+    # names are counted as *sent* only because they reach the interface through a
+    # list of signal structs - a scan that looks for a name next to a fire call
+    # would put all six in this number and read the rise as six regressions.
+    ("framexml_event_gap.py",
+     r"^never sent\s*:\s*(\d+)", 164,
+     "events FrameXML registers a handler for that this client never sends"),
+    # Third-party addons - the case every other interface sweep here is blind to,
+    # because they are not in any manifest and not in FrameXML's tree. An
+    # undefined global in one of them does not error: the fallback answers nil,
+    # so the addon quietly stops doing the thing, which reads as a feature that
+    # is present and broken rather than one nobody wired up.
+    #
+    # 23 bundled addons, one name between them: CalendarNewArenaTeamEvent, which
+    # framexml_unbound_globals also finds and both read the same way - a header's
+    # own Usage line copied into the file, not a call. Not pinned at zero: the
+    # ceiling is drift for a *new* addon or a new gap, and the one row that is
+    # there today is a judgement about a comment, not a fault to clear.
+    ("addon_api_audit.py",
+     r"^(\d+) distinct still missing across", 1,
+     "an installed addon calling a global nothing defines"),
     # Bindings that read fewer arguments than the interface passes. The only
     # sweep here that asks whether an answer used everything it was told -
     # every other one asks whether a name is answered, and these names all are.
+    #
+    # The guard runs it with no interface to read, so this entry is skipped in a
+    # guard run and the ceiling only bites when the sweep is run on its own with
+    # the installed interface named, as its own usage line says.
     #
     # Seven faults on 2026-08-05, four of which *acted* on the wrong thing:
     # dragging a pet spell put a player spell on the bar, clicking a pet talent
@@ -749,8 +1087,272 @@ CHECKS = [
     # stopped being no-ops, and both ignore the same trailing exactMatch flag
     # PromoteToLeader beside them does. They match exactly, which is the
     # behaviour that flag asks for and the only value the unit popup passes.
+    # Forty-eight: AddQuestWatch takes its duration now. 0x005e64d0 keeps an
+    # expiry beside the watch list and 0x005dfef0 drops a watch once it is in
+    # the past, which is what AUTO_QUEST_PROGRESS means: QuestLog_OnEvent
+    # re-watches a quest whose objectives moved with MAX_QUEST_WATCH_TIME, so
+    # the tracker lets go of it five minutes later without being asked.
+    # Forty-seven: UseAction's mouse button as well, which is only a macro's
+    # -- but that is the click path to a macro icon, and clicking one had
+    # nothing behind it while the hotkey for the same icon ran it.
+    #
+    # Thirty-eight, and the drop from forty-seven is the sweep losing two of
+    # its own blind spots rather than nine rows being fixed. What the argument
+    # count accepts is a *reader* of the argument, and it used to accept any
+    # lua_* call naming L beside a number: `lua_pushboolean(L, 1)` is a value
+    # and `lua_pop(L, 2)` counts slots, so a binding ending in a helper that
+    # pops two was credited with reading the mode it had dropped, and a helper
+    # whose whole job is pushing two values made the binding that called it
+    # look answered. And a helper had to be spelled static or inline to be
+    # asked at all, which hid the shared reader the three item-use bindings
+    # take their target through - they were on the list as ignoring it. Both
+    # directions of that error were live: three rows were never there, and
+    # SetPortraitToTexture had been hidden by a push counted as a read.
+    # GetAttackPowerForStat, the row this ceiling has always carried as known
+    # and unfixed, left with the second fix too: its binding reads nothing at
+    # all, so "reads 1, passes 2" was never its shape. It is listed under its
+    # own heading now, with the sixty-four other bindings that answer a call
+    # while looking at none of it - a wider fault than the count can grade,
+    # and one the ceiling does not track.
+    # Thirty-seven: UninviteUnit takes its reason now. That argument was not
+    # free text the interface invented - 0x0051a7a0 reads it, caps it to 64
+    # characters with every pipe left out, and 0x006d43c0 puts it into the kick
+    # packet behind the guid, which is the send that client makes: opcode 0x76,
+    # CMSG_GROUP_UNINVITE_GUID, guid then reason. WoWee kicks by name on 0x75, a
+    # verb that binary's UninviteUnit never uses, and had no field to put a
+    # reason in. A name it can resolve from its own group roster now goes on the
+    # reference packet with the reason beside it; a name it cannot - a unit
+    # popup's "Bob-Icecrown", with SHOW_REALM_NAME on - still goes on the
+    # name-addressed verb, which is what a typed /kick has to fall back to.
+    # Thirty-five: the two trade skill dropdown filters read their second and
+    # third arguments now.  Both were modelled here as a single picked index,
+    # on the reasoning that the installed panel's click handler always calls
+    # Set…Filter(id - 1, 1, 1) and nothing unticks - and that reasoning is what
+    # the row was.  The reference has no pick to keep: 0x00ad0e00 and
+    # 0x00ad0e08 are masks that open and reset all-on, and the arguments say
+    # what to do with one bit of them - zero clears that entry, one sets it and
+    # keeps the rest, a third argument that is not zero sets it alone.  What
+    # lives around that click handler asks per entry: the panel works out which
+    # slot it is showing by walking the whole list and asking each entry
+    # (TradeSkillFilterFrame_InvSlotName, blizzard_tradeskillui.lua:546), which
+    # a single index cannot answer.  Both Get…Filter bindings now answer 1 or
+    # nil as 0x005da1b0 and 0x005dbf90 do rather than a Lua boolean, and both
+    # Set…Filter ones raise the client's own "Usage:" / "Bad sub class" /
+    # "Bad inv slot" / "Missing on//off parameter" literals instead of storing
+    # whatever they were handed.
+    #
+    # What it does not close, said here rather than left to be rediscovered:
+    # the reference also remembers *which* sub-class was last touched
+    # (0x00ad0e04, written beside the mask by 0x005dcf00) and asks that row
+    # which inventory slots it permits (0x005dace0 reads the row's slot mask at
+    # +0x10), so choosing a sub-class narrows and renumbers the second
+    # dropdown.  Neither list here comes out of a table row - both are built
+    # from the recipes this client already knows - so there is no row to ask,
+    # and the two masks stay independent.
+    # Thirty-four: GetAutoCompleteResults reads its fifth and sixth arguments
+    # now.  Its cursorPosition is a *character* offset, and 0x0057b3a0 clamps it
+    # - absent, negative, or past the end all read as the end.  What the cursor
+    # is for is not in the prefix test this client had: 0x0057aca0 asks whether
+    # the name begins with the text up to the cursor and then whether the text
+    # *after* the cursor turns up again at or after the cursor inside the name,
+    # stepping one character at a time for as many starts as the name has left.
+    # That is the branch behind autoCompleteWhenEditingFromCenter (setter
+    # 0x00512850), registered with the default "1" and one of the names this
+    # client registers and never acts on, so on is the only reachable branch -
+    # and the plain prefix this client did every time is the CVar-off branch,
+    # which a player would have to turn on to see.  The sixth argument decides
+    # whether a name equal to the text counts at all: without it the exact name
+    # is dropped (:8637), which is what chatframe.lua:4125 passes 1 to ask
+    # "is this a real name", and here it was always kept.  The local player's
+    # own name is no longer offered either: the reference compares each name's
+    # presence pair against the player's (0x006b1050) and the guid is the same
+    # identity over the two lists that carry it.
+    #
+    # Three things around it stay, and the row does not say so: the fold here is
+    # ASCII while 0x0076e8d0 folds accented letters as well; the second of those
+    # three CVars (autoCompleteUseContext, 0x00512870) switches the include and
+    # exclude masks off entirely when a player turns it off, and that is not
+    # modelled - the masks are asked here whatever it says; and the third
+    # (autoCompleteResortNamesOnRecency) reorders the list by who was spoken to
+    # lately, which is state nothing here keeps.
+    # Thirty-two: the two talent-group counts read their second argument now, and
+    # both answer a count they were told instead of one they worked out.
+    # 0x005c5df0 (GetNumTalentGroups) reads isInspect and isPet and answers
+    # DAT_00c21010 for the inspected player, DAT_00c20ff8 - the byte the talents
+    # packet carried - for the player, and 1 for a pet only when the pet has a
+    # talent list that itself reports groups.  The player's count used to be
+    # inferred from whether the second list had anything in it, which is wrong in
+    # the other direction: a second spec bought and never spent is still a spec,
+    # and the panel draws a tab for it.  Keeping that byte
+    # (spell_handler's talentGroupCount_) also hands SetActiveTalentGroup the
+    # guard it was missing - 0x005c5e70 refuses an index at or past the count, so
+    # a character who never bought the second spec no longer casts its spell -
+    # and its Usage literal.  0x005c5810 (GetActiveTalentGroup) reads isPet too
+    # and answers 1, because a pet has one group; a hunter's pet frame had been
+    # handed the player's own active spec and used that as the pet's group.
+    #
+    # One row in that family stays and is now known to be right rather than
+    # unexamined: LearnTalent.  The reference registers it as
+    # "Usage: LearnTalent(tabIndex, talentIndex[, isPet])" (0x00a1981c) and
+    # 0x005c80e0 reads arguments 1, 2 and 3 and no further, so the panel's fourth
+    # value has no reader in the binary either - the same shape as
+    # JoinPermanentChannel's fourth, and said at the binding now.
+    #
+    # Twenty-eight: the groupIndex rows are the rest of that family, and they
+    # are closed.  0x005c57d0 is ported as one helper - a number argument
+    # becomes a zero-based group, and anything else, including no argument at
+    # all, is the group the player is standing in; GetTalentPrereqs inlines the
+    # same three lines instead of calling it.  An index out of range is not
+    # clamped, because the group is a record index and a record that is not
+    # there answers no points and no ranks: GetTalentTabInfo pushes 0 and 0, and
+    # GetTalentInfo pushes the -1 and 0xffffffff it starts the pair at, each one
+    # pushed one-based.  GetTalentTabInfo reads it from argument 4, GetTalentInfo
+    # and GetTalentPrereqs from 5 - Prereqs also reads argument 3 as isInspect
+    # now, which is what picks the class whose layout the prerequisite
+    # positions come from, so inspecting another class stopped drawing lines to
+    # the viewer's own tree.  GetTalentLink takes the same argument, and its
+    # rank from the same record; note that 0x005c7ce0 reads that slot twice, at
+    # :6701 for the group and again at :6704 as the switch choosing between the
+    # record's learned rank and its preview rank, although the Usage line puts
+    # isPreview in the sixth slot - the panel names a group on every call, so a
+    # copied link carries the preview figure, and it is read as the binary does
+    # rather than as the Usage line suggests it meant.
+    # AddPreviewTalentPoints, GetGroupPreviewTalentPointsSpent and
+    # ResetGroupPreviewTalentPoints take the same pair and refuse a group other
+    # than the one the staging store belongs to: the client keeps a preview
+    # total per group (0x005c6010 totals the record the argument picks), there
+    # is one store here, and the panel only ever stages for the active spec
+    # (blizzard_talentui.lua:443 gates the click on it).
+    #
+    # The inspect half needed the second list, and it is stored now:
+    # SMSG_INSPECT_TALENT carries a talent list for every group the target has,
+    # and the reader kept the active group's and threw the other away, so
+    # InspectResult::talentRanks is talentRanksByGroup.  The total still counts
+    # the active group alone, which is what stopped the double-counting in the
+    # first place.  What stays unmodelled in that family, said at the bindings:
+    # pet talents answer nil or zero as they did, and a preview staged for the
+    # inactive spec is a state nothing here carries.
+    #
+    # Five more went with the group and inspect cluster: CanInspect's showError,
+    # NewGMTicket's needResponse, and the third argument of GetPartyAssignment,
+    # SetLootMethod and - through the same helper - SetPartyAssignment.  The
+    # argument sweep counts reach, not correctness, so what that cluster also
+    # fixed is not in this number at all: /maintank Bob, SetLootMethod("master",
+    # "Bob") and GetPartyAssignment("MAINTANK", name, 1) all named nobody before,
+    # because they resolved unit tokens only, and the four verbs' group and
+    # leader gates, the taint gate ClearPartyAssignment should not ask (Set
+    # asks it, Clear does not), and "no member named means the sender" were
+    # wrong with every argument read.
+    #
+    # Six more went with the name-resolution cluster, and those six were the
+    # same argument: TargetUnit, FollowUnit, StartDuel, PromoteToLeader,
+    # PromoteToAssistant and DemoteAssistant all take exactMatch as their second
+    # argument (0x00520190's fourth parameter, which makes the walk compare the
+    # whole candidate instead of as many characters as were typed), and every one
+    # of them read one argument and stopped.  Reading it is the small half of
+    # that cluster; the half the count cannot see is that TargetUnit, FollowUnit
+    # and StartDuel resolved unit tokens and nothing else, so a typed "/tar
+    # Felwolf" or "/duel Bob" named nobody at all, and that FollowUnit had been
+    # matching the *target's* name by hand instead of taking the resolver's
+    # answer - which needed a follow state that names a guid rather than "whatever
+    # is targeted", since following the resolver's answer does not make it the
+    # target first.
+    #
+    # Three more went with the refund trio, and they were the same argument
+    # under a different name: GetContainerItemPurchaseInfo, GetContainerItem-
+    # PurchaseItem and ContainerRefundItemPurchase all take isEquipped, which
+    # turns their second argument from a slot in a bag into a slot of the
+    # character pane, and none of the three read it.  Reading it is again the
+    # small half.  What that trio was also doing wrong is not in this number:
+    # the Info binding counted the *units* of what was paid and handed the
+    # figure to a loop over entries, the item getter answered a fourth value the
+    # client pushes no fourth of (three calls push the icon, the quantity and
+    # the link, and objdump of 0x005d8f70's tail shows no fourth), and it
+    # treated the index as a slot in the record instead of an ordinal among the
+    # entries that name an item; and the refund verb sent its packet whatever
+    # the state of the world was, where the client refuses - with game error
+    # 0xc - unless the item carries a purchase record and a merchant window is
+    # standing open.  The three Usage lines those bindings never raise are also
+    # not in the count; those are what the argument check itself prints.
+    #
+    # One more went with the letter being written.  ClickSendMailItemButton read
+    # one of the two arguments mailframe.lua hands it, and the second is which
+    # button: 0x0084e0b0 is lua_toboolean, and the interface spells it
+    # `button == "RightButton"`.  A right click hands one row of the letter back
+    # and asks nothing of the cursor; a left click, or no second argument, is the
+    # cursor's half.  Those two had been swapped, because the binding branched on
+    # whether the cursor held an item: right-clicking while carrying something
+    # attached instead of taking anything back, and left-clicking a filled square
+    # emptied it where the client picks that item up onto the cursor.  The first
+    # argument went with the branch: the row is an index into the client's own
+    # array, counted from zero, and -1 means "whichever row is free" -
+    # 0x0056fff0 walks rows from zero when handed -1 and otherwise writes just the
+    # row it was handed - while GetSendMailItem and its siblings subtract one from
+    # theirs (0x00570750), so the two spellings are a row apart by design and the
+    # row walk says which is the array's own.  Reading a row number as a button
+    # number wrote one row under the square that was clicked.  The installed tree
+    # hands self:GetID() and numbers its buttons from one, which is newer
+    # FrameXML through a 30300 tag: 3.3.5's buttons can only have handed the row
+    # number, since nothing on either side adjusts it.  A row outside the twelve
+    # and a letter already full are game error 0x248 over there and were a silent
+    # no here.
+    #
+    # One more went with the spell book: CastSpell's third argument is the
+    # ALT-click, and 0x00541250 hands the cast routine the local player
+    # (0x004d3790, which elsewhere is checked-cast as Player_C) when
+    # 0x00815500(L,3) answers a truth, instead of the target it keeps at
+    # DAT_00bd07b0/b4.  spellbookframe.lua reaches that through
+    # IsModifiedClick("SELFCAST"), so an ALT-click in the book asked for the
+    # target, target or no target, rather than for this player.
+    #
+    # What the rest of this count is made of, for whoever goes down the list.
+    # Two rows are the installed interface asking about an argument the 12340
+    # client never reads at all: StartAuction's fifth (0x0059f990 raises "Usage:
+    # StartAuction(minBid, buyoutPrice, runTime, count)" and takes four), and
+    # LearnTalent's fourth (0x005c80e0 reads three, and its Usage line names
+    # three).  Three more are arguments a comma count cannot see: CancelUnitBuff's
+    # filter changes place with the form it is used in, which is written out at
+    # the binding, SetPortraitToTexture forwards its second with lua_pushvalue,
+    # and CastPetAction takes its target through castPetSlot.  GetUnitName is the row
+    # that is not the client's binding at all.
+    #
+    # JoinPermanentChannel's pair is closed (e7d14943): the client's join worker
+    # 0x00507a80 takes a by-client byte and a by-player byte, the interface's
+    # fourth argument is the second of them, and the first is what gates the
+    # client's own ERR_TOO_MANY_CHAT_CHANNELS.  Both were being sent as zero.
+    #
+    # Two are closed as unimplementable rather than unfixed, and both were
+    # measured before being set down.  JoinBattlefield's third argument is the
+    # rated byte of CMSG_BATTLEMASTER_JOIN_ARENA (0x0054d990 does read three;
+    # 0x0054cc70 picks the opcode with `(-isArena & 0x6a) + 0x2ee` and writes the
+    # bracket as a byte where the battleground join writes an instance dword),
+    # and the client takes that branch off a battleground-record table's
+    # record+0x24 == 4 test.  Nothing on the wire writes that table - SMSG_BATTLEFIELD_LIST's
+    # own reader at 0x0054e390 consumes guid, from-where, type, two level bytes,
+    # one flag byte, reward dwords and the instance list, with no type field - so
+    # an arena queue needs a table before it needs a packet.
+    # GetCategoryNumAchievements' second is not a hidden filter for an ordinary
+    # category: 0x005b38e0 reads the hidden bit (row +0x24 bit 0) only for the
+    # pseudo categories -1 and -2, and the argument instead switches off a dedup
+    # keyed on row +0xc, which the catalog here has no equivalent of.  What the
+    # binding did get wrong is fixed: the client pushes two values, and it was
+    # pushing three.
+    #
+    # What is left is GetBinding, GetBindingKey, GetBindingAction and SetBinding,
+    # four rows for one absent concept: the mode this client's binding store has
+    # no notion of.
+    #
+    # The printed line this pattern reads is worth spelling out: the sweep prints
+    # every counted row and *then* says how many of them the 12340 client carries
+    # no name for, and the two calibrations before the last recorded the second
+    # figure rather than the first (17 where that message reported 18, 14 where
+    # it reported 15) - one under, by however many rows are newer than this client,
+    # which on this tree is the single GetUnitName row.  On a checkout with
+    # Data/interface, where this sweep runs instead of being skipped, that reads
+    # as over ceiling.  The printed figure is what is recorded below now: 12, the
+    # count with the chat-join row above it closed.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 55,
+     r"^(\d+) binding\(s\) read fewer arguments", 12,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,
@@ -795,14 +1397,31 @@ CHECKS = [
      "token strings the interface cannot look up"),
     # Where the interface indexes a table with a binding's answer directly. A
     # reading list, not a verdict - the sweep can print the table's keys but not
-    # what the binding answers. Nine, and the one that put it here was
+    # what the binding answers. The one that put it here was
     # MAX_PLAYER_LEVEL_TABLE[GetAccountExpansionLevel()] against a table holding
     # 0, 1 and 2 while the binding counted from one: on Wrath it read nothing,
     # MAX_PLAYER_LEVEL became nil, and the comparison beside it raised on every
-    # level gained. Five of the nine call a C binding and all five have been
-    # read; a tenth means someone should read that one. 1s.
+    # level gained.
+    #
+    # Eight, where the list had nine, because the sweep stopped globbing the
+    # interface tree and asked the loader which files the client opens. The
+    # dropped site is GlueBackgroundMusic[GetClientExpansionLevel()] in
+    # gluexml/trialconvert.lua: gluexml is the login glue this client never
+    # installs, and that file is the only place the table is written. A lookup no
+    # interpreter here runs was occupying a slot whose whole point is "someone
+    # should read this one".
+    #
+    # What did not move, measured rather than hoped: the key sets of the tables
+    # the sweep compares tokens against are identical under both file lists -
+    # CLASS_ICON_TCOORDS 10, RAID_CLASS_COLORS 10, PowerBarColor 16,
+    # MirrorTimerColors 4, UnitLootMethod 5 - and the token verdict stayed 0. gluexml
+    # does re-write CLASS_ICON_TCOORDS in charactercreate.lua, but adds no key the
+    # loaded files do not already give. So this removed a phantom from a reading
+    # list, not evidence from a verdict. Four of the eight call a binding this
+    # client carries and all four have been read; a ninth means someone should
+    # read that one. 1s.
     ("token_table_check.py",
-     r"^(\d+) table lookup\(s\) keyed by a binding", 9,
+     r"^(\d+) table lookup\(s\) keyed by a binding", 8,
      "tables the interface indexes with a binding's answer"),
     # A bound binding answering "" or 0 where the interface tests for nothing.
     # Only nil and false are false in Lua, so the branch meant for "there is
@@ -950,6 +1569,17 @@ CHECKS = [
     # works or not. Zero is the honest ceiling for a handler that can do nothing
     # at all; the tool's second list - a dead call beside a live one - is two
     # Battle.net branches that cannot run and is not guarded.
+    #
+    # Zero still, after the tool stopped building its two populations from
+    # `XML.rglob("*.lua")` and started asking the loader. The glob read 32 files
+    # no interpreter opens - gluexml's 26, five FrameXML files no .toc Include
+    # reaches, one addon file the manifest does not list - and not one of them
+    # has a SLASH_ row or a SlashCmdList assignment in it, so the sweep sees the
+    # same 151 names and 72 handler bodies either way. What that retires is the
+    # habit of deciding the file list by its path. Canary, in memory: take
+    # LeaveChannelByName away from the /leave handler - the one live call in it -
+    # and this row goes 0 -> 1, which is the proof the ceiling is a bar and not
+    # a silence.
     ("framexml_slash_shadowing.py",
      r"^(\d+) client command\(s\) whose handler has no live call", 0,
      "slash commands FrameXML takes over with a handler that cannot act"),
@@ -1090,6 +1720,79 @@ CHECKS = [
     ("duplicate_block_check.py",
      r"^(\d+) file pair\(s\) sharing code", 0,
      "unjudged pairs of files sharing a block of code"),
+    # The same fact as a data table, which the block checker above says outright
+    # it cannot see: 627 tables of four or more items with three or more distinct
+    # values, of which six are written out in more than one file and six more
+    # are settled here with a reason.
+    #
+    # Most of the six are one fact in two or three places and drift the way two
+    # copies always drift: the reputation rank floors, the six resistances twice,
+    # the five Horde race ids in three places - two of those three in the same
+    # translation unit. Two are the same *shape* rather than the same fact, and
+    # reading each is what tells them apart: the 0|1|2|0|2|3 that celestial's draw
+    # order and weather's share, and a quarter-extent initializer that appears
+    # twice in the screen effects pair.
+    #
+    # The largest that came down was the SPELL_FAILED_ name table, all 187 rows of
+    # it written out in both combat_handler.cpp, where a pet's refused cast is
+    # worded, and spell_handler.cpp, where the player's is. The client spells
+    # those names in one switch (0x007fcca0): 187 literals, cases 0 through 0xba
+    # with no hole in between, SPELL_FAILED_UNKNOWN as the fall-through. Reading
+    # that switch over both copies found no row the other lacked and no row
+    # spelled differently - which is what one switch guarantees and what two
+    # hand-copied 187-row tables do not; a result named in one handler and not the
+    # other is two answers to one code. It is one table in
+    # cast_failure_error.hpp now, prefix and all, since the prefix is part of what
+    # the client returns and three call sites used to paste it on.
+    #
+    # The one before it: the grey-level gap, written out here three times -
+    # kGreyGap behind the greeting's quest-trivial test, kGreyGap again behind
+    # UnitIsTrivial, and a kGreyRange of the same rows deciding when a nameplate
+    # turns its level grey. The client really does keep three tables there
+    # (0x00a12fd0, 0x00a31bb8, 0x00aa34b8), but read out of .rdata all twenty rows
+    # of each agree, so the copies were three spellings of one fact and could
+    # drift apart over something the reference states once. It is
+    # game::triviality::greyGap now, and what stayed with each caller is what grey
+    # means to that caller - which is the part that was never shared.
+    #
+    # Two came down before that, and they were one client table copied three ways
+    # each: the power tokens of 0x007fe4b0, written out by the combat log's energize
+    # line, by a failed cast naming the power it wanted and by UnitPower's
+    # display; and the power divisors of 0x00af5220, written out twice. They are
+    # kLuaPowerNames and kPowerDivisors in lua_api_helpers.hpp now. What the merge
+    # left apart on purpose is what each site answers past the seventh power - the
+    # client hands the combat log an empty string there, UnitPower answers MANA,
+    # and the cast-failure lookup answers nothing so its caller can tell that the
+    # spell wanted a bar this client has no row for. Those are three different
+    # questions, and a shared table that flattened them would have been the wrong
+    # kind of tidy.
+    #
+    # One that came down before these: the 29-entry inventory-type table was a
+    # namespace table in the item-query bindings and a function-local one in the
+    # inventory bindings, both 29 entries in the same order, one naming a tooltip
+    # slot and the other driving IsEquippedItemType's matching - so a slot added to
+    # one and not the other would have had the tooltip name a slot the matcher
+    # could not answer. It is kLuaInvTypes in lua_api_helpers.hpp now, beside the
+    # two power tables and the other shared tables, and both bindings read it.
+    ("duplicate_table_check.py",
+     r"^(\d+) written out in more than one file", 6,
+     "data tables written out in more than one file"),
+    # The same drift question one level smaller: a magic number survives a
+    # rewording that the block scan would miss, which is how one spell id came to
+    # sit in five differently-formatted lists of druid forms, three of them the
+    # trio the stance bar walks. 1382 distinctive literals in the tree, 92 of them
+    # written out in three or more files.
+    #
+    # Read the rows as questions, not as a backlog: the widest one today, 0x2000
+    # in twenty files, is kTypeGuardian in one block of combat_log.hpp,
+    # kMissAbsorbed ten lines later, and the flag a fall counts as far in
+    # entity.hpp - three flag spaces the tool cannot tell apart because it reads
+    # values and nothing else. So this ceiling is for the count moving, and the
+    # tool's header now says outright that the top of its list is not all signal -
+    # the claim that it was is what let a row like that pass as found work.
+    ("repeated_literal_check.py",
+     r"^(\d+) written out in three or more files", 92,
+     "distinctive literals written out in three or more files"),
 ]
 
 # Prose rather than a count: the chunk checker says one of two sentences.
@@ -1099,18 +1802,54 @@ CHECKS = [
 #
 # Each of these three was canaried before it was pinned: the defect it claims
 # to catch was written into a live interface file and each count went 0 -> 1.
-# Two others were written up alongside them and are *not* here -
-# framexml_nil_arithmetic's zero line and framexml_for_limit_check's sentence
-# both stayed clean with their own fault sitting in a loaded file, so pinning
-# them would have added two guards that cannot fail. (nil_arithmetic still
-# earns its keep by hand: the line that found the calendar bug is its "carriers
-# a live file reaches", which is 1 rather than 0 and so has no ceiling to pin.)
+# One of the written-up sweeps is still *not* here: framexml_nil_arithmetic's
+# zero line stayed clean with its own fault sitting in a loaded file, so
+# pinning it would add a guard that cannot fail. (It still earns its keep by
+# hand: the line that found the calendar bug is its "carriers a live file
+# reaches", which is 1 rather than 0 and so has no ceiling to pin.)
+#
+# framexml_for_limit_check was in that same sentence until 2026-11-01 and moved
+# into the table above, canary and all. The reason it could not fail turned out
+# to be a bug in the sweep - it read half the tree whichever way its path was
+# named - and a fault sitting on the unread half reads exactly like a sweep that
+# cannot fail. Worth remembering as the shape of the mistake: "this check can
+# never fire" and "this check is not looking" look identical from here.
 CHECKS += [
     ("framexml_contract_check.py",
      r"^(\d+) arity, \d+ return-count", 0,
      "bindings needing an argument the interface calls bare"),
+    # The third number on that same line. It is graded separately because it
+    # moved twice today for opposite reasons: widening the sweep to the loader's
+    # whole file list (the addon handlers and the XML script bodies were not
+    # being read at all) produced a candidate nobody had ever seen, and it then
+    # proved to be manufactured - the calendar's handler tests two events in one
+    # branch and re-tests one of them around the unpack, so the argument read
+    # belongs to GUILD_ROSTER_UPDATE, which this client fires with one, while
+    # the sweep charged it to PLAYER_GUILD_UPDATE, which it fires with none.
+    # Canaried after the fix rather than before: an unpack of two names from
+    # PLAYER_GUILD_UPDATE written into minimap.lua took the line 0 -> 1, and the
+    # file went back byte for byte.
+    ("framexml_contract_check.py",
+     r"return-count, (\d+) event candidates", 0,
+     "an event handler unpacking more names than the client ever fires"),
+    # One, and it is the same adjudication as the MovieRecording rows under
+    # framexml_api_gap above: minimap.xml's tooltip OnUpdate concatenates
+    # MovieRecording_GetTime, which nothing answers. It runs only inside
+    # MiniMapRecordingButton, declared hidden="true", whose only Show() in the
+    # tree is behind MovieRecording_IsRecording() - which this client answers
+    # false - so the button never appears, its OnEnter never sets
+    # MINIMAP_RECORDING_INDICATOR_ON, and the body never runs. The name is not
+    # in the executable either: the stem "MovieRecording" does not occur in
+    # Wow.exe at all.
+    #
+    # The count moved from 0 to 1 because the sweep grew eyes, not because the
+    # tree grew a fault. It read `framexml/*.lua` and `addons/*/*.lua` before, so
+    # it read no `.xml` at all - and 162 of the 343 files the loader opens are
+    # XML, every script body in them a Lua chunk the client installs. Canaried
+    # on the new half: a fault written into minimap.xml's OnUpdate body took the
+    # line 1 -> 2, and the file went back byte for byte.
     ("framexml_nil_use_check.py",
-     r"^(\d+) missing functions used where nil raises", 0,
+     r"^(\d+) missing functions used where nil raises", 1,
      "missing functions used where nil raises"),
     ("framexml_method_check.py",
      r"^(\d+) methods called that neither the metatable nor the known set", 0,
@@ -1222,10 +1961,18 @@ SENTENCES = [
      "lands inside the range its setting holds",
      "a Blizzard slider handing over a number its setting has no room for"),
     # And the same defaults against the game's own tables, which declare one
-    # beside each CVar their panels drive. Two differ on purpose and are named
-    # in the script with the reason; this is for a third nobody decided on.
+    # beside each CVar their panels drive. Six differ on purpose and are named
+    # in the script with where the registration says so; this is for a seventh
+    # nobody decided on.
+    #
+    # The sentence was out of date: the sweep reworded its clean line - it names
+    # how many of the compared names are the registered disagreements now - and
+    # this still asked for "matches the game's own, but for", which the current
+    # output does not contain. A stale SENTENCES entry fails loudly rather than
+    # silently, so it would have read as a broken sweep the day someone
+    # installed an interface to read; it has never run anywhere that has one.
     ("cvar_default_vs_blizzard.py",
-     "matches the game's own, but for",
+     "matches the game's own;",
      "a default differing from the game's own with no reason recorded"),
     ("cvar_default_agreement.py",
      "answers the interface the same way",
@@ -1233,6 +1980,40 @@ SENTENCES = [
     ("framexml_settings_control_check.py",
      "every control shows the value it is given",
      "a settings control not keeping one of the promises its panel makes"),
+    # The Warden emulator's stub branch - the code that compiles when Unicorn
+    # is absent - is compiled by no configuration anyone here runs, so it rots
+    # in place; issue #115 was exactly that. This re-runs each such
+    # translation unit's real compile command minus -DHAVE_UNICORN and minus
+    # the precompiled header, which has to go too or the compiler is handed the
+    # state the define was on and the mismatch never surfaces.
+    #
+    # Two units today, and both parse. The all-clear is asked for as a sentence
+    # rather than a number because the number is not a quality bar: it is how
+    # many translation units carry the branch, and it going up would mean
+    # another unit grew one, not that anything got worse. The tree configured
+    # without Unicorn prints the same line with a zero in it, which is the
+    # stronger statement - the stub branch is what that build compiles anyway.
+    #
+    # This tool had never run on Windows at all: POSIX shlex ate the backslashes
+    # out of the compiler's path, and past that an MSYS2 c++ invoked by absolute
+    # path from a PATH that does not carry its bin directory exits 1 without
+    # printing a word. Both are written out in the tool's own header, and the
+    # second is the trap building-wowee-locally already records for ordinary
+    # builds - it just took a compile for the sweep to fall into it.
+    # File-format knowledge that has to live in one place: the four decodes this
+    # tree has actually duplicated (the ADT layer alpha, the chunk-under-a-point
+    # lookup, and two others), each with a pattern only that knowledge produces,
+    # so a hit anywhere else is a second copy or a new caller that should go
+    # through the owner. Four pieces, and the all-clear is that each lives in one
+    # place - which is what it cost to learn: the alpha decode had three copies
+    # and the fix that filled a four-bit alpha map's unpainted last row went into
+    # the one the grass uses while the ground kept drawing the strip.
+    ("format_knowledge_check.py",
+     "Each lives in one place.",
+     "a file-format decode that exists in more than one file"),
+    ("unicorn_stub_check.py",
+     "translation unit(s) compile without Unicorn",
+     "the Warden stub branch still parses without Unicorn"),
 ]
 
 
@@ -1280,6 +2061,12 @@ def missing_input(tool):
     # above went to the failure list instead.
     if "framexml_run" in source and not (ROOT / "build/bin/framexml_run").is_file():
         return "build/bin/framexml_run"
+    # Same for a sweep that re-runs the build's own compile commands: without a
+    # configured tree there is no command to re-run, and the sweep's answer to
+    # that is a reason and exit 1, which is not a fault to report.
+    if "compile_commands.json" in source and not (
+            ROOT / "build/compile_commands.json").is_file():
+        return "build/compile_commands.json"
     return None
 
 

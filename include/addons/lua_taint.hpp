@@ -95,6 +95,21 @@ private:
 /// function value carries. Same stack contract as lua_pcall.
 int pcallHandler(lua_State* L, int nargs, int nresults, int errfunc);
 
+/// lua_pcall with scriptErrorHandler installed when `errfunc` names none, and
+/// that handler taken back off the stack again - the client protects every
+/// script call this way (0x00819ea0), and it is the difference between an
+/// error the interface is told about and one only the log ever saw. The stack
+/// contract is lua_pcall's either way.
+int callProtected(lua_State* L, int nargs, int nresults, int errfunc);
+
+/// The message handler a script call is protected with when its caller names
+/// none: the client's one C function, referred to once at the state's creation
+/// (DAT_00af576c, 0x00819730), which hands the message to whatever
+/// seterrorhandler installed and reports what that returns. Given to
+/// LuaEngine's own traceback handler to run its part through, so an error in a
+/// frame script reaches the interface's handler the same as one from an event.
+int scriptErrorHandler(lua_State* L);
+
 /// The handler's arguments as 0x00819ea0 hands them over, once the running
 /// taint is the handler's (`record`): `self` fresh out of the frame's registry
 /// reference, so it carries the handler's taint and not whoever stored the

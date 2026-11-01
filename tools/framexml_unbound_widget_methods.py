@@ -20,26 +20,44 @@ into a report that has to be read.
 False positives to expect, and why they cannot be filtered by shape:
   * Methods FrameXML defines on its own tables and objects - a table is not a
     widget, and `:Method()` looks identical either way. The script subtracts
-    every `function X:Method` and `X.Method = function` it can see, which
-    catches most. It does not catch a method *assigned* from another function:
-    blizzard_achievementui does `self.Collapse = AchievementButton_Collapse`,
-    so Collapse and Expand are reported and are fine. Check how a name is
-    defined before treating it as a gap.
+    every `function X:Method`, `X.Method = function` and `X.Method = name` it
+    can see, which catches most of them. What it cannot see is an assignment
+    whose right side is a call - `context.GetTableName = Pick_Cache_Function(
+    ...)` - because there is no way to know what a call answers. Check how a
+    name is defined before treating it as a gap.
   * Methods on Lua's own types (`("x"):format(...)`) - lowercase, so the
     uppercase-initial filter drops them.
 
+A FIELD ASSIGNMENT IS A DEFINITION, AND THE ENGINE READS IT TOO
+
+`X.Method = someFunction` installs the method on that object: a field beats
+the metatable on the way out, and it is the same field the call reads on the
+way in. So blizzard_achievementui's `self.Collapse = AchievementButton_
+Collapse` in AchievementButton_OnLoad answers Collapse and Expand, and the
+options panels' `self.SetDisplayValue = self.SetValue` answers
+SetDisplayValue - which is not a client method at all, not in the exe and not
+in `__WoweeWidgetMethods`. It is FrameXML saving the prototype before
+shadowing it:
+
+    self.SetDisplayValue = self.SetValue;      -- the engine's, read off mt
+    self.SetValue = function (self, value)     -- this panel's, in the field
+        self:SetDisplayValue(value);           -- the one it just saved
+        ...
+
+The read on the first line works here for the same reason it works in the
+reference client: `mt.__index = mt`, so `self.SetValue` finds the engine's
+binding as a value. The panels that never run that OnLoad are guarded at the
+call - `if (slider.SetDisplayValue) then` in optionspaneltemplates.lua - and
+the fallback answers nil for the read, so the branch is simply not taken.
+SetDisplayValue is therefore answered twice over and must not be added to the
+engine as if it were API: the string does not occur in Wow.exe once.
+
 WHAT IT REPORTS TODAY, AND WHY NONE OF IT IS REAL
 
-Seven, all false positives, left in the count rather than special-cased -
-a list with an exception in it stops being checkable.
-
-  * Collapse and Expand, on the achievement buttons. The addon assigns them
-    as table fields - `self.Collapse = AchievementButton_Collapse` in
-    AchievementButton_OnLoad - and a field always beats the metatable, so they
-    are answered. A field assignment is not a method definition and this
-    cannot see one.
-  * Five on dump.lua's writer object, which nothing constructs. /dump is not
-    reachable here.
+Four, all of them on dump.lua's writer object, which nothing in the tree ever
+constructs - `/dump` is not reachable here. Three are assigned from a call
+(rule above), and `Result` is never assigned but is only ever called behind
+`if (context.Result) then`, which the nil fallback fails harmlessly.
 
 The nine that were real-looking before were GlueXML, and are gone now that
 this reads only what the loader opens.
@@ -87,9 +105,31 @@ called = {}
 # list - sits in the same tree and is refused by name, so a name it calls
 # or a value it unpacks says nothing about this client.
 for p in sorted(loaded_files(XML)):
-    text = strip(p.read_text(errors="ignore"), p.suffix == ".xml")
+    # utf-8 named: these files are utf-8 and the default on a Windows console
+    # is not, so the German interface decodes as cp1252 and `errors="ignore"`
+    # silently drops the five bytes cp1252 leaves undefined - inside a name or
+    # a comment delimiter, that moves what the patterns below match.
+    text = strip(p.read_text(encoding="utf-8", errors="ignore"),
+                 p.suffix == ".xml")
     defined |= set(re.findall(r"\bfunction\s+[\w.]+[.:](\w+)\s*\(", text))
     defined |= set(re.findall(r"[\w.]+\.(\w+)\s*=\s*function", text))
+    # ...and assigned straight from another name, which is the same install by
+    # a shorter route. `X.Method = someName` puts a callable in a field, the
+    # field beats the metatable, and the call answers. framexml_api_gap.py has
+    # had this rule for globals all along and used it to clear
+    # AchievementFrameTab_OnClick, which is assigned rather than defined; the
+    # widget half of the surface needed it for Collapse, Expand and
+    # SetDisplayValue, three names this reported as raising.
+    #
+    # The right side has to be a bare name (or `self.SetValue`, a field read)
+    # and the line has to end there: that keeps `x.y == z` out, keeps out
+    # `= nil`, which installs the opposite of a method, and keeps out
+    # `context.GetTableName = Pick_Cache_Function(...)` - a call's value is
+    # not knowable here, and pretending otherwise would hide the four names
+    # this still reports.
+    defined |= set(re.findall(
+        r"[\w.]+\.(\w+)\s*=(?!=)\s*(?!nil\b|false\b)[A-Za-z_][\w.]*\s*;?\s*$",
+        text, re.M))
     for m in re.finditer(r":(\w+)\s*\(", text):
         called.setdefault(m.group(1), set()).add(p.name)
 

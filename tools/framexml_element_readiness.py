@@ -284,7 +284,7 @@ ADDON_ELEMENTS = {
 # how the two came apart.
 def _element_names():
     path = os.path.join(ROOT, "src", "ui", "framexml_takeover.cpp")
-    with open(path, errors="ignore") as fh:
+    with open(path, encoding="utf-8", errors="ignore") as fh:
         src = fh.read()
     return set(re.findall(r'\{UiElement::\w+,\s*"([a-z]+)"', src))
 
@@ -576,7 +576,7 @@ def main():
              "lua_ContainerNoOp", "lua_GetZeroMoney")
     addon_src = ""
     for name in sorted(glob.glob(os.path.join(ROOT, "src/addons", "*.cpp"))):
-        with open(name, errors="ignore") as fh:
+        with open(name, encoding="utf-8", errors="ignore") as fh:
             addon_src += fh.read()
     named = set()
     for entry in settled.values():

@@ -69,8 +69,11 @@ def wanted(height, lo, hi):
 
 def main():
     if not RUNNER.is_file() or not INTERFACE.is_dir():
+        # Not zero: nothing asked for is not four defaults agreeing, and this
+        # one's canary is a scale put back on the steps it used - which a run
+        # that never started cannot fail to catch.
         print("framexml_run or an extracted interface is missing - no scale was asked for.")
-        return 0
+        return 1
 
     lua = ('local out = {} ' +
            "".join(f'out[#out+1] = "{k}=" .. tostring(WoweeGetSetting("{k}")) '

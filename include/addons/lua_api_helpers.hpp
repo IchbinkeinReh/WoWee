@@ -381,12 +381,17 @@ inline constexpr const char* kLootMethodTokens[] = {
 };
 inline constexpr uint8_t kNumLootMethods = 5;
 
-/// The wire value for a token, or zero - free-for-all - for one not known,
-/// which is what the if-chain's fall-through did.
-inline uint8_t lootMethodFromToken(const std::string& lower) {
+/// The wire value for a token, or -1 for one the client does not know.
+///
+/// Answering free-for-all for a miss - which is what the if-chain this replaces
+/// fell through to - is not a no-op: "SetLootMethod('master', Bob)" mistyped as
+/// "master LootMethod" became a request to give the whole group free-for-all
+/// loot. 0x0052dc20 compares the five names case-blind and raises "Invalid loot
+/// method" for anything else, so the miss has to be visible to the caller.
+inline int lootMethodFromToken(const std::string& lower) {
     for (uint8_t i = 0; i < kNumLootMethods; ++i)
         if (lower == kLootMethodTokens[i]) return i;
-    return 0;
+    return -1;
 }
 
 /// UnitRace returns the display name first and this *file name* second, and the
@@ -403,13 +408,58 @@ inline constexpr const char* kLuaRaceFileNames[] = {
     "Tauren","Gnome","Troll","","BloodElf","Draenei"
 };
 
-/// Indexed by power type, and the token FrameXML looks up in PowerBarColor for
-/// the bar's colour and in _G for its label prefix. Slot 5 is RUNES: a colour
-/// missed here still lands, because PowerBarColor carries numeric aliases as a
-/// fallback, but _G[""] is nil and the prefix has no such second chance.
+/// The client's own power list, the one at 0x007fe4b0: the token FrameXML looks
+/// up in PowerBarColor for the bar's colour and in _G for its label prefix.
+/// Slot 5 is RUNES: a colour missed here still lands, because PowerBarColor
+/// carries numeric aliases as a fallback, but _G[""] is nil and the prefix has
+/// no such second chance.
+///
+/// Written once now; the three places that need a power's name - the combat
+/// log's energize line, a failed cast naming the power it wanted, and
+/// UnitPower's display - each had its own copy. What they are free to disagree
+/// about is what past the seventh power answers, and they do: the client hands
+/// the combat log an empty string, UnitPower answers MANA, and the cast-failure
+/// lookup answers nothing so its caller can tell that the cast named a power
+/// the client has no bar for.
 inline constexpr const char* kLuaPowerNames[] = {
     "MANA","RAGE","FOCUS","ENERGY","HAPPINESS","RUNES","RUNIC_POWER"
 };
+
+/// 0x00af5220: what a power's amounts are shown divided by - rage and runic
+/// power travel in tenths, happiness in thousandths, so the same number means
+/// a different thing per power. Both readers of a power amount need it (the
+/// interface's UnitPower and the combat log's energize line), and past the
+/// seventh power neither divides: a power this client has no row for is not
+/// shown scaled at all.
+inline constexpr uint32_t kPowerDivisors[] = {1, 10, 1, 1, 1000, 1, 10};
+
+/// The 29 inventory types by their tokens (the client's table at 0x00ac7fd8),
+/// indexed by the type a row's inventoryType field carries. Slot 0 is the empty
+/// string: an item with no slot answers "", which is what the tooltip prints and
+/// what IsEquippedItemType's own comparison skips - the type is 0 for a bag, a
+/// reagent or trade goods, and matching on "" would name every one of them.
+///
+/// The localized spelling of each is a GlobalStrings lookup beside the token
+/// (interfaceString here), not this table, so this is the one place the English
+/// token is written.
+///
+/// It was written twice: a namespace table in the item-query bindings and a
+/// function-local one in the inventory bindings, both 29 entries and in the same
+/// order, one feeding GetInventoryItemLink's slot name and the other feeding
+/// IsEquippedItemType's matching. They agreed; nothing but reading both said so,
+/// and a slot added to one and not the other would have the tooltip name a slot
+/// the matcher cannot answer.
+inline constexpr const char* kLuaInvTypes[] = {
+    "", "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER", "INVTYPE_BODY",
+    "INVTYPE_CHEST", "INVTYPE_WAIST", "INVTYPE_LEGS", "INVTYPE_FEET",
+    "INVTYPE_WRIST", "INVTYPE_HAND", "INVTYPE_FINGER", "INVTYPE_TRINKET",
+    "INVTYPE_WEAPON", "INVTYPE_SHIELD", "INVTYPE_RANGED", "INVTYPE_CLOAK",
+    "INVTYPE_2HWEAPON", "INVTYPE_BAG", "INVTYPE_TABARD", "INVTYPE_ROBE",
+    "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPONOFFHAND", "INVTYPE_HOLDABLE",
+    "INVTYPE_AMMO", "INVTYPE_THROWN", "INVTYPE_RANGEDRIGHT", "INVTYPE_QUIVER",
+    "INVTYPE_RELIC"
+};
+inline constexpr uint8_t kNumInvTypes = 29;
 
 // The quality colours live in item_text.hpp and are not restated here. They
 // were written out as two tables in this header - one with the alpha, one
@@ -592,6 +642,82 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
     return 0;
 }
 
+/// The typed-name half of the client's one name resolver: the token table
+/// first (0x0060abf0, the resolveUnitGuid above), and failing that a walk of every
+/// unit the client currently knows, keeping the *nearest* one the text matches
+/// (0x00520190 -> the per-candidate test 0x0051ffe0). TargetUnit, FollowUnit,
+/// StartDuel and the promote verbs all go through it; the arguments differ only
+/// in the mask and in what the verb does with the answer.
+///
+/// The rules that come out of that single walk:
+///
+///  * a match is a *prefix* unless exactMatch is set: the walk compares over
+///    strlen(text) with the flag clear and over the whole candidate with it
+///    set. FrameXML sets the flag from the verb's second argument, which is
+///    how "/targetexact Bob" and every unit-menu entry (which passes the full
+///    name) differ from "/tar Bob" - the latter reaches a Bob who stands at
+///    all, the former only a Bob and not a Bobby;
+///  * a text carrying a '-' is compared against each candidate spelled
+///    "Name-Realm" (0x0076e6e0(text,'-') is the test that switches the
+///    spelling), the realm being the one the name query answered - the same
+///    pair UnitName answers. A candidate whose query has not come back is
+///    still compared by its bare name there, which only ever matches a name
+///    that itself holds a '-';
+///  * the player themselves is scored at 2.5e9 rather than at their distance,
+///    so one's own name is never the answer;
+///  * the type test is `1 << typeId`-shaped, so mask 8 (bit 3, unit) takes
+///    creatures and players alike while mask 0x10 (bit 4) takes players only -
+///    which is why FollowUnit asks for players first and only then falls back
+///    to any unit, and why a name never picks a doodad up.
+///
+/// Not modelled: the selectability gate the walk applies per candidate
+/// (0x00518e40, whose answer depends on the mode the caller asked for), the
+/// distance penalty for a ghost, a corpse-flagged unit or a critter, and the
+/// pre-scan over the four remembered guids and the raid list that runs before
+/// the walk. None of them changes who a prefix picks when only one unit could
+/// match it.
+inline uint64_t resolveNamedUnit(game::GameHandler* gh, const std::string& text,
+                                 bool exact, bool playersOnly) {
+    if (!gh || text.empty()) return 0;
+    const auto& entities = gh->getEntityManager().getEntities();
+    const auto self = entities.find(gh->getPlayerGuid());
+    const float px = self != entities.end() && self->second ? self->second->getX() : 0.0f;
+    const float py = self != entities.end() && self->second ? self->second->getY() : 0.0f;
+    const float pz = self != entities.end() && self->second ? self->second->getZ() : 0.0f;
+    std::string lower = text;
+    toLowerInPlace(lower);
+    const bool namesARealm = lower.find('-') != std::string::npos;
+    uint64_t best = 0;
+    float bestDistSq = 0.0f;
+    for (const auto& [guid, entity] : entities) {
+        if (!entity) continue;
+        const auto type = entity->getType();
+        if (type != game::ObjectType::UNIT && type != game::ObjectType::PLAYER) continue;
+        if (playersOnly && type != game::ObjectType::PLAYER) continue;
+        if (guid == gh->getPlayerGuid()) continue;   // scored out of the running
+        auto unit = std::static_pointer_cast<game::Unit>(entity);
+        std::string name = unit->getName();
+        if (name.empty()) continue;
+        toLowerInPlace(name);
+        if (namesARealm) {
+            std::string realm = gh->getCachedPlayerRealm(guid);
+            if (!realm.empty()) {
+                toLowerInPlace(realm);
+                name += "-" + realm;
+            }
+        }
+        if (exact ? name != lower : name.compare(0, lower.size(), lower) != 0) continue;
+        const float dx = unit->getX() - px;
+        const float dy = unit->getY() - py;
+        const float dz = unit->getZ() - pz;
+        const float distSq = dx * dx + dy * dy + dz * dz;
+        if (best && !(distSq < bestDistSq)) continue;
+        best = guid;
+        bestDistSq = distSq;
+    }
+    return best;
+}
+
 /// A unit token, or the name of somebody standing nearby.
 ///
 /// Several of the interface's verbs take either - "/wave Bob" and "/follow Bob"
@@ -604,6 +730,10 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
 /// name can be resolved from: nothing here can ask the server who a name
 /// belongs to without a query it would then have to wait for. Case-insensitive,
 /// because the player typed it.
+///
+/// This is the whole-name version, and its callers pass whole names; the verbs
+/// the client resolves one prefix at a time, picking the nearest, go through
+/// resolveNamedUnit above instead.
 inline uint64_t resolveUnitOrName(game::GameHandler* gh, const std::string& text) {
     if (!gh || text.empty()) return 0;
     std::string lower = text;

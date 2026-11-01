@@ -14,10 +14,22 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Set
 
-from opcode_map_utils import canonicalize, load_opcode_map
+# The shared opcode helpers live beside this file, and the directory of the
+# script is not on the path when the interpreter is run with -I - which is how
+# every tool here is run, because the data they read is extracted from the
+# player's own files. Both files that import opcode_map_utils had left it out -
+# this one and diff_classic_turtle_opcodes.py - so `python -I
+# tools/validate_opcode_maps.py` died on the import, and the only way to run
+# either was without -I. Which is what tools_run_check.py does at line 116, and
+# is why nothing in this tree ever noticed: the one check that runs every tool
+# runs them on the path the bug needs.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from opcode_map_utils import canonicalize, load_opcode_map  # noqa: E402
 
 
 RE_OPCODE_NAME = re.compile(r"^(?:CMSG|SMSG|MSG)_[A-Z0-9_]+$")

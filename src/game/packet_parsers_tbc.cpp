@@ -1372,11 +1372,11 @@ uint8_t TbcPacketParsers::readQuestGiverStatus(network::Packet& packet) {
 // metadata and joins channels named e.g. "l" instead of "General".
 // ============================================================================
 
-network::Packet TbcPacketParsers::buildJoinChannel(const std::string& channelName, const std::string& password, uint32_t channelId, uint8_t byZone, uint8_t unk) {
+network::Packet TbcPacketParsers::buildJoinChannel(const std::string& channelName, const std::string& password, uint32_t channelId, uint8_t byClient, uint8_t byPlayer) {
     network::Packet packet(wireOpcode(Opcode::CMSG_JOIN_CHANNEL));
     packet.writeUInt32(channelId);
-    packet.writeUInt8(byZone);
-    packet.writeUInt8(unk);
+    packet.writeUInt8(byClient);
+    packet.writeUInt8(byPlayer);
     packet.writeString(channelName);
     packet.writeString(password);
     LOG_DEBUG("[TBC] Built CMSG_JOIN_CHANNEL: channel=", channelName);

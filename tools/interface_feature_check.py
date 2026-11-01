@@ -93,6 +93,14 @@ def main() -> int:
                 )
 
     print(f"{scanned} file(s) ask the interface anything.")
+    if scanned == 0:
+        # Not the pass. Without one of the entry points there is no Lua handed
+        # to the interface anywhere, so this could not have found a truth test
+        # whether the tree has one or not - and "no global is tested" would read
+        # as good news either way. Twelve is what the count has been at.
+        print("\nno file names an interface entry point - the sweep lost its "
+              "subject, which is not the same finding as nothing being wrong.")
+        return 1
     if not findings:
         print("\nno global is tested for its own truth; a missing one cannot answer.")
         return 0

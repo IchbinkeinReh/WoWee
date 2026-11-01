@@ -18,6 +18,8 @@
 //     player has answered - the victim arrives as a guid, not a name.
 //   * The role check knows which dungeons it is for and how many are
 //     answering it.
+//   * The deserter and cooldown marks are what they are in the client: one aura
+//     looked for on that unit, by spell id, with nothing else consulted.
 //   * The proposal's per-member detail and party backfill are NOT modelled. They
 //     answer empty, and each says why where it is bound. The raid browser's search
 //     is modelled — the rows, how they pair up, how they sort, the bosses they count
@@ -108,6 +110,37 @@ const game::LfgDungeon* lfgDungeonById(game::GameHandler* gh, uint32_t id) {
     return nullptr;
 }
 
+/// CanPartyLFGBackfill's one gate, which three bindings read the same way
+/// (0x00553170, 0x005556d0 and 0x0055a0c0 all spell the same four tests):
+///
+///   * the party's member count in 1..3 - 0xbd1998, which is
+///     realGroupPartyCount(). The roster handler counts it out of the member
+///     list while filling the four party slots, and the same walk skips the
+///     player's own entry by guid (0x006d8bbb compares against 0x004d3790,
+///     which answers the local player's guid) and skips anyone whose subgroup
+///     byte differs from the header’s (0x006d8bd5). The server’s roster is
+///     already written without the player in it, so the first skip changes nothing
+///     here, and in a party everyone shares subgroup nought, so the second
+///     does not either. A full five answers four and is refused; a solo queue
+///     answers nought and is refused too, which is right - a queue of one is
+///     filled by the finder itself.
+///   * a finder dungeon on the party, 0xbd19a4;
+///   * bit 1 of the state byte the same roster's five bytes begin with clear
+///     (0xbd1989), the realm's word that the queue has not been filled out
+///     already.
+///
+/// The entry is answered, not nought, because the two readers both want it and
+/// the third is this notice's own button.
+uint32_t partyBackfillEntry(game::GameHandler* gh) {
+    if (gh == nullptr) return 0;
+    const uint32_t others = gh->realGroupPartyCount();
+    if (others == 0 || others > 3) return 0;
+    const auto& party = gh->getPartyData();
+    if (party.lfgDungeonEntry == 0) return 0;
+    if ((party.lfgState & 2) != 0) return 0;
+    return party.lfgDungeonEntry;
+}
+
 /// The dungeon finder lists dungeons and the raid browser lists raids, so each
 /// asks for its own half of the same file.
 bool isDungeonSide(const game::LfgDungeon& d) {
@@ -117,6 +150,35 @@ bool isDungeonSide(const game::LfgDungeon& d) {
 }
 bool isRaidSide(const game::LfgDungeon& d) {
     return d.typeId == static_cast<uint32_t>(game::LfgTypeId::Raid);
+}
+
+/// UnitHasLFGDeserter and UnitHasLFGRandomCooldown, which are the same question
+/// asked of two different spells. The client looks the unit up and then asks one
+/// thing of it: does its aura list hold 0x11581 = 71041 ("Deserter") or
+/// 0x116a0 = 71328 ("Random Dungeon Cooldown") - 0x00555840 and 0x00555760,
+/// LFGInfo.cpp:0x10b4 and 0x1083. For the local player the ask goes to its own
+/// aura block (0x007282a0), and for anybody else to the array of spell ids
+/// behind 0x00513c30, at most 0x40 of them. Nothing else about the unit enters
+/// it: no level, no queue state, no server verb.
+template <uint32_t spellId>
+int lua_UnitHasLfgDebuff(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return luaReturnFalse(L);
+    std::string uid = luaL_optstring(L, 1, "player");
+    toLowerInPlace(uid);
+    const std::vector<game::AuraSlot>* auras = nullptr;
+    if (uid == "player")      auras = &gh->getPlayerAuras();
+    else if (uid == "target") auras = &gh->getTargetAuras();
+    else if (const uint64_t guid = resolveUnitGuid(gh, uid); guid != 0)
+        auras = gh->getUnitAuras(guid);
+    if (auras) {
+        for (const auto& aura : *auras) {
+            if (aura.spellId == spellId) { lua_pushboolean(L, 1); return 1; }
+        }
+    }
+    // A unit whose auras have never arrived is answered no, which is what an
+    // empty aura list means everywhere else in this file.
+    return luaReturnFalse(L);
 }
 
 /// Which dungeons the player has ticked, and which headers are folded up.
@@ -1034,35 +1096,74 @@ void registerLfgLuaAPI(lua_State* L) {
         if (auto* gh = getGameHandler(L)) gh->respondInstanceLock(lua_toboolean(L, 1) != 0);
         return 0;
     }},
-    // Whether the character is sitting out a deserter or random-dungeon
-    // cooldown. Both are auras; this client does not check for them, and
-    // answering yes would grey out a queue the server would have allowed.
-    {"UnitHasLFGDeserter",       luaReturnFalse},
-    {"UnitHasLFGRandomCooldown", luaReturnFalse},
-    // CanPartyLFGBackfill() and GetPartyLFGBackfillInfo() (0x005556d0) - the row
-    // the queue frame puts up when the group the player just joined is itself
-    // queued, offering to go on queued with it (lfdframe.lua:124-135).
+    // Whether a unit is sitting out a deserter or a random-dungeon cooldown.
     //
-    // Most of it was already being read. The roster handler 0x006d8870 takes the
-    // party's queue block inside its `groupType & 8` branch as one byte and a
-    // dword (0x006d88d1, 0x006d88e2): the dword is the packed dungeon entry this
-    // client keeps as lfgDungeonEntry - id behind 0xffffff, type in the byte
-    // above - and the byte, which this client reads and drops, is kept by the
-    // client at 0x00bd1989, where the gate tests bit 1 of it. The three answers
-    // all come off LFGDungeons.dbc through that entry's id: the row's name, its
-    // id, and its type - the same field 0x00554170 compares against 6 for a
-    // random offer, and the value the interface names typeID and never reads.
+    // Both are one aura (lua_UnitHasLfgDebuff above). They used to answer no
+    // outright, which looked safe - "answering yes would grey out a queue the
+    // server would have allowed" - but nothing these two answer greys anything
+    // out. The only caller is lfdframe.lua:951-1031, over `party1`..`party4`:
+    // the queue frame's own list names each member and writes READY under the
+    // name in green, or DESERTER or ON COOLDOWN in red, and shows that list over
+    // the random-difficulty frame too when somebody is desertering. Whether a
+    // queue may start is the realm's to say, and it says the same whatever this
+    // answers here.
+    {"UnitHasLFGDeserter",       lua_UnitHasLfgDebuff<71041>},
+    {"UnitHasLFGRandomCooldown", lua_UnitHasLfgDebuff<71328>},
+    // The “continue examining” notice a queued party is offered:
+    // CanPartyLFGBackfill (0x00553170) asks one gate, and GetPartyLFGBackfillInfo
+    // (0x005556d0) answers the same gate with three values off that dungeon's row
+    // of LFGDungeons.dbc. lfdframe.lua:124-135 puts the row's name into the queue
+    // frame's own banner, and lfgframe.lua:79-85 uses the same answer to decide
+    // whether the realm's offer dialog is still wanted.
     //
-    // What is missing is the first of the three tests, and it is not in the
-    // packet: 0x0052bd60 is handed a number the handler counts out over its four
-    // member slots by comparing each against the guids of the roster it is
-    // replacing (the block at 0x00bd1948), and the gate wants that tally in 1..3.
-    // So it is a diff across two rosters rather than a field, and answering the
-    // pair from the entry alone - which is everything else it takes - would offer
-    // to continue a queue the group is not in. PartyLFGStartBackfill is this
-    // notice's own button.
-    {"CanPartyLFGBackfill",      luaReturnFalse},
-    {"GetPartyLFGBackfillInfo",  [](lua_State* L) -> int { return luaReturnNil(L); }},
+    // All three of the gate's parts were already being read but one. The roster
+    // handler 0x006d8870 takes the party's queue block inside its `groupType & 8`
+    // branch as one byte and a dword (0x006d88d1, 0x006d88e2): the dword is kept
+    // here as lfgDungeonEntry, the count this wants is the same handler's member
+    // tally kept as realGroupPartyCount (partyBackfillEntry above), and the byte
+    // - which this client used to read and drop - is now kept as lfgState.
+    //
+    // The name, id and type are one row read through the entry's low twenty-four
+    // bits. The pointer the client indexes sits 0x40 into the record — its +0x1c
+    // and +0x20 are the map and difficulty this file reads as fields 23 and 24 —
+    // so what it calls [1] and [10] are the record's 17 and 26: the name, and the
+    // type kept here as typeId. An id with no row is answered from the entry's two
+    // halves, which is where that type is packed anyway; the client dereferences a
+    // null row there and dies inside its own store.
+    //
+    // Answering false was not inert. `not CanPartyLFGBackfill()` is what hides
+    // LFG_OFFER_CONTINUE on every PARTY_MEMBERS_CHANGED, and the realm offers
+    // that dialog on its own through SMSG_LFG_OFFER_CONTINUE, which this client
+    // already handles - so every roster of a party took the offer down with it.
+    {"CanPartyLFGBackfill", [](lua_State* L) -> int {
+        lua_pushboolean(L, partyBackfillEntry(getGameHandler(L)) != 0);
+        return 1;
+    }},
+    {"GetPartyLFGBackfillInfo", [](lua_State* L) -> int {
+        auto* gh = getGameHandler(L);
+        const uint32_t entry = partyBackfillEntry(gh);
+        if (entry == 0) return 0;
+        const game::LfgDungeon* d = lfgDungeonById(gh, entry & 0xffffffu);
+        // name, row id, type. The name has to be a string: the banner
+        // concatenates it into a colour code, and nil there is a Lua error.
+        lua_pushstring(L, d ? d->name.c_str() : "");
+        lua_pushnumber(L, d ? static_cast<double>(d->id)
+                            : static_cast<double>(entry & 0xffffffu));
+        lua_pushnumber(L, d ? static_cast<double>(d->typeId)
+                            : static_cast<double>(entry >> 24));
+        return 3;
+    }},
+    // PartyLFGStartBackfill (0x0055a0c0) is this notice's own button, and stays
+    // a no-op. What the client does with it is a guard, three calls and a packet:
+    // outside an LFG state it says nothing but error 0x2bd (the state object's
+    // +0x30 reading nought), and otherwise 0x00559340 empties the party's pending
+    // list, 0x00559b70 walks that list off the entry's type byte, and 0x005572d0
+    // sends opcode 0x35c - a mode, three flags, the whole entry list as dwords,
+    // the three role needs and a fixed string. That is the reference's own queue
+    // bookkeeping, which WoWee keeps in a different shape, over an opcode its
+    // wotlk table has no name for. Guessing at a live realm is worse than
+    // the dead button, which the realm's own offer dialog has always had anyway
+    // (staticpopup.lua:2809).
     {"PartyLFGStartBackfill",    luaReturnNothing},
     // A note shown beside the queue. Nothing carries it.
     // SetLFGComment([text]) (0x00553f50 -> 0x005539a0): kept for the next

@@ -706,6 +706,12 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     lastInteractedGoGuid_ = 0;
     playerDead_ = false;
     releasedSpirit_ = false;
+    // Back to "nothing has been decided", which is what the original's own
+    // start-up does with the same pair (00520000.c:8083 zeroes a stamp and the
+    // byte beside it): a character that has not died answers nought, not the
+    // -1 a death would have stamped.
+    releaseStampMs_ = 0;
+    releaseNoTimer_ = false;
     corpseGuid_ = 0;
     corpsePositionValid_ = false;
     corpseTransportLow_ = 0;
@@ -1084,6 +1090,15 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         // re-sent here: a frame built after the fact has missed the event that
         // would have filled it in.
         if (isPlayerDead()) {
+            // Stamped first, and here rather than at the fields: the original
+            // decides this countdown at the death (FUN_006dc070 beside the rest
+            // of 0x006dc0f0) and at the forced-death packet, and never again
+            // while the player lives, so a death nobody watched needs the one
+            // place it can be decided at. The interface asks as soon as it hears
+            // PLAYER_DEAD, so an unstamped arrival would answer nought - the one
+            // answer that shows no release dialog at all - and the player would
+            // sit in a corpse with nothing to click.
+            decideReleaseTimer();
             fireAddonEvent("PLAYER_DEAD", {});
         }
         // The durability warnings hide themselves when nothing is damaged, and
@@ -2140,6 +2155,10 @@ void GameHandler::followTarget() {
     if (movementHandler_) movementHandler_->followTarget();
 }
 
+void GameHandler::followGuid(uint64_t guid) {
+    if (movementHandler_) movementHandler_->followGuid(guid);
+}
+
 void GameHandler::cancelFollow() {
     if (movementHandler_) movementHandler_->cancelFollow();
 }
@@ -2223,8 +2242,8 @@ void GameHandler::promoteToLeader(uint64_t guid) {
     if (socialHandler_) socialHandler_->promoteToLeader(guid);
 }
 
-void GameHandler::uninvitePlayer(const std::string& playerName) {
-    if (socialHandler_) socialHandler_->uninvitePlayer(playerName);
+void GameHandler::uninvitePlayer(const std::string& playerName, const std::string& reason) {
+    if (socialHandler_) socialHandler_->uninvitePlayer(playerName, reason);
 }
 
 void GameHandler::leaveParty() {
@@ -3510,8 +3529,8 @@ void GameHandler::submitGmSurvey() {
     gmSurveyComment_.clear();
 }
 
-void GameHandler::submitGmTicket(const std::string& text) {
-    if (chatHandler_) chatHandler_->submitGmTicket(text);
+void GameHandler::submitGmTicket(const std::string& text, bool needResponse, bool needMoreHelp) {
+    if (chatHandler_) chatHandler_->submitGmTicket(text, needResponse, needMoreHelp);
 }
 
 void GameHandler::updateGmTicket(const std::string& text) {

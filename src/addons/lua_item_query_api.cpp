@@ -191,14 +191,6 @@ int isCurrentItem(lua_State* L) {
     return 1;
 }
 
-/// The 29 inventory types by their tokens (0x00ac7fd8).
-constexpr const char* kInvTypes[29] = {
-    "", "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER", "INVTYPE_BODY", "INVTYPE_CHEST", "INVTYPE_WAIST",
-    "INVTYPE_LEGS", "INVTYPE_FEET", "INVTYPE_WRIST", "INVTYPE_HAND", "INVTYPE_FINGER", "INVTYPE_TRINKET",
-    "INVTYPE_WEAPON", "INVTYPE_SHIELD", "INVTYPE_RANGED", "INVTYPE_CLOAK", "INVTYPE_2HWEAPON", "INVTYPE_BAG",
-    "INVTYPE_TABARD", "INVTYPE_ROBE", "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPONOFFHAND", "INVTYPE_HOLDABLE",
-    "INVTYPE_AMMO", "INVTYPE_THROWN", "INVTYPE_RANGEDRIGHT", "INVTYPE_QUIVER", "INVTYPE_RELIC"};
-
 bool sameText(std::string a, std::string b) {
     toLowerInPlace(a);
     toLowerInPlace(b);
@@ -218,8 +210,8 @@ int isEquippedItemType(lua_State* L) {
     if (!player) return luaReturnNil(L);
     const std::string type = arg;
     int invType = -1;
-    for (int i = 0; i < 29; ++i) {
-        if (sameText(type, kInvTypes[i]) || (i != 0 && sameText(type, game::interfaceString(kInvTypes[i], "")))) {
+    for (int i = 0; i < kNumInvTypes; ++i) {
+        if (sameText(type, kLuaInvTypes[i]) || (i != 0 && sameText(type, game::interfaceString(kLuaInvTypes[i], "")))) {
             invType = i;
             break;
         }

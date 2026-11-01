@@ -45,7 +45,12 @@ addons = os.path.join(os.path.dirname(__file__), "..", "src", "addons")
 
 eng = ""
 for f in os.listdir(addons):
-    if f.endswith(".cpp"): eng += open(addons+"/"+f).read()
+    # utf-8 named because these files are utf-8 and the default is not: on a
+    # Windows console Python reads a source comment's 0x9d byte as cp1252 and
+    # raises before the sweep has looked at anything, and a read that survives
+    # by ignoring bad bytes drops them - which moves the text the patterns below
+    # are run over.
+    if f.endswith(".cpp"): eng += open(addons+"/"+f, encoding="utf-8", errors="ignore").read()
 have  = set(re.findall(r'lua_setglobal\(L_?,\s*"(\w+)"', eng))
 have |= set(re.findall(r'\{(?:\.\w+\s*=\s*)?"(\w+)"\s*,', eng))
 have |= set(re.findall(r'"(\w+)\s*=', eng))
@@ -70,7 +75,7 @@ for fn in _lua:
     # both rules. Without it the fifteen most-called "missing" names included
     # Flanagan, Stephens, Master and TOP - the credits file and a handful of
     # anchor points, read as calls because a string is full of parentheses.
-    src = without_comments_or_strings(open(fn, errors="ignore").read())
+    src = without_comments_or_strings(open(fn, encoding="utf-8", errors="ignore").read())
     # `local function` too. Anchoring on `function` alone missed every
     # file-local helper, and FrameXML declares plenty of them - GetHandleFrame
     # and GetUIPanelWindowInfo between them accounted for the two most-called

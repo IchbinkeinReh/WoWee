@@ -1009,6 +1009,11 @@ void GameHandler::registerCoreOpcodes() {
         corpseMapId_ = currentMapId_;
         corpsePositionValid_ = true;
         if (ghostStateCallback_) ghostStateCallback_(false);
+        // The stamp first, then the event: 0x006e0000.c:2497 runs the death
+        // decision and only then the routine that says the words, and the
+        // interface's PLAYER_DEAD handler asks GetReleaseTimeRemaining to
+        // decide whether there is a release dialog at all.
+        decideReleaseTimer();
         // PLAYER_DEAD and no words (0x006e2e90 case 0x37a, 0x00520f70); this
         // also printed English "You have been killed."
         fireAddonEvent("PLAYER_DEAD", {});

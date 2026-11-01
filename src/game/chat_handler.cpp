@@ -10,6 +10,7 @@
 #include "game/text_tokens.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
+#include "game/server_notices.hpp"
 #include "game/interface_text.hpp"
 #include "game/zone_manager.hpp"
 #include "game/packet_parsers.hpp"
@@ -1198,11 +1199,17 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
         // arg6 is the flag beside the name: FrameXML looks up CHAT_FLAG_<arg6>
         // and prints <Away>, <Busy> or <GM>. The tag is on the packet and was
         // being dropped, so nothing ever showed as away or as a game master.
-        // AzerothCore's values are a bitmask - AFK 0x01, DND 0x02, GM 0x04,
-        // COM 0x08, DEV 0x10 - and the interface takes one word, so the most
-        // significant is the one to name.
-        const char* chatFlag = (data.chatTag & 0x04) ? "GM"
-                             : (data.chatTag & 0x10) ? "DEV"
+        //
+        // 0x0050be70 reads the byte after the text and turns it into one word
+        // with a chain of bit tests nested outermost-first, which is the order
+        // the words go: DEV (0x10) hides GM (0x04), which hides DND (0x02),
+        // which hides AFK (0x01). A line tagged both developer and game master
+        // is called DEV there and was called GM here. The four words are in the
+        // binary as themselves ("AFK" at 0x009fa3b4, "DND" at 0x009fa3b0, "GM"
+        // at 0x009f0e20, "DEV" at 0x009fbf78); 0x08 is tested for elsewhere and
+        // never names a word, so it stays a bit and not a flag.
+        const char* chatFlag = (data.chatTag & 0x10) ? "DEV"
+                             : (data.chatTag & 0x04) ? "GM"
                              : (data.chatTag & 0x02) ? "DND"
                              : (data.chatTag & 0x01) ? "AFK"
                                                      : "";
@@ -1523,7 +1530,8 @@ void ChatHandler::refreshJoinedChannels() {
 
 std::optional<chat_channels::Join> ChatHandler::joinChannel(const std::string& channelName,
                                                             const std::string& password,
-                                                            bool byLogin) {
+                                                            bool byClient,
+                                                            bool byPlayer) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return std::nullopt;
     // Never a channel without a name - the client's interface refuses one
     // before it gets here, and the server would make one called "".
@@ -1551,16 +1559,27 @@ std::optional<chat_channels::Join> ChatHandler::joinChannel(const std::string& c
     if (!held) {
         if (!channelSlots_.reserve(join->name, join->zoneChannelId)) {
             // reserve() also refuses a name or id already held; "held" was
-            // checked above, so this is the slots being full.
+            // checked above, so this is the slots being full. Ten is what the
+            // client's store holds too, and 0x005076b0 tells the player about
+            // it - ERR_TOO_MANY_CHAT_CHANNELS, a chat line and no sound - only
+            // when the join was not one the client started for itself.
+            if (!byClient) owner_.sayGameError(server_notice::kTooManyChatChannels);
             LOG_WARNING("Not joining channel '", join->name, "': all ",
                         chat_channels::kMaxSlots, " channel slots are taken");
             return std::nullopt;
         }
-        // The login join sends 1 in the first byte and the interface's 0.
-        const uint8_t byZone = byLogin ? 1 : 0;
+        // The two bytes over the name, in the order 0x00507a80 hands them on
+        // (its 7th and 8th arguments): a join the client starts for itself -
+        // the login mask, guild recruitment (0x00507d30), a channel put back
+        // after a relogin - says 1 and 0, and a join somebody asked for says 0
+        // and whatever the interface's fourth argument said, which every call
+        // site in the installed tree spells as 1. This wrote 0 in the second
+        // place whoever asked, and 0 in the first for guild recruitment.
+        const uint8_t byClientByte = byClient ? 1 : 0;
+        const uint8_t byPlayerByte = byPlayer ? 1 : 0;
         auto packet = owner_.getPacketParsers()
-            ? owner_.getPacketParsers()->buildJoinChannel(join->name, pass, join->zoneChannelId, byZone, 0)
-            : JoinChannelPacket::build(join->name, pass, join->zoneChannelId, byZone, 0);
+            ? owner_.getPacketParsers()->buildJoinChannel(join->name, pass, join->zoneChannelId, byClientByte, byPlayerByte)
+            : JoinChannelPacket::build(join->name, pass, join->zoneChannelId, byClientByte, byPlayerByte);
         owner_.getSocket()->send(packet);
         LOG_WARNING("Requesting to join channel: '", join->name, "' id=", join->zoneChannelId,
                  " (asked for as '", channelName, "')");
@@ -1990,8 +2009,10 @@ void ChatHandler::updateLoginChannelJoin() {
     // A row a zone has no channel for (Trade outside a city) is still asked
     // for and keeps its number; the server answers when the player reaches
     // a zone that has it.
+    // Both bytes say "the client is starting this join, nobody asked in front
+    // of it" - see joinChannel.
     for (const auto& r : rows) {
-        if (mask & chat_channels::maskBit(r.id)) joinChannel(r.shortcut, "", true);
+        if (mask & chat_channels::maskBit(r.id)) joinChannel(r.shortcut, "", true, false);
     }
 
     // Guild Recruitment (0x00507d30, run at the end of the login join): with
@@ -1999,10 +2020,14 @@ void ChatHandler::updateLoginChannelJoin() {
     // switch of this client's own; the CVar is the option - and it is
     // registered on (0x00510000 "1", with 0x00512750 as its setter), so a
     // player in no guild is in the channel from the first login.
+    //
+    // Asked for as an automatic join, whatever it is called by: 0x00507d30
+    // hands 0x00507a80 the same 1 and 0 the login mask does, and this was the
+    // one join of the three that reached the wire as two noughts.
     if (addons::storedCVarValue("guildRecruitmentChannel", "1") != "0" && !owner_.isInGuild()) {
         for (const auto& r : rows) {
             if (r.flags & chat_channels::kFlagGuildRecruitment) {
-                joinChannel(r.shortcut);
+                joinChannel(r.shortcut, "", true, false);
                 break;
             }
         }
@@ -2560,17 +2585,16 @@ void ChatHandler::updateGmTicket(const std::string& text) {
     LOG_INFO("Updated GM ticket text");
 }
 
-void ChatHandler::submitGmTicket(const std::string& text) {
+void ChatHandler::submitGmTicket(const std::string& text, bool needResponse, bool needMoreHelp) {
     if (!owner_.isInWorld()) return;
 
-    // CMSG_GMTICKET_CREATE:
+    // CMSG_GMTICKET_CREATE, as 0x005ac8f0 writes it:
     //   uint32  mapId
     //   float   x, y, z          (server coords, no facing)
     //   string  message
-    //   uint32  needResponse
-    //   uint8   needMoreHelp
-    //   uint32  count            - how many chat-log timestamps follow
-    //   uint32  decompressedSize - the zlib'd chat log after it, if any
+    //   uint32  reply bits       - 1, or 0x11 when a reply is asked for
+    //   uint8   more help        - 1 for the "I need more help" variant
+    //   uint32  count, count dwords, uint32 len, len bytes
     //
     // The comment above these writes described a layout in the other order,
     // opening with the text and carrying a facing the server does not read,
@@ -2585,22 +2609,31 @@ void ChatHandler::submitGmTicket(const std::string& text) {
     //
     // The prefix through the message is what all three read: a 1.12 and a
     // 2.4.3 server take mapId, x, y, z and the message and stop there. The
-    // four fields after it are 3.x, and the asymmetry is what decides this -
+    // fields after it are 3.x, and the asymmetry is what decides this -
     // a WotLK server that does not get them reads off the end of the buffer
     // and drops the whole request, while a vanilla or TBC one simply leaves
     // them unread. Trailing bytes nobody reads cost nothing; missing ones
     // cost the ticket. So there is nothing to gate on the expansion here, and
     // a gate would be a second thing to keep right.
     //
-    // The chat log is a client-side transcript this client does not keep, so
-    // both of its lengths go across as zero, which is how the real client
-    // sends a ticket raised outside a conversation.
+    // Two things the reference gates on its own ticket state, which this client
+    // does not carry: creating one is refused while one is open (DAT_00c1e8d0),
+    // and the more-help variant is refused unless a GM answer is in hand
+    // (DAT_00c1e8d4).  SMSG_GMRESPONSE_RECEIVED (0x4ef) writes both of those
+    // bytes, and SMSG_GMTICKET_DELETETICKET (0x218) and
+    // SMSG_GMRESPONSE_STATUS_UPDATE (0x4f1) clear them.
+    // hasActiveGmTicket() is only the first of those half, and only as fresh as
+    // the last SMSG_GMTICKET_GETTICKET, so neither gate is applied here: the
+    // realm decides instead, and a ticket raised twice is a server-side miss
+    // rather than a request that silently never went out.
     //
     // The place is the player's on the wire (0x005ac8f0): the canonical one
     // went out as it was, X and Y the wrong way round.
     const auto& me = owner_.movementInfoRef();
-    owner_.getSocket()->send(GmTicketCreatePacket::build(owner_.currentMapIdRef(), me.x, me.y, me.z, text));
-    LOG_INFO("Submitted GM ticket: '", text, "'");
+    owner_.getSocket()->send(GmTicketCreatePacket::build(owner_.currentMapIdRef(), me.x, me.y, me.z,
+                                                         text, needResponse, needMoreHelp));
+    LOG_INFO("Submitted GM ticket: '", text, "' response=", needResponse ? "asked" : "not asked",
+             " moreHelp=", needMoreHelp ? "yes" : "no");
 }
 
 void ChatHandler::handleMotd(network::Packet& packet) {

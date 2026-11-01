@@ -129,7 +129,10 @@ int pcallScript(lua_State* L, const char* script, int nargs, int errfunc) {
     {
         taint::Scope inner(record);
         taint::adoptArguments(L, nargs, record);
-        rc = lua_pcall(L, nargs, 0, errfunc);
+        // Not lua_pcall: the pre-3.0 path dispatches scripts too, and a
+        // dispatch that protects its call without the message handler installed
+        // is one whose errors the interface never hears about.
+        rc = taint::callProtected(L, nargs, 0, errfunc);
     }
     --gHandlerDepth;
 

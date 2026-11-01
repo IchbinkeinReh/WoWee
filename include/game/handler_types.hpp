@@ -106,10 +106,18 @@ struct InspectResult {
     std::array<uint32_t, 19> itemEntries{};
     std::array<uint16_t, 19> enchantIds{};
     std::vector<InspectArenaTeam> arenaTeams;
-    /// The inspected player's own talents, as talent id -> rank, for their
-    /// active spec. The inspect talent tab draws from these; without them it
-    /// fell back to the viewer's own tree and attributed it to the target.
-    std::unordered_map<uint32_t, uint8_t> talentRanks;
+    /// The inspected player's own talents, as talent id -> rank, one list per
+    /// talent group - the same two lists SpellHandler keeps for the player.
+    /// The inspect talent tab draws from these; without them it fell back to
+    /// the viewer's own tree and attributed it to the target.
+    ///
+    /// Only the target's active group used to be kept, which was the whole of
+    /// the second list going missing: the packet carries a list for every group
+    /// the target has, and GetTalentTabInfo, GetTalentInfo and GetTalentPrereqs
+    /// all take the group they want as an argument (0x005c57d0 reads it), so
+    /// browsing the target's other spec asked for that list by number and got
+    /// the active one's ranks drawn under the other tree's tabs.
+    std::array<std::unordered_map<uint32_t, uint8_t>, 2> talentRanksByGroup{};
     uint8_t classId = 0;
 
     /// The honour tab, which arrives separately: MSG_INSPECT_HONOR_STATS is

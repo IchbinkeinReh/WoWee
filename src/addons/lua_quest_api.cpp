@@ -20,9 +20,12 @@
 #include "game/spell_mods.hpp"
 #include "game/trainer_service_list.hpp"
 #include "ui/chat/chat_utils.hpp"
+#include "ui/cursor_art.hpp"
+#include "ui/framexml_takeover.hpp"
 #include "core/logger.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <algorithm>
@@ -799,13 +802,20 @@ static int lua_GetQuestIndexForWatch(lua_State* L) {
     return 1;
 }
 
-// AddQuestWatch(questLogIndex) - add a quest to the watch list
+// AddQuestWatch(questLogIndex, durationSeconds) - add a quest to the watch
+// list. The second argument is optional and only QuestLogFrame passes one
+// (MAX_QUEST_WATCH_TIME, 300, on the AUTO_QUEST_PROGRESS path): 0x005e67c0
+// reads it when there is a number there and hands 0 otherwise to 0x005e64d0,
+// which watches the quest until that many seconds from now, or for as long as
+// it stays in the log when the call left it out.
 static int lua_AddQuestWatch(lua_State* L) {
     auto* gh = getGameHandler(L);
     int index = static_cast<int>(luaL_checknumber(L, 1));
     if (!gh || index < 1) return 0;
+    int duration = 0;
+    if (lua_isnumber(L, 2)) duration = static_cast<int>(lua_tonumber(L, 2));
     if (const auto* q = questAtRow(gh, index)) {
-        gh->setQuestTracked(q->questId, true);
+        gh->addQuestWatch(q->questId, duration);
     }
     return 0;
 }
@@ -1836,17 +1846,57 @@ static std::vector<const game::GameHandler::TalentTabEntry*> classTalentTabs(
     return tabs;
 }
 
-/// The rank a talent is at, for whoever is being asked about.
-static int talentRankFor(game::GameHandler* gh, bool inspect, uint32_t talentId) {
-    if (!gh) return 0;
+/// Which talent group a binding was asked about (0x005c57d0).
+///
+/// One-based in Lua, zero-based here, and optional: left off - or given as
+/// anything that is not a number - it is the group the player is standing in.
+/// GetTalentPrereqs inlines the same three lines instead of calling the
+/// helper, which is how the two stay in step.
+///
+/// Values out of range are not clamped, and that is what the reference does
+/// too: the group is a record index, and a record that does not exist answers
+/// no points and no ranks rather than the nearest one that does.
+static int talentGroupArg(lua_State* L, int index, game::GameHandler* gh) {
+    if (lua_isnumber(L, index)) return luaToClientInt(L, index) - 1;
+    return gh ? static_cast<int>(gh->getActiveTalentSpec()) : 0;
+}
+
+/// The learned list of one group, for whoever is being asked about.
+///
+/// Both sides carry two, and two is the number the client has room for: the
+/// player's records sit at DAT_00c21030 in a block of 0xa8 bytes of 0x15-dword
+/// records, and the inspected player's at DAT_00c21138 the same way. Asking for
+/// a group outside that answers the empty list, which is what the reference's
+/// null record answers - GetTalentTabInfo pushes 0 for the points and
+/// GetTalentInfo pushes rank 0 and preview rank 0 (its -1 and 0xffffffff, each
+/// pushed one-based).
+static const std::unordered_map<uint32_t, uint8_t>& talentListFor(
+        game::GameHandler* gh, bool inspect, int group) {
+    static const std::unordered_map<uint32_t, uint8_t> kNoTalents;
+    if (!gh || group < 0 || group >= 2) return kNoTalents;
     if (inspect) {
-        if (const auto* r = gh->getInspectResult()) {
-            auto it = r->talentRanks.find(talentId);
-            return (it != r->talentRanks.end()) ? it->second : 0;
-        }
-        return 0;
+        const auto* r = gh->getInspectResult();
+        if (!r) return kNoTalents;
+        return r->talentRanksByGroup[static_cast<size_t>(group)];
     }
-    return gh->getTalentRank(talentId);
+    return gh->getLearnedTalents(static_cast<uint8_t>(group));
+}
+
+/// The rank a talent is at in one group, for whoever is being asked about.
+static int talentRankFor(game::GameHandler* gh, bool inspect, uint32_t talentId, int group) {
+    const auto& learned = talentListFor(gh, inspect, group);
+    const auto it = learned.find(talentId);
+    return (it != learned.end()) ? it->second : 0;
+}
+
+/// Whether points staged in the preview count for a group being read.
+///
+/// They are the viewer's own, staged for the group they are standing in - the
+/// panel itself only stages there (blizzard_talentui.lua:443 gates the click on
+/// `activeSpec == selectedSpec`) - so neither another player's tree nor the
+/// viewer's other tree has any.
+static bool previewApplies(game::GameHandler* gh, bool inspect, int group) {
+    return !inspect && gh && group == static_cast<int>(gh->getActiveTalentSpec());
 }
 
 /// The fourth argument asks for the *pet's* tree.
@@ -1879,7 +1929,17 @@ static int lua_GetNumTalentTabs(lua_State* L) {
 /// the functions that change it.
 static std::unordered_map<uint32_t, int>& previewPoints();
 
-// GetTalentTabInfo(tabIndex) → name, iconTexture, pointsSpent, background
+// GetTalentTabInfo(tabIndex[, isInspect[, isPet[, groupIndex]])
+//   → name, iconTexture, pointsSpent, background, previewPointsSpent
+//
+// The fourth argument says which talent group's tree this tab belongs to, and
+// all four of the interface's call sites pass it - talentframebase.lua:118 and
+// :573, blizzard_talentui.lua:604 and inspecttalentframe.lua:36, each of them
+// `PlayerTalentFrame.talentGroup` (or the inspect frame's) - so reading only
+// the first three answered the points of the group the player is standing in
+// however many the frame asked for: a dual-spec character browsing their second
+// spec saw the first spec's points counted under the second spec's tab names,
+// and the inspect tab could not show a target's other tree at all.
 static int lua_GetTalentTabInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     int tabIndex = static_cast<int>(luaL_checknumber(L, 1)); // 1-indexed
@@ -1888,19 +1948,16 @@ static int lua_GetTalentTabInfo(lua_State* L) {
     }
     if (wantsPetTalents(L, 3)) return luaReturnNil(L);
     const bool inspect = lua_toboolean(L, 2) != 0;
+    const int group = talentGroupArg(L, 4, gh);
     uint8_t classId = talentClassId(gh, inspect);
     const auto classTabs = classTalentTabs(gh, classId);
     if (tabIndex > static_cast<int>(classTabs.size())) {
         return luaReturnNil(L);
     }
     const auto* tab = classTabs[tabIndex - 1];
-    // Count points spent in this tab
+    // Count points spent in this tab, out of the asked-for group's list
     int pointsSpent = 0;
-    static const std::unordered_map<uint32_t, uint8_t> kNoTalents;
-    const auto* inspectResult = inspect ? gh->getInspectResult() : nullptr;
-    const auto& learned = inspect
-        ? (inspectResult ? inspectResult->talentRanks : kNoTalents)
-        : gh->getLearnedTalents();
+    const auto& learned = talentListFor(gh, inspect, group);
     for (const auto& [talentId, rank] : learned) {
         const auto* entry = gh->getTalentEntry(talentId);
         if (entry && entry->tabId == tab->tabId) pointsSpent += rank;
@@ -1911,9 +1968,10 @@ static int lua_GetTalentTabInfo(lua_State* L) {
     // - in a loop over every tab, so leaving it out took the whole frame down
     // as it opened rather than merely showing the wrong total.
     // Staged points are the viewer part-way through spending their own; they
-    // have no meaning on someone else's tree.
+    // have no meaning on someone else's tree, and none in the viewer's other
+    // group either - see previewApplies.
     int previewSpent = 0;
-    if (!inspect) {
+    if (previewApplies(gh, inspect, group)) {
         for (const auto& [talentId, staged] : previewPoints()) {
             const auto* entry = gh->getTalentEntry(talentId);
             if (entry && entry->tabId == tab->tabId) previewSpent += staged;
@@ -1999,15 +2057,19 @@ const game::TalentEntry* talentAt(game::GameHandler* gh,
 /// points staged in the preview but not yet learned.
 static bool talentPrereqsMet(game::GameHandler* gh,
                              const game::GameHandler::TalentEntry* talent,
-                             bool withPreview) {
+                             bool withPreview,
+                             bool inspect, int group) {
     if (!gh || !talent) return false;
     for (int p = 0; p < 3; ++p) {
         const uint32_t prereqId = talent->prereqTalent[p];
         if (prereqId == 0) continue;
         // Counted from zero in the DBC, so the rank asked for is one more.
         const int needed = static_cast<int>(talent->prereqRank[p]) + 1;
-        int have = gh->getTalentRank(prereqId);
-        if (withPreview) {
+        // Out of the group that was asked about: a talent of the other spec
+        // deep in a chain of that spec's own talents is satisfied on its own
+        // terms, not on the ones the player happens to be standing in.
+        int have = talentRankFor(gh, inspect, prereqId, group);
+        if (withPreview && previewApplies(gh, inspect, group)) {
             const auto staged = previewPoints().find(prereqId);
             if (staged != previewPoints().end()) have += staged->second;
         }
@@ -2016,6 +2078,13 @@ static bool talentPrereqsMet(game::GameHandler* gh,
     return true;
 }
 
+// GetTalentInfo(tabIndex, talentIndex[, isInspect[, isPet[, groupIndex]]])
+//
+// The fifth argument names the group, and 0x005c7800 hands it to 0x005c57d0 at
+// :6553 and then reads the rank and the preview rank out of that group's record
+// (+0x1c and +0x20). A group with no record answers 0 and 0 - the -1 and
+// 0xffffffff it starts each of them at, pushed one-based - which is what the
+// client itself says for a spec that has no list.
 static int lua_GetTalentInfo(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int tabIndex = static_cast<int>(luaL_checknumber(L, 1));
@@ -2025,6 +2094,7 @@ static int lua_GetTalentInfo(lua_State* L) {
         for (int i = 0; i < 10; i++) lua_pushnil(L);
         return 10;
     }
+    const int group = talentGroupArg(L, 5, gh);
     const auto* talent = talentAt(gh, tabIndex, talentIndex, talentClassId(gh, inspect));
     // Ten values, not eight. The frame reads previewRank into the rank it
     // displays and then compares it against maxRank - as nil that is an error
@@ -2034,11 +2104,11 @@ static int lua_GetTalentInfo(lua_State* L) {
         for (int i = 0; i < 10; i++) lua_pushnil(L);
         return 10;
     }
-    const int rank = talentRankFor(gh, inspect, talent->talentId);
+    const int rank = talentRankFor(gh, inspect, talent->talentId, group);
     const auto staged = previewPoints().find(talent->talentId);
-    const int previewRank = inspect
-        ? rank
-        : rank + (staged == previewPoints().end() ? 0 : staged->second);
+    const int previewRank = rank
+        + (previewApplies(gh, inspect, group) && staged != previewPoints().end()
+           ? staged->second : 0);
 
     std::string name = gh->getSpellName(talent->rankSpells[0]);
     if (name.empty()) name = "Talent " + std::to_string(talent->talentId);
@@ -2056,9 +2126,9 @@ static int lua_GetTalentInfo(lua_State* L) {
     lua_pushboolean(L, 0);                     // 7: isExceptional
     // Was hardcoded true, which drew every talent as learnable however deep in
     // a chain it sat.
-    lua_pushboolean(L, talentPrereqsMet(gh, talent, /*withPreview=*/false) ? 1 : 0);
+    lua_pushboolean(L, talentPrereqsMet(gh, talent, /*withPreview=*/false, inspect, group) ? 1 : 0);
     lua_pushnumber(L, previewRank);            // 9: previewRank
-    lua_pushboolean(L, talentPrereqsMet(gh, talent, /*withPreview=*/true) ? 1 : 0);
+    lua_pushboolean(L, talentPrereqsMet(gh, talent, /*withPreview=*/true, inspect, group) ? 1 : 0);
     return 10;
 }
 
@@ -2111,12 +2181,32 @@ static const game::ItemQueryResponseData* craftedItem(game::GameHandler* gh,
     return (info && info->valid) ? info : nullptr;
 }
 
-/// Which entry of each dropdown is picked. Both are single-select - the click
-/// handler calls Set…Filter(id - 1, 1, 1) and nothing ever unchecks - so this
-/// is an index rather than a set, and zero is the "all" row the list opens
-/// with.
-static int& tradeSkillSubClassPick() { static int pick = 0; return pick; }
-static int& tradeSkillInvSlotPick()  { static int pick = 0; return pick; }
+/// Which entries of each dropdown are ticked: one bit per entry of the list of
+/// the same name below, and every bit on is no filter at all. The reference
+/// keeps the two as dword masks - 0x00ad0e00 for the sub-classes, 0x00ad0e08
+/// for the inventory slots - that open and reset all-on, and the two arguments
+/// past the index say what to do with one bit of them:
+///
+///     Set…Filter(i)         i below one: every bit on
+///     Set…Filter(i, 0)      that entry's bit off, the rest kept
+///     Set…Filter(i, 1)      that entry's bit on, the rest kept
+///     Set…Filter(i, 1, 1)   that entry's bit on and every other one off
+///
+/// It is a set and not a pick, whatever the installed panel's click handler
+/// happens to call: the panel asks each entry in turn to work out which one is
+/// showing (TradeSkillFilterFrame_InvSlotName, blizzard_tradeskillui.lua:546),
+/// which is a question only a set answers.
+///
+/// Sixty-four bits where the reference has thirty-two: it masks the shift to
+/// 0x1f, so a list longer than that folds two entries onto one bit.  WoWee's
+/// lists are its own - built from every known recipe, see below - so they do
+/// not have to break where the reference's do.
+static uint64_t& tradeSkillSubClassMask() { static uint64_t mask = ~0ull; return mask; }
+static uint64_t& tradeSkillInvSlotMask()  { static uint64_t mask = ~0ull; return mask; }
+
+/// A list position as a filter bit. The shift is masked the way the reference
+/// masks it, widened to the width of the mask above.
+static constexpr uint64_t tradeSkillFilterBit(size_t pos) { return 1ull << (pos & 0x3f); }
 
 /// The item level range typed into the search box. The box does double duty:
 /// a number, a range "20-30" or an approximate "~25" filters by the level of
@@ -2171,10 +2261,12 @@ static std::vector<game::GameHandler::CraftRecipe> visibleCraftingRecipes(
     if (!gh) return out;
     std::string needle = tradeSkillNameFilter();
     toLowerInPlace(needle);
-    const auto subs  = (tradeSkillSubClassPick() > 0) ? tradeSkillSubClasses(gh)
-                                                      : std::vector<std::string>{};
-    const auto slots = (tradeSkillInvSlotPick() > 0)  ? tradeSkillInvSlots(gh)
-                                                      : std::vector<std::string>{};
+    // A list is only needed while its filter says something, and both masks
+    // say nothing while every bit is on.
+    const bool subFiltered  = tradeSkillSubClassMask() != ~0ull;
+    const bool slotFiltered = tradeSkillInvSlotMask() != ~0ull;
+    const auto subs  = subFiltered  ? tradeSkillSubClasses(gh) : std::vector<std::string>{};
+    const auto slots = slotFiltered ? tradeSkillInvSlots(gh)   : std::vector<std::string>{};
     const auto level = tradeSkillLevelRange();
     for (const auto& r : gh->getCraftingRecipes()) {
         if (tradeSkillOnlyMakeable() && r.canMake <= 0) continue;
@@ -2196,16 +2288,21 @@ static std::vector<game::GameHandler::CraftRecipe> visibleCraftingRecipes(
         // A recipe whose item has not arrived yet is shown rather than hidden.
         // The details are asked for on demand, so filtering on what is not back
         // would empty the list and refill it as the replies landed.
-        if (!subs.empty() || !slots.empty()) {
+        if (subFiltered || slotFiltered) {
             const auto* info = craftedItem(gh, r.spellId);
             if (info) {
-                const int si = tradeSkillSubClassPick();
-                if (si > 0 && si <= static_cast<int>(subs.size()) &&
-                    info->subclassName != subs[static_cast<size_t>(si) - 1]) {
-                    continue;
+                if (subFiltered) {
+                    const auto it = std::find(subs.begin(), subs.end(), info->subclassName);
+                    // Only an entry of that list has a tick that could be off.
+                    // A recipe with no sub-class of its own is not in the list
+                    // and so stays in whatever is ticked: one picked name had to
+                    // match it before, which hid those.
+                    if (it != subs.end() &&
+                        (tradeSkillSubClassMask() & tradeSkillFilterBit(it - subs.begin())) == 0) {
+                        continue;
+                    }
                 }
-                const int vi = tradeSkillInvSlotPick();
-                if (vi > 0 && vi <= static_cast<int>(slots.size())) {
+                if (slotFiltered) {
                     std::string label;
                     for (int i = 1; i < game::kNumAuctionSlots; ++i) {
                         if (game::kAuctionSlots[i].invType == info->inventoryType) {
@@ -2213,7 +2310,19 @@ static std::vector<game::GameHandler::CraftRecipe> visibleCraftingRecipes(
                             break;
                         }
                     }
-                    if (label != slots[static_cast<size_t>(vi) - 1]) continue;
+                    const auto it = std::find(slots.begin(), slots.end(), label);
+                    // The same rule, and the reference reads it that way too:
+                    // 0x005dcd49 tests the recipe's own inventory-slot mask
+                    // against the filter (`(row[4] & DAT_00ad0e08) == 0` hides
+                    // the row), and that test is unconditional - so a recipe
+                    // with no inventory type, a bar or a reagent, has a bit the
+                    // all-on mask lets through, and no entry of a slot list can
+                    // clear a bit for a slot no item names.  Those recipes
+                    // stayed hidden before, when the picked slot had to match.
+                    if (it != slots.end() &&
+                        (tradeSkillInvSlotMask() & tradeSkillFilterBit(it - slots.begin())) == 0) {
+                        continue;
+                    }
                 }
             }
         }
@@ -2740,6 +2849,19 @@ static int lua_AddPreviewTalentPoints(lua_State* L) {
     // The pet tree again: staging a preview point there resolved against the
     // player's trees, and LearnPreviewTalents would then have spent it.
     if (wantsPetTalents(L, 4)) return 0;
+    // The fifth argument names the group to stage in, and the client does have
+    // one preview total per group - every group record carries its own per-tab
+    // preview figures, and 0x005c9590 reads the before and after totals out of
+    // the record this argument picks (0x005c6010). There is one staging store
+    // here and it belongs to the group the player is standing in, which is the
+    // only place the panel ever stages (blizzard_talentui.lua:443 gates the
+    // click on the active spec), the only list LearnPreviewTalents commits and
+    // the only one ResetPreviewTalentPoints takes back. Another group's tree is
+    // drawn read-only, so staging there is refused rather than spent next door.
+    if (!previewApplies(gh, false, talentGroupArg(L, 5, gh))) {
+        LOG_WARNING("AddPreviewTalentPoints: nothing is staged for another talent group");
+        return 0;
+    }
     const uint32_t id = resolveTalentId(gh, tab, index);
     if (!gh || id == 0) return 0;
 
@@ -2834,18 +2956,29 @@ static int lua_ResetPreviewTalentPoints(lua_State* L) {
     return 0;
 }
 
-// GetTalentPrereqs(tab, index) → tier, column, isLearnable, isPreviewLearnable
-//                                 repeated once per prerequisite
+// GetTalentPrereqs(tabIndex, talentIndex[, isInspect[, isPet[, groupIndex]]])
+//   → tier, column, isLearnable, isPreviewLearnable
+//     repeated once per prerequisite
 //
 // The frame draws a line from each prerequisite to the talent that needs it, so
 // the positions here have to be the same ones GetTalentInfo reports - 1-indexed
 // row and column, from the same ordering.
+//
+// Which tree that is belongs to the arguments too. 0x005c7ed0 reads the third
+// as isInspect and the fifth as the group, and asks 0x005c77b0 for the
+// prerequisite's record *in that group* before comparing its rank (+0x1c) and
+// its preview rank (+0x20) against the rank required. Reading neither meant
+// inspecting a target of another class drew lines to positions in the viewer's
+// own class's layout, and every prerequisite was scored against the ranks of
+// the spec the viewer happens to be standing in.
 static int lua_GetTalentPrereqs(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int tabIndex = static_cast<int>(luaL_checknumber(L, 1));
     const int talentIndex = static_cast<int>(luaL_checknumber(L, 2));
+    const bool inspect = lua_toboolean(L, 3) != 0;
     if (wantsPetTalents(L, 4)) return 0;
-    const auto* talent = talentAt(gh, tabIndex, talentIndex);
+    const int group = talentGroupArg(L, 5, gh);
+    const auto* talent = talentAt(gh, tabIndex, talentIndex, talentClassId(gh, inspect));
     if (!talent) return 0;
 
     int pushed = 0;
@@ -2858,9 +2991,11 @@ static int lua_GetTalentPrereqs(lua_State* L) {
         // The DBC counts ranks from zero, so the rank a prerequisite asks for
         // is one more than the number stored beside it.
         const int needed = static_cast<int>(talent->prereqRank[p]) + 1;
-        const int have = gh->getTalentRank(prereqId);
+        const int have = talentRankFor(gh, inspect, prereqId, group);
         const auto staged = previewPoints().find(prereqId);
-        const int previewHave = have + (staged == previewPoints().end() ? 0 : staged->second);
+        const int previewHave = have
+            + (previewApplies(gh, inspect, group) && staged != previewPoints().end()
+               ? staged->second : 0);
 
         lua_pushnumber(L, prereq->row + 1);
         lua_pushnumber(L, prereq->column + 1);
@@ -2872,19 +3007,44 @@ static int lua_GetTalentPrereqs(lua_State* L) {
 }
 
 // GetGroupPreviewTalentPointsSpent(pet, group) → points staged
+//
+// The pair picks which group's record to total (0x005c6420 → 0x005c6010, which
+// sums the per-tab preview figures of the record one of the two arguments
+// names). There is one staging store here and it belongs to the group the
+// player is standing in, so the pet's trees and the viewer's other group answer
+// no points staged - which is what the client answers for a record with nothing
+// in it, and what talentframebase.lua:526 subtracts from that group's points.
 static int lua_GetGroupPreviewTalentPointsSpent(lua_State* L) {
+    auto* gh = getGameHandler(L);
     int total = 0;
-    for (const auto& [id, n] : previewPoints()) { (void)id; total += n; }
+    if (!luaClientSwitchArg(L, 1, false)
+        && previewApplies(gh, false, talentGroupArg(L, 2, gh))) {
+        for (const auto& [id, n] : previewPoints()) { (void)id; total += n; }
+    }
     lua_pushnumber(L, total);
     return 1;
 }
 
 // ResetGroupPreviewTalentPoints(pet, group)
+//
+// Same pair, and 0x005c7200 totals that record before and after clearing it,
+// firing PREVIEW_TALENT_POINTS_CHANGED only when the total actually moved.
+// Nothing is staged outside the group the player is standing in, so the pet's
+// trees and the other group have nothing to take back - and saying so without
+// touching the store is what keeps a reset asked for over there from spending
+// itself here.
 static int lua_ResetGroupPreviewTalentPoints(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (luaClientSwitchArg(L, 1, false)
+        || !previewApplies(gh, false, talentGroupArg(L, 2, gh))) {
+        LOG_WARNING("ResetGroupPreviewTalentPoints: nothing is staged for the pet or another group");
+        return 0;
+    }
+    const bool hadStaged = !previewPoints().empty();
     previewPoints().clear();
     // The frame redraws on this and on nothing else, so clearing the staged
     // points without it leaves them on screen after they are gone.
-    if (auto* gh = getGameHandler(L)) {
+    if (hadStaged && gh) {
         gh->fireAddonEvent("PREVIEW_TALENT_POINTS_CHANGED", {});
     }
     return 0;
@@ -2923,6 +3083,16 @@ static int lua_LearnPreviewTalents(lua_State* L) {
 }
 
 // LearnTalent(tabIndex, talentIndex, pet, group) - spend one point directly
+//
+// The fourth value is read by nobody - not here and not in the reference, which
+// registers this one as "Usage: LearnTalent(tabIndex, talentIndex[, isPet])"
+// (0x00a1981c) and whose handler 0x005c80e0 reads arguments 1, 2 and 3 and no
+// further. Unlike its neighbours in the family it has no groupIndex, because
+// which spec is meant comes from which list the tab and index were resolved
+// against: the player's own (checked against DAT_00c2101c, the tab count) in the
+// non-pet branch, the pet's (DAT_00c21028) in the pet branch. So the panel
+// passing a group here is the interface being uniform, not an argument with a
+// reader, and the same goes for the point being spent on the active spec alone.
 static int lua_LearnTalent(lua_State* L) {
     auto* gh = getGameHandler(L);
     // Pet talents are not modelled, and this is the argument that made that
@@ -2960,65 +3130,124 @@ static int lua_GetUnspentTalentPoints(lua_State* L) {
 }
 
 // GetNumTalentGroups(inspect, pet) → how many specs the player has
+//
+// 0x005c5df0 reads both arguments and answers a count it was told, never one it
+// works out: the inspected player's count arrives with their talents
+// (DAT_00c21010), the player's own is the byte the talents packet carried
+// (DAT_00c20ff8, stored beside the active group at DAT_00c20ff4), and the pet's
+// answers 1 only when the pet has a talent list at all *and* that list reports
+// groups (DAT_00c21000 and DAT_00c21028, which LearnTalent's pet branch indexes
+// against). Zero is therefore a real answer - it is what the reference answers
+// before the packet arrives, and the only honest one for a pet, whose talents no
+// packet fills here.
+//
+// This used to infer two from the second list having anything in it, which gets
+// a spec that was bought and never used wrong: a spec with no points spent is
+// still a spec, and the panel draws a tab for it.
 static int lua_GetNumTalentGroups(lua_State* L) {
     auto* gh = getGameHandler(L);
-    // Two only once the second is actually bought: the frame draws a spec tab
-    // per group, and reporting two unconditionally offers one that is not there.
-    int groups = 1;
-    if (gh && lua_toboolean(L, 1)) {
-        // The inspected player's spec count comes with their talents; the
-        // viewer's own says nothing about how many specs the target bought.
-        if (const auto* r = gh->getInspectResult()) {
-            if (r->talentGroups > 0) groups = r->talentGroups;
+    const bool inspect = lua_toboolean(L, 1) != 0;
+    const bool pet = lua_toboolean(L, 2) != 0;
+    int groups = 0;
+    if (gh) {
+        if (inspect) {
+            // The target's own count, whatever the viewer's says.
+            if (const auto* r = gh->getInspectResult()) groups = r->talentGroups;
+        } else if (!pet) {
+            groups = gh->getTalentGroupCount();
         }
-        lua_pushnumber(L, groups);
-        return 1;
     }
-    if (gh && gh->getUnspentTalentPoints(1) > 0) groups = 2;
-    if (gh && !gh->getLearnedTalents(1).empty()) groups = 2;
     lua_pushnumber(L, groups);
     return 1;
 }
 
 // SetActiveTalentGroup(group)
+//
+// 0x005c5e70 raises its Usage literal for anything but a number, then casts the
+// spec's spell only when three things hold: the group is not the one already
+// active, its index is below the realm's count of specs, and that index is below
+// two. The count test is the one nothing here did, so a character who never
+// bought the second spec could still cast its spell - and this client casts a
+// real spell (SPELL_EFFECT_TALENT_SPEC_SELECT through Spell.dbc names 63645 and
+// 63644), so the ask went to the realm rather than staying local. The reference
+// looks the spell up by name hash (0x0000f89d = 63645 for the first spec, read
+// out of the table at 0x00ad05e8) and casts that, which is the same verb.
 static int lua_SetActiveTalentGroup(lua_State* L) {
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: SetActiveTalentGroup(groupIndex)");
     auto* gh = getGameHandler(L);
-    const int group = static_cast<int>(luaL_optnumber(L, 1, 1));
-    if (gh && group >= 1 && group <= 2) {
-        gh->switchTalentSpec(static_cast<uint8_t>(group - 1));
-    }
+    if (!gh) return 0;
+    const int group = luaToClientInt(L, 1) - 1;
+    if (group < 0 || group > 1) return 0;
+    if (group >= static_cast<int>(gh->getTalentGroupCount())) return 0;
+    gh->switchTalentSpec(static_cast<uint8_t>(group));
     return 0;
 }
 
-// GetTalentLink(tabIndex, talentIndex, inspect, group) → hyperlink
+// GetTalentLink(tabIndex, talentIndex[, isInspect[, isPet[, groupIndex[, isPreview]]]])
+//   → hyperlink
+//
+// 0x005c7ce0 resolves the talent out of the tree the two switch arguments pick:
+// 0x005c5c60 answers the player's tab list, the pet's, or the inspect target's
+// - and nothing at all for inspect with pet, which is the combination the
+// inspect talent frame is in. Nothing here resolves a pet's trees, so a pet
+// talent answers no link rather than the hunter's talent in the same slot, and
+// an inspect target of another class is resolved out of that class's layout
+// instead of the viewer's.
+//
+// The rank comes from the record of the group the fifth argument names. The
+// same slot is then read a second time, at :6704, as the switch that chooses
+// between that record's learned rank (+0x1c) and its preview rank (+0x20) -
+// although the Usage line puts isPreview in the sixth slot, and the panel
+// passes both, GetCVarBool("previewTalents") as the sixth. So from the stock
+// panel, which names a group on every call, a copied link carries the preview
+// figure. Read as it is rather than as the Usage line says it should be: the
+// number is what the receiving side shows as the talent's rank, and the figure
+// the sender had on screen is the one that was meant.
 static int lua_GetTalentLink(lua_State* L) {
     auto* gh = getGameHandler(L);
-    const uint32_t id = resolveTalentId(gh, static_cast<int>(luaL_optnumber(L, 1, 0)),
-                                            static_cast<int>(luaL_optnumber(L, 2, 0)));
-    if (!gh || id == 0) { lua_pushnil(L); return 1; }
-    uint32_t rank1 = 0;
-    for (const auto& [talentId, entry] : gh->getAllTalents()) {
-        if (talentId == id) { rank1 = entry.rankSpells[0]; break; }
+    const bool inspect = lua_toboolean(L, 3) != 0;
+    if (wantsPetTalents(L, 4)) { lua_pushnil(L); return 1; }
+    const int group = talentGroupArg(L, 5, gh);
+    const auto* talent = talentAt(gh,
+                                  static_cast<int>(luaL_optnumber(L, 1, 0)),
+                                  static_cast<int>(luaL_optnumber(L, 2, 0)),
+                                  talentClassId(gh, inspect));
+    if (!gh || !talent) { lua_pushnil(L); return 1; }
+    const uint32_t id = talent->talentId;
+    int rank = talentRankFor(gh, inspect, id, group);
+    if (luaClientSwitchArg(L, 5, false) && previewApplies(gh, inspect, group)) {
+        const auto staged = previewPoints().find(id);
+        if (staged != previewPoints().end()) rank += staged->second;
     }
-    std::string name = gh->getSpellName(rank1);
+    std::string name = gh->getSpellName(talent->rankSpells[0]);
     if (name.empty()) name = "Talent";
     const std::string link = "|cff4e96f7|Htalent:" + std::to_string(id) + ":" +
-                             std::to_string(gh->getTalentRank(id)) + "|h[" + name +
-                             "]|h|r";
+                             std::to_string(rank) + "|h[" + name + "]|h|r";
     lua_pushstring(L, link.c_str());
     return 1;
 }
 
+// GetActiveTalentGroup(inspect, pet) → the group whose talents are being read
+//
+// 0x005c5810 reads both arguments and answers one of three stored values, all
+// of them pushed one-based: the inspected player's active group (DAT_00c21004),
+// or - for a call that is not inspecting - the pet's, which the expression at
+// :4392 turns into a plain zero because a pet has one group by definition, or
+// the player's own stored active index (DAT_00c20ff4). The second argument was
+// dropped here, so a hunter's pet frame asked the player which of *their* specs
+// was live and used that as the pet's talent group.
 static int lua_GetActiveTalentGroup(lua_State* L) {
     auto* gh = getGameHandler(L);
+    // Which of the target's specs the talents just read belong to. The
+    // inspect frame keeps this as its talentGroup and passes it back into
+    // every other talent call.
     if (gh && lua_toboolean(L, 1)) {
-        // Which of the target's specs the talents just read belong to. The
-        // inspect frame keeps this as its talentGroup and passes it back into
-        // every other talent call.
         const auto* r = gh->getInspectResult();
         lua_pushnumber(L, r ? (r->activeTalentGroup + 1) : 1);
         return 1;
     }
+    if (lua_toboolean(L, 2)) { lua_pushnumber(L, 1); return 1; }
     lua_pushnumber(L, gh ? (gh->getActiveTalentSpec() + 1) : 1);
     return 1;
 }
@@ -4797,9 +5026,10 @@ void registerQuestLuaAPI(lua_State* L) {
                 // - so each dropdown built its "All" row and stopped, and
                 // picking anything was impossible rather than merely inert.
                 //
-                // Single-select, not a set of ticks: the click handler calls
-                // Set…Filter(id - 1, 1, 1) and nothing ever unticks, so the
-                // state is one index and zero is the "All" row.
+                // A set of ticks, not a single pick - see the two masks above.
+                // The panel's own click handler only ever asks for one at a
+                // time, but everything around it asks per entry, and the two
+                // Get…Filter bindings answer per entry as well.
                 {"GetTradeSkillSubClasses", [](lua_State* L) -> int {
             const auto subs = tradeSkillSubClasses(getGameHandler(L));
             for (const auto& s : subs) lua_pushstring(L, s.c_str());
@@ -4810,23 +5040,134 @@ void registerQuestLuaAPI(lua_State* L) {
             for (const auto& s : slots) lua_pushstring(L, s.c_str());
             return static_cast<int>(slots.size());
         }},
+                // GetTradeSkillSubClassFilter(index) (0x005da1b0): 1 when the
+                // index'th sub-class is ticked, nil when it is not - not a
+                // boolean.  An index below one asks whether *every* entry of the
+                // list is ticked, which is the panel's "All Subclasses" row
+                // (blizzard_tradeskillui.lua:476); an index past the list is the
+                // client's own error.
                 {"GetTradeSkillSubClassFilter", [](lua_State* L) -> int {
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            lua_pushboolean(L, i == tradeSkillSubClassPick() ? 1 : 0);
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetTradeSkillSubClassFilter(index)");
+            const auto subs = tradeSkillSubClasses(getGameHandler(L));
+            const uint64_t mask = tradeSkillSubClassMask();
+            const int index = luaToClientInt(L, 1) - 1;
+            bool on;
+            if (index < 0) {
+                on = true;
+                for (size_t i = 0; i < subs.size() && on; ++i)
+                    on = (mask & tradeSkillFilterBit(i)) != 0;
+            } else {
+                if (index >= static_cast<int>(subs.size()))
+                    return luaL_error(L, "Bad sub class in GetTradeSkillSubClassFilter");
+                on = (mask & tradeSkillFilterBit(index)) != 0;
+            }
+            if (on) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;
         }},
+                // GetTradeSkillInvSlotFilter(index) (0x005dbf90).  Same shape,
+                // one difference worth keeping: with the mask still all-on the
+                // client answers from the all-on state itself and never walks
+                // the list, so it says yes to "are all ticked" and *nothing at
+                // all* - nil, not the error - to any entry index.  The panel
+                // hides it everywhere but one: LoadInvSlots unticks every entry
+                // itself while allChecked holds (blizzard_tradeskillui.lua:529),
+                // and the only reader left is TradeSkillFilterFrame_InvSlotName
+                // (:546), whose walk decides which slot the dropdown remembers
+                // it was showing (:572).  Reproduced rather than tidied up,
+                // because that is the answer the panel was written against.
                 {"GetTradeSkillInvSlotFilter", [](lua_State* L) -> int {
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            lua_pushboolean(L, i == tradeSkillInvSlotPick() ? 1 : 0);
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetTradeSkillInvSlotFilter(index)");
+            const uint64_t mask = tradeSkillInvSlotMask();
+            const int index = luaToClientInt(L, 1) - 1;
+            if (index < 0) {
+                if (mask == ~0ull) lua_pushnumber(L, 1); else lua_pushnil(L);
+                return 1;
+            }
+            if (mask == ~0ull) {
+                lua_pushnil(L);
+                return 1;
+            }
+            const auto slots = tradeSkillInvSlots(getGameHandler(L));
+            if (index >= static_cast<int>(slots.size()))
+                return luaL_error(L, "Bad inv type in GetTradeSkillInvSlotFilter");
+            if ((mask & tradeSkillFilterBit(index)) != 0) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
             return 1;
         }},
+                // SetTradeSkillSubClassFilter(index [, on/off, exclusive])
+                // (0x005dd0f0): index below one turns every tick back on, which
+                // is what the dropdown does as it loads (:463) and again when a
+                // sub-class makes the remembered slot meaningless (:559).  On
+                // the reference this also records which index was last touched
+                // (0x00ad0e04, written by 0x005dcf00 beside the mask) and uses
+                // it to narrow the *inventory slot* list off that sub-class' own
+                // row (0x005dace0 reads the row's slot mask at +0x10), which
+                // renumbers the second dropdown.  There is no such row here:
+                // both lists are built from the recipes, so nothing narrows and
+                // the two masks stay independent.
                 {"SetTradeSkillSubClassFilter", [](lua_State* L) -> int {
-            tradeSkillSubClassPick() = static_cast<int>(luaL_optnumber(L, 1, 0));
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetTradeSkillSubClassFilter(index [, on\\off, exclusive])");
+            const int index = luaToClientInt(L, 1) - 1;
+            if (index < 0) {
+                tradeSkillSubClassMask() = ~0ull;
+            } else {
+                const auto subs = tradeSkillSubClasses(getGameHandler(L));
+                if (index >= static_cast<int>(subs.size()))
+                    return luaL_error(L, "Bad sub class in SetTradeSkillSubClassFilter");
+                if (!lua_isnumber(L, 2))
+                    return luaL_error(L, "Missing on//off parameter in SetTradeSkillSubClassFilter");
+                // Read once, written once: 0x005dd0f0 takes the old mask into a
+                // local (uVar1) before it reads the argument values, works the
+                // new one out of it, and hands that to 0x005dcf00.
+                const uint64_t bit = tradeSkillFilterBit(index);
+                const uint64_t was = tradeSkillSubClassMask();
+                if (luaToClientInt(L, 2) == 0) {
+                    tradeSkillSubClassMask() = was & ~bit;
+                } else if (lua_isnumber(L, 3) && luaToClientInt(L, 3) != 0) {
+                    tradeSkillSubClassMask() = bit;
+                } else {
+                    tradeSkillSubClassMask() = was | bit;
+                }
+            }
+            // The reference recomputes the drawn list (0x005dcc40) and raises
+            // script event 300; the generation bump is how this client says the
+            // list has to be redrawn.
             ++tradeSkillRowsGeneration();
             return 0;
         }},
+                // SetTradeSkillInvSlotFilter(index [, on/off, exclusive])
+                // (0x005dd230).  The index counts entries of the slot list the
+                // dropdown was built from, not inventory type numbers: the
+                // reference walks the slots its sub-class permits and takes the
+                // index'th one of those, and WoWee's list is its permitted set.
                 {"SetTradeSkillInvSlotFilter", [](lua_State* L) -> int {
-            tradeSkillInvSlotPick() = static_cast<int>(luaL_optnumber(L, 1, 0));
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetTradeSkillInvSlotFilter(index [, on\\off, exclusive])");
+            const int index = luaToClientInt(L, 1) - 1;
+            if (index < 0) {
+                tradeSkillInvSlotMask() = ~0ull;
+            } else {
+                const auto slots = tradeSkillInvSlots(getGameHandler(L));
+                if (index >= static_cast<int>(slots.size()))
+                    return luaL_error(L, "Bad inv slot in SetTradeSkillInvSlotFilter");
+                if (!lua_isnumber(L, 2))
+                    return luaL_error(L, "Missing on//off parameter in SetTradeSkillInvSlotFilter");
+                const uint64_t bit = tradeSkillFilterBit(index);
+                const uint64_t was = tradeSkillInvSlotMask();
+                if (luaToClientInt(L, 2) == 0) {
+                    tradeSkillInvSlotMask() = was & ~bit;
+                } else if (lua_isnumber(L, 3) && luaToClientInt(L, 3) != 0) {
+                    tradeSkillInvSlotMask() = bit;
+                } else {
+                    tradeSkillInvSlotMask() = was | bit;
+                }
+                // 0x005dd230 writes the clear and the add itself and goes
+                // through 0x005dcf30 only for the exclusive one; all three end
+                // at the same recompute and event 300, which is the bump below.
+            }
             ++tradeSkillRowsGeneration();
             return 0;
         }},
@@ -5395,6 +5736,25 @@ void registerQuestLuaAPI(lua_State* L) {
             return trainerFold(L, true);
         }},
                 // GetGlyphLink(socket [, talentGroup]) → hyperlink, or nil
+                //
+                // What travels in the link is not the socket's number nor the
+                // glyph's spell. The client's binding (0x005b7740) takes the
+                // socket's *GlyphSlot.dbc* id out of PLAYER_FIELD_GLYPH_SLOTS_1
+                // (+0x122c of the player's fields, +4 per one-based socket) and
+                // the glyph's *GlyphProperties.dbc* id out of the per-socket
+                // cache the client keeps for both specs (0x005c5770), and hands
+                // the pair to 0x0061e650, which looks both rows up - by those
+                // two ids - and writes them into
+                // "%s|Hglyph:%d:%d|h[%s]|h%s" unchanged, colour and all
+                // ("|cff66bbff" leading, "|r" trailing, exactly as here). The
+                // name inside the brackets is the GlyphProperties row's *spell*
+                // name: the row's SpellID (+4) fetched out of the Spell table,
+                // because the properties id and the spell id are different
+                // numbers and only one of them names anything. A glyph whose
+                // spell cannot be named therefore answers no link at all rather
+                // than a link called "Glyph", which is what the panel would
+                // otherwise insert into chat; and the pair is read back in the
+                // same order by SetHyperlink - see the glyph branch there.
                 {"GetGlyphLink", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
@@ -5403,14 +5763,22 @@ void registerQuestLuaAPI(lua_State* L) {
                 lua_pushnil(L);
                 return 1;
             }
+            std::array<uint32_t, 6> slotIds{}, inFields{};
+            uint32_t enabled = 0;
+            if (!gh->getGlyphSocketFields(slotIds, inFields, enabled)) {
+                lua_pushnil(L);
+                return 1;
+            }
             const auto& glyphs = (spec >= 1 && spec <= 2)
                 ? gh->getGlyphs(static_cast<uint8_t>(spec - 1)) : gh->getGlyphs();
-            const uint16_t glyphId = glyphs[index - 1];
-            if (glyphId == 0) { lua_pushnil(L); return 1; }
-            std::string name = gh->getSpellName(glyphId);
-            if (name.empty()) name = "Glyph";
-            const std::string link = "|cff66bbff|Hglyph:" + std::to_string(index) +
-                                     ":" + std::to_string(glyphId) + "|h[" + name +
+            const size_t i = static_cast<size_t>(index - 1);
+            const uint32_t propertiesId = glyphs[i];
+            if (propertiesId == 0) { lua_pushnil(L); return 1; }
+            gh->ensureGlyphPropertiesLoaded();
+            const std::string name = gh->getSpellName(gh->getGlyphSpellId(propertiesId));
+            if (name.empty()) { lua_pushnil(L); return 1; }
+            const std::string link = "|cff66bbff|Hglyph:" + std::to_string(slotIds[i]) +
+                                     ":" + std::to_string(propertiesId) + "|h[" + name +
                                      "]|h|r";
             lua_pushstring(L, link.c_str());
             return 1;
@@ -5452,10 +5820,40 @@ void registerQuestLuaAPI(lua_State* L) {
             else lua_pushnil(L);
             return 1;
         }},
-                
-                // SetCursor(art) - the pointer's own image, which this client
-                // does not change.
-                {"SetCursor", [](lua_State* L) -> int { (void)L; return 0; }},
+                // SetCursor(art) - the pointer's own picture, from either one of
+                // the client's named cursors or a texture path: 0x005104a0
+                // strcmp's the argument against its fifty-two names, and only if
+                // none of them matches does it hand the string to the path
+                // setter (0x00616830). That test is case-sensitive, so the same
+                // name in lower case is a path by then, and a path is what the
+                // vehicle bar passes anyway (`Interface\CURSOR\vehichleCursor`,
+                // extension left off because the client's own texture opener adds
+                // it - see cursorPathForCustom).
+                //
+                // nil hands the pointer back, which is the same call
+                // ResetCursor() makes.
+                //
+                // What the reference does with a path it cannot open is raise a
+                // Lua error and leave a blank picture in the cursor's slot, which
+                // is what this interface's only such call gets:
+                // floatingchatframe.xml's SetCursor("UI-Cursor-Size"), a texture
+                // name out of a newer client's texture set, with no file for it
+                // in this one. Here the pointer is simply left alone.
+                {"SetCursor", [](lua_State* L) -> int {
+                    if (!lua_isstring(L, 1)) {
+                        ui::frameXmlSetScriptCursor(ui::kCursorKindNone);
+                        return 0;
+                    }
+                    const char* art = lua_tostring(L, 1);
+                    const int kind = ui::cursorKindForName(art);
+                    if (kind != ui::kCursorKindNone) {
+                        ui::frameXmlSetScriptCursor(kind);
+                    } else {
+                        ui::frameXmlSetScriptCursor(ui::kCursorKindCustom,
+                                                   ui::cursorPathForCustom(art));
+                    }
+                    return 0;
+                }},
                 // How long until the daily quests reset, which the quest log
                 // prints in a tooltip through SecondsToTime. A nil there is
                 // arithmetic on nothing rather than a blank line.
@@ -5486,46 +5884,16 @@ void registerQuestLuaAPI(lua_State* L) {
             return 1;
         }},
                 // The cursor changes at a vendor: the hand that sells, and the
-                // hammer that repairs. This client draws its own cursor and
-                // has no art switched by name, so these do nothing - which is
-                // what they did before, silently, as unknown globals.
+                // hammer that repairs.
                 //
-                // The names are the client's own table, not file names:
-                // SetCursor (0x005104a0) lays out 52 {name, number} pairs on
-                // the stack - POINT_CURSOR 2, CAST_CURSOR 3, BUY_CURSOR 4 …
-                // VEHICLE_ERROR_CURSOR 0x35 - matches the argument against the
-                // names, and only a miss falls through to 0x00616830, which is
-                // where a path like "Interface\\CURSOR\\Driver" is loaded as a
-                // texture instead; that sets the current cursor (0x00c26de8) to
-                // 0x35 - the number the same table gives VEHICLE_ERROR_CURSOR,
-                // and the one number the setter 0x00616800 refuses to take, so
-                // a named cursor never overwrites a custom-texture one. Both
-                // globals live beside the base cursor 0x00c25de4, the one
-                // ResetCursor (0x00616920)
-                // restores, and a change fires event 0x113 - CURSOR_UPDATE,
-                // which this repository already raises wherever an item
-                // actually moves onto or off the pointer.
-                //
-                // Bound rather than left to the fallback because the fallback
-                // is what makes a typo look like a working call, and because a
-                // window that calls nothing undefined is the measure of
-                // whether it can be handed over.
-                //
-                // What the reference does with this one (0x005856d0) is more
-                // than pick art, and that is worth knowing before anyone wires
-                // a cursor up: it looks the hovered merchant item up, and if
-                // the player's money is under the item's cost it sets cursor
-                // state 0x1d - the "you cannot have this one" hand - and
-                // returns. Otherwise it walks the item's five requirements and
-                // a reputation test (0x005a37b0 on the item's required faction)
-                // and answers 0x1d if any fails, state 3 if none does. The
-                // container version (0x005d8bd0) has no such test: it sets 3
-                // for any item in the bag that is not flagged at record +0x394
-                // bit 0. So a vendor cursor has to re-decide on every hover -
-                // merchantframe.xml calls this from the frame's OnUpdate while
-                // `itemHover` is set, which is what makes the hand change the
-                // moment a bag fills up or a coin lands.
-                {"ShowMerchantSellCursor", [](lua_State* L) -> int { (void)L; return 0; }},
+                // The sell cursor is not here any more - it answers from the
+                // money, the extended-cost row and the reputation the reference
+                // tests, all of which the merchant bindings already read, so it
+                // lives beside them in lua_inventory_api.cpp. What stayed here
+                // is the repair pair, which is state rather than art: the flag
+                // it sets is the base cursor (17) that the client's own click
+                // paths test before treating a click in the bags as a repair,
+                // and the same one all three sell cursors refuse to overwrite.
                 // The merchant's repair-an-item button toggles between these
                 // two and reads the state back through InRepairMode. All three
                 // were stubs, so the button never latched and the per-item
@@ -5606,11 +5974,30 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushnumber(L, 0);
             return 3;
         }},
-                // GetCategoryNumAchievements(id) → total, completed, incomplete
+                // GetCategoryNumAchievements(id [, includeHidden]) → total, completed
+                //
+                // Two answers, not three: 0x005b38e0 pushes the total (its own
+                // counter plus a second one for rows it treats specially) and
+                // then the completed count, and returns 2. The interface has
+                // always unpacked two, so a third answer was simply discarded.
+                //
+                // What the optional second argument does in this client is not
+                // what its name in the installed FrameXML suggests. The hidden
+                // bit (row +0x24 bit 0) is consulted only for the two pseudo
+                // category ids -1 and -2, which ask for "everything not hidden"
+                // and "everything hidden" respectively; for an ordinary
+                // category id the bit is never read. What the argument really
+                // switches is the count: with it true every row of the category
+                // lands in the total, and without it the client folds rows that
+                // share the group key at row +0xc and counts one of them. The
+                // catalog here has no such key, and no progression bit either
+                // (rows with +0x24 bit 2 set are dropped outright), so the
+                // straight count is the closest answer available and the
+                // argument stays unread rather than guessed at.
                 {"GetCategoryNumAchievements", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 3; }
+            if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
             gh->ensureAchievementCategoriesLoaded();
             const auto& ids = gh->getCategoryAchievements(id);
             const auto& earned = gh->getEarnedAchievements();
@@ -5618,8 +6005,7 @@ void registerQuestLuaAPI(lua_State* L) {
             for (uint32_t a : ids) if (earned.count(a)) ++done;
             lua_pushnumber(L, static_cast<lua_Number>(ids.size()));
             lua_pushnumber(L, done);
-            lua_pushnumber(L, static_cast<lua_Number>(ids.size() - done));
-            return 3;
+            return 2;
         }},
                 {"GetAchievementCategory", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
@@ -6010,6 +6396,42 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushnumber(L, gh ? gh->getTotalAchievementPoints() : 0);
             return 1;
         }},
+                // GetAchievementLink(achievementID) (0x005b6110), which the
+                // achievement panel's shift-click puts in chat
+                // (blizzard_achievementui.lua:952) and the watch frame's own
+                // button writes (watchframe.lua:97).
+                //
+                // The writer is 0x0061bff0, "%s|Hachievement:%d:%016I64X:%d:%d:
+                // %d:%d:%u:%u:%u:%u|h[%s]|h%s": "|cffffff00", the id, the
+                // earner's guid as sixteen hex digits - the local player's own,
+                // since the binding reads it out of the client's Player object
+                // (the 0x10 checked cast at 0x005b619c) and nobody else's -
+                // whether that player has it, the month and the day it was
+                // earned on, the year since 2000, then four unsigned numbers,
+                // then the title and "|r". The order of that pair is not a
+                // coin flip: the parser on the other end (0x0062de9e) puts the
+                // first of them where the tooltip's string asks for the month,
+                // and the enUS wording of that string is the American
+                // "%2$d/%3$d" month-before-day.
+                //
+                // The client's own record holds the month and the day one lower
+                // than it writes them, which is why its writer can tell "not
+                // earned" from "1 January" at all; the unpacker this file reads
+                // the date through hands them over already raised, so they go
+                // in as they come. An achievement nobody has earned unpacks to
+                // 1 January 2000 either way, and the tooltip never reads a date
+                // from a link whose completed flag is clear.
+                //
+                // Those four are one bitmask over a hundred and twenty-eight
+                // criteria: bit i of the first says criterion i is done, the
+                // second takes 32..63, and so on. The binding builds it at
+                // 0x005b61ee by walking the achievement's criteria against the
+                // player's own progress records, a criterion counting as done
+                // once its counter has reached its quantity; and an achievement
+                // with no criteria at all gets 0xffffffff in every one, which is
+                // what tells the tooltip reading the link back (0x00627220) that
+                // the link carries no criteria state at all - it lists none,
+                // rather than listing them all as done.
                 {"GetAchievementLink", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
@@ -6017,8 +6439,38 @@ void registerQuestLuaAPI(lua_State* L) {
             gh->ensureAchievementNamesLoaded();
             const std::string& name = gh->getAchievementName(id);
             if (name.empty()) return luaReturnNil(L);
-            std::string link = "|cffffff00|Hachievement:" + std::to_string(id) +
-                               ":0:0:0:0:0:0:0:0:0|h[" + name + "]|h|r";
+
+            const bool earned = gh->getEarnedAchievements().count(id) != 0;
+            // Month, day, year as the comment above says they go: the unpacker
+            // hands the pair over already one-based, so nothing raises them here.
+            const game::WowDate on =
+                game::unpackWowPackedTime(gh->getAchievementDate(id));
+
+            gh->ensureAchievementCriteriaLoaded();
+            const auto& criteria = gh->getAchievementCriteria(id);
+            const auto& progress = gh->getCriteriaProgress();
+            uint32_t mask[4] = {0u, 0u, 0u, 0u};
+            if (criteria.empty()) {
+                mask[0] = mask[1] = mask[2] = mask[3] = 0xFFFFFFFFu;
+            } else {
+                for (size_t i = 0; i < criteria.size() && i < 128; ++i) {
+                    const auto it = progress.find(criteria[i].id);
+                    if (it == progress.end() || it->second < criteria[i].quantity) continue;
+                    mask[i / 32] |= 1u << (i % 32);
+                }
+            }
+
+            char guid[24];
+            std::snprintf(guid, sizeof(guid), "%016llX",
+                          static_cast<unsigned long long>(gh->getPlayerGuid()));
+            std::string link = "|cffffff00|Hachievement:" + std::to_string(id) + ":" + guid +
+                               ":" + (earned ? "1" : "0") +
+                               ":" + std::to_string(on.month) +
+                               ":" + std::to_string(on.day) +
+                               ":" + std::to_string(on.yearSince2000) +
+                               ":" + std::to_string(mask[0]) + ":" + std::to_string(mask[1]) +
+                               ":" + std::to_string(mask[2]) + ":" + std::to_string(mask[3]) +
+                               "|h[" + name + "]|h|r";
             lua_pushstring(L, link.c_str());
             return 1;
         }},

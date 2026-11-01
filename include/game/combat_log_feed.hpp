@@ -138,6 +138,10 @@ private:
     void nameOf(combat_log::Party& side);
     void itemNameOf(combat_log::Entry& entry, uint32_t itemId);
     void commit(uint32_t delayMs = 0);
+    /// COMBAT_TEXT_UPDATE, for an entry being announced. The client raises it
+    /// from its record builders rather than from the log, and always behind
+    /// 0x0074d430: the destination is the character.
+    void noteCombatText(const combat_log::Entry& entry);
     [[nodiscard]] std::string unknownName() const;
 
     /// The entry's line in the file, after the local time (0x0074f910 ->

@@ -1705,6 +1705,11 @@ void AddonManager::fireEvent(const std::string& event, const std::vector<std::st
     luaEngine_.fireEvent(event, args);
 }
 
+void AddonManager::fireEventValues(const std::string& event,
+                                   const std::vector<game::combat_log::Arg>& args) {
+    luaEngine_.fireEventValues(event, args);
+}
+
 void AddonManager::fireCombatLogEvent(const std::vector<game::combat_log::Arg>& args, bool filtered) {
     if (filtered) luaEngine_.fireEventValues("COMBAT_LOG_EVENT", args);
     luaEngine_.fireEventValues("COMBAT_LOG_EVENT_UNFILTERED", args);

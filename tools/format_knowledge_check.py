@@ -75,7 +75,7 @@ def main():
             if rel == owner:
                 continue
             try:
-                text = path.read_text(errors="ignore")
+                text = path.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
             if (what, rel) in SETTLED:

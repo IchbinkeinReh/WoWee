@@ -44,6 +44,11 @@ API = ROOT / "src/addons/lua_system_api.cpp"
 # the extracted interface is the player's own, not in the repository.
 FRAMEXML = (Path(sys.argv[1]) if len(sys.argv) > 1
             else ROOT / "Data/interface/framexml")
+# Either spelling of the path names the same interface, and the loader's answer
+# starts at the folder above FrameXML.
+INTERFACE = FRAMEXML.parent if FRAMEXML.name.lower() == "framexml" else FRAMEXML
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from framexml_source import loaded_files  # noqa: E402
 
 # The names where the engine's registration is not what FrameXML's table
 # declares. The value is what the binary registers, which is therefore what
@@ -68,12 +73,23 @@ PAIRS = (re.compile(r'default\s*=\s*"([^"]*)"\s*,\s*cvar\s*=\s*"([^"]*)"'),
 
 def main():
     if not API.is_file() or not FRAMEXML.is_dir():
+        # Not zero: "nothing compared" reads as a pass unless the exit says it
+        # did not happen. The interface named here has been a directory that
+        # moved once already, which is how this branch got believed.
         print("the extracted interface is missing - nothing compared.")
-        return 0
+        return 1
 
     blizzard = {}
-    for path in sorted(FRAMEXML.glob("*.lua")):
-        text = path.read_text(errors="ignore")
+    # Which files the client loads, from the one place that knows, both kinds.
+    # `FRAMEXML.glob("*.lua")` read 135 files: the five FrameXML files no .toc
+    # Include reaches, whose option rows this client never evaluates, and none
+    # of the 51 addon Lua files or 162 XML files that are loaded. Measured
+    # before and after the change: 35 declared defaults either way - every
+    # option table in this interface is in FrameXML itself - so the numbers held
+    # and the phantom rows are what went away.
+    for path in sorted(p for p in loaded_files(INTERFACE)
+                       if p.suffix.lower() in (".lua", ".xml")):
+        text = path.read_text(encoding="utf-8", errors="ignore")
         for value, cvar in PAIRS[0].findall(text):
             blizzard.setdefault(cvar.lower(), value)
         for cvar, value in PAIRS[1].findall(text):

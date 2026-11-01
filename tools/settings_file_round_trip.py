@@ -114,8 +114,11 @@ def moved(key, value, ranges, spare=None):
 
 def main():
     if not RUNNER.is_file() or not INTERFACE.is_dir():
+        # Not zero. No file written and every value found in the file again are
+        # both "0 missing"; the guard pins its count off this report, so a run
+        # that never ran has to be told apart by more than its wording.
         print("framexml_run or an extracted interface is missing - no file was written.")
-        return 0
+        return 1
 
     shutil.rmtree(CONFIG_ROOT, ignore_errors=True)
     CONFIG_ROOT.mkdir(parents=True, exist_ok=True)

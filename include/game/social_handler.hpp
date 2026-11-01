@@ -383,8 +383,8 @@ public:
     void arenaTeamRemove(uint32_t teamId, const std::string& name);
     void arenaTeamSetLeader(uint32_t teamId, const std::string& name);
     void disbandArenaTeam(uint32_t teamId);
-    /// Report a mail as spam. Type 0 of CMSG_COMPLAIN; the three values after
-    /// the sender are a zero, the mail's own id, and another zero.
+    /// Report a letter as spam. Which reports it refuses, and what it does
+    /// around the packet, is at the definition.
     void reportMailSpam(uint64_t senderGuid, uint32_t mailId);
     void leaveGroup();
     /// A worldport to `mapId`: the party's finder dungeon is forgotten,
@@ -401,7 +401,9 @@ public:
                            const std::string& targetName,
                            bool allowEmptyTarget = false);
     void promoteToLeader(uint64_t guid);
-    void uninvitePlayer(const std::string& playerName);
+    /// Kick a member out. `reason` is UninviteUnit's second argument, which the
+    /// reference sends in the same packet as the guid; see GroupUninviteGuidPacket.
+    void uninvitePlayer(const std::string& playerName, const std::string& reason = {});
     void setLootMethod(uint8_t method, uint64_t masterGuid, uint8_t threshold);
     void setPartyAssignment(uint8_t assignment, uint64_t guid, bool apply);
     void setRaidSubgroup(const std::string& playerName, uint8_t group);

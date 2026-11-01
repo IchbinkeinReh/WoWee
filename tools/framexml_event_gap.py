@@ -80,8 +80,10 @@ import sys
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 #: Name the extracted interface on the command line; see the docstring.
+# One string for the two directories, so the checkers that read this file for
+# the inputs it needs can see the name and skip it instead of running it blind.
 INTERFACE = (sys.argv[1] if len(sys.argv) > 1
-             else os.path.join(ROOT, "Data", "interface"))
+             else os.path.join(ROOT, "Data/interface"))
 SRC = os.path.join(ROOT, "src")
 #: Headers, which the fire-call scans below do not need and the constant
 #: resolution does: this tree spells an event name once in a header

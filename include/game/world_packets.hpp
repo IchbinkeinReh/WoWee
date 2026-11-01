@@ -927,10 +927,21 @@ public:
 class JoinChannelPacket {
 public:
     /// 0x00507a80: the row's id (zero for a channel of the player's own), two
-    /// bytes - 1 and 0 from the login join (0x00508090), 0 and the voice
-    /// setting from the interface's - then the name and the password.
+    /// bytes, then the name and the password.
+    ///
+    /// The two bytes are the pair the client's own join worker is handed and
+    /// keeps with the channel row: 1 and 0 for every join the client starts by
+    /// itself (the login mask at 0x00508090, guild recruitment at 0x00507d30, a
+    /// channel put back after a relogin), and 0 plus what the interface's own
+    /// fourth argument said for a join somebody asked for - which every call
+    /// site in the installed tree spells as 1. The first of them has one use
+    /// the client makes of them: with all ten slots taken it complains only
+    /// when it is zero (0x005076b0, game error 0x1ba ERR_TOO_MANY_CHAT_CHANNELS).
+    /// What the realm answers to the second is not readable here - the client
+    /// sends it, saves it with the row at +0x29 and hands the saved value back
+    /// on the next login, and reads it nowhere.
     static network::Packet build(const std::string& channelName, const std::string& password = "",
-                                 uint32_t channelId = 0, uint8_t byZone = 0, uint8_t unk = 0);
+                                 uint32_t channelId = 0, uint8_t byClient = 0, uint8_t byPlayer = 1);
 };
 
 /**
@@ -1652,12 +1663,30 @@ public:
 
 /** CMSG_GROUP_UNINVITE packet builder - the name-addressed kick.
  *
- * Not CMSG_GROUP_UNINVITE_GUID, which this used to send: that one is read as
- * an eight-byte guid followed by a reason, so a name went across as a guid.
+ * Not the verb the 12340 client uses for a kick: see GroupUninviteGuidPacket.
+ * This one is what is sent when the name is one this client cannot turn into a
+ * guid, so that a name typed at the chat line is still kickable.
  */
 class GroupUninvitePacket {
 public:
     static network::Packet build(const std::string& playerName);
+};
+
+/** CMSG_GROUP_UNINVITE_GUID - the kick the 12340 client's UninviteUnit sends.
+ *
+ * 0x006d43c0 opens the packet (0x76), writes the member's guid as two dwords
+ * (0x0047b100), then the reason as a string (0x0047b300). UninviteUnit resolves
+ * the name before it gets there (0x0060abf0), so a name that is not a unit
+ * token and not in the group's own roster never reaches this packet.
+ *
+ * The reason arrives from UninviteUnit's second argument, filled in as
+ * 0x0051a7a0 fills it - see groupKickReason in world_packets_social.cpp. A kick
+ * with no reason sends the field empty, which is what that binding's zeroed
+ * buffer leaves it.
+ */
+class GroupUninviteGuidPacket {
+public:
+    static network::Packet build(uint64_t guid, const std::string& reason);
 };
 
 /** CMSG_SET_GUILD_BANK_TEXT packet builder
@@ -3170,10 +3199,23 @@ public:
 
 /// CMSG_GMTICKET_CREATE: the map and the player's place - on the wire, so
 /// the canonical place is turned back - then the text and the fields after.
+///
+/// The word after the text is not a boolean. 0x005ac8f0 writes
+/// `1 + (needResponse ? 0x10 : 0)`, so it is a set of bits with the low one
+/// always on: asking for a reply sets bit 0x10 rather than turning the word
+/// from 0 to 1. Writing 1 for "yes" - which is what these writes did - is
+/// therefore the same ticket as asking for no reply at all, and the help
+/// frame's checkbox never reached the realm.
+///
+/// The byte after it is the "I need more help" variant of the same request:
+/// 0x005ad150 sends the ticket text again with that byte set, which is how the
+/// panel under a GM's answer reopens the ticket instead of opening a second
+/// one. Both go out through opcode 0x205; the byte is the only thing that
+/// tells them apart.
 class GmTicketCreatePacket {
 public:
     static network::Packet build(uint32_t mapId, float canonicalX, float canonicalY, float canonicalZ,
-                                 const std::string& text);
+                                 const std::string& text, bool needResponse, bool needMoreHelp);
 };
 
 /** CMSG_QUESTGIVER_QUERY_QUEST packet builder */

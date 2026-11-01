@@ -304,9 +304,10 @@ public:
 
     // --- Channels ---
 
-    /** Build CMSG_JOIN_CHANNEL */
-    virtual network::Packet buildJoinChannel(const std::string& channelName, const std::string& password, uint32_t channelId = 0, uint8_t byZone = 0, uint8_t unk = 0) {
-        return JoinChannelPacket::build(channelName, password, channelId, byZone, unk);
+    /** Build CMSG_JOIN_CHANNEL; the last two are the pair 0x00507a80 keeps with
+     *  the channel row - see JoinChannelPacket::build. */
+    virtual network::Packet buildJoinChannel(const std::string& channelName, const std::string& password, uint32_t channelId = 0, uint8_t byClient = 0, uint8_t byPlayer = 1) {
+        return JoinChannelPacket::build(channelName, password, channelId, byClient, byPlayer);
     }
 
     /** Build CMSG_LEAVE_CHANNEL */
@@ -455,8 +456,8 @@ public:
     // TBC 2.4.3 SMSG_GAMEOBJECT_QUERY_RESPONSE: 2 extra strings after names
     // (iconName + castBarCaption); WotLK has 3 (adds unk1)
     bool parseGameObjectQueryResponse(network::Packet& packet, GameObjectQueryResponseData& data) override;
-    // TBC 2.4.3 CMSG_JOIN_CHANNEL: name+password only (WotLK prepends channelId+hasVoice+joinedByZone)
-    network::Packet buildJoinChannel(const std::string& channelName, const std::string& password, uint32_t channelId = 0, uint8_t byZone = 0, uint8_t unk = 0) override;
+    // TBC 2.4.3 CMSG_JOIN_CHANNEL: name+password only (WotLK prepends channelId and the two bytes)
+    network::Packet buildJoinChannel(const std::string& channelName, const std::string& password, uint32_t channelId = 0, uint8_t byClient = 0, uint8_t byPlayer = 1) override;
     // TBC 2.4.3 CMSG_LEAVE_CHANNEL: name only (WotLK prepends channelId)
     network::Packet buildLeaveChannel(const std::string& channelName, uint32_t channelId = 0) override;
 };
@@ -503,7 +504,7 @@ public:
     bool parseGossipMessage(network::Packet& packet, GossipMessageData& data) override;
     bool parseGuildRoster(network::Packet& packet, GuildRosterData& data) override;
     bool parseGuildQueryResponse(network::Packet& packet, GuildQueryResponseData& data) override;
-    network::Packet buildJoinChannel(const std::string& channelName, const std::string& password, uint32_t channelId = 0, uint8_t byZone = 0, uint8_t unk = 0) override;
+    network::Packet buildJoinChannel(const std::string& channelName, const std::string& password, uint32_t channelId = 0, uint8_t byClient = 0, uint8_t byPlayer = 1) override;
     network::Packet buildLeaveChannel(const std::string& channelName, uint32_t channelId = 0) override;
     network::Packet buildSendMail(uint64_t mailboxGuid, const std::string& recipient,
                                    const std::string& subject, const std::string& body,

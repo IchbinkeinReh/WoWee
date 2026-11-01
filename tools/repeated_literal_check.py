@@ -25,8 +25,18 @@ constants and two files spelling it 533.333 rather than 533.33333, which is
 THE FILTER IS THE WHOLE TOOL
 
 Every number gives 170 literals in four or more files and is unreadable: 0.05f
-is in 48 of them and means nothing. What is left after the filter below is 66
-in three or more files, and the top of that list is all signal.
+is in 48 of them and means nothing. What is left after the filter below is 92
+in three or more files.
+
+The top of that list used to be all signal; it is not any more, and the widest
+row now is the counterexample. `0x2000` appears in twenty files, and it is not
+one fact: in combat_log.hpp it is kTypeGuardian in one block and kMissAbsorbed
+ten lines later, and in entity.hpp it is the flag a fall counts as far. A flag
+space the sweep cannot tell apart from another flag space - which is a limit of
+reading a *value*, and the only thing this tool reads. So a wide row here is a
+question ("do these twenty mean the same number?"), never an answer, and the
+ceiling in the guard is for drift in the count rather than a backlog to work
+down.
 
   * a hex constant of four or more digits - a protocol flag, a magic
   * a float carrying four or more decimals - a derived constant, not a tuning
@@ -87,7 +97,10 @@ def main():
         rel = path.relative_to(ROOT).as_posix()
         if rel.startswith(SKIP_PREFIX):
             continue
-        for line in path.read_text(errors="ignore").split("\n"):
+        # utf-8 named: the sources are utf-8 and the default on a Windows
+        # console is cp1252, which reads a comment's umlaut as several bytes and
+        # drops the five that spelling leaves undefined.
+        for line in path.read_text(encoding="utf-8", errors="ignore").split("\n"):
             for literal in distinctive_literals(line):
                 places[literal].add(rel)
 

@@ -757,16 +757,27 @@ static int lua_GetSpellName(lua_State* L) {
     return 2;
 }
 
-/// CastSpell(slot, bookType) - cast what is in that slot at the current
-/// target, which is what clicking a spellbook entry does.
+/// CastSpell(slot, bookType[, selfCast]) - cast what is in that slot at the
+/// current target, which is what clicking a spellbook entry does.
 static int lua_CastSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
     // Same resolver, and here it decides what is cast: clicking a pet spell
     // resolved through the player's tabs cast whichever of the player's spells
     // sat at that index.
     const uint32_t id = spellIdForCall(L, gh);
+    // The third argument is the ALT-click of spellbookframe.lua's
+    // IsModifiedClick("SELFCAST") branch.  0x00541250 takes the target off the
+    // client's own pair (DAT_00bd07b0/b4, the pair that elsewhere is looked up
+    // as a unit) and, when 0x00815500(L,3) answers a truth, hands the cast
+    // routine 0x004d3790 in its place - the value that elsewhere is checked-
+    // cast as Player_C.  So an ALT-click in the book is not "the target, if
+    // any" but this player, target or no target; and over there the player is
+    // named outright rather than spelled as a zero target, which is how some of
+    // the self-casts here ask.
+    const bool selfCast = lua_toboolean(L, 3) != 0;
     // 0x00541250 -> 0x0053bc40 -> 0x0080cce0, which asks the taint check.
-    if (id != 0 && spellCastAllowed(L, gh, id)) gh->castSpell(id, gh->getTargetGuid());
+    if (id != 0 && spellCastAllowed(L, gh, id))
+        gh->castSpell(id, selfCast ? gh->getPlayerGuid() : gh->getTargetGuid());
     return 0;
 }
 
@@ -878,14 +889,23 @@ static int lua_GetSpellCooldown(lua_State* L) {
     return pushHistoryCooldown(L, gh->petSpellCooldown(spellId));
 }
 
-// TargetUnit(unitId) - set current target
+// TargetUnit(unit, exactMatch) - set current target.
+// The first argument goes to the name resolver
+// (0x00525a30 -> 0x00520190) with mask 8 - any unit, creature or player, but
+// never a doodad - so a typed "/tar Felwolf" reaches the wolf standing nearby
+// and not just a unit already named by a token. The second argument is
+// exactMatch: the unit menu and "/targetexact" set it and compare whole names,
+// "/tar Bo" without it compares as many characters as were typed and takes the
+// nearest of what matches.
 static int lua_TargetUnit(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const char* uid = luaL_checkstring(L, 1);
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
+    const bool exact = lua_toboolean(L, 2) != 0;
     uint64_t guid = resolveUnitGuid(gh, uidStr);
+    if (!guid) guid = resolveNamedUnit(gh, uidStr, exact, false);
     // 0x00525a30 -> 0x005259e0 -> 0x00524bf0, which refuses insecure code
     // a target outright.
     if (guid != 0 && taint::allowedSecureOnly(L)) gh->targetUnit(guid);
@@ -1259,6 +1279,27 @@ static int lua_GetSpellTexture(lua_State* L) {
 
 // GetItemInfo(itemId) -> name, link, quality, iLevel, reqLevel, class, subclass, maxStack, equipSlot, texture, vendorPrice
 
+/// GetSpellLink(spellId [, bookType]) - the spell link, and a second value this
+/// does not answer.
+///
+/// The reference (0x005408e0) always returns two. The first is this one, built
+/// the same way; the second is nil unless the spell belongs to a trade skill,
+/// in which case it is a whole other link that 0x005db060 writes:
+/// "|cffffd000|Htrade:%d:%d:%d:%I64X:" with the spell, two numbers taken off
+/// the trade-skill record that spell resolves to, the player's own guid as hex,
+/// and then the recipes of that skill base64'd six to a byte - a "which of this
+/// smith's list can you actually make" mask, one bit test per recipe against the
+/// player's known spells. spellbookframe.lua:372 unpacks that pair and prefers
+/// the second: shift-clicking a recipe in the spell book links the *trade
+/// skill*, not the spell.
+///
+/// That second link is out of reach here for the reason the three
+/// GetTradeSkill*Link names are - it is built off a trade-skill record list, and
+/// neither dbc folder on this machine holds a Trade table of any name, as the
+/// GetTradeSkillListLink row a few files over also records. Answering one value
+/// rather than the pair costs nothing in this interface tree: every other caller
+/// takes the first value alone (blizzard_combatlog, petpaperdollframe,
+/// vehiclemenubar).
 static int lua_GetSpellLink(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) { return luaReturnNil(L); }
@@ -1280,15 +1321,37 @@ static int lua_GetSpellLink(lua_State* L) {
 /// a vehicle by name, and /cancelaura passes what was typed; both were an
 /// error message where an aura should have dropped.
 ///
-/// The third argument is a filter for the index form and a rank for the name
-/// form, which is how WoW spells it. Only HELPFUL is answerable - a debuff
-/// cannot be cancelled - so the filter decides nothing here beyond confirming
-/// buffs are what is being counted.
+/// Both forms come out of one argument parser the reference shares with
+/// UnitBuff, UnitDebuff, UnitAura and the tooltip's SetUnitAura /
+/// SetUnitBuff / SetUnitDebuff (0x006110a0 -> 0x00608390). A number is stored
+/// as `index - 1`; a name takes the *next* argument as its rank, which is why
+/// the filter sits in the third place after an index and the fourth after a
+/// name. Read as a filter it is not one word but a set, split on '|': HELPFUL
+/// and HARMFUL replace each other (1 and 2), PLAYER sets 4, RAID 8,
+/// CANCELABLE 0x10, NOT_CANCELABLE 0x20.
+///
+/// Of that set only HELPFUL is reachable here. The buff frame's debuff icons
+/// are not clickable at all - DebuffButtonTemplate inherits the AuraButtonTemplate,
+/// which carries only OnEnter and OnLeave, and it is BuffButtonTemplate alone
+/// that adds the OnClick calling this - so no caller hands over HARMFUL, and
+/// counting buffs is what the one caller that passes a filter asks for.
+///
+/// The rank is not compared: no rank data is loaded here (Spell.dbc 3.3.5 names
+/// its ranks through the SpellRank table), and one rank of a spell at a time is
+/// all a unit can carry, so a name match picks the same aura either way.
 static int lua_CancelUnitBuff(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     std::string uidStr(luaL_optstring(L, 1, "player"));
     toLowerInPlace(uidStr);
+    // The reference parses the unit and the aura's ident in one go, and insists
+    // the argument next to the unit be a number or a string (0x006110a0 asks for
+    // one before 0x00608390 reads it either way). Given neither form it raises
+    // its Usage line; this returned without touching anything, which hid a typo
+    // in a macro as an aura that would not drop.
+    if (!lua_isnumber(L, 2) && !lua_isstring(L, 2)) {
+        return luaL_error(L, "Usage: CancelUnitBuff(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])");
+    }
     if (uidStr != "player") return 0;   // only one's own auras can be cancelled
 
     const auto& auras = gh->getPlayerAuras();

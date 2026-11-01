@@ -34,7 +34,26 @@ The extracted interface is installed data, not repository content, and it has
 sat in more than one place: name its directory on the command line. With a
 missing directory the check fails rather than reporting zero dead settings,
 because "0 of 0 declared" and "nothing is dead" are the same line otherwise -
-which is how this one read nothing at all for a while.
+which is how this one read nothing at all for a while. Naming the interface
+folder rather than its framexml subfolder used to be the other way of reading
+nothing: the controls were collected with `PANELS.glob("*.xml")`, so the wrong
+spelling declared no controls and the run exited saying so. Both spellings mean
+the same interface now.
+
+Which files the client opens is asked of the loader rather than decided from a
+folder name, on both halves of the sweep, and the two halves were wrong in
+opposite directions. The panel scan looked only inside FrameXML and so could not
+see an options panel the newer interface keeps in an addon - blizzard_arenaui.xml
+is one. The mention scan walked the whole interface tree, 73 files more than the
+client opens (gluexml's 57, the twelve FrameXML files no .toc Include reaches,
+lcdxml's two and one addon frame's two files), which credits a CVar as *read* on
+the strength of a file no interpreter here runs - the direction that hides
+findings rather than the direction that invents them. Measured on this install,
+the two lists give the same answer today: the same 198 declared CVars, the same
+0 findings. The arena panel's CVar is also declared on a FrameXML panel, and
+focusframe.xml - which nothing loads - declares names that are declared elsewhere
+too. Same verdict, and neither half of the comparison is decided by a folder name
+any more.
 """
 
 import argparse
@@ -42,10 +61,28 @@ import re
 import sys
 from pathlib import Path
 
+# The loader is a sibling tool, and the interpreter runs with -I, so the tools
+# directory has to be named to import it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from framexml_source import loaded_files  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 PANELS = ROOT / "Data/interface/framexml"
-LUA_ROOTS = [ROOT / "Data/interface"]
 CPP_ROOTS = [ROOT / "src", ROOT / "include"]
+
+
+def interface_root():
+    """The folder the .toc chain starts in, whichever spelling was named."""
+    return PANELS.parent if PANELS.name.lower() == "framexml" else PANELS
+
+
+def loaded(suffixes):
+    """Interface files the client opens, from the .toc walk rather than a walk
+    of the folder. Both spellings of the named directory work: FRAMEXML names
+    the folder the panels live in, its parent names the interface, and the .toc
+    sits in the parent."""
+    return [p for p in loaded_files(interface_root())
+            if p.suffix.lower() in suffixes]
 
 # The files that declare controls. A mention inside one of these does not make
 # a setting live, and both ways of being clever about that were tried:
@@ -148,7 +185,7 @@ def declared_controls():
     # across focusframe, targetframe and the panel - and the control the player
     # sees is the one this sweep is about. Document order alone picks whichever
     # file sorts first, which was focusframe.
-    files = sorted(PANELS.glob("*.xml"),
+    files = sorted(loaded({".xml"}),
                    key=lambda q: (q.name not in DECL_FILES, q.name))
     for q in files:
         text = read(q)
@@ -163,7 +200,7 @@ def declared_controls():
     # function names the control the same way $parent does in the markup.
     # Without this a device dropdown could be greyed and still read as
     # unhandled, because nothing here knew what it was called.
-    for p in sorted(PANELS.glob("*.lua")):
+    for p in sorted(loaded({".lua"})):
         text = read(p)
         for m in CVAR_DECL.finditer(text):
             line = text.count("\n", 0, m.start()) + 1
@@ -193,8 +230,16 @@ def removed_controls():
 
 
 def uvar_map():
-    """cvar (lower) -> uvar global, from uvarInfo entries."""
-    text = read(PANELS / "interfaceoptionsframe.lua")
+    """cvar (lower) -> uvar global, from uvarInfo entries.
+
+    The file is looked for among the ones the client opens rather than by
+    joining the named directory to a remembered file name, which is what made
+    the interface-root spelling answer nothing at all: the uvar map was empty,
+    so every setting that is read through a uvar global looked unread.
+    """
+    hits = [p for p in loaded({".lua"})
+            if p.name.lower() == "interfaceoptionsframe.lua"]
+    text = read(hits[0]) if hits else read(PANELS / "interfaceoptionsframe.lua")
     return {c.lower(): u for u, c in UVAR_ENTRY.findall(text)}
 
 
@@ -208,10 +253,18 @@ def gather(roots, suffixes):
 
 
 def readers(extra_snippets):
-    """Lowercased names mentioned anywhere that is not a declaration site."""
+    """Lowercased names mentioned anywhere that is not a declaration site.
+
+    The interface half is the files the client opens, which is narrower than the
+    folder this used to walk - 343 rather than 416 - and narrower in the
+    direction that matters for a ratchet. A mention in gluexml, in lcdxml, or in
+    one of the twelve FrameXML files no .toc Include reaches makes a CVar look
+    read by a program that never loads that file, and a sweep that believes a
+    setting is alive reports nothing at all about it.
+    """
     seen = set()
     globals_read = set()
-    for p in gather(LUA_ROOTS, {".lua", ".xml"}):
+    for p in loaded({".lua", ".xml"}):
         if p.name in DECL_FILES:
             continue
         text = read(p).lower()
@@ -225,18 +278,17 @@ def readers(extra_snippets):
 
 
 def main():
-    global PANELS, LUA_ROOTS
+    global PANELS
     ap = argparse.ArgumentParser()
     ap.add_argument("--canary", action="store_true")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("interface", nargs="?", default=str(PANELS),
-                    help="the directory of the extracted interface; it is installed "
-                         "data rather than repository content, so the default may "
-                         "not be where it is")
+                    help="the directory of the extracted interface, or its framexml "
+                         "subdirectory - it is installed data rather than repository "
+                         "content, so the default may not be where it is")
     args = ap.parse_args()
 
     PANELS = Path(args.interface)
-    LUA_ROOTS = [PANELS.parent]
     if not PANELS.is_dir():
         # The controls are what everything here hangs on, and with the directory
         # away there are none - which prints exactly like a clean tree.

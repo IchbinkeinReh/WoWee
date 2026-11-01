@@ -10,6 +10,7 @@
 #include "ui/escape_action.hpp"
 #include "ui/display_modes.hpp"
 #include "ui/framexml_takeover.hpp"
+#include "ui/cursor_art.hpp"
 #include "ui/scene_pick.hpp"
 #include "core/frame_profiler.hpp"
 #include "ui/ui_colors.hpp"
@@ -19,6 +20,7 @@
 #include "core/application.hpp"
 #include "core/appearance_composer.hpp"
 #include "addons/addon_manager.hpp"
+#include "addons/lua_api_helpers.hpp"   // RunningMacroScope - what a macro run records
 #include "ui/link_hit.hpp"
 #include "core/coordinates.hpp"
 #include "game/transport_manager.hpp"
@@ -162,7 +164,7 @@ void GameScreen::reapplySettingsAfterGpuRebuild(rendering::Renderer* renderer) {
     // list above does not carry them, because at startup the camera is given
     // them by the stored CVars instead.
     for (const char* key : {"fov", "camerashake", "mousespeed", "cameramaxdistance",
-                            "pivotheight", "idleorbit", "invertmouse"}) {
+                            "pivotheight", "idleorbit", "invertmouse", "invertyaw"}) {
         panel.applySettingSideEffects(key);
     }
 }
@@ -342,6 +344,7 @@ void GameScreen::applyCameraControlSettings() {
     if (auto* cam = renderer->getCameraController()) {
         cam->setMouseLook(settingsPanel_.pendingMouseSensitivity);
         cam->setInvertMouse(settingsPanel_.pendingInvertMouse);
+        cam->setInvertYaw(settingsPanel_.pendingInvertYaw);
         cam->setPivotHeight(settingsPanel_.pendingPivotHeight);
         cam->setIdleOrbitEnabled(settingsPanel_.pendingIdleCameraOrbit);
         cam->setShakeScale(settingsPanel_.pendingCameraShake);
@@ -1146,6 +1149,17 @@ void drawCursorTexture(VkDescriptorSet tex) {
     constexpr float kSize = 32.0f;
     ImGui::GetForegroundDrawList()->AddImage(
         (ImTextureID)(uintptr_t)tex, at, ImVec2(at.x + kSize, at.y + kSize));
+}
+
+/// The art of the cursor a script asked for, empty when none was.
+///
+/// SetCursor's argument is either one of the client's own names or a texture
+/// path, and ui/cursor_art.hpp is the table the names come out of.
+std::string scriptCursorPath() {
+    const int kind = frameXmlScriptCursorKind();
+    if (kind == kCursorKindNone) return {};
+    if (kind == kCursorKindCustom) return frameXmlScriptCursorPath();
+    return cursorPathForKind(kind);
 }
 
 /// Which cursor a game object wears, by its GameObjectType.
@@ -2002,7 +2016,17 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
                     } else if (bar[slotIdx].type == game::ActionBarSlot::ITEM && bar[slotIdx].id != 0) {
                         gameHandler.useItemById(bar[slotIdx].id);
                     } else if (bar[slotIdx].type == game::ActionBarSlot::MACRO) {
-                        chatPanel_.executeMacroText(gameHandler, gameHandler.getMacroText(bar[slotIdx].id));
+                        const std::string& body = gameHandler.getMacroText(bar[slotIdx].id);
+                        if (!body.empty()) {
+                            // The hotkey path records the macro it is running,
+                            // as 0x005abbc0 -> 0x00566dc0 -> 0x00564db0 records
+                            // one run from a button: GetRunningMacro and
+                            // GetRunningMacroButton answer it while it runs,
+                            // and no mouse button came with a key press.
+                            const RunningMacroScope running(
+                                static_cast<int>(bar[slotIdx].id), nullptr);
+                            chatPanel_.executeMacroText(gameHandler, body);
+                        }
                     }
                 }
             }
@@ -2124,6 +2148,33 @@ void GameScreen::processTargetInput(game::GameHandler& gameHandler) {
             }
             highlightGuid = hoverPick.mouseover();
         }
+    }
+    // A cursor the interface asked for with SetCursor, drawn last so it covers
+    // whatever the hover decisions above settled on rather than sitting under it.
+    //
+    // The reference keeps one kind for both the script's cursor and the world's
+    // (0x00c26de8), and the hovered-unit code writes that same kind, so a script
+    // cursor there lasts only until the pointer moves onto something. That is not
+    // reproducible here, because the cursor decisions above run every frame
+    // rather than on a hover change: the script's cursor would be overwritten in
+    // the frame after it was asked for and never be seen. So it is kept until the
+    // script hands it back, which is the pairing FrameXML writes against -
+    // uiparent.lua's CursorUpdate asks for INSPECT_CURSOR while the ctrl key is
+    // held over an item and calls ResetCursor the moment it is not.
+    //
+    // Not gated on the interface owning the mouse, unlike everything above: the
+    // callers that use it are FrameXML's own handlers over FrameXML's own frames,
+    // which is exactly the case that gate refuses.
+    if (const std::string scriptArt = scriptCursorPath(); !scriptArt.empty()) {
+        if (VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window,
+                                               scriptArt.c_str())) {
+            drawCursorTexture(tex);
+        }
+        // A path the script named that this client has no art for leaves the
+        // pointer alone. The reference paints that slot with nothing instead and
+        // raises a Lua error over it, which is how floatingchatframe.xml's
+        // SetCursor("UI-Cursor-Size") behaves - a texture name from a newer
+        // interface's texture set, and there is no file for it in this one.
     }
     {
         auto entity = highlightGuid ? gameHandler.getEntityManager().getEntity(highlightGuid)

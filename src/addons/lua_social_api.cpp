@@ -2,6 +2,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "addons/unit_or_name.hpp"
 #include "game/gossip_quest_status.hpp"
+#include "game/grey_triviality.hpp"
 #include "game/interface_text.hpp"
 #include <algorithm>
 #include <cmath>
@@ -17,9 +18,13 @@
 #include "game/inventory_handler.hpp"
 #include "game/difficulty_change.hpp"
 #include "game/reputation_standing.hpp"
+#include "game/server_notices.hpp"
 #include "rendering/animation_controller.hpp"
 
 namespace wowee::addons {
+
+// The game-error rows below are named bare, as they are inside game/.
+namespace server_notice = game::server_notice;
 
 // The languages a character can speak: their racial one, plus the faction
 // tongue every member of that faction is taught. Human and Orc are the two
@@ -190,20 +195,53 @@ static int lua_SendChatMessage(lua_State* L) {
     return 0;
 }
 
-// JoinChannelByName(name, password, frameId, voice) → zoneChannel, shortcut
-// (0x0050d900, which JoinPermanentChannel and JoinTemporaryChannel share). A
-// shortcut joins its zone channel by id with the place in the name; anything
+// JoinChannelByName(name, password, frameId, private) → zoneChannel, shortcut
+// (0x0050d900, which JoinPermanentChannel and JoinTemporaryChannel share -
+// 0x0050dac0 and 0x0050daa0 are 20-byte wrappers that hand the shared half the
+// permanent flag, which is a row of the client's own chat cache and never
+// reaches the wire). The fourth value the panel passes is read after all:
+// 0x00815500(L,4,0) is the boolean reader with a zero default, and what it
+// answers goes out as the second of the two bytes over the channel name.
+// A shortcut joins its zone channel by id with the place in the name; anything
 // else is a channel of the player's own. The answer is the row's id - zero
 // for one of the player's own - and the shortcut for a zone channel; nothing
 // when nothing was joined, which /join reports as an invalid name.
+//
+// The third argument is a chat frame id, and it is the one argument of the
+// three this client has no use for. The join gates on it - 0x00507a80's
+// `param_3 < 10` is the ten chat frames, and a nil third argument reaches that
+// test as 0xffffffff and fails it, which is what channelframe.lua:107 is
+// asking for when it joins a global channel with no frame named - and then
+// appends the channel's name and number to *that frame's own* arrays: the
+// instructions after the gate pick the frame out of an array of 0x100-byte
+// windows at 0x00bcf0b0 (`shl $0x8` on the index, then the frame in %ecx), call
+// 0x00501a70 - ChatFrame.cpp's channel list, which declines a name the frame
+// already carries - and set the dirty flag at 0x00bcefe0. There is no frame-side list here to append to: the
+// routing is the interface's own. A window shows a channel line only when that
+// window's `channelList` names it (chatframe.lua:2707), and FrameXML writes
+// that list itself - straight after a join (channelframe.lua:136,
+// chatframe.lua:1548) and from the chat config and the floating-frame menu
+// through ChatFrame_AddChannel (chatframe.lua:2361, which this interface
+// defines in Lua rather than leaving to the bootstrap stand-in). So the
+// reference does the attach twice, in C and in Lua, and this client does it
+// once; a second copy here would have no reader.
 static int lua_JoinChannelByName(lua_State* L) {
     auto* gh = getGameHandler(L);
     auto* ch = gh ? gh->getChatHandler() : nullptr;
     const char* name = luaL_optstring(L, 1, "");
     const char* pass = luaL_optstring(L, 2, "");
-    // One word, under 128 bytes, as the client checks before anything else.
-    if (!ch || !name || !*name || std::strchr(name, ' ') || std::strlen(name) >= 128) return 0;
-    const auto join = ch->joinChannel(name, pass ? pass : "");
+    // One word, and neither half of it 128 bytes long, as the client checks
+    // before anything else: 0x0050d900 runs the name and the password each
+    // through the strlen at 0x0076ee30 and turns either down at 0x80 - so a
+    // long password is refused here as a long name is, rather than going out.
+    if (!ch || !name || !*name || std::strchr(name, ' ') || std::strlen(name) >= 128 ||
+        std::strlen(pass ? pass : "") >= 128)
+        return 0;
+    // The fourth argument goes on the wire rather than being dropped: the byte
+    // over the name that says whether this was a join somebody asked for, which
+    // every call site in the installed tree spells as 1 and a nil as 0.
+    const bool byPlayer = lua_toboolean(L, 4) != 0;
+    const auto join = ch->joinChannel(name, pass ? pass : "", false, byPlayer);
     if (!join) return 0;
     lua_pushnumber(L, join->zoneChannelId);
     if (join->shortcut.empty()) lua_pushnil(L);
@@ -372,6 +410,91 @@ bool npcWithinInteractRange(game::GameHandler* gh, uint64_t npcGuid) {
     const float dz = player->getZ() - npc->getZ();
     constexpr float kInteractionDistance = 5.0f;
     return dx * dx + dy * dy + dz * dz <= kInteractionDistance * kInteractionDistance;
+}
+
+/// Whose group roster entry the text names, which is how `0x00520190` answers
+/// the group verbs: the unit tokens first, and then the text matched case-blind
+/// against the group's own list - the party's members besides the player when it
+/// is a party, the whole raid roster when it is a raid (`0x0052bc50` gives the
+/// four, `DAT_00beb568` the roster). `exact` is the verb's exactMatch argument:
+/// with it the whole name has to match, without it the client compares
+/// `strlen(text)` characters and so "/maintank Bo" is Bob.
+///
+/// The group's list and not the units nearby is what it searches, and that cuts
+/// both ways: a member logged out, or a town away, is still nameable, and a
+/// stranger standing right here is not nameable at all - which is the complaint
+/// the verb makes rather than a request sent for the wrong person.
+///
+/// What is not modelled is the tie-break: the reference keeps the *nearest* of
+/// the members a prefix could mean (`0x0051ffe0` compares each candidate's
+/// distance and replaces only a worse one), where this takes the first member in
+/// roster order - which differs only for a prefix two members share.
+uint64_t resolveGroupMember(game::GameHandler* gh, const std::string& text, bool exact) {
+    if (!gh || text.empty()) return 0;
+    std::string lower = text;
+    toLowerInPlace(lower);
+    if (const uint64_t byToken = resolveUnitGuid(gh, lower)) return byToken;
+    const auto& pd = gh->getPartyData();
+    const bool raid = game::groupIsRaid(pd.groupType);
+    // A text with a '-' in it names the realm as well, and the reference
+    // switches what it compares: 0x0076e6e0(text,'-') picks the "%s-%s"
+    // spelling of each candidate over the bare name, so "/mt Bob-Icecrown"
+    // reaches the Bob from another server. The realm appended here is the one
+    // the name query answered, so a member whose query has not come back -
+    // usually an offline one - cannot be named that way, and the bare-name
+    // comparison below still runs for everyone.
+    const bool namesARealm = lower.find('-') != std::string::npos;
+    for (const auto& m : pd.members) {
+        if (m.guid == 0 || m.name.empty()) continue;
+        if (!raid && m.guid == gh->getPlayerGuid()) continue;  // see above: the party list
+        std::string name = m.name;
+        toLowerInPlace(name);
+        if (namesARealm) {
+            std::string realm = gh->getCachedPlayerRealm(m.guid);
+            if (!realm.empty()) {
+                toLowerInPlace(realm);
+                name += "-" + realm;
+            }
+        }
+        if (exact ? name == lower : name.compare(0, lower.size(), lower) == 0) return m.guid;
+    }
+    return 0;
+}
+
+/// Whether the player is the one who may change the group's loot rules: the
+/// leader, and nothing else (0x0052dc20 and 0x0052de60 compare only the leader,
+/// and let the realm refuse anybody else). The assignment pair is looser - see
+/// maySetPartyAssignment.
+bool isGroupLeader(game::GameHandler* gh) {
+    return gh && gh->getPartyData().leaderGuid != 0 &&
+           gh->getPartyData().leaderGuid == gh->getPlayerGuid();
+}
+
+/// Whether the player may set the group's assignments: the leader, or a raid
+/// officer (0x0052e1b0 asks 0x00572740, which reads each raid member's rank and
+/// accepts one of rank 1 or above - an assistant - and only insists on the
+/// leader for rank 0). WoWee keeps that rank as the roster flag's assistant bit,
+/// which is what UnitIsRaidOfficer reads too. A party has no raid roster to be
+/// an officer of, so there it is the leader alone.
+bool maySetPartyAssignment(game::GameHandler* gh) {
+    if (!gh) return false;
+    const auto& pd = gh->getPartyData();
+    if (pd.members.empty() && pd.memberCount == 0) return false;
+    if (pd.leaderGuid != 0 && pd.leaderGuid == gh->getPlayerGuid()) return true;
+    if (!game::groupIsRaid(pd.groupType)) return false;
+    for (const auto& m : pd.members)
+        if (m.guid == gh->getPlayerGuid()) return (m.flags & 0x01) != 0;
+    return false;
+}
+
+/// Whether the group has any members at all, which is what the three verbs
+/// check before anything else (`DAT_00bd1948/194c` - the party's first slot -
+/// and the raid roster count, all empty). WoWee has one member list for both,
+/// and a group the realm says is empty reports no members in it.
+bool inAGroup(game::GameHandler* gh) {
+    if (!gh) return false;
+    const auto& pd = gh->getPartyData();
+    return !pd.members.empty() || pd.memberCount != 0;
 }
 
 /// Which arena team a one-based index names, or zero for none.
@@ -718,7 +841,40 @@ static int lua_BNGetNumFriends(lua_State* L) {
 }
 
 
-// GetAutoCompleteResults(text, include, exclude, max, cursorPos) → names
+// Three string walks over *characters* rather than bytes, because a cursor
+// position and the offsets around it are counted in characters in the client:
+// 0x0076eea0 counts the lead bytes, 0x0076ef30(s, n) steps n characters, and
+// both stop at the end of the string instead of running past it. Names here are
+// player names, which are ASCII apart from accented letters - a two-byte
+// sequence counted as one is what such a name costs in the reference too.
+static size_t utf8Characters(const std::string& s) {
+    size_t chars = 0;
+    for (char c : s)
+        if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++chars;
+    return chars;
+}
+
+/// The byte at character number `chars`.
+static size_t utf8ByteAt(const std::string& s, size_t chars) {
+    size_t seen = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (seen == chars) return i;
+        if ((static_cast<unsigned char>(s[i]) & 0xC0) != 0x80) ++seen;
+    }
+    return s.size();
+}
+
+/// Where the character after the one at `i` begins - 0x0076ef30(s, 1) takes the
+/// same step.
+static size_t utf8After(const std::string& s, size_t i) {
+    do {
+        ++i;
+    } while (i < s.size() && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80);
+    return i;
+}
+
+// GetAutoCompleteResults(text, include, exclude, max [, cursorPos [, allowFullMatch]])
+//   → names
 //
 // What the box under a whisper or a mail address offers as you type. Returns
 // the names themselves, one value each, because AutoComplete_UpdateResults
@@ -727,33 +883,116 @@ static int lua_BNGetNumFriends(lua_State* L) {
 // The sources are the ones this client actually knows: the group, the guild
 // roster and the friends list. Battle.net has none here, so its flag matches
 // nothing rather than pretending.
+//
+// 0x0057b3a0 tests all four leading arguments before it reads any of them - a
+// text it can take a string from and three numbers - and answers the literal
+// below otherwise. The two optional ones are optional in the same call: absent
+// is a value, not an error.
+//
+// cursorPos is a **character** offset, not a byte one, and the binding clamps
+// it: absent, negative, or past the end of the text all read as the end. What
+// it does with it is behind the CVar autoCompleteWhenEditingFromCenter (the
+// setter at 0x00512850, registered with the default "1"), and picks between a
+// plain prefix match of the whole text and the one below. That CVar is one of
+// the names this client registers and never acts on, so the on branch is the
+// only one reachable here - as is the other one of those three, whose setter
+// (0x00512870) lets a player turn the include and exclude masks off entirely
+// (:8633 tests them only while it is on). Off would answer every name the text
+// completes regardless of where it is known from; that is not implemented, and
+// the mask question is asked here whatever the CVar says.
+//
+// allowFullMatch is read for truth at 0x0084e0b0 - nil off, anything else as
+// Lua sees it - and decides whether a name that equals the text is a result.
+// Without it such a name is dropped, since there is nothing left to complete,
+// which is why chatframe.lua:4125 passes 1 to ask whether a typed name exists
+// at all.
 static int lua_GetAutoCompleteResults(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3) ||
+        !lua_isnumber(L, 4))
+        return luaL_error(L,
+            "Usage: GetAutoCompleteResults(text, includeBitField, excludeBitField, "
+            "numReturns[, cursorPosition[, allowFullMatch]])");
     auto* gh = getGameHandler(L);
-    std::string prefix = luaL_optstring(L, 1, "");
-    const uint32_t include = static_cast<uint32_t>(luaL_optnumber(L, 2, 0xFFFFFFFFu));
-    const uint32_t exclude = static_cast<uint32_t>(luaL_optnumber(L, 3, 0));
-    const int wanted = static_cast<int>(luaL_optnumber(L, 4, 5));
+    const std::string text = luaL_checkstring(L, 1);
+    const uint32_t include = static_cast<uint32_t>(luaToClientInt(L, 2));
+    const uint32_t exclude = static_cast<uint32_t>(luaToClientInt(L, 3));
+    const int wanted = luaToClientInt(L, 4);
     if (!gh || wanted <= 0) return 0;
+    const bool allowFullMatch = lua_toboolean(L, 6) != 0;
+    const size_t textChars = utf8Characters(text);
+    size_t cursor = textChars;
+    if (lua_isnumber(L, 5)) {
+        const int typed = luaToClientInt(L, 5);
+        if (typed >= 0 && static_cast<size_t>(typed) <= textChars)
+            cursor = static_cast<size_t>(typed);
+    }
 
     constexpr uint32_t kInGroup = 0x01, kInGuild = 0x02, kFriend = 0x04, kOnline = 0x20;
 
-    auto lower = [](std::string v) {
-        for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return v;
+    // Every comparison below is case-blind: 0x0076ea40 folds as it walks, through
+    // 0x0076e8d0 - whose table turns a à into an A among the rest, so this ASCII
+    // half is narrower than the client's. It is the same fold the rest of this
+    // file uses, and it changes no byte's length, which is what lets the
+    // character offsets be taken on the folded copies rather than the originals.
+    auto fold = [](const std::string& v) {
+        std::string out = v;
+        for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return out;
     };
-    const std::string want = lower(prefix);
+    const std::string foldedText = fold(text);
+    const size_t textCut = utf8ByteAt(foldedText, cursor);
+
+    // 0x0057aca0's match test on one name. Its other two tests - the flag mask
+    // and "is this me" - are settled over the names themselves below.
+    auto completes = [&](const std::string& name) {
+        const std::string folded = fold(name);
+        // A name equal to the whole text is not a result unless the caller asked
+        // for those: the reference compares the two whole strings first and
+        // returns no for them when the flag is clear.
+        if (!allowFullMatch && folded == foldedText) return false;
+        if (cursor == textChars) {
+            // Nothing after the cursor to place anywhere, so the whole text has
+            // to be the name's beginning - and that is true of an exactly equal
+            // name too, which the reference answers yes for at :8655 rather than
+            // running the search below with nothing to search for.
+            return folded.compare(0, foldedText.size(), foldedText) == 0;
+        }
+        // Editing from the middle of the text: the name has to carry the text up
+        // to the cursor as its own beginning, and the rest of the text - the part
+        // the player has already typed past the cursor - has to turn up again at
+        // or after the cursor inside the name. A name shorter than the text is
+        // out before any of that (:8653), and the search runs from the cursor for
+        // as many starts as the name has left over, one character at a time.
+        const size_t nameChars = utf8Characters(folded);
+        if (textChars > nameChars) return false;
+        const size_t nameCut = utf8ByteAt(folded, cursor);
+        if (folded.compare(0, nameCut, foldedText, 0, textCut) != 0) return false;
+        const size_t tail = foldedText.size() - textCut;
+        for (size_t at = nameCut, steps = nameChars - (textChars - cursor) - cursor;
+             steps; --steps, at = utf8After(folded, at)) {
+            if (folded.compare(at, tail, foldedText, textCut) == 0) return true;
+        }
+        return false;
+    };
 
     // One name may be a guildmate and a friend both, so what it is comes first
     // and the flags are merged before anything is decided about it.
     std::map<std::string, uint32_t> byName;
+    const uint64_t self = gh->getPlayerGuid();
     auto note = [&](const std::string& name, uint32_t flag, bool online) {
         if (name.empty()) return;
-        if (!want.empty() && lower(name).compare(0, want.size(), want) != 0) return;
+        if (!completes(name)) return;
         byName[name] |= flag | (online ? kOnline : 0u);
     };
 
-    for (const auto& mbr : gh->getPartyData().members) note(mbr.name, kInGroup, mbr.isOnline != 0);
-    for (const auto& mbr : gh->getGuildRoster().members) note(mbr.name, kInGuild, mbr.online);
+    // The local player is never a completion. The reference compares the name
+    // node's presence identity against the player's own (0x006b1050 hands back
+    // one fixed pair); the guid is the same identity here, and it is what both
+    // of the lists below carry.
+    for (const auto& mbr : gh->getPartyData().members)
+        if (mbr.guid != self) note(mbr.name, kInGroup, mbr.isOnline != 0);
+    for (const auto& mbr : gh->getGuildRoster().members)
+        if (mbr.guid != self) note(mbr.name, kInGuild, mbr.online);
     for (const auto& c : gh->getContacts()) {
         if (c.isFriend()) note(c.name, kFriend, c.isOnline());
     }
@@ -762,6 +1001,12 @@ static int lua_GetAutoCompleteResults(lua_State* L) {
     // from a guild roster, which can be a thousand. Room first - pushing past
     // the stack top corrupts the heap rather than raising.
     if (!lua_checkstack(L, wanted + 1)) return 0;
+    // The reference asks the flag question first (:8633) and the match question
+    // after, in one walk that stops once numReturns names are pushed; here the
+    // match went first and the flags come last, over the merged list. Same names
+    // either way, and the order is this map's - the reference's list is by name
+    // as well, and its third CVar (autoCompleteResortNamesOnRecency) can put the
+    // ones the player picked lately in front, which is state nothing here keeps.
     int pushed = 0;
     for (const auto& [name, flags] : byName) {
         if (pushed >= wanted) break;
@@ -872,18 +1117,26 @@ namespace {
 
 /// Give or take raid assistant for the group member with this name.
 ///
+/// 0x00573ef0 and 0x00573fd0 are the same shape as PromoteToLeader: a string
+/// for the first argument or the Usage line of whichever verb it is, then the
+/// name resolver with the verb's exactMatch flag - which the only caller,
+/// unitpopup.lua, sets because it hands over a whole name.
+///
 /// Names are how the unit popup identifies people here, and the group roster is
 /// the only name-to-guid map this client keeps - which is enough, because only
-/// a group member can be an assistant.
+/// a group member can be an assistant. It used to be searched case-fully, so a
+/// menu name whose capitalisation differed from the roster's chose nobody.
 static void setGroupAssistantByName(lua_State* L, bool apply) {
     auto* gh = getGameHandler(L);
-    const char* who = luaL_optstring(L, 1, "");
-    if (!gh || !who || !*who) return;
-    for (const auto& m : gh->getPartyData().members) {
-        if (m.name != who) continue;
-        gh->setGroupAssistant(m.guid, apply);
-        return;
-    }
+    if (!gh) return;
+    if (!lua_isstring(L, 1))
+        luaL_error(L, apply ? "Usage: PromoteToAssistant(name)"
+                            : "Usage: DemoteAssistant(name)");
+    const std::string who(lua_tostring(L, 1));
+    if (who.empty()) return;   // a zero-length text scores every candidate
+    if (const uint64_t guid =
+            resolveGroupMember(gh, who, lua_toboolean(L, 2) != 0))
+        gh->setGroupAssistant(guid, apply);
 }
 
 
@@ -988,11 +1241,10 @@ const game::GossipQuestItem* gossipQuestAt(lua_State* L, bool available, int ind
 /// player's level / 5 below it - 8 from level 100 - is grey. A row that is not
 /// there counts as level 0.
 static bool greetingQuestIsTrivial(game::GameHandler* gh, int questLevel) {
-    static constexpr int kGreyGap[20] = {4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8};
     if (!gh || questLevel == -1) return false;
     const int playerLevel = static_cast<int>(gh->getPlayerLevel());
-    const unsigned band = static_cast<unsigned>(playerLevel / 5);
-    return (band < 20 ? kGreyGap[band] : 8) + questLevel < playerLevel;
+    return game::triviality::greyGap(static_cast<uint32_t>(playerLevel)) + questLevel <
+           playerLevel;
 }
 
 /// IsActiveQuestTrivial / IsAvailableQuestTrivial (0x0058d420, 0x0058d370):
@@ -1078,16 +1330,32 @@ static int lua_GetGMTicket(lua_State* L) {
 }
 
 // NewGMTicket(text, needResponse) → opens one
+// NewGMTicket(ticketDescription, needResponse)
+//
+// needResponse is the whole second half of the request: 0x005ad080 forwards it
+// to the sender 0x005ac8f0, which writes `1 + (needResponse ? 0x10 : 0)` after
+// the text (see GmTicketCreatePacket), so the three buttons that set it - "have
+// me contacted", "don't contact me", and the default - are three different
+// tickets on the wire. It used to be read and thrown away, with the packet
+// saying 1, which is what "no reply wanted" looks like: the checkbox decided
+// nothing.
+//
+// The reference checks the arguments *before* the taint gate, and it wants that
+// argument to be a boolean: 0x0084deb0 answers argument 2's type tag, and
+// anything other than boolean raises the Usage line and sends nothing. The help
+// frame always passes a boolean (helpframe.lua:43 starts it at true and its
+// three buttons set true or false), so insisting costs nothing and matches what
+// the reference does to anything else.
 static int lua_NewGMTicket(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const char* text = luaL_checkstring(L, 1);
+    if (!lua_isboolean(L, 2))
+        return luaL_error(L, "Usage: NewGMTicket(ticketDescription, needResponse)");
     // The ticket verbs ask the taint check (0x005ad080, 0x005ad0f0,
     // 0x005ad150: kind 0x11, refused to insecure code).
     if (!taint::allowed(L, 0x11)) return 0;
-    // needResponse is not carried by the packet this client sends, so it is
-    // read and dropped rather than quietly changing what is submitted.
-    gh->submitGmTicket(text);
+    gh->submitGmTicket(text, lua_toboolean(L, 2) != 0, false);
     return 0;
 }
 
@@ -1381,6 +1649,36 @@ static bool muteRowNamed(const game::ContactEntry& c, const std::string& name) {
     return a == b;
 }
 
+/// Whether a letter can be reported as spam at all - the reference's 0x0056fa70,
+/// which CanComplainInboxItem (0x005713c0) answers with and which its own verb
+/// (0x0056faf0) asks again before it sends anything. That first asks the index
+/// against the client's own count of its letters, which is the row lookup both
+/// bindings below do; of the letter itself it asks four things:
+///
+///   Its mail type is 0 - a player's letter. The other types name an auction
+///   house, a creature or an object, and none of those can be reported.
+///
+///   Its flag dword has no 0x2 in it. This client's own parse reads `read` out
+///   of 0x1 of that same dword; 0x2 is the bit the header info answers back as
+///   `wasReturned` - that answer takes 0x2 or 0x200 - and the complaint gate
+///   tests 0x2 alone.
+///
+///   It is not an invoice: mail template 61, the same value the header info
+///   builds its isInvoice answer from.
+///
+///   It did not come from this player, and its sender is nobody on the friends
+///   list - the client walks its own hundred friend rows for that guid
+///   (0x006b3920).
+bool mailIsComplainable(game::GameHandler* gh, const game::MailMessage& mail) {
+    if (mail.messageType != 0) return false;
+    if ((mail.flags & 0x2) != 0) return false;
+    if (mail.mailTemplateId == 0x3d) return false;
+    if (mail.senderGuid == gh->getPlayerGuid()) return false;
+    for (const auto& contact : gh->getContacts())
+        if (contact.isFriend() && contact.guid == mail.senderGuid) return false;
+    return true;
+}
+
 /// The names in the client's console command table that this client can run,
 /// and which `/console` therefore reaches.
 ///
@@ -1603,17 +1901,19 @@ void registerSocialLuaAPI(lua_State* L) {
                 // invite the dialog was showing, and this client only ever
                 // holds one.
                 {"DeclineInvite",       lua_DeclineGroup},
-                // ComplainInboxItem(index) - reporting a mail as spam.
-                //
-                // Type 0 is mail, and the three values after the sender are
-                // the ones the server logs and ignores: a zero, the mail's own
-                // id, and another zero.
+                // ComplainInboxItem(index) - reporting a letter as spam. The
+                // reference asks the same question here that CanComplainInboxItem
+                // answers, before it reports anything: a row the button would
+                // never have offered is not reported here either. What happens
+                // next - which reports it refuses, whose report it remembers,
+                // and the inbox it asks for again - is at reportMailSpam.
                 {"ComplainInboxItem", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
             if (!gh) return 0;
             const auto& inbox = gh->getMailInbox();
             if (index < 0 || index >= static_cast<int>(inbox.size())) return 0;
+            if (!mailIsComplainable(gh, inbox[index])) return 0;
             gh->reportMailSpam(inbox[index].senderGuid, inbox[index].messageId);
             return 0;
         }},
@@ -1744,6 +2044,18 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh && name) gh->addVoiceIgnore(name);
             return 0;
         }},
+                // MutedList_Update() is not a client binding at all: the name
+                // is in the 12340 binary nowhere (not in its strings, and no
+                // entry in any method table), because in the interface the
+                // client was shipped with it is a Lua function - the one that
+                // fills the squelch frame's rows of muted names. This tree has
+                // no SquelchFrame anywhere and draws the ignore list itself
+                // (friendsframe.lua:451 reads the count, :541 the names), yet
+                // friendsframe.lua:1341 still calls the old name from
+                // FriendsFrameMuteButton_OnClick. Nothing here has a list to
+                // fill, and without a binding the press would raise - visibly
+                // so now, since an error a script raises goes to the handler
+                // the interface installs.
                 {"MutedList_Update", [](lua_State* L) -> int { (void)L; return 0; }},
 
                 // ---- Guild rank permissions ----
@@ -1816,8 +2128,57 @@ void registerSocialLuaAPI(lua_State* L) {
                 // (unitpopup.lua:196-202) - and that path has no `unit` at all, so
                 // the `not unit` test in front of this one answers first.
                 {"UnitIsSameServer", [](lua_State* L) -> int { lua_pushboolean(L, 1); return 1; }},
-                // Recruit-a-Friend summoning, which needs a linked account.
-                {"CanSummonFriend", luaReturnFalse},
+                // Recruit-a-Friend summoning: the summon half of the feature
+                // CanGrantLevel was adjudicated against above, and each row here
+                // is what the reference client already does on a realm that never
+                // taught it the summon spell.
+                //
+                // CanSummonFriend (0x0051d2b0) turns its one unit token into a
+                // guid (0x0060c1c0) and asks 0x006d7630, pushing 1.0 when that
+                // answers 0 and nothing at all otherwise - never false.
+                // 0x006d7630 answers in this order: no guid (8); the linked test
+                // behind IsReferAFriendLinked failing (1); a guid in neither the
+                // party (0x0052c680) nor the guild roster (0x005726f0) (9); then
+                // off whatever record the guid has - a friend row (0x0052bee0) or
+                // a guild row (0x005727b0), or the unit's own fields when it is a
+                // player - offline (row +0x8 bit 0 clear; 13), level 61 or over
+                // (row +0x18 as a word, UNIT_FIELD_LEVEL at blob +0xc0 for a
+                // player; 10), and a summon cooldown still running (11). The leg
+                // that answers here is the second, and it is one bit:
+                // UNIT_DYNAMIC_FLAGS 0x40, the same read IsReferAFriendLinked now
+                // makes in lua_unit_api.cpp, which no realm of this client's asks
+                // for. So nil rather than the flat false that stood here: same
+                // truthiness, and the shape the client pushes.
+                //
+                // SummonFriend (0x00523260) re-asks that gate. A refusal other
+                // than 9 or 13 is said on the spot by 0x005219e0, which picks the
+                // line out of the same ERR_REFER_A_FRIEND_* table this repository
+                // already carries for the server's SMSG_REFER_A_FRIEND_FAILURE;
+                // 9 and 13 ask the guid-keyed name cache (0x0067d770) first and
+                // say it once the name arrives. Neither is reachable through the
+                // UI here in any case - unitpopup.lua:787 hides both menu entries
+                // unless IsReferAFriendLinked answers.
+                //
+                // A clean answer casts a spell: the summonee is made the target
+                // (0x00518dc0) if they are not already, DAT_00be7d88 is cast at
+                // them (0x0080da40 -> 0x0080cce0), and the target is put back.
+                // DAT_00be7d88 is no constant, and nothing in the client names
+                // it: it is the id of whichever spell the client was *taught*,
+                // recorded in the SMSG_LEARNED_SPELL path (handler 0x006e7d60 ->
+                // 0x006e7b00 -> 0x00542030) for a row carrying 0x98 in one
+                // particular column of the spell record, read at offset 0x11c
+                // there and again by the cooldown query 0x00807980, which refuses
+                // a spell carrying 0x4e or 0x2f in it, while 0x006e7b00 compares
+                // the same column against 0x28, 0x3c, 0x65 and 0x9b - a column of
+                // effect ids, whose name the binary never states. Nothing else
+                // writes the global, so where no such spell is taught the id stays
+                // 0, 0x0080cce0 fails to fetch the row of spell 0 and returns
+                // without writing a packet: the no-op this row is, packet for
+                // packet. GetSummonFriendCooldown reads its numbers for that same
+                // id out of the same store the gate's cooldown leg asks
+                // (0x00809000, store 0), so all three names hang off one spell the
+                // realm would have to supply - see lua_system_api.cpp.
+                {"CanSummonFriend", [](lua_State* L) -> int { lua_pushnil(L); return 1; }},
                 {"SummonFriend",    [](lua_State* L) -> int { (void)L; return 0; }},
                 // The voice mute list, which is the third list SMSG_CONTACT_LIST
                 // fills (mask bit 0x4) and which the friends panel's mute tab
@@ -2107,12 +2468,28 @@ void registerSocialLuaAPI(lua_State* L) {
                         inv->selectStationery(static_cast<uint32_t>(luaL_optnumber(L, 1, 0)));
                     return 0;
                 }},
-                // Guarded with `if ( texture )` before being pasted into a
-                // path, so nil leaves the default parchment rather than
-                // building a texture name out of nothing.
-                // Reporting a mail as spam needs a GM channel this client does
-                // not have, so no mail can be complained about.
-                {"CanComplainInboxItem", luaReturnFalse},
+                // CanComplainInboxItem(index) - whether this letter can be
+                // reported as spam, which is the whole of what puts the Report
+                // Spam button under an open letter: mailframe.lua's
+                // OpenMail_Update enables and shows OpenMailReportSpamButton on
+                // this call alone, and hides it on a false answer.
+                //
+                // Answered as the client answers it (0x005713c0): the number 1,
+                // or false - and false for an index the inbox does not have, and
+                // for no player at all, where the reference's own cast to the
+                // player comes back null and its predicate stops right there.
+                {"CanComplainInboxItem", [](lua_State* L) -> int {
+                    auto* gh = getGameHandler(L);
+                    const int index = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
+                    bool can = false;
+                    if (gh) {
+                        const auto& inbox = gh->getMailInbox();
+                        if (index >= 0 && index < static_cast<int>(inbox.size()))
+                            can = mailIsComplainable(gh, inbox[index]);
+                    }
+                    if (can) lua_pushnumber(L, 1); else lua_pushboolean(L, 0);
+                    return 1;
+                }},
                 // Turning a letter into a keepable item. Called from the mail
                 // frame's XML rather than its Lua, which is why a scan of the
                 // Lua alone never reported it.
@@ -2182,8 +2559,27 @@ void registerSocialLuaAPI(lua_State* L) {
                 // opcode here either, so sending numbers whose meaning is guessed
                 // would only buy a log line nobody can read.
                 {"GMReportLag", [](lua_State* L) -> int { (void)L; return 0; }},
+                // GMResponseNeedMoreHelp(ticketDescription) - the button under
+                // a GM's answer that says the answer did not settle it.
+                //
+                // Not a different request: 0x005ad150 calls the same sender as
+                // NewGMTicket with its two choices fixed - asking for a reply,
+                // and the "more help" byte set - and that byte is the only
+                // thing on the wire between the two (opcode 0x205 either way).
+                // Unbound, the button the help frame puts up did nothing at all:
+                // the answer stayed answered and the ticket stayed closed.
+                //
+                // The reference refuses when no GM answer is in hand, which it
+                // knows from a flag only SMSG_GMRESPONSE_RECEIVED sets; this
+                // client fires that event and keeps no state from it, so the
+                // request goes out whenever the button is pressed and the realm
+                // decides. That is the same shape as NewGMTicket's own
+                // already-open refusal - see ChatHandler::submitGmTicket.
                 {"GMResponseNeedMoreHelp", [](lua_State* L) -> int {
-            taint::allowed(L, 0x11);   // see NewGMTicket
+            auto* gh = getGameHandler(L);
+            const char* text = luaL_optstring(L, 1, "");
+            if (!taint::allowed(L, 0x11)) return 0;   // see NewGMTicket
+            if (gh && text && *text) gh->submitGmTicket(text, true, true);
             return 0;
         }},
                 // GetGMStatus() - ask whether the ticket queue is open.
@@ -2332,8 +2728,11 @@ void registerSocialLuaAPI(lua_State* L) {
                 //   → zoneChannel, channelName
                 //
                 // The same join as JoinChannelByName, plus the chat frame the
-                // channel should show in. The frame binding is handled entirely
-                // in FrameXML, so only the join happens here.
+                // channel should show in - which is the one argument here that
+                // is read by nobody, for the reason written out above the
+                // binding: this client has no per-frame channel list on the C
+                // side, and the interface routes channel lines off its own
+                // `channelList` tables.
                 //
                 // What 0x0050d900 answers: the ChatChannels.dbc id of the
                 // channel joined - zero for one of the player's own, which is
@@ -2443,87 +2842,245 @@ void registerSocialLuaAPI(lua_State* L) {
                 // both write CMSG_LOOT_METHOD, which carries all three settings
                 // at once - so each resends the other two as they stand rather
                 // than clearing them.
+                //
+                // 0x0052dc20 leads with the group gates - no group, then not the
+                // leader - before it reads the argument at all, and an unknown
+                // method is a Lua error rather than a method: the five names are
+                // compared case-blind and anything else raises "Invalid loot
+                // method". Falling through to free-for-all answered a typo as
+                // though the player had asked for it.
+                //
+                // "master" with nobody named is its own complaint (0xfc), and a
+                // name the group does not have is 0x51 with the name put into it.
+                // That is what the roster search is for: the loot master has to
+                // be somebody in the group, and saying so beats choosing a person
+                // the argument never named - which is what the old fallback to
+                // the player did.
                 {"SetLootMethod", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            std::string method(luaL_optstring(L, 1, ""));
+            if (!inAGroup(gh)) { gh->sayGameError(server_notice::kNotInGroup); return 0; }
+            if (!isGroupLeader(gh)) { gh->sayGameError(server_notice::kNotLeader); return 0; }
+            if (!lua_isstring(L, 1) && !lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetLootMethod(\"method\" [,master])");
+            std::string method(lua_tostring(L, 1));
             toLowerInPlace(method);
-            const uint8_t m = lootMethodFromToken(method);
+            const int m = lootMethodFromToken(method);
+            if (m < 0) return luaL_error(L, "Invalid loot method");
 
             const auto& pd = gh->getPartyData();
             uint64_t masterGuid = 0;
             if (m == 2) {
                 // The second argument is a unit id or a name, depending on who
-                // is calling - the loot dropdown passes a name.
-                const char* who = luaL_optstring(L, 2, nullptr);
-                if (who && *who) {
-                    for (const auto& mem : pd.members) {
-                        if (mem.name == who) { masterGuid = mem.guid; break; }
-                    }
-                    if (masterGuid == 0) masterGuid = gh->getPlayerGuid();
+                // is calling - the loot dropdown passes a name - and both are
+                // what 0x00520190 takes, so it is tried as a token first.
+                if (!lua_isstring(L, 2) && !lua_isnumber(L, 2)) {
+                    gh->sayGameError(server_notice::kSpecifyMasterLooter);
+                    return 0;
+                }
+                const char* who = lua_tostring(L, 2);
+                if (!who || !*who) {
+                    gh->sayGameError(server_notice::kSpecifyMasterLooter);
+                    return 0;
+                }
+                // Arg 3 is the exactMatch flag here too (0x00815500(L,3,0)),
+                // which the loot dropdown never passes and /loot does not either.
+                masterGuid = resolveGroupMember(gh, who, lua_toboolean(L, 3) != 0);
+                // The resolver searched the group's list, but its token step can
+                // still name somebody outside it - "target" at a stranger - and
+                // the reference confirms membership afterwards (0x0052c680 for
+                // the party, 0x005726f0 for the raid) and answers the same 0x51.
+                const bool inGroup = masterGuid != 0 &&
+                    (masterGuid == gh->getPlayerGuid() ||
+                     std::any_of(pd.members.begin(), pd.members.end(),
+                                 [&](const auto& mem) { return mem.guid == masterGuid; }));
+                if (!inGroup) {
+                    gh->sayGameError(server_notice::kTargetNotInGroupS, {who});
+                    return 0;
                 }
             }
-            gh->setLootMethod(m, masterGuid, pd.lootThreshold);
+            gh->setLootMethod(static_cast<uint8_t>(m), masterGuid, pd.lootThreshold);
             return 0;
         }},
+                // 0x0052de60: the same two group gates first, and this pair has
+                // no raid-officer escape - an assistant may set the assignments
+                // (0x0052e1b0 lets its rank through) and may not move the loot
+                // threshold. Then the number: 2..6, and a number outside that is
+                // the Lua error rather than a clipped quality.
                 {"SetLootThreshold", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
-            const auto quality = static_cast<uint8_t>(luaL_optnumber(L, 1, 2));
+            if (!inAGroup(gh)) { gh->sayGameError(server_notice::kNotInGroup); return 0; }
+            if (!isGroupLeader(gh)) { gh->sayGameError(server_notice::kNotLeader); return 0; }
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetLooThreshold(threshold)");  // sic, as 0x0052de60 spells it
+            const int quality = static_cast<int>(lua_tonumber(L, 1));  // 0x0088b9c0's integer of the same read
+            if (quality < 2 || quality > 6)
+                return luaL_error(L, "SetLootThreshold(): threshold must be between %d and %d", 2, 6);
             const auto& pd = gh->getPartyData();
-            gh->setLootMethod(pd.lootMethod, pd.looterGuid, quality);
+            gh->setLootMethod(pd.lootMethod, pd.looterGuid, static_cast<uint8_t>(quality));
             return 0;
         }},
                 // GetPartyAssignment(assignment, unit) → whether that unit
                 // holds it. The flags come with the group list.
+                //
+                // Three things the reading of it missed, all of them 0x0052ca00
+                // and its raid twin 0x00572950:
+                //
+                //   * The second argument is a name as much as a unit token, and
+                //     the third is exactMatch - see resolveGroupMember. Answering
+                //     false for "whoever the interface named" is how the raid
+                //     frames and the right-click menu lost the tick they were
+                //     drawing: unitpopup.lua passes the member's name.
+                //   * With no second argument it does not answer a yes-or-no at
+                //     all: it returns the *numbers* of the members who hold the
+                //     assignment, numbered as the client numbers them - a raid by
+                //     its roster from one, a party by its four slots, which are
+                //     the members besides the player and are what the flag array
+                //     it walks (DAT_00bd0cff, indices 1 to 4) is indexed by.
+                //   * A name the group does not have is not a false: it is row
+                //     0x51 with the name in it and **no return values**, which is
+                //     why the caller's `if GetPartyAssignment(...) then` sees nil
+                //     rather than a no.
+                //
+                // An assignment of neither name raises, as it does there
+                // ("GetPartyAssignment(): Invalid party assignment"), rather than
+                // answering no for a spelling the client does not have.
                 {"GetPartyAssignment", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            std::string what(luaL_optstring(L, 1, ""));
-            const char* unit = luaL_optstring(L, 2, "");
+            if (!gh) return 0;
+            if (!lua_isstring(L, 1) && !lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetPartyAssignment(\"assignment\" [,\"raidmember\"] [,exactMatch])");
+            std::string what(lua_tostring(L, 1));
             toLowerInPlace(what);
-            if (!gh || !unit || !*unit) return luaReturnFalse(L);
             const uint8_t bit = (what == "maintank") ? 0x02
                               : (what == "mainassist") ? 0x04 : 0x00;
-            if (bit == 0) return luaReturnFalse(L);
-            std::string uid(unit);
-            toLowerInPlace(uid);
-            const uint64_t guid = resolveUnitGuid(gh, uid);
-            if (guid == 0) return luaReturnFalse(L);
-            for (const auto& mem : gh->getPartyData().members) {
+            if (bit == 0) return luaL_error(L, "GetPartyAssignment(): Invalid party assignment");
+
+            const auto& pd = gh->getPartyData();
+            const bool raid = game::groupIsRaid(pd.groupType);
+            if (!lua_isstring(L, 2) && !lua_isnumber(L, 2)) {
+                // Every member holding it is a return value, and the roster is
+                // longer than Lua's default stack: the client asks for room
+                // before each push (0x0084dab0 inside the loop), which is what
+                // lets a 25-man roster answer all of its holders at all.
+                if (!lua_checkstack(L, static_cast<int>(pd.members.size()))) return 0;
+                int held = 0;
+                if (raid) {
+                    for (size_t i = 0; i < pd.members.size(); ++i)
+                        if (pd.members[i].flags & bit)
+                            { lua_pushnumber(L, static_cast<lua_Number>(i + 1)); ++held; }
+                } else {
+                    int slot = 0;
+                    for (const auto& mem : pd.members) {
+                        if (mem.guid == 0 || mem.guid == gh->getPlayerGuid()) continue;
+                        if (++slot > 4) break;   // the client only has four slots to walk
+                        if (mem.flags & bit) { lua_pushnumber(L, slot); ++held; }
+                    }
+                }
+                return held;
+            }
+            const char* who = lua_tostring(L, 2);
+            const uint64_t guid = resolveGroupMember(gh, who ? who : "", lua_toboolean(L, 3) != 0);
+            if (guid == 0) {
+                gh->sayGameError(server_notice::kTargetNotInGroupS, {who ? who : ""});
+                return 0;
+            }
+            for (const auto& mem : pd.members) {
                 if (mem.guid == guid) { lua_pushboolean(L, (mem.flags & bit) ? 1 : 0); return 1; }
             }
-            return luaReturnFalse(L);
+            // A token that named somebody outside the roster: the reference reads
+            // the flags of the unit it resolved, finds none, and answers no.
+            lua_pushboolean(L, 0);
+            return 1;
         }},
-                // Both ask the taint check first (0x0052e1b0, and 0x0052e400 ->
-                // 0x0052df40: kind 4, refused to insecure code).
+                // The pair, and the two are not the same shape. Set is
+                // 0x0052e1b0 and asks the taint check (kind 4); Clear is
+                // 0x0052e400 -> 0x0052df40(0) and does not - the shared body
+                // tests its own argument first (`if (param_1 == 0 || taint(4))`)
+                // and only runs the check for the applying half. Both then want a
+                // group (0x50) and the leader, or a raid officer (0x54 with
+                // 0x00572740, which accepts a raid roster rank of 1 or above).
+                //
+                // The member argument is optional, and "nobody named" is not the
+                // same as "anybody": the reference resolves nothing and sends a
+                // guid of nought, which the realm reads as the sender - so
+                // SetPartyAssignment("MAINTANK") is the player marking themselves,
+                // and it used to do nothing at all here. Named, it is a token or a
+                // name in the group (0x00520190 with mode 6, the raid roster
+                // included, and arg 3 as exactMatch). Not found, the complaint is
+                // "unknown unit" (0x13a) or "no target" (199) for the word
+                // "target" - not 0x51: the group gates have already passed, so the
+                // only thing wrong is that the text names nobody this client knows.
+                //
+                // Two things it does here are not modelled. The unresolved path
+                // first tries the text against players outside the group
+                // (0x00520190 with type mask 8 and no candidate list) and answers
+                // row 0x1d2, ERR_MEETING_STONE_TARGET_NOT_IN_PARTY, if it finds
+                // one - which this client has no way to tell a name from. And
+                // 0x0052bae0 refuses a second change inside 0x2ee ticks of the last
+                // (DAT_00bd199c, the tick it stamped), quietly and with no line;
+                // the realm throttles these itself.
                 {"SetPartyAssignment", [](lua_State* L) -> int {
             if (!taint::allowed(L, 4)) return 0;
             auto* gh = getGameHandler(L);
-            std::string what(luaL_optstring(L, 1, ""));
-            const char* unit = luaL_optstring(L, 2, "");
+            if (!gh) return 0;
+            if (!inAGroup(gh)) { gh->sayGameError(server_notice::kNotInGroup); return 0; }
+            if (!maySetPartyAssignment(gh)) { gh->sayGameError(server_notice::kNotLeader); return 0; }
+            if (!lua_isstring(L, 1) && !lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: %s(\"assignment\" [,\"raidmember\"] [,exactMatch])",
+                                  "SetPartyAssignment");
+            std::string what(lua_tostring(L, 1));
             toLowerInPlace(what);
-            if (!gh || !unit || !*unit) return 0;
             const int assignment = (what == "maintank") ? 0 : (what == "mainassist") ? 1 : -1;
-            if (assignment < 0) return 0;
-            std::string uid(unit);
-            toLowerInPlace(uid);
-            const uint64_t guid = resolveUnitGuid(gh, uid);
-            if (guid) gh->setPartyAssignment(static_cast<uint8_t>(assignment), guid, true);
+            if (assignment < 0) return luaL_error(L, "Invalid Party assignment");
+            uint64_t guid = 0;
+            if (lua_isstring(L, 2) || lua_isnumber(L, 2)) {
+                std::string who(lua_tostring(L, 2) ? lua_tostring(L, 2) : "");
+                guid = resolveGroupMember(gh, who, lua_toboolean(L, 3) != 0);
+                if (guid == 0) {
+                    // "target", or nothing at all, is the other complaint - and
+                    // compared case-blind, as it is in 0x0052e1b0 and 0x0052df40.
+                    std::string lower = who;
+                    toLowerInPlace(lower);
+                    gh->sayGameError(lower.empty() || lower == "target"
+                                         ? server_notice::kNoTarget
+                                         : server_notice::kUnitNotFound);
+                    return 0;
+                }
+            }
+            gh->setPartyAssignment(static_cast<uint8_t>(assignment), guid, true);
             return 0;
         }},
                 {"ClearPartyAssignment", [](lua_State* L) -> int {
-            if (!taint::allowed(L, 4)) return 0;
+            // No taint check: see SetPartyAssignment for why the pair differs.
             auto* gh = getGameHandler(L);
-            std::string what(luaL_optstring(L, 1, ""));
-            const char* unit = luaL_optstring(L, 2, "");
+            if (!gh) return 0;
+            if (!inAGroup(gh)) { gh->sayGameError(server_notice::kNotInGroup); return 0; }
+            if (!maySetPartyAssignment(gh)) { gh->sayGameError(server_notice::kNotLeader); return 0; }
+            if (!lua_isstring(L, 1) && !lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: %s(\"assignment\" [,\"raidmember\"] [,exactMatch])",
+                                  "ClearPartyAssignment");
+            std::string what(lua_tostring(L, 1));
             toLowerInPlace(what);
-            if (!gh || !unit || !*unit) return 0;
             const int assignment = (what == "maintank") ? 0 : (what == "mainassist") ? 1 : -1;
-            if (assignment < 0) return 0;
-            std::string uid(unit);
-            toLowerInPlace(uid);
-            const uint64_t guid = resolveUnitGuid(gh, uid);
-            if (guid) gh->setPartyAssignment(static_cast<uint8_t>(assignment), guid, false);
+            if (assignment < 0) return luaL_error(L, "Invalid Party assignment");
+            uint64_t guid = 0;
+            if (lua_isstring(L, 2) || lua_isnumber(L, 2)) {
+                std::string who(lua_tostring(L, 2) ? lua_tostring(L, 2) : "");
+                guid = resolveGroupMember(gh, who, lua_toboolean(L, 3) != 0);
+                if (guid == 0) {
+                    // "target", or nothing at all, is the other complaint - and
+                    // compared case-blind, as it is in 0x0052e1b0 and 0x0052df40.
+                    std::string lower = who;
+                    toLowerInPlace(lower);
+                    gh->sayGameError(lower.empty() || lower == "target"
+                                         ? server_notice::kNoTarget
+                                         : server_notice::kUnitNotFound);
+                    return 0;
+                }
+            }
+            gh->setPartyAssignment(static_cast<uint8_t>(assignment), guid, false);
             return 0;
         }},
                 // ---- Raid group management ----
@@ -2573,7 +3130,11 @@ void registerSocialLuaAPI(lua_State* L) {
             if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SetRaidRosterSelection(index)");
             auto* gh = getGameHandler(L);
             const int64_t index = std::llround(lua_tonumber(L, 1)) - 1;
-            const auto* raid = gh && gh->getPartyData().groupType == 1 ? &gh->getPartyData().members : nullptr;
+            // Which group is a raid is what game::groupIsRaid exists to answer;
+            // `== 1` is the old convention and reads a WotLK raid (type 2) as no
+            // raid at all, which is why the roster had nothing to select.
+            const auto* raid = (gh && game::groupIsRaid(gh->getPartyData().groupType))
+                                   ? &gh->getPartyData().members : nullptr;
             raidRosterSelection() = (raid && index >= 0 && index < static_cast<int64_t>(raid->size()))
                                         ? (*raid)[static_cast<size_t>(index)].guid : 0;
             return 0;
@@ -2581,7 +3142,7 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GetRaidRosterSelection", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             int index = 0;
-            if (gh && raidRosterSelection() != 0 && gh->getPartyData().groupType == 1) {
+            if (gh && raidRosterSelection() != 0 && game::groupIsRaid(gh->getPartyData().groupType)) {
                 const auto& raid = gh->getPartyData().members;
                 for (size_t i = 0; i < raid.size(); ++i) {
                     if (raid[i].guid == raidRosterSelection()) { index = static_cast<int>(i) + 1; break; }
@@ -2599,6 +3160,19 @@ void registerSocialLuaAPI(lua_State* L) {
                 // UnitIsSilenced and ChannelSilenceVoice stay where they were:
                 // those are voice-chat silencing, a different thing from the mute
                 // list, which is what the wire calls a "voice ignore".
+                //
+                // Answering no is unreachable, which is why it stays a no.
+                // 0x004fccf0 resolves the *name* it is handed to a voice roster
+                // record and reads bit 8 of that record's flags through
+                // 0x007db600 - state with no packet behind it here - and every
+                // consumer asks from behind the voice switch: unitpopup.lua
+                // hides each of the six SILENCE and UNSILENCE entries it builds
+                // for party, raid and battleground when
+                // `not IsVoiceChatEnabled() or not GetVoiceStatus(name)`, and
+                // blizzard_raidui.lua's pullout entry sits inside its own
+                // IsVoiceChatEnabled() block (1331, asking at 1377).  This
+                // client answers IsVoiceChatEnabled false, so the menus that
+                // would ask this one do not offer them at all.
                 {"UnitIsSilenced",      luaReturnFalse},
                 // AddOrDelMute(name) - 0x006b6bd0 → 0x006b6130, the toggle the
                 // raid panels' speaker icon uses. One walk over the mute rows
@@ -3474,11 +4048,23 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->inviteToGroup(unitOrNameArg(L, gh, luaL_checkstring(L, 1)));
             return 0;
         }},
+                // UninviteUnit(name [, reason]) - the reason is argument two, and
+                // it is not decoration. 0x0051a7a0 reads it into a buffer of its
+                // own before it resolves the name, and the packet it then builds
+                // (0x006d43c0) puts that buffer behind the guid: the reason of a
+                // kick rides to the realm in the same send as the kick itself.
+                // The one caller that types one is the boot-vote popup
+                // (staticpopup.lua:2777,2791, `maxLetters = 64`), which is also
+                // the client's own length limit on the field.
                 {"UninviteUnit", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             // 0x0051a7a0: insecure code only inside a hardware event.
             if (gh && !taint::allowedInHardwareEvent(L)) return 0;
-            if (gh) gh->uninvitePlayer(unitOrNameArg(L, gh, luaL_checkstring(L, 1)));
+            if (!gh) return 0;
+            // A number reads as its own text, as FUN_0084e0e0's tostring-style
+            // read of argument two does; nothing there rejects a type.
+            const std::string reason = lua_isstring(L, 2) ? lua_tostring(L, 2) : std::string();
+            gh->uninvitePlayer(unitOrNameArg(L, gh, luaL_checkstring(L, 1)), reason);
             return 0;
         }},
                 {"LeaveParty", [](lua_State* L) -> int {
@@ -3486,7 +4072,8 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->leaveGroup();
             return 0;
         }},
-                // FollowUnit(unit) - and this one matters more than it looks.
+                // FollowUnit(unit, exactMatch) - and this one matters more than
+                // it looks.
                 //
                 // FrameXML owns every follow command: SLASH_FOLLOW1 through 7
                 // are /f, /follow and /fol, and the client's chat tries
@@ -3495,25 +4082,36 @@ void registerSocialLuaAPI(lua_State* L) {
                 // client's working /follow never ran. Following was simply
                 // broken from chat.
                 //
-                // followTarget aims at whatever is targeted, so the cases that
-                // mean that are answered and the rest still are not: a named
-                // party member who is not the target needs a guid the movement
-                // handler has no way to take yet.
+                // 0x005224c0 hands the argument to the name resolver twice: as
+                // a player first (mask 0x10, mode 3) and only then as any unit
+                // (mask 8, mode 0), which is what "/follow Bob" reaching the
+                // player rather than somebody's pet comes from. The two lines a
+                // follow can end on are kNoTarget and kUnitNotFound - the first
+                // for an empty argument or the word "target", the second for a
+                // name nobody near answers - and which one it is comes out of
+                // that same pair.
                 {"FollowUnit", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
             std::string who(luaL_optstring(L, 1, ""));
             toLowerInPlace(who);
-            const bool meansTarget =
-                who.empty() || who == "target" ||
-                // A typed name that happens to be the target, which is what
-                // "/follow Bob" is when Bob is already selected.
-                [&] {
-                    std::string n = gh->lookupName(gh->getTargetGuid());
-                    toLowerInPlace(n);
-                    return !n.empty() && n == who;
-                }();
-            if (meansTarget && gh->getTargetGuid() != 0) gh->followTarget();
+            const bool exact = lua_toboolean(L, 2) != 0;
+            // An empty text and the word "target" are both answered by the
+            // token half of the resolver - 0x0060abf0 with its third argument
+            // set hands back the unit the client is looking at - and
+            // followTarget() is the routine that says ERR_GENERIC_NO_TARGET when
+            // there is none, so the complaint stays with it. Every other token
+            // goes through resolveUnitGuid before the walk does.
+            if (who.empty() || who == "target") { gh->followTarget(); return 0; }
+            uint64_t guid = resolveUnitGuid(gh, who);
+            if (!guid) guid = resolveNamedUnit(gh, who, exact, true);
+            if (!guid) guid = resolveNamedUnit(gh, who, exact, false);
+            if (guid) {
+                gh->followGuid(guid);
+                return 0;
+            }
+            gh->sayGameError(server_notice::kUnitNotFound);
+            gh->playGameErrorSound(server_notice::kUnitNotFound.key);
             return 0;
         }},
                 // Inspect and duel, both of which unitpopup.lua calls straight
@@ -3688,20 +4286,30 @@ void registerSocialLuaAPI(lua_State* L) {
                 // selected-channel state it reads. One name is registered once;
                 // two registrations of it would be settled by load order.
                 {"IsSilenced", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                // PromoteToLeader(name) - /promote, /pr, and the unit menu's
-                // "Promote to Leader". The client had no outgoing side for this
-                // at all: SMSG_GROUP_SET_LEADER was handled and CMSG was never
-                // sent, so leadership could be received and never given.
+                // PromoteToLeader(name, exactMatch) - /promote, /pr, and the
+                // unit menu's "Promote to Leader". The client had no outgoing
+                // side for this at all: SMSG_GROUP_SET_LEADER was handled and
+                // CMSG was never sent, so leadership could be received and never
+                // given.
+                //
+                // 0x00573e10 wants a string for the first argument and raises
+                // its Usage line when it does not get one; the second argument
+                // is the exactMatch flag, which the menu sets and a typed
+                // "/pr Bo" does not.
                 {"PromoteToLeader", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            std::string name(luaL_optstring(L, 1, ""));
-            if (!gh || name.empty()) return 0;
-            toLowerInPlace(name);
-            for (const auto& m : gh->getPartyData().members) {
-                std::string n = m.name;
-                toLowerInPlace(n);
-                if (n == name) { gh->promoteToLeader(m.guid); return 0; }
-            }
+            if (!gh) return 0;
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: PromoteToLeader(name)");
+            const std::string name(lua_tostring(L, 1));
+            // The client's walk scores *every* candidate at a zero-length text,
+            // which is a choice between strangers rather than between members;
+            // the roster-scoped version below would have to guess which member
+            // that meant, so an empty argument asks for nothing.
+            if (name.empty()) return 0;
+            if (const uint64_t guid =
+                    resolveGroupMember(gh, name, lua_toboolean(L, 2) != 0))
+                gh->promoteToLeader(guid);
             return 0;
         }},
                 // Raid assistant, given and taken. The unit menu passes a
@@ -3858,11 +4466,31 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushstring(L, area.c_str());
             return 1;
         }},
-                // Asked every frame by the popup's OnUpdate to grey the accept
-                // button. The server refuses a summon it will not honour, so
-                // the client does not second-guess it.
+                // Asked every frame by the summon popup's OnUpdate, which
+                // greys the accept button on `UnitAffectingCombat("player") or
+                // (not PlayerCanTeleport())`. The client does second-guess the
+                // realm here, off one dword: 0x0060d8f0 casts the local player
+                // object, reads UNIT_FIELD_FLAGS (blob +0xd4, wire 0x3b - the
+                // same dword GetPVPDesired two rows above reads 0x1000 out of),
+                // and answers true only while none of 0x40000, 0x400000 and
+                // 0x800000 stands - the three states a character is not in
+                // control of their own movement in, which this repository
+                // already names stunned / confused / fleeing (pet_action.hpp,
+                // appearance_composer.cpp). A summon landing on a character in
+                // one of them would drop them wherever the spell put them, so
+                // the popup waits out the crowd control instead of offering the
+                // button; a flat true here offered it anyway.
                 {"PlayerCanTeleport", [](lua_State* L) -> int {
-            lua_pushboolean(L, 1); return 1;
+            auto* gh = getGameHandler(L);
+            const uint16_t flags = game::fieldIndex(game::UF::UNIT_FIELD_FLAGS);
+            const auto e = gh && flags != 0xFFFF
+                               ? gh->getEntityManager().getEntity(gh->getPlayerGuid())
+                               : nullptr;
+            if (!e) { lua_pushboolean(L, 0); return 1; }
+            constexpr uint32_t kOutOfControl = 0x40000u | 0x400000u | 0x800000u;
+            const bool can = (e->getField(flags) & kOutOfControl) == 0;
+            lua_pushboolean(L, can ? 1 : 0);
+            return 1;
         }},
                 // Which of three resurrect popups to raise. Both false picks
                 // RESURRECT_NO_TIMER, the plain "accept?" prompt, which is the
@@ -4008,13 +4636,24 @@ void registerSocialLuaAPI(lua_State* L) {
                 // PLAYER_FLAGS, as the IsOutOfBounds row below records, so a
                 // player the realm puts out of bounds is exactly the case in
                 // which the reference answers -1 where it would otherwise have
-                // started six minutes. The answer this gives stays -1 - the
-                // realm WoWee plays against sets neither of the two bits, and it
-                // is the only one of the three that shows the death dialog at
-                // all - but the countdown half depends on realm state this client
-                // cannot see, which is also why it is not reproduced here.
+                // started six minutes.
+                //
+                // All three answers are answered from here, off the pair
+                // GameHandler::decideReleaseTimer writes at a death - see that
+                // function for what it reads and for the stamp-forced-to-1 trick
+                // that keeps -1 and 0 apart. On the realm WoWee plays against
+                // neither of the two bits is set, so the answer in practice is
+                // still the -1 it always gave; what changed is that the
+                // countdown and the nought are reachable at all, and that a
+                // character which has not died answers nought the way the
+                // original's zeroed pair does. The decision is stamped before
+                // PLAYER_DEAD is fired, which is when the interface asks.
                 {"GetReleaseTimeRemaining", [](lua_State* L) -> int {
-            lua_pushnumber(L, -1); return 1;
+            auto* gh = getGameHandler(L);
+            // With no game handler there has been no death to decide at, and a
+            // pair nobody has written is the reference's start-up state: nought.
+            lua_pushnumber(L, gh ? gh->releaseTimeRemainingSec() : 0);
+            return 1;
         }},
                 // Asked from an OnUpdate, so this runs on every frame the
                 // popup is up rather than once.
@@ -4501,13 +5140,22 @@ void registerSocialLuaAPI(lua_State* L) {
                     if (auto* gh = getGameHandler(L)) gh->targetNearestRaidMember(wantsReverseArg(L));
                     return 0;
                 }},
+                // The duel challenge, from the unit menu and from "/duel Bob"
+                // alike: 0x005cf950 puts the argument through the name resolver
+                // with mask 0x10 (players only - a duel is not something one
+                // starts with a bobcat) and the verb's second argument as the
+                // exactMatch flag, which unitpopup sets because it passes a
+                // whole name.
                 {"StartDuel", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* unit = luaL_optstring(L, 1, "target");
             if (!gh || !unit) return 0;
             std::string uid(unit);
             toLowerInPlace(uid);
-            if (const uint64_t guid = resolveUnitGuid(gh, uid)) gh->proposeDuel(guid);
+            const bool exact = lua_toboolean(L, 2) != 0;
+            uint64_t guid = resolveUnitGuid(gh, uid);
+            if (!guid) guid = resolveNamedUnit(gh, uid, exact, true);
+            if (guid) gh->proposeDuel(guid);
             return 0;
         }},
                 {"RandomRoll", [](lua_State* L) -> int {

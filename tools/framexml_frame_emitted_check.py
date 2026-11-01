@@ -58,6 +58,18 @@ import re
 import subprocess
 import sys
 
+# The loader is a sibling tool; the interpreter runs with -I, so the tools
+# directory has to be named to import it.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from framexml_source import loaded_files  # noqa: E402
+
+
+def iface_root(iface):
+    """The folder the .toc chain starts in. Naming FrameXML means the same
+    interface to a reader who remembers the folder's name, and loaded_files()
+    walks the .toc, which lives one level up."""
+    return iface.parent if iface.name.lower() == "framexml" else iface
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 #: Windows writes the target as `framexml_emit.exe`, and pathlib does not resolve
 #: a bare name the way a shell does - so the original path "does not exist" here,
@@ -100,8 +112,15 @@ def main():
               "directory on the command line.")
         return 2
 
-    files = [p for p in sorted(iface.rglob("*.xml"))
-             if "gluexml" not in str(p)]
+    # The .xml files the client loads, from the .toc chain rather than from a
+    # walk of the folder. The walk had gluexml cut out by name, which is the
+    # right idea reached the wrong way: it left in lcdxml's two files and the
+    # twelve FrameXML files that no Include reaches, and the frames declared in
+    # them are ones no running client asks for - a dropped frame there is a
+    # finding nobody can act on, and it shares the report with the kind that
+    # matters. The loader's list is 162 files where the walk found 172.
+    files = [p for p in loaded_files(iface_root(iface))
+             if p.suffix.lower() == ".xml"]
     rows, total = [], 0
     for p in files:
         text = re.sub(r"<!--.*?-->", "", p.read_text(errors="ignore"), flags=re.S)
@@ -133,7 +152,10 @@ def main():
     # Without it an emitter that produced nothing at all would report a clean
     # zero, since every comparison would be against an empty haystack... which
     # is the same silent-success failure the wire sweeps had.
-    probe = iface / "framexml" / "gamemenuframe.xml"
+    # Off the .toc root rather than off whatever was named: naming the FrameXML
+    # folder used to join "framexml" to it a second time, which printed CANARY
+    # MISSING and stopped a run that had just compared every file in the tree.
+    probe = iface_root(iface) / "framexml" / "gamemenuframe.xml"
     if not probe.exists():
         # The canary is what tells an empty comparison from a passing one, so a
         # tree without it cannot be reported on at all.

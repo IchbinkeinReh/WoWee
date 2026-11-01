@@ -590,6 +590,37 @@ for (const auto& [guid, entity] : entityController_->getEntityManager().getEntit
 }
 }
 
+// 0x005e64d0: watch a quest, optionally only until `durationSeconds` from now.
+// A stamp of 0 means no expiry, which is also how the client spells a
+// permanent watch -- it keeps the column and skips it in the sweep with `0 <`.
+void GameHandler::addQuestWatch(uint32_t questId, int32_t durationSeconds) {
+    const auto now = static_cast<int32_t>(std::time(nullptr));
+    if (isQuestTracked(questId)) {
+        // Re-adding a watch never changes the tracker's membership, so it
+        // announces nothing; and a watch with no expiry ignores the duration
+        // entirely (the client returns as soon as it sees the 0 stamp).
+        const auto it = questWatchExpiry_.find(questId);
+        if (it != questWatchExpiry_.end())
+            it->second = durationSeconds ? now + durationSeconds : 0;
+        return;
+    }
+    if (!setQuestTracked(questId, true)) return;
+    if (durationSeconds) questWatchExpiry_[questId] = now + durationSeconds;
+}
+
+// 0x005dfef0: drop every watch whose stamp has been reached. The client fires
+// its QUEST_LOG_UPDATE inside the loop, so two watches expiring in one sweep
+// redraw the tracker twice; going through setQuestTracked gets both halves.
+size_t GameHandler::expireQuestWatches() {
+    if (questWatchExpiry_.empty()) return 0;
+    const auto now = static_cast<int32_t>(std::time(nullptr));
+    std::vector<uint32_t> expired;
+    for (const auto& [questId, expiry] : questWatchExpiry_)
+        if (expiry > 0 && expiry <= now) expired.push_back(questId);
+    for (uint32_t questId : expired) setQuestTracked(questId, false);
+    return expired.size();
+}
+
 void GameHandler::updateTimers(float deltaTime) {
     if (spellHandler_) spellHandler_->updateTimers(deltaTime);
     // Misses whose missile has landed (0x00700e20).
@@ -630,6 +661,16 @@ void GameHandler::updateTimers(float deltaTime) {
                 ++it;
             }
         }
+    }
+
+    // Expire the timed quest watches (0x005dfef0, driven by the client's own
+    // periodic player update). The stamps are unix seconds, so the sweep runs
+    // once a second rather than once a frame; a watch added with
+    // MAX_QUEST_WATCH_TIME comes off five minutes later either way.
+    questWatchSweepTimer_ += deltaTime;
+    if (questWatchSweepTimer_ >= 1.0f) {
+        questWatchSweepTimer_ = 0.0f;
+        expireQuestWatches();
     }
 
     // Announce the corpse-proximity crossing. FrameXML answers CORPSE_IN_RANGE
@@ -1408,6 +1449,9 @@ void GameHandler::loadCharacterConfig() {
     // These selections are per-character. Clear the previous character's
     // values even when the new character has no saved config yet.
     trackedQuestIds_.clear();
+    // The watch stamps are wall-clock and are deliberately not saved (see
+    // questWatchExpiry_), so a new character starts with none at all.
+    questWatchExpiry_.clear();
 
     std::string path = getCharacterConfigDir() + "/" + ch->name + ".cfg";
     std::ifstream in(path);
@@ -1579,12 +1623,12 @@ void GameHandler::sendMail(const std::string& recipient, const std::string& subj
     if (inventoryHandler_) inventoryHandler_->sendMail(recipient, subject, body, money, cod);
 }
 
-bool GameHandler::attachItemFromBackpack(int backpackIndex) {
-    return inventoryHandler_ && inventoryHandler_->attachItemFromBackpack(backpackIndex);
+bool GameHandler::attachItemFromBackpack(int backpackIndex, int attachIndex) {
+    return inventoryHandler_ && inventoryHandler_->attachItemFromBackpack(backpackIndex, attachIndex);
 }
 
-bool GameHandler::attachItemFromBag(int bagIndex, int slotIndex) {
-    return inventoryHandler_ && inventoryHandler_->attachItemFromBag(bagIndex, slotIndex);
+bool GameHandler::attachItemFromBag(int bagIndex, int slotIndex, int attachIndex) {
+    return inventoryHandler_ && inventoryHandler_->attachItemFromBag(bagIndex, slotIndex, attachIndex);
 }
 
 bool GameHandler::detachMailAttachment(int attachIndex) {
@@ -1999,6 +2043,12 @@ void GameHandler::loadTitleNameCache() const {
 
     auto dbc = am->loadDBC("CharTitles.dbc");
     if (!dbc || !dbc->isLoaded() || dbc->getFieldCount() < 5) return;
+
+    // The table's own bound, counted before anything below is skipped: this is
+    // the number the original client keeps next to its CharTitles rows
+    // (`DAT_00ad337c`, compared `<` by its row scans) and the number
+    // GetNumTitles pushes plus one.
+    charTitlesRows_ = dbc->getRecordCount();
 
     const auto* layout = pipeline::getActiveDBCLayout()
         ? pipeline::getActiveDBCLayout()->getLayout("CharTitles") : nullptr;
@@ -3075,6 +3125,59 @@ uint32_t GameHandler::getPlayerMaxLevel() const {
     const auto player = getEntityManager().getEntity(getPlayerGuid());
     if (!player) return 0;
     return player->getField(field);
+}
+
+// What GetReleaseTimeRemaining (0x00516210) answers was decided before it was
+// asked, at the death, and by nobody else: the only writers of the pair are
+// FUN_00513a30 and FUN_00513a60, which one routine calls (FUN_006dc070, reached
+// from the local-player branch of the player-death handler 0x006dc0f0 and from
+// the 0x37a = SMSG_FORCED_DEATH_UPDATE case at 0x006e0000.c:2497), and the
+// zeroing of both at the client's own start-up (00520000.c:8083), which is why a
+// player who has not died answers nought. What that routine reads is two bits of
+// PLAYER_FIELD_BYTES' first byte and one of PLAYER_FLAGS:
+//
+//   bit 0x10                        the release is immediate: a stamp of now,
+//                                   which the binding below turns into nought
+//   bit 0x08, with PLAYER_FLAGS     six minutes from the death - and the flags
+//   0x4000 (out of bounds) clear    half is why a player the realm has put out
+//                                   of bounds gets -1 instead
+//   anything else                   nothing will force a release, the -1 answer
+//
+// The stamp is a tick plus a duration, and a stamp that lands on nought is
+// forced to 1 so that "no timer" and "timer spent" stay two answers apart - the
+// same trick this file's calendarClockMs copied for the calendar's own stamp.
+void GameHandler::decideReleaseTimer() {
+    const auto player = getEntityManager().getEntity(getPlayerGuid());
+    const uint16_t bytesIndex = fieldIndex(UF::PLAYER_FIELD_BYTES);
+    const uint16_t flagsIndex = fieldIndex(UF::PLAYER_FLAGS);
+    const uint32_t bytes = (player && bytesIndex != 0xFFFF)
+                               ? player->getField(bytesIndex) & 0xFFu : 0u;
+    const uint32_t flags = (player && flagsIndex != 0xFFFF)
+                               ? player->getField(flagsIndex) : 0u;
+    const uint64_t now = static_cast<uint64_t>(TransportManager::nowSteadyMs());
+
+    if (bytes & 0x10) {
+        releaseStampMs_ = now == 0 ? 1 : now;
+        releaseNoTimer_ = false;
+    } else if ((bytes & 0x08) != 0 && (flags & 0x4000) == 0) {
+        releaseStampMs_ = now + 360000;
+        releaseNoTimer_ = false;
+    } else {
+        releaseStampMs_ = 0;
+        releaseNoTimer_ = true;
+    }
+}
+
+// The binding's own arithmetic: -1 while the "no timer" byte stands, otherwise
+// what is left of the stamp in whole seconds, and nought for a player that has
+// no stamp or has spent one (0x00516210 divides after the sign test, so a spent
+// stamp answers 0 and never a negative countdown).
+int32_t GameHandler::releaseTimeRemainingSec() const {
+    if (releaseNoTimer_) return -1;
+    if (releaseStampMs_ == 0) return 0;
+    const int64_t left = static_cast<int64_t>(releaseStampMs_) -
+                         TransportManager::nowSteadyMs();
+    return left > 0 ? static_cast<int32_t>(left / 1000) : 0;
 }
 
 uint32_t GameHandler::getSelfResSpellId() const {
@@ -4221,6 +4324,15 @@ void GameHandler::calendarRemoveOpenInvite(size_t index) {
     setCalendarActionPending(true);
 }
 
+bool GameHandler::reportedBeforeOrNote(uint64_t guid) {
+    if (std::find(complainedGuids_.begin(), complainedGuids_.end(), guid) !=
+        complainedGuids_.end())
+        return true;
+    complainedGuids_.push_front(guid);
+    if (complainedGuids_.size() > 32) complainedGuids_.pop_back();
+    return false;
+}
+
 bool GameHandler::calendarCanComplain(uint64_t eventId) const {
     if (calendarActionPending_ || complaintSystemStatus_ == 0) return false;
     if (!entityController_->getEntityManager().getEntity(playerGuid)) return false;
@@ -4242,11 +4354,7 @@ void GameHandler::calendarComplain(uint64_t eventId) {
     for (const auto& invite : calendarData_.invites)
         if (invite.eventId == eventId) ownInviteId = invite.inviteId;
     const uint64_t maker = event->creatorGuid;
-    const bool already = std::find(complainedGuids_.begin(), complainedGuids_.end(), maker) !=
-                         complainedGuids_.end();
-    if (!already) {
-        complainedGuids_.push_front(maker);
-        if (complainedGuids_.size() > 32) complainedGuids_.pop_back();
+    if (!reportedBeforeOrNote(maker)) {
         // CMSG_CALENDAR_COMPLAIN: the maker, the event, the player's invite.
         network::Packet packet(wireOpcode(Opcode::CMSG_CALENDAR_COMPLAIN));
         packet.writeUInt64(maker);

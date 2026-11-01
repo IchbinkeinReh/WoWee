@@ -56,18 +56,33 @@ std::filesystem::path guildNameCachePath() {
 // words are the interface's ERR_* string with the arguments put in.
 enum class ErrTo { Chat, Info, Error };
 
-void gameError(GameHandler& gh, ErrTo to, const char* key, const char* enUS,
-               const std::vector<std::string>& args = {}) {
-    // Its sound first - the character's line, or the row's named sound -
-    // as 0x005216f0 plays it before the words are made, wherever they go.
-    gh.playGameErrorSound(key);
-    const std::string text = interfaceFormat(key, enUS, args);
+void showGameError(GameHandler& gh, ErrTo to, const std::string& text) {
     if (text.empty()) return;
     switch (to) {
         case ErrTo::Chat:  gh.addSystemChatMessage(text); break;
         case ErrTo::Info:  gh.addUIInfoMessage(text); break;
         case ErrTo::Error: gh.addUIError(text); break;
     }
+}
+
+void gameError(GameHandler& gh, ErrTo to, const char* key, const char* enUS,
+               const std::vector<std::string>& args = {}) {
+    // Its sound first - the character's line, or the row's named sound -
+    // as 0x005216f0 plays it before the words are made, wherever they go.
+    gh.playGameErrorSound(key);
+    showGameError(gh, to, interfaceFormat(key, enUS, args));
+}
+
+/// The same, for a line the interface re-spelled between builds.  The first
+/// name is build 12340's, which is also the row WowError_Strings keys its sound
+/// by, and the ones after it are tried for the words alone: the newer interface
+/// this client installs has some of those lines under another name, and asking
+/// only by the old one prints English where the interface says German.
+void gameError(GameHandler& gh, ErrTo to, std::initializer_list<const char*> keys,
+               const char* enUS) {
+    if (keys.size() == 0) return;
+    gh.playGameErrorSound(*keys.begin());
+    showGameError(gh, to, interfaceStringAny(keys, enUS));
 }
 
 /// A duration in milliseconds as 0x0061a9e0 words it with the
@@ -823,7 +838,8 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
                               "You have been removed from a PvP queue because you have been granted a level."); break;
             case 1: gameError(owner_, ErrTo::Error, "ERR_REMOVE_FROM_PVP_QUEUE_XP_GAIN",
                               "You have been removed from a PvP queue because you changed your experience gain settings."); break;
-            case 2: gameError(owner_, ErrTo::Error, "ERR_REMOVE_FROM_PVP_QUEUE_FACTION_CHANGE",
+            case 2: gameError(owner_, ErrTo::Error, {"ERR_REMOVE_FROM_PVP_QUEUE_FACTION_CHANGE",
+                              "ERR_REMOVE_FROM_PVP_QUEUE_FACTION_CHANGE_NONE"},
                               "You have been removed from a PvP queue because you changed your faction."); break;
             default: break;
         }
@@ -853,6 +869,13 @@ void SocialHandler::registerOpcodes(DispatchTable& table) {
                                 "You cannot queue for another battle while queued for a rated arena match"); break;
             case -7:  gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_TEAM_LEFT_QUEUE", "Your team has left the arena queue"); break;
             case -8:  gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_NOT_IN_BATTLEGROUND", "You can't do that in a battleground."); break;
+            // The one refusal in this family the installed interface has no
+            // line for.  It kept JOIN_FAILED, JOIN_RANGE_INDEX and
+            // JOIN_TIMED_OUT and dropped JOIN_XP_GAIN with the XP gain setting
+            // itself, and 3.3.5's wording for it is GlobalStrings.dbc's, which
+            // is not in the extracted data set - so this literal is what even a
+            // German client reads here, where the other rows in this switch ask
+            // for a global the interface does carry and answer in its language.
             case -9:  gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_JOIN_XP_GAIN",
                                 "Cannot join as a group unless all the members of your party have the same XP gain setting."); break;
             case -10: gameError(owner_, ErrTo::Error, "ERR_BATTLEGROUND_JOIN_RANGE_INDEX",
@@ -1522,9 +1545,13 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
     }
 
     // Every spec is sent. Counting all of them reported a dual-spec character
-    // as having spent roughly twice what they have.
+    // as having spent roughly twice what they have - the count stays with the
+    // active group - but every group's list is kept, because the client reads
+    // the group back out of the argument the talent frame passes it
+    // (0x005c57d0), and 0x005c6080 picks the inspect record for that group out
+    // of a per-group array of its own.
     uint32_t totalTalents = 0;
-    std::unordered_map<uint32_t, uint8_t> inspectTalents;
+    std::array<std::unordered_map<uint32_t, uint8_t>, 2> inspectTalents;
     for (uint8_t g = 0; g < talentGroupCount && g < 2; ++g) {
         bytesLeft = packet.getRemainingSize();
         if (bytesLeft < 1) break;
@@ -1534,14 +1561,12 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
             if (bytesLeft < 5) break;
             const uint32_t talentId = packet.readUInt32();
             const uint8_t rank = packet.readUInt8();
-            if (g == activeTalentGroup) {
-                // Rank is zero-based on the wire, as it is for the player's own
-                // talents. The inspect talent tab was counting these and
-                // throwing them away, so it drew the viewer's own tree with the
-                // target's name over it.
-                inspectTalents[talentId] = static_cast<uint8_t>(rank + 1u);
-                totalTalents++;
-            }
+            // Rank is zero-based on the wire, as it is for the player's own
+            // talents. The inspect talent tab was counting these and
+            // throwing them away, so it drew the viewer's own tree with the
+            // target's name over it.
+            inspectTalents[g][talentId] = static_cast<uint8_t>(rank + 1u);
+            if (g == activeTalentGroup) totalTalents++;
         }
         bytesLeft = packet.getRemainingSize();
         if (bytesLeft < 1) break;
@@ -1586,7 +1611,7 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
     // carried go to the gear cache, where the links and tooltips ask for them.
     for (size_t s = 0; s < gear.size(); ++s)
         inspectResult_.enchantIds[s] = static_cast<uint16_t>(gear[s].enchantId);
-    inspectResult_.talentRanks       = std::move(inspectTalents);
+    inspectResult_.talentRanksByGroup = std::move(inspectTalents);
     inspectResult_.classId           = owner_.lookupPlayerClass(guid);
 
     // The gear is in this packet. It used to be looked up from the cache that
@@ -2365,9 +2390,39 @@ void SocialHandler::disbandArenaTeam(uint32_t teamId) {
     owner_.getSocket()->send(packet);
 }
 
+// A letter reported (0x0056faf0). Type 0 of CMSG_COMPLAIN is mail, and the
+// three values after the sender are ones the server logs and ignores: a zero,
+// the mail's own id, and another zero.
+//
+// What the reference does around that packet:
+//
+//   It refuses when the realm has no complaint system on - the byte of
+//   SMSG_FEATURE_SYSTEM_STATUS, the client's 0xbceffc, which the answer to a
+//   complaint can switch off again - and when no mailbox stands open in front of
+//   the player (that guid pair at 0x00beb030), because the inbox it re-reads
+//   below is addressed to that object.
+//
+//   It refuses a sender this session has already reported, and answers that with
+//   the interface's own line and no packet at all. The list it reads is the one
+//   every report verb writes into - the calendar's, the chat line's and this one
+//   - and it is not the realm's ignore roster beside it. Filling it is the same
+//   call's job as reporting: the sender goes in at the head before the packet is
+//   built, which is why a second report of the same letter says so rather than
+//   sending again.
+//
+//   It asks for the letters again afterwards: CMSG_GET_MAIL_LIST to the mailbox
+//   the window is open at. The letter just reported may not be among them any
+//   more, and the mail frame is still looking at it.
 void SocialHandler::reportMailSpam(uint64_t senderGuid, uint32_t mailId) {
     if (senderGuid == 0) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (!owner_.complaintsEnabled()) return;
+    if (!owner_.isMailboxOpen()) return;
+    if (owner_.reportedBeforeOrNote(senderGuid)) {
+        owner_.addSystemChatMessage(
+            interfaceString("COMPLAINT_ADDED", "Complaint Registered."));
+        return;
+    }
     network::Packet packet(wireOpcode(Opcode::CMSG_COMPLAIN));
     packet.writeUInt8(0);              // 0 = mail, 1 = chat
     packet.writeUInt64(senderGuid);
@@ -2375,6 +2430,7 @@ void SocialHandler::reportMailSpam(uint64_t senderGuid, uint32_t mailId) {
     packet.writeUInt32(mailId);
     packet.writeUInt32(0);
     owner_.getSocket()->send(packet);
+    owner_.refreshMailList();
 }
 
 void SocialHandler::leaveGroup() {
@@ -2451,11 +2507,46 @@ void SocialHandler::promoteToLeader(uint64_t guid) {
     owner_.getSocket()->send(packet);
 }
 
-void SocialHandler::uninvitePlayer(const std::string& playerName) {
+// Whose kick this is, by name. The reference resolves the argument before it
+// sends anything (0x0060abf0): a unit token comes from the unit tables and a
+// bare name from the group's own roster, compared case-blind - the walks there
+// compare with 0x0076e780, which is the case-blind compare the mute walks use
+// too. A name that walk answers nothing for is never sent at all.
+static uint64_t groupMemberGuid(const std::vector<GroupMember>& members,
+                                const std::string& playerName) {
+    for (const auto& m : members) {
+        if (m.name.size() != playerName.size()) continue;
+        if (std::equal(m.name.begin(), m.name.end(), playerName.begin(), [](char x, char y) {
+                return std::tolower(static_cast<unsigned char>(x)) ==
+                       std::tolower(static_cast<unsigned char>(y));
+            }))
+            return m.guid;
+    }
+    return 0;
+}
+
+void SocialHandler::uninvitePlayer(const std::string& playerName, const std::string& reason) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // UninviteUnit (0x0051a7a0) sends and says nothing; the group's own
     // update announces who left. These were English lines.
     if (playerName.empty()) return;
+    // The reference's send is guid + reason (0x006d43c0, CMSG_GROUP_UNINVITE_GUID
+    // at 0x76) - the reason is the second argument of the binding, which the
+    // boot-vote popup fills in and nothing else on this side has ever passed.
+    // So the guid is looked up here first, exactly as that binding looks up the
+    // name, and the reason goes with it.
+    //
+    // A name this client's roster does not carry falls back to the name-addressed
+    // verb rather than sending nothing, which is what the reference would do:
+    // the kick is the thing a player typed, and the two verbs are answered the
+    // same way by the server. A name spelled with its realm - "Name-Realm", which
+    // unitpopup.lua passes when SHOW_REALM_NAME is on - is one of the names this
+    // roster does not carry.
+    if (const uint64_t guid = groupMemberGuid(partyData.members, playerName); guid != 0) {
+        auto packet = GroupUninviteGuidPacket::build(guid, reason);
+        owner_.getSocket()->send(packet);
+        return;
+    }
     auto packet = GroupUninvitePacket::build(playerName);
     owner_.getSocket()->send(packet);
 }
@@ -4259,6 +4350,22 @@ void SocialHandler::handleLogoutComplete(network::Packet& /*packet*/) {
 // ============================================================
 // Battleground Handlers
 // ============================================================
+
+// Nothing here is reset on entering a world, and that is the client's own
+// behaviour rather than a shortcut taken here: the queue block (two records 0x40
+// apart from 0x00bea4b8, plus the selected-slot marker at 0x00acd16c and the
+// running-battle pair) is written in exactly two places: the registration
+// function 0x0054e720, which zeroes all of it once at startup on the way past
+// its FUN_006b0b80 opcode registrations, and the SMSG_BATTLEFIELD_STATUS handler
+// 0x0054ae40, itself holding two clear branches - the whole-record zero at
+// 00540000.c:8501-8517, and the running-battle pair alone at :8621-8626. No
+// transfer or world-entry path touches it, because the realm re-sends every slot's status
+// on a zone change and the empty record - the one whose two leading dwords are
+// both zero - is what takes a slot's state with it, port-expiration stamp
+// included (00540000.c:8501-8517). Leaving these standing across a zone change
+// is therefore what the reference does with the same realm; clearing them here
+// would answer "no queue" in the seconds between a transfer and the status that
+// follows it.
 
 void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     BattlefieldStatusData status;

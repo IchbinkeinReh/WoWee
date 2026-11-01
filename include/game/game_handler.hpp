@@ -897,6 +897,7 @@ public:
 
     // Follow/Assist
     void followTarget();
+    void followGuid(uint64_t guid);   // a named unit, not the current target
     void cancelFollow();   // Stop following current target
     void assistTarget();
 
@@ -925,7 +926,11 @@ public:
     void declineGuildInvite();
 
     // GM Ticket
-    void submitGmTicket(const std::string& text);
+    /// NewTicket text, whether the player asked for a reply, and whether this
+    /// is the "I need more help" variant - the two callers of one sender
+    /// (0x005ad080 forwards the argument it was given, 0x005ad150 presses both
+    /// of them), both through 0x005ac8f0.
+    void submitGmTicket(const std::string& text, bool needResponse, bool needMoreHelp);
     /// The GM survey's answers (0x005ac260, 0x005ac2d0) and their submit
     /// (0x005acd50).
     void setGmSurveyAnswer(uint32_t question, uint8_t rank, const std::string& comment);
@@ -1189,6 +1194,19 @@ public:
     void arenaTeamSetLeader(uint32_t teamId, const std::string& name);
     void disbandArenaTeam(uint32_t teamId);
     void reportMailSpam(uint64_t senderGuid, uint32_t mailId);
+    /// Whether the realm runs the complaint system at all: the byte of
+    /// SMSG_FEATURE_SYSTEM_STATUS (0xbceffc), which the client's report verbs
+    /// refuse without.
+    [[nodiscard]] bool complaintsEnabled() const { return complaintSystemStatus_ != 0; }
+    /// The report list every report verb shares (read at 0x006b3700, written at
+    /// 0x006b3750): has this player been reported already this session, and if
+    /// not, that they now have been - newest first, thirty-two deep, the oldest
+    /// dropped. True when they had been, which is the point where each verb
+    /// prints COMPLAINT_ADDED and sends nothing instead. The list sits beside
+    /// the ignore roster in the client (FriendList +0xdaf0 and +0xd490) but is
+    /// not part of it: the two ignore walks consult it only under a report mode
+    /// (0x006b52e0, 0x006b5350 with DAT_00bceffc == 2) this client has never had.
+    bool reportedBeforeOrNote(uint64_t guid);
     /// Take the glyph out of a socket. Zero-based slot, as the server counts.
     void removeGlyphFromSocket(uint32_t slot);
     /// Rename a charter the player is carrying. The petition is an item, so it
@@ -1308,7 +1326,9 @@ public:
 
     /// Hand party leadership to another member.
     void promoteToLeader(uint64_t guid);
-    void uninvitePlayer(const std::string& playerName);
+    /// Kick a member out; `reason` goes to the realm with the kick (UninviteUnit's
+    /// second argument). Optional because a typed /kick has no reason to give.
+    void uninvitePlayer(const std::string& playerName, const std::string& reason = {});
     void setLootMethod(uint8_t method, uint64_t masterGuid, uint8_t threshold);
     void setPartyAssignment(uint8_t assignment, uint64_t guid, bool apply);
     void setRaidSubgroup(const std::string& playerName, uint8_t group);
@@ -1654,6 +1674,9 @@ public:
 
     // Talents - delegate to SpellHandler as canonical authority
     uint8_t getActiveTalentSpec() const { return spellHandler_ ? spellHandler_->getActiveTalentSpec() : 0; }
+    /// The realm's count of this player's talent specs; zero before the packet
+    /// that carries the talents themselves arrives.
+    uint8_t getTalentGroupCount() const { return spellHandler_ ? spellHandler_->getTalentGroupCount() : 0; }
     uint8_t getUnspentTalentPoints() const { return spellHandler_ ? spellHandler_->getUnspentTalentPoints() : 0; }
     uint8_t getUnspentTalentPoints(uint8_t spec) const { return spellHandler_ ? spellHandler_->getUnspentTalentPoints(spec) : 0; }
     const std::unordered_map<uint32_t, uint8_t>& getLearnedTalents() const {
@@ -1681,6 +1704,9 @@ public:
     }
     uint8_t getTalentRank(uint32_t talentId) const {
         return spellHandler_ ? spellHandler_->getTalentRank(talentId) : 0;
+    }
+    uint8_t getTalentRank(uint8_t spec, uint32_t talentId) const {
+        return spellHandler_ ? spellHandler_->getTalentRank(spec, talentId) : 0;
     }
     void learnTalent(uint32_t talentId, uint32_t requestedRank);
     void learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
@@ -2395,6 +2421,17 @@ public:
     bool isPlayerDead() const { return playerDead_; }
     bool isPlayerGhost() const { return releasedSpirit_; }
     bool showDeathDialog() const { return playerDead_ && !releasedSpirit_; }
+    /// What GetReleaseTimeRemaining answers: a countdown in seconds, -1 for
+    /// "nothing will force a release", or nought for "nothing has decided yet".
+    /// The reference's UIParent shows the death popup on `> 0 or == -1`, so
+    /// nought is the one answer that shows no popup at all.
+    int32_t releaseTimeRemainingSec() const;
+    /// Re-decide that, which is what the reference does at the death and at
+    /// nothing else: see GameHandler::decideReleaseTimer in the .cpp for what
+    /// it reads. This runs wherever this client notices the player becoming
+    /// dead, and the state it writes survives a resurrect exactly as the
+    /// original's does - the interface only ever asks it while dead.
+    void decideReleaseTimer();
     /// The graveyard a release would send the player to, in canonical space.
     /// False when the server has not named one, or has withdrawn it.
     bool getDeathReleaseLocation(uint32_t& mapId, glm::vec3& canonical) const {
@@ -2948,9 +2985,20 @@ public:
     void shareQuestWithParty(uint32_t questId);  // CMSG_PUSHQUESTTOPARTY
     bool requestQuestQuery(uint32_t questId, bool force = false);
     bool isQuestTracked(uint32_t questId) const { return trackedQuestIds_.count(questId) > 0; }
-    void setQuestTracked(uint32_t questId, bool tracked) {
-        const bool changed = tracked ? trackedQuestIds_.insert(questId).second
-                                     : trackedQuestIds_.erase(questId) > 0;
+    /// The tracker never holds more than this many quests: 0x005e64d0 appends
+    /// only while its count is under 0x19, and MAX_WATCHABLE_QUESTS says 25.
+    static constexpr size_t kMaxQuestWatches = 25;
+    /// Returns whether the tracker's membership changed, which is what decides
+    /// the announcement below -- a watch getting a new expiry is not a change.
+    bool setQuestTracked(uint32_t questId, bool tracked) {
+        bool changed = false;
+        if (tracked) {
+            changed = trackedQuestIds_.size() < kMaxQuestWatches
+                   && trackedQuestIds_.insert(questId).second;
+        } else if (trackedQuestIds_.erase(questId)) {
+            questWatchExpiry_.erase(questId);
+            changed = true;
+        }
         if (changed) {
             saveCharacterConfig();
             // WatchFrame is purely event-driven and never polls native state,
@@ -2959,7 +3007,25 @@ public:
             // button, which calls WatchFrame_Update() directly).
             fireAddonEvent("QUEST_LOG_UPDATE", {});
         }
+        return changed;
     }
+    /// AddQuestWatch with its second argument (0x005e67c0 hands the duration
+    /// to 0x005e64d0): the quest comes back off the tracker this many seconds
+    /// from now. QuestLogFrame passes MAX_QUEST_WATCH_TIME, which is 300, when
+    /// AUTO_QUEST_PROGRESS is on -- a quest tracked from the log untracks
+    /// itself five minutes later. A call without the argument, which is what
+    /// every other caller of AddQuestWatch makes, watches it as long as it
+    /// stays in the log.
+    ///
+    /// On an already-watched quest the client's three rules, in its order: a
+    /// watch with no expiry keeps it whatever the new duration says, an
+    /// expiring one takes the new stamp, and a duration-less re-add is what
+    /// clears the expiry and makes the watch permanent.
+    void addQuestWatch(uint32_t questId, int32_t durationSeconds);
+    /// 0x005dfef0, which the client runs off its periodic player update: every
+    /// watch whose stamp has been reached comes off, one QUEST_LOG_UPDATE per
+    /// dropped quest rather than one for the sweep. Returns how many came off.
+    size_t expireQuestWatches();
     const std::unordered_set<uint32_t>& getTrackedQuestIds() const;
     /// The quests whose objective areas the world map shades.
     ///
@@ -3488,6 +3554,18 @@ public:
                                      uint8_t gender) const;
     /// Send CMSG_SET_TITLE to activate a title (bit >= 0) or clear it (bit = -1).
     void sendSetTitle(int32_t bit);
+    /// How many rows CharTitles.dbc has, or 0 when the table has not been read.
+    ///
+    /// This is a table bound, not a reach: what the original client's
+    /// GetNumTitles answers is this count plus one (0x005165e0 pushes
+    /// `DAT_00ad337c + 1`, and that same global is what its CharTitles row scans
+    /// run `<` against). The paperdoll title list loops 1..GetNumTitles, so on
+    /// that client a bit set above the row count is never even asked about,
+    /// however wide the known-titles mask is.
+    uint32_t charTitlesRowCount() const {
+        loadTitleNameCache();
+        return charTitlesRows_;
+    }
 
     // Area discovery callback - fires when SMSG_EXPLORATION_EXPERIENCE is received
     using AreaDiscoveryCallback = std::function<void(const std::string& areaName, uint32_t xpGained)>;
@@ -3888,6 +3966,20 @@ public:
     void fireAddonEvent(const std::string& event, const std::vector<std::string>& args = {}) {
         if (addonEventCallback_) addonEventCallback_(event, args);
     }
+    /// The same, with arguments that keep the type the client's format string
+    /// gives them. It matters for an event the interface *compares*:
+    /// COMBAT_TEXT_UPDATE's payload is tested as `arg3 > 0`, and Lua 5.1
+    /// raises rather than coerces when a string meets a number there, so
+    /// sending "120" where the client pushed %d would turn a fight into a
+    /// script error on every hit.
+    using AddonEventValuesCallback =
+        std::function<void(const std::string&, const std::vector<combat_log::Arg>&)>;
+    void setAddonEventValuesCallback(AddonEventValuesCallback cb) {
+        addonEventValuesCallback_ = std::move(cb);
+    }
+    void fireAddonEventValues(const std::string& event, const std::vector<combat_log::Arg>& args) {
+        if (addonEventValuesCallback_) addonEventValuesCallback_(event, args);
+    }
     // Convenience: invoke a callback with a sound manager obtained from the renderer.
     template<typename ManagerGetter, typename Callback>
     void withSoundManager(ManagerGetter getter, Callback cb) {
@@ -4275,8 +4367,10 @@ public:
         uint8_t srcSlot = 0;
         [[nodiscard]] bool occupied() const { return itemGuid != 0; }
     };
-    bool attachItemFromBackpack(int backpackIndex);
-    bool attachItemFromBag(int bagIndex, int slotIndex);
+    /// The row of the letter the item goes into, or -1 for "the first row with
+    /// room" - the same choice InventoryHandler::attachAt makes.
+    bool attachItemFromBackpack(int backpackIndex, int attachIndex = -1);
+    bool attachItemFromBag(int bagIndex, int slotIndex, int attachIndex = -1);
     bool detachMailAttachment(int attachIndex);
     void clearMailAttachments();
     const std::array<MailAttachSlot, 12>& getMailAttachments() const;
@@ -5669,6 +5763,7 @@ private:
     // Chat (state lives in ChatHandler; callbacks remain here for cross-domain access)
     ChatBubbleCallback chatBubbleCallback_;
     AddonEventCallback addonEventCallback_;
+    AddonEventValuesCallback addonEventValuesCallback_;
     CombatLogEventCallback combatLogEventCallback_;
     InterfaceCommand   interfaceCommand_;
     InterfaceQuery     interfaceQuery_;
@@ -6147,6 +6242,15 @@ private:
     // to the QuestHandler - and has been removed.
     std::unordered_set<uint32_t> pendingQuestQueryIds_;
     std::unordered_set<uint32_t> trackedQuestIds_;
+    /// When each tracked quest stops being tracked, as unix seconds; 0 for
+    /// never. This is the third column of the client's watch list (0xc23680
+    /// holds quest id, stamp, and a sort key). A watch this client added by
+    /// itself -- the auto-track on quest accept -- has no row here at all,
+    /// which is the same as a stamp of 0. Not saved with the ids: the stamp is
+    /// wall-clock, and one read back days later would drop the tracker as soon
+    /// as the world loaded, while the client's own list never outlives a run.
+    std::unordered_map<uint32_t, int32_t> questWatchExpiry_;
+    float questWatchSweepTimer_ = 0.0f;
     std::unordered_set<uint32_t> blobQuestIds_;
     bool pendingLoginQuestResync_ = false;
     float pendingLoginQuestResyncTimeout_ = 0.0f;
@@ -6267,6 +6371,9 @@ private:
     mutable std::unordered_map<uint32_t, TitleForms> titleNameCache_;
     mutable std::unordered_map<uint32_t, TitleForms> titleFormatById_;  // CharTitles id -> forms
     mutable bool titleNameCacheLoaded_ = false;
+    /// The row count the table itself has, kept apart from the cache: the cache
+    /// drops the rows with no name in them, the count says how many there were.
+    mutable uint32_t charTitlesRows_ = 0;
     // Combat game tables for the stat flyout: per-class base crit, and the
     // per-class-per-level Agility ratio (11 classes × 100 levels).
     mutable std::vector<float> gtMeleeCritBase_;
@@ -6591,6 +6698,15 @@ private:
     uint32_t currentMountDisplayId_ = 0;
     uint32_t mountAuraSpellId_ = 0;       // Spell ID of the aura that caused mounting (for CMSG_CANCEL_AURA fallback)
     bool playerDead_ = false;
+    /// DAT_00bd0848: the steady-ms tick a forced release would happen at, 0 when
+    /// nothing has promised one. Paired with the byte below, these two are the
+    /// whole state behind GetReleaseTimeRemaining - the countdown itself is
+    /// never sent, it is a duration stamped at the death.
+    uint64_t releaseStampMs_ = 0;
+    /// DAT_00bd084c: the client's own "no timer" answer, kept apart from a stamp
+    /// because a stamp that has run out and one that was never started have to
+    /// stay two different answers (0 and -1).
+    bool releaseNoTimer_ = false;
     std::array<uint8_t, 10> gmSurveyRanks_{};        ///< DAT_00c1e8c4
     std::array<std::string, 10> gmSurveyComments_{}; ///< DAT_00c1e8d8
     std::string gmSurveyComment_;                    ///< DAT_00c1e900
