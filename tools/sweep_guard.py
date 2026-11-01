@@ -802,8 +802,33 @@ CHECKS = [
     # reference packet with the reason beside it; a name it cannot - a unit
     # popup's "Bob-Icecrown", with SHOW_REALM_NAME on - still goes on the
     # name-addressed verb, which is what a typed /kick has to fall back to.
+    # Thirty-five: the two trade skill dropdown filters read their second and
+    # third arguments now.  Both were modelled here as a single picked index,
+    # on the reasoning that the installed panel's click handler always calls
+    # Set…Filter(id - 1, 1, 1) and nothing unticks - and that reasoning is what
+    # the row was.  The reference has no pick to keep: 0x00ad0e00 and
+    # 0x00ad0e08 are masks that open and reset all-on, and the arguments say
+    # what to do with one bit of them - zero clears that entry, one sets it and
+    # keeps the rest, a third argument that is not zero sets it alone.  What
+    # lives around that click handler asks per entry: the panel works out which
+    # slot it is showing by walking the whole list and asking each entry
+    # (TradeSkillFilterFrame_InvSlotName, blizzard_tradeskillui.lua:546), which
+    # a single index cannot answer.  Both Get…Filter bindings now answer 1 or
+    # nil as 0x005da1b0 and 0x005dbf90 do rather than a Lua boolean, and both
+    # Set…Filter ones raise the client's own "Usage:" / "Bad sub class" /
+    # "Bad inv slot" / "Missing on//off parameter" literals instead of storing
+    # whatever they were handed.
+    #
+    # What it does not close, said here rather than left to be rediscovered:
+    # the reference also remembers *which* sub-class was last touched
+    # (0x00ad0e04, written beside the mask by 0x005dcf00) and asks that row
+    # which inventory slots it permits (0x005dace0 reads the row's slot mask at
+    # +0x10), so choosing a sub-class narrows and renumbers the second
+    # dropdown.  Neither list here comes out of a table row - both are built
+    # from the recipes this client already knows - so there is no row to ask,
+    # and the two masks stay independent.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 37,
+     r"^(\d+) binding\(s\) read fewer arguments", 35,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,

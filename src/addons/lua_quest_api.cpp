@@ -2121,12 +2121,32 @@ static const game::ItemQueryResponseData* craftedItem(game::GameHandler* gh,
     return (info && info->valid) ? info : nullptr;
 }
 
-/// Which entry of each dropdown is picked. Both are single-select - the click
-/// handler calls Set…Filter(id - 1, 1, 1) and nothing ever unchecks - so this
-/// is an index rather than a set, and zero is the "all" row the list opens
-/// with.
-static int& tradeSkillSubClassPick() { static int pick = 0; return pick; }
-static int& tradeSkillInvSlotPick()  { static int pick = 0; return pick; }
+/// Which entries of each dropdown are ticked: one bit per entry of the list of
+/// the same name below, and every bit on is no filter at all. The reference
+/// keeps the two as dword masks - 0x00ad0e00 for the sub-classes, 0x00ad0e08
+/// for the inventory slots - that open and reset all-on, and the two arguments
+/// past the index say what to do with one bit of them:
+///
+///     Set…Filter(i)         i below one: every bit on
+///     Set…Filter(i, 0)      that entry's bit off, the rest kept
+///     Set…Filter(i, 1)      that entry's bit on, the rest kept
+///     Set…Filter(i, 1, 1)   that entry's bit on and every other one off
+///
+/// It is a set and not a pick, whatever the installed panel's click handler
+/// happens to call: the panel asks each entry in turn to work out which one is
+/// showing (TradeSkillFilterFrame_InvSlotName, blizzard_tradeskillui.lua:546),
+/// which is a question only a set answers.
+///
+/// Sixty-four bits where the reference has thirty-two: it masks the shift to
+/// 0x1f, so a list longer than that folds two entries onto one bit.  WoWee's
+/// lists are its own - built from every known recipe, see below - so they do
+/// not have to break where the reference's do.
+static uint64_t& tradeSkillSubClassMask() { static uint64_t mask = ~0ull; return mask; }
+static uint64_t& tradeSkillInvSlotMask()  { static uint64_t mask = ~0ull; return mask; }
+
+/// A list position as a filter bit. The shift is masked the way the reference
+/// masks it, widened to the width of the mask above.
+static constexpr uint64_t tradeSkillFilterBit(size_t pos) { return 1ull << (pos & 0x3f); }
 
 /// The item level range typed into the search box. The box does double duty:
 /// a number, a range "20-30" or an approximate "~25" filters by the level of
@@ -2181,10 +2201,12 @@ static std::vector<game::GameHandler::CraftRecipe> visibleCraftingRecipes(
     if (!gh) return out;
     std::string needle = tradeSkillNameFilter();
     toLowerInPlace(needle);
-    const auto subs  = (tradeSkillSubClassPick() > 0) ? tradeSkillSubClasses(gh)
-                                                      : std::vector<std::string>{};
-    const auto slots = (tradeSkillInvSlotPick() > 0)  ? tradeSkillInvSlots(gh)
-                                                      : std::vector<std::string>{};
+    // A list is only needed while its filter says something, and both masks
+    // say nothing while every bit is on.
+    const bool subFiltered  = tradeSkillSubClassMask() != ~0ull;
+    const bool slotFiltered = tradeSkillInvSlotMask() != ~0ull;
+    const auto subs  = subFiltered  ? tradeSkillSubClasses(gh) : std::vector<std::string>{};
+    const auto slots = slotFiltered ? tradeSkillInvSlots(gh)   : std::vector<std::string>{};
     const auto level = tradeSkillLevelRange();
     for (const auto& r : gh->getCraftingRecipes()) {
         if (tradeSkillOnlyMakeable() && r.canMake <= 0) continue;
@@ -2206,16 +2228,21 @@ static std::vector<game::GameHandler::CraftRecipe> visibleCraftingRecipes(
         // A recipe whose item has not arrived yet is shown rather than hidden.
         // The details are asked for on demand, so filtering on what is not back
         // would empty the list and refill it as the replies landed.
-        if (!subs.empty() || !slots.empty()) {
+        if (subFiltered || slotFiltered) {
             const auto* info = craftedItem(gh, r.spellId);
             if (info) {
-                const int si = tradeSkillSubClassPick();
-                if (si > 0 && si <= static_cast<int>(subs.size()) &&
-                    info->subclassName != subs[static_cast<size_t>(si) - 1]) {
-                    continue;
+                if (subFiltered) {
+                    const auto it = std::find(subs.begin(), subs.end(), info->subclassName);
+                    // Only an entry of that list has a tick that could be off.
+                    // A recipe with no sub-class of its own is not in the list
+                    // and so stays in whatever is ticked: one picked name had to
+                    // match it before, which hid those.
+                    if (it != subs.end() &&
+                        (tradeSkillSubClassMask() & tradeSkillFilterBit(it - subs.begin())) == 0) {
+                        continue;
+                    }
                 }
-                const int vi = tradeSkillInvSlotPick();
-                if (vi > 0 && vi <= static_cast<int>(slots.size())) {
+                if (slotFiltered) {
                     std::string label;
                     for (int i = 1; i < game::kNumAuctionSlots; ++i) {
                         if (game::kAuctionSlots[i].invType == info->inventoryType) {
@@ -2223,7 +2250,19 @@ static std::vector<game::GameHandler::CraftRecipe> visibleCraftingRecipes(
                             break;
                         }
                     }
-                    if (label != slots[static_cast<size_t>(vi) - 1]) continue;
+                    const auto it = std::find(slots.begin(), slots.end(), label);
+                    // The same rule, and the reference reads it that way too:
+                    // 0x005dcd49 tests the recipe's own inventory-slot mask
+                    // against the filter (`(row[4] & DAT_00ad0e08) == 0` hides
+                    // the row), and that test is unconditional - so a recipe
+                    // with no inventory type, a bar or a reagent, has a bit the
+                    // all-on mask lets through, and no entry of a slot list can
+                    // clear a bit for a slot no item names.  Those recipes
+                    // stayed hidden before, when the picked slot had to match.
+                    if (it != slots.end() &&
+                        (tradeSkillInvSlotMask() & tradeSkillFilterBit(it - slots.begin())) == 0) {
+                        continue;
+                    }
                 }
             }
         }
@@ -4807,9 +4846,10 @@ void registerQuestLuaAPI(lua_State* L) {
                 // - so each dropdown built its "All" row and stopped, and
                 // picking anything was impossible rather than merely inert.
                 //
-                // Single-select, not a set of ticks: the click handler calls
-                // Set…Filter(id - 1, 1, 1) and nothing ever unticks, so the
-                // state is one index and zero is the "All" row.
+                // A set of ticks, not a single pick - see the two masks above.
+                // The panel's own click handler only ever asks for one at a
+                // time, but everything around it asks per entry, and the two
+                // Get…Filter bindings answer per entry as well.
                 {"GetTradeSkillSubClasses", [](lua_State* L) -> int {
             const auto subs = tradeSkillSubClasses(getGameHandler(L));
             for (const auto& s : subs) lua_pushstring(L, s.c_str());
@@ -4820,23 +4860,134 @@ void registerQuestLuaAPI(lua_State* L) {
             for (const auto& s : slots) lua_pushstring(L, s.c_str());
             return static_cast<int>(slots.size());
         }},
+                // GetTradeSkillSubClassFilter(index) (0x005da1b0): 1 when the
+                // index'th sub-class is ticked, nil when it is not - not a
+                // boolean.  An index below one asks whether *every* entry of the
+                // list is ticked, which is the panel's "All Subclasses" row
+                // (blizzard_tradeskillui.lua:476); an index past the list is the
+                // client's own error.
                 {"GetTradeSkillSubClassFilter", [](lua_State* L) -> int {
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            lua_pushboolean(L, i == tradeSkillSubClassPick() ? 1 : 0);
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetTradeSkillSubClassFilter(index)");
+            const auto subs = tradeSkillSubClasses(getGameHandler(L));
+            const uint64_t mask = tradeSkillSubClassMask();
+            const int index = luaToClientInt(L, 1) - 1;
+            bool on;
+            if (index < 0) {
+                on = true;
+                for (size_t i = 0; i < subs.size() && on; ++i)
+                    on = (mask & tradeSkillFilterBit(i)) != 0;
+            } else {
+                if (index >= static_cast<int>(subs.size()))
+                    return luaL_error(L, "Bad sub class in GetTradeSkillSubClassFilter");
+                on = (mask & tradeSkillFilterBit(index)) != 0;
+            }
+            if (on) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 1;
         }},
+                // GetTradeSkillInvSlotFilter(index) (0x005dbf90).  Same shape,
+                // one difference worth keeping: with the mask still all-on the
+                // client answers from the all-on state itself and never walks
+                // the list, so it says yes to "are all ticked" and *nothing at
+                // all* - nil, not the error - to any entry index.  The panel
+                // hides it everywhere but one: LoadInvSlots unticks every entry
+                // itself while allChecked holds (blizzard_tradeskillui.lua:529),
+                // and the only reader left is TradeSkillFilterFrame_InvSlotName
+                // (:546), whose walk decides which slot the dropdown remembers
+                // it was showing (:572).  Reproduced rather than tidied up,
+                // because that is the answer the panel was written against.
                 {"GetTradeSkillInvSlotFilter", [](lua_State* L) -> int {
-            const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
-            lua_pushboolean(L, i == tradeSkillInvSlotPick() ? 1 : 0);
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: GetTradeSkillInvSlotFilter(index)");
+            const uint64_t mask = tradeSkillInvSlotMask();
+            const int index = luaToClientInt(L, 1) - 1;
+            if (index < 0) {
+                if (mask == ~0ull) lua_pushnumber(L, 1); else lua_pushnil(L);
+                return 1;
+            }
+            if (mask == ~0ull) {
+                lua_pushnil(L);
+                return 1;
+            }
+            const auto slots = tradeSkillInvSlots(getGameHandler(L));
+            if (index >= static_cast<int>(slots.size()))
+                return luaL_error(L, "Bad inv type in GetTradeSkillInvSlotFilter");
+            if ((mask & tradeSkillFilterBit(index)) != 0) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
             return 1;
         }},
+                // SetTradeSkillSubClassFilter(index [, on/off, exclusive])
+                // (0x005dd0f0): index below one turns every tick back on, which
+                // is what the dropdown does as it loads (:463) and again when a
+                // sub-class makes the remembered slot meaningless (:559).  On
+                // the reference this also records which index was last touched
+                // (0x00ad0e04, written by 0x005dcf00 beside the mask) and uses
+                // it to narrow the *inventory slot* list off that sub-class' own
+                // row (0x005dace0 reads the row's slot mask at +0x10), which
+                // renumbers the second dropdown.  There is no such row here:
+                // both lists are built from the recipes, so nothing narrows and
+                // the two masks stay independent.
                 {"SetTradeSkillSubClassFilter", [](lua_State* L) -> int {
-            tradeSkillSubClassPick() = static_cast<int>(luaL_optnumber(L, 1, 0));
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetTradeSkillSubClassFilter(index [, on\\off, exclusive])");
+            const int index = luaToClientInt(L, 1) - 1;
+            if (index < 0) {
+                tradeSkillSubClassMask() = ~0ull;
+            } else {
+                const auto subs = tradeSkillSubClasses(getGameHandler(L));
+                if (index >= static_cast<int>(subs.size()))
+                    return luaL_error(L, "Bad sub class in SetTradeSkillSubClassFilter");
+                if (!lua_isnumber(L, 2))
+                    return luaL_error(L, "Missing on//off parameter in SetTradeSkillSubClassFilter");
+                // Read once, written once: 0x005dd0f0 takes the old mask into a
+                // local (uVar1) before it reads the argument values, works the
+                // new one out of it, and hands that to 0x005dcf00.
+                const uint64_t bit = tradeSkillFilterBit(index);
+                const uint64_t was = tradeSkillSubClassMask();
+                if (luaToClientInt(L, 2) == 0) {
+                    tradeSkillSubClassMask() = was & ~bit;
+                } else if (lua_isnumber(L, 3) && luaToClientInt(L, 3) != 0) {
+                    tradeSkillSubClassMask() = bit;
+                } else {
+                    tradeSkillSubClassMask() = was | bit;
+                }
+            }
+            // The reference recomputes the drawn list (0x005dcc40) and raises
+            // script event 300; the generation bump is how this client says the
+            // list has to be redrawn.
             ++tradeSkillRowsGeneration();
             return 0;
         }},
+                // SetTradeSkillInvSlotFilter(index [, on/off, exclusive])
+                // (0x005dd230).  The index counts entries of the slot list the
+                // dropdown was built from, not inventory type numbers: the
+                // reference walks the slots its sub-class permits and takes the
+                // index'th one of those, and WoWee's list is its permitted set.
                 {"SetTradeSkillInvSlotFilter", [](lua_State* L) -> int {
-            tradeSkillInvSlotPick() = static_cast<int>(luaL_optnumber(L, 1, 0));
+            if (!lua_isnumber(L, 1))
+                return luaL_error(L, "Usage: SetTradeSkillInvSlotFilter(index [, on\\off, exclusive])");
+            const int index = luaToClientInt(L, 1) - 1;
+            if (index < 0) {
+                tradeSkillInvSlotMask() = ~0ull;
+            } else {
+                const auto slots = tradeSkillInvSlots(getGameHandler(L));
+                if (index >= static_cast<int>(slots.size()))
+                    return luaL_error(L, "Bad inv slot in SetTradeSkillInvSlotFilter");
+                if (!lua_isnumber(L, 2))
+                    return luaL_error(L, "Missing on//off parameter in SetTradeSkillInvSlotFilter");
+                const uint64_t bit = tradeSkillFilterBit(index);
+                const uint64_t was = tradeSkillInvSlotMask();
+                if (luaToClientInt(L, 2) == 0) {
+                    tradeSkillInvSlotMask() = was & ~bit;
+                } else if (lua_isnumber(L, 3) && luaToClientInt(L, 3) != 0) {
+                    tradeSkillInvSlotMask() = bit;
+                } else {
+                    tradeSkillInvSlotMask() = was | bit;
+                }
+                // 0x005dd230 writes the clear and the add itself and goes
+                // through 0x005dcf30 only for the exclusive one; all three end
+                // at the same recompute and event 300, which is the bump below.
+            }
             ++tradeSkillRowsGeneration();
             return 0;
         }},
