@@ -921,8 +921,22 @@ CHECKS = [
     # leader gates, the taint gate ClearPartyAssignment should not ask (Set
     # asks it, Clear does not), and "no member named means the sender" were
     # wrong with every argument read.
+    #
+    # Six more went with the name-resolution cluster, and those six were the
+    # same argument: TargetUnit, FollowUnit, StartDuel, PromoteToLeader,
+    # PromoteToAssistant and DemoteAssistant all take exactMatch as their second
+    # argument (0x00520190's fourth parameter, which makes the walk compare the
+    # whole candidate instead of as many characters as were typed), and every one
+    # of them read one argument and stopped.  Reading it is the small half of
+    # that cluster; the half the count cannot see is that TargetUnit, FollowUnit
+    # and StartDuel resolved unit tokens and nothing else, so a typed "/tar
+    # Felwolf" or "/duel Bob" named nobody at all, and that FollowUnit had been
+    # matching the *target's* name by hand instead of taking the resolver's
+    # answer - which needed a follow state that names a guid rather than "whatever
+    # is targeted", since following the resolver's answer does not make it the
+    # target first.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 23,
+     r"^(\d+) binding\(s\) read fewer arguments", 17,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,

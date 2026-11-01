@@ -878,14 +878,23 @@ static int lua_GetSpellCooldown(lua_State* L) {
     return pushHistoryCooldown(L, gh->petSpellCooldown(spellId));
 }
 
-// TargetUnit(unitId) - set current target
+// TargetUnit(unit, exactMatch) - set current target.
+// The first argument goes to the name resolver
+// (0x00525a30 -> 0x00520190) with mask 8 - any unit, creature or player, but
+// never a doodad - so a typed "/tar Felwolf" reaches the wolf standing nearby
+// and not just a unit already named by a token. The second argument is
+// exactMatch: the unit menu and "/targetexact" set it and compare whole names,
+// "/tar Bo" without it compares as many characters as were typed and takes the
+// nearest of what matches.
 static int lua_TargetUnit(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     const char* uid = luaL_checkstring(L, 1);
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
+    const bool exact = lua_toboolean(L, 2) != 0;
     uint64_t guid = resolveUnitGuid(gh, uidStr);
+    if (!guid) guid = resolveNamedUnit(gh, uidStr, exact, false);
     // 0x00525a30 -> 0x005259e0 -> 0x00524bf0, which refuses insecure code
     // a target outright.
     if (guid != 0 && taint::allowedSecureOnly(L)) gh->targetUnit(guid);

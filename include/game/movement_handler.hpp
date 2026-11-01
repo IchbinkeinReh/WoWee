@@ -41,6 +41,11 @@ public:
 
     // Follow target (moved from GameHandler)
     void followTarget();
+    // The same, for a unit that is not the current target - which is what a
+    // typed "/follow Bob" resolves to when Bob is standing somewhere else.
+    // 0x005224c0 hands the resolver's answer straight to the follow state;
+    // there is no "make it the target first" step to borrow.
+    void followGuid(uint64_t guid);
     void cancelFollow();
     // Per-frame movement toward the followed target's live position, called
     // from GameHandler::update() alongside the existing followRenderPos_

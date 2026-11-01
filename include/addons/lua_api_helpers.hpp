@@ -597,6 +597,82 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
     return 0;
 }
 
+/// The typed-name half of the client's one name resolver: the token table
+/// first (0x0060abf0, the resolveUnitGuid above), and failing that a walk of every
+/// unit the client currently knows, keeping the *nearest* one the text matches
+/// (0x00520190 -> the per-candidate test 0x0051ffe0). TargetUnit, FollowUnit,
+/// StartDuel and the promote verbs all go through it; the arguments differ only
+/// in the mask and in what the verb does with the answer.
+///
+/// The rules that come out of that single walk:
+///
+///  * a match is a *prefix* unless exactMatch is set: the walk compares over
+///    strlen(text) with the flag clear and over the whole candidate with it
+///    set. FrameXML sets the flag from the verb's second argument, which is
+///    how "/targetexact Bob" and every unit-menu entry (which passes the full
+///    name) differ from "/tar Bob" - the latter reaches a Bob who stands at
+///    all, the former only a Bob and not a Bobby;
+///  * a text carrying a '-' is compared against each candidate spelled
+///    "Name-Realm" (0x0076e6e0(text,'-') is the test that switches the
+///    spelling), the realm being the one the name query answered - the same
+///    pair UnitName answers. A candidate whose query has not come back is
+///    still compared by its bare name there, which only ever matches a name
+///    that itself holds a '-';
+///  * the player themselves is scored at 2.5e9 rather than at their distance,
+///    so one's own name is never the answer;
+///  * the type test is `1 << typeId`-shaped, so mask 8 (bit 3, unit) takes
+///    creatures and players alike while mask 0x10 (bit 4) takes players only -
+///    which is why FollowUnit asks for players first and only then falls back
+///    to any unit, and why a name never picks a doodad up.
+///
+/// Not modelled: the selectability gate the walk applies per candidate
+/// (0x00518e40, whose answer depends on the mode the caller asked for), the
+/// distance penalty for a ghost, a corpse-flagged unit or a critter, and the
+/// pre-scan over the four remembered guids and the raid list that runs before
+/// the walk. None of them changes who a prefix picks when only one unit could
+/// match it.
+inline uint64_t resolveNamedUnit(game::GameHandler* gh, const std::string& text,
+                                 bool exact, bool playersOnly) {
+    if (!gh || text.empty()) return 0;
+    const auto& entities = gh->getEntityManager().getEntities();
+    const auto self = entities.find(gh->getPlayerGuid());
+    const float px = self != entities.end() && self->second ? self->second->getX() : 0.0f;
+    const float py = self != entities.end() && self->second ? self->second->getY() : 0.0f;
+    const float pz = self != entities.end() && self->second ? self->second->getZ() : 0.0f;
+    std::string lower = text;
+    toLowerInPlace(lower);
+    const bool namesARealm = lower.find('-') != std::string::npos;
+    uint64_t best = 0;
+    float bestDistSq = 0.0f;
+    for (const auto& [guid, entity] : entities) {
+        if (!entity) continue;
+        const auto type = entity->getType();
+        if (type != game::ObjectType::UNIT && type != game::ObjectType::PLAYER) continue;
+        if (playersOnly && type != game::ObjectType::PLAYER) continue;
+        if (guid == gh->getPlayerGuid()) continue;   // scored out of the running
+        auto unit = std::static_pointer_cast<game::Unit>(entity);
+        std::string name = unit->getName();
+        if (name.empty()) continue;
+        toLowerInPlace(name);
+        if (namesARealm) {
+            std::string realm = gh->getCachedPlayerRealm(guid);
+            if (!realm.empty()) {
+                toLowerInPlace(realm);
+                name += "-" + realm;
+            }
+        }
+        if (exact ? name != lower : name.compare(0, lower.size(), lower) != 0) continue;
+        const float dx = unit->getX() - px;
+        const float dy = unit->getY() - py;
+        const float dz = unit->getZ() - pz;
+        const float distSq = dx * dx + dy * dy + dz * dz;
+        if (best && !(distSq < bestDistSq)) continue;
+        best = guid;
+        bestDistSq = distSq;
+    }
+    return best;
+}
+
 /// A unit token, or the name of somebody standing nearby.
 ///
 /// Several of the interface's verbs take either - "/wave Bob" and "/follow Bob"
@@ -609,6 +685,10 @@ inline uint64_t resolveUnitGuid(game::GameHandler* gh, const std::string& uid) {
 /// name can be resolved from: nothing here can ask the server who a name
 /// belongs to without a query it would then have to wait for. Case-insensitive,
 /// because the player typed it.
+///
+/// This is the whole-name version, and its callers pass whole names; the verbs
+/// the client resolves one prefix at a time, picking the nearest, go through
+/// resolveNamedUnit above instead.
 inline uint64_t resolveUnitOrName(game::GameHandler* gh, const std::string& text) {
     if (!gh || text.empty()) return 0;
     std::string lower = text;

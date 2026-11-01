@@ -897,6 +897,7 @@ public:
 
     // Follow/Assist
     void followTarget();
+    void followGuid(uint64_t guid);   // a named unit, not the current target
     void cancelFollow();   // Stop following current target
     void assistTarget();
 

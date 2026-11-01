@@ -4229,8 +4229,27 @@ void MovementHandler::followTarget() {
         return;
     }
 
+    followGuid(owner_.getTargetGuid());
+}
+
+// The follow state names a guid, not "whatever is targeted" - so the only
+// thing a named follow needs is the guid to put in there. The name has
+// already been turned into one by the time this is reached.
+void MovementHandler::followGuid(uint64_t guid) {
+    if (owner_.getState() != WorldState::IN_WORLD) {
+        LOG_WARNING("Cannot follow: not in world");
+        return;
+    }
+
+    auto target = owner_.getEntityManager().getEntity(guid);
+    if (!target) {
+        owner_.raiseUiError(interfaceString("ERR_GENERIC_NO_TARGET", "You have no target."));
+        owner_.playGameErrorSound("ERR_GENERIC_NO_TARGET");
+        return;
+    }
+
     // Set follow target
-    owner_.followTargetGuidRef() = owner_.getTargetGuid();
+    owner_.followTargetGuidRef() = guid;
 
     // Initialize render-space position from entity's canonical coords
     owner_.followRenderPosRef() = core::coords::canonicalToRender(glm::vec3(target->getX(), target->getY(), target->getZ()));
@@ -4255,7 +4274,7 @@ void MovementHandler::followTarget() {
     // No chat line: AUTOFOLLOW_BEGIN below is what says so, through
     // FrameXML's AutoFollowStatus and AUTOFOLLOWSTART. This printed "Now
     // following X." in English as well.
-    LOG_INFO("Following target: ", targetName, " (GUID: 0x", std::hex, owner_.getTargetGuid(), std::dec, ")");
+    LOG_INFO("Following target: ", targetName, " (GUID: 0x", std::hex, guid, std::dec, ")");
     // The name goes with it: the status text is formatted from this argument,
     // and without one it formats a nil.
     owner_.fireAddonEvent("AUTOFOLLOW_BEGIN", {targetName});

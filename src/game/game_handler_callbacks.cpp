@@ -2155,6 +2155,10 @@ void GameHandler::followTarget() {
     if (movementHandler_) movementHandler_->followTarget();
 }
 
+void GameHandler::followGuid(uint64_t guid) {
+    if (movementHandler_) movementHandler_->followGuid(guid);
+}
+
 void GameHandler::cancelFollow() {
     if (movementHandler_) movementHandler_->cancelFollow();
 }

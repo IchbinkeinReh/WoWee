@@ -1100,18 +1100,26 @@ namespace {
 
 /// Give or take raid assistant for the group member with this name.
 ///
+/// 0x00573ef0 and 0x00573fd0 are the same shape as PromoteToLeader: a string
+/// for the first argument or the Usage line of whichever verb it is, then the
+/// name resolver with the verb's exactMatch flag - which the only caller,
+/// unitpopup.lua, sets because it hands over a whole name.
+///
 /// Names are how the unit popup identifies people here, and the group roster is
 /// the only name-to-guid map this client keeps - which is enough, because only
-/// a group member can be an assistant.
+/// a group member can be an assistant. It used to be searched case-fully, so a
+/// menu name whose capitalisation differed from the roster's chose nobody.
 static void setGroupAssistantByName(lua_State* L, bool apply) {
     auto* gh = getGameHandler(L);
-    const char* who = luaL_optstring(L, 1, "");
-    if (!gh || !who || !*who) return;
-    for (const auto& m : gh->getPartyData().members) {
-        if (m.name != who) continue;
-        gh->setGroupAssistant(m.guid, apply);
-        return;
-    }
+    if (!gh) return;
+    if (!lua_isstring(L, 1))
+        luaL_error(L, apply ? "Usage: PromoteToAssistant(name)"
+                            : "Usage: DemoteAssistant(name)");
+    const std::string who(lua_tostring(L, 1));
+    if (who.empty()) return;   // a zero-length text scores every candidate
+    if (const uint64_t guid =
+            resolveGroupMember(gh, who, lua_toboolean(L, 2) != 0))
+        gh->setGroupAssistant(guid, apply);
 }
 
 
@@ -4048,7 +4056,8 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->leaveGroup();
             return 0;
         }},
-                // FollowUnit(unit) - and this one matters more than it looks.
+                // FollowUnit(unit, exactMatch) - and this one matters more than
+                // it looks.
                 //
                 // FrameXML owns every follow command: SLASH_FOLLOW1 through 7
                 // are /f, /follow and /fol, and the client's chat tries
@@ -4057,25 +4066,36 @@ void registerSocialLuaAPI(lua_State* L) {
                 // client's working /follow never ran. Following was simply
                 // broken from chat.
                 //
-                // followTarget aims at whatever is targeted, so the cases that
-                // mean that are answered and the rest still are not: a named
-                // party member who is not the target needs a guid the movement
-                // handler has no way to take yet.
+                // 0x005224c0 hands the argument to the name resolver twice: as
+                // a player first (mask 0x10, mode 3) and only then as any unit
+                // (mask 8, mode 0), which is what "/follow Bob" reaching the
+                // player rather than somebody's pet comes from. The two lines a
+                // follow can end on are kNoTarget and kUnitNotFound - the first
+                // for an empty argument or the word "target", the second for a
+                // name nobody near answers - and which one it is comes out of
+                // that same pair.
                 {"FollowUnit", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             if (!gh) return 0;
             std::string who(luaL_optstring(L, 1, ""));
             toLowerInPlace(who);
-            const bool meansTarget =
-                who.empty() || who == "target" ||
-                // A typed name that happens to be the target, which is what
-                // "/follow Bob" is when Bob is already selected.
-                [&] {
-                    std::string n = gh->lookupName(gh->getTargetGuid());
-                    toLowerInPlace(n);
-                    return !n.empty() && n == who;
-                }();
-            if (meansTarget && gh->getTargetGuid() != 0) gh->followTarget();
+            const bool exact = lua_toboolean(L, 2) != 0;
+            // An empty text and the word "target" are both answered by the
+            // token half of the resolver - 0x0060abf0 with its third argument
+            // set hands back the unit the client is looking at - and
+            // followTarget() is the routine that says ERR_GENERIC_NO_TARGET when
+            // there is none, so the complaint stays with it. Every other token
+            // goes through resolveUnitGuid before the walk does.
+            if (who.empty() || who == "target") { gh->followTarget(); return 0; }
+            uint64_t guid = resolveUnitGuid(gh, who);
+            if (!guid) guid = resolveNamedUnit(gh, who, exact, true);
+            if (!guid) guid = resolveNamedUnit(gh, who, exact, false);
+            if (guid) {
+                gh->followGuid(guid);
+                return 0;
+            }
+            gh->sayGameError(server_notice::kUnitNotFound);
+            gh->playGameErrorSound(server_notice::kUnitNotFound.key);
             return 0;
         }},
                 // Inspect and duel, both of which unitpopup.lua calls straight
@@ -4250,20 +4270,30 @@ void registerSocialLuaAPI(lua_State* L) {
                 // selected-channel state it reads. One name is registered once;
                 // two registrations of it would be settled by load order.
                 {"IsSilenced", [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
-                // PromoteToLeader(name) - /promote, /pr, and the unit menu's
-                // "Promote to Leader". The client had no outgoing side for this
-                // at all: SMSG_GROUP_SET_LEADER was handled and CMSG was never
-                // sent, so leadership could be received and never given.
+                // PromoteToLeader(name, exactMatch) - /promote, /pr, and the
+                // unit menu's "Promote to Leader". The client had no outgoing
+                // side for this at all: SMSG_GROUP_SET_LEADER was handled and
+                // CMSG was never sent, so leadership could be received and never
+                // given.
+                //
+                // 0x00573e10 wants a string for the first argument and raises
+                // its Usage line when it does not get one; the second argument
+                // is the exactMatch flag, which the menu sets and a typed
+                // "/pr Bo" does not.
                 {"PromoteToLeader", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            std::string name(luaL_optstring(L, 1, ""));
-            if (!gh || name.empty()) return 0;
-            toLowerInPlace(name);
-            for (const auto& m : gh->getPartyData().members) {
-                std::string n = m.name;
-                toLowerInPlace(n);
-                if (n == name) { gh->promoteToLeader(m.guid); return 0; }
-            }
+            if (!gh) return 0;
+            if (!lua_isstring(L, 1))
+                return luaL_error(L, "Usage: PromoteToLeader(name)");
+            const std::string name(lua_tostring(L, 1));
+            // The client's walk scores *every* candidate at a zero-length text,
+            // which is a choice between strangers rather than between members;
+            // the roster-scoped version below would have to guess which member
+            // that meant, so an empty argument asks for nothing.
+            if (name.empty()) return 0;
+            if (const uint64_t guid =
+                    resolveGroupMember(gh, name, lua_toboolean(L, 2) != 0))
+                gh->promoteToLeader(guid);
             return 0;
         }},
                 // Raid assistant, given and taken. The unit menu passes a
@@ -5094,13 +5124,22 @@ void registerSocialLuaAPI(lua_State* L) {
                     if (auto* gh = getGameHandler(L)) gh->targetNearestRaidMember(wantsReverseArg(L));
                     return 0;
                 }},
+                // The duel challenge, from the unit menu and from "/duel Bob"
+                // alike: 0x005cf950 puts the argument through the name resolver
+                // with mask 0x10 (players only - a duel is not something one
+                // starts with a bobcat) and the verb's second argument as the
+                // exactMatch flag, which unitpopup sets because it passes a
+                // whole name.
                 {"StartDuel", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* unit = luaL_optstring(L, 1, "target");
             if (!gh || !unit) return 0;
             std::string uid(unit);
             toLowerInPlace(uid);
-            if (const uint64_t guid = resolveUnitGuid(gh, uid)) gh->proposeDuel(guid);
+            const bool exact = lua_toboolean(L, 2) != 0;
+            uint64_t guid = resolveUnitGuid(gh, uid);
+            if (!guid) guid = resolveNamedUnit(gh, uid, exact, true);
+            if (guid) gh->proposeDuel(guid);
             return 0;
         }},
                 {"RandomRoll", [](lua_State* L) -> int {

@@ -163,7 +163,9 @@ inline constexpr GameError kSpecifyMasterLooter{  // 0x0052dc20: "master" with n
 // selected" and "unknown unit" are two different complaints rather than one.
 // CanInspect (0x00522710) and the assignment pair (0x0052e1b0, 0x0052df40) both
 // end their unresolved paths here, and the assignment pair's Usage strings name
-// the argument "raidmember" for the same reason.
+// the argument "raidmember" for the same reason. FollowUnit (0x005224c0) picks
+// between the two with a test of its own: the text is compared against the word
+// "target", and anything else that resolved nowhere is the unknown-unit row.
 inline constexpr GameError kNoTarget{    // row 199: the token was "target", or nothing
     0xc7, "ERR_GENERIC_NO_TARGET", "You have no target.", Line::Error};
 inline constexpr GameError kUnitNotFound{  // row 0x13a: any other token, resolved nowhere
