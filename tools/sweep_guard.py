@@ -707,12 +707,19 @@ CHECKS = [
     #
     # The thirty-nine above were each read. The hundred and fifty-six that
     # joined them have not been, and saying so is the point of writing it here.
-    # Two are worth naming: GetQuestLogCompletionText answers "" and
-    # GetQuestLogRequiredMoney answers 0, both to the quest log and the tracker.
-    # Those two are real, and answering them needs SMSG_QUEST_QUERY_RESPONSE
-    # parsed further than it is - the quest log entry carries neither field, and
-    # the packet that does carry them is the turn-in one, which arrives only
-    # when the player is already standing at the NPC.
+    #
+    # The two names this entry used to hold up as the real work in the list are
+    # gone from the report, which is why they are written out here one last
+    # time rather than left to be re-found. GetQuestLogCompletionText reads the
+    # fifth string of SMSG_QUEST_QUERY_RESPONSE - the quest log entry does carry
+    # it, and the walk that skipped it is what made this look unanswerable -
+    # and falls back to the quest's own objectives sentence, because the tracker
+    # and the world map pin draw this line whether or not it is empty.
+    # GetQuestLogRequiredMoney reads rewardMoney negated, the same reading
+    # quest_rewards.hpp's questDialogMoney() applies: a money requirement is a
+    # negative reward. Whether the core behind this actually sends one is a
+    # server-side question, WOWEE_SERVER_SRC is unset here, and so that half is
+    # unverified - it is not listed, which only means its body calls something.
     ("framexml_live_stubs.py",
      r"^\d+ bindings, \d+ of them stubs, (\d+) reached from a handed-over element", 63,
      "stubs reachable from an element FrameXML draws"),

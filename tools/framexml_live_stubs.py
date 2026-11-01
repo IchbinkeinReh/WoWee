@@ -24,11 +24,17 @@ Lua global, GetSelectedFaction and GetSelectedSkill keep theirs in C++ statics
 behind an accessor, and all three are implementations that simply do not go
 through the game handler.
 
-Two of the newly visible are worth naming: GetQuestLogCompletionText answers ""
-and GetQuestLogRequiredMoney answers 0, both to the quest log and the tracker.
-Answering them needs SMSG_QUEST_QUERY_RESPONSE parsed further than it is - the
-quest log entry carries neither field, and the packet that does carry them is
-the turn-in one, which arrives only once the player is at the NPC.
+Two of the newly visible were worth naming at the time, and both have left the
+list since: GetQuestLogCompletionText now reads the fifth string of
+SMSG_QUEST_QUERY_RESPONSE (the quest log entry does carry it - the walk that
+stepped over it is what made it look as if only the turn-in packet had it), and
+GetQuestLogRequiredMoney now reads rewardMoney negated, the reading
+quest_rewards.hpp's questDialogMoney() already applied to the same field. They
+are kept here as the worked example of what "not listed" means: this sweep
+stops calling a body a stub the moment it calls something, and a body can call
+an accessor and still answer zero. Whether any core sends a money requirement
+as a negative reward is a question for the server source, and that is not on
+this machine.
 
 THE FORTY THAT WERE CHECKED. The hundred and fifty-six that joined them have
 not been.
