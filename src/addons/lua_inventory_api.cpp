@@ -6142,13 +6142,53 @@ void registerInventoryLuaAPI(lua_State* L) {
             uint64_t guid = 0;
             const auto* item = auctionSellItemSlot(gh, &guid);
             if (!item || guid == 0) return 0;
-            // The fourth argument is the size of one stack; the fifth is how
-            // many such stacks to post, which this sends one of - the request
-            // builder writes a single item and posting several would be a
-            // several-item list.
-            const uint32_t stack = static_cast<uint32_t>(
+            // The fourth argument is the size of one stack and the fifth is how
+            // many such stacks to post - and this used to read the fifth and
+            // send one, on the assumption that posting several would need a
+            // several-item request. The reference client's own StartAuction
+            // (0x0059f990, the handler the method table hangs after the name)
+            // says otherwise: it reads a fifth with a default of 1, refuses with
+            // ERR_AUCTION_ENOUGH_ITEMS when the total does not fit the item, and
+            // otherwise raises AUCTION_MULTISELL_START with the count and posts
+            // one ordinary CMSG_AUCTION_SELL_ITEM per stack, walking a
+            // stacks-left counter (FUN_0059ba80). There is no multisell opcode
+            // on its wire at all, which is why the opcode map names none, and the
+            // itemCount field the request builder pins to 1 belongs to the other
+            // trick that routine has: naming several bag objects as the sources
+            // of one auction when the items are split across them. That last one
+            // this client still does not do.
+            uint32_t stack = static_cast<uint32_t>(
                 luaL_optnumber(L, 4, item->item.stackCount ? item->item.stackCount : 1));
-            gh->auctionSellItemByGuid(guid, stack, bid, buy, dur);
+            uint32_t stacks = static_cast<uint32_t>(luaL_optnumber(L, 5, 1));
+            // A missing fifth is 1 there and a written 0 is 0, which takes the
+            // same single-auction branch either way; both are one auction here.
+            if (stack == 0) stack = 1;
+            if (stacks == 0) stacks = 1;
+            if (uint64_t(stack) * stacks > item->item.stackCount) {
+                // Row 0x2d4, said before any of them go out - the reference asks
+                // whether the sources can cover stacks*stackSize and posts
+                // nothing when they cannot.
+                gh->sayGameError(server_notice::kAuctionNotEnoughItems);
+                return 0;
+            }
+            if (stacks > 1)
+                gh->fireAddonEvent("AUCTION_MULTISELL_START", {std::to_string(stacks)});
+            for (uint32_t posted = 0; posted < stacks; ++posted) {
+                gh->auctionSellItemByGuid(guid, stack, bid, buy, dur);
+                // The reference drives its stepper off the answer to each post,
+                // so its posts are spaced out; these go together. Nothing on the
+                // wire asks for spacing - each request names the same source
+                // guid with its own count, and the server works down the stack.
+                //
+                // The third of its events, AUCTION_MULTISELL_FAILURE, is what a
+                // step raises when it cannot be satisfied and the block frame is
+                // left waiting on an answer that will not come. This has no such
+                // step: the only refusal it can see is the one above, made
+                // before the first of them and before the bar goes up.
+                if (stacks > 1)
+                    gh->fireAddonEvent("AUCTION_MULTISELL_UPDATE",
+                                       {std::to_string(posted + 1), std::to_string(stacks)});
+            }
             auctionSellSlot() = AuctionSellSlot{};
             fireAuctionSellUpdate(gh);
             return 0;

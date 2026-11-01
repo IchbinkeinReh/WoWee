@@ -186,6 +186,15 @@ inline constexpr GameError kInternalBagError{
 inline constexpr GameError kMailInvalidAttachmentSlot{
     0x248, "ERR_MAIL_INVALID_ATTACHMENT_SLOT", "", Line::Error};
 
+// StartAuction's own refusal, pushed by 0x0059f990 before it asks the realm for
+// anything: it reads the stacks-per-auction and the number-of-stacks arguments
+// and asks whether the source items can cover stackSize*numStacks, and says this
+// and posts nothing when they cannot. The two arguments are not tested against
+// each other - a stack size nobody claimed and a stack count nobody covered are
+// the same complaint - which is why the wording is about the total. Row 0x2d4.
+inline constexpr GameError kAuctionNotEnoughItems{
+    0x2d4, "ERR_AUCTION_ENOUGH_ITEMS", "", Line::Error};
+
 // The join's own complaint, and the one thing the first of CMSG_JOIN_CHANNEL's
 // two bytes is put to use for in this client: 0x005076b0 takes a new channel
 // row out of ten, finds none, and says this only when the join's first byte was
