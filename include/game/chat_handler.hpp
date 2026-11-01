@@ -44,11 +44,19 @@ public:
     /// its name; anything else is a channel of the player's own. A slot - the
     /// channel's number - is taken now, before the server answers. Nothing
     /// when the zone channel has no place to be named after yet, or all ten
-    /// slots are taken; otherwise what was asked for, which the interface's
-    /// JoinChannelByName answers with.
+    /// slots are taken - and said to be full, in chat, only when somebody
+    /// asked for the channel; otherwise what was asked for, which the
+    /// interface's JoinChannelByName answers with.
+    ///
+    /// The last two are the pair of bytes over the name, and the client only
+    /// ever hands the two possible pairs: true,false for a join it starts for
+    /// itself (the login mask, guild recruitment, a relogin's re-join) and
+    /// false,true for one somebody asked for. The second of them is what the
+    /// interface's fourth argument said rather than a fixed true, so a caller
+    /// reproducing a Lua call passes what it was given.
     std::optional<chat_channels::Join> joinChannel(const std::string& channelName,
                                                    const std::string& password = "",
-                                                   bool byLogin = false);
+                                                   bool byClient = false, bool byPlayer = true);
     /// Leave a channel by its number, its name or its shortcut (0x005093f0).
     void leaveChannel(const std::string& channelName);
     /// Ask the server for a channel's members; the answer arrives as

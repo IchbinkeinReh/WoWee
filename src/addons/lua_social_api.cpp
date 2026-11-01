@@ -17,9 +17,13 @@
 #include "game/inventory_handler.hpp"
 #include "game/difficulty_change.hpp"
 #include "game/reputation_standing.hpp"
+#include "game/server_notices.hpp"
 #include "rendering/animation_controller.hpp"
 
 namespace wowee::addons {
+
+// The game-error rows below are named bare, as they are inside game/.
+namespace server_notice = game::server_notice;
 
 // The languages a character can speak: their racial one, plus the faction
 // tongue every member of that faction is taught. Human and Orc are the two
@@ -190,11 +194,14 @@ static int lua_SendChatMessage(lua_State* L) {
     return 0;
 }
 
-// JoinChannelByName(name, password, frameId) → zoneChannel, shortcut
+// JoinChannelByName(name, password, frameId, private) → zoneChannel, shortcut
 // (0x0050d900, which JoinPermanentChannel and JoinTemporaryChannel share -
 // 0x0050dac0 and 0x0050daa0 are 20-byte wrappers that hand the shared half the
-// permanent flag, so the fourth value the panel passes is read by nobody). A
-// shortcut joins its zone channel by id with the place in the name; anything
+// permanent flag, which is a row of the client's own chat cache and never
+// reaches the wire). The fourth value the panel passes is read after all:
+// 0x00815500(L,4,0) is the boolean reader with a zero default, and what it
+// answers goes out as the second of the two bytes over the channel name.
+// A shortcut joins its zone channel by id with the place in the name; anything
 // else is a channel of the player's own. The answer is the row's id - zero
 // for one of the player's own - and the shortcut for a zone channel; nothing
 // when nothing was joined, which /join reports as an invalid name.
@@ -222,9 +229,18 @@ static int lua_JoinChannelByName(lua_State* L) {
     auto* ch = gh ? gh->getChatHandler() : nullptr;
     const char* name = luaL_optstring(L, 1, "");
     const char* pass = luaL_optstring(L, 2, "");
-    // One word, under 128 bytes, as the client checks before anything else.
-    if (!ch || !name || !*name || std::strchr(name, ' ') || std::strlen(name) >= 128) return 0;
-    const auto join = ch->joinChannel(name, pass ? pass : "");
+    // One word, and neither half of it 128 bytes long, as the client checks
+    // before anything else: 0x0050d900 runs the name and the password each
+    // through the strlen at 0x0076ee30 and turns either down at 0x80 - so a
+    // long password is refused here as a long name is, rather than going out.
+    if (!ch || !name || !*name || std::strchr(name, ' ') || std::strlen(name) >= 128 ||
+        std::strlen(pass ? pass : "") >= 128)
+        return 0;
+    // The fourth argument goes on the wire rather than being dropped: the byte
+    // over the name that says whether this was a join somebody asked for, which
+    // every call site in the installed tree spells as 1 and a nil as 0.
+    const bool byPlayer = lua_toboolean(L, 4) != 0;
+    const auto join = ch->joinChannel(name, pass ? pass : "", false, byPlayer);
     if (!join) return 0;
     lua_pushnumber(L, join->zoneChannelId);
     if (join->shortcut.empty()) lua_pushnil(L);

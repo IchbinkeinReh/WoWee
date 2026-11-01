@@ -927,10 +927,21 @@ public:
 class JoinChannelPacket {
 public:
     /// 0x00507a80: the row's id (zero for a channel of the player's own), two
-    /// bytes - 1 and 0 from the login join (0x00508090), 0 and the voice
-    /// setting from the interface's - then the name and the password.
+    /// bytes, then the name and the password.
+    ///
+    /// The two bytes are the pair the client's own join worker is handed and
+    /// keeps with the channel row: 1 and 0 for every join the client starts by
+    /// itself (the login mask at 0x00508090, guild recruitment at 0x00507d30, a
+    /// channel put back after a relogin), and 0 plus what the interface's own
+    /// fourth argument said for a join somebody asked for - which every call
+    /// site in the installed tree spells as 1. The first of them has one use
+    /// the client makes of them: with all ten slots taken it complains only
+    /// when it is zero (0x005076b0, game error 0x1ba ERR_TOO_MANY_CHAT_CHANNELS).
+    /// What the realm answers to the second is not readable here - the client
+    /// sends it, saves it with the row at +0x29 and hands the saved value back
+    /// on the next login, and reads it nowhere.
     static network::Packet build(const std::string& channelName, const std::string& password = "",
-                                 uint32_t channelId = 0, uint8_t byZone = 0, uint8_t unk = 0);
+                                 uint32_t channelId = 0, uint8_t byClient = 0, uint8_t byPlayer = 1);
 };
 
 /**

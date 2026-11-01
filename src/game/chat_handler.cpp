@@ -10,6 +10,7 @@
 #include "game/text_tokens.hpp"
 #include "game/game_handler.hpp"
 #include "game/game_utils.hpp"
+#include "game/server_notices.hpp"
 #include "game/interface_text.hpp"
 #include "game/zone_manager.hpp"
 #include "game/packet_parsers.hpp"
@@ -1523,7 +1524,8 @@ void ChatHandler::refreshJoinedChannels() {
 
 std::optional<chat_channels::Join> ChatHandler::joinChannel(const std::string& channelName,
                                                             const std::string& password,
-                                                            bool byLogin) {
+                                                            bool byClient,
+                                                            bool byPlayer) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return std::nullopt;
     // Never a channel without a name - the client's interface refuses one
     // before it gets here, and the server would make one called "".
@@ -1551,16 +1553,27 @@ std::optional<chat_channels::Join> ChatHandler::joinChannel(const std::string& c
     if (!held) {
         if (!channelSlots_.reserve(join->name, join->zoneChannelId)) {
             // reserve() also refuses a name or id already held; "held" was
-            // checked above, so this is the slots being full.
+            // checked above, so this is the slots being full. Ten is what the
+            // client's store holds too, and 0x005076b0 tells the player about
+            // it - ERR_TOO_MANY_CHAT_CHANNELS, a chat line and no sound - only
+            // when the join was not one the client started for itself.
+            if (!byClient) owner_.sayGameError(server_notice::kTooManyChatChannels);
             LOG_WARNING("Not joining channel '", join->name, "': all ",
                         chat_channels::kMaxSlots, " channel slots are taken");
             return std::nullopt;
         }
-        // The login join sends 1 in the first byte and the interface's 0.
-        const uint8_t byZone = byLogin ? 1 : 0;
+        // The two bytes over the name, in the order 0x00507a80 hands them on
+        // (its 7th and 8th arguments): a join the client starts for itself -
+        // the login mask, guild recruitment (0x00507d30), a channel put back
+        // after a relogin - says 1 and 0, and a join somebody asked for says 0
+        // and whatever the interface's fourth argument said, which every call
+        // site in the installed tree spells as 1. This wrote 0 in the second
+        // place whoever asked, and 0 in the first for guild recruitment.
+        const uint8_t byClientByte = byClient ? 1 : 0;
+        const uint8_t byPlayerByte = byPlayer ? 1 : 0;
         auto packet = owner_.getPacketParsers()
-            ? owner_.getPacketParsers()->buildJoinChannel(join->name, pass, join->zoneChannelId, byZone, 0)
-            : JoinChannelPacket::build(join->name, pass, join->zoneChannelId, byZone, 0);
+            ? owner_.getPacketParsers()->buildJoinChannel(join->name, pass, join->zoneChannelId, byClientByte, byPlayerByte)
+            : JoinChannelPacket::build(join->name, pass, join->zoneChannelId, byClientByte, byPlayerByte);
         owner_.getSocket()->send(packet);
         LOG_WARNING("Requesting to join channel: '", join->name, "' id=", join->zoneChannelId,
                  " (asked for as '", channelName, "')");
@@ -1990,8 +2003,10 @@ void ChatHandler::updateLoginChannelJoin() {
     // A row a zone has no channel for (Trade outside a city) is still asked
     // for and keeps its number; the server answers when the player reaches
     // a zone that has it.
+    // Both bytes say "the client is starting this join, nobody asked in front
+    // of it" - see joinChannel.
     for (const auto& r : rows) {
-        if (mask & chat_channels::maskBit(r.id)) joinChannel(r.shortcut, "", true);
+        if (mask & chat_channels::maskBit(r.id)) joinChannel(r.shortcut, "", true, false);
     }
 
     // Guild Recruitment (0x00507d30, run at the end of the login join): with
@@ -1999,10 +2014,14 @@ void ChatHandler::updateLoginChannelJoin() {
     // switch of this client's own; the CVar is the option - and it is
     // registered on (0x00510000 "1", with 0x00512750 as its setter), so a
     // player in no guild is in the channel from the first login.
+    //
+    // Asked for as an automatic join, whatever it is called by: 0x00507d30
+    // hands 0x00507a80 the same 1 and 0 the login mask does, and this was the
+    // one join of the three that reached the wire as two noughts.
     if (addons::storedCVarValue("guildRecruitmentChannel", "1") != "0" && !owner_.isInGuild()) {
         for (const auto& r : rows) {
             if (r.flags & chat_channels::kFlagGuildRecruitment) {
-                joinChannel(r.shortcut);
+                joinChannel(r.shortcut, "", true, false);
                 break;
             }
         }

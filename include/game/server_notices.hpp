@@ -186,6 +186,16 @@ inline constexpr GameError kInternalBagError{
 inline constexpr GameError kMailInvalidAttachmentSlot{
     0x248, "ERR_MAIL_INVALID_ATTACHMENT_SLOT", "", Line::Error};
 
+// The join's own complaint, and the one thing the first of CMSG_JOIN_CHANNEL's
+// two bytes is put to use for in this client: 0x005076b0 takes a new channel
+// row out of ten, finds none, and says this only when the join's first byte was
+// nought - that is, only when somebody asked for the channel in front of them.
+// The client's own joins (the login mask, guild recruitment, a channel put back
+// after a relogin) set that byte to 1 and are silent about it. Row 0x1ba, and
+// row 0x1ba has no vocal half either (0x44).
+inline constexpr GameError kTooManyChatChannels{
+    0x1ba, "ERR_TOO_MANY_CHAT_CHANNELS", "", Line::Chat};
+
 // CanInspect(unit, showError)'s other two, from 0x00522710, and all four of its
 // rows say Line::Error - the red line - and are only raised when showError was
 // asked for.

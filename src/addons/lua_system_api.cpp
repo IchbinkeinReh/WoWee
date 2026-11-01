@@ -47,6 +47,7 @@
 #include "game/calendar_data.hpp"
 #include "game/lfg_update.hpp"
 #include "game/pet_action.hpp"
+#include "game/server_notices.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/ambient_sound_manager.hpp"
 #include "audio/audio_coordinator.hpp"
@@ -71,6 +72,9 @@
 #include "core/local_time.hpp"
 
 namespace wowee::addons {
+
+// The game-error rows below are named bare, as they are inside game/.
+namespace server_notice = game::server_notice;
 
 // CombatLog_Object_IsA(unitFlags, mask) - does a combat log unit match a filter.
 //

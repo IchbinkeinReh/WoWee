@@ -8,6 +8,7 @@
 #include "addons/lua_api_registrations.hpp"
 #include "core/application.hpp"
 #include "game/inventory_slots.hpp"
+#include "game/inventory_handler.hpp"
 #include "game/equip_slot_fit.hpp"
 #include "game/known_currencies.hpp"
 #include "game/currency_categories.hpp"
@@ -36,6 +37,9 @@
 #include <string_view>
 
 namespace wowee::addons {
+
+// The game-error rows below are named bare, as they are inside game/.
+namespace server_notice = game::server_notice;
 
 static std::string itemClassDisplayName(game::GameHandler* gh, uint32_t itemClass);
 static std::string itemSubclassDisplayName(game::GameHandler* gh, uint32_t itemClass, uint32_t subClass,

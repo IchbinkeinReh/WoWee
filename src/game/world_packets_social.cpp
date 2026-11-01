@@ -384,14 +384,19 @@ bool TextEmoteParser::parse(network::Packet& packet, TextEmoteData& data, bool l
 // ============================================================
 
 network::Packet JoinChannelPacket::build(const std::string& channelName, const std::string& password,
-                                         uint32_t channelId, uint8_t byZone, uint8_t unk) {
+                                         uint32_t channelId, uint8_t byClient, uint8_t byPlayer) {
     network::Packet packet(wireOpcode(Opcode::CMSG_JOIN_CHANNEL));
     // The id is what makes the server treat the name as its zone channel; a
     // zero joins a channel of the player's own by that name, which is how
     // "General" sent as text made a private channel called General.
+    //
+    // Then the two bytes 0x00507a80 was handed (its 7th and 8th arguments), in
+    // that order: the client's own joins send 1 and 0 and an asked-for one
+    // sends 0 and the interface's fourth argument, which the installed tree
+    // always spells 1. This wrote 0 for the second of them whoever asked.
     packet.writeUInt32(channelId);
-    packet.writeUInt8(byZone);
-    packet.writeUInt8(unk);
+    packet.writeUInt8(byClient);
+    packet.writeUInt8(byPlayer);
     packet.writeString(channelName);
     packet.writeString(password);
     LOG_DEBUG("Built CMSG_JOIN_CHANNEL: channel=", channelName);
