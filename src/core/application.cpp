@@ -4466,8 +4466,11 @@ void Application::applyServerMovementState(float deltaTime) {
                 // The offset is in the car's own frame; the walking below is
                 // in the world's, so it is done to the place the offset puts
                 // the rider and taken back into the car's frame after.
-                glm::vec3 riderCanonical = transports->getPlayerWorldPosition(
-                    rideGuid, gameHandler->getPlayerTransportOffset());
+                const glm::vec3 heldOffset = gameHandler->getPlayerTransportOffset();
+                glm::vec3 riderCanonical = transports->getPlayerWorldPosition(rideGuid, heldOffset);
+                // Where the offset alone puts the rider: if nothing below moves
+                // them from there, the offset is kept as it is.
+                const glm::vec3 carriedCanonical = riderCanonical;
                 glm::vec3 tentativeCanonical = core::coords::renderToCanonical(renderPos);
                 if (hasM2RideLock_) {
                     glm::vec3 walkDelta = tentativeCanonical - lastM2RideLockedCanonical_;
@@ -4532,8 +4535,16 @@ void Application::applyServerMovementState(float deltaTime) {
                         }
                     }
                 }
-                glm::vec3 localOffset =
-                    transports->worldToTransportLocal(rideGuid, riderCanonical).value_or(glm::vec3(0.0f));
+                // The offset is the passenger's place on the transport and the
+                // client changes it only by moving the passenger (0x004f47b0
+                // is boarding's). Taken back out of the world each frame
+                // instead, it drifted: through the inverse of a car pitched on
+                // the tram's slopes, two thousand yards from the origin, the
+                // round trip loses a little the same way every frame - a rider
+                // standing still slid half a yard along the car in a trip.
+                glm::vec3 localOffset = riderCanonical == carriedCanonical
+                    ? heldOffset
+                    : transports->worldToTransportLocal(rideGuid, riderCanonical).value_or(glm::vec3(0.0f));
                 if (hasM2RideLock_) {
                     // Keep a generous distance clamp as a secondary backstop for any
                     // other source of drift (e.g. knockback, server-forced movement)
