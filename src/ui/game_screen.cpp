@@ -314,7 +314,6 @@ void GameScreen::setServices(const UIServices& services) {
     // Propagate to child panels
     chatPanel_.setServices(services);
     toastManager_.setServices(services);
-    dialogManager_.setServices(services);
     settingsPanel_.setServices(services);
     // The chat settings are the chat panel's, and the options panels ask the
     // settings panel for every setting by name. Handing it the chat's own

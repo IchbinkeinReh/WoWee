@@ -96,6 +96,9 @@ public:
 
 private:
     UIServices services_;  // Injected service references
+    // The top left of the display's safe area this frame (ui/safe_area.hpp):
+    // the panels are laid out in its size and placed from here.
+    ImVec2 safeOrigin_{0.0f, 0.0f};
 
     struct ServerProfile {
         std::string hostname;

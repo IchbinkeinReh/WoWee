@@ -33,12 +33,7 @@ public:
     /// called in render() after reclaim corpse button
     void renderLateDialogs(game::GameHandler& gameHandler);
 
-    // UIServices injection (Phase B singleton breaking)
-    void setServices(const UIServices& services) { services_ = services; }
-
 private:
-    // Injected UI services
-    UIServices services_;
     // Common ImGui window flags for popup dialogs
     static constexpr ImGuiWindowFlags kDialogFlags =
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize;

@@ -1,4 +1,5 @@
 #include "ui/auth_screen.hpp"
+#include "ui/safe_area.hpp"
 #include "core/platform.hpp"
 #include "rendering/rt_memory_guard.hpp"
 #include "core/rt_session_marker.hpp"
@@ -413,7 +414,11 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
         }
     }
 
-    renderProminentStatus(screen.x, screen.y);
+    // What follows keeps to the display's safe area - clear of a phone's
+    // notch and home indicator; the backdrop above fills the whole screen.
+    const safe_area::Rect safe = safe_area::rect();
+    safeOrigin_ = safe.min;
+    renderProminentStatus(safe.size.x, safe.size.y);
 
     // Whether a dropdown was down when the frame began. Escape closes one
     // from inside the control, so asking afterwards would find it already
@@ -455,11 +460,11 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
     // that had never been pushed.
     const bool sheetWasOpen = settingsOpen_;
     if (sheetWasOpen) ui_.pushInert();
-    renderCard(authHandler, screen.x, screen.y);
+    renderCard(authHandler, safe.size.x, safe.size.y);
     if (sheetWasOpen) ui_.popInert();
 
-    if (settingsOpen_) renderLoginSettingsSheet(screen.x, screen.y);
-    if (rtMarkerShown_) renderRtCrashDialog(screen.x, screen.y);
+    if (settingsOpen_) renderLoginSettingsSheet(safe.size.x, safe.size.y);
+    if (rtMarkerShown_) renderRtCrashDialog(safe.size.x, safe.size.y);
 
     // Escape backs out of one thing per press: the open dropdown, then the
     // settings sheet, then the keyboard.
@@ -510,7 +515,7 @@ void AuthScreen::render(auth::AuthHandler& authHandler) {
     {
         ui_.setLayer(PaperLayer::Overlay);
         const float size = ui_.px(kSmallSize);
-        const ImVec2 at(ui_.px(14), screen.y - ui_.lineHeight(size) - ui_.px(8));
+        const ImVec2 at(safe.min.x + ui_.px(14), safe.max().y - ui_.lineHeight(size) - ui_.px(8));
         ui_.text(ImVec2(at.x + 1.0f, at.y + 1.0f), core::kVersionString, size,
                  IM_COL32(0, 0, 0, 150));
         ui_.text(at, core::kVersionString, size, IM_COL32(0xEC, 0xE2, 0xCC, 0xC8));
@@ -556,8 +561,8 @@ void AuthScreen::renderProminentStatus(float screenW, float screenH) {
                                  ui_.textWidth(statusMessage.c_str(), size) + pad * 2.0f);
     const float textW = width - pad * 2.0f;
     const float textH = ui_.wrappedHeight(textW, statusMessage.c_str(), size);
-    const float x0 = (screenW - width) * 0.5f;
-    const float y0 = screenH * 0.10f;
+    const float x0 = safeOrigin_.x + (screenW - width) * 0.5f;
+    const float y0 = safeOrigin_.y + screenH * 0.10f;
     const ImVec2 a(x0, y0);
     const ImVec2 b(x0 + width, y0 + textH + pad);
 
@@ -721,8 +726,8 @@ void AuthScreen::renderCard(auth::AuthHandler& authHandler, float screenW, float
 
     const float cardW = px(kCardWidth);
     const float cardH = px(kCardPadTop) + contentH + px(kCardPadBottom);
-    const ImVec2 cardA((screenW - cardW) * 0.5f,
-                       std::max(px(12), (screenH - cardH) * 0.48f));
+    const ImVec2 cardA(safeOrigin_.x + (screenW - cardW) * 0.5f,
+                       safeOrigin_.y + std::max(px(12), (screenH - cardH) * 0.48f));
     const ImVec2 cardB(cardA.x + cardW, cardA.y + cardH);
 
     ui_.sheet(cardA, cardB);
@@ -1907,7 +1912,7 @@ void AuthScreen::renderRtCrashDialog(float screenW, float screenH) {
 
     ui_.setLayer(PaperLayer::Overlay);
     ui_.scrim(0.45f);
-    const ImVec2 a((screenW - w) * 0.5f, (screenH - h) * 0.5f);
+    const ImVec2 a(safeOrigin_.x + (screenW - w) * 0.5f, safeOrigin_.y + (screenH - h) * 0.5f);
     const ImVec2 b(a.x + w, a.y + h);
     ui_.sheet(a, b, /*taped=*/false);
     ui_.claimMouse(a, b);
@@ -1977,7 +1982,7 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
     ui_.setLayer(PaperLayer::Overlay);
     ui_.scrim(0.45f);
 
-    const ImVec2 a((screenW - w) * 0.5f, (screenH - h) * 0.5f);
+    const ImVec2 a(safeOrigin_.x + (screenW - w) * 0.5f, safeOrigin_.y + (screenH - h) * 0.5f);
     const ImVec2 b(a.x + w, a.y + h);
     ui_.sheet(a, b, /*taped=*/false);
     // The sheet eats every click that lands on it, including the ones that
@@ -2264,8 +2269,10 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
         const float th = px(14) * 2.0f + titleH + px(6) + bodyH;
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         ImVec2 ta(mouse.x + px(18), mouse.y + px(18));
-        if (ta.x + tw > screenW - px(6)) ta.x = std::max(px(6), mouse.x - tw - px(12));
-        if (ta.y + th > screenH - px(6)) ta.y = std::max(px(6), screenH - px(6) - th);
+        const float right = safeOrigin_.x + screenW;
+        const float bottom = safeOrigin_.y + screenH;
+        if (ta.x + tw > right - px(6)) ta.x = std::max(safeOrigin_.x + px(6), mouse.x - tw - px(12));
+        if (ta.y + th > bottom - px(6)) ta.y = std::max(safeOrigin_.y + px(6), bottom - px(6) - th);
         const ImVec2 tb(ta.x + tw, ta.y + th);
         ui_.sheet(ta, tb, /*taped=*/false);
         ui_.wrapped(ImVec2(ta.x + px(14), ta.y + px(14)), inner, hoverTitle.c_str(), labelSize, theme.ink);
@@ -2285,7 +2292,7 @@ void AuthScreen::renderLoginSettingsSheet(float screenW, float screenH) {
                                       ui_.textWidth(line3, px(kSmall))});
         const float cw = std::min(screenW - px(20), std::max(px(440), textW + px(kPad) * 2.0f));
         const float ch = px(kPad) * 2.0f + ui_.lineHeight(px(kLabel)) * 3.0f + px(28) + px(kButton);
-        const ImVec2 ca((screenW - cw) * 0.5f, (screenH - ch) * 0.5f);
+        const ImVec2 ca(safeOrigin_.x + (screenW - cw) * 0.5f, safeOrigin_.y + (screenH - ch) * 0.5f);
         const ImVec2 cb(ca.x + cw, ca.y + ch);
         ui_.sheet(ca, cb, /*taped=*/false);
         ui_.claimMouse(ca, cb);

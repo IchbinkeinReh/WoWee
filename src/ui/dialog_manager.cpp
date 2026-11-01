@@ -1,4 +1,5 @@
 #include "ui/dialog_manager.hpp"
+#include "ui/safe_area.hpp"
 #include "game/item_text.hpp"
 #include "game/inventory_slots.hpp"
 #include "ui/framexml_takeover.hpp"
@@ -61,9 +62,9 @@ void DialogManager::renderDuelCountdown(game::GameHandler& gameHandler) {
     float remaining = gameHandler.getDuelCountdownRemaining();
     if (remaining <= 0.0f) return;
 
-    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-    float screenW = displaySize.x > 0.0f ? displaySize.x : 1280.0f;
-    float screenH = displaySize.y > 0.0f ? displaySize.y : 720.0f;
+    const safe_area::Rect safe = safe_area::rect();
+    float screenW = safe.size.x;
+    float screenH = safe.size.y;
 
     auto* dl = ImGui::GetForegroundDrawList();
     ImFont* font = ImGui::GetFont();
@@ -81,8 +82,8 @@ void DialogManager::renderDuelCountdown(game::GameHandler& gameHandler) {
     float scale = 4.0f;
     float scaledSize = fontSize * scale;
     ImVec2 textSz = font->CalcTextSizeA(scaledSize, FLT_MAX, 0.0f, buf);
-    float tx = (screenW - textSz.x) * 0.5f;
-    float ty = screenH * 0.35f - textSz.y * 0.5f;
+    float tx = safe.min.x + (screenW - textSz.x) * 0.5f;
+    float ty = safe.min.y + screenH * 0.35f - textSz.y * 0.5f;
 
     // Pulsing alpha: fades in and out per second
     float pulse = 0.75f + 0.25f * std::sin(static_cast<float>(ImGui::GetTime()) * 6.28f);
@@ -105,13 +106,13 @@ void DialogManager::renderDuelCountdown(game::GameHandler& gameHandler) {
 void DialogManager::renderPetUnlearnConfirmDialog(game::GameHandler& gameHandler) {
     if (!gameHandler.showPetUnlearnDialog()) return;
 
-    auto* window = services_.window;
-    float screenW = window ? static_cast<float>(window->getWidth()) : 1280.0f;
-    float screenH = window ? static_cast<float>(window->getHeight()) : 720.0f;
-
     float dlgW = 340.0f;
     float dlgH = 130.0f;
-    ImGui::SetNextWindowPos(ImVec2(screenW / 2 - dlgW / 2, screenH * 0.3f), ImGuiCond_Always);
+    {
+        const safe_area::Rect safe = safe_area::rect();
+        ImGui::SetNextWindowPos(ImVec2(safe.min.x + (safe.size.x - dlgW) * 0.5f,
+                                       safe.min.y + safe.size.y * 0.3f), ImGuiCond_Always);
+    }
     ImGui::SetNextWindowSize(ImVec2(dlgW, dlgH), ImGuiCond_Always);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);

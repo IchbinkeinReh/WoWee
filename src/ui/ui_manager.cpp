@@ -1,6 +1,10 @@
 #include "ui/ui_manager.hpp"
 #include "core/platform.hpp"
+#include "ui/safe_area.hpp"
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <optional>
 #include "pipeline/asset_manager.hpp"
 #include "ui/imgui_theme.hpp"
 #include "ui/interface_fonts.hpp"
@@ -423,6 +427,34 @@ void UIManager::update([[maybe_unused]] float deltaTime) {
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
+
+    // The display's safe area for the panels and for UIParent: the whole
+    // window everywhere but a phone with a notch or a cutout.
+    safe_area::Insets insets;
+    if (SDL_Window* sdlWin = window ? window->getSDLWindow() : nullptr) {
+        SDL_Rect safe{};
+        int winW = 0, winH = 0;
+        if (SDL_GetWindowSafeArea(sdlWin, &safe) && SDL_GetWindowSize(sdlWin, &winW, &winH) &&
+            safe.w > 0 && safe.h > 0) {
+            insets.left = static_cast<float>(safe.x);
+            insets.top = static_cast<float>(safe.y);
+            insets.right = static_cast<float>(winW - safe.x - safe.w);
+            insets.bottom = static_cast<float>(winH - safe.y - safe.h);
+        }
+    }
+    // A test hook (with WOWEE_AUTO_LUA only): WOWEE_TEST_SAFE_AREA="l,r,t,b"
+    // stands in for a notch on a desktop, so a scripted run can see what
+    // keeps clear of one.
+    static const std::optional<safe_area::Insets> fake = []() -> std::optional<safe_area::Insets> {
+        const char* lua = std::getenv("WOWEE_AUTO_LUA");
+        const char* v = std::getenv("WOWEE_TEST_SAFE_AREA");
+        if (!lua || !*lua || !v || !*v) return std::nullopt;
+        safe_area::Insets in;
+        if (std::sscanf(v, "%f,%f,%f,%f", &in.left, &in.right, &in.top, &in.bottom) != 4) return std::nullopt;
+        return in;
+    }();
+    if (fake) insets = *fake;
+    safe_area::set(insets);
 }
 
 void UIManager::render(core::AppState appState, auth::AuthHandler* authHandler, game::GameHandler* gameHandler) {

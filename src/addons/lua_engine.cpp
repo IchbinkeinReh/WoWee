@@ -862,6 +862,15 @@ int lua_Region_SetAllPoints(lua_State* L) {
     // the origin, and everything anchored to it lands there too.
     const auto* w = tree->get(id);
     if (target == 0 || target == id) target = w ? w->parent : 0;
+    // A UIParent filling the screen fills the tree's own UIParent instead,
+    // which the layout keeps inside the display's safe area (a phone's notch,
+    // its home indicator) - so FrameXML's, declared in uiparent.xml, and the
+    // one made before it are kept there too. On a desktop the two are the
+    // same rect.
+    if (w && w->name == "UIParent" && id != tree->uiParentId() &&
+        (target == 0 || target == tree->rootId())) {
+        target = tree->uiParentId();
+    }
     tree->setAllPoints(id, target);
     return 0;
 }

@@ -6,6 +6,7 @@
 #include "rendering/rt_rays.hpp"
 #include "addons/addon_lua_snippets.hpp"
 #include "ui/graphics_choices.hpp"
+#include "ui/safe_area.hpp"
 #include "ui/graphics_presets.hpp"
 #include "ui/settings_panel.hpp"
 #include "addons/addon_manager.hpp"
@@ -466,14 +467,15 @@ void SettingsPanel::renderSettingsWindow(ChatPanel& chatPanel,
         settingsInit = true;
     }
 
-    ImGuiIO& io = ImGui::GetIO();
-    float screenW = io.DisplaySize.x;
-    float screenH = io.DisplaySize.y;
+    // Within the display's safe area, clear of a phone's notch.
+    const safe_area::Rect safe = safe_area::rect();
+    float screenW = safe.size.x;
+    float screenH = safe.size.y;
     // Give the settings surface enough room on high-resolution displays while
     // retaining a sensible minimum for 1080p and laptop screens.
     ImVec2 size(std::clamp(650.0f * appliedWindowUiScale_, 520.0f, screenW * 0.90f),
                 std::clamp(std::min(screenH * 0.90f, 900.0f * appliedWindowUiScale_), 560.0f, screenH * 0.90f));
-    ImVec2 pos((screenW - size.x) * 0.5f, (screenH - size.y) * 0.5f);
+    ImVec2 pos = safe.centered(size.x, size.y);
 
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);

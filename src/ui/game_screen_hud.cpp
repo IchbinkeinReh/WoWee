@@ -1,6 +1,7 @@
 #include "core/character_component.hpp"
 #include "core/platform.hpp"
 #include "ui/game_screen.hpp"
+#include "ui/safe_area.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "ui/ui_texture_load.hpp"
 #include "ui/ui_upload_budget.hpp"
@@ -512,7 +513,8 @@ void GameScreen::renderTouchChatButton([[maybe_unused]] game::GameHandler& gameH
     const float margin = h * 0.4f;
     // Top centre: the unit frames are on the left, the minimap and the map's
     // close button on the right, and the movement stick takes the lower left.
-    ImGui::SetNextWindowPos(ImVec2((io.DisplaySize.x - w) * 0.5f, margin));
+    const safe_area::Rect safe = safe_area::rect();
+    ImGui::SetNextWindowPos(ImVec2(safe.min.x + (safe.size.x - w) * 0.5f, safe.min.y + margin));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, h * 0.3f);
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(20, 20, 20, 150));
@@ -601,7 +603,8 @@ void GameScreen::renderWorldMap(game::GameHandler& gameHandler) {
         const ImGuiIO& io = ImGui::GetIO();
         const float side = ImGui::GetFrameHeight() * 1.8f;
         const float margin = side * 0.4f;
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - side - margin, margin));
+        const safe_area::Rect safe = safe_area::rect();
+        ImGui::SetNextWindowPos(ImVec2(safe.max().x - side - margin, safe.min.y + margin));
         // In front of the map, which takes focus whenever it is touched.
         ImGui::SetNextWindowFocus();
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
