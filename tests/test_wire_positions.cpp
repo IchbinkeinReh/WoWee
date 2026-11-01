@@ -126,7 +126,7 @@ TEST_CASE("a battleground's flag carriers are kept last first", "[wire_positions
 
 TEST_CASE("a GM ticket sends the player's place as the wire has it", "[wire_positions]") {
     // 0x005ac8f0: the map, then the player's x, y, z.
-    const auto pkt = GmTicketCreatePacket::build(1, -4325.5f, 15.25f, 5.5f, "help");
+    const auto pkt = GmTicketCreatePacket::build(1, -4325.5f, 15.25f, 5.5f, "help", false, false);
     const auto& d = pkt.getData();
     const std::vector<uint8_t> head(d.begin(), d.begin() + 16);
     CHECK(head == std::vector<uint8_t>{0x01, 0x00, 0x00, 0x00,
