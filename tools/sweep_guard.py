@@ -889,6 +889,20 @@ CHECKS = [
     ("framexml_event_gap.py",
      r"^never sent\s*:\s*(\d+)", 164,
      "events FrameXML registers a handler for that this client never sends"),
+    # Third-party addons - the case every other interface sweep here is blind to,
+    # because they are not in any manifest and not in FrameXML's tree. An
+    # undefined global in one of them does not error: the fallback answers nil,
+    # so the addon quietly stops doing the thing, which reads as a feature that
+    # is present and broken rather than one nobody wired up.
+    #
+    # 23 bundled addons, one name between them: CalendarNewArenaTeamEvent, which
+    # framexml_unbound_globals also finds and both read the same way - a header's
+    # own Usage line copied into the file, not a call. Not pinned at zero: the
+    # ceiling is drift for a *new* addon or a new gap, and the one row that is
+    # there today is a judgement about a comment, not a fault to clear.
+    ("addon_api_audit.py",
+     r"^(\d+) distinct still missing across", 1,
+     "an installed addon calling a global nothing defines"),
     # Bindings that read fewer arguments than the interface passes. The only
     # sweep here that asks whether an answer used everything it was told -
     # every other one asks whether a name is answered, and these names all are.

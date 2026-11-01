@@ -7,9 +7,17 @@ undefined global is callable and returns nil, so an addon calling one does not
 error - it quietly does nothing, which reads as a feature that is present but
 broken rather than one that was never wired up.
 
-    tools/addon_api_audit.py                 # every addon, worst last
-    tools/addon_api_audit.py blizzard_talentui   # one addon, names listed
-    tools/addon_api_audit.py --framexml          # the original interface, per file
+    tools/addon_api_audit.py --interface PATH        # every addon, worst last
+    tools/addon_api_audit.py --interface PATH blizzard_talentui   # one addon
+    tools/addon_api_audit.py --interface PATH --framexml          # FrameXML per file
+
+PATH is the interface folder; the one under `Data/` is whichever expansion was
+extracted last, and a checkout that has never extracted one has no `Data/interface`
+at all. Naming no path there used to print "no addons at …", exit 0, and read as
+an audit that came back clean - which is how `tools_run_check.py`, the one check
+that runs every tool the guard does not, came to count this as a sweep that works.
+It is skipped by that check now, and says which directory it looked at when it
+runs.
 
 The --framexml mode counts only files the client actually loads. Twelve on disk
 are not in the manifest and are reached by no Include - focusframe,
@@ -43,9 +51,24 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ADDONS = ROOT / "Data" / "interface" / "addons"
-FRAMEXML = ROOT / "Data" / "interface" / "framexml"
+# "Data/interface" as one string, not "Data" / "interface": sweep_guard and
+# tools_run_check read a tool's source for the inputs it needs and skip it when
+# one is absent, and a path split across quotes hides the name. This tool had no
+# way to name the interface either, so on a checkout without one the checker ran
+# it, it printed "no addons at …", exited 0, and was counted as a sweep that
+# works. The interface is the player's own extracted tree, so name it:
+#
+#     tools/addon_api_audit.py --interface ~/wow/interface
+INTERFACE = ROOT / "Data/interface"
+ADDONS = INTERFACE / "addons"
+FRAMEXML = INTERFACE / "framexml"
 SRC = ROOT / "src" / "addons"
+
+# Which files the loader opens, from the one place that knows (see
+# reachableFrameXml below, which used to answer that by itself). The interpreter
+# is run with -I, so the script's own directory has to be named.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from framexml_source import loaded_files  # noqa: E402
 
 # A call on something, rather than a call to a global: the character before the
 # name is a colon or a dot. Lua's own `string.format` is caught by this too,
@@ -176,39 +199,24 @@ def audit(addon_dir, known):
 def reachableFrameXml():
     """The interface files the client will actually load.
 
-    The manifest names the entry points; each of those pulls in more through
-    Include and Script. Anything left over is on disk and unreachable, and
-    counting it reports work that does not exist - FocusFrame, for one, is
-    declared in targetframe.xml, and focusframe.xml is never read.
+    Anything on disk and unreachable is left out, because counting it reports
+    work that does not exist - FocusFrame, for one, is declared in
+    targetframe.xml, and focusframe.xml is never read.
+
+    Asked of the loader's own answer rather than re-derived here. This was a
+    second copy of that rule - the manifest, the Include/Script walk, the
+    case-folding, and a "no manifest means glob everything" fallback that the
+    loader does not have - which is how a sweep comes to disagree with the client
+    it describes while nothing breaks. Measured before the copy went away: 263
+    files each way on this install, out of the 275 sitting in the folder, so the
+    twelve this drops are the twelve the client does not open.
+
+    Both kinds, .lua and .xml: the XML carries inline OnLoad and OnEvent bodies,
+    which call globals exactly like the Lua does.
     """
-    toc = FRAMEXML / "framexml.toc"
-    if not toc.is_file():
-        toc = FRAMEXML / "FrameXML.toc"
-    if not toc.is_file():
-        return sorted(FRAMEXML.glob("*.lua"))
-
-    reached = set()
-
-    def walk(name):
-        key = name.lower().replace("\\", "/").split("/")[-1]
-        if key in reached:
-            return
-        reached.add(key)
-        path = FRAMEXML / key
-        if not path.is_file() or path.suffix.lower() != ".xml":
-            return
-        text = read(path)
-        for ref in re.findall(r'<(?:Include|Script)\s+file="([^"]+)"', text):
-            walk(ref)
-
-    for line in read(toc).splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            walk(line)
-    # Both kinds: the XML carries inline OnLoad and OnEvent bodies, which call
-    # globals exactly like the Lua does.
-    return sorted(p for p in FRAMEXML.iterdir()
-                  if p.suffix.lower() in (".lua", ".xml") and p.name.lower() in reached)
+    return sorted(p for p in loaded_files(INTERFACE)
+                  if p.suffix.lower() in (".lua", ".xml")
+                  and p.parent.resolve() == FRAMEXML.resolve())
 
 
 def auditFrameXml(known):
@@ -239,13 +247,49 @@ def auditFrameXml(known):
 
 
 def main():
+    global INTERFACE, ADDONS, FRAMEXML
+    if "--interface" in sys.argv:
+        at = sys.argv.index("--interface")
+        if at + 1 >= len(sys.argv):
+            print("--interface wants a directory")
+            return 2
+        INTERFACE = Path(sys.argv[at + 1])
+        # Named FrameXML instead of the folder above it? Both spellings mean the
+        # same interface to a reader; only one of them is where the loader's
+        # answer starts.
+        if INTERFACE.name.lower() == "framexml":
+            INTERFACE = INTERFACE.parent
+        ADDONS, FRAMEXML = INTERFACE / "addons", INTERFACE / "framexml"
     if "--framexml" in sys.argv:
+        if not FRAMEXML.is_dir():
+            print(f"no FrameXML at {FRAMEXML} - name the extracted interface "
+                  f"with --interface PATH")
+            return 0
         return auditFrameXml(known_names())
     if not ADDONS.is_dir():
-        print(f"no addons at {ADDONS}")
+        # Not an answer about the interface - a statement about this checkout.
+        # Returning 0 with no line at all is what let this read as a clean audit
+        # on a machine with nothing to audit.
+        print(f"no addons at {ADDONS} - name the extracted interface with "
+              f"--interface PATH")
         return 0
     known = known_names()
-    wanted = sys.argv[1] if len(sys.argv) > 1 else None
+    # The first positional argument, with the option and its value taken out -
+    # the path after --interface does not start with a dash, so filtering on the
+    # dash alone made the interface directory the addon to look for and the run
+    # answered "no addon named C:\…\interface".
+    positional, skipping = [], False
+    for arg in sys.argv[1:]:
+        if skipping:
+            skipping = False
+            continue
+        if arg == "--interface":
+            skipping = True
+            continue
+        if arg.startswith("-"):
+            continue
+        positional.append(arg)
+    wanted = positional[0] if positional else None
 
     rows = []
     for d in sorted(p for p in ADDONS.iterdir() if p.is_dir()):
@@ -265,8 +309,11 @@ def main():
         else:
             print(f"{count:4}  {name}")
     total = len({m for _, _, ms in rows for m in ms})
-    print(f"\n{len(known)} names known; {total} distinct still missing "
-          f"across {len(rows)} addon(s)")
+    # The count starts its own line: a number buried after a semicolon in the
+    # middle of a sentence cannot be read out of a report by a guard that grades
+    # sweeps by their headline, and this is the line the guard reads.
+    print(f"\n{len(rows)} addon(s) read, {len(known)} names known")
+    print(f"{total} distinct still missing across them")
     return 0
 
 
