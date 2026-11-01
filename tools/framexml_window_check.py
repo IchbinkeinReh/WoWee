@@ -19,6 +19,16 @@ present all along.
 
     tools/framexml_window_check.py           # windows nothing has decided about
     tools/framexml_window_check.py --all     # including the ones ignored below
+    tools/framexml_window_check.py "<the extracted interface>"
+
+The interface is installed data rather than repository content, so the default
+is a path that is often not there. It used to be the only path: with no
+interface the run printed "0 top-level windows; 0 accounted for or ignored" and
+then listed every suppressed name as one "no XML declares", because there was no
+XML - which is a sweep reporting its own blindness as findings, and reporting
+coverage as the number zero. It now stops and says so. Naming FrameXML rather
+than the folder above it means the same interface; the loader's .toc walk starts
+one level up.
 
 Never fails the build: whether an unaccounted window matters depends on whether
 this client draws the same thing, which is a judgement about two interfaces
@@ -29,9 +39,34 @@ import re
 import sys
 from pathlib import Path
 
+# The loader is a sibling tool; the interpreter runs with -I, so the tools
+# directory has to be named to import it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from framexml_source import loaded_files  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
-FRAMEXML = ROOT / "Data" / "interface" / "framexml"
 TAKEOVER = ROOT / "src" / "ui" / "framexml_takeover.cpp"
+
+_pos = [a for a in sys.argv[1:] if not a.startswith("-")]
+# Spelled as one literal, not "Data" / "interface": sweep_guard.py looks for this
+# string to decide which tools need an installed interface it does not have here,
+# and a path built from two pieces is invisible to it.
+INTERFACE = Path(_pos[0]) if _pos else ROOT / "Data/interface"
+if INTERFACE.name.lower() == "framexml":
+    INTERFACE = INTERFACE.parent
+FRAMEXML = INTERFACE / "framexml"
+
+
+def loaded(suffix):
+    """The interface files the client opens, in one kind.
+
+    Every scan here used to glob: FrameXML's own folder for most of them, and
+    FrameXML's folder plus `<named path>/../addons/*/*.xml` for two - so naming
+    an installed interface still sent the addon half looking in the repository,
+    which is not the same interface. The loader walks the .toc chain and reaches
+    both halves wherever the tree lives.
+    """
+    return [p for p in loaded_files(INTERFACE) if p.suffix.lower() == suffix]
 
 # A named, non-virtual frame hung directly off UIParent.
 FRAME = re.compile(
@@ -90,7 +125,7 @@ def uiParentTemplates():
     client's own roll dialog with nothing reporting it.
     """
     templates = {}          # name -> (onUIParent, inheritedNames)
-    for path in sorted(FRAMEXML.glob("*.xml")):
+    for path in sorted(loaded(".xml")):
         text = path.read_text(errors="ignore")
         for attrs in FRAME.findall(text):
             if 'virtual="true"' not in attrs:
@@ -117,7 +152,7 @@ def uiParentTemplates():
 def topLevelWindows():
     onUIParent = uiParentTemplates()
     found = {}
-    for path in sorted(FRAMEXML.glob("*.xml")):
+    for path in sorted(loaded(".xml")):
         text = path.read_text(errors="ignore")
         for attrs in FRAME.findall(text):
             if 'virtual="true"' in attrs:
@@ -138,8 +173,7 @@ def topLevelWindows():
 def declaredNames():
     """Every frame or region name the XML declares, and the $parent suffixes."""
     plain, suffixes = set(), set()
-    for path in list(FRAMEXML.glob("*.xml")) + \
-                list((ROOT / "Data" / "interface" / "addons").glob("*/*.xml")):
+    for path in sorted(loaded(".xml")):
         text = path.read_text(errors="ignore")
         for n in re.findall(r'name="([^"]+)"', text):
             if n.startswith("$parent"):
@@ -162,7 +196,7 @@ def checkSuppressionNames():
     # Frames the Lua builds by name at run time: BuffButton1 comes from
     # CreateFrame("Button", "BuffButton"..i, ...) and no XML mentions it.
     builtPrefixes = set()
-    for path in FRAMEXML.glob("*.lua"):
+    for path in loaded(".lua"):
         text = path.read_text(errors="ignore")
         builtPrefixes |= set(re.findall(
             r'CreateFrame\(\s*"[^"]+"\s*,\s*"([A-Za-z]\w*)"\s*\.\.', text))
@@ -205,6 +239,16 @@ def checkSuppressionNames():
 
 def main():
     showAll = "--all" in sys.argv
+    if not INTERFACE.is_dir():
+        # Every number here is a count of frames read out of XML. With no
+        # interface this function used to print "0 top-level windows; 0
+        # accounted for or ignored" and then list all 155 suppressed names as
+        # ones "no XML declares" - the same run reading nothing and calling it a
+        # finding, which is how a blind sweep keeps its green.
+        print(f"no interface at {INTERFACE} - name the extracted interface "
+              "directory on the command line. Nothing was read, so nothing "
+              "below would mean anything.")
+        return 1
     if not TAKEOVER.is_file():
         print(f"no takeover file at {TAKEOVER}")
         return 0
@@ -245,7 +289,11 @@ def main():
             print(f"    {name:<38} {element}")
         print("    A name nothing declares suppresses nothing.\n")
 
-    print("Neither owned nor suppressed - check whether this client draws one:")
+    # Counted, so the list can be graded by a number rather than by someone
+    # reading it: it is long, and "how long" is the only question a check can
+    # answer without judgement.
+    print(f"{len(unknown)} neither owned nor suppressed - "
+          "check whether this client draws one:")
     for name, source in sorted(unknown.items()):
         print(f"    {name:<32} {source}")
     print("\nIf this client draws the same thing, name the frame in "
@@ -276,8 +324,7 @@ def checkInherits():
                   r'|Model|PlayerModel|DressUpModel|TabardModel|ColorSelect'
                   r'|SimpleHTML|Cooldown|QuestPOIFrame|Minimap|MovieFrame'
                   r'|FontString)')
-    xmls = sorted(FRAMEXML.glob("*.xml")) + \
-           sorted((ROOT / "Data" / "interface" / "addons").glob("*/*.xml"))
+    xmls = sorted(loaded(".xml"))
     declared, referenced = set(), {}
     for path in xmls:
         text = path.read_text(errors="ignore")

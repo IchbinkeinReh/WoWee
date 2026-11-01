@@ -683,6 +683,37 @@ CHECKS = [
     # social_panel.cpp draws from the same packets. They are
     # UiElement::Petition now.
     #
+    # Fifty-seven, where the read list was thirty-eight, because the check could
+    # not see windows declared in the interface's addon files: it globbed
+    # FrameXML's folder, and the half that looked for addons looked at a
+    # repository path rather than at the interface being checked. The nineteen
+    # that arrived are all of them, and none has been adjudicated yet -
+    # ArenaEnemyFrames, AuctionDressUpFrame, AuctionProgressFrame,
+    # BackpackTokenFrame, BarberShopBannerFrame, BattlefieldMinimap,
+    # BattlefieldMinimapTab, CalendarFrame, EventTraceFrame, GMChatFrame,
+    # GMChatStatusFrame, GMSurveyFrame, GuildBankPopupFrame, ItemSocketingFrame,
+    # KeyBindingFrame, MacroFrame, MacroPopupFrame, StopwatchFrame,
+    # TimeManagerFrame.
+    #
+    # Each is one of two questions, and they are opposite answers: this client
+    # draws that window itself, in which case FrameXML's copy has to be
+    # suppressed or the player sees two; or it does not, in which case the window
+    # is FrameXML's to draw and the takeover list has to name it so its API calls
+    # get answered instead of nil - which is the quiet failure, a window that is
+    # present and does nothing. Do not lower this ceiling to make it green;
+    # answering the question for one of them is what lowers it.
+    #
+    # The row is graded against the count the tool now prints, which it did not
+    # use to print - the list came out with no number on it. The check also had
+    # no argument of its own, so on a machine without the interface in the
+    # repository it read nothing and printed "0 top-level windows" plus every
+    # suppressed name as one "no XML declares", exit 0; it now stops and says so,
+    # and the source names `Data/interface` in one piece so the guard can see
+    # that this is one of the sweeps that needs an installed interface.
+    ("framexml_window_check.py",
+     r"^(\d+) neither owned nor suppressed", 57,
+     "top-level windows no one has decided draws them"),
+    #
     # So the ceiling guards a list that has been read the right way once, on
     # 2026-08-05, with the result written into the tool's docstring: fifteen
     # dormant, eighteen opened by a control in FrameXML's own interface, four
