@@ -44,6 +44,10 @@ SETTLED = {
         "texture's alpha and not a terrain chunk's blend, it is interleaved "
         "per pixel rather than run through a map, and the two formats are free "
         "to change without each other.",
+    ("a point's texel in a chunk's alpha map", "src/pipeline/bc_encode.cpp"):
+        "BC1's 5:6:5 colour packing. Green has six bits, so a byte scales by "
+        "63/255 there; it is a texture block's colour endpoint, not a place in "
+        "a chunk's 64x64 alpha map.",
 }
 
 # (what it is, the file that owns it, a regex only that knowledge writes)
