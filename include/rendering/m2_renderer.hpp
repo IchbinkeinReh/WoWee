@@ -1306,8 +1306,9 @@ private:
     /// that wrote them has been joined.
     std::vector<rt_lights::PointLight> rtParticleLights_;
     std::vector<rt_lights::ParticleGlow> rtEmitterGlowScratch_;
-    /// The glowing patches of a model just loaded (M2ModelGPU::glowPatches).
-    static void computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
+    /// The glowing patches of a model just loaded (M2ModelGPU::glowPatches);
+    /// `standIn` is the white texture a slot nothing filled draws.
+    static void computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& model, const VkTexture* standIn);
     /// A lamp with no light of its own and where its glass glows
     /// (M2ModelGPU::isLamp, lampLocal, lampBone).
     static void detectLamp(M2ModelGPU& gpuModel, const pipeline::M2Model& model);

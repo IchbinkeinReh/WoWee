@@ -2193,7 +2193,7 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
     // models that give light out of its occluders (registerRtModel).
     if (!skyMode_) {
         detectLamp(gpuModel, model);
-        computeGlow(gpuModel, model);
+        computeGlow(gpuModel, model, whiteTexture_.get());
     }
     registerRtModel(gpuModel, model);
     models[modelId] = std::move(gpuModel);
@@ -2244,7 +2244,7 @@ void M2Renderer::logRtLightDiag(const glm::vec3& eye, float radius) const {
     }
 }
 
-void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& model) {
+void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& model, const VkTexture* standIn) {
     gpuModel.glowPatches.clear();
     if (model.vertices.empty() || model.indices.empty()) return;
     // What gives a light already (an M2 light, fireLight, lampLight) - its
@@ -2261,6 +2261,13 @@ void M2Renderer::computeGlow(M2ModelGPU& gpuModel, const pipeline::M2Model& mode
     rt_lights::GlowBuilder builder;
     for (uint32_t bi = 0; bi < gpuModel.batches.size(); ++bi) {
         const auto& batch = gpuModel.batches[bi];
+        // A batch on the white stand-in says nothing of its colour: a slot
+        // somebody else fills (an item's or a creature's skin, which a
+        // unit's particle twin never gets - those batches are the character
+        // renderer's to draw) or a texture that did not load. Taken as white
+        // it gave Perdition's Blade, whose unlit blade is orange, a white
+        // light on the ground under it.
+        if (!batch.texture || batch.texture == standIn) continue;
         // What it shows (rt_lights::batchGlowColor): the texture's mean over
         // what of it is visible, times the batch's colour - here where it
         // does not move, per frame where it does (collectRtLights).
