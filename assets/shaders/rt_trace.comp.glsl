@@ -152,6 +152,15 @@ float rtHardShadowVis(float s) {
     return s > 1e-3 ? (s - 1.0) / s : 0.0;
 }
 
+// How far, in yards per unit of the sine between a face and its smooth
+// normal, a shadow ray is lifted off its triangle toward the smooth surface:
+// about a quarter of a ground triangle's edge (4.17 yards), the height of a
+// rounded surface over the chord of it.
+const float RT_TERMINATOR_LIFT = 1.0;
+// How far a ray leaving a triangle turned from its light has to go to be off
+// it: a ground triangle's longest edge, about three yards.
+const float RT_TERMINATOR_REACH = 3.0;
+
 // How far past the terminator the lamps' light wraps, (N.L + w) / (1 + w),
 // is pass.tune3.w: 0.25 (a face turned some 15 degrees from a lamp still
 // takes a little of it), 0.5 with "Softer lamp light" (some 30).
@@ -204,6 +213,29 @@ void main() {
         // by the ground's (ground clutter); this is only whether anything
         // stands between it and the sun.
         vec3 sunOrigin = dot(n, L) > 0.0 ? origin : p - n * rtSurfaceOffset(dist);
+        // The shadow terminator: a surface shaded by its smooth normal is
+        // lit where that faces the sun, but the ray leaves its flat
+        // triangle, and near the terminator the next triangles of a
+        // rounded hill rise across it - or the triangle itself is turned
+        // from the sun - and whole triangles went dark in hard wedges on a
+        // hillside under a low sun. The ray starts instead from about
+        // where the smooth surface would be (Hanika, "Hacking the Shadow
+        // Terminator"): lifted along the smooth normal by the triangle's
+        // bend from it, the more the lower the sun stands over the face.
+        float smoothToSun = dot(shadingN, L);
+        if (smoothToSun > 0.0) {
+            float bend = length(cross(n, shadingN));
+            float lift = RT_TERMINATOR_LIFT * bend * (1.0 - clamp(dot(n, L), 0.0, 1.0));
+            if (dot(n, L) <= 0.0) {
+                // A triangle turned from the sun its smooth normal still
+                // faces: the ray runs down into its own plane, and must be
+                // high enough to have left the triangle before it gets
+                // there - its far edge some RT_TERMINATOR_REACH away.
+                sunOrigin = p + shadingN * rtSurfaceOffset(dist);
+                lift = max(lift, RT_TERMINATOR_REACH * -dot(n, L) / max(dot(shadingN, n), 0.5));
+            }
+            sunOrigin += shadingN * lift;
+        }
         // Within the shadow map's reach the units' sun shadows are the map's:
         // drawn this frame in the pose on screen. Traced, they came a frame
         // late and settled over several more, and a running body trailed a
@@ -318,7 +350,18 @@ void main() {
         RtPointLight light = rtPointLights[picked[k]];
         float radius = rtLightRadius(abs(light.positionEnd.w));
         vec3 jitter = (vec3(rtRandom(rng), rtRandom(rng), rtRandom(rng)) * 2.0 - 1.0) * radius;
-        vec3 toLight = light.positionEnd.xyz + jitter - origin;
+        // Lifted off its triangle toward the smooth surface as the sun's ray
+        // is (RT_TERMINATOR_LIFT): a lamp low over a rounded floor or a
+        // hillside laid the same hard triangles over its light.
+        vec3 lampOrigin = origin;
+        {
+            vec3 dir = normalize(light.positionEnd.xyz - p);
+            if (dot(shadingN, dir) > 0.0) {
+                float bend = length(cross(n, shadingN));
+                lampOrigin += shadingN * (RT_TERMINATOR_LIFT * bend * (1.0 - clamp(dot(n, dir), 0.0, 1.0)));
+            }
+        }
+        vec3 toLight = light.positionEnd.xyz + jitter - lampOrigin;
         float d = length(toLight);
         // Short of the light by the standoff, and by the jitter's reach so a
         // point picked at the source's edge does not land inside the lamp.
@@ -327,13 +370,13 @@ void main() {
             // The units cast their shadows near them (rtUnitShadowReach).
             bool byUnit;
             rtUnitReach = rtUnitShadowReach(d, rng);
-            pointVis = rtOccludedBy(origin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
+            pointVis = rtOccludedBy(lampOrigin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
             rtUnitReach = 1e30;
             unitHit = unitHit || byUnit;
             // Stopped by the ground or a building - a floor, a wall: the
             // light is in another space and gives nothing here, whatever the
             // point shadows' strength (rtHardShadowVis).
-            if (pointVis < 0.5 && pass.tune2.w > 0.5 && rtOccludedByStructure(origin, toLight / d, reach, rng)) {
+            if (pointVis < 0.5 && pass.tune2.w > 0.5 && rtOccludedByStructure(lampOrigin, toLight / d, reach, rng)) {
                 pointVis = rtHardShadowVis(pass.tune2.y);
             }
         }
