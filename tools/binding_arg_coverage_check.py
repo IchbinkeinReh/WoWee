@@ -49,6 +49,19 @@ docstring is honest about which way each errs:
     that made four talent bindings read as unfixed immediately after they were
     fixed, which is the same shape as framexml_provides not seeing the
     set("Name", ...) registration form.
+  * "counts luaL_*(L, N)" means **readers** of the argument, not every call that
+    names L beside a number. It used to be the latter, which credited a binding
+    with `lua_pushboolean(L, 1)` (a value, not an index) and `lua_pop(L, 2)` (a
+    slot count), so `GetBinding(index[, mode])` looked like it read the mode
+    because the helper it ends with pops two, and a binding whose whole job is
+    pushing values hid the binding that called it. Requiring a reader rather than
+    a lua_* call is the direction that fails safe: a reader this pattern does not
+    know prints a row to go and read.
+  * a helper need not be spelled `static` or `inline` to count as one.
+    `uint64_t usedOnUnit(lua_State* L, int index)` is the argument reader the
+    three item-use bindings share, and none of them calls a lua_* function with
+    the target themselves, so the requiring storage class made all three look
+    like they ignored it.
 
 WHAT IT COULD NOT SEE UNTIL 2026-08-06
 
@@ -85,6 +98,13 @@ a table this client does not carry and which a guess would get wrong for half
 the classes. Wrong is wrong either way; a made-up formula would merely be
 harder to notice.
 
+It is not in the list below the count either, and that is a measurement worth
+keeping. Its body reads no argument at all, which is not "one short of the call"
+- the alias answers the whole call from the player, whatever it is handed. Said
+apart, it sits with the other bindings of that shape, and the number they come
+to is printed as well: the fault is real in each and a comma count cannot grade
+it, so it is reported rather than counted.
+
 Nor a binding whose extra argument is genuinely optional. Some of what is left
 is that: the show-realm flag on GetUnitName, whose answer is a realm this client
 never has, the exactMatch flag on the three party-assignment names, which every
@@ -96,21 +116,28 @@ WHAT THE SECOND ARGUMENT SPLITS
 
     tools/binding_arg_coverage_check.py "<the extracted interface>" "<strings.tsv>"
 
-WHAT THE SECOND ARGUMENT SPLITS
-
-    tools/binding_arg_coverage_check.py "<the extracted interface>" "<strings.tsv>"
-
 The installed interface is a post-Cataclysm FrameXML wearing a 30300 tag, so a
 name here could be one that binary never had. Pass the decompile's `strings.tsv`
 and the rows split on whether the client's own strings carry the name, the same
 test framexml_live_stubs.py applies. Run that on 2026-11-01 and it filters one
-row of 47: GetUnitName, which unitframe.lua:468 defines for itself, so what the
-interface calls by that name is its own function and the native binding is
-shadowed before anything can reach it. That the other 46 come back is the useful
-half: GetActiveTalentGroup, GetNumTalentGroups, AddPreviewTalentPoints and the
-rest of the dual-spec talent names read like a feature from a decade later and
-are in the 12340 client after all. Guessing which names are new is worth as much
-here as anywhere else, so the split runs rather than a rule of thumb.
+row of the thirty-seven: GetUnitName, which unitframe.lua:468 defines for
+itself, so what the interface calls by that name is its own function and the
+native binding is shadowed before anything can reach it. That the other
+thirty-six come back is the useful half: GetActiveTalentGroup,
+GetNumTalentGroups, AddPreviewTalentPoints and the rest of the dual-spec talent
+names read like a feature from a decade later and are in the 12340 client after
+all. Guessing which names are new is worth as much here as anywhere else, so the
+split runs rather than a rule of thumb.
+
+The split runs over the counted rows only. The second list describes a shape
+rather than ratcheting a count, and the test would sort nothing out of it
+anyway: every one of the fourteen names spot-checked there on 2026-11-01 - the
+three KBSetup_*, the three voice-session names, GetMultiCastTotemSpells,
+UnitClassBase, GetGuildInfo, GetMacroInfo, GetLFDChoiceInfo,
+GetAttackPowerForStat, UnitIsSameServer and IsSelectedSpell - is a name the 12340
+client carries.
+Those are bindings asked about a feature that binary had, answering from
+themselves instead of from what they were given.
 
 The count the ceiling is held to stays the unsplit one: the split says which
 rows to read, not how many faults there are.
@@ -175,7 +202,19 @@ def passed_by_interface():
 
 
 def _max_index(body):
-    idx = [int(n) for n in re.findall(r"lua(?:L)?_\w+\(\s*L\s*,\s*(\d+)", body)]
+    """The highest argument index a body reads with its own hands.
+
+    Readers only. The pattern used to be "any lua_* call with a number after L",
+    which also caught the pushers and the stack shufflers: `lua_pushboolean(L, 1)`
+    hands the interpreter a *value* and `lua_pop(L, 2)` counts slots, and each of
+    those made a binding look like it had taken an argument. A helper whose whole
+    job is pushing two values scored two, and the binding that called it was
+    dropped from the list - the exact shape of fault this sweep exists to find.
+    Excluded that way round is the safe direction too: a missed reader shows up
+    as a row to go and read, not as a clean sweep.
+    """
+    readers = r"(?:luaL_(?:check|opt)\w+|lua_(?:to|is)\w+)\(\s*L\s*,\s*(\d+)"
+    idx = [int(n) for n in re.findall(readers, body)]
     return max(idx) if idx else 0
 
 
@@ -186,7 +225,17 @@ def helper_reach():
     out = {}
     # Braces, for the reason given where the bodies are read: a one-line helper
     # has no closing brace at the start of a line.
-    for m in re.finditer(r"(?:inline|static)\s+[\w:*&<> ]+?\s(\w+)\(lua_State\* L[^)]*\)\s*\{(?:\.\w+\s*=\s*)?", src):
+    #
+    # And a helper need not be spelled static or inline at all: `uint64_t
+    # usedOnUnit(lua_State* L, int index)` is the argument reader the three
+    # item-use bindings share, none of which call a lua_* function with the
+    # target themselves. Requiring the storage class made those three look like
+    # they ignored the target their caller passes, right after the helper that
+    # hands it to the wire was written. A definition at the start of a line
+    # counts with or without it - the `lua_State* L` inside the parentheses is
+    # what says definition rather than call.
+    for m in re.finditer(r"^[ \t{]*(?:static\s+|inline\s+)?[\w:*&<> ]+?\s(\w+)\(lua_State\* L[^)]*\)\s*\{(?:\.\w+\s*=\s*)?",
+                         src, re.M):
         depth, i = 1, m.end()
         while i < len(src) and depth:
             if src[i] == "{":
@@ -245,6 +294,7 @@ def main():
     helpers = helper_reach()
 
     rows = []
+    blind = []
     for name, impl in sorted(registered.items()):
         if name not in widest:
             continue
@@ -260,7 +310,25 @@ def main():
                 reads = max(reads, helpers[fn])
             if literal and fn in helpers:
                 reads = max(reads, int(literal))
-        if reads > 0 and widest[name] > reads:
+        # A body that reads nothing is not "one argument short of the call", it
+        # answers the whole call from elsewhere - GetAttackPowerForStat(stat,
+        # value) aliased to GetAttackPower, which hands back the player's total
+        # melee power whatever it is handed. Counting that as "reads 1, passes 2"
+        # made it one more row of the list; asking for neither is a different
+        # width of fault, so it is listed apart and kept out of the count.
+        if reads == 0 and widest[name] > reads:
+            # Split again by whether the body answers at all, because the two
+            # halves are two different faults and only one of them is new here.
+            # `(void)L; return 0;` is a binding that has not been written - the
+            # other sweep (framexml_live_stubs.py) reports every one of those by
+            # name already, and repeating 150 of them buries what the count is
+            # for. A body that *pushes values* while ignoring everything it was
+            # handed is the fault this list exists to catch: the call answers,
+            # confidently, about the wrong thing.
+            answers = re.search(r"lua_push\w+|luaReturn\w+|return\s+[1-9]", body)
+            if answers:
+                blind.append((widest[name], name))
+        elif reads and widest[name] > reads:
             rows.append((widest[name] - reads, name, widest[name], reads))
 
     rows.sort(reverse=True)
@@ -273,6 +341,17 @@ def main():
         print(f"  passes {passes}, reads {reads}   {name}")
     if not rows:
         print("  (none)")
+
+    # Printed apart, and deliberately outside the count above: a binding that
+    # names no argument at all has not "missed the last one", it answers the
+    # whole call from something else.
+    if blind:
+        print()
+        print(f"{len(blind)} of them read no argument at all, whatever the interface")
+        print("passes - each answers the call from elsewhere, which a comma count")
+        print("cannot grade:")
+        for passes, name in sorted(blind, reverse=True):
+            print(f"  passes {passes}, reads none   {name}")
 
     if STRINGS and STRINGS.is_file():
         known = set()

@@ -720,6 +720,10 @@ CHECKS = [
     # sweep here that asks whether an answer used everything it was told -
     # every other one asks whether a name is answered, and these names all are.
     #
+    # The guard runs it with no interface to read, so this entry is skipped in a
+    # guard run and the ceiling only bites when the sweep is run on its own with
+    # the installed interface named, as its own usage line says.
+    #
     # Seven faults on 2026-08-05, four of which *acted* on the wrong thing:
     # dragging a pet spell put a player spell on the bar, clicking a pet talent
     # spent a point in the player's tree, cancelling an aura by name raised
