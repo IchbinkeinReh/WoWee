@@ -6612,6 +6612,7 @@ void Renderer::recordRtLighting() {
     in.interiorFullAt = currentFrameData.rtTune2.z;
     in.maxLight = currentFrameData.rtTune2.w;
     in.lampWrap = lampWrap(rtSoftLamps_);
+    in.unitShadowReach = rtUnitShadowReach_;
     in.minBrightness = rtMinBrightnessFactor(rtMinBrightnessPercent_);
     {
         const NormalBlendCosines blend = normalBlendCosines(rtNormalKeepDeg_, rtNormalFaceDeg_);

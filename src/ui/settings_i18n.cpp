@@ -193,6 +193,14 @@ constexpr SettingGerman kGerman[] = {
      "weicheres, flacheres Lampenlicht, und die von einer niedrigen Kerze knapp abgewandten "
      "Flächen - die Kante einer Stufe, ein Bordstein - ein wenig erhellt statt dunkel.",
      nullptr, nullptr, nullptr},
+    {"rtunitshadowreach",
+     "Figurenschattenweite (m)",
+     "Wie weit vom Körper der Schatten einer Figur oder Kreatur von einer Lampe, einem Feuer "
+     "oder einem Leuchten fallen darf: der Boden neben ihr, eine Wand hinter ihr. Kurz hält die "
+     "Schatten nahe am Körper, wo seine verfolgten Teile ihn gut wiedergeben; lang lässt sie eine "
+     "Säule hinaufsteigen oder einen Raum durchqueren, wo die groben Gelenke der Teile mehr "
+     "auffallen. 5 ist die Reichweite wie bisher.",
+     nullptr, nullptr, nullptr},
     {"rtminbrightness",
      "Mindesthelligkeit (%)",
      "Wie viel ihrer Helligkeit ohne Raytracing eine Fläche behält, wo verfolgte Schatten, "

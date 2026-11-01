@@ -42,7 +42,9 @@ layout(set = 0, binding = 0) uniform RtPassData {
     vec4 rays;           // rays a pixel, 1-5: x toward the sun, y occlusion,
                          // z toward a point light; w a probe's rays a direction
     vec4 tune4;          // xy the normal blend's cosines, near and far
-                         // (rtNormalAgreement, rt_normal_blend.hpp)
+                         // (rtNormalAgreement, rt_normal_blend.hpp); z how
+                         // far a unit's lamp shadow reaches, yards
+                         // (rtUnitShadowReach)
     // The probe volume (rt_gi.glsli), read only by the probe passes.
     vec4 giVolume[2];        // the grid this frame's update writes
     vec4 giVolumeMod[2];

@@ -167,6 +167,9 @@ public:
         float maxLight = 0.0f;
         /// How far past the terminator the lamps' light wraps (rt_lamp_wrap.hpp).
         float lampWrap = 0.25f;
+        /// How far, in yards, a unit's shadow of a lamp reaches from it
+        /// (rtUnitShadowReach in rt_trace.comp).
+        float unitShadowReach = 5.0f;
         /// The least the traced scale darkens a surface to (rt_min_brightness.hpp).
         float minBrightness = 0.0f;
         /// The normal blend's cosines (rt_normal_blend.hpp), near and far.

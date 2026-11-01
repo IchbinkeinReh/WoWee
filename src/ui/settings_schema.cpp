@@ -303,6 +303,16 @@ constexpr SettingDesc kSchema[] = {
      "they shine on: softer, flatter lamp light, and the faces just\n"
      "turned away from a low candle - the bevel of a step, a curb -\n"
      "lit a little instead of dark.", "", 0, "raytracedlighting"},
+    // How far a unit's shadow of a lamp reaches from its body
+    // (rtUnitShadowReach in rt_trace.comp): 5 as it always was.
+    {"rtunitshadowreach", "Unit shadow reach (yards)", SettingKind::Int, 1, 100, 1,
+     "Ray Tracing", "",
+     "How far from a character or creature its shadow of a lamp, a fire\n"
+     "or a glow may fall: the floor beside it, a wall behind it. Short\n"
+     "keeps the shadows close to the body, where its traced pieces hold\n"
+     "it well; long lets them climb a pillar or cross a room, where the\n"
+     "pieces' coarse joints show more. 5 is the reach as it always was.", "", 5,
+     "raytracedlighting"},
     // A floor on what the tracing darkens a surface to (rt_min_brightness.hpp):
     // 0 the tracing as it always was.
     {"rtminbrightness", "Minimum brightness (%)", SettingKind::Int, 0, 50, 1,

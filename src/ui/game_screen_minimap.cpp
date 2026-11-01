@@ -2040,6 +2040,7 @@ void GameScreen::saveSettings() {
     out << "ray_traced_lighting=" << settingsPanel_.pendingRtLighting << "\n";
     out << "rt_full_resolution=" << (settingsPanel_.pendingRtFullRes ? 1 : 0) << "\n";
     out << "rt_soft_lamps=" << (settingsPanel_.pendingRtSoftLamps ? 1 : 0) << "\n";
+    out << "rt_unit_shadow_reach=" << settingsPanel_.pendingRtUnitShadowReach << "\n";
     out << "rt_min_brightness=" << settingsPanel_.pendingRtMinBrightness << "\n";
     out << "rt_water=" << (settingsPanel_.pendingRtWater ? 1 : 0) << "\n";
     out << "rt_wave_amp=" << settingsPanel_.pendingRtWaveAmp << "\n";
@@ -2393,6 +2394,8 @@ void GameScreen::loadSettings() {
             else if (key == "ray_traced_lighting") settingsPanel_.pendingRtLighting = std::clamp(std::stoi(val), 0, 3);
             else if (key == "rt_full_resolution") settingsPanel_.pendingRtFullRes = (std::stoi(val) != 0);
             else if (key == "rt_soft_lamps") settingsPanel_.pendingRtSoftLamps = (std::stoi(val) != 0);
+            else if (key == "rt_unit_shadow_reach")
+                settingsPanel_.pendingRtUnitShadowReach = std::clamp(std::stoi(val), 1, 100);
             else if (key == "rt_normal_keep")
                 settingsPanel_.pendingRtNormalKeep =
                     std::clamp(std::stoi(val), 0, rendering::kNormalBlendMaxDegrees);

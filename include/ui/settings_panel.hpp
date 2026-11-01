@@ -83,6 +83,7 @@ public:
     /// The resolution back to the first-run size (Window::getFirstRunWidth),
     /// applied; part of restoreGraphicsDefaults and Restore Video Defaults.
     void restoreDefaultResolution();
+    int pendingRtUnitShadowReach = 5;  ///< a unit's lamp shadow's reach, yards (rtUnitShadowReach)
     int pendingRtMinBrightness = 0;   ///< the traced darkening's floor, % (rt_min_brightness.hpp)
     bool pendingRtWater = true;       ///< "Ray traced water" (water_rt.glsli)
     int pendingRtWaveAmp = 100;       ///< its waves' height, % of the default

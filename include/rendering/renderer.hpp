@@ -766,6 +766,8 @@ public:
     void setRtFullResolution(bool full);
     /// The lamps' wider wrap (Ray Tracing, "Softer lamp light"; rt_lamp_wrap.hpp).
     void setRtSoftLamps(bool softer) { rtSoftLamps_ = softer; }
+    /// The Ray Tracing page's "Unit shadow reach" (rtUnitShadowReach).
+    void setRtUnitShadowReach(float yards) { rtUnitShadowReach_ = yards; }
     /// The Ray Tracing page's "Minimum brightness (%)" (rt_min_brightness.hpp).
     void setRtMinBrightness(int percent) { rtMinBrightnessPercent_ = percent; }
     /// The Ray Tracing page's two "Normal blend" angles (rt_normal_blend.hpp).
@@ -1162,6 +1164,7 @@ private:
     std::string rtHeldOffLogged_;
     LightingTune lightingTune_{};
     bool rtSoftLamps_ = false;
+    float rtUnitShadowReach_ = 5.0f;
     bool rtWater_ = true;  ///< "Ray traced water" (water_rt.glsli)
     float rtWaveAmp_ = 1.0f;
     float rtWaveFreq_ = 1.0f;

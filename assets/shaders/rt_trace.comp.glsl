@@ -98,9 +98,10 @@ float rtLightRadius(float reach) {
 // shadow ray stops this short of it rather than finding the lamp itself.
 const float RT_LIGHT_STANDOFF = 0.45;
 // How far a unit's point-light shadow reaches from its body: no farther than
-// this, nor than three quarters of the way from the surface to the light,
-// and fading out over the last half of it (rtUnitShadowReach).
-const float RT_UNIT_SHADOW_MAX = 5.0;
+// pass.tune4.z yards (the Ray Tracing page's "Unit shadow reach", 5 by
+// default), nor than three quarters of the way from the
+// surface to the light, and fading out over the last half of it
+// (rtUnitShadowReach).
 const float RT_UNIT_SHADOW_SHARE = 0.75;
 const float RT_UNIT_SHADOW_FADE = 0.5;
 
@@ -114,15 +115,16 @@ const float RT_UNIT_SHADOW_FADE = 0.5;
 // farther the surface is from the body against the body's distance to the
 // light, the more the pieces' every error is magnified, to a hard,
 // room-sized wedge (the Goldshire inn's upper floor). So the body occludes
-// only the part of the ray near the surface - within RT_UNIT_SHADOW_MAX
+// only the part of the ray near the surface - within pass.tune4.z
 // yards and within RT_UNIT_SHADOW_SHARE of the way to the light, so its
-// shadow is never more than four times its size - and that end is drawn per
+// shadow is, at the 5 yards it defaults to, never more than four times its
+// size - and that end is drawn per
 // ray, down to RT_UNIT_SHADOW_FADE of it: the shadow is whole up to about
 // 1.6 times the body's size and fades out beyond, rather than stops at an
 // edge. A unit's own surface never meets its own pieces (its group's box,
 // rtInGroup), which do not hold its skin closely enough to shadow it.
 float rtUnitShadowReach(float d, inout uint rng) {
-    float reach = min(RT_UNIT_SHADOW_MAX, RT_UNIT_SHADOW_SHARE * d);
+    float reach = min(pass.tune4.z, RT_UNIT_SHADOW_SHARE * d);
     return reach * mix(RT_UNIT_SHADOW_FADE, 1.0, rtRandom(rng));
 }
 
