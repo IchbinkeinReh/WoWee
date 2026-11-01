@@ -286,6 +286,10 @@ if(ANDROID OR IOS)
         set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
         set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
         set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+        # CMake makes every iOS executable an app bundle unless told not to.
+        # Only the client is one (its add_executable says so); the command
+        # line tools stay plain programs, which their install rules expect.
+        set(CMAKE_MACOSX_BUNDLE OFF)
         if(OPENSSL_ROOT_DIR)
             list(APPEND CMAKE_FIND_ROOT_PATH "${OPENSSL_ROOT_DIR}")
         endif()
@@ -1516,6 +1520,18 @@ endif()
 if(APPLE)
     target_link_libraries(wowee PRIVATE "-framework Foundation")
 endif()
+if(IOS)
+    # miniaudio's iOS backend talks to AVAudioSession, which is Objective-C:
+    # the one unit that compiles it is Objective-C++ there, outside the C++
+    # precompiled header. Vendored, and its iOS paths have the unused
+    # parameters Android's had, and AVAudioSession calls newer SDKs deprecate.
+    set_source_files_properties(src/audio/audio_engine.cpp PROPERTIES
+        XCODE_EXPLICIT_FILE_TYPE sourcecode.cpp.objcpp
+        SKIP_PRECOMPILE_HEADERS ON
+        COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-deprecated-declarations")
+    target_link_libraries(wowee PRIVATE
+        "-framework AVFoundation" "-framework AudioToolbox" "-framework CoreAudio")
+endif()
 if(WIN32)
     # winmm: timeBeginPeriod/timeEndPeriod, which the frame pacer uses to ask
     # for a 1ms sleep granularity. Windows defaults to a 15.6ms timer tick -
@@ -1771,6 +1787,8 @@ endif()
 # Install targets
 install(TARGETS wowee
     RUNTIME DESTINATION bin
+    # The iOS app (MACOSX_BUNDLE).
+    BUNDLE DESTINATION .
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
 )
