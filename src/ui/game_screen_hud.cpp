@@ -507,7 +507,6 @@ void GameScreen::renderTouchChatButton([[maybe_unused]] game::GameHandler& gameH
     // then, and Back or the keyboard's own enter closes the box again.
     if (ImGui::GetIO().WantTextInput || interfaceTakingTypedInput()) return;
 
-    const ImGuiIO& io = ImGui::GetIO();
     const float h = ImGui::GetFrameHeight() * 1.8f;
     const float w = h * 2.2f;
     const float margin = h * 0.4f;
@@ -600,7 +599,6 @@ void GameScreen::renderWorldMap(game::GameHandler& gameHandler) {
     // and could not be closed. Back closes it as Escape does; this is the
     // button for whoever does not think to try that.
     if (wm->isOpen() || wm->isTaxiMapOpen()) {
-        const ImGuiIO& io = ImGui::GetIO();
         const float side = ImGui::GetFrameHeight() * 1.8f;
         const float margin = side * 0.4f;
         const safe_area::Rect safe = safe_area::rect();
