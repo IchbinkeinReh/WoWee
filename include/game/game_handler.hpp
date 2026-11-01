@@ -1700,6 +1700,9 @@ public:
     uint8_t getTalentRank(uint32_t talentId) const {
         return spellHandler_ ? spellHandler_->getTalentRank(talentId) : 0;
     }
+    uint8_t getTalentRank(uint8_t spec, uint32_t talentId) const {
+        return spellHandler_ ? spellHandler_->getTalentRank(spec, talentId) : 0;
+    }
     void learnTalent(uint32_t talentId, uint32_t requestedRank);
     void learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
     void switchTalentSpec(uint8_t newSpec);

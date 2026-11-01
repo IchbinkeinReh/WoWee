@@ -876,17 +876,42 @@ CHECKS = [
     # value has no reader in the binary either - the same shape as
     # JoinPermanentChannel's fourth, and said at the binding now.
     #
-    # What is still open in the family, so it is not lost: the groupIndex of
-    # GetTalentTabInfo, GetTalentInfo, GetTalentPrereqs and
-    # AddPreviewTalentPoints does have a reader - 0x005c57d0 turns the argument
-    # into a zero-based group when it is given and falls back to the player's own
-    # active group when it is not, and that group picks which record the points
-    # and ranks come from (0x005c6080).  Those four still read the active spec
-    # whatever the argument says; closing them needs the second inspect group
-    # stored as well, since the inspect reader keeps only the active group's
-    # ranks and throws the other group's list away.
+    # Twenty-eight: the groupIndex rows are the rest of that family, and they
+    # are closed.  0x005c57d0 is ported as one helper - a number argument
+    # becomes a zero-based group, and anything else, including no argument at
+    # all, is the group the player is standing in; GetTalentPrereqs inlines the
+    # same three lines instead of calling it.  An index out of range is not
+    # clamped, because the group is a record index and a record that is not
+    # there answers no points and no ranks: GetTalentTabInfo pushes 0 and 0, and
+    # GetTalentInfo pushes the -1 and 0xffffffff it starts the pair at, each one
+    # pushed one-based.  GetTalentTabInfo reads it from argument 4, GetTalentInfo
+    # and GetTalentPrereqs from 5 - Prereqs also reads argument 3 as isInspect
+    # now, which is what picks the class whose layout the prerequisite
+    # positions come from, so inspecting another class stopped drawing lines to
+    # the viewer's own tree.  GetTalentLink takes the same argument, and its
+    # rank from the same record; note that 0x005c7ce0 reads that slot twice, at
+    # :6701 for the group and again at :6704 as the switch choosing between the
+    # record's learned rank and its preview rank, although the Usage line puts
+    # isPreview in the sixth slot - the panel names a group on every call, so a
+    # copied link carries the preview figure, and it is read as the binary does
+    # rather than as the Usage line suggests it meant.
+    # AddPreviewTalentPoints, GetGroupPreviewTalentPointsSpent and
+    # ResetGroupPreviewTalentPoints take the same pair and refuse a group other
+    # than the one the staging store belongs to: the client keeps a preview
+    # total per group (0x005c6010 totals the record the argument picks), there
+    # is one store here, and the panel only ever stages for the active spec
+    # (blizzard_talentui.lua:443 gates the click on it).
+    #
+    # The inspect half needed the second list, and it is stored now:
+    # SMSG_INSPECT_TALENT carries a talent list for every group the target has,
+    # and the reader kept the active group's and threw the other away, so
+    # InspectResult::talentRanks is talentRanksByGroup.  The total still counts
+    # the active group alone, which is what stopped the double-counting in the
+    # first place.  What stays unmodelled in that family, said at the bindings:
+    # pet talents answer nil or zero as they did, and a preview staged for the
+    # inactive spec is a state nothing here carries.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 32,
+     r"^(\d+) binding\(s\) read fewer arguments", 28,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,

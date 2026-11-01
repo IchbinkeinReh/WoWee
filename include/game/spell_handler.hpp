@@ -308,8 +308,15 @@ public:
         return spec < 2 ? learnedGlyphs_[spec] : empty;
     }
     [[nodiscard]] uint8_t getTalentRank(uint32_t talentId) const {
-        auto it = learnedTalents_[activeTalentSpec_].find(talentId);
-        return (it != learnedTalents_[activeTalentSpec_].end()) ? it->second : 0;
+        return getTalentRank(activeTalentSpec_, talentId);
+    }
+    /// The rank of a talent in one named spec's list. A talent function asked
+    /// about group 2 has to ask this: the lists are per spec, and the
+    /// no-argument form reads whichever one the player happens to be on.
+    [[nodiscard]] uint8_t getTalentRank(uint8_t spec, uint32_t talentId) const {
+        if (spec >= 2) return 0;
+        auto it = learnedTalents_[spec].find(talentId);
+        return (it != learnedTalents_[spec].end()) ? it->second : 0;
     }
     void learnTalent(uint32_t talentId, uint32_t requestedRank);
     /// The previewed talents learned in one request, each at the rank it is

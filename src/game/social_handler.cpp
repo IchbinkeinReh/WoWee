@@ -1545,9 +1545,13 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
     }
 
     // Every spec is sent. Counting all of them reported a dual-spec character
-    // as having spent roughly twice what they have.
+    // as having spent roughly twice what they have - the count stays with the
+    // active group - but every group's list is kept, because the client reads
+    // the group back out of the argument the talent frame passes it
+    // (0x005c57d0), and 0x005c6080 picks the inspect record for that group out
+    // of a per-group array of its own.
     uint32_t totalTalents = 0;
-    std::unordered_map<uint32_t, uint8_t> inspectTalents;
+    std::array<std::unordered_map<uint32_t, uint8_t>, 2> inspectTalents;
     for (uint8_t g = 0; g < talentGroupCount && g < 2; ++g) {
         bytesLeft = packet.getRemainingSize();
         if (bytesLeft < 1) break;
@@ -1557,14 +1561,12 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
             if (bytesLeft < 5) break;
             const uint32_t talentId = packet.readUInt32();
             const uint8_t rank = packet.readUInt8();
-            if (g == activeTalentGroup) {
-                // Rank is zero-based on the wire, as it is for the player's own
-                // talents. The inspect talent tab was counting these and
-                // throwing them away, so it drew the viewer's own tree with the
-                // target's name over it.
-                inspectTalents[talentId] = static_cast<uint8_t>(rank + 1u);
-                totalTalents++;
-            }
+            // Rank is zero-based on the wire, as it is for the player's own
+            // talents. The inspect talent tab was counting these and
+            // throwing them away, so it drew the viewer's own tree with the
+            // target's name over it.
+            inspectTalents[g][talentId] = static_cast<uint8_t>(rank + 1u);
+            if (g == activeTalentGroup) totalTalents++;
         }
         bytesLeft = packet.getRemainingSize();
         if (bytesLeft < 1) break;
@@ -1609,7 +1611,7 @@ void SocialHandler::handleInspectResults(network::Packet& packet) {
     // carried go to the gear cache, where the links and tooltips ask for them.
     for (size_t s = 0; s < gear.size(); ++s)
         inspectResult_.enchantIds[s] = static_cast<uint16_t>(gear[s].enchantId);
-    inspectResult_.talentRanks       = std::move(inspectTalents);
+    inspectResult_.talentRanksByGroup = std::move(inspectTalents);
     inspectResult_.classId           = owner_.lookupPlayerClass(guid);
 
     // The gear is in this packet. It used to be looked up from the cache that
