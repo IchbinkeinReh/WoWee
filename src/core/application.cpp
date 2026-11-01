@@ -585,6 +585,9 @@ void applyLifecycle(Window* window, bool background, const char* why) {
         // As the focus change would leave it: Sound in Background decides
         // only for a window that lost the focus, and a resumed one has it.
         audio::AudioEngine::instance().setSuspended(false);
+        // Whether the connection lived through it (WILL_ENTER_FOREGROUND
+        // never gets here, so this is once per return).
+        if (auto* gh = core::Application::getInstance().getGameHandler()) gh->noteResumedFromBackground();
     }
 }
 

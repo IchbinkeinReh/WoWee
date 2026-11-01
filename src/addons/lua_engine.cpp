@@ -21,6 +21,7 @@
 // The clipboard, for paste and copy in an edit box.
 #include <SDL3/SDL.h>
 #include "addons/lua_api_helpers.hpp"
+#include "network/world_socket.hpp"
 #include "addons/addon_lua_snippets.hpp"
 #include "game/chat_channels.hpp"
 #include "game/interface_text.hpp"
@@ -6661,6 +6662,30 @@ void LuaEngine::registerCoreAPI() {
             return 0;
         });
         lua_setglobal(L_, "__WoweePressKey");
+
+        // __WoweeTestLifecycle("background" | "foreground"): what a phone
+        // sends when the app leaves the screen and comes back, on a desktop.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            const std::string which = luaL_checkstring(L, 1);
+            SDL_Event e{};
+            e.type = which == "background" ? SDL_EVENT_DID_ENTER_BACKGROUND : SDL_EVENT_DID_ENTER_FOREGROUND;
+            SDL_PushEvent(&e);
+            return 0;
+        });
+        lua_setglobal(L_, "__WoweeTestLifecycle");
+        // __WoweeTestDeafen(true): every packet from the server dropped from
+        // now on - a connection that died with no word, seen from here.
+        // __WoweeTestCloseSocket(): the connection closed under the client.
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L)) gh->setDeafForTest(lua_toboolean(L, 1) != 0);
+            return 0;
+        });
+        lua_setglobal(L_, "__WoweeTestDeafen");
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            if (auto* gh = getGameHandler(L); gh && gh->getSocket()) gh->getSocket()->disconnect();
+            return 0;
+        });
+        lua_setglobal(L_, "__WoweeTestCloseSocket");
     }
 
     // The micro menu's game-menu button reaches this client's own settings.

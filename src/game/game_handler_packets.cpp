@@ -4285,6 +4285,7 @@ void GameHandler::handlePacket(network::Packet& packet) {
 }
 
 void GameHandler::enqueueIncomingPacket(const network::Packet& packet) {
+    if (deafForTest_) return;
     if (pendingIncomingPackets_.size() >= kMaxQueuedInboundPackets) {
         LOG_ERROR("Inbound packet queue overflow (", pendingIncomingPackets_.size(),
                   " packets); dropping oldest packet to preserve responsiveness");

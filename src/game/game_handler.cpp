@@ -279,6 +279,15 @@ void GameHandler::resetDbcCaches() {
     LOG_INFO("GameHandler: DBC caches cleared for expansion switch");
 }
 
+void GameHandler::noteResumedFromBackground() {
+    if (!socket || !socket->isConnected() || state == WorldState::DISCONNECTED) return;
+    resumeRxMark_ = lastRxTime_;
+    resumeAnswerDeadline_ = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(static_cast<int>(kResumeAnswerSeconds * 1000.0f));
+    LOG_WARNING("Back from the background: asking the server whether the connection lives");
+    if (state == WorldState::IN_WORLD) sendPing();
+}
+
 bool GameHandler::isConnected() const {
     return socket && socket->isConnected();
 }
@@ -413,6 +422,20 @@ void GameHandler::updateNetworking() {
         if (silenceMs > game::RX_SILENCE_CRITICAL_MS && !rxSilence15sLogged_) {
             rxSilence15sLogged_ = true;
             LOG_WARNING("RX SILENCE: 15s - server appears to have stopped sending");
+        }
+    }
+
+    // Back from the background: anything from the server says the connection
+    // lived; nothing in time, and it is closed - the check below then takes it
+    // the way it takes a connection the server closed.
+    if (resumeAnswerDeadline_) {
+        if (!socket || !socket->isConnected() || lastRxTime_ > resumeRxMark_) {
+            resumeAnswerDeadline_.reset();
+        } else if (std::chrono::steady_clock::now() >= *resumeAnswerDeadline_) {
+            resumeAnswerDeadline_.reset();
+            LOG_WARNING("No answer from the server in ", kResumeAnswerSeconds,
+                        " s after coming back from the background; closing the connection");
+            socket->disconnect();
         }
     }
 

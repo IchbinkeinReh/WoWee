@@ -5075,6 +5075,19 @@ public:
     void sayGameError(const server_notice::GameError& error, const std::vector<std::string>& args = {});
     void raiseDifficultyCooldownError(uint32_t ms);
     void sendPing();
+    /// The app came back from the background (a phone's home screen): the
+    /// connection may have died meanwhile without a word - the network
+    /// changed, or the server gave up on a client that did not answer - and
+    /// a half-open socket reads as one that is merely quiet. The server is
+    /// pinged now; with nothing from it within kResumeAnswerSeconds the
+    /// connection is closed, and the closed socket goes the way any other
+    /// does (update: "Server closed connection", disconnect, the login).
+    void noteResumedFromBackground();
+    static constexpr float kResumeAnswerSeconds = 10.0f;
+    /// Test hook (with WOWEE_AUTO_LUA only, through __WoweeTestDeafen): every
+    /// packet from now on is dropped as it arrives, which is what a link
+    /// that died in the background looks like from this side.
+    void setDeafForTest(bool deaf) { deafForTest_ = deaf; }
     void setTransportAttachment(uint64_t childGuid, ObjectType type,
                                 uint64_t transportGuid, const glm::vec3& localOffset,
                                 bool hasLocalOrientation, float localOrientation,
@@ -6434,6 +6447,11 @@ private:
 
     // ---- RX silence detection ----
     std::chrono::steady_clock::time_point lastRxTime_{};
+    // noteResumedFromBackground: until when an answer is waited for, and the
+    // last packet's time when the wait began.
+    std::optional<std::chrono::steady_clock::time_point> resumeAnswerDeadline_;
+    std::chrono::steady_clock::time_point resumeRxMark_{};
+    bool deafForTest_ = false;
     bool rxSilenceLogged_ = false;
     bool rxSilence15sLogged_ = false;
 
