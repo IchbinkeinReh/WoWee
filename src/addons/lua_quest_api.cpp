@@ -6453,10 +6453,17 @@ void registerQuestLuaAPI(lua_State* L) {
             if (criteria.empty()) {
                 mask[0] = mask[1] = mask[2] = mask[3] = 0xFFFFFFFFu;
             } else {
-                for (size_t i = 0; i < criteria.size() && i < 128; ++i) {
+                // Bit n is the n-th criterion without the progress-bar flag
+                // (Achievement_Criteria flags 0x2): 0x005b61ee walks past
+                // those without counting them, and the reader 0x00627220
+                // skips them the same way.
+                size_t bit = 0;
+                for (size_t i = 0; i < criteria.size() && bit < 128; ++i) {
+                    if (criteria[i].flags & 0x2u) continue;
+                    const size_t n = bit++;
                     const auto it = progress.find(criteria[i].id);
                     if (it == progress.end() || it->second < criteria[i].quantity) continue;
-                    mask[i / 32] |= 1u << (i % 32);
+                    mask[n / 32] |= 1u << (n % 32);
                 }
             }
 

@@ -2771,13 +2771,18 @@ static bool fillAchievementLinkTooltip(lua_State* L, wowee::ui::Widget* w, game:
         const auto& criteria = gh->getAchievementCriteria(id);
         std::string left;
         const float* leftColour = grey;
-        for (size_t i = 0; i < criteria.size() && i < 128; ++i) {
+        size_t bit = 0;
+        for (size_t i = 0; i < criteria.size() && bit < 128; ++i) {
+            // A progress-bar criterion (flags 0x2) is neither listed nor
+            // counted (0x00627220), as the writer does not count it either.
+            if (criteria[i].flags & 0x2u) continue;
+            const size_t n = bit++;
             // A criterion with nothing to say is passed over rather than put in
             // a column: the client's own test is on the record it could not
             // find, and a row whose description the DBC leaves empty still
             // takes a slot there and leaves its partner on the line below.
             if (criteria[i].description.empty()) continue;
-            const bool done = (mask[i / 32] >> (i % 32)) & 1u;
+            const bool done = (mask[n / 32] >> (n % 32)) & 1u;
             if (left.empty()) {
                 left = criteria[i].description;
                 leftColour = done ? met : grey;
