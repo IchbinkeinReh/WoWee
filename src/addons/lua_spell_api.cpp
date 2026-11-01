@@ -757,16 +757,27 @@ static int lua_GetSpellName(lua_State* L) {
     return 2;
 }
 
-/// CastSpell(slot, bookType) - cast what is in that slot at the current
-/// target, which is what clicking a spellbook entry does.
+/// CastSpell(slot, bookType[, selfCast]) - cast what is in that slot at the
+/// current target, which is what clicking a spellbook entry does.
 static int lua_CastSpell(lua_State* L) {
     auto* gh = getGameHandler(L);
     // Same resolver, and here it decides what is cast: clicking a pet spell
     // resolved through the player's tabs cast whichever of the player's spells
     // sat at that index.
     const uint32_t id = spellIdForCall(L, gh);
+    // The third argument is the ALT-click of spellbookframe.lua's
+    // IsModifiedClick("SELFCAST") branch.  0x00541250 takes the target off the
+    // client's own pair (DAT_00bd07b0/b4, the pair that elsewhere is looked up
+    // as a unit) and, when 0x00815500(L,3) answers a truth, hands the cast
+    // routine 0x004d3790 in its place - the value that elsewhere is checked-
+    // cast as Player_C.  So an ALT-click in the book is not "the target, if
+    // any" but this player, target or no target; and over there the player is
+    // named outright rather than spelled as a zero target, which is how some of
+    // the self-casts here ask.
+    const bool selfCast = lua_toboolean(L, 3) != 0;
     // 0x00541250 -> 0x0053bc40 -> 0x0080cce0, which asks the taint check.
-    if (id != 0 && spellCastAllowed(L, gh, id)) gh->castSpell(id, gh->getTargetGuid());
+    if (id != 0 && spellCastAllowed(L, gh, id))
+        gh->castSpell(id, selfCast ? gh->getPlayerGuid() : gh->getTargetGuid());
     return 0;
 }
 

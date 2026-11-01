@@ -975,6 +975,14 @@ CHECKS = [
     # and a letter already full are game error 0x248 over there and were a silent
     # no here.
     #
+    # One more went with the spell book: CastSpell's third argument is the
+    # ALT-click, and 0x00541250 hands the cast routine the local player
+    # (0x004d3790, which elsewhere is checked-cast as Player_C) when
+    # 0x00815500(L,3) answers a truth, instead of the target it keeps at
+    # DAT_00bd07b0/b4.  spellbookframe.lua reaches that through
+    # IsModifiedClick("SELFCAST"), so an ALT-click in the book asked for the
+    # target, target or no target, rather than for this player.
+    #
     # What the rest of this count is made of, for whoever goes down the list.
     # Two rows are the installed interface asking about an argument the 12340
     # client never reads at all: StartAuction's fifth (0x0059f990 raises "Usage:
@@ -987,23 +995,20 @@ CHECKS = [
     # that is not the client's binding at all.  The rest are real and open:
     # JoinPermanentChannel's chat-frame index and isStatic, JoinBattlefield's
     # third argument behind an arena queue this client has no packet for,
-    # GetBinding, GetBindingKey, GetBindingAction and SetBinding behind a binding
-    # store that has no mode, and CastSpell's third, which has not been read in
-    # the binary yet.
+    # GetCategoryNumAchievements' second, and GetBinding, GetBindingKey,
+    # GetBindingAction and SetBinding behind a binding store that has no mode.
     #
-    # The number below did not move with the row closed above, and the printed
-    # line this pattern reads is worth spelling out: the sweep prints every
-    # counted row and *then* says how many of them the 12340 client carries no
-    # name for, and the last two calibrations recorded the second figure rather
-    # than the first (17 where that message reported 18, 14 where it reported 15)
-    # - one under, by however many rows are newer than this client, which on this
-    # tree is the single GetUnitName row.  On a checkout with Data/interface,
-    # where this sweep runs instead of being skipped, that reads as over ceiling.
-    # Closing ClickSendMailItemButton takes the printed count from 15 to 14, and
-    # 14 is what is recorded here: the printed figure at last, the same value as
-    # before for an unrelated reason.
+    # The printed line this pattern reads is worth spelling out: the sweep prints
+    # every counted row and *then* says how many of them the 12340 client carries
+    # no name for, and the two calibrations before the last recorded the second
+    # figure rather than the first (17 where that message reported 18, 14 where
+    # it reported 15) - one under, by however many rows are newer than this client,
+    # which on this tree is the single GetUnitName row.  On a checkout with
+    # Data/interface, where this sweep runs instead of being skipped, that reads
+    # as over ceiling.  The printed figure is what is recorded below now: 13, the
+    # count with the spell-book row above it closed.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 14,
+     r"^(\d+) binding\(s\) read fewer arguments", 13,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,
