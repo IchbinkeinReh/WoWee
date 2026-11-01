@@ -1199,11 +1199,17 @@ void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
         // arg6 is the flag beside the name: FrameXML looks up CHAT_FLAG_<arg6>
         // and prints <Away>, <Busy> or <GM>. The tag is on the packet and was
         // being dropped, so nothing ever showed as away or as a game master.
-        // AzerothCore's values are a bitmask - AFK 0x01, DND 0x02, GM 0x04,
-        // COM 0x08, DEV 0x10 - and the interface takes one word, so the most
-        // significant is the one to name.
-        const char* chatFlag = (data.chatTag & 0x04) ? "GM"
-                             : (data.chatTag & 0x10) ? "DEV"
+        //
+        // 0x0050be70 reads the byte after the text and turns it into one word
+        // with a chain of bit tests nested outermost-first, which is the order
+        // the words go: DEV (0x10) hides GM (0x04), which hides DND (0x02),
+        // which hides AFK (0x01). A line tagged both developer and game master
+        // is called DEV there and was called GM here. The four words are in the
+        // binary as themselves ("AFK" at 0x009fa3b4, "DND" at 0x009fa3b0, "GM"
+        // at 0x009f0e20, "DEV" at 0x009fbf78); 0x08 is tested for elsewhere and
+        // never names a word, so it stays a bit and not a flag.
+        const char* chatFlag = (data.chatTag & 0x10) ? "DEV"
+                             : (data.chatTag & 0x04) ? "GM"
                              : (data.chatTag & 0x02) ? "DND"
                              : (data.chatTag & 0x01) ? "AFK"
                                                      : "";
