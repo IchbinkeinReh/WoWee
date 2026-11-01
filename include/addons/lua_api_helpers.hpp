@@ -408,13 +408,30 @@ inline constexpr const char* kLuaRaceFileNames[] = {
     "Tauren","Gnome","Troll","","BloodElf","Draenei"
 };
 
-/// Indexed by power type, and the token FrameXML looks up in PowerBarColor for
-/// the bar's colour and in _G for its label prefix. Slot 5 is RUNES: a colour
-/// missed here still lands, because PowerBarColor carries numeric aliases as a
-/// fallback, but _G[""] is nil and the prefix has no such second chance.
+/// The client's own power list, the one at 0x007fe4b0: the token FrameXML looks
+/// up in PowerBarColor for the bar's colour and in _G for its label prefix.
+/// Slot 5 is RUNES: a colour missed here still lands, because PowerBarColor
+/// carries numeric aliases as a fallback, but _G[""] is nil and the prefix has
+/// no such second chance.
+///
+/// Written once now; the three places that need a power's name - the combat
+/// log's energize line, a failed cast naming the power it wanted, and
+/// UnitPower's display - each had its own copy. What they are free to disagree
+/// about is what past the seventh power answers, and they do: the client hands
+/// the combat log an empty string, UnitPower answers MANA, and the cast-failure
+/// lookup answers nothing so its caller can tell that the cast named a power
+/// the client has no bar for.
 inline constexpr const char* kLuaPowerNames[] = {
     "MANA","RAGE","FOCUS","ENERGY","HAPPINESS","RUNES","RUNIC_POWER"
 };
+
+/// 0x00af5220: what a power's amounts are shown divided by - rage and runic
+/// power travel in tenths, happiness in thousandths, so the same number means
+/// a different thing per power. Both readers of a power amount need it (the
+/// interface's UnitPower and the combat log's energize line), and past the
+/// seventh power neither divides: a power this client has no row for is not
+/// shown scaled at all.
+inline constexpr uint32_t kPowerDivisors[] = {1, 10, 1, 1, 1000, 1, 10};
 
 /// The 29 inventory types by their tokens (the client's table at 0x00ac7fd8),
 /// indexed by the type a row's inventoryType field carries. Slot 0 is the empty

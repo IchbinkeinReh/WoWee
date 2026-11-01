@@ -8,6 +8,7 @@
 
 #include <glm/glm.hpp>
 
+#include "addons/lua_api_helpers.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "core/app_clock.hpp"
 #include "core/config_paths.hpp"
@@ -69,17 +70,14 @@ uint32_t plainField(const Entity& e, UF f) {
 
 /// 0x00af5220: what a power's amounts are shown divided by.
 int32_t powerDivisor(uint32_t powerType) {
-    static constexpr int32_t kDivisors[7] = {1, 10, 1, 1, 1000, 1, 10};
-    return powerType < 7 ? kDivisors[powerType] : 1;
+    return powerType < 7 ? static_cast<int32_t>(addons::kPowerDivisors[powerType]) : 1;
 }
 
 /// 0x007fe4b0: the token an ENERGIZE amount travels with. Not display words -
 /// the client hands these upper-case names to the interface and lets it pick
 /// the text, and past the seventh power it hands an empty string.
 const char* powerToken(uint32_t powerType) {
-    static constexpr const char* kTokens[7] = {"MANA", "RAGE", "FOCUS", "ENERGY",
-                                               "HAPPINESS", "RUNES", "RUNIC_POWER"};
-    return powerType < 7 ? kTokens[powerType] : "";
+    return powerType < 7 ? addons::kLuaPowerNames[powerType] : "";
 }
 
 /// 0x00a2d394: the school each environmental type's damage is of.

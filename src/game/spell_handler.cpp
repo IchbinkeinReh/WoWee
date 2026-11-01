@@ -1,5 +1,6 @@
 #include "game/spell_handler.hpp"
 #include "game/shapeshift_forms.hpp"
+#include "addons/lua_api_helpers.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/protocol_constants.hpp"
 #include "game/gather_spells.hpp"
@@ -284,10 +285,14 @@ CastFailureLine castFailureLine(const GameHandler& owner, uint32_t spellId, uint
     return {key.data(), castFailureEnUS(key)};
 }
 
-/// The interface's name for a power, as 0x007fe4b0 lists them.
+/// The interface's name for a power, as 0x007fe4b0 lists them. Nothing is
+/// answered past the seventh, which is the point of this one rather than the
+/// empty string the combat log's copy hands back: the caller is naming the
+/// power a cast wanted, and an answer here would be a line about MANA for a
+/// spell that wanted a bar this client does not have.
 const char* powerTokenKey(int powerType) {
-    static constexpr const char* kKeys[] = {"MANA", "RAGE", "FOCUS", "ENERGY", "HAPPINESS", "RUNES", "RUNIC_POWER"};
-    return (powerType >= 0 && powerType < 7) ? kKeys[powerType] : nullptr;
+    return (powerType >= 0 && powerType < 7) ? addons::kLuaPowerNames[powerType]
+                                             : nullptr;
 }
 
 /// The line a player's failed cast shows on screen, as 0x00808200 words it:

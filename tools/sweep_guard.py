@@ -1722,28 +1722,40 @@ CHECKS = [
      "unjudged pairs of files sharing a block of code"),
     # The same fact as a data table, which the block checker above says outright
     # it cannot see: 627 tables of four or more items with three or more distinct
-    # values, of which ten are written out in more than one file and six more are
-    # settled here with a reason.
+    # values, of which eight are written out in more than one file and six more
+    # are settled here with a reason.
     #
-    # Most of the ten are one fact in two or three places and drift the way two
+    # Most of the eight are one fact in two or three places and drift the way two
     # copies always drift: the 187-entry spell-failure table in both combat_handler
     # and spell_handler, the grey-level gap in three places (two kGreyGap and a
-    # kGreyRange), the reputation rank floors, the six resistances twice, the
-    # power token names in three places, the five Horde race ids in three places -
-    # two of those three in the same translation unit. Two are the same *shape*
-    # rather than the same fact, and reading each is what tells them apart: the
-    # 0|1|2|0|2|3 that celestial's draw order and weather's share, and a
-    # quarter-extent initializer that appears twice in the screen effects pair.
+    # kGreyRange), the reputation rank floors, the six resistances twice, the five
+    # Horde race ids in three places - two of those three in the same translation
+    # unit. Two are the same *shape* rather than the same fact, and reading each is
+    # what tells them apart: the 0|1|2|0|2|3 that celestial's draw order and
+    # weather's share, and a quarter-extent initializer that appears twice in the
+    # screen effects pair.
     #
-    # One came down today: the 29-entry inventory-type table was a namespace
-    # table in the item-query bindings and a function-local one in the inventory
-    # bindings, both 29 entries in the same order, one naming a tooltip slot and
-    # the other driving IsEquippedItemType's matching - so a slot added to one and
-    # not the other would have had the tooltip name a slot the matcher could not
-    # answer. It is kLuaInvTypes in lua_api_helpers.hpp now, beside the other
-    # shared tables, and both bindings read it.
+    # Two came down today, and they were one client table copied three ways each:
+    # the power tokens of 0x007fe4b0, written out by the combat log's energize
+    # line, by a failed cast naming the power it wanted and by UnitPower's
+    # display; and the power divisors of 0x00af5220, written out twice. They are
+    # kLuaPowerNames and kPowerDivisors in lua_api_helpers.hpp now. What the merge
+    # left apart on purpose is what each site answers past the seventh power - the
+    # client hands the combat log an empty string there, UnitPower answers MANA,
+    # and the cast-failure lookup answers nothing so its caller can tell that the
+    # spell wanted a bar this client has no row for. Those are three different
+    # questions, and a shared table that flattened them would have been the wrong
+    # kind of tidy.
+    #
+    # One that came down before these: the 29-entry inventory-type table was a
+    # namespace table in the item-query bindings and a function-local one in the
+    # inventory bindings, both 29 entries in the same order, one naming a tooltip
+    # slot and the other driving IsEquippedItemType's matching - so a slot added to
+    # one and not the other would have had the tooltip name a slot the matcher
+    # could not answer. It is kLuaInvTypes in lua_api_helpers.hpp now, beside the
+    # two power tables and the other shared tables, and both bindings read it.
     ("duplicate_table_check.py",
-     r"^(\d+) written out in more than one file", 10,
+     r"^(\d+) written out in more than one file", 8,
      "data tables written out in more than one file"),
     # The same drift question one level smaller: a magic number survives a
     # rewording that the block scan would miss, which is how one spell id came to

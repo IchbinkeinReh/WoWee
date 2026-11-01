@@ -135,8 +135,7 @@ static int lua_UnitHealthMax(lua_State* L) {
 /// 0x007fde00: what a power is shown over - rage and runic power in tenths,
 /// happiness in thousandths (table 0x00af5220).
 static uint32_t powerDivisor(int type) {
-    static constexpr uint32_t kDivisor[7] = {1, 10, 1, 1, 1000, 1, 10};
-    return type >= 0 && type < 7 ? kDivisor[type] : 1;
+    return type >= 0 && type < 7 ? kPowerDivisors[type] : 1;
 }
 
 /// UnitPower(unit, powerType) - the second argument names *which* bar.
