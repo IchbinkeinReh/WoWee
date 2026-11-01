@@ -1669,6 +1669,9 @@ public:
 
     // Talents - delegate to SpellHandler as canonical authority
     uint8_t getActiveTalentSpec() const { return spellHandler_ ? spellHandler_->getActiveTalentSpec() : 0; }
+    /// The realm's count of this player's talent specs; zero before the packet
+    /// that carries the talents themselves arrives.
+    uint8_t getTalentGroupCount() const { return spellHandler_ ? spellHandler_->getTalentGroupCount() : 0; }
     uint8_t getUnspentTalentPoints() const { return spellHandler_ ? spellHandler_->getUnspentTalentPoints() : 0; }
     uint8_t getUnspentTalentPoints(uint8_t spec) const { return spellHandler_ ? spellHandler_->getUnspentTalentPoints(spec) : 0; }
     const std::unordered_map<uint32_t, uint8_t>& getLearnedTalents() const {

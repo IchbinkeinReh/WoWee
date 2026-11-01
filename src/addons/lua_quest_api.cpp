@@ -2972,6 +2972,16 @@ static int lua_LearnPreviewTalents(lua_State* L) {
 }
 
 // LearnTalent(tabIndex, talentIndex, pet, group) - spend one point directly
+//
+// The fourth value is read by nobody - not here and not in the reference, which
+// registers this one as "Usage: LearnTalent(tabIndex, talentIndex[, isPet])"
+// (0x00a1981c) and whose handler 0x005c80e0 reads arguments 1, 2 and 3 and no
+// further. Unlike its neighbours in the family it has no groupIndex, because
+// which spec is meant comes from which list the tab and index were resolved
+// against: the player's own (checked against DAT_00c2101c, the tab count) in the
+// non-pet branch, the pet's (DAT_00c21028) in the pet branch. So the panel
+// passing a group here is the interface being uniform, not an argument with a
+// reader, and the same goes for the point being spent on the active spec alone.
 static int lua_LearnTalent(lua_State* L) {
     auto* gh = getGameHandler(L);
     // Pet talents are not modelled, and this is the argument that made that
@@ -3009,33 +3019,57 @@ static int lua_GetUnspentTalentPoints(lua_State* L) {
 }
 
 // GetNumTalentGroups(inspect, pet) → how many specs the player has
+//
+// 0x005c5df0 reads both arguments and answers a count it was told, never one it
+// works out: the inspected player's count arrives with their talents
+// (DAT_00c21010), the player's own is the byte the talents packet carried
+// (DAT_00c20ff8, stored beside the active group at DAT_00c20ff4), and the pet's
+// answers 1 only when the pet has a talent list at all *and* that list reports
+// groups (DAT_00c21000 and DAT_00c21028, which LearnTalent's pet branch indexes
+// against). Zero is therefore a real answer - it is what the reference answers
+// before the packet arrives, and the only honest one for a pet, whose talents no
+// packet fills here.
+//
+// This used to infer two from the second list having anything in it, which gets
+// a spec that was bought and never used wrong: a spec with no points spent is
+// still a spec, and the panel draws a tab for it.
 static int lua_GetNumTalentGroups(lua_State* L) {
     auto* gh = getGameHandler(L);
-    // Two only once the second is actually bought: the frame draws a spec tab
-    // per group, and reporting two unconditionally offers one that is not there.
-    int groups = 1;
-    if (gh && lua_toboolean(L, 1)) {
-        // The inspected player's spec count comes with their talents; the
-        // viewer's own says nothing about how many specs the target bought.
-        if (const auto* r = gh->getInspectResult()) {
-            if (r->talentGroups > 0) groups = r->talentGroups;
+    const bool inspect = lua_toboolean(L, 1) != 0;
+    const bool pet = lua_toboolean(L, 2) != 0;
+    int groups = 0;
+    if (gh) {
+        if (inspect) {
+            // The target's own count, whatever the viewer's says.
+            if (const auto* r = gh->getInspectResult()) groups = r->talentGroups;
+        } else if (!pet) {
+            groups = gh->getTalentGroupCount();
         }
-        lua_pushnumber(L, groups);
-        return 1;
     }
-    if (gh && gh->getUnspentTalentPoints(1) > 0) groups = 2;
-    if (gh && !gh->getLearnedTalents(1).empty()) groups = 2;
     lua_pushnumber(L, groups);
     return 1;
 }
 
 // SetActiveTalentGroup(group)
+//
+// 0x005c5e70 raises its Usage literal for anything but a number, then casts the
+// spec's spell only when three things hold: the group is not the one already
+// active, its index is below the realm's count of specs, and that index is below
+// two. The count test is the one nothing here did, so a character who never
+// bought the second spec could still cast its spell - and this client casts a
+// real spell (SPELL_EFFECT_TALENT_SPEC_SELECT through Spell.dbc names 63645 and
+// 63644), so the ask went to the realm rather than staying local. The reference
+// looks the spell up by name hash (0x0000f89d = 63645 for the first spec, read
+// out of the table at 0x00ad05e8) and casts that, which is the same verb.
 static int lua_SetActiveTalentGroup(lua_State* L) {
+    if (!lua_isnumber(L, 1))
+        return luaL_error(L, "Usage: SetActiveTalentGroup(groupIndex)");
     auto* gh = getGameHandler(L);
-    const int group = static_cast<int>(luaL_optnumber(L, 1, 1));
-    if (gh && group >= 1 && group <= 2) {
-        gh->switchTalentSpec(static_cast<uint8_t>(group - 1));
-    }
+    if (!gh) return 0;
+    const int group = luaToClientInt(L, 1) - 1;
+    if (group < 0 || group > 1) return 0;
+    if (group >= static_cast<int>(gh->getTalentGroupCount())) return 0;
+    gh->switchTalentSpec(static_cast<uint8_t>(group));
     return 0;
 }
 
@@ -3058,16 +3092,26 @@ static int lua_GetTalentLink(lua_State* L) {
     return 1;
 }
 
+// GetActiveTalentGroup(inspect, pet) → the group whose talents are being read
+//
+// 0x005c5810 reads both arguments and answers one of three stored values, all
+// of them pushed one-based: the inspected player's active group (DAT_00c21004),
+// or - for a call that is not inspecting - the pet's, which the expression at
+// :4392 turns into a plain zero because a pet has one group by definition, or
+// the player's own stored active index (DAT_00c20ff4). The second argument was
+// dropped here, so a hunter's pet frame asked the player which of *their* specs
+// was live and used that as the pet's talent group.
 static int lua_GetActiveTalentGroup(lua_State* L) {
     auto* gh = getGameHandler(L);
+    // Which of the target's specs the talents just read belong to. The
+    // inspect frame keeps this as its talentGroup and passes it back into
+    // every other talent call.
     if (gh && lua_toboolean(L, 1)) {
-        // Which of the target's specs the talents just read belong to. The
-        // inspect frame keeps this as its talentGroup and passes it back into
-        // every other talent call.
         const auto* r = gh->getInspectResult();
         lua_pushnumber(L, r ? (r->activeTalentGroup + 1) : 1);
         return 1;
     }
+    if (lua_toboolean(L, 2)) { lua_pushnumber(L, 1); return 1; }
     lua_pushnumber(L, gh ? (gh->getActiveTalentSpec() + 1) : 1);
     return 1;
 }

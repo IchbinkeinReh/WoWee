@@ -4779,6 +4779,12 @@ void SpellHandler::handleTalentsInfo(network::Packet& packet) {
     loadTalentDbc();
 
     activeTalentSpec_ = activeTalentGroup;
+    // Kept as the packet said it. 0x005c9740 stores this byte into the same
+    // block as the active group (DAT_00c20ff8 beside DAT_00c20ff4), and
+    // GetNumTalentGroups answers it while SetActiveTalentGroup refuses an index
+    // at or past it - the reference asks the realm how many specs there are
+    // rather than working it out from the lists.
+    talentGroupCount_ = talentGroupCount;
 
     for (uint8_t g = 0; g < talentGroupCount && g < 2; ++g) {
         if (!packet.hasRemaining(1)) break;

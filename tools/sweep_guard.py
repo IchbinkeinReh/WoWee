@@ -853,8 +853,40 @@ CHECKS = [
     # modelled - the masks are asked here whatever it says; and the third
     # (autoCompleteResortNamesOnRecency) reorders the list by who was spoken to
     # lately, which is state nothing here keeps.
+    # Thirty-two: the two talent-group counts read their second argument now, and
+    # both answer a count they were told instead of one they worked out.
+    # 0x005c5df0 (GetNumTalentGroups) reads isInspect and isPet and answers
+    # DAT_00c21010 for the inspected player, DAT_00c20ff8 - the byte the talents
+    # packet carried - for the player, and 1 for a pet only when the pet has a
+    # talent list that itself reports groups.  The player's count used to be
+    # inferred from whether the second list had anything in it, which is wrong in
+    # the other direction: a second spec bought and never spent is still a spec,
+    # and the panel draws a tab for it.  Keeping that byte
+    # (spell_handler's talentGroupCount_) also hands SetActiveTalentGroup the
+    # guard it was missing - 0x005c5e70 refuses an index at or past the count, so
+    # a character who never bought the second spec no longer casts its spell -
+    # and its Usage literal.  0x005c5810 (GetActiveTalentGroup) reads isPet too
+    # and answers 1, because a pet has one group; a hunter's pet frame had been
+    # handed the player's own active spec and used that as the pet's group.
+    #
+    # One row in that family stays and is now known to be right rather than
+    # unexamined: LearnTalent.  The reference registers it as
+    # "Usage: LearnTalent(tabIndex, talentIndex[, isPet])" (0x00a1981c) and
+    # 0x005c80e0 reads arguments 1, 2 and 3 and no further, so the panel's fourth
+    # value has no reader in the binary either - the same shape as
+    # JoinPermanentChannel's fourth, and said at the binding now.
+    #
+    # What is still open in the family, so it is not lost: the groupIndex of
+    # GetTalentTabInfo, GetTalentInfo, GetTalentPrereqs and
+    # AddPreviewTalentPoints does have a reader - 0x005c57d0 turns the argument
+    # into a zero-based group when it is given and falls back to the player's own
+    # active group when it is not, and that group picks which record the points
+    # and ranks come from (0x005c6080).  Those four still read the active spec
+    # whatever the argument says; closing them needs the second inspect group
+    # stored as well, since the inspect reader keeps only the active group's
+    # ranks and throws the other group's list away.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 34,
+     r"^(\d+) binding\(s\) read fewer arguments", 32,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,
