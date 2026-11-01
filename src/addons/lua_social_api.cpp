@@ -739,7 +739,40 @@ static int lua_BNGetNumFriends(lua_State* L) {
 }
 
 
-// GetAutoCompleteResults(text, include, exclude, max, cursorPos) → names
+// Three string walks over *characters* rather than bytes, because a cursor
+// position and the offsets around it are counted in characters in the client:
+// 0x0076eea0 counts the lead bytes, 0x0076ef30(s, n) steps n characters, and
+// both stop at the end of the string instead of running past it. Names here are
+// player names, which are ASCII apart from accented letters - a two-byte
+// sequence counted as one is what such a name costs in the reference too.
+static size_t utf8Characters(const std::string& s) {
+    size_t chars = 0;
+    for (char c : s)
+        if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++chars;
+    return chars;
+}
+
+/// The byte at character number `chars`.
+static size_t utf8ByteAt(const std::string& s, size_t chars) {
+    size_t seen = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (seen == chars) return i;
+        if ((static_cast<unsigned char>(s[i]) & 0xC0) != 0x80) ++seen;
+    }
+    return s.size();
+}
+
+/// Where the character after the one at `i` begins - 0x0076ef30(s, 1) takes the
+/// same step.
+static size_t utf8After(const std::string& s, size_t i) {
+    do {
+        ++i;
+    } while (i < s.size() && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80);
+    return i;
+}
+
+// GetAutoCompleteResults(text, include, exclude, max [, cursorPos [, allowFullMatch]])
+//   → names
 //
 // What the box under a whisper or a mail address offers as you type. Returns
 // the names themselves, one value each, because AutoComplete_UpdateResults
@@ -748,33 +781,116 @@ static int lua_BNGetNumFriends(lua_State* L) {
 // The sources are the ones this client actually knows: the group, the guild
 // roster and the friends list. Battle.net has none here, so its flag matches
 // nothing rather than pretending.
+//
+// 0x0057b3a0 tests all four leading arguments before it reads any of them - a
+// text it can take a string from and three numbers - and answers the literal
+// below otherwise. The two optional ones are optional in the same call: absent
+// is a value, not an error.
+//
+// cursorPos is a **character** offset, not a byte one, and the binding clamps
+// it: absent, negative, or past the end of the text all read as the end. What
+// it does with it is behind the CVar autoCompleteWhenEditingFromCenter (the
+// setter at 0x00512850, registered with the default "1"), and picks between a
+// plain prefix match of the whole text and the one below. That CVar is one of
+// the names this client registers and never acts on, so the on branch is the
+// only one reachable here - as is the other one of those three, whose setter
+// (0x00512870) lets a player turn the include and exclude masks off entirely
+// (:8633 tests them only while it is on). Off would answer every name the text
+// completes regardless of where it is known from; that is not implemented, and
+// the mask question is asked here whatever the CVar says.
+//
+// allowFullMatch is read for truth at 0x0084e0b0 - nil off, anything else as
+// Lua sees it - and decides whether a name that equals the text is a result.
+// Without it such a name is dropped, since there is nothing left to complete,
+// which is why chatframe.lua:4125 passes 1 to ask whether a typed name exists
+// at all.
 static int lua_GetAutoCompleteResults(lua_State* L) {
+    if (!lua_isstring(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3) ||
+        !lua_isnumber(L, 4))
+        return luaL_error(L,
+            "Usage: GetAutoCompleteResults(text, includeBitField, excludeBitField, "
+            "numReturns[, cursorPosition[, allowFullMatch]])");
     auto* gh = getGameHandler(L);
-    std::string prefix = luaL_optstring(L, 1, "");
-    const uint32_t include = static_cast<uint32_t>(luaL_optnumber(L, 2, 0xFFFFFFFFu));
-    const uint32_t exclude = static_cast<uint32_t>(luaL_optnumber(L, 3, 0));
-    const int wanted = static_cast<int>(luaL_optnumber(L, 4, 5));
+    const std::string text = luaL_checkstring(L, 1);
+    const uint32_t include = static_cast<uint32_t>(luaToClientInt(L, 2));
+    const uint32_t exclude = static_cast<uint32_t>(luaToClientInt(L, 3));
+    const int wanted = luaToClientInt(L, 4);
     if (!gh || wanted <= 0) return 0;
+    const bool allowFullMatch = lua_toboolean(L, 6) != 0;
+    const size_t textChars = utf8Characters(text);
+    size_t cursor = textChars;
+    if (lua_isnumber(L, 5)) {
+        const int typed = luaToClientInt(L, 5);
+        if (typed >= 0 && static_cast<size_t>(typed) <= textChars)
+            cursor = static_cast<size_t>(typed);
+    }
 
     constexpr uint32_t kInGroup = 0x01, kInGuild = 0x02, kFriend = 0x04, kOnline = 0x20;
 
-    auto lower = [](std::string v) {
-        for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return v;
+    // Every comparison below is case-blind: 0x0076ea40 folds as it walks, through
+    // 0x0076e8d0 - whose table turns a à into an A among the rest, so this ASCII
+    // half is narrower than the client's. It is the same fold the rest of this
+    // file uses, and it changes no byte's length, which is what lets the
+    // character offsets be taken on the folded copies rather than the originals.
+    auto fold = [](const std::string& v) {
+        std::string out = v;
+        for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return out;
     };
-    const std::string want = lower(prefix);
+    const std::string foldedText = fold(text);
+    const size_t textCut = utf8ByteAt(foldedText, cursor);
+
+    // 0x0057aca0's match test on one name. Its other two tests - the flag mask
+    // and "is this me" - are settled over the names themselves below.
+    auto completes = [&](const std::string& name) {
+        const std::string folded = fold(name);
+        // A name equal to the whole text is not a result unless the caller asked
+        // for those: the reference compares the two whole strings first and
+        // returns no for them when the flag is clear.
+        if (!allowFullMatch && folded == foldedText) return false;
+        if (cursor == textChars) {
+            // Nothing after the cursor to place anywhere, so the whole text has
+            // to be the name's beginning - and that is true of an exactly equal
+            // name too, which the reference answers yes for at :8655 rather than
+            // running the search below with nothing to search for.
+            return folded.compare(0, foldedText.size(), foldedText) == 0;
+        }
+        // Editing from the middle of the text: the name has to carry the text up
+        // to the cursor as its own beginning, and the rest of the text - the part
+        // the player has already typed past the cursor - has to turn up again at
+        // or after the cursor inside the name. A name shorter than the text is
+        // out before any of that (:8653), and the search runs from the cursor for
+        // as many starts as the name has left over, one character at a time.
+        const size_t nameChars = utf8Characters(folded);
+        if (textChars > nameChars) return false;
+        const size_t nameCut = utf8ByteAt(folded, cursor);
+        if (folded.compare(0, nameCut, foldedText, 0, textCut) != 0) return false;
+        const size_t tail = foldedText.size() - textCut;
+        for (size_t at = nameCut, steps = nameChars - (textChars - cursor) - cursor;
+             steps; --steps, at = utf8After(folded, at)) {
+            if (folded.compare(at, tail, foldedText, textCut) == 0) return true;
+        }
+        return false;
+    };
 
     // One name may be a guildmate and a friend both, so what it is comes first
     // and the flags are merged before anything is decided about it.
     std::map<std::string, uint32_t> byName;
+    const uint64_t self = gh->getPlayerGuid();
     auto note = [&](const std::string& name, uint32_t flag, bool online) {
         if (name.empty()) return;
-        if (!want.empty() && lower(name).compare(0, want.size(), want) != 0) return;
+        if (!completes(name)) return;
         byName[name] |= flag | (online ? kOnline : 0u);
     };
 
-    for (const auto& mbr : gh->getPartyData().members) note(mbr.name, kInGroup, mbr.isOnline != 0);
-    for (const auto& mbr : gh->getGuildRoster().members) note(mbr.name, kInGuild, mbr.online);
+    // The local player is never a completion. The reference compares the name
+    // node's presence identity against the player's own (0x006b1050 hands back
+    // one fixed pair); the guid is the same identity here, and it is what both
+    // of the lists below carry.
+    for (const auto& mbr : gh->getPartyData().members)
+        if (mbr.guid != self) note(mbr.name, kInGroup, mbr.isOnline != 0);
+    for (const auto& mbr : gh->getGuildRoster().members)
+        if (mbr.guid != self) note(mbr.name, kInGuild, mbr.online);
     for (const auto& c : gh->getContacts()) {
         if (c.isFriend()) note(c.name, kFriend, c.isOnline());
     }
@@ -783,6 +899,12 @@ static int lua_GetAutoCompleteResults(lua_State* L) {
     // from a guild roster, which can be a thousand. Room first - pushing past
     // the stack top corrupts the heap rather than raising.
     if (!lua_checkstack(L, wanted + 1)) return 0;
+    // The reference asks the flag question first (:8633) and the match question
+    // after, in one walk that stops once numReturns names are pushed; here the
+    // match went first and the flags come last, over the merged list. Same names
+    // either way, and the order is this map's - the reference's list is by name
+    // as well, and its third CVar (autoCompleteResortNamesOnRecency) can put the
+    // ones the player picked lately in front, which is state nothing here keeps.
     int pushed = 0;
     for (const auto& [name, flags] : byName) {
         if (pushed >= wanted) break;

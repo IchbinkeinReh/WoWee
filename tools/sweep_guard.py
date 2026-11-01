@@ -827,8 +827,34 @@ CHECKS = [
     # dropdown.  Neither list here comes out of a table row - both are built
     # from the recipes this client already knows - so there is no row to ask,
     # and the two masks stay independent.
+    # Thirty-four: GetAutoCompleteResults reads its fifth and sixth arguments
+    # now.  Its cursorPosition is a *character* offset, and 0x0057b3a0 clamps it
+    # - absent, negative, or past the end all read as the end.  What the cursor
+    # is for is not in the prefix test this client had: 0x0057aca0 asks whether
+    # the name begins with the text up to the cursor and then whether the text
+    # *after* the cursor turns up again at or after the cursor inside the name,
+    # stepping one character at a time for as many starts as the name has left.
+    # That is the branch behind autoCompleteWhenEditingFromCenter (setter
+    # 0x00512850), registered with the default "1" and one of the names this
+    # client registers and never acts on, so on is the only reachable branch -
+    # and the plain prefix this client did every time is the CVar-off branch,
+    # which a player would have to turn on to see.  The sixth argument decides
+    # whether a name equal to the text counts at all: without it the exact name
+    # is dropped (:8637), which is what chatframe.lua:4125 passes 1 to ask
+    # "is this a real name", and here it was always kept.  The local player's
+    # own name is no longer offered either: the reference compares each name's
+    # presence pair against the player's (0x006b1050) and the guid is the same
+    # identity over the two lists that carry it.
+    #
+    # Three things around it stay, and the row does not say so: the fold here is
+    # ASCII while 0x0076e8d0 folds accented letters as well; the second of those
+    # three CVars (autoCompleteUseContext, 0x00512870) switches the include and
+    # exclude masks off entirely when a player turns it off, and that is not
+    # modelled - the masks are asked here whatever it says; and the third
+    # (autoCompleteResortNamesOnRecency) reorders the list by who was spoken to
+    # lately, which is state nothing here keeps.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 35,
+     r"^(\d+) binding\(s\) read fewer arguments", 34,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,
