@@ -2450,6 +2450,13 @@ void QuestHandler::handleGossipMessage(network::Packet& packet) {
     // Moving it earlier is enough on any NPC talked to twice, where the text
     // is already cached and the query is not sent at all. The first visit
     // still needs the arrival to say so, which handleNpcTextUpdate now does.
+    //
+    // And the window is announced once, when the text is there. It was
+    // announced here and again when the text came: the interface answers
+    // GOSSIP_SHOW for a lone service option (an auctioneer's, a banker's) by
+    // choosing it, so a first visit chose it twice, the house opened twice,
+    // and the second opening closed the first's window behind it.
+    gossipShowAwaitingText_ = false;
     if (currentGossip_.titleTextId > 0 && !npcTextCache_.count(currentGossip_.titleTextId)) {
         uint32_t wireOp = wireOpcode(Opcode::CMSG_NPC_TEXT_QUERY);
         if (wireOp != 0xFFFF && owner_.getSocket()) {
@@ -2457,10 +2464,12 @@ void QuestHandler::handleGossipMessage(network::Packet& packet) {
             qPkt.writeUInt32(currentGossip_.titleTextId);
             qPkt.writeUInt64(currentGossip_.npcGuid);
             owner_.getSocket()->send(qPkt);
+            gossipShowAwaitingText_ = true;
         }
     }
 
-    if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GOSSIP_SHOW", {});
+    if (!gossipShowAwaitingText_ && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("GOSSIP_SHOW", {});
     owner_.closeVendor(); // Close vendor if gossip opens
 
     // Classify gossip quests and update quest log + overhead NPC markers.
@@ -2666,17 +2675,12 @@ void QuestHandler::handleNpcTextUpdate(network::Packet& packet) {
     LOG_DEBUG("NPC text update: id=", textId,
              " cached=", npcTextCache_.count(textId) ? "yes" : "no");
 
-    // The window is already open and waiting on exactly this text, so say so.
-    //
-    // A cache filled without an event is this client's oldest shape of bug and
-    // it reads as "it only works the second time": the greeting is there for
-    // every later visit to the same NPC and blank on the first, because the
-    // first is the only one where the text arrives after the window did.
-    // GOSSIP_SHOW is the event the interface redraws the greeting on, and
-    // firing it again is what a second look at an open window means.
-    if (gossipWindowOpen_ && currentGossip_.titleTextId == textId &&
-        npcTextCache_.count(textId) && owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("GOSSIP_SHOW", {});
+    // The window is open and was waiting on exactly this text: now it is
+    // announced (handleGossipMessage held GOSSIP_SHOW back for it), once, so
+    // the greeting is drawn on a first visit as on every later one.
+    if (gossipWindowOpen_ && gossipShowAwaitingText_ && currentGossip_.titleTextId == textId) {
+        gossipShowAwaitingText_ = false;
+        if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("GOSSIP_SHOW", {});
     }
 }
 

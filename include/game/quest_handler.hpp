@@ -356,6 +356,8 @@ private:
     // --- State ---
     // Gossip
     bool gossipWindowOpen_ = false;
+    /// GOSSIP_SHOW held back until the greeting's text has arrived.
+    bool gossipShowAwaitingText_ = false;
     GossipMessageData currentGossip_;
     std::string questGreeting_;
     std::vector<GossipPoi> gossipPois_;
