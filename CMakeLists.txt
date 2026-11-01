@@ -290,6 +290,10 @@ if(ANDROID OR IOS)
         # Only the client is one (its add_executable says so); the command
         # line tools stay plain programs, which their install rules expect.
         set(CMAKE_MACOSX_BUNDLE OFF)
+        # Xcode's own default turns on -Wshorten-64-to-32, which no other
+        # build of this client has; with -Werror every size_t that goes into
+        # a uint32_t stopped the build. The same warnings as macOS instead.
+        set(CMAKE_XCODE_ATTRIBUTE_GCC_WARN_64_TO_32_BIT_CONVERSION NO)
         if(OPENSSL_ROOT_DIR)
             list(APPEND CMAKE_FIND_ROOT_PATH "${OPENSSL_ROOT_DIR}")
         endif()

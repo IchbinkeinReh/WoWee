@@ -512,6 +512,8 @@ jobs:
 
     - name: Build
       run: |
+        # Every file's errors in one run, not the first file's only.
+        defaults write com.apple.dt.Xcode IDEBuildingContinueBuildingAfterErrors -bool YES
         xcodebuild -project build-ios/wowee.xcodeproj -target wowee \
           -configuration Release -sdk iphoneos \
           CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
