@@ -30,16 +30,15 @@ static int lua_UnitName(lua_State* L) {
     // is the one answer about an object that would have been right, and giving
     // it while UnitExists says no is a unit that half exists.
     // A Mirror Image (aura 279) answers its caster's name (0x0072a000).
-    auto* ghName = getGameHandler(L);
-    const std::string shown = unit && ghName ? ghName->shownUnitName(*unit) : unit ? unit->getName() : std::string{};
+    auto* gh = getGameHandler(L);
+    std::string uidStr(uid);
+    toLowerInPlace(uidStr);
+    const uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
+    const std::string shown = unit && gh ? gh->shownUnitName(*unit) : unit ? unit->getName() : std::string{};
     if (unit && !shown.empty()) {
         lua_pushstring(L, shown.c_str());
     } else {
         // Fallback: party member name for out-of-range members
-        auto* gh = getGameHandler(L);
-        std::string uidStr(uid);
-        toLowerInPlace(uidStr);
-        uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
         const auto* pm = findRosterMember(gh, guid);
         if (pm && !pm->name.empty()) {
             lua_pushstring(L, pm->name.c_str());
@@ -80,7 +79,22 @@ static int lua_UnitName(lua_State* L) {
             lua_pushnil(L);
         }
     }
-    lua_pushnil(L);  // the realm: none for one's own
+    // The other half of the pair: the server the player came from. It was
+    // hardcoded nil, so a cross-realm member was named without the realm that
+    // made the name theirs - and this is the only place that realm reaches
+    // Lua at all, since the name query answer that carried it
+    // (getCachedPlayerRealm, the +0x34 of 0x0072a000's record) had no other
+    // reader among the bindings. 0x0060e740 answers two values and takes the
+    // realm from that record, so a player on one's own server - whose query
+    // answer names no realm - gets nil here, as they do there.
+    //
+    // The token "player" answers nil too, by a test that runs before any unit
+    // is resolved: that function compares the argument's own text against
+    // "player" and returns the local player's name with a nil second value.
+    std::string realm;
+    if (gh && uidStr != "player") realm = gh->getCachedPlayerRealm(guid);
+    if (realm.empty()) lua_pushnil(L);
+    else lua_pushstring(L, realm.c_str());
     return 2;
 }
 

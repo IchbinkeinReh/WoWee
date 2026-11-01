@@ -1301,15 +1301,37 @@ static int lua_GetSpellLink(lua_State* L) {
 /// a vehicle by name, and /cancelaura passes what was typed; both were an
 /// error message where an aura should have dropped.
 ///
-/// The third argument is a filter for the index form and a rank for the name
-/// form, which is how WoW spells it. Only HELPFUL is answerable - a debuff
-/// cannot be cancelled - so the filter decides nothing here beyond confirming
-/// buffs are what is being counted.
+/// Both forms come out of one argument parser the reference shares with
+/// UnitBuff, UnitDebuff, UnitAura and the tooltip's SetUnitAura /
+/// SetUnitBuff / SetUnitDebuff (0x006110a0 -> 0x00608390). A number is stored
+/// as `index - 1`; a name takes the *next* argument as its rank, which is why
+/// the filter sits in the third place after an index and the fourth after a
+/// name. Read as a filter it is not one word but a set, split on '|': HELPFUL
+/// and HARMFUL replace each other (1 and 2), PLAYER sets 4, RAID 8,
+/// CANCELABLE 0x10, NOT_CANCELABLE 0x20.
+///
+/// Of that set only HELPFUL is reachable here. The buff frame's debuff icons
+/// are not clickable at all - DebuffButtonTemplate inherits the AuraButtonTemplate,
+/// which carries only OnEnter and OnLeave, and it is BuffButtonTemplate alone
+/// that adds the OnClick calling this - so no caller hands over HARMFUL, and
+/// counting buffs is what the one caller that passes a filter asks for.
+///
+/// The rank is not compared: no rank data is loaded here (Spell.dbc 3.3.5 names
+/// its ranks through the SpellRank table), and one rank of a spell at a time is
+/// all a unit can carry, so a name match picks the same aura either way.
 static int lua_CancelUnitBuff(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
     std::string uidStr(luaL_optstring(L, 1, "player"));
     toLowerInPlace(uidStr);
+    // The reference parses the unit and the aura's ident in one go, and insists
+    // the argument next to the unit be a number or a string (0x006110a0 asks for
+    // one before 0x00608390 reads it either way). Given neither form it raises
+    // its Usage line; this returned without touching anything, which hid a typo
+    // in a macro as an aura that would not drop.
+    if (!lua_isnumber(L, 2) && !lua_isstring(L, 2)) {
+        return luaL_error(L, "Usage: CancelUnitBuff(\"unit\", [index] or [\"name\", \"rank\"][, \"filter\"])");
+    }
     if (uidStr != "player") return 0;   // only one's own auras can be cancelled
 
     const auto& auras = gh->getPlayerAuras();

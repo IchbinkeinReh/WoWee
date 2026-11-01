@@ -408,13 +408,10 @@ bool npcWithinInteractRange(game::GameHandler* gh, uint64_t npcGuid) {
 /// stranger standing right here is not nameable at all - which is the complaint
 /// the verb makes rather than a request sent for the wrong person.
 ///
-/// Two things are not modelled. The reference keeps the *nearest* of the members
-/// a prefix could mean (`0x0051ffe0` compares each candidate's distance and
-/// replaces only a worse one), and a text with a '-' in it is matched against
-/// each member's "Name-Realm" spelling (`0x0076e6e0(text, '-')` picks which of
-/// the two the compare uses). This takes the first member in roster order and
-/// compares bare names, so the answers differ only for a prefix two members
-/// share, and never for a realm-qualified name.
+/// What is not modelled is the tie-break: the reference keeps the *nearest* of
+/// the members a prefix could mean (`0x0051ffe0` compares each candidate's
+/// distance and replaces only a worse one), where this takes the first member in
+/// roster order - which differs only for a prefix two members share.
 uint64_t resolveGroupMember(game::GameHandler* gh, const std::string& text, bool exact) {
     if (!gh || text.empty()) return 0;
     std::string lower = text;
@@ -422,11 +419,26 @@ uint64_t resolveGroupMember(game::GameHandler* gh, const std::string& text, bool
     if (const uint64_t byToken = resolveUnitGuid(gh, lower)) return byToken;
     const auto& pd = gh->getPartyData();
     const bool raid = game::groupIsRaid(pd.groupType);
+    // A text with a '-' in it names the realm as well, and the reference
+    // switches what it compares: 0x0076e6e0(text,'-') picks the "%s-%s"
+    // spelling of each candidate over the bare name, so "/mt Bob-Icecrown"
+    // reaches the Bob from another server. The realm appended here is the one
+    // the name query answered, so a member whose query has not come back -
+    // usually an offline one - cannot be named that way, and the bare-name
+    // comparison below still runs for everyone.
+    const bool namesARealm = lower.find('-') != std::string::npos;
     for (const auto& m : pd.members) {
         if (m.guid == 0 || m.name.empty()) continue;
         if (!raid && m.guid == gh->getPlayerGuid()) continue;  // see above: the party list
         std::string name = m.name;
         toLowerInPlace(name);
+        if (namesARealm) {
+            std::string realm = gh->getCachedPlayerRealm(m.guid);
+            if (!realm.empty()) {
+                toLowerInPlace(realm);
+                name += "-" + realm;
+            }
+        }
         if (exact ? name == lower : name.compare(0, lower.size(), lower) == 0) return m.guid;
     }
     return 0;
