@@ -190,12 +190,33 @@ static int lua_SendChatMessage(lua_State* L) {
     return 0;
 }
 
-// JoinChannelByName(name, password, frameId, voice) → zoneChannel, shortcut
-// (0x0050d900, which JoinPermanentChannel and JoinTemporaryChannel share). A
+// JoinChannelByName(name, password, frameId) → zoneChannel, shortcut
+// (0x0050d900, which JoinPermanentChannel and JoinTemporaryChannel share -
+// 0x0050dac0 and 0x0050daa0 are 20-byte wrappers that hand the shared half the
+// permanent flag, so the fourth value the panel passes is read by nobody). A
 // shortcut joins its zone channel by id with the place in the name; anything
 // else is a channel of the player's own. The answer is the row's id - zero
 // for one of the player's own - and the shortcut for a zone channel; nothing
 // when nothing was joined, which /join reports as an invalid name.
+//
+// The third argument is a chat frame id, and it is the one argument of the
+// three this client has no use for. The join gates on it - 0x00507a80's
+// `param_3 < 10` is the ten chat frames, and a nil third argument reaches that
+// test as 0xffffffff and fails it, which is what channelframe.lua:107 is
+// asking for when it joins a global channel with no frame named - and then
+// appends the channel's name and number to *that frame's own* arrays: the
+// instructions after the gate pick the frame out of an array of 0x100-byte
+// windows at 0x00bcf0b0 (`shl $0x8` on the index, then the frame in %ecx), call
+// 0x00501a70 - ChatFrame.cpp's channel list, which declines a name the frame
+// already carries - and set the dirty flag at 0x00bcefe0. There is no frame-side list here to append to: the
+// routing is the interface's own. A window shows a channel line only when that
+// window's `channelList` names it (chatframe.lua:2707), and FrameXML writes
+// that list itself - straight after a join (channelframe.lua:136,
+// chatframe.lua:1548) and from the chat config and the floating-frame menu
+// through ChatFrame_AddChannel (chatframe.lua:2361, which this interface
+// defines in Lua rather than leaving to the bootstrap stand-in). So the
+// reference does the attach twice, in C and in Lua, and this client does it
+// once; a second copy here would have no reader.
 static int lua_JoinChannelByName(lua_State* L) {
     auto* gh = getGameHandler(L);
     auto* ch = gh ? gh->getChatHandler() : nullptr;
@@ -2441,8 +2462,11 @@ void registerSocialLuaAPI(lua_State* L) {
                 //   → zoneChannel, channelName
                 //
                 // The same join as JoinChannelByName, plus the chat frame the
-                // channel should show in. The frame binding is handled entirely
-                // in FrameXML, so only the join happens here.
+                // channel should show in - which is the one argument here that
+                // is read by nobody, for the reason written out above the
+                // binding: this client has no per-frame channel list on the C
+                // side, and the interface routes channel lines off its own
+                // `channelList` tables.
                 //
                 // What 0x0050d900 answers: the ChatChannels.dbc id of the
                 // channel joined - zero for one of the player's own, which is
