@@ -647,10 +647,24 @@ CHECKS = [
     # which is the one question about it that reading either side cannot
     # settle.
     #
-    # Zero across 172 files and 2369 frames. It matters because a dropped frame
+    # Zero across 162 files and 2298 frames. It matters because a dropped frame
     # raises nothing: the handlers that touch it die on a nil index somewhere
     # else entirely, and what the player sees is a panel that is present and
     # does nothing - the shape of several reports this week.
+    #
+    # Those two counts used to read 172 and 2369, because the file list was
+    # `iface.rglob("*.xml")` with gluexml cut out by name. Cutting gluexml was the
+    # right idea reached the wrong way: the walk also covered lcdxml's two layout
+    # files, the seven FrameXML files no Include reaches (bindings, focusframe,
+    # minigameframe, opacitysliderframe, petpopup, questtimerframe, tictactoeframe)
+    # and one addon frame's manifest-less file. 71 named frames in those ten files
+    # were being compared against the emitter - a dropped one there would have
+    # been printed in the same list as a dropped frame the client really asks for,
+    # which is how a real finding gets lost among findings nobody can act on. The
+    # loader's chain answers the question instead of a path pattern, and the
+    # verdict is unchanged at zero either way, which was measured rather than
+    # assumed - a population shrinking by ten files is also what a blinded sweep
+    # looks like.
     #
     # Needs the framexml_emit target; it says so and stops rather than
     # reporting a clean zero it did not earn.
