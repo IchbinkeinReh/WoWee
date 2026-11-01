@@ -61,6 +61,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INTERFACE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
+if INTERFACE.name.lower() == "framexml":
+    # loaded_files() walks the .toc from the folder above FrameXML, and naming
+    # FrameXML means the same interface to a reader who remembers the folder.
+    INTERFACE = INTERFACE.parent
+# Which interface files the client loads - both scans below ask it rather than
+# picking a tree by path. The recursive glob here saw 32 files more than the
+# loader does (gluexml's 26, five FrameXML files no .toc Include reaches, and one
+# addon file the manifest does not list) and nothing the loader adds that it
+# missed, so this is a subtraction - and one subtraction that matters: the ninth
+# site on the reading list was `GlueBackgroundMusic[GetClientExpansionLevel()]`
+# in gluexml/trialconvert.lua. GlueBackgroundMusic exists in no other file, and
+# gluexml is the login glue this client never installs, so that lookup is one no
+# interpreter here can perform. Table keys are read the same way: a key found
+# only in a file the client does not open is not a key the caller can reach.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from framexml_source import loaded_files  # noqa: E402
+
+LOADED_LUA = [p for p in loaded_files(INTERFACE) if p.suffix.lower() == ".lua"]
 # Token tables live wherever the code that answers with them does; both files
 # are searched so a table can sit beside its subject rather than in one bucket.
 SOURCES = [ROOT / "include/addons/lua_api_helpers.hpp",
@@ -92,7 +110,7 @@ def lua_keys(table):
     an empty table followed by a run of PowerBarColor["KEY"] = ... assignments.
     """
     keys = set()
-    for path in INTERFACE.rglob("*.lua"):
+    for path in LOADED_LUA:
         text = path.read_text(errors="ignore")
         keys.update(re.findall(re.escape(table) + r'\s*\[\s*"([^"]+)"\s*\]', text))
         # Numeric keys as well, for the report below: a table written
@@ -126,7 +144,7 @@ def table_keyed_by_binding():
     C read. The count is pinned so a new site is read once.
     """
     sites = {}
-    for path in INTERFACE.rglob("*.lua"):
+    for path in LOADED_LUA:
         text = path.read_text(errors="ignore")
         for m in re.finditer(r"\b([A-Za-z_]\w*)\[\s*([A-Z]\w+)\s*\(", text):
             table, fn = m.group(1), m.group(2)

@@ -1304,14 +1304,31 @@ CHECKS = [
      "token strings the interface cannot look up"),
     # Where the interface indexes a table with a binding's answer directly. A
     # reading list, not a verdict - the sweep can print the table's keys but not
-    # what the binding answers. Nine, and the one that put it here was
+    # what the binding answers. The one that put it here was
     # MAX_PLAYER_LEVEL_TABLE[GetAccountExpansionLevel()] against a table holding
     # 0, 1 and 2 while the binding counted from one: on Wrath it read nothing,
     # MAX_PLAYER_LEVEL became nil, and the comparison beside it raised on every
-    # level gained. Five of the nine call a C binding and all five have been
-    # read; a tenth means someone should read that one. 1s.
+    # level gained.
+    #
+    # Eight, where the list had nine, because the sweep stopped globbing the
+    # interface tree and asked the loader which files the client opens. The
+    # dropped site is GlueBackgroundMusic[GetClientExpansionLevel()] in
+    # gluexml/trialconvert.lua: gluexml is the login glue this client never
+    # installs, and that file is the only place the table is written. A lookup no
+    # interpreter here runs was occupying a slot whose whole point is "someone
+    # should read this one".
+    #
+    # What did not move, measured rather than hoped: the key sets of the tables
+    # the sweep compares tokens against are identical under both file lists -
+    # CLASS_ICON_TCOORDS 10, RAID_CLASS_COLORS 10, PowerBarColor 16,
+    # MirrorTimerColors 4, UnitLootMethod 5 - and the token verdict stayed 0. gluexml
+    # does re-write CLASS_ICON_TCOORDS in charactercreate.lua, but adds no key the
+    # loaded files do not already give. So this removed a phantom from a reading
+    # list, not evidence from a verdict. Four of the eight call a binding this
+    # client carries and all four have been read; a ninth means someone should
+    # read that one. 1s.
     ("token_table_check.py",
-     r"^(\d+) table lookup\(s\) keyed by a binding", 9,
+     r"^(\d+) table lookup\(s\) keyed by a binding", 8,
      "tables the interface indexes with a binding's answer"),
     # A bound binding answering "" or 0 where the interface tests for nothing.
     # Only nil and false are false in Lua, so the branch meant for "there is
