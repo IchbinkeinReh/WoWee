@@ -1301,7 +1301,7 @@ static int lua_GetContainerItemPurchaseItem(lua_State* L) {
     const int wanted = static_cast<int>(lua_tonumber(L, 3)) - 1;
     for (size_t entry = 0, seen = 0; entry < info->items.size(); ++entry) {
         if (info->items[entry].first == 0) continue;
-        if (seen++ != wanted) continue;
+        if (static_cast<int>(seen++) != wanted) continue;
         const uint32_t itemId = info->items[entry].first;
         const auto* item = gh->getItemInfo(itemId);
         if (!item || !item->valid) {
