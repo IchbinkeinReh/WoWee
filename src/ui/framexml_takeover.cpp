@@ -198,7 +198,6 @@ void frameXmlNoteMouseOwned(bool owned) {
 }
 bool frameXmlOwnsMouse() { return gMouseOwned.load(std::memory_order_relaxed); }
 
-namespace { std::atomic<bool> gCombatTextAddOn{false}; }
 
 namespace {
 /// Every load-on-demand addon that has actually loaded.
