@@ -198,7 +198,9 @@ int lua_debugstack(lua_State* L) {
             } else {
                 next = level;    // barely past the cut: show them all instead
             }
-        } else if (lua_getinfo(target, "Sn", &ar)) {
+        } else if (lua_getinfo(target, "Snl", &ar)) {
+            // "l" too: without it currentline is whatever the stack held,
+            // and a script error's stack read "[C]:1452078272: in function".
             std::string line(ar.short_src);
             line += ":";
             if (ar.currentline > 0) line += std::to_string(ar.currentline) + ":";
@@ -210,7 +212,7 @@ int lua_debugstack(lua_State* L) {
             else if (what == 'm') line += " in main chunk";
             else if (what == 'C' || what == 't') line += " ?";
             else
-                line += " in function <" + std::string(ar.source) + ":" +
+                line += " in function <" + std::string(ar.short_src) + ":" +
                         std::to_string(ar.linedefined) + ">";
             line += "\n";
             lua_pushstring(L, line.c_str());

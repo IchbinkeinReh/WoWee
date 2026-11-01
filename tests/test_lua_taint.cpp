@@ -285,6 +285,18 @@ TEST_CASE("A handler runs under the taint of whoever set it", "[taint]") {
     CHECK(f.globalString("handlerTaint") == "SomeAddon");
 }
 
+TEST_CASE("debugstack names each Lua frame's current line, and a C frame none", "[taint]") {
+    Fixture f;
+    f.run("function Inner()\n  trace = debugstack(1)\nend\nfunction Outer()\n  pcall(Inner)\nend\nOuter()", 0);
+    const std::string trace = f.globalString("trace");
+    INFO(trace);
+    // Called by pcall, Inner has no name to give: it is named by where it
+    // was defined, as luaG_traceback does.
+    CHECK(trace.find("]:2: in function <[string") != std::string::npos);
+    CHECK(trace.find("[C]: in function `pcall'") != std::string::npos);
+    CHECK(trace.find("]:5: in function `Outer'") != std::string::npos);
+}
+
 TEST_CASE("A handler is called with its arguments, and an error leaves the stack as it was", "[taint]") {
     Fixture f;
     f.run("function TwoArgs(a, b) sum = a + b end", 0);
