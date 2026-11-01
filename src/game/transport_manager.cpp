@@ -588,12 +588,27 @@ uint64_t TransportManager::groundTransportUnder(const glm::vec3& canonicalPositi
             // The car's own floor under the feet, within a step of them -
             // not a box about it, which covers its doorway and the ground
             // outside.
-            deck = m2Renderer_->getInstanceFloorHeight(
-                transport.wmoInstanceId, render.x, render.y,
-                render.z + rendering::movement::kMaxStepUp);
-            if (deck) {
-                const float delta = render.z - *deck;
-                if (delta < -rendering::movement::kMaxStepUp || delta > 2.0f) deck.reset();
+            //
+            // Under the feet, not under one point: the centre and a cross
+            // about it, as the ground under a character is found. A rider
+            // pressed against the shaft wall at an open doorway stands with
+            // its centre on the lip of the floor, where the one ray down
+            // missed it - and the lift went on down without them, through
+            // the doorway frame on the way.
+            constexpr float kFootprint = 0.35f;
+            const glm::vec2 cross[5] = {{0.0f, 0.0f}, {kFootprint, 0.0f}, {-kFootprint, 0.0f},
+                                        {0.0f, kFootprint}, {0.0f, -kFootprint}};
+            for (const glm::vec2& d : cross) {
+                std::optional<float> floor = m2Renderer_->getInstanceFloorHeight(
+                    transport.wmoInstanceId, render.x + d.x, render.y + d.y,
+                    render.z + rendering::movement::kMaxStepUp);
+                if (floor) {
+                    const float delta = render.z - *floor;
+                    if (delta < -rendering::movement::kMaxStepUp || delta > 2.0f) floor.reset();
+                }
+                if (floor && (!deck || *floor > *deck)) deck = floor;
+                // The centre's answer is the floor wherever it has one.
+                if (deck && d.x == 0.0f && d.y == 0.0f) break;
             }
         } else {
             deck = getTransportDeckFloorHeight(guid, canonicalPosition);
