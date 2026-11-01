@@ -697,11 +697,33 @@ CHECKS = [
     #
     # Each is one of two questions, and they are opposite answers: this client
     # draws that window itself, in which case FrameXML's copy has to be
-    # suppressed or the player sees two; or it does not, in which case the window
-    # is FrameXML's to draw and the takeover list has to name it so its API calls
-    # get answered instead of nil - which is the quiet failure, a window that is
-    # present and does nothing. Do not lower this ceiling to make it green;
-    # answering the question for one of them is what lowers it.
+    # suppressed or the player sees two; or it does not, and the window is
+    # FrameXML's to draw. Do not lower this ceiling to make it green; answering
+    # the question for one of them is what lowers it.
+    #
+    # Naming a frame in the takeover file settles the first of those and nothing
+    # else. What decides whether such a window's calls answer at all is the
+    # missing-API fallback in lua_engine.cpp: every unknown PascalCase global
+    # answers a no-op object, except the ones in `__WoweeLoadOnDemandFrames`,
+    # which answer nil so FrameXML's `if ( not MacroFrame ) then
+    # MacroFrame_LoadUI() end` asks for the addon instead of reading "already
+    # loaded". Six of these are in that list today - ArenaEnemyFrames,
+    # BattlefieldMinimap, BattlefieldMinimapTab, KeyBindingFrame, MacroFrame,
+    # TimeManagerFrame - and the tool now says which, next to the name.
+    #
+    # The list carries that evidence because a list of 57 bare names is a list
+    # nobody reads: each line names the strongest thing this checkout already
+    # knows about the window, out of four. The load-on-demand list; the frame
+    # name in the C++ that feeds it ("hides OpenMailFrame when not"); the
+    # window's own routine (`ItemSocketingFrame_LoadUI` in lua_socket_api.cpp);
+    # or its base name's routine, which is the weak one and is labelled weak -
+    # `ChatFrame_` credits ChatFrame7 without any line being about ChatFrame7.
+    # Measured on this tree: 6 / 6 / 18 / 27. The 27 named nowhere are the work.
+    # The count itself did not move, so the 57 is still the bar; what moved is
+    # whether the list can be read. Canary on the evidence, in memory: ask for
+    # OpenMailFrame, GroupLootFrame1, ItemSocketingFrame and a name invented for
+    # the test, and the three real ones get three different tiers while the
+    # invented one gets "nothing in this client's code mentions it".
     #
     # The row is graded against the count the tool now prints, which it did not
     # use to print - the list came out with no number on it. The check also had
@@ -709,7 +731,11 @@ CHECKS = [
     # repository it read nothing and printed "0 top-level windows" plus every
     # suppressed name as one "no XML declares", exit 0; it now stops and says so,
     # and the source names `Data/interface` in one piece so the guard can see
-    # that this is one of the sweeps that needs an installed interface.
+    # that this is one of the sweeps that needs an installed interface. Its
+    # second half had the same fault in miniature: with no XML the inherits
+    # check printed "0 templates and font objects inherited; 0 declared.
+    # Every inherits= resolves." - a clean verdict from a run that had opened no
+    # file, on the command line that had just been told nothing was read.
     ("framexml_window_check.py",
      r"^(\d+) neither owned nor suppressed", 57,
      "top-level windows no one has decided draws them"),
