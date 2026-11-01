@@ -5974,11 +5974,30 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushnumber(L, 0);
             return 3;
         }},
-                // GetCategoryNumAchievements(id) → total, completed, incomplete
+                // GetCategoryNumAchievements(id [, includeHidden]) → total, completed
+                //
+                // Two answers, not three: 0x005b38e0 pushes the total (its own
+                // counter plus a second one for rows it treats specially) and
+                // then the completed count, and returns 2. The interface has
+                // always unpacked two, so a third answer was simply discarded.
+                //
+                // What the optional second argument does in this client is not
+                // what its name in the installed FrameXML suggests. The hidden
+                // bit (row +0x24 bit 0) is consulted only for the two pseudo
+                // category ids -1 and -2, which ask for "everything not hidden"
+                // and "everything hidden" respectively; for an ordinary
+                // category id the bit is never read. What the argument really
+                // switches is the count: with it true every row of the category
+                // lands in the total, and without it the client folds rows that
+                // share the group key at row +0xc and counts one of them. The
+                // catalog here has no such key, and no progression bit either
+                // (rows with +0x24 bit 2 set are dropped outright), so the
+                // straight count is the closest answer available and the
+                // argument stays unread rather than guessed at.
                 {"GetCategoryNumAchievements", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const auto id = static_cast<uint32_t>(luaL_optnumber(L, 1, 0));
-            if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 3; }
+            if (!gh) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
             gh->ensureAchievementCategoriesLoaded();
             const auto& ids = gh->getCategoryAchievements(id);
             const auto& earned = gh->getEarnedAchievements();
@@ -5986,8 +6005,7 @@ void registerQuestLuaAPI(lua_State* L) {
             for (uint32_t a : ids) if (earned.count(a)) ++done;
             lua_pushnumber(L, static_cast<lua_Number>(ids.size()));
             lua_pushnumber(L, done);
-            lua_pushnumber(L, static_cast<lua_Number>(ids.size() - done));
-            return 3;
+            return 2;
         }},
                 {"GetAchievementCategory", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);

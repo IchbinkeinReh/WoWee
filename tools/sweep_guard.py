@@ -992,11 +992,33 @@ CHECKS = [
     # filter changes place with the form it is used in, which is written out at
     # the binding, SetPortraitToTexture forwards its second with lua_pushvalue,
     # and CastPetAction takes its target through castPetSlot.  GetUnitName is the row
-    # that is not the client's binding at all.  The rest are real and open:
-    # JoinPermanentChannel's chat-frame index and isStatic, JoinBattlefield's
-    # third argument behind an arena queue this client has no packet for,
-    # GetCategoryNumAchievements' second, and GetBinding, GetBindingKey,
-    # GetBindingAction and SetBinding behind a binding store that has no mode.
+    # that is not the client's binding at all.
+    #
+    # JoinPermanentChannel's pair is closed (e7d14943): the client's join worker
+    # 0x00507a80 takes a by-client byte and a by-player byte, the interface's
+    # fourth argument is the second of them, and the first is what gates the
+    # client's own ERR_TOO_MANY_CHAT_CHANNELS.  Both were being sent as zero.
+    #
+    # Two are closed as unimplementable rather than unfixed, and both were
+    # measured before being set down.  JoinBattlefield's third argument is the
+    # rated byte of CMSG_BATTLEMASTER_JOIN_ARENA (0x0054d990 does read three;
+    # 0x0054cc70 picks the opcode with `(-isArena & 0x6a) + 0x2ee` and writes the
+    # bracket as a byte where the battleground join writes an instance dword),
+    # and the client takes that branch off a battleground-record table's
+    # record+0x24 == 4 test.  Nothing on the wire writes that table - SMSG_BATTLEFIELD_LIST's
+    # own reader at 0x0054e390 consumes guid, from-where, type, two level bytes,
+    # one flag byte, reward dwords and the instance list, with no type field - so
+    # an arena queue needs a table before it needs a packet.
+    # GetCategoryNumAchievements' second is not a hidden filter for an ordinary
+    # category: 0x005b38e0 reads the hidden bit (row +0x24 bit 0) only for the
+    # pseudo categories -1 and -2, and the argument instead switches off a dedup
+    # keyed on row +0xc, which the catalog here has no equivalent of.  What the
+    # binding did get wrong is fixed: the client pushes two values, and it was
+    # pushing three.
+    #
+    # What is left is GetBinding, GetBindingKey, GetBindingAction and SetBinding,
+    # four rows for one absent concept: the mode this client's binding store has
+    # no notion of.
     #
     # The printed line this pattern reads is worth spelling out: the sweep prints
     # every counted row and *then* says how many of them the 12340 client carries
@@ -1005,10 +1027,10 @@ CHECKS = [
     # it reported 15) - one under, by however many rows are newer than this client,
     # which on this tree is the single GetUnitName row.  On a checkout with
     # Data/interface, where this sweep runs instead of being skipped, that reads
-    # as over ceiling.  The printed figure is what is recorded below now: 13, the
-    # count with the spell-book row above it closed.
+    # as over ceiling.  The printed figure is what is recorded below now: 12, the
+    # count with the chat-join row above it closed.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 13,
+     r"^(\d+) binding\(s\) read fewer arguments", 12,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,

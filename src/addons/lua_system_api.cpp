@@ -6561,10 +6561,29 @@ static int lua_SetSelectedBattlefield(lua_State* L) {
     return 0;
 }
 
-// JoinBattlefield(index, asGroup, isArena) - queue for it.
+// JoinBattlefield(index, asGroup, isRated) - queue for it.
 //
 // The index names an instance of the selected battleground, and zero means the
 // first available one - which is what both join buttons pass.
+//
+// The client reads all three of them (0x0054d990 takes arg 1 as a number and
+// hands args 2 and 3 over through FUN_00815500(L,2,0) and FUN_00815500(L,3,0)
+// to FUN_0054cc70(index - 1, isGroup, isRated)), and the third one is read by
+// the queue worker only on the arena path: the worker picks the opcode with
+// `(-isArena & 0x6a) + 0x2ee`, so 0x2ee CMSG_BATTLEMASTER_JOIN becomes 0x358
+// CMSG_BATTLEMASTER_JOIN_ARENA, and the two packets differ in more than the
+// number - the arena one is guid, then a *byte* for the bracket index instead
+// of the instance dword, then the group byte, then the rated byte. Nothing
+// here can take that branch: the worker decides it before looking at any
+// argument, by reading the selected type id out of a table of battleground
+// records and testing record +0x24 == 4. That table is filled at load time and
+// nothing on this client's wire writes it - objdump over the whole image finds
+// the record array referenced from eight sites, all of them inside this same
+// battleground code, and SMSG_BATTLEFIELD_LIST's reader (0x0054e390) consumes
+// guid, from-where byte, type dword, two level bytes, one flag byte, three
+// reward dwords, an optional second reward block, then the running instances -
+// no type field in it. So an arena queue is a missing table plus a missing
+// packet, and the third argument has nowhere honest to go.
 static int lua_JoinBattlefield(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
