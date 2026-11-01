@@ -1722,20 +1722,30 @@ CHECKS = [
      "unjudged pairs of files sharing a block of code"),
     # The same fact as a data table, which the block checker above says outright
     # it cannot see: 627 tables of four or more items with three or more distinct
-    # values, of which eight are written out in more than one file and six more
+    # values, of which seven are written out in more than one file and six more
     # are settled here with a reason.
     #
-    # Most of the eight are one fact in two or three places and drift the way two
+    # Most of the seven are one fact in two or three places and drift the way two
     # copies always drift: the 187-entry spell-failure table in both combat_handler
-    # and spell_handler, the grey-level gap in three places (two kGreyGap and a
-    # kGreyRange), the reputation rank floors, the six resistances twice, the five
-    # Horde race ids in three places - two of those three in the same translation
-    # unit. Two are the same *shape* rather than the same fact, and reading each is
-    # what tells them apart: the 0|1|2|0|2|3 that celestial's draw order and
-    # weather's share, and a quarter-extent initializer that appears twice in the
-    # screen effects pair.
+    # and spell_handler, the reputation rank floors, the six resistances twice, the
+    # five Horde race ids in three places - two of those three in the same
+    # translation unit. Two are the same *shape* rather than the same fact, and
+    # reading each is what tells them apart: the 0|1|2|0|2|3 that celestial's draw
+    # order and weather's share, and a quarter-extent initializer that appears
+    # twice in the screen effects pair.
     #
-    # Two came down today, and they were one client table copied three ways each:
+    # One that came down today: the grey-level gap, written out here three times -
+    # kGreyGap behind the greeting's quest-trivial test, kGreyGap again behind
+    # UnitIsTrivial, and a kGreyRange of the same rows deciding when a nameplate
+    # turns its level grey. The client really does keep three tables there
+    # (0x00a12fd0, 0x00a31bb8, 0x00aa34b8), but read out of .rdata all twenty rows
+    # of each agree, so the copies were three spellings of one fact and could
+    # drift apart over something the reference states once. It is
+    # game::triviality::greyGap now, and what stayed with each caller is what grey
+    # means to that caller - which is the part that was never shared.
+    #
+    # Two came down before that, and they were one client table copied three ways
+    # each:
     # the power tokens of 0x007fe4b0, written out by the combat log's energize
     # line, by a failed cast naming the power it wanted and by UnitPower's
     # display; and the power divisors of 0x00af5220, written out twice. They are
@@ -1755,7 +1765,7 @@ CHECKS = [
     # could not answer. It is kLuaInvTypes in lua_api_helpers.hpp now, beside the
     # two power tables and the other shared tables, and both bindings read it.
     ("duplicate_table_check.py",
-     r"^(\d+) written out in more than one file", 8,
+     r"^(\d+) written out in more than one file", 7,
      "data tables written out in more than one file"),
     # The same drift question one level smaller: a magic number survives a
     # rewording that the block scan would miss, which is how one spell id came to

@@ -3,6 +3,7 @@
 #include "game/shapeshift_forms.hpp"
 #include "game/battleground_flag.hpp"
 #include "game/game_utils.hpp"
+#include "game/grey_triviality.hpp"
 #include "game/bg_score_defs.hpp"
 #include "game/pvp_flags.hpp"
 #include "rendering/selection_circle.hpp"
@@ -3320,7 +3321,6 @@ static int lua_UnitIsFeignDeath(lua_State* L) {
 /// level 99. 1 or nil.
 static int lua_UnitIsTrivial(lua_State* L) {
     if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: UnitIsTrivial(\"unit\")");
-    static constexpr int kGreyGap[20] = {4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8};
     auto* gh = getGameHandler(L);
     auto* unit = resolveUnit(L, lua_tostring(L, 1));
     bool trivial = false;
@@ -3329,10 +3329,8 @@ static int lua_UnitIsTrivial(lua_State* L) {
         if (me) {
             const int playerLevel = static_cast<int>(me->getLevel());
             const int gap = playerLevel - static_cast<int>(unit->getLevel());
-            if (gap > 0) {
-                const unsigned band = static_cast<unsigned>(playerLevel / 5);
-                trivial = band < 20 ? gap > kGreyGap[band] : gap > 8;
-            }
+            if (gap > 0)
+                trivial = gap > game::triviality::greyGap(static_cast<uint32_t>(playerLevel));
         }
     }
     if (trivial) lua_pushnumber(L, 1); else lua_pushnil(L);

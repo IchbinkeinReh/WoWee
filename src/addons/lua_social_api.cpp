@@ -2,6 +2,7 @@
 // Extracted from lua_engine.cpp as part of §5.1 (Tame LuaEngine).
 #include "addons/unit_or_name.hpp"
 #include "game/gossip_quest_status.hpp"
+#include "game/grey_triviality.hpp"
 #include "game/interface_text.hpp"
 #include <algorithm>
 #include <cmath>
@@ -1240,11 +1241,10 @@ const game::GossipQuestItem* gossipQuestAt(lua_State* L, bool available, int ind
 /// player's level / 5 below it - 8 from level 100 - is grey. A row that is not
 /// there counts as level 0.
 static bool greetingQuestIsTrivial(game::GameHandler* gh, int questLevel) {
-    static constexpr int kGreyGap[20] = {4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8};
     if (!gh || questLevel == -1) return false;
     const int playerLevel = static_cast<int>(gh->getPlayerLevel());
-    const unsigned band = static_cast<unsigned>(playerLevel / 5);
-    return (band < 20 ? kGreyGap[band] : 8) + questLevel < playerLevel;
+    return game::triviality::greyGap(static_cast<uint32_t>(playerLevel)) + questLevel <
+           playerLevel;
 }
 
 /// IsActiveQuestTrivial / IsAvailableQuestTrivial (0x0058d420, 0x0058d370):

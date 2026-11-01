@@ -17,6 +17,7 @@
 #include "core/application.hpp"
 #include "core/coordinates.hpp"
 #include "game/game_handler.hpp"
+#include "game/grey_triviality.hpp"
 #include "game/unit_name_rules.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "rendering/camera.hpp"
@@ -188,14 +189,11 @@ std::string summonTitleLine(game::GameHandler& gh, const game::Entity& e, const 
 /// red five or more above, orange three, yellow within two, green, and grey
 /// past the grey range (0x00aa34b8 by the player's level over five).
 ImU32 levelColor(uint32_t unitLevel, uint32_t playerLevel, int alpha) {
-    static constexpr int kGreyRange[20] = {4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8};
     const int diff = static_cast<int>(unitLevel) - static_cast<int>(playerLevel);
     if (diff > 4) return IM_COL32(255, 25, 25, alpha);
     if (diff > 2) return IM_COL32(255, 127, 63, alpha);
     if (diff > -3) return IM_COL32(255, 255, 0, alpha);
-    const uint32_t band = playerLevel / 5;
-    const int grey = band < 20 ? kGreyRange[band] : 8;
-    if (-diff > grey) return IM_COL32(127, 127, 127, alpha);
+    if (-diff > game::triviality::greyGap(playerLevel)) return IM_COL32(127, 127, 127, alpha);
     return IM_COL32(63, 178, 63, alpha);
 }
 
