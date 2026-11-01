@@ -240,13 +240,19 @@ CHECKS = [
     # suppressed motion scripts, so every greyed control answered the mouse.
     #
     # The check splits that list when the decompile's strings.tsv is its second
-    # argument: five of the fourteen - the two Minimap model attributes and the
-    # three XML namespace ones - are names the 12340 client carries nothing for,
-    # so that client never read them out of the XML either and they are printed
-    # apart. This table runs every sweep with no arguments, so the number checked
-    # here is the unsplit fourteen; the ceiling is against that, not the nine.
+    # argument: six of the fifteen - the two Minimap model attributes, the three
+    # XML namespace ones and ScrollingMessageFrame's `fade` - are names the 12340
+    # client carries nothing for, so that client never read them out of the XML
+    # either and they are printed apart. This table runs every sweep with no
+    # arguments, so the number checked here is the unsplit fifteen; the ceiling is
+    # against that, not the nine.
+    #
+    # Fifteen, where it was fourteen until the sweep read the files the client
+    # loads. One attribute left the list (`debug` on Binding, which is in
+    # bindings.xml, a file no .toc Include reaches) and two arrived with the
+    # addon frames, which is why the ceiling moved down rather than up.
     ("declared_vs_read_check.py",
-     r"attributes declared, (\d+) the emitter never names", 16,
+     r"attributes declared, (\d+) the emitter never names", 15,
      "XML attributes the emitter never reads"),
     # The other half. An attribute the emitter ignores is a wrong value on a
     # frame; an element it ignores is a frame, region or animation that never
@@ -274,8 +280,33 @@ CHECKS = [
     ("declared_vs_read_check.py",
      r"^(\d+) script type\(s\) declared and never fired", 2,
      "script handlers FrameXML declares that nothing fires"),
+    # Thirty-seven, where it was twenty-four until the sweep read the files the
+    # client loads: the population went 68 -> 88 names, and the un-mapped list
+    # gained thirteen and lost none - AchievementMenuClose/Open, the three
+    # AlarmClockWarning*, BarberShop_Sit, Barbershop_Haircut, GM_ChatWarning,
+    # the four Glyph_Major*/Minor*, and GuildBankOpenBag.  Those live in the
+    # addon frames and in XML script bodies, the two halves of the interface the
+    # globs could not see.  Nothing was fixed and no sound was found missing, so
+    # this is the same list with longer reach - which is only a harmless way for
+    # a ceiling to move if what the count means was measured, so it was.
+    #
+    # "No hand-written mapping" is not "silent".  PlaySound resolves the name
+    # through SoundEntries.dbc case-folded on both sides - ui_sound_manager.cpp
+    # upper-cases the table's names as it reads them and upper-cases the key as
+    # it looks one up - so 87 of the 88 names the interface asks for reach a row
+    # and play.  That is also why `Barbershop_Haircut` is not a miss even though
+    # the table spells its row `BarberShop_Haircut`: the difference is case, and
+    # neither side keeps case.
+    #
+    # The one name with no row is `AlarmClockWarning1`.  The 3.3.5 table has
+    # AlarmClockWarning2 and AlarmClockWarning3 and no Warning1, and the
+    # reference binary carries no `AlarmClockWarning` bytes at all - which is the
+    # test that settles it: the client whose behaviour this reproduces never
+    # asked for that sound either, so it is the newer interface calling a row
+    # that only a later table has.  Nothing is missing here, and the ceiling is
+    # a bar on the count, not a list of things to implement.
     ("declared_vs_read_check.py",
-     r"sound names asked for, (\d+) with no hand-written mapping", 24,
+     r"sound names asked for, (\d+) with no hand-written mapping", 37,
      "UI sounds with no hand-written mapping (the dbc answers most of them)"),
     # "Read as off" is exact, and was checked rather than assumed: pushCvarDefault
     # ends in a catch-all answering "0", so an unlisted CVar comes back "0" and
@@ -288,12 +319,23 @@ CHECKS = [
     # there is no statement of the default anywhere in the tree, and a number
     # invented here would be a behaviour change wearing the clothes of a fix.
     #
-    # Two things do read as off wrongly and neither is reachable: the CVars for
+    # Two things read as off wrongly and neither is reachable: the CVars for
     # movie recording and for voice chat, both features this client does not
     # have. MacOptionsFrame was shown and updated to check the first of those -
     # it draws without raising, so the arithmetic worry there is not real.
+    #
+    # Seven, and the number written here had been left where it was introduced
+    # while the list shrank underneath it. The whole list today is
+    # MovieRecordingCompression, Framerate, GUI, Icon, Quality and Width - the
+    # six above - plus lfgDebug. A ceiling of 41 against a measured 7 is not a
+    # bar: it would have let 34 new unanswered CVars through without saying so.
+    #
+    # Re-pinned against the loader rather than guessed from it. Reading the
+    # interface through loaded_files() named 81 CVars instead of 77 and left the
+    # misses exactly these seven, which is worth recording because the other
+    # numbers on that tool all moved.
     ("declared_vs_read_check.py",
-     r"CVars named, (\d+) the client never answers", 41,
+     r"CVars named, (\d+) the client never answers", 7,
      "CVars the client never answers, so they read as off"),
     # The half of that list that raises rather than reading as off. A CVar the
     # interface only tests survives answering nothing - the branch behind it

@@ -143,7 +143,7 @@ import re
 import sys
 import pathlib as _pathlib
 sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
-from framexml_source import without_comments
+from framexml_source import loaded_files, without_comments
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # The interface root on the command line - the framexml directory comes off it,
@@ -156,7 +156,27 @@ INTERFACE = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
 # all. Optional: without it nothing is split out and every unread attribute is
 # counted, which is the honest number for a sweep that cannot tell the two apart.
 STRINGS = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else None
+if INTERFACE.name.lower() == "framexml":
+    # Naming FrameXML rather than the folder above it means the same interface
+    # to a reader; loaded_files() walks the .toc from the folder above.
+    INTERFACE = INTERFACE.parent
 FRAMEXML = INTERFACE / "framexml"
+# The interface files the client loads, from the one place that knows, in both
+# kinds - 343 of them, 181 .lua and 162 .xml. Every rule here used
+# `FRAMEXML.rglob(...)`, which is the wrong tree in both directions: it read the
+# twelve FrameXML files no .toc Include reaches - bindings.xml, focusframe,
+# petpopup and the rest, declarations nothing will ever parse - and it never saw
+# one of the 80 files in the 23 addon directories beside FrameXML (51 .lua and
+# 29 .xml), which is nearly a quarter of what the client loads. Measured across
+# the change: 95 attributes declared
+# becomes 92 (three were in unloaded files) and 14 unread becomes 15; 79 loaded
+# elements becomes 77; and 68 sound names becomes 88, 24 with no hand-written
+# mapping becomes 37. The sound list only grew: thirteen names arrived and none
+# left, and the guard entry says what they are and why the count is not a count
+# of missing sounds.
+_LOADER = loaded_files(INTERFACE)
+LOADED_LUA = [p for p in _LOADER if p.suffix.lower() == ".lua"]
+LOADED_XML = [p for p in _LOADER if p.suffix.lower() == ".xml"]
 EMITTER = ROOT / "src/ui/framexml_emitter.cpp"
 ADDONS = ROOT / "src/addons"
 SRC = ROOT / "src"
@@ -169,7 +189,7 @@ def strip_xml_comments(text):
 def attributes():
     """Attribute name -> the elements it appears on."""
     out = {}
-    for path in FRAMEXML.rglob("*.xml"):
+    for path in LOADED_XML:
         text = strip_xml_comments(path.read_text(errors="ignore"))
         for m in re.finditer(r"<(\w+)([^>]*)>", text):
             for attr in re.findall(r'\b([a-zA-Z]\w*)\s*=\s*"', m.group(2)):
@@ -191,7 +211,7 @@ def elements():
     thirty-one element names that mean nothing here.
     """
     out = {}
-    for path in FRAMEXML.rglob("*.xml"):
+    for path in LOADED_XML:
         low = str(path).lower()
         if "gluexml" in low or "lcdxml" in low:
             continue
@@ -205,10 +225,10 @@ def elements():
 
 def script_types():
     out = set()
-    for path in FRAMEXML.rglob("*.xml"):
+    for path in LOADED_XML:
         text = strip_xml_comments(path.read_text(errors="ignore"))
         out |= set(re.findall(r"<(On[A-Z]\w*)", text))
-    for path in FRAMEXML.rglob("*.lua"):
+    for path in LOADED_LUA:
         text = without_comments(path.read_text(errors="ignore"))
         out |= set(re.findall(r'SetScript\(\s*"(On\w+)"', text))
     return out
@@ -238,7 +258,7 @@ def constants():
                              path.read_text(errors="ignore")):
             boot[m.group(1)] = m.group(2).strip()
     fx = {}
-    for path in FRAMEXML.rglob("*.lua"):
+    for path in LOADED_LUA:
         text = without_comments(path.read_text(errors="ignore"))
         for m in re.finditer(r"^([A-Z][A-Z0-9_]{2,})\s*=\s*([^\n;]{1,40})",
                              text, re.M):
@@ -263,7 +283,7 @@ def vocabulary(pattern, known_from):
     once answered "0" for it, which laid every dropdown out at SetScale(0).
     """
     want = {}
-    for path in list(FRAMEXML.rglob("*.lua")) + list(FRAMEXML.rglob("*.xml")):
+    for path in LOADED_LUA + LOADED_XML:
         text = without_comments(path.read_text(errors="ignore"))
         for m in re.finditer(pattern, text):
             want.setdefault(m.group(1).lower(), m.group(1))
@@ -484,7 +504,7 @@ def main():
     # bit.band on it, so the quest tracker worked until the login event that
     # configures it and went down on its next update, every session.
     arith = set()
-    for path in list(FRAMEXML.rglob("*.lua")):
+    for path in LOADED_LUA:
         text = without_comments(path.read_text(errors="ignore"))
         for m in re.finditer(r'tonumber\(\s*GetCVar\(\s*"([A-Za-z0-9_]+)"', text):
             arith.add(m.group(1).lower())
