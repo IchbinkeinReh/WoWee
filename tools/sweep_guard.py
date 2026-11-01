@@ -149,12 +149,34 @@ CHECKS = [
      "sound samples read from disk that nothing plays"),
     # A checkbox that saves its CVar, reads it back, and changes nothing looks
     # exactly like one that works - it remembers what you chose. 69 of the 198
-    # controls in the option panels had no reader at all; 14 of those are
-    # honestly greyed with a reason, and this counts the rest. The ceiling
-    # comes down as they are implemented or greyed, and must never go up: a new
-    # control wired to nothing is the thing being watched for.
+    # controls in the option panels once had no reader at all; 14 of those were
+    # honestly greyed with a reason and the rest have since been implemented or
+    # greyed, which is what the ceiling was there to follow down. Zero today, so
+    # the bar is at zero: a new control wired to nothing is the thing being
+    # watched for, and a ratchet left a slot of slack open reports it a control
+    # late.
+    #
+    # The tool also stopped deciding which files count from a folder name, which
+    # is the only reason its numbers could have moved here. Its panel scan globbed
+    # FrameXML's own folder and could not see an options panel the newer interface
+    # keeps in an addon; its mention scan walked the whole interface tree, 73
+    # files more than the client opens (gluexml's 57, the twelve FrameXML files no
+    # .toc Include reaches, lcdxml's two, one addon frame's two), so a CVar whose
+    # only reader is in a file this client never installs read as alive. Measured,
+    # both lists give the same 198 declared CVars and the same zero findings: the
+    # arena panel's CVar is declared on a FrameXML panel as well, and the
+    # never-loaded focusframe.xml declares names that are declared elsewhere too.
+    #
+    # What did move is reach. Naming the interface folder rather than its framexml
+    # subfolder used to declare no controls at all, because the uvar map and the
+    # panel scan were both reached by joining a remembered file name onto the
+    # named directory; both spellings print the same line now, and --canary - the
+    # planted name nothing reads - passes from either. Note that the guard runs
+    # its tools with no arguments, and this one's default is a repository path
+    # that does not exist, so on a machine without an installed interface it is
+    # one of the skipped rows and this ceiling is for the machine that has one.
     ("dead_setting_check.py",
-     r"^settings with no reader and still on a panel: (\d+) of", 1,
+     r"^settings with no reader and still on a panel: (\d+) of", 0,
      "option panel controls whose CVar nothing reads"),
     # Both halves still write to the chat window. The handler adds a line and
     # fires the event; chatframe.lua's own branch formats the same fact from
