@@ -1009,19 +1009,9 @@ static int lua_GetItemInfo(lua_State* L) {
     lua_pushnumber(L, info->maxStack > 0 ? info->maxStack : 1); // 8: maxStack
     // 9: equipSlot - WoW inventoryType to INVTYPE string
     {
-        static constexpr const char* kInvTypes[] = {
-            "", "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER",
-            "INVTYPE_BODY", "INVTYPE_CHEST", "INVTYPE_WAIST", "INVTYPE_LEGS",
-            "INVTYPE_FEET", "INVTYPE_WRIST", "INVTYPE_HAND", "INVTYPE_FINGER",
-            "INVTYPE_TRINKET", "INVTYPE_WEAPON", "INVTYPE_SHIELD",
-            "INVTYPE_RANGED", "INVTYPE_CLOAK", "INVTYPE_2HWEAPON",
-            "INVTYPE_BAG", "INVTYPE_TABARD", "INVTYPE_ROBE",
-            "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPONOFFHAND", "INVTYPE_HOLDABLE",
-            "INVTYPE_AMMO", "INVTYPE_THROWN", "INVTYPE_RANGEDRIGHT",
-            "INVTYPE_QUIVER", "INVTYPE_RELIC"
-        };
+        // One table for both directions of this fact - see kLuaInvTypes.
         uint32_t invType = info->inventoryType;
-        lua_pushstring(L, invType < 29 ? kInvTypes[invType] : "");
+        lua_pushstring(L, invType < kNumInvTypes ? kLuaInvTypes[invType] : "");
     }
     // 10: texture (icon path from ItemDisplayInfo.dbc)
     if (info->displayInfoId != 0) {

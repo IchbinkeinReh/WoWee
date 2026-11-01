@@ -416,6 +416,34 @@ inline constexpr const char* kLuaPowerNames[] = {
     "MANA","RAGE","FOCUS","ENERGY","HAPPINESS","RUNES","RUNIC_POWER"
 };
 
+/// The 29 inventory types by their tokens (the client's table at 0x00ac7fd8),
+/// indexed by the type a row's inventoryType field carries. Slot 0 is the empty
+/// string: an item with no slot answers "", which is what the tooltip prints and
+/// what IsEquippedItemType's own comparison skips - the type is 0 for a bag, a
+/// reagent or trade goods, and matching on "" would name every one of them.
+///
+/// The localized spelling of each is a GlobalStrings lookup beside the token
+/// (interfaceString here), not this table, so this is the one place the English
+/// token is written.
+///
+/// It was written twice: a namespace table in the item-query bindings and a
+/// function-local one in the inventory bindings, both 29 entries and in the same
+/// order, one feeding GetInventoryItemLink's slot name and the other feeding
+/// IsEquippedItemType's matching. They agreed; nothing but reading both said so,
+/// and a slot added to one and not the other would have the tooltip name a slot
+/// the matcher cannot answer.
+inline constexpr const char* kLuaInvTypes[] = {
+    "", "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER", "INVTYPE_BODY",
+    "INVTYPE_CHEST", "INVTYPE_WAIST", "INVTYPE_LEGS", "INVTYPE_FEET",
+    "INVTYPE_WRIST", "INVTYPE_HAND", "INVTYPE_FINGER", "INVTYPE_TRINKET",
+    "INVTYPE_WEAPON", "INVTYPE_SHIELD", "INVTYPE_RANGED", "INVTYPE_CLOAK",
+    "INVTYPE_2HWEAPON", "INVTYPE_BAG", "INVTYPE_TABARD", "INVTYPE_ROBE",
+    "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPONOFFHAND", "INVTYPE_HOLDABLE",
+    "INVTYPE_AMMO", "INVTYPE_THROWN", "INVTYPE_RANGEDRIGHT", "INVTYPE_QUIVER",
+    "INVTYPE_RELIC"
+};
+inline constexpr uint8_t kNumInvTypes = 29;
+
 // The quality colours live in item_text.hpp and are not restated here. They
 // were written out as two tables in this header - one with the alpha, one
 // without - and the pair drifted: this one said heirlooms were 00ccff, a later
