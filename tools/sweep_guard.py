@@ -1602,6 +1602,29 @@ SENTENCES = [
     ("framexml_settings_control_check.py",
      "every control shows the value it is given",
      "a settings control not keeping one of the promises its panel makes"),
+    # The Warden emulator's stub branch - the code that compiles when Unicorn
+    # is absent - is compiled by no configuration anyone here runs, so it rots
+    # in place; issue #115 was exactly that. This re-runs each such
+    # translation unit's real compile command minus -DHAVE_UNICORN and minus
+    # the precompiled header, which has to go too or the compiler is handed the
+    # state the define was on and the mismatch never surfaces.
+    #
+    # Two units today, and both parse. The all-clear is asked for as a sentence
+    # rather than a number because the number is not a quality bar: it is how
+    # many translation units carry the branch, and it going up would mean
+    # another unit grew one, not that anything got worse. The tree configured
+    # without Unicorn prints the same line with a zero in it, which is the
+    # stronger statement - the stub branch is what that build compiles anyway.
+    #
+    # This tool had never run on Windows at all: POSIX shlex ate the backslashes
+    # out of the compiler's path, and past that an MSYS2 c++ invoked by absolute
+    # path from a PATH that does not carry its bin directory exits 1 without
+    # printing a word. Both are written out in the tool's own header, and the
+    # second is the trap building-wowee-locally already records for ordinary
+    # builds - it just took a compile for the sweep to fall into it.
+    ("unicorn_stub_check.py",
+     "translation unit(s) compile without Unicorn",
+     "the Warden stub branch still parses without Unicorn"),
 ]
 
 
@@ -1649,6 +1672,12 @@ def missing_input(tool):
     # above went to the failure list instead.
     if "framexml_run" in source and not (ROOT / "build/bin/framexml_run").is_file():
         return "build/bin/framexml_run"
+    # Same for a sweep that re-runs the build's own compile commands: without a
+    # configured tree there is no command to re-run, and the sweep's answer to
+    # that is a reason and exit 1, which is not a fault to report.
+    if "compile_commands.json" in source and not (
+            ROOT / "build/compile_commands.json").is_file():
+        return "build/compile_commands.json"
     return None
 
 
