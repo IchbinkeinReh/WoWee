@@ -53,6 +53,31 @@ XML = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Data/interface"
 if not XML.is_dir():
     print(f"no interface at {XML} - name one on the command line")
     raise SystemExit(2)
+if XML.name.lower() == "framexml":
+    # loaded_files() walks the .toc from the folder above FrameXML, and naming
+    # FrameXML means the same interface to a reader who remembers the folder.
+    XML = XML.parent
+
+# The files the client loads, in one place. The `defined` set below already came
+# from loaded_files(); the two populations underneath it - the SLASH_ rows and
+# the SlashCmdList handler bodies - were built with `XML.rglob("*.lua")`, which
+# is 213 files here against the loader's 181. The extra 32 are gluexml's 26, the
+# five FrameXML files no .toc Include reaches (focusframe, minigameframe,
+# petpopup, questtimerframe, tictactoeframe), and one addon file the manifest
+# does not list, addons/blizzard_inspectui/inspecthonorframe.lua. Nothing moves
+# the other way: a recursive glob from the interface root already covers the
+# addon tree, so the loader list here is a subset rather than a different set.
+#
+# That is the whole difference, and it is worth having measured rather than
+# assumed: none of those 32 files holds a `SLASH_<NAME><n> = "/cmd"` row or a
+# `SlashCmdList["NAME"] = function` assignment, so both file lists feed the sweep
+# the same 151 names and 72 handler bodies and it prints the same lines either
+# way. This change moves no verdict. It retires an evidence base of 32 files
+# nothing runs, which matters because a handler's *body* is what decides
+# live-or-dead here: a row read out of a file the interpreter never opened is a
+# shadow that cannot exist, and the day one appears the sweep would report a
+# command FrameXML steals that nobody could ever have typed.
+LOADED_LUA = [p for p in loaded_files(XML) if p.suffix.lower() == ".lua"]
 
 STUBS = {"lua_ReturnNil", "lua_ReturnZero", "lua_ReturnFalse", "lua_ReturnNothing",
          "lua_ContainerNoOp", "lua_ContainerFalse"}
@@ -86,13 +111,13 @@ for path in sorted(loaded_files(XML)):
 
 # SLASH_<NAME><n> = "/cmd"
 slash = {}
-for path in XML.rglob("*.lua"):
+for path in LOADED_LUA:
     for m in re.finditer(r'SLASH_([A-Z0-9_]+?)(\d)\s*=\s*"(/[^"]+)"', path.read_text(errors="ignore")):
         slash.setdefault(m.group(1), set()).add(m.group(3).lower())
 
 # SlashCmdList["NAME"] = function(...) ... end  -> globals it calls
 handlers = {}
-for path in XML.rglob("*.lua"):
+for path in LOADED_LUA:
     t = path.read_text(errors="ignore")
     for m in re.finditer(r'SlashCmdList\["([A-Z0-9_]+)"\]\s*=\s*function\b(.{0,700}?)\nend', t, re.S):
         handlers.setdefault(m.group(1), "")

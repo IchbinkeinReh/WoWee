@@ -1459,6 +1459,17 @@ CHECKS = [
     # works or not. Zero is the honest ceiling for a handler that can do nothing
     # at all; the tool's second list - a dead call beside a live one - is two
     # Battle.net branches that cannot run and is not guarded.
+    #
+    # Zero still, after the tool stopped building its two populations from
+    # `XML.rglob("*.lua")` and started asking the loader. The glob read 32 files
+    # no interpreter opens - gluexml's 26, five FrameXML files no .toc Include
+    # reaches, one addon file the manifest does not list - and not one of them
+    # has a SLASH_ row or a SlashCmdList assignment in it, so the sweep sees the
+    # same 151 names and 72 handler bodies either way. What that retires is the
+    # habit of deciding the file list by its path. Canary, in memory: take
+    # LeaveChannelByName away from the /leave handler - the one live call in it -
+    # and this row goes 0 -> 1, which is the proof the ceiling is a bar and not
+    # a silence.
     ("framexml_slash_shadowing.py",
      r"^(\d+) client command\(s\) whose handler has no live call", 0,
      "slash commands FrameXML takes over with a handler that cannot act"),
