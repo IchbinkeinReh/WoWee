@@ -42,6 +42,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Which files the client loads, from the one place that knows. The interpreter
+# runs with -I, so the tools directory has to be named to import a sibling.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from framexml_source import loaded_files  # noqa: E402
+
 # The calls a key is handed to.  `text` and `fmt` are the parameter names the
 # format helpers in include/game/interface_text.hpp and include/game/chat_log
 # .hpp give their text source, so a key reaches the lookup through them too.
@@ -93,9 +98,18 @@ def asks(repo):
 
 def interface_globals(root):
     """Names the installed interface assigns as globals, which is what a
-    GlobalStrings line is by the time the client reads it."""
+    GlobalStrings line is by the time the client reads it.
+
+    From the loader's file list, both kinds: an assignment in a file the client
+    never opens is not a global it has. `root.rglob("*.lua")` counted 752 names
+    like that on this install - gluexml's 57 files, lcdxml's two, and the twelve
+    FrameXML files no .toc Include reaches - and a key whose only line sits in
+    one of those read as satisfied. 10648 assignments before, 9896 after; the
+    reported key is the same one either way.
+    """
     names = set()
-    for path in root.rglob("*.lua"):
+    for path in sorted(p for p in loaded_files(root)
+                       if p.suffix.lower() in (".lua", ".xml")):
         src = path.read_text(encoding="utf-8", errors="replace")
         for m in re.finditer(r"(?m)^\s*([A-Z][A-Z0-9_]{2,})\s*=", src):
             names.add(m.group(1))
@@ -136,6 +150,11 @@ def main():
               "and until then this sweep has seen nothing and its silence means "
               "nothing")
         return 1
+
+    # Either spelling of the path names the same interface; the loader's answer
+    # starts at the folder above FrameXML.
+    if interface.name.lower() == "framexml":
+        interface = interface.parent
 
     offered = asks(ROOT)
     have = interface_globals(interface)

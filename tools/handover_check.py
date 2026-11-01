@@ -53,6 +53,9 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from framexml_source import loaded_files  # noqa: E402
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 # Named on the command line, Data/interface otherwise - and the literal stays,
@@ -60,6 +63,10 @@ SRC = ROOT / "src"
 # sweep that ran and found nothing.
 FRAMEXML = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
             else ROOT / "Data/interface")
+# The name says FrameXML and the value is the interface folder above it, which
+# is what loaded_files() walks; naming either one now means the same tree.
+if FRAMEXML.name.lower() == "framexml":
+    FRAMEXML = FRAMEXML.parent
 
 # A Lua line the client hands to the interface, however it is spelled.
 COMMAND = re.compile(r'(?:runInterfaceCommand|executeString)\s*\(\s*"((?:[^"\\]|\\.)*)"')
@@ -85,10 +92,21 @@ REGISTRY = {"src/ui/keybinding_manager.cpp", "src/addons/lua_action_api.cpp"}
 
 
 def lua_globals():
-    """Every function name the shipped interface defines at global scope."""
+    """Every function name the shipped interface defines at global scope.
+
+    Asked of the files the client loads, both kinds, from the one place that
+    knows which those are. `FRAMEXML.rglob("*.lua")` walked the whole tree:
+    gluexml's 57 files, lcdxml's two, the twelve FrameXML files no .toc Include
+    reaches - a name defined in any of those was credited to an interface that
+    never runs it, so an interface command calling it read as answered - while
+    the XML script bodies, which the loader does install as chunks and which do
+    define globals, were not walked at all. Measured 0 findings before and after
+    on this install; the credit was going to the wrong files either way.
+    """
     names = set()
-    for path in FRAMEXML.rglob("*.lua"):
-        text = path.read_text(errors="ignore")
+    for path in sorted(p for p in loaded_files(FRAMEXML)
+                       if p.suffix.lower() in (".lua", ".xml")):
+        text = path.read_text(encoding="utf-8", errors="ignore")
         names |= set(re.findall(r"^\s*function\s+([A-Za-z_]\w*)\s*\(", text, re.M))
         # Assigned rather than declared: `Foo = function(...)`.
         names |= set(re.findall(r"^\s*([A-Za-z_]\w*)\s*=\s*function\s*\(", text, re.M))

@@ -37,13 +37,17 @@ import re
 import sys
 import pathlib as _pathlib
 sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
-from framexml_source import without_comments
+from framexml_source import loaded_files, without_comments
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # The interface root on the command line; Data/interface is the fallback and is
 # not tracked in the checkout.
 XML = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
        else ROOT / "Data/interface")
+# Naming FrameXML rather than the folder above it means the same interface to a
+# reader; loaded_files() walks the .toc from the folder above.
+if XML.name.lower() == "framexml":
+    XML = XML.parent
 ADDONS = ROOT / "src/addons"
 
 
@@ -57,8 +61,17 @@ def bound_names():
         # The bootstrap's name lists, which are Lua source inside C strings.
         out |= set(re.findall(r"'(\w+)'", text))
         out |= set(re.findall(r'^\s*"?\s*(\w+)\s*=\s*function', text, re.M))
-    for path in XML.rglob("*.lua"):
-        text = path.read_text(errors="ignore")
+    # Definitions count only when the client loads the file that holds them, and
+    # an XML script body is a definition site like any .lua - the loader runs it
+    # as a chunk. `XML.rglob("*.lua")` reached gluexml and lcdxml and the twelve
+    # FrameXML files no Include reaches, so a name defined only in a file nobody
+    # opens was credited, and a name defined only in a frame's OnLoad body was
+    # not. Measured: 0 findings before, 0 after - the sets moved, the answer did
+    # not, and the reason to change it anyway is that the next finding would land
+    # in whichever of those two places the answer is wrong about.
+    for path in sorted(p for p in loaded_files(XML)
+                       if p.suffix.lower() in (".lua", ".xml")):
+        text = path.read_text(encoding="utf-8", errors="ignore")
         out |= set(re.findall(r"^\s*function\s+([A-Za-z_]\w*)\s*\(", text, re.M))
         out |= set(re.findall(r"^([A-Za-z_]\w*)\s*=\s*function", text, re.M))
     return out
