@@ -769,6 +769,42 @@ CHECKS = [
     ("framexml_unbound_widget_methods.py",
      r"^(\d+) widget methods called that answer nil", 4,
      "frame:Method() calls that no binding and no FrameXML assignment answers"),
+    # The _G half of the same question, one level further out: which globals
+    # FrameXML calls that neither a binding nor its own tree defines. Seven, and
+    # the sweep's own split says none of them is a raise waiting to happen -
+    # zero are reached from a function that runs on its own, so every one needs
+    # a player to open something first.
+    #
+    # CalendarNewArenaTeamEvent is the copy-paste Usage line the api_gap entry
+    # above settled. Five are the MovieRecording family, and four of those five
+    # are asked from macoptionsframe.xml and .lua - the Mac options frame, which
+    # this loader never opens - in a client that has no movie recorder at all;
+    # "MovieRecording" does not occur in the exe. The seventh,
+    # VoiceChatButton_OnEvent, is a script handler on a voice chat button, and
+    # the voice family is absent on purpose.
+    #
+    # Seven here against four there, and the two numbers are not comparable:
+    # this sweep subtracts every name FrameXML defines itself, which retires
+    # LOCAL_Function_Environment_Manager, and it counts a *handler attribute* as
+    # a call, which admits VoiceChatButton_OnEvent.
+    ("framexml_unbound_globals.py",
+     r"^(\d+) called and nowhere defined", 7,
+     "globals FrameXML calls that neither the bindings nor FrameXML itself defines"),
+    # Text keys the C++ hands to the interface that have no line in it. One:
+    # ERR_BATTLEGROUND_JOIN_XP_GAIN, from social_handler.cpp's arena-queue
+    # refusal switch, case -9 - "cannot join as a group unless every party
+    # member has the same XP gain setting". The interface kept its neighbours in
+    # that family (JOIN_FAILED, JOIN_RANGE_INDEX, JOIN_TIMED_OUT) and dropped
+    # this one along with the XP-gain setting it belonged to, and 3.3.5's
+    # wording is GlobalStrings.dbc's, which is nowhere on these drives. So the
+    # row's second argument - an English literal - is what even a German client
+    # reads there, while its neighbours answer in the client's language.
+    #
+    # Nothing to fix and plenty to watch: a row added asking for a key the tree
+    # *does* carry, and answered by its literal anyway, is the bug this reads.
+    ("interface_text_keys.py",
+     r"^(\d+) asks the interface has no line for", 1,
+     "text keys the C++ asks the interface for that it has no line for"),
     # Bindings that read fewer arguments than the interface passes. The only
     # sweep here that asks whether an answer used everything it was told -
     # every other one asks whether a name is answered, and these names all are.
