@@ -2505,11 +2505,46 @@ void SocialHandler::promoteToLeader(uint64_t guid) {
     owner_.getSocket()->send(packet);
 }
 
-void SocialHandler::uninvitePlayer(const std::string& playerName) {
+// Whose kick this is, by name. The reference resolves the argument before it
+// sends anything (0x0060abf0): a unit token comes from the unit tables and a
+// bare name from the group's own roster, compared case-blind - the walks there
+// compare with 0x0076e780, which is the case-blind compare the mute walks use
+// too. A name that walk answers nothing for is never sent at all.
+static uint64_t groupMemberGuid(const std::vector<GroupMember>& members,
+                                const std::string& playerName) {
+    for (const auto& m : members) {
+        if (m.name.size() != playerName.size()) continue;
+        if (std::equal(m.name.begin(), m.name.end(), playerName.begin(), [](char x, char y) {
+                return std::tolower(static_cast<unsigned char>(x)) ==
+                       std::tolower(static_cast<unsigned char>(y));
+            }))
+            return m.guid;
+    }
+    return 0;
+}
+
+void SocialHandler::uninvitePlayer(const std::string& playerName, const std::string& reason) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     // UninviteUnit (0x0051a7a0) sends and says nothing; the group's own
     // update announces who left. These were English lines.
     if (playerName.empty()) return;
+    // The reference's send is guid + reason (0x006d43c0, CMSG_GROUP_UNINVITE_GUID
+    // at 0x76) - the reason is the second argument of the binding, which the
+    // boot-vote popup fills in and nothing else on this side has ever passed.
+    // So the guid is looked up here first, exactly as that binding looks up the
+    // name, and the reason goes with it.
+    //
+    // A name this client's roster does not carry falls back to the name-addressed
+    // verb rather than sending nothing, which is what the reference would do:
+    // the kick is the thing a player typed, and the two verbs are answered the
+    // same way by the server. A name spelled with its realm - "Name-Realm", which
+    // unitpopup.lua passes when SHOW_REALM_NAME is on - is one of the names this
+    // roster does not carry.
+    if (const uint64_t guid = groupMemberGuid(partyData.members, playerName); guid != 0) {
+        auto packet = GroupUninviteGuidPacket::build(guid, reason);
+        owner_.getSocket()->send(packet);
+        return;
+    }
     auto packet = GroupUninvitePacket::build(playerName);
     owner_.getSocket()->send(packet);
 }

@@ -3596,11 +3596,23 @@ void registerSocialLuaAPI(lua_State* L) {
             if (gh) gh->inviteToGroup(unitOrNameArg(L, gh, luaL_checkstring(L, 1)));
             return 0;
         }},
+                // UninviteUnit(name [, reason]) - the reason is argument two, and
+                // it is not decoration. 0x0051a7a0 reads it into a buffer of its
+                // own before it resolves the name, and the packet it then builds
+                // (0x006d43c0) puts that buffer behind the guid: the reason of a
+                // kick rides to the realm in the same send as the kick itself.
+                // The one caller that types one is the boot-vote popup
+                // (staticpopup.lua:2777,2791, `maxLetters = 64`), which is also
+                // the client's own length limit on the field.
                 {"UninviteUnit", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             // 0x0051a7a0: insecure code only inside a hardware event.
             if (gh && !taint::allowedInHardwareEvent(L)) return 0;
-            if (gh) gh->uninvitePlayer(unitOrNameArg(L, gh, luaL_checkstring(L, 1)));
+            if (!gh) return 0;
+            // A number reads as its own text, as FUN_0084e0e0's tostring-style
+            // read of argument two does; nothing there rejects a type.
+            const std::string reason = lua_isstring(L, 2) ? lua_tostring(L, 2) : std::string();
+            gh->uninvitePlayer(unitOrNameArg(L, gh, luaL_checkstring(L, 1)), reason);
             return 0;
         }},
                 {"LeaveParty", [](lua_State* L) -> int {

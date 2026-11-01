@@ -1321,7 +1321,9 @@ public:
 
     /// Hand party leadership to another member.
     void promoteToLeader(uint64_t guid);
-    void uninvitePlayer(const std::string& playerName);
+    /// Kick a member out; `reason` goes to the realm with the kick (UninviteUnit's
+    /// second argument). Optional because a typed /kick has no reason to give.
+    void uninvitePlayer(const std::string& playerName, const std::string& reason = {});
     void setLootMethod(uint8_t method, uint64_t masterGuid, uint8_t threshold);
     void setPartyAssignment(uint8_t assignment, uint64_t guid, bool apply);
     void setRaidSubgroup(const std::string& playerName, uint8_t group);

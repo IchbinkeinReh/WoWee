@@ -401,7 +401,9 @@ public:
                            const std::string& targetName,
                            bool allowEmptyTarget = false);
     void promoteToLeader(uint64_t guid);
-    void uninvitePlayer(const std::string& playerName);
+    /// Kick a member out. `reason` is UninviteUnit's second argument, which the
+    /// reference sends in the same packet as the guid; see GroupUninviteGuidPacket.
+    void uninvitePlayer(const std::string& playerName, const std::string& reason = {});
     void setLootMethod(uint8_t method, uint64_t masterGuid, uint8_t threshold);
     void setPartyAssignment(uint8_t assignment, uint64_t guid, bool apply);
     void setRaidSubgroup(const std::string& playerName, uint8_t group);

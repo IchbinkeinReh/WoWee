@@ -1652,12 +1652,30 @@ public:
 
 /** CMSG_GROUP_UNINVITE packet builder - the name-addressed kick.
  *
- * Not CMSG_GROUP_UNINVITE_GUID, which this used to send: that one is read as
- * an eight-byte guid followed by a reason, so a name went across as a guid.
+ * Not the verb the 12340 client uses for a kick: see GroupUninviteGuidPacket.
+ * This one is what is sent when the name is one this client cannot turn into a
+ * guid, so that a name typed at the chat line is still kickable.
  */
 class GroupUninvitePacket {
 public:
     static network::Packet build(const std::string& playerName);
+};
+
+/** CMSG_GROUP_UNINVITE_GUID - the kick the 12340 client's UninviteUnit sends.
+ *
+ * 0x006d43c0 opens the packet (0x76), writes the member's guid as two dwords
+ * (0x0047b100), then the reason as a string (0x0047b300). UninviteUnit resolves
+ * the name before it gets there (0x0060abf0), so a name that is not a unit
+ * token and not in the group's own roster never reaches this packet.
+ *
+ * The reason arrives from UninviteUnit's second argument, filled in as
+ * 0x0051a7a0 fills it - see groupKickReason in world_packets_social.cpp. A kick
+ * with no reason sends the field empty, which is what that binding's zeroed
+ * buffer leaves it.
+ */
+class GroupUninviteGuidPacket {
+public:
+    static network::Packet build(uint64_t guid, const std::string& reason);
 };
 
 /** CMSG_SET_GUILD_BANK_TEXT packet builder

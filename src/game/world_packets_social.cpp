@@ -1366,21 +1366,59 @@ network::Packet DuelCancelPacket::build(uint64_t arbiterGuid) {
 // Party/Raid Management
 // ============================================================
 
-// Kicking a party member is addressed by name everywhere above this - the
-// interface calls UninviteUnit with one and nothing on the way down resolves a
-// guid - so the opcode has to be the name-addressed one.
+// The name-addressed kick, which the 12340 client's UninviteUnit does not use.
+// It stays as the fallback for the one case the guid verb cannot serve: a name
+// this client's own roster does not carry, which the reference client would not
+// have sent at all (0x0051a7a0 resolves first and sends nothing when the walk
+// answers no guid), and which would otherwise leave a typed /kick doing nothing.
 //
-// This sent the name under CMSG_GROUP_UNINVITE_GUID, which the server reads as
-// an eight-byte guid and then a reason string. A name is not a guid: the first
-// eight characters were taken as one, which matches nobody, and a name shorter
-// than eight ran the read off the end of the buffer and had the whole request
-// dropped. Either way the member stayed in the group while the client had
-// already said "Removed X from the group." CMSG_GROUP_UNINVITE takes the name
-// and is in every expansion profile at 0x75.
+// Sending a name under CMSG_GROUP_UNINVITE_GUID is what this used to do, and it
+// is not the same packet: the server reads that one as an eight-byte guid and
+// then a reason string, so the first eight characters of a name were taken as a
+// guid matching nobody, and a name shorter than eight ran the read off the end
+// of the buffer and had the whole request dropped. GroupUninviteGuidPacket
+// below sends that verb with what it asks for.
 network::Packet GroupUninvitePacket::build(const std::string& playerName) {
     network::Packet packet(wireOpcode(Opcode::CMSG_GROUP_UNINVITE));
     packet.writeString(playerName);
     LOG_DEBUG("Built CMSG_GROUP_UNINVITE for player: ", playerName);
+    return packet;
+}
+
+/// The reason field as 0x0051a7a0 fills it, before the guid is sent beside it.
+///
+/// The binding zeroes a 256-byte buffer, and only when the argument is a
+/// non-empty string does it run 0x007e1830(argument, buffer, 0x40, 0x100, 1):
+/// 0x007e17f0 copies at most 255 bytes out of the argument **leaving every '|'
+/// behind** - the pipe is the hyperlink marker, so a reason cannot smuggle one -
+/// and then the copy is walked counting UTF-8 lead bytes and cut at the 64th.
+/// Sixty-four is also the boot-vote box's own limit (`maxLetters = 64`,
+/// staticpopup.lua:2774), so the cut is only ever seen coming from an add-on.
+///
+/// A buffer left empty is sent as an empty string: the packet is built either
+/// way, so "no reason given" is a field and not an omission.
+static std::string groupKickReason(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (char c : text) {
+        if (out.size() >= 0xFF) break;
+        if (c != '|') out.push_back(c);
+    }
+    size_t chars = 0;
+    for (size_t i = 0; i < out.size(); ++i) {
+        if ((static_cast<unsigned char>(out[i]) & 0xC0) != 0x80) {
+            if (chars == 0x40) { out.resize(i); break; }
+            ++chars;
+        }
+    }
+    return out;
+}
+
+network::Packet GroupUninviteGuidPacket::build(uint64_t guid, const std::string& reason) {
+    network::Packet packet(wireOpcode(Opcode::CMSG_GROUP_UNINVITE_GUID));
+    packet.writeUInt64(guid);
+    packet.writeString(groupKickReason(reason));
+    LOG_DEBUG("Built CMSG_GROUP_UNINVITE_GUID, reason: ", reason.empty() ? "(none)" : "given");
     return packet;
 }
 

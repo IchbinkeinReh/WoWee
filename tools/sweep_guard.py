@@ -769,8 +769,37 @@ CHECKS = [
     # Forty-seven: UseAction's mouse button as well, which is only a macro's
     # -- but that is the click path to a macro icon, and clicking one had
     # nothing behind it while the hotkey for the same icon ran it.
+    #
+    # Thirty-eight, and the drop from forty-seven is the sweep losing two of
+    # its own blind spots rather than nine rows being fixed. What the argument
+    # count accepts is a *reader* of the argument, and it used to accept any
+    # lua_* call naming L beside a number: `lua_pushboolean(L, 1)` is a value
+    # and `lua_pop(L, 2)` counts slots, so a binding ending in a helper that
+    # pops two was credited with reading the mode it had dropped, and a helper
+    # whose whole job is pushing two values made the binding that called it
+    # look answered. And a helper had to be spelled static or inline to be
+    # asked at all, which hid the shared reader the three item-use bindings
+    # take their target through - they were on the list as ignoring it. Both
+    # directions of that error were live: three rows were never there, and
+    # SetPortraitToTexture had been hidden by a push counted as a read.
+    # GetAttackPowerForStat, the row this ceiling has always carried as known
+    # and unfixed, left with the second fix too: its binding reads nothing at
+    # all, so "reads 1, passes 2" was never its shape. It is listed under its
+    # own heading now, with the sixty-four other bindings that answer a call
+    # while looking at none of it - a wider fault than the count can grade,
+    # and one the ceiling does not track.
+    # Thirty-seven: UninviteUnit takes its reason now. That argument was not
+    # free text the interface invented - 0x0051a7a0 reads it, caps it to 64
+    # characters with every pipe left out, and 0x006d43c0 puts it into the kick
+    # packet behind the guid, which is the send that client makes: opcode 0x76,
+    # CMSG_GROUP_UNINVITE_GUID, guid then reason. WoWee kicks by name on 0x75, a
+    # verb that binary's UninviteUnit never uses, and had no field to put a
+    # reason in. A name it can resolve from its own group roster now goes on the
+    # reference packet with the reason beside it; a name it cannot - a unit
+    # popup's "Bob-Icecrown", with SHOW_REALM_NAME on - still goes on the
+    # name-addressed verb, which is what a typed /kick has to fall back to.
     ("binding_arg_coverage_check.py",
-     r"^(\d+) binding\(s\) read fewer arguments", 47,
+     r"^(\d+) binding\(s\) read fewer arguments", 37,
      "bindings that ignore an argument the interface passes"),
     ("tools_run_check.py",
      r"^(\d+) that cannot run", 0,

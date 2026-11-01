@@ -2238,8 +2238,8 @@ void GameHandler::promoteToLeader(uint64_t guid) {
     if (socialHandler_) socialHandler_->promoteToLeader(guid);
 }
 
-void GameHandler::uninvitePlayer(const std::string& playerName) {
-    if (socialHandler_) socialHandler_->uninvitePlayer(playerName);
+void GameHandler::uninvitePlayer(const std::string& playerName, const std::string& reason) {
+    if (socialHandler_) socialHandler_->uninvitePlayer(playerName, reason);
 }
 
 void GameHandler::leaveParty() {
