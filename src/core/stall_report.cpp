@@ -32,12 +32,9 @@ const char* reportPath() {
 #if defined(_WIN32) && defined(_M_X64) || defined(_WIN32) && defined(__x86_64__)
 constexpr int kMaxFrames = 48;
 
-// A thread's return addresses, from the context it was suspended in. No
+// Return addresses from a context, unwound with the image's own tables. No
 // allocation: the thread may hold the heap's lock.
-int walk(HANDLE thread, DWORD64* out) {
-    CONTEXT ctx{};
-    ctx.ContextFlags = CONTEXT_FULL;
-    if (!GetThreadContext(thread, &ctx)) return 0;
+int walkFrom(CONTEXT ctx, DWORD64* out) {
     int n = 0;
     for (; n < kMaxFrames && ctx.Rip != 0; ++n) {
         out[n] = ctx.Rip;
@@ -56,6 +53,35 @@ int walk(HANDLE thread, DWORD64* out) {
         }
     }
     return n;
+}
+
+// A thread's return addresses, from the context it was suspended in.
+int walk(HANDLE thread, DWORD64* out) {
+    CONTEXT ctx{};
+    ctx.ContextFlags = CONTEXT_FULL;
+    if (!GetThreadContext(thread, &ctx)) return 0;
+    return walkFrom(ctx, out);
+}
+
+void writeFrames(FILE* f, const DWORD64* frames, int count) {
+    const auto exeBase = reinterpret_cast<DWORD64>(GetModuleHandleW(nullptr));
+    for (int i = 0; i < count; ++i) {
+        const DWORD64 pc = frames[i];
+        HMODULE mod = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(pc), &mod);
+        const auto base = reinterpret_cast<DWORD64>(mod);
+        if (base == exeBase) {
+            std::fprintf(f, " exe+0x%llx", static_cast<unsigned long long>(pc - base));
+        } else {
+            char name[MAX_PATH] = "?";
+            if (mod) GetModuleFileNameA(mod, name, MAX_PATH);
+            const char* leaf = name;
+            for (const char* c = name; *c; ++c)
+                if (*c == '\\' || *c == '/') leaf = c + 1;
+            std::fprintf(f, " %s+0x%llx", leaf, static_cast<unsigned long long>(pc - base));
+        }
+    }
 }
 
 void writeStacks(FILE* f) {
@@ -91,27 +117,10 @@ void writeStacks(FILE* f) {
     }
     CloseHandle(snap);
 
-    const auto exeBase = reinterpret_cast<DWORD64>(GetModuleHandleW(nullptr));
     for (int k = 0; k < threads; ++k) {
         std::fprintf(f, "thread %lu%s:", static_cast<unsigned long>(ids[k]),
                      ids[k] == gMainThreadId.load() ? " (main)" : "");
-        for (int i = 0; i < counts[k]; ++i) {
-            const DWORD64 pc = frames[k][i];
-            HMODULE mod = nullptr;
-            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                               reinterpret_cast<LPCWSTR>(pc), &mod);
-            const auto base = reinterpret_cast<DWORD64>(mod);
-            if (base == exeBase) {
-                std::fprintf(f, " exe+0x%llx", static_cast<unsigned long long>(pc - base));
-            } else {
-                char name[MAX_PATH] = "?";
-                if (mod) GetModuleFileNameA(mod, name, MAX_PATH);
-                const char* leaf = name;
-                for (const char* c = name; *c; ++c)
-                    if (*c == '\\' || *c == '/') leaf = c + 1;
-                std::fprintf(f, " %s+0x%llx", leaf, static_cast<unsigned long long>(pc - base));
-            }
-        }
+        writeFrames(f, frames[k], counts[k]);
         std::fprintf(f, "\n");
     }
 }
@@ -140,6 +149,47 @@ void write(int64_t stallMs, int snapshot) {
                  static_cast<long long>(stallMs), snapshot, gStage.load(std::memory_order_relaxed));
 #if defined(_WIN32) && defined(_M_X64) || defined(_WIN32) && defined(__x86_64__)
     writeStacks(f);
+#endif
+    std::fprintf(f, "\n");
+    std::fclose(f);
+}
+
+void writeCrash(const char* reason, const void* context) {
+    // The first only: a crash raises others on its way out (a C++ throw
+    // nothing catches is followed by a bad function table), and the first is
+    // the one that says why.
+    static std::atomic<bool> written{false};
+    if (written.exchange(true)) return;
+    const char* p = std::getenv("WOWEE_CRASH_REPORT");
+    FILE* f = std::fopen((p && *p) ? p : "crash_report.txt", "a");
+    const std::time_t now = std::time(nullptr);
+    char when[32] = "";
+    const std::tm tm = localTime(now);
+    std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &tm);
+    // To stderr as well, which is where the log of a run being watched goes.
+    std::fprintf(stderr, "\n=== CRASH %s: %s, stage: %s (stacks in %s) ===\n", when, reason,
+                 gStage.load(std::memory_order_relaxed), (p && *p) ? p : "crash_report.txt");
+    std::fflush(stderr);
+    if (!f) return;
+    std::fprintf(f, "%s crash: %s, stage: %s\n", when, reason, gStage.load(std::memory_order_relaxed));
+#if defined(_WIN32) && defined(_M_X64) || defined(_WIN32) && defined(__x86_64__)
+    // The crashing thread first: from the faulting context where there is
+    // one, else from here.
+    static DWORD64 frames[kMaxFrames];
+    CONTEXT ctx{};
+    if (context) {
+        ctx = *static_cast<const CONTEXT*>(context);
+    } else {
+        RtlCaptureContext(&ctx);
+    }
+    const int n = walkFrom(ctx, frames);
+    std::fprintf(f, "thread %lu (crashing)%s:", static_cast<unsigned long>(GetCurrentThreadId()),
+                 GetCurrentThreadId() == gMainThreadId.load() ? " (main)" : "");
+    writeFrames(f, frames, n);
+    std::fprintf(f, "\n");
+    writeStacks(f);
+#else
+    (void)context;
 #endif
     std::fprintf(f, "\n");
     std::fclose(f);

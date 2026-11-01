@@ -42,4 +42,11 @@ private:
 /// could hold, allocates nothing while a thread is suspended.
 void write(int64_t stallMs, int snapshot);
 
+/// A crash, said on stderr and written with every thread's stack to
+/// crash_report.txt beside the executable (or WOWEE_CRASH_REPORT): the
+/// reason, the stage the main loop was in, and on Windows the crashing
+/// thread's stack first - unwound from `context` (a CONTEXT*, the fault's)
+/// when there is one, else from the caller.
+void writeCrash(const char* reason, const void* context = nullptr);
+
 }  // namespace wowee::core::stall_report

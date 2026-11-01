@@ -4,7 +4,15 @@
 #include "core/version.hpp"
 #include <exception>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
+#include "core/stall_report.hpp"
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 #include "core/env.hpp"
 #include <cctype>
 #include <filesystem>
@@ -95,8 +103,54 @@ static void crashHandlerSigaction(int sig, siginfo_t* info, void* /*ucontext*/) 
 #else
 static void crashHandler(int sig) {
     releaseMouseGrab();
+#ifdef _WIN32
+    if (sig == SIGABRT || sig == SIGSEGV || sig == SIGFPE) {
+        wowee::core::stall_report::writeCrash(sig == SIGABRT ? "SIGABRT (abort)"
+                                              : sig == SIGSEGV ? "SIGSEGV" : "SIGFPE");
+    }
+#endif
     std::signal(sig, SIG_DFL);
     std::raise(sig);
+}
+#endif
+
+#ifdef _WIN32
+// What ended a Windows run that left no trace: an exception nothing caught
+// (std::terminate, then abort - exit code 3, and nothing in the log), or a
+// fault no handler took. Each writes crash_report.txt with every thread's
+// stack before the process goes.
+static LONG WINAPI unhandledExceptionReport(EXCEPTION_POINTERS* info) {
+    char reason[160];
+    const auto* rec = info ? info->ExceptionRecord : nullptr;
+    const unsigned long code = rec ? static_cast<unsigned long>(rec->ExceptionCode) : 0ul;
+    // The ones worth a name. 0x20474343 is how libgcc raises a C++ throw on
+    // Windows; seen here, nothing caught it - an exception out of a thread.
+    const char* what = code == 0xC0000005ul ? "access violation"
+                     : code == 0x20474343ul ? "C++ exception"
+                     : code == 0xC00000FDul ? "stack overflow"
+                     : code == 0xC0000409ul ? "fast fail"
+                     : code == 0xC0000094ul ? "integer division by zero"
+                     : "exception";
+    std::snprintf(reason, sizeof(reason), "%s nothing handled (0x%08lx) at %p", what, code,
+                  rec ? rec->ExceptionAddress : nullptr);
+    wowee::core::stall_report::writeCrash(reason, info ? info->ContextRecord : nullptr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+[[noreturn]] static void terminateReport() {
+    char reason[512] = "std::terminate with no exception";
+    if (const std::exception_ptr e = std::current_exception()) {
+        try {
+            std::rethrow_exception(e);
+        } catch (const std::exception& ex) {
+            std::snprintf(reason, sizeof(reason), "std::terminate: uncaught %s", ex.what());
+        } catch (...) {
+            std::snprintf(reason, sizeof(reason), "std::terminate: uncaught non-standard exception");
+        }
+    }
+    wowee::core::stall_report::writeCrash(reason);
+    std::signal(SIGABRT, SIG_DFL);
+    std::abort();
 }
 #endif
 
@@ -190,6 +244,10 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
     std::signal(SIGTERM, crashHandler);
     std::signal(SIGINT,  crashHandler);
 #else
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(unhandledExceptionReport);
+    std::set_terminate(terminateReport);
+#endif
     std::signal(SIGSEGV, crashHandler);
     std::signal(SIGABRT, crashHandler);
     std::signal(SIGFPE,  crashHandler);
