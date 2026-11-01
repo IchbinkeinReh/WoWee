@@ -723,6 +723,21 @@ CHECKS = [
     ("framexml_live_stubs.py",
      r"^\d+ bindings, \d+ of them stubs, (\d+) reached from a handed-over element", 63,
      "stubs reachable from an element FrameXML draws"),
+    # Log lines whose only bound is a clock: guarded by a static timestamp and a
+    # difference against it, which bounds the rate and not the total, so any
+    # condition that *holds* writes the same sentence for as long as it holds.
+    # Zero today, and the four this used to report are in the tool with their
+    # reasons: two were fixed (the no-floor dump now fires once per yard square
+    # under the player, the fog readout once per change in the three numbers it
+    # prints), and two were the sweep reading a member-held previous value and a
+    # counting-out retry counter as a bare clock.
+    #
+    # Ceiling 0 on purpose. A new row here is a new line that will not stop
+    # printing while its condition holds, which is the bug class this exists for
+    # - not a count allowed to drift.
+    ("timed_log_check.py",
+     r"^(\d+) log line\(s\) bounded by a clock and nothing else", 0,
+     "log lines spaced by a clock and bounded by nothing else"),
     # FrameXML calls a name nobody defines. Four, and none of them is work.
     #
     # This sweep had no entry here and no encoding on its reads, so on a
