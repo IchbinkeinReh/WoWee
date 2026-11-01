@@ -55,9 +55,21 @@ def load_aliases(path: Path, canonical: set[str]) -> dict[str, str]:
     return out
 
 
-def write_file(path: Path, content: str) -> None:
+def write_file(path: Path, content: str) -> bool:
+    """Write only when the content changed, and say whether it did.
+
+    The build runs this on every build. Rewriting unchanged files gave them a
+    new mtime each time, so everything that includes an opcode table was
+    rebuilt by every build - and the package step (cpack's preinstall builds
+    `all` again) recompiled most of the tree, serially, for half an hour.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    # Line endings aside: a Windows checkout holds these with CRLF, and that
+    # is the same file.
+    if path.exists() and path.read_bytes().replace(b"\r\n", b"\n") == content.encode("utf-8"):
+        return False
+    path.write_text(content, encoding="utf-8")
+    return True
 
 
 def main() -> int:
@@ -90,13 +102,18 @@ def main() -> int:
     alias_lines += ["// NOLINTEND(modernize-use-designated-initializers)"]
     aliases_content = "\n".join(alias_lines) + "\n"
 
-    write_file(inc_dir / "opcode_enum_generated.inc", enum_content)
-    write_file(inc_dir / "opcode_names_generated.inc", names_content)
-    write_file(inc_dir / "opcode_aliases_generated.inc", aliases_content)
+    changed = sum(
+        write_file(inc_dir / name, content)
+        for name, content in (
+            ("opcode_enum_generated.inc", enum_content),
+            ("opcode_names_generated.inc", names_content),
+            ("opcode_aliases_generated.inc", aliases_content),
+        )
+    )
 
     print(
         f"generated: canonical={len(canonical_names)} aliases={len(aliases)} "
-        f"-> include/game/opcode_*_generated.inc"
+        f"-> include/game/opcode_*_generated.inc ({changed} of 3 rewritten)"
     )
     return 0
 

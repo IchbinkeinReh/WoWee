@@ -131,8 +131,11 @@ jobs:
     - name: Run tests
       run: cd build && ctest --output-on-failure
 
+    # cpack builds `all` again before packaging (its preinstall target), and
+    # serially unless told otherwise. A clean tree makes that a no-op; the
+    # parallel level keeps it short if something ever leaves the tree dirty.
     - name: Package (DEB)
-      run: cd build && cpack -G DEB
+      run: cd build && CMAKE_BUILD_PARALLEL_LEVEL=${{ matrix.build_jobs }} cpack -G DEB
 
     - name: Upload DEB
       uses: actions/upload-artifact@v5
@@ -566,7 +569,7 @@ jobs:
 
     - name: Package (ZIP)
       shell: msys2 {0}
-      run: cd build && cpack -G ZIP
+      run: cd build && CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cpack -G ZIP
 
     - name: Upload ZIP
       uses: actions/upload-artifact@v5
@@ -697,7 +700,7 @@ jobs:
 
     - name: Package (NSIS)
       shell: msys2 {0}
-      run: cd build && cpack -G NSIS
+      run: cd build && CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cpack -G NSIS
 
     - name: Upload installer
       uses: actions/upload-artifact@v5
