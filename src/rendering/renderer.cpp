@@ -2608,7 +2608,12 @@ void Renderer::updatePlayerArea() {
             }
         }
     }
-    const uint32_t area = za::placeArea(wmoDist, wmoArea, groundDown(nameStartZ, nameEndZ), groundArea);
+    // A map that is one building is in the area Map.dbc gives it, before
+    // anything under the feet is asked (0x0077fa00): the Deeprun Tram's
+    // tunnel has no area of its own, and its texts stayed the last map's.
+    const uint32_t area = globalWmoMapArea_ != 0
+        ? globalWmoMapArea_
+        : za::placeArea(wmoDist, wmoArea, groundDown(nameStartZ, nameEndZ), groundArea);
     if (area == 0) return;
 
     // Where the ambience and the music are for (0x0078f020): the place's area and its zone,

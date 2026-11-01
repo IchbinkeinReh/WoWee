@@ -344,6 +344,7 @@
   "Map": {
     "ID": 0,
     "InternalName": 1,
+    "AreaTableID": 22,
     "LoadingScreenID": 57
   },
   "ParticleColor": {

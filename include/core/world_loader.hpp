@@ -91,7 +91,7 @@ public:
 
     // Reset methods (for logout / character switch)
     void resetLoadedMap() { loadedMapId_ = 0xFFFFFFFF; }
-    void resetMapNameCache() { mapNameCacheLoaded_ = false; mapNameById_.clear(); }
+    void resetMapNameCache() { mapNameCacheLoaded_ = false; mapNameById_.clear(); mapAreaById_.clear(); }
 
 private:
     /// The loading screen, while a world is being loaded into.
@@ -144,6 +144,9 @@ private:
     // Map.dbc name cache (loaded once per session)
     bool mapNameCacheLoaded_ = false;
     std::unordered_map<uint32_t, std::string> mapNameById_;
+    // Map.dbc's AreaTableID, where a map names one: the area a map that is
+    // a single building is in, wherever the player stands in it.
+    std::unordered_map<uint32_t, uint32_t> mapAreaById_;
 
     // Background world preloader - warms AssetManager file cache for the
     // expected world before the user clicks Enter World.

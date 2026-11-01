@@ -359,6 +359,12 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
         // its tiles up by map, and left on the last one it found none - a
         // dungeon with no dungeon on its minimap.
         renderer_->setActiveMapName(mapName);
+        // The area such a map is in, whatever is under the feet (0x0077fa00):
+        // the Deeprun Tram is the Deeprun Tram from end to end.
+        {
+            const auto area = mapAreaById_.find(mapId);
+            renderer_->setGlobalWmoMapArea(area != mapAreaById_.end() ? area->second : 0);
+        }
         if (renderer_->getTerrainManager()) {
             renderer_->getTerrainManager()->setStreamingEnabled(false);
         }
@@ -585,6 +591,7 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
         terrainOk = true;  // Mark as OK so post-load setup runs
     } else {
         // ---- Normal ADT-based map ----
+        renderer_->setGlobalWmoMapArea(0);
         // Compute ADT tile from canonical coordinates
         auto [tileX, tileY] = core::coords::canonicalToTile(spawnCanonical.x, spawnCanonical.y);
         std::string adtPath = "World\\Maps\\" + mapName + "\\" + mapName + "_" +
@@ -892,8 +899,12 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         if (auto mapDbc = assetManager_->loadDBC("Map.dbc"); mapDbc && mapDbc->isLoaded()) {
             mapNameById_.reserve(mapDbc->getRecordCount());
             const auto* mapL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("Map") : nullptr;
+            const uint32_t areaCol = mapL ? mapL->tryField("AreaTableID") : 0xFFFFFFFFu;
             for (uint32_t i = 0; i < mapDbc->getRecordCount(); i++) {
                 uint32_t id = mapDbc->getUInt32(i, mapL ? (*mapL)["ID"] : 0);
+                if (areaCol < mapDbc->getFieldCount()) {
+                    if (const uint32_t area = mapDbc->getUInt32(i, areaCol); area != 0) mapAreaById_[id] = area;
+                }
                 std::string internalName = mapDbc->getString(i, mapL ? (*mapL)["InternalName"] : 1);
                 if (!internalName.empty() && mapNameById_.find(id) == mapNameById_.end()) {
                     mapNameById_[id] = std::move(internalName);

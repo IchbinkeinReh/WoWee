@@ -251,6 +251,9 @@ public:
     /// The texts the interface names the player's place by (game::zone_area),
     /// none until there is a place to name.
     const game::zone_area::Texts* getZoneTexts() const { return zoneTextsKnown_ ? &zoneTexts_ : nullptr; }
+    /// The area of a map that is one building (its WDT places a single WMO),
+    /// from Map.dbc's AreaTableID; 0 on any other map, or one that names none.
+    void setGlobalWmoMapArea(uint32_t areaId) { globalWmoMapArea_ = areaId; }
     /// What 0x0077fbf0 reads of where the player stands (updatePlayerArea).
     const game::outdoors::Place& getPlayerPlace() const { return playerPlace_; }
     VkContext* getVkContext() const { return vkCtx; }
@@ -1286,6 +1289,7 @@ private:
     game::outdoors::Place playerPlace_;
     game::zone_area::Texts zoneTexts_;
     bool zoneTextsKnown_ = false;
+    uint32_t globalWmoMapArea_ = 0;
     uint32_t zoneTextsMapId_ = 0xFFFFFFFFu;
     /// The zone and subzone CMSG_ZONEUPDATE last went for (0x00adf318,
     /// 0x00adf31c), none until the first; out of the world they go back to
