@@ -482,6 +482,10 @@ void main() {
     bool rtOn = rtWater.x > 0.5 && basicType < 1.5;
     vec3 rtReflect = vec3(0.0);
     float rtFresnel = 0.0;
+    // Whether the sun reaches this point of the surface, for its glint and
+    // the light it scatters through the crests: with the tracing, one ray
+    // toward it. Without, it is taken to (the water has no shadow map).
+    float sunOnWater = 1.0;
     if (rtOn) {
         rtwScreenReuse = rtWater.y < 2.5;
         uint rng = uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u + uint(time * 60.0);
@@ -503,6 +507,12 @@ void main() {
         bool tir = dot(t, t) < 1e-6;
         rtFresnel = tir ? 1.0 : rtwFresnel(cosI);
         bool bedShown;
+        // A hill or a house between the sun and the water: no glint. The
+        // sun low behind Southshore's hill still laid its bright streak
+        // over the bay in the hill's shade.
+        if (!below && ldir.z > 0.0) {
+            sunOnWater = rtOccluded(FragPos + vec3(0.0, 0.0, 0.1), ldir, 400.0, rng) ? 0.0 : 1.0;
+        }
         if (!below) {
             // Not under the water's own plane: a wave can tip the mirror
             // past it.
@@ -561,7 +571,7 @@ void main() {
     float G = GeometrySmith(NdotV, NdotL, roughness);
     vec3 F = fresnelSchlickRoughness(max(dot(halfDir, viewDir), 0.0), F0, roughness);
     vec3 specular = (D * G * F) / (4.0 * NdotV * NdotL + 0.001) * lightColor.rgb * NdotL;
-    specular = min(specular, vec3(2.0));
+    specular = min(specular, vec3(2.0)) * sunOnWater;
 
     // Noise-based sparkle. Its features are far smaller than the wave detail, so
     // it aliases sooner - fade it out over the near half of the detail range,
@@ -570,7 +580,7 @@ void main() {
     if (dist < 700.0) {  // where the fade below still leaves any of it
         float sparkleNoise = fbmNoise(FragPos.xy * 4.0 + time * 0.5, time * 1.5);
         float sparkle = pow(max(sparkleNoise - 0.55, 0.0) / 0.45, 3.0) * shimmerStrength * 0.10;
-        specular += sparkle * lightColor.rgb * (1.0 - smoothstep(150.0, 700.0, dist));
+        specular += sparkle * lightColor.rgb * (1.0 - smoothstep(150.0, 700.0, dist)) * sunOnWater;
     }
 
     // ============================================================
@@ -578,7 +588,7 @@ void main() {
     // ============================================================
     float sssBase = pow(max(dot(viewDir, -ldir), 0.0), 4.0);
     float sss = sssBase * max(0.0, WaveOffset * 3.0) * 0.25;
-    vec3 sssColor = vec3(0.05, 0.55, 0.35) * sss * lightColor.rgb;
+    vec3 sssColor = vec3(0.05, 0.55, 0.35) * sss * lightColor.rgb * sunOnWater;
 
     // ============================================================
     // Combine - what comes through and the reflection, by Fresnel
