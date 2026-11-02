@@ -1748,6 +1748,17 @@ add_custom_command(TARGET wowee POST_BUILD
         $<TARGET_FILE_DIR:wowee>/assets
     COMMENT "Syncing assets to $<TARGET_FILE_DIR:wowee>/assets"
 )
+# And on every build of its own: a POST_BUILD step runs only when wowee is
+# linked again, so a build that changed only shaders - their .spv rebuilt
+# under assets/ by wowee_shaders - left the client running the old ones from
+# beside the executable, with nothing to say so.
+add_custom_target(wowee_assets_sync ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/assets
+        $<TARGET_FILE_DIR:wowee>/assets
+    COMMENT "Syncing assets to $<TARGET_FILE_DIR:wowee>/assets"
+)
+add_dependencies(wowee_assets_sync wowee)
 
 # Symlink Data/ next to the executable so expansion profiles, opcode tables,
 # and other runtime data files are found when running from the build directory.
