@@ -530,6 +530,16 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         if (inWater) {
         swimming = true;
         jumpLocked_ = false;
+        // In a building's liquid under the ground - the Undercity's slime
+        // canals - the hill's heightmap lies far over the head. It is no
+        // floor there and no wall: taken as a wall (below) every stroke
+        // ran into it, and the swimmer turned on the spot without moving.
+        const bool underTerrain = [&] {
+            if (!terrainManager || !waterRenderer || !waterRenderer->isWmoWaterAt(targetPos.x, targetPos.y))
+                return false;
+            const auto th = terrainManager->getHeightAt(targetPos.x, targetPos.y);
+            return th && *th > targetPos.z + 2.0f;
+        }();
         // Swim movement follows look pitch (f.forward/back), while strafe stays
         // lateral for stable control.
         float swimSpeed = (swimSpeedOverride_ > 0.0f && swimSpeedOverride_ < 100.0f && !std::isnan(swimSpeedOverride_))
@@ -646,7 +656,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
                 }
             };
 
-            if (terrainManager) {
+            if (terrainManager && !underTerrain) {
                 considerFloor(terrainManager->getHeightAt(targetPos.x, targetPos.y));
             }
             if (wmoRenderer) {
@@ -670,7 +680,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             // A structure floor found beneath the feet still owns the vertical,
             // so a cave or an interior that genuinely sits below the heightmap
             // keeps swimming as it did.
-            if (terrainManager && !floorH) {
+            if (terrainManager && !floorH && !underTerrain) {
                 auto th = terrainManager->getHeightAt(targetPos.x, targetPos.y);
                 if (th && *th > targetPos.z) floorH = th;
             }
@@ -715,7 +725,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             // holds them half a yard above the floor, so a beach shelving up
             // under them stays passable and they swim ashore as before.
             constexpr float SWIM_TERRAIN_WALL_CLEARANCE = 0.9f;
-            if (terrainManager) {
+            if (terrainManager && !underTerrain) {
                 const SwimStep allowed = swimStepAgainstTerrain(
                     {followTarget->x, followTarget->y}, {stepPos.x, stepPos.y},
                     targetPos.z + SWIM_TERRAIN_WALL_CLEARANCE,
