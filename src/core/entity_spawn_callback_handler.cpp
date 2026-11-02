@@ -233,15 +233,33 @@ void EntitySpawnCallbackHandler::setupCallbacks() {
                     // own choice unchanged, left it there.
                     auto moving = gameHandler_.getEntityManager().getEntity(guid);
                     const bool walking = moving && moving->movesAtWalkPace();
-                    const uint32_t targetAnim = walking ? rendering::anim::WALK : rendering::anim::RUN;
+                    // A rider's legs are its mount's (0x007385c0): the walk or
+                    // run goes to the mount, and the rider keeps its seat. This
+                    // played the run on the rider and marked the unit moving,
+                    // so the per-frame sync saw no change to act on and the
+                    // mount, stopped at the last halt, slid along in its stand
+                    // - every mounted NPC once it had stopped and set off again.
+                    // A state kit animating the unit keeps the mount (the sync).
+                    const auto* mount = entitySpawner_.getRemotePlayerMount(guid);
+                    const bool kitAnimates = mount && renderer_.getSpellVisualSystem() &&
+                                             renderer_.getSpellVisualSystem()->unitKitAnimation(guid).has_value();
+                    const uint32_t animInstance = mount ? mount->instanceId : instanceId;
+                    uint32_t targetAnim = walking ? rendering::anim::WALK : rendering::anim::RUN;
+                    if (mount) {
+                        const bool flying = entitySpawner_.getCreatureFlyingState().count(guid) > 0;
+                        targetAnim = rendering::anim::mountLocomotion(true, flying, walking);
+                        if (!cr->hasAnimation(mount->instanceId, targetAnim)) targetAnim = rendering::anim::RUN;
+                        gotState = cr->getAnimationState(animInstance, curAnimId, curT, curDur);
+                    }
                     // The new spline's speed, before the play reads it to carry
                     // the stride over from Walk to Run.
                     if (auto entity = gameHandler_.getEntityManager().getEntity(guid)) {
-                        cr->setLocomotionSpeed(instanceId, entity->getMoveSpeed());
+                        cr->setLocomotionSpeed(animInstance, entity->getMoveSpeed());
                     }
                     // Only restart when the selected locomotion animation changed.
-                    if (!gotState || (curAnimId != rendering::anim::DEATH && curAnimId != targetAnim)) {
-                        cr->playAnimation(instanceId, targetAnim, /*loop=*/true);
+                    if (!kitAnimates &&
+                        (!gotState || (curAnimId != rendering::anim::DEATH && curAnimId != targetAnim))) {
+                        cr->playAnimation(animInstance, targetAnim, /*loop=*/true);
                     }
                     entitySpawner_.getCreatureWasMoving()[guid] = true;
                 }
