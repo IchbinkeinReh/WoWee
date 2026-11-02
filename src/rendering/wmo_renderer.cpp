@@ -5043,7 +5043,13 @@ std::optional<WMORenderer::InteriorFog> WMORenderer::interiorFogAt(const glm::ve
         auto it = loadedModels.find(instance.modelId);
         if (it == loadedModels.end()) continue;
         const ModelData& model = it->second;
-        if (model.fogs.empty()) continue;
+        // A building whose MFOG holds only the default fog has no fog of its
+        // own: 0x007a1150 returns at once when the model's fog count
+        // (+0x194, beside the fog array at +0x158) is one, and the zone's
+        // light keeps the fog. The Alterac foothills' yeti caves
+        // (md_mountaincave_medium_e) carry a lone cream default fog, and
+        // taken as theirs it filled the dark teal cave with a bright haze.
+        if (model.fogs.size() <= 1) continue;
 
         const glm::vec3 local = glm::vec3(instance.invModelMatrix * glm::vec4(pos, 1.0f));
         int groupIndex = -1;
