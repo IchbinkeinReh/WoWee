@@ -3221,6 +3221,20 @@ void Renderer::update(float deltaTime) {
                                                      : (vkCtx ? vkCtx->getSwapchainExtent().width : 0);
         WOWEE_PROFILE_SCOPE("weather", Cpu);
         weather->update(in);
+        // Not drawn while the camera is inside a building or a cave - an
+        // interior group (MOGP 0x2000), as the sun's glare and the minimap
+        // decide it. The drops are traced against the ground over them,
+        // which a cave's hill or a roof stops, but a cell asked before what
+        // covers it had arrived, or asked from far above it, could let them
+        // fall inside: rain streaked past the yetis in Darrow Hill's cave.
+        // Still updated, so they are there on stepping out.
+        const bool indoors = wmoRenderer && wmoRenderer->isInsideInteriorWMO(in.cameraPosition.x,
+                                                                             in.cameraPosition.y,
+                                                                             in.cameraPosition.z);
+        if (indoors != weatherIndoors_) {
+            weatherIndoors_ = indoors;
+            LOG_WARNING("Weather: ", indoors ? "hidden, the camera is indoors" : "shown, the camera is outdoors");
+        }
     }
 
     // Update lightning (storm / heavy rain)
@@ -4577,7 +4591,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
                 waterRenderer->render(cmd, perFrameSet, *camera, globalTime, false, frameIdx);
                 sceneMark(cmd, kMarkWater, "water");
             }
-            if (weather && camera) weather->render(cmd, perFrameSet);
+            if (weather && camera && !weatherIndoors_) weather->render(cmd, perFrameSet);
             if (lightning && camera && lightning->isEnabled()) lightning->render(cmd, perFrameSet);
             if (swimEffects && camera && !swimEffectsDrawWithWater_) {
                 swimEffects->render(cmd, perFrameSet);
@@ -4751,7 +4765,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
             waterRenderer->render(currentCmd, perFrameSet, *camera, globalTime, false, frameIdx);
             sceneMark(currentCmd, kMarkWater, "water");
         }
-        if (weather && camera) weather->render(currentCmd, perFrameSet);
+        if (weather && camera && !weatherIndoors_) weather->render(currentCmd, perFrameSet);
         if (lightning && camera && lightning->isEnabled()) lightning->render(currentCmd, perFrameSet);
         if (swimEffects && camera && !swimEffectsDrawWithWater_) {
             swimEffects->render(currentCmd, perFrameSet);
