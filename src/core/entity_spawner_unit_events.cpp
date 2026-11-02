@@ -491,6 +491,36 @@ void EntitySpawner::playUnitModelEvents(uint32_t localPlayerInstance) {
 }
 
 
+float EntitySpawner::playerCollisionHeight() {
+    namespace us = rendering::unit_splash;
+    if (!gameHandler_ || !assetManager_) return collisionHeight_;
+    auto entity = gameHandler_->getEntityManager().getEntity(gameHandler_->getPlayerGuid());
+    if (!entity || !entity->isUnit()) return collisionHeight_;
+    const auto& unit = static_cast<const game::Unit&>(*entity);
+    const uint16_t scaleField = game::fieldIndex(game::UF::OBJECT_FIELD_SCALE_X);
+    const uint32_t scaleBits = scaleField != 0xFFFF ? unit.getField(scaleField) : 0u;
+    if (unit.getDisplayId() == collisionHeightDisplay_ && scaleBits == collisionHeightScaleBits_) {
+        return collisionHeight_;
+    }
+    auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
+    auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+    const int32_t display = displays ? displays->findRecordById(unit.getDisplayId()) : -1;
+    if (display < 0 || !models || models->getFieldCount() <= us::kModelCollisionHeightColumn) {
+        return collisionHeight_;
+    }
+    const auto drow = static_cast<uint32_t>(display);
+    const int32_t model = models->findRecordById(displays->getUInt32(drow, 1));
+    if (model < 0) return collisionHeight_;
+    const auto mrow = static_cast<uint32_t>(model);
+    const float objectScale = scaleField != 0xFFFF ? std::bit_cast<float>(scaleBits) : 1.0f;
+    collisionHeight_ = us::collisionHeight(models->getFloat(mrow, us::kModelCollisionHeightColumn), objectScale,
+                                           displays->getFloat(drow, us::kDisplayScaleColumn),
+                                           models->getFloat(mrow, us::kModelScaleColumn));
+    collisionHeightDisplay_ = unit.getDisplayId();
+    collisionHeightScaleBits_ = scaleBits;
+    return collisionHeight_;
+}
+
 void EntitySpawner::playUnitSplashes(uint32_t localPlayerInstance) {
     namespace us = rendering::unit_splash;
     rendering::CharacterRenderer* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;

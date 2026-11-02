@@ -3894,6 +3894,9 @@ void Application::applyServerMovementState(float deltaTime) {
         // or .gm fly), not isPlayerFlying() which also needs the
         // FLYING flag the client only sets once already airborne.
         renderer->getCameraController()->setFlyingActive(gameHandler->canFly());
+        // How deep the water must be to swim in, and how deep it treads.
+        if (entitySpawner_)
+            renderer->getCameraController()->setCollisionHeight(entitySpawner_->playerCollisionHeight());
         // And whether the player is up in it, which the camera worked out
         // last frame: take-off and landing are decided where the floor is.
         gameHandler->setFlightAirborne(renderer->getCameraController()->isFlightAirborne());

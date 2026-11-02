@@ -371,16 +371,12 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
             waterH = waterRenderer->getWaterHeightAt(targetPos.x, targetPos.y);
         }
         constexpr float MAX_SWIM_DEPTH_FROM_SURFACE = 12.0f;
-        // Hysteresis: starting to swim needs deeper water than continuing to
-        // swim does. With one threshold, a character wading at the boundary
-        // flipped between swim and walk every frame - each flip restarts the
-        // locomotion animation and sends a START_SWIM/STOP_SWIM pair, which
-        // is what made walking out of water stutter. The two bounds sit
-        // either side of the single 1.0 this replaces.
-        constexpr float SWIM_ENTER_WATER_DEPTH = 1.15f;
-        constexpr float SWIM_EXIT_WATER_DEPTH  = 0.85f;
-        const float MIN_SWIM_WATER_DEPTH =
-            swimming ? SWIM_EXIT_WATER_DEPTH : SWIM_ENTER_WATER_DEPTH;
+        // Deep enough to swim in: over three quarters of the collision height
+        // to start, and a thirty-sixth of a yard less to go on (0x00730d10).
+        // The client's own margin keeps a character wading at the boundary
+        // from flipping between swim and walk: 1.15 and 0.85 made one swim
+        // in a pond the client wades through, a yard and a quarter deep.
+        const float MIN_SWIM_WATER_DEPTH = swimming ? swimExitDepth() : swimFloatDepth();
         bool inWater = false;
         // Water Walk: treat water surface as ground - player walks on top, not through.
         if (waterWalkActive_ && waterH && targetPos.z >= *waterH - 0.5f) {
@@ -439,7 +435,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
                     // Measured from where a swimmer actually floats, not from
                     // a bare number.
                     //
-                    // depthFromFeet is WATER_SURFACE_OFFSET exactly while
+                    // depthFromFeet is swimFloatDepth() exactly while
                     // swimming - the feet are pinned that far under the
                     // surface - so this constant was really "the float depth
                     // plus a little". It was 1.45 against a float depth of 0.9.
@@ -448,9 +444,9 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
                     // and the assist that walks a swimmer up a shore stopped
                     // firing: the character stayed swimming in ankle-deep water,
                     // shuddering on the boundary, and never fully left it.
-                    bool nearSurface = depthFromFeet <= WATER_SURFACE_OFFSET + 0.55f;
+                    bool nearSurface = depthFromFeet <= swimFloatDepth() + 0.55f;
                     bool reachableRamp = (floorDelta >= -0.30f && floorDelta <= 1.10f);
-                    bool shallowRampWater = waterOverFloor <= 1.55f;
+                    bool shallowRampWater = waterOverFloor <= swimFloatDepth() + 0.10f;
                     bool notDiving = f.forward3D.z > -0.20f && !f.xDown;
                     if (nearSurface && reachableRamp && shallowRampWater && notDiving) {
                         inWater = false;
@@ -497,7 +493,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
                             float waterOverFloor = *waterH - *aheadFloor;
                             bool nearSurface = depthFromFeet <= 1.65f;
                             bool reachableRamp = (floorDelta >= -0.35f && floorDelta <= 1.25f);
-                            bool shallowRampWater = waterOverFloor <= 1.75f;
+                            bool shallowRampWater = waterOverFloor <= swimFloatDepth() + 0.30f;
                             if (nearSurface && reachableRamp && shallowRampWater) {
                                 inWater = false;
                             }
@@ -522,7 +518,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         if (swimming && inWater && waterH &&
             swim_jump::allowed(f.spaceHeld && !f.noAscendDescend,
                                f.nowForward || f.nowBackward || f.nowStrafeLeft || f.nowStrafeRight,
-                               *waterH - targetPos.z, WATER_SURFACE_OFFSET)) {
+                               *waterH - targetPos.z, swimFloatDepth())) {
             swimJump = true;
             inWater = false;
         }
@@ -544,7 +540,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         // lateral for stable control.
         float swimSpeed = (swimSpeedOverride_ > 0.0f && swimSpeedOverride_ < 100.0f && !std::isnan(swimSpeedOverride_))
                               ? swimSpeedOverride_ : f.speed * SWIM_SPEED_FACTOR;
-        float waterSurfaceZ = waterH ? (*waterH - WATER_SURFACE_OFFSET) : targetPos.z;
+        float waterSurfaceZ = waterH ? (*waterH - swimFloatDepth()) : targetPos.z;
 
         // For auto-run/auto-swim: use character facing (immune to camera pan)
         // For manual W key: use camera direction (swim where you look)
@@ -620,8 +616,8 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         targetPos.z += verticalVelocity * f.physicsDeltaTime;
 
         // Don't rise above water surface
-        if (waterH && targetPos.z > *waterH - WATER_SURFACE_OFFSET) {
-            targetPos.z = *waterH - WATER_SURFACE_OFFSET;
+        if (waterH && targetPos.z > *waterH - swimFloatDepth()) {
+            targetPos.z = *waterH - swimFloatDepth();
             if (verticalVelocity > 0.0f) verticalVelocity = 0.0f;
         }
 
@@ -2830,16 +2826,12 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
         if (wmoRenderer) wmoH = wmoRenderer->getFloorHeight(newPos.x, newPos.y, feetZ + 2.0f);
         if (m2Renderer && !externalFollow_) m2H = m2Renderer->getFloorHeight(newPos.x, newPos.y, feetZ + 1.0f);
         auto floorH = selectHighestFloor(terrainH, wmoH, m2H);
-        // Hysteresis: starting to swim needs deeper water than continuing to
-        // swim does. With one threshold, a character wading at the boundary
-        // flipped between swim and walk every frame - each flip restarts the
-        // locomotion animation and sends a START_SWIM/STOP_SWIM pair, which
-        // is what made walking out of water stutter. The two bounds sit
-        // either side of the single 1.0 this replaces.
-        constexpr float SWIM_ENTER_WATER_DEPTH = 1.15f;
-        constexpr float SWIM_EXIT_WATER_DEPTH  = 0.85f;
-        const float MIN_SWIM_WATER_DEPTH =
-            swimming ? SWIM_EXIT_WATER_DEPTH : SWIM_ENTER_WATER_DEPTH;
+        // Deep enough to swim in: over three quarters of the collision height
+        // to start, and a thirty-sixth of a yard less to go on (0x00730d10).
+        // The client's own margin keeps a character wading at the boundary
+        // from flipping between swim and walk: 1.15 and 0.85 made one swim
+        // in a pond the client wades through, a yard and a quarter deep.
+        const float MIN_SWIM_WATER_DEPTH = swimming ? swimExitDepth() : swimFloatDepth();
         inWater = (floorH && ((*waterH - *floorH) >= MIN_SWIM_WATER_DEPTH)) || (isOcean && !floorH);
         }
     }
@@ -2850,7 +2842,7 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
         jumpLocked_ = false;
         float swimSpeed = (swimSpeedOverride_ > 0.0f && swimSpeedOverride_ < 100.0f && !std::isnan(swimSpeedOverride_))
                               ? swimSpeedOverride_ : f.speed * SWIM_SPEED_FACTOR;
-        float waterSurfaceCamZ = waterH ? (*waterH - WATER_SURFACE_OFFSET + eyeHeight) : newPos.z;
+        float waterSurfaceCamZ = waterH ? (*waterH - swimFloatDepth() + eyeHeight) : newPos.z;
         bool diveIntent = f.nowForward && (f.forward3D.z < -0.28f);
 
         float movLenSq = glm::dot(f.movement, f.movement);
@@ -2879,8 +2871,8 @@ void CameraController::updateFreeFlyCamera(float /*deltaTime*/, FrameInput& f) {
         newPos.z += verticalVelocity * f.physicsDeltaTime;
 
         // Don't rise above water surface (feet at water level)
-        if (waterH && (newPos.z - eyeHeight) > *waterH - WATER_SURFACE_OFFSET) {
-            newPos.z = *waterH - WATER_SURFACE_OFFSET + eyeHeight;
+        if (waterH && (newPos.z - eyeHeight) > *waterH - swimFloatDepth()) {
+            newPos.z = *waterH - swimFloatDepth() + eyeHeight;
             if (verticalVelocity > 0.0f) verticalVelocity = 0.0f;
         }
 

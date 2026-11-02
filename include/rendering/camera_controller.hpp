@@ -359,6 +359,11 @@ public:
     /// Permission to fly - a flying mount where flight is allowed, or .gm fly.
     /// Not the same as being in the air: see isFlightAirborne.
     void setFlyingActive(bool active);
+    /// The player's collision height, which decides the water deep enough to
+    /// swim in and how deep it treads (see collisionHeight_).
+    void setCollisionHeight(float height) {
+        if (height > 0.1f && height < 50.0f) collisionHeight_ = height;
+    }
     [[nodiscard]] bool isFlyingActive() const { return flyingActive_; }
     /// In the air on it. Space takes off, and touching real ground without
     /// climbing lands - after which the mount runs, falls and jumps like any
@@ -963,12 +968,17 @@ private:
     // this it holds depth. Retail lets a character idle underwater - and drown
     // doing it - so buoyancy cannot reach all the way down.
     static constexpr float SWIM_FLOAT_BAND = 1.3f;
-    // How far the feet float below the surface while treading, which is what
-    // decides where the waterline crosses the body. The neck pivot is 1.6 above
-    // the feet, so 0.9 put the line around the knee and left the character
-    // riding on top of the water; retail treads with the shoulders out and the
+    // The player's collision height (CreatureModelData CollisionHeight at its
+    // scale, unit +0x854; setCollisionHeight), which swimming is measured by
+    // (0x00730d10): a unit starts to swim where the water over its feet is
+    // deeper than three quarters of it, stops where it is a thirty-sixth of
+    // a yard less, and treads with its feet that far under the surface
+    // (0x0072f1f0 holds it at exactly 0.75 of the height). 73/36 until told,
+    // a human's or an elf's 2.03 - which floats the feet 1.52 down, the
     // water at the chest.
-    static constexpr float WATER_SURFACE_OFFSET = 1.45f;
+    float collisionHeight_ = 73.0f / 36.0f;
+    [[nodiscard]] float swimFloatDepth() const { return 0.75f * collisionHeight_; }
+    [[nodiscard]] float swimExitDepth() const { return swimFloatDepth() - 1.0f / 36.0f; }
 
     // Movement input suppression (after teleport/portal, ignore held keys)
     float movementSuppressTimer_ = 0.0f;
