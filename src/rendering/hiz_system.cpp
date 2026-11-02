@@ -35,7 +35,7 @@ bool HiZSystem::initialize(VkContext* ctx, uint32_t width, uint32_t height) {
 void HiZSystem::shutdown() {
     if (!ctx_) return;
     VkDevice device = ctx_->getDevice();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     destroyDescriptors();
     destroyPyramidImage();
@@ -48,7 +48,7 @@ void HiZSystem::shutdown() {
 bool HiZSystem::resize(uint32_t width, uint32_t height) {
     if (!ctx_) return false;
     VkDevice device = ctx_->getDevice();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     destroyDescriptors();
     destroyPyramidImage();

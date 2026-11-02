@@ -273,7 +273,7 @@ bool ScreenEffects::ensureCompositePipeline() {
     const VkFormat format = ctx_->getSwapchainFormat();
     if (compositePipeline_ != VK_NULL_HANDLE && format == compositeFormat_) return true;
     VkDevice device = ctx_->getDevice();
-    if (compositePipeline_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device);
+    if (compositePipeline_ != VK_NULL_HANDLE) ::wowee::rendering::deviceWaitIdle(device);
     destroy(device, compositePipeline_);
 
     ShaderPair shaders = loadShaderPair(device, "assets/shaders/postprocess.vert.spv",
@@ -322,7 +322,7 @@ bool ScreenEffects::ensureTargets(VkExtent2D extent) {
         glow_[0].image != VK_NULL_HANDLE) {
         return true;
     }
-    vkDeviceWaitIdle(ctx_->getDevice());
+    ::wowee::rendering::deviceWaitIdle(ctx_->getDevice());
     destroyTargets();
 
     smallExtent_ = {.width = std::max(1u, extent.width / 4), .height = std::max(1u, extent.height / 4)};
@@ -600,7 +600,7 @@ void ScreenEffects::composite(VkCommandBuffer cmd, uint32_t frame) {
 void ScreenEffects::shutdown() {
     if (!ctx_) return;
     VkDevice device = ctx_->getDevice();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
     destroyTargets();
     for (auto& t : fog_) destroyScreenTarget(*ctx_, t);
     wave_.destroy(device, ctx_->getAllocator());

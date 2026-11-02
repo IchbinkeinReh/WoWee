@@ -547,7 +547,7 @@ bool Renderer::createPerFrameResources() {
 
 void Renderer::destroyPerFrameResources() {
     if (!vkCtx) return;
-    vkDeviceWaitIdle(vkCtx->getDevice());
+    ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
     VkDevice device = vkCtx->getDevice();
 
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
@@ -1416,7 +1416,7 @@ void Renderer::applyMsaaChange() {
     if (samples == current) return;
 
     // Single GPU wait - all subsequent operations are CPU-side object creation
-    vkDeviceWaitIdle(vkCtx->getDevice());
+    ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
 
     // Set new MSAA and recreate swapchain (render pass, depth, MSAA image, framebuffers)
     vkCtx->setMsaaSamples(samples);
@@ -1636,7 +1636,7 @@ void Renderer::beginFrame() {
     // The minimap's display pipeline, built for the panel's pass, once for
     // each minimap there is (one is made with each world's renderers).
     if (minimap && gVrMinimapBuiltFor != minimap.get() && vkCtx->getOverlayRenderPass() != VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(vkCtx->getDevice());
+        ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
         minimap->setTargetPass(vkCtx->getOverlayRenderPass(), VK_SAMPLE_COUNT_1_BIT);
         minimap->recreatePipelines();
         gVrMinimapBuiltFor = minimap.get();
@@ -2041,6 +2041,7 @@ void Renderer::endFrame() {
         {
             WOWEE_PROFILE_SCOPE("record interface (ImGui)", Cpu);
 #ifndef WOWEE_VR
+            updateImGuiTextures(ImGui::GetDrawData());
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), currentCmd);
 #endif
         }
@@ -2119,7 +2120,7 @@ core::ScreenRecorder::Stats Renderer::stopRecording() {
     // The frames still on the GPU are finished and handed over, oldest first,
     // so the file ends where the recording did rather than two frames short.
     if (vkCtx && screenCapture_) {
-        vkDeviceWaitIdle(vkCtx->getDevice());
+        ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
         ScreenCapture::Ready ready[2] = {screenCapture_->collect(0), screenCapture_->collect(1)};
         if (ready[0].valid && ready[1].valid && ready[1].pts < ready[0].pts) std::swap(ready[0], ready[1]);
         ScreenCapture* capture = screenCapture_.get();
@@ -2201,7 +2202,7 @@ bool Renderer::captureScreenshot(const std::string& outputPath) {
     VkDeviceSize bufSize = static_cast<VkDeviceSize>(w) * h * 4;
 
     // Stall GPU so the swapchain image is idle
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     // Create staging buffer
     VkBufferCreateInfo bufInfo{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -5922,7 +5923,7 @@ void Renderer::refreshSwimEffectsPass() {
     const bool glareMoved = celestial && (glareDrawsWithWater_ != glareWasWithWater ||
                                           celestial->glarePipelineStale());
     if (!sprayMoved && !minimapMoved && !glareMoved) return;
-    vkDeviceWaitIdle(vkCtx->getDevice());
+    ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
     if (sprayMoved) swimEffects->recreatePipelines();
     if (minimapMoved) minimap->recreatePipelines();
     if (glareMoved) celestial->recreateGlarePipeline();
@@ -6006,7 +6007,7 @@ void Renderer::destroySecondaryCommandResources() {
     syncWorldRecording();
     if (!vkCtx) return;
     VkDevice device = vkCtx->getDevice();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     // Secondary buffers are freed when their pool is destroyed
     for (auto& workerCmdPool : workerCmdPools_) {
@@ -7112,7 +7113,7 @@ void Renderer::applyPendingShadowMapSize() {
     // Both slots' maps are bound in sets a frame still in flight may read,
     // and one may be mid-write - so nothing goes until the device is idle,
     // as for the fog's volumes and the ray traced lighting's images.
-    vkDeviceWaitIdle(vkCtx->getDevice());
+    ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
     const uint32_t previous = SHADOW_MAP_SIZE;
     const int previousCascades = shadowCascadeCount_;
     destroyShadowMapImages();

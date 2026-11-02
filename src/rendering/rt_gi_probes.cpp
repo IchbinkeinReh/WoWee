@@ -110,7 +110,7 @@ void RtGiProbes::initialize(VkContext* ctx, RtScene* scene) {
 void RtGiProbes::shutdown() {
     if (!ctx_) return;
     VkDevice dev = ctx_->getDevice();
-    vkDeviceWaitIdle(dev);
+    ::wowee::rendering::deviceWaitIdle(dev);
     destroyResources();
     for (VkPipeline* p : {&trace_, &update_, &exposure_}) {
         if (*p) vkDestroyPipeline(dev, *p, nullptr);

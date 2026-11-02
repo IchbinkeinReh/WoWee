@@ -239,7 +239,7 @@ void CompositeRenderer::shutdown() {
     VkDevice device = vkCtx->getDevice();
     VmaAllocator alloc = vkCtx->getAllocator();
 
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     destroy(device, tilePipeline);
     destroy(device, tilePipelineLayout);

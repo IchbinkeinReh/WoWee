@@ -48,7 +48,7 @@ bool AuxSwapchain::create(VkContext* ctx, SDL_Window* window) {
 void AuxSwapchain::destroy() {
     if (!ctx_) return;
     VkDevice device = ctx_->getDevice();
-    if (device != VK_NULL_HANDLE) vkDeviceWaitIdle(device);
+    if (device != VK_NULL_HANDLE) ::wowee::rendering::deviceWaitIdle(device);
     destroySwapchainResources();
     destroySemaphores();
     if (swapchain_ != VK_NULL_HANDLE) {
@@ -114,7 +114,7 @@ bool AuxSwapchain::rebuild() {
     VkDevice device = ctx_->getDevice();
     // The old images may still be in a frame the GPU has not finished, and
     // their views and framebuffers go with them.
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     vkb::SwapchainBuilder builder{ctx_->getPhysicalDevice(), device, surface_};
     builder.set_desired_format({.format = VK_FORMAT_B8G8R8A8_UNORM,

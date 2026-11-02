@@ -135,7 +135,7 @@ bool SunShafts::ensureCompositePipeline() {
     if (compositePipeline_ != VK_NULL_HANDLE && format == compositeFormat_) return true;
     VkDevice device = ctx_->getDevice();
     // A rebuild replaces a pipeline an in-flight frame may have bound.
-    if (compositePipeline_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device);
+    if (compositePipeline_ != VK_NULL_HANDLE) ::wowee::rendering::deviceWaitIdle(device);
     destroy(device, compositePipeline_);
 
     ShaderPair shaders = loadShaderPair(device, "assets/shaders/postprocess.vert.spv",
@@ -195,7 +195,7 @@ bool SunShafts::ensureTargets(VkExtent2D extent) {
     }
     // Both slots' images are replaced, and the other slot's frame may still be
     // in flight with them bound. A resize is rare enough to wait for it.
-    vkDeviceWaitIdle(ctx_->getDevice());
+    ::wowee::rendering::deviceWaitIdle(ctx_->getDevice());
     destroyTargets();
 
     // A quarter a side. The rays are blurred to nothing finer than that.
@@ -370,7 +370,7 @@ void SunShafts::composite(VkCommandBuffer cmd, uint32_t frame) {
 void SunShafts::shutdown() {
     if (!ctx_) return;
     VkDevice device = ctx_->getDevice();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
     destroyTargets();
     destroy(device, descPool_);
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {

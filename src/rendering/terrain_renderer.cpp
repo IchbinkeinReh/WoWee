@@ -339,7 +339,7 @@ void TerrainRenderer::shutdown() {
     VkDevice device = vkCtx->getDevice();
     VmaAllocator allocator = vkCtx->getAllocator();
 
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     clear();
     // clear() defers chunk destruction, and no further frames will run to drain

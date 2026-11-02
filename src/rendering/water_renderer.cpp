@@ -307,7 +307,7 @@ void WaterRenderer::shutdown() {
 
     if (!vkCtx) return;
     VkDevice device = vkCtx->getDevice();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     // clear() defers surface destruction, and those lambdas free descriptor sets
     // from the pools destroyed just below. Drain them here, while the pools are

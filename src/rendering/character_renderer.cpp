@@ -686,7 +686,7 @@ void CharacterRenderer::shutdown() {
         });
     }
 
-    vkDeviceWaitIdle(vkCtx_->getDevice());
+    ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator alloc = vkCtx_->getAllocator();
 
@@ -807,7 +807,7 @@ void CharacterRenderer::clear() {
         completedNormalMaps_.clear();
     }
 
-    vkDeviceWaitIdle(vkCtx_->getDevice());
+    ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
     VkDevice device = vkCtx_->getDevice();
 
     // Destroy GPU resources for all models

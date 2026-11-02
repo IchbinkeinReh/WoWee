@@ -92,7 +92,7 @@ bool EyeAdaptationPass::ensureCompositePipeline() {
     if (compositePipeline_ != VK_NULL_HANDLE && format == compositeFormat_) return true;
     VkDevice device = ctx_->getDevice();
     // A rebuild replaces a pipeline an in-flight frame may have bound.
-    if (compositePipeline_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device);
+    if (compositePipeline_ != VK_NULL_HANDLE) ::wowee::rendering::deviceWaitIdle(device);
     destroy(device, compositePipeline_);
 
     ShaderPair shaders = loadShaderPair(device, "assets/shaders/postprocess.vert.spv",
@@ -263,7 +263,7 @@ void EyeAdaptationPass::composite(VkCommandBuffer cmd) {
 void EyeAdaptationPass::shutdown() {
     if (!ctx_) return;
     VkDevice device = ctx_->getDevice();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
     for (uint32_t i = 0; i < MAX_FRAMES; i++) {
         destroyScreenTarget(*ctx_, small_[i]);
         if (readback_[i].buffer) vmaDestroyBuffer(ctx_->getAllocator(), readback_[i].buffer, readback_[i].allocation);

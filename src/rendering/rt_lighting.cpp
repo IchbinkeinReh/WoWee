@@ -159,7 +159,7 @@ void RtLighting::shutdown() {
     if (!ctx_) return;
     VkDevice dev = ctx_->getDevice();
     VmaAllocator alloc = ctx_->getAllocator();
-    vkDeviceWaitIdle(dev);
+    ::wowee::rendering::deviceWaitIdle(dev);
     probes_.shutdown();
     destroyImages();
     destroyGbuffer();
@@ -461,7 +461,7 @@ bool RtLighting::prepare(VkExtent2D sceneExtent, VkSampleCountFlagBits samples) 
         // Nothing of the pass, the G-buffer, the probes or the scene's
         // acceleration structures is kept while off; the per-frame sets go
         // back to the neutral image.
-        vkDeviceWaitIdle(ctx_->getDevice());
+        ::wowee::rendering::deviceWaitIdle(ctx_->getDevice());
         destroyImages();
         destroyGbuffer();
         probes_.destroyResources();
@@ -480,7 +480,7 @@ bool RtLighting::prepare(VkExtent2D sceneExtent, VkSampleCountFlagBits samples) 
     // The probe volume lives only in Full mode: its atlas is some 47 MB.
     bool changed = false;
     if ((mode_ == Mode::Full) != probes_.hasResources()) {
-        vkDeviceWaitIdle(ctx_->getDevice());
+        ::wowee::rendering::deviceWaitIdle(ctx_->getDevice());
         if (mode_ == Mode::Full) {
             // Failing that, Full lights as ShadowsAO; createResources has said why.
             probes_.createResources();
@@ -492,7 +492,7 @@ bool RtLighting::prepare(VkExtent2D sceneExtent, VkSampleCountFlagBits samples) 
 
     // The apply pass is built for the scene's sample count.
     if (applySamples_ != ctx_->getMsaaSamples() || !apply_) {
-        vkDeviceWaitIdle(ctx_->getDevice());
+        ::wowee::rendering::deviceWaitIdle(ctx_->getDevice());
         if (!createApplyPipeline()) {
             mode_ = Mode::Off;
             return true;
@@ -501,7 +501,7 @@ bool RtLighting::prepare(VkExtent2D sceneExtent, VkSampleCountFlagBits samples) 
 
     if (sceneExtent.width != gbufExtent_.width || sceneExtent.height != gbufExtent_.height ||
         samples != gbufSamples_ || gbuf0_.image == VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(ctx_->getDevice());
+        ::wowee::rendering::deviceWaitIdle(ctx_->getDevice());
         destroyGbuffer();
         if (!createGbuffer(sceneExtent, samples)) {
             LOG_ERROR("RtLighting: failed to create the ", sceneExtent.width, "x", sceneExtent.height,
@@ -521,7 +521,7 @@ bool RtLighting::prepare(VkExtent2D sceneExtent, VkSampleCountFlagBits samples) 
         : VkExtent2D{std::max(1u, (sceneExtent.width + 1) / 2), std::max(1u, (sceneExtent.height + 1) / 2)};
     if (want.width == traceExtent_.width && want.height == traceExtent_.height) return changed;
 
-    vkDeviceWaitIdle(ctx_->getDevice());
+    ::wowee::rendering::deviceWaitIdle(ctx_->getDevice());
     destroyImages();
     if (!createImages(want)) {
         LOG_ERROR("RtLighting: failed to create ", want.width, "x", want.height, " images");

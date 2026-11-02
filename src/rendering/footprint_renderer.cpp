@@ -84,7 +84,7 @@ void FootprintRenderer::shutdown() {
     if (!vkCtx_) return;
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator allocator = vkCtx_->getAllocator();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     for (auto& texture : textures_) texture.destroy(device, allocator);
     // Through the helpers, which clear each handle as they destroy it, so the

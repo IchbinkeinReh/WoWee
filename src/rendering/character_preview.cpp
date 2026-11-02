@@ -450,7 +450,7 @@ bool CharacterPreview::loadCharacter(game::Race race, game::Gender gender,
     // be drawing this instance's bone buffers. This frame's is recorded after
     // the interface, so it sees the instance as it is left here.
     if (instanceId_ > 0) {
-        if (vkCtx_) vkDeviceWaitIdle(vkCtx_->getDevice());
+        if (vkCtx_) ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
         charRenderer_->removeInstance(instanceId_);
         instanceId_ = 0;
         modelLoaded_ = false;

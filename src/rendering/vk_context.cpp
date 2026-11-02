@@ -2,6 +2,7 @@
 #include <set>
 #include <thread>
 #include <mutex>
+#include <memory>
 #include "rendering/vk_context.hpp"
 #include "core/platform.hpp"
 
@@ -28,6 +29,33 @@
 
 namespace wowee {
 namespace rendering {
+
+// Per-thread immediate submit resources (see beginSingleTimeCommands).
+namespace detail {
+
+struct ImmediateSlot {
+    VkDevice device = VK_NULL_HANDLE;
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+    uint64_t generation = 0;
+    bool open = false;
+};
+
+struct ImmediateRegistry {
+    std::mutex mutex;
+    VkDevice device = VK_NULL_HANDLE;
+    uint32_t family = 0;
+    // Bumped when the device's slots are destroyed: a thread whose slot is
+    // from an older generation makes a new one.
+    uint64_t generation = 1;
+    // Every live slot, so the device's teardown can destroy them all. The
+    // slots themselves belong to their threads.
+    std::vector<ImmediateSlot*> slots;
+    std::set<std::thread::id> threads;
+};
+
+}  // namespace detail
 
 VkContext* VkContext::sInstance_ = nullptr;
 
@@ -135,7 +163,7 @@ void VkContext::shutdown() {
 
     LOG_DEBUG("VkContext::shutdown - vkDeviceWaitIdle...");
     if (device) {
-        vkDeviceWaitIdle(device);
+        ::wowee::rendering::deviceWaitIdle(device);
     }
 
     // Clear deferred cleanup queues WITHOUT executing them.  By this point the
@@ -229,11 +257,10 @@ void VkContext::shutdown() {
     }
     batchStagingBuffers_.clear();
 
-    if (immFence) { vkDestroyFence(device, immFence, nullptr); immFence = VK_NULL_HANDLE; }
-    // Destroying the pool implicitly frees immCmdBuf_; just drop the handle.
-    if (immCommandPool) { vkDestroyCommandPool(device, immCommandPool, nullptr); immCommandPool = VK_NULL_HANDLE; }
-    immCmdBuf_ = VK_NULL_HANDLE;
-    if (transferCommandPool_) { vkDestroyCommandPool(device, transferCommandPool_, nullptr); transferCommandPool_ = VK_NULL_HANDLE; }
+    // A batch left open (its owner never ended it) and every thread's
+    // immediate pool and fence, all made on this device.
+    if (batchPool_) destroyBatchPool();
+    releaseImmediateSlots();
 
     // Persist pipeline cache to disk before tearing down the device - but not
     // a lost device's. What it would write is whatever the driver had when it
@@ -345,8 +372,13 @@ bool VkContext::rebuildAfterDeviceLoss() {
     currentAcquireSemaphore_ = VK_NULL_HANDLE;
     uploadBatchDepth_ = 0;
     inUploadBatch_ = false;
+    batchOwner_.store(std::thread::id{});
     batchCmd_ = VK_NULL_HANDLE;
-    inFlightBatches_.clear();
+    batchPool_ = VK_NULL_HANDLE;
+    {
+        std::lock_guard<std::mutex> lock(inFlightMutex_);
+        inFlightBatches_.clear();
+    }
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         gpuMarkCount_[i] = 0;
         gpuMarksPending_[i] = false;
@@ -1525,28 +1557,14 @@ bool VkContext::createCommandPools() {
         }
     }
 
-    // Immediate submit pool
-    VkCommandPoolCreateInfo immPoolInfo{};
-    immPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    immPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    immPoolInfo.queueFamilyIndex = graphicsQueueFamily;
-
-    if (vkCreateCommandPool(device, &immPoolInfo, nullptr, &immCommandPool) != VK_SUCCESS) {
-        LOG_ERROR("Failed to create immediate command pool");
-        return false;
-    }
-
-    // Separate command pool for the transfer queue (same family, different queue)
-    if (hasDedicatedTransfer_) {
-        VkCommandPoolCreateInfo transferPoolInfo{};
-        transferPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        transferPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        transferPoolInfo.queueFamilyIndex = graphicsQueueFamily;
-
-        if (vkCreateCommandPool(device, &transferPoolInfo, nullptr, &transferCommandPool_) != VK_SUCCESS) {
-            LOG_ERROR("Failed to create transfer command pool");
-            return false;
-        }
+    // Immediate submits make their pools per thread, on first use
+    // (beginSingleTimeCommands); upload batches one per batch. Both from the
+    // graphics family, the only one anything here submits to.
+    if (!immRegistry_) immRegistry_ = std::make_shared<detail::ImmediateRegistry>();
+    {
+        std::lock_guard<std::mutex> lock(immRegistry_->mutex);
+        immRegistry_->device = device;
+        immRegistry_->family = graphicsQueueFamily;
     }
 
     return true;
@@ -1604,7 +1622,7 @@ void VkContext::noteDeviceLost(const char* where, VkResult result) {
 
 VkResult VkContext::waitIdle(const char* where) {
     if (device == VK_NULL_HANDLE) return VK_SUCCESS;
-    const VkResult r = vkDeviceWaitIdle(device);
+    const VkResult r = ::wowee::rendering::deviceWaitIdle(device);
     if (r != VK_SUCCESS) LOG_ERROR("vkDeviceWaitIdle failed in ", where, ": ", static_cast<int>(r));
     noteDeviceLost(where, r);
     return r;
@@ -1829,21 +1847,6 @@ bool VkContext::createSyncObjects() {
     // before we know which image we'll get.
     if (vkCreateSemaphore(device, &semInfo, nullptr, &nextAcquireSemaphore_) != VK_SUCCESS) {
         LOG_ERROR("Failed to create next-acquire semaphore");
-        return false;
-    }
-
-    // Immediate submit fence (not signaled initially)
-    VkFenceCreateInfo immFenceInfo{};
-    immFenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    // Logged for the same reason as the frame fences: validation reports a
-    // fence by handle, and immFence is shared by endSingleTimeCommands and the
-    // upload batches - which submit on different queues.
-    if (vkCreateFence(device, &immFenceInfo, nullptr, &immFence) == VK_SUCCESS) {
-        LOG_WARNING("immediate fence = 0x", std::hex,
-                    reinterpret_cast<uint64_t>(immFence), std::dec);
-    }
-    if (immFence == VK_NULL_HANDLE) {
-        LOG_ERROR("Failed to create immediate submit fence");
         return false;
     }
 
@@ -2837,7 +2840,7 @@ VkDescriptorSet VkContext::uploadImGuiTexture(const uint8_t* rgba, int width, in
     // records and returns without submitting, so destroying the staging here
     // pulls the source out from under a copy that has not happened - the image
     // then contains whatever was left behind, which draws as nothing at all.
-    if (inUploadBatch_) {
+    if (isInUploadBatch()) {
         deferRawStagingCleanup(stagingBuffer, stagingMemory);
     } else {
         vkDestroyBuffer(device, stagingBuffer, nullptr);
@@ -2904,7 +2907,7 @@ VkDescriptorSet VkContext::uploadImGuiTexture(const uint8_t* rgba, int width, in
 
 void VkContext::releaseSurface() {
     if (device) {
-        if (const VkResult idle = vkDeviceWaitIdle(device); idle != VK_SUCCESS) {
+        if (const VkResult idle = ::wowee::rendering::deviceWaitIdle(device); idle != VK_SUCCESS) {
             LOG_ERROR("Surface release: wait-idle failed (", static_cast<int>(idle), ")");
             noteDeviceLost("releaseSurface", idle);
         }
@@ -3045,7 +3048,7 @@ bool VkContext::recreateSwapchain(int width, int height) {
     // change comes this way).
     (void)width;
     (void)height;
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
     for (auto fb : swapchainFramebuffers) {
         if (fb) vkDestroyFramebuffer(device, fb, nullptr);
     }
@@ -3087,7 +3090,7 @@ bool VkContext::recreateSwapchain(int width, int height) {
         return false;
     }
 
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     // Destroy old framebuffers
     for (auto fb : swapchainFramebuffers) {
@@ -3223,7 +3226,7 @@ void VkContext::resetFrameSyncState() {
     }
     // Checked: if the device is already gone, everything below is theatre and
     // the fence wait in the next frame takes the blame for it.
-    if (const VkResult idle = vkDeviceWaitIdle(device); idle != VK_SUCCESS) {
+    if (const VkResult idle = ::wowee::rendering::deviceWaitIdle(device); idle != VK_SUCCESS) {
         LOG_ERROR("wait-idle before a rebuild failed: ", static_cast<int>(idle),
                   " - the device was already lost before this rebuild, not by it");
     }
@@ -3557,7 +3560,7 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     VkResult submitResult;
     {
         WOWEE_PROFILE_SCOPE("submit", Cpu);
-        submitResult = vkQueueSubmit(graphicsQueue, 1, &submitInfo,
+        submitResult = queueSubmit(graphicsQueue, 1, &submitInfo,
                                      frameTimeline_ != VK_NULL_HANDLE ? VK_NULL_HANDLE
                                                                       : frame.inFlightFence);
     }
@@ -3629,7 +3632,9 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
         // A wait, not work: with FIFO the driver may hold the thread here
         // until a vblank frees an image.
         WOWEE_PROFILE_SCOPE("wait: present", Wait);
-        result = vkQueuePresentKHR(presentQueue, &presentInfo);
+        // Under the queue lock, so a worker's upload waits out a vblank
+        // here rather than entering the queue alongside the present.
+        result = queuePresent(presentQueue, &presentInfo);
     }
     // Presenting unrotated onto a rotated surface is suboptimal by definition,
     // and says so on every frame for as long as the swapchain lives. Rebuilding
@@ -3659,51 +3664,196 @@ void VkContext::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
         extraInfo.swapchainCount = 1;
         extraInfo.pSwapchains = &extra.swapchain;
         extraInfo.pImageIndices = &extra.imageIndex;
-        const VkResult extraResult = vkQueuePresentKHR(presentQueue, &extraInfo);
+        const VkResult extraResult = queuePresent(presentQueue, &extraInfo);
         if (extra.onResult) extra.onResult(extraResult);
     }
 
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
-VkCommandBuffer VkContext::beginSingleTimeCommands() {
-    // Lazily allocate once and reuse. The pool was created with
-    // VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT so individual buffers
-    // can be reset without freeing the underlying allocation.
-    if (immCmdBuf_ == VK_NULL_HANDLE) {
-        VkCommandBufferAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.commandPool = immCommandPool;
-        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = 1;
-        vkAllocateCommandBuffers(device, &allocInfo, &immCmdBuf_);
-    } else {
-        vkResetCommandBuffer(immCmdBuf_, 0);
+// ---- Queue access ----------------------------------------------------------
+//
+// A VkQueue is externally synchronised: no two threads may be inside
+// vkQueueSubmit, vkQueuePresentKHR or vkQueueWaitIdle on it at once, and
+// vkDeviceWaitIdle counts as access to every queue of the device. The frame
+// submits and presents from the main thread while loaders and frame workers
+// submit uploads of their own, and nothing ordered the two - so every such
+// call goes through this one lock, held around the call alone, with nothing
+// else taken under it.
+std::mutex& queueAccessMutex() {
+    static std::mutex m;
+    return m;
+}
+
+VkResult queueSubmit(VkQueue queue, uint32_t count, const VkSubmitInfo* submits, VkFence fence) {
+    const std::lock_guard<std::mutex> lock{queueAccessMutex()};
+    return vkQueueSubmit(queue, count, submits, fence);
+}
+
+VkResult queuePresent(VkQueue queue, const VkPresentInfoKHR* info) {
+    const std::lock_guard<std::mutex> lock{queueAccessMutex()};
+    return vkQueuePresentKHR(queue, info);
+}
+
+VkResult deviceWaitIdle(VkDevice device) {
+    const std::lock_guard<std::mutex> lock{queueAccessMutex()};
+    return vkDeviceWaitIdle(device);
+}
+
+void updateImGuiTextures(ImDrawData* drawData) {
+    // ImGui's backend uploads a texture with a submit and a queue wait of its
+    // own, from inside ImGui_ImplVulkan_RenderDrawData, where no lock reaches.
+    // Done here first, each under the queue lock; the render then finds them
+    // done. The lock spans the backend's whole update - its allocation and
+    // recording as well as the submit - as the submit cannot be wrapped alone.
+    if (!drawData || !drawData->Textures) return;
+    for (ImTextureData* tex : *drawData->Textures) {
+        if (!tex || tex->Status == ImTextureStatus_OK) continue;
+        const std::lock_guard<std::mutex> lock{queueAccessMutex()};
+        ImGui_ImplVulkan_UpdateTexture(tex);
     }
+}
+
+// ---- Immediate submits ------------------------------------------------------
+//
+// Each thread its own command pool, command buffer and fence, made on its
+// first immediate submit and on the first after a device rebuild. One set
+// shared between threads let one thread reset the command buffer another was
+// recording and the fence another was waiting on - and threads do submit:
+// loaders, frame workers, the RT scene's upload.
+
+
+namespace {
+
+void destroySlotHandles(detail::ImmediateSlot& slot) {
+    if (slot.fence) vkDestroyFence(slot.device, slot.fence, nullptr);
+    if (slot.pool) vkDestroyCommandPool(slot.device, slot.pool, nullptr);  // frees cmd
+    slot.fence = VK_NULL_HANDLE;
+    slot.pool = VK_NULL_HANDLE;
+    slot.cmd = VK_NULL_HANDLE;
+    slot.open = false;
+}
+
+struct ThreadImmediate {
+    std::weak_ptr<detail::ImmediateRegistry> registry;
+    detail::ImmediateSlot* slot = nullptr;
+    ~ThreadImmediate() {
+        if (!slot) return;
+        if (auto reg = registry.lock()) {
+            std::lock_guard<std::mutex> lock(reg->mutex);
+            auto it = std::find(reg->slots.begin(), reg->slots.end(), slot);
+            if (it != reg->slots.end()) {
+                destroySlotHandles(*slot);
+                reg->slots.erase(it);
+            }
+        }
+        delete slot;
+    }
+};
+
+thread_local ThreadImmediate t_immediate;
+// Begins of upload batches this thread made while another thread's was open,
+// so that their ends are not taken for the owner's.
+thread_local int t_foreignBatchDepth = 0;
+
+}  // namespace
+
+detail::ImmediateSlot* VkContext::immediateSlot() {
+    const std::shared_ptr<detail::ImmediateRegistry> reg = immRegistry_;
+    if (!reg) return nullptr;
+    ThreadImmediate& t = t_immediate;
+    std::lock_guard<std::mutex> lock(reg->mutex);
+    if (reg->device == VK_NULL_HANDLE) return nullptr;
+    if (t.slot && t.registry.lock() == reg && t.slot->generation == reg->generation && t.slot->pool) {
+        return t.slot;
+    }
+    // None yet, or one whose handles went with an earlier device (the
+    // teardown destroyed them and dropped it from the list).
+    if (!t.slot) t.slot = new detail::ImmediateSlot();
+    t.registry = reg;
+    detail::ImmediateSlot& slot = *t.slot;
+    slot = detail::ImmediateSlot{};
+    slot.device = reg->device;
+    slot.generation = reg->generation;
+
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = reg->family;
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+    bool ok = vkCreateCommandPool(slot.device, &poolInfo, nullptr, &slot.pool) == VK_SUCCESS;
+    if (ok) {
+        allocInfo.commandPool = slot.pool;
+        ok = vkAllocateCommandBuffers(slot.device, &allocInfo, &slot.cmd) == VK_SUCCESS;
+    }
+    ok = ok && vkCreateFence(slot.device, &fenceInfo, nullptr, &slot.fence) == VK_SUCCESS;
+    if (!ok) {
+        LOG_ERROR("Immediate submit: could not make this thread's command pool, buffer or fence");
+        destroySlotHandles(slot);
+        return nullptr;
+    }
+    if (std::find(reg->slots.begin(), reg->slots.end(), t.slot) == reg->slots.end()) {
+        reg->slots.push_back(t.slot);
+    }
+    // Said as each new thread arrives. It used to warn of a shared fence; now
+    // each has its own, and the count shows how many threads submit at all.
+    if (reg->threads.insert(std::this_thread::get_id()).second && reg->threads.size() > 1) {
+        LOG_WARNING("Immediate submits now come from ", reg->threads.size(),
+                    " threads - each with its own command pool and fence, the queue taken under its lock");
+    }
+    return t.slot;
+}
+
+void VkContext::releaseImmediateSlots() {
+    if (!immRegistry_) return;
+    std::lock_guard<std::mutex> lock(immRegistry_->mutex);
+    for (detail::ImmediateSlot* slot : immRegistry_->slots) destroySlotHandles(*slot);
+    immRegistry_->slots.clear();
+    immRegistry_->device = VK_NULL_HANDLE;
+    ++immRegistry_->generation;
+}
+
+VkCommandBuffer VkContext::beginSingleTimeCommands() {
+    detail::ImmediateSlot* slot = immediateSlot();
+    if (!slot) return VK_NULL_HANDLE;
+    if (slot->open) {
+        // One thread, one immediate buffer: a second begin before the end
+        // resets the first under whoever recorded it.
+        static std::atomic<bool> said{false};
+        if (!said.exchange(true)) {
+            LOG_ERROR("beginSingleTimeCommands: this thread's immediate buffer is already open - the first"
+                      " recording is lost");
+        }
+    }
+    vkResetCommandBuffer(slot->cmd, 0);
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(immCmdBuf_, &beginInfo);
-    checkpoint(immCmdBuf_, "immediate commands");
-
-    return immCmdBuf_;
-}
-
-void VkContext::noteImmediateSubmitThread(const char* who) {
-    static std::mutex seenMutex;
-    static std::set<std::thread::id> seen;
-    const std::thread::id self = std::this_thread::get_id();
-    std::lock_guard<std::mutex> lock(seenMutex);
-    if (seen.insert(self).second && seen.size() > 1) {
-        LOG_WARNING("immFence is now being used from ", seen.size(),
-                    " threads (latest via ", who, ") - it is shared and "
-                    "unguarded, so two of them can reset a fence the other "
-                    "is waiting on");
-    }
+    vkBeginCommandBuffer(slot->cmd, &beginInfo);
+    checkpoint(slot->cmd, "immediate commands");
+    slot->open = true;
+    return slot->cmd;
 }
 
 void VkContext::endSingleTimeCommands(VkCommandBuffer cmd) {
+    detail::ImmediateSlot* slot = t_immediate.slot;
+    if (cmd == VK_NULL_HANDLE || !slot || slot->cmd != cmd || !slot->open) {
+        // The assertion that the buffers are not shared again: an end must
+        // come on the thread that began, with the buffer it was given.
+        static std::atomic<bool> said{false};
+        if (!said.exchange(true)) {
+            LOG_ERROR("endSingleTimeCommands: a command buffer this thread did not begin - nothing submitted."
+                      " Immediate submit resources are per thread; one crossed threads.");
+        }
+        return;
+    }
+    slot->open = false;
     vkEndCommandBuffer(cmd);
 
     VkSubmitInfo submitInfo{};
@@ -3711,24 +3861,10 @@ void VkContext::endSingleTimeCommands(VkCommandBuffer cmd) {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
 
-    // immFence and the immediate command pool are shared and unguarded. If two
-    // threads reach here at once, one resets a fence the other is waiting on -
-    // which is what validation reports as VUID-vkResetFences-pFences-01123,
-    // and the driver answers by losing the device. Said once per thread so a
-    // log shows whether that is happening.
-    noteImmediateSubmitThread("endSingleTimeCommands");
-
     // Checked, because this is where the first sign of trouble goes missing.
-    //
-    // A log of a lost device begins with validation complaining that immFence
-    // is being reset while still in use - which is what happens *after* a wait
-    // that returned an error rather than waiting. The submit and the wait were
-    // both unchecked, so whatever actually went wrong left no line at all and
-    // the reset took the blame for it.
-    //
-    // Said once. If the device is gone, every subsequent call fails the same
+    // Said once: if the device is gone, every subsequent call fails the same
     // way and a log full of it buries the first one.
-    static bool reported = false;
+    static std::atomic<bool> reported{false};
     // A whole GPU round trip, synchronously. On the main thread it is frame
     // time spent waiting on the GPU like the frame fence is; anywhere else it
     // is only that thread's.
@@ -3738,35 +3874,38 @@ void VkContext::endSingleTimeCommands(VkCommandBuffer cmd) {
         if (onMain) immScope.emplace("wait: immediate submit (sync upload)", core::ProfileKind::Wait);
         else immScope.emplace("immediate submit (sync upload)", core::ProfileKind::Background);
     }
-    const VkResult submitted = vkQueueSubmit(graphicsQueue, 1, &submitInfo, immFence);
-    if (submitted != VK_SUCCESS && !reported) {
-        reported = true;
+    const VkResult submitted = queueSubmit(graphicsQueue, 1, &submitInfo, slot->fence);
+    if (submitted != VK_SUCCESS && !reported.exchange(true)) {
         LOG_ERROR("immediate submit failed: ", static_cast<int>(submitted),
                   " - this is the first failure, whatever follows is its wake");
     }
-    const VkResult waited = vkWaitForFences(device, 1, &immFence, VK_TRUE, UINT64_MAX);
+    // Not waited on when the submit did not go in: the fence would never
+    // signal.
+    const VkResult waited = submitted == VK_SUCCESS
+        ? vkWaitForFences(device, 1, &slot->fence, VK_TRUE, UINT64_MAX)
+        : submitted;
     immScope.reset();
-    if (waited != VK_SUCCESS && !reported) {
-        reported = true;
+    if (waited != VK_SUCCESS && submitted == VK_SUCCESS && !reported.exchange(true)) {
         LOG_ERROR("immediate wait failed: ", static_cast<int>(waited),
-                  " (VK_ERROR_DEVICE_LOST is -4) - the fence is not signalled,"
-                  " so the reset below is the symptom rather than the cause");
+                  " (VK_ERROR_DEVICE_LOST is -4)");
     }
     noteDeviceLost("immediate submit", submitted);
     noteDeviceLost("immediate wait", waited);
-    vkResetFences(device, 1, &immFence);
-    // Buffer stays allocated; it will be reset on the next beginSingleTimeCommands.
+    vkResetFences(device, 1, &slot->fence);
+    // The buffer stays allocated; the next beginSingleTimeCommands resets it.
 }
 
 void VkContext::immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function) {
-    if (inUploadBatch_) {
-        // Record into the batch command buffer - no submit, no fence wait.
-        // Opened on demand, so a batch nothing writes to costs nothing.
+    if (isInUploadBatch()) {
+        // Record into this thread's batch command buffer - no submit, no
+        // fence wait. Opened on demand, so a batch nothing writes to costs
+        // nothing.
         ensureBatchCmd();
         if (batchCmd_ != VK_NULL_HANDLE) function(batchCmd_);
         return;
     }
     VkCommandBuffer cmd = beginSingleTimeCommands();
+    if (cmd == VK_NULL_HANDLE) return;
     function(cmd);
     endSingleTimeCommands(cmd);
 }
@@ -3790,6 +3929,19 @@ void VkContext::beginUploadBatch() {
     }();
     if (noBatch) return;
 
+    // One thread's batch at a time. Another thread that opens one meanwhile
+    // gets none: its uploads go through its own immediate path, and its end
+    // calls are matched off against these begins rather than ending the
+    // owner's batch. Recording into one command buffer from two threads, as
+    // nesting into whoever's batch was open used to, is not allowed.
+    const std::thread::id self = std::this_thread::get_id();
+    if (batchOwner_.load() != self) {
+        std::thread::id none{};
+        if (!batchOwner_.compare_exchange_strong(none, self)) {
+            ++t_foreignBatchDepth;
+            return;
+        }
+    }
     uploadBatchDepth_++;
     if (inUploadBatch_) return; // already in a batch (nested call)
     inUploadBatch_ = true;
@@ -3805,17 +3957,38 @@ void VkContext::beginUploadBatch() {
 
 /// Opens the batch's command buffer if nothing has recorded into one yet.
 void VkContext::ensureBatchCmd() {
+    if (batchOwner_.load() != std::this_thread::get_id()) {
+        // Never by construction (immediateSubmit asks isInUploadBatch); said,
+        // so that a path recording into another thread's batch shows itself.
+        static std::atomic<bool> said{false};
+        if (!said.exchange(true)) {
+            LOG_ERROR("Upload batch: a thread that does not own the open batch tried to record into it"
+                      " - refused, nothing recorded");
+        }
+        return;
+    }
     if (batchCmd_ != VK_NULL_HANDLE) return;
-    // From the transfer pool where there is one, otherwise the immediate pool.
-    VkCommandPool pool = hasDedicatedTransfer_ ? transferCommandPool_ : immCommandPool;
+    // A pool of the batch's own, gone with it. A shared one was recorded into
+    // by the batch's thread while another freed retired batches from it, and
+    // a command pool is externally synchronised like a queue.
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    poolInfo.queueFamilyIndex = graphicsQueueFamily;
+    if (vkCreateCommandPool(device, &poolInfo, nullptr, &batchPool_) != VK_SUCCESS) {
+        batchPool_ = VK_NULL_HANDLE;
+        return;
+    }
 
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.commandPool = pool;
+    allocInfo.commandPool = batchPool_;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = 1;
     if (vkAllocateCommandBuffers(device, &allocInfo, &batchCmd_) != VK_SUCCESS) {
         batchCmd_ = VK_NULL_HANDLE;
+        vkDestroyCommandPool(device, batchPool_, nullptr);
+        batchPool_ = VK_NULL_HANDLE;
         return;
     }
 
@@ -3827,11 +4000,8 @@ void VkContext::ensureBatchCmd() {
 }
 
 void VkContext::endUploadBatch() {
-    if (uploadBatchDepth_ <= 0) return;
-    uploadBatchDepth_--;
-    if (uploadBatchDepth_ > 0) return; // still inside an outer batch
-
-    inUploadBatch_ = false;
+    if (!endsOwnBatch()) return;
+    BatchRelease release{this};
 
     // Nothing ever recorded, so there is nothing to end, submit or free.
     if (batchCmd_ == VK_NULL_HANDLE) {
@@ -3840,14 +4010,12 @@ void VkContext::endUploadBatch() {
         return;
     }
 
-    VkCommandPool pool = hasDedicatedTransfer_ ? transferCommandPool_ : immCommandPool;
-
     // Nothing is submitted to a lost device: its fence would never signal, so
     // the batch would sit in inFlightBatches_ until the rebuild with its
     // staging held. Dropped instead; what it carried is uploaded again by the
     // world reload after the rebuild.
     if (deviceLost_) {
-        dropUploadBatch(pool);
+        dropUploadBatch();
         return;
     }
 
@@ -3858,8 +4026,7 @@ void VkContext::endUploadBatch() {
     if (batchStagingBuffers_.empty() && batchRawStaging_.empty()) {
         // No GPU copies were recorded - skip the submit entirely.
         vkEndCommandBuffer(batchCmd_);
-        vkFreeCommandBuffers(device, pool, 1, &batchCmd_);
-        batchCmd_ = VK_NULL_HANDLE;
+        destroyBatchPool();
         return;
     }
 
@@ -3901,7 +4068,7 @@ void VkContext::endUploadBatch() {
         return v && *v && *v != '0';
     }();
     VkQueue targetQueue = (hasDedicatedTransfer_ && asyncUploadQueue) ? transferQueue_ : graphicsQueue;
-    noteDeviceLost("async upload batch submit", vkQueueSubmit(targetQueue, 1, &submitInfo, fence));
+    noteDeviceLost("async upload batch submit", queueSubmit(targetQueue, 1, &submitInfo, fence));
 
     // Said once, with the handle, because these are the only fences created
     // after startup - so a validation message naming a high handle is one of
@@ -3917,22 +4084,23 @@ void VkContext::endUploadBatch() {
     // Stash everything for later cleanup when fence signals
     InFlightBatch batch;
     batch.fence = fence;
-    batch.cmd = batchCmd_;
+    batch.pool = batchPool_;
     batch.stagingBuffers = std::move(batchStagingBuffers_);
     batch.rawStaging = std::move(batchRawStaging_);
-    inFlightBatches_.push_back(std::move(batch));
+    {
+        std::lock_guard<std::mutex> lock(inFlightMutex_);
+        inFlightBatches_.push_back(std::move(batch));
+    }
 
     batchCmd_ = VK_NULL_HANDLE;
+    batchPool_ = VK_NULL_HANDLE;
     batchStagingBuffers_.clear();
     batchRawStaging_.clear();
 }
 
 void VkContext::endUploadBatchSync() {
-    if (uploadBatchDepth_ <= 0) return;
-    uploadBatchDepth_--;
-    if (uploadBatchDepth_ > 0) return;
-
-    inUploadBatch_ = false;
+    if (!endsOwnBatch()) return;
+    BatchRelease release{this};
 
     // Nothing ever recorded, so there is nothing to end, submit or free.
     if (batchCmd_ == VK_NULL_HANDLE) {
@@ -3941,18 +4109,15 @@ void VkContext::endUploadBatchSync() {
         return;
     }
 
-    VkCommandPool pool = hasDedicatedTransfer_ ? transferCommandPool_ : immCommandPool;
-
     // As endUploadBatch: nothing goes to a lost device, and nothing waits on it.
     if (deviceLost_) {
-        dropUploadBatch(pool);
+        dropUploadBatch();
         return;
     }
 
     if (batchStagingBuffers_.empty() && batchRawStaging_.empty()) {
         vkEndCommandBuffer(batchCmd_);
-        vkFreeCommandBuffers(device, pool, 1, &batchCmd_);
-        batchCmd_ = VK_NULL_HANDLE;
+        destroyBatchPool();
         return;
     }
 
@@ -3987,39 +4152,28 @@ void VkContext::endUploadBatchSync() {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &batchCmd_;
 
-    // Its own fence, not the shared immediate one.
-    //
-    // immFence is also used by endSingleTimeCommands, which submits on the
-    // graphics queue while this submits on the transfer queue when there is
-    // one. Validation reports that fence - 0x170000000017, named at creation
-    // - being reset while still in use, repeatedly, just before the device is
-    // lost. Two queues signalling one fence is the fragility whatever the
-    // exact interleaving; a fence per submit has no such question about it.
-    //
-    // FrameXML is what makes this reachable: it uploads hundreds of textures
-    // through here, where this client alone uploads a handful.
+    // A fence of its own. One shared with the immediate submits was reset
+    // by one submitter while another waited on it (validation named it,
+    // repeatedly, just before devices were lost); a fence per submit has no
+    // such question about it.
     VkFenceCreateInfo batchFenceInfo{};
     batchFenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     VkFence batchFence = VK_NULL_HANDLE;
     if (vkCreateFence(device, &batchFenceInfo, nullptr, &batchFence) != VK_SUCCESS) {
-        LOG_ERROR("Could not create an upload fence; falling back to the shared one");
-        batchFence = immFence;
+        LOG_ERROR("Could not create an upload fence; the batch is dropped");
+        dropUploadBatch();
+        return;
     }
 
     // Both checked. These were the only unchecked waits between a world load
     // and the first frame's submit, so a device lost in one of them was first
     // reported by that submit, one stage later and with no name attached.
-    noteDeviceLost("sync upload batch submit", vkQueueSubmit(targetQueue, 1, &submitInfo, batchFence));
+    noteDeviceLost("sync upload batch submit", queueSubmit(targetQueue, 1, &submitInfo, batchFence));
     noteDeviceLost("sync upload batch wait",
                    vkWaitForFences(device, 1, &batchFence, VK_TRUE, UINT64_MAX));
-    if (batchFence != immFence) {
-        vkDestroyFence(device, batchFence, nullptr);
-    } else {
-        vkResetFences(device, 1, &immFence);
-    }
+    vkDestroyFence(device, batchFence, nullptr);
 
-    vkFreeCommandBuffers(device, pool, 1, &batchCmd_);
-    batchCmd_ = VK_NULL_HANDLE;
+    destroyBatchPool();
 
     for (auto& staging : batchStagingBuffers_) {
         destroyBuffer(allocator, staging);
@@ -4030,56 +4184,59 @@ void VkContext::endUploadBatchSync() {
 }
 
 void VkContext::pollUploadBatches() {
-    if (inFlightBatches_.empty()) return;
-
-    VkCommandPool pool = hasDedicatedTransfer_ ? transferCommandPool_ : immCommandPool;
-
-    for (auto it = inFlightBatches_.begin(); it != inFlightBatches_.end(); ) {
-        VkResult result = vkGetFenceStatus(device, it->fence);
-        if (result == VK_SUCCESS) {
-            // GPU finished - free resources
-            for (auto& raw : it->rawStaging) {
-                vkDestroyBuffer(device, raw.buffer, nullptr);
-                vkFreeMemory(device, raw.memory, nullptr);
+    // Asked from more than one thread (the renderer's update and the terrain
+    // streamer), while the batches' own threads add to the list.
+    std::vector<InFlightBatch> done;
+    {
+        std::lock_guard<std::mutex> lock(inFlightMutex_);
+        if (inFlightBatches_.empty()) return;
+        for (auto it = inFlightBatches_.begin(); it != inFlightBatches_.end(); ) {
+            VkResult result = vkGetFenceStatus(device, it->fence);
+            if (result == VK_SUCCESS) {
+                done.push_back(std::move(*it));
+                it = inFlightBatches_.erase(it);
+            } else {
+                // VK_NOT_READY is the ordinary answer. Anything else is the device
+                // saying so through a fence nobody was going to wait on.
+                if (result != VK_NOT_READY) noteDeviceLost("upload batch fence status", result);
+                ++it;
             }
-            for (auto& staging : it->stagingBuffers) {
-                destroyBuffer(allocator, staging);
-            }
-            vkFreeCommandBuffers(device, pool, 1, &it->cmd);
-            vkDestroyFence(device, it->fence, nullptr);
-            it = inFlightBatches_.erase(it);
-            ++batchesRetired_;
-        } else {
-            // VK_NOT_READY is the ordinary answer. Anything else is the device
-            // saying so through a fence nobody was going to wait on.
-            if (result != VK_NOT_READY) noteDeviceLost("upload batch fence status", result);
-            ++it;
         }
     }
+    // GPU finished - free resources, outside the lock.
+    for (InFlightBatch& batch : done) retireBatch(batch);
+}
+
+void VkContext::retireBatch(InFlightBatch& batch) {
+    for (auto& raw : batch.rawStaging) {
+        vkDestroyBuffer(device, raw.buffer, nullptr);
+        vkFreeMemory(device, raw.memory, nullptr);
+    }
+    for (auto& staging : batch.stagingBuffers) {
+        destroyBuffer(allocator, staging);
+    }
+    // The batch's command buffer goes with its pool.
+    if (batch.pool) vkDestroyCommandPool(device, batch.pool, nullptr);
+    vkDestroyFence(device, batch.fence, nullptr);
+    batch = InFlightBatch{};
+    ++batchesRetired_;
 }
 
 void VkContext::waitAllUploads() {
-    VkCommandPool pool = hasDedicatedTransfer_ ? transferCommandPool_ : immCommandPool;
-
-    for (auto& batch : inFlightBatches_) {
+    std::vector<InFlightBatch> all;
+    {
+        std::lock_guard<std::mutex> lock(inFlightMutex_);
+        all.swap(inFlightBatches_);
+    }
+    for (auto& batch : all) {
         noteDeviceLost("waitAllUploads",
                        vkWaitForFences(device, 1, &batch.fence, VK_TRUE, UINT64_MAX));
-        for (auto& raw : batch.rawStaging) {
-            vkDestroyBuffer(device, raw.buffer, nullptr);
-            vkFreeMemory(device, raw.memory, nullptr);
-        }
-        for (auto& staging : batch.stagingBuffers) {
-            destroyBuffer(allocator, staging);
-        }
-        vkFreeCommandBuffers(device, pool, 1, &batch.cmd);
-        vkDestroyFence(device, batch.fence, nullptr);
-        // Counted, because the rebuild warning reports submitted against
-        // retired and this path used to clear the list without saying so. It
-        // read as a hundred and thirty-seven batches outstanding while one was,
-        // which is a number that invites exactly the wrong conclusion.
-        ++batchesRetired_;
+        // Counted (retireBatch), because the rebuild warning reports submitted
+        // against retired and this path used to clear the list without saying
+        // so. It read as a hundred and thirty-seven batches outstanding while
+        // one was, which is a number that invites exactly the wrong conclusion.
+        retireBatch(batch);
     }
-    inFlightBatches_.clear();
 }
 
 std::string VkContext::dumpAllocatorJson() const {
@@ -4105,13 +4262,16 @@ VkContext::UploadStats VkContext::uploadStats() const {
         s.stagingBytes += b.info.size;
         ++s.stagingBuffers;
     }
-    for (const auto& batch : inFlightBatches_) {
-        for (const auto& b : batch.stagingBuffers) {
-            s.stagingBytes += b.info.size;
-            ++s.stagingBuffers;
+    {
+        std::lock_guard<std::mutex> lock(inFlightMutex_);
+        for (const auto& batch : inFlightBatches_) {
+            for (const auto& b : batch.stagingBuffers) {
+                s.stagingBytes += b.info.size;
+                ++s.stagingBuffers;
+            }
         }
+        s.batchesInFlight = inFlightBatches_.size();
     }
-    s.batchesInFlight = inFlightBatches_.size();
     for (const auto& q : deferredCleanup_) s.deferredCleanups += q.size();
     return s;
 }
@@ -4124,15 +4284,38 @@ void VkContext::deferRawStagingCleanup(VkBuffer buffer, VkDeviceMemory memory) {
     batchRawStaging_.push_back({.buffer = buffer, .memory = memory});
 }
 
-void VkContext::dropUploadBatch(VkCommandPool pool) {
+void VkContext::dropUploadBatch() {
     vkEndCommandBuffer(batchCmd_);
-    vkFreeCommandBuffers(device, pool, 1, &batchCmd_);
-    batchCmd_ = VK_NULL_HANDLE;
+    destroyBatchPool();
     for (auto& staging : batchStagingBuffers_) {
         destroyBuffer(allocator, staging);
     }
     batchStagingBuffers_.clear();
     freeRawStaging();
+}
+
+void VkContext::destroyBatchPool() {
+    // Frees the batch's command buffer with it.
+    if (batchPool_) vkDestroyCommandPool(device, batchPool_, nullptr);
+    batchPool_ = VK_NULL_HANDLE;
+    batchCmd_ = VK_NULL_HANDLE;
+}
+
+bool VkContext::endsOwnBatch() {
+    if (batchOwner_.load() != std::this_thread::get_id()) {
+        // The end of a begin that found another thread's batch open.
+        if (t_foreignBatchDepth > 0) --t_foreignBatchDepth;
+        return false;
+    }
+    if (uploadBatchDepth_ <= 0) return false;
+    uploadBatchDepth_--;
+    if (uploadBatchDepth_ > 0) return false;  // still inside an outer batch
+    inUploadBatch_ = false;
+    return true;
+}
+
+bool VkContext::isInUploadBatch() const {
+    return inUploadBatch_ && batchOwner_.load() == std::this_thread::get_id();
 }
 
 void VkContext::freeRawStaging() {

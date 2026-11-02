@@ -385,7 +385,7 @@ bool VolumetricFog::applyPendingQuality() {
 
     // The volumes are bound in both frame slots' per-frame sets, and one of
     // those may still be in flight.
-    vkDeviceWaitIdle(ctx_->getDevice());
+    ::wowee::rendering::deviceWaitIdle(ctx_->getDevice());
     const bool wasOn = volumesReady_;
     destroyVolumes();
 
@@ -528,7 +528,7 @@ void VolumetricFog::record(VkCommandBuffer cmd, uint32_t frame, VkDescriptorSet 
 void VolumetricFog::shutdown() {
     if (!ctx_) return;
     VkDevice device = ctx_->getDevice();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     destroyVolumes();
     destroyVolume(neutral_);

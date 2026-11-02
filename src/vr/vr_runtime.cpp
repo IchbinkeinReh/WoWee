@@ -740,7 +740,7 @@ void Runtime::shutdown() {
     Impl& m = *impl_;
     if (!m.vk) return;
     rendering::VkContext& vk = *m.vk;
-    if (vk.getDevice()) vkDeviceWaitIdle(vk.getDevice());
+    if (vk.getDevice()) ::wowee::rendering::deviceWaitIdle(vk.getDevice());
     m.releaseAll();
     m.destroyMirror();
     m.destroyUiImage();
@@ -764,7 +764,11 @@ void Runtime::shutdown() {
             XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO};
             ei.displayTime = m.frameState.predictedDisplayTime;
             ei.environmentBlendMode = m.blendMode;
-            xrEndFrame(m.session, &ei);
+            {
+                // The runtime submits to the app's queue inside xrEndFrame.
+                const std::lock_guard<std::mutex> lock{rendering::queueAccessMutex()};
+                xrEndFrame(m.session, &ei);
+            }
             m.frameBegun = false;
         }
         xrDestroySession(m.session);
@@ -799,7 +803,10 @@ void Runtime::Impl::pollEvents() {
                         XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO};
                         ei.displayTime = frameState.predictedDisplayTime;
                         ei.environmentBlendMode = blendMode;
-                        xrEndFrame(session, &ei);
+                        {
+                            const std::lock_guard<std::mutex> lock{rendering::queueAccessMutex()};
+                            xrEndFrame(session, &ei);
+                        }
                         frameBegun = false;
                     }
                     xrEndSession(session);
@@ -1228,7 +1235,7 @@ bool Runtime::Impl::ensureUiImage(SDL_Window*) {
         return true;
     }
     // A new size (the window was resized): everything made again.
-    vkDeviceWaitIdle(vk->getDevice());
+    ::wowee::rendering::deviceWaitIdle(vk->getDevice());
     destroyUiImage();
     if (!createOwnImage(*vk, vk->getSwapchainFormat(), uiExtent,
                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, ui)) {
@@ -1296,7 +1303,10 @@ void Runtime::Impl::recordUi(VkCommandBuffer cmd) {
     VkRect2D sc{{0, 0}, uiExtent};
     vkCmdSetScissor(cmd, 0, 1, &sc);
     if (underlay) underlay(cmd);
-    if (draw && draw->Valid) ImGui_ImplVulkan_RenderDrawData(draw, cmd);
+    if (draw && draw->Valid) {
+        rendering::updateImGuiTextures(draw);
+        ImGui_ImplVulkan_RenderDrawData(draw, cmd);
+    }
     vkCmdEndRenderPass(cmd);
     // The pass leaves it ready to present; it is copied instead.
     imageBarrier(cmd, ui.image, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -1449,6 +1459,8 @@ void Runtime::endFrame() {
     ei.environmentBlendMode = m.blendMode;
     ei.layerCount = static_cast<uint32_t>(layers.size());
     ei.layers = layers.data();
+    // The runtime submits to the app's queue inside xrEndFrame.
+    const std::lock_guard<std::mutex> lock{rendering::queueAccessMutex()};
     xrOk(xrEndFrame(m.session, &ei), "xrEndFrame");
 }
 
@@ -1465,7 +1477,7 @@ bool Runtime::Impl::rebuildMirror() {
     VkSurfaceCapabilitiesKHR caps{};
     if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk->getPhysicalDevice(), surface, &caps) != VK_SUCCESS) return false;
     if (caps.currentExtent.width == 0 || caps.currentExtent.height == 0) return false;  // minimised
-    vkDeviceWaitIdle(vk->getDevice());
+    ::wowee::rendering::deviceWaitIdle(vk->getDevice());
     destroyMirror();
     uint32_t fmtCount = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(vk->getPhysicalDevice(), surface, &fmtCount, nullptr);

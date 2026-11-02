@@ -682,7 +682,7 @@ void Weather::shutdown() {
     if (!vkCtx_) return;
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator allocator = vkCtx_->getAllocator();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
     auto release = [&](std::unique_ptr<Packet>& p) {
         destroy(allocator, p->buffer, p->allocation);
         destroy(allocator, p->splashBuffer, p->splashAllocation);

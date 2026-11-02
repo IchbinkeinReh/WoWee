@@ -277,7 +277,7 @@ void ScreenCapture::drawIndicator(VkCommandBuffer cmd, VkFramebuffer overlayFram
 void ScreenCapture::shutdown() {
     if (!ctx_) return;
     VkDevice device = ctx_->getDevice();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
     VmaAllocator allocator = ctx_->getAllocator();
     for (auto& b : buffers_) {
         destroy(allocator, b.buffer, b.alloc);

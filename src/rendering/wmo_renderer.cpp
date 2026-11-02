@@ -372,7 +372,7 @@ void WMORenderer::shutdown() {
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator allocator = vkCtx_->getAllocator();
 
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     // Free all GPU resources for loaded models
     for (auto& [id, model] : loadedModels) {
@@ -1413,7 +1413,7 @@ void WMORenderer::clearAll() {
     if (vkCtx_) {
         VkDevice device = vkCtx_->getDevice();
         VmaAllocator allocator = vkCtx_->getAllocator();
-        vkDeviceWaitIdle(device);
+        ::wowee::rendering::deviceWaitIdle(device);
 
         // Free GPU resources for loaded models
         for (auto& [id, model] : loadedModels) {

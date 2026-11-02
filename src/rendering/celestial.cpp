@@ -271,7 +271,7 @@ void Celestial::destroyTextures() {
 void Celestial::loadTextures(pipeline::AssetManager* assetManager) {
     if (!vkCtx_ || !assetManager || texSetLayout_ == VK_NULL_HANDLE) return;
     VkDevice device = vkCtx_->getDevice();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
     destroyTextures();
 
     VkDescriptorPoolSize poolSize{};

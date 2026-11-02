@@ -325,7 +325,7 @@ void Minimap::shutdown() {
     VkDevice device = vkCtx->getDevice();
     VmaAllocator alloc = vkCtx->getAllocator();
 
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     destroy(device, tilePipeline);
     destroy(device, displayPipeline);
@@ -567,7 +567,7 @@ void Minimap::loadMask() {
     }
     // Last bound by a display draw frames ago; the queue is idle for the
     // upload just made.
-    vkDeviceWaitIdle(vkCtx->getDevice());
+    ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
     VkDescriptorImageInfo info = maskTexture_->descriptorInfo();
     VkWriteDescriptorSet w{};
     w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

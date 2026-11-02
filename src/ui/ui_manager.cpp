@@ -404,7 +404,7 @@ void UIManager::shutdown() {
     if (imguiInitialized) {
         auto* vkCtx = window ? window->getVkContext() : nullptr;
         if (vkCtx && vkCtx->getDevice() != VK_NULL_HANDLE) {
-            vkDeviceWaitIdle(vkCtx->getDevice());
+            ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
         }
 
         // Already gone when a rebuild after a lost device did not come back.

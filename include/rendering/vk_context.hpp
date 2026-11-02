@@ -14,9 +14,34 @@
 #include <cstdint>
 #include <unordered_map>
 #include <mutex>
+#include <atomic>
+#include <memory>
+#include <thread>
+
+struct ImDrawData;
 
 namespace wowee {
 namespace rendering {
+
+// Queue access. A VkQueue is externally synchronised, and vkDeviceWaitIdle
+// counts as access to every queue of the device: these take one process-wide
+// lock around the call alone, so the main thread's frame and the other
+// threads' uploads never enter a queue together. Anything that submits,
+// presents or waits a queue or the device idle goes through them.
+std::mutex& queueAccessMutex();
+VkResult queueSubmit(VkQueue queue, uint32_t count, const VkSubmitInfo* submits, VkFence fence);
+VkResult queuePresent(VkQueue queue, const VkPresentInfoKHR* info);
+VkResult deviceWaitIdle(VkDevice device);
+/// ImGui's pending texture uploads for this draw data, each under the queue
+/// lock - called before ImGui_ImplVulkan_RenderDrawData, which would
+/// otherwise submit them itself, unlocked.
+void updateImGuiTextures(ImDrawData* drawData);
+
+namespace detail {
+struct ImmediateSlot;
+struct ImmediateRegistry;
+}  // namespace detail
+
 
 static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -55,9 +80,6 @@ public:
     /// Waits for the device, signals every fence, and starts again at slot
     /// zero. Only safe between frames, which is where the rebuild happens.
     void resetFrameSyncState();
-    /// Says once when the shared immediate-submit fence is reached from more
-    /// than one thread, which is unsafe and matches what validation reports.
-    void noteImmediateSubmitThread(const char* who);
 
     /// Which incarnation of the UI textures is current. Anything holding a
     /// descriptor set from uploadImGuiTexture caches this alongside it and
@@ -183,7 +205,9 @@ public:
     void ensureBatchCmd();
     void endUploadBatch();       // Async: submits but does NOT wait for fence
     void endUploadBatchSync();   // Sync: submits and waits (for load screens)
-    [[nodiscard]] bool isInUploadBatch() const { return inUploadBatch_; }
+    /// Whether an upload batch is open on the calling thread: only the thread
+    /// that opened one records into it.
+    [[nodiscard]] bool isInUploadBatch() const;
     /// Hands a plainly-allocated staging buffer to the current batch, which
     /// frees it once its copies have actually run.
     void deferRawStagingCleanup(VkBuffer buffer, VkDeviceMemory memory);
@@ -542,7 +566,6 @@ private:
 
     // Dedicated transfer queue (second queue from same graphics family)
     VkQueue transferQueue_ = VK_NULL_HANDLE;
-    VkCommandPool transferCommandPool_ = VK_NULL_HANDLE;
     bool hasDedicatedTransfer_ = false;
     uint32_t graphicsQueueFamilyQueueCount_ = 1; // queried in selectPhysicalDevice
 
@@ -640,22 +663,35 @@ private:
     VkSemaphore nextAcquireSemaphore_ = VK_NULL_HANDLE;  // free semaphore for next acquire
     VkSemaphore currentAcquireSemaphore_ = VK_NULL_HANDLE; // the one used for the current frame
 
-    // Immediate submit resources
-    VkCommandPool immCommandPool = VK_NULL_HANDLE;
-    VkFence immFence = VK_NULL_HANDLE;
-    // Cached, reusable cmd buffer for beginSingleTimeCommands. Pool was created
-    // with RESET_COMMAND_BUFFER_BIT so we can reset and reuse instead of
-    // round-tripping through vkAllocateCommandBuffers + vkFreeCommandBuffers
-    // every immediate submit (the M2 frustum-cull dispatch fires this per frame).
-    VkCommandBuffer immCmdBuf_ = VK_NULL_HANDLE;
+    // Immediate submit resources: a command pool, buffer and fence per
+    // thread (detail::ImmediateSlot, made on first use), listed here so the
+    // device's teardown can destroy them all.
+    std::shared_ptr<detail::ImmediateRegistry> immRegistry_;
+    detail::ImmediateSlot* immediateSlot();
+    void releaseImmediateSlots();
 
     /// Ends and frees the open batch's command buffer and staging without
     /// submitting it: the end of a batch recorded against a lost device.
-    void dropUploadBatch(VkCommandPool pool);
+    void dropUploadBatch();
+    /// Destroys the open batch's pool, and its command buffer with it.
+    void destroyBatchPool();
+    /// The end of an upload batch on the calling thread: true when it closes
+    /// the batch this thread owns, false for an inner end or for the end of a
+    /// begin that found another thread's batch open.
+    bool endsOwnBatch();
+    /// Gives the batch up at the end of its last end call, whichever way that
+    /// returns.
+    struct BatchRelease {
+        VkContext* ctx;
+        ~BatchRelease() { ctx->batchOwner_.store(std::thread::id{}); }
+    };
 
-    // Batch upload state (nesting-safe via depth counter)
+    // Batch upload state (nesting-safe via depth counter). Touched only by
+    // the thread in batchOwner_.
     int uploadBatchDepth_ = 0;
     bool inUploadBatch_ = false;
+    std::atomic<std::thread::id> batchOwner_{};
+    VkCommandPool batchPool_ = VK_NULL_HANDLE;
     VkCommandBuffer batchCmd_ = VK_NULL_HANDLE;
     std::vector<AllocatedBuffer> batchStagingBuffers_;
     /// Staging allocated with plain Vulkan calls rather than the allocator.
@@ -667,13 +703,18 @@ private:
     // Async upload: in-flight batches awaiting GPU completion
     struct InFlightBatch {
         VkFence fence = VK_NULL_HANDLE;
-        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        /// The batch's own pool; its command buffer goes with it.
+        VkCommandPool pool = VK_NULL_HANDLE;
         std::vector<AllocatedBuffer> stagingBuffers;
         /// Plainly-allocated staging, which has to outlive the submit just as
         /// the allocator's does.
         std::vector<RawStaging> rawStaging;
     };
     std::vector<InFlightBatch> inFlightBatches_;
+    /// Guards inFlightBatches_: added to by a batch's thread, retired by
+    /// whichever thread polls.
+    mutable std::mutex inFlightMutex_;
+    void retireBatch(InFlightBatch& batch);
 
     void runDeferredCleanup(uint32_t frameIndex);
 public:

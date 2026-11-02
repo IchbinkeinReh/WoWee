@@ -3798,7 +3798,7 @@ void Application::performLogoutToLogin() {
 
     if (renderer && renderer->getVkContext() && !renderer->getVkContext()->isDeviceLost()) {
         LOG_DEBUG("Waiting for GPU idle before logout scene cleanup...");
-        vkDeviceWaitIdle(renderer->getVkContext()->getDevice());
+        ::wowee::rendering::deviceWaitIdle(renderer->getVkContext()->getDevice());
     }
 
     // --- Reset all EntitySpawner state (mount, creatures, players, GOs, queues, caches) ---

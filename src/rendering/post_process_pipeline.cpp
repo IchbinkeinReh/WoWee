@@ -777,7 +777,7 @@ void PostProcessPipeline::destroyFSRResources() {
 
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator alloc = vkCtx_->getAllocator();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     destroy(device, fsr_.pipeline);
     destroy(device, fsr_.pipelineLayout);
@@ -1328,7 +1328,7 @@ void PostProcessPipeline::destroyFSR2Resources() {
 
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator alloc = vkCtx_->getAllocator();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
 #if WOWEE_HAS_AMD_FSR2
     if (fsr2_.useAmdBackend) {
@@ -1877,7 +1877,7 @@ void PostProcessPipeline::destroyFXAAResources() {
     ++targetsGeneration_;
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator alloc = vkCtx_->getAllocator();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
 
     destroy(device, fxaa_.pipeline);
     destroy(device, fxaa_.pipelineLayout);

@@ -157,7 +157,7 @@ void BlobShadowRenderer::shutdown() {
     if (!vkCtx_) return;
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator allocator = vkCtx_->getAllocator();
-    vkDeviceWaitIdle(device);
+    ::wowee::rendering::deviceWaitIdle(device);
     for (uint32_t f = 0; f < MAX_FRAMES_IN_FLIGHT; ++f) {
         destroy(allocator, vertexBuffer_[f], vertexAlloc_[f]);
         vertexMapped_[f] = nullptr;

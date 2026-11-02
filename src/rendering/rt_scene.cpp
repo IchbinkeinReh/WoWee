@@ -225,7 +225,7 @@ void RtScene::shutdown() {
     if (!ctx_) return;
     VkDevice dev = ctx_->getDevice();
     VmaAllocator alloc = ctx_->getAllocator();
-    vkDeviceWaitIdle(dev);
+    ::wowee::rendering::deviceWaitIdle(dev);
     alive_.reset();
 
     for (auto& m : meshes_) destroyMeshGpu(m);

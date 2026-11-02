@@ -102,7 +102,7 @@ void LoadingScreen::shutdown() {
     }
     if (!vkCtx) return;
     if (!picture_.image && !bar_[0].image && !bar_[1].image) return;
-    vkDeviceWaitIdle(vkCtx->getDevice());
+    ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
     release(picture_);
     for (Texture& tex : bar_) release(tex);
 }
@@ -130,7 +130,7 @@ bool LoadingScreen::loadTexture(pipeline::AssetManager* assets, const std::strin
         return false;
     }
     if (out.image) {
-        vkDeviceWaitIdle(vkCtx->getDevice());
+        ::wowee::rendering::deviceWaitIdle(vkCtx->getDevice());
         release(out);
     }
     return upload(image.data.data(), image.width, image.height, out);
@@ -389,6 +389,7 @@ void LoadingScreen::render() {
                 rpInfo.renderPass != VK_NULL_HANDLE &&
                 imageIndex < vkCtx->getOverlayFramebuffers().size();
             if (overlayReady) {
+                updateImGuiTextures(ImGui::GetDrawData());
                 vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
                 ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
                 vkCmdEndRenderPass(cmd);

@@ -218,7 +218,7 @@ void MapWindow::close() {
 
     // Nothing of this window's may still be in flight: its pipelines, its
     // textures and its swapchain images are about to go.
-    if (ctx_ && ctx_->getDevice() != VK_NULL_HANDLE) vkDeviceWaitIdle(ctx_->getDevice());
+    if (ctx_ && ctx_->getDevice() != VK_NULL_HANDLE) ::wowee::rendering::deviceWaitIdle(ctx_->getDevice());
 
     if (imgui_) {
         ImGuiContext* previous = ImGui::GetCurrentContext();
@@ -488,6 +488,7 @@ void MapWindow::record(VkCommandBuffer cmd) {
     map_->compositePass(cmd);
     swapchain_->record(cmd, kBackground, [this](VkCommandBuffer c) {
         ContextScope scope(imgui_);
+        rendering::updateImGuiTextures(ImGui::GetDrawData());
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), c);
     });
 }

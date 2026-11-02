@@ -978,7 +978,7 @@ void M2Renderer::shutdown() {
     LOG_INFO("Shutting down M2 renderer...");
     if (!vkCtx_) return;
 
-    vkDeviceWaitIdle(vkCtx_->getDevice());
+    ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
     VkDevice device = vkCtx_->getDevice();
     VmaAllocator alloc = vkCtx_->getAllocator();
 

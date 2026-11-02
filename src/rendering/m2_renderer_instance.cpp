@@ -792,7 +792,7 @@ void M2Renderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
 
 void M2Renderer::clear() {
     if (vkCtx_) {
-        vkDeviceWaitIdle(vkCtx_->getDevice());
+        ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
         for (auto& [id, model] : models) {
             destroyModelGPU(model);
         }
@@ -880,7 +880,7 @@ void M2Renderer::clear() {
 }
 
 void M2Renderer::clearInstances() {
-    if (vkCtx_) vkDeviceWaitIdle(vkCtx_->getDevice());
+    if (vkCtx_) ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
     for (auto& inst : instances) destroyInstanceBones(inst);
     instances.clear();
     shadowCullDirty_ = true;
@@ -1020,7 +1020,7 @@ void M2Renderer::cleanupUnusedModels() {
     // right after taxi landings - timed here so the next repro pins it down.
     if (!toRemove.empty() && vkCtx_) {
         const auto waitStart = std::chrono::steady_clock::now();
-        vkDeviceWaitIdle(vkCtx_->getDevice());
+        ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
         const float waitMs = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - waitStart).count();
         LOG_DEBUG("M2 cleanup: vkDeviceWaitIdle took ", waitMs, "ms (", toRemove.size(), " models to remove)");
@@ -1052,7 +1052,7 @@ void M2Renderer::unloadModel(uint32_t modelId) {
     shadowCullDirty_ = true;
     auto it = models.find(modelId);
     if (it == models.end()) return;
-    if (vkCtx_) vkDeviceWaitIdle(vkCtx_->getDevice());
+    if (vkCtx_) ::wowee::rendering::deviceWaitIdle(vkCtx_->getDevice());
     destroyModelGPU(it->second);
     models.erase(it);
     modelUnusedSince_.erase(modelId);
