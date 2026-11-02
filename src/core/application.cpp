@@ -2961,6 +2961,10 @@ void Application::releaseGpuForDeviceRebuild() {
     // and the player's position all stay.
     if (mapWindow_) mapWindow_->close();
     difficultyLoadingScreen_.reset();
+    // A loading screen still up over a world settling in holds a picture and
+    // bar made on this device. Kept, the world reload ended it as superseded
+    // and destroyed those on the new device - a crash in the driver.
+    endWorldSettle("device lost");
     ui::gamepadControls().setCameraController(nullptr);
     ui::touchControls().setCameraController(nullptr);
 
