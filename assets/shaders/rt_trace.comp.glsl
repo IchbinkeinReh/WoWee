@@ -123,9 +123,24 @@ const float RT_UNIT_SHADOW_FADE = 0.5;
 // 1.6 times the body's size and fades out beyond, rather than stops at an
 // edge. A unit's own surface never meets its own pieces (its group's box,
 // rtInGroup), which do not hold its skin closely enough to shadow it.
+//
+// Past its default the slider governs this as well: the share of the way to
+// the light grows to RT_UNIT_SHADOW_SHARE_MAX by RT_UNIT_SHADOW_OPEN_REACH
+// yards, and the fade moves from that share to the slider's own end. Near a
+// fire the share was the whole limit - a body two yards from the flames cast
+// a yard-long stub of a shadow whatever the slider said - while the shadow
+// of a body two yards from a light low enough to stand over runs on well
+// past it. At the default the reach is what it was.
+const float RT_UNIT_SHADOW_DEFAULT_REACH = 5.0;
+const float RT_UNIT_SHADOW_OPEN_REACH = 20.0;
+const float RT_UNIT_SHADOW_SHARE_MAX = 0.98;
 float rtUnitShadowReach(float d, inout uint rng) {
-    float reach = min(pass.tune4.z, RT_UNIT_SHADOW_SHARE * d);
-    return reach * mix(RT_UNIT_SHADOW_FADE, 1.0, rtRandom(rng));
+    float slider = pass.tune4.z;
+    float open = clamp((slider - RT_UNIT_SHADOW_DEFAULT_REACH) /
+                       (RT_UNIT_SHADOW_OPEN_REACH - RT_UNIT_SHADOW_DEFAULT_REACH), 0.0, 1.0);
+    float share = mix(RT_UNIT_SHADOW_SHARE, RT_UNIT_SHADOW_SHARE_MAX, open);
+    float fade = mix(RT_UNIT_SHADOW_FADE, 1.0, rtRandom(rng));
+    return min(slider * fade, share * d * mix(fade, 1.0, open));
 }
 
 // How far outside a light's storey a building's baked colour still takes
