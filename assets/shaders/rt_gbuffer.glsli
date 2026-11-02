@@ -239,7 +239,16 @@ vec3 rtFaceBasedNormal(vec3 face, vec3 vertexNormal, vec3 shading) {
 // nothing filled in.
 const float RT_NORMAL_AGREE_NEAR = 0.9659;  // cos 15 degrees
 const float RT_NORMAL_AGREE_FAR = 0.8192;   // cos 35 degrees
+//
+// Only a floor's, though - a face turned up (RT_NORMAL_FLOOR_Z) whose normal
+// leans down from it, toward the walls it was smoothed with, as the
+// barber's floor's does. A wall, a vault or a cave's rock is genuinely
+// curved where its normals lean off its faces: lit by the faces, a low-poly
+// cave (Thunder Bluff's Pools of Vision, its mushrooms' and pool's light)
+// showed its every triangle as a hard facet of light and shade.
+const float RT_NORMAL_FLOOR_Z = 0.7;
 float rtNormalAgreement(vec3 face, vec3 n, vec2 cosines) {
+    if (face.z < RT_NORMAL_FLOOR_Z || n.z >= face.z) return 1.0;
     return smoothstep(cosines.y, cosines.x, dot(face, n));
 }
 
@@ -251,7 +260,17 @@ float rtNormalAgreement(vec3 face, vec3 n, vec2 cosines) {
 // 50 to 65 degrees off). Resolved here, so rt_trace leaves it as it is
 // (rt_prepare marks it). Mirrored in rt_gbuffer_pack.hpp
 // (interiorLampNormal).
+//
+// Off a floor, its own vertex normal (RT_WALL_BUMP_SHARE of its bumps): the traced lamps light the
+// smooth surface (rtNormalAgreement) and rt_trace measures "behind" and "low
+// over it" by this normal, where a low particle light took every bump of a
+// cave wall's normal map turned from it as black (the Pools of Vision).
+const float RT_WALL_BUMP_SHARE = 0.0;
 vec3 rtInteriorLampNormal(vec3 face, vec3 vertexNormal, vec3 shading, vec2 cosines) {
+    if (face.z < RT_NORMAL_FLOOR_Z || vertexNormal.z >= face.z) {
+        vec3 w = vertexNormal + (shading - vertexNormal) * RT_WALL_BUMP_SHARE;
+        return dot(w, w) > 1e-8 ? normalize(w) : face;
+    }
     vec3 byFace = rtFaceBasedNormal(face, vertexNormal, shading);
     vec3 n = mix(byFace, shading, rtNormalAgreement(face, vertexNormal, cosines));
     return dot(n, n) > 1e-8 ? normalize(n) : face;
