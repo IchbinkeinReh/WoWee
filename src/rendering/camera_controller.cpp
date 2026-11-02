@@ -1238,8 +1238,29 @@ CameraController::FloorSample CameraController::sampleFloorUnderFeet(const glm::
         // limit even at the boundary, where isInsideWMO is not reliable yet.
         float minWalkableWmo = (cachedInsideWMO || atTunnelSeam)
             ? MIN_WALKABLE_NORMAL_WMO : MIN_WALKABLE_NORMAL_TERRAIN;
+        // A steep crease between walkable faces is crossed, not fallen
+        // through. Where a deck meets a ramp a strip of triangles can be too
+        // steep to stand on while walkable floor lies a foot either side of
+        // it; dropped, it left no floor at all, the probe found the wall
+        // under it, anchored lower each frame, and Blackrock's bridge let the
+        // player through to the walkway twelve yards below - a little forward
+        // and back over the crease was enough. So a steep face within a step
+        // of the feet still holds them up where walkable floor at that
+        // height is within half a yard of them. A steep face on its own - a
+        // roof, a slanted wall - is still no floor, and a fall still passes
+        // it by.
         if (wmoH && !ignoreSlopeLimit_ && wmoNormalZ < minWalkableWmo) {
-            wmoH = std::nullopt;  // Treat as unwalkable
+            bool crease = false;
+            if (verticalVelocity > -3.0f && *wmoH >= targetPos.z - 0.35f && *wmoH <= targetPos.z + stepUpBudget) {
+                const auto cross = feetCross(0.5f);
+                for (std::size_t i = 1; i < cross.size() && !crease; ++i) {
+                    float nz = 0.0f;
+                    const auto h = wmoRenderer->getFloorHeight(targetPos.x + cross[i].x, targetPos.y + cross[i].y,
+                                                               wmoProbeZ, &nz);
+                    crease = h && nz >= minWalkableWmo && std::abs(*h - *wmoH) <= 0.6f;
+                }
+            }
+            if (!crease) wmoH = std::nullopt;  // Treat as unwalkable
         }
 
         // Reject WMO floors far above last known ground when airborne
