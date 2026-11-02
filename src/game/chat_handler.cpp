@@ -676,32 +676,12 @@ void ChatHandler::sendChatMessage(ChatType type, const std::string& message, con
                     raw.empty() ? std::string{} : core::toHexString(raw.data(), raw.size(), true), "]");
     }
     owner_.getSocket()->send(packet);
-
-    // Add local echo so the player sees their own message immediately
-    MessageChatData echo;
-    echo.senderGuid = owner_.getPlayerGuid();
-    echo.language = language;
-    echo.message = message;
-
-    auto nameIt = owner_.getPlayerNameCache().find(owner_.getPlayerGuid());
-    if (nameIt != owner_.getPlayerNameCache().end()) {
-        echo.senderName = nameIt->second;
-    } else if (const Character* active = owner_.getActiveCharacter()) {
-        echo.senderName = active->name;
-    }
-
-    if (type == ChatType::WHISPER) {
-        echo.type = ChatType::WHISPER_INFORM;
-        echo.receiverName = target;
-    } else {
-        echo.type = type;
-    }
-
-    if (type == ChatType::CHANNEL) {
-        echo.channelName = target;
-    }
-
-    addLocalChatMessage(echo);
+    // Nothing shown here: the line appears when the server sends it back -
+    // to the speaker as to everyone in range, a whisper as WHISPER_INFORM -
+    // as the client has it (0x0050d170 sends CMSG_MESSAGECHAT and adds
+    // nothing). A line shown on sending showed a GM command (".go xyz ...")
+    // as the player saying it, which the server never broadcast, and showed
+    // a line the server refused (muted, too far, wrong language) as said.
 }
 
 void ChatHandler::sendAddonMessage(ChatType type, const std::string& message, const std::string& target) {
@@ -748,18 +728,11 @@ void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& 
     // reads no name for a line it is about to drop.
     if (dropAsIgnored(data)) return;
 
-    // WoW servers echo successful outgoing whispers as WHISPER_INFORM, but the
-    // client already creates a local WHISPER_INFORM row immediately on send.
-    if (data.type == ChatType::WHISPER_INFORM) {
-        return;
-    }
-
-    // Skip server echo of our own messages (we already added a local echo)
-    if (data.senderGuid == owner_.getPlayerGuid() && data.senderGuid != 0) {
-        if (data.type == ChatType::WHISPER && !data.senderName.empty()) {
-            owner_.lastWhisperSenderRef() = data.senderName;
-        }
-        return;
+    // The player's own lines come back this way, a whisper as WHISPER_INFORM
+    // (sendChatMessage shows nothing of its own).
+    if (data.senderGuid == owner_.getPlayerGuid() && data.senderGuid != 0 &&
+        data.type == ChatType::WHISPER && !data.senderName.empty()) {
+        owner_.lastWhisperSenderRef() = data.senderName;
     }
 
     deliverChatMessage(std::move(data), /*alreadyWaited=*/false);
