@@ -287,25 +287,39 @@ VkTexture::BlockUploadTally VkTexture::blockUploadTally() {
             .decodedBytes = g_blockUploadDecodedBytes.load(std::memory_order_relaxed)};
 }
 
+void VkTexture::takePixelSummary(const pipeline::BLPImage& image) {
+    if (!image.isValid()) return;
+    float rgb[3];
+    image.averageColor(rgb, alphaCoverage_);
+    averageColor_ = glm::vec3(rgb[0], rgb[1], rgb[2]);
+    alphaMask_.reset();
+    if (alphaCoverage_ < 1.0f) {
+        auto mask = std::make_unique<std::array<uint64_t, 64>>();
+        if (image.alphaMask(*mask)) alphaMask_ = std::move(mask);
+    }
+    std::unique_ptr<std::vector<uint32_t>> detail;
+    std::array<uint32_t, 64 * 64> thumb;
+    if (image.thumbnail64(thumb)) {
+        detail = std::make_unique<std::vector<uint32_t>>(rt_detail::buildPyramid(thumb, {rgb[0], rgb[1], rgb[2]}));
+    }
+    setRtDetail(std::move(detail));
+}
+
+void VkTexture::takePixelSummary(const uint8_t* rgba, int width, int height) {
+    if (!rgba || width <= 0 || height <= 0) return;
+    // As a BLP's uncompressed pixels are read (BLPImage::averageColor,
+    // thumbnail64, alphaMask): the same steps over the same layout.
+    pipeline::BLPImage image;
+    image.width = width;
+    image.height = height;
+    image.data.assign(rgba, rgba + size_t(width) * size_t(height) * 4);
+    takePixelSummary(image);
+}
+
 bool VkTexture::uploadBLP(VkContext& ctx, const pipeline::BLPImage& image) {
     if (!image.isValid()) return false;
 
-    {
-        float rgb[3];
-        image.averageColor(rgb, alphaCoverage_);
-        averageColor_ = glm::vec3(rgb[0], rgb[1], rgb[2]);
-        alphaMask_.reset();
-        if (alphaCoverage_ < 1.0f) {
-            auto mask = std::make_unique<std::array<uint64_t, 64>>();
-            if (image.alphaMask(*mask)) alphaMask_ = std::move(mask);
-        }
-        std::unique_ptr<std::vector<uint32_t>> detail;
-        std::array<uint32_t, 64 * 64> thumb;
-        if (image.thumbnail64(thumb)) {
-            detail = std::make_unique<std::vector<uint32_t>>(rt_detail::buildPyramid(thumb, {rgb[0], rgb[1], rgb[2]}));
-        }
-        setRtDetail(std::move(detail));
-    }
+    takePixelSummary(image);
 
     if (!image.isBlockCompressed()) {
         return upload(ctx, image.data.data(),

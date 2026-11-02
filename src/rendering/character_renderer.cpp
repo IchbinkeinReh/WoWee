@@ -1053,6 +1053,7 @@ VkTexture* CharacterRenderer::loadTexture(const std::string& path, uint32_t texF
             applyMagentaKeyIfNeeded(blpImage, key);
         } else {
             approxBytes = blpImage.approxUploadBytes();
+            tex->takePixelSummary(blpImage);
         }
     }
     if (!blpImage.isBlockCompressed()) {
@@ -1638,6 +1639,8 @@ bool CharacterRenderer::textureCompressionActive() const {
 
 size_t CharacterRenderer::uploadPixels(VkTexture& tex, const std::vector<uint8_t>& rgba, int width,
                                           int height, bool hasAlpha) {
+    // The traced lighting's colour and texture of it, however it is stored.
+    tex.takePixelSummary(rgba.data(), width, height);
     if (textureCompressionActive()) {
         const auto levels = pipeline::encodeBCWithMips(rgba.data(), width, height, hasAlpha);
         std::vector<const uint8_t*> data;

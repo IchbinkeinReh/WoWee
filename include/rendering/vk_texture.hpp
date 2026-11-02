@@ -57,9 +57,17 @@ public:
     /// compressed or a format the device cannot sample.
     bool uploadBlocks(VkContext& ctx, const pipeline::BLPImage& image);
 
+    /// What uploadBLP takes from a BLP's pixels - the mean colour, the alpha
+    /// mask and the ray traced detail - for a texture uploaded another way:
+    /// a BLP's blocks as they are (uploadBlocks), or pixels made here, a
+    /// unit's composited skin. Without them a traced hit on the unit was its
+    /// triangles' grey, untextured.
+    void takePixelSummary(const pipeline::BLPImage& image);
+    void takePixelSummary(const uint8_t* rgba, int width, int height);
+
     /// Mean colour of the visible texels and the fraction that are visible,
-    /// taken by uploadBLP (BLPImage::averageColor). White and fully covered
-    /// for a texture that came in any other way.
+    /// taken by uploadBLP (BLPImage::averageColor) or takePixelSummary. White
+    /// and fully covered for a texture that came in any other way.
     [[nodiscard]] const glm::vec3& averageColor() const { return averageColor_; }
     [[nodiscard]] float alphaCoverage() const { return alphaCoverage_; }
     /// Which of a 64x64 grid over it is visible (BLPImage::alphaMask), taken
