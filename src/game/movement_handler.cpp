@@ -1369,6 +1369,21 @@ void MovementHandler::handleForceMoveFlagChange(network::Packet& packet, const c
             info->flags &= ~flag;
         }
     }
+    // Flying taken away while up in the air ends the flight there and then
+    // (0x006ef0d0 calls 0x0098c240 when FLYING is set): FLYING, ascending,
+    // descending and the pitch keys all go, and the mover falls. Left behind,
+    // FLYING kept the player in the swim/fly pose after .gm fly off - on the
+    // way down, on the ground and walking on - as the animation reads it as
+    // swimming or flying, and the landing that would have cleared it is only
+    // said while CAN_FLY is still there. Cleared before the ack, which
+    // carries the flags.
+    const uint32_t flying = static_cast<uint32_t>(MovementFlags::FLYING);
+    if (!set && flag == static_cast<uint32_t>(MovementFlags::CAN_FLY) && (info->flags & flying)) {
+        info->flags &= ~(flying | static_cast<uint32_t>(MovementFlags::ASCENDING) |
+                         static_cast<uint32_t>(MovementFlags::DESCENDING) |
+                         static_cast<uint32_t>(MovementFlags::PITCH_UP) |
+                         static_cast<uint32_t>(MovementFlags::PITCH_DOWN));
+    }
 
     if (!owner_.getSocket()) return;
     if (wireOpcode(ackOpcode) == 0xFFFF) return;
