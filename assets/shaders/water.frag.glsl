@@ -37,7 +37,8 @@ layout(push_constant) uniform Push {
     float liquidBasicType;
     vec2 screenSize;  // size of the target being drawn into
     vec2 depthRange;  // the camera's own near and far, for linearising SceneDepth
-    float sceneValid; // 1 once the refraction capture holds a frame, 0 before it
+    float sceneValid; // 1 once the refraction capture holds a frame, 0 before it;
+                      // 2 when that frame is the finished one, water and all
     float lightColors; // 1: closeColor and farColor hold the light's ramp
     float pad1, pad2;
 } push;

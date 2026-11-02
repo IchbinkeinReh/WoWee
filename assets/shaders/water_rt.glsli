@@ -59,6 +59,14 @@ vec3 rtwLitHit(vec4 surface, vec3 n, vec3 toSun, float sunVis) {
 // falling to 0 over its outer 3% so the change to the traced colour where a
 // hit leaves it is not a line. 0 for no match.
 bool rtwScreenReuse = true;  // off for the traced-only debug view
+// The capture is a finished frame with the water already in it (the MSAA
+// path into an off-screen target; WaterRenderer::setSceneHistoryHasWater):
+// what lies under the surface there is last frame's water over the bed, so
+// a bed read off it took the water's own picture back in, frame after
+// frame - a moving unit left a trail through the lake, and an idle mount
+// a ghost. The bed is traced instead; what stands above the water may
+// still be read off it.
+bool rtwHistoryHasWater() { return push.sceneValid > 1.5; }
 float rtwOnScreen(vec3 hit, vec3 hitNormal, out vec3 color) {
     color = vec3(0.0);
     if (!rtwScreenReuse || push.sceneValid < 0.5) return 0.0;
@@ -141,7 +149,7 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
         // shadowed - wherever the hit is on screen there and is what that
         // pixel shows; the hit's own colour only where it is not.
         vec3 shown;
-        float onScreen = rtwOnScreen(hit, hn, shown);
+        float onScreen = rtwHistoryHasWater() ? 0.0 : rtwOnScreen(hit, hn, shown);
         bed = shown;
         if (onScreen < 1.0) {
             // Not on screen as itself: off the edge, or behind something
@@ -155,7 +163,7 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
             vec3 under;
             hs.rgb = rtHitColor(origin, dir, t, rtwFootprint(origin, t), hs.rgb);
             vec3 traced = rtwLitHit(hs, hn, toSun, 0.8);
-            bed = mix(rtwBehindSurface(origin, under) ? under : traced, shown, onScreen);
+            bed = mix(!rtwHistoryHasWater() && rtwBehindSurface(origin, under) ? under : traced, shown, onScreen);
         }
         bedFromScreen = onScreen >= 1.0;
     }

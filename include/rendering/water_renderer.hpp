@@ -235,6 +235,12 @@ public:
 
     void setRefractionEnabled(bool enabled);
     bool isRefractionEnabled() const { return refractionEnabled; }
+    /// Whether the refraction capture is the finished frame - water and all -
+    /// rather than the scene taken just before the water: the MSAA path into
+    /// an off-screen target, which cannot leave the scene pass for the copy
+    /// (Renderer::waterDrawsInContinuePass). The traced water then reads no
+    /// bed off it (water_rt.glsli, rtwHistoryHasWater).
+    void setSceneHistoryHasWater(bool hasWater) { sceneHistoryHasWater_ = hasWater; }
     // Display brightness (1.0 = neutral). The scene-history capture used for
     // refraction bakes this in, so the shader divides it back out.
     // Size of the target the water is drawn into. Screen-space lookups derive
@@ -429,6 +435,7 @@ private:
     PerFrameSceneHistory sceneHistory[SCENE_HISTORY_FRAMES];
     VkExtent2D sceneHistoryExtent = {.width = 0, .height = 0};
     bool sceneHistoryReady = false;
+    bool sceneHistoryHasWater_ = false;
     mutable uint32_t renderDiagCounter_ = 0;
 
     // Surface disturbance trail. Points age out, spreading as they go; the

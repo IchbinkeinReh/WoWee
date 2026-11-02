@@ -1986,6 +1986,7 @@ void Renderer::endFrame() {
             depthIsMsaa = postProcessPipeline_->sceneDepthIsMsaa();
             depthExtent = postProcessPipeline_->getSceneRenderExtent();
         }
+        waterRenderer->setSceneHistoryHasWater(true);
         waterRenderer->captureSceneHistory(
             currentCmd,
             vkCtx->getSwapchainImages()[currentImageIndex],
@@ -4970,6 +4971,7 @@ void Renderer::finishRenderWorld() {
         }
 
         if (sceneColor != VK_NULL_HANDLE && waterRenderer->isRefractionEnabled()) {
+            waterRenderer->setSceneHistoryHasWater(false);
             waterRenderer->captureSceneHistory(currentCmd, sceneColor, sceneDepth,
                                                sceneExtent, depthIsMsaa,
                                                vkCtx->getCurrentFrame());

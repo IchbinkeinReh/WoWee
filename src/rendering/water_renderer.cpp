@@ -1285,7 +1285,8 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         // how the two came to disagree: the shader linearised the depth buffer
         // against a near plane of 0.05 while the camera's is 0.5.
         push.depthRange = glm::vec2(camera.getNearPlane(), camera.getFarPlane());
-        push.sceneValid = sceneHistoryReady ? 1.0f : 0.0f;
+        // 2: a capture with the water in it (setSceneHistoryHasWater).
+        push.sceneValid = !sceneHistoryReady ? 0.0f : sceneHistoryHasWater_ ? 2.0f : 1.0f;
 
         vkCmdPushConstants(cmd, layout,
                             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
