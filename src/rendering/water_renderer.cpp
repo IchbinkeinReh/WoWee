@@ -694,24 +694,6 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
     // Tile origin = NW corner = chunk(0,0) position
     const auto& chunk00 = terrain.getChunk(0, 0);
 
-    // The Stormwind lowering: the enhanced water draws water above 94 here
-    // a yard low, but for the moonwell. It came with the code this repository
-    // started from, without a word on why - the canals' water standing too
-    // high against their walls in that draw, by the look of it. It lowered
-    // the heights themselves, so every height query was a yard under the
-    // surface the client draws, over most of the Eastern Kingdoms: a swimmer
-    // floated low, and the camera was "under" the Burning Steppes' lava a
-    // yard below its surface. Now only the enhanced draw takes it
-    // (WaterSurface::enhancedZOffset).
-    bool isStormwindArea = (tileX >= 28 && tileX <= 50 && tileY >= 28 && tileY <= 52);
-    float tileWorldX = 0, tileWorldY = 0;
-    glm::vec2 moonwellPos2D(0.0f);
-    if (isStormwindArea) {
-        tileWorldX = (32.0f - tileX) * core::coords::TILE_SIZE;
-        tileWorldY = (32.0f - tileY) * core::coords::TILE_SIZE;
-        moonwellPos2D = glm::vec2(-8755.9f, 1108.9f);
-    }
-
     int totalSurfaces = 0;
 
     // Merge threshold: groups with more than this many chunks get merged into
@@ -768,13 +750,6 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
                     if (sane) { useFlat = false; surface.heights = layer.heights; }
                 }
                 if (useFlat) surface.heights.resize(numVertices, layer.minHeight);
-
-                if (isStormwindArea && layer.minHeight > 94.0f) {
-                    float distToMoonwell = glm::distance(glm::vec2(tileWorldX, tileWorldY), moonwellPos2D);
-                    if (distToMoonwell > 300.0f) {
-                        surface.enhancedZOffset = -1.0f;
-                    }
-                }
 
                 surface.mask = layer.mask;
                 surface.clientLiquidType = clientTypeOfLayer(layer);
@@ -916,13 +891,6 @@ void WaterRenderer::loadFromTerrain(const pipeline::ADTTerrain& terrain, bool ap
             }
         }
 
-        // Stormwind water lowering
-        if (isStormwindArea && surface.minHeight > 94.0f) {
-            float distToMoonwell = glm::distance(glm::vec2(tileWorldX, tileWorldY), moonwellPos2D);
-            if (distToMoonwell > 300.0f) {
-                surface.enhancedZOffset = -1.0f;
-            }
-        }
 
         createWaterMesh(surface);
         if (surface.indexCount > 0 && vkCtx) {
@@ -1247,12 +1215,12 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
             const glm::vec3 aabbMin(
                 std::min({c0.x, c1.x, c2.x, c3.x}),
                 std::min({c0.y, c1.y, c2.y, c3.y}),
-                surface.minHeight + surface.enhancedZOffset
+                surface.minHeight
             );
             const glm::vec3 aabbMax(
                 std::max({c0.x, c1.x, c2.x, c3.x}),
                 std::max({c0.y, c1.y, c2.y, c3.y}),
-                surface.maxHeight + surface.enhancedZOffset
+                surface.maxHeight
             );
             if (!frustum.intersectsAABB(aabbMin, aabbMax)) continue;
         }
@@ -1474,7 +1442,7 @@ void WaterRenderer::createWaterMesh(WaterSurface& surface) {
         for (int x = 0; x < gridWidth; x++) {
             int index = y * gridWidth + x;
             float height = ((index < static_cast<int>(surface.heights.size()))
-                ? surface.heights[index] : surface.minHeight) + surface.enhancedZOffset;
+                ? surface.heights[index] : surface.minHeight);
 
             glm::vec3 pos = surface.origin +
                             surface.stepX * static_cast<float>(x) +

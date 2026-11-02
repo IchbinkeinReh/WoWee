@@ -374,6 +374,10 @@ public:
     /// The race splash of each unit wading across four tenths of its height
     /// into or out of water (rendering/unit_splash.hpp).
     void playUnitSplashes(uint32_t localPlayerInstance);
+    /// The player's collision height (unit +0x854): its display's
+    /// CreatureModelData CollisionHeight at its scale, 73/36 where there is
+    /// none. Swimming is measured by it.
+    float playerCollisionHeight();
     /// A unit's jump's own sound, asked of it outright as its movement
     /// handlers ask it: kSlotJumpStart leaving the ground, kSlotJumpEnd
     /// coming down (unit_model_events.hpp).
@@ -1441,6 +1445,10 @@ private:
     /// Each unit's depth below the water at its last check while not
     /// swimming (+0x784), by guid.
     std::unordered_map<uint64_t, float> splashDepth_;
+    /// playerCollisionHeight's last answer, and the display and scale it was for.
+    uint32_t collisionHeightDisplay_ = 0;
+    uint32_t collisionHeightScaleBits_ = 0;
+    float collisionHeight_ = 73.0f / 36.0f;
     /// The melee hit each attacker keeps until its model lands it (+0xb98),
     /// the client's swing and impact tables, and the no-wound targets'
     /// reaction hold (0x00ca1600).

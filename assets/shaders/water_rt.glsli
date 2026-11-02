@@ -162,7 +162,13 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
             // the traced colour only where that is not the bed either.
             vec3 under;
             hs.rgb = rtHitColor(origin, dir, t, rtwFootprint(origin, t), hs.rgb);
-            vec3 traced = rtwLitHit(hs, hn, toSun, 0.8);
+            // The ground lit as level. Its triangles' own normals, each a
+            // flat face, lit the bed facet by facet: under a capture with
+            // the water in it (MSAA), where the bed is always the traced
+            // one, a shallow pond showed the terrain's triangles as bands
+            // of light and shade with straight edges between them.
+            bool ground = (rtInstances[rtHitInstance].flags & RT_MESH_TERRAIN) != 0u;
+            vec3 traced = rtwLitHit(hs, ground ? vec3(0.0, 0.0, 1.0) : hn, toSun, 0.8);
             bed = mix(!rtwHistoryHasWater() && rtwBehindSurface(origin, under) ? under : traced, shown, onScreen);
         }
         bedFromScreen = onScreen >= 1.0;
