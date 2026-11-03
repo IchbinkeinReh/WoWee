@@ -410,6 +410,13 @@ public:
     void completeItemUseOnItem(uint64_t targetItemGuid, bool confirmed = false);
 
     void openItemBySlot(int backpackIndex);
+    /// Gift wrapping (0x00708c20 -> 0x006d67e0): using a wrapper puts it on
+    /// the cursor as the paper; the next item clicked is wrapped in it
+    /// (0x006dcf20, CMSG_WRAP_ITEM), and putting the cursor down (0x00519280
+    /// -> 0x006cef80) ends it.
+    [[nodiscard]] bool wrapping() const { return wrapPaperGuid_ != 0; }
+    void wrapItemAt(uint8_t wireBag, uint8_t wireSlot);
+    void cancelWrapping() { wrapPaperGuid_ = 0; }
     void openItemInBag(int bagIndex, int slotIndex);
     void readItemBySlot(int backpackIndex);
     void readItemInBag(int bagIndex, int slotIndex);
@@ -865,6 +872,9 @@ private:
     };
     // mutable: isAwaitingItemTarget() drops the pending use when out of world.
     mutable std::optional<PendingItemTarget> pendingItemTarget_;
+    uint64_t wrapPaperGuid_ = 0;   ///< 0xc9ead0
+    uint8_t wrapPaperBag_ = 0;
+    uint8_t wrapPaperSlot_ = 0;
     /// The same, for an item waiting on a unit rather than on another item.
     mutable std::optional<PendingItemTarget> pendingUnitTarget_;
     /// The same, for a glyph waiting on a socket.

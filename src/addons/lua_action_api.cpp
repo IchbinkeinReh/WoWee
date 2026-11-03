@@ -1681,6 +1681,8 @@ static bool cursorWireSlot(uint8_t& bag, uint8_t& slot) {
 
 /// Put the cursor down.
 static void clearCursorItem(lua_State* L) {
+    // 0x00519280 ends gift wrapping too (0x006cef80).
+    if (auto* gh = getGameHandler(L)) gh->cancelWrapping();
     s_cursorMoney = 0;
     s_cursorSplit = 0;
     setCursorType(L, CursorType::NONE);
@@ -1877,6 +1879,13 @@ static int lua_PickupContainerItem(lua_State* L) {
     // client consumes the click in C for the same reason, which is why
     // containerframe.lua has no branch of its own for it.
     if (repairedHeldItem(gh, containerSlotGuid(gh, bag, slot))) return 0;
+
+    // With wrapping paper taken up, the click wraps the item in this square
+    // (0x005d7ff0 -> 0x006dcf20), unless it is locked.
+    if (s_cursorType == CursorType::NONE && gh->wrappingItem() && containerSlotGuid(gh, bag, slot) != 0) {
+        gh->wrapItemAt(containerWireBag(bag), containerWireSlot(bag, slot));
+        return 0;
+    }
 
     // A bag click while the cursor holds a vendor's item is the purchase -
     // into this square (0x005d7ff0 -> 0x006d2ea0, CMSG_BUY_ITEM_IN_SLOT, one).

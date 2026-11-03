@@ -1887,6 +1887,22 @@ void InventoryHandler::buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t sl
     owner_.getSocket()->send(packet);
 }
 
+void InventoryHandler::wrapItemAt(uint8_t wireBag, uint8_t wireSlot) {
+    // 0x006dcf20: the paper's place, then the item's, each a bag and a slot
+    // byte; then wrapping ends (0x006cef80).
+    if (wrapPaperGuid_ == 0) return;
+    if (owner_.getState() == WorldState::IN_WORLD && owner_.getSocket() &&
+        wireOpcode(Opcode::CMSG_WRAP_ITEM) != 0xFFFF) {
+        network::Packet packet(wireOpcode(Opcode::CMSG_WRAP_ITEM));
+        packet.writeUInt8(wrapPaperBag_);
+        packet.writeUInt8(wrapPaperSlot_);
+        packet.writeUInt8(wireBag);
+        packet.writeUInt8(wireSlot);
+        owner_.getSocket()->send(packet);
+    }
+    wrapPaperGuid_ = 0;
+}
+
 uint64_t InventoryHandler::containerGuid(uint8_t wireBag) const {
     if (wireBag == slots::kNoContainer) return owner_.getPlayerGuid();
     const int bank = static_cast<int>(wireBag) - slots::bankBagFirst();
@@ -2335,6 +2351,21 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
     }
 
     const auto* itemInfo = owner_.getItemInfo(item.itemId);
+    // 0x00708c20: a wrapper (ItemFlags 0x200) is no spell. A wrapped gift
+    // (ITEM_FIELD_FLAGS 0x8) is opened, CMSG_OPEN_ITEM (0x006dce70); paper is
+    // taken up to wrap the next item clicked (0x006d67e0).
+    constexpr uint32_t kItemFlagWrapper = 0x200;
+    constexpr uint32_t kItemFieldFlagWrapped = 0x8;
+    if (itemInfo && itemInfo->valid && (itemInfo->itemFlags & kItemFlagWrapper) != 0) {
+        if ((owner_.getItemFieldFlags(itemGuid) & kItemFieldFlagWrapped) != 0) {
+            owner_.getSocket()->send(OpenItemPacket::build(wowBag, wowSlot));
+        } else {
+            wrapPaperGuid_ = itemGuid;
+            wrapPaperBag_ = wowBag;
+            wrapPaperSlot_ = wowSlot;
+        }
+        return;
+    }
     uint32_t useSpellId = 0;
     if (itemInfo) {
         for (const auto& sp : itemInfo->spells) {

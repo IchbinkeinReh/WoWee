@@ -4229,6 +4229,11 @@ public:
     void buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, uint32_t count);
     void buyItemInSlot(uint64_t vendorGuid, uint32_t itemId, uint32_t vendorSlot,
                        uint8_t wireBag, uint8_t wireSlot, uint32_t count);
+    /// Gift wrapping (InventoryHandler): paper taken up, the item it wraps,
+    /// and the end of it.
+    bool wrappingItem() const;
+    void wrapItemAt(uint8_t wireBag, uint8_t wireSlot);
+    void cancelWrapping();
     void sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count);
     void sellItemBySlot(int backpackIndex);
     void sellItemInBag(int bagIndex, int slotIndex);

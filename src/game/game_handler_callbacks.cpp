@@ -4444,6 +4444,18 @@ void GameHandler::buyItemInSlot(uint64_t vendorGuid, uint32_t itemId, uint32_t v
     if (inventoryHandler_) inventoryHandler_->buyItemInSlot(vendorGuid, itemId, vendorSlot, wireBag, wireSlot, count);
 }
 
+bool GameHandler::wrappingItem() const {
+    return inventoryHandler_ && inventoryHandler_->wrapping();
+}
+
+void GameHandler::wrapItemAt(uint8_t wireBag, uint8_t wireSlot) {
+    if (inventoryHandler_) inventoryHandler_->wrapItemAt(wireBag, wireSlot);
+}
+
+void GameHandler::cancelWrapping() {
+    if (inventoryHandler_) inventoryHandler_->cancelWrapping();
+}
+
 void GameHandler::buyBackItem(uint32_t row) {
     if (inventoryHandler_) inventoryHandler_->buyBackItem(row);
 }
