@@ -25,6 +25,7 @@
 #include "game/social_handler.hpp"
 #include "game/quest_handler.hpp"
 #include "game/npc_interaction.hpp"
+#include "game/pet_action_bar.hpp"
 #include "game/warden_handler.hpp"
 #include "game/warden_crypto.hpp"
 #include "game/warden_memory.hpp"
@@ -4442,6 +4443,57 @@ void GameHandler::buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, u
 void GameHandler::buyItemInSlot(uint64_t vendorGuid, uint32_t itemId, uint32_t vendorSlot,
                                 uint8_t wireBag, uint8_t wireSlot, uint32_t count) {
     if (inventoryHandler_) inventoryHandler_->buyItemInSlot(vendorGuid, itemId, vendorSlot, wireBag, wireSlot, count);
+}
+
+bool GameHandler::petBarEditable() const {
+    if (petGuid_ == 0) return false;
+    auto pet = getEntityManager().getEntity(petGuid_);
+    auto* unit = dynamic_cast<const Unit*>(pet.get());
+    return unit && (unit->getUnitFlags() & 0x01000000u) == 0;
+}
+
+namespace {
+/// CMSG_PET_SET_ACTION (0x005d6020): the pet, the other slot that moved and
+/// its action when there is one, then the slot and its action.
+void sendPetSetAction(network::WorldSocket* socket, uint64_t pet, int moved, uint32_t movedAction,
+                      int slot, uint32_t action) {
+    if (!socket || wireOpcode(Opcode::CMSG_PET_SET_ACTION) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_PET_SET_ACTION));
+    packet.writeUInt64(pet);
+    if (moved >= 0) {
+        packet.writeUInt32(static_cast<uint32_t>(moved));
+        packet.writeUInt32(movedAction);
+    }
+    packet.writeUInt32(static_cast<uint32_t>(slot));
+    packet.writeUInt32(action);
+    socket->send(packet);
+}
+}  // namespace
+
+uint32_t GameHandler::placePetAction(int idx, uint32_t action) {
+    namespace pab = pet_action_bar;
+    if (!petBarEditable() || idx < 0 || idx >= pab::kSlots) return 0;
+    // A passive spell is not put on the bar (Attributes 0x40).
+    if (pab::typeOf(action) == pab::kTypeSpell && pab::valueOf(action) != 0 &&
+        isSpellPassive(pab::valueOf(action))) {
+        return 0;
+    }
+    pab::Slots slots{};
+    for (int i = 0; i < pab::kSlots; ++i) slots[static_cast<size_t>(i)] = petActionSlots_[i];
+    const auto placed = pab::place(slots, idx, action);
+    if (!placed.changed) return 0;
+    for (int i = 0; i < pab::kSlots; ++i) petActionSlots_[i] = slots[static_cast<size_t>(i)];
+    if (state == WorldState::IN_WORLD)
+        sendPetSetAction(socket.get(), petGuid_, placed.moved,
+                         placed.moved >= 0 ? petActionSlots_[placed.moved] : 0, idx, petActionSlots_[idx]);
+    fireAddonEvent("PET_BAR_UPDATE", {});
+    return placed.displaced;
+}
+
+void GameHandler::clearPetActionSlot(int idx) {
+    namespace pab = pet_action_bar;
+    if (idx < 0 || idx >= pab::kSlots) return;
+    placePetAction(idx, petActionSlots_[idx] & 0xff000000u);
 }
 
 bool GameHandler::wrappingItem() const {

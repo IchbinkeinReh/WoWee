@@ -1838,6 +1838,10 @@ wowee_add_test(test_npc_interaction SOURCES test_npc_interaction.cpp)
 # 0x00530100..0x00530920 keep them.
 wowee_add_test(test_tutorials SOURCES test_tutorials.cpp)
 
+# ── test_pet_action_bar ──────────────────────────────────────
+# The pet bar's ten slots as 0x005d6020 moves actions between them.
+wowee_add_test(test_pet_action_bar SOURCES test_pet_action_bar.cpp)
+
 # ── test_scene_pick ──────────────────────────────────────────
 # Which of ScenePick's answers a caller wants. closestGuid and resolve()
 # disagree exactly where a wide object stands beside an NPC, which is where the

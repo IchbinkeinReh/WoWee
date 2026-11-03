@@ -1529,6 +1529,15 @@ public:
         if (idx < 0 || idx >= PET_ACTION_BAR_SLOTS) return 0;
         return petActionSlots_[idx];
     }
+    /// 0x005d6020: `action` onto pet bar slot `idx` the client's way
+    /// (game/pet_action_bar.hpp), CMSG_PET_SET_ACTION and PET_BAR_UPDATE.
+    /// Answers the action the slot gives up to the cursor, 0 for none.
+    uint32_t placePetAction(int idx, uint32_t action);
+    /// 0x005d64a0: a spell taken off the bar leaves the slot empty.
+    void clearPetActionSlot(int idx);
+    /// Whether the pet's bar may be changed: a pet, and not one with
+    /// UNIT_FIELD_FLAGS 0x01000000 (0x005d65c0).
+    bool petBarEditable() const;
     // Pet command/react state from SMSG_PET_MODE or SMSG_PET_SPELLS
     uint8_t getPetCommand() const { return petCommand_; }   // 0=stay,1=follow,2=attack,3=dismiss
     uint8_t getPetReact()   const { return petReact_; }     // 0=passive,1=defensive,2=aggressive

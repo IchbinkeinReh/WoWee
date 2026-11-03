@@ -62,7 +62,7 @@ namespace wowee::addons {
 /// AMMO is the ammunition lifted off the paperdoll's ammo slot (the client's
 /// cursor type 9): an item to the interface, holding an entry rather than an
 /// item, since the ammunition never left the bags.
-enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET, AMMO };
+enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET, AMMO, PET_ACTION };
 static CursorType s_cursorType = CursorType::NONE;
 static uint32_t   s_cursorId   = 0;    // spellId, itemId, or action slot
 static int        s_cursorSlot = 0;    // source slot for placement
@@ -123,25 +123,6 @@ bool cursorItemCameFromInventory() {
     // can be destroyed.
     return s_cursorType == CursorType::ITEM &&
            game::slots::cursorSourceIsInventory(s_cursorBag);
-}
-
-/// PickupPetAction(slot) - pick a pet ability up off the pet bar.
-///
-/// Defined and does nothing. The cursor here holds spells, items, actions and
-/// macros; a pet action is a fifth kind in its own slot space, and moving one
-/// is a server operation this client does not send. Inventing a cursor state
-/// that cannot be put down anywhere would be worse than not picking up.
-///
-/// Defined because it is reachable three ways - shift-clicking a pet button,
-/// dragging one, and dropping on one - and the pet bar is drawn. Undefined,
-/// the first shift-click on a pet ability takes the bar down. Clicking a pet
-/// ability to use it goes through a different path and works; only rearranging
-/// the bar is lost.
-//
-// It asks the taint check first all the same (0x005d65c0, kind 0xe).
-static int lua_PickupPetAction(lua_State* L) {
-    taint::allowed(L, 0xe);
-    return 0;
 }
 
 /// Change what the cursor is holding, and say so.
@@ -1691,6 +1672,37 @@ static void clearCursorItem(lua_State* L) {
     s_cursorBag = -1;
     wowee::ui::frameXmlSetCursorItem(std::string());
     cursorItemSlot() = {};
+}
+
+/// PickupPetAction(slot): the pet bar's drag and drop. Reached by
+/// shift-clicking a pet button, dragging one and dropping on one.
+static int lua_PickupPetAction(lua_State* L) {
+    // 0x005d65c0, slots counted from 1.
+    const int slot = static_cast<int>(luaL_checknumber(L, 1)) - 1;
+    if (slot < 0 || slot > 10) return luaL_error(L, "Invalid slot in PickupPetAction");
+    if (!taint::allowed(L, 0xe)) return 0;
+    auto* gh = getGameHandler(L);
+    if (!gh || !gh->petBarEditable()) return 0;
+    // What the cursor held, before it is put down (0xbd07e4).
+    const uint32_t held = s_cursorType == CursorType::PET_ACTION ? s_cursorId : 0;
+    clearCursorItem(L);
+    if (held != 0) {
+        // Put on the slot; what the slot held comes up instead (0x005d6020).
+        const uint32_t displaced = gh->placePetAction(slot, held);
+        if ((displaced & 0x00ffffffu) != 0) {
+            setCursorType(L, CursorType::PET_ACTION);
+            s_cursorId = displaced;
+        }
+        return 0;
+    }
+    // Taken up (0x00520a80); a spell is taken off the bar (0x005d64a0),
+    // a command or reaction stays where it is.
+    const uint32_t action = slot < game::GameHandler::PET_ACTION_BAR_SLOTS ? gh->getPetActionSlot(slot) : 0;
+    if (action == 0) return 0;
+    setCursorType(L, CursorType::PET_ACTION);
+    s_cursorId = action;
+    if (((action >> 24) & 0x3fu) == 1) gh->clearPetActionSlot(slot);
+    return 0;
 }
 
 static bool droppedItemFromNowhere(lua_State* L) {
