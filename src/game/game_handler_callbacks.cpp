@@ -1000,6 +1000,23 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
         // (0x00528010 -> 0x005a56f0).
         requestGuildBankWithdrawMoney();
     }
+    // 0x00528010 -> 0x005d6e60: with a pet - the charm, else the summon -
+    // its bar and spells asked for again, a bare CMSG_REQUEST_PET_INFO.
+    if (socket && wireOpcode(Opcode::CMSG_REQUEST_PET_INFO) != 0xFFFF) {
+        if (auto me = getEntityManager().getEntity(playerGuid)) {
+            const auto guidAt = [&](UF low) -> uint64_t {
+                const uint16_t i = fieldIndex(low);
+                return i != 0xFFFF ? me->getField(i) | (static_cast<uint64_t>(me->getField(static_cast<uint16_t>(i + 1))) << 32)
+                                   : 0ull;
+            };
+            const uint64_t charm = guidAt(UF::UNIT_FIELD_CHARM);
+            const uint64_t pet = charm != 0 ? charm : guidAt(UF::UNIT_FIELD_SUMMON);
+            if (pet != 0) {
+                network::Packet pkt(wireOpcode(Opcode::CMSG_REQUEST_PET_INFO));
+                socket->send(pkt);
+            }
+        }
+    }
     // Every way into the world (0x00528010, once per entry - 0x00528c30
     // clears it on the way out): the battleground queues' status asked for
     // (0x0054ca50, CMSG_BATTLEFIELD_STATUS), then the dungeon finder's
