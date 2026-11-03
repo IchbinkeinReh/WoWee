@@ -635,6 +635,9 @@ void GameHandler::registerCoreOpcodes() {
                     timerName, std::to_string(value),
                     std::to_string(maxV), std::to_string(scale),
                     paused ? "1" : "0", timerLabel});
+            // 0x00519a50: fatigue's tutorial (0x1a), breath's (0x1c).
+            if (type == 0) triggerTutorial(0x1a);
+            else if (type == 1) triggerTutorial(0x1c);
         }
     };
     dispatchTable_[Opcode::SMSG_STOP_MIRROR_TIMER] = [this](network::Packet& packet) {
@@ -2031,6 +2034,19 @@ void GameHandler::registerCoreOpcodes() {
                         // Talent points are zero: the packet carries no such
                         // delta, and zero is what stops the interface claiming
                         // a point was gained.
+                        // 0x006e2e90's SMSG_LEVELUP_INFO: the tutorials a
+                        // level opens, before PLAYER_LEVEL_UP.
+                        {
+                            const uint32_t lv = newLevel;
+                            if (lv > 1) triggerTutorial(0x36);
+                            if (lv > 3) triggerTutorial(0xd);
+                            if (lv > 5) triggerTutorial(0x16);
+                            if (lv > 6) { triggerTutorial(0x15); triggerTutorial(0x25); }
+                            if (lv > 7) triggerTutorial(0x20);
+                            if (lv > 9) triggerTutorial(0xc);
+                            if (lv > 11) triggerTutorial(0x26);
+                            if (lv > 14) triggerTutorial(0x32);
+                        }
                         fireAddonEvent("PLAYER_LEVEL_UP", {
                             std::to_string(newLevel),
                             std::to_string(lastLevelUpDeltas_.hp),

@@ -4383,6 +4383,9 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     const uint8_t arenaType = status.arenaType;
     const uint32_t bgTypeId = status.bgTypeId;
     const uint32_t statusId = status.statusId;
+    // 0x0054ae40: a place to join (0x30), a place in a queue (0x2f).
+    if (statusId == 2) owner_.triggerTutorial(0x30);
+    else if (statusId == 1) owner_.triggerTutorial(0x2f);
 
     // The name GetBattlefieldStatus answers with, from where 0x0054bc30 takes
     // it: the map's own (Map.dbc) once a place is offered or entered, and the
@@ -6434,6 +6437,8 @@ void SocialHandler::handleSetFactionStanding(network::Packet& packet) {
             owner_.addLocalChatLine(ChatType::COMBAT_FACTION_CHANGE, line);
         }
     }
+    // 0x005d20a0: reputation's tutorial, past level 9.
+    if (owner_.getPlayerLevel() > 9) owner_.triggerTutorial(0xf);
 }
 
 void SocialHandler::handleSetFactionAtWar(network::Packet& packet) {

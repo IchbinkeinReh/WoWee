@@ -3847,6 +3847,9 @@ void GameHandler::interactWithNpc(uint64_t guid) {
         }
     }
 
+    // 0x006ddbb0: a questgiver with nothing for the player yet (status 1)
+    // opens its tutorial.
+    if (getQuestGiverStatus(guid) == QuestGiverStatus::UNAVAILABLE) triggerTutorial(0x2a);
     // Past the hellos, 0x006ddbb0 clicks a spell-click unit rather than greet it.
     if (clickUnitBeyondHellos(guid)) return;
 
