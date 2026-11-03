@@ -3380,6 +3380,27 @@ void GameHandler::onPlayerEnteredWorldGuild() {
 // Talents
 // ============================================================
 
+uint8_t GameHandler::getPetTalentRank(uint32_t talentId) const {
+    return spellHandler_ ? spellHandler_->getPetTalentRank(talentId) : 0;
+}
+
+uint32_t GameHandler::getPetUnspentTalentPoints() const {
+    return spellHandler_ ? spellHandler_->getPetUnspentTalentPoints() : 0;
+}
+
+const std::unordered_map<uint32_t, uint8_t>& GameHandler::getPetTalents() const {
+    static const std::unordered_map<uint32_t, uint8_t> none;
+    return spellHandler_ ? spellHandler_->getPetTalents() : none;
+}
+
+const TalentTabEntry* GameHandler::getPetTalentTab() const {
+    return spellHandler_ ? spellHandler_->getPetTalentTab() : nullptr;
+}
+
+void GameHandler::learnPetTalent(uint32_t talentId, uint32_t requestedRank) {
+    if (spellHandler_) spellHandler_->learnPetTalent(talentId, requestedRank);
+}
+
 void GameHandler::learnTalent(uint32_t talentId, uint32_t requestedRank) {
     if (spellHandler_) spellHandler_->learnTalent(talentId, requestedRank);
 }

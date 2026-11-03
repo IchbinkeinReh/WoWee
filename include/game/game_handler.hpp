@@ -1738,6 +1738,12 @@ public:
     }
     void learnTalent(uint32_t talentId, uint32_t requestedRank);
     void learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
+    // The pet's talents (SpellHandler).
+    uint8_t getPetTalentRank(uint32_t talentId) const;
+    uint32_t getPetUnspentTalentPoints() const;
+    const std::unordered_map<uint32_t, uint8_t>& getPetTalents() const;
+    const TalentTabEntry* getPetTalentTab() const;
+    void learnPetTalent(uint32_t talentId, uint32_t requestedRank);
     void switchTalentSpec(uint8_t newSpec);
 
     // Talent DBC access

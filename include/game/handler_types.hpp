@@ -35,6 +35,9 @@ struct TalentTabEntry {
     uint32_t tabId = 0;
     std::string name;
     uint32_t classMask = 0;
+    /// The pet talent types it is the tree of (bit = CreatureFamily's
+    /// PetTalentType); zero for a class's tab.
+    uint32_t petTalentMask = 0;
     uint8_t orderIndex = 0;
     std::string backgroundFile;
 };

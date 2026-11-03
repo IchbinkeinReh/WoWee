@@ -3026,6 +3026,53 @@ void SpellHandler::learnTalent(uint32_t talentId, uint32_t requestedRank) {
     owner_.getSocket()->send(packet);
 }
 
+void SpellHandler::learnPetTalent(uint32_t talentId, uint32_t requestedRank) {
+    const uint64_t pet = owner_.getPetGuid();
+    if (pet == 0 || requestedRank == 0 || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (wireOpcode(Opcode::CMSG_PET_LEARN_TALENT) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_PET_LEARN_TALENT));
+    packet.writeUInt64(pet);
+    packet.writeUInt32(talentId);
+    packet.writeUInt32(requestedRank - 1);  // from zero, as CMSG_LEARN_TALENT
+    owner_.getSocket()->send(packet);
+}
+
+const TalentTabEntry* SpellHandler::getPetTalentTab() const {
+    const uint64_t pet = owner_.getPetGuid();
+    if (pet == 0) return nullptr;
+    auto entity = owner_.getEntityManager().getEntity(pet);
+    auto* unit = dynamic_cast<const Unit*>(entity.get());
+    if (!unit) return nullptr;
+    const uint32_t family = owner_.getCreatureFamily(unit->getEntry());
+    if (family == 0) return nullptr;
+    auto it = petTalentTypes_.find(family);
+    if (it == petTalentTypes_.end()) {
+        int32_t type = -1;
+        auto* am = owner_.services().assetManager;
+        auto dbc = am ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
+        if (dbc && dbc->isLoaded()) {
+            const auto* cfL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("CreatureFamily") : nullptr;
+            const uint32_t typeField = cfL ? cfL->tryField("PetTalentType") : 0xFFFFFFFFu;
+            const uint32_t idField = cfL ? cfL->tryField("ID") : 0u;
+            if (typeField != 0xFFFFFFFFu) {
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                    if (dbc->getUInt32(i, idField) == family) {
+                        type = static_cast<int32_t>(dbc->getUInt32(i, typeField));
+                        break;
+                    }
+                }
+            }
+        }
+        it = petTalentTypes_.emplace(family, type).first;
+    }
+    if (it->second < 0 || it->second > 31) return nullptr;
+    const uint32_t bit = 1u << it->second;
+    for (const auto& [tabId, tab] : talentTabCache_) {
+        if ((tab.petTalentMask & bit) != 0) return &tab;
+    }
+    return nullptr;
+}
+
 void SpellHandler::learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks) {
     if (talentRanks.empty() || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     owner_.getSocket()->send(LearnPreviewTalentsPacket::build(talentRanks));
@@ -3329,6 +3376,8 @@ void SpellHandler::loadTalentDbc() {
         const uint32_t ttClassField = ttL ? (*ttL)["ClassMask"]      : 20;
         const uint32_t ttOrderField = ttL ? (*ttL)["OrderIndex"]     : 22;
         const uint32_t ttBgField    = ttL ? (*ttL)["BackgroundFile"] : 23;
+        // Named only in a layout that has it: before 3.x there are no pet trees.
+        const uint32_t ttPetField   = ttL ? ttL->tryField("PetTalentMask") : 0xFFFFFFFFu;
 
         uint32_t count = tabDbc->getRecordCount();
         for (uint32_t i = 0; i < count; ++i) {
@@ -3338,6 +3387,7 @@ void SpellHandler::loadTalentDbc() {
 
             entry.name = tabDbc->getString(i, ttNameField);
             entry.classMask = tabDbc->getUInt32(i, ttClassField);
+            entry.petTalentMask = ttPetField != 0xFFFFFFFFu ? tabDbc->getUInt32(i, ttPetField) : 0;
             entry.orderIndex = static_cast<uint8_t>(tabDbc->getUInt32(i, ttOrderField));
             entry.backgroundFile = tabDbc->getString(i, ttBgField);
 
@@ -4723,6 +4773,21 @@ void SpellHandler::handleTalentsInfo(network::Packet& packet) {
     if (!packet.hasRemaining(1)) return;
     uint8_t talentType = packet.readUInt8();
     if (talentType != 0) {
+        // The pet's (0x006cd770 -> 0x005c9f10, 0x005c98a0): its unspent
+        // points, then a count of talents with each one's id and rank from
+        // zero; PET_TALENT_UPDATE (0x273) after.
+        if (!packet.hasRemaining(5)) return;
+        loadTalentDbc();
+        petUnspentTalents_ = packet.readUInt32();
+        const uint8_t count = packet.readUInt8();
+        petTalents_.clear();
+        for (uint8_t i = 0; i < count && packet.hasRemaining(5); ++i) {
+            const uint32_t talentId = packet.readUInt32();
+            const uint8_t rank = packet.readUInt8();
+            petTalents_[talentId] = static_cast<uint8_t>(rank + 1u);
+        }
+        petTalentsKnown_ = true;
+        owner_.fireAddonEvent("PET_TALENT_UPDATE", {});
         return;
     }
     if (!packet.hasRemaining(6)) {

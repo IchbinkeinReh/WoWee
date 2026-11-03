@@ -320,6 +320,19 @@ public:
         return (it != learnedTalents_[spec].end()) ? it->second : 0;
     }
     void learnTalent(uint32_t talentId, uint32_t requestedRank);
+    // ---- The pet's talents (SMSG_TALENTS_INFO type 1, 0x005c98a0) ----
+    [[nodiscard]] uint8_t getPetTalentRank(uint32_t talentId) const {
+        auto it = petTalents_.find(talentId);
+        return it != petTalents_.end() ? it->second : 0;
+    }
+    [[nodiscard]] const std::unordered_map<uint32_t, uint8_t>& getPetTalents() const { return petTalents_; }
+    [[nodiscard]] uint32_t getPetUnspentTalentPoints() const { return petUnspentTalents_; }
+    [[nodiscard]] bool hasPetTalents() const { return petTalentsKnown_; }
+    /// The pet's tree (0x005c64d0): the TalentTab row whose PetTalentMask holds
+    /// the bit of the pet's family's PetTalentType; none for a family of -1.
+    [[nodiscard]] const TalentTabEntry* getPetTalentTab() const;
+    /// CMSG_PET_LEARN_TALENT: the pet, the talent and the rank, from zero.
+    void learnPetTalent(uint32_t talentId, uint32_t requestedRank);
     /// The previewed talents learned in one request, each at the rank it is
     /// to have (counted from one), in the order the trees list them.
     void learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
@@ -820,6 +833,10 @@ private:
     /// drawn before the talents are.
     uint8_t talentGroupCount_ = 0;
     uint8_t unspentTalentPoints_[2] = {0, 0};
+    std::unordered_map<uint32_t, uint8_t> petTalents_;  ///< ranks from one
+    uint32_t petUnspentTalents_ = 0;
+    bool petTalentsKnown_ = false;
+    mutable std::unordered_map<uint32_t, int32_t> petTalentTypes_;  ///< CreatureFamily -> PetTalentType
     std::unordered_map<uint32_t, uint8_t> learnedTalents_[2];
     std::array<std::array<uint16_t, MAX_GLYPH_SLOTS>, 2> learnedGlyphs_{};
     std::unordered_map<uint32_t, TalentEntry> talentCache_;
