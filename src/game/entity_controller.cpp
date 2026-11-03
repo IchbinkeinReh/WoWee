@@ -3473,10 +3473,41 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
                 if (moved) pendingEvents_.emit("KNOWN_TITLES_UPDATE", {});
             }
         }
+        // The player's own fields the client watches to ask every quest
+        // giver's status again (the watchers 0x006e5180 installs, each calling 0x006d50c0):
+        // a quest log slot (0x006df370), a quest done today (0x006d9f20), the
+        // money (0x006da070) and a skill's value - the low half of its second
+        // dword (0x006da4a0). Once per block however many moved.
+        bool questStatusMoved = false;
+        {
+            const auto moved = [&](uint16_t key, uint32_t mask) {
+                const auto now = block.fields.find(key);
+                if (now == block.fields.end()) return false;
+                const auto was = lastFields.find(key);
+                return ((was == lastFields.end() ? 0u : was->second) & mask) != (now->second & mask);
+            };
+            const auto range = [&](UF first, uint16_t count, uint16_t stride, uint16_t offset, uint32_t mask) {
+                const uint16_t base = fieldIndex(first);
+                if (base == 0xFFFF) return false;
+                for (uint16_t i = 0; i < count; ++i) {
+                    if (moved(static_cast<uint16_t>(base + i * stride + offset), mask)) return true;
+                }
+                return false;
+            };
+            questStatusMoved =
+                range(UF::PLAYER_QUEST_LOG_START, 25 * 5, 1, 0, 0xFFFFFFFFu) ||
+                range(UF::PLAYER_FIELD_DAILY_QUESTS_1, 25, 1, 0, 0xFFFFFFFFu) ||
+                range(UF::PLAYER_FIELD_COINAGE, 1, 1, 0, 0xFFFFFFFFu) ||
+                range(UF::PLAYER_SKILL_INFO_START, 128, 3, 1, 0x0000FFFFu);
+        }
+
         // Merge block fields into the persistent snapshot. Both are sorted, so
         // a simple insert_or_assign per key keeps the invariant intact.
         for (const auto& [key, val] : block.fields) {
             owner_.lastPlayerFieldsRef().insert_or_assign(key, val);
+        }
+        if (questStatusMoved) {
+            if (auto* qh = owner_.getQuestHandler()) qh->queryAllQuestGiverStatuses();
         }
         if (needCoinageDetectSnapshot) {
             maybeDetectCoinageIndex(oldFieldsSnapshot, owner_.lastPlayerFieldsRef());

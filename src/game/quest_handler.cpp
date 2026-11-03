@@ -220,6 +220,12 @@ void QuestHandler::tickQuestGiverStatusRequery(float deltaTime) {
     }
 }
 
+void QuestHandler::queryAllQuestGiverStatuses() {
+    if (!owner_.getSocket() || wireOpcode(Opcode::CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY));
+    owner_.getSocket()->send(packet);
+}
+
 void QuestHandler::sendQuestGiverStatusQueries() {
     if (!owner_.getSocket()) return;
     for (const auto& [guid, entity] : owner_.getEntityManager().getEntities()) {

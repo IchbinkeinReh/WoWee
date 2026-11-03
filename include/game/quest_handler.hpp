@@ -318,6 +318,9 @@ public:
     // Ask every questgiver in view for its status again (rate-limited, see
     // below). Also for what changes the answer outside the quest log: the
     // player's faction or GM flag (game/quest_status_requery.hpp).
+    /// 0x006d50c0: every quest giver's status asked at once, a bare
+    /// CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY.
+    void queryAllQuestGiverStatuses();
     void requeryNearbyQuestGiverStatus();
 
 private:
