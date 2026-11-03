@@ -4227,6 +4227,8 @@ public:
     void openVendor(uint64_t npcGuid);
     void closeVendor();
     void buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, uint32_t count);
+    void buyItemInSlot(uint64_t vendorGuid, uint32_t itemId, uint32_t vendorSlot,
+                       uint8_t wireBag, uint8_t wireSlot, uint32_t count);
     void sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count);
     void sellItemBySlot(int backpackIndex);
     void sellItemInBag(int bagIndex, int slotIndex);

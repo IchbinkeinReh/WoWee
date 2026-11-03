@@ -4439,6 +4439,11 @@ void GameHandler::buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, u
     if (inventoryHandler_) inventoryHandler_->buyItem(vendorGuid, itemId, slot, count);
 }
 
+void GameHandler::buyItemInSlot(uint64_t vendorGuid, uint32_t itemId, uint32_t vendorSlot,
+                                uint8_t wireBag, uint8_t wireSlot, uint32_t count) {
+    if (inventoryHandler_) inventoryHandler_->buyItemInSlot(vendorGuid, itemId, vendorSlot, wireBag, wireSlot, count);
+}
+
 void GameHandler::buyBackItem(uint32_t row) {
     if (inventoryHandler_) inventoryHandler_->buyBackItem(row);
 }

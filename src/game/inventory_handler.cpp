@@ -1887,6 +1887,31 @@ void InventoryHandler::buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t sl
     owner_.getSocket()->send(packet);
 }
 
+uint64_t InventoryHandler::containerGuid(uint8_t wireBag) const {
+    if (wireBag == slots::kNoContainer) return owner_.getPlayerGuid();
+    const int bank = static_cast<int>(wireBag) - slots::bankBagFirst();
+    if (bank >= 0 && bank < static_cast<int>(bankBagSlotGuids_.size())) return bankBagSlotGuids_[static_cast<size_t>(bank)];
+    return owner_.getEquipSlotGuid(wireBag);
+}
+
+void InventoryHandler::buyItemInSlot(uint64_t vendorGuid, uint32_t itemId, uint32_t vendorSlot,
+                                     uint8_t wireBag, uint8_t wireSlot, uint32_t count) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (wireOpcode(Opcode::CMSG_BUY_ITEM_IN_SLOT) == 0xFFFF) return;
+    const uint64_t bagGuid = containerGuid(wireBag);
+    if (bagGuid == 0) return;
+    pendingBuyItemId_ = itemId;
+    pendingBuyItemSlot_ = vendorSlot;
+    network::Packet packet(wireOpcode(Opcode::CMSG_BUY_ITEM_IN_SLOT));
+    packet.writeUInt64(vendorGuid);
+    packet.writeUInt32(itemId);
+    packet.writeUInt32(vendorSlot);
+    packet.writeUInt64(bagGuid);
+    packet.writeUInt8(wireSlot);
+    packet.writeUInt32(count);
+    owner_.getSocket()->send(packet);
+}
+
 void InventoryHandler::sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     LOG_INFO("Sell request: vendorGuid=0x", std::hex, vendorGuid,

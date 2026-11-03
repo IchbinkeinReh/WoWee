@@ -252,6 +252,14 @@ public:
     // Drop the session-persistent buyback mirror (fresh character world entry).
     void clearBuybackState();
     void buyItem(uint64_t vendorGuid, uint32_t itemId, uint32_t slot, uint32_t count);
+    /// 0x006d2ea0: bought into a chosen place, CMSG_BUY_ITEM_IN_SLOT - the
+    /// vendor, the item and its vendor slot, the container's guid, the slot
+    /// in it (u8) and the count.
+    void buyItemInSlot(uint64_t vendorGuid, uint32_t itemId, uint32_t vendorSlot,
+                       uint8_t wireBag, uint8_t wireSlot, uint32_t count);
+    /// The guid of a container as the wire numbers it: the player's own for
+    /// 0xFF (backpack, bank, keyring), else the bag sitting in that slot.
+    [[nodiscard]] uint64_t containerGuid(uint8_t wireBag) const;
     void sellItem(uint64_t vendorGuid, uint64_t itemGuid, uint32_t count);
     void sellItemBySlot(int backpackIndex);
     void sellItemInBag(int bagIndex, int slotIndex);

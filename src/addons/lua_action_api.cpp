@@ -1754,22 +1754,6 @@ static void soldHeldItem(lua_State* L) {
     clearCursorItem(L);
 }
 
-bool boughtHeldMerchantItem(lua_State* L) {
-    if (s_cursorType != CursorType::MERCHANT) return false;
-    auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(s_cursorId);
-    if (gh && index >= 1) {
-        const auto& items = gh->getVendorItems().items;
-        if (index <= static_cast<int>(items.size())) {
-            const auto& vi = items[index - 1];
-            gh->buyItem(gh->getVendorGuid(), vi.itemId, vi.slot, 1);
-        }
-    }
-    clearCursorItem(L);
-    return true;
-}
-
-
 /// Put the item in a bag slot on the cursor, with everything that goes with it:
 /// the icon, the greyed slot, and the record of where it came from.
 ///
@@ -1894,9 +1878,19 @@ static int lua_PickupContainerItem(lua_State* L) {
     // containerframe.lua has no branch of its own for it.
     if (repairedHeldItem(gh, containerSlotGuid(gh, bag, slot))) return 0;
 
-    // A bag click while the cursor holds a vendor's item is the purchase.
-    // containerframe.lua routes it here after checking GetCursorInfo.
-    if (boughtHeldMerchantItem(L)) return 0;
+    // A bag click while the cursor holds a vendor's item is the purchase -
+    // into this square (0x005d7ff0 -> 0x006d2ea0, CMSG_BUY_ITEM_IN_SLOT, one).
+    if (s_cursorType == CursorType::MERCHANT) {
+        const int index = static_cast<int>(s_cursorId);
+        const auto& items = gh->getVendorItems().items;
+        if (index >= 1 && index <= static_cast<int>(items.size())) {
+            const auto& vi = items[static_cast<size_t>(index - 1)];
+            gh->buyItemInSlot(gh->getVendorGuid(), vi.itemId, vi.slot,
+                              containerWireBag(bag), containerWireSlot(bag, slot), 1);
+        }
+        clearCursorItem(L);
+        return 0;
+    }
 
     // Carrying something out of the guild bank, so this is the withdrawal.
     // The destination is this bag slot rather than the server's choice, which
