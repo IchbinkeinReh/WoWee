@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/tutorials.hpp"
 #include "game/item_text.hpp"   // ItemLinkInstance - the numbers an item link carries
 #include "game/visible_item_fields.hpp"   // the visible-item pair as the client's record reads it
 #include "game/mirror_image.hpp"
@@ -1488,6 +1489,19 @@ public:
     /// ClearTutorials (0x00530820 -> 0x00530510): CMSG_TUTORIAL_CLEAR, the
     /// server's word for every tutorial seen.
     void sendTutorialClear();
+    /// The tutorial pop-outs (game/tutorials.hpp), ids counted from 0.
+    TutorialState& tutorials() { return tutorials_; }
+    /// 0x00530450: flagged once, with CMSG_TUTORIAL_FLAG (u32 id).
+    void flagTutorial(uint32_t id);
+    /// 0x00530840: TUTORIAL_TRIGGER and the TutorialPopup sound, once; with
+    /// showTutorials off, flagged instead.
+    void triggerTutorial(uint32_t id);
+    /// 0x00530510: every one set, CMSG_TUTORIAL_CLEAR.
+    void clearTutorials();
+    /// 0x00530630: every one forgotten, CMSG_TUTORIAL_RESET.
+    void resetTutorials();
+    /// 0x00528010's four (0x29, 1, 2, 0).
+    void triggerEntryTutorials();
     /// CMSG_SET_ACTIONBAR_TOGGLES: the multi-bars shown, bits 0 to 3, u8
     /// (0x005a8290).
     void sendActionBarToggles(uint8_t mask);
@@ -6283,6 +6297,8 @@ private:
     // Vehicle (WotLK): non-zero when player is seated in a vehicle
     uint32_t vehicleId_ = 0;
     vehicle::VehicleRoster vehicleRoster_;
+    TutorialState tutorials_;
+    bool entryTutorialsPending_ = false;
     std::chrono::steady_clock::time_point nextLoadingKeepAlive_{};  ///< 0xb2fe70
     cast_visual::Roster castVisuals_;
     mutable std::unordered_map<uint32_t, bool> precastKitAnimates_;

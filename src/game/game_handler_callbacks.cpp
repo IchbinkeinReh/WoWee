@@ -1017,6 +1017,12 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
             }
         }
     }
+    // 0x00528010's tutorials, each shown once: 0x29, 1, 2 and 0 in that order.
+    // The client runs this once the world is loaded, by when the server's
+    // flags are always in; here world entry can come first, so the four wait
+    // for SMSG_TUTORIAL_FLAGS when it has not arrived.
+    if (tutorials_.loaded()) triggerEntryTutorials();
+    else entryTutorialsPending_ = true;
     // Every way into the world (0x00528010, once per entry - 0x00528c30
     // clears it on the way out): the battleground queues' status asked for
     // (0x0054ca50, CMSG_BATTLEFIELD_STATUS), then the dungeon finder's
@@ -1148,6 +1154,11 @@ void GameHandler::handleTutorialFlags(network::Packet& packet) {
         v = packet.readUInt32();
     }
 
+    tutorials_.loadFlags(flags);  // 0x00530920
+    if (entryTutorialsPending_) {
+        entryTutorialsPending_ = false;
+        triggerEntryTutorials();
+    }
     LOG_INFO("SMSG_TUTORIAL_FLAGS: [",
              flags[0], ", ", flags[1], ", ", flags[2], ", ", flags[3], ", ",
              flags[4], ", ", flags[5], ", ", flags[6], ", ", flags[7], "]");
@@ -2994,6 +3005,47 @@ void GameHandler::sendActionBarToggles(uint8_t mask) {
     if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_SET_ACTIONBAR_TOGGLES) == 0xFFFF) return;
     network::Packet packet(wireOpcode(Opcode::CMSG_SET_ACTIONBAR_TOGGLES));
     packet.writeUInt8(mask);
+    socket->send(packet);
+}
+
+void GameHandler::flagTutorial(uint32_t id) {
+    if (!tutorials_.flag(id)) return;
+    if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_TUTORIAL_FLAG) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_TUTORIAL_FLAG));
+    packet.writeUInt32(id);
+    socket->send(packet);
+}
+
+void GameHandler::triggerTutorial(uint32_t id) {
+    const bool show = addons::storedCVarValue("showTutorials", "1") != "0";
+    switch (tutorials_.trigger(id, show)) {
+    case TutorialState::Trigger::Nothing:
+        break;
+    case TutorialState::Trigger::Flag:
+        flagTutorial(id);
+        break;
+    case TutorialState::Trigger::Popup:
+        if (auto* ac = services().audioCoordinator) {
+            if (auto* sfx = ac->getUiSoundManager()) sfx->playByName("TutorialPopup");
+        }
+        fireAddonEvent("TUTORIAL_TRIGGER", {std::to_string(id + 1)});
+        break;
+    }
+}
+
+void GameHandler::triggerEntryTutorials() {
+    for (uint32_t id : {0x29u, 1u, 2u, 0u}) triggerTutorial(id);
+}
+
+void GameHandler::clearTutorials() {
+    tutorials_.setAll();
+    sendTutorialClear();
+}
+
+void GameHandler::resetTutorials() {
+    tutorials_.reset();
+    if (!socket || state != WorldState::IN_WORLD || wireOpcode(Opcode::CMSG_TUTORIAL_RESET) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_TUTORIAL_RESET));
     socket->send(packet);
 }
 

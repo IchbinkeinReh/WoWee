@@ -1833,6 +1833,11 @@ wowee_add_test(test_npc_flags SOURCES test_npc_flags.cpp)
 # member's vehicle, after every hello flag.
 wowee_add_test(test_npc_interaction SOURCES test_npc_interaction.cpp)
 
+# ── test_tutorials ───────────────────────────────────────────
+# The tutorial pop-outs' two bit sets and the session's seen list, as
+# 0x00530100..0x00530920 keep them.
+wowee_add_test(test_tutorials SOURCES test_tutorials.cpp)
+
 # ── test_scene_pick ──────────────────────────────────────────
 # Which of ScenePick's answers a caller wants. closestGuid and resolve()
 # disagree exactly where a wide object stands beside an NPC, which is where the

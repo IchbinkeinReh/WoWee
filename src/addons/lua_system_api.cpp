@@ -780,62 +780,12 @@ static void saveStoredCVars() {
     cvarFileSnapshot().valid = false;
 }
 
-/// Tutorials the player has already been shown.
-///
-/// The stock client keeps these in account data, which this client is not
-/// sent, so they ride in the CVar file beside everything else that has to
-/// survive a login - one row, the ids comma separated. An in-memory set would
-/// look finished and re-show every tutorial on the next login, which is the
-/// shape this repository keeps producing.
-///
-/// TutorialFrame_NewTutorial refuses to queue a tutorial that is already
-/// flagged, so an answer of "no" here means every tutorial fires again on
-/// every login, and an unanswered call raises inside TutorialFrame_Update.
-static const char* kTutorialCVar = "wowee_tutorialsFlagged";
-
-static bool tutorialFlagged(int id) {
-    const std::string& all = cvarStore()[kTutorialCVar];
-    const std::string needle = std::to_string(id);
-    size_t at = 0;
-    while ((at = all.find(needle, at)) != std::string::npos) {
-        const bool startOk = (at == 0) || all[at - 1] == ',';
-        const size_t end = at + needle.size();
-        const bool endOk = (end == all.size()) || all[end] == ',';
-        if (startOk && endOk) return true;
-        at = end;
-    }
-    return false;
-}
-
-/// Every flagged tutorial, in id order.
-///
-/// Stored in the order they were seen, which is not the order they are browsed
-/// in: the next and previous buttons walk the ids, so the list is sorted here
-/// rather than kept sorted, and a file hand-edited into any order still reads.
-static std::vector<int> tutorialIds() {
-    std::vector<int> ids;
-    const std::string& all = cvarStore()[kTutorialCVar];
-    size_t at = 0;
-    while (at < all.size()) {
-        const size_t comma = all.find(',', at);
-        const std::string piece = all.substr(
-            at, comma == std::string::npos ? std::string::npos : comma - at);
-        if (!piece.empty()) {
-            try { ids.push_back(std::stoi(piece)); } catch (...) {}
-        }
-        if (comma == std::string::npos) break;
-        at = comma + 1;
-    }
-    std::sort(ids.begin(), ids.end());
-    return ids;
-}
-
-static void flagTutorial(int id) {
-    if (id <= 0 || tutorialFlagged(id)) return;
-    std::string& all = cvarStore()[kTutorialCVar];
-    if (!all.empty()) all += ',';
-    all += std::to_string(id);
-    saveStoredCVars();
+/// A tutorial id from Lua, counted from 1 as the frames count it, as the
+/// client's own count from 0 - or -1 for one past the sixty (the Lua
+/// functions check `id - 1 < 0x3c`).
+static int tutorialArg(lua_State* L) {
+    const int id = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
+    return (id >= 0 && id < static_cast<int>(game::TutorialState::kCount)) ? id : -1;
 }
 
 /// A sound CVar's value, or the stock client's default for it.
@@ -1055,6 +1005,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // On (0x00747860 registers it "1"): every unit's footfalls play
     // (0x00747240).
     else if (n == "footstepsounds") lua_pushstring(L, "1");
+    // On (0x0051d9b0 registers it "1"): a tutorial not yet triggered pops
+    // out rather than being flagged unseen (0x00530840).
+    else if (n == "showtutorials") lua_pushstring(L, "1");
     // The client registers both (0x007f3a10, 0x0078e400): violenceLevel at
     // its locale's limit, 2 here, which shows a spell's first SpellVisual
     // (0x007fa290); spellEffectLevel ("Spell Detail") at 9, which drops all
@@ -6766,10 +6719,14 @@ static int lua_GetRunningMacroButton(lua_State* L) {
 
 // TriggerTutorial(id) - show one of the interface's tutorial pop-outs.
 //
-// Tutorials are a saved per-account set of which have been seen, and none of
-// that is kept here, so nothing is shown. Answered rather than left missing
-// because the bag bar fires it whenever a bag is picked up.
-static int lua_TriggerTutorial(lua_State* L) { (void)L; return 0; }
+// The server keeps which have been seen (SMSG_TUTORIAL_FLAGS); one not yet
+// triggered pops out through TUTORIAL_TRIGGER (game/tutorials.hpp).
+static int lua_TriggerTutorial(lua_State* L) {
+    // 0x005308d0 -> 0x00530840.
+    const int id = tutorialArg(L);
+    if (auto* gh = getGameHandler(L); gh && id >= 0) gh->triggerTutorial(static_cast<uint32_t>(id));
+    return 0;
+}
 
 // Quit() - leave the game, as the game menu's Exit button does.
 //
@@ -8477,7 +8434,9 @@ void registerSystemLuaAPI(lua_State* L) {
                 // shown, IsTutorialFlagged from TutorialFrame_NewTutorial
                 // before one is queued.
                 {"FlagTutorial", [](lua_State* L) -> int {
-            flagTutorial(static_cast<int>(luaL_optnumber(L, 1, 0)));
+            // 0x00530750 -> 0x00530450.
+            const int id = tutorialArg(L);
+            if (auto* gh = getGameHandler(L); gh && id >= 0) gh->flagTutorial(static_cast<uint32_t>(id));
             return 0;
         }},
                 // Walking the tutorials already seen. Both answer an id or
@@ -8487,28 +8446,34 @@ void registerSystemLuaAPI(lua_State* L) {
                 // ClearTutorials() (0x00530820 -> 0x00530510): every one of
                 // the sixty marked seen, and CMSG_TUTORIAL_CLEAR.
                 {"ClearTutorials", [](lua_State* L) -> int {
-            for (int id = 1; id <= 60; ++id) flagTutorial(id);
-            if (auto* gh = getGameHandler(L)) gh->sendTutorialClear();
+            if (auto* gh = getGameHandler(L)) gh->clearTutorials();
             return 0;
         }},
                 {"GetNextCompleatedTutorial", [](lua_State* L) -> int {
-            const int from = static_cast<int>(luaL_optnumber(L, 1, 0));
-            for (int id : tutorialIds()) {
-                if (id > from) { lua_pushnumber(L, id); return 1; }
-            }
-            return 0;
+            // 0x005301d0 -> 0x00530140: the one seen after it this session.
+            auto* gh = getGameHandler(L);
+            const int from = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
+            const uint32_t next = gh && from >= 0 ? gh->tutorials().nextSeen(static_cast<uint32_t>(from)) : 0;
+            if (next == 0) return 0;
+            lua_pushnumber(L, next);
+            return 1;
         }},
                 {"GetPrevCompleatedTutorial", [](lua_State* L) -> int {
-            const int from = static_cast<int>(luaL_optnumber(L, 1, 0));
-            const auto ids = tutorialIds();
-            for (int id : std::views::reverse(ids)) {
-                if (id < from) { lua_pushnumber(L, id); return 1; }
-            }
-            return 0;
+            // 0x00530240 -> 0x00530190: the one seen before it.
+            auto* gh = getGameHandler(L);
+            const int from = static_cast<int>(luaL_optnumber(L, 1, 0)) - 1;
+            const uint32_t prev = gh && from >= 0 ? gh->tutorials().prevSeen(static_cast<uint32_t>(from)) : 0;
+            if (prev == 0) return 0;
+            lua_pushnumber(L, prev);
+            return 1;
         }},
                 {"IsTutorialFlagged", [](lua_State* L) -> int {
-            lua_pushboolean(L, tutorialFlagged(
-                static_cast<int>(luaL_optnumber(L, 1, 0))) ? 1 : 0);
+            // 0x005307a0: 1 or nil, for an id of 1 to 60.
+            const int id = tutorialArg(L);
+            if (id < 0) return 0;
+            auto* gh = getGameHandler(L);
+            if (gh && gh->tutorials().flagged(static_cast<uint32_t>(id))) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
             return 1;
         }},
                 // GetDebugStats() fills the debug stats overlay, which is one
@@ -9895,14 +9860,16 @@ void registerSystemLuaAPI(lua_State* L) {
                 // the rest of its API are bound - so the panel's checkbox is
                 // offering something real.
                 {"CanUseEquipmentSets",         lua_ReturnTrue},
-                // Tutorials can be reset because they are kept: the flags live
-                // in the CVar file. Answering false would grey out a button
-                // that would have worked.
-                {"CanResetTutorials",           lua_ReturnTrue},
+                // 0x00530700: 1 when any has been triggered, else nil.
+                {"CanResetTutorials", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (gh && gh->tutorials().anyTriggered()) lua_pushnumber(L, 1);
+            else lua_pushnil(L);
+            return 1;
+        }},
+                // 0x00530830 -> 0x00530630.
                 {"ResetTutorials", [](lua_State* L) -> int {
-            (void)L;
-            cvarStore()[kTutorialCVar].clear();
-            saveStoredCVars();
+            if (auto* gh = getGameHandler(L)) gh->resetTutorials();
             return 0;
         }},
                 // A Mac-only mouse this build does not look for.
