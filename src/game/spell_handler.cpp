@@ -19,6 +19,9 @@
 #include "game/go_interaction_anim.hpp"
 #include "game/transport_manager.hpp"
 #include "game/spell_target_point.hpp"
+#include "game/missile_trajectory.hpp"
+#include "game/movement_handler.hpp"
+#include "game/vehicle.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
@@ -44,6 +47,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <random>
 #include <sstream>
 
 namespace wowee {
@@ -1332,10 +1336,81 @@ bool SpellHandler::spellCanTargetUnit(uint64_t unitGuid) const {
            takeUnit(unitTarget_.spellId, unitTarget_.caster, unitGuid, unitTarget_.required, false).taken;
 }
 
+SpellHandler::TrajectoryCast SpellHandler::buildTrajectoryCast(uint32_t spellId, uint64_t caster, uint64_t target,
+                                                               network::Packet& out) {
+    namespace mt = missile_trajectory;
+    const auto it = owner_.spellNameCacheRef().find(spellId);
+    if (it == owner_.spellNameCacheRef().end() || it->second.spellMissileId == 0) return TrajectoryCast::NotAimed;
+    auto* am = core::Application::getInstance().getAssetManager();
+    auto missiles = am ? am->loadDBCOptional("SpellMissile.dbc") : nullptr;
+    if (!missiles || missiles->getFieldCount() < 14) return TrajectoryCast::NotAimed;
+    const int32_t found = missiles->findRecordById(it->second.spellMissileId);
+    if (found < 0) return TrajectoryCast::NotAimed;
+    const auto r = static_cast<uint32_t>(found);
+    mt::MissileRow row;
+    row.flags = missiles->getUInt32(r, 1);
+    if ((row.flags & mt::kFlagAimed) == 0) return TrajectoryCast::NotAimed;
+    row.pitchMin = missiles->getFloat(r, 2);
+    row.pitchMax = missiles->getFloat(r, 3);
+    row.speedMin = missiles->getFloat(r, 4);
+    row.speedMax = missiles->getFloat(r, 5);
+    row.facingRandMin = missiles->getFloat(r, 6);
+    row.facingRandMax = missiles->getFloat(r, 7);
+    row.pitchRandMin = missiles->getFloat(r, 8);
+    row.pitchRandMax = missiles->getFloat(r, 9);
+    row.speedRandMin = missiles->getFloat(r, 10);
+    row.speedRandMax = missiles->getFloat(r, 11);
+    row.gravity = missiles->getFloat(r, 12);
+    row.maxDuration = missiles->getFloat(r, 13);
+    // 0x0080ac90: only the active mover casts one.
+    const uint64_t mover = owner_.activeMover();
+    MovementHandler* movement = owner_.getMovementHandler();
+    if (caster != mover || !movement) {
+        LOG_WARNING("Missile trajectory does not have active mover caster");
+        return TrajectoryCast::Refused;
+    }
+    const MovementInfo wire = movement->moverWireInfo();
+    // 0x006fcd60. The world's frame here is the wire's, as the renderer's is.
+    mt::AimInput in;
+    if (const vehicle::VehicleRecord* v = owner_.vehicleRowOf(caster)) {
+        in.hasVehicleRow = true;
+        in.vehicleFlags = v->flags;
+        in.vehiclePitchMin = v->pitchMin;
+        in.vehiclePitchMax = v->pitchMax;
+    }
+    in.unitPitch = owner_.unitPitch(caster);
+    in.aimPower = owner_.vehicleAimPower();
+    in.facing = wire.orientation;
+    rendering::SpellVisualSystem::MissileEnd from;
+    from.position = glm::vec3(wire.x, wire.y, wire.z);
+    from.renderInstanceId = owner_.resolveUnitRenderInstance(caster);
+    auto* renderer = owner_.services().renderer;
+    auto* svs = renderer ? renderer->getSpellVisualSystem() : nullptr;
+    const auto origin = svs ? svs->trajectoryOrigin(owner_.getSpellVisualId(spellId), from)
+                            : rendering::SpellVisualSystem::TrajectoryOrigin{from.position,
+                                                                            from.position + glm::vec3(0, 0, 1)};
+    in.launch = origin.launch;
+    static std::mt19937 rng{std::random_device{}()};
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+    const mt::Aim aim = mt::chooseAim(row, in, [&] { return unit(rng); });
+    const mt::Flight flight = mt::fly(row, aim, origin.middle, [renderer](const glm::vec3& a, const glm::vec3& b) {
+        return renderer ? renderer->intersectSegment(a, b) : std::nullopt;
+    });
+    out = CastSpellPacket::buildTrajectory(spellId, ++castCount_, target, aim.launch, flight.impact, aim.pitch,
+                                           aim.speed, mover, wire);
+    LOG_INFO("Aimed cast ", spellId, ": pitch ", aim.pitch, " speed ", aim.speed, " lands in ", flight.seconds, " s");
+    return TrajectoryCast::Built;
+}
+
 void SpellHandler::sendPetCast(uint32_t spellId, uint64_t caster, uint64_t target) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    const auto cast = owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
-                                                : CastSpellPacket::build(spellId, target, ++castCount_);
+    network::Packet aimed;
+    const TrajectoryCast how = buildTrajectoryCast(spellId, caster, target, aimed);
+    if (how == TrajectoryCast::Refused) return;
+    const auto cast = how == TrajectoryCast::Built ? aimed
+                      : owner_.getPacketParsers()
+                          ? owner_.getPacketParsers()->buildCastSpell(spellId, target, ++castCount_)
+                          : CastSpellPacket::build(spellId, target, ++castCount_);
     owner_.getSocket()->send(CastSpellPacket::asPetCast(caster, cast));
     LOG_INFO("Pet 0x", std::hex, caster, " casting spell: ", std::dec, spellId, " on 0x", std::hex, target, std::dec);
     castSent(spellId, caster);
@@ -1944,7 +2019,12 @@ void SpellHandler::sendPlayerCast(uint32_t spellId, uint64_t target, uint64_t it
         owner_.sendMovement(Opcode::MSG_MOVE_HEARTBEAT);
     }
 
-    auto packet = item != 0
+    network::Packet aimed;
+    const TrajectoryCast how =
+        item == 0 ? buildTrajectoryCast(spellId, owner_.getPlayerGuid(), target, aimed) : TrajectoryCast::NotAimed;
+    if (how == TrajectoryCast::Refused) return;
+    auto packet = how == TrajectoryCast::Built ? aimed
+        : item != 0
         ? (owner_.getPacketParsers() ? owner_.getPacketParsers()->buildCastSpellOnItem(spellId, item)
                                      : CastSpellPacket::buildItemTarget(spellId, item, ++castCount_))
         : owner_.getPacketParsers()
@@ -3833,8 +3913,8 @@ void SpellHandler::handleSpellStart(network::Packet& packet) {
     if (owner_.spellCastBeginCallbackRef()) owner_.spellCastBeginCallbackRef()(data.casterUnit, data.spellId);
     // 0x00806700 -> 0x00805330(spell, cast time, 0) for a start not pending
     // (cast flags 0x1): the cast the caster shows. No cast object here is
-    // aimed (+0x139): only 0x00809f80 marks one, on a trajectory cast the
-    // player sends, which this client does not send.
+    // aimed (+0x139): only 0x00809f80 marks one, on the trajectory cast the
+    // player sends; buildTrajectoryCast sends it but keeps no cast object.
     if ((data.castFlags & 0x1u) == 0) {
         cast_visual::Begin begin;
         begin.castCount = data.castCount;

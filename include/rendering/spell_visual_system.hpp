@@ -122,6 +122,17 @@ public:
         glm::vec3 position{0.0f};
     };
 
+    /// Where an aimed trajectory cast's shot leaves from, and the caster's
+    /// middle its launch point is looked at from (0x006fcd60): the model's
+    /// $AIM event, else where the visual's missile would leave (0x0071a720,
+    /// 0x00720bf0); the middle is the unit's position raised by its model's
+    /// box centre (+0xbc), or by a yard without a model.
+    struct TrajectoryOrigin {
+        glm::vec3 launch{0.0f};
+        glm::vec3 middle{0.0f};
+    };
+    TrajectoryOrigin trajectoryOrigin(uint32_t visualId, const MissileEnd& caster);
+
     /// What an ADJUST_MISSILE cast (flag 0x20000) hands its missile: the
     /// elevation and flight time from SMSG_SPELL_GO and the spell's
     /// SpellMissile row, which put it on an arc (0x00700880). `castSpeed` is

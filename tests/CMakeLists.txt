@@ -1842,6 +1842,11 @@ wowee_add_test(test_tutorials SOURCES test_tutorials.cpp)
 # The pet bar's ten slots as 0x005d6020 moves actions between them.
 wowee_add_test(test_pet_action_bar SOURCES test_pet_action_bar.cpp)
 
+# ── test_missile_trajectory ──────────────────────────────────
+# The aimed trajectory cast's solver (0x006fcd60): the pitch, speed and facing
+# a vehicle's shot leaves with, and where its stepped path meets the world.
+wowee_add_test(test_missile_trajectory SOURCES test_missile_trajectory.cpp)
+
 # ── test_scene_pick ──────────────────────────────────────────
 # Which of ScenePick's answers a caller wants. closestGuid and resolve()
 # disagree exactly where a wide object stands beside an NPC, which is where the

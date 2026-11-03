@@ -937,6 +937,33 @@ glm::vec3 SpellVisualSystem::missileSource(const MissileVisual& visual, const Mi
     return from.position;
 }
 
+SpellVisualSystem::TrajectoryOrigin SpellVisualSystem::trajectoryOrigin(uint32_t visualId,
+                                                                      const MissileEnd& caster) {
+    TrajectoryOrigin o;
+    o.launch = caster.position;
+    o.middle = caster.position + glm::vec3(0.0f, 0.0f, 1.0f);
+    CharacterRenderer* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
+    if (!charRenderer || caster.renderInstanceId == 0) return o;
+    if (const pipeline::M2Model* model = charRenderer->getInstanceModelData(caster.renderInstanceId))
+        o.middle = caster.position + glm::vec3(0.0f, 0.0f, (model->boundMin.z + model->boundMax.z) * 0.5f);
+    glm::vec3 aim;
+    if (charRenderer->getEventPosition(caster.renderInstanceId, 0x4D494124u /* $AIM */, aim)) {
+        o.launch = aim;
+        return o;
+    }
+    if (const MissileVisual* visual = findMissileVisual(visualId)) {
+        o.launch = missileSource(*visual, caster);
+        return o;
+    }
+    for (uint32_t id : {0x4C534324u /* $CSL */, 0x52534324u /* $CSR */, 0x54534324u /* $CST */}) {
+        if (charRenderer->getEventPosition(caster.renderInstanceId, id, aim)) {
+            o.launch = aim;
+            return o;
+        }
+    }
+    return o;
+}
+
 // Where the missile aims this frame (FUN_006ff320): the target's attachment
 // carrying the impact offset while the target exists, and once it has gone
 // the last point it was seen at, which is where the missile then lands.

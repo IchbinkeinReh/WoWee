@@ -717,6 +717,12 @@ private:
     bool auraLetsSpell(uint64_t unit, uint32_t spellId) const;
     /// The cursor holds the spell for a unit (0x0080cce0).
     void armUnitTarget(uint32_t spellId, uint64_t caster, uint32_t required);
+    /// An aimed trajectory cast (0x0080ac90 -> 0x00809f80): a spell whose
+    /// SpellMissile row has Flags bit 1. NotAimed for any other; Refused
+    /// where the caster is not the active mover or nothing could be worked
+    /// out; Built with the cast in `out`.
+    enum class TrajectoryCast { NotAimed, Refused, Built };
+    TrajectoryCast buildTrajectoryCast(uint32_t spellId, uint64_t caster, uint64_t target, network::Packet& out);
     /// CMSG_PET_CAST_SPELL at a unit or at none (0x0080ac90).
     void sendPetCast(uint32_t spellId, uint64_t caster, uint64_t target);
     /// CMSG_CAST_SPELL from the player at a unit, at none, or at an item

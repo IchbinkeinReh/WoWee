@@ -298,6 +298,9 @@ public:
     /// passenger component's +0x10 0x200, 0x00748070 to 0x00748230).
     [[nodiscard]] bool vehicleMoveHeld(uint64_t unit) const { return heldVehicleMoves_.count(unit) != 0; }
 
+    /// A movement packet for the mover, in server coordinates.
+    [[nodiscard]] MovementInfo moverWireInfo();
+
 private:
     /// A monster move held for a vehicle's enter or exit animation, kept as
     /// it came (0x00748170) and run again as it is let go.
@@ -344,8 +347,6 @@ private:
     /// The movement of `guid` as the client keeps it: movementInfo for the
     /// mover, the player's held one while another unit moves.
     [[nodiscard]] const MovementInfo& movementOf(uint64_t guid) const;
-    /// A movement packet for the mover, in server coordinates.
-    [[nodiscard]] MovementInfo moverWireInfo();
     /// A passenger's offset on `transportGuid` as the wire carries it - the
     /// inverse of how it came in (TransportManager::serverToTransportLocal).
     [[nodiscard]] glm::vec3 transportOffsetToWire(uint64_t transportGuid, const glm::vec3& localOffset) const;
