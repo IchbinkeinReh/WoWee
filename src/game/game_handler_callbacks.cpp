@@ -3836,6 +3836,16 @@ bool GameHandler::clickUnitBeyondHellos(uint64_t guid) {
     return true;
 }
 
+void GameHandler::loadingKeepAlive(bool starting) {
+    const auto now = std::chrono::steady_clock::now();
+    if (!starting && now < nextLoadingKeepAlive_) return;
+    if (!starting && socket && wireOpcode(Opcode::CMSG_KEEP_ALIVE) != 0xFFFF) {
+        network::Packet packet(wireOpcode(Opcode::CMSG_KEEP_ALIVE));
+        socket->send(packet);
+    }
+    nextLoadingKeepAlive_ = now + std::chrono::seconds(30);
+}
+
 void GameHandler::queryAreaSpiritHealer(uint64_t guid) {
     if (!isInWorld() || !socket) return;
     areaSpiritHealerGuid_ = guid;

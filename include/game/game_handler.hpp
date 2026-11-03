@@ -2931,6 +2931,10 @@ public:
     /// (CMSG_SPELLCLICK) or a group member's vehicle entered
     /// (CMSG_PLAYER_VEHICLE_ENTER). False when it is neither.
     bool clickUnitBeyondHellos(uint64_t guid);
+    /// 0x00408520: on a loading screen, CMSG_KEEP_ALIVE every thirty seconds.
+    /// Starting (0x0040a990) sets the first one thirty seconds out; each
+    /// progress step after sends one once that time has come.
+    void loadingKeepAlive(bool starting);
     void interactWithGameObject(uint64_t guid);
     uint64_t getHookedFishingBobberGuid() const { return hookedFishingBobberGuid_; }
     void selectGossipOption(uint32_t optionId, const std::string& code = "");
@@ -6279,6 +6283,7 @@ private:
     // Vehicle (WotLK): non-zero when player is seated in a vehicle
     uint32_t vehicleId_ = 0;
     vehicle::VehicleRoster vehicleRoster_;
+    std::chrono::steady_clock::time_point nextLoadingKeepAlive_{};  ///< 0xb2fe70
     cast_visual::Roster castVisuals_;
     mutable std::unordered_map<uint32_t, bool> precastKitAnimates_;
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958

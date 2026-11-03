@@ -708,6 +708,7 @@ void WorldLoader::loadMapGeometry(uint32_t mapId, const std::string& mapName,
                              loaded, total);
                 }
 
+                if (gameHandler_) gameHandler_->loadingKeepAlive(/*starting=*/false);
                 if (loadingScreenOk) {
                     loadingScreen->setStatus(buf);
                     loadingScreen->setProgress(progress);
@@ -786,6 +787,8 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     loadingScreen.setVkContext(window_->getVkContext());
     loadingScreen.setSDLWindow(window_->getSDLWindow());
     bool loadingScreenOk = loadingScreen.initialize(assetManager_, mapId);
+    // 0x0040a990: the loading screen starts the keep-alive's thirty seconds.
+    if (gameHandler_) gameHandler_->loadingKeepAlive(/*starting=*/true);
 
     auto showProgress = [&](const char* msg, float progress) {
         SDL_Event event;
@@ -809,6 +812,9 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
         // own frames. Beat the watchdog so it does not read a healthy load as a hang
         // and force-release the player's mouse capture.
         app_.beatWatchdog();
+        // 0x0040a920 -> 0x00408520: each progress step, a keep-alive once the
+        // thirty seconds are up.
+        if (gameHandler_) gameHandler_->loadingKeepAlive(/*starting=*/false);
         if (!loadingScreenOk) return;
         loadingScreen.setStatus(msg);
         loadingScreen.setProgress(progress);
