@@ -531,6 +531,8 @@ public:
 
     // Utility methods for delegation from GameHandler
     void updateLogoutCountdown(float deltaTime);
+    /// 0x00573390: the ready check's timer, for the one who started it.
+    void updateReadyCheckTimer();
     void resetTransferState();
     GroupListData& mutablePartyData() { return partyData; }
     /// The player's own group as it stands outside a battleground - the "real"

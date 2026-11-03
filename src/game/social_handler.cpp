@@ -6147,6 +6147,43 @@ void SocialHandler::handlePvpLogData(network::Packet& packet) {
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("UPDATE_BATTLEFIELD_SCORE", {});
 }
 
+void SocialHandler::updateReadyCheckTimer() {
+    // 0x00573390, run each frame (and at once when the last answer is in,
+    // 0x005744f0 / 0x00574880, which the confirm handler above does by moving
+    // the deadline into the past). Only for whoever started the check: the
+    // summary in chat - who did not answer (RAID_MEMBERS_AFK), else
+    // READY_CHECK_ALL_READY or READY_CHECK_FINISHED - and then
+    // MSG_RAID_READY_CHECK_FINISHED, which ends the check for everyone.
+    if (!readyCheckDeadline_ || std::chrono::steady_clock::now() < *readyCheckDeadline_) return;
+    if (readyCheckInitiatorGuid_ == 0 || readyCheckInitiatorGuid_ != owner_.getPlayerGuid()) return;
+    readyCheckDeadline_.reset();  // DAT_00beb61c = 0
+
+    std::string afk;
+    bool allReady = true;
+    for (const auto& member : partyData.members) {
+        if (member.guid == owner_.getPlayerGuid()) continue;
+        const auto it = readyCheckAnswers_.find(member.guid);
+        const ReadyCheckAnswer answer = it != readyCheckAnswers_.end() ? it->second : ReadyCheckAnswer{};
+        if (!answer.ready) allReady = false;
+        if (answer.waiting && !member.name.empty()) {
+            if (!afk.empty()) afk += ", ";  // 0x009fc494
+            afk += member.name;
+        }
+    }
+    if (!afk.empty()) {
+        owner_.addSystemChatMessage(interfaceFormat("RAID_MEMBERS_AFK", "The following players are Away: %s", {afk}));
+    } else if (allReady) {
+        owner_.addSystemChatMessage(interfaceString("READY_CHECK_ALL_READY", "Everyone is Ready"));
+    } else {
+        owner_.addSystemChatMessage(interfaceString("READY_CHECK_FINISHED", "Ready check finished"));
+    }
+
+    if (auto* sock = owner_.getSocket(); sock && wireOpcode(Opcode::MSG_RAID_READY_CHECK_FINISHED) != 0xFFFF) {
+        network::Packet packet(wireOpcode(Opcode::MSG_RAID_READY_CHECK_FINISHED));
+        sock->send(packet);
+    }
+}
+
 void SocialHandler::updateLogoutCountdown(float deltaTime) {
     // A queue request the server let pass without a word. A realm that keeps
     // a battleground back - ChromieCraft opens the random one at level sixty,

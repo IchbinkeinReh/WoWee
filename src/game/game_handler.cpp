@@ -1000,6 +1000,7 @@ void GameHandler::update(float deltaTime) {
 
         // Tick logout countdown
         if (socialHandler_) socialHandler_->updateLogoutCountdown(deltaTime);
+        if (socialHandler_) socialHandler_->updateReadyCheckTimer();
 
         updateTaxiAndMountState(deltaTime);
 
