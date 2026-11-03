@@ -1744,6 +1744,7 @@ public:
     const std::unordered_map<uint32_t, uint8_t>& getPetTalents() const;
     const TalentTabEntry* getPetTalentTab() const;
     void learnPetTalent(uint32_t talentId, uint32_t requestedRank);
+    void learnPreviewPetTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
     void switchTalentSpec(uint8_t newSpec);
 
     // Talent DBC access

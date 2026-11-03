@@ -333,6 +333,9 @@ public:
     [[nodiscard]] const TalentTabEntry* getPetTalentTab() const;
     /// CMSG_PET_LEARN_TALENT: the pet, the talent and the rank, from zero.
     void learnPetTalent(uint32_t talentId, uint32_t requestedRank);
+    /// CMSG_LEARN_PREVIEW_TALENTS_PET (0x005c6a10's pet branch): the pet, a
+    /// count, and each talent with the rank it is to have, from zero.
+    void learnPreviewPetTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);
     /// The previewed talents learned in one request, each at the rank it is
     /// to have (counted from one), in the order the trees list them.
     void learnPreviewTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks);

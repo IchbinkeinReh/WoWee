@@ -1907,6 +1907,10 @@ static bool wantsPetTalents(lua_State* L, int index) {
     return lua_toboolean(L, index) != 0;
 }
 
+/// The pet's staged points and their total, defined below with the player's.
+static std::unordered_map<uint32_t, int>& petPreviewPoints();
+static int petPreviewTotal();
+
 /// The pet's tree, its one tab (0x005c64d0): none without a pet, for a family
 /// with no tree, or when the inspect side is asked (an inspect has no pet).
 static const game::TalentTabEntry* petTalentTab(game::GameHandler* gh, bool inspect) {
@@ -1936,12 +1940,19 @@ static const game::GameHandler::TalentEntry* petTalentAt(game::GameHandler* gh, 
     return index <= static_cast<int>(talents.size()) ? talents[static_cast<size_t>(index - 1)] : nullptr;
 }
 
-/// Every prerequisite of a pet talent learned.
-static bool petPrereqsMet(game::GameHandler* gh, const game::GameHandler::TalentEntry* talent) {
+/// Every prerequisite of a pet talent learned, or with the pet's staged
+/// points counted as well.
+static bool petPrereqsMet(game::GameHandler* gh, const game::GameHandler::TalentEntry* talent, bool withPreview) {
     if (!gh || !talent) return false;
     for (int p = 0; p < 3; ++p) {
-        if (talent->prereqTalent[p] == 0) continue;
-        if (gh->getPetTalentRank(talent->prereqTalent[p]) < static_cast<int>(talent->prereqRank[p]) + 1) return false;
+        const uint32_t prereqId = talent->prereqTalent[p];
+        if (prereqId == 0) continue;
+        int have = gh->getPetTalentRank(prereqId);
+        if (withPreview) {
+            const auto it = petPreviewPoints().find(prereqId);
+            if (it != petPreviewPoints().end()) have += it->second;
+        }
+        if (have < static_cast<int>(talent->prereqRank[p]) + 1) return false;
     }
     return true;
 }
@@ -1997,7 +2008,7 @@ static int lua_GetTalentTabInfo(lua_State* L) {
         lua_pushnil(L);
         lua_pushnumber(L, spent);
         lua_pushstring(L, tab->backgroundFile.c_str());
-        lua_pushnumber(L, 0);  // nothing staged in the pet's tree
+        lua_pushnumber(L, petPreviewTotal());
         return 5;
     }
     const bool inspect = lua_toboolean(L, 2) != 0;
@@ -2154,10 +2165,12 @@ static int lua_GetTalentInfo(lua_State* L) {
             return 10;
         }
         const int rank = gh->getPetTalentRank(talent->talentId);
+        const auto stagedIt = petPreviewPoints().find(talent->talentId);
+        const int previewRank = rank + (stagedIt != petPreviewPoints().end() ? stagedIt->second : 0);
         std::string name = gh->getSpellName(talent->rankSpells[0]);
         if (name.empty()) name = "Talent " + std::to_string(talent->talentId);
         const std::string icon = gh->getSpellIconPath(talent->rankSpells[0]);
-        const bool met = petPrereqsMet(gh, talent);
+        const bool met = petPrereqsMet(gh, talent, /*withPreview=*/false);
         lua_pushstring(L, name.c_str());
         if (icon.empty()) lua_pushnil(L);
         else lua_pushstring(L, icon.c_str());
@@ -2167,8 +2180,8 @@ static int lua_GetTalentInfo(lua_State* L) {
         lua_pushnumber(L, talent->maxRank);
         lua_pushboolean(L, 0);
         lua_pushboolean(L, met ? 1 : 0);
-        lua_pushnumber(L, rank);  // nothing staged in the pet's tree
-        lua_pushboolean(L, met ? 1 : 0);
+        lua_pushnumber(L, previewRank);
+        lua_pushboolean(L, petPrereqsMet(gh, talent, /*withPreview=*/true) ? 1 : 0);
         return 10;
     }
     const int group = talentGroupArg(L, 5, gh);
@@ -2917,15 +2930,41 @@ static std::unordered_map<uint32_t, int>& previewPoints() {
     return points;
 }
 
+/// The same for the pet's tree, a record of its own in the client (the pet's
+/// list at 0xc21024): nothing staged there is ever spent on the player.
+static std::unordered_map<uint32_t, int>& petPreviewPoints() {
+    static std::unordered_map<uint32_t, int> points;
+    return points;
+}
+
+static int petPreviewTotal() {
+    int total = 0;
+    for (const auto& [id, n] : petPreviewPoints()) { (void)id; total += n; }
+    return total;
+}
+
 // AddPreviewTalentPoints(tabIndex, talentIndex, delta, pet, group)
 static int lua_AddPreviewTalentPoints(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int tab   = static_cast<int>(luaL_optnumber(L, 1, 0));
     const int index = static_cast<int>(luaL_optnumber(L, 2, 0));
     const int delta = static_cast<int>(luaL_optnumber(L, 3, 1));
-    // The pet tree again: staging a preview point there resolved against the
-    // player's trees, and LearnPreviewTalents would then have spent it.
-    if (wantsPetTalents(L, 4)) return 0;
+    // The pet's tree stages in its own record, bounded by its talent's cap and
+    // the pet's own unspent points; PREVIEW_PET_TALENT_POINTS_CHANGED (0x275).
+    if (wantsPetTalents(L, 4)) {
+        const auto* talent = petTalentAt(gh, false, tab, index);
+        if (!talent) return 0;
+        int& staged = petPreviewPoints()[talent->talentId];
+        int upper = static_cast<int>(talent->maxRank) - gh->getPetTalentRank(talent->talentId);
+        if (delta > 0) {
+            const int unspent = static_cast<int>(gh->getPetUnspentTalentPoints()) - petPreviewTotal();
+            upper = std::min(upper, staged + std::max(0, unspent));
+        }
+        staged = std::clamp(staged + delta, 0, std::max(0, upper));
+        if (staged == 0) petPreviewPoints().erase(talent->talentId);
+        gh->fireAddonEvent("PREVIEW_PET_TALENT_POINTS_CHANGED", {});
+        return 0;
+    }
     // The fifth argument names the group to stage in, and the client does have
     // one preview total per group - every group record carries its own per-tab
     // preview figures, and 0x005c9590 reads the before and after totals out of
@@ -2991,8 +3030,9 @@ static int lua_GetPreviewTalentPointsSpent(lua_State* L) {
 // ResetPreviewTalentPoints(tabIndex [, isPet [, groupIndex]]) (0x005c7130):
 // every point staged in that tree taken back, and when the staged total moved,
 // PREVIEW_TALENT_POINTS_CHANGED with 0, the tree, the group (from one) and by
-// how much. Points are staged for the player's active group alone, so the
-// pet's trees and another group have none to take back.
+// how much. The player's points are staged for the active group alone, so
+// another group has none to take back; the pet's tree has its own record and
+// event (0x275).
 static int lua_ResetPreviewTalentPoints(lua_State* L) {
     if (!lua_isnumber(L, 1)) {
         return luaL_error(L, "Usage: ResetPreviewTalentPoints(tabIndex[, isPet[, groupIndex]])");
@@ -3003,9 +3043,18 @@ static int lua_ResetPreviewTalentPoints(lua_State* L) {
     const bool pet = luaClientSwitchArg(L, 2, false);
     const int group = lua_isnumber(L, 3) ? luaToClientInt(L, 3) - 1
                                          : static_cast<int>(gh->getActiveTalentSpec());
-    if (pet || group != static_cast<int>(gh->getActiveTalentSpec())) {
-        LOG_WARNING("ResetPreviewTalentPoints: nothing is staged for ",
-                    pet ? "the pet" : "another talent group");
+    if (pet) {
+        // The pet's one tree (0x005c7130 fires 0x275 for it).
+        const int before = petPreviewTotal();
+        if (tab == 1) petPreviewPoints().clear();
+        if (before != 0 && tab == 1) {
+            gh->fireAddonEvent("PREVIEW_PET_TALENT_POINTS_CHANGED",
+                               {"0", std::to_string(tab), "1", std::to_string(-before)});
+        }
+        return 0;
+    }
+    if (group != static_cast<int>(gh->getActiveTalentSpec())) {
+        LOG_WARNING("ResetPreviewTalentPoints: nothing is staged for another talent group");
         return 0;
     }
     const auto tabs = classTalentTabs(gh, gh->getPlayerClass());
@@ -3060,11 +3109,14 @@ static int lua_GetTalentPrereqs(lua_State* L) {
         for (int p = 0; p < 3; ++p) {
             const auto* prereq = talent->prereqTalent[p] ? gh->getTalentEntry(talent->prereqTalent[p]) : nullptr;
             if (!prereq) continue;
-            const bool met = gh->getPetTalentRank(prereq->talentId) >= static_cast<int>(talent->prereqRank[p]) + 1;
+            const int needed = static_cast<int>(talent->prereqRank[p]) + 1;
+            const int have = gh->getPetTalentRank(prereq->talentId);
+            const auto it = petPreviewPoints().find(prereq->talentId);
+            const int previewHave = have + (it != petPreviewPoints().end() ? it->second : 0);
             lua_pushnumber(L, prereq->row + 1);
             lua_pushnumber(L, prereq->column + 1);
-            lua_pushboolean(L, met ? 1 : 0);
-            lua_pushboolean(L, met ? 1 : 0);
+            lua_pushboolean(L, have >= needed ? 1 : 0);
+            lua_pushboolean(L, previewHave >= needed ? 1 : 0);
             pushed += 4;
         }
         return pushed;
@@ -3102,15 +3154,17 @@ static int lua_GetTalentPrereqs(lua_State* L) {
 //
 // The pair picks which group's record to total (0x005c6420 → 0x005c6010, which
 // sums the per-tab preview figures of the record one of the two arguments
-// names). There is one staging store here and it belongs to the group the
-// player is standing in, so the pet's trees and the viewer's other group answer
-// no points staged - which is what the client answers for a record with nothing
-// in it, and what talentframebase.lua:526 subtracts from that group's points.
+// names). The player's staging store belongs to the group the player is
+// standing in, so the viewer's other group answers no points staged - which is
+// what the client answers for a record with nothing in it, and what
+// talentframebase.lua:526 subtracts from that group's points. The pet's tree
+// answers out of its own store.
 static int lua_GetGroupPreviewTalentPointsSpent(lua_State* L) {
     auto* gh = getGameHandler(L);
     int total = 0;
-    if (!luaClientSwitchArg(L, 1, false)
-        && previewApplies(gh, false, talentGroupArg(L, 2, gh))) {
+    if (luaClientSwitchArg(L, 1, false)) {
+        total = petPreviewTotal();
+    } else if (previewApplies(gh, false, talentGroupArg(L, 2, gh))) {
         for (const auto& [id, n] : previewPoints()) { (void)id; total += n; }
     }
     lua_pushnumber(L, total);
@@ -3121,15 +3175,20 @@ static int lua_GetGroupPreviewTalentPointsSpent(lua_State* L) {
 //
 // Same pair, and 0x005c7200 totals that record before and after clearing it,
 // firing PREVIEW_TALENT_POINTS_CHANGED only when the total actually moved.
-// Nothing is staged outside the group the player is standing in, so the pet's
-// trees and the other group have nothing to take back - and saying so without
-// touching the store is what keeps a reset asked for over there from spending
-// itself here.
+// The player's points are staged in the group the player is standing in, so
+// the other group has nothing to take back - and saying so without touching the
+// store is what keeps a reset asked for over there from spending itself here.
+// The pet's tree empties its own store.
 static int lua_ResetGroupPreviewTalentPoints(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (luaClientSwitchArg(L, 1, false)
-        || !previewApplies(gh, false, talentGroupArg(L, 2, gh))) {
-        LOG_WARNING("ResetGroupPreviewTalentPoints: nothing is staged for the pet or another group");
+    if (luaClientSwitchArg(L, 1, false)) {
+        const bool hadPetStaged = !petPreviewPoints().empty();
+        petPreviewPoints().clear();
+        if (hadPetStaged && gh) gh->fireAddonEvent("PREVIEW_PET_TALENT_POINTS_CHANGED", {});
+        return 0;
+    }
+    if (!previewApplies(gh, false, talentGroupArg(L, 2, gh))) {
+        LOG_WARNING("ResetGroupPreviewTalentPoints: nothing is staged for another group");
         return 0;
     }
     const bool hadStaged = !previewPoints().empty();
@@ -3146,6 +3205,27 @@ static int lua_ResetGroupPreviewTalentPoints(lua_State* L) {
 static int lua_LearnPreviewTalents(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
+    if (luaClientSwitchArg(L, 1, false)) {
+        // The pet's (0x005c6a10's pet branch, CMSG_LEARN_PREVIEW_TALENTS_PET):
+        // its staged talents in row and column order, each at the rank it is
+        // to have.
+        std::vector<const game::GameHandler::TalentEntry*> order;
+        for (const auto& [id, n] : petPreviewPoints()) {
+            if (n <= 0) continue;
+            if (const auto* t = gh->getTalentEntry(id)) order.push_back(t);
+        }
+        std::sort(order.begin(), order.end(), [](const auto* a, const auto* b) {
+            return std::tie(a->row, a->column, a->talentId) < std::tie(b->row, b->column, b->talentId);
+        });
+        std::vector<std::pair<uint32_t, uint32_t>> ranks;
+        for (const auto* t : order) {
+            ranks.emplace_back(t->talentId, static_cast<uint32_t>(gh->getPetTalentRank(t->talentId) +
+                                                                  petPreviewPoints()[t->talentId]));
+        }
+        petPreviewPoints().clear();
+        gh->learnPreviewPetTalents(ranks);
+        return 0;
+    }
     // One CMSG_LEARN_PREVIEW_TALENTS (0x005c6a10): each talent with points
     // staged, at the rank it is to have, tree by tree and in each tree in
     // its order - a talent's tier and prerequisites are spent before it, as

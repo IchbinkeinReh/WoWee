@@ -3397,6 +3397,10 @@ const TalentTabEntry* GameHandler::getPetTalentTab() const {
     return spellHandler_ ? spellHandler_->getPetTalentTab() : nullptr;
 }
 
+void GameHandler::learnPreviewPetTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks) {
+    if (spellHandler_) spellHandler_->learnPreviewPetTalents(talentRanks);
+}
+
 void GameHandler::learnPetTalent(uint32_t talentId, uint32_t requestedRank) {
     if (spellHandler_) spellHandler_->learnPetTalent(talentId, requestedRank);
 }

@@ -3037,6 +3037,20 @@ void SpellHandler::learnPetTalent(uint32_t talentId, uint32_t requestedRank) {
     owner_.getSocket()->send(packet);
 }
 
+void SpellHandler::learnPreviewPetTalents(const std::vector<std::pair<uint32_t, uint32_t>>& talentRanks) {
+    const uint64_t pet = owner_.getPetGuid();
+    if (pet == 0 || talentRanks.empty() || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (wireOpcode(Opcode::CMSG_LEARN_PREVIEW_TALENTS_PET) == 0xFFFF) return;
+    network::Packet packet(wireOpcode(Opcode::CMSG_LEARN_PREVIEW_TALENTS_PET));
+    packet.writeUInt64(pet);
+    packet.writeUInt32(static_cast<uint32_t>(talentRanks.size()));
+    for (const auto& [talentId, rank] : talentRanks) {
+        packet.writeUInt32(talentId);
+        packet.writeUInt32(rank > 0 ? rank - 1 : 0);
+    }
+    owner_.getSocket()->send(packet);
+}
+
 const TalentTabEntry* SpellHandler::getPetTalentTab() const {
     const uint64_t pet = owner_.getPetGuid();
     if (pet == 0) return nullptr;
