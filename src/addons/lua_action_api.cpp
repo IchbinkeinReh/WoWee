@@ -1501,6 +1501,19 @@ static int lua_PickupSpell(lua_State* L) {
     // spells sat at that index.
     const uint32_t picked = spellIdForCall(L, gh);
     if (picked == 0) return 0;
+    // Out of the pet's book the cursor holds the pet's action for the spell,
+    // its entry in the pet's spell list (0x005d3410 -> 0x00520a80): the spell,
+    // type 1, and the autocast bits SMSG_PET_SPELLS gave it.
+    if (const char* book = lua_isnumber(L, 1) && !lua_isnoneornil(L, 2) ? lua_tostring(L, 2) : nullptr;
+        book && std::string(book) == "pet") {
+        clearCursorItem(L);
+        const uint32_t state = 0x01u | (gh->isPetSpellAutocastable(picked) ? 0x80u : 0u) |
+                               (gh->isPetSpellAutocast(picked) ? 0x40u : 0u);
+        setCursorType(L, CursorType::PET_ACTION);
+        s_cursorId = (picked & 0x00ffffffu) | (state << 24);
+        wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(picked));
+        return 0;
+    }
     setCursorType(L, CursorType::SPELL);
     s_cursorId = picked;
     // On the pointer as well as in the state, the way every other pickup here
@@ -1692,6 +1705,8 @@ static int lua_PickupPetAction(lua_State* L) {
         if ((displaced & 0x00ffffffu) != 0) {
             setCursorType(L, CursorType::PET_ACTION);
             s_cursorId = displaced;
+            if (((displaced >> 24) & 0x3fu) == 1)
+                wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(displaced & 0x00ffffffu));
         }
         return 0;
     }
@@ -1701,7 +1716,10 @@ static int lua_PickupPetAction(lua_State* L) {
     if (action == 0) return 0;
     setCursorType(L, CursorType::PET_ACTION);
     s_cursorId = action;
-    if (((action >> 24) & 0x3fu) == 1) gh->clearPetActionSlot(slot);
+    if (((action >> 24) & 0x3fu) == 1) {
+        wowee::ui::frameXmlSetCursorItem(gh->getSpellIconPath(action & 0x00ffffffu));
+        gh->clearPetActionSlot(slot);
+    }
     return 0;
 }
 
