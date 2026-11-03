@@ -176,6 +176,21 @@ uint64_t VehicleRoster::occupant(uint64_t vehicleGuid, uint8_t seat) const {
     return 0;
 }
 
+uint8_t VehicleRoster::emptySeats(uint64_t vehicleGuid) const {
+    const VehicleRecord* row = tables_ ? tables_->vehicle(vehicleId(vehicleGuid)) : nullptr;
+    if (!row) return 0;
+    uint8_t taken = 0;
+    for (const auto& [guid, p] : passengers_) {
+        if (p.vehicleGuid == vehicleGuid && p.seat < kSeatCount) taken |= static_cast<uint8_t>(1u << p.seat);
+    }
+    uint8_t mask = 0;
+    for (uint32_t i = 0; i < kSeatCount; ++i) {
+        const uint8_t bit = static_cast<uint8_t>(1u << i);
+        if (row->seatIds[i] != 0 && (taken & bit) == 0) mask |= bit;
+    }
+    return mask;
+}
+
 uint32_t VehicleRoster::uiSeatCount(uint64_t vehicleGuid, const std::function<bool(uint64_t)>& isPlayer) const {
     // 0x00757470.
     const VehicleRecord* row = tables_ ? tables_->vehicle(vehicleId(vehicleGuid)) : nullptr;

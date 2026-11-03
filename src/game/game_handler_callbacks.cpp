@@ -24,6 +24,7 @@
 #include "game/inventory_handler.hpp"
 #include "game/social_handler.hpp"
 #include "game/quest_handler.hpp"
+#include "game/npc_interaction.hpp"
 #include "game/warden_handler.hpp"
 #include "game/warden_crypto.hpp"
 #include "game/warden_memory.hpp"
@@ -3777,6 +3778,9 @@ void GameHandler::interactWithNpc(uint64_t guid) {
         }
     }
 
+    // Past the hellos, 0x006ddbb0 clicks a spell-click unit rather than greet it.
+    if (clickUnitBeyondHellos(guid)) return;
+
     auto packet = GossipHelloPacket::build(guid);
     socket->send(packet);
 
@@ -3796,6 +3800,40 @@ void GameHandler::interactWithNpc(uint64_t guid) {
     }
     LOG_DEBUG("interactWithNpc: hello to ", pendingNpcHello_.name, " at ",
               pendingNpcHello_.distance, " yards");
+}
+
+bool GameHandler::clickUnitBeyondHellos(uint64_t guid) {
+    if (!isInWorld() || !socket || guid == 0) return false;
+    auto entity = getEntityManager().getEntity(guid);
+    auto* unit = dynamic_cast<Unit*>(entity.get());
+    if (!unit) return false;
+
+    npc_interaction::Unit u;
+    u.npcFlags = unit->getNpcFlags();
+    if (const uint16_t f = fieldIndex(UF::UNIT_FIELD_FLAGS_2); f != 0xFFFF) u.flags2 = unit->getField(f);
+    u.questStatus = static_cast<uint8_t>(getQuestGiverStatus(guid));
+    u.isPlayer = entity->getType() == ObjectType::PLAYER;
+    u.isSelf = guid == playerGuid;
+    for (const auto& m : getPartyData().members) {
+        if (m.guid == guid) { u.inGroup = true; break; }
+    }
+    u.emptySeats = vehicleRoster_.emptySeats(guid);
+
+    const auto action = npc_interaction::decide(u);
+    if (action != npc_interaction::Action::SpellClick &&
+        action != npc_interaction::Action::VehicleEnter) {
+        return false;
+    }
+    const Opcode op = action == npc_interaction::Action::SpellClick
+                          ? Opcode::CMSG_SPELLCLICK
+                          : Opcode::CMSG_PLAYER_VEHICLE_ENTER;
+    if (wireOpcode(op) == 0xFFFF) return false;
+    network::Packet packet(wireOpcode(op));
+    packet.writeUInt64(guid);
+    socket->send(packet);
+    LOG_INFO(action == npc_interaction::Action::SpellClick ? "CMSG_SPELLCLICK" : "CMSG_PLAYER_VEHICLE_ENTER",
+             ": 0x", std::hex, guid, std::dec);
+    return true;
 }
 
 void GameHandler::queryAreaSpiritHealer(uint64_t guid) {

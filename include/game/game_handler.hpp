@@ -2927,6 +2927,10 @@ public:
 
     // NPC Gossip
     void interactWithNpc(uint64_t guid);
+    /// What 0x006ddbb0 does past the NPC hellos: a spell click
+    /// (CMSG_SPELLCLICK) or a group member's vehicle entered
+    /// (CMSG_PLAYER_VEHICLE_ENTER). False when it is neither.
+    bool clickUnitBeyondHellos(uint64_t guid);
     void interactWithGameObject(uint64_t guid);
     uint64_t getHookedFishingBobberGuid() const { return hookedFishingBobberGuid_; }
     void selectGossipOption(uint32_t optionId, const std::string& code = "");

@@ -2549,6 +2549,9 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                 // 0x00731260 for another player: nothing to talk to, so
                 // attacked when the player may attack them.
                 auto other = std::static_pointer_cast<game::Unit>(target);
+                // 0x006ddbb0 for a group member: their vehicle, if it has a
+                // free seat (CMSG_PLAYER_VEHICLE_ENTER).
+                if (other->getHealth() > 0 && gameHandler.clickUnitBeyondHellos(target->getGuid())) return;
                 if (other->getHealth() > 0 && playerMayAttackPlayer(gameHandler, *other)) {
                     gameHandler.startAutoAttack(target->getGuid());
                 }

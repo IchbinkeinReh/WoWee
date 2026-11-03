@@ -249,6 +249,9 @@ public:
                                        const std::function<bool(uint64_t)>& known) const;
     /// The passenger in a vehicle's seat (0x00757680), 0 for none.
     [[nodiscard]] uint64_t occupant(uint64_t vehicleGuid, uint8_t seat) const;
+    /// 0x00757ef0, kept by the client at +0x16d: a bit for each seat the
+    /// vehicle's row has that no passenger sits in.
+    [[nodiscard]] uint8_t emptySeats(uint64_t vehicleGuid) const;
     /// How many seats the interface shows for a vehicle (0x00757470): its
     /// seat columns that name a seat, each seat a vehicle that is no player
     /// rides in taken by that vehicle's own.

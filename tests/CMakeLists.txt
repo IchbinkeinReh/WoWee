@@ -1828,6 +1828,11 @@ register_test_target(test_interface_text_lines)
 # ever read as one.
 wowee_add_test(test_npc_flags SOURCES test_npc_flags.cpp)
 
+# ── test_npc_interaction ─────────────────────────────────────
+# A right-click past the NPC hellos (0x006ddbb0): the spell click and a group
+# member's vehicle, after every hello flag.
+wowee_add_test(test_npc_interaction SOURCES test_npc_interaction.cpp)
+
 # ── test_scene_pick ──────────────────────────────────────────
 # Which of ScenePick's answers a caller wants. closestGuid and resolve()
 # disagree exactly where a wide object stands beside an NPC, which is where the
