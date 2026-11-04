@@ -1311,6 +1311,7 @@ void RtScene::buildTlas(VkCommandBuffer cmd, TlasResources& as,
 void RtScene::writeDescriptors(FrameResources& fr) {
     if (fr.descriptorGeneration == descriptorGeneration_) return;
     fr.descriptorGeneration = descriptorGeneration_;
+    fr.writtenEpoch = gpuEpoch_;
 
     auto info = [&](const AllocatedBuffer& b) {
         return VkDescriptorBufferInfo{b.buffer ? b.buffer : placeholder_.buffer, 0, VK_WHOLE_SIZE};
@@ -1605,6 +1606,12 @@ void RtScene::uploadSlots(VkCommandBuffer cmd, RtSlotStore& store, AllocatedBuff
     dep.memoryBarrierCount = 1;
     dep.pMemoryBarriers = &mb;
     cmdPipelineBarrier2(cmd, dep);
+}
+
+bool RtScene::descriptorsWritten() const {
+    if (!ctx_) return false;
+    const FrameResources& fr = frames_[ctx_->getCurrentFrame()];
+    return fr.writtenEpoch == gpuEpoch_ && fr.descriptorGeneration == descriptorGeneration_;
 }
 
 VkDescriptorSet RtScene::descriptorSet() const {

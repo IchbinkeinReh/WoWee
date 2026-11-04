@@ -218,6 +218,11 @@ public:
     [[nodiscard]] VkDescriptorSetLayout descriptorSetLayout() const { return setLayout_; }
     /// The set for the current frame slot. Valid after update().
     [[nodiscard]] VkDescriptorSet descriptorSet() const;
+    /// Whether this frame's set names the scene as it now stands, and not
+    /// what releaseGpu freed. It is written in update(), after the frame's
+    /// secondary command buffers were recorded: one that binds the set must
+    /// ask this first, when it records.
+    [[nodiscard]] bool descriptorsWritten() const;
     /// False until at least one instance has made it into an acceleration
     /// structure; tracing an empty scene is legal but pointless.
     [[nodiscard]] bool hasContent() const { return liveInstances_ + liveDynInstances_ > 0; }
@@ -323,6 +328,7 @@ private:
         TlasResources staticAs, dynamicAs;
         uint64_t uploadedVersion = ~0ull;
         uint64_t descriptorGeneration = ~0ull;
+        uint64_t writtenEpoch = ~0ull;  // gpuEpoch_ when the set was last written
         uint32_t instanceCount = 0;
         VkDescriptorSet set = VK_NULL_HANDLE;
     };

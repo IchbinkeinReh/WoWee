@@ -730,7 +730,11 @@ void Renderer::updatePerFrameUBO() {
     // walks the BVH twice, and the hardware's rays cost far less.
     if (waterRenderer) {
         RtWaterFrame wf;
-        wf.on = rtWater_ && rtLighting_ && rtLighting_->active() && rtDeferredThisFrame_ && rtScene_;
+        // Its set bound as the water records, on a worker, ahead of the
+        // scene's update: bound before it is written after the tracing comes
+        // back on, it named what had been freed and the device was lost.
+        wf.on = rtWater_ && rtLighting_ && rtLighting_->active() && rtDeferredThisFrame_ && rtScene_ &&
+                rtScene_->descriptorsWritten();
         if (wf.on) {
             const bool hw = rtScene_->backend() == RtScene::Backend::Hardware;
             wf.sceneSet = rtScene_->descriptorSet();
