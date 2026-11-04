@@ -2123,6 +2123,73 @@ int lua_Tooltip_AddDoubleLine(lua_State* L) {
 ///
 /// WoW's anchor names say which side of the owner the tooltip sits on; the
 /// pair of points that produces is the whole of the mapping.
+namespace {
+/// The anchor types, numbered as the client stores them (0x0061d650). An
+/// unknown name is 0, ANCHOR_LEFT, as the parse at 0x0061eb40 leaves it.
+constexpr const char* kTooltipAnchorTypes[] = {
+    "ANCHOR_LEFT", "ANCHOR_RIGHT", "ANCHOR_BOTTOMLEFT", "ANCHOR_BOTTOM",
+    "ANCHOR_BOTTOMRIGHT", "ANCHOR_TOPLEFT", "ANCHOR_TOP", "ANCHOR_TOPRIGHT",
+    "ANCHOR_CURSOR", "ANCHOR_NONE", "ANCHOR_PRESERVE", "ANCHOR_CURSOR_RIGHT",
+};
+constexpr int kAnchorNone = 9;
+constexpr int kAnchorPreserve = 10;
+
+int tooltipAnchorType(lua_State* L, int arg) {
+    if (!lua_isstring(L, arg)) return 0;
+    const char* name = lua_tostring(L, arg);
+    for (int i = 0; i < static_cast<int>(std::size(kTooltipAnchorTypes)); ++i)
+        if (strcmp(name, kTooltipAnchorTypes[i]) == 0) return i;
+    return 0;
+}
+
+/// 0x0061b040: the tooltip placed against its owner by its anchor type, the
+/// offsets added. NONE clears the points for the caller's own SetPoint,
+/// PRESERVE keeps them.
+void anchorTooltip(wowee::ui::WidgetTree& tree, uint32_t id, uint32_t owner, int type,
+                   float x, float y) {
+    if (type == kAnchorPreserve) return;
+    if (owner == 0 || type == kAnchorNone) {
+        // ANCHOR_NONE means the caller places the tooltip itself, and the call
+        // that follows is a SetPoint - which is how GameTooltip_SetDefaultAnchor
+        // pins an action button's tooltip to the bottom-right of the screen.
+        // Returning without clearing left the anchor from the previous owner in
+        // place, and SetPoint only replaces an anchor on the same point: a LEFT
+        // anchor to the last button and a BOTTOMRIGHT anchor to UIParent both
+        // applied, pulling the tooltip down onto the action bar it came from.
+        tree.clearPoints(id);
+        return;
+    }
+    // The tooltip's point and the owner's, by type. The cursor is not a frame,
+    // so the two cursor types land beside the owner instead - which is where
+    // the cursor is, near enough, and better than nowhere.
+    struct Pair { const char* point; const char* rel; };
+    static const Pair kPoints[] = {
+        {"BOTTOMRIGHT", "TOPLEFT"},     // LEFT
+        {"BOTTOMLEFT",  "TOPRIGHT"},    // RIGHT
+        {"TOPRIGHT",    "BOTTOMLEFT"},  // BOTTOMLEFT
+        {"TOP",         "BOTTOM"},      // BOTTOM
+        {"TOPLEFT",     "BOTTOMRIGHT"}, // BOTTOMRIGHT
+        {"BOTTOMLEFT",  "TOPLEFT"},     // TOPLEFT
+        {"BOTTOM",      "TOP"},         // TOP
+        {"BOTTOMRIGHT", "TOPRIGHT"},    // TOPRIGHT
+        {"TOPLEFT",     "BOTTOMRIGHT"}, // CURSOR
+    };
+    const Pair& p = kPoints[type == 11 ? 8 : type];
+    wowee::ui::Anchor a;
+    a.point = p.point;
+    a.relativeTo = owner;
+    a.relativePoint = p.rel;
+    a.x = x;
+    a.y = y;
+    tree.clearPoints(id);
+    tree.addPoint(id, a);
+}
+
+float optNumber(lua_State* L, int arg) {
+    return lua_isnumber(L, arg) ? static_cast<float>(lua_tonumber(L, arg)) : 0.0f;
+}
+}  // namespace
+
 int lua_Tooltip_SetOwner(lua_State* L) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
@@ -2144,47 +2211,44 @@ int lua_Tooltip_SetOwner(lua_State* L) {
     // So the tooltip can be taken away with the frame it describes, whether or
     // not that frame ever gets the OnLeave that would have done it.
     tree->setTooltipOwner(id, owner);
-    const std::string anchor = luaL_optstring(L, 3, "ANCHOR_RIGHT");
-    // ANCHOR_PRESERVE is the one that means what it says: keep the anchors.
-    if (anchor == "ANCHOR_PRESERVE") return 0;
-    if (owner == 0 || anchor == "ANCHOR_NONE") {
-        // ANCHOR_NONE means the caller places the tooltip itself, and the call
-        // that follows is a SetPoint - which is how GameTooltip_SetDefaultAnchor
-        // pins an action button's tooltip to the bottom-right of the screen.
-        // Returning without clearing left the anchor from the previous owner in
-        // place, and SetPoint only replaces an anchor on the same point: a LEFT
-        // anchor to the last button and a BOTTOMRIGHT anchor to UIParent both
-        // applied, pulling the tooltip down onto the action bar it came from.
-        tree->clearPoints(id);
-        return 0;
-    }
+    // SetOwner(owner [, anchor [, x [, y]]]) (0x0061eb40 -> 0x0061ea00): the
+    // type defaults to ANCHOR_LEFT, and with no owner it is NONE.
+    const int type = owner ? tooltipAnchorType(L, 3) : kAnchorNone;
+    const float x = optNumber(L, 4);
+    const float y = optNumber(L, 5);
+    w->tooltipAnchorType = type;
+    anchorTooltip(*tree, id, owner, type, x, y);
+    return 0;
+}
 
-    struct Pair { const char* name; const char* point; const char* rel; };
-    static const Pair kAnchors[] = {
-        {"ANCHOR_TOPLEFT",     "BOTTOMLEFT",  "TOPLEFT"},
-        {"ANCHOR_TOPRIGHT",    "BOTTOMRIGHT", "TOPRIGHT"},
-        {"ANCHOR_BOTTOMLEFT",  "TOPLEFT",     "BOTTOMLEFT"},
-        {"ANCHOR_BOTTOMRIGHT", "TOPRIGHT",    "BOTTOMRIGHT"},
-        {"ANCHOR_LEFT",        "RIGHT",       "LEFT"},
-        {"ANCHOR_RIGHT",       "LEFT",        "RIGHT"},
-        {"ANCHOR_TOP",         "BOTTOM",      "TOP"},
-        {"ANCHOR_BOTTOM",      "TOP",         "BOTTOM"},
-        // The cursor is not a frame, so this lands beside the owner instead -
-        // which is where the cursor is, near enough, and better than nowhere.
-        {"ANCHOR_CURSOR",      "TOPLEFT",     "BOTTOMRIGHT"},
-    };
-    const char* point = "LEFT";
-    const char* rel = "RIGHT";
-    for (const Pair& p : kAnchors) {
-        if (anchor == p.name) { point = p.point; rel = p.rel; break; }
-    }
+/// GetAnchorType() (0x0061d650): the type SetOwner or SetAnchorType left.
+int lua_Tooltip_GetAnchorType(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    int type = w ? w->tooltipAnchorType : kAnchorNone;
+    if (type < 0 || type >= static_cast<int>(std::size(kTooltipAnchorTypes))) type = kAnchorNone;
+    lua_pushstring(L, kTooltipAnchorTypes[type]);
+    return 1;
+}
 
-    wowee::ui::Anchor a;
-    a.point = point;
-    a.relativeTo = owner;
-    a.relativePoint = rel;
-    tree->clearPoints(id);
-    tree->addPoint(id, a);
+/// SetAnchorType(type [, x [, y]]) (0x0061d3d0): the tooltip placed again
+/// with a new type and offsets; the type is only taken while it has an owner.
+int lua_Tooltip_SetAnchorType(lua_State* L) {
+    if (!lua_isstring(L, 2)) {
+        const auto* w = widgetOf(L, 1);
+        return luaL_error(L, "Usage: %s:SetAnchorType( anchorType [,Xoffset] [,Yoffset] )",
+                          (w && !w->name.empty()) ? w->name.c_str() : "<unnamed>");
+    }
+    auto* tree = wowee::addons::getWidgetTree(L);
+    const uint32_t id = widgetIdOf(L, 1);
+    auto* w = (tree && id) ? tree->get(id) : nullptr;
+    if (!w) return 0;
+    const uint32_t owner = w->tooltipOwnerId;
+    // Without an owner the layout has nothing to place it against and leaves
+    // it where it is (0x0061b040 returns first).
+    if (owner == 0) return 0;
+    const int type = tooltipAnchorType(L, 2);
+    w->tooltipAnchorType = type;
+    anchorTooltip(*tree, id, owner, type, optNumber(L, 3), optNumber(L, 4));
     return 0;
 }
 
@@ -5069,6 +5133,8 @@ int lua_Frame_SetNormalFontObject(lua_State* L) {
     return 0;
 }
 
+int lua_Region_GetSize(lua_State* L);  // with GetChildren, below
+
 /// Attach the shared region methods to the table on top of the stack.
 void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     auto set = [&](const char* name, lua_CFunction fn) {
@@ -5106,6 +5172,7 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     set("GetStringHeight", lua_Region_GetTextHeight);
     set("GetFieldSize", lua_Region_GetFieldSize);
     set("GetHeight", lua_Region_GetHeight);
+    set("GetSize", lua_Region_GetSize);
     set("GetLeft", lua_Region_GetLeft);
     set("GetRight", lua_Region_GetRight);
     set("GetBottom", lua_Region_GetBottom);
@@ -5525,8 +5592,13 @@ static int lua_CreateFont(lua_State* L) {
 /// was not.
 ///
 /// Frames only. Textures and font strings are a frame's *regions* in WoW and
-/// come back from GetRegions, which nothing here calls.
-int lua_Frame_GetChildren(lua_State* L) {
+/// come back from GetRegions.
+namespace {
+/// GetChildren and GetRegions are one walk over the frame's children, split
+/// by kind: frames are its children, textures and font strings its regions.
+/// With `countOnly` the same ones are counted (GetNumChildren,
+/// GetNumRegions) rather than pushed.
+int pushChildWidgets(lua_State* L, bool regions, bool countOnly) {
     auto* tree = wowee::addons::getWidgetTree(L);
     const uint32_t id = widgetIdOf(L, 1);
     if (!tree || id == 0) return 0;
@@ -5554,10 +5626,13 @@ int lua_Frame_GetChildren(lua_State* L) {
     int pushed = 0;
     for (const uint32_t childId : w->children) {
         const auto* child = tree->get(childId);
-        if (!child || child->kind != wowee::ui::WidgetKind::Frame) continue;
+        if (!child || (child->kind == wowee::ui::WidgetKind::Frame) == regions) continue;
         lua_pushinteger(L, static_cast<lua_Integer>(childId));
         lua_rawget(L, registry);
-        if (lua_istable(L, -1)) {
+        if (lua_istable(L, -1) && countOnly) {
+            lua_pop(L, 1);
+            ++pushed;
+        } else if (lua_istable(L, -1)) {
             lua_settaintof(L, -1, caller);   // fresh, as GetParent
             ++pushed;
         } else {
@@ -5568,8 +5643,29 @@ int lua_Frame_GetChildren(lua_State* L) {
         }
     }
     lua_remove(L, registry);    // drop the registry, keep the children above it
+    if (countOnly) {
+        lua_pushinteger(L, pushed);
+        return 1;
+    }
     return pushed;
 }
+
+/// Region:GetSize() - the width and the height, as GetWidth and GetHeight
+/// answer them.
+int lua_Region_GetSize(lua_State* L) {
+    lua_settop(L, 1);
+    lua_Region_GetWidth(L);
+    lua_pushvalue(L, 1);
+    lua_Region_GetHeight(L);
+    lua_remove(L, -2);
+    return 2;
+}
+}  // namespace
+
+int lua_Frame_GetChildren(lua_State* L) { return pushChildWidgets(L, false, false); }
+int lua_Frame_GetRegions(lua_State* L) { return pushChildWidgets(L, true, false); }
+int lua_Frame_GetNumChildren(lua_State* L) { return pushChildWidgets(L, false, true); }
+int lua_Frame_GetNumRegions(lua_State* L) { return pushChildWidgets(L, true, true); }
 
 int lua_Frame_EnableKeyboard(lua_State* L) {
     if (!protectedFrameAllows(L)) return 0;
@@ -7290,6 +7386,8 @@ void LuaEngine::registerCoreAPI() {
         {"AddMessage",      lua_MessageFrame_AddMessage},
         {"AddLine",         lua_Tooltip_AddLine},
         {"SetOwner",        lua_Tooltip_SetOwner},
+        {"GetAnchorType",   lua_Tooltip_GetAnchorType},
+        {"SetAnchorType",   lua_Tooltip_SetAnchorType},
         {"SetAction",       lua_Tooltip_SetAction},
         {"SetInventoryItem", lua_Tooltip_SetInventoryItem},
         {"SetBagItem",      lua_Tooltip_SetBagItem},
@@ -7479,6 +7577,10 @@ void LuaEngine::registerCoreAPI() {
         {"SetParent",       lua_Region_SetParent},
         {"GetParent",       lua_Region_GetParent},
         {"GetChildren",     lua_Frame_GetChildren},
+        {"GetRegions",      lua_Frame_GetRegions},
+        {"GetNumChildren",  lua_Frame_GetNumChildren},
+        {"GetNumRegions",   lua_Frame_GetNumRegions},
+        {"GetSize",         lua_Region_GetSize},
         {"CreateTexture",   lua_Frame_CreateTexture},
         {"CreateFontString", lua_Frame_CreateFontString},
         {nullptr, nullptr}
