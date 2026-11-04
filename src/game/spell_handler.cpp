@@ -4726,6 +4726,8 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
                         break;
                     }
                 }
+                // The lists took it: the bar is brought up to date (0x005ab9d0).
+                updateMultiCastBar();
             }
         }
         const bool critter = inList(false);
@@ -5981,6 +5983,31 @@ const std::string& SpellHandler::getSpellFocusName(uint32_t focusId) {
     }
     auto it = spellFocusNames_.find(focusId);
     return it != spellFocusNames_.end() ? it->second : kEmpty;
+}
+
+void SpellHandler::updateMultiCastBar() {
+    uint32_t bits = 0;
+    try {
+        bits = static_cast<uint32_t>(std::stoul(addons::storedCVarValue("autoFilledMultiCastSlots", "0")));
+    } catch (const std::exception&) {}
+    uint32_t now = bits;
+    const auto& bar = owner_.getActionBar();
+    for (int e = 0; e < totem_bar::kElements; ++e) {
+        const uint32_t bit = 1u << e;
+        const auto list = multiCastSpells(e);
+        if ((bits & bit) == 0) {
+            if (list.empty()) continue;
+            for (int slot = totem_bar::kFirstSlot + e; slot <= totem_bar::kLastSlot; slot += 4) {
+                if (bar[static_cast<size_t>(slot)].type == ActionBarSlot::EMPTY)
+                    owner_.setActionBarSlot(slot, ActionBarSlot::SPELL, list.front());
+            }
+            now |= bit;
+        } else if (list.empty()) {
+            now &= ~bit;
+        }
+    }
+    if (now != bits) addons::setStoredCVar("autoFilledMultiCastSlots", std::to_string(now));
+    owner_.fireAddonEvent("UPDATE_MULTI_CAST_ACTIONBAR", {});
 }
 
 bool SpellHandler::carriesTotemCategory(uint32_t cat) const {

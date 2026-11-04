@@ -1008,6 +1008,9 @@ static void pushCvarDefault(lua_State* L, const std::string& n,
     // On (0x0051d9b0 registers it "1"): a tutorial not yet triggered pops
     // out rather than being flagged unseen (0x00530840).
     else if (n == "showtutorials") lua_pushstring(L, "1");
+    // Nothing filled yet (registered "0"): a bit per totem bar element the
+    // client has already filled with its first spell (0x005ab9d0).
+    else if (n == "autofilledmulticastslots") lua_pushstring(L, "0");
     // The client registers both (0x007f3a10, 0x0078e400): violenceLevel at
     // its locale's limit, 2 here, which shows a spell's first SpellVisual
     // (0x007fa290); spellEffectLevel ("Spell Detail") at 9, which drops all

@@ -249,6 +249,11 @@ public:
     [[nodiscard]] std::vector<uint32_t> multiCastSpells(int element) const;
     /// 0x007548f0: the player carries what the TotemCategory asks for.
     [[nodiscard]] bool carriesTotemCategory(uint32_t category) const;
+    /// The totem bar's update (0x005ab9d0): an element whose list has spells
+    /// and whose bit in autoFilledMultiCastSlots is clear puts its first
+    /// spell on each of its empty slots and sets the bit; one with none
+    /// clears it. Then UPDATE_MULTI_CAST_ACTIONBAR.
+    void updateMultiCastBar();
 
     // Unit cast state (tracked per GUID for target frame + boss frames)
     [[nodiscard]] const UnitCastState* getUnitCastState(uint64_t guid) const {

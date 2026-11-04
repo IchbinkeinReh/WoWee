@@ -3025,6 +3025,8 @@ void InventoryHandler::triggerItemPushTutorials(uint64_t receiver, const ItemQue
                 break;
             }
         }
+        // 0x005d9540 ends with the bar's update (0x005ab9d0).
+        if (sh && mask != 0) sh->updateMultiCastBar();
     }
 }
 
