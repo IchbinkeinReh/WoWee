@@ -819,6 +819,14 @@ void main() {
         outColor = vec4(rtWater.y < 1.5 || rtWater.y > 2.5 ? rtReflect : refractedColor, 1.0);
         return;
     }
+    // A building's interior water keeps the client's liquid, drawn under this
+    // (WaterRenderer::renderClient): its texture and ramp are what the water
+    // looks like there, the Pools of Vision's teal. Traced over it whole, the
+    // pool was a bare film over its orange bed. Only the reflection goes on top.
+    if (rtOn && push.interiorFog > 0.5) {
+        outColor = vec4(applyFog(rtReflect + specular, FragPos, dist, waterFogColour()), rtFresnel);
+        return;
+    }
     color = applyFog(color, FragPos, dist, waterFogColour());
 
     outColor = vec4(color, alpha);

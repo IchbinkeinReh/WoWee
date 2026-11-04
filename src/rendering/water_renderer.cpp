@@ -2824,7 +2824,10 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
             if (!surface.clientVertexBuffer || !surface.indexBuffer || surface.indexCount == 0) continue;
             if (tracedWater) {
                 const uint8_t basicType = (surface.liquidType == 0) ? 0 : ((surface.liquidType - 1) % 4);
-                if (basicType < 2) continue;  // the traced water's
+                // The traced water's, but for a building's interior water, which
+                // it only reflects on (water.frag).
+                const bool interiorWmo = surface.wmoId != 0 && surface.wmoInterior;
+                if (basicType < 2 && !interiorWmo) continue;
             }
             ClientLiquid* liquid = clientLiquidFor(surface.clientLiquidType);
             if (!liquid || liquid->kind == client_liquid::MaterialKind::None) continue;
