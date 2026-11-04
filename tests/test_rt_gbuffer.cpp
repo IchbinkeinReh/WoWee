@@ -613,15 +613,15 @@ TEST_CASE("The normal blend sliders map to the rule's cosines", "[rt_gbuffer]") 
     // Held to 0..90.
     REQUIRE(normalBlendCosines(-5, 200).nearCos == 1.0f);
     REQUIRE(normalBlendCosines(-5, 200).farCos == Catch::Approx(0.0f).margin(1e-6));
-    // Wider: a 30 degree lean that defaults blend partly keeps all its own
-    // with keep at 40, and is the face's alone with face at 25.
+    // Wider: a 40 degree lean that defaults blend partly keeps all its own
+    // with keep at 45, and is the face's alone with face at 25.
     const glm::vec3 face(0.0f, 0.0f, 1.0f);
-    const glm::vec3 lean30(std::sin(glm::radians(30.0f)), 0.0f, std::cos(glm::radians(30.0f)));
-    const float mid = normalAgreement(face, lean30);
+    const glm::vec3 lean40(std::sin(glm::radians(40.0f)), 0.0f, std::cos(glm::radians(40.0f)));
+    const float mid = normalAgreement(face, lean40);
     REQUIRE(mid > 0.0f);
     REQUIRE(mid < 1.0f);
-    const NormalBlendCosines wide = normalBlendCosines(40, 60);
-    REQUIRE(normalAgreement(face, lean30, wide.nearCos, wide.farCos) == 1.0f);
+    const NormalBlendCosines wide = normalBlendCosines(45, 60);
+    REQUIRE(normalAgreement(face, lean40, wide.nearCos, wide.farCos) == 1.0f);
     const NormalBlendCosines narrow = normalBlendCosines(10, 25);
-    REQUIRE(normalAgreement(face, lean30, narrow.nearCos, narrow.farCos) == 0.0f);
+    REQUIRE(normalAgreement(face, lean40, narrow.nearCos, narrow.farCos) == 0.0f);
 }
