@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/swim_wave.hpp"
 #include "rendering/rt_normal_blend.hpp"
 #include "rendering/rt_memory_guard.hpp"
 #include "core/platform.hpp"
@@ -1171,6 +1172,9 @@ private:
     float rtUnitShadowReach_ = 5.0f;
     bool rtWater_ = true;  ///< "Ray traced water" (water_rt.glsli)
     float rtWaveAmp_ = 1.0f;
+    bool rtSwimWaves_ = true;
+    std::vector<swim_wave::Wave> swimWaves_;
+    std::array<swim_wave::Limb, 3> swimLimbs_{};
     float rtWaveFreq_ = 1.0f;
     bool rtListenerAdded_ = false;
     // The memory guard (rt_memory_guard.hpp): run each frame before the ray
@@ -1192,6 +1196,8 @@ public:
     // not taken where the hit is on screen: what is traced, and textured.
     static constexpr int kRtWaterTracedOnlyView = 17;
     void setRtWater(bool on) { rtWater_ = on; }
+    /// The swimmer's small waves on the traced water (swim_wave.hpp).
+    void setRtSwimWaves(bool on) { rtSwimWaves_ = on; }
     /// Its waves' height and frequency, 1 the default of each.
     void setRtWaterWaves(float amplitude, float frequency) {
         rtWaveAmp_ = amplitude;

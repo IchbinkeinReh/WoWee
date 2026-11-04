@@ -250,6 +250,10 @@ constexpr SettingDesc kSchema[] = {
      "under it traced through the world - the bed bent by the waves,\n"
      "darker and bluer with depth, the sky and the shore in the mirror.\n"
      "Off, or without ray tracing, the original client's water.", "", 1, "raytracedlighting"},
+    {"rtswimwaves", "Swimming waves", SettingKind::Bool, 0, 0, 0,
+     "Water", "Water",
+     "On the ray traced water: small waves from a swimmer's arms and body\n"
+     "where they move at the surface. An experiment.", "", 1, "rtwater"},
     // The waves' height and their closeness, of the traced water's own
     // (water.vert's Gerstner waves, water.frag's detail ripples). 100% is
     // half the height they were first made with, which the mirror showed

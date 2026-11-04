@@ -802,14 +802,7 @@ void Renderer::updatePerFrameUBO() {
     currentFrameData.playerPos = glm::vec4(characterPosition, playerSpeed_);
     currentFrameData.playerWake = glm::vec4(playerWakePos_, 0.0f);
 
-    // Water ripple gate: swimming and actually moving.
-    if (cameraController) {
-        bool inWater = cameraController->isSwimming();
-        bool moving = cameraController->isMoving();
-        currentFrameData.fogParams.w = (inWater && moving) ? 1.0f : 0.0f;
-    } else {
-        currentFrameData.fogParams.w = 0.0f;
-    }
+    currentFrameData.fogParams.w = 0.0f;
 
     // Copy to current frame's mapped UBO
     uint32_t frame = vkCtx->getCurrentFrame();
@@ -3291,6 +3284,21 @@ void Renderer::update(float deltaTime) {
         WOWEE_PROFILE_SCOPE("water wake", Cpu);
         waterRenderer->updateWake(deltaTime, glm::vec2(charPos.x, charPos.y),
                                   travelDir, intensity, wading);
+
+        // The swimmer's small waves, from its hands and body at the surface.
+        namespace sw = swim_wave;
+        sw::age(swimWaves_, deltaTime);
+        const auto waterZ = rtSwimWaves_ ? waterRenderer->getWaterHeightAt(charPos.x, charPos.y) : std::nullopt;
+        if (waterZ && characterRenderer && characterInstanceId != 0) {
+            for (uint32_t hand : {1u, 2u}) {
+                glm::mat4 at(1.0f);
+                if (characterRenderer->getAttachmentTransform(characterInstanceId, hand, at)) {
+                    sw::limbMoved(swimWaves_, swimLimbs_[hand - 1], glm::vec3(at[3]), *waterZ, deltaTime);
+                }
+            }
+            sw::limbMoved(swimWaves_, swimLimbs_[2], glm::vec3(charPos.x, charPos.y, *waterZ), *waterZ, deltaTime);
+        }
+        waterRenderer->setSwimWaves(swimWaves_);
     }
 
     // Update mount dust effects

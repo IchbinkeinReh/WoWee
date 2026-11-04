@@ -2043,6 +2043,7 @@ void GameScreen::saveSettings() {
     out << "rt_unit_shadow_reach=" << settingsPanel_.pendingRtUnitShadowReach << "\n";
     out << "rt_min_brightness=" << settingsPanel_.pendingRtMinBrightness << "\n";
     out << "rt_water=" << (settingsPanel_.pendingRtWater ? 1 : 0) << "\n";
+    out << "rt_swim_waves=" << (settingsPanel_.pendingRtSwimWaves ? 1 : 0) << "\n";
     out << "rt_wave_amp=" << settingsPanel_.pendingRtWaveAmp << "\n";
     out << "rt_wave_freq=" << settingsPanel_.pendingRtWaveFreq << "\n";
     out << "rt_normal_keep=" << settingsPanel_.pendingRtNormalKeep << "\n";
@@ -2403,6 +2404,7 @@ void GameScreen::loadSettings() {
                 settingsPanel_.pendingRtNormalFace =
                     std::clamp(std::stoi(val), 0, rendering::kNormalBlendMaxDegrees);
             else if (key == "rt_water") settingsPanel_.pendingRtWater = (std::stoi(val) != 0);
+            else if (key == "rt_swim_waves") settingsPanel_.pendingRtSwimWaves = (std::stoi(val) != 0);
             else if (key == "rt_wave_amp") settingsPanel_.pendingRtWaveAmp = std::clamp(std::stoi(val), 0, 200);
             else if (key == "rt_wave_freq") settingsPanel_.pendingRtWaveFreq = std::clamp(std::stoi(val), 25, 300);
             else if (key == "rt_min_brightness")

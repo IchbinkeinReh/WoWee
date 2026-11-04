@@ -12,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "rendering/swim_wave.hpp"
 #include "audio/zone_ambience.hpp"
 #include "rendering/client_liquid.hpp"
 #include "rendering/client_proc_water.hpp"
@@ -133,6 +134,8 @@ struct WaterFrameUBOData {
     // The camera the scene capture was taken with: this frame's, or the last
     // one's where the capture is the finished frame before (MSAA).
     glm::mat4 captureViewProj{1.0f};
+    glm::vec4 swimWaveInfo{0.0f};                       // x = how many
+    glm::vec4 swimWaves[swim_wave::kMaxWaves]{};        // xy = where, z = age, w = strength
 };
 
 /// What the ray traced water needs from the frame (Renderer, each frame).
@@ -218,6 +221,14 @@ public:
     void setRtWaterScene(VkDescriptorSetLayout sceneLayout, bool hardware);
     /// This frame's ray traced water, before render().
     void setRtWaterFrame(const RtWaterFrame& frame) { rtFrame_ = frame; }
+    /// The swimmer's rings this frame (swim_wave.hpp).
+    void setSwimWaves(const std::vector<swim_wave::Wave>& waves) {
+        const size_t n = std::min(waves.size(), swim_wave::kMaxWaves);
+        frameUBO_.swimWaveInfo.x = static_cast<float>(n);
+        for (size_t i = 0; i < n; ++i) {
+            frameUBO_.swimWaves[i] = glm::vec4(waves[i].position, waves[i].age, waves[i].strength);
+        }
+    }
     /// Whether this frame's water and ocean are the traced ones: on, with
     /// what they need. Otherwise every liquid is the client's own (its
     /// LiquidType textures, depth ramps and blending, client_liquid.hpp), as

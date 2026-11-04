@@ -61,6 +61,7 @@ layout(set = 2, binding = 1) uniform sampler2D SceneDepth;
 // is a churn site that spreads and dies, so a running character leaves a trail
 // of froth rather than a disc stuck under its feet.
 const int MAX_WAKE_POINTS = 32;
+const int MAX_SWIM_WAVES = 16;
 
 layout(set = 2, binding = 3) uniform WaterFrameData {
     vec4 wakeBounds;                  // xy = centre, z = cull radius, w = count
@@ -73,6 +74,8 @@ layout(set = 2, binding = 3) uniform WaterFrameData {
     vec4 rtSkyTop;      // the sky a reflection that leaves the scene meets: overhead
     vec4 rtSkyHorizon;  // and at the horizon
     mat4 captureViewProj;  // the camera the scene capture was taken with
+    vec4 swimWaveInfo;                 // x = how many
+    vec4 swimWaves[MAX_SWIM_WAVES];    // xy = where, z = age in seconds, w = strength
 };
 
 layout(location = 0) in vec3 FragPos;
@@ -362,16 +365,20 @@ void main() {
     float detailFade = 1.0 - smoothstep(250.0, 1400.0, dist);
     vec3 norm = normalize(mix(meshNorm, detailNorm, 0.55 * detailFade));
 
-    // Player interaction ripple normal perturbation
-    vec2 rippleOrigin = playerPos.xy;
-    float rippleStrength = fogParams.w;
-    float d = length(FragPos.xy - rippleOrigin);
-    float rippleEnv = rippleStrength * exp(-d * 0.12);
-    if (rippleEnv > 0.001) {
-        vec2 radialDir = (FragPos.xy - rippleOrigin) / max(d, 0.01);
-        float dHdr = rippleEnv * 0.12 * (-0.12 * sin(d * 2.5 - time * 6.0) + 2.5 * cos(d * 2.5 - time * 6.0));
-        norm = normalize(norm + vec3(-radialDir * dHdr, 0.0));
+    // The swimmer's small waves (swim_wave.hpp): a ring going out from where
+    // a hand or the body moved at the surface, slope only.
+    vec2 swimTilt = vec2(0.0);
+    int swimWaveCount = clamp(int(swimWaveInfo.x), 0, MAX_SWIM_WAVES);
+    for (int i = 0; i < swimWaveCount; ++i) {
+        vec4 w = swimWaves[i];
+        vec2 fromWave = FragPos.xy - w.xy;
+        float d = length(fromWave);
+        float along = (d - (0.15 + w.z * 1.7)) / (0.28 + w.z * 0.25);
+        float crest = exp(-along * along) * sin(along * 4.0);
+        float slope = crest * w.w * 0.22 * (1.0 - w.z / 1.6);
+        swimTilt -= (fromWave / max(d, 0.01)) * slope;
     }
+    norm = normalize(norm + vec3(swimTilt, 0.0));
 
     vec3 viewDir = normalize(viewPos.xyz - FragPos);
     vec3 ldir = normalize(-lightDir.xyz);
@@ -504,11 +511,7 @@ void main() {
         // crosses binormal into tangent), so it is turned over before the
         // detail and the ripples go on it as above.
         vec3 waveN = normalize(mix(meshNorm.z < 0.0 ? -meshNorm : meshNorm, detailNorm, 0.55 * detailFade));
-        if (rippleEnv > 0.001) {
-            vec2 radialDir = (FragPos.xy - rippleOrigin) / max(d, 0.01);
-            float dHdr = rippleEnv * 0.12 * (-0.12 * sin(d * 2.5 - time * 6.0) + 2.5 * cos(d * 2.5 - time * 6.0));
-            waveN = normalize(waveN + vec3(-radialDir * dHdr, 0.0));
-        }
+        waveN = normalize(waveN + vec3(swimTilt, 0.0));
         // Under the water's plane, looking up at it.
         bool below = viewPos.z < FragPos.z;
         vec3 n = below ? -waveN : waveN;

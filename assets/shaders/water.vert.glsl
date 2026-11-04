@@ -160,13 +160,6 @@ void main() {
     worldPos.z += waves.displacement.z;
     WaveOffset = waves.waveHeight; // raw wave height for fragment shader foam
 
-    // Player interaction ripples - concentric waves emanating from player position
-    vec2 rippleOrigin = playerPos.xy;
-    float rippleStrength = fogParams.w;
-    float d = length(worldPos.xy - rippleOrigin);
-    float ripple = rippleStrength * 0.12 * exp(-d * 0.12) * sin(d * 2.5 - time * 6.0);
-    worldPos.z += ripple;
-
     // Analytical normal from Gerstner tangent/binormal (cross product gives Z-up normal)
     Normal = normalize(cross(waves.binormal, waves.tangent));
 

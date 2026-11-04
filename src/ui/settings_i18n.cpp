@@ -152,6 +152,11 @@ constexpr SettingGerman kGerman[] = {
      "und Fackeln und Lava glühen darin. Höhere Stufen sind schärfer und kosten mehr; Niedrig "
      "passt zu schwächerer Hardware. Nicht im ursprünglichen Client, daher aus, bis gewählt.",
      "Aus|Niedrig|Mittel|Hoch", nullptr, nullptr},
+    {"rtswimwaves",
+     "Schwimmwellen",
+     "Auf dem Wasser mit Raytracing: kleine Wellen von Armen und Körper eines Schwimmers, wo sie "
+     "sich an der Oberfläche bewegen. Ein Experiment.",
+     nullptr, nullptr, nullptr},
     {"rtwater",
      "Wasser mit Raytracing",
      "Mit Raytracing: Wellen, die Spiegelung des Wassers und was darunter liegt, durch die Welt "

@@ -972,7 +972,7 @@ constexpr const char* kGraphicsApplyKeys[] = {
     "animatedportraits",
     "fogskyblend", "fogstrength", "sharpstars", "lightshafts", "mistdensity", "sunshafts",
     "lensflare",
-    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtwaveamp", "rtwavefreq", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
+    "screenglow", "raytracedlighting", "rtfullres", "rtsoftlamps", "rtunitshadowreach", "rtminbrightness", "rtwater", "rtswimwaves", "rtwaveamp", "rtwavefreq", "rtnormalkeep", "rtnormalface", "rteyebrighten", "rteyeseconds",
     "rteyesensitivity",
     "rtsunrays", "rtaorays", "rtpointrays", "rtbouncerays",
     // The Debug Graphics settings: each applies all of them.
@@ -1175,6 +1175,7 @@ constexpr FieldBinding kFieldBindings[] = {
     {.key = "rtunitshadowreach", .asInt = &SettingsPanel::pendingRtUnitShadowReach},
     {.key = "rtminbrightness", .asInt = &SettingsPanel::pendingRtMinBrightness},
     {.key = "rtwater", .asBool = &SettingsPanel::pendingRtWater},
+    {.key = "rtswimwaves", .asBool = &SettingsPanel::pendingRtSwimWaves},
     {.key = "rtwaveamp", .asInt = &SettingsPanel::pendingRtWaveAmp},
     {.key = "rtwavefreq", .asInt = &SettingsPanel::pendingRtWaveFreq},
     {.key = "rtnormalkeep", .asInt = &SettingsPanel::pendingRtNormalKeep},
@@ -1691,6 +1692,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         if (renderer) renderer->setRtMinBrightness(pendingRtMinBrightness);
     } else if (key == "rtwater") {
         if (renderer) renderer->setRtWater(pendingRtWater);
+    } else if (key == "rtswimwaves") {
+        if (renderer) renderer->setRtSwimWaves(pendingRtSwimWaves);
     } else if (key == "rtwaveamp" || key == "rtwavefreq") {
         if (renderer) renderer->setRtWaterWaves(pendingRtWaveAmp / 100.0f, pendingRtWaveFreq / 100.0f);
     } else if (key == "rtnormalkeep" || key == "rtnormalface") {

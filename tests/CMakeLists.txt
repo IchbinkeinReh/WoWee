@@ -3612,3 +3612,7 @@ register_test_target(test_bc_encode)
 # ── test_water_ripple ──
 # The client ripples: header-only logic.
 wowee_add_test(test_water_ripple SOURCES test_water_ripple.cpp)
+
+# ── test_swim_wave ──
+# A swimmer's waves: header-only logic.
+wowee_add_test(test_swim_wave SOURCES test_swim_wave.cpp)
