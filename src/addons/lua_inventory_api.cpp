@@ -2080,18 +2080,29 @@ static int lua_AddSendMailCOD(lua_State* L) {
 
 /// GetSendMailPrice() (0x00571b00): 30 copper a letter, 30 an attachment once
 /// there is more than one - max(30, attachments x 30) - plus the money set to
-/// go with it (SetSendMailMoney, 0x00beb1bc). A chosen stationery or package
-/// adds its own price there; this client offers neither, so neither adds.
+/// go with it (SetSendMailMoney, 0x00beb1bc). The chosen stationery adds the
+/// paper's buy price where it is one of the offered rows the player is not
+/// carrying and its template is known (0x00beb1cc in the list at 0x00beb1f8,
+/// template +0x20). A chosen package would add its own; this client offers
+/// none (GetNumPackages, SelectPackage).
 /// It was a flat 30 whatever was attached, so a letter with twelve items showed
 /// thirty copper of postage and cost three hundred and sixty.
 static int lua_GetSendMailPrice(lua_State* L) {
     uint32_t attached = 0;
+    uint64_t paper = 0;
     if (auto* gh = getGameHandler(L)) {
         for (const auto& slot : gh->getMailAttachments()) {
             if (slot.occupied()) ++attached;
         }
+        if (auto* inv = gh->getInventoryHandler(); inv && inv->selectedStationery() != 0) {
+            for (const auto& row : inv->stationeryOptions()) {
+                if (row.id != inv->selectedStationery()) continue;
+                if (row.hasCost) paper = row.cost;
+                break;
+            }
+        }
     }
-    const uint64_t postage = std::max<uint64_t>(30, uint64_t{attached} * 30);
+    const uint64_t postage = std::max<uint64_t>(30, uint64_t{attached} * 30) + paper;
     lua_pushnumber(L, static_cast<double>(postage + s_sendMailMoney));
     return 1;
 }
@@ -3823,6 +3834,32 @@ static int lua_GetInventorySlotInfo(lua_State* L) {
     return 1;
 }
 
+/// ShowInventorySellCursor(slot) (0x005ea930): the coin bag over one of the
+/// player's inventory slots holding an item, under the same guards as the
+/// container's. The slot is a number from 1 or a slot name (0x005e7c00);
+/// one outside the equipment, bag, bank and key ring ranges does nothing.
+static int lua_ShowInventorySellCursor(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!sellCursorAllowed(gh)) return 0;
+    int slotId = 0;
+    if (lua_type(L, 1) == LUA_TNUMBER) {
+        slotId = luaToClientInt(L, 1);
+    } else if (lua_type(L, 1) == LUA_TSTRING) {
+        lua_pushcfunction(L, lua_GetInventorySlotInfo);
+        lua_pushvalue(L, 1);
+        if (lua_pcall(L, 1, 1, 0) != 0) {
+            lua_pop(L, 1);
+            return 0;
+        }
+        if (lua_isnumber(L, -1)) slotId = static_cast<int>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+    }
+    const game::ItemSlot* item = slotId >= 1 ? inventorySlotItem(gh->getInventory(), slotId) : nullptr;
+    if (!item || item->empty()) return 0;
+    ui::frameXmlSetScriptCursor(ui::kCursorKindBuy);
+    return 0;
+}
+
 /// Which of the three lists a name refers to. The panel says "list", "owner"
 /// or "bidder" and every call that acts on a row is relative to one of them.
 /// Takes a view, not a string: every caller passes the `const char*` straight
@@ -5010,6 +5047,7 @@ void registerInventoryLuaAPI(lua_State* L) {
             return 0;
         }},
                 {"ShowContainerSellCursor", lua_ShowContainerSellCursor},
+                {"ShowInventorySellCursor", lua_ShowInventorySellCursor},
                 {"ShowBuybackSellCursor", lua_ShowBuybackSellCursor},
                 // A left-click on a vendor's item goes here, and it was a
                 // no-op - so at a merchant only right-click bought anything.
