@@ -108,3 +108,12 @@ TEST_CASE("a ranged weapon asks for 0x2b unless the player is a hunter; a wand a
     in.inventoryType = 26;
     CHECK(itemPushTutorials(in) == std::vector<uint32_t>{0x2b});
 }
+
+TEST_CASE("one awaits only once the flags are in and until it is triggered", "[tutorials]") {
+    TutorialState t;
+    CHECK_FALSE(t.awaiting(0x12));
+    t.loadFlags({});
+    CHECK(t.awaiting(0x12));
+    (void)t.trigger(0x12, true);
+    CHECK_FALSE(t.awaiting(0x12));
+}

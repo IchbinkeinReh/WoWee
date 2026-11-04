@@ -30,6 +30,8 @@ public:
 
     /// 0x005222b0, IsTutorialFlagged.
     [[nodiscard]] bool flagged(uint32_t id) const { return id < kWords * 32 && test(flagged_, id); }
+    /// 0x00522270: loaded, and this one not triggered yet.
+    [[nodiscard]] bool awaiting(uint32_t id) const { return loaded_ && id < kWords * 32 && !test(triggered_, id); }
 
     /// 0x00530450: false when it already was; else both bits set, the id put on
     /// the session list (0x00530100) - and the caller sends CMSG_TUTORIAL_FLAG.

@@ -1641,6 +1641,23 @@ void CombatHandler::setTarget(uint64_t guid) {
             } else if (owner_.unitMayAssist(me, guid)) {
                 lastFriendTargetGuid_ = guid;
             }
+            // Then the tutorials the choice opens (0x00524bf0): another
+            // player, the first time; else a player of the player's side at
+            // level 5 and up (0x00729b30); else one that may be attacked
+            // (0x00729740); else a flight master; else a quest giver with
+            // nothing yet.
+            const bool isPlayer = entity->getType() == ObjectType::PLAYER;
+            if (isPlayer && guid != me && owner_.tutorials().awaiting(0x12)) {
+                owner_.triggerTutorial(0x12);
+            } else if (isPlayer && owner_.unitsCooperate(me, guid) && owner_.getPlayerLevel() >= 5) {
+                owner_.triggerTutorial(0x11);
+            } else if (owner_.unitMayAttack(me, guid)) {
+                owner_.triggerTutorial(4);
+            } else if ((unit->getNpcFlags() & 0x2000u) != 0) {
+                owner_.triggerTutorial(0x22);
+            } else if (owner_.getQuestGiverStatus(guid) == QuestGiverStatus::UNAVAILABLE) {
+                owner_.triggerTutorial(0x2a);
+            }
         }
     }
 
