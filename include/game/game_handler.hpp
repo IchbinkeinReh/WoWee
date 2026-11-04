@@ -77,6 +77,7 @@ namespace wowee::game {
     class SocialHandler;
     class WardenHandler;
     namespace tabard { struct Design; }
+    namespace pet { struct DismissContext; }
 }
 
 namespace wowee {
@@ -1538,6 +1539,12 @@ public:
     /// Whether the pet's bar may be changed: a pet, and not one with
     /// UNIT_FIELD_FLAGS 0x01000000 (0x005d65c0).
     bool petBarEditable() const;
+    /// What 0x005d3e80 reads of the player, its pet and its seat.
+    [[nodiscard]] pet::DismissContext petDismissContext() const;
+    /// GetPetActionsUsable (0x005d53c0): the pet answers its actions - the
+    /// player's own pet in view, neither charmed nor stunned, fleeing or
+    /// confused (0x005d3e80).
+    [[nodiscard]] bool petActionsUsable() const;
     // Pet command/react state from SMSG_PET_MODE or SMSG_PET_SPELLS
     uint8_t getPetCommand() const { return petCommand_; }   // 0=stay,1=follow,2=attack,3=dismiss
     uint8_t getPetReact()   const { return petReact_; }     // 0=passive,1=defensive,2=aggressive

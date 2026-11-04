@@ -3446,6 +3446,16 @@ static int lua_SetOverrideBindingClick(lua_State* L) {
 /// SetMouselookOverrideBinding("key", "binding" or nil) (0x005fd550 ->
 /// 0x005fd440): what the key runs while the mouse looks, under the taint
 /// check (kind 0xd); nil takes it away.
+/// GetPetActionsUsable() (0x005d53c0): 1 where the pet answers its actions
+/// (0x005d3e80), else nil. A stub answering false here greyed out every pet
+/// action button however the pet stood.
+static int lua_GetPetActionsUsable(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (gh && gh->petActionsUsable()) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
+
 static int lua_SetMouselookOverrideBinding(lua_State* L) {
     if (!lua_isstring(L, 1))
         return luaL_error(L, "Usage: SetMouselookOverrideBinding(\"key\", \"binding\" or nil)");
@@ -3888,6 +3898,7 @@ void registerActionLuaAPI(lua_State* L) {
                 {"SetOverrideBindingItem",  lua_SetOverrideBindingItem},
                 {"ClearOverrideBindings", lua_ClearOverrideBindings},
                 {"SetMouselookOverrideBinding", lua_SetMouselookOverrideBinding},
+                {"GetPetActionsUsable", lua_GetPetActionsUsable},
                 // Paging lives here, and the getter with it. Both were
                 // defined twice - this pair against __WoweeActionBarPage and a
                 // bootstrap pair against a local - so whichever won,

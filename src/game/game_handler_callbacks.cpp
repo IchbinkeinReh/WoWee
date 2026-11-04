@@ -3258,9 +3258,7 @@ uint32_t GameHandler::summonPropertiesFlagsOf(uint64_t unitGuid) {
     return 0;
 }
 
-void GameHandler::dismissPet() {
-    // CGPetInfo::PetDismiss (0x005d46f0).
-    if (state != WorldState::IN_WORLD || !socket) return;
+pet::DismissContext GameHandler::petDismissContext() const {
     pet::DismissContext c;
     auto player = getEntityManager().getEntity(playerGuid);
     if (player) {
@@ -3283,6 +3281,18 @@ void GameHandler::dismissPet() {
         c.seatKnown = true;
         c.seatFlags = seat->flags;
     }
+    return c;
+}
+
+bool GameHandler::petActionsUsable() const {
+    // GetPetActionsUsable (0x005d53c0) -> 0x005d3e80.
+    return pet::canDismissPet(petDismissContext());
+}
+
+void GameHandler::dismissPet() {
+    // CGPetInfo::PetDismiss (0x005d46f0).
+    if (state != WorldState::IN_WORLD || !socket) return;
+    pet::DismissContext c = petDismissContext();
     if (pet::canDismissPet(c) && !(c.pet == c.mover && c.playerTransport == c.pet))
         c.summonPropertiesFlags = summonPropertiesFlagsOf(c.pet);
     switch (pet::dismissAction(c)) {
