@@ -5018,7 +5018,11 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 if (creatureMount) charRenderer->setInstancePosition(creatureMount->instanceId, creatureMountPos);
                 if (deadOrCorpse || largeCorrection) {
                     charRenderer->setInstancePosition(instanceId, renderPos);
-                } else if (planarDistSq > kMoveThreshSq || dz > 0.08f) {
+                } else if (renderPos != prevPos) {
+                    // Every step, however small: a threshold here compares one
+                    // frame's step, and a cockroach at under a yard a second
+                    // stays below it frame after frame. It stood still and then
+                    // jumped whenever a long frame made one step big enough.
                     // Entity::updateMovement already evaluates the server spline for
                     // this frame. Starting another renderer interpolation here resets
                     // that interpolation every frame and leaves the model trailing its
@@ -5263,7 +5267,7 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     if (remoteMount) {
                         charRenderer->setInstancePosition(remoteMount->instanceId, mountRenderPos);
                     }
-                } else if (planarDistSq > kMoveThreshSq2 || dz > 0.08f) {
+                } else if (renderPos != prevPos) {
                     float planarDist = std::sqrt(planarDistSq);
                     float duration = std::clamp(planarDist / 5.5f, 0.05f, 0.22f);
                     charRenderer->moveInstanceTo(instanceId, renderPos, duration);
