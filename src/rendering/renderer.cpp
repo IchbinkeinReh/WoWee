@@ -3249,6 +3249,7 @@ void Renderer::update(float deltaTime) {
     // Update swim effects
     if (swimEffects && camera && cameraController && waterRenderer) {
         WOWEE_PROFILE_SCOPE("swim effects", Cpu);
+        swimEffects->setSurfaceRipplesShown(!waterRenderer->rtWaterDrawn());
         swimEffects->update(*camera, *cameraController, *waterRenderer, deltaTime);
     }
 
@@ -3542,6 +3543,7 @@ void Renderer::runDeferredWorldInitStep(float deltaTime) {
 
 void Renderer::loadDeferredWorldTextures() {
     if (skySystem) skySystem->loadTextures(cachedAssetManager);
+    if (swimEffects) swimEffects->loadRippleTextures(cachedAssetManager);
     if (footprintRenderer && !footprintRenderer->initialize(this, vkCtx, perFrameSetLayout, cachedAssetManager))
         LOG_WARNING("Footprint renderer re-init failed (non-fatal)");
     if (blobShadowRenderer && !blobShadowRenderer->initialize(vkCtx, perFrameSetLayout, cachedAssetManager))
@@ -5540,6 +5542,7 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
                 audioCoordinator_->getMovementSoundManager()->initialize(assetManager);
             }
             if (skySystem) skySystem->loadTextures(assetManager);
+            if (swimEffects) swimEffects->loadRippleTextures(assetManager);
             if (footprintRenderer) {
                 if (!footprintRenderer->initialize(this, vkCtx, perFrameSetLayout, assetManager))
                     LOG_WARNING("Footprint renderer initialization failed (non-fatal)");

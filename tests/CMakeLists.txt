@@ -3608,3 +3608,7 @@ target_link_libraries(test_bc_encode PRIVATE catch2_main)
 wowee_test_link_glm(test_bc_encode)
 add_test(NAME bc_encode COMMAND test_bc_encode)
 register_test_target(test_bc_encode)
+
+# ── test_water_ripple ──
+# The client ripples: header-only logic.
+wowee_add_test(test_water_ripple SOURCES test_water_ripple.cpp)

@@ -178,6 +178,7 @@ public:
     // through the floor.
     void suppressVerticalPhysics() { verticalVelocity = 0.0f; grounded = true; }
     [[nodiscard]] bool isJumpKeyPressed() const { return jumpBufferTimer > 0.0f; }
+    [[nodiscard]] float collisionHeight() const { return collisionHeight_; }
     [[nodiscard]] bool isMovingForward() const { return moveForwardActive; }
     [[nodiscard]] bool isMovingBackward() const { return moveBackwardActive; }
     [[nodiscard]] bool isStrafingLeft() const { return strafeLeftActive; }

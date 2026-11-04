@@ -1,11 +1,16 @@
 #pragma once
 
+#include "rendering/vk_texture.hpp"
+#include "rendering/water_ripple.hpp"
+#include <array>
+#include <optional>
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
 #include <vector>
 
 namespace wowee {
+namespace pipeline { class AssetManager; }
 namespace rendering {
 
 class Camera;
@@ -52,6 +57,10 @@ public:
     void render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
     void spawnFootSplash(const glm::vec3& footPos, float waterH);
     void setM2Renderer(M2Renderer* renderer) { m2Renderer = renderer; }
+    /// The client's ripples (water_ripple.hpp): their two textures.
+    void loadRippleTextures(pipeline::AssetManager* assets);
+    /// Whether they show: not on the traced water.
+    void setSurfaceRipplesShown(bool shown) { surfaceRipplesShown_ = shown; }
 
 private:
     struct Particle {
@@ -111,6 +120,25 @@ private:
     VmaAllocation insectDynamicVBAlloc = VK_NULL_HANDLE;
     VmaAllocationInfo insectDynamicVBAllocInfo{};
     VkDeviceSize insectDynamicVBSize = 0;
+
+    // The client's ripples, one flat quad each (water_ripple.hpp).
+    bool createSurfaceRipplePipeline();
+    void updateSurfaceRipples(const CameraController& cc, const glm::vec3& charPos,
+                              std::optional<float> waterH, float deltaTime);
+    void renderSurfaceRipples(VkCommandBuffer cmd, VkDescriptorSet perFrameSet);
+    std::vector<water_ripple::Ripple> surfaceRipples_;
+    float surfaceRippleDelay_ = 0.0f;
+    float surfaceRippleLastDepth_ = 0.0f;
+    bool surfaceRipplesShown_ = false;
+    VkPipeline surfaceRipplePipeline_ = VK_NULL_HANDLE;
+    VkPipelineLayout surfaceRippleLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout surfaceRippleSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool surfaceRipplePool_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 2> surfaceRippleSets_{};
+    std::array<VkTexture, 2> surfaceRippleTextures_{};
+    ::VkBuffer surfaceRippleQuad_ = VK_NULL_HANDLE;
+    VmaAllocation surfaceRippleQuadAlloc_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout perFrameLayout_ = VK_NULL_HANDLE;
 
     std::vector<float> rippleVertexData;
     std::vector<float> bubbleVertexData;
