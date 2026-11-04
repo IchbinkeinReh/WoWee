@@ -794,6 +794,9 @@ void MovementHandler::sendMovement(Opcode opcode) {
             // character looked flat to everyone else, and isSwimming() - which
             // reads this same word - answered no while the player swam.
             movementInfo.flags |= static_cast<uint32_t>(MovementFlags::SWIMMING);
+            // 0x00721210: the active mover starting to swim triggers
+            // tutorial 0x1b.
+            owner_.triggerTutorial(0x1b);
             // Entering water ends a fall, and nothing else would: FALL_LAND is
             // sent on touching ground and a swimmer never touches it, so a
             // jump into a lake left FALLING set with fallTime still climbing.
