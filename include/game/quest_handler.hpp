@@ -386,8 +386,6 @@ private:
     bool questRequestItemsOpen_ = false;
     QuestRequestItemsData currentQuestRequestItems_;
     uint32_t pendingTurnInQuestId_ = 0;
-    uint64_t pendingTurnInNpcGuid_ = 0;
-    bool pendingTurnInRewardRequest_ = false;
     // QuestSort.dbc names, loaded lazily
     std::unordered_map<uint32_t, std::string> questSortNames_;
     bool questSortDbcLoaded_ = false;

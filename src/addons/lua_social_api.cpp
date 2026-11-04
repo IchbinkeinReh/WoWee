@@ -3657,6 +3657,10 @@ void registerSocialLuaAPI(lua_State* L) {
             return selectGossipQuestAt(L, /*available=*/true);
         }},
                 {"SelectActiveQuest", [](lua_State* L) -> int {
+            // 0x0058ccb0: the greeting's one, unlike the gossip's, triggers
+            // tutorial 0x21 as it hands the quest in.
+            if (auto* gh = getGameHandler(L); gh && lua_isnumber(L, 1) && lua_tonumber(L, 1) >= 1)
+                gh->triggerTutorial(0x21);
             return selectGossipQuestAt(L, /*available=*/false);
         }},
                 // Greys the title of a quest the player has outlevelled, by

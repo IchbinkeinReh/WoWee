@@ -872,7 +872,6 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_QUESTGIVER_QUEST_INVALID] = [this](network::Packet& packet) {
         if (packet.hasRemaining(4)) {
             uint32_t failReason = packet.readUInt32();
-            pendingTurnInRewardRequest_ = false;
             const char* reasonStr = "Unknown";
             switch (failReason) {
                 case 0: reasonStr = "Don't have quest"; break;
@@ -943,8 +942,6 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             LOG_INFO("Quest completed: questId=", questId);
             if (pendingTurnInQuestId_ == questId) {
                 pendingTurnInQuestId_ = 0;
-                pendingTurnInNpcGuid_ = 0;
-                pendingTurnInRewardRequest_ = false;
             }
             // The turn-in lines 0x006d0e10 prints, in chat: ERR_QUEST_COMPLETE_S
             // with the title, then ERR_QUEST_REWARD_EXP_I and
@@ -1606,14 +1603,10 @@ void QuestHandler::selectGossipQuest(uint32_t questId) {
     const bool shouldStartProgressFlow = activeQuestConfirmedByServer;
     if (shouldStartProgressFlow) {
         pendingTurnInQuestId_ = questId;
-        pendingTurnInNpcGuid_ = currentGossip_.npcGuid;
-        pendingTurnInRewardRequest_ = activeQuest ? activeQuest->complete : false;
         auto packet = QuestgiverCompleteQuestPacket::build(currentGossip_.npcGuid, questId);
         owner_.getSocket()->send(packet);
     } else {
         pendingTurnInQuestId_ = 0;
-        pendingTurnInNpcGuid_ = 0;
-        pendingTurnInRewardRequest_ = false;
         auto packet = owner_.getPacketParsers()
             ? owner_.getPacketParsers()->buildQueryQuestPacket(currentGossip_.npcGuid, questId)
             : QuestgiverQueryQuestPacket::build(currentGossip_.npcGuid, questId);
@@ -1778,13 +1771,15 @@ void QuestHandler::offerQuestFromItem(uint64_t itemGuid, uint32_t questId) {
 void QuestHandler::completeQuest() {
     if (!questRequestItemsOpen_ || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     pendingTurnInQuestId_ = currentQuestRequestItems_.questId;
-    pendingTurnInNpcGuid_ = currentQuestRequestItems_.npcGuid;
-    pendingTurnInRewardRequest_ = currentQuestRequestItems_.isCompletable();
 
     LOG_DEBUG("completeQuest: questId=", currentQuestRequestItems_.questId,
               " completable=", currentQuestRequestItems_.isCompletable());
 
-    auto packet = QuestgiverCompleteQuestPacket::build(
+    // CompleteQuest on the progress page (0x0058cf40): tutorial 0x21, then
+    // CMSG_QUESTGIVER_REQUEST_REWARD (0x006d4dd0). The reward page is the
+    // server's answer to it.
+    owner_.triggerTutorial(0x21);
+    auto packet = QuestgiverRequestRewardPacket::build(
         currentQuestRequestItems_.npcGuid, currentQuestRequestItems_.questId);
     owner_.getSocket()->send(packet);
     questRequestItemsOpen_ = false;
@@ -1792,7 +1787,6 @@ void QuestHandler::completeQuest() {
 }
 
 void QuestHandler::closeQuestRequestItems(bool announce) {
-    pendingTurnInRewardRequest_ = false;
     questRequestItemsOpen_ = false;
     currentQuestRequestItems_ = QuestRequestItemsData{};
     // What closes the quest frame. It opens on QUEST_DETAIL, QUEST_PROGRESS or
@@ -1809,11 +1803,12 @@ void QuestHandler::chooseQuestReward(uint32_t rewardIndex) {
     uint64_t npcGuid = currentQuestOfferReward_.npcGuid;
     LOG_INFO("Completing quest: questId=", currentQuestOfferReward_.questId,
              " npcGuid=", npcGuid, " rewardIndex=", rewardIndex);
+    // GetQuestReward (0x0058cfa0): tutorial 0x21, then the choice.
+    owner_.triggerTutorial(0x21);
     auto packet = QuestgiverChooseRewardPacket::build(
         npcGuid, currentQuestOfferReward_.questId, rewardIndex);
     owner_.getSocket()->send(packet);
     pendingTurnInQuestId_ = 0;
-    pendingTurnInNpcGuid_ = 0;
     // Announced, which is what closes the dialog. Taking the reward put the
     // three fields back and told nothing: this client's own window reads the
     // flag and closed, and the interface's quest frame hides on QUEST_FINISHED
@@ -1830,7 +1825,6 @@ void QuestHandler::chooseQuestReward(uint32_t rewardIndex) {
 }
 
 void QuestHandler::closeQuestOfferReward(bool announce) {
-    pendingTurnInRewardRequest_ = false;
     questOfferRewardOpen_ = false;
     currentQuestOfferReward_ = QuestOfferRewardData{};
     if (announce && owner_.addonEventCallbackRef()) {
@@ -2862,16 +2856,6 @@ void QuestHandler::handleQuestRequestItems(network::Packet& packet) {
     }
     clearPendingQuestAccept(data.questId);
 
-    if (pendingTurnInRewardRequest_ &&
-        data.questId == pendingTurnInQuestId_ &&
-        data.npcGuid == pendingTurnInNpcGuid_ &&
-        data.isCompletable() &&
-        owner_.getSocket()) {
-        auto rewardReq = QuestgiverRequestRewardPacket::build(data.npcGuid, data.questId);
-        owner_.getSocket()->send(rewardReq);
-        pendingTurnInRewardRequest_ = false;
-    }
-
     currentQuestRequestItems_ = data;
     questFrameFlags_ = data.questFlags;
     questRequestItemsOpen_ = true;
@@ -2932,8 +2916,6 @@ void QuestHandler::handleQuestOfferReward(network::Packet& packet) {
     LOG_INFO("Quest offer reward: questId=", data.questId, " title=\"", data.title, "\"");
     if (pendingTurnInQuestId_ == data.questId) {
         pendingTurnInQuestId_ = 0;
-        pendingTurnInNpcGuid_ = 0;
-        pendingTurnInRewardRequest_ = false;
     }
     currentQuestOfferReward_ = data;
     questFrameFlags_ = data.questFlags;

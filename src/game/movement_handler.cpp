@@ -3024,6 +3024,8 @@ void MovementHandler::handleShowTaxiNodes(network::Packet& packet) {
     // so the original interface's map could not appear however complete the
     // functions behind it were.
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("TAXIMAP_OPENED", {});
+    // 0x005932e0: tutorial 0x22 after TAXIMAP_OPENED.
+    owner_.triggerTutorial(0x22);
 }
 
 void MovementHandler::applyTaxiMountForCurrentNode() {

@@ -3335,8 +3335,10 @@ void InventoryHandler::useItemById(uint32_t itemId, uint64_t unitTarget) {
 
 void InventoryHandler::handleListInventory(network::Packet& packet) {
     ListInventoryData data;
-    data.canRepair = currentVendorItems_.canRepair;   // set by the gossip's repair option
+    data.canRepair = currentVendorItems_.canRepair;
     if (!ListInventoryParser::parse(packet, data)) return;
+    // 0x00584500: tutorial 0x13 as the merchant's list opens.
+    owner_.triggerTutorial(0x13);
     // MERCHANT_SHOW opens with the vendor (0x00584500), which first sets it
     // as the interaction object (0x0051fce0): the window open with the one
     // before closes (0x00512e60) - the merchant's own, MERCHANT_CLOSED, when
