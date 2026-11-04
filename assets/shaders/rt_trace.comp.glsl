@@ -347,8 +347,12 @@ void main() {
     // not: the Undercity's) counts half as well, as on a curve: a folded hide or
     // a cave's uneven floor turned one triangle from a low lamp and lit the next,
     // black to bright along the edge between them.
+    // A room's floor (normalResolved) by its lamp normal outright: bump-free
+    // where the vertex normal is good (rtInteriorLampNormal), and the face's
+    // where it was smoothed with the walls. Measured by the face, a low light
+    // lit a cave floor triangle by triangle (the Pools of Vision).
     float floorLean = smoothstep(RT_FLOOR_BUMP_COS, RT_FLOOR_LEAN_COS, dot(n, lightN));
-    vec3 faceRef = n.z >= RT_NORMAL_FLOOR_Z ? normalize(mix(n, lightN, floorLean)) : normalResolved ? lightN : normalize(n + lightN);
+    vec3 faceRef = n.z >= RT_NORMAL_FLOOR_Z ? (normalResolved ? lightN : normalize(mix(n, lightN, floorLean))) : normalResolved ? lightN : normalize(n + lightN);
     vec3 pointSum = vec3(0.0);
     float bakedSum = 0.0;
     float weightSum = 0.0;

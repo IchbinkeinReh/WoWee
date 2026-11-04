@@ -520,13 +520,13 @@ TEST_CASE("A room's lamp normal: its own near the face, the face's far off it", 
         const float r = glm::radians(degrees);
         return glm::vec3(std::sin(r), 0.0f, std::cos(r));
     };
-    // The thresholds: all within 15 degrees, none past 35, rising between.
+    // The thresholds: all within 30 degrees, none past 50, rising between.
     REQUIRE(normalAgreement(face, leaning(10.0f)) == Catch::Approx(1.0f));
     REQUIRE(normalAgreement(face, leaning(15.0f)) == Catch::Approx(1.0f).margin(1e-3));
-    REQUIRE(normalAgreement(face, leaning(35.0f)) == Catch::Approx(0.0f).margin(1e-3));
+    REQUIRE(normalAgreement(face, leaning(50.0f)) == Catch::Approx(0.0f).margin(1e-3));
     REQUIRE(normalAgreement(face, leaning(64.0f)) == 0.0f);
     float last = 1.0f;
-    for (float a = 15.0f; a <= 35.0f; a += 1.0f) {
+    for (float a = 30.0f; a <= 50.0f; a += 1.0f) {
         const float w = normalAgreement(face, leaning(a));
         REQUIRE(w <= last + 1e-6f);
         last = w;
@@ -543,8 +543,8 @@ TEST_CASE("A room's lamp normal: its own near the face, the face's far off it", 
     const glm::vec3 flat = interiorLampNormal(face, floorN, floorN);
     REQUIRE(flat.z == Catch::Approx(1.0f));
     // Half-way between, between the two.
-    const glm::vec3 mid = interiorLampNormal(face, leaning(25.0f), leaning(25.0f));
-    REQUIRE(mid.z > leaning(25.0f).z);
+    const glm::vec3 mid = interiorLampNormal(face, leaning(40.0f), leaning(40.0f));
+    REQUIRE(mid.z > leaning(40.0f).z);
     REQUIRE(mid.z < 1.0f);
     // Only a floor's: a wall's or a cave rock's normal leaning off its face
     // is its curve, and lit by the face its triangles showed as facets.

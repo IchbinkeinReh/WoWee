@@ -237,8 +237,8 @@ vec3 rtFaceBasedNormal(vec3 face, vec3 vertexNormal, vec3 shading) {
 // page's "Normal blend" sliders, as cosines (rt_normal_blend.hpp): x the
 // near one, y the far one; RT_NORMAL_AGREE_* are their defaults, for a block
 // nothing filled in.
-const float RT_NORMAL_AGREE_NEAR = 0.9659;  // cos 15 degrees
-const float RT_NORMAL_AGREE_FAR = 0.8192;   // cos 35 degrees
+const float RT_NORMAL_AGREE_NEAR = 0.8660;  // cos 30 degrees
+const float RT_NORMAL_AGREE_FAR = 0.6428;  // cos 50 degrees
 //
 // Only a floor's, though - a face turned up (RT_NORMAL_FLOOR_Z) whose normal
 // leans down from it, toward the walls it was smoothed with, as the

@@ -14,8 +14,8 @@
 
 namespace wowee::rendering {
 
-inline constexpr int kNormalBlendKeepDefault = 15;
-inline constexpr int kNormalBlendFaceDefault = 35;
+inline constexpr int kNormalBlendKeepDefault = 30;
+inline constexpr int kNormalBlendFaceDefault = 50;
 inline constexpr int kNormalBlendMaxDegrees = 90;
 
 struct NormalBlendCosines {
@@ -26,7 +26,7 @@ struct NormalBlendCosines {
 /// The two angles as the cosines the shaders compare with. The face angle is
 /// held to at least the keep angle (whichever slider moved last, the rule
 /// stays one blend), and the cosines are taken to four decimals - which at
-/// the defaults is exactly the 0.9659 and 0.8192 the rule was written with.
+/// the defaults is exactly the 0.8660 and 0.6428 the rule uses.
 /// Equal angles become a step at that angle: the far cosine is kept just
 /// under the near one, so the smoothstep has a width.
 [[nodiscard]] inline NormalBlendCosines normalBlendCosines(int keepDegrees, int faceDegrees) {

@@ -154,8 +154,8 @@ inline glm::vec3 faceBasedNormal(const glm::vec3& face, const glm::vec3& vertexN
 
 /// rtNormalAgreement: how much of a normal's own the lamps light by - all
 /// of it within 15 degrees of its face, none past 35, smoothstep between.
-inline constexpr float kNormalAgreeNear = 0.9659f;  // cos 15 degrees
-inline constexpr float kNormalAgreeFar = 0.8192f;   // cos 35 degrees
+inline constexpr float kNormalAgreeNear = 0.8660f;  // cos 30 degrees
+inline constexpr float kNormalAgreeFar = 0.6428f;   // cos 50 degrees
 /// Only for a floor (a face turned up past kNormalFloorZ whose normal leans
 /// down from it); every other surface keeps its own.
 constexpr float kNormalFloorZ = 0.7f;
