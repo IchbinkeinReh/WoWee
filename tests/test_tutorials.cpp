@@ -128,3 +128,21 @@ TEST_CASE("more than ten attacks in a row after tutorial 5 trigger 0x3b", "[tuto
     CHECK_FALSE(t.note(true, false));                                // another spell disarms it
     for (int i = 0; i < 20; ++i) CHECK_FALSE(t.note(true, true));
 }
+
+TEST_CASE("the attack stops count toward 0x37, 5 and 0x38", "[tutorials]") {
+    TutorialState t;
+    wowee::game::AttackStopCounter c;
+    CHECK(c.note(1, t).empty());  // level 1 counts nothing
+    t.loadFlags({});
+    CHECK(c.note(2, t) == std::vector<uint32_t>{0x37});
+    std::array<uint32_t, TutorialState::kWords> w{};
+    w[1] = 1u << (0x37 - 32);  // 0x37 flagged
+    t.loadFlags(w);
+    for (int i = 0; i < 2; ++i) c.note(2, t);                // the second and third
+    CHECK(c.note(2, t) == std::vector<uint32_t>{0x37});     // the fourth: not past four yet
+    CHECK(c.note(2, t) == std::vector<uint32_t>{5, 0x37});  // the fifth
+    w[0] = 1u << 5;  // 5 flagged as well
+    t.loadFlags(w);
+    for (int i = 0; i < 5; ++i) c.note(2, t);                      // the sixth to tenth
+    CHECK(c.note(2, t) == std::vector<uint32_t>{0x38, 5, 0x37});  // the eleventh
+}

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game/tutorials.hpp"
+
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
 #include "game/spell_defines.hpp"
@@ -221,6 +223,7 @@ private:
 
     // --- Combat state ---
     bool autoAttacking_ = false;
+    AttackStopCounter attackStops_;  ///< 0x006e1660's tutorial counter
     bool autoAttackRequested_ = false;
     bool autoAttackRetryPending_ = false;
     uint64_t autoAttackTarget_ = 0;

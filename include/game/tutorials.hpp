@@ -196,4 +196,23 @@ struct AttackStreak {
     }
 };
 
+/// The counter 0x006e1660 keeps as the player stops attacking (DAT_00c9ecc0):
+/// above level 1, while tutorial 0x38 is not flagged, each stop counts one
+/// and triggers 0x37; past four, with 0x37 flagged, 5 as well; past ten, with
+/// 5 flagged, 0x38 ahead of it. The tutorials due, in the client's order.
+struct AttackStopCounter {
+    uint32_t count = 0;
+    std::vector<uint32_t> note(uint32_t level, const TutorialState& t) {
+        std::vector<uint32_t> out;
+        if (level <= 1 || (t.loaded() && t.flagged(0x38))) return out;
+        ++count;
+        if (t.loaded() && t.flagged(0x37) && count > 4) {
+            if (t.flagged(5) && count > 10) out.push_back(0x38);
+            out.push_back(5);
+        }
+        out.push_back(0x37);
+        return out;
+    }
+};
+
 }  // namespace wowee::game

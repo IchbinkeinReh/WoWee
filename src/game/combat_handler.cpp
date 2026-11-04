@@ -484,6 +484,8 @@ void CombatHandler::stopAutoAttack() {
     LOG_INFO("Stopping auto-attack");
     if (owner_.addonEventCallbackRef())
         owner_.addonEventCallbackRef()("PLAYER_LEAVE_COMBAT", {});
+    // 0x006e1660: the stop's tutorials.
+    for (uint32_t id : attackStops_.note(owner_.getPlayerLevel(), owner_.tutorials())) owner_.triggerTutorial(id);
 }
 
 // ============================================================
