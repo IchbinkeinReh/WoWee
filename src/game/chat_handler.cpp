@@ -766,6 +766,8 @@ void ChatHandler::handleMessageChat(network::Packet& packet, const std::string& 
 }
 
 void ChatHandler::deliverChatMessage(MessageChatData data, bool alreadyWaited) {
+    // 0x004fdbc0: a whisper received (chat type 7) triggers tutorial 0x10.
+    if (data.type == ChatType::WHISPER && !alreadyWaited) owner_.triggerTutorial(0x10);
     // Resolve sender name from entity/cache if not already set by parser
     if (data.senderName.empty() && data.senderGuid != 0) {
         auto nameIt = owner_.getPlayerNameCache().find(data.senderGuid);
