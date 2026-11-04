@@ -4712,16 +4712,36 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
     }
 
     if (!alreadyKnown && owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("LEARNED_SPELL_IN_TAB", {std::to_string(spellId)});
+        // 0x00542030: a companion goes to its list - tutorial 0x33 for a
+        // critter, 0x34 for a mount, and COMPANION_LEARNED, which the mounts
+        // and critters tab redraws on. Any other spell goes to its
+        // spellbook tab: LEARNED_SPELL_IN_TAB with the tab's number from 1,
+        // which the book flashes, then tutorial 0x27.
+        const auto inList = [&](bool mounts) {
+            for (const auto& c : owner_.getCompanions(mounts))
+                if (c.spellId == spellId) return true;
+            return false;
+        };
+        const bool critter = inList(false);
+        const bool mount = !critter && inList(true);
+        if (critter || mount) {
+            owner_.triggerTutorial(critter ? 0x33 : 0x34);
+            owner_.addonEventCallbackRef()("COMPANION_LEARNED", {});
+        } else {
+            const auto& tabs = getSpellBookTabs();
+            for (size_t t = 0; t < tabs.size(); ++t) {
+                const auto& ids = tabs[t].spellIds;
+                if (std::find(ids.begin(), ids.end(), spellId) == ids.end()) continue;
+                owner_.addonEventCallbackRef()("LEARNED_SPELL_IN_TAB", {std::to_string(t + 1)});
+                owner_.triggerTutorial(0x27);
+                break;
+            }
+        }
         owner_.addonEventCallbackRef()("SPELLS_CHANGED", {});
         // The stance bar's list took it (0x00542563 -> event 0x178).
         if (isStanceBarSpell(owner_.getPlayerClass(), spellId)) {
             owner_.addonEventCallbackRef()("UPDATE_SHAPESHIFT_FORMS", {});
         }
-        // The mounts and critters list is built from the spellbook, so a new
-        // spell can add to it. petpaperdollframe refreshes on this and on
-        // nothing else, which is why the tab stayed as it was first drawn.
-        owner_.addonEventCallbackRef()("COMPANION_LEARNED", {});
         // A crafting window's recipes are the spells that just changed, and
         // it refreshes on its own event rather than on that one.
         if (craftingWindowOpen_) owner_.addonEventCallbackRef()("TRADE_SKILL_UPDATE", {});
