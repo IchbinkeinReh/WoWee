@@ -38,6 +38,22 @@ layout(location = 4) in vec3 vT;
 layout(location = 5) in vec3 vB;
 layout(location = 6) in vec3 vN;
 layout(location = 7) in float vFog;
+layout(location = 8) in vec3 vWorld;
+layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
+// The air between the camera and the liquid, out of the fog volume, as the
+// terrain and the traced water take it (water.frag's fogVolumeAt): without
+// it a far lava lake under Blackrock Spire stood out of the orange haze
+// that hides the ground round it, in the distance fog's bare lavender.
+vec3 liquidAir(vec3 color, vec3 worldPos) {
+    if (volumetricParams.x < 0.5) return color;
+    vec4 clip = projection * view * vec4(worldPos, 1.0);
+    float depth = max(clip.w, 1e-4);
+    vec2 uv = clip.xy / depth * 0.5 + 0.5;
+    float slice = log(max(depth, volumetricParams.y) / volumetricParams.y) * volumetricParams.z;
+    vec4 a = textureLod(uFogVolume, vec3(uv, slice - 0.5 / volumetricParams.w), 0.0);
+    return color * a.a + a.rgb;
+}
+
 
 layout(location = 0) out vec4 outColor;
 
@@ -94,5 +110,5 @@ void main() {
     float alpha = f * pw.c11.x + base.a;
     if (clamp(alpha, 0.0, 1.0) * 255.0 < 1.0) discard;
 
-    outColor = vec4(mix(fogColor.rgb, clamp(color, 0.0, 1.0), vFog), clamp(alpha, 0.0, 1.0));
+    outColor = vec4(liquidAir(mix(fogColor.rgb, clamp(color, 0.0, 1.0), vFog), vWorld), clamp(alpha, 0.0, 1.0));
 }

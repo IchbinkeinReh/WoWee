@@ -37,10 +37,12 @@ layout(location = 1) out vec2 vDepthUV;
 layout(location = 2) out vec4 vPrimary;
 layout(location = 3) out vec3 vSecondary;
 layout(location = 4) out float vFog;
+layout(location = 5) out vec3 vWorld;  // for the fog volume (liquid.frag)
 
 void main() {
     vec4 viewSpace = view * vec4(aPos, 1.0);
     gl_Position = projection * viewSpace;
+    vWorld = aPos;
 
     // texcoord[1] = attrib6 x (c9, c10) + c12; texcoord[0] = attrib7 x (c13, c14).
     vSurfaceUV = mat2(push.animMatrix.xy, push.animMatrix.zw) * aSurfaceUV + push.scroll.xy;
