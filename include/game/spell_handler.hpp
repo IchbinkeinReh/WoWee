@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game/tutorials.hpp"
+
 #include "game/world_packets.hpp"
 #include "game/opcode_table.hpp"
 #include "game/spell_defines.hpp"
@@ -643,6 +645,7 @@ private:
     // --- Spell state ---
     std::unordered_set<uint32_t> knownSpells_;
     uint8_t castCount_ = 0;
+    AttackStreak attackStreak_;  ///< 0x0080cce0's tutorial counter
     /// The cast count of the player's cast the server last started: the
     /// running cast a cancel ends (0x00806200).
     uint8_t runningCastCount_ = 0;

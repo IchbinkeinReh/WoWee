@@ -171,4 +171,29 @@ struct ItemPushTutorialInput {
     return out;
 }
 
+/// The counter 0x0080cce0 keeps as the player casts (DAT_00af53c4,
+/// DAT_00d3f604): until tutorial 5 is flagged it stays armed at nought;
+/// after, each attack - an Attack effect (78), a ranged spell (Attributes
+/// 0x2) or one that repeats (AttributesEx2 0x20) - counts one and anything
+/// else disarms it, and more than ten in a row trigger tutorial 0x3b.
+struct AttackStreak {
+    bool armed = true;
+    uint32_t count = 0;
+    /// One cast by the player; true where tutorial 0x3b is due.
+    bool note(bool tutorial5Flagged, bool attack) {
+        if (!tutorial5Flagged) {
+            armed = true;
+            count = 0;
+            return false;
+        }
+        if (!armed) return false;
+        if (!attack) {
+            armed = false;
+        } else {
+            ++count;
+        }
+        return count > 10;
+    }
+};
+
 }  // namespace wowee::game

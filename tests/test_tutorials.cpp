@@ -117,3 +117,14 @@ TEST_CASE("one awaits only once the flags are in and until it is triggered", "[t
     (void)t.trigger(0x12, true);
     CHECK_FALSE(t.awaiting(0x12));
 }
+
+TEST_CASE("more than ten attacks in a row after tutorial 5 trigger 0x3b", "[tutorials]") {
+    wowee::game::AttackStreak s;
+    for (int i = 0; i < 20; ++i) CHECK_FALSE(s.note(false, true));  // 5 not flagged: armed at nought
+    for (int i = 0; i < 10; ++i) CHECK_FALSE(s.note(true, true));
+    CHECK(s.note(true, true));                                       // the eleventh
+    wowee::game::AttackStreak t;
+    for (int i = 0; i < 5; ++i) CHECK_FALSE(t.note(true, true));
+    CHECK_FALSE(t.note(true, false));                                // another spell disarms it
+    for (int i = 0; i < 20; ++i) CHECK_FALSE(t.note(true, true));
+}

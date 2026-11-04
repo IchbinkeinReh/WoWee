@@ -1739,6 +1739,12 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // on its way into or out of one, or its move held for the vehicle's
     // animation.
     if (owner_.heldBySeat(owner_.getPlayerGuid())) return;
+    // 0x0080cce0: the attack counter behind tutorial 0x3b.
+    if (const auto sit = owner_.spellNameCacheRef().find(spellId); sit != owner_.spellNameCacheRef().end()) {
+        const auto& e = sit->second;
+        const bool attack = e.effectIds[0] == 78 || (e.attr & 0x2u) != 0 || (e.attrEx2 & 0x20u) != 0;
+        if (attackStreak_.note(owner_.tutorials().flagged(5), attack)) owner_.triggerTutorial(0x3b);
+    }
 
     // Auto Shot and the wand's Shoot keep going once started, and the action
     // button flashes for as long as they do. The stop half comes from the
