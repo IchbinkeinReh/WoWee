@@ -12,10 +12,11 @@ TEST_CASE("a ripple rises for 40% of its life and is gone at its end", "[water_r
     REQUIRE(step(r, 0.2f));
     REQUIRE(r.alpha == Catch::Approx(0.5f).margin(1e-4));
     REQUIRE(step(r, 0.3f));
-    REQUIRE(r.alpha == Catch::Approx(0.8333f).margin(1e-3));
+    // Down from the peak by the time it took to reach it, as 0x0079d5e0 has it.
+    REQUIRE(r.alpha == Catch::Approx(0.6667f).margin(1e-3));
     REQUIRE(r.size == Catch::Approx(2.0f));
     REQUIRE(step(r, 0.2f));
-    REQUIRE(r.alpha == Catch::Approx(0.5f).margin(1e-3));
+    REQUIRE(r.alpha == Catch::Approx(0.3333f).margin(1e-3));
     REQUIRE_FALSE(step(r, 0.31f));
 }
 
