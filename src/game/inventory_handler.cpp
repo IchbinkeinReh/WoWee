@@ -1,5 +1,7 @@
 #include "game/inventory_handler.hpp"
 #include "game/tutorials.hpp"
+#include "game/totem_bar.hpp"
+#include "game/spell_handler.hpp"
 #include "game/auction_pending_sales.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/spell_classification.hpp"
@@ -3011,6 +3013,19 @@ void InventoryHandler::triggerItemPushTutorials(uint64_t receiver, const ItemQue
     in.playerClass = owner_.getPlayerClass();
     in.equipTutorialSeen = owner_.tutorials().flagged(0x37);
     for (uint32_t id : itemPushTutorials(in)) owner_.triggerTutorial(id);
+    // 0x005d9540, from the container slot's handler (0x005d9790): an item of
+    // a totem category arriving while that element's totem bar list holds
+    // spells triggers tutorial 0x2e.
+    if (self && info.totemCategory != 0) {
+        const uint32_t mask = totem_bar::elementMask(info.totemCategory);
+        auto* sh = owner_.getSpellHandler();
+        for (int e = 0; sh && e < totem_bar::kElements; ++e) {
+            if ((mask & (1u << e)) != 0 && !sh->multiCastSpells(e).empty()) {
+                owner_.triggerTutorial(0x2e);
+                break;
+            }
+        }
+    }
 }
 
 void InventoryHandler::fireBagUpdates() {

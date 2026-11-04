@@ -2144,22 +2144,8 @@ bool SpellHandler::toolsCarried(uint32_t spellId, const Entity& player) const {
     // ... each TotemCategory met by what is carried: items whose own
     // category is of its type, their masks together covering its mask
     // (0x007548f0 -> 0x007541f0; TotemCategory.dbc type 18, mask 19).
-    auto* am = core::Application::getInstance().getAssetManager();
-    auto cats = am ? am->loadDBCOptional("TotemCategory.dbc") : nullptr;
     for (const uint32_t cat : e.totemCategories) {
-        if (cat == 0) continue;
-        const int32_t row = cats && cats->getFieldCount() > 19 ? cats->findRecordById(cat) : -1;
-        if (row < 0) return false;
-        const uint32_t type = cats->getUInt32(static_cast<uint32_t>(row), 18);
-        uint32_t need = cats->getUInt32(static_cast<uint32_t>(row), 19);
-        inv.forEachCarried([&](const ItemDef& d) {
-            const auto* info = owner_.getItemInfo(d.itemId);
-            if (!info || info->totemCategory == 0 || need == 0) return;
-            const int32_t r = cats->findRecordById(info->totemCategory);
-            if (r >= 0 && cats->getUInt32(static_cast<uint32_t>(r), 18) == type)
-                need &= ~cats->getUInt32(static_cast<uint32_t>(r), 19);
-        });
-        if (need != 0) return false;
+        if (cat != 0 && !carriesTotemCategory(cat)) return false;
     }
     // 0x00800d60: no reagents prepared (UNIT_FLAG 0x20 with AttributesEx5
     // 0x2), or for a spell of the class's family PLAYER_NO_REAGENT_COST
@@ -4729,6 +4715,19 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
                 if (c.spellId == spellId) return true;
             return false;
         };
+        // 0x00542030's totem branch: a totem spell newly learned, while the
+        // player carries a totem of its category, triggers tutorial 0x2e.
+        if (const auto tit = owner_.spellNameCacheRef().find(spellId); tit != owner_.spellNameCacheRef().end()) {
+            const auto& t = tit->second;
+            if ((t.attrEx4 & 0x8000u) == 0 && (t.attrEx7 & 0x20u) != 0) {
+                for (uint32_t cat : t.totemCategories) {
+                    if (totem_bar::elementMask(cat) != 0 && carriesTotemCategory(cat)) {
+                        owner_.triggerTutorial(0x2e);
+                        break;
+                    }
+                }
+            }
+        }
         const bool critter = inList(false);
         const bool mount = !critter && inList(true);
         if (critter || mount) {
@@ -5982,6 +5981,26 @@ const std::string& SpellHandler::getSpellFocusName(uint32_t focusId) {
     }
     auto it = spellFocusNames_.find(focusId);
     return it != spellFocusNames_.end() ? it->second : kEmpty;
+}
+
+bool SpellHandler::carriesTotemCategory(uint32_t cat) const {
+    // 0x007548f0 -> 0x007541f0: items carried whose own category is of the
+    // category's type, their masks together covering its mask
+    // (TotemCategory.dbc type 18, mask 19).
+    auto* am = core::Application::getInstance().getAssetManager();
+    auto cats = am ? am->loadDBCOptional("TotemCategory.dbc") : nullptr;
+    const int32_t row = cats && cats->getFieldCount() > 19 ? cats->findRecordById(cat) : -1;
+    if (row < 0) return false;
+    const uint32_t type = cats->getUInt32(static_cast<uint32_t>(row), 18);
+    uint32_t need = cats->getUInt32(static_cast<uint32_t>(row), 19);
+    owner_.getInventory().forEachCarried([&](const ItemDef& d) {
+        const auto* info = owner_.getItemInfo(d.itemId);
+        if (!info || info->totemCategory == 0 || need == 0) return;
+        const int32_t r = cats->findRecordById(info->totemCategory);
+        if (r >= 0 && cats->getUInt32(static_cast<uint32_t>(r), 18) == type)
+            need &= ~cats->getUInt32(static_cast<uint32_t>(r), 19);
+    });
+    return need == 0;
 }
 
 std::vector<uint32_t> SpellHandler::multiCastSpells(int element) const {

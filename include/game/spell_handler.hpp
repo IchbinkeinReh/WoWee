@@ -247,6 +247,8 @@ public:
     /// The totem bar's element lists (totem_bar.hpp), from the known spells
     /// by spell id: element 0 fire, 1 earth, 2 water, 3 air.
     [[nodiscard]] std::vector<uint32_t> multiCastSpells(int element) const;
+    /// 0x007548f0: the player carries what the TotemCategory asks for.
+    [[nodiscard]] bool carriesTotemCategory(uint32_t category) const;
 
     // Unit cast state (tracked per GUID for target frame + boss frames)
     [[nodiscard]] const UnitCastState* getUnitCastState(uint64_t guid) const {
