@@ -702,6 +702,7 @@ void CharacterScreen::renderAddonsSheet(float screenW, float screenH) {
                              ImVec2(rowA.x + px(8), cy - boxSize * 0.5f), boxSize, nullptr,
                              &value)) {
                 am->setAddonEnabled(addon.addonName, value);
+                am->saveAddonEnabledState();
             }
 
             const float textX = rowA.x + px(8) + boxSize + px(12);

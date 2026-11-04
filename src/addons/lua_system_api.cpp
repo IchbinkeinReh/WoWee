@@ -9770,6 +9770,14 @@ void registerSystemLuaAPI(lua_State* L) {
                 svc->setAddOnEnabled(name, true);
             return 0;
         }},
+                // ResetDisabledAddOns() (0x00511a40): reads this character's
+                // AddOns.txt back over the list (0x005f91e0), so enable changes
+                // not yet saved by a reload or logout are gone.
+                {"ResetDisabledAddOns", [](lua_State* L) -> int {
+            auto* svc = getLuaServices(L);
+            if (svc && svc->resetAddOnsEnabled) svc->resetAddOnsEnabled();
+            return 0;
+        }},
                 {"GetAddOnMetadata",  lua_GetAddOnMetadata},
                 {"IsAddOnLoadOnDemand", lua_IsAddOnLoadOnDemand},
                 {"GetAddOnDependencies", lua_GetAddOnDependencies},

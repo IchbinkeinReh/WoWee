@@ -73,10 +73,19 @@ public:
     LuaEngine* getLuaEngine() { return &luaEngine_; }
     [[nodiscard]] bool isInitialized() const { return luaEngine_.isInitialized(); }
 
-    // Per-addon enable/disable (persisted). Disabled addons are skipped by
-    // loadAllAddons; changes take effect on the next load (world enter or /reload).
+    // Per-addon enable/disable. Disabled addons are skipped by loadAllAddons;
+    // changes take effect on the next load (world enter or /reload).
+    //
+    // A change is held in memory until the interface is torn down, as the
+    // client's EnableAddOn and DisableAddOn are: AddOns.txt is written by
+    // 0x005f76a0, which only the world UI's teardown (0x00528f00) calls, and
+    // ResetDisabledAddOns (0x005f91e0) reads it back over the pending list.
     [[nodiscard]] bool isAddonEnabled(const std::string& addonName) const;
     void setAddonEnabled(const std::string& addonName, bool enabled);
+    /// Write the pending enable state now.
+    void saveAddonEnabledState() const { saveEnabledState(); }
+    /// Throw away unsaved changes by reading the saved state back.
+    void resetAddonEnabledState();
     // True once any addon has been loaded this session (so the UI can note that a
     // toggle only applies after the next reload).
     [[nodiscard]] bool addonsLoaded() const { return addonsLoaded_; }
