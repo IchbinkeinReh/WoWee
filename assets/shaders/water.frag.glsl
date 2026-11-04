@@ -72,6 +72,7 @@ layout(set = 2, binding = 3) uniform WaterFrameData {
     vec4 rtWater2;      // x how far a refracted ray goes, z the waves' height, w their frequency (1 default)
     vec4 rtSkyTop;      // the sky a reflection that leaves the scene meets: overhead
     vec4 rtSkyHorizon;  // and at the horizon
+    mat4 captureViewProj;  // the camera the scene capture was taken with
 };
 
 layout(location = 0) in vec3 FragPos;

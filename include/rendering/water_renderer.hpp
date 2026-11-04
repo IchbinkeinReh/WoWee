@@ -130,6 +130,9 @@ struct WaterFrameUBOData {
     glm::vec4 rtWater2{0.0f};      // x how far a refracted ray goes, z/w the waves' height and frequency
     glm::vec4 rtSkyTop{0.0f};      // the sky a reflection leaving the scene meets, overhead
     glm::vec4 rtSkyHorizon{0.0f};  // and at the horizon
+    // The camera the scene capture was taken with: this frame's, or the last
+    // one's where the capture is the finished frame before (MSAA).
+    glm::mat4 captureViewProj{1.0f};
 };
 
 /// What the ray traced water needs from the frame (Renderer, each frame).
@@ -430,6 +433,9 @@ private:
     VkExtent2D sceneHistoryExtent = {.width = 0, .height = 0};
     bool sceneHistoryReady = false;
     bool sceneHistoryHasWater_ = false;
+    /// The camera of the frame before, which took a capture with the water in it.
+    glm::mat4 lastViewProj_{1.0f};
+    bool hasLastViewProj_ = false;
     mutable uint32_t renderDiagCounter_ = 0;
 
     // Surface disturbance trail. Points age out, spreading as they go; the

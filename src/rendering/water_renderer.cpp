@@ -1165,6 +1165,12 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
                                    rtFrame_.waveFreq);
     frameUBO_.rtSkyTop = glm::vec4(rtFrame_.skyTop, 1.0f);
     frameUBO_.rtSkyHorizon = glm::vec4(rtFrame_.skyHorizon, 1.0f);
+    {
+        const glm::mat4 viewProj = camera.getProjectionMatrix() * camera.getViewMatrix();
+        frameUBO_.captureViewProj = sceneHistoryHasWater_ && hasLastViewProj_ ? lastViewProj_ : viewProj;
+        lastViewProj_ = viewProj;
+        hasLastViewProj_ = true;
+    }
     // The wake as it stands, into this frame's slot - safe now, the frame has
     // waited for the GPU to finish with it.
     uploadFrameUBO();
