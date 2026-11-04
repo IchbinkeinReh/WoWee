@@ -341,30 +341,6 @@ void SwimEffects::recreatePipelines() {
     if (surfaceRippleLayout_) createSurfaceRipplePipeline();
 }
 
-void SwimEffects::spawnRipple(const glm::vec3& pos, const glm::vec3& moveDir, float waterH) {
-    if (static_cast<int>(ripples.size()) >= MAX_RIPPLE_PARTICLES) return;
-
-    Particle p;
-    // Scatter splash droplets around the character at the water surface
-    float ox = randFloat(-1.5f, 1.5f);
-    float oy = randFloat(-1.5f, 1.5f);
-    p.position = glm::vec3(pos.x + ox, pos.y + oy, waterH + 0.3f);
-
-    // Spray outward + upward from movement direction
-    float spread = randFloat(-1.0f, 1.0f);
-    glm::vec3 perp(-moveDir.y, moveDir.x, 0.0f);
-    glm::vec3 outDir = -moveDir + perp * spread;
-    float speed = randFloat(1.5f, 4.0f);
-    p.velocity = glm::vec3(outDir.x * speed, outDir.y * speed, randFloat(1.0f, 3.0f));
-
-    p.lifetime = 0.0f;
-    p.maxLifetime = randFloat(0.5f, 1.0f);
-    p.size = randFloat(3.0f, 7.0f);
-    p.alpha = randFloat(0.5f, 0.8f);
-
-    ripples.push_back(p);
-}
-
 void SwimEffects::spawnFootSplash(const glm::vec3& footPos, float waterH) {
     // Small burst of splash droplets at foot position (for wading)
     constexpr int splashCount = 5;
@@ -460,30 +436,8 @@ void SwimEffects::update(const Camera& camera, const CameraController& cc,
 
     updateSurfaceRipples(cc, charPos, charWaterH, deltaTime);
 
-    // --- Ripple/splash spawning ---
-    if (swimming && charWaterH) {
-        float wh = *charWaterH;
-        float spawnRate = moving ? 40.0f : 8.0f;
-        rippleSpawnAccum += spawnRate * deltaTime;
+    // The foot splashes below live on in `ripples`, and go out with their lifetime.
 
-        // Compute movement direction from camera yaw
-        float yawRad = glm::radians(cc.getYaw());
-        glm::vec3 moveDir(std::cos(yawRad), std::sin(yawRad), 0.0f);
-        if (moveDir.x * moveDir.x + moveDir.y * moveDir.y > 1e-6f) {
-            moveDir = glm::normalize(moveDir);
-        }
-
-        while (rippleSpawnAccum >= 1.0f) {
-            spawnRipple(charPos, moveDir, wh);
-            rippleSpawnAccum -= 1.0f;
-        }
-    } else {
-        rippleSpawnAccum = 0.0f;
-        // Don't clear ripples - foot splash particles are added while wading
-        // (not swimming) and need to live out their lifetime.
-    }
-
-    // --- Wading spray ---
     // Feet in the water but not swimming: the shoreline transition. Ripples
     // above only spawn while swimming, so walking or riding through the
     // shallows threw nothing but the per-footstep burst, which reads as dry.

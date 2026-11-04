@@ -148,11 +148,9 @@ private:
     VkSampleCountFlagBits targetSamples_ = VK_SAMPLE_COUNT_1_BIT;
 
     float wadeSpawnAccum = 0.0f;
-    float rippleSpawnAccum = 0.0f;
     float bubbleSpawnAccum = 0.0f;
     float insectSpawnAccum = 0.0f;
 
-    void spawnRipple(const glm::vec3& pos, const glm::vec3& moveDir, float waterH);
     void spawnBubble(const glm::vec3& pos, float waterH);
     void spawnInsect(const glm::vec3& vegPos);
 };
