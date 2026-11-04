@@ -9440,7 +9440,6 @@ void LuaEngine::registerCoreAPI() {
         // Misc compatibility stubs
         // GetScreenWidth, GetScreenHeight, GetNumLootItems are now C functions
         // GetFramerate is now a C function
-        "function IsLoggedIn() return true end\n"
         "function StaticPopup_Show() end\n"
         "function StaticPopup_Hide() end\n"
         // UI Panel management - Show/Hide standard WoW panels
@@ -9913,6 +9912,14 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
                               const std::function<void(lua_State*)>& pushArgs,
                               const std::string& traceArg) {
     if (!L_) return;
+    // 0x00528010 clears the flag IsLoggedIn reads (0x00bd0793) as the world
+    // is entered, just ahead of PLAYER_LOGIN (the first entry of an
+    // interface) and PLAYER_ENTERING_WORLD; a new interface (0x0052a980)
+    // starts with it set, so here with a new state.
+    if (eventName == "PLAYER_LOGIN" || eventName == "PLAYER_ENTERING_WORLD") {
+        lua_pushboolean(L_, 1);
+        lua_setfield(L_, LUA_REGISTRYINDEX, "wowee_logged_in");
+    }
 
     // Combat lockdown is the flag these two events announce, and 0x00524600
     // moves it on the far side of each: leaving combat lifts it before

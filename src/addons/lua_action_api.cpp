@@ -3446,6 +3446,18 @@ static int lua_SetOverrideBindingClick(lua_State* L) {
 /// SetMouselookOverrideBinding("key", "binding" or nil) (0x005fd550 ->
 /// 0x005fd440): what the key runs while the mouse looks, under the taint
 /// check (kind 0xd); nil takes it away.
+/// IsLoggedIn() (0x0060a450): 1 once this interface has seen the world
+/// entered, nil before - while it loads, and after a reload until the world
+/// is entered again.
+static int lua_IsLoggedIn(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_logged_in");
+    const bool in = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    if (in) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
+
 /// GetPetActionsUsable() (0x005d53c0): 1 where the pet answers its actions
 /// (0x005d3e80), else nil. A stub answering false here greyed out every pet
 /// action button however the pet stood.
@@ -3899,6 +3911,7 @@ void registerActionLuaAPI(lua_State* L) {
                 {"ClearOverrideBindings", lua_ClearOverrideBindings},
                 {"SetMouselookOverrideBinding", lua_SetMouselookOverrideBinding},
                 {"GetPetActionsUsable", lua_GetPetActionsUsable},
+                {"IsLoggedIn", lua_IsLoggedIn},
                 // Paging lives here, and the getter with it. Both were
                 // defined twice - this pair against __WoweeActionBarPage and a
                 // bootstrap pair against a local - so whichever won,
