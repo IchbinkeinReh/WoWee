@@ -2067,8 +2067,7 @@ void InventoryHandler::buyBackItem(uint32_t row) {
 // event rather than by polling. The optimistic repair below changes durability
 // without the server having said so yet, so it has to say so itself.
 void InventoryHandler::announceDurabilityChange() {
-    owner_.fireAddonEvent("UPDATE_INVENTORY_ALERTS", {});
-    owner_.fireAddonEvent("UPDATE_INVENTORY_DURABILITY", {});
+    owner_.updateInventoryAlerts();
 }
 
 void InventoryHandler::repairItem(uint64_t vendorGuid, uint64_t itemGuid) {
@@ -6621,6 +6620,9 @@ void InventoryHandler::fireEquipSlotEvents() {
                 owner_.addonEventCallbackRef()("ACTIONBAR_SLOT_CHANGED", {std::to_string(i + 1)});
         }
     }
+    // The item-change routine (0x006e1e10) ends with the durability alerts'
+    // pass (0x005e90d0): an item put on or taken off moves them.
+    owner_.updateInventoryAlerts();
 }
 
 void InventoryHandler::fireBankSlotEvents() {

@@ -1851,6 +1851,10 @@ wowee_add_test(test_missile_trajectory SOURCES test_missile_trajectory.cpp)
 # SetOverrideBinding's store: priority first, then the newest, per owner.
 wowee_add_test(test_override_bindings SOURCES test_override_bindings.cpp)
 
+# ── test_inventory_alerts ────────────────────────────────────
+# The durability figure's alerts (0x005e8fe0): low, broken, the ammunition.
+wowee_add_test(test_inventory_alerts SOURCES test_inventory_alerts.cpp)
+
 # ── test_scene_pick ──────────────────────────────────────────
 # Which of ScenePick's answers a caller wants. closestGuid and resolve()
 # disagree exactly where a wide object stands beside an NPC, which is where the

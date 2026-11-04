@@ -120,55 +120,20 @@ static int lua_GetMoney(lua_State* L) {
 
 // ── Bags ───────────────────────────────────────────────────────────────────
 
-/// GetInventoryAlertStatus(index) → 0 for undamaged, 1 low, 2 broken.
-///
-/// The comment that used to sit here said durability was not tracked. It is,
-/// per equipped item, and GetInventoryItemDurability has been answering from
-/// the same two fields all along - so the armoured-figure warning never lit
-/// up whatever state the gear was in.
-///
-/// The index is durabilityframe.lua's own INVENTORY_ALERT_STATUS_SLOTS
-/// ordering, which is neither the equipment slot order nor a contiguous run
-/// of it: head, shoulders, chest, waist, legs, feet, wrists, hands, then the
-/// three weapon slots.
-/// UpdateInventoryAlertStatus() - recompute the durability alerts.
-///
-/// 1.12's name for the client-side refresh, and durabilityframe.lua calls it
-/// from DurabilityFrame_OnUpdate when an enchant timer runs out. Unbound, that
-/// raised inside an OnUpdate - the worst place for it, because the frame is
-/// asked again on the very next frame.
-///
-/// The durability itself is already tracked and already read through
-/// GetInventoryAlertStatus, so there is nothing here to recompute: what the
-/// caller wants is for the frame to look again. Firing the event the real one
-/// fires is the whole of it.
+/// GetInventoryAlertStatus(index) (0x005e7fa0) → 0 fine, 1 low, 2 broken:
+/// the alert the last pass held for the entry, in durabilityframe.lua's
+/// INVENTORY_ALERT_STATUS_SLOTS order - eight armour slots, the three
+/// weapons and the ammunition (inventory_alerts.hpp).
+/// UpdateInventoryAlertStatus() runs that pass (0x005eaf30 -> 0x005e90d0).
 static int lua_UpdateInventoryAlertStatus(lua_State* L) {
-    lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
-    auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
-    lua_pop(L, 1);
-    if (engine) engine->fireEvent("UPDATE_INVENTORY_ALERTS", {});
+    if (auto* gh = getGameHandler(L)) gh->updateInventoryAlerts();
     return 0;
 }
 
 static int lua_GetInventoryAlertStatus(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetInventoryAlertStatus(index)");
     auto* gh = getGameHandler(L);
-    const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-    static const game::EquipSlot kAlertSlots[] = {
-        game::EquipSlot::HEAD,   game::EquipSlot::SHOULDERS, game::EquipSlot::CHEST,
-        game::EquipSlot::WAIST,  game::EquipSlot::LEGS,      game::EquipSlot::FEET,
-        game::EquipSlot::WRISTS, game::EquipSlot::HANDS,     game::EquipSlot::MAIN_HAND,
-        game::EquipSlot::OFF_HAND, game::EquipSlot::RANGED,
-    };
-    constexpr int kCount = static_cast<int>(sizeof(kAlertSlots) / sizeof(kAlertSlots[0]));
-    if (!gh || index < 1 || index > kCount) { lua_pushnumber(L, 0); return 1; }
-    const auto& sl = gh->getInventory().getEquipSlot(kAlertSlots[index - 1]);
-    int status = 0;
-    if (!sl.empty() && sl.item.maxDurability > 0) {
-        // WoW's own thresholds: broken at nothing left, low at a fifth.
-        if (sl.item.curDurability == 0) status = 2;
-        else if (sl.item.curDurability * 5 <= sl.item.maxDurability) status = 1;
-    }
-    lua_pushnumber(L, status);
+    lua_pushnumber(L, gh ? gh->inventoryAlert(static_cast<int>(lua_tonumber(L, 1))) : 0);
     return 1;
 }
 

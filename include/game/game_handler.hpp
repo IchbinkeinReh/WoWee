@@ -4608,6 +4608,16 @@ public:
         auto it = onlineItems_.find(guid);
         return it != onlineItems_.end() && (it->second.flags & 0x1u) != 0;
     }
+    /// The durability alerts' pass (0x005e90d0): each of the twelve worked
+    /// out again, UPDATE_INVENTORY_ALERTS when one moved,
+    /// UPDATE_INVENTORY_DURABILITY always, and the low and broken tutorials.
+    void updateInventoryAlerts();
+    /// The alert GetInventoryAlertStatus answers, held since the last pass;
+    /// `index` from 1.
+    [[nodiscard]] int inventoryAlert(int index) const {
+        return index >= 1 && index <= static_cast<int>(inventoryAlerts_.size())
+                   ? inventoryAlerts_[static_cast<size_t>(index - 1)] : 0;
+    }
     /// ITEM_FIELD_FLAGS of an item this client holds: 0x1 soulbound, 0x100
     /// bound but still tradeable. 0 for one it does not.
     uint32_t getItemFieldFlags(uint64_t guid) const {
@@ -6331,6 +6341,7 @@ private:
     cast_visual::Roster castVisuals_;
     mutable std::unordered_map<uint32_t, bool> precastKitAnimates_;
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
+    std::array<int, 12> inventoryAlerts_{};  ///< DAT_00c24238
     VehicleMoveHoldCallback vehicleMoveHoldCallback_;
     bool petActionsOnBonusBar_ = false;
     uint32_t possessSpellId_ = 0;

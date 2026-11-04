@@ -1961,6 +1961,8 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                 owner_.releasedSpiritRef() = true;
                 LOG_INFO("Player entered ghost form (PLAYER_FLAGS)");
                 if (owner_.ghostStateCallbackRef()) owner_.ghostStateCallbackRef()(true);
+                // 0x006df710: the ghost flag coming on triggers tutorial 0x18.
+                if (!isCreate) owner_.triggerTutorial(0x18);
             } else if (wasGhost && !nowGhost) {
                 owner_.releasedSpiritRef() = false;
                 owner_.playerDeadRef() = false;
@@ -2452,8 +2454,8 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
         // UPDATE_INVENTORY_DURABILITY. Neither was fired anywhere but at world
         // entry, so the indicator showed the durability the player logged in
         // with -- a repair changed nothing on screen, and neither did damage.
-        pendingEvents_.emit("UPDATE_INVENTORY_ALERTS", {});
-        pendingEvents_.emit("UPDATE_INVENTORY_DURABILITY", {});
+        // Through the alerts' pass, which raises both (0x005e90d0).
+        owner_.updateInventoryAlerts();
     }
 }
 

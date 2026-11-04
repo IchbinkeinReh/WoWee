@@ -7,6 +7,7 @@
 #include "game/unit_name_rules.hpp"
 #include "rendering/mount_transition.hpp"
 #include "game/game_handler.hpp"
+#include "game/inventory_alerts.hpp"
 #include "game/reputation_standing.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/spell_description_eval.hpp"
@@ -1129,10 +1130,10 @@ void GameHandler::handleLoginVerifyWorld(network::Packet& packet) {
             fireAddonEvent("PLAYER_DEAD", {});
         }
         // The durability warnings hide themselves when nothing is damaged, and
-        // this is the event that asks them to look. Without it the frame keeps
-        // the state its XML was written with, which is shown.
-        fireAddonEvent("UPDATE_INVENTORY_ALERTS", {});
-        fireAddonEvent("UPDATE_INVENTORY_DURABILITY", {});
+        // this is the pass that asks them to look (0x006e1e10 -> 0x005e90d0).
+        // Without it the frame keeps the state its XML was written with,
+        // which is shown.
+        updateInventoryAlerts();
     }
 }
 
@@ -1585,6 +1586,35 @@ const ListInventoryData& GameHandler::getVendorItems() const {
     if (inventoryHandler_) return inventoryHandler_->getVendorItems();
     return currentVendorItems;
 }
+void GameHandler::updateInventoryAlerts() {
+    namespace ia = inventory_alerts;
+    bool moved = false;
+    for (int i = 0; i < ia::kCount; ++i) {
+        const int slot = ia::kSlots[static_cast<size_t>(i)];
+        int status = 0;
+        if (slot < 0) {
+            const uint32_t ammo = getAmmoId();
+            status = ia::ammoAlert(ammo, ammo ? static_cast<uint32_t>(getInventory().countItem(ammo)) : 0);
+        } else {
+            const auto& s = getInventory().getEquipSlot(static_cast<EquipSlot>(slot));
+            ia::Item item;
+            item.present = !s.empty();
+            item.durability = s.item.curDurability;
+            item.maxDurability = s.item.maxDurability;
+            item.fieldFlags = getItemFieldFlags(getEquipSlotGuid(slot));
+            const ia::Result r = ia::itemAlert(item);
+            status = r.status;
+            if (r.tutorial >= 0) triggerTutorial(static_cast<uint32_t>(r.tutorial));
+        }
+        if (inventoryAlerts_[static_cast<size_t>(i)] != status) {
+            inventoryAlerts_[static_cast<size_t>(i)] = status;
+            moved = true;
+        }
+    }
+    if (moved) fireAddonEvent("UPDATE_INVENTORY_ALERTS", {});
+    fireAddonEvent("UPDATE_INVENTORY_DURABILITY", {});
+}
+
 void GameHandler::setVendorCanRepair(bool v) {
     if (inventoryHandler_) inventoryHandler_->setVendorCanRepair(v);
     else currentVendorItems.canRepair = v;
