@@ -147,7 +147,13 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
     float reach = max(rtWater2.x, 1.0);
     vec3 bed = vec3(0.0);
     float d = reach;
-    if (rtClosest(origin, dir, reach, rng, t, hn, hs)) {
+    // Seen from above, every ray under a wader leaves the surface inside the
+    // wader's box, and a ray from inside a unit's box passes the unit by: the
+    // body under the water was not there to meet.
+    rtMeetsOwnGroup = true;
+    bool met = rtClosest(origin, dir, reach, rng, t, hn, hs);
+    rtMeetsOwnGroup = false;
+    if (met) {
         d = t;
         vec3 hit = origin + dir * t;
         // The frame under the water has the bed as drawn - textured, lit,

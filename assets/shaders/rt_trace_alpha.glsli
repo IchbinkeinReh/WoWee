@@ -63,12 +63,18 @@ bool rtCutoutsOpen = false;
 uint rtHitTri = 0u;
 uint rtHitInstance = 0u;
 
+// A ray that looks at a unit instead of shadowing from one: it starts inside
+// the unit's box because the box crosses what it left from, not because the
+// unit is its own (the water's surface, through a wader's waist).
+bool rtMeetsOwnGroup = false;
+
 // Whether a ray from p passes the instances of `group` by: it starts inside
 // the group's box - on the character the group is, which never shadows or
 // occludes itself.
 bool rtInGroup(uint group, vec3 p) {
     if (group == 0u) return false;
     if (rtSkipUnits) return true;
+    if (rtMeetsOwnGroup) return false;
     vec3 lo = rtGroups[group * 2u].xyz;
     vec3 hi = rtGroups[group * 2u + 1u].xyz;
     if (all(greaterThanEqual(p, lo)) && all(lessThanEqual(p, hi))) return true;
