@@ -6,6 +6,8 @@
 #include "core/coordinates.hpp"
 #include "rendering/camera.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "game/totem_bar.hpp"
+#include "game/interface_text.hpp"
 #include "addons/lua_taint.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "game/item_text.hpp"
@@ -97,12 +99,51 @@ static int lua_SpellTargetItem(lua_State* L) {
 // carries no item here, so there is nothing to drop.
 static int lua_DropItemOnUnit(lua_State* L) { lua_pushboolean(L, 0); return 1; }
 
-// The totem bar's per-slot spell choice, which needs the multi-cast action bar
-// this client does not model.
-// It asks the taint check first all the same (0x005ab8a0, kind 0xe).
+// SetMultiCastSpell(slot, spellID) (0x005ab8a0): one of the totem bar's
+// action slots, 133..144, under the taint check (kind 0xe). Spell 0 empties
+// it; a spell of the slot's element's totem category is put there
+// (0x005aae80); any other is refused with ERR_MULTI_CAST_ACTION_TOTEM_S
+// naming the category the slot wants (0x005a7bc0).
 static int lua_SetMultiCastSpell(lua_State* L) {
-    taint::allowed(L, 0xe);
+    if (!lua_isnumber(L, 1) && !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: SetMultiCastSpell(slot, spellID)");
+    if (!taint::allowed(L, 0xe)) return 0;
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    const int slot = static_cast<int>(lua_tonumber(L, 1)) - 1;
+    if (slot < game::totem_bar::kFirstSlot || slot > game::totem_bar::kLastSlot) return 0;
+    const auto spellId = static_cast<uint32_t>(lua_tonumber(L, 2));
+    gh->loadSpellNameCache();
+    if (spellId == 0) {
+        gh->setActionBarSlot(slot, game::ActionBarSlot::EMPTY, 0);
+        return 0;
+    }
+    const auto& cache = gh->spellNameCacheRef();
+    const auto it = cache.find(spellId);
+    if (it == cache.end()) return 0;
+    const uint32_t cats[2] = {it->second.totemCategories[0], it->second.totemCategories[1]};
+    if (!game::totem_bar::slotTakes(slot, cats)) {
+        const std::string& name = gh->getTotemCategoryName(game::totem_bar::slotCategory(slot));
+        gh->addUIError(game::interfaceFormat("ERR_MULTI_CAST_ACTION_TOTEM_S", "Requires %s", {name}));
+        return 0;
+    }
+    gh->setActionBarSlot(slot, game::ActionBarSlot::SPELL, spellId);
     return 0;
+}
+
+// GetMultiCastTotemSpells(slot) (0x005a8330) → the element's totem spells:
+// slot 1 fire, 2 earth, 3 water, 4 air, taken modulo four.
+static int lua_GetMultiCastTotemSpells(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetMultiCastTotemSpells(slot)");
+    auto* gh = getGameHandler(L);
+    auto* sh = gh ? gh->getSpellHandler() : nullptr;
+    if (!sh) return 0;
+    gh->loadSpellNameCache();
+    const int element = (static_cast<int>(lua_tonumber(L, 1)) - 1) & 3;
+    const auto ids = sh->multiCastSpells(element);
+    if (!lua_checkstack(L, static_cast<int>(ids.size()) + 1)) return 0;
+    for (uint32_t id : ids) lua_pushnumber(L, id);
+    return static_cast<int>(ids.size());
 }
 
 
@@ -1542,6 +1583,7 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"SpellTargetItem",   lua_SpellTargetItem},
                 {"DropItemOnUnit",    lua_DropItemOnUnit},
                 {"SetMultiCastSpell", lua_SetMultiCastSpell},
+                {"GetMultiCastTotemSpells", lua_GetMultiCastTotemSpells},
                 {"CastSpell",         lua_CastSpell},
                 {"IsPassiveSpell",    lua_IsPassiveSpell},
                 // 1.12's name for the same question - renamed at 2.0, and

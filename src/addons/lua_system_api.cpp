@@ -8574,7 +8574,6 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushnumber(L, done);
             return 1;
         }},
-                {"GetMultiCastTotemSpells",  lua_ReturnNil},
                 {"GetVoiceStatus",           lua_ReturnFalse},
                 {"GetMuteStatus",            lua_ReturnFalse},
                 {"GetActiveVoiceChannel",    lua_ReturnNil},

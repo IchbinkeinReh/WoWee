@@ -244,6 +244,9 @@ public:
     // TotemCategory.dbc name ("Blacksmith Hammer", "Mining Pick", ...) for
     // totem-category cast failures; empty if unknown.
     const std::string& getTotemCategoryName(uint32_t categoryId);
+    /// The totem bar's element lists (totem_bar.hpp), from the known spells
+    /// by spell id: element 0 fire, 1 earth, 2 water, 3 air.
+    [[nodiscard]] std::vector<uint32_t> multiCastSpells(int element) const;
 
     // Unit cast state (tracked per GUID for target frame + boss frames)
     [[nodiscard]] const UnitCastState* getUnitCastState(uint64_t guid) const {

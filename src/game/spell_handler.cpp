@@ -20,6 +20,7 @@
 #include "game/transport_manager.hpp"
 #include "game/spell_target_point.hpp"
 #include "game/missile_trajectory.hpp"
+#include "game/totem_bar.hpp"
 #include "game/movement_handler.hpp"
 #include "game/vehicle.hpp"
 #include "rendering/renderer.hpp"
@@ -5981,6 +5982,44 @@ const std::string& SpellHandler::getSpellFocusName(uint32_t focusId) {
     }
     auto it = spellFocusNames_.find(focusId);
     return it != spellFocusNames_.end() ? it->second : kEmpty;
+}
+
+std::vector<uint32_t> SpellHandler::multiCastSpells(int element) const {
+    if (element < 0 || element >= totem_bar::kElements) return {};
+    const auto& cache = owner_.spellNameCacheRef();
+    std::vector<uint32_t> ids(knownSpells_.begin(), knownSpells_.end());
+    std::sort(ids.begin(), ids.end());
+    // 0x0053b540: the rank's number.
+    const auto rankOf = [&](uint32_t id) -> uint32_t {
+        const auto it = cache.find(id);
+        if (it == cache.end()) return 0;
+        uint32_t n = 0;
+        for (char c : it->second.rank) {
+            if (c >= '0' && c <= '9') n = n * 10 + static_cast<uint32_t>(c - '0');
+        }
+        return n;
+    };
+    const auto nameOf = [&](uint32_t id) -> std::string {
+        const auto it = cache.find(id);
+        return it != cache.end() ? it->second.name : std::string();
+    };
+    totem_bar::Lists lists;
+    for (uint32_t id : ids) {
+        const auto it = cache.find(id);
+        if (it == cache.end()) continue;
+        const auto& e = it->second;
+        // 0x00542030: a spell the book takes (AttributesEx4 0x8000 clear)
+        // that summons a totem (AttributesEx7 0x20).
+        if ((e.attrEx4 & 0x8000u) != 0 || (e.attrEx7 & 0x20u) == 0) continue;
+        totem_bar::Spell sp;
+        sp.id = id;
+        sp.name = e.name;
+        sp.rank = rankOf(id);
+        sp.categories[0] = e.totemCategories[0];
+        sp.categories[1] = e.totemCategories[1];
+        totem_bar::add(lists, sp, nameOf, rankOf);
+    }
+    return lists[static_cast<size_t>(element)];
 }
 
 const std::string& SpellHandler::getTotemCategoryName(uint32_t categoryId) {
