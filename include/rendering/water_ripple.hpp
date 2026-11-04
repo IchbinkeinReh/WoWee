@@ -74,7 +74,7 @@ inline bool step(Ripple& r, float dt) {
 
 /// A wake's angle off the facing, by the move flags (0x0071cba0).
 inline float wakeAngle(float facing, uint32_t flags) {
-    constexpr float kPi = 3.1415927f, kHalf = 1.5707964f, kQuarter = 0.78539819f, kThree = 2.3561945f;
+    constexpr float kPi = 3.1415927f, kHalf = 1.5707964f, kQuarter = 0.78539819f, kThree = kPi - kQuarter;
     if (flags & kStrafeLeft) {
         if (flags & kForward) return facing + kQuarter;
         return (flags & kBackward) ? facing + kThree : facing + kHalf;
@@ -114,7 +114,7 @@ inline bool spawn(const Unit& u, const Rolls& roll, Ripple& out, float& next) {
     const float inverse = 1.0f / interval;
 
     float size = std::clamp(u.sizeValue * 0.33333334f * (roll.size * 0.2f - 0.1f + 1.0f),
-                            0.33333334f, 1.6666666f);
+                            0.33333334f, 5.0f / 3.0f);
     float life = roll.life * 0.1f - 0.05f + 0.65f;
     float growth = (roll.growth * 1.5f - 0.75f + 3.75f) * 12.0f * 0.027777778f * inverse;
     float strength = 0.16666667f;

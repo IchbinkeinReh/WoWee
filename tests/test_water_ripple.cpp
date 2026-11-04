@@ -9,11 +9,13 @@ using namespace wowee::rendering::water_ripple;
 TEST_CASE("a ripple rises for 40% of its life and is gone at its end", "[water_ripple]") {
     Ripple r = start(glm::vec3(0.0f), 0.0f, 1.0f, 1.0f, 0.16666667f, 2.0f, false);
     REQUIRE(r.peak == Catch::Approx(1.0f));
-    REQUIRE(step(r, 0.4f));
-    REQUIRE(r.alpha == Catch::Approx(1.0f).margin(1e-4));
-    REQUIRE(r.size == Catch::Approx(1.8f));
-    REQUIRE(step(r, 0.3f));
+    REQUIRE(step(r, 0.2f));
     REQUIRE(r.alpha == Catch::Approx(0.5f).margin(1e-4));
+    REQUIRE(step(r, 0.3f));
+    REQUIRE(r.alpha == Catch::Approx(0.8333f).margin(1e-3));
+    REQUIRE(r.size == Catch::Approx(2.0f));
+    REQUIRE(step(r, 0.2f));
+    REQUIRE(r.alpha == Catch::Approx(0.5f).margin(1e-3));
     REQUIRE_FALSE(step(r, 0.31f));
 }
 

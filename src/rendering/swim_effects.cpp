@@ -772,7 +772,7 @@ bool SwimEffects::createSurfaceRipplePipeline() {
     surfaceRipplePipeline_ = PipelineBuilder()
         .setShaders(vert.stageInfo(VK_SHADER_STAGE_VERTEX_BIT), frag.stageInfo(VK_SHADER_STAGE_FRAGMENT_BIT))
         .setVertexInput({binding}, {pos, uv})
-        .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+        .setTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
         .setRasterization(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE)
         .setDepthTest(true, false, depth::kNearerOrEqual)
         .setColorBlendAttachment(PipelineBuilder::blendAdditive())
@@ -835,10 +835,8 @@ void SwimEffects::loadRippleTextures(pipeline::AssetManager* assets) {
     const float vertices[] = {
         -0.5f, -0.5f, 0.0f, 0.0f, 1.0f,
          0.5f, -0.5f, 0.0f, 1.0f, 1.0f,
-         0.5f,  0.5f, 0.0f, 1.0f, 0.0f,
-        -0.5f, -0.5f, 0.0f, 0.0f, 1.0f,
-         0.5f,  0.5f, 0.0f, 1.0f, 0.0f,
-        -0.5f,  0.5f, 0.0f, 0.0f, 0.0f
+        -0.5f,  0.5f, 0.0f, 0.0f, 0.0f,
+         0.5f,  0.5f, 0.0f, 1.0f, 0.0f
     };
     AllocatedBuffer buffer = uploadBuffer(*vkCtx, vertices, sizeof(vertices), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     surfaceRippleQuad_ = buffer.buffer;
@@ -911,7 +909,7 @@ void SwimEffects::renderSurfaceRipples(VkCommandBuffer cmd, VkDescriptorSet perF
                                 &surfaceRippleSets_[r.wake ? 1 : 0], 0, nullptr);
         vkCmdPushConstants(cmd, surfaceRippleLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(push), &push);
-        vkCmdDraw(cmd, 6, 1, 0, 0);
+        vkCmdDraw(cmd, 4, 1, 0, 0);
     }
 }
 
