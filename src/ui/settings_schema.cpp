@@ -1,5 +1,6 @@
 #include "ui/settings_schema.hpp"
 
+#include "rendering/rt_normal_blend.hpp"
 #include "ui/graphics_defaults.hpp"
 
 namespace wowee {
@@ -421,17 +422,19 @@ constexpr SettingDesc kSchema[] = {
      "How bright the lamps' traced light must be for a room's painted\n"
      "light to show in full. Lower lights more of the room.", "", 100},
     // Where the lamps light a surface by its face rather than its own
-    // normal (rt_normal_blend.hpp): the defaults are the rule as it was.
+    // normal (rt_normal_blend.hpp).
     {"rtnormalkeep", "Normal blend: keep own normal up to (degrees)", SettingKind::Int, 0, 90, 1,
      "Debug Graphics", "",
      "Lamps light a surface by its own (smoothed, bumped) normal while it\n"
      "leans at most this far from the surface's real face: round pillars,\n"
-     "arches and characters stay smooth. Past it the face takes over.", "", 15, "raytracedlighting"},
+     "arches and characters stay smooth. Past it the face takes over.", "", rendering::kNormalBlendKeepDefault,
+     "raytracedlighting"},
     {"rtnormalface", "Normal blend: face normal from (degrees)", SettingKind::Int, 0, 90, 1,
      "Debug Graphics", "",
      "Past this angle from its face a surface is lit by the face alone, so a\n"
      "floor whose normals were smoothed with the walls does not go dark in\n"
-     "patches. Between the two a smooth blend; never less than the first.", "", 35, "raytracedlighting"},
+     "patches. Between the two a smooth blend; never less than the first.", "", rendering::kNormalBlendFaceDefault,
+     "raytracedlighting"},
     {"dbgtimeoverride", "Use this time of day", SettingKind::Bool, 0, 0, 0, "Debug Time", "Time of day",
      "Light the world at the time below instead of the server's.\n"
      "Only what is drawn; the server's clock is left alone.", "", 0},

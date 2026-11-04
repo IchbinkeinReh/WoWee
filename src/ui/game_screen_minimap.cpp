@@ -2548,6 +2548,13 @@ void GameScreen::loadSettings() {
     // Apply immediately if services are already wired. The constructor loads
     // settings before renderer injection, so setServices() applies them again.
     applyCameraControlSettings();
+    // The normal blend's old defaults, saved by every earlier run: the page
+    // they sit on is not one Restore Video Defaults reaches, and at 15/35 a
+    // cave's floor is lit triangle by triangle.
+    if (settingsPanel_.pendingRtNormalKeep == 15 && settingsPanel_.pendingRtNormalFace == 35) {
+        settingsPanel_.pendingRtNormalKeep = rendering::kNormalBlendKeepDefault;
+        settingsPanel_.pendingRtNormalFace = rendering::kNormalBlendFaceDefault;
+    }
     settingsPanel_.applyLoadedSettings();
 
     LOG_INFO("Settings loaded from ", path);

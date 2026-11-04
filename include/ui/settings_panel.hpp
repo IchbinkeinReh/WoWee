@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/rt_normal_blend.hpp"
 #include "ui/buff_bar_layout.hpp"
 #include "ui/graphics_defaults.hpp"
 #include "ui/ui_services.hpp"
@@ -88,8 +89,8 @@ public:
     bool pendingRtWater = true;       ///< "Ray traced water" (water_rt.glsli)
     int pendingRtWaveAmp = 100;       ///< its waves' height, % of the default
     int pendingRtWaveFreq = 100;      ///< and their frequency, %
-    int pendingRtNormalKeep = 15;     ///< the normal blend's angles, degrees (rt_normal_blend.hpp)
-    int pendingRtNormalFace = 35;
+    int pendingRtNormalKeep = rendering::kNormalBlendKeepDefault;     ///< the normal blend's angles, degrees (rt_normal_blend.hpp)
+    int pendingRtNormalFace = rendering::kNormalBlendFaceDefault;
     /// The eye adaptation (Ray Tracing; eye_adaptation::paramsFor).
     int pendingRtEyeBrighten = 30;
     float pendingRtEyeSeconds = 2.5f;

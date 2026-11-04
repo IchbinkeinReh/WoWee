@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rendering/rt_normal_blend.hpp"
 #include "rendering/rt_memory_guard.hpp"
 #include "core/platform.hpp"
 #include "rendering/memory_report.hpp"
@@ -1198,8 +1199,8 @@ public:
     }
 private:
     int rtMinBrightnessPercent_ = 0;
-    int rtNormalKeepDeg_ = 15;
-    int rtNormalFaceDeg_ = 35;
+    int rtNormalKeepDeg_ = kNormalBlendKeepDefault;
+    int rtNormalFaceDeg_ = kNormalBlendFaceDefault;
     int eyeBrighteningPercent_ = 30;
     float eyeAdaptSeconds_ = 2.5f;
     int eyeSensitivityPercent_ = 0;
