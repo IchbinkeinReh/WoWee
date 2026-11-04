@@ -2902,6 +2902,9 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     }
 
     const bool nowInGroup = !partyData.isEmpty();
+    // A raid's list builds its roster (0x006d8870 -> 0x00574f10), which
+    // triggers tutorial 0x2d.
+    if (nowInGroup && groupIsRaid(partyData.groupType)) owner_.triggerTutorial(0x2d);
     // A member new to the roster whose player is not here is asked about
     // (0x0052d410 for the party's, 0x00574f10 for the raid's): a member
     // already listed keeps the stats it had.
