@@ -209,20 +209,22 @@ struct WMOBatch {
 
 // WMO Group (individual room/section)
 struct WMOGroup {
-    uint32_t flags;
-    glm::vec3 boundingBoxMin;
-    glm::vec3 boundingBoxMax;
-    uint16_t portalStart;
-    uint16_t portalCount;
+    // Zeroed: a group built in code (WoweeBuildingLoader::toWMOModel) sets
+    // only the bits it means, and read garbage for the rest.
+    uint32_t flags = 0;
+    glm::vec3 boundingBoxMin{0.0f};
+    glm::vec3 boundingBoxMax{0.0f};
+    uint16_t portalStart = 0;
+    uint16_t portalCount = 0;
     /// MOGP's first batch count: the transition batches, which come first
     /// in MOBA. The client keeps their vertex colours' alpha (0x007d7380).
     uint16_t transBatchCount = 0;
     /// The second: the interior batches, which follow them. 0x007ac9f0 draws
     /// these unlit in a group with vertex colours.
     uint16_t intBatchCount = 0;
-    uint32_t fogIndices[4];     // Fog references
-    uint32_t liquidType;
-    uint32_t groupId;
+    uint32_t fogIndices[4] = {};  // Fog references
+    uint32_t liquidType = 0;
+    uint32_t groupId = 0;
     /// MOGP's WMOAreaTable group id (+0x38).
     int32_t areaGroupId = 0;
 
