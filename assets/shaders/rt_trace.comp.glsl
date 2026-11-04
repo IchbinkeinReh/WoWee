@@ -183,6 +183,10 @@ const int RT_LIGHT_KIND_PARTICLE = 6;
 const float RT_GLOW_LIFT = 1.0;
 // How wide a particle light's source is taken to be for its shadow rays.
 const float RT_PARTICLE_SOURCE_RADIUS = 1.5;
+// A floor's normal this far off its face is a fold's, not a bump's: from all
+// bump below about 10 degrees to all fold past about 18.
+const float RT_FLOOR_BUMP_COS = 0.985;
+const float RT_FLOOR_LEAN_COS = 0.95;
 // How far a ray leaving a triangle turned from its light has to go to be off
 // it: a ground triangle's longest edge, about three yards.
 const float RT_TERMINATOR_REACH = 3.0;
@@ -339,7 +343,12 @@ void main() {
     // triangles and not the next - a low-poly cave's every facet hard-edged
     // in its pool's and mushrooms' particle light, coming and going as the
     // particles drifted (Thunder Bluff's Pools of Vision).
-    vec3 faceRef = n.z >= RT_NORMAL_FLOOR_Z ? n : normalResolved ? lightN : normalize(n + lightN);
+    // A floor's normal that lies near its face (lightN comes to n where it does
+    // not: the Undercity's) counts half as well, as on a curve: a folded hide or
+    // a cave's uneven floor turned one triangle from a low lamp and lit the next,
+    // black to bright along the edge between them.
+    float floorLean = smoothstep(RT_FLOOR_BUMP_COS, RT_FLOOR_LEAN_COS, dot(n, lightN));
+    vec3 faceRef = n.z >= RT_NORMAL_FLOOR_Z ? normalize(mix(n, lightN, floorLean)) : normalResolved ? lightN : normalize(n + lightN);
     vec3 pointSum = vec3(0.0);
     float bakedSum = 0.0;
     float weightSum = 0.0;
@@ -367,7 +376,7 @@ void main() {
         // below still gave it a fifth of its strength, a step along a curved
         // line that moved with every particle over a cave's wall. There
         // the wrap runs it down to nothing, and a wall between stops it.
-        if (d > 1e-4 && n.z >= RT_NORMAL_FLOOR_Z && dot(n, toLight) <= 0.0) continue;
+        if (d > 1e-4 && n.z >= RT_NORMAL_FLOOR_Z && dot(faceRef, toLight) <= 0.0) continue;
         // Wrapped a little past the terminator: a lamp is a flame, a glass, a
         // glow, not a point, and a face turned just past one still takes
         // some of its light. Unwrapped, a crease turned from a candle went

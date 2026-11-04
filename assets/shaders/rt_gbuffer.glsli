@@ -272,7 +272,9 @@ vec3 rtInteriorLampNormal(vec3 face, vec3 vertexNormal, vec3 shading, vec2 cosin
         return dot(w, w) > 1e-8 ? normalize(w) : face;
     }
     vec3 byFace = rtFaceBasedNormal(face, vertexNormal, shading);
-    vec3 n = mix(byFace, shading, rtNormalAgreement(face, vertexNormal, cosines));
+    // Where its vertex normal is good, that without the bumps, as a wall: a low
+    // lamp took a cave floor's bumps turned from it as black streaks.
+    vec3 n = mix(byFace, vertexNormal, rtNormalAgreement(face, vertexNormal, cosines));
     return dot(n, n) > 1e-8 ? normalize(n) : face;
 }
 

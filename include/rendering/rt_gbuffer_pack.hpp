@@ -177,7 +177,7 @@ inline glm::vec3 interiorLampNormal(const glm::vec3& face, const glm::vec3& vert
         const glm::vec3 w = vertexNormal + (shading - vertexNormal) * kWallBumpShare;
         return glm::dot(w, w) > 1e-8f ? glm::normalize(w) : face;
     }
-    const glm::vec3 n = glm::mix(faceBasedNormal(face, vertexNormal, shading), shading,
+    const glm::vec3 n = glm::mix(faceBasedNormal(face, vertexNormal, shading), vertexNormal,
                                  normalAgreement(face, vertexNormal, nearCos, farCos));
     return glm::dot(n, n) > 1e-8f ? glm::normalize(n) : face;
 }

@@ -535,6 +535,9 @@ TEST_CASE("A room's lamp normal: its own near the face, the face's far off it", 
     const glm::vec3 pillar = leaning(10.0f);
     const glm::vec3 kept = interiorLampNormal(face, pillar, pillar);
     REQUIRE(glm::length(kept - pillar) < 1e-5f);
+    // Its bumps go with it: a low lamp took them as black streaks.
+    const glm::vec3 bare = interiorLampNormal(face, pillar, leaning(20.0f));
+    REQUIRE(glm::length(bare - pillar) < 1e-5f);
     // The barber's floor, 64 degrees off: the face's, wholly.
     const glm::vec3 floorN = leaning(64.0f);
     const glm::vec3 flat = interiorLampNormal(face, floorN, floorN);
