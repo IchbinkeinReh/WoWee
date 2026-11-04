@@ -125,6 +125,50 @@ static int lua_wow_message(lua_State* L) {
 /// to a chat window. Addons use it more, and a no-op answering nothing is the
 /// wrong shape for a question - it reads as "no" for a frame that is
 /// registered, and re-registering is not always harmless.
+/// RegisterAllEvents (0x0049f0e0 -> 0x0081b470) registers the frame for every
+/// event the client has. Here it is kept as the frame's place in
+/// __WoweeAllEventFrames, and the dispatcher registers it for each event the
+/// first time that event fires (registerAllEventFrames) - the same frame
+/// registered for the same events, as late as it can be observed. An event the
+/// frame unregisters afterwards is remembered in __WoweeAllEventSkip[frame] so
+/// it is not registered again; RegisterEvent takes it back off.
+///
+/// Leaves nothing on the stack. `skip` true marks the name, false clears it;
+/// a frame not registered for everything has no table and nothing changes.
+void allEventsSkip(lua_State* L, int frame, const char* eventName, bool skip) {
+    lua_getglobal(L, "__WoweeAllEventSkip");
+    if (lua_istable(L, -1)) {
+        lua_pushvalue(L, frame);
+        lua_rawget(L, -2);
+        if (lua_istable(L, -1)) {
+            if (skip) lua_pushboolean(L, 1);
+            else lua_pushnil(L);
+            lua_setfield(L, -2, eventName);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+}
+
+/// Whether the frame at `frame` is registered for everything and has not
+/// unregistered `eventName` since.
+bool allEventsCover(lua_State* L, int frame, const char* eventName) {
+    bool on = false;
+    lua_getglobal(L, "__WoweeAllEventSkip");
+    if (lua_istable(L, -1)) {
+        lua_pushvalue(L, frame);
+        lua_rawget(L, -2);
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, eventName);
+            on = lua_isnil(L, -1);
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    return on;
+}
+
 static int lua_Frame_IsEventRegistered(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     const char* eventName = luaL_optstring(L, 2, nullptr);
@@ -139,6 +183,7 @@ static int lua_Frame_IsEventRegistered(lua_State* L) {
             lua_pop(L, 1);
         }
         lua_pop(L, 1);
+        if (!on) on = allEventsCover(L, 1, eventName);
     }
     lua_pushboolean(L, on ? 1 : 0);
     return 1;
@@ -167,6 +212,7 @@ static int lua_Frame_RegisterEvent(lua_State* L) {
     lua_pushboolean(L, 1);
     lua_setfield(L, -2, eventName);
     lua_pop(L, 1);
+    allEventsSkip(L, 1, eventName, false);
 
     // Also register in global __WoweeFrameEvents for dispatch
     lua_getglobal(L, "__WoweeFrameEvents");
@@ -222,6 +268,32 @@ static int lua_Frame_UnregisterEvent(lua_State* L);
 static int lua_Frame_UnregisterAllEvents(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     taint::Quiet quiet;   // as RegisterEvent
+    // Everything, which takes RegisterAllEvents back too.
+    lua_getglobal(L, "__WoweeAllEventSkip");
+    if (lua_istable(L, -1)) {
+        lua_pushvalue(L, 1);
+        lua_pushnil(L);
+        lua_rawset(L, -3);
+    }
+    lua_pop(L, 1);
+    lua_getglobal(L, "__WoweeAllEventFrames");
+    if (lua_istable(L, -1)) {
+        const int n = static_cast<int>(lua_objlen(L, -1));
+        for (int i = n; i >= 1; --i) {
+            lua_rawgeti(L, -1, i);
+            const bool isSelf = lua_rawequal(L, -1, 1);
+            lua_pop(L, 1);
+            if (!isSelf) continue;
+            for (int j = i; j < n; ++j) {
+                lua_rawgeti(L, -1, j + 1);
+                lua_rawseti(L, -2, j);
+            }
+            lua_pushnil(L);
+            lua_rawseti(L, -2, n);
+            break;
+        }
+    }
+    lua_pop(L, 1);
     lua_getfield(L, 1, "__events");
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return 0; }
     // Collected first: unregistering rewrites this table, and a traversal that
@@ -249,6 +321,8 @@ static int lua_Frame_UnregisterEvent(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     const char* eventName = luaL_checkstring(L, 2);
     taint::Quiet quiet;   // as RegisterEvent
+
+    allEventsSkip(L, 1, eventName, true);
 
     // Remove from frame's own events
     lua_getfield(L, 1, "__events");
@@ -290,6 +364,74 @@ static int lua_Frame_UnregisterEvent(lua_State* L) {
     }
     lua_pop(L, 1);
     return 0;
+}
+
+static int lua_Frame_RegisterAllEvents(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    taint::Quiet quiet;   // as RegisterEvent
+    lua_getglobal(L, "__WoweeAllEventSkip");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setglobal(L, "__WoweeAllEventSkip");
+    }
+    // A fresh start: every event again, those unregistered before included.
+    lua_pushvalue(L, 1);
+    lua_newtable(L);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+    lua_getglobal(L, "__WoweeAllEventFrames");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setglobal(L, "__WoweeAllEventFrames");
+    }
+    const int n = static_cast<int>(lua_objlen(L, -1));
+    bool listed = false;
+    for (int i = 1; i <= n && !listed; ++i) {
+        lua_rawgeti(L, -1, i);
+        listed = lua_rawequal(L, -1, 1);
+        lua_pop(L, 1);
+    }
+    if (!listed) {
+        lua_pushvalue(L, 1);
+        lua_rawseti(L, -2, n + 1);
+    }
+    lua_pop(L, 1);
+    return 0;
+}
+
+/// The dispatcher's half of RegisterAllEvents: each frame registered for
+/// everything is registered for `eventName` as it first fires, unless it has
+/// unregistered it since.
+void registerAllEventFrames(lua_State* L, const char* eventName) {
+    lua_getglobal(L, "__WoweeAllEventFrames");
+    if (!lua_istable(L, -1) || lua_objlen(L, -1) == 0) { lua_pop(L, 1); return; }
+    taint::Quiet quiet;
+    const int list = lua_gettop(L);
+    const int n = static_cast<int>(lua_objlen(L, list));
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, list, i);
+        const int frame = lua_gettop(L);
+        bool already = false;
+        lua_getfield(L, frame, "__events");
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, eventName);
+            already = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+        if (!already && allEventsCover(L, frame, eventName)) {
+            lua_pushcfunction(L, lua_Frame_RegisterEvent);
+            lua_pushvalue(L, frame);
+            lua_pushstring(L, eventName);
+            lua_call(L, 2, 0);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
 }
 
 // Frame method: frame:SetScript("handler", func)
@@ -4600,6 +4742,21 @@ int lua_Texture_SetTexCoord(lua_State* L) {
     }
     return 0;
 }
+/// GetTexCoord() (0x0048c7f0): the four corners' coordinates, upper-left,
+/// lower-left, upper-right, lower-right, eight numbers whichever form set them.
+int lua_Texture_GetTexCoord(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    float q[8] = {0, 0, 0, 1, 1, 0, 1, 1};
+    if (w && w->texCoordRotated) {
+        for (int i = 0; i < 8; ++i) q[i] = w->texCoordQuad[i];
+    } else if (w) {
+        const float l = w->texCoord[0], r = w->texCoord[1], t = w->texCoord[2], b = w->texCoord[3];
+        const float c[8] = {l, t, l, b, r, t, r, b};
+        for (int i = 0; i < 8; ++i) q[i] = c[i];
+    }
+    for (float v : q) lua_pushnumber(L, v);
+    return 8;
+}
 int lua_Texture_SetBlendMode(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
         const char* mode = luaL_optstring(L, 2, "BLEND");
@@ -4646,6 +4803,14 @@ int lua_Region_SetVertexColor(lua_State* L) {
         w->color[3] = static_cast<float>(luaOptNumberText(L, 5, 1.0));
     }
     return 0;
+}
+/// GetDrawLayer() (0x0048bee0): the layer's name, no sublevel.
+int lua_Region_GetDrawLayer(lua_State* L) {
+    static const char* kNames[] = {"BACKGROUND", "BORDER", "ARTWORK", "OVERLAY", "HIGHLIGHT"};
+    const auto* w = widgetOf(L, 1);
+    const auto layer = w ? (w->isStatusBar ? w->barLayer : w->layer) : wowee::ui::DrawLayer::Artwork;
+    lua_pushstring(L, kNames[static_cast<size_t>(layer)]);
+    return 1;
 }
 int lua_Region_SetDrawLayer(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
@@ -5209,7 +5374,9 @@ void installRegionMethods(lua_State* L, bool isTexture, bool isFontString) {
     set("GetVertexColor", lua_Region_GetVertexColor);
     set("GetFontObject", lua_FontString_GetFontObject);
     set("SetDrawLayer", lua_Region_SetDrawLayer);
+    set("GetDrawLayer", lua_Region_GetDrawLayer);
     if (isTexture) {
+        set("GetTexCoord", lua_Texture_GetTexCoord);
         set("SetTexture", lua_Texture_SetTexture);
         set("GetTexture", lua_Texture_GetTexture);
         set("SetTexCoord", lua_Texture_SetTexCoord);
@@ -5760,6 +5927,8 @@ int lua_Frame_SetBackdrop(lua_State* L) {
     // Where only one is given the other is the sensible stand-in.
     num("tileSize", w->edgeSize);
     num("edgeSize", w->edgeSize);
+    w->backdropTileSize = 0.0f;
+    num("tileSize", w->backdropTileSize);
     lua_getfield(L, 2, "tile");
     w->tileBackground = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
@@ -5779,6 +5948,59 @@ int lua_Frame_SetBackdrop(lua_State* L) {
     lua_pop(L, 1);
     return 0;
 }
+
+/// GetBackdrop([table]) (0x004a12d0): the backdrop as a table - the one
+/// passed, or a new one - and nothing when the frame has none.
+int lua_Frame_GetBackdrop(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (!w || !w->hasBackdrop) return 0;
+    if (lua_istable(L, 2)) lua_pushvalue(L, 2);
+    else lua_newtable(L);
+    lua_pushstring(L, w->bgFile.c_str());
+    lua_setfield(L, -2, "bgFile");
+    lua_pushstring(L, w->edgeFile.c_str());
+    lua_setfield(L, -2, "edgeFile");
+    if (w->tileBackground) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    lua_setfield(L, -2, "tile");
+    lua_pushnumber(L, w->backdropTileSize);
+    lua_setfield(L, -2, "tileSize");
+    lua_pushnumber(L, w->edgeSize);
+    lua_setfield(L, -2, "edgeSize");
+    // An insets table already there is filled rather than replaced.
+    lua_getfield(L, -1, "insets");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -3, "insets");
+    }
+    lua_pushnumber(L, w->insetLeft);
+    lua_setfield(L, -2, "left");
+    lua_pushnumber(L, w->insetRight);
+    lua_setfield(L, -2, "right");
+    lua_pushnumber(L, w->insetTop);
+    lua_setfield(L, -2, "top");
+    lua_pushnumber(L, w->insetBottom);
+    lua_setfield(L, -2, "bottom");
+    lua_pop(L, 1);
+    return 1;
+}
+
+/// GetBackdropColor and GetBackdropBorderColor (0x004a19a0, 0x004a1af0):
+/// r, g, b, a as the colour is kept, a byte each; nothing without a backdrop.
+int pushBackdropColour(lua_State* L, bool border) {
+    const auto* w = widgetOf(L, 1);
+    if (!w || !w->hasBackdrop) return 0;
+    const float* c = border ? w->borderColor : w->backdropColor;
+    for (int i = 0; i < 4; ++i) {
+        const float v = std::clamp(c[i], 0.0f, 1.0f);
+        lua_pushnumber(L, static_cast<float>(std::lround(v * 255.0f)) * 0.00392156f);
+    }
+    return 4;
+}
+int lua_Frame_GetBackdropColor(lua_State* L) { return pushBackdropColour(L, false); }
+int lua_Frame_GetBackdropBorderColor(lua_State* L) { return pushBackdropColour(L, true); }
 
 int lua_Frame_SetBackdropColor(lua_State* L) {
     if (auto* w = widgetOf(L, 1)) {
@@ -7311,6 +7533,7 @@ void LuaEngine::registerCoreAPI() {
         {"IsEventRegistered", lua_Frame_IsEventRegistered},
         {"UnregisterEvent", lua_Frame_UnregisterEvent},
         {"UnregisterAllEvents", lua_Frame_UnregisterAllEvents},
+        {"RegisterAllEvents", lua_Frame_RegisterAllEvents},
         {"SetScript",       lua_Frame_SetScript},
         {"HookScript",      lua_Frame_HookScript},
         {"SetAttribute",    lua_Frame_SetAttribute},
@@ -7520,6 +7743,9 @@ void LuaEngine::registerCoreAPI() {
         {"SetClampRectInsets",    lua_Frame_SetClampRectInsets},
         {"IsClampedToScreen",     lua_Frame_IsClampedToScreen},
         {"SetBackdrop",           lua_Frame_SetBackdrop},
+        {"GetBackdrop",           lua_Frame_GetBackdrop},
+        {"GetBackdropColor",      lua_Frame_GetBackdropColor},
+        {"GetBackdropBorderColor",lua_Frame_GetBackdropBorderColor},
         {"SetBackdropColor",      lua_Frame_SetBackdropColor},
         {"SetBackdropBorderColor",lua_Frame_SetBackdropBorderColor},
         {"SetMinMaxValues",       lua_StatusBar_SetMinMaxValues},
@@ -10140,6 +10366,7 @@ void LuaEngine::fireEventWith(const std::string& eventName, int nargs,
         return out;
     }();
 
+    registerAllEventFrames(L_, eventName.c_str());
     lua_getglobal(L_, "__WoweeFrameEvents");
     if (lua_istable(L_, -1)) {
         lua_getfield(L_, -1, eventName.c_str());

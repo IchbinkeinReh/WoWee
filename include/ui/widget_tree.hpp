@@ -348,6 +348,9 @@ struct Widget {
     std::string edgeFile;
     bool  tileBackground = false;
     float edgeSize = 16.0f;
+    /// The background's repeat as the backdrop table gave it, which only
+    /// GetBackdrop hands back; the draw tiles at the edge size.
+    float backdropTileSize = 0.0f;
     float insetLeft = 0.0f, insetRight = 0.0f, insetTop = 0.0f, insetBottom = 0.0f;
     float backdropColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float borderColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
