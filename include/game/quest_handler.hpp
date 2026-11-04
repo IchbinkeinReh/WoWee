@@ -301,11 +301,21 @@ public:
     /// Tell the interface a quest moved - see the definition for why the
     /// three events go together.
     void announceQuestLogChanged(uint32_t questId);
+    /// A quest put in a log slot - a new one, or a failed one taken again
+    /// (0x006df370): announced once the quest is known, else when its query
+    /// answers (0x006df2b0).
+    void noteQuestAdded(uint32_t questId);
+    /// ERR_QUEST_ACCEPTED_S in chat with its sound, the group quest's and
+    /// the fourth quest's tutorials, then QUEST_ACCEPTED with the log index.
+    void announceQuestAdded(uint32_t questId);
     void announceQuestItemPushed(uint32_t itemId, uint32_t count, uint32_t totalCount,
                                  const std::string& itemName);
 
     void clearQuestStateForCharacterSwitch() {
         slotQuestIds_.fill(0);
+        slotQuestStates_.fill(0);
+        slotsSeen_ = false;
+        pendingQuestAddedNotices_.clear();
         questLog_.clear();
         pendingQuestQueryIds_.clear();
         npcQuestStatus_.clear();
@@ -395,6 +405,21 @@ private:
     /// dropped, by whatever means, and the log follows it
     /// (applyQuestStateFromFields).
     std::array<uint32_t, 25> slotQuestIds_{};
+    /// Each slot's state word at the last update, and whether the slots were
+    /// seen at all - the first sight of them (the player's create) is only
+    /// noted, as the client's watchers are not called for it.
+    std::array<uint32_t, 25> slotQuestStates_{};
+    bool slotsSeen_ = false;
+    /// What SMSG_QUEST_QUERY_RESPONSE told of a quest: its QuestInfo type
+    /// (+0x14) and title.
+    struct QueriedQuest {
+        uint32_t type = 0;
+        std::string title;
+    };
+    std::unordered_map<uint32_t, QueriedQuest> queriedQuests_;
+    std::unordered_set<uint32_t> pendingQuestAddedNotices_;
+    /// DAT_00c9eb08: quests added this session while tutorial 0x14 waits.
+    uint32_t questsAddedCount_ = 0;
     std::unordered_map<uint32_t, uint64_t> pendingQuestAcceptNpcGuids_;
     bool questOfferRewardOpen_ = false;
     QuestOfferRewardData currentQuestOfferReward_;

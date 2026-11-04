@@ -1328,6 +1328,13 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     " kills=", objKills, " items=", objItems);
         const QuestQueryRewardsData rwds = QuestQueryRewardsParser::parse(packet.getData(), questLogStride);
         if (!parsed.endText.empty()) questEndTexts()[questId] = parsed.endText;
+        {
+            // QuestInfo (+0x14, the sixth word in WotLK's layout).
+            QueriedQuest& known = queriedQuests_[questId];
+            if (questLogStride >= 5 && packet.getData().size() >= 24)
+                known.type = network::wire::loadLE32(packet.getData(), 20);
+            if (!parsed.title.empty()) known.title = parsed.title;
+        }
 
         for (auto& q : questLog_) {
             if (q.questId != questId) continue;
@@ -1458,6 +1465,8 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
         }
 
         pendingQuestQueryIds_.erase(questId);
+        // 0x006df2b0: the quest added before it was known, now that it is.
+        if (pendingQuestAddedNotices_.erase(questId) != 0) announceQuestAdded(questId);
     };
 
     // ---- SMSG_QUESTUPDATE_ADD_PVP_KILL ----
@@ -2129,7 +2138,7 @@ void QuestHandler::addQuestToLocalLogIfMissing(uint32_t questId, const std::stri
     entry.objectives = normalizeQuestText(objectives, false);
     questLog_.push_back(std::move(entry));
     if (owner_.addonEventCallbackRef()) {
-        owner_.addonEventCallbackRef()("QUEST_ACCEPTED", {std::to_string(questId)});
+        // QUEST_ACCEPTED is announceQuestAdded's, with the log index.
         owner_.addonEventCallbackRef()("QUEST_LOG_UPDATE", {});
         owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
     }
@@ -2323,10 +2332,28 @@ void QuestHandler::syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, u
     // other way showed only after a relog. A slot that changes resyncs the
     // log from all of them (resyncQuestLogFromServerSlots).
     std::array<uint32_t, 25> ids{};
+    std::array<uint32_t, 25> states{};
     for (uint16_t slot = 0; slot < 25; ++slot) {
         const auto it = fields.find(static_cast<uint16_t>(ufQuestStart + slot * qStride));
         if (it != fields.end()) ids[slot] = it->second;
+        if (qStride >= 2) {
+            const auto st = fields.find(static_cast<uint16_t>(ufQuestStart + slot * qStride + 1));
+            if (st != fields.end()) states[slot] = st->second;
+        }
     }
+    // 0x006df370, per slot: a quest that is new there, or one that was
+    // failed and is not any more.
+    std::vector<uint32_t> added;
+    if (slotsSeen_) {
+        for (size_t slot = 0; slot < ids.size(); ++slot) {
+            if (ids[slot] == 0) continue;
+            if (ids[slot] != slotQuestIds_[slot] ||
+                (!isQuestSlotFailed(qStride, states[slot]) && isQuestSlotFailed(qStride, slotQuestStates_[slot])))
+                added.push_back(ids[slot]);
+        }
+    }
+    slotsSeen_ = true;
+    slotQuestStates_ = states;
     if (ids != slotQuestIds_) {
         slotQuestIds_ = ids;
         std::unordered_set<uint32_t> before;
@@ -2349,6 +2376,44 @@ void QuestHandler::syncQuestLogMembershipFromSlots(const FlatFieldMap& fields, u
                 owner_.addonEventCallbackRef()("UNIT_QUEST_LOG_CHANGED", {"player"});
             }
         }
+    }
+    for (uint32_t questId : added) noteQuestAdded(questId);
+}
+
+void QuestHandler::noteQuestAdded(uint32_t questId) {
+    // 0x0067de90 with 0x006df2b0 to call back: at once for a quest already
+    // known, else once its query answers.
+    if (queriedQuests_.count(questId) != 0) {
+        announceQuestAdded(questId);
+        return;
+    }
+    pendingQuestAddedNotices_.insert(questId);
+    requestQuestQuery(questId, false);
+}
+
+void QuestHandler::announceQuestAdded(uint32_t questId) {
+    const auto it = queriedQuests_.find(questId);
+    if (it == queriedQuests_.end()) return;
+    // 0x005216f0(0x92): ERR_QUEST_ACCEPTED_S, a system line, with QUESTADDED.
+    std::string title = it->second.title;
+    if (title.empty()) {
+        for (const auto& q : questLog_) {
+            if (q.questId == questId) title = q.title;
+        }
+    }
+    owner_.addSystemChatMessage(interfaceFormat("ERR_QUEST_ACCEPTED_S", "Quest accepted: %s", {title}));
+    owner_.playGameErrorSound("ERR_QUEST_ACCEPTED_S");
+    // A group quest (QuestInfo 1): 0x28 and 0x26. The fourth quest while
+    // 0x14 is not flagged: 0x14.
+    if (it->second.type == 1) {
+        owner_.triggerTutorial(0x28);
+        owner_.triggerTutorial(0x26);
+    }
+    if (!owner_.tutorials().flagged(0x14) && ++questsAddedCount_ > 3) owner_.triggerTutorial(0x14);
+    // QUEST_ACCEPTED (0x270) with the quest's log index (0x005deeb0).
+    if (owner_.addonEventCallbackRef()) {
+        const int index = questLogIndexOf(questId);
+        owner_.addonEventCallbackRef()("QUEST_ACCEPTED", {std::to_string(index > 0 ? index : 0)});
     }
 }
 
