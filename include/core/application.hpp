@@ -481,6 +481,7 @@ private:
         bool looting = false;
         bool stealthed = false;
         bool autoAttacking = false;
+        bool swimming = false;
     };
     PlayerAnimationSeen playerAnimationSeen_;
 

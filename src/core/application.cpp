@@ -4800,13 +4800,21 @@ void Application::syncPlayerAnimation(const game::Unit& self) {
                                   .alive = u.alive,
                                   .looting = u.looting,
                                   .stealthed = u.stealthed,
-                                  .autoAttacking = u.autoAttacking};
+                                  .autoAttacking = u.autoAttacking,
+                                  .swimming = (u.moveFlags & rendering::upper_body::kMoveSwimOrFly) != 0};
     const PlayerAnimationSeen before = std::exchange(playerAnimationSeen_, now);
-    if (before.instanceId != instanceId || u.riding) return;
+    if (u.riding) return;
+    // A new instance starts on Stand. Made after the swim began, at a teleport
+    // into water across maps, no movement event comes to ask again, and the
+    // character stood in the water until the next one.
+    if (before.instanceId != instanceId) {
+        if (now.swimming) cr->playBaseAnimation(instanceId);
+        return;
+    }
     const bool changed = (now.leaping && !before.leaping) || now.turning != before.turning ||
                          now.turningLeft != before.turningLeft || now.alive != before.alive ||
                          now.looting != before.looting || now.stealthed != before.stealthed ||
-                         now.autoAttacking != before.autoAttacking;
+                         now.autoAttacking != before.autoAttacking || now.swimming != before.swimming;
     if (changed) cr->playBaseAnimation(instanceId);
 }
 
