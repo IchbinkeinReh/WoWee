@@ -3,6 +3,7 @@
 // 0x006de1c0, 0x006d9230).
 #include "game/game_handler.hpp"
 #include "game/interface_text.hpp"
+#include "game/social_handler.hpp"
 #include "game/tabard_design.hpp"
 #include "network/packet.hpp"
 #include "network/world_socket.hpp"
@@ -37,6 +38,25 @@ void GameHandler::closeTabardVendor() {
     tabardPreview_.reset();
     tabardVendorGuid_ = 0;
     fireAddonEvent("CLOSE_TABARD_FRAME", {});
+}
+
+void GameHandler::tabardFromGuildRegistrar() {
+    // The registrar kept at 0xc0e570 is the guild one only; the arena
+    // registrar (0x005a22a0) keeps its own.
+    if (!socialHandler_ || !socialHandler_->hasPetitionShowlist() ||
+        !socialHandler_->isGuildRegistrar())
+        return;
+    const uint64_t registrar = socialHandler_->getPetitionNpcGuid();
+    // 0x006d2500: asked only when the designer is not already open with this
+    // npc. (It also refuses with ERR_EMBLEMERROR_NOTABARDGEOSET when the
+    // player's model cannot show a tabard, 0x007202c0 - see differences.)
+    if (registrar != 0 && registrar != tabardVendorGuid_ && socket) {
+        network::Packet packet(wireOpcode(Opcode::MSG_TABARDVENDOR_ACTIVATE));
+        packet.writeUInt64(registrar);
+        socket->send(packet);
+    }
+    // CloseGuildRegistrar (0x00599f00): the npc let go, GUILD_REGISTRAR_CLOSED.
+    closePetitionVendor();
 }
 
 void GameHandler::previewTabard(const GuildEmblem& emblem) { tabardPreview_ = emblem; }

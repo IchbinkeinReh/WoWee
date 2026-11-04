@@ -1262,6 +1262,10 @@ public:
     [[nodiscard]] uint64_t getTabardVendorGuid() const { return tabardVendorGuid_; }
     /// CloseTabardCreation, the vendor let go (0x00598ec0).
     void closeTabardVendor();
+    /// GetTabardInfo (0x0059a1f0), the guild registrar's way to the designer:
+    /// MSG_TABARDVENDOR_ACTIVATE to the registrar (0x006d2500) and then
+    /// CloseGuildRegistrar's own steps.
+    void tabardFromGuildRegistrar();
     /// The design painted on the player's own tabard while it is designed
     /// (0x004ec1c0 on the player's component).
     void previewTabard(const GuildEmblem& emblem);

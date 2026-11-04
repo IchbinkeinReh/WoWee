@@ -126,6 +126,13 @@ int lua_CloseTabardCreation(lua_State* L) {
     return 0;
 }
 
+int lua_GetTabardInfo(lua_State* L) {
+    // 0x0059a1f0: despite the name it answers nothing - the guild registrar
+    // hands its npc over to the tabard designer and closes.
+    if (auto* gh = getGameHandler(L)) gh->tabardFromGuildRegistrar();
+    return 0;
+}
+
 }  // namespace
 
 void addTabardModelMethods(lua_State* L) {
@@ -150,6 +157,8 @@ void addTabardModelMethods(lua_State* L) {
 void registerTabardLuaAPI(lua_State* L) {
     lua_pushcfunction(L, lua_CloseTabardCreation);
     lua_setglobal(L, "CloseTabardCreation");
+    lua_pushcfunction(L, lua_GetTabardInfo);
+    lua_setglobal(L, "GetTabardInfo");
 }
 
 }  // namespace wowee::addons
