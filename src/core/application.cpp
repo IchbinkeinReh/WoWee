@@ -6197,6 +6197,9 @@ void Application::render() {
                                 }
                                 if (worn.empty()) worn = self->equipment;
                             }
+                            // Undress empties the figure; what is tried on
+                            // after goes onto it bare.
+                            if (dressUp->undressed) worn.clear();
                             for (const auto& tried : dressUp->tryOnItems) {
                                 bool replaced = false;
                                 for (auto& item : worn) {

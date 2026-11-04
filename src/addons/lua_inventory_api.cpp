@@ -872,16 +872,28 @@ static int lua_WoweeSetModelCreature(lua_State* L) {
     return 0;
 }
 
-/// __WoweeUndress(frame) - take everything tried on back off.
-static int lua_WoweeUndress(lua_State* L) {
+/// Model:Undress (0x00597e90 -> 0x00597ba0) empties every item slot and both
+/// hands, what was tried on included. Dress (0x00597ed0) and RefreshUnit
+/// (0x00597b00) build the figure from its unit again (0x005977e0), which takes
+/// off what was tried on and puts back what Undress removed.
+static int setModelDressed(lua_State* L, bool undressed) {
     auto* tree = getWidgetTree(L);
     if (!tree || !lua_istable(L, 1)) return 0;
     lua_getfield(L, 1, "__wid");
     const uint32_t id = static_cast<uint32_t>(lua_tointeger(L, -1));
     lua_pop(L, 1);
-    if (auto* w = tree->get(id)) w->tryOnItems.clear();
+    if (auto* w = tree->get(id)) {
+        w->tryOnItems.clear();
+        w->undressed = undressed;
+    }
     return 0;
 }
+
+/// __WoweeUndress(frame).
+static int lua_WoweeUndress(lua_State* L) { return setModelDressed(L, true); }
+
+/// __WoweeRedress(frame).
+static int lua_WoweeRedress(lua_State* L) { return setModelDressed(L, false); }
 
 static int lua_IsDressableItem(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -5131,6 +5143,7 @@ void registerInventoryLuaAPI(lua_State* L) {
                 {"__WoweeTryOn",   lua_WoweeTryOn},
                 {"__WoweeSetModelCreature", lua_WoweeSetModelCreature},
                 {"__WoweeUndress", lua_WoweeUndress},
+                {"__WoweeRedress", lua_WoweeRedress},
                 {"IsDressableItem",   lua_IsDressableItem},
                 {"GetItemQualityColor", lua_GetItemQualityColor},
                 {"_GetItemTooltipData", lua_GetItemTooltipData},

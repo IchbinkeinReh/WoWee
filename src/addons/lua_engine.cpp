@@ -3266,8 +3266,17 @@ int lua_Tooltip_SetUnit(lua_State* L) {
     // which then drew across the rotate arrows and sized the frame to fit one
     // line of text instead of the figure.
     if (w && w->objectType != "GameTooltip") {
-        lua_pushboolean(L, 0);
-        return 1;
+        // Model:SetUnit("unit") (0x005978e0): a unit that resolves has the
+        // figure built from it again (0x005977e0), as Dress does; nothing is
+        // returned either way.
+        auto* gh = wowee::addons::getGameHandler(L);
+        std::string unit = luaL_optstring(L, 2, "");
+        for (char& c : unit) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (gh && !unit.empty() && wowee::addons::resolveUnitGuid(gh, unit) != 0) {
+            w->tryOnItems.clear();
+            w->undressed = false;
+        }
+        return 0;
     }
     auto* gh = wowee::addons::getGameHandler(L);
     const char* uid = luaL_optstring(L, 2, "player");
@@ -7550,7 +7559,8 @@ void LuaEngine::registerCoreAPI() {
         // and built by the render loop, which is where the offscreen views
         // are; zero clears it.
         "function mt:SetCreature(id) __WoweeSetModelCreature(self, id) end\n"
-        "function mt:RefreshUnit() end\n"
+        "function mt:RefreshUnit() __WoweeRedress(self) end\n"
+        "function mt:Dress() __WoweeRedress(self) end\n"
         "function mt:GetInventorySlot()\n"
         "    return BankButtonIDToInvSlotID(self:GetID(), self.isBag)\n"
         "end\n"

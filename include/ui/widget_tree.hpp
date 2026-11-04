@@ -623,6 +623,11 @@ struct Widget {
     /// closing this one is what empties it.
     struct TryOnItem { uint32_t displayInfoId; uint8_t inventoryType; };
     std::vector<TryOnItem> tryOnItems;
+    /// Undress was asked (0x00597ba0): the frame's own figure has every item
+    /// slot and both hands emptied, under whatever is tried on after. Dress,
+    /// RefreshUnit and SetUnit build the figure from the unit again
+    /// (0x005977e0), which puts it all back.
+    bool undressed = false;
 
     /// A creature this model frame has been told to show, by display id. Set
     /// by whichever binding decides - the stable's paperdoll is told a slot
