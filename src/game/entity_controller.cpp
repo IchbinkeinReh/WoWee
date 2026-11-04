@@ -1738,18 +1738,26 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
         else if (pfi.pBytes2 != 0xFFFF && key == pfi.pBytes2) {
             uint8_t bankBagSlots = static_cast<uint8_t>((val >> 16) & 0xFF);
             owner_.inventoryRef().setPurchasedBankBagSlots(bankBagSlots);
-            // Byte 3 (bits 24-31): REST_STATE
-            // 0 = not resting, 1 = REST_TYPE_IN_TAVERN, 2 = REST_TYPE_IN_CITY
-            uint8_t restStateByte = static_cast<uint8_t>((val >> 24) & 0xFF);
+            // Byte 3 (bits 24-31): the rest state - 1 rested, 2 normal - which
+            // is the experience bonus, not resting (PLAYER_FLAGS 0x20). Its
+            // watcher (0x006da630): UPDATE_EXHAUSTION, and ERR_EXHAUSTION_RESTED
+            // with tutorial 0x19 or ERR_EXHAUSTION_NORMAL in chat. A create
+            // only notes it.
+            const int restState = static_cast<int>((val >> 24) & 0xFF);
+            const int wasRestState = lastRestState_;
+            lastRestState_ = restState;
+            if (!isCreate && wasRestState >= 0 && restState != wasRestState) {
+                pendingEvents_.emit("UPDATE_EXHAUSTION", {});
+                if (restState == 1) {
+                    owner_.addSystemChatMessage(interfaceString("ERR_EXHAUSTION_RESTED", "You feel rested."));
+                    owner_.triggerTutorial(0x19);
+                } else if (restState == 2) {
+                    owner_.addSystemChatMessage(interfaceString("ERR_EXHAUSTION_NORMAL", "You feel normal."));
+                }
+            }
             if (isCreate) {
                 LOG_DEBUG("PLAYER_BYTES_2 (CREATE): raw=0x", std::hex, val, std::dec,
                            " bankBagSlots=", static_cast<int>(bankBagSlots));
-                bool wasResting = owner_.isRestingRef();
-                owner_.isRestingRef() = (restStateByte != 0);
-                if (owner_.isRestingRef() != wasResting) {
-                    pendingEvents_.emit("UPDATE_EXHAUSTION", {});
-                    pendingEvents_.emit("PLAYER_UPDATE_RESTING", {});
-                }
             } else {
                 // Byte 0 (bits 0-7): facial hair / piercings
                 uint8_t facialHair = static_cast<uint8_t>(val & 0xFF);
@@ -1759,7 +1767,6 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
                 LOG_DEBUG("PLAYER_BYTES_2 (VALUES): raw=0x", std::hex, val, std::dec,
                            " bankBagSlots=", static_cast<int>(bankBagSlots),
                            " facial=", static_cast<int>(facialHair));
-                owner_.isRestingRef() = (restStateByte != 0);
                 if (owner_.appearanceChangedCallbackRef())
                     owner_.appearanceChangedCallbackRef()();
                 if (owner_.playerModelRebuildCallbackRef())
