@@ -21,6 +21,7 @@ layout(location = 4) out vec3 vT;     // texcoord[4]
 layout(location = 5) out vec3 vB;     // texcoord[5]
 layout(location = 6) out vec3 vN;     // texcoord[6]
 layout(location = 7) out float vFog;
+layout(location = 8) out vec3 vWorld;  // render space, for the fog volume
 
 // The waves' height at p, offset by `off`: a circular wave by its distance
 // from its centre, a plane wave by the scaled position along its direction,
@@ -46,6 +47,7 @@ void main() {
     gl_Position = projection * viewSpace;
 
     vec3 P = toClient(aPos);
+    vWorld = aPos;
     float h0 = height(P.xy, vec2(0.0));
     float hx = height(P.xy, vec2(0.5, 0.0));
     float hy = height(P.xy, vec2(0.0, 0.5));
