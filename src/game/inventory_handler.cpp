@@ -1,4 +1,5 @@
 #include "game/inventory_handler.hpp"
+#include "game/tutorials.hpp"
 #include "game/auction_pending_sales.hpp"
 #include "addons/lua_api_registrations.hpp"
 #include "game/spell_classification.hpp"
@@ -640,7 +641,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         const bool created    = packet.readUInt32() != 0;
         const bool showInChat = packet.readUInt32() != 0;
         const uint8_t bagSlot = packet.readUInt8();
-        /*uint32_t slot          =*/ packet.readUInt32();
+        const uint32_t slot = packet.readUInt32();
         uint32_t itemId = packet.readUInt32();
         /*uint32_t suffixFactor  =*/ packet.readUInt32();
         int32_t randomProp = static_cast<int32_t>(packet.readUInt32());
@@ -669,7 +670,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             owner_.pendingItemPushNotifsRef().push_back({.itemId = itemId, .count = count,
                 .bagButtonId = bagButtonId, .self = self, .received = received,
                 .created = created, .showInChat = showInChat, .randomProp = randomProp, .who = who,
-                .totalCount = totalCount});
+                .receiver = guid, .bagSlot = bagSlot, .slot = slot, .totalCount = totalCount});
             owner_.ensureItemInfo(itemId);
             return;
         }
@@ -681,6 +682,7 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
         // packet's flags - and none when the server says not to show it. This
         // printed "Received item: [x] x2" as a system line for all of them.
         owner_.addLocalChatLine(ChatType::LOOT, interface_text::itemPushLine(push, link, who, uiText));
+        triggerItemPushTutorials(guid, *info, bagSlot, slot);
         if (!self) return;
         if (auto* qh = owner_.getQuestHandler())
             qh->announceQuestItemPushed(itemId, count, totalCount, info->name);
@@ -2988,6 +2990,28 @@ void InventoryHandler::splitItem(uint8_t srcBag, uint8_t srcSlot, uint8_t count)
         }
     }
     owner_.raiseUiError("Cannot split: no free inventory slots.");
+}
+
+void InventoryHandler::triggerItemPushTutorials(uint64_t receiver, const ItemQueryResponseData& info,
+                                                uint8_t bagSlot, uint32_t slot) {
+    // 0x00523900: only for a receiver this client knows.
+    const bool self = receiver == owner_.getPlayerGuid();
+    if (!self && !owner_.getEntityManager().getEntity(receiver)) return;
+    ItemPushTutorialInput in;
+    in.self = self;
+    in.itemId = info.entry;
+    in.itemClass = info.itemClass;
+    in.subClass = info.subClass;
+    in.inventoryType = info.inventoryType;
+    for (const auto& sp : info.spells) {
+        if (sp.spellId != 0 && sp.spellTrigger == 0) in.hasUseSpell = true;
+    }
+    in.bagSlot = bagSlot;
+    in.slot = slot;
+    in.playerLevel = owner_.getPlayerLevel();
+    in.playerClass = owner_.getPlayerClass();
+    in.equipTutorialSeen = owner_.tutorials().flagged(0x37);
+    for (uint32_t id : itemPushTutorials(in)) owner_.triggerTutorial(id);
 }
 
 void InventoryHandler::fireBagUpdates() {
@@ -5787,6 +5811,7 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
                     .created = it->created, .showInChat = it->showInChat, .count = it->count};
                 owner_.addLocalChatLine(ChatType::LOOT,
                                         interface_text::itemPushLine(push, link, it->who, uiText));
+                triggerItemPushTutorials(it->receiver, data, it->bagSlot, it->slot);
                 if (!it->self) { it = owner_.pendingItemPushNotifsRef().erase(it); continue; }
                 if (auto* qh = owner_.getQuestHandler())
                     qh->announceQuestItemPushed(data.entry, it->count, it->totalCount, data.name);

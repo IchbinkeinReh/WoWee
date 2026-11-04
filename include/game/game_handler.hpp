@@ -4036,7 +4036,8 @@ public:
     /// What a game error sounds like, by its GlobalStrings key, as the
     /// client's table of them says (0x005216f0): the character's line where
     /// it gives one (0x00986d00), else the SoundEntries row it names
-    /// (0x004c74a0); nothing for the rest.
+    /// (0x004c74a0); nothing for the rest. ERR_BAG_FULL also triggers
+    /// tutorial 0x39 there.
     void playGameErrorSound(std::string_view gameErrorKey);
 
     // Reputation change toast: factionName, delta, new standing
@@ -5953,6 +5954,10 @@ private:
         bool showInChat = true;
         int32_t randomProp = 0;
         std::string who;
+        /// The receiver and where the item went, for its tutorials (0x00523900).
+        uint64_t receiver = 0;
+        uint8_t bagSlot = 0;
+        uint32_t slot = 0;
         /// The stack total after the push, for the quest progress line.
         uint32_t totalCount = 0;
     };

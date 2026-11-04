@@ -1290,6 +1290,8 @@ void SpellHandler::sayPetCastFailure(uint32_t spellId, uint8_t result) const {
 }
 
 void SpellHandler::showPlayerCastFailure(uint32_t spellId, uint8_t result, const std::string& text) const {
+    // 0x00808200: SPELL_FAILED_NEED_AMMO (0x34) triggers tutorial 0x2c.
+    if (result == 0x34) owner_.triggerTutorial(0x2c);
     // OsGetAsyncTimeMs's milliseconds (0x0086ae20); only their differences count.
     const auto nowMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                  std::chrono::steady_clock::now().time_since_epoch())

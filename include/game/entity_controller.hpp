@@ -233,6 +233,10 @@ private:
     // Cached field indices resolved once per handler call to avoid repeated lookups.
     /// The player's shapeshift form from UNIT_FIELD_BYTES_2 (WotLK).
     void applyPlayerShapeshiftForm(const UpdateBlock& block);
+    /// UNIT_FIELD_BYTES_2 byte 1 (+0x1d1) of the player's: the PvP flag
+    /// coming on triggers tutorial 0x1f (0x00724d90). A create only notes it.
+    void notePlayerPvpByte(const UpdateBlock& block, bool isCreate);
+    int lastPlayerPvpByte_ = -1;  ///< -1 until the player's has been seen
     struct UnitFieldIndices {
         uint16_t health, maxHealth, powerBase, maxPowerBase;
         uint16_t level, faction, flags, dynFlags, auraState;

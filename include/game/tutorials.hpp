@@ -11,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace wowee::game {
 
@@ -112,5 +113,60 @@ private:
     std::array<uint32_t, kCount> order_{};
     bool loaded_ = false;
 };
+
+/// What SMSG_ITEM_PUSH_RESULT's handler (0x00523900) looks at for its
+/// tutorials: the packet's receiver and slot, the item's template and the
+/// player's level and class.
+struct ItemPushTutorialInput {
+    bool self = false;            ///< the item went to the local player
+    uint32_t itemId = 0;
+    uint32_t itemClass = 0;       ///< template +4
+    uint32_t subClass = 0;        ///< +8
+    uint32_t inventoryType = 0;   ///< +0x28
+    bool hasUseSpell = false;     ///< a spell (+0x100) with trigger 0 (+0x114)
+    uint8_t bagSlot = 0;          ///< 255 for the backpack and the slots on the player
+    uint32_t slot = 0;
+    uint32_t playerLevel = 0;
+    uint8_t playerClass = 0;
+    bool equipTutorialSeen = false;  ///< tutorial 0x37 flagged (0x005222b0)
+};
+
+/// The tutorials an item push triggers, in the order 0x00523900 asks for
+/// them. On the player's own:
+///   - 7 always;
+///   - 8 for an item with a use spell, unless it is food or a scroll;
+///   - 0x17 for one that can be worn, once tutorial 0x37 has been seen;
+///   - 9 for a container;
+///   - 0x31 for one put on the key ring (slots 86..117 of the player);
+///   - 0x1e for the Hearthstone (6948);
+///   - 10 and 11 for food or a scroll after level 1.
+/// Then 0x2b for a ranged weapon of the player's who is no hunter, or a wand
+/// pushed to anyone.
+[[nodiscard]] inline std::vector<uint32_t> itemPushTutorials(const ItemPushTutorialInput& in) {
+    // DAT_00a2d288: the equipment slots each inventory type fits.
+    static constexpr std::array<uint32_t, 29> kSlotMask = {
+        0x0,     0x1,    0x2,      0x4,     0x8,     0x10,    0x20,    0x40,     0x80,       0x100,
+        0x200,   0xc00,  0x3000,   0x18000, 0x10000, 0x20000, 0x4000,  0x18000,  0x780000,   0x40000,
+        0x10,    0x18000, 0x18000, 0x10000, 0x0,     0x20000, 0x20000, 0x0,      0x20000};
+    std::vector<uint32_t> out;
+    const bool consumableFoodOrScroll = in.itemClass == 0 && (in.subClass == 4 || in.subClass == 5);
+    if (in.self) {
+        out.push_back(7);
+        if (in.hasUseSpell && !consumableFoodOrScroll) out.push_back(8);
+        const uint32_t mask = in.inventoryType < kSlotMask.size() ? kSlotMask[in.inventoryType] : 0;
+        if ((mask & 0x7fffffu) != 0 && in.equipTutorialSeen) out.push_back(0x17);
+        if (in.itemClass == 1) out.push_back(9);
+        if (in.bagSlot == 0xff && in.slot - 0x56u < 0x20u) out.push_back(0x31);
+        if (in.itemId == 0x1b24) out.push_back(0x1e);
+        if (in.playerLevel > 1 && consumableFoodOrScroll) {
+            out.push_back(10);
+            out.push_back(11);
+        }
+    }
+    if ((in.self && (in.inventoryType == 15 || in.inventoryType == 26) && in.playerClass != 3) ||
+        (in.itemClass == 2 && in.subClass == 0x13))
+        out.push_back(0x2b);
+    return out;
+}
 
 }  // namespace wowee::game

@@ -538,6 +538,8 @@ void GameHandler::playErrorSpeech(audio::PlayerErrorSpeech type) {
 }
 
 void GameHandler::playGameErrorSound(std::string_view gameErrorKey) {
+    // 0x005216f0: the game error ERR_BAG_FULL (11) triggers tutorial 0x39.
+    if (gameErrorKey == "ERR_BAG_FULL") triggerTutorial(0x39);
     if (const auto speech = audio::vocal_error::forGameError(gameErrorKey)) {
         playErrorSpeech(*speech);
         return;

@@ -53,3 +53,58 @@ TEST_CASE("clear sets everything, reset empties everything", "[tutorials]") {
     CHECK_FALSE(t.anyTriggered());
     CHECK(t.flag(1));
 }
+
+TEST_CASE("an item pushed to the player asks for its tutorials in the client's order", "[tutorials]") {
+    using wowee::game::itemPushTutorials;
+    wowee::game::ItemPushTutorialInput in;
+    in.self = true;
+    in.itemId = 6948;  // the Hearthstone: a use spell, class 15
+    in.itemClass = 15;
+    in.hasUseSpell = true;
+    in.bagSlot = 0xff;
+    in.slot = 23;
+    in.playerLevel = 1;
+    CHECK(itemPushTutorials(in) == std::vector<uint32_t>{7, 8, 0x1e});
+
+    // Bread after level 1: no use tutorial, the food ones.
+    in.itemId = 4540;
+    in.itemClass = 0;
+    in.subClass = 5;
+    in.playerLevel = 2;
+    CHECK(itemPushTutorials(in) == std::vector<uint32_t>{7, 10, 11});
+
+    // A key on the key ring.
+    in = {};
+    in.self = true;
+    in.itemClass = 13;
+    in.bagSlot = 0xff;
+    in.slot = 86;
+    CHECK(itemPushTutorials(in) == std::vector<uint32_t>{7, 0x31});
+
+    // A bag that can be worn, once tutorial 0x37 was seen.
+    in = {};
+    in.self = true;
+    in.itemClass = 1;
+    in.inventoryType = 18;
+    CHECK(itemPushTutorials(in) == std::vector<uint32_t>{7, 9});
+    in.equipTutorialSeen = true;
+    CHECK(itemPushTutorials(in) == std::vector<uint32_t>{7, 0x17, 9});
+}
+
+TEST_CASE("a ranged weapon asks for 0x2b unless the player is a hunter; a wand always", "[tutorials]") {
+    using wowee::game::itemPushTutorials;
+    wowee::game::ItemPushTutorialInput in;
+    in.self = true;
+    in.itemClass = 2;
+    in.subClass = 2;  // a bow
+    in.inventoryType = 15;
+    in.playerClass = 1;
+    CHECK(itemPushTutorials(in) == std::vector<uint32_t>{7, 0x2b});
+    in.playerClass = 3;
+    CHECK(itemPushTutorials(in) == std::vector<uint32_t>{7});
+    in = {};
+    in.itemClass = 2;
+    in.subClass = 0x13;
+    in.inventoryType = 26;
+    CHECK(itemPushTutorials(in) == std::vector<uint32_t>{0x2b});
+}

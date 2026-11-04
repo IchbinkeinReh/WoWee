@@ -57,6 +57,10 @@ public:
     /// id redraws nothing at all. That is why an item dragged to a new slot
     /// stayed drawn in its old one until the bag was closed and reopened.
     void fireBagUpdates();
+    /// SMSG_ITEM_PUSH_RESULT's tutorials (0x00523900), once the item's
+    /// template is known.
+    void triggerItemPushTutorials(uint64_t receiver, const ItemQueryResponseData& info, uint8_t bagSlot,
+                                  uint32_t slot);
 
     void registerOpcodes(DispatchTable& table);
 

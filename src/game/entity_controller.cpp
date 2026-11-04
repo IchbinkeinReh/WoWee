@@ -1089,6 +1089,7 @@ bool EntityController::applyUnitFieldsOnCreate(const UpdateBlock& block,
         }
     }
     applyPlayerShapeshiftForm(block);
+    notePlayerPvpByte(block, true);
     // The predicted powers start as the fields (0x0071c320).
     unit->resetPredictedPower();
     // Initial update masks commonly omit fields whose value is zero. A dead unit
@@ -1112,6 +1113,18 @@ void EntityController::applyPlayerShapeshiftForm(const UpdateBlock& block) {
     for (const char* event : owner_.setPlayerShapeshiftForm(static_cast<uint8_t>(it->second >> 24))) {
         pendingEvents_.emit(event);
     }
+}
+
+void EntityController::notePlayerPvpByte(const UpdateBlock& block, bool isCreate) {
+    if (block.guid != owner_.getPlayerGuid() || isPreWotlk()) return;
+    const uint16_t bytes2 = fieldIndex(UF::UNIT_FIELD_BYTES_2);
+    if (bytes2 == 0xFFFF) return;
+    const auto it = block.fields.find(bytes2);
+    if (it == block.fields.end()) return;
+    const int now = static_cast<int>((it->second >> 8) & 0xFF);
+    const int was = lastPlayerPvpByte_;
+    lastPlayerPvpByte_ = now;
+    if (!isCreate && was >= 0 && was != now && (now & 0x1) != 0) owner_.triggerTutorial(0x1f);
 }
 
 // Consolidates player-death state into one place so both the health==0 and
@@ -1364,6 +1377,9 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         else if (key == ufi.dynFlags) {
             uint32_t oldDyn = unit->getDynamicFlags();
             unit->setDynamicFlags(val);
+            // 0x00740570: a unit becoming lootable triggers tutorial 6.
+            if ((oldDyn & UNIT_DYNFLAG_LOOTABLE) == 0 && (val & UNIT_DYNFLAG_LOOTABLE) != 0)
+                owner_.triggerTutorial(6);
             if (block.guid == owner_.getPlayerGuid()) {
                 if (oldDyn != val) pendingEvents_.emit("UNIT_DYNAMIC_FLAGS", {"player"});
                 bool wasDead = (oldDyn & UNIT_DYNFLAG_DEAD) != 0;
@@ -1608,6 +1624,7 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
         owner_.addonEventCallbackRef()("UNIT_PET_EXPERIENCE", {"pet"});
     }
     applyPlayerShapeshiftForm(block);
+    notePlayerPvpByte(block, false);
     // The pet tab redraws its stat block on these, named for the pet.
     if (petStatsChanged && owner_.addonEventCallbackRef()) {
         owner_.addonEventCallbackRef()("UNIT_STATS", {"pet"});
@@ -1775,6 +1792,11 @@ bool EntityController::applyPlayerStatFields(const FlatFieldMap& fields,
           if (nowResting != owner_.isRestingRef()) {
               owner_.isRestingRef() = nowResting;
               pendingEvents_.emit("PLAYER_UPDATE_RESTING", {});
+              // 0x006e0fd0: resting coming on triggers tutorials 0x1d, 0x1e.
+              if (nowResting && !isCreate) {
+                  owner_.triggerTutorial(0x1d);
+                  owner_.triggerTutorial(0x1e);
+              }
           }
           // The PvP flag (PLAYER_FLAGS_IN_PVP, 0x200) turning on or off:
           // ERR_PVP_TOGGLE_ON/OFF on screen in yellow and
