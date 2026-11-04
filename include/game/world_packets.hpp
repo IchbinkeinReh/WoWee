@@ -4012,12 +4012,6 @@ struct AuctionHelloData {
     uint8_t enabled = 1;
 };
 
-/** MSG_AUCTION_HELLO packet builder */
-class AuctionHelloPacket {
-public:
-    static network::Packet build(uint64_t guid);
-};
-
 /** MSG_AUCTION_HELLO parser (server response) */
 class AuctionHelloParser {
 public:

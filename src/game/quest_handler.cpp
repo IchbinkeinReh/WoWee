@@ -1541,84 +1541,30 @@ void QuestHandler::selectGossipOption(uint32_t optionId, const std::string& code
                                                   currentGossip_.menuId, optionId, code);
     owner_.getSocket()->send(packet);
 
-    for (const auto& opt : currentGossip_.options) {
-        if (opt.id != optionId) continue;
-        LOG_INFO("  matched option: id=", opt.id, " icon=", (int)opt.icon, " text='", opt.text, "'");
-
-        std::string text = opt.text;
-        std::string textLower = text;
-        std::transform(textLower.begin(), textLower.end(), textLower.begin(),
-                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-
-        // Icon- and text-based NPC interaction fallbacks.
-        // Use flags to avoid sending the same activation packet twice when
-        // both the icon and text match (e.g., banker icon 6 + "deposit box").
-        bool sentBanker = false;
-        bool sentAuction = false;
-
-        if (opt.icon == 6) {
-            auto pkt = BankerActivatePacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(pkt);
-            sentBanker = true;
-            LOG_INFO("Sent CMSG_BANKER_ACTIVATE (icon) for npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
-        }
-
-        if (!sentAuction && (text == "GOSSIP_OPTION_AUCTIONEER" || textLower.find("auction") != std::string::npos)) {
-            auto pkt = AuctionHelloPacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(pkt);
-            sentAuction = true;
-            LOG_INFO("Sent MSG_AUCTION_HELLO for npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
-        }
-
-        if (!sentBanker && (text == "GOSSIP_OPTION_BANKER" || textLower.find("deposit box") != std::string::npos)) {
-            auto pkt = BankerActivatePacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(pkt);
-            sentBanker = true;
-            LOG_INFO("Sent CMSG_BANKER_ACTIVATE (text) for npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
-        }
-
-        const bool isVendor = (text == "GOSSIP_OPTION_VENDOR" ||
-                               (textLower.find("browse") != std::string::npos &&
-                                (textLower.find("goods") != std::string::npos || textLower.find("wares") != std::string::npos)));
-        const bool isArmorer = (text == "GOSSIP_OPTION_ARMORER" || textLower.find("repair") != std::string::npos);
-        if (isVendor || isArmorer) {
-            if (isArmorer) {
-                owner_.setVendorCanRepair(true);
+    // 0x0058af10 sends only this: the window the option leads to - a vendor,
+    // a bank, a flight map, a battlemaster's list, a tabard designer - is the
+    // server's answer to it. Then the options and quests go (0x0058a7b0).
+    //
+    // One exception, kept for this client's own gossip window only: it has
+    // no confirm step for a hearthstone, so the bind is sent with the select
+    // (see differences.md). FrameXML follows the server's own flow - the
+    // select goes out, SMSG_BINDER_CONFIRM asks, the popup answers.
+    if (!ui::frameXmlOwns(ui::UiElement::Gossip)) {
+        for (const auto& opt : currentGossip_.options) {
+            if (opt.id != optionId) continue;
+            std::string textLower = opt.text;
+            std::transform(textLower.begin(), textLower.end(), textLower.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (textLower.find("make this inn your home") != std::string::npos ||
+                textLower.find("set your home") != std::string::npos) {
+                owner_.getSocket()->send(BinderActivatePacket::build(currentGossip_.npcGuid));
+                LOG_INFO("Sent CMSG_BINDER_ACTIVATE for npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
             }
-            auto pkt = ListInventoryPacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(pkt);
-            LOG_DEBUG("Sent CMSG_LIST_INVENTORY (gossip) to npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
+            break;
         }
-
-        // Only while this client draws the gossip window. It has no confirm
-        // step, so matching the option's text and sending the activate is the
-        // whole of how a hearthstone gets set there.
-        //
-        // FrameXML follows the server's own flow instead - the select goes out,
-        // the server asks with SMSG_BINDER_CONFIRM, the popup answers - so
-        // sending here as well would bind before the question was asked and
-        // then ask it anyway.
-        if (!ui::frameXmlOwns(ui::UiElement::Gossip) &&
-            (textLower.find("make this inn your home") != std::string::npos ||
-             textLower.find("set your home") != std::string::npos)) {
-            auto bindPkt = BinderActivatePacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(bindPkt);
-            LOG_INFO("Sent CMSG_BINDER_ACTIVATE for npc=0x", std::hex, currentGossip_.npcGuid, std::dec);
-        }
-
-        // Stable master detection
-        if (text == "GOSSIP_OPTION_STABLE" ||
-            textLower.find("stable") != std::string::npos ||
-            textLower.find("my pet") != std::string::npos) {
-            owner_.stableMasterGuidRef() = currentGossip_.npcGuid;
-            owner_.stableWindowOpenRef() = false;
-            auto listPkt = ListStabledPetsPacket::build(currentGossip_.npcGuid);
-            owner_.getSocket()->send(listPkt);
-            LOG_INFO("Sent MSG_LIST_STABLED_PETS (gossip) to npc=0x",
-                     std::hex, currentGossip_.npcGuid, std::dec);
-        }
-        break;
     }
+    currentGossip_.options.clear();
+    currentGossip_.quests.clear();
 }
 
 void QuestHandler::selectGossipQuest(uint32_t questId) {

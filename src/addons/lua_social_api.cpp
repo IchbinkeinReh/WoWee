@@ -3992,12 +3992,9 @@ void registerSocialLuaAPI(lua_State* L) {
             const auto& opt = opts[static_cast<size_t>(index - 1)];
             const bool confirmed = lua_toboolean(L, 3) != 0;
 
-            // A coded option wants a string typed rather than a price agreed,
-            // and the interface asks for it with a different dialog.
-            if (!confirmed && opt.isCoded) {
-                gh->fireAddonEvent("GOSSIP_ENTER_CODE", {std::to_string(index)});
-                return 0;
-            }
+            // 0x0058af10, in its order: an option with a box asks first;
+            // then a coded one with no code typed asks for it, answered or
+            // not; then one costing more than the player has is refused.
             if (!confirmed && (opt.boxMoney > 0 || !opt.boxText.empty())) {
                 // arg1 is handed straight back to this function as the index,
                 // so it is the position rather than the option's id.
@@ -4006,7 +4003,18 @@ void registerSocialLuaAPI(lua_State* L) {
                                     std::to_string(opt.boxMoney)});
                 return 0;
             }
-            gh->selectGossipOption(opt.id, luaL_optstring(L, 2, ""));
+            const char* code = luaL_optstring(L, 2, "");
+            if (opt.isCoded && (!code || *code == '\0')) {
+                gh->fireAddonEvent("GOSSIP_ENTER_CODE", {std::to_string(index)});
+                return 0;
+            }
+            if (gh->getMoneyCopper() < opt.boxMoney) {
+                // 0x005216f0(0x28): ERR_NOT_ENOUGH_MONEY.
+                gh->addUIError(game::interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+                gh->playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
+                return 0;
+            }
+            gh->selectGossipOption(opt.id, code);
             // GOSSIP_CONFIRM_CANCEL (282) after the send, which is where the
             // client raises it - 0x0058af10, just past the write of
             // CMSG_GOSSIP_SELECT_OPTION (0x17c) - and with no argument at all.

@@ -623,12 +623,6 @@ bool GuildBankListParser::parse(network::Packet& packet, GuildBankData& data) {
 // Auction House System
 // ============================================================
 
-network::Packet AuctionHelloPacket::build(uint64_t guid) {
-    network::Packet p(wireOpcode(Opcode::MSG_AUCTION_HELLO));
-    p.writeUInt64(guid);
-    return p;
-}
-
 bool AuctionHelloParser::parse(network::Packet& packet, AuctionHelloData& data) {
     size_t remaining = packet.getRemainingSize();
     if (remaining < 12) {
