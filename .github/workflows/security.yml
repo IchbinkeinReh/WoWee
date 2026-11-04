@@ -34,6 +34,17 @@ jobs:
         with:
           submodules: true
 
+      - name: Free disk space
+        run: |
+          # The analysis ran out of room on the runner ("No space left on
+          # device" with 250 MB left). The SDKs this job never uses go first;
+          # the tool cache stays, CodeQL lives there.
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium
+          sudo docker image prune --all --force || true
+          df -h /
+
       - name: Install dependencies
         run: |
           sudo apt-get update
