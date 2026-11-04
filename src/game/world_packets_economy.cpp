@@ -189,7 +189,7 @@ network::Packet GetMailListPacket::build(uint64_t mailboxGuid) {
 network::Packet SendMailPacket::build(uint64_t mailboxGuid, const std::string& recipient,
                                       const std::string& subject, const std::string& body,
                                       uint64_t money, uint64_t cod, uint32_t stationeryId,
-                                      const std::vector<uint64_t>& itemGuids) {
+                                      const std::vector<uint64_t>& itemGuids, uint32_t packageId) {
     // WotLK 3.3.5a format
     network::Packet packet(wireOpcode(Opcode::CMSG_SEND_MAIL));
     packet.writeUInt64(mailboxGuid);
@@ -202,7 +202,9 @@ network::Packet SendMailPacket::build(uint64_t mailboxGuid, const std::string& r
     // also what the client writes when nothing was chosen, so a letter written
     // on the plain parchment is sent this way too.
     packet.writeUInt32(stationeryId);
-    packet.writeUInt32(0);       // unknown
+    // The Package.dbc row chosen (SelectPackage), sent only with attachments
+    // (0x0056d8a0 writes it masked by the item count).
+    packet.writeUInt32(itemGuids.empty() ? 0u : packageId);
     uint8_t attachCount = static_cast<uint8_t>(itemGuids.size());
     packet.writeUInt8(attachCount);
     for (uint8_t i = 0; i < attachCount; ++i) {

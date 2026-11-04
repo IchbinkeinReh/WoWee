@@ -321,9 +321,10 @@ public:
     virtual network::Packet buildSendMail(uint64_t mailboxGuid, const std::string& recipient,
                                            const std::string& subject, const std::string& body,
                                            uint64_t money, uint64_t cod, uint32_t stationeryId = 0,
-                                           const std::vector<uint64_t>& itemGuids = {}) {
+                                           const std::vector<uint64_t>& itemGuids = {},
+                                           uint32_t packageId = 0) {
         return SendMailPacket::build(mailboxGuid, recipient, subject, body, money, cod,
-                                     stationeryId, itemGuids);
+                                     stationeryId, itemGuids, packageId);
     }
 
     /** Parse SMSG_MAIL_LIST_RESULT into a vector of MailMessage */
@@ -509,7 +510,8 @@ public:
     network::Packet buildSendMail(uint64_t mailboxGuid, const std::string& recipient,
                                    const std::string& subject, const std::string& body,
                                    uint64_t money, uint64_t cod, uint32_t stationeryId = 0,
-                                   const std::vector<uint64_t>& itemGuids = {}) override;
+                                   const std::vector<uint64_t>& itemGuids = {},
+                                   uint32_t packageId = 0) override;
     bool parseMailList(network::Packet& packet, std::vector<MailMessage>& inbox) override;
     network::Packet buildMailTakeItem(uint64_t mailboxGuid, uint32_t mailId, uint32_t itemGuidLow) override;
     network::Packet buildMailDelete(uint64_t mailboxGuid, uint32_t mailId, uint32_t mailTemplateId) override;

@@ -1297,7 +1297,8 @@ network::Packet ClassicPacketParsers::buildSendMail(uint64_t mailboxGuid,
                                                      const std::string& body,
                                                      uint64_t money, uint64_t cod,
                                                      uint32_t stationeryId,
-                                                     const std::vector<uint64_t>& itemGuids) {
+                                                     const std::vector<uint64_t>& itemGuids,
+                                                     uint32_t /*packageId: Classic carries none*/) {
     network::Packet packet(wireOpcode(Opcode::CMSG_SEND_MAIL));
     packet.writeUInt64(mailboxGuid);
     packet.writeString(recipient);

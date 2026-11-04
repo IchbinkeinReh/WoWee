@@ -3795,6 +3795,7 @@ void InventoryHandler::closeMailbox() {
     // mail store (0x00571530 zeroes the count, the choice and the draft money
     // together), so the next letter starts with no paper picked.
     selectedStationery_ = 0;
+    selectedPackage_ = 0;
     // A paper's item that never answered is asked for again at the next mailbox.
     stationeryItemsQueried_.clear();
     clearMailAttachments();
@@ -3896,7 +3897,8 @@ void InventoryHandler::sendMail(const std::string& recipient, const std::string&
         return;
     }
     auto packet = owner_.getPacketParsers()->buildSendMail(mailboxGuid_, recipient, subject, body,
-                                                           money, cod, selectedStationery_, itemGuids);
+                                                           money, cod, selectedStationery_, itemGuids,
+                                                           selectedPackage_);
     LOG_INFO("sendMail: to='", recipient, "' subject='", subject, "' money=", money,
              " attachments=", itemGuids.size(), " stationery=", selectedStationery_,
              " mailboxGuid=", mailboxGuid_);

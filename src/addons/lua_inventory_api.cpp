@@ -2043,13 +2043,80 @@ static int lua_AddSendMailCOD(lua_State* L) {
     return 0;
 }
 
+/// Package.dbc as the mail packages read it (0x00ad42f4 rows of 16 bytes):
+/// the id, the icon, the price and the name - the first of its locale
+/// columns that holds one.
+namespace {
+struct MailPackage {
+    uint32_t id = 0;
+    std::string icon;
+    uint32_t cost = 0;
+    std::string name;
+};
+const std::vector<MailPackage>& mailPackages() {
+    static std::vector<MailPackage> rows;
+    static bool loaded = false;
+    if (loaded) return rows;
+    auto* am = core::Application::getInstance().getAssetManager();
+    auto dbc = am ? am->loadDBCOptional("Package.dbc") : nullptr;
+    if (!dbc) return rows;  // asked again once the data is there
+    loaded = true;
+    for (uint32_t r = 0; r < dbc->getRecordCount(); ++r) {
+        MailPackage p;
+        p.id = dbc->getUInt32(r, 0);
+        if (dbc->getFieldCount() > 1) p.icon = dbc->getString(r, 1);
+        if (dbc->getFieldCount() > 2) p.cost = dbc->getUInt32(r, 2);
+        for (uint32_t f = 3; f < dbc->getFieldCount() && f < 19 && p.name.empty(); ++f) p.name = dbc->getString(r, f);
+        rows.push_back(std::move(p));
+    }
+    return rows;
+}
+}  // namespace
+
+/// GetNumPackages() (0x0056e1e0): the rows of Package.dbc.
+static int lua_GetNumPackages(lua_State* L) {
+    lua_pushnumber(L, static_cast<double>(mailPackages().size()));
+    return 1;
+}
+
+/// GetPackageInfo(index) (0x0056e210) → name, texture, cost: the row's name,
+/// its icon under StringLookups row 3 (Interface\Icons), and its price;
+/// nil, nil, 0 for an index past the rows.
+static int lua_GetPackageInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetPackageInfo(index)");
+    const int index = static_cast<int>(lua_tonumber(L, 1)) - 1;
+    const auto& rows = mailPackages();
+    if (index < 0 || index >= static_cast<int>(rows.size())) {
+        lua_pushnil(L);
+        lua_pushnil(L);
+        lua_pushnumber(L, 0);
+        return 3;
+    }
+    const auto& row = rows[static_cast<size_t>(index)];
+    lua_pushstring(L, row.name.c_str());
+    lua_pushstring(L, ("Interface\\Icons\\" + row.icon).c_str());
+    lua_pushnumber(L, row.cost);
+    return 3;
+}
+
+/// SelectPackage(index) (0x0056e310): that row's id for the letter, or none
+/// for an index past the rows.
+static int lua_SelectPackage(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: SelectPackage(index)");
+    const int index = static_cast<int>(lua_tonumber(L, 1)) - 1;
+    const auto& rows = mailPackages();
+    auto* gh = getGameHandler(L);
+    auto* inv = gh ? gh->getInventoryHandler() : nullptr;
+    if (inv) inv->selectPackage(index >= 0 && index < static_cast<int>(rows.size()) ? rows[static_cast<size_t>(index)].id : 0);
+    return 0;
+}
+
 /// GetSendMailPrice() (0x00571b00): 30 copper a letter, 30 an attachment once
 /// there is more than one - max(30, attachments x 30) - plus the money set to
 /// go with it (SetSendMailMoney, 0x00beb1bc). The chosen stationery adds the
 /// paper's buy price where it is one of the offered rows the player is not
 /// carrying and its template is known (0x00beb1cc in the list at 0x00beb1f8,
-/// template +0x20). A chosen package would add its own; this client offers
-/// none (GetNumPackages, SelectPackage).
+/// template +0x20), and the chosen package its own (Package.dbc +8).
 /// It was a flat 30 whatever was attached, so a letter with twelve items showed
 /// thirty copper of postage and cost three hundred and sixty.
 static int lua_GetSendMailPrice(lua_State* L) {
@@ -2064,6 +2131,11 @@ static int lua_GetSendMailPrice(lua_State* L) {
                 if (row.id != inv->selectedStationery()) continue;
                 if (row.hasCost) paper = row.cost;
                 break;
+            }
+        }
+        if (auto* inv = gh->getInventoryHandler(); inv && inv->selectedPackage() != 0) {
+            for (const auto& row : mailPackages()) {
+                if (row.id == inv->selectedPackage()) paper += row.cost;
             }
         }
     }
@@ -5013,6 +5085,9 @@ void registerInventoryLuaAPI(lua_State* L) {
         }},
                 {"ShowContainerSellCursor", lua_ShowContainerSellCursor},
                 {"ShowInventorySellCursor", lua_ShowInventorySellCursor},
+                {"GetNumPackages", lua_GetNumPackages},
+                {"GetPackageInfo", lua_GetPackageInfo},
+                {"SelectPackage", lua_SelectPackage},
                 {"ShowBuybackSellCursor", lua_ShowBuybackSellCursor},
                 // A left-click on a vendor's item goes here, and it was a
                 // no-op - so at a merchant only right-click bought anything.

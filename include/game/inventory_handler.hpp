@@ -520,6 +520,10 @@ public:
 
     /// The chosen paper, as the Stationery.dbc id the send packet carries.
     uint32_t selectedStationery() const { return selectedStationery_; }
+    /// SelectPackage (0x0056e310): the Package.dbc row the letter goes in, 0
+    /// for none; cleared with the rest of the mail store (0x00571530).
+    void selectPackage(uint32_t packageId) { selectedPackage_ = packageId; }
+    uint32_t selectedPackage() const { return selectedPackage_; }
 
     /// Choose by the popup's one-based index. Out of range clears the choice,
     /// which is what SelectStationery does (0x0056e0e0), and clearing it is what
@@ -1036,6 +1040,7 @@ private:
     /// for none, which is also what the client sends when nothing was picked
     /// (MailInfo.cpp's DAT_00beb1cc).
     uint32_t selectedStationery_ = 0;
+    uint32_t selectedPackage_ = 0;
     /// Kept as a member only so the bindings can read it through a reference;
     /// rebuilt on every read from the rows below.
     std::vector<StationeryOption> stationeryOptions_;

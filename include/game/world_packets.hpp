@@ -3802,7 +3802,8 @@ public:
     static network::Packet build(uint64_t mailboxGuid, const std::string& recipient,
                                  const std::string& subject, const std::string& body,
                                  uint64_t money, uint64_t cod, uint32_t stationeryId = 0,
-                                 const std::vector<uint64_t>& itemGuids = {});
+                                 const std::vector<uint64_t>& itemGuids = {},
+                                 uint32_t packageId = 0);
 };
 
 /** CMSG_MAIL_TAKE_MONEY packet builder */
