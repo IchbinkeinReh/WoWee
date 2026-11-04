@@ -156,8 +156,12 @@ inline glm::vec3 faceBasedNormal(const glm::vec3& face, const glm::vec3& vertexN
 /// of it within 15 degrees of its face, none past 35, smoothstep between.
 inline constexpr float kNormalAgreeNear = 0.9659f;  // cos 15 degrees
 inline constexpr float kNormalAgreeFar = 0.8192f;   // cos 35 degrees
+/// Only for a floor (a face turned up past kNormalFloorZ whose normal leans
+/// down from it); every other surface keeps its own.
+constexpr float kNormalFloorZ = 0.7f;
 inline float normalAgreement(const glm::vec3& face, const glm::vec3& n, float nearCos = kNormalAgreeNear,
                              float farCos = kNormalAgreeFar) {
+    if (face.z < kNormalFloorZ || n.z >= face.z) return 1.0f;
     const float t = std::clamp((glm::dot(face, n) - farCos) / (nearCos - farCos), 0.0f, 1.0f);
     return t * t * (3.0f - 2.0f * t);
 }
@@ -165,8 +169,14 @@ inline float normalAgreement(const glm::vec3& face, const glm::vec3& n, float ne
 /// rtInteriorLampNormal: a room's baked colour's normal for the lamps - its
 /// own where its vertex normal agrees with the face, faceBasedNormal past
 /// 35 degrees, blended between.
+inline constexpr float kWallBumpShare = 0.0f;
 inline glm::vec3 interiorLampNormal(const glm::vec3& face, const glm::vec3& vertexNormal, const glm::vec3& shading,
                                     float nearCos = kNormalAgreeNear, float farCos = kNormalAgreeFar) {
+    // Off a floor: its vertex normal, kWallBumpShare of its bumps (rtInteriorLampNormal).
+    if (face.z < kNormalFloorZ || vertexNormal.z >= face.z) {
+        const glm::vec3 w = vertexNormal + (shading - vertexNormal) * kWallBumpShare;
+        return glm::dot(w, w) > 1e-8f ? glm::normalize(w) : face;
+    }
     const glm::vec3 n = glm::mix(faceBasedNormal(face, vertexNormal, shading), shading,
                                  normalAgreement(face, vertexNormal, nearCos, farCos));
     return glm::dot(n, n) > 1e-8f ? glm::normalize(n) : face;

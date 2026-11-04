@@ -181,6 +181,8 @@ const int RT_LIGHT_KIND_UNIT = 4;
 const int RT_LIGHT_KIND_EMISSIVE = 5;
 const int RT_LIGHT_KIND_PARTICLE = 6;
 const float RT_GLOW_LIFT = 1.0;
+// How wide a particle light's source is taken to be for its shadow rays.
+const float RT_PARTICLE_SOURCE_RADIUS = 1.5;
 // How far a ray leaving a triangle turned from its light has to go to be off
 // it: a ground triangle's longest edge, about three yards.
 const float RT_TERMINATOR_REACH = 3.0;
@@ -328,6 +330,16 @@ void main() {
     // their faces (rtNormalAgreement). A room's baked colour comes with the
     // same rule applied already, to its vertex normal (normalResolved).
     vec3 lightN = normalize(mix(n, shadingN, normalResolved ? 1.0 : rtNormalAgreement(n, shadingN, pass.tune4.xy)));
+    // What "behind the surface" and "a lamp low over it" below are measured
+    // against: a floor's face, as they were written for (a plank, a step, a
+    // curb); a room's wall its smooth normal (rtInteriorLampNormal leaves
+    // it its vertex normal); anything else its face and own normal half and
+    // half. A wall's or a cave's rock is curved where its normal leans off
+    // its faces, and measured by the faces a light near it lit some
+    // triangles and not the next - a low-poly cave's every facet hard-edged
+    // in its pool's and mushrooms' particle light, coming and going as the
+    // particles drifted (Thunder Bluff's Pools of Vision).
+    vec3 faceRef = n.z >= RT_NORMAL_FLOOR_Z ? n : normalResolved ? lightN : normalize(n + lightN);
     vec3 pointSum = vec3(0.0);
     float bakedSum = 0.0;
     float weightSum = 0.0;
@@ -351,7 +363,11 @@ void main() {
         // hearth's light below the inn's upper rooms) and, its shadow ray
         // starting from the far side of the board, took that light in
         // grainy streaks.
-        if (d > 1e-4 && dot(n, toLight) <= 0.0) continue;
+        // A floor's only: anywhere else this cut a light off where the wrap
+        // below still gave it a fifth of its strength, a step along a curved
+        // line that moved with every particle over a cave's wall. There
+        // the wrap runs it down to nothing, and a wall between stops it.
+        if (d > 1e-4 && n.z >= RT_NORMAL_FLOOR_Z && dot(n, toLight) <= 0.0) continue;
         // Wrapped a little past the terminator: a lamp is a flame, a glass, a
         // glow, not a point, and a face turned just past one still takes
         // some of its light. Unwrapped, a crease turned from a candle went
@@ -365,8 +381,8 @@ void main() {
         // shows it, and one at the floor's level lights the floor as a floor.
         vec3 nl = lightN;
         if (d > 1e-4) {
-            float rise = dot(n, toLight / d);
-            nl = normalize(mix(n, lightN, smoothstep(RT_LAMP_DETAIL_LOW, RT_LAMP_DETAIL_HIGH, rise)));
+            float rise = dot(faceRef, toLight / d);
+            nl = normalize(mix(faceRef, lightN, smoothstep(RT_LAMP_DETAIL_LOW, RT_LAMP_DETAIL_HIGH, rise)));
         }
         float ndl = d > 1e-4 ? (dot(nl, toLight / d) + pass.tune3.w) / (1.0 + pass.tune3.w) : 1.0;
         if (ndl <= 0.0) continue;
@@ -392,16 +408,36 @@ void main() {
     if (picked[k] >= 0) {
         RtPointLight light = rtPointLights[picked[k]];
         float radius = rtLightRadius(abs(light.positionEnd.w));
+        // A cloud of particles is a volume of light, not a lamp's point: its
+        // shadow as soft as the cloud is wide. Taken from points a hand
+        // apart, a particle drifting by a cave's low-poly wall cast the
+        // wall's every ridge as a hard triangle - and as the particles drift,
+        // the triangles came and went from frame to frame (Thunder Bluff's
+        // Pools of Vision, 37 particle lights off its pool and mushrooms).
+        if (int(light.storey.w + 0.5) == RT_LIGHT_KIND_PARTICLE) radius = max(radius, RT_PARTICLE_SOURCE_RADIUS);
         vec3 jitter = (vec3(rtRandom(rng), rtRandom(rng), rtRandom(rng)) * 2.0 - 1.0) * radius;
         // Lifted off its triangle toward the smooth surface as the sun's ray
         // is (RT_TERMINATOR_LIFT): a lamp low over a rounded floor or a
         // hillside laid the same hard triangles over its light.
         vec3 lampOrigin = origin;
         {
-            vec3 dir = normalize(rtLightAim(light) - p);
+            vec3 toAim = rtLightAim(light) - p;
+            vec3 dir = normalize(toAim);
             if (dot(shadingN, dir) > 0.0) {
                 float bend = length(cross(n, shadingN));
-                lampOrigin += shadingN * (RT_TERMINATOR_LIFT * bend * (1.0 - clamp(dot(n, dir), 0.0, 1.0)));
+                float lift = RT_TERMINATOR_LIFT * bend * (1.0 - clamp(dot(n, dir), 0.0, 1.0));
+                // And a triangle turned from the lamp its smooth normal still
+                // faces, as the sun's: its ray ran down into its own plane
+                // and the next faces, and a low-poly cave lit by mushrooms
+                // and its pool (Thunder Bluff's Pools of Vision) showed its
+                // triangles as hard facets of lamp shadow - flickering, as
+                // the lamp each ray picks changes from frame to frame.
+                if (dot(n, dir) <= 0.0) {
+                    lampOrigin = p + shadingN * rtSurfaceOffset(dist);
+                    lift = max(lift, RT_TERMINATOR_REACH * -dot(n, dir) / max(dot(shadingN, n), 0.5));
+                }
+                // Never past half way to the lamp, which is near.
+                lampOrigin += shadingN * min(lift, 0.5 * length(toAim));
             }
         }
         vec3 toLight = rtLightAim(light) + jitter - lampOrigin;

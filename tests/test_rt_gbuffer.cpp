@@ -543,6 +543,15 @@ TEST_CASE("A room's lamp normal: its own near the face, the face's far off it", 
     const glm::vec3 mid = interiorLampNormal(face, leaning(25.0f), leaning(25.0f));
     REQUIRE(mid.z > leaning(25.0f).z);
     REQUIRE(mid.z < 1.0f);
+    // Only a floor's: a wall's or a cave rock's normal leaning off its face
+    // is its curve, and lit by the face its triangles showed as facets.
+    const glm::vec3 wall(1.0f, 0.0f, 0.0f);
+    const glm::vec3 rock = glm::normalize(glm::vec3(0.6f, 0.0f, 0.8f));
+    REQUIRE(normalAgreement(wall, rock) == 1.0f);
+    REQUIRE(glm::length(interiorLampNormal(wall, rock, rock) - rock) < 1e-5f);
+    // Nor a floor whose normal leans up from a tilted face.
+    const glm::vec3 tilted = glm::normalize(glm::vec3(0.5f, 0.0f, 0.86f));
+    REQUIRE(normalAgreement(tilted, face) == 1.0f);
 }
 
 // rtCapLight: the light the traced lights add, held to the Debug Lights'
