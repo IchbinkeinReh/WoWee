@@ -300,6 +300,18 @@ void CombatHandler::registerOpcodes(DispatchTable& table) {
                 }
             }
 
+            // The player new to this unit's list (0x007416f0 -> 0x0052b370):
+            // with threat warnings on and above level 13, tutorial 0x35.
+            {
+                const uint64_t me = owner_.getPlayerGuid();
+                const auto onList = [me](const std::vector<ThreatEntry>& l) {
+                    return std::any_of(l.begin(), l.end(), [me](const ThreatEntry& e) { return e.victimGuid == me; });
+                };
+                const auto old = threatLists_.find(unitGuid);
+                const bool before = old != threatLists_.end() && onList(old->second);
+                if (!before && onList(list) && threatWarningWanted() && owner_.getPlayerLevel() > 13)
+                    owner_.triggerTutorial(0x35);
+            }
             threatLists_[unitGuid] = std::move(list);
             if (!owner_.addonEventCallbackRef()) return;
             auto fire = owner_.addonEventCallbackRef();
