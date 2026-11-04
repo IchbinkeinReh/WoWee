@@ -71,7 +71,12 @@ float rtwOnScreen(vec3 hit, vec3 hitNormal, out vec3 color) {
     color = vec3(0.0);
     if (!rtwScreenReuse || push.sceneValid < 0.5) return 0.0;
     if (dot(hitNormal, viewPos.xyz - hit) <= 0.0) return 0.0;
-    vec4 clip = projection * view * vec4(hit, 1.0);
+    // Where the capture has it, by the camera it was taken with. By this
+    // frame's, a capture a frame old was read a frame's turn out of place:
+    // whatever the water reflected slid off itself while the view turned,
+    // and with the water in the capture the slip fed on itself, a trail of
+    // the frames before.
+    vec4 clip = captureViewProj * vec4(hit, 1.0);
     if (clip.w < 0.1) return 0.0;
     vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
     vec2 edge = min(uv, 1.0 - uv);
