@@ -1847,6 +1847,10 @@ wowee_add_test(test_pet_action_bar SOURCES test_pet_action_bar.cpp)
 # a vehicle's shot leaves with, and where its stepped path meets the world.
 wowee_add_test(test_missile_trajectory SOURCES test_missile_trajectory.cpp)
 
+# ── test_override_bindings ───────────────────────────────────
+# SetOverrideBinding's store: priority first, then the newest, per owner.
+wowee_add_test(test_override_bindings SOURCES test_override_bindings.cpp)
+
 # ── test_scene_pick ──────────────────────────────────────────
 # Which of ScenePick's answers a caller wants. closestGuid and resolve()
 # disagree exactly where a wide object stands beside an NPC, which is where the

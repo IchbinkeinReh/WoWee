@@ -1,4 +1,5 @@
 #include "addons/lua_engine.hpp"
+#include "addons/override_bindings.hpp"
 #include "addons/interface_prefetch.hpp"
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
@@ -6790,6 +6791,8 @@ bool LuaEngine::initialize() {
     // hardware event - the taint is the process's, as the client's is, and a
     // reload must not inherit what the last interface left running.
     taint::reset();
+    // Nor the overrides its frames put on keys: those frames are gone.
+    overrideBindings().reset();
     L_ = luaL_newstate();
     ++stateGeneration_;
     if (!L_) {
@@ -10890,10 +10893,22 @@ std::string LuaEngine::bindingCommandForKey(const std::string& key) {
     // of the interface's own tables rather than restated here. GetBindingAction
     // already honours SetBinding, so a key the player rebound in game answers
     // to whatever they moved it to without this knowing anything about it.
+    // While the mouse looks, a key's mouselook override comes first
+    // (SetMouselookOverrideBinding, 0x005fd440).
+    if (const auto look = overrideBindings().mouselook(key)) {
+        lua_getglobal(L_, "IsMouselooking");
+        bool looking = false;
+        if (lua_isfunction(L_, -1) && lua_pcall(L_, 0, 1, 0) == 0) looking = lua_toboolean(L_, -1) != 0;
+        lua_pop(L_, 1);
+        if (looking) return *look;
+    }
+    // A key press asks with checkOverride: the key's overrides answer ahead
+    // of its own binding (0x00562490).
     lua_getglobal(L_, "GetBindingAction");
     if (!lua_isfunction(L_, -1)) { lua_pop(L_, 1); return ""; }
     lua_pushstring(L_, key.c_str());
-    if (lua_pcall(L_, 1, 1, 0) != 0) {
+    lua_pushboolean(L_, 1);
+    if (lua_pcall(L_, 2, 1, 0) != 0) {
         LOG_WARNING("GetBindingAction(", key, ") failed: ",
                     luaL_optstring(L_, -1, "?"));
         lua_pop(L_, 1);

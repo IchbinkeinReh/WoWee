@@ -8,6 +8,7 @@
 #include "audio/ui_sound_manager.hpp"
 #include "addons/lua_api_helpers.hpp"
 #include "addons/lua_taint.hpp"
+#include "addons/override_bindings.hpp"
 #include "addons/lua_api_registrations.hpp"
 // For fireEvent: paging has to reach the frames as well as the addons.
 #include "addons/lua_engine.hpp"
@@ -3145,7 +3146,8 @@ static int lua_GetBindingKey(lua_State* L) {
     return 2;
 }
 
-// GetBindingAction(key) → command, or "" for a key that holds nothing
+// GetBindingAction(key[, checkOverride]) → command, or "" for a key that
+// holds nothing; with checkOverride, its override first.
 //
 // Empty rather than nil, which is what the real client answers and what the
 // interface is written against. Blizzard's key binding panel reads it as
@@ -3162,6 +3164,13 @@ static int lua_GetBindingKey(lua_State* L) {
 static int lua_GetBindingAction(lua_State* L) {
     seedBindingDefaults();
     const std::string key = luaL_checkstring(L, 1);
+    // checkOverride (0x00562490): the key's overrides answer first.
+    if (lua_toboolean(L, 2)) {
+        if (const auto over = overrideBindings().lookup(key)) {
+            lua_pushstring(L, over->c_str());
+            return 1;
+        }
+    }
     for (const auto& [command, keys] : bindingKeys()) {
         if (keys[0] == key || keys[1] == key) {
             lua_pushstring(L, command.c_str());
@@ -3366,12 +3375,92 @@ static int lua_RunBinding(lua_State* L) {
 // What they do ask is the taint check (0x00563480 and 0x005604f0, kind 0xd:
 // not insecure code in combat lockdown), and that is kept: its refusal is
 // an event the interface hears.
-static int lua_SetOverrideBindingClick(lua_State* L) { taint::allowed(L, 0xd); return 0; }
-static int lua_SetOverrideBinding(lua_State* L) { taint::allowed(L, 0xd); return 0; }
-static int lua_SetOverrideBindingSpell(lua_State* L) { taint::allowed(L, 0xd); return 0; }
-static int lua_SetOverrideBindingMacro(lua_State* L) { taint::allowed(L, 0xd); return 0; }
-static int lua_SetOverrideBindingItem(lua_State* L) { taint::allowed(L, 0xd); return 0; }
-static int lua_ClearOverrideBindings(lua_State* L) { taint::allowed(L, 0xd); return 0; }
+OverrideBindings& overrideBindings() {
+    static OverrideBindings store;
+    return store;
+}
+
+namespace {
+
+/// 0x00563480: the override is put over the key unless the taint check
+/// refuses (kind 0xd); a command that is nil or empty takes the owner's away
+/// (0x005603d0).
+void putOverride(lua_State* L, bool priority, const std::string& command) {
+    if (!taint::allowed(L, 0xd)) return;
+    overrideBindings().set(lua_topointer(L, 1), priority, lua_tostring(L, 3), command);
+}
+
+/// The owner a frame (a table) and the key a string, as each of them asks.
+bool overrideArgsOk(lua_State* L) {
+    return lua_type(L, 1) == LUA_TTABLE && lua_isstring(L, 3);
+}
+
+}  // namespace
+
+/// SetOverrideBinding(owner, isPriority, "KEY"[, "COMMAND"]) (0x00563a90).
+static int lua_SetOverrideBinding(lua_State* L) {
+    if (!overrideArgsOk(L))
+        return luaL_error(L, "Usage: SetOverrideBinding(owner, isPriority, \"KEY\"[, \"COMMAND\"])");
+    const char* command = lua_isstring(L, 4) ? lua_tostring(L, 4) : "";
+    putOverride(L, lua_toboolean(L, 2) != 0, command);
+    return 0;
+}
+
+/// The Spell, Item and Macro forms (0x00563b80, 0x00563cb0, 0x00563de0):
+/// the name after its command's prefix; the name is not optional.
+template <const char* Prefix, const char* Usage>
+static int lua_SetOverrideBindingNamed(lua_State* L) {
+    if (!overrideArgsOk(L) || !lua_isstring(L, 4)) return luaL_error(L, "%s", Usage);
+    putOverride(L, lua_toboolean(L, 2) != 0, std::string(Prefix) + lua_tostring(L, 4));
+    return 0;
+}
+constexpr char kSpellPrefix[] = "SPELL ";
+constexpr char kItemPrefix[] = "ITEM ";
+constexpr char kMacroPrefix[] = "MACRO ";
+constexpr char kSpellUsage[] = "Usage: SetOverrideBindingSpell(owner, isPriority, \"KEY\", \"spellname\")";
+constexpr char kItemUsage[] = "Usage: SetOverrideBindingItem(owner, isPriority, \"KEY\", \"itemname\")";
+constexpr char kMacroUsage[] =
+    "Usage: SetOverrideBindingMacro(owner, isPriority, \"KEY\", \"macroname\"|macroid)";
+static int lua_SetOverrideBindingSpell(lua_State* L) {
+    return lua_SetOverrideBindingNamed<kSpellPrefix, kSpellUsage>(L);
+}
+static int lua_SetOverrideBindingItem(lua_State* L) {
+    return lua_SetOverrideBindingNamed<kItemPrefix, kItemUsage>(L);
+}
+static int lua_SetOverrideBindingMacro(lua_State* L) {
+    return lua_SetOverrideBindingNamed<kMacroPrefix, kMacroUsage>(L);
+}
+
+/// SetOverrideBindingClick(owner, isPriority, "KEY", "buttonName"[,
+/// "mouseButton"]) (0x00563f10): "CLICK button:mouseButton", LeftButton when
+/// none is named.
+static int lua_SetOverrideBindingClick(lua_State* L) {
+    if (!overrideArgsOk(L) || !lua_isstring(L, 4))
+        return luaL_error(L, "Usage: SetOverrideBindingClick(owner, isPriority, \"KEY\", \"buttonName\"[, "
+                             "\"mouseButton\"])");
+    const char* mouse = lua_isstring(L, 5) ? lua_tostring(L, 5) : "LeftButton";
+    putOverride(L, lua_toboolean(L, 2) != 0, std::string("CLICK ") + lua_tostring(L, 4) + ":" + mouse);
+    return 0;
+}
+
+/// SetMouselookOverrideBinding("key", "binding" or nil) (0x005fd550 ->
+/// 0x005fd440): what the key runs while the mouse looks, under the taint
+/// check (kind 0xd); nil takes it away.
+static int lua_SetMouselookOverrideBinding(lua_State* L) {
+    if (!lua_isstring(L, 1))
+        return luaL_error(L, "Usage: SetMouselookOverrideBinding(\"key\", \"binding\" or nil)");
+    if (!taint::allowed(L, 0xd)) return 0;
+    overrideBindings().setMouselook(lua_tostring(L, 1), lua_isstring(L, 2) ? lua_tostring(L, 2) : "");
+    return 0;
+}
+
+/// ClearOverrideBindings(owner) (0x00560560 -> 0x005604f0).
+static int lua_ClearOverrideBindings(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TTABLE) return luaL_error(L, "Usage: ClearOverrideBindings(owner)");
+    if (!taint::allowed(L, 0xd)) return 0;
+    overrideBindings().clear(lua_topointer(L, 1));
+    return 0;
+}
 
 // Frame methods: SetPoint, SetSize, SetWidth, SetHeight, GetWidth, GetHeight, GetCenter, SetAlpha, GetAlpha
 
@@ -3798,6 +3887,7 @@ void registerActionLuaAPI(lua_State* L) {
                 {"SetOverrideBindingMacro", lua_SetOverrideBindingMacro},
                 {"SetOverrideBindingItem",  lua_SetOverrideBindingItem},
                 {"ClearOverrideBindings", lua_ClearOverrideBindings},
+                {"SetMouselookOverrideBinding", lua_SetMouselookOverrideBinding},
                 // Paging lives here, and the getter with it. Both were
                 // defined twice - this pair against __WoweeActionBarPage and a
                 // bootstrap pair against a local - so whichever won,
