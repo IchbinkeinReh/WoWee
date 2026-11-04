@@ -21,6 +21,8 @@ layout(set = 0, binding = 0) uniform PerFrame {
     vec4 playerPos;   // xyz = player world position, w = horizontal speed
     vec4 playerWake;  // xyz = trailing player position (springback reference)
     vec4 volumetricParams;  // x = on, y = near, z = 1 / ln(far / near), w = slices
+    vec4 rtParams;          // unread here; declared for the field after it
+    vec4 cameraFogColor;    // the camera's fog, its interior's blended in
 };
 
 layout(set = 0, binding = 2) uniform sampler3D uFogVolume;
@@ -40,7 +42,8 @@ layout(push_constant) uniform Push {
     float sceneValid; // 1 once the refraction capture holds a frame, 0 before it;
                       // 2 when that frame is the finished one, water and all
     float lightColors; // 1: closeColor and farColor hold the light's ramp
-    float pad1, pad2;
+    float interiorFog; // 1: a building's interior liquid, fogged as its rooms are
+    float pad2;
 } push;
 
 layout(set = 1, binding = 0) uniform WaterMaterial {
@@ -261,6 +264,13 @@ vec4 fogVolumeAt(vec3 worldPos) {
 // the far haze the sky is painted to meet, so it goes on first; the volume is
 // everything between the camera and that, sunlit shafts included.
 // `distanceFog`: the zone's fog colour here (0x007f16f0's 0xd38b8c).
+// The fog colour this liquid is drawn into: an interior liquid's the camera's,
+// its building's fog blended in, as the room around it is (wmo.frag's
+// fogPass); the zone's otherwise.
+vec3 waterFogColour() {
+    return push.interiorFog > 0.5 ? cameraFogColor.rgb : fogColor.rgb;
+}
+
 vec3 applyFog(vec3 color, vec3 worldPos, float dist, vec3 distanceFog) {
     // Raised to fogColor.w: 1 before map 530, the later fog's exponent after (0x00873210).
     float fogFactor = pow(clamp((fogParams.y - dist) / (fogParams.y - fogParams.x), 0.0, 1.0), max(fogColor.w, 1.0));
@@ -327,7 +337,7 @@ void main() {
         // Emissive brightening for hot areas
         color *= 1.0 + coreMask * 0.6;
 
-        color = applyFog(color, FragPos, dist, fogColor.rgb);
+        color = applyFog(color, FragPos, dist, waterFogColour());
         outColor = vec4(color, 0.97);
         return;
     }
@@ -521,6 +531,16 @@ void main() {
             if (!tir) {
                 refractedColor = rtwRefraction(FragPos - n * 0.05, t, ldir, absorptionCoeff, litBase, rng,
                                                bedShown).rgb;
+                // A canal's or a building's water keeps the floor of its own
+                // colour it has drawn without the tracing (bodyFloor): the
+                // client draws it as its ramp colour at the river's alpha
+                // over the bed, not as clear glass. Traced alone, a cave's
+                // shallow pool showed its orange bed bare where the client
+                // shows the pool's green (the Pools of Vision).
+                // A building's interior water as the client draws it there:
+                // unlit, its ramp colour whole (0x00793d20 passes it the
+                // white light).
+                refractedColor = mix(refractedColor, push.interiorFog > 0.5 ? waterBody : litBase, bodyFloor);
             }
         } else {
             rtReflect = rtwRefraction(FragPos + n * 0.05, r, ldir, absorptionCoeff, litBase, rng, bedShown).rgb;
@@ -798,7 +818,7 @@ void main() {
         outColor = vec4(rtWater.y < 1.5 || rtWater.y > 2.5 ? rtReflect : refractedColor, 1.0);
         return;
     }
-    color = applyFog(color, FragPos, dist, fogColor.rgb);
+    color = applyFog(color, FragPos, dist, waterFogColour());
 
     outColor = vec4(color, alpha);
 }

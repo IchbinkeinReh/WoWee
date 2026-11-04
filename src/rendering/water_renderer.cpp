@@ -53,7 +53,8 @@ struct WaterPushConstants {
     glm::vec2 depthRange;  // camera near, far - the shader linearises SceneDepth with these
     float sceneValid = 0.0f; // 1 once captureSceneHistory has run; the shader used to guess this per pixel
     float lightColors = 0.0f; // 1: water and ocean take the light's colours above
-    float pad1 = 0.0f, pad2 = 0.0f;
+    float interiorFog = 0.0f; // 1: an interior WMO liquid, fogged with the camera's fog
+    float pad2 = 0.0f;
 };
 static_assert(sizeof(WaterPushConstants) == 80, "the two shader declarations of this range are laid out for 80 bytes");
 
@@ -1241,6 +1242,17 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         if (hasLightWaterColors_ && basicType < 2) {
             push.closeColor = basicType == 1 ? lightWaterColors_.oceanClose : lightWaterColors_.riverClose;
             push.farColor = basicType == 1 ? lightWaterColors_.oceanFar : lightWaterColors_.riverFar;
+            // A building's water takes proceduralWmoWaterTex's colour, the
+            // river's far colour at every depth with the river's alphas
+            // (client_liquid::wmoWaterRamp, as the client's own draw has it):
+            // its shallows are not the river's clear close colour. With that
+            // the traced pool of a cave showed its orange bed bare where the
+            // client shows the pool's own green water over it (the Pools of
+            // Vision, ray tracing off and on).
+            if (isWmoWater && basicType == 0) {
+                push.closeColor = glm::vec4(glm::vec3(lightWaterColors_.riverFar), lightWaterColors_.riverClose.a);
+                push.farColor = lightWaterColors_.riverFar;
+            }
             push.lightColors = 1.0f;
         }
         push.waveAmp = waveAmp * kRtWaveAmpScale * rtFrame_.waveAmp;
@@ -1255,6 +1267,7 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         push.depthRange = glm::vec2(camera.getNearPlane(), camera.getFarPlane());
         // 2: a capture with the water in it (setSceneHistoryHasWater).
         push.sceneValid = !sceneHistoryReady ? 0.0f : sceneHistoryHasWater_ ? 2.0f : 1.0f;
+        push.interiorFog = surface.wmoId != 0 && surface.wmoInterior ? 1.0f : 0.0f;
 
         vkCmdPushConstants(cmd, layout,
                             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
