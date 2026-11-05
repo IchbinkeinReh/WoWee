@@ -2676,13 +2676,10 @@ void SocialHandler::setRaidMarkLocally(uint64_t guid, uint8_t icon) {
 
 void SocialHandler::setRaidMark(uint64_t guid, uint8_t icon) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
-    // Raid marks are group state on the server: it drops MSG_RAID_TARGET_UPDATE
-    // from an ungrouped player and broadcasts nothing back, so a solo mark used
-    // to do nothing at all. Apply it locally instead - a deliberate divergence
-    // from Blizzlike behaviour, since a solo player marking their own targets
-    // harms nobody and the alternative is a feature that cannot be used, or
-    // tested, without a second player. Joining a group later is safe: the
-    // server's full list is authoritative and replaces these marks wholesale.
+    // Out of a group the client keeps the marks itself (SetRaidTarget,
+    // 0x00574ab0: no raid and no party, so the slot is written here and
+    // RAID_TARGET_UPDATE fired, with nothing sent). Joining a group later is
+    // safe: the server's full list replaces these marks wholesale.
     if (!isInGroup()) {
         setRaidMarkLocally(guid, icon);
         return;
