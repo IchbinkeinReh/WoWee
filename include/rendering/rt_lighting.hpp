@@ -172,6 +172,9 @@ public:
         float unitShadowReach = 5.0f;
         /// The least the traced scale darkens a surface to (rt_min_brightness.hpp).
         float minBrightness = 0.0f;
+        /// How much of the sun reaches a room's baked colour: 0 with the
+        /// setting off and below the horizon, 1 with the drawn sun up.
+        float roomSun = 0.0f;
         /// The normal blend's cosines (rt_normal_blend.hpp), near and far.
         float normalBlendNear = 0.8660f;
         float normalBlendFar = 0.6428f;

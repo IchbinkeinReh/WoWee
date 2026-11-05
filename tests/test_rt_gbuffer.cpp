@@ -597,6 +597,38 @@ TEST_CASE("The maximum light holds the added light at its cap, its hue kept", "[
 // The "Normal blend" sliders: their defaults are the rule's constants
 // exactly, the face angle never under the keep angle, and the blend moves
 // with them.
+TEST_CASE("The sun through a door: only what is baked, inside, and sees it", "[rt_gbuffer]") {
+    using namespace wowee::rendering::rt_gbuffer;
+    Texel t;
+    t.flags = kValid | kBaked | kInterior;
+    t.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+    t.kp = glm::vec3(0.5f);
+    Traced r;
+    r.weight = 1.0f;
+    r.sun = 1.0f;
+    Tune tune;
+    tune.roomSun = 1.0f;
+    const glm::vec3 up(0.0f, 0.0f, 1.0f);
+    Tune off = tune;
+    off.roomSun = 0.0f;
+
+    const Factors lit = apply(t, r, tune, up);
+    const Factors plain = apply(t, r, off, up);
+    REQUIRE(lit.add.r == Catch::Approx(plain.add.r + 0.5f * kRoomSunLight));
+    REQUIRE(lit.mul.r == Catch::Approx(plain.mul.r * (1.0f - kRoomSunTakes)));
+
+    // A room with no line to the sun is exactly as without it...
+    r.sun = 0.0f;
+    REQUIRE(apply(t, r, tune, up).add.r == Catch::Approx(apply(t, r, off, up).add.r));
+    REQUIRE(apply(t, r, tune, up).mul.r == Catch::Approx(apply(t, r, off, up).mul.r));
+    r.sun = 1.0f;
+    // ...so is a face turned from it...
+    REQUIRE(apply(t, r, tune, -up).add.r == Catch::Approx(apply(t, r, off, -up).add.r));
+    // ...and what is not a room's baked colour.
+    t.flags = kValid | kSun;
+    REQUIRE(apply(t, r, tune, up).add.r == Catch::Approx(apply(t, r, off, up).add.r));
+}
+
 TEST_CASE("The normal blend sliders map to the rule's cosines", "[rt_gbuffer]") {
     using namespace wowee::rendering;
     using wowee::rendering::rt_gbuffer::kNormalAgreeFar;

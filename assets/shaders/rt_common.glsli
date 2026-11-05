@@ -20,7 +20,8 @@ layout(set = 0, binding = 0) uniform RtPassData {
                          // radius, z = how many point lights, w = shadow ray length
     vec4 extent;         // xy = trace size, zw = 1 / trace size
     vec4 sceneExtent;    // xy = scene depth size, zw = 1 / size
-    vec4 misc;           // x = 1 when the acceleration structure holds anything,
+    vec4 misc;           // w how much sun reaches a room's baked colour (rt_apply);
+                         // x = 1 when the acceleration structure holds anything,
                          // y = 1 when last frame's slot holds history,
                          // z = the least the traced scale darkens a surface
                          // to, 0 to 0.5 (rt_apply; rt_min_brightness.hpp)

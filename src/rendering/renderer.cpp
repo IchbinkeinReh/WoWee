@@ -6660,6 +6660,12 @@ void Renderer::recordRtLighting() {
     in.lampWrap = lampWrap(rtSoftLamps_);
     in.unitShadowReach = rtUnitShadowReach_;
     in.minBrightness = rtMinBrightnessFactor(rtMinBrightnessPercent_);
+    // By the drawn sun's own height: at night in.sunDir is the light's
+    // direction, which stands above the horizon with no sun in it.
+    if (rtRoomSun_ && lightingManager) {
+        const float height = glm::normalize(lightingManager->getLightingParams().sunDir).z;
+        in.roomSun = glm::smoothstep(0.0f, 0.08f, height);
+    }
     {
         const NormalBlendCosines blend = normalBlendCosines(rtNormalKeepDeg_, rtNormalFaceDeg_);
         in.normalBlendNear = blend.nearCos;

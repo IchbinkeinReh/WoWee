@@ -87,6 +87,7 @@ public:
     int pendingRtUnitShadowReach = 5;  ///< a unit's lamp shadow's reach, yards (rtUnitShadowReach)
     int pendingRtMinBrightness = 0;   ///< the traced darkening's floor, % (rt_min_brightness.hpp)
     bool pendingRtSwimWaves = true;   ///< the swimmer's waves (swim_wave.hpp)
+    bool pendingRtRoomSun = true;     ///< the sun through a door (rt_apply.glsli)
     bool pendingRtWater = true;       ///< "Ray traced water" (water_rt.glsli)
     int pendingRtWaveAmp = 100;       ///< its waves' height, % of the default
     int pendingRtWaveFreq = 100;      ///< and their frequency, %

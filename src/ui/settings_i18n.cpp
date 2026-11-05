@@ -192,6 +192,12 @@ constexpr SettingGerman kGerman[] = {
      "Gras, Pfähle und die Kanten der Dinge bekommen dann ihr eigenes verfolgtes Licht und ihren "
      "eigenen Schatten, statt des Aussehens ohne Raytracing, wo die halbe Auflösung sie verfehlte.",
      nullptr, nullptr, nullptr},
+    {"rtroomsun",
+     "Sonne in Räumen",
+     "Wo die Sonne wirklich durch eine Tür oder eine Lücke fällt, ein sonniger Fleck auf dem, was "
+     "drinnen ist, mit seinen Schatten. Räume ohne Sicht zur Sonne bleiben wie gemalt. Nicht im "
+     "ursprünglichen Client.",
+     nullptr, nullptr, nullptr},
     {"rtsoftlamps",
      "Weicheres Lampenlicht",
      "Fackeln, Kerzen und Lampen leuchten etwas weiter um das herum, was sie anscheinen: "

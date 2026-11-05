@@ -211,7 +211,14 @@ struct Tune {
     float occlusion = 1.0f;
     float maxLight = 0.0f;
     int mode = 2;
+    float roomSun = 0.0f;  ///< the sun through a door (rt_apply.glsli), 0 none
+    glm::vec3 sunColor{1.0f};
 };
+
+/// What of the sun a room's sunlit pixel takes, and what of its painted light
+/// that gives up, so a door's bright floor is not clipped (rt_apply.glsli).
+inline constexpr float kRoomSunLight = 0.7f;
+inline constexpr float kRoomSunTakes = 0.35f;
 
 /// The edge-on lift the shadow variants give a face turned toward the light's
 /// edge (rtEdgeOnLift).
@@ -225,7 +232,7 @@ struct Factors {
 };
 
 /// rt_apply.frag.glsl: the factor and addend for a pixel's colour.
-inline Factors apply(const Texel& t, const Traced& r, const Tune& tune, const glm::vec3& toSun) {
+inline Factors applyBase(const Texel& t, const Traced& r, const Tune& tune, const glm::vec3& toSun) {
     Factors f;
     if ((t.flags & kValid) == 0) return f;
     float rs = 1.0f;
@@ -258,6 +265,18 @@ inline Factors apply(const Texel& t, const Traced& r, const Tune& tune, const gl
     const float rr = rs * rIn;
     f.mul = glm::vec3(1.0f) + t.g * (rr - 1.0f) - rr * occlusionLoss(t, ao);
     f.add = t.kp * pointIn;
+    return f;
+}
+
+/// applyBase, then the sun through a door on a room's baked colour.
+inline Factors apply(const Texel& t, const Traced& r, const Tune& tune, const glm::vec3& toSun) {
+    Factors f = applyBase(t, r, tune, toSun);
+    if ((t.flags & kValid) == 0 || tune.roomSun <= 0.0f) return f;
+    if ((t.flags & kBaked) == 0 || (t.flags & kInterior) == 0) return f;
+    const float inside = (t.flags & kTransition) != 0 ? 1.0f - t.outside : 1.0f;
+    const float seen = tune.roomSun * r.weight * r.sun * inside * std::max(glm::dot(t.normal, toSun), 0.0f);
+    f.mul *= 1.0f - kRoomSunTakes * seen;
+    f.add += t.kp * capLight(tune.sunColor * (kRoomSunLight * seen), tune.maxLight);
     return f;
 }
 

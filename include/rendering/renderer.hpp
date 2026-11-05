@@ -1174,6 +1174,7 @@ private:
     bool rtWater_ = true;  ///< "Ray traced water" (water_rt.glsli)
     float rtWaveAmp_ = 1.0f;
     bool rtSwimWaves_ = true;
+    bool rtRoomSun_ = true;
     std::vector<swim_wave::Wave> swimWaves_;
     std::array<swim_wave::Limb, 3> swimLimbs_{};
     float rtWaveFreq_ = 1.0f;
@@ -1199,6 +1200,7 @@ public:
     void setRtWater(bool on) { rtWater_ = on; }
     /// The swimmer's small waves on the traced water (swim_wave.hpp).
     void setRtSwimWaves(bool on) { rtSwimWaves_ = on; }
+    void setRtRoomSun(bool on) { rtRoomSun_ = on; }
     /// Its waves' height and frequency, 1 the default of each.
     void setRtWaterWaves(float amplitude, float frequency) {
         rtWaveAmp_ = amplitude;

@@ -302,6 +302,11 @@ constexpr SettingDesc kSchema[] = {
      "missed them.", "", 0},
     // Off is the wrap the lamps have anyway (rt_lamp_wrap.hpp); on wraps them
     // twice as far, for a flatter, softer lamp light.
+    {"rtroomsun", "Sun into rooms", SettingKind::Bool, 0, 0, 0,
+     "Ray Tracing", "",
+     "Where the sun really reaches through a door or a gap, a sunlit\n"
+     "patch on what is inside, with its shadows. Rooms with no line to\n"
+     "the sun stay as painted. Not in the original client.", "", 1, "raytracedlighting"},
     {"rtsoftlamps", "Softer lamp light", SettingKind::Bool, 0, 0, 0,
      "Ray Tracing", "",
      "Torches, candles and lamps light a little further round what\n"

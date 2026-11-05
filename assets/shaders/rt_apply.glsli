@@ -148,6 +148,11 @@ vec3 geometricNormal(ivec2 pix, int s, float d, vec3 p) {
                          dd, relAt(pix + ivec2(0, -1), dd), du, relAt(pix + ivec2(0, 1), du));
 }
 
+// What of the sun a room's sunlit pixel takes, and what of its painted light
+// that gives up (the sun through a door, below).
+const float RT_ROOM_SUN_LIGHT = 0.7;
+const float RT_ROOM_SUN_TAKES = 0.35;
+
 // rtEdgeOnLift (rt_lighting.glsli).
 float edgeOnLift(vec3 n, vec3 toLight) {
     return clamp(pow(abs(1.2 - abs(dot(n, toLight))), 4.0), 0.0, 1.0);
@@ -230,6 +235,19 @@ void main() {
     // corner all three find dark went to black whatever the ambient; a lit
     // surface is above the floor and as it was.
     outMul.rgb = max(outMul.rgb, vec3(pass.misc.z));
+
+    // The sun through a door (rt_gbuffer_pack.hpp's roomSun): a room's baked
+    // colour holds no sun, and the trace has already found which of its pixels
+    // see it. Only those, by how they face it: a room with no line to the sun
+    // stays as painted. It takes the place of some of the painted light rather
+    // than going on top of it, which a door's bright baked floor would clip.
+    if (pass.misc.w > 0.0 && baked && (g.flags & RT_GB_INTERIOR) != 0u) {
+        float inside = (g.flags & RT_GB_TRANSITION) != 0u ? 1.0 - g.outside : 1.0;
+        float seen = pass.misc.w * r.weight * r.sun * inside *
+                     max(dot(g.normal, normalize(pass.sunDir.xyz)), 0.0);
+        outMul.rgb *= 1.0 - RT_ROOM_SUN_TAKES * seen;
+        outAdd.rgb += g.kp * rtCapLight(pass.sunColor.rgb * (RT_ROOM_SUN_LIGHT * seen), pass.tune3.z);
+    }
 
     // WOWEE_GI_DEBUG 5-9 and the Debug Graphics views, instead of the picture:
     // the traced sun's visibility, the point lights' light as it is added,
