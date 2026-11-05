@@ -2500,7 +2500,7 @@ void GameScreen::interactWithTarget(game::GameHandler& gameHandler) {
                 // Check if unit is dead (health == 0) → loot, otherwise interact/attack
                 auto unit = std::static_pointer_cast<game::Unit>(target);
                 if (unit->getHealth() == 0 && unit->getMaxHealth() > 0) {
-                    gameHandler.lootTarget(target->getGuid());
+                    gameHandler.lootCorpse(target->getGuid());
                 } else {
                     // Interact with service NPCs; otherwise treat non-interactable living units
                     // as attackable fallback (covers bad faction-template classification).

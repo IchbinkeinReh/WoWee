@@ -3813,6 +3813,31 @@ void GameHandler::lootTarget(uint64_t guid) {
     if (inventoryHandler_) inventoryHandler_->lootTarget(guid);
 }
 
+void GameHandler::lootCorpse(uint64_t guid) {
+    if (!isInWorld()) return;
+    // 0x006dad90: a corpse is looted standing still - while the player moves
+    // (any of the movement flags 0xc010ff) the click does nothing at all.
+    if ((movementInfo.flags & 0xc010ffu) != 0) return;
+    // A mounted player gets down first where Auto Dismount (and, in the air,
+    // Auto Dismount in Flight) lets it (0x0071b0c0), else is told so and
+    // nothing is sent.
+    if (isMounted() && !isTaxiMountActive()) {
+        auto me = std::dynamic_pointer_cast<Unit>(getEntityManager().getEntity(getPlayerGuid()));
+        const uint32_t unitFlags = me ? me->getUnitFlags() : 0u;
+        const bool getsDown = (unitFlags & 0x100000u) == 0 &&
+                              addons::storedCVarValue("autoDismount", "1") != "0" &&
+                              (!isPlayerFlying() ||
+                               addons::storedCVarValue("autoDismountFlying", "0") != "0");
+        if (!getsDown) {
+            playGameErrorSound("ERR_NOT_WHILE_MOUNTED");
+            raiseUiError(interfaceString("ERR_NOT_WHILE_MOUNTED", "You can't do that while mounted."));
+            return;
+        }
+        dismount();
+    }
+    lootTarget(guid);
+}
+
 void GameHandler::lootItem(uint8_t slotIndex, bool confirmed) {
     if (inventoryHandler_) inventoryHandler_->lootItem(slotIndex, confirmed);
 }

@@ -2886,6 +2886,9 @@ public:
 
     // ---- Loot ----
     void lootTarget(uint64_t guid);
+    /// A dead unit right-clicked (0x006dad90): nothing while moving, the
+    /// mount left first, else lootTarget.
+    void lootCorpse(uint64_t guid);
     void lootItem(uint8_t slotIndex, bool confirmed = false);
     void confirmPendingLoot();
     void confirmBindOnUse();
