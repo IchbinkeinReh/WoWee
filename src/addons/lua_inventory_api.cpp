@@ -4548,15 +4548,18 @@ static int lua_PutItemInBag(lua_State* L) {
         lua_pushboolean(L, 1);
         return 1;
     }
-    for (int i = 0; i < size; ++i) {
-        const auto& target = isWorn ? inv.getBagSlot(bagIndex, i)
-                                    : inv.getBankBagSlot(bagIndex, i);
-        if (!target.empty()) continue;
+    // Into the bag, wherever the server puts it: CMSG_AUTOSTORE_BAG_ITEM
+    // (0x005e8d30 -> 0x006dbae0), source bag and slot and the bag. A slot
+    // chosen here and swapped into never joined a stack already in the bag,
+    // and a full bag said nothing where the server says it is full.
+    if (game::wireOpcode(game::Opcode::CMSG_AUTOSTORE_BAG_ITEM) != 0xFFFF) {
         const int container = isWorn ? game::slots::wornBagContainer(bagIndex)
                                      : game::slots::bankBagContainer(bagIndex);
-        gh->swapContainerItems(srcBag, srcSlot,
-                               static_cast<uint8_t>(container),
-                               static_cast<uint8_t>(i));
+        network::Packet packet(game::wireOpcode(game::Opcode::CMSG_AUTOSTORE_BAG_ITEM));
+        packet.writeUInt8(srcBag);
+        packet.writeUInt8(srcSlot);
+        packet.writeUInt8(static_cast<uint8_t>(container));
+        gh->sendInterfaceRequest(packet);
         cursorItemSlot() = {};
         wowee::ui::frameXmlSetCursorItem(std::string());
         lua_pushboolean(L, 1);
