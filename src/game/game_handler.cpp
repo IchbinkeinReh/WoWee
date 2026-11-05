@@ -5638,6 +5638,19 @@ const std::string& GameHandler::getLanguageName(uint32_t languageId) const {
     return it != languageNames_.end() ? it->second : kNone;
 }
 
+uint32_t GameHandler::languageIdByName(const std::string& name) const {
+    (void)getLanguageName(1);  // the file, read on the first ask
+    auto lower = [](std::string v) {
+        for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return v;
+    };
+    const std::string want = lower(name);
+    for (const auto& [id, n] : languageNames_) {
+        if (lower(n) == want) return id;
+    }
+    return 0;
+}
+
 const std::string& GameHandler::getPageTextMaterialName(uint32_t materialId) const {
     static const std::string kNone;
     if (!pageTextMaterialsLoaded_) {

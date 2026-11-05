@@ -122,7 +122,12 @@ static int lua_GetLanguageByIndex(lua_State* L) {
 
     const int idx = static_cast<int>(luaL_optnumber(L, 1, 1));
     if (idx < 1 || idx > static_cast<int>(langs.size())) return 0;
-    lua_pushstring(L, langs[static_cast<size_t>(idx) - 1].name);
+    // Languages.dbc's name where the file is there - the interface hands it
+    // back to SendChatMessage, which looks it up there.
+    const std::string& dbcName =
+        gh ? gh->getLanguageName(static_cast<uint32_t>(langs[static_cast<size_t>(idx) - 1].id))
+           : std::string();
+    lua_pushstring(L, !dbcName.empty() ? dbcName.c_str() : langs[static_cast<size_t>(idx) - 1].name);
     lua_pushnumber(L, langs[static_cast<size_t>(idx) - 1].id);
     return 2;
 }
@@ -135,7 +140,6 @@ static int lua_SendChatMessage(lua_State* L) {
     if (!gh) return 0;
     const char* msg = luaL_checkstring(L, 1);
     const char* chatType = luaL_optstring(L, 2, "SAY");
-    // language arg (3) ignored - server determines language
     const char* target = luaL_optstring(L, 4, "");
 
     std::string typeStr(chatType);
@@ -195,6 +199,39 @@ static int lua_SendChatMessage(lua_State* L) {
     // officers, channels and battleground, and set a DND reply; anything
     // said aloud (say, yell, emote) or an AFK reply is refused with
     // ERR_CHAT_WHILE_DEAD (0x0050d170).
+    // The third argument names the language (0x0050d170): a name
+    // Languages.dbc does not carry is a Lua error, and one the player does
+    // not speak (0x006e0640) is refused with ERR_CANT_SPEAK_LANGAGE.
+    uint32_t languageId = 0;
+    if (lua_type(L, 3) == LUA_TSTRING || lua_type(L, 3) == LUA_TNUMBER) {
+        const std::string name = lua_tostring(L, 3);
+        std::vector<LanguageEntry> langs;
+        collectKnownLanguages(gh->getPlayerRace(), langs);
+        languageId = gh->languageIdByName(name);
+        // Without the file, the names GetLanguageByIndex gave.
+        auto sameName = [](const char* a, const std::string& b) {
+            const size_t n = std::strlen(a);
+            if (n != b.size()) return false;
+            for (size_t i = 0; i < n; ++i) {
+                if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                    std::tolower(static_cast<unsigned char>(b[i]))) return false;
+            }
+            return true;
+        };
+        for (const auto& e : langs) {
+            if (languageId == 0 && sameName(e.name, name)) languageId = static_cast<uint32_t>(e.id);
+        }
+        if (languageId == 0) return luaL_error(L, "SendChatMessage(): Unknown language");
+        const bool speaks = std::any_of(langs.begin(), langs.end(), [&](const LanguageEntry& e) {
+            return static_cast<uint32_t>(e.id) == languageId;
+        });
+        if (!speaks) {
+            gh->playGameErrorSound("ERR_CANT_SPEAK_LANGAGE");
+            gh->addUIError(game::interfaceString("ERR_CANT_SPEAK_LANGAGE",
+                                                 "You can't speak that language."));
+            return 0;
+        }
+    }
     if (gh->isPlayerDead() || gh->isPlayerGhost()) {
         const bool allowed = ct != game::ChatType::SAY && ct != game::ChatType::YELL &&
                              ct != game::ChatType::EMOTE && ct != game::ChatType::AFK;
@@ -203,7 +240,7 @@ static int lua_SendChatMessage(lua_State* L) {
             return 0;
         }
     }
-    gh->sendChatMessage(ct, msg, targetStr);
+    gh->sendChatMessage(ct, msg, targetStr, languageId);
     return 0;
 }
 

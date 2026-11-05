@@ -626,7 +626,8 @@ void ChatHandler::registerOpcodes(DispatchTable& table) {
     table[Opcode::SMSG_USERLIST_REMOVE] = [this](network::Packet& p) { handleUserlistRemove(p); };
 }
 
-void ChatHandler::sendChatMessage(ChatType type, const std::string& message, const std::string& target) {
+void ChatHandler::sendChatMessage(ChatType type, const std::string& message, const std::string& target,
+                                  uint32_t languageId) {
     if (owner_.getState() != WorldState::IN_WORLD) {
         LOG_WARNING("Cannot send chat in state: ", static_cast<int>(owner_.getState()));
         return;
@@ -667,6 +668,8 @@ void ChatHandler::sendChatMessage(ChatType type, const std::string& message, con
     uint8_t race = owner_.getPlayerRace();
     bool isHorde = (race == 2 || race == 5 || race == 6 || race == 8 || race == 10);
     ChatLanguage language = isHorde ? ChatLanguage::ORCISH : ChatLanguage::COMMON;
+    // Unless the line names one (SendChatMessage's third argument, 0x0050d170).
+    if (languageId != 0) language = static_cast<ChatLanguage>(languageId);
 
     auto packet = MessageChatPacket::build(type, language, message, target);
     if (chatPacketDiagEnabled()) {

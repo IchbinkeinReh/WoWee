@@ -411,7 +411,8 @@ public:
      * @param message Message text
      * @param target Target name (for whispers, empty otherwise)
      */
-    void sendChatMessage(ChatType type, const std::string& message, const std::string& target = "");
+    void sendChatMessage(ChatType type, const std::string& message, const std::string& target = "",
+                         uint32_t language = 0);
     void sendAddonMessage(ChatType type, const std::string& message, const std::string& target = "");
     /// 0x006dd9e0: false when the client sends nothing.
     bool sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid = 0);
@@ -3584,6 +3585,9 @@ public:
     /// the third chat argument against GetDefaultLanguage() and prefixes
     /// "[<it>] " when they differ, so a number there is printed verbatim.
     const std::string& getLanguageName(uint32_t languageId) const;
+    /// Languages.dbc's id for a name, compared without case (0x004fe2d0);
+    /// zero when the file names no such language.
+    uint32_t languageIdByName(const std::string& name) const;
 
     // Other player level-up callback - fires when another player gains a level
     using OtherPlayerLevelUpCallback = std::function<void(uint64_t guid, uint32_t newLevel)>;

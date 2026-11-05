@@ -1948,8 +1948,9 @@ void GameHandler::setOrientation(float orientation) {
 // applyUpdateObjectBlock, finalizeUpdateObjectBatch, handleCompressedUpdateObject,
 // handleDestroyObject) moved to EntityController - see entity_controller.cpp
 
-void GameHandler::sendChatMessage(ChatType type, const std::string& message, const std::string& target) {
-    if (chatHandler_) chatHandler_->sendChatMessage(type, message, target);
+void GameHandler::sendChatMessage(ChatType type, const std::string& message, const std::string& target,
+                                  uint32_t language) {
+    if (chatHandler_) chatHandler_->sendChatMessage(type, message, target, language);
 }
 
 void GameHandler::sendAddonMessage(ChatType type, const std::string& message, const std::string& target) {

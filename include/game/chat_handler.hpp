@@ -36,7 +36,10 @@ public:
     void registerOpcodes(DispatchTable& table);
 
     // --- Public API (delegated from GameHandler) ---
-    void sendChatMessage(ChatType type, const std::string& message, const std::string& target = "");
+    /// `language` 0 is the faction tongue; otherwise a Languages.dbc id the
+    /// caller has already checked the player speaks.
+    void sendChatMessage(ChatType type, const std::string& message, const std::string& target = "",
+                         uint32_t language = 0);
     void sendAddonMessage(ChatType type, const std::string& message, const std::string& target = "");
     void sendTextEmote(uint32_t textEmoteId, uint64_t targetGuid = 0);
     /// Join a channel the way 0x00507a80 does: a ChatChannels.dbc shortcut
