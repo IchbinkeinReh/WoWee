@@ -239,6 +239,37 @@ void WidgetTree::hideOrphanedTooltips() {
     }
 }
 
+void WidgetTree::followCursorTooltips(float x, float y) {
+    for (uint32_t id : ownedTooltips_) {
+        Widget* tip = get(id);
+        if (!tip || !tip->shown) continue;
+        const int type = tip->tooltipAnchorType;
+        if (type != 8 && type != 11) continue;
+        // In the tooltip's own units, as an anchor offset is (1 / its scale).
+        const float es = tip->effScale > 0.0f ? tip->effScale : 1.0f;
+        Anchor a;
+        a.relativeTo = rootId();
+        a.relativePoint = "BOTTOMLEFT";
+        if (type == 8) {
+            a.point = "BOTTOM";
+            a.x = x / es;
+            a.y = y / es;
+        } else {
+            a.point = "BOTTOMLEFT";
+            a.x = x / es + tip->tooltipAnchorX;
+            a.y = y / es + tip->tooltipAnchorY;
+        }
+        if (tip->anchors.size() == 1) {
+            const Anchor& now = tip->anchors.front();
+            if (now.point == a.point && now.relativeTo == a.relativeTo &&
+                now.relativePoint == a.relativePoint && now.x == a.x && now.y == a.y)
+                continue;
+        }
+        clearPoints(id);
+        addPoint(id, a);
+    }
+}
+
 void WidgetTree::setPortraitUnit(uint32_t id, const std::string& unit) {
     if (id == 0) return;
 

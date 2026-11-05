@@ -2356,9 +2356,16 @@ void anchorTooltip(wowee::ui::WidgetTree& tree, uint32_t id, uint32_t owner, int
         tree.clearPoints(id);
         return;
     }
-    // The tooltip's point and the owner's, by type. The cursor is not a frame,
-    // so the two cursor types land beside the owner instead - which is where
-    // the cursor is, near enough, and better than nowhere.
+    // The two cursor types have no place against the owner: 0x0061b040 only
+    // clears the points, and every update puts the tooltip at the cursor
+    // (followCursorTooltips). Placed now as well, so it is not drawn
+    // unanchored until the next one.
+    if (type == 8 || type == 11) {
+        tree.clearPoints(id);
+        tree.followCursorTooltips(LuaEngine::lastMouseX(), LuaEngine::lastMouseY());
+        return;
+    }
+    // The tooltip's point and the owner's, by type.
     struct Pair { const char* point; const char* rel; };
     static const Pair kPoints[] = {
         {"BOTTOMRIGHT", "TOPLEFT"},     // LEFT
@@ -2369,9 +2376,8 @@ void anchorTooltip(wowee::ui::WidgetTree& tree, uint32_t id, uint32_t owner, int
         {"BOTTOMLEFT",  "TOPLEFT"},     // TOPLEFT
         {"BOTTOM",      "TOP"},         // TOP
         {"BOTTOMRIGHT", "TOPRIGHT"},    // TOPRIGHT
-        {"TOPLEFT",     "BOTTOMRIGHT"}, // CURSOR
     };
-    const Pair& p = kPoints[type == 11 ? 8 : type];
+    const Pair& p = kPoints[type];
     wowee::ui::Anchor a;
     a.point = p.point;
     a.relativeTo = owner;
@@ -2414,6 +2420,8 @@ int lua_Tooltip_SetOwner(lua_State* L) {
     const float x = optNumber(L, 4);
     const float y = optNumber(L, 5);
     w->tooltipAnchorType = type;
+    w->tooltipAnchorX = x;
+    w->tooltipAnchorY = y;
     anchorTooltip(*tree, id, owner, type, x, y);
     return 0;
 }
@@ -2445,7 +2453,9 @@ int lua_Tooltip_SetAnchorType(lua_State* L) {
     if (owner == 0) return 0;
     const int type = tooltipAnchorType(L, 2);
     w->tooltipAnchorType = type;
-    anchorTooltip(*tree, id, owner, type, optNumber(L, 3), optNumber(L, 4));
+    w->tooltipAnchorX = optNumber(L, 3);
+    w->tooltipAnchorY = optNumber(L, 4);
+    anchorTooltip(*tree, id, owner, type, w->tooltipAnchorX, w->tooltipAnchorY);
     return 0;
 }
 
@@ -12435,6 +12445,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
     // exactly this - the loot window closes itself - and the item's
     // description stayed on screen over nothing.
     widgets_.hideOrphanedTooltips();
+    widgets_.followCursorTooltips(x, y);
 
     // How far the cursor has travelled since last frame, which is what carries
     // a frame that is being moved and what tells a drag from a click.

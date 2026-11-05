@@ -568,6 +568,9 @@ struct Widget {
     /// The anchor type SetOwner or SetAnchorType left, numbered as the client
     /// stores it (0x0061d650); 9 is ANCHOR_NONE.
     int   tooltipAnchorType = 9;
+    /// The offsets SetOwner or SetAnchorType gave, which ANCHOR_CURSOR_RIGHT
+    /// adds to the cursor each frame (0x0061b2e0).
+    float tooltipAnchorX = 0.0f, tooltipAnchorY = 0.0f;
     /// The frame this tooltip was last given by SetOwner. A tooltip is hidden
     /// when its owner stops being visible - see hideOrphanedTooltips.
     uint32_t tooltipOwnerId = 0;
@@ -1117,6 +1120,11 @@ public:
     /// Record which frame a tooltip is describing, so it can be taken away
     /// with it. See hideOrphanedTooltips.
     void setTooltipOwner(uint32_t tooltipId, uint32_t ownerId);
+    /// Put each shown tooltip anchored to the cursor at the cursor, which the
+    /// client does on every update (0x0061b2e0): ANCHOR_CURSOR by its bottom,
+    /// ANCHOR_CURSOR_RIGHT by its bottom-left plus its offsets. `x` and `y`
+    /// are the cursor in tree space.
+    void followCursorTooltips(float x, float y);
     /// Hide any tooltip whose owner has stopped being visible.
     ///
     /// A tooltip is hidden by its owner's OnLeave, and a frame that is hidden
