@@ -31,6 +31,7 @@ layout(push_constant) uniform Push {
     // The light's ramp for this liquid (Wow.exe 3.3.5a 0x008a2bf0): rgb and
     // alpha in the shallows, then in the deep - ch14/ch15 with the ocean
     // alphas for an ocean, ch16/ch17 with the water alphas for the rest.
+    // A building's interior water, traced, has its one colour in closeColor.
     vec4 closeColor;
     vec4 farColor;
     float waveAmp;
@@ -44,12 +45,6 @@ layout(push_constant) uniform Push {
     float lightColors; // 1: closeColor and farColor hold the light's ramp
     float interiorFog; // 1: a building's interior liquid, fogged as its rooms are
     float pad2;
-    // A building's interior liquid (the end of main): the MOMT colour the
-    // client gives its vertices, the animated texture's 2x2, and the grid's
-    // size, z 1 while that texture is bound.
-    vec4 liquidColor;
-    vec4 liquidAnim;
-    vec4 liquidGrid;
 } push;
 
 layout(set = 1, binding = 0) uniform WaterMaterial {
@@ -62,7 +57,6 @@ layout(set = 1, binding = 0) uniform WaterMaterial {
 
 layout(set = 2, binding = 0) uniform sampler2D SceneColor;
 layout(set = 2, binding = 1) uniform sampler2D SceneDepth;
-layout(set = 2, binding = 4) uniform sampler2D uLiquidTex;  // an interior liquid's, this frame
 // Binding 2 was the planar reflection, gone with the enhanced water.
 // Wake points are laid down behind anything wading through the shallows. Each
 // is a churn site that spreads and dies, so a running character leaves a trail
@@ -70,9 +64,12 @@ layout(set = 2, binding = 4) uniform sampler2D uLiquidTex;  // an interior liqui
 const int MAX_WAKE_POINTS = 32;
 const int MAX_SWIM_WAVES = 16;
 const int MAX_WATER_LAMPS = 8;
-// An interior liquid (the end of main): how far the waves bend its texture, in
-// tiles; the most it mirrors.
-const float RT_INTERIOR_RIPPLE = 0.15;
+// An interior liquid (the end of main): how fast its colour takes over with the
+// depth along the view, per yard (the underwater fade's above); how far over the
+// shore it fades in, yards; how much a wave's slope shades it; the most it mirrors.
+const float RT_INTERIOR_ABSORB = 0.35;
+const float RT_INTERIOR_SHORE = 0.4;
+const float RT_INTERIOR_SLOPE = 1.0;
 const float RT_INTERIOR_MIRROR = 0.6;
 
 layout(set = 2, binding = 3) uniform WaterFrameData {
@@ -865,28 +862,27 @@ void main() {
         outColor = vec4(rtWater.y < 1.5 || rtWater.y > 2.5 ? rtReflect : refractedColor, 1.0);
         return;
     }
-    // A building's interior water is traced too, but its body is the client's
-    // own (psLiquidWater, drawn the interior way): the MOMT colour over the
-    // ramp's white half, the animated texture on it, by the MOMT alpha and the
-    // ramp's. Its coordinate is bent by the wave normal, so waves and a
-    // swimmer's rings move the water itself and not only what it reflects.
-    // What lies under it is the frame already there, the bed as painted, by
-    // the same alpha, as the client has it: traced, a cave's bed was bare and
-    // orange. The mirror goes over the two by Fresnel, written so that one
-    // blend gives body, mirror and bed each their share.
+    // A building's interior water is traced too, as one colour (closeColor, the
+    // client's liquid averaged) that shows more the deeper the water is along
+    // the view: shallow is the bed, deep is the colour. The bed is the frame
+    // already there, as painted, by the same share: traced, a cave's bed was
+    // bare and orange. The depth is by the capture's own camera, so the shore
+    // keeps its place while the view turns. With no texture on it a wave shows
+    // in the mirror and in the slope's shade. The mirror goes over the two by
+    // Fresnel, written so that one blend gives each its share.
     if (rtOn && push.interiorFog > 0.5) {
-        vec2 grid = TexCoord * push.liquidGrid.xy + norm.xy * RT_INTERIOR_RIPPLE;
-        vec4 tex = push.liquidGrid.z > 0.5 ? texture(uLiquidTex, mat2(push.liquidAnim.xy, push.liquidAnim.zw) * grid)
-                                           : vec4(0.0);
-        vec3 body = push.liquidColor.rgb + tex.rgb + tex.a * 0.25;
-        float bodyAlpha = push.liquidColor.a * mix(push.closeColor.a, push.farColor.a, depthFade);
+        vec4 at = captureViewProj * vec4(FragPos, 1.0);
+        vec2 atUV = at.xy / max(at.w, 0.1) * 0.5 + 0.5;
+        float path = max(linearizeDepth(texture(SceneDepth, atUV).r, near, far) - at.w, 0.0);
+        float share = 1.0 - exp(-path * RT_INTERIOR_ABSORB);
+        vec3 body = push.closeColor.rgb * (1.0 + RT_INTERIOR_SLOPE * dot(norm.xy, normalize(viewDir.xy + 1e-4)));
         // From under the surface there is no mirror to show: the rays there
         // meet the bare bed.
         float f = viewPos.z < FragPos.z ? 0.0 : min(rtFresnel, RT_INTERIOR_MIRROR) * rtwReflectionSeen;
-        float cover = 1.0 - (1.0 - bodyAlpha) * (1.0 - f);
-        vec3 water = (body * (bodyAlpha * (1.0 - f)) + (f > 0.0 ? rtReflect : vec3(0.0)) * f) / max(cover, 1e-3);
+        float cover = 1.0 - (1.0 - share) * (1.0 - f);
+        vec3 water = (body * (share * (1.0 - f)) + (f > 0.0 ? rtReflect : vec3(0.0)) * f) / max(cover, 1e-3);
         outColor = vec4(applyFog(water + specular, FragPos, dist, waterFogColour()),
-                        cover * smoothstep(0.0, 0.08, shoreDepth) * smoothstep(2400.0, 600.0, dist));
+                        cover * smoothstep(0.0, RT_INTERIOR_SHORE, path) * smoothstep(2400.0, 600.0, dist));
         return;
     }
     color = applyFog(color, FragPos, dist, waterFogColour());
