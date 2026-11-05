@@ -304,6 +304,16 @@ inline CursorItemSlot& cursorItemSlot() {
     return held;
 }
 
+/// The guild bank slot whose item is on the cursor, counted from one, or
+/// zeros. The client locks that slot while it is held (0x005137d0) - what
+/// GetGuildBankItemInfo answers third - and lets it go when the cursor does
+/// (0x00519280), with GUILDBANK_ITEM_LOCK_CHANGED each time.
+struct GuildBankCursorSlot { int tab = 0; int slot = 0; };
+inline GuildBankCursorSlot& guildBankCursorSlot() {
+    static GuildBankCursorSlot held;
+    return held;
+}
+
 /// The uppercase tokens WoW returns second from UnitClass, and the key every
 /// class-indexed table in FrameXML uses - CLASS_ICON_TCOORDS for the class
 /// portrait, RAID_CLASS_COLORS for a name's colour. Written out rather than

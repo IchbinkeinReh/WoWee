@@ -189,7 +189,11 @@ static void setCursorType(lua_State* L, CursorType type) {
     lua_getfield(L, LUA_REGISTRYINDEX, "wowee_lua_engine");
     auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
+    // A guild bank item put down lets its slot go (0x00519280 case 0xb).
+    const bool releasedBankSlot = prevType == CursorType::GUILDBANK && guildBankCursorSlot().tab != 0;
+    if (releasedBankSlot) guildBankCursorSlot() = {};
     if (!engine) return;
+    if (releasedBankSlot) engine->fireEvent("GUILDBANK_ITEM_LOCK_CHANGED", {});
     // Which side of the announcement the sound sits on follows the client:
     // ClearCursor plays the drop inside its switch and raises CURSOR_UPDATE
     // (event 275) at its tail afterwards (00510000.c:7768-7830), while a
@@ -1601,6 +1605,9 @@ static int lua_PickupGuildBankItem(lua_State* L) {
         const auto* info = gh->getItemInfo(it.itemEntry);
         wowee::ui::frameXmlSetCursorItem(
             info ? gh->getItemIconPath(info->displayInfoId) : std::string());
+        // The slot is locked while its item is held (0x005137d0).
+        guildBankCursorSlot() = {tab, slot};
+        gh->fireAddonEvent("GUILDBANK_ITEM_LOCK_CHANGED", {});
         return 0;
     }
     return 0;

@@ -5853,7 +5853,9 @@ void registerInventoryLuaAPI(lua_State* L) {
             lua_pushstring(L, icon.empty()
                 ? "Interface\\Icons\\INV_Misc_QuestionMark" : icon.c_str());
             lua_pushnumber(L, it.stackCount);
-            lua_pushboolean(L, 0);   // locked
+            // Locked while its item is on the cursor (0x005137d0).
+            const auto& held = guildBankCursorSlot();
+            lua_pushboolean(L, (held.tab == tab && held.slot == slot) ? 1 : 0);
             return 3;
         }},
                 // GetGuildBankItemLink(tab, slot) → hyperlink
