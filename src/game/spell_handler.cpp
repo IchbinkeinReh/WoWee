@@ -6584,31 +6584,29 @@ void SpellHandler::extractSkillFields(const FlatFieldMap& fields) {
         newSkills[skillId] = skill;
     }
 
+    // 0x006da4a0, each skill's value field moving: a skill newly held (from
+    // nothing) is ERR_SKILL_GAINED_S with its name, one raised is
+    // ERR_SKILL_UP_SI with its name and new value - both CHAT_MSG_SKILL lines
+    // (the table's chat type 26). Only for a skill the race and class have a
+    // SkillRaceClassInfo row for whose flags lack 0x402 (the hidden ones).
+    // Not on the first read, which is the player arriving, not learning.
+    const bool firstRead = owner_.playerSkillsRef().empty();
     for (const auto& [skillId, skill] : newSkills) {
-        if (skill.value == 0) continue;
+        if (skill.value == 0 || firstRead) continue;
         auto oldIt = owner_.playerSkillsRef().find(skillId);
-        if (oldIt != owner_.playerSkillsRef().end() && skill.value > oldIt->second.value) {
-            auto catIt = owner_.skillLineCategoriesRef().find(skillId);
-            if (catIt != owner_.skillLineCategoriesRef().end()) {
-                uint32_t category = catIt->second;
-                if (category == 5 || category == 10 || category == 12) {
-                    continue;
-                }
-            }
+        const uint32_t was = oldIt != owner_.playerSkillsRef().end() ? oldIt->second.value : 0;
+        if (skill.value == was) continue;
+        if (!owner_.skillChangeAnnounced(skillId)) continue;
+        if (was != 0 && skill.value < was) continue;
 
-            const std::string& name = owner_.getSkillName(skillId);
-            std::string skillName = name.empty() ? ("Skill #" + std::to_string(skillId)) : name;
-            // CHAT_MSG_SKILL, which the interface colours blue, as the server
-            // sends it - not a system line, which is yellow. The words are the
-            // interface's SKILL_RANK_UP, so a German client says "Eure
-            // Fertigkeit '...' hat sich auf ... erhöht."; enUS only for want
-            // of one.
-            std::string format;
-            if (auto* addons = core::Application::getInstance().getAddonManager())
-                if (auto* lua = addons->getLuaEngine()) format = lua->globalText("SKILL_RANK_UP");
-            if (format.empty()) format = "Your skill in %s has increased to %d.";
+        const std::string& name = owner_.getSkillName(skillId);
+        const std::string skillName = name.empty() ? ("Skill #" + std::to_string(skillId)) : name;
+        if (was == 0) {
             owner_.addLocalChatLine(ChatType::SKILL,
-                                    formatSkillRankUp(format, skillName, skill.value));
+                interfaceFormat("ERR_SKILL_GAINED_S", "You have gained the %s skill.", {skillName}));
+        } else {
+            const std::string format = interfaceString("ERR_SKILL_UP_SI", "Your skill in %s has increased to %d.");
+            owner_.addLocalChatLine(ChatType::SKILL, formatSkillRankUp(format, skillName, skill.value));
         }
     }
 

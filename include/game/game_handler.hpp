@@ -4221,6 +4221,12 @@ public:
     /// set by a cast of one with AttributesEx2 0x20 (0x007fa2e0), cleared
     /// by SMSG_CANCEL_AUTO_REPEAT (0x00807560).
     [[nodiscard]] bool isAutoRepeating() const { return autoRepeating_; }
+    /// Whether a change to this skill is said in chat (0x006da4a0): the race
+    /// and class have a SkillRaceClassInfo row for it, without 0x402.
+    [[nodiscard]] bool skillChangeAnnounced(uint32_t skillId) {
+        const auto* rci = skillRaceClassInfo(skillId);
+        return rci != nullptr && (rci->flags & 0x402u) == 0;
+    }
     void setAutoRepeating(bool on) { autoRepeating_ = on; if (!on) autoRepeatSpellId_ = 0; }
     /// The repeating spell started (0x007fe130 answers it), which
     /// IsAutoRepeatSpell compares against.
