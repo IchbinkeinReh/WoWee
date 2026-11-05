@@ -5082,6 +5082,16 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             }
             if (packet.hasRemaining(8))
                 tradePeerGuid_ = packet.readUInt64();
+            // Someone on the ignore list is answered before anything else:
+            // CMSG_IGNORE_TRADE (0x005873e0 -> 0x00703ee0), no window, no line.
+            if (tradePeerGuid_ != 0 && owner_.ignoreListGuidsRef().count(tradePeerGuid_) != 0) {
+                if (owner_.getSocket() && wireOpcode(Opcode::CMSG_IGNORE_TRADE) != 0xFFFF) {
+                    network::Packet ignore(wireOpcode(Opcode::CMSG_IGNORE_TRADE));
+                    owner_.getSocket()->send(ignore);
+                }
+                resetTradeState();
+                break;
+            }
             tradeStatus_ = TradeStatus::PendingIncoming;
             // Resolve name
             auto nit = owner_.getPlayerNameCache().find(tradePeerGuid_);
