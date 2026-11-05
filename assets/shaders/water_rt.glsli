@@ -159,7 +159,9 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
         // The frame under the water has the bed as drawn - textured, lit,
         // shadowed - wherever the hit is on screen there and is what that
         // pixel shows; the hit's own colour only where it is not.
-        vec3 shown;
+        // Written only when rtwOnScreen runs: left undefined with a capture that
+        // holds the water, it could take the whole bed with it (the mix below).
+        vec3 shown = vec3(0.0);
         float onScreen = rtwHistoryHasWater() ? 0.0 : rtwOnScreen(hit, hn, shown);
         bed = shown;
         if (onScreen < 1.0) {

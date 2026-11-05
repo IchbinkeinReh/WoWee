@@ -6720,6 +6720,7 @@ void Renderer::recordRtLighting() {
             }
         }
         rtLighting_->setPointLights(lightScratch);
+        if (waterRenderer) waterRenderer->setWaterLamps(lightScratch, in.cameraPos);
         // The view of the lights' kinds: where the traced lights are and
         // what gave each, for the interface's dots and legend. The ones the
         // pass holds, in the order it takes them.

@@ -12,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "rendering/rt_point_lights.hpp"
 #include "rendering/swim_wave.hpp"
 #include "audio/zone_ambience.hpp"
 #include "rendering/client_liquid.hpp"
@@ -121,6 +122,8 @@ constexpr int kMaxWakePoints = 32;
 /// choppy sea on a still pond.
 inline constexpr float kRtWaveAmpScale = 0.5f;
 
+inline constexpr size_t kMaxWaterLamps = 8;
+
 struct WaterFrameUBOData {
     glm::vec4 wakeBounds{0.0f};              // xy = centre, z = cull radius, w = count
     glm::vec4 wakePoints[kMaxWakePoints]{};  // xy = pos, z = age 0..1, w = strength
@@ -136,6 +139,8 @@ struct WaterFrameUBOData {
     glm::mat4 captureViewProj{1.0f};
     glm::vec4 swimWaveInfo{0.0f};                       // x = how many
     glm::vec4 swimWaves[swim_wave::kMaxWaves]{};        // xy = where, z = age, w = strength
+    glm::vec4 waterLampAt[kMaxWaterLamps]{};            // xyz = where, w = reach
+    glm::vec4 waterLampColour[kMaxWaterLamps]{};        // rgb, a = where it starts to fall off
 };
 
 /// What the ray traced water needs from the frame (Renderer, each frame).
@@ -221,6 +226,8 @@ public:
     void setRtWaterScene(VkDescriptorSetLayout sceneLayout, bool hardware);
     /// This frame's ray traced water, before render().
     void setRtWaterFrame(const RtWaterFrame& frame) { rtFrame_ = frame; }
+    /// The lamps the traced water takes this frame, nearest first.
+    void setWaterLamps(const std::vector<rt_lights::PointLight>& lights, const glm::vec3& from);
     /// The swimmer's rings this frame (swim_wave.hpp).
     void setSwimWaves(const std::vector<swim_wave::Wave>& waves) {
         const size_t n = std::min(waves.size(), swim_wave::kMaxWaves);

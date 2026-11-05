@@ -1835,6 +1835,25 @@ void WaterRenderer::uploadFrameUBO() {
 // Disturbance trail. Points are dropped along the path rather than parented to
 // the character, so the froth stays where the water was churned and the
 // character runs out of it - froth pinned under the feet reads as a decal.
+void WaterRenderer::setWaterLamps(const std::vector<rt_lights::PointLight>& lights, const glm::vec3& from) {
+    std::vector<const rt_lights::PointLight*> nearest;
+    nearest.reserve(lights.size());
+    for (const auto& l : lights) nearest.push_back(&l);
+    const size_t n = std::min(nearest.size(), kMaxWaterLamps);
+    std::partial_sort(nearest.begin(), nearest.begin() + static_cast<std::ptrdiff_t>(n), nearest.end(),
+                      [&](const rt_lights::PointLight* a, const rt_lights::PointLight* b) {
+                          const glm::vec3 da = a->position - from;
+                          const glm::vec3 db = b->position - from;
+                          return glm::dot(da, da) < glm::dot(db, db);
+                      });
+    frameUBO_.swimWaveInfo.y = static_cast<float>(n);
+    for (size_t i = 0; i < n; ++i) {
+        const rt_lights::PointLight& l = *nearest[i];
+        frameUBO_.waterLampAt[i] = glm::vec4(l.position, l.attenuationEnd);
+        frameUBO_.waterLampColour[i] = glm::vec4(glm::vec3(l.color), l.attenuationStart);
+    }
+}
+
 void WaterRenderer::updateWake(float deltaTime, const glm::vec2& pos,
                                const glm::vec2& travelDir, float intensity, bool wading) {
     // Age the existing trail. Drift is what spreads a swimmer's two emission

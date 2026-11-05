@@ -62,6 +62,7 @@ layout(set = 2, binding = 1) uniform sampler2D SceneDepth;
 // of froth rather than a disc stuck under its feet.
 const int MAX_WAKE_POINTS = 32;
 const int MAX_SWIM_WAVES = 16;
+const int MAX_WATER_LAMPS = 8;
 
 layout(set = 2, binding = 3) uniform WaterFrameData {
     vec4 wakeBounds;                  // xy = centre, z = cull radius, w = count
@@ -76,6 +77,10 @@ layout(set = 2, binding = 3) uniform WaterFrameData {
     mat4 captureViewProj;  // the camera the scene capture was taken with
     vec4 swimWaveInfo;                 // x = how many
     vec4 swimWaves[MAX_SWIM_WAVES];    // xy = where, z = age in seconds, w = strength
+    // The lamps nearest the camera: xyz where, w reach; rgb colour, a where it
+    // starts to fall off. swimWaveInfo.y says how many.
+    vec4 waterLampAt[MAX_WATER_LAMPS];
+    vec4 waterLampColour[MAX_WATER_LAMPS];
 };
 
 layout(location = 0) in vec3 FragPos;
@@ -623,6 +628,23 @@ void main() {
     // ============================================================
     vec3 color = rtOn ? mix(refractedColor, rtReflect, rtFresnel) : refractedColor;
     color += specular + sssColor;
+
+    // The lamps by the water: on the bed, through what the depth absorbs, and a
+    // little off the surface. Without it a mount's glow lit the bank and
+    // stopped dead at the water's edge.
+    if (rtOn) {
+        vec3 lamps = vec3(0.0);
+        int lampCount = clamp(int(swimWaveInfo.y), 0, MAX_WATER_LAMPS);
+        for (int i = 0; i < lampCount; ++i) {
+            vec3 toLamp = waterLampAt[i].xyz - FragPos;
+            float d = length(toLamp);
+            float end = waterLampAt[i].w;
+            if (d >= end) continue;
+            float t = clamp((end - d) / max(end - waterLampColour[i].a, 0.01), 0.0, 1.0);
+            lamps += waterLampColour[i].rgb * (t * t * (3.0 - 2.0 * t));
+        }
+        color += (refractedColor * absorbed * (1.0 - rtFresnel) + vec3(0.05)) * lamps;
+    }
 
     float crest = smoothstep(0.5, 1.0, WaveOffset) * 0.04;
     color += vec3(crest);
