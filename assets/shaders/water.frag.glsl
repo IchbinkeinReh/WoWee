@@ -505,7 +505,11 @@ void main() {
     // toward it. Without, it is taken to (the water has no shadow map).
     float sunOnWater = 1.0;
     if (rtOn) {
-        rtwScreenReuse = rtWater.y < 2.5;
+        // Over a building's interior water, which the client's liquid draws, the
+        // reflection alone is traced, and all of it: read off a capture of the
+        // finished frame it took the liquid and last frame's reflection back in,
+        // patches with straight edges and trails as the camera turned.
+        rtwScreenReuse = rtWater.y < 2.5 && push.interiorFog < 0.5;
         uint rng = uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u + uint(time * 60.0);
         // The wave normal, facing up: the mesh's faces down (water.vert
         // crosses binormal into tangent), so it is turned over before the
