@@ -1249,6 +1249,19 @@ static int lua_SetRaidTarget(lua_State* L) {
     toLowerInPlace(uidStr);
     uint64_t guid = resolveUnitGuid(gh, uidStr);
     if (guid == 0) return 0;
+    // SetRaidTarget (0x00574ab0): a mark for a player outside the group who
+    // is not of the player's side and peaceable (0x00729b30) is refused with
+    // ERR_INVALID_RAID_TARGET - enemy players are not marked.
+    if (index >= 1 && index <= 8 && guid != gh->getPlayerGuid() && !gh->isPlayerOrGroupUnit(guid)) {
+        auto entity = gh->getEntityManager().getEntity(guid);
+        if (entity && entity->getType() == game::ObjectType::PLAYER &&
+            !gh->unitsCooperate(gh->getPlayerGuid(), guid)) {
+            gh->playGameErrorSound("ERR_INVALID_RAID_TARGET");
+            gh->addUIError(game::interfaceString("ERR_INVALID_RAID_TARGET",
+                                                 "You can't mark that target."));
+            return 0;
+        }
+    }
     if (index >= 1 && index <= 8)
         gh->setRaidMark(guid, static_cast<uint8_t>(index - 1));
     else if (index == 0)
