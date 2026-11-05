@@ -4735,6 +4735,13 @@ public:
     }
     /// Whether that was waiting, and no longer is.
     bool takeTrainerDescriptionItem(uint32_t entry) { return trainerDescriptionItems_.erase(entry) > 0; }
+    /// A quest reward item said in chat as the turn-in does (0x006d0e10 ->
+    /// 0x006cd8c0): ERR_QUEST_REWARD_ITEM_S with its link, or
+    /// ERR_QUEST_REWARD_ITEM_MULT_IS with the count above one - once the item
+    /// is known, asked for when it is not.
+    void announceQuestRewardItem(uint32_t itemId, uint32_t count);
+    /// The item a waiting reward line wanted has arrived.
+    void questRewardItemArrived(uint32_t itemId);
     // Request item info from server if not already cached/pending
     void ensureItemInfo(uint32_t entry) {
         if (entry == 0 || itemInfoCache_.count(entry) || pendingItemQueries_.count(entry)) return;
@@ -5987,6 +5994,7 @@ private:
     std::unordered_map<uint32_t, ItemQueryResponseData> itemInfoCache_;
     std::unordered_set<uint32_t> pendingItemQueries_;
     std::unordered_set<uint32_t> trainerDescriptionItems_;
+    std::vector<std::pair<uint32_t, uint32_t>> pendingQuestRewardItems_;
     float pendingItemQueryTimer_ = 0.0f;
 
     // Deferred SMSG_ITEM_PUSH_RESULT notifications for items whose info wasn't

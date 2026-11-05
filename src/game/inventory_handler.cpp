@@ -5699,6 +5699,8 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         owner_.itemInfoCacheRef()[data.entry] = data;
         rebuildOnlineInventory();
         maybeDetectVisibleItemLayout();
+        // 0x006cd8c0: a quest reward line that was waiting on this item.
+        owner_.questRewardItemArrived(data.entry);
         // 0x00593ca0: a trainer description that was waiting on this item.
         if (owner_.takeTrainerDescriptionItem(data.entry) && owner_.addonEventCallbackRef())
             owner_.addonEventCallbackRef()("TRAINER_DESCRIPTION_UPDATE", {});

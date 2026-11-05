@@ -948,7 +948,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
             // ERR_QUEST_REWARD_MONEY_S for the experience and money the
             // WotLK packet carries after the id, then the honour (sent ten
             // times over), talent point and arena point lines in their own
-            // chat types. (Its reward item line is not given here.)
+            // chat types, then the reward items (below).
             for (const auto& q : questLog_) {
                 if (q.questId == questId && !q.title.empty()) {
                     owner_.addSystemChatMessage(questTitleText("ERR_QUEST_COMPLETE_S", "%s completed.", q.title));
@@ -988,6 +988,18 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                                             {std::to_string(arena)}));
                     }
                 }
+            }
+            // Then the items: each fixed reward the quest gives, and the one
+            // chosen, in that order (0x006d0e10).
+            for (const auto& q : questLog_) {
+                if (q.questId != questId) continue;
+                for (const auto& r : q.rewardItems)
+                    if (r.itemId != 0) owner_.announceQuestRewardItem(r.itemId, r.count);
+                break;
+            }
+            if (chosenRewardItemId_ != 0) {
+                owner_.announceQuestRewardItem(chosenRewardItemId_, 0);
+                chosenRewardItemId_ = 0;
             }
             for (auto it = questLog_.begin(); it != questLog_.end(); ++it) {
                 if (it->questId == questId) {
@@ -1805,6 +1817,10 @@ void QuestHandler::chooseQuestReward(uint32_t rewardIndex) {
              " npcGuid=", npcGuid, " rewardIndex=", rewardIndex);
     // GetQuestReward (0x0058cfa0): tutorial 0x21, then the choice.
     owner_.triggerTutorial(0x21);
+    // The item chosen, kept for the turn-in's line (0xc0d66c).
+    chosenRewardItemId_ = 0;
+    for (const auto& r : currentQuestOfferReward_.choiceRewards)
+        if (r.choiceSlot == rewardIndex) { chosenRewardItemId_ = r.itemId; break; }
     auto packet = QuestgiverChooseRewardPacket::build(
         npcGuid, currentQuestOfferReward_.questId, rewardIndex);
     owner_.getSocket()->send(packet);

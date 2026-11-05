@@ -2045,6 +2045,35 @@ void GameHandler::stopAutoRepeat(bool tellServer) {
     fireAddonEvent("STOP_AUTOREPEAT_SPELL", {});
 }
 
+namespace {
+std::string questRewardLine(const ItemQueryResponseData& info, uint32_t count, uint32_t level) {
+    const std::string link = buildItemLink(info.entry, info.quality, info.name, level);
+    if (count > 1)
+        return interfaceFormat("ERR_QUEST_REWARD_ITEM_MULT_IS", "Received %d of item: %s.",
+                               {std::to_string(count), link});
+    return interfaceFormat("ERR_QUEST_REWARD_ITEM_S", "Received item: %s.", {link});
+}
+}  // namespace
+
+void GameHandler::announceQuestRewardItem(uint32_t itemId, uint32_t count) {
+    if (itemId == 0) return;
+    if (const auto* info = getItemInfo(itemId); info && info->valid) {
+        addSystemChatMessage(questRewardLine(*info, count, getPlayerLevel()));
+        return;
+    }
+    pendingQuestRewardItems_.emplace_back(itemId, count);
+    ensureItemInfo(itemId);
+}
+
+void GameHandler::questRewardItemArrived(uint32_t itemId) {
+    const auto* info = getItemInfo(itemId);
+    for (auto it = pendingQuestRewardItems_.begin(); it != pendingQuestRewardItems_.end();) {
+        if (it->first != itemId) { ++it; continue; }
+        if (info && info->valid) addSystemChatMessage(questRewardLine(*info, it->second, getPlayerLevel()));
+        it = pendingQuestRewardItems_.erase(it);
+    }
+}
+
 void GameHandler::targetLastTarget() {
     if (combatHandler_) combatHandler_->targetLastTarget();
 }

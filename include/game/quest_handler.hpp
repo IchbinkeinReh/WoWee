@@ -386,6 +386,8 @@ private:
     bool questRequestItemsOpen_ = false;
     QuestRequestItemsData currentQuestRequestItems_;
     uint32_t pendingTurnInQuestId_ = 0;
+    /// The reward item GetQuestReward chose, said at the turn-in (0xc0d66c).
+    uint32_t chosenRewardItemId_ = 0;
     // QuestSort.dbc names, loaded lazily
     std::unordered_map<uint32_t, std::string> questSortNames_;
     bool questSortDbcLoaded_ = false;
