@@ -1100,6 +1100,7 @@ private:
     bool featherFallActive_ = false;
     // Server-driven water walk: treat water surface as ground (don't swim).
     bool waterWalkActive_ = false;
+    std::optional<float> waterWalkSurface_;  // this frame, the water it stands on
     // Player-controlled flight (CAN_FLY + FLYING): 3D movement, no gravity.
     bool flyingActive_ = false;
     bool flightAirborne_ = false;

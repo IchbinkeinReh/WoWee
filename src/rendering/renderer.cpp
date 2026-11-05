@@ -2033,6 +2033,10 @@ void Renderer::endFrame() {
         if (eyeAdaptation_) eyeAdaptation_->composite(currentCmd);
         vkCtx->gpuMark(currentCmd, "effects composite");
 
+        // After the water's capture of the finished frame, or the traced
+        // water mirrors the map as a disc in the pond.
+        if (minimapDrawsInOverlay_) renderMinimapOverlay(currentCmd);
+
         // ImGui's pipelines are built against the overlay pass, so it always
         // records inline here rather than into a scene-pass secondary buffer.
         {
@@ -3296,7 +3300,10 @@ void Renderer::update(float deltaTime) {
                     sw::limbMoved(swimWaves_, swimLimbs_[hand - 1], glm::vec3(at[3]), *waterZ, deltaTime);
                 }
             }
-            sw::limbMoved(swimWaves_, swimLimbs_[2], glm::vec3(charPos.x, charPos.y, *waterZ), *waterZ, deltaTime);
+            if (swimming) {
+                sw::limbMoved(swimWaves_, swimLimbs_[2], glm::vec3(charPos.x, charPos.y, *waterZ), *waterZ,
+                              deltaTime);
+            }
         }
         waterRenderer->setSwimWaves(swimWaves_);
     }
@@ -5109,8 +5116,12 @@ void Renderer::syncSwimEffectsTargetPass() {
         minimapDrawsWithWater_ = false;
         minimap->setTargetPass(vkCtx->getOverlayRenderPass(), VK_SAMPLE_COUNT_1_BIT);
 #else
-        minimap->setTargetPass(minimapDrawsWithWater_ ? pass : VK_NULL_HANDLE,
-                               samples);
+        minimapDrawsInOverlay_ = !minimapDrawsWithWater_ && vkCtx->getOverlayRenderPass() != VK_NULL_HANDLE;
+        if (minimapDrawsInOverlay_) {
+            minimap->setTargetPass(vkCtx->getOverlayRenderPass(), VK_SAMPLE_COUNT_1_BIT);
+        } else {
+            minimap->setTargetPass(minimapDrawsWithWater_ ? pass : VK_NULL_HANDLE, samples);
+        }
 #endif
     }
 }
@@ -5245,7 +5256,7 @@ void Renderer::renderPostSceneOverlays(VkCommandBuffer cmd) {
 
     // Unless it is following water into the pass after this one, where it is
     // drawn instead - see renderMinimapOverlay's caller below the water.
-    if (!minimapDrawsWithWater_) renderMinimapOverlay(cmd);
+    if (!minimapDrawsWithWater_ && !minimapDrawsInOverlay_) renderMinimapOverlay(cmd);
 }
 
 /// The minimap disc, over whatever has been drawn so far.
@@ -5944,10 +5955,12 @@ void Renderer::refreshSwimEffectsPass() {
     if (!vkCtx) return;
     const bool sprayWasWithWater = swimEffectsDrawWithWater_;
     const bool minimapWasWithWater = minimapDrawsWithWater_;
+    const bool minimapWasInOverlay = minimapDrawsInOverlay_;
     const bool glareWasWithWater = glareDrawsWithWater_;
     syncSwimEffectsTargetPass();
     const bool sprayMoved = swimEffects && swimEffectsDrawWithWater_ != sprayWasWithWater;
-    const bool minimapMoved = minimap && minimapDrawsWithWater_ != minimapWasWithWater;
+    const bool minimapMoved = minimap && (minimapDrawsWithWater_ != minimapWasWithWater ||
+                                          minimapDrawsInOverlay_ != minimapWasInOverlay);
     Celestial* celestial = skySystem ? skySystem->getCelestial() : nullptr;
     const bool glareMoved = celestial && (glareDrawsWithWater_ != glareWasWithWater ||
                                           celestial->glarePipelineStale());

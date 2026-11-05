@@ -379,12 +379,17 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         const float MIN_SWIM_WATER_DEPTH = swimming ? swimExitDepth() : swimFloatDepth();
         bool inWater = false;
         // Water Walk: treat water surface as ground - player walks on top, not through.
-        if (waterWalkActive_ && waterH && targetPos.z >= *waterH - 0.5f) {
+        // Only from at the surface and not on the way up: from anywhere above
+        // it, a bridge or a jump, this pulled the character down to the water.
+        waterWalkSurface_.reset();
+        if (waterWalkActive_ && waterH && targetPos.z >= *waterH - 0.5f &&
+            targetPos.z <= *waterH + 0.25f && verticalVelocity <= 0.0f) {
             // Clamp to water surface so the player stands on it
             targetPos.z = *waterH;
             verticalVelocity = 0.0f;
             grounded = true;
             inWater = false;
+            waterWalkSurface_ = *waterH;
         } else if (waterH && targetPos.z < *waterH) {
             std::optional<uint16_t> waterType;
             if (waterRenderer) {
@@ -516,9 +521,7 @@ glm::vec3 CameraController::moveFollowedCharacter(float /*deltaTime*/, FrameInpu
         }
         bool swimJump = false;
         if (swimming && inWater && waterH &&
-            swim_jump::allowed(f.spaceHeld && !f.noAscendDescend,
-                               f.nowForward || f.nowBackward || f.nowStrafeLeft || f.nowStrafeRight,
-                               *waterH - targetPos.z, swimFloatDepth())) {
+            swim_jump::allowed(f.spaceHeld && !f.noAscendDescend, *waterH - targetPos.z, swimFloatDepth())) {
             swimJump = true;
             inWater = false;
         }
@@ -2159,6 +2162,15 @@ void CameraController::groundFollowedCharacter(float deltaTime, FrameInput& f,
                 }
             }
         }
+
+    // The water is the ground under a water walker. The step above looks for
+    // the bed, far below, and found the character in the air: the fall
+    // animation, over the surface, for as long as it walked there.
+    if (waterWalkSurface_) {
+        targetPos.z = *waterWalkSurface_;
+        verticalVelocity = 0.0f;
+        grounded = true;
+    }
 
     // Update follow target position
     *followTarget = targetPos;
