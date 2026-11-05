@@ -202,19 +202,34 @@ static void setCursorType(lua_State* L, CursorType type) {
     if (wasCarrying) askCursorSound(L, prevType, false);
     engine->fireEvent("CURSOR_UPDATE", {});
     if (nowCarrying) askCursorSound(L, type, true);
-    // Picking something up shows the empty slots of the action bars, so there
-    // is somewhere visible to drop it; putting it down hides them again. Every
-    // action button registers for both and neither was ever fired, so dragging
-    // a spell towards the bar showed no targets at all - the bar looked as
-    // though it would not take it.
+    // Picking something up shows the empty slots of the bar it can go on, so
+    // there is somewhere visible to drop it; putting it down hides them again.
+    //
+    // Only what a bar takes: an item, a spell, a macro or an equipment set
+    // shows the action bars (0x00520770, 0x00520960, 0x00520be0, 0x00520dc0,
+    // 0x00522fb0), a pet action the pet bar (0x00520a80 -> PET_BAR_SHOWGRID);
+    // money, a merchant's item and a guild bank item show neither. Putting it
+    // down hides the one that was shown (0x00519280, flag 0xbd074c).
     //
     // Fired on the change rather than on every set: this function is called
     // with the same type repeatedly and the grid would flicker.
-    if (nowCarrying && !wasCarrying) {
-        engine->fireEvent("ACTIONBAR_SHOWGRID", {});
-    } else if (wasCarrying && !nowCarrying) {
-        engine->fireEvent("ACTIONBAR_HIDEGRID", {});
-    }
+    enum class Grid { None, ActionBar, PetBar };
+    auto gridOf = [](CursorType t) {
+        switch (t) {
+            case CursorType::SPELL: case CursorType::ITEM: case CursorType::MACRO:
+            case CursorType::EQUIPMENT_SET: case CursorType::AMMO:
+                return Grid::ActionBar;
+            case CursorType::PET_ACTION: return Grid::PetBar;
+            default: return Grid::None;
+        }
+    };
+    const Grid was = wasCarrying ? gridOf(prevType) : Grid::None;
+    const Grid now = nowCarrying ? gridOf(type) : Grid::None;
+    if (was == now) return;
+    if (was == Grid::ActionBar) engine->fireEvent("ACTIONBAR_HIDEGRID", {});
+    else if (was == Grid::PetBar) engine->fireEvent("PET_BAR_HIDEGRID", {});
+    if (now == Grid::ActionBar) engine->fireEvent("ACTIONBAR_SHOWGRID", {});
+    else if (now == Grid::PetBar) engine->fireEvent("PET_BAR_SHOWGRID", {});
 }
 
 /// The pet bar's slot a bonus bar slot (0-based) refers to while the bonus bar
