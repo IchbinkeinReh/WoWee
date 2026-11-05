@@ -3559,6 +3559,13 @@ void EntityController::onValuesUpdatePlayer(const UpdateBlock& block, std::share
             }
             owner_.updatePossessSpell();  // 0x005d30e0 / 0x005d62a0
             owner_.updatePetActionBar();
+            // ...and said: PLAYER_FARSIGHT_FOCUS_CHANGED (event 0xa1). A
+            // player with no health is told PLAYER_DEAD again (0x00520f70),
+            // so the death frames come back to the body's view.
+            pendingEvents_.emit("PLAYER_FARSIGHT_FOCUS_CHANGED", {});
+            if (const uint16_t health = fieldIndex(UF::UNIT_FIELD_HEALTH);
+                health != 0xFFFF && static_cast<int32_t>(entity->getField(health)) < 1)
+                pendingEvents_.emit("PLAYER_DEAD", {});
         }
         PlayerFieldIndices pfi = PlayerFieldIndices::resolve();
         bool slotsChanged = applyPlayerStatFields(block.fields, pfi, false);
