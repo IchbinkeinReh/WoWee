@@ -132,8 +132,16 @@ void main() {
     // rays skim the underside at every distance - so it would darken every
     // field it lies under, by about a quarter. The readers skip it
     // (giSampleCascade). DDGI's probe classification, Majercik et al. 2021.
-    float buried = sBuried * 4u > uint(GI_RAYS) ? 1.0 : 0.0;
-    imageStore(uGiAtlasStore, visTexel, vec4(visOut, buried, 0.0));
+    //
+    // Decided on the share of rays over time, with a gap between going in and
+    // coming out: on one frame's turned rays a probe by a tent's skin, near the
+    // quarter, went on and off from update to update, and the cell it lit
+    // flashed dark and back. b the state, a the share so far.
+    float share = float(sBuried) / float(GI_RAYS);
+    bool fresh = reset || age < 1.0 || isnan(prevVis.a) || isinf(prevVis.a);
+    share = fresh ? share : mix(share, prevVis.a, hysteresis);
+    float buried = share > 0.3 ? 1.0 : share < 0.2 ? 0.0 : (fresh ? 0.0 : prevVis.b);
+    imageStore(uGiAtlasStore, visTexel, vec4(visOut, buried, share));
 
     if (doIrr) {
         vec3 result = irr / max(irrWeight, 1e-4);
