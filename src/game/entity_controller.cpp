@@ -3839,6 +3839,14 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
                                (block.fields.find(targetLo) != block.fields.end() ||
                                 block.fields.find(targetHi) != block.fields.end());
     const uint64_t oldTarget = watchesTarget ? unitTargetGuid(*entity) : 0;
+    // The pet's name timestamp, which moves when it is renamed. The client
+    // watches the field (0x00741d00 registers 0x0072cf70 on it) and says so
+    // when the unit is the player's - its summoner, or its creator when it has
+    // none - as LOCALPLAYER_PET_RENAMED (event 0x13d).
+    const uint16_t petNameStamp = fieldIndex(UF::UNIT_FIELD_PET_NAME_TIMESTAMP);
+    const bool watchesPetName = entity->getType() == ObjectType::UNIT && petNameStamp != 0xFFFF &&
+                                block.fields.find(petNameStamp) != block.fields.end();
+    const uint32_t oldPetNameStamp = watchesPetName ? entity->getField(petNameStamp) : 0;
 
     // Set fields (common)
     for (const auto& field : block.fields) {
@@ -3857,6 +3865,19 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
         // and a raid frame both hear of it.
         for (const auto& uid : owner_.unitTokensForGuid(block.guid))
             pendingEvents_.emit("UNIT_TARGET", {uid});
+    }
+
+    if (watchesPetName && entity->getField(petNameStamp) != oldPetNameStamp) {
+        auto guidAt = [&](UF lo) -> uint64_t {
+            const uint16_t i = fieldIndex(lo);
+            if (i == 0xFFFF) return 0;
+            return static_cast<uint64_t>(entity->getField(i)) |
+                   (static_cast<uint64_t>(entity->getField(static_cast<uint16_t>(i + 1))) << 32);
+        };
+        uint64_t owner = guidAt(UF::UNIT_FIELD_SUMMONEDBY_LO);
+        if (owner == 0) owner = guidAt(UF::UNIT_FIELD_CREATEDBY);
+        if (owner != 0 && owner == owner_.getPlayerGuid())
+            pendingEvents_.emit("LOCALPLAYER_PET_RENAMED", {});
     }
 
     flushPendingEvents();
