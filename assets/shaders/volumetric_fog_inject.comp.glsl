@@ -49,7 +49,7 @@ layout(set = 1, binding = 0) uniform VolumeParams {
     vec4 drift;          // xyz = how far the mist has blown, w = noise amount
     vec4 jitter;         // xyz = sample point inside the cell, w = history weight
     ivec4 dims;
-    vec4 sunTravel;      // xyz = the way the sunlight travels, from the drawn sun
+    vec4 sunTravel;      // xyz = the way the sunlight travels, from the drawn sun; w = its height
 } vol;
 
 layout(set = 1, binding = 1) uniform sampler2D uShadowDepth;
@@ -174,12 +174,12 @@ void main() {
     // outdoors - toward a sun low enough to look at, through whatever stands
     // in front of it.
     //
-    // Only while the sun is up. At night the light's direction points up
-    // from under the ground; the shadow map flips it to build its projection,
-    // but flipped here the forward lobe would glow in the night sky at a
-    // mirrored sun that is not there. It fades out as the sun sets instead.
+    // Only while the sun is up, by the drawn sun's own height. At night the
+    // light's direction stands in for it, coming down from a sky with no sun
+    // in it, and the forward lobe would glow there. It fades out as the sun
+    // sets instead.
     vec3 travel = normalize(vol.sunTravel.xyz);
-    float sunUp = smoothstep(0.0, 0.08, -travel.z);
+    float sunUp = smoothstep(0.0, 0.08, vol.sunTravel.w);
     vec3 toCamera = normalize(vol.rayOrigin.xyz - p);
     // The forward lobe only while the sun itself can be seen from the eye
     // (lighting.y): behind a tree's crown or a roof the glow round it and the

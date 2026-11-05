@@ -47,4 +47,13 @@ inline glm::vec3 towardSun(const glm::vec3& towardLight, const glm::vec3& drawnS
     return glm::dot(blended, blended) > 1e-12f ? glm::normalize(blended) : held;
 }
 
+/// The way the sunlight travels, for what follows the drawn sun with no floor
+/// under it. `lightTravel`: the way the light travels (Light.dbc's direction,
+/// LightingParams::directionalDir), which towardSun wants reversed: passed as
+/// it stands, the two it blends across the horizon were nearly opposite, and
+/// the direction swung through the zenith in a few minutes of game time.
+inline glm::vec3 sunTravel(const glm::vec3& lightTravel, const glm::vec3& drawnSun) {
+    return -towardSun(-lightTravel, drawnSun, -2.0f);
+}
+
 }  // namespace wowee::rendering::shadow_sun

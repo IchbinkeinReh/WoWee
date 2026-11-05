@@ -1,5 +1,6 @@
 // The direction the shadows fall from near the horizon (shadow_sun.hpp).
 #include <catch_amalgamated.hpp>
+#include "rendering/day_night.hpp"
 #include "rendering/shadow_sun.hpp"
 
 #include <algorithm>
@@ -41,6 +42,23 @@ TEST_CASE("crossing the horizon the shadows turn smoothly, not at once", "[shado
     }
     // Some eighteen degrees between the two, handed over across fourteen of sun.
     CHECK(worst < 0.8f);
+}
+
+TEST_CASE("the sunlight's way turns smoothly through a whole day of the real curves", "[shadow_sun]") {
+    // Two minutes of game time a step. Passed unreversed, the light's direction
+    // turned it 33 degrees in one step at sunrise and went up through the sky.
+    float worst = 0.0f;
+    float highest = -1.0f;
+    glm::vec3 prev(0.0f);
+    for (int minute = 0; minute <= 1440; minute += 2) {
+        const float t = static_cast<float>(minute % 1440) / 1440.0f;
+        const glm::vec3 cur = shadow_sun::sunTravel(daynight::directionalLightDir(t), daynight::sunDirection(t));
+        if (minute > 0) worst = std::max(worst, angleDeg(prev, cur));
+        highest = std::max(highest, cur.z);
+        prev = cur;
+    }
+    CHECK(worst < 1.5f);
+    CHECK(highest < 0.0f);  // sunlight comes down, day and night
 }
 
 TEST_CASE("no drawn sun, the light alone", "[shadow_sun]") {

@@ -78,6 +78,9 @@ public:
         /// The way the sunlight travels (Renderer::sunTravelDirection), so the
         /// shafts lean from the sun the sky draws.
         glm::vec3 sunTravel{0.0f, 0.0f, -1.0f};
+        /// The sine of the drawn sun's elevation: its light fades out of the
+        /// air as this reaches the horizon.
+        float sunHeight = 1.0f;
         /// Brightness of the sunlit air. Most of it goes forward, so this is
         /// mostly what the air toward the sun does.
         float sunScatter = 0.4f;

@@ -6561,7 +6561,7 @@ glm::vec3 Renderer::sunTravelDirection() const {
     // not switched: the shadows jumped at sunrise and sunset.
     if (lightingManager) {
         const auto& lp = lightingManager->getLightingParams();
-        return -shadow_sun::towardSun(lp.directionalDir, lp.sunDir, -2.0f);
+        return shadow_sun::sunTravel(lp.directionalDir, lp.sunDir);
     }
     return glm::normalize(glm::vec3(-0.3f, -0.7f, -0.6f));
 }
@@ -7283,6 +7283,9 @@ void Renderer::renderVolumetricFog() {
 
     VolumetricFog::FrameInputs in;
     in.sunTravel = sunTravelDirection();
+    // The light's direction stands in for the sun at night, so the way it
+    // travels no longer says whether the sun is up.
+    in.sunHeight = lightingManager ? glm::normalize(lightingManager->getLightingParams().sunDir).z : -in.sunTravel.z;
     in.sunSeen = 1.0f - glm::clamp(sunOcclusion_, 0.0f, 1.0f);
     in.view = currentFrameData.view;
     in.projection = currentFrameData.projection;
