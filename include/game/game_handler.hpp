@@ -4711,6 +4711,16 @@ public:
         return (it != itemInfoCache_.end()) ? &it->second : nullptr;
     }
     const std::unordered_map<uint32_t, ItemQueryResponseData>& getItemInfoCache() const { return itemInfoCache_; }
+    /// A trainer service's description waiting on the item it makes
+    /// (0x005959d0 asks with 0x00593ca0 as the answer's callback), which
+    /// says TRAINER_DESCRIPTION_UPDATE when the item arrives.
+    void awaitTrainerDescriptionItem(uint32_t entry) {
+        if (entry == 0) return;
+        trainerDescriptionItems_.insert(entry);
+        ensureItemInfo(entry);
+    }
+    /// Whether that was waiting, and no longer is.
+    bool takeTrainerDescriptionItem(uint32_t entry) { return trainerDescriptionItems_.erase(entry) > 0; }
     // Request item info from server if not already cached/pending
     void ensureItemInfo(uint32_t entry) {
         if (entry == 0 || itemInfoCache_.count(entry) || pendingItemQueries_.count(entry)) return;
@@ -5961,6 +5971,7 @@ private:
     std::set<uint64_t> itemRefundAsked_;
     std::unordered_map<uint32_t, ItemQueryResponseData> itemInfoCache_;
     std::unordered_set<uint32_t> pendingItemQueries_;
+    std::unordered_set<uint32_t> trainerDescriptionItems_;
     float pendingItemQueryTimer_ = 0.0f;
 
     // Deferred SMSG_ITEM_PUSH_RESULT notifications for items whose info wasn't

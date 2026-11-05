@@ -5668,6 +5668,9 @@ void InventoryHandler::handleItemQueryResponse(network::Packet& packet) {
         owner_.itemInfoCacheRef()[data.entry] = data;
         rebuildOnlineInventory();
         maybeDetectVisibleItemLayout();
+        // 0x00593ca0: a trainer description that was waiting on this item.
+        if (owner_.takeTrainerDescriptionItem(data.entry) && owner_.addonEventCallbackRef())
+            owner_.addonEventCallbackRef()("TRAINER_DESCRIPTION_UPDATE", {});
 
         // The answer to a question a tooltip asked and could not wait for.
         //

@@ -5593,9 +5593,29 @@ void registerQuestLuaAPI(lua_State* L) {
             if (!trainerRowSpell(gh, r)) return luaReturnNil(L);
             const auto id = static_cast<uint32_t>(r->spellId);
             const std::string desc = gh->formatSpellDescription(id, gh->getSpellDescription(id));
-            if (desc.empty()) return luaReturnNil(L);
-            lua_pushstring(L, desc.c_str());
-            return 1;
+            if (!desc.empty()) {
+                lua_pushstring(L, desc.c_str());
+                return 1;
+            }
+            // 0x005959d0: a trade spell with no words of its own that makes
+            // an item (effect 0 CREATE_ITEM 24, 157 or CREATE_RANDOM_ITEM 59)
+            // is described by the item - asked for when it is not known yet,
+            // with TRAINER_DESCRIPTION_UPDATE when it comes.
+            const auto* e = trainerRowSpell(gh, r);
+            const uint32_t effect = e ? e->effectIds[0] : 0;
+            uint32_t item = 0;
+            if (e && (e->attr & 0x20u) != 0 && (effect == 24 || effect == 157 || effect == 59) &&
+                trainerSpellColumn(gh, id, "EffectItemType0", 0, item) && item != 0) {
+                if (const auto* info = gh->getItemInfo(item)) {
+                    if (!info->description.empty()) {
+                        lua_pushstring(L, info->description.c_str());
+                        return 1;
+                    }
+                } else {
+                    gh->awaitTrainerDescriptionItem(item);
+                }
+            }
+            return luaReturnNil(L);
         }},
                 // GetTrainerServiceSkillLine(index) (0x005952f0): the skill
                 // line the first effect that names one belongs to - a
