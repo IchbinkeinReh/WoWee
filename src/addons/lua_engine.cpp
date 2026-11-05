@@ -42,6 +42,7 @@
 #include "core/app_clock.hpp"
 #include "core/config_paths.hpp"
 #include <filesystem>
+#include <unordered_set>
 
 extern "C" {
 #include <lua.h>
@@ -614,6 +615,60 @@ wowee::ui::Widget* widgetOf(lua_State* L, int index) {
     if (!tree) return nullptr;
     return tree->get(widgetIdOf(L, index));
 }
+
+/// HasScript("handler") (0x0049eab0): whether this kind of frame has the
+/// handler at all, set or not - the class's own name lookup (vtable slot 0xc),
+/// each falling back to its parent's: the frame's (0x0048e680, OnEvent from
+/// 0x00816830) under every one.
+bool frameTypeHasScript(const std::string& type, const std::string& handler) {
+    static const std::unordered_set<std::string> kFrame = {
+        "OnEvent", "OnLoad", "OnSizeChanged", "OnUpdate", "OnShow", "OnHide",
+        "OnEnter", "OnLeave", "OnMouseDown", "OnMouseUp", "OnMouseWheel",
+        "OnDragStart", "OnDragStop", "OnReceiveDrag", "OnChar", "OnKeyDown",
+        "OnKeyUp", "OnAttributeChanged", "OnEnable", "OnDisable"};
+    if (kFrame.count(handler)) return true;
+    using Set = std::unordered_set<std::string>;
+    static const Set kButton = {"PreClick", "OnClick", "PostClick", "OnDoubleClick"};   // 0x0096f200
+    static const Set kEditBox = {                                                        // 0x009628f0
+        "OnEnterPressed", "OnEscapePressed", "OnSpacePressed", "OnTabPressed",
+        "OnTextChanged", "OnTextSet", "OnCursorChanged", "OnInputLanguageChanged",
+        "OnEditFocusGained", "OnEditFocusLost", "OnCharComposition"};
+    static const Set kValue = {"OnValueChanged", "OnMinMaxChanged"};                     // 0x00961630, 0x0096bca0
+    static const Set kScroll = {"OnHorizontalScroll", "OnVerticalScroll", "OnScrollRangeChanged"};  // 0x0096b0b0
+    static const Set kTooltip = {                                                        // 0x0061a280
+        "OnTooltipSetDefaultAnchor", "OnTooltipCleared", "OnTooltipAddMoney",
+        "OnTooltipSetUnit", "OnTooltipSetItem", "OnTooltipSetSpell", "OnTooltipSetQuest",
+        "OnTooltipSetAchievement", "OnTooltipSetEquipmentSet", "OnTooltipSetFrameStack"};
+    static const Set kModel = {"OnUpdateModel", "OnAnimFinished"};                       // 0x0095f420
+    static const Set kMovie = {"OnMovieFinished", "OnMovieShowSubtitle", "OnMovieHideSubtitle"};  // 0x0095db80
+    static const Set kHyperlink = {"OnHyperlinkEnter", "OnHyperlinkLeave", "OnHyperlinkClick"};  // 0x00978610
+    if (type == "Button" || type == "CheckButton") return kButton.count(handler) > 0;
+    if (type == "EditBox") return kEditBox.count(handler) > 0;
+    if (type == "Slider" || type == "StatusBar") return kValue.count(handler) > 0;
+    if (type == "ScrollFrame") return kScroll.count(handler) > 0;
+    if (type == "GameTooltip") return kTooltip.count(handler) > 0;
+    if (type == "ColorSelect") return handler == "OnColorSelect";                       // 0x0096dc50
+    if (type == "MovieFrame") return kMovie.count(handler) > 0;
+    if (type == "Model" || type == "PlayerModel" || type == "DressUpModel" ||
+        type == "TabardModel" || type == "CinematicModel")
+        return kModel.count(handler) > 0;
+    if (type == "ScrollingMessageFrame")                                                 // 0x00969040
+        return handler == "OnMessageScrollChanged" || kHyperlink.count(handler) > 0;
+    if (type == "MessageFrame" || type == "SimpleHTML") return kHyperlink.count(handler) > 0;
+    return false;
+}
+
+static int lua_Frame_HasScript(lua_State* L) {
+    const char* handler = luaL_checkstring(L, 2);
+    const auto* w = widgetOf(L, 1);
+    if (w && frameTypeHasScript(w->objectType, handler)) {
+        lua_pushnumber(L, 1);
+        return 1;
+    }
+    lua_pushnil(L);
+    return 1;
+}
+
 
 /// 0x00488540: whether the running code may change the frame a method was
 /// called on. A protected frame is out of reach of insecure code during
@@ -7543,6 +7598,7 @@ void LuaEngine::registerCoreAPI() {
         {"CanChangeProtectedState", lua_Frame_CanChangeProtectedState},
         {"CanChangeAttribute", lua_Frame_CanChangeAttribute},
         {"GetScript",       lua_Frame_GetScript},
+        {"HasScript",       lua_Frame_HasScript},
         {"GetName",         lua_Frame_GetName},
         {"GetID",           lua_Frame_GetID},
         {"Show",            lua_Region_Show},
