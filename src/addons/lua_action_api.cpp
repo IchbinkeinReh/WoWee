@@ -1433,6 +1433,12 @@ static int lua_PickupAction(lua_State* L) {
         clearCursorItem(L);
         return 0;
     }
+    // A passive spell does not go on a bar (0x005ab120, Attributes 0x40):
+    // ERR_PASSIVE_ABILITY, and the slot and the cursor stay as they were.
+    if (holding && held == CursorType::SPELL && gh->isSpellPassive(heldId)) {
+        gh->addUIError(game::interfaceString("ERR_PASSIVE_ABILITY", "You can't put a passive ability in the action bar."));
+        return 0;
+    }
     if (holding) {
         gh->setActionBarSlot(slot - 1, typeForCursor(held), heldId);
     } else if (hadAction) {
