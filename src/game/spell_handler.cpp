@@ -3085,6 +3085,12 @@ void SpellHandler::cancelAura(uint32_t spellId) {
             break;
         }
     }
+    // Waiting to Resurrect (2584) given up is leaving the spirit healer's
+    // queue, which 0x00802f80 says before the cancel goes out (event 0x1d2):
+    // the countdown dialog closes on it.
+    constexpr uint32_t kWaitingToResurrect = 0xa18;
+    if (spellId == kWaitingToResurrect && owner_.addonEventCallbackRef())
+        owner_.addonEventCallbackRef()("AREA_SPIRIT_HEALER_OUT_OF_RANGE", {});
     auto packet = CancelAuraPacket::build(spellId);
     owner_.getSocket()->send(packet);
 }
