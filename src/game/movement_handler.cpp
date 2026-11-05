@@ -8,6 +8,7 @@
 #include "game/vehicle.hpp"
 #include "game/vehicle_mover.hpp"
 #include "game/update_field_table.hpp"
+#include <bit>
 #include "game/transport_manager.hpp"
 #include "game/transport_local.hpp"
 #include "game/entity.hpp"
@@ -3009,6 +3010,16 @@ void MovementHandler::handleShowTaxiNodes(network::Packet& packet) {
         knownTaxiMask_[i] = data.nodeMask[i];
     }
     taxiMaskInitialized_ = true;
+
+    // Fewer than two nodes known is nowhere to fly: ERR_TAXINOPATHS and no
+    // map (0x006d6050 counts the mask's bits before 0x005932e0 opens it).
+    uint32_t knownNodes = 0;
+    for (uint32_t i = 0; i < TLK_TAXI_MASK_SIZE; ++i) knownNodes += static_cast<uint32_t>(std::popcount(data.nodeMask[i]));
+    if (knownNodes < 2) {
+        owner_.raiseUiError(interfaceString("ERR_TAXINOPATHS",
+            "You don't know any flight locations connected to this one."));
+        return;
+    }
 
     currentTaxiData_ = data;
     taxiNpcGuid_ = data.npcGuid;
