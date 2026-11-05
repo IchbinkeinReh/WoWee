@@ -560,6 +560,9 @@ struct Widget {
     size_t maxMessages = 128;
     /// How far back through the history the frame has been scrolled, in lines.
     int   messageScroll = 0;
+    /// How many messages the last draw fitted on screen, which is the page
+    /// PageUp and PageDown turn and GetNumLinesDisplayed answers.
+    mutable int messagesDisplayed = 0;
 
     /// A tooltip holds lines the same way, but draws them from the top and
     /// sizes itself to fit them - which is the part a chat frame does not do,

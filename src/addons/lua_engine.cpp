@@ -4389,6 +4389,68 @@ int lua_MessageFrame_ScrollToBottom(lua_State* L) {
     return 0;
 }
 
+// The rest of ScrollingMessageFrame's scrolling (0x009732f0-0x009736f0). The
+// client counts in wrapped lines; this frame keeps its offset in messages, so
+// a page here is the messages the last draw fitted rather than its lines.
+namespace {
+int lastScroll(const wowee::ui::Widget& w) {
+    return w.messages.empty() ? 0 : static_cast<int>(w.messages.size()) - 1;
+}
+void scrollTo(wowee::ui::Widget& w, int offset) {
+    w.messageScroll = std::clamp(offset, 0, lastScroll(w));
+}
+}  // namespace
+
+/// PageUp (0x00973370 -> 0x0096ab50): back a page, which is the lines shown
+/// less one, so the line at the top stays in view at the bottom.
+int lua_MessageFrame_PageUp(lua_State* L) {
+    if (auto* w = widgetOf(L, 1))
+        scrollTo(*w, w->messageScroll + std::max(w->messagesDisplayed - 1, 1));
+    return 0;
+}
+/// PageDown (0x009733b0), the same page forward.
+int lua_MessageFrame_PageDown(lua_State* L) {
+    if (auto* w = widgetOf(L, 1))
+        scrollTo(*w, w->messageScroll - std::max(w->messagesDisplayed - 1, 1));
+    return 0;
+}
+/// ScrollToTop (0x009733f0): as far back as the history goes.
+int lua_MessageFrame_ScrollToTop(lua_State* L) {
+    if (auto* w = widgetOf(L, 1)) w->messageScroll = lastScroll(*w);
+    return 0;
+}
+/// SetScrollOffset(offset) (0x00973470): that far back from the newest.
+int lua_MessageFrame_SetScrollOffset(lua_State* L) {
+    auto* w = widgetOf(L, 1);
+    if (w && lua_isnumber(L, 2)) scrollTo(*w, static_cast<int>(lua_tonumber(L, 2)));
+    return 0;
+}
+/// GetCurrentScroll (0x009736f0 -> 0x009690c0): how far back it is.
+int lua_MessageFrame_GetCurrentScroll(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->messageScroll : 0);
+    return 1;
+}
+/// GetNumLinesDisplayed (0x009736a0).
+int lua_MessageFrame_GetNumLinesDisplayed(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    lua_pushnumber(L, w ? w->messagesDisplayed : 0);
+    return 1;
+}
+/// AtBottom and AtTop (0x00973530, 0x009734d0): 1 at that end, else nil.
+int lua_MessageFrame_AtBottom(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (!w || w->messageScroll <= 0) { lua_pushnumber(L, 1); return 1; }
+    lua_pushnil(L);
+    return 1;
+}
+int lua_MessageFrame_AtTop(lua_State* L) {
+    const auto* w = widgetOf(L, 1);
+    if (!w || w->messageScroll >= lastScroll(*w)) { lua_pushnumber(L, 1); return 1; }
+    lua_pushnil(L);
+    return 1;
+}
+
 int lua_Region_GetNumPoints(lua_State* L) {
     const auto* w = widgetOf(L, 1);
     lua_pushnumber(L, w ? static_cast<lua_Number>(w->anchors.size()) : 0.0);
@@ -7735,6 +7797,14 @@ void LuaEngine::registerCoreAPI() {
         {"ScrollUp",        lua_MessageFrame_ScrollUp},
         {"ScrollDown",      lua_MessageFrame_ScrollDown},
         {"ScrollToBottom",  lua_MessageFrame_ScrollToBottom},
+        {"ScrollToTop",     lua_MessageFrame_ScrollToTop},
+        {"PageUp",          lua_MessageFrame_PageUp},
+        {"PageDown",        lua_MessageFrame_PageDown},
+        {"SetScrollOffset", lua_MessageFrame_SetScrollOffset},
+        {"GetCurrentScroll", lua_MessageFrame_GetCurrentScroll},
+        {"GetNumLinesDisplayed", lua_MessageFrame_GetNumLinesDisplayed},
+        {"AtBottom",        lua_MessageFrame_AtBottom},
+        {"AtTop",           lua_MessageFrame_AtTop},
         {"Enable",          lua_Button_Enable},
         {"SetChecked",      lua_CheckButton_SetChecked},
         {"SetButtonState",  lua_Button_SetButtonState},
@@ -7958,11 +8028,6 @@ void LuaEngine::registerCoreAPI() {
         "function mt:GetInventorySlot()\n"
         "    return BankButtonIDToInvSlotID(self:GetID(), self.isBag)\n"
         "end\n"
-        // Message frames here do not scroll: every line is drawn and the frame
-        // is always showing its newest, which is what AtBottom asks. Answering
-        // false would have the interface offer a scroll-to-bottom button that
-        // does nothing.
-        "function mt:AtBottom() return true end\n"
     );
 
     // Animations. Written in Lua because it is almost entirely bookkeeping -
