@@ -657,6 +657,8 @@ public:
     /// why the empty name the popup allows is refused here rather than sent.
     void setGuildBankTabInfo(uint8_t tabId, const std::string& name,
                              const std::string& icon);
+    /// 0x005a50c0's refusals of an item for the guild bank; true when refused.
+    bool guildBankRefusesDeposit(uint8_t srcBag, uint8_t srcSlot);
     void guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot);
     // Deposit an inventory item into the first free slot of the viewed tab.
     void guildBankDepositFromInventory(uint8_t srcBag, uint8_t srcSlot);

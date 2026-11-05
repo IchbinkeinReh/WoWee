@@ -4484,8 +4484,45 @@ void InventoryHandler::setGuildBankTabInfo(uint8_t tabId, const std::string& nam
     owner_.getSocket()->send(p);
 }
 
+bool InventoryHandler::guildBankRefusesDeposit(uint8_t srcBag, uint8_t srcSlot) {
+    // 0x005a50c0, before the swap goes out, in its order: a bound item is
+    // refused - a quest item (Bonding 4) with ERR_GUILD_BANK_QUEST_ITEM, any
+    // other with ERR_GUILD_BANK_BOUND_ITEM - then a conjured one (ItemFlags
+    // 0x2), a wrapped one (ITEM_FIELD_FLAGS 0x8), and one taken from the
+    // player's own equipment and bag slots (below 23).
+    uint64_t guid = 0;
+    if (srcBag == 0xFF && srcSlot >= 23 && srcSlot < 39) guid = owner_.getBackpackItemGuid(srcSlot - 23);
+    else if (srcBag >= 19 && srcBag <= 22) guid = owner_.getBagItemGuid(srcBag - 19, srcSlot);
+    else if (srcBag == 0xFF && srcSlot < 23) guid = owner_.getEquipSlotGuid(srcSlot);
+    if (guid == 0) {
+        if (srcBag == 0xFF && srcSlot < 23) {
+            owner_.addUIError(interfaceString("ERR_GUILD_BANK_EQUIPPED_ITEM", "You must unequip that item first"));
+            return true;
+        }
+        return false;
+    }
+    const uint32_t fieldFlags = owner_.getItemFieldFlags(guid);
+    const auto* info = owner_.getItemInfo(owner_.getItemEntryByGuid(guid));
+    auto refuse = [&](const char* key, const char* enUS) {
+        owner_.addUIError(interfaceString(key, enUS));
+        return true;
+    };
+    if ((fieldFlags & 0x1u) != 0) {
+        if (info && info->bindType == 4) return refuse("ERR_GUILD_BANK_QUEST_ITEM", "You can't store quest items in the guild bank");
+        return refuse("ERR_GUILD_BANK_BOUND_ITEM", "You can't store soulbound items in the guild bank");
+    }
+    if (info && info->valid && (info->itemFlags & 0x2u) != 0)
+        return refuse("ERR_GUILD_BANK_CONJURED_ITEM", "You can't store conjured items in the guild bank");
+    if ((fieldFlags & 0x8u) != 0)
+        return refuse("ERR_GUILD_BANK_WRAPPED_ITEM", "You can't store wrapped items in the guild bank");
+    if (srcBag == 0xFF && srcSlot < 23)
+        return refuse("ERR_GUILD_BANK_EQUIPPED_ITEM", "You must unequip that item first");
+    return false;
+}
+
 void InventoryHandler::guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || guildBankerGuid_ == 0) return;
+    if (guildBankRefusesDeposit(srcBag, srcSlot)) return;
     auto packet = GuildBankSwapItemsPacket::buildInventoryToBank(guildBankerGuid_, tabId, bankSlot, srcBag, srcSlot);
     owner_.getSocket()->send(packet);
 }
@@ -4493,6 +4530,7 @@ void InventoryHandler::guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uin
 void InventoryHandler::guildBankDepositFromInventory(uint8_t srcBag, uint8_t srcSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() ||
         guildBankerGuid_ == 0 || !guildBankOpen_) return;
+    if (guildBankRefusesDeposit(srcBag, srcSlot)) return;
     // CMSG_GUILD_BANK_SWAP_ITEMS has no server-side auto-store for the deposit
     // direction (that path forces bank→character), so the client picks the
     // target slot - the first empty one in the tab the player is viewing, which
