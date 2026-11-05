@@ -1624,8 +1624,17 @@ void registerSpellLuaAPI(lua_State* L) {
             lua_pushboolean(L, gh && gh->getCurrentCastSpellId() == spellId ? 1 : 0);
             return 1;
         }},
+                // IsAutoRepeatSpell(spell [, book]) (0x005415d0): 1 when the
+                // spell is the repeating one running (0x007fe130), else nil.
                 {"IsAutoRepeatSpell", [](lua_State* L) -> int {
-            (void)L; lua_pushboolean(L, 0); return 1; // Stub
+            auto* gh = getGameHandler(L);
+            const uint32_t spellId = gh ? spellIdForCall(L, gh) : 0;
+            if (spellId != 0 && spellId == gh->autoRepeatSpellId()) {
+                lua_pushnumber(L, 1);
+                return 1;
+            }
+            lua_pushnil(L);
+            return 1;
         }},
                 {"CastShapeshiftForm", [](lua_State* L) -> int {
             // CastShapeshiftForm(index) - cast the spell for the given form slot

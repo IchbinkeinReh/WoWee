@@ -4221,7 +4221,11 @@ public:
     /// set by a cast of one with AttributesEx2 0x20 (0x007fa2e0), cleared
     /// by SMSG_CANCEL_AUTO_REPEAT (0x00807560).
     [[nodiscard]] bool isAutoRepeating() const { return autoRepeating_; }
-    void setAutoRepeating(bool on) { autoRepeating_ = on; }
+    void setAutoRepeating(bool on) { autoRepeating_ = on; if (!on) autoRepeatSpellId_ = 0; }
+    /// The repeating spell started (0x007fe130 answers it), which
+    /// IsAutoRepeatSpell compares against.
+    void startAutoRepeat(uint32_t spellId) { autoRepeating_ = true; autoRepeatSpellId_ = spellId; }
+    [[nodiscard]] uint32_t autoRepeatSpellId() const { return autoRepeating_ ? autoRepeatSpellId_ : 0; }
     /// 0x00807560: a running auto-repeat spell (Auto Shot, Shoot) stopped -
     /// CMSG_CANCEL_AUTO_REPEAT_SPELL first when `tellServer`, then
     /// STOP_AUTOREPEAT_SPELL (event 0x1ae). Nothing when none is running.
@@ -5609,6 +5613,7 @@ private:
     /// unitsCooperate, with unitMayAttack(a, b) asked only when not given.
     [[nodiscard]] bool unitsCooperateGiven(uint64_t a, uint64_t b, std::optional<bool> aMayAttackB) const;
     bool autoRepeating_ = false;
+    uint32_t autoRepeatSpellId_ = 0;
     // Dead: autoTargetAttacker moved to CombatHandler
 
     /**

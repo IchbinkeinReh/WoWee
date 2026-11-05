@@ -1824,6 +1824,7 @@ void GameHandler::registerCoreOpcodes() {
         // exactly this. Its ranged ready ends with it (0x00807560 clears
         // +0xa38 0x200).
         autoRepeating_ = false;
+        autoRepeatSpellId_ = 0;
         fireAddonEvent("STOP_AUTOREPEAT_SPELL", {});
     };
 

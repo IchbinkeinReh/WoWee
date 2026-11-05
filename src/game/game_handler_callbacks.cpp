@@ -2041,6 +2041,7 @@ void GameHandler::stopAutoRepeat(bool tellServer) {
         socket->send(packet);
     }
     autoRepeating_ = false;
+    autoRepeatSpellId_ = 0;
     fireAddonEvent("STOP_AUTOREPEAT_SPELL", {});
 }
 
