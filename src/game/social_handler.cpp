@@ -6505,17 +6505,20 @@ void SocialHandler::handleGroupSetLeader(network::Packet& packet) {
 
 void SocialHandler::sendMinimapPing(float wowX, float wowY) {
     if (owner_.getState() != WorldState::IN_WORLD) return;
+    // PingLocation (0x0057ed70) sends only in a party or raid (0xbd1948,
+    // 0xbeb608), and announces the ping here either way (0x0057eb80).
+    if (owner_.isInGroup()) {
+        // MSG_MINIMAP_PING (CMSG direction): float posX + float posY
+        // Server convention: posX = east/west axis = canonical Y (west)
+        //                    posY = north/south axis = canonical X (north)
+        const float serverX = wowY;  // canonical Y (west) → server posX
+        const float serverY = wowX;  // canonical X (north) → server posY
 
-    // MSG_MINIMAP_PING (CMSG direction): float posX + float posY
-    // Server convention: posX = east/west axis = canonical Y (west)
-    //                    posY = north/south axis = canonical X (north)
-    const float serverX = wowY;  // canonical Y (west) → server posX
-    const float serverY = wowX;  // canonical X (north) → server posY
-
-    network::Packet pkt(wireOpcode(Opcode::MSG_MINIMAP_PING));
-    pkt.writeFloat(serverX);
-    pkt.writeFloat(serverY);
-    owner_.getSocket()->send(pkt);
+        network::Packet pkt(wireOpcode(Opcode::MSG_MINIMAP_PING));
+        pkt.writeFloat(serverX);
+        pkt.writeFloat(serverY);
+        owner_.getSocket()->send(pkt);
+    }
 
     // Add ping locally so the sender sees their own ping immediately
     GameHandler::MinimapPing localPing;
@@ -6524,6 +6527,7 @@ void SocialHandler::sendMinimapPing(float wowX, float wowY) {
     localPing.wowY       = wowY;
     localPing.age        = 0.0f;
     owner_.minimapPingsRef().push_back(localPing);
+    owner_.announceMinimapPing(localPing.senderGuid, wowX, wowY);
 }
 
 // ============================================================

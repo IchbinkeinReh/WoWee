@@ -4526,6 +4526,16 @@ int lua_Minimap_PingLocation(lua_State* L) {
     return 0;
 }
 
+/// Minimap:GetPingPosition() (0x0057efe0): where the last ping is, as the
+/// offset MINIMAP_PING gave for it but from where the player stands now.
+int lua_Minimap_GetPingPosition(lua_State* L) {
+    auto* gh = wowee::addons::getGameHandler(L);
+    const glm::vec2 at = gh ? gh->minimapPingPosition() : glm::vec2(0.0f);
+    lua_pushnumber(L, at.x);
+    lua_pushnumber(L, at.y);
+    return 2;
+}
+
 /// Enable and Disable, with the handlers that go with them.
 ///
 /// A disabled button is greyed and takes no clicks, and FrameXML both sets
@@ -7828,6 +7838,7 @@ void LuaEngine::registerCoreAPI() {
         {"GetZoom",         lua_Minimap_GetZoom},
         {"GetZoomLevels",   lua_Minimap_GetZoomLevels},
         {"PingLocation",    lua_Minimap_PingLocation},
+        {"GetPingPosition", lua_Minimap_GetPingPosition},
         {"DrawQuestBlob",   lua_QuestBlobFrame_DrawQuestBlob},
         {"GetCenter",       lua_Region_GetCenter},
         {"SetAlpha",        lua_Region_SetAlpha},

@@ -913,6 +913,12 @@ public:
 
     // Minimap ping (Ctrl+click on minimap; wowX/wowY in canonical WoW coords)
     void sendMinimapPing(float wowX, float wowY);
+    /// 0x0057eb80: a ping at a canonical place, by `sender` - kept as the last
+    /// one (0xbeba8c) and announced as MINIMAP_PING with its offset.
+    void announceMinimapPing(uint64_t sender, float wowX, float wowY);
+    /// Minimap:GetPingPosition (0x0057efe0): the last ping's offset from the
+    /// player, as MINIMAP_PING gives it; zero with no player.
+    [[nodiscard]] glm::vec2 minimapPingPosition() const;
 
     // Guild commands
     void requestGuildInfo();
@@ -6100,6 +6106,11 @@ private:
     uint32_t weaponProficiency_ = 0;  // bitmask from SMSG_SET_PROFICIENCY itemClass=2
     uint32_t armorProficiency_  = 0;  // bitmask from SMSG_SET_PROFICIENCY itemClass=4
     std::vector<MinimapPing> minimapPings_;
+    /// The last ping's canonical place (0xbeba8c), the world origin before one.
+    glm::vec2 lastMinimapPing_{0.0f, 0.0f};
+    /// The offset of a canonical place from the player over the map, turned
+    /// with it (0x0057eb80, 0x0057efe0).
+    [[nodiscard]] glm::vec2 minimapPingOffset(float wowX, float wowY) const;
     uint64_t pendingGameObjectInteractGuid_ = 0;
     // Owned fishing bobber whose bite animation has fired. Keeping this explicit
     // lets the UI target/reel it even while GAMEOBJECT_QUERY metadata is pending.
