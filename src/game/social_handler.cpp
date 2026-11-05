@@ -2831,6 +2831,7 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
     const uint64_t prevLooterGuid = partyData.looterGuid;
     const uint8_t prevLootThreshold = partyData.lootThreshold;
     const bool wasInGroup = !partyData.isEmpty();
+    const bool wasRaid = wasInGroup && groupIsRaid(partyData.groupType);
     const std::vector<GroupMember> prevMembers = partyData.members;
     partyData = GroupListData{};
     if (!GroupListParser::parse(packet, partyData, hasRoles, hasBattleGroupFlag)) return;
@@ -2926,8 +2927,8 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
                                         [&](const GroupMember& p) { return p.guid == m.guid; });
         if (!listed && !owner_.getEntityManager().getEntity(m.guid)) requestPartyMemberStats(m.guid);
     }
-    // Who came and went, as 0x006d8870 says it - in a party only, a raid's
-    // roster being the raid frame's business: ERR_JOINED_GROUP_S for each
+    // Who came and went, as 0x006d8870 says it for a party (a raid's has its
+    // own lines, below): ERR_JOINED_GROUP_S for each
     // member not there before and ERR_LEFT_GROUP_S for each one gone, system
     // lines. A group just formed names its other member to the leader alone.
     // Leaving is said elsewhere (ERR_LEFT_GROUP_YOU, ERR_UNINVITE_YOU,
@@ -2951,6 +2952,24 @@ void SocialHandler::handleGroupList(network::Packet& packet) {
                       {partyData.members.back().name});
         }
     }
+    // A raid's are its own lines, said by the raid roster's rebuild
+    // (0x00574f10 -> 0x00572d90, 0x00572490) once the raid already had a
+    // roster: ERR_RAID_MEMBER_ADDED_S and ERR_RAID_MEMBER_REMOVED_S, system
+    // lines. Leaving one is ERR_RAID_YOU_LEFT (0x006d8870 -> 0x00572f90).
+    if (nowInGroup && groupIsRaid(partyData.groupType) && wasRaid) {
+        const auto had = [](const std::vector<GroupMember>& list, uint64_t guid) {
+            return std::any_of(list.begin(), list.end(),
+                               [guid](const GroupMember& m) { return m.guid == guid; });
+        };
+        for (const auto& m : partyData.members)
+            if (!m.name.empty() && !had(prevMembers, m.guid))
+                gameError(owner_, ErrTo::Chat, "ERR_RAID_MEMBER_ADDED_S", "%s has joined the raid group.", {m.name});
+        for (const auto& m : prevMembers)
+            if (!m.name.empty() && !had(partyData.members, m.guid))
+                gameError(owner_, ErrTo::Chat, "ERR_RAID_MEMBER_REMOVED_S", "%s has left the raid group.", {m.name});
+    }
+    if (!nowInGroup && wasRaid)
+        gameError(owner_, ErrTo::Chat, "ERR_RAID_YOU_LEFT", "You have left the raid group.");
     if (nowInGroup != wasInGroup) LOG_INFO(nowInGroup ? "Joined group" : "Left group");
     // The loot rules, as 0x0052bd90 announces them - on joining a group, and
     // afterwards whenever one changes: ERR_SET_LOOT_* for the method,
