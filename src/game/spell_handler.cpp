@@ -814,8 +814,18 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
     // confirm dialog reads.
     table[Opcode::MSG_TALENT_WIPE_CONFIRM] = [this](network::Packet& packet) {
         if (!packet.hasRemaining(12)) { packet.skipAll(); return; }
-        talentWipeNpcGuid_ = packet.readUInt64();
-        talentWipeCost_    = packet.readUInt32();
+        const uint64_t npcGuid = packet.readUInt64();
+        const uint32_t cost    = packet.readUInt32();
+        // No trainer is the server's refusal (0x006e2e90, MSG_TALENT_WIPE_CONFIRM):
+        // ERR_TALENT_WIPE_ERROR, and no confirmation asked.
+        if (npcGuid == 0) {
+            owner_.playGameErrorSound("ERR_TALENT_WIPE_ERROR");
+            owner_.addUIError(interfaceString("ERR_TALENT_WIPE_ERROR",
+                                              "There was an error removing your talents."));
+            return;
+        }
+        talentWipeNpcGuid_ = npcGuid;
+        talentWipeCost_    = cost;
         talentWipePending_ = true;
         LOG_INFO("MSG_TALENT_WIPE_CONFIRM: npc=0x", std::hex, talentWipeNpcGuid_, std::dec,
                  " cost=", talentWipeCost_);
