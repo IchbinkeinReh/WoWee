@@ -461,8 +461,8 @@ private:
     bool sceneHistoryReady = false;
     bool sceneHistoryHasWater_ = false;
     /// The camera of the frame before, which took a capture with the water in it.
-    glm::mat4 lastViewProj_{1.0f};
-    bool hasLastViewProj_ = false;
+    glm::mat4 slotViewProj_[SCENE_HISTORY_FRAMES]{};  ///< the camera each capture slot was taken with
+    bool slotHasView_[SCENE_HISTORY_FRAMES]{};
     mutable uint32_t renderDiagCounter_ = 0;
 
     // Surface disturbance trail. Points age out, spreading as they go; the

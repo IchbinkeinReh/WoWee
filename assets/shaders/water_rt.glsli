@@ -58,7 +58,10 @@ vec3 rtwLitHit(vec4 surface, vec3 n, vec3 toSun, float sunVis) {
 // Returns how much of the frame's colour to take: 1 well inside the screen,
 // falling to 0 over its outer 3% so the change to the traced colour where a
 // hit leaves it is not a line. 0 for no match.
-bool rtwScreenReuse = true;  // off for the traced-only debug view
+bool rtwScreenReuse = true;  // off for the traced-only debug view and interior water
+// (Interior water's mirror reads the capture by its own rules: rtwMirrorSeen.)
+const float RTW_MIRROR_EDGE = 0.12;   // of the screen, the fade at its edge
+const float RTW_MIRROR_REACH = 0.02;  // of its height, how far round a point the depth is asked
 // The capture is a finished frame with the water already in it (the MSAA
 // path into an off-screen target; WaterRenderer::setSceneHistoryHasWater):
 // what lies under the surface there is last frame's water over the bed, so
@@ -86,6 +89,44 @@ float rtwOnScreen(vec3 hit, vec3 hitNormal, out vec3 color) {
     if (abs(scene - clip.w) >= max(0.5, 0.03 * clip.w)) return 0.0;
     color = texture(SceneColor, uv).rgb;
     return w;
+}
+
+// The capture's colour for a mirror over a building's interior water, and how
+// far it can be trusted. That capture is the finished frame under MSAA, water
+// and last frame's reflection in it, so a mirror reading it unchecked feeds on
+// itself. A camera above the water sees a point above the water with no water
+// in front of it, so the point's own pixel is free of it: this takes only a
+// point standing clear of `surfaceZ` whose depth agrees with the capture's.
+// Every test is a fade, and the depth's is taken over the taps round the point,
+// so what is rejected goes to the water's body over a distance and not at a
+// line: the edge of something in front of the point, the screen's, the point's
+// face turning away.
+float rtwMirrorDepthAgrees(vec2 uv, float depth, float tolerance) {
+    float scene = linearizeDepth(texture(SceneDepth, uv).r, push.depthRange.x, push.depthRange.y);
+    return 1.0 - smoothstep(tolerance, 2.0 * tolerance, abs(scene - depth));
+}
+float rtwMirrorSeen(vec3 hit, vec3 hitNormal, float surfaceZ, out vec3 color) {
+    color = vec3(0.0);
+    if (!(rtWater.y < 2.5) || push.sceneValid < 0.5) return 0.0;
+    vec4 clip = captureViewProj * vec4(hit, 1.0);
+    if (clip.w < 0.1) return 0.0;
+    vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+    vec2 edge = min(uv, 1.0 - uv);
+    float seen = smoothstep(0.0, RTW_MIRROR_EDGE, min(edge.x, edge.y));
+    seen *= smoothstep(0.0, 0.2, dot(hitNormal, normalize(viewPos.xyz - hit)));
+    seen *= smoothstep(0.05, 0.4, hit.z - surfaceZ);
+    if (seen <= 0.0) return 0.0;
+    float tolerance = max(0.25, 0.01 * clip.w);
+    float agree = rtwMirrorDepthAgrees(uv, clip.w, tolerance);
+    vec2 reach = vec2(RTW_MIRROR_REACH * push.screenSize.y / push.screenSize.x, RTW_MIRROR_REACH);
+    for (int i = 0; i < 8; ++i) {
+        float a = float(i) * 0.7853982;
+        vec2 ring = vec2(cos(a), sin(a)) * reach;
+        agree += rtwMirrorDepthAgrees(uv + ring, clip.w, tolerance);
+        agree += rtwMirrorDepthAgrees(uv + ring * 0.5, clip.w, tolerance);
+    }
+    color = texture(SceneColor, uv).rgb;
+    return seen * smoothstep(0.1, 0.9, agree / 17.0);
 }
 
 // What the frame drawn under the water shows at the surface point `p`'s own
@@ -130,6 +171,10 @@ vec3 rtwReflection(vec3 origin, vec3 dir, vec3 toSun, inout uint rng) {
     }
     vec3 hit = origin + dir * t;
     vec3 shown;
+    if (push.interiorFog > 0.5) {
+        rtwReflectionSeen = rtwMirrorSeen(hit, hn, origin.z, shown);
+        return shown;
+    }
     // Fogged already, over the camera's distance to it.
     float onScreen = rtwOnScreen(hit, hn, shown);
     rtwReflectionSeen = onScreen;
