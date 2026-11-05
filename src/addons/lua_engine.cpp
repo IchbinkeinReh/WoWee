@@ -1,4 +1,5 @@
 #include "addons/lua_engine.hpp"
+#include "core/test_frame_shot.hpp"
 #include "addons/interface_prefetch.hpp"
 #include "ui/link_hit.hpp"
 #include "ui/text_markup.hpp"
@@ -6983,6 +6984,11 @@ void LuaEngine::registerCoreAPI() {
             return 0;
         });
         lua_setglobal(L_, "__WoweeTestCloseSocket");
+        lua_pushcfunction(L_, [](lua_State* L) -> int {
+            wowee::core::testFrameShotPath = luaL_checkstring(L, 1);
+            return 0;
+        });
+        lua_setglobal(L_, "__WoweeTestFrameShot");
     }
 
     // The micro menu's game-menu button reaches this client's own settings.

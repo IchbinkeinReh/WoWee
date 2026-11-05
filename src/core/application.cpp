@@ -1,3 +1,4 @@
+#include "core/test_frame_shot.hpp"
 #include "core/stall_report.hpp"
 #include "core/platform.hpp"
 #include "core/application.hpp"
@@ -6896,6 +6897,10 @@ void Application::render() {
     // row counted in one place and not the other comes out as a sheet taller
     // than what is on it, which nothing but looking will catch. The in-game
     // screenshot key cannot reach the login screen, which is where that card is.
+    if (!testFrameShotPath.empty()) {
+        renderer->captureScreenshot(testFrameShotPath);
+        testFrameShotPath.clear();
+    }
     if (const char* shot = std::getenv("WOWEE_SCREENSHOT"); shot != nullptr) {
         // Let the interface settle first: ImGui sizes much of its layout from
         // what it measured last frame, and hides a window outright for its
