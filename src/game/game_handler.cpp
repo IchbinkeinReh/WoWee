@@ -829,6 +829,18 @@ void GameHandler::update(float deltaTime) {
     updateNetworking();
     if (!socket) return;  // disconnect() may have been called
     if (state == WorldState::IN_WORLD) updatePredictedPower();
+    // The world state frame's countdowns run on the server's clock, which
+    // 0x005488f0 asks for every twenty seconds in the world:
+    // CMSG_WORLD_STATE_UI_TIMER_UPDATE (0x00548760), answered with
+    // SMSG_WORLD_STATE_UI_TIMER_UPDATE.
+    if (state == WorldState::IN_WORLD && wireOpcode(Opcode::CMSG_WORLD_STATE_UI_TIMER_UPDATE) != 0xFFFF) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= nextWorldStateTimerQuery_) {
+            nextWorldStateTimerQuery_ = now + std::chrono::seconds(20);
+            network::Packet query(wireOpcode(Opcode::CMSG_WORLD_STATE_UI_TIMER_UPDATE));
+            socket->send(query);
+        }
+    }
 
     // Sends a Warden response built off the main thread. Nothing else does:
     // without this the server's check goes unanswered and it drops the

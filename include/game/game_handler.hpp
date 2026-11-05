@@ -6375,6 +6375,7 @@ private:
     TutorialState tutorials_;
     bool entryTutorialsPending_ = false;
     std::chrono::steady_clock::time_point nextLoadingKeepAlive_{};  ///< 0xb2fe70
+    std::chrono::steady_clock::time_point nextWorldStateTimerQuery_{};  ///< 0xbe8f40
     cast_visual::Roster castVisuals_;
     mutable std::unordered_map<uint32_t, bool> precastKitAnimates_;
     float vehicleAimPower_ = 0.0f;  ///< DAT_00c24958
