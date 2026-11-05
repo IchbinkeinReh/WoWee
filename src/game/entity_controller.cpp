@@ -2595,6 +2595,10 @@ void EntityController::onCreatePlayer(const UpdateBlock& block, std::shared_ptr<
         // The active player made: 0x006e6150 -> 0x00528010 -> 0x005cb900,
         // the guild rights asked for with PLAYER_GUILDID now known.
         owner_.onPlayerEnteredWorldGuild();
+        // ...and, from the unit's own creation (0x0072e3a0 -> 0x006d66e0),
+        // PVPQUEUE_ANYWHERE_UPDATE_AVAILABLE (event 0x26f): the battleground
+        // queue can be asked about from anywhere again.
+        pendingEvents_.emit("PVPQUEUE_ANYWHERE_UPDATE_AVAILABLE", {});
     }
 
     // Name query + visible items
