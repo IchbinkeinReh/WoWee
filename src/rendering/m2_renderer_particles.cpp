@@ -453,6 +453,12 @@ void M2Renderer::prepareM2Particles() {
         // the wrong speed, or drawn at the wrong size - and none of those says
         // which model it is. This does.
         float highestParticleZ = -std::numeric_limits<float>::max();
+        // The model's alpha goes on its particles' (0x008309c0 copies it to the
+        // emitter's +0x130, clamped; 0x00979e90 multiplies by it), and the
+        // distance fade is that alpha (0x00791cb0): a fading doodad's flame
+        // fades with it.
+        const float modelAlpha = std::clamp(
+            instanceDistanceFade(inst, particleDrawOrder_[instOrder].first) * inst.fade, 0.0f, 1.0f);
         float widestParticle = 0.0f;
 
         // WOWEE_M2_PARTICLE_DIAG=<name substring>: once every two seconds, what
@@ -595,7 +601,7 @@ void M2Renderer::prepareM2Particles() {
             float lifeRatio = p.life / std::max(p.maxLife, 0.001f);
             glm::vec3 color = interpFBlockVec3(em.particleColor, lifeRatio);
             if (cachedColorOverride) color = interpFBlockVec3(cachedOverrideBlock, lifeRatio);
-            float alpha = std::min(interpFBlockFloat(em.particleAlpha, lifeRatio), 1.0f);
+            float alpha = std::min(interpFBlockFloat(em.particleAlpha, lifeRatio), 1.0f) * modelAlpha;
             float rawScale = interpFBlockFloat(em.particleScale, lifeRatio);
 
             // The authored colour, alpha and size, as they are: the client puts
