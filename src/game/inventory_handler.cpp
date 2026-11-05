@@ -448,15 +448,9 @@ void InventoryHandler::registerOpcodes(DispatchTable& table) {
             if (!packet.hasRemaining(8)) break;
             masterLootCandidates_.push_back(packet.readUInt64());
         }
-        // The candidate list arrives because the master looter picked an item,
-        // and the menu that assigns it is built from exactly this. Parsed and
-        // stored already; nothing was told it had come, so the menu never
-        // opened. Both events: one opens it, one fills it, and they are the
-        // same frame rather than two.
-        if (owner_.addonEventCallbackRef()) {
-            owner_.addonEventCallbackRef()("OPEN_MASTER_LOOT_LIST", {});
-            owner_.addonEventCallbackRef()("UPDATE_MASTER_LOOT_LIST", {});
-        }
+        // Kept and nothing more (0x006fa690). The menu that assigns an item
+        // is opened by LootSlot on a master looter's slot (0x00589140); a
+        // list arriving with the loot is not an item picked.
     };
 
     // ---- Loot money / misc consume ----

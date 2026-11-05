@@ -4775,6 +4775,26 @@ static int lua_LootSlot(lua_State* L) {
         return 0;
     }
     if (const auto* item = lootItemAtSlot(gh, slot)) {
+        // 0x00589140: by the slot's type in the loot response - a roll still
+        // going (1) and a locked slot (3) are refused with their lines, and a
+        // master looter's slot (2) opens the candidate menu rather than take
+        // the item.
+        switch (item->lootSlotType) {
+            case 1:
+                gh->playGameErrorSound("ERR_LOOT_ROLL_PENDING");
+                gh->addUIError(game::interfaceString("ERR_LOOT_ROLL_PENDING",
+                                                     "That item is still being rolled for"));
+                return 0;
+            case 3:
+                gh->playGameErrorSound("ERR_LOOT_CANT_LOOT_THAT");
+                gh->addUIError(game::interfaceString("ERR_LOOT_CANT_LOOT_THAT",
+                                                     "You can't loot that item."));
+                return 0;
+            case 2:
+                gh->fireAddonEvent("OPEN_MASTER_LOOT_LIST", {});
+                return 0;
+            default: break;
+        }
         // The server's own slot number, not the position on screen.
         gh->lootItem(item->slotIndex);
     }
