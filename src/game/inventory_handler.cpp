@@ -2166,6 +2166,12 @@ void InventoryHandler::equipItemToSlot(uint64_t itemGuid, uint8_t equipSlot, boo
     // packet outright when the destination is not an equipment position, and a
     // dropped request is indistinguishable from one that was never built.
     if (equipSlot >= static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT)) return;
+    // An item on the trade table is not put on (0x006dff90, 0x005864d0).
+    if (itemInTrade(itemGuid)) {
+        owner_.playGameErrorSound("ERR_EQUIP_TRADE_ITEM");
+        owner_.addUIError(interfaceString("ERR_EQUIP_TRADE_ITEM", "You can't equip an item you are trading."));
+        return;
+    }
 
     // Asked before the packet is built, so a bind-on-equip item named into a
     // slot no longer binds itself without the player saying so. EquipItemByName
@@ -2236,6 +2242,11 @@ void InventoryHandler::autoEquipItemBySlot(int backpackIndex, bool confirmed) {
     if (setAmmoInstead(slot.item.itemId)) return;
 
     const uint8_t wireSlot = static_cast<uint8_t>(Inventory::NUM_EQUIP_SLOTS + backpackIndex);
+    if (itemInTrade(itemGuidAtWire(0xFF, wireSlot))) {   // 0x006dff90
+        owner_.playGameErrorSound("ERR_EQUIP_TRADE_ITEM");
+        owner_.addUIError(interfaceString("ERR_EQUIP_TRADE_ITEM", "You can't equip an item you are trading."));
+        return;
+    }
     if (!confirmed && slot.item.wouldBindOnEquip()) {
         pendingSwap_ = PendingSwap{};   // only one move can be waiting
         pendingEquip_ = PendingEquip{.active = true, .fromBag = false, .bag = 0, .slot = backpackIndex, .wireSlot = wireSlot};
@@ -2263,6 +2274,12 @@ void InventoryHandler::autoEquipItemInBag(int bagIndex, int slotIndex, bool conf
     if (const auto& bagSlot = owner_.inventoryRef().getBagSlot(bagIndex, slotIndex);
         !bagSlot.empty() && setAmmoInstead(bagSlot.item.itemId))
         return;
+    if (itemInTrade(itemGuidAtWire(static_cast<uint8_t>(Inventory::FIRST_BAG_EQUIP_SLOT + bagIndex),
+                                   static_cast<uint8_t>(slotIndex)))) {   // 0x006dff90
+        owner_.playGameErrorSound("ERR_EQUIP_TRADE_ITEM");
+        owner_.addUIError(interfaceString("ERR_EQUIP_TRADE_ITEM", "You can't equip an item you are trading."));
+        return;
+    }
 
     if (!confirmed && equipWouldBindFromBag(bagIndex, slotIndex)) {
         pendingSwap_ = PendingSwap{};   // only one move can be waiting
@@ -5080,6 +5097,12 @@ void InventoryHandler::setTradeItem(uint8_t tradeSlot, uint8_t srcBag, uint8_t s
     }
     auto packet = SetTradeItemPacket::build(tradeSlot, srcBag, srcSlot);
     owner_.getSocket()->send(packet);
+    if (tradeSlot < TRADE_SLOT_COUNT) myTradeItemGuids_[tradeSlot] = itemGuidAtWire(srcBag, srcSlot);
+}
+
+bool InventoryHandler::itemInTrade(uint64_t itemGuid) const {
+    if (itemGuid == 0 || tradePeerGuid_ == 0) return false;
+    return std::find(myTradeItemGuids_.begin(), myTradeItemGuids_.end(), itemGuid) != myTradeItemGuids_.end();
 }
 
 void InventoryHandler::clearTradeItem(uint8_t tradeSlot) {
@@ -5087,6 +5110,7 @@ void InventoryHandler::clearTradeItem(uint8_t tradeSlot) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
     auto packet = ClearTradeItemPacket::build(tradeSlot);
     owner_.getSocket()->send(packet);
+    if (tradeSlot < TRADE_SLOT_COUNT) myTradeItemGuids_[tradeSlot] = 0;
 }
 
 void InventoryHandler::setTradeGold(uint64_t amount) {
@@ -5102,6 +5126,7 @@ void InventoryHandler::resetTradeState() {
     tradeInitiated_ = false;
     tradePeerName_.clear();
     myTradeSlots_ = {};
+    myTradeItemGuids_ = {};
     peerTradeSlots_ = {};
     myTradeGold_ = 0;
     peerTradeGold_ = 0;
@@ -5222,6 +5247,7 @@ void InventoryHandler::handleTradeStatus(network::Packet& packet) {
             // this player still holding the gold they had put down, for as long
             // as the realm stayed quiet about those slots.
             myTradeSlots_ = {};
+            myTradeItemGuids_ = {};
             peerTradeSlots_ = {};
             myTradeGold_ = 0;
             peerTradeGold_ = 0;

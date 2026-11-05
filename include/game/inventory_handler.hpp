@@ -661,6 +661,8 @@ public:
     bool guildBankRefusesDeposit(uint8_t srcBag, uint8_t srcSlot);
     /// The item at the wire's bag and slot, 0 when none is known there.
     [[nodiscard]] uint64_t itemGuidAtWire(uint8_t bag, uint8_t slot) const;
+    /// One of the player's own items put on the trade table (0x005864d0).
+    [[nodiscard]] bool itemInTrade(uint64_t itemGuid) const;
     void guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot);
     // Deposit an inventory item into the first free slot of the viewed tab.
     void guildBankDepositFromInventory(uint8_t srcBag, uint8_t srcSlot);
@@ -920,6 +922,9 @@ private:
     uint64_t    tradeRequestNameGuid_ = 0;
     std::string tradePeerName_;
     std::array<TradeSlot, TRADE_SLOT_COUNT> myTradeSlots_{};
+    /// The item put into each of the player's own trade slots (0xbfa620) -
+    /// the offer packet names the entry, not the copy.
+    std::array<uint64_t, TRADE_SLOT_COUNT> myTradeItemGuids_{};
     std::array<TradeSlot, TRADE_SLOT_COUNT> peerTradeSlots_{};
     uint64_t myTradeGold_   = 0;
     uint64_t peerTradeGold_ = 0;
