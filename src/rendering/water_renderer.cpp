@@ -62,7 +62,7 @@ struct WaterPushConstants {
     glm::vec4 liquidAnim{1.0f, 0.0f, 0.0f, 1.0f};
     glm::vec4 liquidGrid{0.0f};
 };
-static_assert(sizeof(WaterPushConstants) == 128, "the two shader declarations of this range are laid out for 80 bytes");
+static_assert(sizeof(WaterPushConstants) == 128, "the two shader declarations of this range are laid out for 128 bytes");
 
 
 

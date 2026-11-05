@@ -112,12 +112,19 @@ float rtwFootprint(vec3 origin, float t) {
     return (length(viewPos.xyz - origin) + t) * pixelAngle * 2.0;
 }
 
+// How much of the last reflection is the surface as drawn. A room's traced rock
+// has only its bare texture, not the light painted on it, so over a building's
+// interior water only that much of the mirror is shown: past it the water keeps
+// its own colour rather than a guess at what is off screen.
+float rtwReflectionSeen = 0.0;
+
 // The reflection along `dir` from `origin`.
 vec3 rtwReflection(vec3 origin, vec3 dir, vec3 toSun, inout uint rng) {
     float t;
     vec3 hn;
     vec4 hs;
     float reach = max(rtWater.z, 1.0);
+    rtwReflectionSeen = 0.0;
     if (!rtClosest(origin, dir, reach, rng, t, hn, hs)) {
         return rtwSky(dir);
     }
@@ -125,6 +132,7 @@ vec3 rtwReflection(vec3 origin, vec3 dir, vec3 toSun, inout uint rng) {
     vec3 shown;
     // Fogged already, over the camera's distance to it.
     float onScreen = rtwOnScreen(hit, hn, shown);
+    rtwReflectionSeen = onScreen;
     if (onScreen >= 1.0) return shown;
     bool unit;
     // Shadowed as the land is, by the sun its shadows follow (rtSunRay).

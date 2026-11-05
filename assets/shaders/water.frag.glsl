@@ -526,7 +526,7 @@ void main() {
         // reflection alone is traced, and all of it: read off a capture of the
         // finished frame it took the liquid and last frame's reflection back in,
         // patches with straight edges and trails as the camera turned.
-        rtwScreenReuse = rtWater.y < 2.5 && push.interiorFog < 0.5;
+        rtwScreenReuse = rtWater.y < 2.5;
         uint rng = uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u + uint(time * 60.0);
         // The wave normal, facing up: the mesh's faces down (water.vert
         // crosses binormal into tangent), so it is turned over before the
@@ -869,22 +869,23 @@ void main() {
     // ramp's white half, the animated texture on it, by the MOMT alpha and the
     // ramp's. Its coordinate is bent by the wave normal, so waves and a
     // swimmer's rings move the water itself and not only what it reflects.
-    // Traced whole with its bare colour, the Pools of Vision were a film over
-    // an orange bed: the rock traced has its bare texture, without the room's
-    // painted light. So what comes through and the mirror are seen through the
-    // room's air, multiplied by it, which keeps them as dark as the painted
-    // rock and takes the orange out; the mirror stays short of hiding the
-    // liquid at a grazing angle.
+    // What lies under it is the frame already there, the bed as painted, by
+    // the same alpha, as the client has it: traced, a cave's bed was bare and
+    // orange. The mirror goes over the two by Fresnel, written so that one
+    // blend gives body, mirror and bed each their share.
     if (rtOn && push.interiorFog > 0.5) {
         vec2 grid = TexCoord * push.liquidGrid.xy + norm.xy * RT_INTERIOR_RIPPLE;
         vec4 tex = push.liquidGrid.z > 0.5 ? texture(uLiquidTex, mat2(push.liquidAnim.xy, push.liquidAnim.zw) * grid)
                                            : vec4(0.0);
         vec3 body = push.liquidColor.rgb + tex.rgb + tex.a * 0.25;
         float bodyAlpha = push.liquidColor.a * mix(push.closeColor.a, push.farColor.a, depthFade);
-        vec3 bed = refractedColor * waterFogColour();
-        vec3 mirror = rtReflect * waterFogColour();
-        vec3 water = mix(mix(bed, body, bodyAlpha), mirror, min(rtFresnel, RT_INTERIOR_MIRROR));
-        outColor = vec4(applyFog(water + specular, FragPos, dist, waterFogColour()), alpha);
+        // From under the surface there is no mirror to show: the rays there
+        // meet the bare bed.
+        float f = viewPos.z < FragPos.z ? 0.0 : min(rtFresnel, RT_INTERIOR_MIRROR) * rtwReflectionSeen;
+        float cover = 1.0 - (1.0 - bodyAlpha) * (1.0 - f);
+        vec3 water = (body * (bodyAlpha * (1.0 - f)) + (f > 0.0 ? rtReflect : vec3(0.0)) * f) / max(cover, 1e-3);
+        outColor = vec4(applyFog(water + specular, FragPos, dist, waterFogColour()),
+                        cover * smoothstep(0.0, 0.08, shoreDepth) * smoothstep(2400.0, 600.0, dist));
         return;
     }
     color = applyFog(color, FragPos, dist, waterFogColour());
