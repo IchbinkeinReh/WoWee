@@ -4782,9 +4782,21 @@ static int lua_LootSlot(lua_State* L) {
 }
 
 // CloseLoot() - close loot window
+// CloseLoot(noUI) (0x005888b0 -> 0x00523640): the argument is the interface
+// saying its loot frame could not be shown - LootFrame answers LOOT_OPENED
+// with CloseLoot(1) when it stays hidden - and, read by 0x00815500 as a
+// truth (a number counts when it is not zero), it has the release said as
+// ERR_LOOT_NO_UI. Only for loot that was open: with none, nothing is said.
 static int lua_CloseLoot(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (gh) gh->closeLoot();
+    if (!gh) return 0;
+    const bool noUI = lua_type(L, 1) == LUA_TNUMBER ? lua_tonumber(L, 1) != 0
+                                                    : lua_toboolean(L, 1) != 0;
+    if (noUI && gh->isLootWindowOpen()) {
+        gh->playGameErrorSound("ERR_LOOT_NO_UI");
+        gh->addUIError(game::interfaceString("ERR_LOOT_NO_UI", "You can't loot right now."));
+    }
+    gh->closeLoot();
     return 0;
 }
 
