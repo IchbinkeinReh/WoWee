@@ -2369,6 +2369,18 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
         }
         return;
     }
+    // A charter (ItemFlags 0x2000, ITEM_FLAG_PETITION) is read, not cast:
+    // CMSG_PETITION_SHOW_SIGNATURES with its guid (0x00708c20 ->
+    // 0x006d6e00), answered with the signatures it carries.
+    constexpr uint32_t kItemFlagPetition = 0x2000;
+    if (itemInfo && itemInfo->valid && (itemInfo->itemFlags & kItemFlagPetition) != 0) {
+        if (wireOpcode(Opcode::CMSG_PETITION_SHOW_SIGNATURES) != 0xFFFF) {
+            network::Packet packet(wireOpcode(Opcode::CMSG_PETITION_SHOW_SIGNATURES));
+            packet.writeUInt64(itemGuid);
+            owner_.getSocket()->send(packet);
+        }
+        return;
+    }
     uint32_t useSpellId = 0;
     if (itemInfo) {
         for (const auto& sp : itemInfo->spells) {
