@@ -1180,6 +1180,22 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             // A unit dying in front of the client is a combat log entry
             // (0x007489c0 -> 0x007561e0), once, as its health runs out.
             if (val == 0 && oldHealth != 0) owner_.combatLogFeed().unitDied(block.guid);
+            // A party member dying is said: ERR_PLAYER_DIED_S with the name,
+            // a system line (0x00729220 -> 0x006dc0f0) - another player in
+            // one of the party's slots (0x0052c680: the player's own
+            // subgroup), not one dynamically flagged dead (0x20) already.
+            if (val == 0 && oldHealth != 0 && entity->getType() == ObjectType::PLAYER &&
+                block.guid != owner_.getPlayerGuid() &&
+                (unit->getDynamicFlags() & 0x20u) == 0) {
+                const auto& party = owner_.getPartyData();
+                const bool inParty = std::any_of(party.members.begin(), party.members.end(),
+                    [&](const GroupMember& m) { return m.guid == block.guid && m.subGroup == party.subGroup; });
+                if (inParty) {
+                    const std::string who = owner_.lookupName(block.guid);
+                    if (!who.empty())
+                        owner_.addSystemChatMessage(interfaceFormat("ERR_PLAYER_DIED_S", "%s has died.", {who}));
+                }
+            }
             if (val == 0) {
                 if (owner_.getCombatHandler() && block.guid == owner_.getCombatHandler()->getAutoAttackTargetGuid()) {
                     owner_.stopAutoAttack();
