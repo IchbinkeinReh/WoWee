@@ -2891,7 +2891,7 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
             if (tracedWater) {
                 const uint8_t basicType = (surface.liquidType == 0) ? 0 : ((surface.liquidType - 1) % 4);
                 // The traced water's, a building's interior water with it: that
-                // takes this draw's colour and texture itself (water.frag).
+                // has its own colour, this draw's averaged (water.frag).
                 if (basicType < 2) continue;
             }
             ClientLiquid* liquid = clientLiquidFor(surface.clientLiquidType);
