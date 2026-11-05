@@ -376,6 +376,42 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
     if (targetGuid == owner_.getPlayerGuid()) return;
     if (targetGuid == 0) return;
 
+    // What the player's own state forbids, said as 0x0072bdb0 says it, in its
+    // order: dead (ERR_ATTACK_DEAD); charmed by someone else; then
+    // UNIT_FIELD_FLAGS stunned (0x40000), pacified (0x20000), fleeing
+    // (0x800000) and confused (0x400000). When an aura is the cause the
+    // client names its mechanic instead (ERR_ATTACK_PREVENTED_BY_MECHANIC_S,
+    // see differences).
+    if (owner_.isPlayerDead() || owner_.isPlayerGhost()) {
+        owner_.addUIError(interfaceString("ERR_ATTACK_DEAD", "You can't attack while dead."));
+        return;
+    }
+    if (auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid())) {
+        const uint16_t charmedBy = fieldIndex(UF::UNIT_FIELD_CHARMEDBY);
+        const uint64_t charmer = charmedBy == 0xFFFF ? 0
+            : (static_cast<uint64_t>(self->getField(static_cast<uint16_t>(charmedBy + 1))) << 32) |
+                  self->getField(charmedBy);
+        if (charmer != 0 && charmer != owner_.getPlayerGuid()) {
+            owner_.addUIError(interfaceString("ERR_ATTACK_CHARMED", "You can't attack while charmed."));
+            return;
+        }
+        const uint16_t flagsIdx = fieldIndex(UF::UNIT_FIELD_FLAGS);
+        const uint32_t flags = flagsIdx == 0xFFFF ? 0 : self->getField(flagsIdx);
+        struct Refusal { uint32_t flag; const char* key; const char* enUS; };
+        static constexpr Refusal kRefusals[] = {
+            {0x00040000u, "ERR_ATTACK_STUNNED",  "You can't attack while stunned."},
+            {0x00020000u, "ERR_ATTACK_PACIFIED", "You can't attack while pacified."},
+            {0x00800000u, "ERR_ATTACK_FLEEING",  "You can't attack while fleeing."},
+            {0x00400000u, "ERR_ATTACK_CONFUSED", "You can't attack while confused."},
+        };
+        for (const auto& r : kRefusals) {
+            if ((flags & r.flag) != 0) {
+                owner_.addUIError(interfaceString(r.key, r.enUS));
+                return;
+            }
+        }
+    }
+
     // Assist Attack: swinging at a friendly unit attacks whatever they are
     // fighting instead. The panel offers this and nothing read it, so an
     // attack on an ally was simply sent and refused by the server - a tank
