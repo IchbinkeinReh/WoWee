@@ -5250,7 +5250,27 @@ void SpellHandler::togglePetSpellAutocast(uint32_t spellId) {
 }
 
 void SpellHandler::renamePet(const std::string& newName) {
-    if (owner_.petGuidRef() == 0 || owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // PetRename (0x005d5670) refuses, in order: no pet (ERR_NO_PET), one the
+    // player did not create (ERR_NOTYOURPET), and one whose UNIT_FIELD_BYTES_2
+    // byte 2 lacks UNIT_CAN_BE_RENAMED (ERR_PET_NOT_RENAMEABLE).
+    const auto pet = owner_.petGuidRef() ? owner_.getEntityManager().getEntity(owner_.petGuidRef()) : nullptr;
+    if (!pet || !pet->isUnit()) {
+        owner_.addUIError(interfaceString("ERR_NO_PET", "You don't have a pet."));
+        return;
+    }
+    const uint16_t createdBy = fieldIndex(UF::UNIT_FIELD_CREATEDBY);
+    const uint64_t maker = createdBy == 0xFFFF ? 0
+        : (static_cast<uint64_t>(pet->getField(static_cast<uint16_t>(createdBy + 1))) << 32) |
+              pet->getField(createdBy);
+    if (maker != owner_.getPlayerGuid()) {
+        owner_.addUIError(interfaceString("ERR_NOTYOURPET", "That's not your pet."));
+        return;
+    }
+    if (((entityField(*pet, UF::UNIT_FIELD_BYTES_2) >> 16) & 0x1u) == 0) {
+        owner_.addUIError(interfaceString("ERR_PET_NOT_RENAMEABLE", "Your pet can't be renamed."));
+        return;
+    }
     if (newName.empty() || newName.size() > 12) return;
     auto packet = PetRenamePacket::build(owner_.petGuidRef(), newName, 0);
     owner_.getSocket()->send(packet);
