@@ -4332,6 +4332,18 @@ void MovementHandler::followGuid(uint64_t guid) {
             return;
         }
     }
+    // ...and the follow is started only within thirty yards: 0x00715c70's
+    // table gives the follow move (kind 3) 900, the square of the distance.
+    {
+        const float dx = target->getX() - owner_.movementInfoRef().x;
+        const float dy = target->getY() - owner_.movementInfoRef().y;
+        const float dz = target->getZ() - owner_.movementInfoRef().z;
+        constexpr float kFollowStartRangeSq = 900.0f;
+        if (dx * dx + dy * dy + dz * dz >= kFollowStartRangeSq) {
+            refuse("ERR_AUTOFOLLOW_TOO_FAR", "Target is too far away.");
+            return;
+        }
+    }
 
     // Set follow target
     owner_.followTargetGuidRef() = guid;
