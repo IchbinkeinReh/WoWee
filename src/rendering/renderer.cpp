@@ -751,6 +751,7 @@ void Renderer::updatePerFrameUBO() {
                 const auto& sky = lightingManager->getLightingParams();
                 wf.skyTop = sky.skyTopColor;
                 wf.skyHorizon = sky.skySmogColor;
+                wf.sunDir = shadow_sun::towardSun(-sky.directionalDir, sky.sunDir, kShadowSunMinHeight);
             }
         }
         waterRenderer->setRtWaterFrame(wf);

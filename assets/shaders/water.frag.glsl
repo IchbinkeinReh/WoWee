@@ -74,6 +74,7 @@ layout(set = 2, binding = 3) uniform WaterFrameData {
     vec4 rtWater2;      // x how far a refracted ray goes, z the waves' height, w their frequency (1 default)
     vec4 rtSkyTop;      // the sky a reflection that leaves the scene meets: overhead
     vec4 rtSkyHorizon;  // and at the horizon
+    vec4 rtSunRay;      // xyz toward the sun the traced lighting's shadows follow
     mat4 captureViewProj;  // the camera the scene capture was taken with
     vec4 swimWaveInfo;                 // x = how many
     vec4 swimWaves[MAX_SWIM_WAVES];    // xy = where, z = age in seconds, w = strength
@@ -533,8 +534,12 @@ void main() {
         // A hill or a house between the sun and the water: no glint. The
         // sun low behind Southshore's hill still laid its bright streak
         // over the bay in the hill's shade.
-        if (!below && ldir.z > 0.0) {
-            sunOnWater = rtOccluded(FragPos + vec3(0.0, 0.0, 0.1), ldir, 400.0, rng) ? 0.0 : 1.0;
+        // Toward the sun the land's shadows fall from, not the light's
+        // direction: along that the ray met pines that shade nothing there,
+        // and Thunder Bluff's pond lost its glint to them in hard-edged shards.
+        vec3 sunRay = normalize(rtSunRay.xyz);
+        if (!below && sunRay.z > 0.0) {
+            sunOnWater = rtOccluded(FragPos + vec3(0.0, 0.0, 0.1), sunRay, 400.0, rng) ? 0.0 : 1.0;
         }
         if (!below) {
             // Not under the water's own plane: a wave can tip the mirror

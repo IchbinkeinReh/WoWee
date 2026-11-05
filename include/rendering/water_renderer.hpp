@@ -134,6 +134,7 @@ struct WaterFrameUBOData {
     glm::vec4 rtWater2{0.0f};      // x how far a refracted ray goes, z/w the waves' height and frequency
     glm::vec4 rtSkyTop{0.0f};      // the sky a reflection leaving the scene meets, overhead
     glm::vec4 rtSkyHorizon{0.0f};  // and at the horizon
+    glm::vec4 rtSunRay{0.0f, 0.0f, 1.0f, 0.0f};  // xyz toward the sun the traced shadows follow
     // The camera the scene capture was taken with: this frame's, or the last
     // one's where the capture is the finished frame before (MSAA).
     glm::mat4 captureViewProj{1.0f};
@@ -155,6 +156,7 @@ struct RtWaterFrame {
     float refractReach = 80.0f;
     glm::vec3 skyTop{0.5f, 0.7f, 1.0f};
     glm::vec3 skyHorizon{0.7f, 0.75f, 0.8f};
+    glm::vec3 sunDir{0.0f, 0.0f, 1.0f};  ///< toward the sun the traced lighting's shadows follow
 };
 
 class WaterRenderer {

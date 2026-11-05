@@ -127,7 +127,9 @@ vec3 rtwReflection(vec3 origin, vec3 dir, vec3 toSun, inout uint rng) {
     float onScreen = rtwOnScreen(hit, hn, shown);
     if (onScreen >= 1.0) return shown;
     bool unit;
-    float vis = dot(hn, toSun) > 0.0 && !rtOccludedBy(hit + hn * 0.05, toSun, 400.0, rng, unit) ? 1.0 : 0.0;
+    // Shadowed as the land is, by the sun its shadows follow (rtSunRay).
+    vec3 sunRay = normalize(rtSunRay.xyz);
+    float vis = dot(hn, sunRay) > 0.0 && !rtOccludedBy(hit + hn * 0.05, sunRay, 400.0, rng, unit) ? 1.0 : 0.0;
     hs.rgb = rtHitColor(origin, dir, t, rtwFootprint(origin, t), hs.rgb);
     vec3 c = rtwLitHit(hs, hn, toSun, vis);
     // The air between the surface and what it shows.
