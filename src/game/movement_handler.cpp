@@ -4301,6 +4301,38 @@ void MovementHandler::followGuid(uint64_t guid) {
         return;
     }
 
+    // 0x0072b4a0's follow case: a player on the player's side (0x00729bd0 -
+    // not oneself, neither charmed, one faction group, not attackable), then
+    // the player's own state - no health, stunned (UNIT_FIELD_FLAGS 0x40000),
+    // channeling - each refused with its line.
+    auto refuse = [&](const char* key, const char* enUS) {
+        owner_.raiseUiError(interfaceString(key, enUS));
+        owner_.playGameErrorSound(key);
+    };
+    const uint64_t me = owner_.getPlayerGuid();
+    if (target->getType() != ObjectType::PLAYER || guid == me || !owner_.unitsCooperate(me, guid)) {
+        refuse("ERR_INVALID_FOLLOW_TARGET", "You can't follow that unit.");
+        return;
+    }
+    if (auto self = owner_.getEntityManager().getEntity(me)) {
+        const auto field = [&](UF f) {
+            const uint16_t i = fieldIndex(f);
+            return i == 0xFFFF ? 0u : self->getField(i);
+        };
+        if (static_cast<int32_t>(field(UF::UNIT_FIELD_HEALTH)) < 1) {
+            refuse("ERR_PLAYER_DEAD", "You can't do that when you're dead.");
+            return;
+        }
+        if ((field(UF::UNIT_FIELD_FLAGS) & 0x40000u) != 0) {
+            refuse("ERR_GENERIC_STUNNED", "You are stunned");
+            return;
+        }
+        if (field(UF::UNIT_CHANNEL_SPELL) != 0) {
+            refuse("ERR_TOOBUSYTOFOLLOW", "You're too busy to follow anything!");
+            return;
+        }
+    }
+
     // Set follow target
     owner_.followTargetGuidRef() = guid;
 
