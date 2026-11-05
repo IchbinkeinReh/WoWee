@@ -831,7 +831,12 @@ void main() {
     // looks like there, the Pools of Vision's teal. Traced over it whole, the
     // pool was a bare film over its orange bed. Only the reflection goes on top.
     if (rtOn && push.interiorFog > 0.5) {
-        outColor = vec4(applyFog(rtReflect + specular, FragPos, dist, waterFogColour()), rtFresnel);
+        // The traced rock has its bare texture, without the room's painted light
+        // and fog: at a grazing angle, Fresnel near 1, that put the orange of a
+        // cave's rock over the far water (the reflection view shows it whole).
+        // So it takes the room's air, and never hides the liquid.
+        vec3 roomReflect = mix(rtReflect, waterFogColour(), 0.65);
+        outColor = vec4(applyFog(roomReflect + specular, FragPos, dist, waterFogColour()), min(rtFresnel, 0.45));
         return;
     }
     color = applyFog(color, FragPos, dist, waterFogColour());
