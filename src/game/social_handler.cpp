@@ -2309,6 +2309,18 @@ void SocialHandler::handleDuelWinner(network::Packet& packet) {
 
 void SocialHandler::inviteToGroup(const std::string& playerName) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // One's own name, matched without case, is refused before the request
+    // (0x006d4300): ERR_INVITE_SELF.
+    if (const Character* self = owner_.getActiveCharacter(); self && !playerName.empty()) {
+        auto lower = [](std::string v) {
+            for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return v;
+        };
+        if (lower(playerName) == lower(self->name)) {
+            gameError(owner_, ErrTo::Error, "ERR_INVITE_SELF", "You can't invite yourself to a group.");
+            return;
+        }
+    }
     LOG_WARNING(">>> Sending CMSG_GROUP_INVITE to '", playerName, "'");
     auto packet = GroupInvitePacket::build(playerName);
     owner_.getSocket()->send(packet);

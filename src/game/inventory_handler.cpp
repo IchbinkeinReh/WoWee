@@ -7321,6 +7321,11 @@ void InventoryHandler::initiateTrade(uint64_t targetGuid) {
     // "You must target a player to trade with." and "Requesting trade with
     // target." in English.
     if (targetGuid == 0) return;
+    // Oneself: ERR_TRADE_SELF (0x00522600).
+    if (targetGuid == owner_.getPlayerGuid()) {
+        owner_.raiseUiError(interfaceString("ERR_TRADE_SELF", "You can't trade with yourself."));
+        return;
+    }
 
     // 0x00703cf0: not with a partner already (ERR_ALREADY_TRADING), and not
     // again within a second of the last request.
