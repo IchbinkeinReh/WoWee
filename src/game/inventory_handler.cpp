@@ -4511,16 +4511,22 @@ void InventoryHandler::setGuildBankTabInfo(uint8_t tabId, const std::string& nam
     owner_.getSocket()->send(p);
 }
 
+uint64_t InventoryHandler::itemGuidAtWire(uint8_t bag, uint8_t slot) const {
+    // The wire's bag and slot: 0xFF with the equipment and bag slots below 23
+    // and the backpack from 23, or a worn bag's container (19-22).
+    if (bag == 0xFF && slot >= 23 && slot < 39) return owner_.getBackpackItemGuid(slot - 23);
+    if (bag >= 19 && bag <= 22) return owner_.getBagItemGuid(bag - 19, slot);
+    if (bag == 0xFF && slot < 23) return owner_.getEquipSlotGuid(slot);
+    return 0;
+}
+
 bool InventoryHandler::guildBankRefusesDeposit(uint8_t srcBag, uint8_t srcSlot) {
     // 0x005a50c0, before the swap goes out, in its order: a bound item is
     // refused - a quest item (Bonding 4) with ERR_GUILD_BANK_QUEST_ITEM, any
     // other with ERR_GUILD_BANK_BOUND_ITEM - then a conjured one (ItemFlags
     // 0x2), a wrapped one (ITEM_FIELD_FLAGS 0x8), and one taken from the
     // player's own equipment and bag slots (below 23).
-    uint64_t guid = 0;
-    if (srcBag == 0xFF && srcSlot >= 23 && srcSlot < 39) guid = owner_.getBackpackItemGuid(srcSlot - 23);
-    else if (srcBag >= 19 && srcBag <= 22) guid = owner_.getBagItemGuid(srcBag - 19, srcSlot);
-    else if (srcBag == 0xFF && srcSlot < 23) guid = owner_.getEquipSlotGuid(srcSlot);
+    const uint64_t guid = itemGuidAtWire(srcBag, srcSlot);
     if (guid == 0) {
         if (srcBag == 0xFF && srcSlot < 23) {
             owner_.addUIError(interfaceString("ERR_GUILD_BANK_EQUIPPED_ITEM", "You must unequip that item first"));
@@ -5067,6 +5073,17 @@ void InventoryHandler::cancelTrade() {
 void InventoryHandler::setTradeItem(uint8_t tradeSlot, uint8_t srcBag, uint8_t srcSlot) {
     if (tradeStatus_ != TradeStatus::Open) return;
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket()) return;
+    // A bag with anything in it is not traded (0x005877b0): ERR_TRADE_BAG.
+    if (const uint64_t guid = itemGuidAtWire(srcBag, srcSlot); guid != 0) {
+        if (const auto bag = owner_.containerContentsRef().find(guid); bag != owner_.containerContentsRef().end()) {
+            for (uint32_t i = 0; i < bag->second.numSlots && i < bag->second.slotGuids.size(); ++i) {
+                if (bag->second.slotGuids[i] != 0) {
+                    owner_.addUIError(interfaceString("ERR_TRADE_BAG", "You can't trade non-empty bags."));
+                    return;
+                }
+            }
+        }
+    }
     auto packet = SetTradeItemPacket::build(tradeSlot, srcBag, srcSlot);
     owner_.getSocket()->send(packet);
 }

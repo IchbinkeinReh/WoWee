@@ -659,6 +659,8 @@ public:
                              const std::string& icon);
     /// 0x005a50c0's refusals of an item for the guild bank; true when refused.
     bool guildBankRefusesDeposit(uint8_t srcBag, uint8_t srcSlot);
+    /// The item at the wire's bag and slot, 0 when none is known there.
+    [[nodiscard]] uint64_t itemGuidAtWire(uint8_t bag, uint8_t slot) const;
     void guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot);
     // Deposit an inventory item into the first free slot of the viewed tab.
     void guildBankDepositFromInventory(uint8_t srcBag, uint8_t srcSlot);
