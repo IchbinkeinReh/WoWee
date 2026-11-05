@@ -123,6 +123,16 @@ void M2Renderer::emitParticles(M2Instance& inst, const M2ModelGPU& gpu, float dt
         // player asked for. Nothing raises it beyond what the model authors.
         rate += distN(particleRng_) * em.emissionRateVary;
         rate *= particleDensity_;
+        // ...and thinned with the distance from the camera, by the emitter's
+        // place. The client's flag against this (0x400000) is set from the
+        // unit and spell side and not by a model's own data, so a spell
+        // effect keeps its rate here.
+        if (!gpu.isSpellEffect) {
+            glm::mat4 emitterWorld = inst.modelMatrix;
+            if (em.bone < inst.boneMatrices.size()) emitterWorld = emitterWorld * inst.boneMatrices[em.bone];
+            const glm::vec3 emitterPos(emitterWorld * glm::vec4(em.position, 1.0f));
+            rate *= m2_particle::emissionDistanceFactor(glm::length(emitterPos - cachedCamPos_));
+        }
 
         if (rate <= 0.0f || life <= 0.0f) {
             // Diagnostic: a lamp or flame whose emitter never fires produces a

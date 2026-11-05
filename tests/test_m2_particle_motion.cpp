@@ -75,6 +75,14 @@ TEST_CASE("Spline: two segments are walked by arc length") {
     REQUIRE(s.position(0.625f).x == Approx(2.5f).margin(1e-4));
 }
 
+TEST_CASE("Emission distance: all of it to 50 yards, then down to a quarter") {
+    REQUIRE(emissionDistanceFactor(0.0f) == Approx(1.0f));
+    REQUIRE(emissionDistanceFactor(50.0f) == Approx(1.0f));
+    REQUIRE(emissionDistanceFactor(75.0f) == Approx(0.5f));
+    REQUIRE(emissionDistanceFactor(87.5f) == Approx(0.25f));
+    REQUIRE(emissionDistanceFactor(500.0f) == Approx(0.25f));
+}
+
 TEST_CASE("Spline: n points make n / 3 segments; fewer than three make none") {
     BezierSpline s;
     s.setPoints({{0, 0, 0}, {1, 0, 0}});

@@ -22,6 +22,13 @@ struct StepParams {
     float windTime = 0.0f;
 };
 
+/// What an emitter's rate is multiplied by at this distance from the camera
+/// (0x0097d8c0): all of it out to 50 yards, then 2% less for each yard, and
+/// never below a quarter, which it reaches at 87.5.
+inline float emissionDistanceFactor(float distance) {
+    return std::clamp(1.0f - (distance - 50.0f) * 0.02f, 0.25f, 1.0f);
+}
+
 /// One particle's move over dt (0x00979bb0). `age` is its age before the
 /// step. Wind first, while the particle is younger than the wind time; then
 /// the move with gravity's half-square term and gravity on the velocity; then
