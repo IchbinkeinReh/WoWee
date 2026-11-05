@@ -3908,6 +3908,24 @@ void GameHandler::lootMasterGive(uint8_t lootSlot, uint64_t targetGuid) {
 
 void GameHandler::interactWithNpc(uint64_t guid) {
     if (!isInWorld()) return;
+    // 0x006ddbb0: nothing past the NPC's combat reach plus four yards (a
+    // straight-line distance, height included) is spoken to. With
+    // click-to-move interaction the client walks there instead; without it -
+    // and there is none here - it says so and sends nothing.
+    if (auto entity = getEntityManager().getEntity(guid)) {
+        if (auto* unit = dynamic_cast<Unit*>(entity.get())) {
+            const float dx = movementInfo.x - entity->getX();
+            const float dy = movementInfo.y - entity->getY();
+            const float dz = movementInfo.z - entity->getZ();
+            const float reach = unit->getCombatReach() + 4.0f;
+            if (dx * dx + dy * dy + dz * dz > reach * reach) {
+                playGameErrorSound("ERR_TOO_FAR_TO_INTERACT");
+                raiseUiError(interfaceString("ERR_TOO_FAR_TO_INTERACT",
+                                             "You need to be closer to interact with that target."));
+                return;
+            }
+        }
+    }
     // A dead player at an area spirit healer is a different conversation. The
     // battleground ones do not answer a gossip hello at all - they answer
     // CMSG_AREA_SPIRIT_HEALER_QUERY with the seconds to the next mass
