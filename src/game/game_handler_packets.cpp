@@ -571,8 +571,14 @@ void GameHandler::registerCoreOpcodes() {
         if (!packet.hasRemaining(8)) return;
         uint32_t field = packet.readUInt32();
         uint32_t value = packet.readUInt32();
+        // The arena season (world state 3191) moving says so first
+        // (0x00549440, ARENA_SEASON_WORLD_STATE 0x230).
+        constexpr uint32_t kArenaSeason = 0xc77;
+        const auto had = worldStates_.find(field);
+        const uint32_t was = had != worldStates_.end() ? had->second : 0;
         worldStates_[field] = value;
         LOG_DEBUG("SMSG_UPDATE_WORLD_STATE: field=", field, " value=", value);
+        if (field == kArenaSeason && was != value) fireAddonEvent("ARENA_SEASON_WORLD_STATE", {});
         fireAddonEvent("UPDATE_WORLD_STATES", {});
     };
     dispatchTable_[Opcode::SMSG_WORLD_STATE_UI_TIMER_UPDATE] = [this](network::Packet& packet) {
@@ -1884,6 +1890,15 @@ void GameHandler::registerCoreOpcodes() {
             uint32_t key = packet.readUInt32();
             uint32_t val = packet.readUInt32();
             worldStates_[key] = val;
+        }
+        // The arena season (3191) moving, as each value is set (0x00549440).
+        {
+            constexpr uint32_t kArenaSeason = 0xc77;
+            const auto was = before.find(kArenaSeason);
+            const auto now = worldStates_.find(kArenaSeason);
+            const uint32_t wasValue = was != before.end() ? was->second : 0;
+            if (now != worldStates_.end() && now->second != wasValue)
+                fireAddonEvent("ARENA_SEASON_WORLD_STATE", {});
         }
         if (worldStates_ != before || worldStateMapId_ != mapBefore || worldStateZoneId_ != zoneBefore || placeMoved)
             fireAddonEvent("UPDATE_WORLD_STATES", {});
