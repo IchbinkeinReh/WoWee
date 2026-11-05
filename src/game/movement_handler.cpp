@@ -2509,7 +2509,13 @@ void MovementHandler::handleTeleportAck(network::Packet& packet) {
         movementInfo.y = canonical.y;
         movementInfo.z = canonical.z;
         movementInfo.orientation = core::coords::serverToCanonicalYaw(orientation);
-        movementInfo.flags = 0;
+        // What the mover is doing ends here; what an aura gives it does not. The
+        // server does not send it again, and water walking went at every .go
+        // with the buff still on.
+        movementInfo.flags &= static_cast<uint32_t>(MovementFlags::WATER_WALK) |
+                              static_cast<uint32_t>(MovementFlags::FEATHER_FALL) |
+                              static_cast<uint32_t>(MovementFlags::HOVER) |
+                              static_cast<uint32_t>(MovementFlags::CAN_FLY);
         // Off whatever transport it was on, or onto the one the teleport
         // names. Kept, the old one went on placing the player by its offset
         // on it, so a .go away from a lift left them riding it.
