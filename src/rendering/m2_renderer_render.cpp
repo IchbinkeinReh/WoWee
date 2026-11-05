@@ -1074,7 +1074,10 @@ void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) co
     // evenly. As painted, the traced lamps adding to it.
     if (inst.interiorLit && !inst.worldObjectLit && inst.cachedModel) {
         const glm::vec3 size = inst.cachedModel->boundMax - inst.cachedModel->boundMin;
-        if (size.z < 0.2f * std::max(size.x, size.y)) e.flags |= kInstanceFloorLit;
+        // Wide both ways: a sword, a book or a razor on a table is not a floor.
+        if (size.z < 0.2f * std::max(size.x, size.y) && std::min(size.x, size.y) >= 1.5f) {
+            e.flags |= kInstanceFloorLit;
+        }
     }
     // A game object outside takes the zone's light as the frame dims it -
     // the sun's glare, the Debug Graphics strengths - as the units and the
