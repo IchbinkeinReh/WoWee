@@ -1068,17 +1068,6 @@ void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) co
     e.flags = (inst.interiorLit ? kInstanceInteriorLit : 0) | (inst.interiorPass ? kInstanceInteriorPass : 0) |
               (inst.worldObjectLit && !inst.interiorLit ? kInstanceWorldObject : 0) |
               (inst.worldObjectLit && inst.interiorLit ? kInstanceFloorLit : 0);
-    // A rug: a doodad of an interior lying flat is the floor as far as the room's
-    // light goes. Shaded at its own pixels, a low lamp turned a fold of a hide
-    // from it and that fold went black, where the client draws its colour
-    // evenly. As painted, the traced lamps adding to it.
-    if (inst.interiorLit && !inst.worldObjectLit && inst.cachedModel) {
-        const glm::vec3 size = inst.cachedModel->boundMax - inst.cachedModel->boundMin;
-        // Wide both ways: a sword, a book or a razor on a table is not a floor.
-        if (size.z < 0.2f * std::max(size.x, size.y) && std::min(size.x, size.y) >= 1.5f) {
-            e.flags |= kInstanceFloorLit;
-        }
-    }
     // A game object outside takes the zone's light as the frame dims it -
     // the sun's glare, the Debug Graphics strengths - as the units and the
     // world around it do (wmo_doodad_light::drawnObjectLight).
