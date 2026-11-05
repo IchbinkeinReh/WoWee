@@ -4222,6 +4222,10 @@ public:
     /// by SMSG_CANCEL_AUTO_REPEAT (0x00807560).
     [[nodiscard]] bool isAutoRepeating() const { return autoRepeating_; }
     void setAutoRepeating(bool on) { autoRepeating_ = on; }
+    /// 0x00807560: a running auto-repeat spell (Auto Shot, Shoot) stopped -
+    /// CMSG_CANCEL_AUTO_REPEAT_SPELL first when `tellServer`, then
+    /// STOP_AUTOREPEAT_SPELL (event 0x1ae). Nothing when none is running.
+    void stopAutoRepeat(bool tellServer);
     /// VEHICLE_ANGLE_UPDATE for the mover's row (0x005fa910).
     void fireVehicleAngleUpdate(float pitch);
     /// VehicleAimUp/DownStart/Stop (0x005fc8e0 -> 0x005fa170, 0x005fb1a0).

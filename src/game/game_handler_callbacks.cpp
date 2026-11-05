@@ -2034,6 +2034,16 @@ std::shared_ptr<Entity> GameHandler::getFocus() const {
     return combatHandler_ ? combatHandler_->getFocus() : nullptr;
 }
 
+void GameHandler::stopAutoRepeat(bool tellServer) {
+    if (!autoRepeating_) return;
+    if (tellServer && socket && isInWorld()) {
+        network::Packet packet(wireOpcode(Opcode::CMSG_CANCEL_AUTO_REPEAT_SPELL));
+        socket->send(packet);
+    }
+    autoRepeating_ = false;
+    fireAddonEvent("STOP_AUTOREPEAT_SPELL", {});
+}
+
 void GameHandler::targetLastTarget() {
     if (combatHandler_) combatHandler_->targetLastTarget();
 }

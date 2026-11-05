@@ -1686,6 +1686,12 @@ void CombatHandler::setTarget(uint64_t guid) {
         addons::storedCVarValue("stopAutoAttackOnTargetChange", "0") != "0") {
         stopAutoAttack();
     }
+    // The same setting stops a repeating shot too, and tells the server
+    // (0x00524bf0 -> 0x00807560(1)).
+    if (guid != owner_.getTargetGuid() &&
+        addons::storedCVarValue("stopAutoAttackOnTargetChange", "0") != "0") {
+        owner_.stopAutoRepeat(true);
+    }
 
     owner_.setTargetGuidRaw(guid);
 
@@ -1739,6 +1745,9 @@ void CombatHandler::clearTarget() {
         // targetGuid before the event).
         owner_.setTargetGuidRaw(0);
         owner_.fireAddonEvent("PLAYER_TARGET_CHANGED", {});
+        // A repeating shot has nothing left to shoot at (0x00524bf0 with
+        // none -> 0x00807560(1)).
+        owner_.stopAutoRepeat(true);
     } else {
         owner_.setTargetGuidRaw(0);
     }
