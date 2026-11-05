@@ -191,6 +191,18 @@ static int lua_SendChatMessage(lua_State* L) {
             return 0;
         }
     }
+    // The dead may still whisper and talk to their party, raid, guild,
+    // officers, channels and battleground, and set a DND reply; anything
+    // said aloud (say, yell, emote) or an AFK reply is refused with
+    // ERR_CHAT_WHILE_DEAD (0x0050d170).
+    if (gh->isPlayerDead() || gh->isPlayerGhost()) {
+        const bool allowed = ct != game::ChatType::SAY && ct != game::ChatType::YELL &&
+                             ct != game::ChatType::EMOTE && ct != game::ChatType::AFK;
+        if (!allowed) {
+            gh->addUIError(game::interfaceString("ERR_CHAT_WHILE_DEAD", "You can't chat when you're dead!"));
+            return 0;
+        }
+    }
     gh->sendChatMessage(ct, msg, targetStr);
     return 0;
 }
