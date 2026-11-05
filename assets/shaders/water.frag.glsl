@@ -44,6 +44,12 @@ layout(push_constant) uniform Push {
     float lightColors; // 1: closeColor and farColor hold the light's ramp
     float interiorFog; // 1: a building's interior liquid, fogged as its rooms are
     float pad2;
+    // A building's interior liquid (the end of main): the MOMT colour the
+    // client gives its vertices, the animated texture's 2x2, and the grid's
+    // size, z 1 while that texture is bound.
+    vec4 liquidColor;
+    vec4 liquidAnim;
+    vec4 liquidGrid;
 } push;
 
 layout(set = 1, binding = 0) uniform WaterMaterial {
@@ -56,6 +62,7 @@ layout(set = 1, binding = 0) uniform WaterMaterial {
 
 layout(set = 2, binding = 0) uniform sampler2D SceneColor;
 layout(set = 2, binding = 1) uniform sampler2D SceneDepth;
+layout(set = 2, binding = 4) uniform sampler2D uLiquidTex;  // an interior liquid's, this frame
 // Binding 2 was the planar reflection, gone with the enhanced water.
 // Wake points are laid down behind anything wading through the shallows. Each
 // is a churn site that spreads and dies, so a running character leaves a trail
@@ -63,6 +70,10 @@ layout(set = 2, binding = 1) uniform sampler2D SceneDepth;
 const int MAX_WAKE_POINTS = 32;
 const int MAX_SWIM_WAVES = 16;
 const int MAX_WATER_LAMPS = 8;
+// An interior liquid (the end of main): how far the waves bend its texture, in
+// tiles; the most it mirrors.
+const float RT_INTERIOR_RIPPLE = 0.15;
+const float RT_INTERIOR_MIRROR = 0.6;
 
 layout(set = 2, binding = 3) uniform WaterFrameData {
     vec4 wakeBounds;                  // xy = centre, z = cull radius, w = count
@@ -853,17 +864,27 @@ void main() {
         outColor = vec4(rtWater.y < 1.5 || rtWater.y > 2.5 ? rtReflect : refractedColor, 1.0);
         return;
     }
-    // A building's interior water keeps the client's liquid, drawn under this
-    // (WaterRenderer::renderClient): its texture and ramp are what the water
-    // looks like there, the Pools of Vision's teal. Traced over it whole, the
-    // pool was a bare film over its orange bed. Only the reflection goes on top.
+    // A building's interior water is traced too, but its body is the client's
+    // own (psLiquidWater, drawn the interior way): the MOMT colour over the
+    // ramp's white half, the animated texture on it, by the MOMT alpha and the
+    // ramp's. Its coordinate is bent by the wave normal, so waves and a
+    // swimmer's rings move the water itself and not only what it reflects.
+    // Traced whole with its bare colour, the Pools of Vision were a film over
+    // an orange bed: the rock traced has its bare texture, without the room's
+    // painted light. So what comes through and the mirror are seen through the
+    // room's air, multiplied by it, which keeps them as dark as the painted
+    // rock and takes the orange out; the mirror stays short of hiding the
+    // liquid at a grazing angle.
     if (rtOn && push.interiorFog > 0.5) {
-        // The traced rock has its bare texture, without the room's painted light
-        // and fog: at a grazing angle, Fresnel near 1, that put the orange of a
-        // cave's rock over the far water (the reflection view shows it whole).
-        // So it takes the room's air, and never hides the liquid.
-        vec3 roomReflect = mix(rtReflect, waterFogColour(), 0.65);
-        outColor = vec4(applyFog(roomReflect + specular, FragPos, dist, waterFogColour()), min(rtFresnel, 0.45));
+        vec2 grid = TexCoord * push.liquidGrid.xy + norm.xy * RT_INTERIOR_RIPPLE;
+        vec4 tex = push.liquidGrid.z > 0.5 ? texture(uLiquidTex, mat2(push.liquidAnim.xy, push.liquidAnim.zw) * grid)
+                                           : vec4(0.0);
+        vec3 body = push.liquidColor.rgb + tex.rgb + tex.a * 0.25;
+        float bodyAlpha = push.liquidColor.a * mix(push.closeColor.a, push.farColor.a, depthFade);
+        vec3 bed = refractedColor * waterFogColour();
+        vec3 mirror = rtReflect * waterFogColour();
+        vec3 water = mix(mix(bed, body, bodyAlpha), mirror, min(rtFresnel, RT_INTERIOR_MIRROR));
+        outColor = vec4(applyFog(water + specular, FragPos, dist, waterFogColour()), alpha);
         return;
     }
     color = applyFog(color, FragPos, dist, waterFogColour());

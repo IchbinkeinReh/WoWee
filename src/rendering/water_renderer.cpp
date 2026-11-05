@@ -55,8 +55,14 @@ struct WaterPushConstants {
     float lightColors = 0.0f; // 1: water and ocean take the light's colours above
     float interiorFog = 0.0f; // 1: an interior WMO liquid, fogged with the camera's fog
     float pad2 = 0.0f;
+    // A building's interior liquid, as the traced water draws it (water.frag):
+    // the MOMT colour the client gives its vertices, the animated texture's
+    // 2x2, and the grid's size with z 1 while that texture is bound.
+    glm::vec4 liquidColor{0.0f};
+    glm::vec4 liquidAnim{1.0f, 0.0f, 0.0f, 1.0f};
+    glm::vec4 liquidGrid{0.0f};
 };
-static_assert(sizeof(WaterPushConstants) == 80, "the two shader declarations of this range are laid out for 80 bytes");
+static_assert(sizeof(WaterPushConstants) == 128, "the two shader declarations of this range are laid out for 80 bytes");
 
 
 
@@ -126,17 +132,24 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
     frameUBOBinding.descriptorCount = 1;
     frameUBOBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // An interior liquid's animated texture, this frame's (bindInteriorLiquid).
+    VkDescriptorSetLayoutBinding liquidTexBinding{};
+    liquidTexBinding.binding = 4;
+    liquidTexBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    liquidTexBinding.descriptorCount = 1;
+    liquidTexBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     sceneSetLayout = createDescriptorSetLayout(device,
-        {sceneColorBinding, sceneDepthBinding, frameUBOBinding});
+        {sceneColorBinding, sceneDepthBinding, frameUBOBinding, liquidTexBinding});
     if (!sceneSetLayout) {
         LOG_ERROR("WaterRenderer: failed to create scene set layout");
         return false;
     }
 
-    // Pool needs 2 combined image samplers + 1 uniform buffer per frame
+    // Pool needs 3 combined image samplers + 1 uniform buffer per frame
     std::array<VkDescriptorPoolSize, 2> scenePoolSizes{};
     scenePoolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    scenePoolSizes[0].descriptorCount = 2 * SCENE_HISTORY_FRAMES;
+    scenePoolSizes[0].descriptorCount = 3 * SCENE_HISTORY_FRAMES;
     scenePoolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     scenePoolSizes[1].descriptorCount = SCENE_HISTORY_FRAMES;
     VkDescriptorPoolCreateInfo scenePoolInfo{};
@@ -180,6 +193,42 @@ bool WaterRenderer::initialize(VkContext* ctx, VkDescriptorSetLayout perFrameLay
 
     LOG_INFO("Water renderer initialized (Vulkan)");
     return true;
+}
+
+void WaterRenderer::bindInteriorLiquid(VkDescriptorSet sceneSet, uint32_t frameIndex) {
+    // Once a frame: writing a set already bound in this command buffer would
+    // invalidate the bind.
+    if (interiorLiquidFrame_ == frameIndex) return;
+    interiorLiquidFrame_ = frameIndex;
+    interiorLiquidType_ = 0;
+    for (const auto& surface : surfaces) {
+        if (surface.wmoId == 0 || !surface.wmoInterior) continue;
+        const uint8_t basicType = (surface.liquidType == 0) ? 0 : ((surface.liquidType - 1) % 4);
+        if (basicType >= 2) continue;
+        ClientLiquid* liquid = clientLiquidFor(surface.clientLiquidType);
+        if (!liquid || liquid->kind != client_liquid::MaterialKind::Water) continue;
+        const auto& st = client_liquid::kWaterStages;
+        auto& slot = liquid->slots[st.animSlot];
+        if (!slot.loaded) loadClientSlot(slot, liquid->record.textures[st.animSlot]);
+        if (slot.frames.empty()) continue;
+        const uint32_t timeMs = static_cast<uint32_t>(clientTimeSeconds_ * 1000.0);
+        const uint32_t at = client_liquid::animFrameIndex(timeMs, liquid->record.ints[st.animPeriodInt],
+                                                          static_cast<uint32_t>(slot.frames.size()));
+        const VkDescriptorImageInfo info = slot.frames[at]->descriptorInfo();
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = sceneSet;
+        write.dstBinding = 4;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &info;
+        vkUpdateDescriptorSets(vkCtx->getDevice(), 1, &write, 0, nullptr);
+        const glm::mat2 m = client_liquid::animStageMatrix(liquid->record.floats[st.rotationFloat],
+                                                           liquid->record.floats[st.scaleFloat]);
+        interiorLiquidAnim_ = glm::vec4(m[0], m[1]);
+        interiorLiquidType_ = surface.clientLiquidType;
+        return;
+    }
 }
 
 void WaterRenderer::setRtWaterScene(VkDescriptorSetLayout sceneLayout, bool hardware) {
@@ -506,6 +555,11 @@ void WaterRenderer::createSceneHistoryResources(VkExtent2D extent, VkFormat colo
         w1.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w1.pImageInfo = &depthInfo;
         writes.push_back(w1);
+
+        // Something valid until bindInteriorLiquid has a texture to give it.
+        VkWriteDescriptorSet w4 = w0;
+        w4.dstBinding = 4;
+        writes.push_back(w4);
 
         if (frameUBOBuffer_) {
             VkWriteDescriptorSet w3{};
@@ -1197,6 +1251,8 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
     Frustum frustum;
     frustum.extractFromMatrix(camera.getViewProjectionMatrix());
 
+    if (traced) bindInteriorLiquid(activeSceneSet, frameIndex);
+
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
@@ -1275,6 +1331,15 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         // 2: a capture with the water in it (setSceneHistoryHasWater).
         push.sceneValid = !sceneHistoryReady ? 0.0f : sceneHistoryHasWater_ ? 2.0f : 1.0f;
         push.interiorFog = surface.wmoId != 0 && surface.wmoInterior ? 1.0f : 0.0f;
+        if (push.interiorFog > 0.5f) {
+            const uint32_t c = surface.wmoColorBGRA;
+            push.liquidColor = glm::vec4(static_cast<float>((c >> 16) & 0xff), static_cast<float>((c >> 8) & 0xff),
+                                         static_cast<float>(c & 0xff), static_cast<float>((c >> 24) & 0xff)) / 255.0f;
+            const bool textured = interiorLiquidType_ != 0 && surface.clientLiquidType == interiorLiquidType_;
+            push.liquidAnim = interiorLiquidAnim_;
+            push.liquidGrid = glm::vec4(static_cast<float>(surface.width), static_cast<float>(surface.height),
+                                        textured ? 1.0f : 0.0f, 0.0f);
+        }
 
         vkCmdPushConstants(cmd, layout,
                             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -2844,10 +2909,9 @@ void WaterRenderer::renderClient(VkCommandBuffer cmd, VkDescriptorSet perFrameSe
             if (!surface.clientVertexBuffer || !surface.indexBuffer || surface.indexCount == 0) continue;
             if (tracedWater) {
                 const uint8_t basicType = (surface.liquidType == 0) ? 0 : ((surface.liquidType - 1) % 4);
-                // The traced water's, but for a building's interior water, which
-                // it only reflects on (water.frag).
-                const bool interiorWmo = surface.wmoId != 0 && surface.wmoInterior;
-                if (basicType < 2 && !interiorWmo) continue;
+                // The traced water's, a building's interior water with it: that
+                // takes this draw's colour and texture itself (water.frag).
+                if (basicType < 2) continue;
             }
             ClientLiquid* liquid = clientLiquidFor(surface.clientLiquidType);
             if (!liquid || liquid->kind == client_liquid::MaterialKind::None) continue;

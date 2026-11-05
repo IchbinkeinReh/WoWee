@@ -32,6 +32,9 @@ layout(push_constant) uniform Push {
     float sceneValid;
     float lightColors;
     float pad1, pad2;
+    vec4 liquidColor;  // these three are the fragment stage's too
+    vec4 liquidAnim;
+    vec4 liquidGrid;
 } push;
 
 layout(location = 0) in vec3 aPos;

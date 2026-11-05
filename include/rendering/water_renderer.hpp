@@ -387,6 +387,13 @@ private:
     void buildClientPipelines(VkRenderPass pass, VkSampleCountFlagBits samples,
                               VkPipeline& water, VkPipeline& magma, VkPipeline& proc);
     ClientLiquid* clientLiquidFor(uint32_t liquidType);
+    /// The animated texture of the interior liquid in the world, for the traced
+    /// water to draw it with. One liquid type at a time: one with another type
+    /// keeps its colour and goes without the texture.
+    void bindInteriorLiquid(VkDescriptorSet sceneSet, uint32_t frameIndex);
+    uint32_t interiorLiquidFrame_ = ~0u;
+    uint32_t interiorLiquidType_ = 0;
+    glm::vec4 interiorLiquidAnim_{1.0f, 0.0f, 0.0f, 1.0f};
     void loadClientSlot(ClientTexSlot& slot, const std::string& name);
     void createClientMesh(WaterSurface& surface);
     void writeClientRamps(uint32_t frameSlot);
