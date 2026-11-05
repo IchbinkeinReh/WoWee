@@ -3854,6 +3854,12 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
     const bool watchesPetName = entity->getType() == ObjectType::UNIT && petNameStamp != 0xFFFF &&
                                 block.fields.find(petNameStamp) != block.fields.end();
     const uint32_t oldPetNameStamp = watchesPetName ? entity->getField(petNameStamp) : 0;
+    // The player's UNIT_FLAG2_COMPREHEND_LANG (0x8) turning over changes the
+    // languages they can speak: LANGUAGE_LIST_CHANGED (0x0073c5d0, 0xf0).
+    const uint16_t flags2 = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+    const bool watchesLanguages = block.guid == owner_.getPlayerGuid() && flags2 != 0xFFFF &&
+                                  block.fields.find(flags2) != block.fields.end();
+    const uint32_t oldFlags2 = watchesLanguages ? entity->getField(flags2) : 0;
 
     // Set fields (common)
     for (const auto& field : block.fields) {
@@ -3874,6 +3880,8 @@ void EntityController::handleValuesUpdate(const UpdateBlock& block) {
             pendingEvents_.emit("UNIT_TARGET", {uid});
     }
 
+    if (watchesLanguages && ((entity->getField(flags2) ^ oldFlags2) & 0x8u) != 0)
+        pendingEvents_.emit("LANGUAGE_LIST_CHANGED", {});
     if (watchesPetName && entity->getField(petNameStamp) != oldPetNameStamp) {
         auto guidAt = [&](UF lo) -> uint64_t {
             const uint16_t i = fieldIndex(lo);

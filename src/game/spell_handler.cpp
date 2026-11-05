@@ -4735,6 +4735,14 @@ void SpellHandler::handleLearnedSpell(network::Packet& packet) {
                 // The lists took it: the bar is brought up to date (0x005ab9d0).
                 updateMultiCastBar();
             }
+            // A language (SPELL_EFFECT_LANGUAGE 39, the switch's 0x27) is
+            // kept and announced: LANGUAGE_LIST_CHANGED (0x004fb530, 0xf0).
+            for (uint32_t effect : t.effectIds) {
+                if (effect == 39) {
+                    owner_.addonEventCallbackRef()("LANGUAGE_LIST_CHANGED", {});
+                    break;
+                }
+            }
         }
         const bool critter = inList(false);
         const bool mount = !critter && inList(true);
