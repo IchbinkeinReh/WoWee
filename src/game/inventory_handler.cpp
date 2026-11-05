@@ -3969,6 +3969,33 @@ void InventoryHandler::noteMailAttachRefundable(int attachIndex) {
 /// straight over, and the one that drops it anywhere hands -1.
 bool InventoryHandler::attachAt(int attachIndex, uint64_t itemGuid, const game::ItemDef& item,
                                 uint8_t srcBag, uint8_t srcSlot) {
+    // 0x0056fff0's refusals, in its order: an item not known
+    // (ERR_ITEM_NOT_FOUND); a bound one - ERR_MAIL_QUEST_ITEM for Bonding 4,
+    // ERR_MAIL_BOUND_ITEM unless bound to the account (ItemFlags 0x8000000);
+    // a conjured one (ITEM_FIELD_FLAGS 0x2, ERR_MAIL_CONJURED_ITEM); one of
+    // limited duration (ITEM_FIELD_FLAGS 0x10000); a bag with something in it.
+    {
+        const auto* info = owner_.getItemInfo(owner_.getItemEntryByGuid(itemGuid));
+        if (!info) info = owner_.getItemInfo(item.itemId);
+        auto refuse = [&](const char* key, const char* enUS) {
+            owner_.addUIError(interfaceString(key, enUS));
+            return false;
+        };
+        if (!info || !info->valid) return refuse("ERR_ITEM_NOT_FOUND", "Item not found.");
+        const uint32_t fieldFlags = owner_.getItemFieldFlags(itemGuid);
+        if ((fieldFlags & 0x1u) != 0) {
+            if (info->bindType == 4) return refuse("ERR_MAIL_QUEST_ITEM", "You can't mail quest items.");
+            if ((info->itemFlags & 0x8000000u) == 0)
+                return refuse("ERR_MAIL_BOUND_ITEM", "You can't mail soulbound items.");
+        }
+        if ((fieldFlags & 0x2u) != 0) return refuse("ERR_MAIL_CONJURED_ITEM", "You can't mail conjured items.");
+        if ((fieldFlags & 0x10000u) != 0)
+            return refuse("ERR_MAIL_LIMITED_DURATION_ITEM", "You cannot mail an item with a limited duration.");
+        if (const auto bag = owner_.containerContentsRef().find(itemGuid); bag != owner_.containerContentsRef().end()) {
+            for (uint32_t i = 0; i < bag->second.numSlots && i < bag->second.slotGuids.size(); ++i)
+                if (bag->second.slotGuids[i] != 0) return refuse("ERR_MAIL_BAG", "You can only mail empty bags.");
+        }
+    }
     const int limit = maxSendableMailAttachments();
     int row = attachIndex;
     if (row < 0) {
