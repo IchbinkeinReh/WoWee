@@ -4836,8 +4836,17 @@ void InventoryHandler::handleAuctionCommandResult(network::Packet& packet) {
             owner_.addSystemChatMessage(uiText("ERR_AUCTION_STARTED", "Auction created."));
         else if (action == 1)
             owner_.addSystemChatMessage(uiText("ERR_AUCTION_REMOVED", "Auction cancelled."));
-        else if (action == 2)
+        else if (action == 2) {
             owner_.addSystemChatMessage(uiText("ERR_AUCTION_BID_PLACED", "Bid accepted."));
+            // A bid taken, the player waves: CMSG_EMOTE with ONESHOT_WAVE (3)
+            // at the end of 0x0059ffb0's bid branch.
+            if (owner_.getSocket() && wireOpcode(Opcode::CMSG_EMOTE) != 0xFFFF) {
+                constexpr uint32_t kEmoteOneshotWave = 3;
+                network::Packet wave(wireOpcode(Opcode::CMSG_EMOTE));
+                wave.writeUInt32(kEmoteOneshotWave);
+                owner_.getSocket()->send(wave);
+            }
+        }
         if (owner_.addonEventCallbackRef()) {
             owner_.addonEventCallbackRef()("PLAYER_MONEY", {});
             fireBagUpdates();
