@@ -354,6 +354,21 @@ static int lua_GetFriendInfo(lua_State* L) {
 /// replaced wholesale whenever SMSG_GUILD_ROSTER arrives and a cache would go
 /// stale exactly when the panel redraws.
 namespace {
+/// The name the guild commands take (GuildInvite, GuildUninvite, GuildPromote,
+/// GuildDemote, GuildSetLeader - 0x00522a20 to 0x00522d60): none is
+/// ERR_COMMAND_NEEDS_TARGET in red rather than a raise, and past 48
+/// characters is the "Name too long" raise. Null when nothing is to be sent.
+const char* guildCommandName(lua_State* L, game::GameHandler* gh) {
+    const char* name = lua_isstring(L, 1) ? lua_tostring(L, 1) : nullptr;
+    if (!name) {
+        if (gh) gh->addUIError(game::interfaceString("ERR_COMMAND_NEEDS_TARGET",
+                                                     "That command requires a target."));
+        return nullptr;
+    }
+    if (std::strlen(name) > 0x30) luaL_error(L, "Name too long");
+    return name;
+}
+
 /// The direction argument these targeting commands take: Bindings.xml gives
 /// each of them two keys, one plain and one with a 1 for backwards.
 inline bool wantsReverseArg(lua_State* L) {
@@ -3397,22 +3412,22 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"GetIgnoreName",           lua_GetIgnoreName},
                 {"GuildInvite", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->inviteToGuild(luaL_checkstring(L, 1));
+            if (const char* name = guildCommandName(L, gh); name && gh) gh->inviteToGuild(name);
             return 0;
         }},
                 {"GuildUninvite", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->kickGuildMember(luaL_checkstring(L, 1));
+            if (const char* name = guildCommandName(L, gh); name && gh) gh->kickGuildMember(name);
             return 0;
         }},
                 {"GuildPromote", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->promoteGuildMember(luaL_checkstring(L, 1));
+            if (const char* name = guildCommandName(L, gh); name && gh) gh->promoteGuildMember(name);
             return 0;
         }},
                 {"GuildDemote", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            if (gh) gh->demoteGuildMember(luaL_checkstring(L, 1));
+            if (const char* name = guildCommandName(L, gh); name && gh) gh->demoteGuildMember(name);
             return 0;
         }},
                 {"GuildLeave", [](lua_State* L) -> int {
@@ -4826,8 +4841,7 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 {"GuildSetLeader", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            const char* name = luaL_optstring(L, 1, "");
-            if (gh && name && *name) gh->setGuildLeader(name);
+            if (const char* name = guildCommandName(L, gh); name && gh) gh->setGuildLeader(name);
             return 0;
         }},
                 // LoggingChat([on]) (0x004fbc60 with index 0): with an
