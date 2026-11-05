@@ -1584,6 +1584,9 @@ void GameHandler::loadCharacterConfig() {
         }
         LOG_INFO("Character config loaded from ", path);
     }
+    // The macros are read with the rest, and the client announces them once
+    // its file is read (0x00567c10 -> 0x00566240, UPDATE_MACROS 0x180).
+    fireAddonEvent("UPDATE_MACROS", {});
 }
 
 void GameHandler::setTransportAttachment(uint64_t childGuid, ObjectType type, uint64_t transportGuid,

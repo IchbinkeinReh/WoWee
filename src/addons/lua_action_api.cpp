@@ -3711,6 +3711,8 @@ void registerActionLuaAPI(lua_State* L) {
             if (id == 0) return luaReturnNil(L);
             gh->setMacroText(id, body);
             gh->setMacroMeta(id, name, icon);
+            // 0x00568020 -> 0x00566240: the lists rebuilt and UPDATE_MACROS.
+            gh->fireAddonEvent("UPDATE_MACROS", {});
             lua_pushnumber(L, id);
             return 1;
         }},
@@ -3726,9 +3728,13 @@ void registerActionLuaAPI(lua_State* L) {
             // Each part is optional and nil means "leave it": EditMacro is
             // called with only a name when a macro is renamed, and writing the
             // other two as empty would erase the macro being renamed.
+            // Only a macro that is there (0x00566cd0 finds it first).
+            if (gh->getMacroText(id).empty() && gh->getMacroName(id).empty())
+                return luaReturnNil(L);
             if (body) gh->setMacroText(id, body);
             gh->setMacroMeta(id, name ? name : gh->getMacroName(id),
                                  icon ? icon : gh->getMacroIcon(id));
+            gh->fireAddonEvent("UPDATE_MACROS", {});   // 0x00566cd0
             lua_pushnumber(L, id);
             return 1;
         }},
@@ -3760,6 +3766,8 @@ void registerActionLuaAPI(lua_State* L) {
             const uint32_t first = (id >= 37u) ? 37u : 1u;
             const uint32_t last  = (id >= 37u) ? 54u : 36u;
             if (id < first || id > last) return 0;
+            // Only a macro that is there (0x00566d50 finds it first).
+            if (gh->getMacroText(id).empty() && gh->getMacroName(id).empty()) return 0;
             for (uint32_t slot = id; slot < last; ++slot) {
                 const std::string next = gh->getMacroText(slot + 1);
                 if (next.empty()) {
@@ -3774,6 +3782,7 @@ void registerActionLuaAPI(lua_State* L) {
             // The last slot in the half is never written by the loop above.
             gh->setMacroText(last, "");
             gh->setMacroMeta(last, "", "");
+            gh->fireAddonEvent("UPDATE_MACROS", {});   // 0x00566d50
             return 0;
         }},
                 // Saved as each change is made, so this has nothing to do.
