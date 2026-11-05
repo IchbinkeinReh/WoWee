@@ -7,6 +7,7 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "game/inventory_handler.hpp"
 #include "addons/lua_taint.hpp"
 #include "addons/override_bindings.hpp"
 #include "addons/lua_api_registrations.hpp"
@@ -2425,6 +2426,16 @@ static int lua_DeleteCursorItem(lua_State* L) {
     auto* gh = getGameHandler(L);
     uint8_t bag = 0, slot = 0;
     if (gh && cursorWireSlot(bag, slot)) {
+        // One that cannot be destroyed (ITEM_FIELD_FLAGS 0x20) is refused
+        // with ERR_ITEM_CANT_BE_DESTROYED and stays on the cursor
+        // (0x00522320).
+        if (auto* inv = gh->getInventoryHandler()) {
+            const uint64_t guid = inv->itemGuidAtWire(bag, slot);
+            if (guid != 0 && (gh->getItemFieldFlags(guid) & 0x20u) != 0) {
+                gh->addUIError(game::interfaceString("ERR_ITEM_CANT_BE_DESTROYED", "That item cannot be destroyed."));
+                return 0;
+            }
+        }
         // The whole stack: WoW asks about a partial stack before it gets here,
         // and the popup that calls this is the confirmation for all of it.
         gh->destroyItem(bag, slot, 0);
