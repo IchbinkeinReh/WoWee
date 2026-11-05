@@ -5178,6 +5178,19 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
     LOG_INFO("SMSG_PET_SPELLS: petGuid=0x", std::hex, owner_.petGuidRef(), std::dec,
              " react=", static_cast<int>(owner_.petReactRef()), " command=", static_cast<int>(owner_.petCommandRef()),
              " spells=", owner_.petSpellListRef().size());
+    // A hunter's pet (0x0071b630: a pet number, made by a hunter) closes the
+    // pet dialogs before UNIT_PET - PET_UI_CLOSE, event 0x1a6 (0x005d6900).
+    if (const auto pet = owner_.getEntityManager().getEntity(owner_.petGuidRef()); pet && pet->isUnit() &&
+        entityField(*pet, UF::UNIT_FIELD_PETNUMBER) != 0) {
+        const uint16_t createdBy = fieldIndex(UF::UNIT_FIELD_CREATEDBY);
+        const uint64_t maker = createdBy == 0xFFFF ? 0
+            : (static_cast<uint64_t>(pet->getField(static_cast<uint16_t>(createdBy + 1))) << 32) |
+                  pet->getField(createdBy);
+        const auto creator = maker ? owner_.getEntityManager().getEntity(maker) : nullptr;
+        if (creator && creator->getType() == ObjectType::PLAYER &&
+            ((entityField(*creator, UF::UNIT_FIELD_BYTES_0) >> 8) & 0xFFu) == 3u)
+            owner_.fireAddonEvent("PET_UI_CLOSE", {});
+    }
     owner_.fireAddonEvent("UNIT_PET", {"player"});
         // The pet frame and the pet action bar both rebuild from this one;
         // UNIT_PET alone tells them the pet changed but not that its interface
