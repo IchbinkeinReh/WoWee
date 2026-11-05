@@ -5042,6 +5042,9 @@ void SpellHandler::handleAchievementEarned(network::Packet& packet) {
 // ============================================================
 
 void SpellHandler::handlePetSpells(network::Packet& packet) {
+    // 0x005d6900 notes whether the pet changed, for the dead player's check
+    // after the bar is rebuilt.
+    const uint64_t petBefore = owner_.petGuidRef();
     // 0x005d6b90 begins by emptying the pet's spell history (0x00804420).
     petHistory_.clear();
     const size_t remaining = packet.getRemainingSize();
@@ -5064,6 +5067,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
         // should be redrawn.
         owner_.fireAddonEvent("PET_UI_UPDATE", {});
         owner_.updatePetActionBar();  // 0x005d4ad0
+        petChangedWhileDead(petBefore);
         return;
     }
 
@@ -5087,6 +5091,7 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
         // should be redrawn.
         owner_.fireAddonEvent("PET_UI_UPDATE", {});
         owner_.updatePetActionBar();  // 0x005d4ad0
+        petChangedWhileDead(petBefore);
         return;
     }
 
@@ -5181,6 +5186,19 @@ void SpellHandler::handlePetSpells(network::Packet& packet) {
     // The bonus bar takes the pet's actions or gives them back, and
     // PET_BAR_UPDATE (0x005d6xxx -> 0x005d4ad0).
     owner_.updatePetActionBar();
+    petChangedWhileDead(petBefore);
+}
+
+void SpellHandler::petChangedWhileDead(uint64_t petBefore) {
+    // 0x005d6900's tail: a pet that changed while the player has no health is
+    // a Death Knight raised as a ghoul - RAISED_AS_GHOUL (event 0x26c) - and
+    // losing it puts them back to being dead, PLAYER_DEAD (0x00520f70).
+    if (owner_.petGuidRef() == petBefore) return;
+    const auto self = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    if (!self || !self->isUnit()) return;
+    const uint16_t health = fieldIndex(UF::UNIT_FIELD_HEALTH);
+    if (health == 0xFFFF || static_cast<int32_t>(self->getField(health)) >= 1) return;
+    owner_.fireAddonEvent(owner_.petGuidRef() == 0 ? "PLAYER_DEAD" : "RAISED_AS_GHOUL", {});
 }
 
 void SpellHandler::sendPetAction(uint32_t action, uint64_t targetGuid) {

@@ -490,6 +490,8 @@ public:
 
     // Packet handlers dispatched from GameHandler's opcode table
     void handlePetSpells(network::Packet& packet);
+    /// 0x005d6900's last step, after SMSG_PET_SPELLS set the pet.
+    void petChangedWhileDead(uint64_t petBefore);
     void handleListStabledPets(network::Packet& packet);
 
     // Pet stable commands (called via GameHandler delegation)
