@@ -1,6 +1,7 @@
 #version 450
 
-// A ripple on the liquid, added to it (render state 6 set to 3, 0x0079d5e0).
+// A ripple on the liquid, added to it (render state 6 set to 3, 0x0079d5e0), as
+// the client's WaterRipples: the texture's colour, its alpha by the vertex's, unlit.
 
 layout(set = 1, binding = 0) uniform sampler2D rippleTexture;
 

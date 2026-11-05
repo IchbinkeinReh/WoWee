@@ -521,6 +521,34 @@ float EntitySpawner::playerCollisionHeight() {
     return collisionHeight_;
 }
 
+std::pair<float, float> EntitySpawner::unitRippleSize(const game::Unit& unit) {
+    namespace us = rendering::unit_splash;
+    const uint16_t scaleField = game::fieldIndex(game::UF::OBJECT_FIELD_SCALE_X);
+    const uint32_t scaleBits = scaleField != 0xFFFF ? unit.getField(scaleField) : 0u;
+    float scale = scaleBits != 0 ? std::bit_cast<float>(scaleBits) : 1.0f;
+    if (!(scale > 0.01f && scale <= 100.0f)) scale = 1.0f;
+    const uint64_t key = (static_cast<uint64_t>(unit.getDisplayId()) << 32) | scaleBits;
+    if (const auto it = rippleHeights_.find(key); it != rippleHeights_.end()) return {scale, it->second};
+    float height = us::kDefaultCollisionHeight * scale;
+    if (assetManager_) {
+        auto displays = assetManager_->loadDBCOptional("CreatureDisplayInfo.dbc");
+        auto models = assetManager_->loadDBCOptional("CreatureModelData.dbc");
+        const int32_t display = displays ? displays->findRecordById(unit.getDisplayId()) : -1;
+        if (display >= 0 && models && models->getFieldCount() > us::kModelCollisionHeightColumn) {
+            const auto drow = static_cast<uint32_t>(display);
+            const int32_t model = models->findRecordById(displays->getUInt32(drow, 1));
+            if (model >= 0) {
+                const auto mrow = static_cast<uint32_t>(model);
+                height = us::collisionHeight(models->getFloat(mrow, us::kModelCollisionHeightColumn), scale,
+                                             displays->getFloat(drow, us::kDisplayScaleColumn),
+                                             models->getFloat(mrow, us::kModelScaleColumn));
+            }
+        }
+    }
+    rippleHeights_[key] = height;
+    return {scale, height};
+}
+
 void EntitySpawner::playUnitSplashes(uint32_t localPlayerInstance) {
     namespace us = rendering::unit_splash;
     rendering::CharacterRenderer* cr = renderer_ ? renderer_->getCharacterRenderer() : nullptr;

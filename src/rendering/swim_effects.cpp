@@ -696,10 +696,6 @@ struct SurfaceRipplePush {
     glm::vec4 tint{1.0f};
 };
 
-// The unit's virtual at 0x3c, which sizes its ripples. Not identified: 4 gives
-// the ring the width it has around a character in the original's shot.
-constexpr float kSurfaceRippleSizeValue = 4.0f;
-
 float rippleRoll() {
     static std::mt19937 rng{std::random_device{}()};
     return std::uniform_real_distribution<float>(0.0f, 1.0f)(rng);
@@ -809,6 +805,9 @@ void SwimEffects::updateSurfaceRipples(const CameraController& cc, const glm::ve
                                        std::optional<float> waterH, float deltaTime) {
     namespace wr = water_ripple;
     std::erase_if(surfaceRipples_, [&](wr::Ripple& r) { return !wr::step(r, deltaTime); });
+    // A unit out of the water, or gone, for a few seconds is forgotten.
+    rippleClock_ += deltaTime;
+    std::erase_if(unitRipples_, [&](const auto& entry) { return rippleClock_ - entry.second.seen > 5.0f; });
     surfaceRippleDelay_ -= deltaTime;
     if (!waterH || !surfaceRipplesShown_ || *waterH <= charPos.z) {
         surfaceRippleLastDepth_ = 0.0f;
@@ -820,7 +819,7 @@ void SwimEffects::updateSurfaceRipples(const CameraController& cc, const glm::ve
     u.height = cc.collisionHeight();
     u.speed = cc.isSwimming() ? 4.722222f : 7.0f;
     u.facing = glm::radians(cc.getFacingYaw());
-    u.sizeValue = kSurfaceRippleSizeValue;
+    u.sizeValue = 1.0f;  // the object's scale (the unit vtable's +0x3c reads descriptor +0x10)
     if (cc.isMovingForward()) u.moveFlags |= wr::kForward;
     if (cc.isMovingBackward()) u.moveFlags |= wr::kBackward;
     if (cc.isStrafingLeft()) u.moveFlags |= wr::kStrafeLeft;
@@ -842,6 +841,38 @@ void SwimEffects::updateSurfaceRipples(const CameraController& cc, const glm::ve
     if (wr::spawn(u, rolls, ripple, next) && surfaceRipples_.size() < 96) {
         surfaceRipples_.push_back(ripple);
         surfaceRippleDelay_ = next;
+    }
+}
+
+void SwimEffects::unitInWater(uint64_t guid, const glm::vec3& feet, float waterZ, bool moving, float speed,
+                              float facing, float scale, float height, float deltaTime) {
+    namespace wr = water_ripple;
+    if (!surfaceRipplesShown_ || waterZ <= feet.z) return;
+    UnitRipple& state = unitRipples_[guid];
+    state.delay -= deltaTime;
+    state.seen = rippleClock_;
+    wr::Unit u;
+    u.surfacePoint = glm::vec3(feet.x, feet.y, waterZ + 0.03f);
+    u.depth = waterZ - feet.z;
+    u.height = height;
+    u.speed = speed;
+    u.facing = facing;
+    u.sizeValue = scale;
+    u.moveFlags = moving ? wr::kForward : 0u;
+    u.mode = moving ? wr::Mode::Moving : wr::Mode::Still;
+    const float mark = u.height * 0.4f;
+    if ((mark < u.depth) != (mark < state.lastDepth)) {
+        u.mode = wr::Mode::Crossing;
+        state.delay = 0.0f;
+    }
+    state.lastDepth = u.depth;
+    if (state.delay > 0.0f) return;
+    const wr::Rolls rolls{rippleRoll(), rippleRoll(), rippleRoll(), rippleRoll(), rippleRoll()};
+    wr::Ripple ripple;
+    float next = 0.0f;
+    if (wr::spawn(u, rolls, ripple, next) && surfaceRipples_.size() < 96) {
+        surfaceRipples_.push_back(ripple);
+        state.delay = next;
     }
 }
 

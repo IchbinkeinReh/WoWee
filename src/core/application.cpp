@@ -13,6 +13,7 @@
 #include "ui/safe_area.hpp"
 #include "ui/settings_schema.hpp"
 #include "ui/settings_i18n.hpp"
+#include "rendering/swim_effects.hpp"
 #include "rendering/camera_smooth.hpp"
 #include "pipeline/m2_asset_loader.hpp"
 #include "core/coordinates.hpp"
@@ -398,6 +399,22 @@ void playRiderMountAnimation(rendering::CharacterRenderer& cr, rendering::SpellV
 
 // Another unit's animation tier and what 0x007385c0 reads of it, onto its
 // instance, from what the sync has worked out of how it moves.
+// A unit's ripples, near the character: the client's every unit in liquid
+// (0x0071cba0), at its own scale and collision height.
+void feedUnitRipple(rendering::Renderer& renderer, EntitySpawner& spawner, uint64_t guid, const game::Unit& unit,
+                    const glm::vec3& feet, bool moving, bool dead, float deltaTime) {
+    auto* swim = renderer.getSwimEffects();
+    auto* water = renderer.getWaterRenderer();
+    if (dead || !swim || !water || !swim->surfaceRipplesShown()) return;
+    const glm::vec3 away = feet - renderer.getCharacterPosition();
+    if (glm::dot(away, away) > 60.0f * 60.0f) return;
+    const auto waterZ = water->getWaterHeightAt(feet.x, feet.y);
+    if (!waterZ) return;
+    const auto size = spawner.unitRippleSize(unit);
+    swim->unitInWater(guid, feet, *waterZ, moving, unit.getMoveSpeed(), unit.getModelFacing(), size.first,
+                      size.second, deltaTime);
+}
+
 void syncUnitAnimation(rendering::CharacterRenderer& cr, game::GameHandler& gh, EntitySpawner& spawner,
                        rendering::SpellVisualSystem* svs, uint64_t guid, uint32_t instanceId, const game::Unit& unit,
                        bool moving, bool swimming, bool flying, bool riding) {
@@ -5043,6 +5060,9 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                 // the renderer to the correct destination via the spline packet.
                 posIt->second = renderPos;
 
+                feedUnitRipple(*renderer, *entitySpawner_, guid, *unitPtr, renderPos, isMovingNow && !deadOrCorpse,
+                               deadOrCorpse, deltaTime);
+
                 // The speed its movement animation plays to: the spline's,
                 // as the client's GetCurrentSpeed gives it for a unit on one.
                 charRenderer->setLocomotionSpeed(
@@ -5284,6 +5304,8 @@ void Application::syncRenderInstancesToEntities(float deltaTime) {
                     }
                 }
                 posIt->second = renderPos;
+                feedUnitRipple(*renderer, *entitySpawner_, guid, *unitPtr, renderPos, isMovingNow && !deadOrCorpse,
+                               deadOrCorpse, deltaTime);
 
                 // The speed the player's (or its mount's) movement animation
                 // plays to - see the creature loop above.

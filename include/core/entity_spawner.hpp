@@ -378,6 +378,8 @@ public:
     /// CreatureModelData CollisionHeight at its scale, 73/36 where there is
     /// none. Swimming is measured by it.
     float playerCollisionHeight();
+    /// A unit's object scale and collision height, for its ripples.
+    std::pair<float, float> unitRippleSize(const game::Unit& unit);
     /// A unit's jump's own sound, asked of it outright as its movement
     /// handlers ask it: kSlotJumpStart leaving the ground, kSlotJumpEnd
     /// coming down (unit_model_events.hpp).
@@ -1449,6 +1451,7 @@ private:
     uint32_t collisionHeightDisplay_ = 0;
     uint32_t collisionHeightScaleBits_ = 0;
     float collisionHeight_ = 73.0f / 36.0f;
+    std::unordered_map<uint64_t, float> rippleHeights_;  // by display and scale bits
     /// The melee hit each attacker keeps until its model lands it (+0xb98),
     /// the client's swing and impact tables, and the no-wound targets'
     /// reaction hold (0x00ca1600).

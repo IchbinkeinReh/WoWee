@@ -1,5 +1,6 @@
 #pragma once
 
+#include <unordered_map>
 #include "rendering/vk_texture.hpp"
 #include "rendering/water_ripple.hpp"
 #include <array>
@@ -61,6 +62,11 @@ public:
     void loadRippleTextures(pipeline::AssetManager* assets);
     /// Whether they show: not on the traced water.
     void setSurfaceRipplesShown(bool shown) { surfaceRipplesShown_ = shown; }
+    /// Whether a unit's ripples are wanted at all this frame.
+    [[nodiscard]] bool surfaceRipplesShown() const { return surfaceRipplesShown_; }
+    /// A unit other than the player with its feet under `waterZ` this frame.
+    void unitInWater(uint64_t guid, const glm::vec3& feet, float waterZ, bool moving, float speed, float facing,
+                     float scale, float height, float deltaTime);
 
 private:
     struct Particle {
@@ -129,6 +135,13 @@ private:
     std::vector<water_ripple::Ripple> surfaceRipples_;
     float surfaceRippleDelay_ = 0.0f;
     float surfaceRippleLastDepth_ = 0.0f;
+    struct UnitRipple {
+        float delay = 0.0f;
+        float lastDepth = 0.0f;
+        float seen = 0.0f;  // rippleClock_ when last in water
+    };
+    float rippleClock_ = 0.0f;
+    std::unordered_map<uint64_t, UnitRipple> unitRipples_;
     bool surfaceRipplesShown_ = false;
     VkPipeline surfaceRipplePipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout surfaceRippleLayout_ = VK_NULL_HANDLE;
