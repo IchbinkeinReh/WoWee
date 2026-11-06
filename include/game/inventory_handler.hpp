@@ -368,6 +368,18 @@ public:
     /// Apply the enchant that was held back by the replace prompt.
     void replaceEnchant();
 
+    /// ClickTargetTradeButton(7) with a spell waiting for an item (0x005198a0):
+    /// the partner's "will not be traded" slot is what it goes on. A permanent
+    /// enchant (effect 53) aimed at an item already carrying one asks first -
+    /// TRADE_REPLACE_ENCHANT with the two enchants' names - and leaves the
+    /// spell waiting; anything else is cast at the slot straight away.
+    void clickPartnerNonTradedSlot();
+    /// 0x0080c5f0, which ReplaceTradeEnchant also runs: the waiting spell sent
+    /// at the trade window's slot 6 (TARGET_FLAG_TRADE_ITEM 0x1000, the slot
+    /// number where the item's guid would go), the server finding the item in
+    /// the partner's half. False with nothing waiting.
+    bool castPendingAtTradeSlot();
+
     void equipPendingItem();
     void cancelPendingEquip();
     /// `unitTarget` names who the item is used on, and overrides the default

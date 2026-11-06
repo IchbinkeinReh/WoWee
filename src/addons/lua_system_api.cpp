@@ -9582,10 +9582,14 @@ void registerSystemLuaAPI(lua_State* L) {
                 // SMSG_TRIGGER_MOVIE is answered with CMSG_COMPLETE_MOVIE at
                 // once - so nothing.
                 {"GameMovieFinished",        lua_ReturnNothing},
-                // ReplaceTradeEnchant() (0x00510b80 -> 0x0080c5f0): only with
-                // an enchant waiting on the trade window's slot (0x00d3f4e0
-                // 0x4010), which this client never puts there - so nothing.
-                {"ReplaceTradeEnchant",      lua_ReturnNothing},
+                // ReplaceTradeEnchant() (0x00510b80 -> 0x0080c5f0): the Yes
+                // on TRADE_REPLACE_ENCHANT. The spell is still waiting for its
+                // item, and goes at the trade window's untraded slot now.
+                {"ReplaceTradeEnchant", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (auto* inv = gh ? gh->getInventoryHandler() : nullptr) inv->castPendingAtTradeSlot();
+            return 0;
+        }},
                 // IsPartyLeader() - whether *this* player leads the group.
                 //
                 // The client has known this all along: the party data carries a

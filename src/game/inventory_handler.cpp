@@ -2585,6 +2585,51 @@ void InventoryHandler::replaceEnchant() {
     completeItemUseOnItem(pending.targetItemGuid, true);
 }
 
+void InventoryHandler::clickPartnerNonTradedSlot() {
+    if (!isAwaitingItemTarget()) return;
+    const PendingItemTarget& pending = *pendingItemTarget_;
+    const auto& cache = owner_.spellNameCacheRef();
+    if (auto it = cache.find(pending.spellId); it != cache.end()) {
+        const uint32_t existing = peerTradeSlots_[TRADE_SLOT_NONTRADED].inst.enchantId;
+        for (int i = 0; i < 3; ++i) {
+            if (it->second.effectIds[i] != 53 || existing == 0) continue;
+            // Both enchants have to be rows of SpellItemEnchantment for the
+            // question to be asked; without either the spell just goes.
+            const std::string oldName = owner_.getEnchantName(existing);
+            const std::string newName = owner_.getEnchantName(it->second.effectMiscValues[i]);
+            if (oldName.empty() || newName.empty()) continue;
+            owner_.fireAddonEvent("TRADE_REPLACE_ENCHANT", {oldName, newName});
+            return;
+        }
+    }
+    castPendingAtTradeSlot();
+}
+
+bool InventoryHandler::castPendingAtTradeSlot() {
+    if (!isAwaitingItemTarget() || !owner_.getSocket()) return false;
+    const PendingItemTarget pending = *pendingItemTarget_;
+    pendingItemTarget_.reset();
+    // The targets 0x009ab8b0 writes for it: the mask, then a packed guid that
+    // is the trade slot rather than an item - TrinityCore and its kin look the
+    // item up in the partner's half by that number.
+    constexpr uint32_t kTargetFlagTradeItem = 0x1000;
+    if (pending.fromSpell) {
+        owner_.getSocket()->send(CastSpellPacket::buildTradeItemTarget(pending.spellId, 0));
+    } else {
+        // An item's use carries the same targets after its own header; the
+        // builder writes the mask alone when nothing else is named, and the
+        // slot follows it.
+        network::Packet packet = UseItemPacket::build(pending.bag, pending.slot, pending.itemGuid,
+                                                      pending.spellId, 0, 0, 0, 0,
+                                                      kTargetFlagTradeItem);
+        packet.writePackedGuid(static_cast<uint64_t>(TRADE_SLOT_NONTRADED));
+        owner_.getSocket()->send(packet);
+    }
+    LOG_INFO("Casting ", pending.itemName, " (spell ", pending.spellId,
+             ") at the trade window's untraded slot");
+    return true;
+}
+
 void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confirmed) {
     if (!isAwaitingItemTarget()) return;
     const PendingItemTarget pending = *pendingItemTarget_;

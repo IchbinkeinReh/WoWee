@@ -2594,6 +2594,10 @@ public:
     static network::Packet buildGameObjectTarget(uint32_t spellId, uint64_t targetGuid, uint8_t castCount);
     /// Cast at an item - Disenchant, Prospecting, Milling, enchant formulas.
     static network::Packet buildItemTarget(uint32_t spellId, uint64_t itemGuid, uint8_t castCount);
+    /// A cast at the trade window's untraded slot (0x0080c5f0):
+    /// TARGET_FLAG_TRADE_ITEM (0x1000) and the slot number, 6, packed where an
+    /// item's guid would be.
+    static network::Packet buildTradeItemTarget(uint32_t spellId, uint8_t castCount);
     /// Cast at a place on the ground: SpellCastTargets with only
     /// TARGET_FLAG_DEST_LOCATION, written as 0x009ab8b0 writes it.
     /// x, y, z in the transport's frame when transportGuid is set (0x009ab8b0).

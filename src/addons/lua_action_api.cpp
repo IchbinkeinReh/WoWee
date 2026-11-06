@@ -94,6 +94,16 @@ uint64_t cursorMoney() {
     return s_cursorType == CursorType::MONEY ? s_cursorMoney : 0;
 }
 
+void dropCursorMoneyOnTrade(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint64_t held = cursorMoney();
+    if (!gh || held == 0) return;
+    const uint64_t total = gh->getMyTradeGold() + held;
+    if (total > gh->getMoneyCopper()) return;
+    gh->setTradeGold(total);
+    setCursorMoney(L, 0);
+}
+
 void setCursorMoney(lua_State* L, uint64_t copper) {
     // Through setCursorType rather than by assignment: it is what fires
     // CURSOR_UPDATE and what shows the action bars' empty slots. Setting the
@@ -2957,8 +2967,20 @@ static int lua_ClickTradeButton(lua_State* L) {
     return 0;
 }
 
-// The other side's slots belong to the other player.
-static int lua_ClickTargetTradeButton(lua_State* L) { (void)L; return 0; }
+// ClickTargetTradeButton(index) (0x00586c80) - a click on the partner's half.
+// Money on the cursor is added to this player's own offer, the same drop as
+// AddTradeMoney. Otherwise only the seventh slot answers, the one the partner
+// puts an item to be enchanted in: a spell waiting for an item goes on it.
+static int lua_ClickTargetTradeButton(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ClickTargetTradeButton(index)");
+    if (cursorMoney() != 0) {
+        dropCursorMoneyOnTrade(L);
+    } else if (std::lround(lua_tonumber(L, 1)) == 7) {
+        auto* gh = getGameHandler(L);
+        if (auto* inv = gh ? gh->getInventoryHandler() : nullptr) inv->clickPartnerNonTradedSlot();
+    }
+    return 0;
+}
 
 static int lua_SetTradeMoney(lua_State* L) {
     auto* gh = getGameHandler(L);
