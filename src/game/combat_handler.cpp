@@ -513,6 +513,9 @@ void CombatHandler::startAutoAttack(uint64_t targetGuid) {
         auto packet = AttackSwingPacket::build(targetGuid);
         owner_.getSocket()->send(packet);
     }
+    // 0x006e2610: swinging ends a repeating shot, the server told
+    // (0x00807560(1)).
+    owner_.stopAutoRepeat(true);
     LOG_INFO("Starting auto-attack on 0x", std::hex, targetGuid, std::dec);
 }
 
