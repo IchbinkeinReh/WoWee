@@ -858,20 +858,33 @@ static int lua_UnitCanCooperate(lua_State* L) {
 }
 
 // UnitCreatureFamily(unit) → familyName or nil
+// UnitCreatureFamily(unit) (0x00611820) → CreatureFamily.dbc's localized
+// Name for a creature's template family (0x007153e0), nil without one - a
+// player has no template, and a creature of no family has none to name.
 static int lua_UnitCreatureFamily(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    const char* uid = luaL_optstring(L, 1, "target");
-    std::string uidStr(uid);
+    std::string uidStr(luaL_checkstring(L, 1));
     toLowerInPlace(uidStr);
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
-    if (guid == 0) { return luaReturnNil(L); }
-    auto entity = gh->getEntityManager().getEntity(guid);
-    if (!entity || entity->getType() == game::ObjectType::PLAYER) { return luaReturnNil(L); }
+    const uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
+    auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
+    if (!entity || entity->getType() == game::ObjectType::PLAYER) return luaReturnNil(L);
     auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
-    if (!unit) { return luaReturnNil(L); }
-    uint32_t family = gh->getCreatureFamily(unit->getEntry());
-    if (family == 0) { return luaReturnNil(L); }
+    if (!unit) return luaReturnNil(L);
+    const uint32_t family = gh->getCreatureFamily(unit->getEntry());
+    if (family == 0) return luaReturnNil(L);
+    auto* am = gh->services().assetManager;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* layout = layouts ? layouts->getLayout("CreatureFamily") : nullptr;
+    const uint32_t nameF = layout ? layout->tryField("Name") : 0xFFFFFFFFu;
+    auto dbc = am && am->isInitialized() ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
+    if (dbc && dbc->isLoaded() && nameF < dbc->getFieldCount()) {
+        const int32_t r = dbc->findRecordById(family);
+        if (r < 0) return luaReturnNil(L);
+        const std::string name = dbc->getString(static_cast<uint32_t>(r), nameF);
+        lua_pushstring(L, name.c_str());
+        return 1;
+    }
+    // Without the file, the English names.
     static constexpr const char* kFamilies[] = {
         "", "Wolf", "Cat", "Spider", "Bear", "Boar", "Crocolisk", "Carrion Bird",
         "Crab", "Gorilla", "Raptor", "", "Tallstrider", "", "", "Felhunter",
@@ -881,8 +894,8 @@ static int lua_UnitCreatureFamily(lua_State* L) {
         "Chimaera", "Devilsaur", "Ghoul", "Silithid", "Worm", "Rhino", "Wasp",
         "Core Hound", "Spirit Beast"
     };
-    lua_pushstring(L, (family < sizeof(kFamilies)/sizeof(kFamilies[0]) && kFamilies[family][0])
-        ? kFamilies[family] : "Beast");
+    if (family >= std::size(kFamilies) || !kFamilies[family][0]) return luaReturnNil(L);
+    lua_pushstring(L, kFamilies[family]);
     return 1;
 }
 

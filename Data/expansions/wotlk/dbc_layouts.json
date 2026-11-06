@@ -142,6 +142,7 @@
     "MaxScaleLevel": 4,
     "MinScale": 1,
     "MinScaleLevel": 2,
+    "Name": 10,
     "PetTalentType": 8
   },
   "CreatureModelData": {
