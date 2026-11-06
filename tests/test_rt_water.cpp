@@ -57,3 +57,12 @@ TEST_CASE("RT water: the sky from horizon to zenith", "[rt][water]") {
     CHECK(glm::length(sky(glm::vec3(0.0f, 0.0f, 1.0f), horizon, top) - top) < 1e-6f);
     CHECK(glm::length(sky(glm::vec3(1.0f, 0.0f, -0.5f), horizon, top) - horizon) < 1e-6f);
 }
+
+TEST_CASE("RT water: the sun's path to the bed stays short however low it stands", "[rt_water]") {
+    // Overhead: straight down.
+    CHECK(sunPathInWater(2.0f, glm::vec3(0.0f, 0.0f, 1.0f)) == Catch::Approx(2.0f));
+    // On the horizon it still enters at no more than the critical angle,
+    // 48.6 degrees from the vertical: 2 / cos(48.6).
+    const glm::vec3 low = glm::normalize(glm::vec3(1.0f, 0.0f, 0.01f));
+    CHECK(sunPathInWater(2.0f, low) == Catch::Approx(3.02f).margin(0.03f));
+}

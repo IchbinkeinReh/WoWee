@@ -40,6 +40,14 @@ inline constexpr float kF0 = 0.02f;
     return bed * t + scatter * (glm::vec3(1.0f) - t);
 }
 
+/// How far the sun comes through the water to a bed `depth` under the surface:
+/// it bends down at the surface, so however low it stands the path stays short.
+/// `toSun` unit, above the water.
+[[nodiscard]] inline float sunPathInWater(float depth, const glm::vec3& toSun) {
+    const glm::vec3 up = -refractDir(-toSun, glm::vec3(0.0f, 0.0f, 1.0f), 1.0f / kIor);
+    return depth / std::max(up.z, 0.2f);
+}
+
 /// The sky along `dir`: the horizon's colour level, the zenith's overhead.
 [[nodiscard]] inline glm::vec3 sky(const glm::vec3& dir, const glm::vec3& horizon, const glm::vec3& top) {
     const float up = std::clamp(dir.z, 0.0f, 1.0f);

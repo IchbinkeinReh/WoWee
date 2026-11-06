@@ -18,7 +18,8 @@
 //   the frame drawn under the water where the hit is on screen there and
 //   matches it (its depth), and from the hit's own colour lit where it is
 //   not; over the path, Beer-Lambert absorption, exp(-sigma x d), and what
-//   the water scatters in, its body colour lit, by 1 - exp(-sigma x d).
+//   the water scatters in, its body colour lit, by 1 - exp(-sigma x d). The
+//   sun on the bed is held back by the water it came down through (rtwSunDown).
 //   No hit within reach: all of it the water's own.
 // - The two by Schlick's Fresnel at the 1.333 interface (F0 0.02); from
 //   under the surface past the critical angle, all reflection.
@@ -42,9 +43,19 @@ vec3 rtwSky(vec3 dir) {
 // A traced hit's colour lit: its triangle's under the ambient, and the sun
 // where `sunVis` lets it through - the sum held to 1, as terrain.frag and
 // the models' shaders hold theirs.
-vec3 rtwLitHit(vec4 surface, vec3 n, vec3 toSun, float sunVis) {
+vec3 rtwLitHit(vec4 surface, vec3 n, vec3 toSun, vec3 sunVis) {
     vec3 light = ambientColor.rgb + lightColor.rgb * max(dot(n, toSun), 0.0) * sunVis;
     return surface.rgb * clamp(light, 0.0, 1.0);
+}
+
+// The way the sun goes down through the surface, up toward it from the bed.
+vec3 rtwSunUnderwater() {
+    return -refract(-normalize(rtSunRay.xyz), vec3(0.0, 0.0, 1.0), 1.0 / RTW_IOR);
+}
+
+// How far from `bed`, `depth` under the surface, the sun has come through water.
+float rtwSunPath(float depth) {
+    return depth / max(rtwSunUnderwater().z, 0.2);
 }
 
 // The frame drawn under the water (SceneColor) where a traced hit is on
@@ -58,6 +69,7 @@ vec3 rtwLitHit(vec4 surface, vec3 n, vec3 toSun, float sunVis) {
 // Returns how much of the frame's colour to take: 1 well inside the screen,
 // falling to 0 over its outer 3% so the change to the traced colour where a
 // hit leaves it is not a line. 0 for no match.
+const float RTW_BED_SHORE = 0.5;  // yards under the surface the ground's own sun has taken over by
 bool rtwScreenReuse = true;  // off for the traced-only debug view and interior water
 // (Interior water's mirror reads the capture by its own rules: rtwMirrorSeen.)
 const float RTW_MIRROR_EDGE = 0.12;   // of the screen, the fade at its edge
@@ -167,7 +179,7 @@ vec3 rtwReflection(vec3 origin, vec3 dir, vec3 toSun, inout uint rng) {
     vec3 sunRay = normalize(rtSunRay.xyz);
     float vis = dot(hn, sunRay) > 0.0 && !rtOccludedBy(hit + hn * 0.05, sunRay, 400.0, rng, unit) ? 1.0 : 0.0;
     hs.rgb = rtHitColor(origin, dir, t, rtwFootprint(origin, t), hs.rgb);
-    vec3 c = rtwLitHit(hs, hn, toSun, vis);
+    vec3 c = rtwLitHit(hs, hn, toSun, vec3(vis));
     // The air between the surface and what it shows.
     float haze = clamp(t / max(fogParams.y, 1.0), 0.0, 1.0);
     return mix(mix(c, fogColor.rgb, haze), shown, onScreen);
@@ -199,25 +211,40 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
         // pixel shows; the hit's own colour only where it is not.
         vec3 shown;
         float onScreen = rtwOnScreen(hit, hn, shown);
+        // The ground under the water takes its sun here, not from the frame. The
+        // frame lights it as dry land in a hollow: a low sun's ray runs straight
+        // on through the bank, and the whole bed of a pond lay in the bank's
+        // shadow. The sun bends down at the surface, so what can stop it is what
+        // stands over the point it came in at, and the water it came through.
+        // That is the one sun on it, by the triangle's colour, so nothing is lit
+        // twice; near the shore, where no bank can stand between, it hands over
+        // to the frame, which the land beside it is.
+        // Lit as level: its triangles' own normals, each a flat face, lit the bed
+        // facet by facet, bands of light and shade with straight edges between.
+        bool ground = (rtInstances[rtHitInstance].flags & RT_MESH_TERRAIN) != 0u;
+        float depth = max(origin.z - hit.z, 0.0);
+        float tracedShare = ground ? smoothstep(0.0, RTW_BED_SHORE, depth) : 0.0;
+        vec3 traced = vec3(0.0);
+        if (onScreen < 1.0 || tracedShare > 0.0) {
+            hs.rgb = rtHitColor(origin, dir, t, rtwFootprint(origin, t), hs.rgb);
+            vec3 sunRay = normalize(rtSunRay.xyz);
+            float sunPath = rtwSunPath(depth);
+            vec3 entry = hit + rtwSunUnderwater() * sunPath;
+            float vis = sunRay.z > 0.0 && !rtOccluded(entry + vec3(0.0, 0.0, 0.1), sunRay, 400.0, rng) ? 1.0 : 0.0;
+            traced = rtwLitHit(hs, ground ? vec3(0.0, 0.0, 1.0) : hn, toSun, exp(-sigma * sunPath) * vis);
+        }
         bed = shown;
         if (onScreen < 1.0) {
             // Not on screen as itself: off the edge, or behind something
             // nearer - most often the swimmer, whose body covers where the
             // bed beyond its outline projects. The traced colour there is lit
-            // apart from the frame (no baked shade, no traced occlusion) and
-            // read as a pale cut-out of the swimmer on the bed, a body length
-            // beyond it. What the frame shows straight under this pixel is
-            // the same bed, without the bend, and lit as the rest of it is;
-            // the traced colour only where that is not the bed either.
+            // apart from the frame and read as a pale cut-out of the swimmer on
+            // the bed, a body length beyond it. What the frame shows straight
+            // under this pixel is the same bed, without the bend.
             vec3 under;
-            hs.rgb = rtHitColor(origin, dir, t, rtwFootprint(origin, t), hs.rgb);
-            // The ground lit as level: its triangles' own normals, each a
-            // flat face, lit the bed facet by facet, bands of light and shade
-            // with straight edges between them.
-            bool ground = (rtInstances[rtHitInstance].flags & RT_MESH_TERRAIN) != 0u;
-            vec3 traced = rtwLitHit(hs, ground ? vec3(0.0, 0.0, 1.0) : hn, toSun, 0.8);
             bed = mix(rtwBehindSurface(origin, under) ? under : traced, shown, onScreen);
         }
+        bed = mix(bed, traced, tracedShare);
         bedFromScreen = onScreen >= 1.0;
     }
     vec3 transmit = exp(-sigma * d);
