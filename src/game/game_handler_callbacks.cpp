@@ -3938,6 +3938,22 @@ void GameHandler::lootMasterGive(uint8_t lootSlot, uint64_t targetGuid) {
 
 void GameHandler::interactWithNpc(uint64_t guid) {
     if (!isInWorld()) return;
+    // 0x006ddbb0 first: in a form that takes no items (0x00721ca0) whose row
+    // is missing or lacks flag 8, the player leaves it where autoUnshift lets
+    // it (0x0071b130, 0x00726ce0) and is refused ERR_CANT_INTERACT_SHAPESHIFTED
+    // where it does not.
+    if (const uint8_t form = getShapeshiftFormId(); form != 0) {
+        const auto* row = shapeshiftFormRow(form);
+        if ((!row || (row->flags & 0x1u) == 0) && (!row || (row->flags & 0x8u) == 0)) {
+            if (!wouldAutoUnshift()) {
+                playGameErrorSound("ERR_CANT_INTERACT_SHAPESHIFTED");
+                raiseUiError(interfaceString("ERR_CANT_INTERACT_SHAPESHIFTED",
+                                             "Can't speak while shapeshifted."));
+                return;
+            }
+            leaveShapeshiftForm();
+        }
+    }
     // 0x006ddbb0: nothing past the NPC's combat reach plus four yards (a
     // straight-line distance, height included) is spoken to. With
     // click-to-move interaction the client walks there instead; without it -
