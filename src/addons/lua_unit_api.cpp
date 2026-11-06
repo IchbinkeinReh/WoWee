@@ -3047,30 +3047,53 @@ static int lua_UnitIsEnemy(lua_State* L) {
     return 1;
 }
 
+// UnitCreatureType(unit) (0x00611780) → CreatureType.dbc's localized name for
+// the unit's type, nil without one. The type (0x0071f300): the shapeshift
+// form's CreatureType when it sets one, else a creature's template type, else
+// the race's (ChrRaces CreatureType) for a player.
 static int lua_UnitCreatureType(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushstring(L, "Unknown"); return 1; }
-    const char* uid = luaL_optstring(L, 1, "target");
+    const char* uid = luaL_checkstring(L, 1);
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
-    if (guid == 0) { lua_pushstring(L, "Unknown"); return 1; }
-    auto entity = gh->getEntityManager().getEntity(guid);
-    if (!entity) { lua_pushstring(L, "Unknown"); return 1; }
-    // Player units are always "Humanoid"
-    if (entity->getType() == game::ObjectType::PLAYER) {
-        lua_pushstring(L, "Humanoid");
-        return 1;
-    }
+    const uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
+    auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
     auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
-    if (!unit) { lua_pushstring(L, "Unknown"); return 1; }
-    uint32_t ct = gh->getCreatureType(unit->getEntry());
+    if (!unit) return luaReturnNil(L);
+    uint32_t type = 0;
+    const uint32_t bytes2 = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2));
+    if (const auto* row = gh->shapeshiftFormRow(static_cast<uint8_t>(bytes2 >> 24)); row && row->creatureType > 0)
+        type = row->creatureType;
+    auto* am = gh->services().assetManager;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    if (type == 0 && entity->getType() != game::ObjectType::PLAYER) {
+        type = gh->getCreatureType(unit->getEntry());
+    } else if (type == 0) {
+        const uint32_t race = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) & 0xFFu;
+        const auto* layout = layouts ? layouts->getLayout("ChrRaces") : nullptr;
+        const uint32_t typeF = layout ? layout->tryField("CreatureType") : 0xFFFFFFFFu;
+        auto races = am && am->isInitialized() ? am->loadDBCOptional("ChrRaces.dbc") : nullptr;
+        if (races && races->isLoaded() && typeF < races->getFieldCount())
+            if (const int32_t r = races->findRecordById(race); r >= 0)
+                type = races->getUInt32(static_cast<uint32_t>(r), typeF);
+    }
+    if (type == 0) return luaReturnNil(L);
+    auto types = am && am->isInitialized() ? am->loadDBCOptional("CreatureType.dbc") : nullptr;
+    if (types && types->isLoaded() && types->getFieldCount() > 1) {
+        if (const int32_t r = types->findRecordById(type); r >= 0) {
+            const std::string name = types->getString(static_cast<uint32_t>(r), 1);
+            lua_pushstring(L, name.c_str());
+            return 1;
+        }
+        return luaReturnNil(L);
+    }
+    // Without the file, the English names.
     static constexpr const char* kTypes[] = {
-        "Unknown", "Beast", "Dragonkin", "Demon", "Elemental",
-        "Giant", "Undead", "Humanoid", "Critter", "Mechanical",
-        "Not specified", "Totem", "Non-combat Pet", "Gas Cloud"
+        "", "Beast", "Dragonkin", "Demon", "Elemental", "Giant", "Undead", "Humanoid",
+        "Critter", "Mechanical", "Not specified", "Totem", "Non-combat Pet", "Gas Cloud"
     };
-    lua_pushstring(L, (ct < 14) ? kTypes[ct] : "Unknown");
+    if (type >= std::size(kTypes)) return luaReturnNil(L);
+    lua_pushstring(L, kTypes[type]);
     return 1;
 }
 
