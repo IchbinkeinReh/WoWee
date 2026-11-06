@@ -445,6 +445,7 @@ public:
     [[nodiscard]] const std::string& getSpellRank(uint32_t spellId) const;
     [[nodiscard]] const std::string& getSpellDescription(uint32_t spellId) const;
     [[nodiscard]] std::string getEnchantName(uint32_t enchantId) const;
+    [[nodiscard]] bool enchantSoulbinds(uint32_t enchantId) const;
     /// The gem item an enchantment came out of (SpellItemEnchantment.Src_ItemID).
     /// Zero when the enchantment is not a gem, or on a file with no such column.
     /// This is the only route from an enchantment sitting in an item's socket

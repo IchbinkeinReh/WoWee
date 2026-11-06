@@ -2246,6 +2246,10 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
     const uint16_t chargesField = (fieldIndex(UF::ITEM_FIELD_STACK_COUNT) != 0xFFFF)
         ? static_cast<uint16_t>(fieldIndex(UF::ITEM_FIELD_STACK_COUNT) + 2u) : 0xFFFFu;
     auto chargesIt  = (chargesField != 0xFFFF)  ? block.fields.find(chargesField)  : block.fields.end();
+    // ITEM_FIELD_CREATE_PLAYED_TIME, one after MAXDURABILITY on WotLK.
+    const uint16_t createdField = (!isPreWotlk() && fieldIndex(UF::ITEM_FIELD_MAXDURABILITY) != 0xFFFF)
+        ? static_cast<uint16_t>(fieldIndex(UF::ITEM_FIELD_MAXDURABILITY) + 1u) : 0xFFFFu;
+    auto createdIt  = (createdField != 0xFFFF)  ? block.fields.find(createdField)  : block.fields.end();
     auto randPropIt = (randPropField != 0xFFFF) ? block.fields.find(randPropField) : block.fields.end();
     auto seedIt     = (seedField != 0xFFFF)     ? block.fields.find(seedField)     : block.fields.end();
     const uint16_t enchBase = (fieldIndex(UF::ITEM_FIELD_STACK_COUNT) != 0xFFFF)
@@ -2271,6 +2275,13 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
         if (sock3EnchIt != block.fields.end()) info.socketEnchantIds[2]  = sock3EnchIt->second;
         if (flagsIt    != block.fields.end()) info.flags                 = flagsIt->second;
         if (chargesIt  != block.fields.end()) info.spellCharges0         = static_cast<int32_t>(chargesIt->second);
+        if (createdIt  != block.fields.end()) info.createPlayedTime      = createdIt->second;
+        if (enchBase != 0xFFFF) {
+            for (uint16_t e = 0; e < 12; ++e) {
+                const auto f = block.fields.find(static_cast<uint16_t>(enchBase + e * 3u));
+                if (f != block.fields.end()) info.enchantIds[e] = f->second;
+            }
+        }
         if (randPropIt != block.fields.end()) info.randomPropertyId      = static_cast<int32_t>(randPropIt->second);
         if (seedIt     != block.fields.end()) info.suffixFactor          = seedIt->second;
         // Both halves out of one block, or neither. A create block carries the
@@ -2330,6 +2341,7 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
     // RANDOM_PROPERTIES_ID sits before DURABILITY (DUR-2 pre-WotLK, DUR-1 on WotLK).
     const uint16_t itemFlagsField    = (itemStackField != 0xFFFF) ? (itemStackField + 7u) : 0xFFFF;
     const uint16_t itemChargesField  = (itemStackField != 0xFFFF) ? (itemStackField + 2u) : 0xFFFF;
+    const uint16_t itemCreatedField  = (!isPreWotlk() && itemMaxDurField != 0xFFFF) ? (itemMaxDurField + 1u) : 0xFFFF;
     const uint16_t itemRandPropField = (itemDurField != 0xFFFF)
         ? static_cast<uint16_t>(itemDurField - (isPreWotlk() ? 2u : 1u)) : 0xFFFF;
     const uint16_t itemSeedField = (itemRandPropField != 0xFFFF && itemRandPropField > 0)
@@ -2339,6 +2351,11 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
     bool isItemInInventory = (it != owner_.onlineItemsRef().end());
 
     for (const auto& [key, val] : block.fields) {
+        // Every enchantment slot's id, the five the branches below read
+        // included - the bind check walks all twelve (0x007073e0).
+        if (isItemInInventory && itemEnchBase != 0xFFFF && key >= itemEnchBase &&
+            key < itemEnchBase + 36u && (key - itemEnchBase) % 3u == 0)
+            it->second.enchantIds[(key - itemEnchBase) / 3u] = val;
         if (key == itemStackField && isItemInInventory) {
             if (it->second.stackCount != val) {
                 it->second.stackCount = val;
@@ -2389,6 +2406,8 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
             }
         } else if (isItemInInventory && itemChargesField != 0xFFFF && key == itemChargesField) {
             it->second.spellCharges0 = static_cast<int32_t>(val);
+        } else if (isItemInInventory && itemCreatedField != 0xFFFF && key == itemCreatedField) {
+            it->second.createPlayedTime = val;
         } else if (isItemInInventory && itemFlagsField != 0xFFFF && key == itemFlagsField) {
             if (it->second.flags != val) {
                 it->second.flags = val;

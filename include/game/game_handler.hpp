@@ -801,6 +801,8 @@ public:
     void requestPlayedTime();
     void queryWho(const std::string& playerName = "");
     uint32_t getTotalTimePlayed() const;
+    /// 0x006cf440: played time now, -1 before SMSG_PLAYED_TIME has come.
+    int64_t playedTimeNow() const;
     uint32_t getLevelTimePlayed() const;
 
     using WhoEntry = game::WhoEntry;
@@ -4618,6 +4620,8 @@ public:
     const int32_t* getSpellEffectBasePoints(uint32_t spellId) const;
     float getSpellDuration(uint32_t spellId) const;
     std::string getEnchantName(uint32_t enchantId) const;
+    /// SpellItemEnchantment Flags & 1: an enchant that binds the item.
+    bool enchantSoulbinds(uint32_t enchantId) const;
     /// The gem item an enchantment came out of; 0 when it is not a gem.
     uint32_t getEnchantGemItem(uint32_t enchantId) const;
     /// The template entry of an item this client is holding, by guid. Zero when
@@ -5626,6 +5630,11 @@ public:
         /// ITEM_FIELD_SPELL_CHARGES, the first of the five (STACK_COUNT + 2):
         /// what is left of the template's first spell's charges.
         int32_t  spellCharges0 = 0;
+        /// All twelve ITEM_FIELD_ENCHANTMENT slots' ids (STACK_COUNT + 8, three apart).
+        std::array<uint32_t, 12> enchantIds{};
+        /// ITEM_FIELD_CREATE_PLAYED_TIME (MAXDURABILITY + 1): the owner's played
+        /// time when the item was made.
+        uint32_t createPlayedTime = 0;
         int32_t  randomPropertyId = 0;   // ITEM_FIELD_RANDOM_PROPERTIES_ID (signed)
         uint32_t suffixFactor = 0;       // ITEM_FIELD_PROPERTY_SEED (random-suffix stat scale)
         /// ITEM_FIELD_CREATOR: who made the item, as a guid. Zero when the realm

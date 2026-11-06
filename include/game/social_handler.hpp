@@ -94,6 +94,9 @@ public:
     void requestPlayedTime();
     void queryWho(const std::string& playerName = "");
     [[nodiscard]] uint32_t getTotalTimePlayed() const { return totalTimePlayed_; }
+    /// The played time now (0x006cf440): the last SMSG_PLAYED_TIME total plus
+    /// the seconds since it came; -1 before any has.
+    [[nodiscard]] int64_t playedTimeNow() const;
     [[nodiscard]] uint32_t getLevelTimePlayed() const { return levelTimePlayed_; }
     [[nodiscard]] const std::vector<WhoEntry>& getWhoResults() const { return whoResults_; }
     [[nodiscard]] uint32_t getWhoOnlineCount() const { return whoOnlineCount_; }
@@ -897,6 +900,8 @@ private:
 
     // Time played
     uint32_t totalTimePlayed_ = 0;
+    /// When totalTimePlayed_ arrived (0x006cf470's +0x1950); unset before.
+    std::optional<std::chrono::steady_clock::time_point> totalTimePlayedAt_;
     /// SMSG_QUERY_TIME_RESPONSE's second word and when it landed. Zero means
     /// no answer yet, which is different from "the reset is now".
     uint32_t dailyResetOffset_ = 0;

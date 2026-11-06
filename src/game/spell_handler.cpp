@@ -6340,6 +6340,21 @@ std::string SpellHandler::getEnchantName(uint32_t enchantId) const {
     return {};
 }
 
+bool SpellHandler::enchantSoulbinds(uint32_t enchantId) const {
+    if (enchantId == 0) return false;
+    auto* am = owner_.services().assetManager;
+    if (!am || !am->isInitialized()) return false;
+    auto dbc = am->loadDBC("SpellItemEnchantment.dbc");
+    if (!dbc || !dbc->isLoaded()) return false;
+    const auto* sieL = pipeline::getActiveDBCLayout()
+        ? pipeline::getActiveDBCLayout()->getLayout("SpellItemEnchantment") : nullptr;
+    // Flags straight after ItemVisual (the client's +0x40 after +0x3c).
+    const uint32_t visualField = pipeline::detectEnchantmentItemVisualField(dbc.get(), sieL);
+    if (visualField == 0 || visualField + 1 >= dbc->getFieldCount()) return false;
+    const int32_t row = dbc->findRecordById(enchantId);
+    return row >= 0 && (dbc->getUInt32(static_cast<uint32_t>(row), visualField + 1) & 1u) != 0;
+}
+
 uint32_t SpellHandler::getEnchantGemItem(uint32_t enchantId) const {
     if (enchantId == 0) return 0;
     auto* am = owner_.services().assetManager;

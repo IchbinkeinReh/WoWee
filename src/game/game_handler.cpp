@@ -4702,6 +4702,10 @@ void GameHandler::respondToCalendarInvite(uint64_t eventId, uint64_t inviteId,
 // Delegating getters - SocialHandler owns the canonical state
 // ============================================================
 
+int64_t GameHandler::playedTimeNow() const {
+    return socialHandler_ ? socialHandler_->playedTimeNow() : -1;
+}
+
 uint32_t GameHandler::getTotalTimePlayed() const {
     return socialHandler_ ? socialHandler_->getTotalTimePlayed() : 0;
 }

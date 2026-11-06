@@ -5326,6 +5326,10 @@ const std::string& GameHandler::getTotemCategoryName(uint32_t categoryId) const 
     return EMPTY_STRING;
 }
 
+bool GameHandler::enchantSoulbinds(uint32_t enchantId) const {
+    return spellHandler_ && spellHandler_->enchantSoulbinds(enchantId);
+}
+
 std::string GameHandler::getEnchantName(uint32_t enchantId) const {
     if (spellHandler_) return spellHandler_->getEnchantName(enchantId);
     return {};

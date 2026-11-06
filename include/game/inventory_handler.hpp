@@ -667,6 +667,8 @@ public:
     [[nodiscard]] uint64_t itemGuidAtWire(uint8_t bag, uint8_t slot) const;
     /// One of the player's own items put on the trade table (0x005864d0).
     [[nodiscard]] bool itemInTrade(uint64_t itemGuid) const;
+    /// TRADE_POTENTIAL_BIND_ENCHANT's answer for an item (0x005869a0).
+    [[nodiscard]] bool enchantWouldBind(uint64_t itemGuid) const;
     void guildBankDepositItem(uint8_t tabId, uint8_t bankSlot, uint8_t srcBag, uint8_t srcSlot);
     // Deposit an inventory item into the first free slot of the viewed tab.
     void guildBankDepositFromInventory(uint8_t srcBag, uint8_t srcSlot);

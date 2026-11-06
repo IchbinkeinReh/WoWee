@@ -4016,10 +4016,18 @@ uint32_t SocialHandler::getSecondsUntilDailyReset() const {
     return left > 0 ? static_cast<uint32_t>(left) : 0;
 }
 
+int64_t SocialHandler::playedTimeNow() const {
+    if (!totalTimePlayedAt_) return -1;
+    const auto since = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - *totalTimePlayedAt_).count();
+    return static_cast<int64_t>(totalTimePlayed_) + since;
+}
+
 void SocialHandler::handlePlayedTime(network::Packet& packet) {
     PlayedTimeData data;
     if (!PlayedTimeParser::parse(packet, data)) return;
     totalTimePlayed_ = data.totalTimePlayed;
+    totalTimePlayedAt_ = std::chrono::steady_clock::now();   // 0x006cf470, either way
     levelTimePlayed_ = data.levelTimePlayed;
     if (data.triggerMessage) {
         // TIME_PLAYED_MSG(totalTime, levelTime), in seconds, which is what
