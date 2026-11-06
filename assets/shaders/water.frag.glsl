@@ -554,7 +554,10 @@ void main() {
             r.z = max(r.z, 0.02);
             rtReflect = rtwReflection(FragPos + n * 0.05, normalize(r), ldir, rng);
             if (!tir) {
-                refractedColor = rtwRefraction(FragPos - n * 0.05, t, ldir, absorptionCoeff, litBase, rng,
+                // Started under the bed, as a fixed step down from the surface does
+                // where the water is thinner than it, the ray met nothing and the
+                // pixel took all the water's own colour: a dark band along the shore.
+                refractedColor = rtwRefraction(FragPos - n * min(0.05, 0.5 * shoreDepth), t, ldir, absorptionCoeff, litBase, rng,
                                                bedShown).rgb;
                 // A canal's or a building's water keeps the floor of its own
                 // colour it has drawn without the tracing (bodyFloor): the
