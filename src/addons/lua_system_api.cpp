@@ -3763,6 +3763,86 @@ static int lua_ReturnNothing(lua_State*) { return 0; }
 /// counterpart in the game, kept here so the getter and setter agree.
 static int& selectedDisplayChannel() { static int selected = 0; return selected; }
 
+/// One row of the channel pane, as 0x00504840 lays them out (0x20 bytes each
+/// at 0xb74468): the Group, World and Custom headers in that order, each
+/// followed - unless collapsed - by its rows. Group holds a Party row while
+/// the player's party has anyone else in it and a Battleground row in a raid
+/// on a battleground or arena map (0x00572f50); the Raid row and the voice
+/// sessions behind both are voice chat's, which this client has none of.
+/// World holds the joined zone channels (slot +0x94), Custom the others not
+/// being left (+0xa0). A header's count is every row of its kind, shown or
+/// collapsed.
+struct ChannelDisplayRow {
+    enum class Kind { Header, Channel, Party, Battleground } kind = Kind::Header;
+    int category = 0;                                      // header: 0 group, 1 world, 2 custom
+    const game::chat_channels::Slot* slot = nullptr;       // channel rows
+    uint32_t count = 0;                                    // header: rows of its kind; group rows: members
+    bool world = false;
+};
+static std::array<bool, 3>& channelHeaderCollapsed() { static std::array<bool, 3> c{}; return c; }
+
+static std::vector<ChannelDisplayRow> channelDisplayRows(game::GameHandler* gh) {
+    std::vector<ChannelDisplayRow> rows;
+    if (!gh) return rows;
+    const auto& collapsed = channelHeaderCollapsed();
+    const auto& party = gh->getPartyData();
+    const bool inGroup = gh->isInGroup();
+    const bool raid = inGroup && game::groupIsRaid(party.groupType);
+    const uint64_t self = gh->getPlayerGuid();
+    uint32_t subgroupOthers = 0;
+    for (const auto& m : party.members)
+        if (m.guid != self && (!raid || m.subGroup == party.subGroup)) ++subgroupOthers;
+    const bool partyRow = inGroup && subgroupOthers > 0;
+    const int mapType = gh->currentMapInstanceType();
+    const bool bgRow = raid && (mapType == 3 || mapType == 4);
+    rows.push_back({ChannelDisplayRow::Kind::Header, 0, nullptr,
+                    static_cast<uint32_t>(partyRow) + static_cast<uint32_t>(bgRow), false});
+    if (!collapsed[0]) {
+        if (partyRow) rows.push_back({ChannelDisplayRow::Kind::Party, 0, nullptr, subgroupOthers + 1, false});
+        if (bgRow)
+            rows.push_back({ChannelDisplayRow::Kind::Battleground, 0, nullptr,
+                            static_cast<uint32_t>(party.members.size()) + 1, false});
+    }
+    const auto* chat = gh->getChatHandler();
+    for (int category = 1; category <= 2; ++category) {
+        const size_t header = rows.size();
+        rows.push_back({ChannelDisplayRow::Kind::Header, category, nullptr, 0, false});
+        if (!chat) continue;
+        for (const auto& slot : chat->channelSlots().all()) {
+            if (slot.number == 0) continue;
+            const bool world = slot.zoneChannelId != 0;
+            if (category == 1 ? !world : (world || slot.leaving)) continue;
+            ++rows[header].count;
+            if (!collapsed[static_cast<size_t>(category)])
+                rows.push_back({ChannelDisplayRow::Kind::Channel, category, &slot, 0, world});
+        }
+    }
+    return rows;
+}
+
+/// Expand/CollapseChannelHeader's shared half.
+static int setChannelHeader(lua_State* L, bool collapse) {
+    if (!lua_isnumber(L, 1)) return 0;
+    auto* gh = getGameHandler(L);
+    const long long index = std::llround(lua_tonumber(L, 1));
+    const auto rows = channelDisplayRows(gh);
+    if (index < 1 || static_cast<size_t>(index) > rows.size()) return 0;
+    const auto& row = rows[static_cast<size_t>(index) - 1];
+    if (row.kind != ChannelDisplayRow::Kind::Header) return 0;
+    channelHeaderCollapsed()[static_cast<size_t>(row.category)] = collapse;
+    if (gh) gh->fireAddonEvent("CHANNEL_UI_UPDATE", {});
+    return 0;
+}
+
+/// The channel a pane row (one-based) names, or nullptr for a header, a group
+/// row or no row at all.
+static const game::chat_channels::Slot* displayChannelSlot(game::GameHandler* gh, long long index) {
+    const auto rows = channelDisplayRows(gh);
+    if (index < 1 || static_cast<size_t>(index) > rows.size()) return nullptr;
+    const auto& row = rows[static_cast<size_t>(index) - 1];
+    return row.kind == ChannelDisplayRow::Kind::Channel ? row.slot : nullptr;
+}
+
 /// Which of the four extra action bars are switched on: bottom-left,
 /// bottom-right, right and the second right, in that order.
 ///
@@ -7353,9 +7433,7 @@ static int lua_DisplayChannelVoice(lua_State* L) {
     const auto index = std::llround(lua_tonumber(L, 1));
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
-    const auto& joined = gh->getJoinedChannels();
-    if (index < 1 || static_cast<size_t>(index) > joined.size()) return 0;
-    gh->sendChannelVoice(joined[static_cast<size_t>(index) - 1], On);
+    if (const auto* slot = displayChannelSlot(gh, index)) gh->sendChannelVoice(slot->name, On);
     return 0;
 }
 
@@ -8979,7 +9057,8 @@ void registerSystemLuaAPI(lua_State* L) {
                 // panel shows nothing.
                 {"GetNumDisplayChannels", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            lua_pushnumber(L, gh ? static_cast<double>(gh->getJoinedChannels().size()) : 0.0);
+            // 0x00504e10: the rows 0x00504840 laid out, headers included.
+            lua_pushnumber(L, static_cast<double>(channelDisplayRows(gh).size()));
             return 1;
         }},
                 {"GetNumMapOverlays",        lua_GetNumMapOverlays},
@@ -9258,24 +9337,59 @@ void registerSystemLuaAPI(lua_State* L) {
                 // returning one marks every channel as a category header:
                 // channelframe.lua does `if ( self.header )` and would draw
                 // each row as a heading, then call ExpandChannelHeader on it.
+                // GetChannelDisplayInfo(index) (0x004ff580) → name, header,
+                // collapsed, channelNumber, count, active, category,
+                // voiceEnabled, voiceActive for the pane's row: a header names
+                // its category (CHANNEL_CATEGORY_GROUP/WORLD/CUSTOM, localized)
+                // with its collapse flag and count; the group rows are
+                // CHAT_MSG_PARTY and CHAT_MSG_BATTLEGROUND with their members;
+                // a channel row gives its name and number under WORLD or
+                // CUSTOM. The last is the selected row's 1.
                 {"GetChannelDisplayInfo", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetChannelDisplayInfo(index)");
             auto* gh = getGameHandler(L);
-            const int index = static_cast<int>(luaL_optnumber(L, 1, 0));
-            if (!gh || index < 1) { lua_pushnil(L); return 1; }
-            const auto& joined = gh->getJoinedChannels();
-            if (index > static_cast<int>(joined.size())) { lua_pushnil(L); return 1; }
-            lua_pushstring(L, joined[static_cast<size_t>(index) - 1].c_str());
-            lua_pushboolean(L, 0);      // header - flat list, no categories
-            lua_pushboolean(L, 0);      // collapsed
-            lua_pushnumber(L, index);   // channelNumber
-            // The roster arrives with SMSG_CHANNEL_LIST, which the panel asks
-            // for by calling GetNumChannelMembers on the row it is drawing.
-            lua_pushnumber(L, static_cast<lua_Number>(
-                gh->getChannelRoster(joined[static_cast<size_t>(index) - 1]).size()));
-            lua_pushboolean(L, 1);      // active
-            lua_pushstring(L, "CHANNEL_CATEGORY_CUSTOM");
-            lua_pushboolean(L, 0);      // voiceEnabled
-            lua_pushboolean(L, 0);      // voiceActive
+            const long long index = std::llround(lua_tonumber(L, 1));
+            const auto rows = channelDisplayRows(gh);
+            if (index < 1 || static_cast<size_t>(index) > rows.size()) return 0;
+            const auto& row = rows[static_cast<size_t>(index) - 1];
+            static constexpr const char* kCategories[] = {
+                "CHANNEL_CATEGORY_GROUP", "CHANNEL_CATEGORY_WORLD", "CHANNEL_CATEGORY_CUSTOM"};
+            auto pushCount = [L](uint32_t n) { if (n) lua_pushnumber(L, n); else lua_pushnil(L); };
+            const bool selected = selectedDisplayChannel() == index;
+            if (row.kind == ChannelDisplayRow::Kind::Header) {
+                const char* key = kCategories[row.category];
+                lua_pushstring(L, game::interfaceString(key, key).c_str());
+                lua_pushnumber(L, 1);
+                if (channelHeaderCollapsed()[static_cast<size_t>(row.category)]) lua_pushnumber(L, 1);
+                else lua_pushnil(L);
+                lua_pushnil(L);
+                pushCount(row.count);
+                for (int i = 0; i < 4; ++i) lua_pushnil(L);
+                return 9;
+            }
+            if (row.kind == ChannelDisplayRow::Kind::Channel) {
+                lua_pushstring(L, row.slot->name.c_str());
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnumber(L, row.slot->number);
+                // The roster's size once it has come - the panel asks for it
+                // with GetNumChannelMembers on the row it draws.
+                pushCount(static_cast<uint32_t>(gh->getChannelRoster(row.slot->name).size()));
+                const bool active = row.world ? !row.slot->pending : !row.slot->leaving;
+                if (active) lua_pushnumber(L, 1); else lua_pushnil(L);
+                lua_pushstring(L, row.world ? kCategories[1] : kCategories[2]);
+            } else {
+                const char* key = row.kind == ChannelDisplayRow::Kind::Party ? "CHAT_MSG_PARTY" : "CHAT_MSG_BATTLEGROUND";
+                lua_pushstring(L, game::interfaceString(key, key).c_str());
+                lua_pushnil(L);
+                lua_pushnil(L);
+                lua_pushnil(L);
+                pushCount(row.count);
+                lua_pushnumber(L, 1);
+                lua_pushstring(L, kCategories[0]);
+            }
+            lua_pushnil(L);                               // voiceEnabled
+            if (selected) lua_pushnumber(L, 1); else lua_pushnil(L);
             return 9;
         }},
                 // Whether the unit frames should draw their threat
@@ -9442,9 +9556,8 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int sel = selectedDisplayChannel();
             if (!gh || sel < 1) { lua_pushboolean(L, 0); return 1; }
-            const auto& joined = gh->getJoinedChannels();
-            if (sel > static_cast<int>(joined.size())) { lua_pushboolean(L, 0); return 1; }
-            lua_pushboolean(L, gh->ownsChatChannel(joined[static_cast<size_t>(sel) - 1]) ? 1 : 0);
+            const auto* slot = displayChannelSlot(gh, sel);
+            lua_pushboolean(L, slot && gh->ownsChatChannel(slot->name) ? 1 : 0);
             return 1;
         }},
                 // IsDisplayChannelModerator() (0x004ffae0): the same channel
@@ -9479,11 +9592,11 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int sel = selectedDisplayChannel();
             if (!gh || sel < 1) return luaReturnNil(L);
-            const auto& joined = gh->getJoinedChannels();
-            if (sel > static_cast<int>(joined.size())) return luaReturnNil(L);
+            const auto* slot = displayChannelSlot(gh, sel);
+            if (!slot) return luaReturnNil(L);
             const uint64_t self = gh->getPlayerGuid();
             bool moderator = false;
-            for (const auto& m : gh->getChannelRoster(joined[static_cast<size_t>(sel) - 1])) {
+            for (const auto& m : gh->getChannelRoster(slot->name)) {
                 if (m.guid != self) continue;
                 moderator = m.owner || m.moderator;
                 break;
@@ -9495,11 +9608,13 @@ void registerSystemLuaAPI(lua_State* L) {
             selectedDisplayChannel() = static_cast<int>(luaL_optnumber(L, 1, 0));
             return 0;
         }},
-                // No categories exist to open or close - see the header note
-                // on GetChannelDisplayInfo - but the row click handler calls
-                // one of these on whatever it was given.
-                {"ExpandChannelHeader",      lua_ReturnNothing},
-                {"CollapseChannelHeader",    lua_ReturnNothing},
+                // ExpandChannelHeader(index) / CollapseChannelHeader(index)
+                // (0x00505360, 0x005052e0): the category of the header on that
+                // row opens or closes, the rows are laid out again and
+                // CHANNEL_UI_UPDATE fires (0x00504840(1)); a row that is not
+                // a header does nothing.
+                {"ExpandChannelHeader", [](lua_State* L) -> int { return setChannelHeader(L, false); }},
+                {"CollapseChannelHeader", [](lua_State* L) -> int { return setChannelHeader(L, true); }},
                 // Who is in a channel. The server sends a roster only on
                 // request and this client never asks, so there is nobody to
                 // report; the count above is zero for the same reason.
@@ -9511,9 +9626,9 @@ void registerSystemLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int channel = static_cast<int>(luaL_optnumber(L, 1, 0));
             if (!gh || channel < 1) { lua_pushnumber(L, 0); return 1; }
-            const auto& joined = gh->getJoinedChannels();
-            if (channel > static_cast<int>(joined.size())) { lua_pushnumber(L, 0); return 1; }
-            const auto& name = joined[static_cast<size_t>(channel) - 1];
+            const auto* slot = displayChannelSlot(gh, channel);
+            if (!slot) { lua_pushnumber(L, 0); return 1; }
+            const auto& name = slot->name;
             gh->requestChannelList(name);
             lua_pushnumber(L, static_cast<lua_Number>(gh->getChannelRoster(name).size()));
             return 1;
@@ -9530,9 +9645,9 @@ void registerSystemLuaAPI(lua_State* L) {
             const int channel = static_cast<int>(luaL_optnumber(L, 1, 0));
             const int member = static_cast<int>(luaL_optnumber(L, 2, 0));
             if (!gh || channel < 1 || member < 1) { return luaReturnNil(L); }
-            const auto& joined = gh->getJoinedChannels();
-            if (channel > static_cast<int>(joined.size())) { return luaReturnNil(L); }
-            const auto& roster = gh->getChannelRoster(joined[static_cast<size_t>(channel) - 1]);
+            const auto* slot = displayChannelSlot(gh, channel);
+            if (!slot) { return luaReturnNil(L); }
+            const auto& roster = gh->getChannelRoster(slot->name);
             if (member > static_cast<int>(roster.size())) { return luaReturnNil(L); }
             const auto& m = roster[static_cast<size_t>(member) - 1];
             lua_pushstring(L, m.name.c_str());          // 1: name
