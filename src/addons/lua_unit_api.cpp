@@ -17,6 +17,8 @@
 #include <cmath>
 #include <bit>
 #include "game/interface_text.hpp"
+#include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_layout.hpp"
 
 namespace wowee::addons {
 
@@ -289,6 +291,36 @@ static int lua_UnitIsDead(lua_State* L) {
     return 1;
 }
 
+/// A ChrRaces or ChrClasses name as the client answers it (0x00715970,
+/// 0x007159e0): the localized name in the unit's gender - Name_female or
+/// Name_male, seventeen and thirty-four after Name - the other where that
+/// one is empty, and the plain Name where both are. Empty where the file or
+/// its layout is not to hand.
+static std::string chrRowName(game::GameHandler* gh, const char* file, const char* layoutName,
+                              uint32_t id, bool female) {
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* layout = layouts ? layouts->getLayout(layoutName) : nullptr;
+    const uint32_t nameF = layout ? layout->tryField("Name") : 0xFFFFFFFFu;
+    auto dbc = am && am->isInitialized() ? am->loadDBCOptional(file) : nullptr;
+    if (!dbc || !dbc->isLoaded() || nameF == 0xFFFFFFFFu || nameF + 34 >= dbc->getFieldCount()) return {};
+    const int32_t row = dbc->findRecordById(id);
+    if (row < 0) return {};
+    const auto r = static_cast<uint32_t>(row);
+    std::string fem = dbc->getString(r, nameF + 17);
+    std::string male = dbc->getString(r, nameF + 34);
+    std::string name = female ? (!fem.empty() ? fem : male) : (!male.empty() ? male : fem);
+    return !name.empty() ? name : dbc->getString(r, nameF);
+}
+
+/// UNIT_FIELD_BYTES_0's gender byte for a unit token: true for female.
+static bool unitIsFemale(game::GameHandler* gh, const std::string& lowerUid) {
+    const uint64_t guid = gh ? resolveUnitGuid(gh, lowerUid) : 0;
+    auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
+    if (!entity) return false;
+    return ((entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) >> 16) & 0xFFu) == 1;
+}
+
 static int lua_UnitClass(lua_State* L) {
     const char* uid = luaL_optstring(L, 1, "player");
     auto* gh = getGameHandler(L);
@@ -337,7 +369,10 @@ static int lua_UnitClass(lua_State* L) {
         // where "MAGE" was meant looked up nothing: SetPortraitTexture found no
         // CLASS_ICON_TCOORDS entry and fell back to the placeholder portrait,
         // which is the blue question mark on the character sheet.
-        lua_pushstring(L, kLuaClasses[classId]);
+        // The localized name in the unit's gender (0x007159e0).
+        const std::string localized = chrRowName(gh, "ChrClasses.dbc", "ChrClasses", classId,
+                                                 unitIsFemale(gh, uidStr));
+        lua_pushstring(L, !localized.empty() ? localized.c_str() : kLuaClasses[classId]);
         lua_pushstring(L, token);
         lua_pushnumber(L, classId);
         return 3;
@@ -1290,7 +1325,9 @@ static int lua_UnitRace(lua_State* L) {
 
     const uint8_t raceId = unitRaceOf(gh, uid);
     const bool known = (raceId > 0 && raceId < 12);
-    const char* name = known ? kLuaRaces[raceId] : "Unknown";
+    // The localized name in the unit's gender (0x0060fd40 -> 0x00715970).
+    std::string localized = known ? chrRowName(gh, "ChrRaces.dbc", "ChrRaces", raceId, unitIsFemale(gh, uid)) : "";
+    const char* name = known ? (!localized.empty() ? localized.c_str() : kLuaRaces[raceId]) : "Unknown";
     const char* file = known ? kLuaRaceFileNames[raceId] : "Unknown";
     lua_pushstring(L, name);      // 1: localized race
     lua_pushstring(L, file);      // 2: race file name, spliced into asset paths
