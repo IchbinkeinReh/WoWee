@@ -1756,6 +1756,15 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         owner_.stopAutoRepeat(true);
         return;
     }
+    // 0x0080cce0: another spell, not one that repeats (AttributesEx2 0x20),
+    // stops a repeat that shoots a wand - EquippedItemClass 2 with subclass
+    // bit 19 (0x80000) - the server told (0x00807560(1)).
+    if (owner_.isAutoRepeating() && (owner_.getSpellAttributesEx2(spellId) & 0x20u) == 0) {
+        const auto rit = owner_.spellNameCacheRef().find(owner_.autoRepeatSpellId());
+        if (rit != owner_.spellNameCacheRef().end() && rit->second.equippedItemClass == 2 &&
+            (rit->second.equippedItemSubClassMask & 0x80000u) != 0)
+            owner_.stopAutoRepeat(true);
+    }
     // 0x0080cce0: the attack counter behind tutorial 0x3b.
     if (const auto sit = owner_.spellNameCacheRef().find(spellId); sit != owner_.spellNameCacheRef().end()) {
         const auto& e = sit->second;
