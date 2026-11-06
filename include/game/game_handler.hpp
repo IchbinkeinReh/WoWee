@@ -4666,6 +4666,11 @@ public:
         auto it = onlineItems_.find(guid);
         return it != onlineItems_.end() ? it->second.flags : 0u;
     }
+    /// ITEM_FIELD_SPELL_CHARGES[0] of an item this client holds, 0 when unknown.
+    int32_t getItemSpellCharges(uint64_t guid) const {
+        auto it = onlineItems_.find(guid);
+        return it != onlineItems_.end() ? it->second.spellCharges0 : 0;
+    }
     uint32_t getItemEntryByGuid(uint64_t guid) const {
         auto it = onlineItems_.find(guid);
         return (it != onlineItems_.end()) ? it->second.entry : 0;
@@ -5611,6 +5616,9 @@ public:
         uint32_t temporaryEnchantId = 0;
         std::array<uint32_t, 3> socketEnchantIds{};
         uint32_t flags = 0;              // ITEM_FIELD_FLAGS (bit 0x1 = soulbound)
+        /// ITEM_FIELD_SPELL_CHARGES, the first of the five (STACK_COUNT + 2):
+        /// what is left of the template's first spell's charges.
+        int32_t  spellCharges0 = 0;
         int32_t  randomPropertyId = 0;   // ITEM_FIELD_RANDOM_PROPERTIES_ID (signed)
         uint32_t suffixFactor = 0;       // ITEM_FIELD_PROPERTY_SEED (random-suffix stat scale)
         /// ITEM_FIELD_CREATOR: who made the item, as a guid. Zero when the realm

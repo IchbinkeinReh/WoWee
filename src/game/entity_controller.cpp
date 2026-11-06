@@ -2238,6 +2238,10 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
     const uint16_t seedField = (randPropField != 0xFFFF && randPropField > 0)
         ? static_cast<uint16_t>(randPropField - 1u) : 0xFFFFu;
     auto flagsIt    = (flagsField != 0xFFFF)    ? block.fields.find(flagsField)    : block.fields.end();
+    // ITEM_FIELD_SPELL_CHARGES[0], two after STACK_COUNT (DURATION between).
+    const uint16_t chargesField = (fieldIndex(UF::ITEM_FIELD_STACK_COUNT) != 0xFFFF)
+        ? static_cast<uint16_t>(fieldIndex(UF::ITEM_FIELD_STACK_COUNT) + 2u) : 0xFFFFu;
+    auto chargesIt  = (chargesField != 0xFFFF)  ? block.fields.find(chargesField)  : block.fields.end();
     auto randPropIt = (randPropField != 0xFFFF) ? block.fields.find(randPropField) : block.fields.end();
     auto seedIt     = (seedField != 0xFFFF)     ? block.fields.find(seedField)     : block.fields.end();
     const uint16_t enchBase = (fieldIndex(UF::ITEM_FIELD_STACK_COUNT) != 0xFFFF)
@@ -2262,6 +2266,7 @@ void EntityController::trackItemOnCreate(const UpdateBlock& block, bool& newItem
         if (sock2EnchIt != block.fields.end()) info.socketEnchantIds[1]  = sock2EnchIt->second;
         if (sock3EnchIt != block.fields.end()) info.socketEnchantIds[2]  = sock3EnchIt->second;
         if (flagsIt    != block.fields.end()) info.flags                 = flagsIt->second;
+        if (chargesIt  != block.fields.end()) info.spellCharges0         = static_cast<int32_t>(chargesIt->second);
         if (randPropIt != block.fields.end()) info.randomPropertyId      = static_cast<int32_t>(randPropIt->second);
         if (seedIt     != block.fields.end()) info.suffixFactor          = seedIt->second;
         // Both halves out of one block, or neither. A create block carries the
@@ -2320,6 +2325,7 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
     // ITEM_FIELD_FLAGS (STACK+7) carries the soulbound bit that a BoE item gains on equip;
     // RANDOM_PROPERTIES_ID sits before DURABILITY (DUR-2 pre-WotLK, DUR-1 on WotLK).
     const uint16_t itemFlagsField    = (itemStackField != 0xFFFF) ? (itemStackField + 7u) : 0xFFFF;
+    const uint16_t itemChargesField  = (itemStackField != 0xFFFF) ? (itemStackField + 2u) : 0xFFFF;
     const uint16_t itemRandPropField = (itemDurField != 0xFFFF)
         ? static_cast<uint16_t>(itemDurField - (isPreWotlk() ? 2u : 1u)) : 0xFFFF;
     const uint16_t itemSeedField = (itemRandPropField != 0xFFFF && itemRandPropField > 0)
@@ -2377,6 +2383,8 @@ void EntityController::updateItemOnValuesUpdate(const UpdateBlock& block,
                 it->second.socketEnchantIds[2] = val;
                 inventoryChanged = true;
             }
+        } else if (isItemInInventory && itemChargesField != 0xFFFF && key == itemChargesField) {
+            it->second.spellCharges0 = static_cast<int32_t>(val);
         } else if (isItemInInventory && itemFlagsField != 0xFFFF && key == itemFlagsField) {
             if (it->second.flags != val) {
                 it->second.flags = val;

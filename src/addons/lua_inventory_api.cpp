@@ -3953,6 +3953,18 @@ static void fireAuctionSellUpdate(game::GameHandler* gh) {
 
 /// The item a wire (container, slot) pair names, and its guid. Null when the
 /// pair names nothing this client is holding.
+// StartAuction (0x0059f990): an item whose template's first spell carries
+// charges is not put up once any are spent - its ITEM_FIELD_SPELL_CHARGES no
+// longer the template's - and says ERR_AUCTION_USED_CHARGES.
+static bool auctionChargesIntact(game::GameHandler* gh, uint32_t itemId, uint64_t guid) {
+    const auto* info = gh->getItemInfo(itemId);
+    if (!info || info->spells[0].spellId == 0) return true;
+    if (gh->getItemSpellCharges(guid) == info->spells[0].charges) return true;
+    gh->playGameErrorSound("ERR_AUCTION_USED_CHARGES");
+    gh->addUIError(game::interfaceString("ERR_AUCTION_USED_CHARGES", "You cannot auction an item with used charges."));
+    return false;
+}
+
 static const game::ItemSlot* auctionSellItemSlot(game::GameHandler* gh,
                                                  uint64_t* guidOut = nullptr) {
     if (guidOut) *guidOut = 0;
@@ -6299,6 +6311,10 @@ void registerInventoryLuaAPI(lua_State* L) {
             uint64_t guid = 0;
             const auto* item = auctionSellItemSlot(gh, &guid);
             if (!item || guid == 0) return 0;
+            if (!auctionChargesIntact(gh, item->item.itemId, guid)) {
+                LOG_WARNING("StartAuction: item ", item->item.itemId, " has used charges; not posted");
+                return 0;
+            }
             // The fourth argument is the size of one stack and the fifth is how
             // many such stacks to post - and this used to read the fifth and
             // send one, on the assumption that posting several would need a
