@@ -1891,18 +1891,42 @@ void registerSocialLuaAPI(lua_State* L) {
             lua_pushnumber(L, cost);
             return 3;
         }},
-                // TurnInArenaPetition(teamSize, r,g,b, icon, ...) - the banner
-                // designer's Accept.
-                //
-                // Every argument after the first is the tabard being drawn on
-                // screen, and the server reads none of them:
-                // HandleTurnInPetitionOpcode takes the petition's guid and
-                // nothing else. So the charter whose window is open is the
-                // whole of the request, and the colours are a client-side
-                // preview of a banner the server assigns itself.
+                // TurnInArenaPetition(teamSize, bgR,bgG,bgB, icon,
+                // iconR,iconG,iconB, border, borderR,borderG,borderB)
+                // (0x005a26d0 -> 0x006dd680), at an arena registrar: the
+                // carried charter for that team size - backpack, then bags -
+                // goes out with the banner after its guid, each colour packed
+                // 0xAARRGGBB with full alpha (0x0061be50 -> 0x0048bd20) and
+                // the icon and border as numbers; with any of the eleven
+                // missing, all five words are -1. No such charter:
+                // ERR_NO_ARENA_CHARTER.
                 {"TurnInArenaPetition", [](lua_State* L) -> int {
-            if (auto* gh = getGameHandler(L))
-                gh->turnInPetition(gh->getPetitionInfo().petitionGuid);
+            auto* gh = getGameHandler(L);
+            const int teamSize = static_cast<int>(luaL_checknumber(L, 1));
+            if (!gh || gh->getPetitionNpcGuid() == 0) return 0;
+            std::array<uint32_t, 5> design{0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+            bool complete = true;
+            for (int i = 2; i <= 12; ++i) complete = complete && lua_isnumber(L, i);
+            if (complete) {
+                auto channel = [&](int idx) {
+                    const double v = std::clamp(lua_tonumber(L, idx), 0.0, 1.0);
+                    return static_cast<uint32_t>(std::nearbyint(v * 255.0 + 0.5)) & 0xFFu;
+                };
+                auto colour = [&](int first) {
+                    return 0xFF000000u | (channel(first) << 16) | (channel(first + 1) << 8) | channel(first + 2);
+                };
+                design = {colour(2), static_cast<uint32_t>(static_cast<int32_t>(lua_tonumber(L, 5))), colour(6),
+                          static_cast<uint32_t>(static_cast<int32_t>(lua_tonumber(L, 9))), colour(10)};
+            }
+            // The 2v2, 3v3 and 5v5 charters.
+            const uint32_t charter = teamSize == 2 ? 23560u : teamSize == 3 ? 23561u : teamSize == 5 ? 23562u : 0u;
+            const uint64_t guid = charter ? carriedCharterGuid(gh, {charter}) : 0;
+            if (guid == 0) {
+                gh->playGameErrorSound("ERR_NO_ARENA_CHARTER");
+                gh->addUIError(game::interfaceString("ERR_NO_ARENA_CHARTER", "You don't have an arena charter."));
+                return 0;
+            }
+            gh->turnInArenaPetition(guid, design);
             return 0;
         }},
                 // --- The guild registrar ---
@@ -2035,18 +2059,13 @@ void registerSocialLuaAPI(lua_State* L) {
         }},
                 // HasFilledPetition() (0x005a2820 -> 0x006dd680 with no team
                 // size): whether the player carries an arena charter, the
-                // backpack walked first and then the worn bags - and, when
-                // none is there, ERR_NO_ARENA_CHARTER. A guild charter does
-                // not count. The client tells charters apart by the petition
+                // backpack walked first and then the worn bags, said nothing
+                // either way. A guild charter does not count. The client tells charters apart by the petition
                 // query's type; here they are told apart by their fixed item
                 // ids, the 2v2, 3v3 and 5v5 charters.
                 {"HasFilledPetition", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const bool carrying = gh && carriedCharterGuid(gh, {23560, 23561, 23562}) != 0;
-            if (gh && !carrying) {
-                gh->playGameErrorSound("ERR_NO_ARENA_CHARTER");
-                gh->addUIError(game::interfaceString("ERR_NO_ARENA_CHARTER", "You don't have an arena charter."));
-            }
             lua_pushboolean(L, carrying ? 1 : 0);
             return 1;
         }},

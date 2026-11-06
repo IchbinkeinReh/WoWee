@@ -3798,6 +3798,10 @@ void GameHandler::signPetition(uint64_t petitionGuid) {
     if (socialHandler_) socialHandler_->signPetition(petitionGuid);
 }
 
+void GameHandler::turnInArenaPetition(uint64_t petitionGuid, const std::array<uint32_t, 5>& design) {
+    if (socialHandler_) socialHandler_->turnInArenaPetition(petitionGuid, design);
+}
+
 void GameHandler::turnInPetition(uint64_t petitionGuid, bool blankDesign) {
     if (socialHandler_) socialHandler_->turnInPetition(petitionGuid, blankDesign);
 }

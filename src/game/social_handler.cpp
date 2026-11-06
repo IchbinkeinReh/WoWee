@@ -2163,6 +2163,14 @@ void SocialHandler::turnInPetition(uint64_t petitionGuid, bool blankDesign) {
     owner_.getSocket()->send(pkt);
 }
 
+void SocialHandler::turnInArenaPetition(uint64_t petitionGuid, const std::array<uint32_t, 5>& design) {
+    if (!owner_.getSocket() || owner_.getState() != WorldState::IN_WORLD) return;
+    network::Packet pkt(wireOpcode(Opcode::CMSG_TURN_IN_PETITION));
+    pkt.writeUInt64(petitionGuid);
+    for (uint32_t word : design) pkt.writeUInt32(word);
+    owner_.getSocket()->send(pkt);
+}
+
 void SocialHandler::offerPetition(uint64_t petitionGuid, uint64_t targetGuid) {
     if (!owner_.getSocket() || owner_.getState() != WorldState::IN_WORLD) return;
     if (petitionGuid == 0 || targetGuid == 0) return;

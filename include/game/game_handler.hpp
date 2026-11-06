@@ -1253,6 +1253,7 @@ public:
     /// CMSG_TURN_IN_PETITION. With blankDesign the five tabard words follow
     /// at -1, as TurnInPetition sends them (0x005a2600).
     void turnInPetition(uint64_t petitionGuid, bool blankDesign = false);
+    void turnInArenaPetition(uint64_t petitionGuid, const std::array<uint32_t, 5>& design);
     void offerPetition(uint64_t petitionGuid, uint64_t targetGuid);
 
     // Guild name lookup for other players' nameplates
