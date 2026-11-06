@@ -2151,9 +2151,10 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
     // its glass, its flame or its glow, and the model's frame, cap and bars
     // around it took most of its rays and threw them as hard wedges across
     // the room (a hanging lantern in the Goldshire inn lit its floor through
-    // the gaps between its bars). Such a fixture's shadow of anything else's
-    // light is small; it is left out of the scene.
-    if (gpuModel.isLamp || !gpuModel.glowPatches.empty() || !gpuModel.lights.empty()) return;
+    // the gaps between its bars). So fixed lights pass a fixture by, and it
+    // stands in the scene for the sun and for what units carry: left out, a
+    // mailbox with a crystal in it cast no shadow from a torch beside it.
+    gpuModel.rtFixture = gpuModel.isLamp || !gpuModel.glowPatches.empty() || !gpuModel.lights.empty();
 
     // A flat sheet on the floor - a rug, a doormat, a map on a table - casts
     // no shadow worth its triangles, and lying a few hundredths of a yard
@@ -2237,6 +2238,7 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
             src.details.push_back(detail);
         }
     }
+    if (gpuModel.rtFixture) src.flags |= RtScene::kMeshFixture;
     if (!animated) {
         gpuModel.rtMesh = rtScene_->addMesh(std::move(src));
         return;
@@ -2256,6 +2258,7 @@ void M2Renderer::registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& 
     std::vector<uint32_t> remap(src.positions.size(), RtScene::kInvalid);
     for (const auto& part : parts) {
         RtScene::MeshSource piece;
+        piece.flags = src.flags;
         for (uint32_t t : part.triangles) {
             for (int c = 0; c < 3; ++c) {
                 const uint32_t v = src.indices[t * 3 + c];
@@ -2458,8 +2461,14 @@ void M2Renderer::syncRtScene() {
              !model->glowPatches.empty())) {
             rtLitNext_.push_back(inst.id);
         }
+        // A fixture that moves is carried, and its light's rays would meet it.
+        if (model && model->rtFixture) {
+            if (inst.rtSeen && inst.rtSeenAt != inst.position) inst.rtMoved = true;
+            inst.rtSeen = true;
+            inst.rtSeenAt = inst.position;
+        }
         const uint32_t mesh = model ? model->rtMesh : RtScene::kInvalid;
-        const bool wanted = mesh != RtScene::kInvalid && inst.fade >= 1.0f;
+        const bool wanted = mesh != RtScene::kInvalid && inst.fade >= 1.0f && !inst.rtMoved;
         const bool valid = inst.rtInstance != RtScene::kInvalid && ownedBy(inst.rtInstance, mesh, inst.id);
         if (!wanted) {
             inst.rtInstance = RtScene::kInvalid;  // an unseen id is removed below
@@ -2518,7 +2527,7 @@ void M2Renderer::syncRtScene() {
             if (auto it = models.find(inst.modelId); it != models.end()) model = &it->second;
         }
         const glm::vec3 d = inst.position - cachedCamPos_;
-        const bool wanted = model && !model->rtPieces.empty() && inst.fade >= 1.0f &&
+        const bool wanted = model && !model->rtPieces.empty() && inst.fade >= 1.0f && !inst.rtMoved &&
                             !inst.boneMatrices.empty() && glm::dot(d, d) < kAnimatedCastRadius * kAnimatedCastRadius &&
                             rtAnimatedPieces_ + model->rtPieces.size() <= kMaxAnimatedPieces;
         if (!wanted) {
@@ -2652,6 +2661,8 @@ void M2Renderer::collectRtLights(const glm::vec3& eye, float range,
                 turned ? kNoBones : inst.boneMatrices);
             if (!l) continue;
             l->color *= fade;
+            // Carried: it meets the fixtures, as a character's own lights do.
+            l->carried = inst.rtMoved;
             out.push_back(*l);
         }
     }

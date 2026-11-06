@@ -89,6 +89,12 @@ public:
         kMeshTerrain = 1u,
         /// A building's own faces (a WMO's): its floors, walls and roofs.
         kMeshBuilding = 2u,
+        /// What gives light from inside itself - a lamp, a glowing crystal, a
+        /// model with its own M2 light. It shadows the sun and what units
+        /// carry, but no fixed light: its frame and bars round its own flame
+        /// took that light's rays and threw them as hard wedges across the
+        /// room. Fixed lights pass all fixtures by (kRayNoFixtures).
+        kMeshFixture = 4u,
     };
 
     /// The ray masks of the hardware tracer's instances, by what they are.
@@ -99,7 +105,10 @@ public:
     /// software tracer reads the mesh flags instead (rtStructureOnly).
     static constexpr uint8_t kRayAll = 0xFF;
     static constexpr uint8_t kRayStructure = 0x02;
+    static constexpr uint8_t kRayFixture = 0x04;
+    static constexpr uint8_t kRayNoFixtures = 0xFF & ~kRayFixture;
     [[nodiscard]] static constexpr uint8_t instanceMask(uint32_t meshFlags) {
+        if ((meshFlags & kMeshFixture) != 0) return kRayFixture;
         return (meshFlags & (kMeshTerrain | kMeshBuilding)) != 0 ? uint8_t(0x01 | kRayStructure) : uint8_t(0x01);
     }
 

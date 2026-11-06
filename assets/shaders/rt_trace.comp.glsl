@@ -219,6 +219,10 @@ vec3 rtLightAim(RtPointLight light) {
     return at;
 }
 
+// How a light goes out over a floor as it comes down to the floor's face.
+const float RT_FLOOR_FACE_FADE_LOW = -0.02;
+const float RT_FLOOR_FACE_FADE_HIGH = 0.10;
+
 layout(local_size_x = 8, local_size_y = 8) in;
 
 void main() {
@@ -380,7 +384,15 @@ void main() {
         // below still gave it a fifth of its strength, a step along a curved
         // line that moved with every particle over a cave's wall. There
         // the wrap runs it down to nothing, and a wall between stops it.
-        if (d > 1e-4 && n.z >= RT_NORMAL_FLOOR_Z && dot(faceRef, toLight) <= 0.0) continue;
+        // Faded rather than cut: the wrap below leaves a light a fifth of its
+        // strength there, so a floor whose normals lean off its face ended a
+        // carried torch's light in a hard ring round the bearer (Thunder Bluff's
+        // lift, a car smoothed toward its edge) well inside the light's reach.
+        float faceFade = 1.0;
+        if (d > 1e-4 && n.z >= RT_NORMAL_FLOOR_Z) {
+            faceFade = smoothstep(RT_FLOOR_FACE_FADE_LOW, RT_FLOOR_FACE_FADE_HIGH, dot(faceRef, toLight) / d);
+            if (faceFade <= 0.0) continue;
+        }
         // Wrapped a little past the terminator: a lamp is a flame, a glass, a
         // glow, not a point, and a face turned just past one still takes
         // some of its light. Unwrapped, a crease turned from a candle went
@@ -399,7 +411,7 @@ void main() {
         }
         float ndl = d > 1e-4 ? (dot(nl, toLight / d) + pass.tune3.w) / (1.0 + pass.tune3.w) : 1.0;
         if (ndl <= 0.0) continue;
-        vec3 c = light.colorStart.rgb * (rtLightFalloff(d, light.colorStart.w, end) * ndl);
+        vec3 c = light.colorStart.rgb * (rtLightFalloff(d, light.colorStart.w, end) * ndl * faceFade);
         float w = max(c.r, max(c.g, c.b));
         if (w <= 0.0) continue;
         // The view of the lights' kinds: the same light, its brightness in
@@ -464,7 +476,10 @@ void main() {
             // And never the unit that carries the light (rtLampEnd).
             rtUnitReach = rtUnitShadowReach(d, rng);
             rtLampEnd = light.positionEnd.xyz;
+            // Only what is carried meets the fixtures (storey.z -1: PointLight::carried).
+            rtSkipFixtures = int(light.storey.w + 0.5) != RT_LIGHT_KIND_UNIT && light.storey.z > -0.5;
             pointVis = rtOccludedBy(lampOrigin, toLight / d, reach, rng, byUnit) ? 0.0 : 1.0;
+            rtSkipFixtures = false;
             rtLampEnd = vec3(1e30);
             rtUnitReach = 1e30;
             unitHit = unitHit || byUnit;

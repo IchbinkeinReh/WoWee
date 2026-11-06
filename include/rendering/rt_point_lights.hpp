@@ -52,6 +52,7 @@ struct PointLight {
     /// surfaces take only its shadows; adding its light again would light
     /// them twice (rt_lighting.glsli, rtPointLightOwn and rtBakedShade).
     bool baked = false;
+    bool carried = false;  // moves with what bears it: meets the fixtures (RtScene::kMeshFixture)
     Source source = Source::Model;
     /// A building's light: the storey whose baked colours alone it shades,
     /// from its floor to its ceiling in world z (rt_light_storey.hpp,
@@ -81,7 +82,7 @@ inline PointLightGPU toGpu(const PointLight& l) {
             glm::vec4(l.color, l.attenuationStart),
             l.hasStorey ? glm::vec4(l.storeyFloor, std::min(l.storeyCeiling, kOpenCeiling), 1.0f,
                                     static_cast<float>(l.source))
-                        : glm::vec4(0.0f, 0.0f, 0.0f, static_cast<float>(l.source))};
+                        : glm::vec4(0.0f, 0.0f, l.carried ? -1.0f : 0.0f, static_cast<float>(l.source))};
 }
 
 /// How much of a light reaches `distance` yards: all of it within the start,

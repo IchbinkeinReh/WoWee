@@ -16,6 +16,7 @@ struct RtTri { vec4 v0; vec4 v1; vec4 v2; };
 struct RtMesh { uint nodeOffset; uint triOffset; uint pad0; uint pad1; };
 struct RtInstance { vec4 worldToObject[3]; uint mesh; uint flags; uint group; uint pad2; };
 const uint RT_MESH_TERRAIN = 1u;  // RtScene::kMeshTerrain
+const uint RT_RAY_NO_FIXTURES = 0xFBu;  // RtScene::kRayNoFixtures
 const uint RT_MESH_BUILDING = 2u;  // RtScene::kMeshBuilding
 
 #ifndef RT_SCENE_SET
@@ -60,13 +61,14 @@ bool rtAcceptCandidate(uint inst, uint prim, vec2 bary, vec3 origin, float t, in
 // history (rt_temporal).
 bool rtOccludedBy(vec3 origin, vec3 dir, float tMax, inout uint rng, out bool unit) {
     unit = false;
+    uint mask = rtSkipFixtures ? RT_RAY_NO_FIXTURES : 0xFFu;
     rayQueryEXT q;
-    rayQueryInitializeEXT(q, rtTlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
+    rayQueryInitializeEXT(q, rtTlas, gl_RayFlagsTerminateOnFirstHitEXT, mask,
                           origin, 0.0, dir, tMax);
     RT_RESOLVE_CANDIDATES(q, rng);
     if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT) return true;
     rayQueryEXT d;
-    rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
+    rayQueryInitializeEXT(d, rtDynamicTlas, gl_RayFlagsTerminateOnFirstHitEXT, mask,
                           origin, 0.0, dir, tMax);
     RT_RESOLVE_CANDIDATES(d, rng);
     if (rayQueryGetIntersectionTypeEXT(d, true) == gl_RayQueryCommittedIntersectionNoneEXT) return false;

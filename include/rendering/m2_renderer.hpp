@@ -205,6 +205,7 @@ struct M2ModelGPU {
     /// animation of an instance that has an owner (M2Instance::eventOwner).
     std::vector<pipeline::M2Model::M2Event> events;
     uint32_t rtMesh = ~0u;      // RtScene mesh, or ~0u when it does not cast
+    bool rtFixture = false;     // gives light from inside itself (RtScene::kMeshFixture)
     /// An animated model's RtScene meshes instead: cut into one piece per
     /// bone (rt_rigid_parts.hpp), each placed by its bone's matrix.
     struct RtPiece {
@@ -285,6 +286,10 @@ struct M2Instance {
     glm::mat4 invModelMatrix;
     // Its RtScene instance and the matrix last given to it; see syncRtScene.
     uint32_t rtInstance = ~0u;
+    // A fixture seen to move (syncRtScene): carried, and out of the scene.
+    glm::vec3 rtSeenAt{0.0f};
+    bool rtSeen = false;
+    bool rtMoved = false;
     glm::mat4 rtMatrix{0.0f};
     // An animated model's pieces' RtScene instances, while it is near enough
     // to cast (syncRtScene), parallel to M2ModelGPU::rtPieces.
