@@ -1653,6 +1653,10 @@ QuestQueryRewardsData QuestQueryRewardsParser::parse(const std::vector<uint8_t>&
     if (arenaField) {
         const uint32_t a = fieldAt(arenaField);
         if (a <= 100000u) out.arenaPoints = a;
+        // The reputation mask is the next word, the last before the reward
+        // pairs; five bits, so anything wider is a slipped layout.
+        const uint32_t mask = fieldAt(arenaField + 1);
+        if (mask <= 0x1Fu) out.reputationMask = mask;
     }
     if (titleField) {
         // A CharTitles.dbc id - a few hundred rows, so small; a slipped layout

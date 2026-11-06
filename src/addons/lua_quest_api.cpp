@@ -319,7 +319,6 @@ static int lua_GetQuestRewardTitle(lua_State* L) {
     lua_pushstring(L, name.c_str());
     return 1;
 }
-static int lua_ProcessQuestLogRewardFactions(lua_State* L) { (void)L; return 0; }
 
 // The selected quest's five reputation reward slots, packed to the front (the
 // panel walks 1..GetNumQuestLogRewardFactions expecting no gaps). Inlined
@@ -336,40 +335,168 @@ static const game::QuestHandler::QuestLogEntry* selectedQuest(game::GameHandler*
     if (index < 1 || index > static_cast<int>(log.size())) return nullptr;
     return &log[static_cast<size_t>(index - 1)];
 }
-// The reputation reward slots for whichever panel is open - the offer's own
-// when it is up, the selected log quest's otherwise (same reason as the title:
-// the log selection is not the offered quest). Copied into a common shape so
-// the two source structs, identical in fields, are read the same way.
-struct RewardFaction { uint32_t factionId; int32_t valueId; int32_t override; };
-static std::vector<RewardFaction> currentFactionRewards(game::GameHandler* gh) {
-    std::vector<RewardFaction> out;
-    if (!gh) return out;
-    if (gh->isQuestOfferRewardOpen()) {
-        for (const auto& fr : gh->getQuestOfferReward().factionRewards)
-            if (fr.factionId != 0) out.push_back({fr.factionId, fr.valueId, fr.override});
-    } else if (const auto* q = selectedQuest(gh)) {
-        for (const auto& fr : q->factionRewards)
-            if (fr.factionId != 0) out.push_back({fr.factionId, fr.valueId, fr.override});
+// The reputation lines of the reward panel, as 0x0058d050 works them out for
+// ProcessQuestLogRewardFactions (0x005df8a0) and as GetNumQuestLogRewardFactions
+// and GetQuestLogRewardFactionInfo (0x005df910 / 0x005df940) read them back.
+//
+// Each of the quest's five slots names a faction and a QuestFactionReward value
+// index; the slot counts only when that index's entry is not zero, and its
+// amount is then the override when one is set, else the entry in hundredths.
+// 0x0058c790 adds the line, clamped to a rank where a cap is given, and - unless
+// the quest's reputation mask has the slot's bit - spills it over: to the
+// faction's parent at its second rate and under its second cap, and to each of
+// its children at the child's first rate and under the child's first cap, each
+// of those spilling on in turn, never back to the faction it came from. A line
+// that would leave the standing where it is, and any past the tenth, is not
+// added. The standing the caps are weighed against is the player's whole one
+// in reputation points, against bounds counted in hundredths - the client's own
+// mix of units.
+//
+// The slots are the offer's own while the reward panel is up, the selected log
+// quest's otherwise (the log selection is not the offered quest); the mask is
+// the log quest's, which the offer packet does not repeat.
+namespace {
+struct RewardSlot { uint32_t factionId; int32_t valueId; int32_t override; };
+struct FactionSpill { uint32_t parent = 0; float rate[2] = {0, 0}; int32_t cap[2] = {-1, -1}; };
+
+const std::unordered_map<uint32_t, FactionSpill>& factionSpills(game::GameHandler* gh,
+                                                                std::vector<uint32_t>& order) {
+    static std::unordered_map<uint32_t, FactionSpill> spills;
+    static std::vector<uint32_t> rows;
+    static bool loaded = false;
+    if (!loaded) {
+        auto* am = gh ? gh->services().assetManager : nullptr;
+        if (am && am->isInitialized()) {
+            loaded = true;
+            auto dbc = am->loadDBC("Faction.dbc");
+            const auto* layouts = pipeline::getActiveDBCLayout();
+            const auto* l = layouts ? layouts->getLayout("Faction") : nullptr;
+            const uint32_t parentF = l ? l->tryField("ParentFactionID") : 0xFFFFFFFFu;
+            if (dbc && dbc->isLoaded() && parentF != 0xFFFFFFFFu) {
+                const uint32_t idF = (*l)["ID"];
+                const uint32_t rate0 = l->tryField("ParentFactionMod0"), rate1 = l->tryField("ParentFactionMod1");
+                const uint32_t cap0 = l->tryField("ParentFactionCap0"), cap1 = l->tryField("ParentFactionCap1");
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                    FactionSpill f;
+                    f.parent = dbc->getUInt32(i, parentF);
+                    f.rate[0] = dbc->getFloat(i, rate0);
+                    f.rate[1] = dbc->getFloat(i, rate1);
+                    f.cap[0] = static_cast<int32_t>(dbc->getUInt32(i, cap0));
+                    f.cap[1] = static_cast<int32_t>(dbc->getUInt32(i, cap1));
+                    const uint32_t id = dbc->getUInt32(i, idF);
+                    spills[id] = f;
+                    rows.push_back(id);
+                }
+            }
+        }
     }
-    return out;
+    order = rows;
+    return spills;
 }
-// GetNumQuestLogRewardFactions() → how many faction rewards the quest carries.
+
+/// The lowest standing of each rank and the one past Exalted (0x00a2d2fc).
+constexpr int32_t kRankFloor[9] = {-42000, -6000, -3000, 0, 3000, 9000, 21000, 42000, 43000};
+
+void addRewardLine(game::GameHandler* gh, const std::unordered_map<uint32_t, FactionSpill>& spills,
+                   const std::vector<uint32_t>& order, uint32_t factionId, int32_t amount,
+                   int32_t gainCap, int32_t lossCap, uint32_t from, bool noSpill,
+                   std::vector<std::pair<uint32_t, int32_t>>& lines) {
+    const auto it = spills.find(factionId);
+    if (it == spills.end()) return;
+    const int32_t standing = gh->getFactionStanding(factionId);
+    int32_t after = standing + amount;
+    if (amount < 1) {
+        if (lossCap >= 0 && lossCap < 9) {
+            const int32_t floor = kRankFloor[lossCap] * 100;
+            if (after <= std::min(standing, floor)) {
+                after = floor;
+                if (standing < floor) return;
+            }
+        }
+    } else if (gainCap >= 0 && gainCap < 8) {
+        const int32_t ceiling = kRankFloor[gainCap + 1] * 100 - 100;
+        if (std::max(standing, ceiling) <= after) {
+            after = ceiling;
+            if (ceiling < standing) return;
+        }
+    }
+    if (after == standing || lines.size() >= 10) return;
+    lines.emplace_back(factionId, amount);
+    if (noSpill) return;
+    const FactionSpill& f = it->second;
+    if (f.parent != 0 && f.parent != from) {
+        const auto up = static_cast<int32_t>(std::lrint(static_cast<float>(amount) * f.rate[1]));
+        if (up != 0) addRewardLine(gh, spills, order, f.parent, up, f.cap[1], -1, factionId, false, lines);
+    }
+    // The children, last first, as 0x006f6020's list is walked.
+    for (auto c = order.rbegin(); c != order.rend(); ++c) {
+        const auto ci = spills.find(*c);
+        if (ci == spills.end() || ci->second.parent != factionId || *c == from) continue;
+        const auto down = static_cast<int32_t>(std::lrint(static_cast<float>(amount) * ci->second.rate[0]));
+        if (down != 0) addRewardLine(gh, spills, order, *c, down, ci->second.cap[0], -1, factionId, false, lines);
+    }
+}
+}  // namespace
+
+static std::vector<std::pair<uint32_t, int32_t>> rewardReputationLines(game::GameHandler* gh) {
+    std::vector<std::pair<uint32_t, int32_t>> lines;
+    if (!gh) return lines;
+    std::array<RewardSlot, 5> slots{};
+    uint32_t mask = 0;
+    const auto* logQuest = selectedQuest(gh);
+    if (gh->isQuestOfferRewardOpen()) {
+        const auto& offer = gh->getQuestOfferReward();
+        for (size_t i = 0; i < 5; ++i) {
+            const auto& fr = offer.factionRewards[i];
+            slots[i] = {fr.factionId, fr.valueId, fr.override};
+        }
+        for (const auto& q : gh->getQuestLog()) {
+            if (q.questId == offer.questId) { mask = q.reputationMask; break; }
+        }
+    } else if (logQuest) {
+        for (size_t i = 0; i < 5; ++i) {
+            const auto& fr = logQuest->factionRewards[i];
+            slots[i] = {fr.factionId, fr.valueId, fr.override};
+        }
+        mask = logQuest->reputationMask;
+    } else {
+        return lines;
+    }
+    auto* qh = gh->getQuestHandler();
+    std::vector<uint32_t> order;
+    const auto& spills = factionSpills(gh, order);
+    for (size_t i = 0; i < 5 && qh; ++i) {
+        const auto& slot = slots[i];
+        if (slot.factionId == 0 || std::abs(slot.valueId) >= 10) continue;
+        const int32_t entry = qh->getQuestRewardReputation(slot.valueId, 0);
+        if (entry == 0) continue;
+        const int32_t amount = slot.override != 0 ? slot.override : entry;
+        addRewardLine(gh, spills, order, slot.factionId, amount, -1, -1, 0,
+                      (mask & (1u << i)) != 0, lines);
+    }
+    return lines;
+}
+
+// ProcessQuestLogRewardFactions() - works the lines out for the selected
+// quest. They are worked out here each time they are read instead, from the
+// same quest, so there is nothing for this to keep.
+static int lua_ProcessQuestLogRewardFactions(lua_State* L) { (void)L; return 0; }
+
+// GetNumQuestLogRewardFactions() → how many reputation lines there are.
 static int lua_GetNumQuestLogRewardFactions(lua_State* L) {
-    lua_pushnumber(L, static_cast<double>(currentFactionRewards(getGameHandler(L)).size()));
+    lua_pushnumber(L, static_cast<double>(rewardReputationLines(getGameHandler(L)).size()));
     return 1;
 }
-// GetQuestLogRewardFactionInfo(i) → factionId, amount(in hundredths). The panel
-// pairs the id with GetFactionInfoByID and divides the amount by 100 itself.
+// GetQuestLogRewardFactionInfo(i) → factionId, amount (hundredths); 0, 0 past
+// the tenth line or before the first. The panel pairs the id with
+// GetFactionInfoByID and divides the amount by 100 itself.
 static int lua_GetQuestLogRewardFactionInfo(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    const int want = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const auto list = currentFactionRewards(gh);
-    if (want < 1 || want > static_cast<int>(list.size())) { return luaReturnNil(L); }
-    const auto& fr = list[static_cast<size_t>(want - 1)];
-    auto* qh = gh->getQuestHandler();
-    const int32_t amount = qh ? qh->getQuestRewardReputation(fr.valueId, fr.override) : 0;
-    lua_pushnumber(L, fr.factionId);
-    lua_pushnumber(L, amount);
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetQuestLogRewardFactionInfo(index)");
+    const auto index = std::llround(lua_tonumber(L, 1) - 1.0);
+    const auto lines = rewardReputationLines(getGameHandler(L));
+    const bool have = index >= 0 && index < static_cast<long long>(lines.size());
+    lua_pushnumber(L, have ? lines[static_cast<size_t>(index)].first : 0);
+    lua_pushnumber(L, have ? lines[static_cast<size_t>(index)].second : 0);
     return 2;
 }
 

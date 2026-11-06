@@ -180,6 +180,11 @@
   "Faction": {
     "ID": 0,
     "Name": 23,
+    "ParentFactionCap0": 21,
+    "ParentFactionCap1": 22,
+    "ParentFactionID": 18,
+    "ParentFactionMod0": 19,
+    "ParentFactionMod1": 20,
     "ReputationBase0": 10,
     "ReputationBase1": 11,
     "ReputationBase2": 12,

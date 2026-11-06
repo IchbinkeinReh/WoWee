@@ -3398,6 +3398,10 @@ struct QuestQueryRewardsData {
     std::array<uint32_t, 5> factionId{};
     std::array<int32_t, 5>  factionValueId{};
     std::array<int32_t, 5>  factionValueOverride{};
+    /// RewardReputationMask, the word after the arena points (the client's
+    /// quest record +0x28e0): bit i set keeps reward i's reputation off the
+    /// factions it would spill over to. WotLK only.
+    uint32_t reputationMask = 0;
     bool valid = false;
 };
 

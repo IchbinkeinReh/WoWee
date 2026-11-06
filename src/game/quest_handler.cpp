@@ -1441,6 +1441,7 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                     q.factionRewards[i].valueId   = rwds.factionValueId[i];
                     q.factionRewards[i].override  = rwds.factionValueOverride[i];
                 }
+                q.reputationMask = rwds.reputationMask;
                 q.sourceItemId = rwds.sourceItemId;
                 q.questFlags = rwds.questFlags;
                 q.playersSlain = rwds.playersSlain;

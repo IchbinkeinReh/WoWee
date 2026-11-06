@@ -139,6 +139,8 @@ public:
         uint32_t rewardTitleId = 0;  // CharTitles.dbc id of an awarded title, 0 = none
         struct FactionReward { uint32_t factionId = 0; int32_t valueId = 0; int32_t override = 0; };
         std::array<FactionReward, 5> factionRewards{};
+        /// RewardReputationMask: bit i keeps factionRewards[i] from spilling over.
+        uint32_t reputationMask = 0;
         int32_t level = 0;   // quest level from query response; 0 = unknown, -1 = player-scaling
         // ZoneOrSort from query response: >0 = AreaTable zone id, <0 = QuestSort.dbc
         // category (negated), 0 = unknown
