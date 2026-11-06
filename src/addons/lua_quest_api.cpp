@@ -5077,25 +5077,33 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushstring(L, game::buildItemLink(made, info->quality, info->name, gh->getPlayerLevel()).c_str());
             return 1;
         }},
-                // A recipe link is not an |Htrade: link; that one is the *list*
-                // link, two rows below. What 0x005db920 writes for a recipe is
-                // "|cffffd000|Henchant:%d|h[%s]|h|r" - the spell id, because the
-                // thing an enchanting recipe makes has no item entry - and when a
-                // formula item exists, "[%s: %s]" puts its name first. The gate is
-                // a flag byte on the trade skill record: 0x20, and only recipes
-                // carrying it get a link at all.
-                //
-                // Two things stand between that and answering here, and they are
-                // why this stays nil rather than guessing at a format. The recipe
-                // list this client keeps is GameHandler::CraftRecipe - spellId,
-                // name, difficulty band, how many the bags allow - and the flag
-                // byte never reaches it, so the set of rows that should be links
-                // is not knowable from here. And an enchant link is drawn as text
-                // here: the chat markup parser knows item, spell, quest and
-                // achievement, so the tooltip the original pops up off that link
-                // is the half that would be missing. Both are reachable, and
-                // neither is a one-line change.
-                {"GetTradeSkillRecipeLink",   [](lua_State* L) -> int { return luaReturnNil(L); }},
+                // GetTradeSkillRecipeLink(index) (0x005db920): a recipe whose
+                // spell is a trade spell (Attributes 0x20) links as
+                // "|cffffd000|Henchant:<spell>|h[<skill>: <name>]|h|r", the
+                // recipe's skill line named first where the player's race and
+                // class have one for it (0x005da5f0), "[<name>]" where not;
+                // any other row, nothing. A recipe link is not the |Htrade:
+                // list link two rows below.
+                {"GetTradeSkillRecipeLink", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTradeSkillRecipeLink(index)");
+            auto* gh = getGameHandler(L);
+            const int i = static_cast<int>(lua_tonumber(L, 1));
+            const auto* rec = gh ? tradeSkillRecipeAt(tradeSkillRows(gh), i) : nullptr;
+            if (!rec) return 0;
+            const auto it = gh->spellNameCacheRef().find(rec->spellId);
+            if (it == gh->spellNameCacheRef().end() || (it->second.attr & 0x20u) == 0) return 0;
+            const std::string& name = it->second.name;
+            const uint32_t skillLine = gh->spellSkillLine(rec->spellId);
+            const std::string skill = skillLine != 0 ? gh->getSkillLineName(skillLine) : std::string();
+            char link[1024];
+            if (skill.empty())
+                std::snprintf(link, sizeof(link), "|cffffd000|Henchant:%u|h[%s]|h|r", rec->spellId, name.c_str());
+            else
+                std::snprintf(link, sizeof(link), "|cffffd000|Henchant:%u|h[%s: %s]|h|r", rec->spellId,
+                              skill.c_str(), name.c_str());
+            lua_pushstring(L, link);
+            return 1;
+        }},
                 {"GetTradeSkillReagentItemLink", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
