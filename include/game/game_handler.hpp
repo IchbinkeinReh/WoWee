@@ -1635,6 +1635,7 @@ public:
     void requestStabledPetList();          // CMSG MSG_LIST_STABLED_PETS
     void stablePet();                      // CMSG_STABLE_PET (the active pet into a free slot)
     void unstablePet(uint32_t petNumber);  // CMSG_UNSTABLE_PET (retrieve to active)
+    void swapStablePet(uint32_t petNumber);  // CMSG_STABLE_SWAP_PET (that pet out, the active one in)
     void buyStableSlot();                  // CMSG_BUY_STABLE_SLOT (next slot from the open stable master)
     void abandonPet();                     // CMSG_PET_ABANDON (give a hunter pet up for good)
     /// Forget a primary profession. The server refuses anything that is not

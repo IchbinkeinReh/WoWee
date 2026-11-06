@@ -1717,6 +1717,15 @@ const game::GameHandler::StabledPet* activePet(game::GameHandler* gh) {
     return nullptr;
 }
 
+/// The pet a stable index names, as the client counts them: -1 the one that is
+/// out, then the stable slots from 0.
+const game::GameHandler::StabledPet* stablePetAt(game::GameHandler* gh, int index) {
+    if (index == -1) return activePet(gh);
+    const auto stabled = stabledOnly(gh);
+    if (index < 0 || index >= static_cast<int>(stabled.size())) return nullptr;
+    return stabled[static_cast<size_t>(index)];
+}
+
 /// Which slot the player has clicked. Held here because it is a fact about the
 /// window rather than about the character, and the server is never told.
 int& selectedStableSlot() {
@@ -1777,8 +1786,35 @@ static int lua_GetSelectedStablePet(lua_State* L) {
     return 1;
 }
 
+// ClickStablePet(index) (0x005a1ca0). With no pet held it selects the index
+// and answers 1. With one held (PickupStablePet) the pet is put down there and
+// it answers nil: back on its own index, nothing; the pet that is out onto a
+// stable slot holding a pet, CMSG_STABLE_SWAP_PET with that pet, or onto an
+// empty bought slot, CMSG_STABLE_PET; a stabled pet onto the pet that is out,
+// the swap with it while a pet is out and CMSG_UNSTABLE_PET while none is. A
+// stabled pet onto another stable slot sends nothing.
 static int lua_ClickStablePet(lua_State* L) {
-    selectedStableSlot() = static_cast<int>(luaL_optnumber(L, 1, 0));
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ClickStablePet(index)");
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
+    if (const auto held = cursorStablePet()) {
+        auto* gh = getGameHandler(L);
+        if (gh && *held != index) {
+            if (*held == -1) {
+                const auto* there = stablePetAt(gh, index);
+                if (there && there->petNumber != 0) gh->swapStablePet(there->petNumber);
+                else if (index >= 0 && index < gh->getStableSlots()) gh->stablePet();
+            } else if (index == -1) {
+                const auto* pet = stablePetAt(gh, *held);
+                if (pet && pet->petNumber != 0) {
+                    if (gh->getPetGuid() != 0) gh->swapStablePet(pet->petNumber);
+                    else gh->unstablePet(pet->petNumber);
+                }
+            }
+        }
+        clearCursor(L);
+        return luaReturnNil(L);
+    }
+    selectedStableSlot() = index + 1;
     // The model preview shows whichever pet is selected, so selecting a
     // different one is exactly when it has to be redrawn. Nothing else changes
     // it, and the frame will not redraw on its own.
@@ -1786,7 +1822,8 @@ static int lua_ClickStablePet(lua_State* L) {
     auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
     if (engine) engine->fireEvent("PET_STABLE_UPDATE_PAPERDOLL", {});
-    return 0;
+    lua_pushnumber(L, 1);
+    return 1;
 }
 
 // ---- What a pet eats, and what it trains into ----
@@ -1925,14 +1962,17 @@ static int lua_SetPetStablePaperdoll(lua_State* L) {
     return 0;
 }
 
-/// PickupStablePet(slot) - start dragging a pet between stable slots.
-///
-/// Also a deliberate no-op. Moving a pet by dragging needs a cursor that can
-/// hold one, and this client's cursor holds items and spells; the buttons the
-/// stable frame offers for the same moves go through stablePet and
-/// unstablePet, which do work. So the frame loses the drag and keeps the
-/// operation.
-static int lua_PickupStablePet(lua_State* L) { (void)L; return 0; }
+/// PickupStablePet(index) (0x005a0fe0) - start dragging a pet: 0 the one that
+/// is out, 1 on the stable slots. An empty index picks nothing up; a pet goes
+/// onto the cursor (0x00520c60), to be put down by ClickStablePet.
+static int lua_PickupStablePet(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: PickupStablePet(index)");
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
+    if (const auto* pet = stablePetAt(getGameHandler(L), index); pet && pet->petNumber != 0) {
+        pickupStablePetCursor(L, index, "Interface\\Icons\\Ability_Hunter_BeastTaming");
+    }
+    return 0;
+}
 
 /// GetStablePetFoodTypes(slot) - and the one that cannot answer nil.
 ///

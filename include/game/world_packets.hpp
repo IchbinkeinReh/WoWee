@@ -4151,6 +4151,13 @@ public:
     static network::Packet build(uint64_t stableMasterGuid, uint32_t petNumber);
 };
 
+class StableSwapPetPacket {
+public:
+    /** CMSG_STABLE_SWAP_PET (0x005a1ca0): the stable master and the number of
+     *  the stabled pet that changes places with the one that is out. */
+    static network::Packet build(uint64_t stableMasterGuid, uint32_t petNumber);
+};
+
 class PetRenamePacket {
 public:
     /** CMSG_PET_RENAME: rename the player's active pet.

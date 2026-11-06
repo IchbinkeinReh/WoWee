@@ -863,6 +863,13 @@ network::Packet UnstablePetPacket::build(uint64_t stableMasterGuid, uint32_t pet
     return p;
 }
 
+network::Packet StableSwapPetPacket::build(uint64_t stableMasterGuid, uint32_t petNumber) {
+    network::Packet p(wireOpcode(Opcode::CMSG_STABLE_SWAP_PET));
+    p.writeUInt64(stableMasterGuid);
+    p.writeUInt32(petNumber);
+    return p;
+}
+
 network::Packet PetRenamePacket::build(uint64_t petGuid, const std::string& name, uint8_t isDeclined) {
     network::Packet p(wireOpcode(Opcode::CMSG_PET_RENAME));
     p.writeUInt64(petGuid);

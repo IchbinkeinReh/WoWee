@@ -3422,6 +3422,10 @@ void GameHandler::unstablePet(uint32_t petNumber) {
     if (spellHandler_) spellHandler_->unstablePet(petNumber);
 }
 
+void GameHandler::swapStablePet(uint32_t petNumber) {
+    if (spellHandler_) spellHandler_->swapStablePet(petNumber);
+}
+
 void GameHandler::handleListStabledPets(network::Packet& packet) {
     if (spellHandler_) spellHandler_->handleListStabledPets(packet);
 }

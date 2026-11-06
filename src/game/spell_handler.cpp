@@ -8099,6 +8099,12 @@ void SpellHandler::abandonPet() {
     LOG_INFO("Sent CMSG_PET_ABANDON for pet=0x", std::hex, owner_.petGuidRef(), std::dec);
 }
 
+void SpellHandler::swapStablePet(uint32_t petNumber) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || owner_.stableMasterGuidRef() == 0 || petNumber == 0) return;
+    owner_.getSocket()->send(StableSwapPetPacket::build(owner_.stableMasterGuidRef(), petNumber));
+    LOG_INFO("Sent CMSG_STABLE_SWAP_PET: petNumber=", petNumber);
+}
+
 void SpellHandler::unstablePet(uint32_t petNumber) {
     if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || owner_.stableMasterGuidRef() == 0 || petNumber == 0) return;
     auto pkt = UnstablePetPacket::build(owner_.stableMasterGuidRef(), petNumber);

@@ -1269,6 +1269,12 @@ void setCursorMoney(lua_State* L, uint64_t copper);
 /// otherwise the money stays held. AddTradeMoney and ClickTargetTradeButton
 /// both drop it this way.
 void dropCursorMoneyOnTrade(lua_State* L);
+/// PickupStablePet's cursor (0x00520c60: kind 10, the slot at 0x00bd07ec):
+/// -1 for the pet that is out, else the stable slot counted from 0.
+void pickupStablePetCursor(lua_State* L, int slot, const std::string& icon);
+std::optional<int> cursorStablePet();
+/// ClearCursor's own put-down (0x00519280), whatever is held.
+void clearCursor(lua_State* L);
 
 /// The paperdoll slot an item on the cursor was picked up from, or zero when it
 /// came from a bag or nothing is held. One-based, as FrameXML numbers slots.

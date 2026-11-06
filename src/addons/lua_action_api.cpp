@@ -64,7 +64,7 @@ namespace wowee::addons {
 /// AMMO is the ammunition lifted off the paperdoll's ammo slot (the client's
 /// cursor type 9): an item to the interface, holding an entry rather than an
 /// item, since the ammunition never left the bags.
-enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET, AMMO, PET_ACTION };
+enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET, AMMO, PET_ACTION, STABLE_PET };
 static CursorType s_cursorType = CursorType::NONE;
 static uint32_t   s_cursorId   = 0;    // spellId, itemId, or action slot
 static int        s_cursorSlot = 0;    // source slot for placement
@@ -78,6 +78,7 @@ static uint64_t   s_cursorMoney = 0;   // copper, when the cursor carries money
 /// has to wait on the cursor until the drop says where it is going.
 static uint32_t   s_cursorSplit = 0;
 static void setCursorType(lua_State* L, CursorType type);
+static void clearCursorItem(lua_State* L);
 /// Where the cursor's item came from, in wire bag/slot space. Declared here
 /// because the guild bank pickup above needs it and it is defined further down
 /// with the other cursor helpers.
@@ -93,6 +94,20 @@ static void soldHeldItem(lua_State* L);
 uint64_t cursorMoney() {
     return s_cursorType == CursorType::MONEY ? s_cursorMoney : 0;
 }
+
+void pickupStablePetCursor(lua_State* L, int slot, const std::string& icon) {
+    clearCursorItem(L);
+    s_cursorSlot = slot;
+    setCursorType(L, CursorType::STABLE_PET);
+    wowee::ui::frameXmlSetCursorItem(icon);
+}
+
+std::optional<int> cursorStablePet() {
+    if (s_cursorType != CursorType::STABLE_PET) return std::nullopt;
+    return s_cursorSlot;
+}
+
+void clearCursor(lua_State* L) { clearCursorItem(L); }
 
 void dropCursorMoneyOnTrade(lua_State* L) {
     auto* gh = getGameHandler(L);
