@@ -1450,6 +1450,25 @@ bool GameHandler::hasPendingTradeRequest() const {
 bool GameHandler::isTradeOpen() const {
     return inventoryHandler_ ? inventoryHandler_->isTradeOpen() : false;
 }
+uint64_t GameHandler::getTradePeerGuid() const {
+    return inventoryHandler_ ? inventoryHandler_->getTradePeerGuid() : 0;
+}
+
+bool GameHandler::feedPetWithItem(uint64_t itemGuid) {
+    if (!spellHandler_ || itemGuid == 0) return false;
+    for (uint32_t spellId : spellHandler_->getKnownSpells()) {
+        const auto it = spellNameCache_.find(spellId);
+        if (it == spellNameCache_.end()) continue;
+        for (uint32_t effect : it->second.effectIds) {
+            if (effect == 101) {
+                spellHandler_->castSpellAtItem(spellId, itemGuid);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 const std::string& GameHandler::getTradePeerName() const {
     if (inventoryHandler_) return inventoryHandler_->getTradePeerName();
     return tradePeerName_;

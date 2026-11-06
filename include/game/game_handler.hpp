@@ -2698,6 +2698,11 @@ public:
     bool hasPendingTradeRequest() const;
     bool isTradeOpen() const;
     const std::string& getTradePeerName() const;
+    /// Who the open trade is with, 0 without one.
+    uint64_t getTradePeerGuid() const;
+    /// DropItemOnUnit's pet leg (0x0080dcf0): the known Feed Pet spell (the
+    /// one with effect 101) cast at the item; false without one.
+    bool feedPetWithItem(uint64_t itemGuid);
 
     // My trade slots (what I'm offering)
     const std::array<TradeSlot, TRADE_SLOT_COUNT>& getMyTradeSlots() const;

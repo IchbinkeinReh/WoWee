@@ -2460,6 +2460,60 @@ static int lua_AutoEquipCursorItem(lua_State* L) {
     return 0;
 }
 
+// DropItemOnUnit(unit) (0x0051bdd0): the held item dropped on a unit frame.
+// On the player it is worn (AutoEquipCursorItem, 0x006dfc40). On another
+// player of the player's side and peaceable (0x00729b30): while trading with
+// them it goes into the trade (0x00586b50) - the first free of the six traded
+// slots, or the slot that is not traded for a bound item, and nowhere when it
+// is already on the table or that slot is taken - and with no trade open one
+// is asked for (0x00703cf0). On the player's pet it is fed to it with the
+// Feed Pet spell (0x0080dcf0) and the cursor put down.
+static void dropCursorItemOnUnit(lua_State* L, game::GameHandler* gh, uint64_t guid,
+                                 const std::shared_ptr<game::Entity>& entity) {
+    uint8_t bag = 0, slot = 0;
+    const bool fromBags = cursorWireSlot(bag, slot);
+    auto* inv = gh->getInventoryHandler();
+    const uint64_t itemGuid = fromBags && inv ? inv->itemGuidAtWire(bag, slot) : 0;
+    const uint64_t me = gh->getPlayerGuid();
+    if (entity->getType() == game::ObjectType::PLAYER && guid == me) {
+        lua_AutoEquipCursorItem(L);
+        return;
+    }
+    if (entity->getType() == game::ObjectType::PLAYER && gh->unitsCooperate(me, guid)) {
+        if (gh->getTradePeerGuid() == 0) {
+            gh->initiateTrade(guid);
+        } else if (gh->getTradePeerGuid() == guid && itemGuid != 0 && !inv->itemInTrade(itemGuid)) {
+            const auto& mine = gh->getMyTradeSlots();
+            const bool bound = (gh->getItemFieldFlags(itemGuid) & 0x1u) != 0;
+            int target = -1;
+            if (bound) {
+                if (mine[6].itemId == 0) target = 6;
+            } else {
+                for (int i = 0; i < 6 && target < 0; ++i)
+                    if (mine[static_cast<size_t>(i)].itemId == 0) target = i;
+            }
+            if (target >= 0) {
+                gh->setTradeItem(static_cast<uint8_t>(target), bag, slot);
+                clearCursorItem(L);
+            }
+        }
+    }
+    if (guid == gh->getPetGuid() && gh->feedPetWithItem(itemGuid)) clearCursorItem(L);
+}
+
+static int lua_DropItemOnUnit(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: DropItemOnUnit(\"unit\")");
+    auto* gh = getGameHandler(L);
+    if (gh && s_cursorType == CursorType::ITEM && s_cursorId != 0) {
+        std::string uid(lua_tostring(L, 1));
+        toLowerInPlace(uid);
+        const uint64_t guid = resolveUnitGuid(gh, uid);
+        auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
+        if (entity && entity->isUnit()) dropCursorItemOnUnit(L, gh, guid, entity);
+    }
+    return 0;
+}
+
 // EquipCursorItem(slot) (0x0051a3d0): the held item into that equipment slot.
 // Dropped back where it came from when the slot already holds it, or when it
 // came off the paperdoll and does not fit there; otherwise, not fitting, worn
@@ -3606,6 +3660,7 @@ void registerActionLuaAPI(lua_State* L) {
                 {"CursorHasMoney",      lua_CursorHasMoney},
                 {"CursorHasMacro",      lua_CursorHasMacro},
                 {"DeleteCursorItem",    lua_DeleteCursorItem},
+                {"DropItemOnUnit",     lua_DropItemOnUnit},
                 {"AutoEquipCursorItem", lua_AutoEquipCursorItem},
                 {"EquipCursorItem",     lua_EquipCursorItem},
                 {"IsModifiedClick",     lua_IsModifiedClick},

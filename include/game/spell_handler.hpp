@@ -59,6 +59,8 @@ public:
 
     // --- Public API (delegated from GameHandler) ---
     void castSpell(uint32_t spellId, uint64_t targetGuid = 0);
+    /// The player's cast of a spell at an item (CMSG_CAST_SPELL, item target).
+    void castSpellAtItem(uint32_t spellId, uint64_t itemGuid) { sendPlayerCast(spellId, 0, itemGuid); }
     /// A pet's spell cast by the pet itself (0x005d4210 -> 0x0080cce0,
     /// CMSG_PET_CAST_SPELL): at a place it waits for one, as the player's do.
     void castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targetGuid);
