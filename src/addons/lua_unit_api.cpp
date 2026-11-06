@@ -297,7 +297,7 @@ static int lua_UnitIsDead(lua_State* L) {
 /// one is empty, and the plain Name where both are. Empty where the file or
 /// its layout is not to hand.
 static std::string chrRowName(game::GameHandler* gh, const char* file, const char* layoutName,
-                              uint32_t id, bool female) {
+                              uint32_t id, int gender) {
     auto* am = gh ? gh->services().assetManager : nullptr;
     const auto* layouts = pipeline::getActiveDBCLayout();
     const auto* layout = layouts ? layouts->getLayout(layoutName) : nullptr;
@@ -309,8 +309,21 @@ static std::string chrRowName(game::GameHandler* gh, const char* file, const cha
     const auto r = static_cast<uint32_t>(row);
     std::string fem = dbc->getString(r, nameF + 17);
     std::string male = dbc->getString(r, nameF + 34);
-    std::string name = female ? (!fem.empty() ? fem : male) : (!male.empty() ? male : fem);
+    std::string name = gender == 1 ? (!fem.empty() ? fem : male)
+                     : gender == 0 ? (!male.empty() ? male : fem) : std::string();
     return !name.empty() ? name : dbc->getString(r, nameF);
+}
+
+std::string localizedRaceName(game::GameHandler* gh, uint32_t raceId, int gender) {
+    std::string name = chrRowName(gh, "ChrRaces.dbc", "ChrRaces", raceId, gender);
+    if (name.empty() && raceId > 0 && raceId < 12) name = kLuaRaces[raceId];
+    return name;
+}
+
+std::string localizedClassName(game::GameHandler* gh, uint32_t classId, int gender) {
+    std::string name = chrRowName(gh, "ChrClasses.dbc", "ChrClasses", classId, gender);
+    if (name.empty() && classId < 12) name = kLuaClasses[classId];
+    return name;
 }
 
 /// UNIT_FIELD_BYTES_0's gender byte for a unit token: true for female.
@@ -371,7 +384,7 @@ static int lua_UnitClass(lua_State* L) {
         // which is the blue question mark on the character sheet.
         // The localized name in the unit's gender (0x007159e0).
         const std::string localized = chrRowName(gh, "ChrClasses.dbc", "ChrClasses", classId,
-                                                 unitIsFemale(gh, uidStr));
+                                                 unitIsFemale(gh, uidStr) ? 1 : 0);
         lua_pushstring(L, !localized.empty() ? localized.c_str() : kLuaClasses[classId]);
         lua_pushstring(L, token);
         lua_pushnumber(L, classId);
@@ -1326,7 +1339,7 @@ static int lua_UnitRace(lua_State* L) {
     const uint8_t raceId = unitRaceOf(gh, uid);
     const bool known = (raceId > 0 && raceId < 12);
     // The localized name in the unit's gender (0x0060fd40 -> 0x00715970).
-    std::string localized = known ? chrRowName(gh, "ChrRaces.dbc", "ChrRaces", raceId, unitIsFemale(gh, uid)) : "";
+    std::string localized = known ? chrRowName(gh, "ChrRaces.dbc", "ChrRaces", raceId, unitIsFemale(gh, uid) ? 1 : 0) : "";
     const char* name = known ? (!localized.empty() ? localized.c_str() : kLuaRaces[raceId]) : "Unknown";
     const char* file = known ? kLuaRaceFileNames[raceId] : "Unknown";
     lua_pushstring(L, name);      // 1: localized race
@@ -2928,7 +2941,8 @@ static int lua_GetRaidRosterInfo(lua_State* L) {
     if (entity) {
         uint32_t bytes0 = entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
         uint8_t classId = static_cast<uint8_t>((bytes0 >> 8) & 0xFF);
-        if (classId > 0 && classId < 12) className = kLuaClasses[classId];
+        if (classId > 0 && classId < 12)
+            className = localizedClassName(gh, classId, ((bytes0 >> 16) & 0xFFu) == 1 ? 1 : 0);
     }
     lua_pushstring(L, className.c_str());    // class (localized)
     lua_pushstring(L, className.c_str());    // fileName
@@ -3060,48 +3074,45 @@ static int lua_UnitCreatureType(lua_State* L) {
     return 1;
 }
 
-// GetPlayerInfoByGUID(guid) → localizedClass, englishClass, localizedRace, englishRace, sex, name, realm
+// GetPlayerInfoByGUID(guid) → localizedClass, englishClass, localizedRace,
+// englishRace, sex, name, realm (0x00613f90). Only a player's guid, and only
+// once the name cache has it (0x0067d770 asks the server meanwhile): nothing
+// at all before. The class and race names are the cached player's, in its
+// gender (0x0072aab0, 0x0072aa70); the English ones are the class token and
+// the race's file string; sex is 2 for male, 3 for female.
 static int lua_GetPlayerInfoByGUID(lua_State* L) {
     auto* gh = getGameHandler(L);
     const char* guidStr = luaL_checkstring(L, 1);
-    if (!gh || !guidStr) {
-        for (int i = 0; i < 7; i++) lua_pushnil(L);
-        return 7;
-    }
-    // Parse hex GUID string "0x0000000000000001"
+    if (!gh || !guidStr) return 0;
     uint64_t guid = 0;
     if (guidStr[0] == '0' && (guidStr[1] == 'x' || guidStr[1] == 'X'))
         guid = strtoull(guidStr + 2, nullptr, 16);
     else
         guid = strtoull(guidStr, nullptr, 16);
+    if (guid == 0) return luaL_error(L, "Usage: GetPlayerInfoByGUID(\"playerGUID\")");
+    if ((guid >> 60) != 0) return 0;   // not a player
 
-    if (guid == 0) { for (int i = 0; i < 7; i++) lua_pushnil(L); return 7; }
-
-    // Look up entity name
     std::string name = gh->lookupName(guid);
-    if (name.empty() && guid == gh->getPlayerGuid()) {
-        const auto& chars = gh->getCharacters();
-        for (const auto& c : chars)
-            if (c.guid == guid) { name = c.name; break; }
-    }
-
-    // For player GUID, return class/race if it's the local player
-    const char* className = "Unknown";
-    const char* raceName = "Unknown";
+    uint8_t classId = gh->lookupPlayerClass(guid);
+    uint8_t raceId = gh->lookupPlayerRace(guid);
+    uint8_t gender = gh->lookupPlayerGender(guid);
     if (guid == gh->getPlayerGuid()) {
-        uint8_t cid = gh->getPlayerClass();
-        uint8_t rid = gh->getPlayerRace();
-        if (cid < 12) className = kLuaClasses[cid];
-        if (rid < 12) raceName = kLuaRaces[rid];
+        for (const auto& c : gh->getCharacters())
+            if (c.guid == guid && name.empty()) name = c.name;
+        classId = gh->getPlayerClass();
+        raceId = gh->getPlayerRace();
     }
-
-    lua_pushstring(L, className);  // 1: localizedClass
-    lua_pushstring(L, className);  // 2: englishClass
-    lua_pushstring(L, raceName);   // 3: localizedRace
-    lua_pushstring(L, raceName);   // 4: englishRace
-    lua_pushnumber(L, 0);          // 5: sex (0=unknown)
-    lua_pushstring(L, name.c_str()); // 6: name
-    lua_pushstring(L, "");         // 7: realm
+    if (name.empty()) return 0;
+    const int g = gender == 1 ? 1 : 0;
+    lua_pushstring(L, localizedClassName(gh, classId, g).c_str());              // 1
+    if (const char* token = luaClassToken(classId)) lua_pushstring(L, token);  // 2
+    else lua_pushnil(L);
+    lua_pushstring(L, localizedRaceName(gh, raceId, g).c_str());                // 3
+    if (raceId > 0 && raceId < 12) lua_pushstring(L, kLuaRaceFileNames[raceId]); // 4
+    else lua_pushnil(L);
+    lua_pushnumber(L, gender == 1 ? 3 : 2);                                    // 5
+    lua_pushstring(L, name.c_str());                                           // 6
+    lua_pushstring(L, "");                                                     // 7: same realm
     return 7;
 }
 

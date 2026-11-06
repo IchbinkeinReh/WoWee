@@ -3617,7 +3617,8 @@ int lua_Tooltip_SetUnit(lua_State* L) {
                 if (const char* cls = wowee::addons::luaClassToken(classId)) {
                     (void)cls;
                     levelLine += " ";
-                    levelLine += wowee::addons::kLuaClasses[classId];
+                    levelLine += wowee::addons::localizedClassName(
+                        gh, classId, ((bytes0 >> 16) & 0xFFu) == 1 ? 1 : 0);
                 }
             }
             addLine(levelLine, 1.0f, 0.82f, 0.0f);

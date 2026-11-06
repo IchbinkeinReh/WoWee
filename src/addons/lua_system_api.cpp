@@ -5748,7 +5748,7 @@ static int lua_GetLFGRoleUpdateMember(lua_State* L) {
     } else {
         lua_pushstring(L, name.c_str());
         const uint8_t classId = gh->lookupPlayerClass(m.guid);
-        lua_pushstring(L, luaClassToken(classId) ? kLuaClasses[classId] : "");
+        lua_pushstring(L, luaClassToken(classId) ? localizedClassName(gh, classId, 2).c_str() : "");
     }
     if (m.chosen) {
         for (uint32_t bit : {1u, 2u, 4u, 8u}) lua_pushboolean(L, (m.roles & bit) ? 1 : 0);

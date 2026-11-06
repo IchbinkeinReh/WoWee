@@ -921,6 +921,12 @@ inline game::Unit* resolveUnit(lua_State* L, const char* unitId) {
 /// UNIT_FIELD_BYTES_0, with the name-query cache behind it for a unit whose
 /// fields have not arrived. Shared because two bindings need it and a second
 /// copy of "where a race comes from" is how they drift.
+/// ChrRaces / ChrClasses names as the client answers them (0x00715970,
+/// 0x007159e0): `gender` 0 male, 1 female (each falling back to the other),
+/// 2 the plain Name. The English name where the file is not to hand.
+std::string localizedRaceName(game::GameHandler* gh, uint32_t raceId, int gender);
+std::string localizedClassName(game::GameHandler* gh, uint32_t classId, int gender);
+
 inline uint8_t unitRaceOf(game::GameHandler* gh, const std::string& lowerUid) {
     if (!gh) return 0;
     if (lowerUid == "player") return gh->getPlayerRace();
