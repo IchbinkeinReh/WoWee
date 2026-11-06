@@ -3777,6 +3777,10 @@ void SpellHandler::handleCastFailed(network::Packet& packet) {
     owner_.castVisuals().ended(owner_.getPlayerGuid(), data.castCount, data.spellId);
     if (owner_.isAutoRepeating() && data.result != 0x1b)
         owner_.castVisuals().autoRepeatStopped(owner_.getPlayerGuid());
+    // The repeating spell itself refused: the repeat ends and the server is
+    // told (0x00808200 -> 0x00807560(1)).
+    if (owner_.isAutoRepeating() && data.result != 0x1b && data.spellId == owner_.autoRepeatSpellId())
+        owner_.stopAutoRepeat(true);
 
     // 0x00809af0 fails the pending cast the count names (0x008051d0), not
     // whatever is casting: a spell sent during a cast and refused
