@@ -1750,6 +1750,12 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
     // on its way into or out of one, or its move held for the vehicle's
     // animation.
     if (owner_.heldBySeat(owner_.getPlayerGuid())) return;
+    // 0x0080da80: casting the spell that is repeating turns it off, the
+    // server told (0x00807560(1)), and casts nothing.
+    if (owner_.isAutoRepeating() && spellId == owner_.autoRepeatSpellId()) {
+        owner_.stopAutoRepeat(true);
+        return;
+    }
     // 0x0080cce0: the attack counter behind tutorial 0x3b.
     if (const auto sit = owner_.spellNameCacheRef().find(spellId); sit != owner_.spellNameCacheRef().end()) {
         const auto& e = sit->second;
