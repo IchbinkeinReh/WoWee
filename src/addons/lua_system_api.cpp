@@ -6000,10 +6000,15 @@ static int lua_GetArenaTeamRosterInfo(lua_State* L) {
     if (!roster || member > static_cast<int>(roster->members.size())) return luaReturnNil(L);
     const auto& m = roster->members[static_cast<size_t>(member) - 1];
 
-    lua_pushstring(L, m.name.c_str());       // 1: name
-    lua_pushnumber(L, 0);                    // 2: rank
-    lua_pushnumber(L, 0);                    // 3: level
-    lua_pushnil(L);                          // 4: class
+    // 0x005a3080: the rank the roster carries (0 the captain), the level, and
+    // the class in the member's gender where the name cache knows it.
+    lua_pushstring(L, m.name.c_str());                       // 1: name
+    lua_pushnumber(L, m.isCaptain ? 0 : 1);                  // 2: rank
+    lua_pushnumber(L, m.level);                              // 3: level
+    if (luaClassToken(m.classId))                            // 4: class
+        lua_pushstring(L, localizedClassName(gh, m.classId, gh->lookupPlayerGender(m.guid) == 1 ? 1 : 0).c_str());
+    else
+        lua_pushnil(L);
     lua_pushboolean(L, m.online ? 1 : 0);    // 5: online
     lua_pushnumber(L, m.weekGames);          // 6: played
     lua_pushnumber(L, m.weekWins);           // 7: win
@@ -6013,15 +6018,52 @@ static int lua_GetArenaTeamRosterInfo(lua_State* L) {
     return 10;
 }
 
-// Which roster row is selected, and closing the roster. Both are the panel's
-// own state - nothing is sent for either.
-static int lua_GetArenaTeamRosterSelection(lua_State* L) { lua_pushnumber(L, 0); return 1; }
-static int lua_SetArenaTeamRosterSelection(lua_State* L) { (void)L; return 0; }
+// Which roster row is selected (0x005a3410, 0x005a3370): one member guid
+// for all three teams (0xc0f838) - Set keeps the guid of the team's row, or
+// none for a row it does not have; Get answers that guid's row in the team
+// asked about, plus one, 0 where it is not there. Nothing is sent.
+static uint64_t& arenaRosterSelection() { static uint64_t guid = 0; return guid; }
+static int lua_GetArenaTeamRosterSelection(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetArenaTeamRosterSelection(team)");
+    auto* gh = getGameHandler(L);
+    const uint32_t teamId = arenaTeamIdAtIndex(gh, static_cast<int>(lua_tonumber(L, 1)));
+    const auto* roster = gh && teamId != 0 ? gh->getArenaTeamRoster(teamId) : nullptr;
+    int row = 0;
+    if (roster && arenaRosterSelection() != 0) {
+        for (size_t i = 0; i < roster->members.size(); ++i)
+            if (roster->members[i].guid == arenaRosterSelection()) { row = static_cast<int>(i) + 1; break; }
+    }
+    lua_pushnumber(L, row);
+    return 1;
+}
+static int lua_SetArenaTeamRosterSelection(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2))
+        return luaL_error(L, "Usage: SetArenaTeamRosterSelection(team, index)");
+    auto* gh = getGameHandler(L);
+    const uint32_t teamId = arenaTeamIdAtIndex(gh, static_cast<int>(lua_tonumber(L, 1)));
+    const int index = static_cast<int>(lua_tonumber(L, 2));
+    const auto* roster = gh && teamId != 0 ? gh->getArenaTeamRoster(teamId) : nullptr;
+    arenaRosterSelection() = roster && index >= 1 && index <= static_cast<int>(roster->members.size())
+                                 ? roster->members[static_cast<size_t>(index) - 1].guid : 0;
+    return 0;
+}
 static int lua_CloseArenaTeamRoster(lua_State* L) { (void)L; return 0; }
 
-// Team captaincy is not reported by anything this client parses, so no team
-// reads as the player's to run.
-static int lua_IsArenaTeamCaptain(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+// IsArenaTeamCaptain(index) (0x0060dc70): 1 where the player's
+// PLAYER_FIELD_ARENA_TEAM_INFO slot for that team (seven fields each) holds a
+// member rank - its third field - of 0, the captain's; nil otherwise.
+static int lua_IsArenaTeamCaptain(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: IsArenaTeamCaptain(index)");
+    auto* gh = getGameHandler(L);
+    const int index = static_cast<int>(lua_tonumber(L, 1));
+    const uint16_t base = game::fieldIndex(game::UF::PLAYER_FIELD_ARENA_TEAM_INFO_1_1);
+    auto me = gh ? gh->getEntityManager().getEntity(gh->getPlayerGuid()) : nullptr;
+    if (!me || base == 0xFFFF || index < 1 || index > 3) return luaReturnNil(L);
+    const uint32_t rank = me->getField(static_cast<uint16_t>(base + (index - 1) * 7 + 2));
+    if (rank == 0) lua_pushnumber(L, 1);
+    else lua_pushnil(L);
+    return 1;
+}
 
 // Closing the battlemaster's window, which is a client-side dismissal.
 static int lua_CloseBattlefield(lua_State* L) { (void)L; return 0; }
