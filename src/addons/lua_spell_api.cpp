@@ -1506,7 +1506,11 @@ void registerSpellLuaAPI(lua_State* L) {
             // step of ToggleGameMenu runs only on nil.
             const bool casting = gh && gh->isCasting();
             if (gh) gh->cancelCast();
-            if (casting) lua_pushnumber(L, 1.0);
+            // With no cast, a repeating shot is what stops: the client sends
+            // CMSG_CANCEL_AUTO_REPEAT_SPELL and answers 1 (0x00807560(1)).
+            const bool repeating = gh && !casting && gh->isAutoRepeating();
+            if (repeating) gh->stopAutoRepeat(true);
+            if (casting || repeating) lua_pushnumber(L, 1.0);
             else lua_pushnil(L);
             return 1;
         }},

@@ -1180,6 +1180,10 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             // A unit dying in front of the client is a combat log entry
             // (0x007489c0 -> 0x007561e0), once, as its health runs out.
             if (val == 0 && oldHealth != 0) owner_.combatLogFeed().unitDied(block.guid);
+            // The target dying ends a repeating shot, the server told
+            // (0x00729220 -> 0x0071ee70 -> 0x00807560(1)).
+            if (val == 0 && oldHealth != 0 && block.guid == owner_.getTargetGuid())
+                owner_.stopAutoRepeat(true);
             // A party member dying is said: ERR_PLAYER_DIED_S with the name,
             // a system line (0x00729220 -> 0x006dc0f0) - another player in
             // one of the party's slots (0x0052c680: the player's own

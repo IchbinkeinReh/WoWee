@@ -1793,6 +1793,9 @@ void CombatHandler::clearTarget() {
 
 void CombatHandler::forgetUnit(uint64_t guid) {
     if (guid == 0) return;
+    // 0x00524350 first: the target forgotten ends a repeating shot, the
+    // server told (0x00807560(1)).
+    if (guid == owner_.getTargetGuid()) owner_.stopAutoRepeat(true);
     if (guid == owner_.getTargetGuid()) {
         // 0x005241b0: let go, the server told (CMSG_SET_SELECTION) and
         // PLAYER_TARGET_CHANGED.
