@@ -4317,6 +4317,9 @@ void EntityController::handleNameQueryResponse(network::Packet& packet) {
     // whether or not it found a name — otherwise a row whose guid names nobody would
     // hold the list un-announced for as long as it is browsed.
     owner_.onLfgNameAnswered(data.guid);
+    // GetMasterLootCandidate's and GetBattlefieldPosition's waits
+    // (0x00588150 raises only for a found name, 0x005496c0 for any answer).
+    owner_.onNameAnsweredForWaits(data.guid, data.isValid());
     // A channel invite whose inviter is a stranger. 0x0050e120 case 0x18 asks for
     // the name and lets 0x004fb5c0 raise the popup with it. As there, only an
     // answer that found the name ends the wait (0x004fb5c0 clears it on success).

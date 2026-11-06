@@ -4030,7 +4030,9 @@ static int lua_GetBattlefieldPosition(lua_State* L) {
             svc->mapUVForWorldPos(p->wowX, p->wowY, 0.0f, u, v)) {
             lua_pushnumber(L, u);
             lua_pushnumber(L, v);
-            lua_pushstring(L, gh->lookupName(p->guid).c_str());
+            // A name not yet known is asked for, and its answer raises
+            // WORLD_MAP_NAME_UPDATE (0x0054c2e0 -> 0x005496c0).
+            lua_pushstring(L, gh->nameOrAsk(p->guid, "WORLD_MAP_NAME_UPDATE", false).c_str());
             return 3;
         }
     }

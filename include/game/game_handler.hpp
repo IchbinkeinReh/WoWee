@@ -2828,6 +2828,13 @@ public:
     /// A name answer landed for that guid, and a raid browser row may have been
     /// waiting on it — see SocialHandler::onLfgNameAnswered for what it does.
     void onLfgNameAnswered(uint64_t guid);
+    /// The name cache's ask with a callback (0x0067d770 handed a function):
+    /// the name when it is known; otherwise the query goes out and `event` is
+    /// raised when the answer comes - only for an answer that found the name
+    /// when `onlyFound`. One wait per guid and event.
+    const std::string& nameOrAsk(uint64_t guid, const char* event, bool onlyFound);
+    /// The answer for those waits (from the name query response).
+    void onNameAnsweredForWaits(uint64_t guid, bool found);
     uint32_t getLfgProposalId() const;
     /// The proposal's dungeon and the bosses of it already done, both read off
     /// the proposal packet itself - see SocialHandler's two fields for why they
@@ -6441,6 +6448,9 @@ private:
     std::unordered_map<uint32_t, int32_t> questWatchExpiry_;
     float questWatchSweepTimer_ = 0.0f;
     std::unordered_set<uint32_t> blobQuestIds_;
+    /// Events waiting on a player name, by guid: the event and whether only a
+    /// found name raises it.
+    std::unordered_map<uint64_t, std::vector<std::pair<std::string, bool>>> nameWaits_;
     bool pendingLoginQuestResync_ = false;
     float pendingLoginQuestResyncTimeout_ = 0.0f;
 

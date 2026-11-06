@@ -5304,6 +5304,27 @@ void GameHandler::sortLfgBrowser(std::string_view word) {
     if (socialHandler_) socialHandler_->sortLfgBrowser(word);
 }
 
+const std::string& GameHandler::nameOrAsk(uint64_t guid, const char* event, bool onlyFound) {
+    const std::string& name = lookupName(guid);
+    if (!name.empty() || guid == 0) return name;
+    auto& waits = nameWaits_[guid];
+    const bool waiting = std::any_of(waits.begin(), waits.end(),
+                                     [event](const auto& w) { return w.first == event; });
+    if (!waiting) waits.emplace_back(event, onlyFound);
+    queryPlayerName(guid);
+    return name;
+}
+
+void GameHandler::onNameAnsweredForWaits(uint64_t guid, bool found) {
+    const auto it = nameWaits_.find(guid);
+    if (it == nameWaits_.end()) return;
+    const auto waits = std::move(it->second);
+    nameWaits_.erase(it);
+    for (const auto& [event, onlyFound] : waits) {
+        if (found || !onlyFound) fireAddonEvent(event, {});
+    }
+}
+
 void GameHandler::onLfgNameAnswered(uint64_t guid) {
     if (socialHandler_) socialHandler_->onLfgNameAnswered(guid);
 }

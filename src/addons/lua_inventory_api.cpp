@@ -5033,10 +5033,10 @@ static int lua_GetMasterLootCandidate(lua_State* L) {
     if (index > static_cast<int>(candidates.size())) return luaReturnNil(L);
 
     const uint64_t guid = candidates[static_cast<size_t>(index) - 1];
-    std::string name = gh->lookupName(guid);
-    // A name this client has not learned yet would come back empty, and an
-    // empty string is true in Lua - the menu would show a blank row that gives
-    // the item to someone unnamed. Nil skips the row instead.
+    // A name this client has not learned yet answers nil, and is asked for:
+    // the answer raises UPDATE_MASTER_LOOT_LIST when it found the name
+    // (0x00588920 -> 0x00588150), which redraws the menu with it.
+    const std::string name = gh->nameOrAsk(guid, "UPDATE_MASTER_LOOT_LIST", true);
     if (name.empty()) return luaReturnNil(L);
     lua_pushstring(L, name.c_str());
     return 1;
