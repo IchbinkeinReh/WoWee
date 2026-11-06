@@ -1665,16 +1665,7 @@ void registerSpellLuaAPI(lua_State* L) {
             // cancel is pending), cancel each positive aura (0x10) whose
             // shapeshift effect (aura 36) names that form.
             auto* gh = getGameHandler(L);
-            if (!gh || game::isPreWotlk() || gh->getShapeshiftFormId() == 0) return 0;
-            std::vector<uint32_t> spells;
-            for (const auto& aura : gh->getPlayerAuras()) {
-                if ((aura.flags & 0x10) != 0) spells.push_back(aura.spellId);
-            }
-            // The form is read again for each: the first cancel leaves it.
-            for (uint32_t spellId : spells) {
-                const uint8_t form = gh->getShapeshiftFormId();
-                if (form != 0 && gh->spellShapeshiftsInto(spellId, form)) gh->cancelAura(spellId);
-            }
+            if (gh && !game::isPreWotlk()) gh->leaveShapeshiftForm();
             return 0;
         }},
                 // GetShapeshiftFormCooldown is defined in the bootstrap, over

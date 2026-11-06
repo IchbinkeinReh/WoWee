@@ -5622,5 +5622,29 @@ void GameHandler::onCalendarNameKnown(uint64_t guid) {
     for (const auto& signal : said) fireAddonEvent(signal.event, signal.args);
 }
 
+bool GameHandler::wouldAutoUnshift() const {
+    auto me = getEntityManager().getEntity(getPlayerGuid());
+    const auto* unit = dynamic_cast<const Unit*>(me.get());
+    if (!unit || (unit->getUnitFlags() & 0x100000u) != 0) return false;
+    if (addons::storedCVarValue("autoUnshift", "1") == "0") return false;
+    if ((movementInfo.flags & 0x2000000u) != 0 && addons::storedCVarValue("autoDismountFlying", "0") == "0")
+        return false;
+    const auto* row = shapeshiftFormRow(getShapeshiftFormId());
+    return !row || (row->flags & 0x100u) == 0;
+}
+
+void GameHandler::leaveShapeshiftForm() {
+    if (getShapeshiftFormId() == 0) return;
+    std::vector<uint32_t> spells;
+    for (const auto& aura : getPlayerAuras()) {
+        if ((aura.flags & 0x10) != 0) spells.push_back(aura.spellId);
+    }
+    // The form is read again for each: the first cancel leaves it.
+    for (uint32_t spellId : spells) {
+        const uint8_t form = getShapeshiftFormId();
+        if (form != 0 && spellShapeshiftsInto(spellId, form)) cancelAura(spellId);
+    }
+}
+
 } // namespace game
 } // namespace wowee

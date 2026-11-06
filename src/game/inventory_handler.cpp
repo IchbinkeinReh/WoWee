@@ -2403,6 +2403,9 @@ void InventoryHandler::dispatchUseItem(uint8_t wowBag, uint8_t wowSlot, uint64_t
     }
     LOG_DEBUG("useItem: bag=", (int)wowBag, " slot=", (int)wowSlot, " entry=", item.itemId,
               " spellId=", useSpellId);
+    if (useSpellId != 0 && itemInfo && itemInfo->valid &&
+        !itemUseAllowed(wowBag, wowSlot, itemGuid, *itemInfo))
+        return;
 
     // Pre-WotLK mounts are items, so the same rule applies to them: using the
     // one you are riding dismounts you rather than re-summoning it.
@@ -4529,6 +4532,57 @@ uint64_t InventoryHandler::itemGuidAtWire(uint8_t bag, uint8_t slot) const {
     if (bag >= 19 && bag <= 22) return owner_.getBagItemGuid(bag - 19, slot);
     if (bag == 0xFF && slot < 23) return owner_.getEquipSlotGuid(slot);
     return 0;
+}
+
+bool InventoryHandler::itemUseAllowed(uint8_t wowBag, uint8_t wowSlot, uint64_t itemGuid,
+                                      const ItemQueryResponseData& info) {
+    auto refuse = [this](const char* key, const char* enUS) {
+        owner_.playGameErrorSound(key);
+        owner_.addUIError(interfaceString(key, enUS));
+        return false;
+    };
+    auto me = owner_.getEntityManager().getEntity(owner_.getPlayerGuid());
+    const auto* player = dynamic_cast<const Unit*>(me.get());
+    // Something worn (Item.dbc InventoryType, 0x00707280): used where it is
+    // worn - the equipment and bag slots below 23 - and not broken; a weapon
+    // in either hand not while disarmed of that hand (0x00718fc0).
+    if (info.inventoryType != 0) {
+        if (wowBag != 0xFF || wowSlot > 22)
+            return refuse("ERR_MUST_EQUIP_ITEM", "You must equip that item to use it.");
+        const auto& online = owner_.onlineItemsRef();
+        if (const auto it = online.find(itemGuid);
+            it != online.end() && it->second.maxDurability != 0 && it->second.curDurability == 0)
+            return refuse("ERR_MUST_REPAIR_DURABILITY", "You must repair that item's durability to use it.");
+        const uint32_t unitFlags = player ? player->getUnitFlags() : 0u;
+        const uint16_t flags2Field = fieldIndex(UF::UNIT_FIELD_FLAGS_2);
+        const uint32_t flags2 = player && flags2Field != 0xFFFF ? player->getField(flags2Field) : 0u;
+        auto weaponIn = [&](EquipSlot slot) {
+            const auto& s = owner_.inventoryRef().getEquipSlot(slot);
+            if (s.empty()) return false;
+            const auto* w = owner_.getItemInfo(s.item.itemId);
+            return w && w->itemClass == 2;
+        };
+        const bool disarmed = (unitFlags & 0x200000u) != 0;
+        const bool mainDisarmed = disarmed && weaponIn(EquipSlot::MAIN_HAND);
+        const bool offDisarmed = (disarmed && !mainDisarmed && weaponIn(EquipSlot::OFF_HAND)) ||
+                                 (flags2 & 0x80u) != 0;
+        if ((wowSlot == 15 && mainDisarmed) || (wowSlot == 16 && offDisarmed))
+            return refuse("ERR_CANT_USE_DISARMED", "You can't use that item while disarmed.");
+    }
+    // A form that takes no items (0x00721ca0: a form whose row lacks flag 1,
+    // no cancel pending): unless its row is flagged 0x80, or 0x40 for
+    // something worn, or the item is usable shapeshifted (ItemFlags
+    // 0x800000), the player leaves the form where autoUnshift lets it and is
+    // told ERR_NO_ITEMS_WHILE_SHAPESHIFTED where it does not.
+    const uint8_t form = owner_.getShapeshiftFormId();
+    const auto* row = form != 0 ? owner_.shapeshiftFormRow(form) : nullptr;
+    if (row && (row->flags & 0x1u) == 0 && (row->flags & 0x80u) == 0 &&
+        ((row->flags & 0x40u) == 0 || info.inventoryType == 0) && (info.itemFlags & 0x800000u) == 0) {
+        if (!owner_.wouldAutoUnshift())
+            return refuse("ERR_NO_ITEMS_WHILE_SHAPESHIFTED", "You can't use items while shapeshifted.");
+        owner_.leaveShapeshiftForm();
+    }
+    return true;
 }
 
 bool InventoryHandler::guildBankRefusesDeposit(uint8_t srcBag, uint8_t srcSlot) {

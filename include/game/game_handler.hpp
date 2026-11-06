@@ -3240,6 +3240,13 @@ public:
     uint32_t getBonusActionBarOffset() const;
     /// The form's SpellShapeshiftForm.dbc row, nothing for none or unknown.
     const ShapeshiftFormRow* shapeshiftFormRow(uint8_t form) const;
+    /// 0x0071b130: whether the player would leave its form for an action -
+    /// autoUnshift on, not UNIT_FLAG 0x100000, not flying unless
+    /// autoDismountFlying, and a form not flagged 0x100.
+    bool wouldAutoUnshift() const;
+    /// 0x00726ce0: cancel each positive aura (0x10) whose shapeshift effect
+    /// (aura 36) names the form in effect.
+    void leaveShapeshiftForm();
     /// The player's UNIT_FIELD_BYTES_2 byte 3 changed (0x006da130): the
     /// form, its preset spells, and the events to fire, in order.
     std::vector<const char*> setPlayerShapeshiftForm(uint8_t form);
