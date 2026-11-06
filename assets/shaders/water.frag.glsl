@@ -661,98 +661,6 @@ void main() {
     float crest = smoothstep(0.5, 1.0, WaveOffset) * 0.04;
     color += vec3(crest);
 
-    // Carried out of the shoreline block so the alpha below can make the foam
-    // opaque. Tinting alone left it invisible: at the water's edge alpha sits
-    // near its floor, so foam was being blended over the sand at 15%.
-    float shorelineFoam = 0.0;
-
-    // ============================================================
-    // Shoreline foam - scattered particles, not smooth bands
-    // Only on terrain water (waveAmp > 0); WMO water (canals, indoor)
-    // has waveAmp == 0 and should not show shoreline interaction.
-    // ============================================================
-    // The mask below is zero past 0.9 of depth, so nothing here draws beyond
-    // it; without that bound the block ran on every water pixel with a bed
-    // under it, which is the whole lake, and multiplied its five cellular
-    // fields by nothing.
-    if (basicType < 1.5 && shoreDepth > 0.001 && shoreDepth < 0.9 && push.waveAmp > 0.0) {
-        // How far out from the waterline foam reaches, in yards of depth.
-        // Halved from 1.8 once the depth being measured was the real one:
-        // against a depth ten times too shallow this had been tuned by eye
-        // to something that looked right, and with the scale corrected the
-        // same number drew a band twice the width it should be.
-        float foamDepthMask = 1.0 - smoothstep(0.0, 0.9, shoreDepth);
-
-        // Foam rides on the water rather than sitting in world space. The surf
-        // carries it up the beach and drags it back, so the whole pattern is
-        // advected by the swash: it drifts shoreward as the front runs up and
-        // reverses as it withdraws. Without this the particles held still while
-        // the water visibly moved through them.
-        vec2 drift = vec2(noiseValue(FragPos.xy * 0.09) - 0.5,
-                          noiseValue(FragPos.xy * 0.09 + vec2(19.0)) - 0.5);
-        drift = normalize(drift + vec2(0.001));
-        vec2 swashAdvect = drift * swashPhase * 1.35;
-
-        // Two warp octaves at different scales, because a single one leaves the
-        // lattice legible underneath it.
-        vec2 warpOffset = vec2(
-            noiseValue(FragPos.xy * 2.5 + time * 0.08) - 0.5,
-            noiseValue(FragPos.xy * 2.5 + vec2(37.0) + time * 0.06) - 0.5
-        ) * 1.6;
-        warpOffset += vec2(
-            noiseValue(FragPos.xy * 6.1 - time * 0.11) - 0.5,
-            noiseValue(FragPos.xy * 6.1 + vec2(11.0) + time * 0.09) - 0.5
-        ) * 0.55;
-        vec2 foamUV = FragPos.xy + warpOffset + swashAdvect;
-
-        // Worley cells thresholded near their centres put a dot in every cell,
-        // so the cell lattice itself becomes the pattern - which is the grid.
-        // Rotate each octave and use scales that are not simple multiples, so no
-        // two lattices line up, and vary the threshold with noise so only some
-        // cells produce a speck.
-        const mat2 rot1 = mat2( 0.87, -0.50,  0.50,  0.87);   // ~30 degrees
-        const mat2 rot2 = mat2( 0.26, -0.97,  0.97,  0.26);   // ~75 degrees
-        float thresholdJitter = noiseValue(FragPos.xy * 5.0 + time * 0.2);
-
-        float cells1 = cellularFoam(rot1 * foamUV * 13.0 + time * vec2(0.15, 0.08));
-        float foam1 = (1.0 - smoothstep(0.0, 0.075 + 0.075 * thresholdJitter, cells1)) * 0.45;
-
-        float cells2 = cellularFoam(rot2 * foamUV * 27.7 + time * vec2(-0.12, 0.22));
-        float foam2 = (1.0 - smoothstep(0.0, 0.045 + 0.05 * (1.0 - thresholdJitter), cells2)) * 0.30;
-
-        float cells3 = cellularFoam(foamUV * 51.3 + time * vec2(0.25, -0.1));
-        float foam3 = (1.0 - smoothstep(0.0, 0.05, cells3)) * 0.18;
-
-        // Noise breakup for clumping
-        float noiseMask = noiseValue(FragPos.xy * 3.0 + time * 0.15);
-        float foam = (foam1 + foam2 + foam3) * foamDepthMask * smoothstep(0.3, 0.6, noiseMask);
-
-        // The surf line itself, on the contour computed above with the wet sand,
-        // so the foam sits exactly where the water currently reaches.
-        float swashBand = 1.0 - smoothstep(0.0, 0.085, abs(shoreDepth - swashDepth));
-        float swashTexture = 0.55 + 0.45 * cellularFoam(rot1 * foamUV * 8.6 + time * vec2(0.05, 0.12));
-        foam += swashBand * swashTexture * 0.55 * foamDepthMask;
-
-        // Spray thrown off the front as it runs up: much finer than the foam,
-        // sparse, and only while the surf is advancing. It is what sells the
-        // edge as breaking water rather than a wet line.
-        float sprayMask = 1.0 - smoothstep(0.0, 0.11, abs(shoreDepth - swashDepth + 0.04));
-        float sprayCells = cellularFoam(rot2 * (foamUV + swashAdvect * 0.5) * 96.0
-                                        + time * vec2(0.6, -0.45));
-        float spray = (1.0 - smoothstep(0.0, 0.035, sprayCells))
-                    * sprayMask * max(swashPhase, 0.0) * 0.7;
-        foam += spray * foamDepthMask;
-
-        // Only enough of a ramp to keep the water mesh's own boundary from
-        // showing as a hard line. The old 0.1 cut removed the foam exactly where
-        // the water meets the sand, which is where it belongs.
-        foam *= smoothstep(0.0, 0.025, shoreDepth);
-        foam = clamp(foam, 0.0, 0.85);
-        // Bluer foam tint instead of near-white
-        color = mix(color, vec3(0.78, 0.85, 0.92), foam * 0.48);
-        shorelineFoam = foam;
-    }
-
     // ============================================================
     // Wake froth - water churned up by something moving through it
     // Not gated on shoreDepth: wading happens wherever the water is shallow
@@ -837,13 +745,8 @@ void main() {
     float alpha = mix(baseAlpha, min(1.0, baseAlpha * 1.3), fresnel) * alphaScale;
     alpha = clamp(alpha, 0.15, 0.92);
     // Wet sand is a band on the beach, not a film of water, so it needs enough
-    // presence to darken what is under it; foam has to be close to opaque or it
-    // does not read at all.
+    // presence to darken what is under it.
     alpha = max(alpha, wetBand * 0.42 * smoothstep(0.0, 0.05, shoreDepth));
-    // Foam opacity, kept in step with the colour mix above. Both come down
-    // together - a fifth, then a fifth again - because lowering one alone
-    // leaves the foam as opaque as it was and merely paler.
-    alpha = max(alpha, shorelineFoam * 0.58);
     alpha = max(alpha, wakeFoam * 0.55);
     // Dissolve the sheet before the water geometry runs out, so the ocean fades
     // into the horizon haze instead of ending on a hard line. This has to come
