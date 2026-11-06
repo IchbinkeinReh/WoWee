@@ -5898,8 +5898,24 @@ static int lua_IsPartyLFG(lua_State* L) {
 // The two cooldowns that gate re-queuing. Neither is tracked, and both are read
 // as `if ( expiration )` - so nil, because a zero would read as a live cooldown
 // and park the queue frame behind a countdown that never ends.
-static int lua_GetLFGDeserterExpiration(lua_State* L) { lua_pushnil(L); return 1; }
-static int lua_GetLFGRandomCooldownExpiration(lua_State* L) { lua_pushnil(L); return 1; }
+// GetLFGDeserterExpiration() / GetLFGRandomCooldownExpiration() (0x005580e0,
+// 0x00558060): the end of the player's Dungeon Deserter (71041) or Dungeon
+// Cooldown (71328) aura, in GetTime's seconds; nothing without the aura.
+static int pushPlayerAuraExpiration(lua_State* L, uint32_t spellId) {
+    auto* gh = getGameHandler(L);
+    if (!gh) return 0;
+    for (const auto& aura : gh->getPlayerAuras()) {
+        if (aura.spellId != spellId) continue;
+        if (aura.durationMs <= 0) { lua_pushnumber(L, 0); return 1; }
+        const auto nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+        lua_pushnumber(L, luaGetTimeNow() + aura.getRemainingMs(nowMs) / 1000.0);
+        return 1;
+    }
+    return 0;
+}
+static int lua_GetLFGDeserterExpiration(lua_State* L) { return pushPlayerAuraExpiration(L, 71041); }
+static int lua_GetLFGRandomCooldownExpiration(lua_State* L) { return pushPlayerAuraExpiration(L, 71328); }
 
 // RefreshLFGList() - the raid browser's refresh button.
 static int lua_RefreshLFGList(lua_State* L) { (void)L; return 0; }
