@@ -6582,10 +6582,29 @@ static int lua_CombatTextSetActiveUnit(lua_State* L) { (void)L; return 0; }
 // and every use here is a multiply, so a nil would take the arithmetic down.
 static int lua_GetBattlefieldMapIconScale(lua_State* L) { lua_pushnumber(L, 1.0); return 1; }
 
-// PlayerIsPVPInactive(unit) → whether a battleground member has gone idle and
-// is about to be removed. The server reports this per-player in a battleground
-// and nothing here parses it, so nobody reads as idle.
-static int lua_PlayerIsPVPInactive(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+// PlayerIsPVPInactive(unit) (0x00612e20) → whether the unit carries the
+// battleground's Inactive aura (43681): read off the player's own auras, the
+// target's, or the aura list kept for a party or raid member.
+static int lua_PlayerIsPVPInactive(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: PlayerIsPVPInactive(\"unit\")");
+    constexpr uint32_t kInactive = 43681;
+    auto* gh = getGameHandler(L);
+    bool inactive = false;
+    if (gh) {
+        std::string uid(lua_tostring(L, 1));
+        toLowerInPlace(uid);
+        const uint64_t guid = resolveUnitGuid(gh, uid);
+        const std::vector<game::AuraSlot>* auras = nullptr;
+        if (guid != 0 && guid == gh->getPlayerGuid()) auras = &gh->getPlayerAuras();
+        else if (guid != 0 && guid == gh->getTargetGuid()) auras = &gh->getTargetAuras();
+        else if (guid != 0) auras = gh->getUnitAuras(guid);
+        if (auras)
+            for (const auto& a : *auras)
+                if (!a.isEmpty() && a.spellId == kInactive) { inactive = true; break; }
+    }
+    lua_pushboolean(L, inactive ? 1 : 0);
+    return 1;
+}
 
 // ---- The battlemaster's battleground list ----
 //
