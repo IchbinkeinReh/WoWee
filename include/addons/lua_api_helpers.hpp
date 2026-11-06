@@ -925,6 +925,9 @@ inline game::Unit* resolveUnit(lua_State* L, const char* unitId) {
 /// 0x007159e0): `gender` 0 male, 1 female (each falling back to the other),
 /// 2 the plain Name. The English name where the file is not to hand.
 std::string localizedRaceName(game::GameHandler* gh, uint32_t raceId, int gender);
+/// The mouse button of the click the interface was last handed (the
+/// UI's +0x1234, which GetMouseButtonClicked reads - 0x0050f950).
+std::string& lastClickButton();
 std::string localizedClassName(game::GameHandler* gh, uint32_t classId, int gender);
 
 inline uint8_t unitRaceOf(game::GameHandler* gh, const std::string& lowerUid) {

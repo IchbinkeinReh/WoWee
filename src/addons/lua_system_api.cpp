@@ -8754,7 +8754,12 @@ void registerSystemLuaAPI(lua_State* L) {
             if (faction.empty()) lua_pushnil(L); else lua_pushstring(L, faction.c_str());
             return 3;
         }},
-                {"GetMouseButtonClicked",    lua_ReturnNil},
+                // GetMouseButtonClicked() (0x0050f950): the button of the
+                // click the interface was last handed.
+                {"GetMouseButtonClicked", [](lua_State* L) -> int {
+            lua_pushstring(L, lastClickButton().c_str());
+            return 1;
+        }},
                 {"GetChatWindowSavedPosition",   lua_GetChatWindowSavedPosition},
                 {"GetChatWindowSavedDimensions", lua_GetChatWindowSavedDimensions},
                 {"SetChatWindowSavedPosition",   lua_SetChatWindowSavedPosition},
