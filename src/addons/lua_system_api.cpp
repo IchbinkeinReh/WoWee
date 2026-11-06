@@ -18,6 +18,7 @@
 #include "game/chat_handler.hpp"
 #include "game/inventory_handler.hpp"
 #include "game/group_defines.hpp"
+#include "game/interface_text.hpp"
 #include "game/battleground_flag.hpp"
 #include "game/minimap_tracking.hpp"
 #include "game/known_titles.hpp"
@@ -6540,6 +6541,34 @@ static int lua_SetSelectedBattlefield(lua_State* L) {
 // reward dwords, an optional second reward block, then the running instances -
 // no type field in it. So an arena queue is a missing table plus a missing
 // packet, and the third argument has nowhere honest to go.
+// JoinBattlefield's refusals before it asks (0x0054cc70): queued as a group,
+// a party with more others in it than the battleground's MaxGroupSize, or a
+// raid with more members, is ERR_GROUP_JOIN_BATTLEGROUND_TOO_MANY; and a
+// battleground - not an arena - is not queued for from inside one
+// (ERR_BATTLEGROUND_NOT_IN_BATTLEGROUND).
+static bool battlefieldJoinAllowed(game::GameHandler* gh, uint32_t bgTypeId, bool asGroup) {
+    const auto* row = gh->getBattlemasterInfo(bgTypeId);
+    const bool arena = row && row->instanceType == 4;
+    if (asGroup && row) {
+        const auto& party = gh->getPartyData();
+        const size_t others = game::groupIsRaid(party.groupType) ? 0 : party.members.size();
+        const size_t raid = game::groupIsRaid(party.groupType) ? party.members.size() + 1 : 0;
+        if (row->maxGroupSize < others || row->maxGroupSize < raid) {
+            gh->playGameErrorSound("ERR_GROUP_JOIN_BATTLEGROUND_TOO_MANY");
+            gh->addUIError(game::interfaceString("ERR_GROUP_JOIN_BATTLEGROUND_TOO_MANY",
+                                                 "Your group has too many players to join this battleground."));
+            return false;
+        }
+    }
+    if (!arena && gh->currentMapInstanceType() == 3) {
+        gh->playGameErrorSound("ERR_BATTLEGROUND_NOT_IN_BATTLEGROUND");
+        gh->addUIError(game::interfaceString("ERR_BATTLEGROUND_NOT_IN_BATTLEGROUND",
+                                             "You can't do that in a battleground."));
+        return false;
+    }
+    return true;
+}
+
 static int lua_JoinBattlefield(lua_State* L) {
     auto* gh = getGameHandler(L);
     if (!gh) return 0;
@@ -6576,7 +6605,8 @@ static int lua_JoinBattlefield(lua_State* L) {
         gh->isGossipWindowOpen() ? gh->getCurrentGossip().npcGuid : 0;
     LOG_WARNING("CMSG_BATTLEMASTER_JOIN: bgTypeId=", bgTypeId, " instance=", instanceId,
              " asGroup=", asGroup, " battlemaster=0x", std::hex, battlemaster, std::dec);
-    gh->joinBattlefield(battlemaster, bgTypeId, instanceId, asGroup);
+    if (battlefieldJoinAllowed(gh, bgTypeId, asGroup))
+        gh->joinBattlefield(battlemaster, bgTypeId, instanceId, asGroup);
     return 0;
 }
 
