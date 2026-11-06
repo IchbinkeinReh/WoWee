@@ -578,6 +578,7 @@ private:
     void rememberDestLocationCount(uint64_t caster, uint8_t counter);
     void handleSpellCooldown(network::Packet& packet);
     void handleCooldownEvent(network::Packet& packet);
+    void handleResetRangedCombatTimer(network::Packet& packet);
     void handleAuraUpdate(network::Packet& packet, bool isAll);
     void handleLearnedSpell(network::Packet& packet);
 

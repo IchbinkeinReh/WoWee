@@ -4047,7 +4047,6 @@ void GameHandler::registerRemainingOpcodes() {
         Opcode::SMSG_QUERY_OBJECT_POSITION,
         Opcode::SMSG_QUERY_OBJECT_ROTATION,
         Opcode::SMSG_REDIRECT_CLIENT,
-        Opcode::SMSG_RESET_RANGED_COMBAT_TIMER,
         Opcode::SMSG_SET_EXTRA_AURA_INFO_NEED_UPDATE,
         Opcode::SMSG_SET_PLAYER_DECLINED_NAMES_RESULT,
         Opcode::SMSG_SPELL_CHANCE_RESIST_PUSHBACK,

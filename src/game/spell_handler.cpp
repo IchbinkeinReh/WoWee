@@ -798,6 +798,9 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
     };
     table[Opcode::SMSG_SPELL_COOLDOWN] = [this](network::Packet& packet) { handleSpellCooldown(packet); };
     table[Opcode::SMSG_COOLDOWN_EVENT] = [this](network::Packet& packet) { handleCooldownEvent(packet); };
+    table[Opcode::SMSG_RESET_RANGED_COMBAT_TIMER] = [this](network::Packet& packet) {
+        handleResetRangedCombatTimer(packet);
+    };
     table[Opcode::SMSG_AURA_UPDATE] = [this](network::Packet& packet) {
         handleAuraUpdate(packet, false);
     };
@@ -4481,6 +4484,31 @@ void SpellHandler::handleSpellCooldown(network::Packet& packet) {
     // set off every cooldown frame the character has.
     if (cooldownGuid != 0 && (forPlayer || cooldownGuid == owner_.getPetGuid()))
         cooldownHistoryChanged(!forPlayer);
+}
+
+void SpellHandler::handleResetRangedCombatTimer(network::Packet& packet) {
+    // 0x008071c0: a duration in milliseconds, and every known spell that is
+    // a ranged attack (Attributes 0x2) - not AttributesEx2 0x20000 nor
+    // AttributesEx4 0x10000000 - goes into the player's history as begun now
+    // for that long, with no category; then the cooldown displays look again.
+    if (!packet.hasRemaining(4)) return;
+    const int32_t duration = static_cast<int32_t>(packet.readUInt32());
+    packet.skipAll();
+    loadSpellNameCache();
+    const int64_t now = historyNowMs();
+    for (uint32_t spellId : knownSpells_) {
+        const auto it = owner_.spellNameCacheRef().find(spellId);
+        if (it == owner_.spellNameCacheRef().end()) continue;
+        const auto& e = it->second;
+        if ((e.attr & 0x2u) == 0 || (e.attrEx2 & 0x20000u) != 0 || (e.attrEx4 & 0x10000000u) != 0) continue;
+        if (duration == 0) continue;
+        spell_history::Entry h;
+        h.spellId = spellId;
+        h.start = now;
+        h.duration = duration;
+        playerHistory_.add(h);
+    }
+    cooldownHistoryChanged(false);
 }
 
 void SpellHandler::handleCooldownEvent(network::Packet& packet) {
