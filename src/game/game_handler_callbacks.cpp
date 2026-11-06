@@ -4155,6 +4155,47 @@ void GameHandler::interactWithGameObject(uint64_t guid) {
     performGameObjectInteractionNow(guid);
 }
 
+bool GameHandler::meetingStoneAllowsUse(const GameObjectQueryResponseData* goInfo) {
+    // 0x00712270, a summoning stone, in its order: a group to summon for; a
+    // target; the player's own level in the stone's range (0x007121e0, its
+    // first two data fields); the target in the party or raid; and the
+    // target's level in the range too - read off the unit, or off its group
+    // row when it is online and out of sight, and ERR_MEETING_STONE_NOT_FOUND
+    // when neither says.
+    auto refuse = [this](const char* key, const char* enUS) {
+        playGameErrorSound(key);
+        addUIError(interfaceString(key, enUS));
+        return false;
+    };
+    if (!isInGroup())
+        return refuse("ERR_MEETING_STONE_NEED_PARTY", "You must be in a party to use this meeting stone.");
+    const uint64_t target = getTargetGuid();
+    if (target == 0) return refuse("ERR_GENERIC_NO_TARGET", "You have no target.");
+    const uint32_t minLevel = goInfo && goInfo->hasData ? goInfo->data[0] : 0;
+    const uint32_t maxLevel = goInfo && goInfo->hasData ? goInfo->data[1] : 0;
+    auto inRange = [&](uint32_t level) { return level >= minLevel && level <= maxLevel; };
+    if (!inRange(getPlayerLevel()))
+        return refuse("ERR_MEETING_STONE_INVALID_LEVEL", "You are not the correct level to use this meeting stone.");
+    const GroupMember* row = nullptr;
+    for (const auto& m : getPartyData().members) {
+        if (m.guid == target) { row = &m; break; }
+    }
+    if (!row)
+        return refuse("ERR_MEETING_STONE_TARGET_NOT_IN_PARTY", "Your target is not in your party.");
+    uint32_t targetLevel = 0;
+    if (auto* unit = dynamic_cast<Unit*>(getEntityManager().getEntity(target).get())) {
+        targetLevel = unit->getLevel();
+    } else if (row->isOnline && row->level != 0) {
+        targetLevel = row->level;
+    } else {
+        return refuse("ERR_MEETING_STONE_NOT_FOUND", "Your target could not be found.");
+    }
+    if (!inRange(targetLevel))
+        return refuse("ERR_MEETING_STONE_TARGET_INVALID_LEVEL",
+                      "Your target is not the correct level to use this meeting stone.");
+    return true;
+}
+
 void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
     if (guid == 0) return;
     if (!isInWorld()) return;
@@ -4195,6 +4236,7 @@ void GameHandler::performGameObjectInteractionNow(uint64_t guid) {
                          std::dec, " entry=", goEntry, " name='", goName, "'");
                 return;
             }
+            if (goType == 23 && !meetingStoneAllowsUse(goInfo)) return;
             if (goType == 5 && !goName.empty()) {
                 std::string lower = lowerCopy(goName);
                 if (lower.rfind("doodad_", 0) != 0) {

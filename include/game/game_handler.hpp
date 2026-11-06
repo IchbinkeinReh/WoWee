@@ -2618,6 +2618,9 @@ public:
     void convertToRaid();
     void sendSetLootMethod(uint32_t method, uint32_t threshold, uint64_t masterLooterGuid);
     bool isInGroup() const;
+    /// A summoning stone's refusals before it is used (0x00712270); true when
+    /// the use may go ahead.
+    bool meetingStoneAllowsUse(const GameObjectQueryResponseData* goInfo);
     const GroupListData& getPartyData() const;
     /// The player's own group outside a battleground (SocialHandler::RealGroup);
     /// a default one before the social handler exists.
