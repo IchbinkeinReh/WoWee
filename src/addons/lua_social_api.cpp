@@ -440,7 +440,7 @@ static int lua_GetFriendInfo(lua_State* L) {
             lua_pushstring(L, c.name.c_str());      // 1: name
             lua_pushnumber(L, c.level);              // 2: level
 
-            lua_pushstring(L, c.classId < 12 ? kLuaClasses[c.classId] : "Unknown"); // 3: class
+            lua_pushstring(L, c.classId < 12 ? localizedClassName(gh, c.classId, 2).c_str() : "Unknown"); // 3: class
             std::string area;
             if (c.areaId != 0) area = gh->getWhoAreaName(c.areaId);
             lua_pushstring(L, area.c_str());         // 4: area
@@ -806,7 +806,7 @@ static int lua_GetGuildRosterInfo(lua_State* L) {
         ? rankNames[m.rankIndex].c_str() : "");              // 2: rank name
     lua_pushnumber(L, m.rankIndex);                          // 3: rankIndex
     lua_pushnumber(L, m.level);                              // 4: level
-    lua_pushstring(L, m.classId < 12 ? kLuaClasses[m.classId] : "Unknown"); // 5: class
+    lua_pushstring(L, m.classId < 12 ? localizedClassName(gh, m.classId, 2).c_str() : "Unknown"); // 5: class
     std::string zone;
     if (m.zoneId != 0 && m.online) zone = gh->getWhoAreaName(m.zoneId);
     lua_pushstring(L, zone.c_str());                         // 6: zone

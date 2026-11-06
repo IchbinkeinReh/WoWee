@@ -59,6 +59,8 @@ public:
 
     // --- Public API (delegated from GameHandler) ---
     void castSpell(uint32_t spellId, uint64_t targetGuid = 0);
+    /// The player's cast of a spell at an item (CMSG_CAST_SPELL, item target).
+    void castSpellAtItem(uint32_t spellId, uint64_t itemGuid) { sendPlayerCast(spellId, 0, itemGuid); }
     /// A pet's spell cast by the pet itself (0x005d4210 -> 0x0080cce0,
     /// CMSG_PET_CAST_SPELL): at a place it waits for one, as the player's do.
     void castPetSpell(uint64_t caster, uint32_t spellId, uint64_t targetGuid);
@@ -227,11 +229,13 @@ public:
     // like Cooking or First Aid - see tradeskillOpenerSkillLine)
     [[nodiscard]] bool isCraftingWindowOpen() const { return craftingWindowOpen_; }
     [[nodiscard]] uint32_t getCraftingSkillLine() const { return craftingSkillLine_; }
+    /// The profession spell that opened the window (0x00c235a0).
+    [[nodiscard]] uint32_t getCraftingSpellId() const { return craftingSpellId_; }
     /// Opening and closing a profession announce themselves, because the
     /// interface's trade skill panel is driven entirely by these two events -
     /// it hides on TRADE_SKILL_CLOSE and fills itself on TRADE_SKILL_SHOW.
     /// Without them the panel could be complete and still never appear.
-    void openCraftingWindow(uint32_t skillLine);
+    void openCraftingWindow(uint32_t skillLine, uint32_t spellId);
     void closeCraftingWindow();
     // Returns the skill line id if spellId is a tradeskill-window opener
     // (e.g. Cooking → 185) with at least one known recipe, else 0.
@@ -445,6 +449,7 @@ public:
     [[nodiscard]] const std::string& getSpellRank(uint32_t spellId) const;
     [[nodiscard]] const std::string& getSpellDescription(uint32_t spellId) const;
     [[nodiscard]] std::string getEnchantName(uint32_t enchantId) const;
+    [[nodiscard]] bool enchantSoulbinds(uint32_t enchantId) const;
     /// The gem item an enchantment came out of (SpellItemEnchantment.Src_ItemID).
     /// Zero when the enchantment is not a gem, or on a file with no such column.
     /// This is the only route from an enchantment sitting in an item's socket
@@ -498,6 +503,7 @@ public:
     void requestStabledPetList();
     void stablePet();
     void unstablePet(uint32_t petNumber);
+    void swapStablePet(uint32_t petNumber);
 
     // DBC cache loading (called from GameHandler during login)
     void loadSpellNameCache() const;
@@ -577,6 +583,7 @@ private:
     void rememberDestLocationCount(uint64_t caster, uint8_t counter);
     void handleSpellCooldown(network::Packet& packet);
     void handleCooldownEvent(network::Packet& packet);
+    void handleResetRangedCombatTimer(network::Packet& packet);
     void handleAuraUpdate(network::Packet& packet, bool isAll);
     void handleLearnedSpell(network::Packet& packet);
 
@@ -825,6 +832,7 @@ private:
     // Crafting window
     bool craftingWindowOpen_ = false;
     uint32_t craftingSkillLine_ = 0;
+    uint32_t craftingSpellId_ = 0;
 
     // SpellFocusObject.dbc names, loaded lazily
     std::unordered_map<uint32_t, std::string> spellFocusNames_;

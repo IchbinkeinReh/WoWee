@@ -1119,14 +1119,11 @@ static int lua_MoneyCursorNoop(lua_State* L) { (void)L; return 0; }
 /// helper describes - the frame it is dropped on reads the amount, puts it
 /// where it belongs and clears the cursor. A no-op meant dragging gold onto a
 /// trade did nothing, and there is no other way to offer money in this panel.
+///
+/// AddTradeMoney (0x00586d90) asks no taint check: the one at 0x00586930 is
+/// the trade update's, where it guards taking both acceptances back.
 static int lua_AddTradeMoney(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    const uint64_t held = cursorMoney();
-    if (!gh || held == 0) return 0;
-    // 0x00586dc0 -> 0x00586930, which asks the taint check (kind 7).
-    if (!taint::allowed(L, 7)) return 0;
-    gh->setTradeGold(gh->getMyTradeGold() + held);
-    setCursorMoney(L, 0);
+    dropCursorMoneyOnTrade(L);
     return 0;
 }
 

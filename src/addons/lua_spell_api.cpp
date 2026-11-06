@@ -95,9 +95,6 @@ static int lua_SpellTargetItem(lua_State* L) {
     return 1;
 }
 
-// Dropping what the cursor holds onto a unit, which opens a trade. The cursor
-// carries no item here, so there is nothing to drop.
-static int lua_DropItemOnUnit(lua_State* L) { lua_pushboolean(L, 0); return 1; }
 
 // SetMultiCastSpell(slot, spellID) (0x005ab8a0): one of the totem bar's
 // action slots, 133..144, under the taint check (kind 0xe). Spell 0 empties
@@ -1598,7 +1595,6 @@ void registerSpellLuaAPI(lua_State* L) {
                 {"SpellTargetUnit",   lua_SpellTargetUnit},
                 {"SpellCanTargetUnit", lua_SpellCanTargetUnit},
                 {"SpellTargetItem",   lua_SpellTargetItem},
-                {"DropItemOnUnit",    lua_DropItemOnUnit},
                 {"SetMultiCastSpell", lua_SetMultiCastSpell},
                 {"GetMultiCastTotemSpells", lua_GetMultiCastTotemSpells},
                 {"CastSpell",         lua_CastSpell},

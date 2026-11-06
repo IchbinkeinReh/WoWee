@@ -801,6 +801,8 @@ public:
     void requestPlayedTime();
     void queryWho(const std::string& playerName = "");
     uint32_t getTotalTimePlayed() const;
+    /// 0x006cf440: played time now, -1 before SMSG_PLAYED_TIME has come.
+    int64_t playedTimeNow() const;
     uint32_t getLevelTimePlayed() const;
 
     using WhoEntry = game::WhoEntry;
@@ -1633,6 +1635,7 @@ public:
     void requestStabledPetList();          // CMSG MSG_LIST_STABLED_PETS
     void stablePet();                      // CMSG_STABLE_PET (the active pet into a free slot)
     void unstablePet(uint32_t petNumber);  // CMSG_UNSTABLE_PET (retrieve to active)
+    void swapStablePet(uint32_t petNumber);  // CMSG_STABLE_SWAP_PET (that pet out, the active one in)
     void buyStableSlot();                  // CMSG_BUY_STABLE_SLOT (next slot from the open stable master)
     void abandonPet();                     // CMSG_PET_ABANDON (give a hunter pet up for good)
     /// Forget a primary profession. The server refuses anything that is not
@@ -1700,6 +1703,7 @@ public:
     // Crafting window (opened client-side by casting a profession spell)
     bool isCraftingWindowOpen() const { return spellHandler_ ? spellHandler_->isCraftingWindowOpen() : false; }
     uint32_t getCraftingSkillLine() const { return spellHandler_ ? spellHandler_->getCraftingSkillLine() : 0; }
+    uint32_t getCraftingSpellId() const { return spellHandler_ ? spellHandler_->getCraftingSpellId() : 0; }
     void closeCraftingWindow() { if (spellHandler_) spellHandler_->closeCraftingWindow(); }
 
     // Unit cast state (aliased from handler_types.hpp)
@@ -2696,6 +2700,11 @@ public:
     bool hasPendingTradeRequest() const;
     bool isTradeOpen() const;
     const std::string& getTradePeerName() const;
+    /// Who the open trade is with, 0 without one.
+    uint64_t getTradePeerGuid() const;
+    /// DropItemOnUnit's pet leg (0x0080dcf0): the known Feed Pet spell (the
+    /// one with effect 101) cast at the item; false without one.
+    bool feedPetWithItem(uint64_t itemGuid);
 
     // My trade slots (what I'm offering)
     const std::array<TradeSlot, TRADE_SLOT_COUNT>& getMyTradeSlots() const;
@@ -2783,6 +2792,7 @@ public:
     uint32_t getLfgJoinedListId() const;
     void lfgSearchJoin(uint32_t typeId, uint32_t lfgId);
     void lfgSearchLeave();
+    void refreshLfgList();
     /// The rows of the raid browser's list, for SearchLFGGetNumResults and
     /// SearchLFGGetResults; the row pointer is null past the end.
     uint32_t getLfgListRowCount() const;
@@ -2888,6 +2898,8 @@ public:
     /// The arena side the last in-progress battlefield status gave
     /// (GetBattlefieldArenaFaction, 0x0054a280), 0 before one has come.
     uint8_t battlefieldArenaFaction() const;
+    /// The map of the battle the last in-progress status named (0x00bea564).
+    uint32_t battlefieldMapId() const;
 
     // ---- Loot ----
     void lootTarget(uint64_t guid);
@@ -3063,8 +3075,10 @@ public:
         if (tracked) {
             changed = trackedQuestIds_.size() < kMaxQuestWatches
                    && trackedQuestIds_.insert(questId).second;
+            if (changed) questWatchOrder_.push_back(questId);
         } else if (trackedQuestIds_.erase(questId)) {
             questWatchExpiry_.erase(questId);
+            std::erase(questWatchOrder_, questId);
             changed = true;
         }
         if (changed) {
@@ -3095,6 +3109,24 @@ public:
     /// dropped quest rather than one for the sweep. Returns how many came off.
     size_t expireQuestWatches();
     const std::unordered_set<uint32_t>& getTrackedQuestIds() const;
+    /// The watch list in its own order (0x00c23680, 0xc bytes an entry): a
+    /// new watch goes on the end (0x005e64d0), ShiftQuestWatches moves one,
+    /// and SortQuestWatches reorders the lot. GetQuestIndexForWatch and the
+    /// tracker read it in this order, not the log's.
+    const std::vector<uint32_t>& getQuestWatchOrder() const { return questWatchOrder_; }
+    /// 0x005def60: the watch at `from` taken out and put back at `to`, the
+    /// ones between moving up or down one; nothing when either is off the
+    /// end or they are the same.
+    void shiftQuestWatch(size_t from, size_t to) {
+        if (from == to || from >= questWatchOrder_.size() || to >= questWatchOrder_.size()) return;
+        const auto first = questWatchOrder_.begin();
+        if (from < to) std::rotate(first + from, first + from + 1, first + to + 1);
+        else std::rotate(first + to, first + from, first + from + 1);
+    }
+    /// SortQuestWatches' result: the same watches in a new order.
+    void reorderQuestWatches(std::vector<uint32_t> order) {
+        if (order.size() == questWatchOrder_.size()) questWatchOrder_ = std::move(order);
+    }
     /// The quests whose objective areas the world map shades.
     ///
     /// Set by WorldMapBlobFrame:DrawQuestBlob, which FrameXML calls with false
@@ -4618,6 +4650,8 @@ public:
     const int32_t* getSpellEffectBasePoints(uint32_t spellId) const;
     float getSpellDuration(uint32_t spellId) const;
     std::string getEnchantName(uint32_t enchantId) const;
+    /// SpellItemEnchantment Flags & 1: an enchant that binds the item.
+    bool enchantSoulbinds(uint32_t enchantId) const;
     /// The gem item an enchantment came out of; 0 when it is not a gem.
     uint32_t getEnchantGemItem(uint32_t enchantId) const;
     /// The template entry of an item this client is holding, by guid. Zero when
@@ -5626,6 +5660,11 @@ public:
         /// ITEM_FIELD_SPELL_CHARGES, the first of the five (STACK_COUNT + 2):
         /// what is left of the template's first spell's charges.
         int32_t  spellCharges0 = 0;
+        /// All twelve ITEM_FIELD_ENCHANTMENT slots' ids (STACK_COUNT + 8, three apart).
+        std::array<uint32_t, 12> enchantIds{};
+        /// ITEM_FIELD_CREATE_PLAYED_TIME (MAXDURABILITY + 1): the owner's played
+        /// time when the item was made.
+        uint32_t createPlayedTime = 0;
         int32_t  randomPropertyId = 0;   // ITEM_FIELD_RANDOM_PROPERTIES_ID (signed)
         uint32_t suffixFactor = 0;       // ITEM_FIELD_PROPERTY_SEED (random-suffix stat scale)
         /// ITEM_FIELD_CREATOR: who made the item, as a guid. Zero when the realm
@@ -6391,6 +6430,7 @@ private:
     // to the QuestHandler - and has been removed.
     std::unordered_set<uint32_t> pendingQuestQueryIds_;
     std::unordered_set<uint32_t> trackedQuestIds_;
+    std::vector<uint32_t> questWatchOrder_;  ///< trackedQuestIds_ in watch order
     /// When each tracked quest stops being tracked, as unix seconds; 0 for
     /// never. This is the third column of the client's watch list (0xc23680
     /// holds quest id, stamp, and a sort key). A watch this client added by

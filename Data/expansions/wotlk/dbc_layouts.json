@@ -138,10 +138,13 @@
   },
   "CreatureFamily": {
     "ID": 0,
+    "IconFile": 27,
     "MaxScale": 3,
     "MaxScaleLevel": 4,
     "MinScale": 1,
     "MinScaleLevel": 2,
+    "Name": 10,
+    "PetFoodMask": 7,
     "PetTalentType": 8
   },
   "CreatureModelData": {
@@ -177,6 +180,11 @@
   "Faction": {
     "ID": 0,
     "Name": 23,
+    "ParentFactionCap0": 21,
+    "ParentFactionCap1": 22,
+    "ParentFactionID": 18,
+    "ParentFactionMod0": 19,
+    "ParentFactionMod1": 20,
     "ReputationBase0": 10,
     "ReputationBase1": 11,
     "ReputationBase2": 12,
@@ -346,6 +354,7 @@
     "ID": 0,
     "InternalName": 1,
     "AreaTableID": 22,
+    "MinimapIconScale": 58,
     "LoadingScreenID": 57
   },
   "ParticleColor": {
@@ -364,6 +373,7 @@
     "ZoneMusicID": 9
   },
   "SkillLine": {
+    "CanLink": 55,
     "Category": 1,
     "Description": 20,
     "ID": 0,
@@ -371,6 +381,8 @@
     "SpellIcon": 37
   },
   "SkillLineAbility": {
+    "ClassMask": 4,
+    "RaceMask": 3,
     "SkillLineID": 1,
     "SpellID": 2
   },

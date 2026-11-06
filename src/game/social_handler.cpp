@@ -2488,6 +2488,7 @@ void SocialHandler::convertToRaid() {
     if (!isInGroup()) return;
     if (partyData.leaderGuid != owner_.getPlayerGuid()) return;
     if (groupIsRaid(partyData.groupType)) return;
+    if (owner_.getPlayerLevel() < 10) return;   // 9 < UNIT_FIELD_LEVEL
     auto packet = GroupRaidConvertPacket::build();
     owner_.getSocket()->send(packet);
     LOG_INFO("Sent CMSG_GROUP_RAID_CONVERT");
@@ -4016,10 +4017,18 @@ uint32_t SocialHandler::getSecondsUntilDailyReset() const {
     return left > 0 ? static_cast<uint32_t>(left) : 0;
 }
 
+int64_t SocialHandler::playedTimeNow() const {
+    if (!totalTimePlayedAt_) return -1;
+    const auto since = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - *totalTimePlayedAt_).count();
+    return static_cast<int64_t>(totalTimePlayed_) + since;
+}
+
 void SocialHandler::handlePlayedTime(network::Packet& packet) {
     PlayedTimeData data;
     if (!PlayedTimeParser::parse(packet, data)) return;
     totalTimePlayed_ = data.totalTimePlayed;
+    totalTimePlayedAt_ = std::chrono::steady_clock::now();   // 0x006cf470, either way
     levelTimePlayed_ = data.levelTimePlayed;
     if (data.triggerMessage) {
         // TIME_PLAYED_MSG(totalTime, levelTime), in seconds, which is what
@@ -4494,10 +4503,14 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     // counting down from the clock's own reading.
     //
     // One pair for the whole client, with the slot that owns it remembered the
-    // way 0x00acd16c does: a status of another kind for that slot leaves the
-    // pair alone - only an empty record, the zero the server sends when the
-    // player leaves a queue, takes the pair with it (00540000.c:8510-8517).
+    // way 0x00acd16c does. Any status that is not a running battle zeroes the
+    // pair whichever slot it is for, and lets go of the slot when it is the
+    // owner's; an empty record, the zero the server sends when the player
+    // leaves a queue, takes the battle's map with it as well, but only for the
+    // owning slot. The map is the running status' own, kept at 0x00bea564 for
+    // GetBattlefieldMapIconScale.
     if (statusId == 3) {
+        battlefieldMapId_ = status.mapId;
         const auto now = std::chrono::steady_clock::now();
         battlefieldInstanceExpiry_ = status.instanceRemainingMs
             ? now + std::chrono::milliseconds(status.instanceRemainingMs)
@@ -4506,10 +4519,17 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
             ? now - std::chrono::milliseconds(status.elapsedMs)
             : std::chrono::steady_clock::time_point{};
         battlefieldInstanceSlot_ = static_cast<int32_t>(queueSlot);
-    } else if (statusId == 0 && battlefieldInstanceSlot_ == static_cast<int32_t>(queueSlot)) {
+    } else if (statusId == 0) {
+        if (battlefieldInstanceSlot_ == static_cast<int32_t>(queueSlot)) {
+            battlefieldInstanceExpiry_ = {};
+            battlefieldInstanceStart_  = {};
+            battlefieldMapId_          = 0;
+            battlefieldInstanceSlot_   = -1;
+        }
+    } else {
         battlefieldInstanceExpiry_ = {};
         battlefieldInstanceStart_  = {};
-        battlefieldInstanceSlot_   = -1;
+        if (battlefieldInstanceSlot_ == static_cast<int32_t>(queueSlot)) battlefieldInstanceSlot_ = -1;
     }
 
     // Said in the log only. The original answers a status with
@@ -5390,17 +5410,23 @@ void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
         lfgNamesAsked_.clear();
         lfgPendingNames_ = 0;
     }
-    // The rows the packet brought are not yet the rows the panel shows: a row is a
-    // player record plus the listing attached to it, and the pairing is what
-    // 0x00553530 does when the interface asks for an index.
-    rebuildLfgBrowserRows();
     // Then the names the new rows are missing, which the client asks for row by row
     // as it allocates them (0x0055b770:9931-9937). Nothing is answered from them yet,
     // but the answers are what put a name — and a class — on a row the panel has
     // already drawn.
     requestLfgRowNames();
     lfgListWindowId_ = lfgJoinedListId_;
+    // The panel keeps what it was showing until the list is a different one
+    // (0x0055b770:9978-9981) or RefreshLFGList asks for what has come since.
     if (previousWindow != 0 && previousWindow == lfgListWindowId_) return;
+    refreshLfgList();
+}
+
+void SocialHandler::refreshLfgList() {
+    lfgShownRows_ = lfgListRows_;
+    // A row is a player record plus the listing attached to it, and the
+    // pairing is what 0x00553530 does when the interface asks for an index.
+    rebuildLfgBrowserRows();
     fireLfgListChanged();
 }
 
@@ -5409,8 +5435,8 @@ void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
 // guid through its name cache (0x0067d770 feeding the strncmp at 0x0076e760), and an
 // empty answer is what makes that key say nothing and the walk move on.
 void SocialHandler::rebuildLfgBrowserRows() {
-    lfgBrowserRows_ = buildLfgBrowserRows(lfgListRows_, lfgListingsFirst_);
-    sortLfgBrowserRows(lfgBrowserRows_, lfgListRows_, lfgSortKeys_,
+    lfgBrowserRows_ = buildLfgBrowserRows(lfgShownRows_, lfgListingsFirst_);
+    sortLfgBrowserRows(lfgBrowserRows_, lfgShownRows_, lfgSortKeys_,
                        [this](const LfgListRow& r) { return owner_.lookupName(r.guid); });
 }
 
@@ -5471,6 +5497,7 @@ void SocialHandler::onLfgNameAnswered(uint64_t guid) {
 // the list would never be re-announced again while that list is held.
 void SocialHandler::clearLfgListWindow() {
     lfgListRows_.clear();
+    lfgShownRows_.clear();
     lfgBrowserRows_.clear();
     lfgNamesAsked_.clear();
     lfgPendingNames_ = 0;

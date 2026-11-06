@@ -921,6 +921,15 @@ inline game::Unit* resolveUnit(lua_State* L, const char* unitId) {
 /// UNIT_FIELD_BYTES_0, with the name-query cache behind it for a unit whose
 /// fields have not arrived. Shared because two bindings need it and a second
 /// copy of "where a race comes from" is how they drift.
+/// ChrRaces / ChrClasses names as the client answers them (0x00715970,
+/// 0x007159e0): `gender` 0 male, 1 female (each falling back to the other),
+/// 2 the plain Name. The English name where the file is not to hand.
+std::string localizedRaceName(game::GameHandler* gh, uint32_t raceId, int gender);
+/// The mouse button of the click the interface was last handed (the
+/// UI's +0x1234, which GetMouseButtonClicked reads - 0x0050f950).
+std::string& lastClickButton();
+std::string localizedClassName(game::GameHandler* gh, uint32_t classId, int gender);
+
 inline uint8_t unitRaceOf(game::GameHandler* gh, const std::string& lowerUid) {
     if (!gh) return 0;
     if (lowerUid == "player") return gh->getPlayerRace();
@@ -1255,6 +1264,17 @@ uint32_t cursorItemId();
 /// up has to displace an item and ClearCursor has to drop both.
 uint64_t cursorMoney();
 void setCursorMoney(lua_State* L, uint64_t copper);
+/// Money on the cursor added to the trade offer (0x00704220): only when the
+/// new total is not more than the player has, and then the cursor is put down;
+/// otherwise the money stays held. AddTradeMoney and ClickTargetTradeButton
+/// both drop it this way.
+void dropCursorMoneyOnTrade(lua_State* L);
+/// PickupStablePet's cursor (0x00520c60: kind 10, the slot at 0x00bd07ec):
+/// -1 for the pet that is out, else the stable slot counted from 0.
+void pickupStablePetCursor(lua_State* L, int slot, const std::string& icon);
+std::optional<int> cursorStablePet();
+/// ClearCursor's own put-down (0x00519280), whatever is held.
+void clearCursor(lua_State* L);
 
 /// The paperdoll slot an item on the cursor was picked up from, or zero when it
 /// came from a bag or nothing is held. One-based, as FrameXML numbers slots.

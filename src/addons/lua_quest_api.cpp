@@ -34,6 +34,8 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <unordered_map>
+#include <optional>
 
 namespace wowee::addons {
 
@@ -317,7 +319,6 @@ static int lua_GetQuestRewardTitle(lua_State* L) {
     lua_pushstring(L, name.c_str());
     return 1;
 }
-static int lua_ProcessQuestLogRewardFactions(lua_State* L) { (void)L; return 0; }
 
 // The selected quest's five reputation reward slots, packed to the front (the
 // panel walks 1..GetNumQuestLogRewardFactions expecting no gaps). Inlined
@@ -334,40 +335,168 @@ static const game::QuestHandler::QuestLogEntry* selectedQuest(game::GameHandler*
     if (index < 1 || index > static_cast<int>(log.size())) return nullptr;
     return &log[static_cast<size_t>(index - 1)];
 }
-// The reputation reward slots for whichever panel is open - the offer's own
-// when it is up, the selected log quest's otherwise (same reason as the title:
-// the log selection is not the offered quest). Copied into a common shape so
-// the two source structs, identical in fields, are read the same way.
-struct RewardFaction { uint32_t factionId; int32_t valueId; int32_t override; };
-static std::vector<RewardFaction> currentFactionRewards(game::GameHandler* gh) {
-    std::vector<RewardFaction> out;
-    if (!gh) return out;
-    if (gh->isQuestOfferRewardOpen()) {
-        for (const auto& fr : gh->getQuestOfferReward().factionRewards)
-            if (fr.factionId != 0) out.push_back({fr.factionId, fr.valueId, fr.override});
-    } else if (const auto* q = selectedQuest(gh)) {
-        for (const auto& fr : q->factionRewards)
-            if (fr.factionId != 0) out.push_back({fr.factionId, fr.valueId, fr.override});
+// The reputation lines of the reward panel, as 0x0058d050 works them out for
+// ProcessQuestLogRewardFactions (0x005df8a0) and as GetNumQuestLogRewardFactions
+// and GetQuestLogRewardFactionInfo (0x005df910 / 0x005df940) read them back.
+//
+// Each of the quest's five slots names a faction and a QuestFactionReward value
+// index; the slot counts only when that index's entry is not zero, and its
+// amount is then the override when one is set, else the entry in hundredths.
+// 0x0058c790 adds the line, clamped to a rank where a cap is given, and - unless
+// the quest's reputation mask has the slot's bit - spills it over: to the
+// faction's parent at its second rate and under its second cap, and to each of
+// its children at the child's first rate and under the child's first cap, each
+// of those spilling on in turn, never back to the faction it came from. A line
+// that would leave the standing where it is, and any past the tenth, is not
+// added. The standing the caps are weighed against is the player's whole one
+// in reputation points, against bounds counted in hundredths - the client's own
+// mix of units.
+//
+// The slots are the offer's own while the reward panel is up, the selected log
+// quest's otherwise (the log selection is not the offered quest); the mask is
+// the log quest's, which the offer packet does not repeat.
+namespace {
+struct RewardSlot { uint32_t factionId; int32_t valueId; int32_t override; };
+struct FactionSpill { uint32_t parent = 0; float rate[2] = {0, 0}; int32_t cap[2] = {-1, -1}; };
+
+const std::unordered_map<uint32_t, FactionSpill>& factionSpills(game::GameHandler* gh,
+                                                                std::vector<uint32_t>& order) {
+    static std::unordered_map<uint32_t, FactionSpill> spills;
+    static std::vector<uint32_t> rows;
+    static bool loaded = false;
+    if (!loaded) {
+        auto* am = gh ? gh->services().assetManager : nullptr;
+        if (am && am->isInitialized()) {
+            loaded = true;
+            auto dbc = am->loadDBC("Faction.dbc");
+            const auto* layouts = pipeline::getActiveDBCLayout();
+            const auto* l = layouts ? layouts->getLayout("Faction") : nullptr;
+            const uint32_t parentF = l ? l->tryField("ParentFactionID") : 0xFFFFFFFFu;
+            if (dbc && dbc->isLoaded() && parentF != 0xFFFFFFFFu) {
+                const uint32_t idF = (*l)["ID"];
+                const uint32_t rate0 = l->tryField("ParentFactionMod0"), rate1 = l->tryField("ParentFactionMod1");
+                const uint32_t cap0 = l->tryField("ParentFactionCap0"), cap1 = l->tryField("ParentFactionCap1");
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                    FactionSpill f;
+                    f.parent = dbc->getUInt32(i, parentF);
+                    f.rate[0] = dbc->getFloat(i, rate0);
+                    f.rate[1] = dbc->getFloat(i, rate1);
+                    f.cap[0] = static_cast<int32_t>(dbc->getUInt32(i, cap0));
+                    f.cap[1] = static_cast<int32_t>(dbc->getUInt32(i, cap1));
+                    const uint32_t id = dbc->getUInt32(i, idF);
+                    spills[id] = f;
+                    rows.push_back(id);
+                }
+            }
+        }
     }
-    return out;
+    order = rows;
+    return spills;
 }
-// GetNumQuestLogRewardFactions() → how many faction rewards the quest carries.
+
+/// The lowest standing of each rank and the one past Exalted (0x00a2d2fc).
+constexpr int32_t kRankFloor[9] = {-42000, -6000, -3000, 0, 3000, 9000, 21000, 42000, 43000};
+
+void addRewardLine(game::GameHandler* gh, const std::unordered_map<uint32_t, FactionSpill>& spills,
+                   const std::vector<uint32_t>& order, uint32_t factionId, int32_t amount,
+                   int32_t gainCap, int32_t lossCap, uint32_t from, bool noSpill,
+                   std::vector<std::pair<uint32_t, int32_t>>& lines) {
+    const auto it = spills.find(factionId);
+    if (it == spills.end()) return;
+    const int32_t standing = gh->getFactionStanding(factionId);
+    int32_t after = standing + amount;
+    if (amount < 1) {
+        if (lossCap >= 0 && lossCap < 9) {
+            const int32_t floor = kRankFloor[lossCap] * 100;
+            if (after <= std::min(standing, floor)) {
+                after = floor;
+                if (standing < floor) return;
+            }
+        }
+    } else if (gainCap >= 0 && gainCap < 8) {
+        const int32_t ceiling = kRankFloor[gainCap + 1] * 100 - 100;
+        if (std::max(standing, ceiling) <= after) {
+            after = ceiling;
+            if (ceiling < standing) return;
+        }
+    }
+    if (after == standing || lines.size() >= 10) return;
+    lines.emplace_back(factionId, amount);
+    if (noSpill) return;
+    const FactionSpill& f = it->second;
+    if (f.parent != 0 && f.parent != from) {
+        const auto up = static_cast<int32_t>(std::lrint(static_cast<float>(amount) * f.rate[1]));
+        if (up != 0) addRewardLine(gh, spills, order, f.parent, up, f.cap[1], -1, factionId, false, lines);
+    }
+    // The children, last first, as 0x006f6020's list is walked.
+    for (auto c = order.rbegin(); c != order.rend(); ++c) {
+        const auto ci = spills.find(*c);
+        if (ci == spills.end() || ci->second.parent != factionId || *c == from) continue;
+        const auto down = static_cast<int32_t>(std::lrint(static_cast<float>(amount) * ci->second.rate[0]));
+        if (down != 0) addRewardLine(gh, spills, order, *c, down, ci->second.cap[0], -1, factionId, false, lines);
+    }
+}
+}  // namespace
+
+static std::vector<std::pair<uint32_t, int32_t>> rewardReputationLines(game::GameHandler* gh) {
+    std::vector<std::pair<uint32_t, int32_t>> lines;
+    if (!gh) return lines;
+    std::array<RewardSlot, 5> slots{};
+    uint32_t mask = 0;
+    const auto* logQuest = selectedQuest(gh);
+    if (gh->isQuestOfferRewardOpen()) {
+        const auto& offer = gh->getQuestOfferReward();
+        for (size_t i = 0; i < 5; ++i) {
+            const auto& fr = offer.factionRewards[i];
+            slots[i] = {fr.factionId, fr.valueId, fr.override};
+        }
+        for (const auto& q : gh->getQuestLog()) {
+            if (q.questId == offer.questId) { mask = q.reputationMask; break; }
+        }
+    } else if (logQuest) {
+        for (size_t i = 0; i < 5; ++i) {
+            const auto& fr = logQuest->factionRewards[i];
+            slots[i] = {fr.factionId, fr.valueId, fr.override};
+        }
+        mask = logQuest->reputationMask;
+    } else {
+        return lines;
+    }
+    auto* qh = gh->getQuestHandler();
+    std::vector<uint32_t> order;
+    const auto& spills = factionSpills(gh, order);
+    for (size_t i = 0; i < 5 && qh; ++i) {
+        const auto& slot = slots[i];
+        if (slot.factionId == 0 || std::abs(slot.valueId) >= 10) continue;
+        const int32_t entry = qh->getQuestRewardReputation(slot.valueId, 0);
+        if (entry == 0) continue;
+        const int32_t amount = slot.override != 0 ? slot.override : entry;
+        addRewardLine(gh, spills, order, slot.factionId, amount, -1, -1, 0,
+                      (mask & (1u << i)) != 0, lines);
+    }
+    return lines;
+}
+
+// ProcessQuestLogRewardFactions() - works the lines out for the selected
+// quest. They are worked out here each time they are read instead, from the
+// same quest, so there is nothing for this to keep.
+static int lua_ProcessQuestLogRewardFactions(lua_State* L) { (void)L; return 0; }
+
+// GetNumQuestLogRewardFactions() → how many reputation lines there are.
 static int lua_GetNumQuestLogRewardFactions(lua_State* L) {
-    lua_pushnumber(L, static_cast<double>(currentFactionRewards(getGameHandler(L)).size()));
+    lua_pushnumber(L, static_cast<double>(rewardReputationLines(getGameHandler(L)).size()));
     return 1;
 }
-// GetQuestLogRewardFactionInfo(i) → factionId, amount(in hundredths). The panel
-// pairs the id with GetFactionInfoByID and divides the amount by 100 itself.
+// GetQuestLogRewardFactionInfo(i) → factionId, amount (hundredths); 0, 0 past
+// the tenth line or before the first. The panel pairs the id with
+// GetFactionInfoByID and divides the amount by 100 itself.
 static int lua_GetQuestLogRewardFactionInfo(lua_State* L) {
-    auto* gh = getGameHandler(L);
-    const int want = static_cast<int>(luaL_optnumber(L, 1, 0));
-    const auto list = currentFactionRewards(gh);
-    if (want < 1 || want > static_cast<int>(list.size())) { return luaReturnNil(L); }
-    const auto& fr = list[static_cast<size_t>(want - 1)];
-    auto* qh = gh->getQuestHandler();
-    const int32_t amount = qh ? qh->getQuestRewardReputation(fr.valueId, fr.override) : 0;
-    lua_pushnumber(L, fr.factionId);
-    lua_pushnumber(L, amount);
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetQuestLogRewardFactionInfo(index)");
+    const auto index = std::llround(lua_tonumber(L, 1) - 1.0);
+    const auto lines = rewardReputationLines(getGameHandler(L));
+    const bool have = index >= 0 && index < static_cast<long long>(lines.size());
+    lua_pushnumber(L, have ? lines[static_cast<size_t>(index)].first : 0);
+    lua_pushnumber(L, have ? lines[static_cast<size_t>(index)].second : 0);
     return 2;
 }
 
@@ -411,31 +540,140 @@ static int lua_GetQuestWatchIndex(lua_State* L) {
     return luaReturnNil(L);   // not watched
 }
 
-// SortQuestWatches() → whether the order changed.
-//
-// False, and that is the truthful answer rather than a shrug: the watch order
-// follows the quest log, so there is never a separate order to sort. The
-// caller reads it as "did anything move" and rebuilds the tracker when it did.
-static int lua_SortQuestWatches(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+// Defined with the POI list further down: the proximity order weighs each
+// watch by its areas there.
+static bool sortQuestWatches(lua_State* L);
 
-// ShiftQuestWatches(from, to) - reorder the list by hand. Nothing is stored to
-// reorder, so dragging a tracker entry leaves it where the log puts it.
-static int lua_ShiftQuestWatches(lua_State* L) { (void)L; return 0; }
+// SortQuestWatches() (0x005e64b0) → whether the order was sorted.
+static int lua_SortQuestWatches(lua_State* L) {
+    lua_pushboolean(L, sortQuestWatches(L) ? 1 : 0);
+    return 1;
+}
 
-// GetQuestSortIndex(questLogIndex) → the header the quest sits under.
+// ShiftQuestWatches(indexFrom, indexTo) (0x005dfba0) - the tracker dragging
+// one watch to another place; the ones between close up behind it.
+static int lua_ShiftQuestWatches(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) {
+        return luaL_error(L, "Usage: ShiftQuestWatches(indexFrom, indexTo)");
+    }
+    const auto from = static_cast<long long>(lua_tonumber(L, 1)) - 1;
+    const auto to = static_cast<long long>(lua_tonumber(L, 2)) - 1;
+    auto* gh = getGameHandler(L);
+    if (gh && from >= 0 && to >= 0) {
+        gh->shiftQuestWatch(static_cast<size_t>(from), static_cast<size_t>(to));
+    }
+    return 0;
+}
+
+// GetQuestSortIndex(questIndex) (0x005dfa10) → which header the row sits
+// under, counted among the headers from one.
 //
-// Nil: this quest log has no headers - GetQuestLogTitle answers false for
-// isHeader on every row - so there is no header index to give and nothing for
-// the caller to expand.
-static int lua_GetQuestSortIndex(lua_State* L) { (void)L; return luaReturnNil(L); }
+// The row's group key (a header's own, a quest's zoneOrSort from the quest
+// cache) is looked up in the list of the log's group keys (0x005deae0); a row
+// past the end or a quest the cache does not hold yet finds none and answers
+// 0. A quest still waiting on its query is grouped under key 0 here, and that
+// is the "not cached" case, so it answers 0 as well.
+// GetTradeSkillListLink() (0x005dc0b0 -> 0x005db060) → the open profession
+// as a chat link, or nil.
+//
+// "|cffffd000|Htrade:<spell>:<rank>:<max>:<guid>:" - the spell that opened the
+// window, the player's rank and maximum in its skill line (each with the
+// permanent bonus added, 0x0051a250 / 0x00594710), and the player's guid in
+// hex - then one character of "A..Z a..z 0..9 + /" per six recipes, a bit per
+// recipe of the line in SkillLineAbility order: set when the player knows it
+// and it is open to the player's race and class. "|h[<spell name>]|h|r" closes
+// it. The recipes are the line's first run of rows in the file (0x00812030
+// lists a run per line), and only a line SkillLine marks linkable has one.
+// Nil when the window's spell is not a trade skill's, or its line cannot be
+// linked.
+static int lua_GetTradeSkillListLink(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    const uint32_t spellId = gh ? gh->getCraftingSpellId() : 0;
+    if (!am || !am->isInitialized() || spellId == 0) return luaReturnNil(L);
+    const auto abilities = am->loadDBC("SkillLineAbility.dbc");
+    const auto lines = am->loadDBC("SkillLine.dbc");
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* slaLayout = layouts ? layouts->getLayout("SkillLineAbility") : nullptr;
+    const auto* lineLayout = layouts ? layouts->getLayout("SkillLine") : nullptr;
+    std::string link;
+    if (abilities && abilities->isLoaded() && lines && lines->isLoaded() && slaLayout && lineLayout) {
+        const uint32_t lineCol = (*slaLayout)["SkillLineID"];
+        const uint32_t spellCol = (*slaLayout)["SpellID"];
+        const uint32_t raceCol = slaLayout->tryField("RaceMask");
+        const uint32_t classCol = slaLayout->tryField("ClassMask");
+        const uint32_t linkCol = lineLayout->tryField("CanLink");
+        const uint32_t race = gh->getPlayerRace(), cls = gh->getPlayerClass();
+        // The window's skill line, off the spell's own row.
+        uint32_t line = 0;
+        for (uint32_t i = 0; i < abilities->getRecordCount() && line == 0; ++i) {
+            if (abilities->getUInt32(i, spellCol) == spellId) line = abilities->getUInt32(i, lineCol);
+        }
+        const int32_t lineRow = line ? lines->findRecordById(line) : -1;
+        if (lineRow >= 0 && linkCol != 0xFFFFFFFFu && raceCol != 0xFFFFFFFFu &&
+            classCol != 0xFFFFFFFFu && lines->getUInt32(static_cast<uint32_t>(lineRow), linkCol) != 0) {
+            uint32_t rank = 0, maxRank = 0;
+            if (auto it = gh->getPlayerSkills().find(line); it != gh->getPlayerSkills().end()) {
+                const auto& sk = it->second;
+                rank = sk.value ? sk.value + sk.bonusPerm : 0;
+                maxRank = sk.maxValue ? sk.maxValue + sk.bonusPerm : 0;
+            }
+            char head[96];
+            std::snprintf(head, sizeof(head), "|cffffd000|Htrade:%u:%u:%u:%llX:", spellId, rank,
+                          maxRank, static_cast<unsigned long long>(gh->getPlayerGuid()));
+            link = head;
+            static const char* kAlphabet =
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            const auto& known = gh->getKnownSpells();
+            const auto allowed = [](uint32_t mask, uint32_t which) {
+                return mask == 0 || (which >= 1 && (mask & (1u << ((which - 1) & 31))) != 0);
+            };
+            uint32_t bits = 0, count = 0;
+            bool inRun = false;
+            for (uint32_t i = 0; i < abilities->getRecordCount(); ++i) {
+                if (abilities->getUInt32(i, lineCol) != line) {
+                    if (inRun) break;
+                    continue;
+                }
+                inRun = true;
+                const uint32_t spell = abilities->getUInt32(i, spellCol);
+                if (known.count(spell) && allowed(abilities->getUInt32(i, raceCol), race) &&
+                    allowed(abilities->getUInt32(i, classCol), cls)) {
+                    bits |= 1u << count;
+                }
+                if (++count == 6) {
+                    link += kAlphabet[bits];
+                    bits = count = 0;
+                }
+            }
+            if (count != 0) link += kAlphabet[bits];
+            link += "|h[" + gh->getSpellName(spellId) + "]|h|r";
+        }
+    }
+    if (link.empty()) return luaReturnNil(L);
+    lua_pushstring(L, link.c_str());
+    return 1;
+}
+
+static int lua_GetQuestSortIndex(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetQuestSortIndex(questIndex)");
+    const auto rows = questRows(getGameHandler(L));
+    const auto index = static_cast<long long>(lua_tonumber(L, 1)) - 1;
+    int sortIndex = 0;
+    if (index >= 0 && index < static_cast<long long>(rows.size()) &&
+        (rows[index].isHeader || rows[index].group != 0)) {
+        int headers = 0;
+        for (const auto& row : rows) {
+            if (!row.isHeader) continue;
+            ++headers;
+            if (row.group == rows[index].group) { sortIndex = headers; break; }
+        }
+    }
+    lua_pushnumber(L, sortIndex);
+    return 1;
+}
 
 // ---- Quest log special items ----
-//
-// Whether the quest item's target is close enough to use it on. Nothing here
-// knows an item's range, and nil is the answer that hides the range indicator
-// rather than colouring it wrongly - WatchFrameItem_OnUpdate takes the third
-// branch and hides the count text.
-static int lua_IsQuestLogSpecialItemInRange(lua_State* L) { (void)L; return luaReturnNil(L); }
 
 // UseQuestLogSpecialItem(questLogIndex) - clicking that button.
 //
@@ -774,32 +1012,26 @@ static int lua_GetNumQuestWatches(lua_State* L) {
     return 1;
 }
 
-// GetQuestIndexForWatch(watchIndex) → questLogIndex
-// Maps the Nth watched quest to its quest log index (1-based)
+// GetQuestIndexForWatch(index) (0x005df780) → the quest log row of the
+// index-th watch, counted in the watch list's own order: that watch's quest is
+// looked for among the display rows, and one under a collapsed header has no
+// row and answers nothing.
 static int lua_GetQuestIndexForWatch(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetQuestIndexForWatch(index)");
     auto* gh = getGameHandler(L);
-    int watchIdx = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || watchIdx < 1) { return luaReturnNil(L); }
-    // The index this answers is a quest log index, and a quest log index now
-    // counts header rows - so it has to be found in the display list rather
-    // than by counting through getQuestLog(). Answering the raw log position
-    // pointed the watch frame at whatever row happened to hold that number,
-    // which after grouping is usually a different quest or a header.
-    const auto rows = questRows(gh);
-    const auto& tracked = gh->getTrackedQuestIds();
-    int found = 0;
-    for (size_t i = 0; i < rows.size(); ++i) {
-        if (!rows[i].quest) continue;
-        if (tracked.count(rows[i].quest->questId)) {
-            found++;
-            if (found == watchIdx) {
-                lua_pushnumber(L, static_cast<int>(i) + 1); // 1-based
+    const auto watchIdx = static_cast<long long>(lua_tonumber(L, 1));
+    const auto* order = gh ? &gh->getQuestWatchOrder() : nullptr;
+    if (order && watchIdx >= 1 && watchIdx <= static_cast<long long>(order->size())) {
+        const uint32_t questId = (*order)[static_cast<size_t>(watchIdx - 1)];
+        const auto rows = questRows(gh);
+        for (size_t i = 0; i < rows.size(); ++i) {
+            if (rows[i].quest && rows[i].quest->questId == questId) {
+                lua_pushnumber(L, static_cast<double>(i + 1));
                 return 1;
             }
         }
     }
-    lua_pushnil(L);
-    return 1;
+    return 0;
 }
 
 // AddQuestWatch(questLogIndex, durationSeconds) - add a quest to the watch
@@ -815,7 +1047,10 @@ static int lua_AddQuestWatch(lua_State* L) {
     int duration = 0;
     if (lua_isnumber(L, 2)) duration = static_cast<int>(lua_tonumber(L, 2));
     if (const auto* q = questAtRow(gh, index)) {
+        const bool added = !gh->isQuestTracked(q->questId);
         gh->addQuestWatch(q->questId, duration);
+        // 0x005e64d0 sorts after appending, and only then.
+        if (added && gh->isQuestTracked(q->questId)) sortQuestWatches(L);
     }
     return 0;
 }
@@ -1022,6 +1257,127 @@ static game::QuestPoiIconList::QuestState questPoiStateFn(game::GameHandler* gh)
     return [gh, rows](int32_t questId) { return questPoiState(gh, *rows, questId); };
 }
 
+/// The map a WorldMapArea row is drawn over (its second column), or none.
+static std::optional<uint32_t> worldMapAreaMapId(game::GameHandler* gh, uint32_t areaId) {
+    static std::unordered_map<uint32_t, uint32_t> maps;
+    static bool loaded = false;
+    if (!loaded) {
+        auto* am = gh ? gh->services().assetManager : nullptr;
+        if (!am || !am->isInitialized()) return std::nullopt;
+        loaded = true;
+        if (auto dbc = am->loadDBC("WorldMapArea.dbc"); dbc && dbc->isLoaded()) {
+            const auto* layout = pipeline::getActiveDBCLayout()
+                ? pipeline::getActiveDBCLayout()->getLayout("WorldMapArea") : nullptr;
+            const uint32_t idField = layout ? (*layout)["ID"] : 0;
+            const uint32_t mapField = layout ? (*layout)["MapID"] : 1;
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                maps[dbc->getUInt32(i, idField)] = dbc->getUInt32(i, mapField);
+            }
+        }
+    }
+    const auto it = maps.find(areaId);
+    if (it == maps.end()) return std::nullopt;
+    return it->second;
+}
+
+/// 0x005e3b90: how near the player is to a watched quest, as the square of
+/// the distance to the nearest of its areas still worth going to - the hand-in
+/// area once the quest is complete, else those of objectives still open - on
+/// the map the player is on. The area on the floor nearest the one the world
+/// map has selected wins first, the distance only between equal floors. A
+/// quest with no areas listed is as far as a float goes.
+static float questWatchDistance(game::GameHandler* gh, const game::QuestPoiIconList& list,
+                                const std::vector<QuestRow>& rows,
+                                const game::QuestPoiMapView& view, uint32_t questId) {
+    constexpr float kFar = 3.4028235e+38f;
+    const auto* icon = list.iconFor(static_cast<int32_t>(questId));
+    if (!icon) return kFar;
+    const uint32_t mask = questPoiState(gh, rows, static_cast<int32_t>(questId)).objectiveMask;
+    const int32_t floor = view.dungeon ? static_cast<int32_t>(view.dungeonFloor) : 0;
+    const auto& mi = gh->getMovementInfo();
+    // Server coordinates, the axes the area centres use.
+    const float px = mi.y, py = mi.x;
+    float best = kFar;
+    int32_t bestFloorGap = 0x7fffffff;
+    for (const auto& area : icon->areas) {
+        const bool wanted = mask == 0xffffffffu
+            ? area.objectiveIndex == -1
+            : area.objectiveIndex != -1 && (mask & (1u << (area.objectiveIndex & 31))) != 0;
+        if (!wanted) continue;
+        const auto map = worldMapAreaMapId(gh, area.worldMapAreaId);
+        if (!map || *map != gh->getCurrentMapId()) continue;
+        const float dx = px - static_cast<float>(area.centerX);
+        const float dy = py - static_cast<float>(area.centerY);
+        const float d = dy * dy + dx * dx;
+        const int32_t gap = std::abs(floor - static_cast<int32_t>(area.floor));
+        if (gap < bestFloorGap || (gap == bestFloorGap && d < best)) {
+            bestFloorGap = gap;
+            best = d;
+        }
+    }
+    return best;
+}
+
+/// 0x005e5c10, which SortQuestWatches answers and every new watch runs
+/// (0x005e64d0). The order is the CVar trackerSorting's: 0 leaves the watches
+/// where the player put them; 1 is nearest first, and sorts only when the
+/// list is not already in that order; 2 is highest quest level first and 3
+/// lowest first (a quest that scales takes the player's level, one not yet
+/// queried counts as 0). Ties go by quest id. True when it sorted.
+static bool sortQuestWatches(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh || gh->getQuestWatchOrder().size() < 2) return false;
+    lua_getglobal(L, "GetCVar");
+    int mode = 0;
+    if (lua_isfunction(L, -1)) {
+        lua_pushstring(L, "trackerSorting");
+        lua_call(L, 1, 1);
+        if (const char* v = lua_tostring(L, -1)) mode = std::atoi(v);
+    }
+    lua_pop(L, 1);
+    if (mode == 0) return false;
+
+    struct Watch { uint32_t questId; float distance; int32_t level; };
+    std::vector<Watch> watches;
+    for (uint32_t questId : gh->getQuestWatchOrder()) watches.push_back({questId, 0.0f, 0});
+
+    if (mode == 1) {
+        auto* list = questPoiList(gh);
+        if (!list) return false;
+        const auto rows = questRows(gh);
+        const auto view = questPoiMapView(L);
+        bool ascending = true;
+        float last = 0.0f;
+        for (auto& w : watches) {
+            w.distance = questWatchDistance(gh, *list, rows, view, w.questId);
+            if (ascending) {
+                if (w.distance < last) ascending = false;
+                else last = w.distance;
+            }
+        }
+        if (ascending) return false;
+    } else {
+        for (auto& w : watches) {
+            for (const auto& q : gh->getQuestLog()) {
+                if (q.questId != w.questId) continue;
+                w.level = q.level == -1 ? static_cast<int32_t>(gh->getPlayerLevel()) : q.level;
+                break;
+            }
+        }
+    }
+    std::sort(watches.begin(), watches.end(), [mode](const Watch& a, const Watch& b) {
+        if (mode == 1) return a.distance < b.distance;
+        if ((mode == 2 || mode == 3) && a.level != b.level) {
+            return mode == 3 ? a.level < b.level : a.level > b.level;
+        }
+        return a.questId < b.questId;
+    });
+    std::vector<uint32_t> order;
+    for (const auto& w : watches) order.push_back(w.questId);
+    gh->reorderQuestWatches(std::move(order));
+    return true;
+}
+
 // Which map a quest wants shown, and on which floor. Declared in
 // lua_api_helpers.hpp because the reader is the world map's own binding, while
 // the answer comes off this list and the map this is laid out on.
@@ -1077,13 +1433,9 @@ static int lua_QuestPOIGetQuestIDByVisibleIndex(lua_State* L) {
     if (!list) return 0;
     const int index = static_cast<int>(lua_tonumber(L, 1));
     const auto rows = questRows(gh);
-    // The watch list in its own order, which is the log's here.
+    // The watch list in its own order.
     std::vector<int32_t> watched;
-    for (const auto& row : rows) {
-        if (row.quest && gh->isQuestTracked(row.quest->questId)) {
-            watched.push_back(static_cast<int32_t>(row.quest->questId));
-        }
-    }
+    for (uint32_t questId : gh->getQuestWatchOrder()) watched.push_back(static_cast<int32_t>(questId));
     const int32_t questId = list->questIdByVisibleIndex(index - 1, questPoiStateFn(gh), watched);
     if (questId < 0) return 0;
     lua_pushnumber(L, questId);
@@ -1492,6 +1844,15 @@ const game::GameHandler::StabledPet* activePet(game::GameHandler* gh) {
     return nullptr;
 }
 
+/// The pet a stable index names, as the client counts them: -1 the one that is
+/// out, then the stable slots from 0.
+const game::GameHandler::StabledPet* stablePetAt(game::GameHandler* gh, int index) {
+    if (index == -1) return activePet(gh);
+    const auto stabled = stabledOnly(gh);
+    if (index < 0 || index >= static_cast<int>(stabled.size())) return nullptr;
+    return stabled[static_cast<size_t>(index)];
+}
+
 /// Which slot the player has clicked. Held here because it is a fact about the
 /// window rather than about the character, and the server is never told.
 int& selectedStableSlot() {
@@ -1552,8 +1913,35 @@ static int lua_GetSelectedStablePet(lua_State* L) {
     return 1;
 }
 
+// ClickStablePet(index) (0x005a1ca0). With no pet held it selects the index
+// and answers 1. With one held (PickupStablePet) the pet is put down there and
+// it answers nil: back on its own index, nothing; the pet that is out onto a
+// stable slot holding a pet, CMSG_STABLE_SWAP_PET with that pet, or onto an
+// empty bought slot, CMSG_STABLE_PET; a stabled pet onto the pet that is out,
+// the swap with it while a pet is out and CMSG_UNSTABLE_PET while none is. A
+// stabled pet onto another stable slot sends nothing.
 static int lua_ClickStablePet(lua_State* L) {
-    selectedStableSlot() = static_cast<int>(luaL_optnumber(L, 1, 0));
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ClickStablePet(index)");
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
+    if (const auto held = cursorStablePet()) {
+        auto* gh = getGameHandler(L);
+        if (gh && *held != index) {
+            if (*held == -1) {
+                const auto* there = stablePetAt(gh, index);
+                if (there && there->petNumber != 0) gh->swapStablePet(there->petNumber);
+                else if (index >= 0 && index < gh->getStableSlots()) gh->stablePet();
+            } else if (index == -1) {
+                const auto* pet = stablePetAt(gh, *held);
+                if (pet && pet->petNumber != 0) {
+                    if (gh->getPetGuid() != 0) gh->swapStablePet(pet->petNumber);
+                    else gh->unstablePet(pet->petNumber);
+                }
+            }
+        }
+        clearCursor(L);
+        return luaReturnNil(L);
+    }
+    selectedStableSlot() = index + 1;
     // The model preview shows whichever pet is selected, so selecting a
     // different one is exactly when it has to be redrawn. Nothing else changes
     // it, and the frame will not redraw on its own.
@@ -1561,7 +1949,8 @@ static int lua_ClickStablePet(lua_State* L) {
     auto* engine = static_cast<LuaEngine*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
     if (engine) engine->fireEvent("PET_STABLE_UPDATE_PAPERDOLL", {});
-    return 0;
+    lua_pushnumber(L, 1);
+    return 1;
 }
 
 // ---- What a pet eats, and what it trains into ----
@@ -1575,14 +1964,93 @@ static int lua_ClickStablePet(lua_State* L) {
 // So these answer absent, and the frame is built for that: GetPetIcon and
 // GetPetFoodTypes are both tested before use, and the talent tree is taken as
 // `GetPetTalentTree() or ""`.
+/// The CreatureFamily row of the player's pet when it is a hunter's
+/// (0x0071b630: a pet number, made by a hunter), else -1.
+static int32_t hunterPetFamilyRow(game::GameHandler* gh, std::shared_ptr<pipeline::DBCFile>& families,
+                                  const pipeline::DBCFieldMap*& layout) {
+    if (!gh || gh->getPetGuid() == 0) return -1;
+    auto pet = std::dynamic_pointer_cast<game::Unit>(gh->getEntityManager().getEntity(gh->getPetGuid()));
+    if (!pet || pet->getField(game::fieldIndex(game::UF::UNIT_FIELD_PETNUMBER)) == 0) return -1;
+    const uint16_t creatorF = game::fieldIndex(game::UF::UNIT_FIELD_CREATEDBY);
+    const uint64_t creator = creatorF == 0xFFFF ? 0
+        : pet->getField(creatorF) | (static_cast<uint64_t>(pet->getField(static_cast<uint16_t>(creatorF + 1))) << 32);
+    auto owner = gh->getEntityManager().getEntity(creator);
+    if (!owner || ((owner->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) >> 8) & 0xFFu) != 3) return -1;
+    const uint32_t family = gh->getCreatureFamily(pet->getEntry());
+    auto* am = gh->services().assetManager;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    layout = layouts ? layouts->getLayout("CreatureFamily") : nullptr;
+    families = am && am->isInitialized() && family != 0 ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
+    if (!families || !families->isLoaded() || !layout) return -1;
+    return families->findRecordById(family);
+}
+
+/// GetPetIcon() (0x005d3ce0): the hunter pet's family's IconFile, nil for any
+/// other pet or none.
 static int lua_GetPetIcon(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh || !activePet(gh)) { return luaReturnNil(L); }
-    lua_pushstring(L, "Interface\\Icons\\Ability_Hunter_BeastTaming");
+    std::shared_ptr<pipeline::DBCFile> families;
+    const pipeline::DBCFieldMap* layout = nullptr;
+    const int32_t row = hunterPetFamilyRow(gh, families, layout);
+    const uint32_t iconF = layout ? layout->tryField("IconFile") : 0xFFFFFFFFu;
+    if (row < 0 || iconF >= families->getFieldCount()) return luaReturnNil(L);
+    const std::string icon = families->getString(static_cast<uint32_t>(row), iconF);
+    if (icon.empty()) return luaReturnNil(L);
+    lua_pushstring(L, icon.c_str());
     return 1;
 }
-static int lua_GetPetTalentTree(lua_State* L) { return luaReturnNil(L); }
-static int lua_GetPetFoodTypes(lua_State* L)  { return luaReturnNil(L); }
+
+/// GetPetTalentTree() (0x005d3d80): the name of the first TalentTab whose
+/// PetTalentMask holds the hunter pet's family's PetTalentType bit, nil
+/// without one.
+static int lua_GetPetTalentTree(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    std::shared_ptr<pipeline::DBCFile> families;
+    const pipeline::DBCFieldMap* layout = nullptr;
+    const int32_t row = hunterPetFamilyRow(gh, families, layout);
+    const uint32_t typeF = layout ? layout->tryField("PetTalentType") : 0xFFFFFFFFu;
+    if (row < 0 || typeF >= families->getFieldCount()) return luaReturnNil(L);
+    const auto type = static_cast<int32_t>(families->getUInt32(static_cast<uint32_t>(row), typeF));
+    if (type < 0 || type > 31) return luaReturnNil(L);
+    auto* am = gh->services().assetManager;
+    const auto* tabL = pipeline::getActiveDBCLayout() ? pipeline::getActiveDBCLayout()->getLayout("TalentTab") : nullptr;
+    auto tabs = am ? am->loadDBCOptional("TalentTab.dbc") : nullptr;
+    const uint32_t maskF = tabL ? tabL->tryField("PetTalentMask") : 0xFFFFFFFFu;
+    const uint32_t nameF = tabL ? tabL->tryField("Name") : 0xFFFFFFFFu;
+    if (!tabs || !tabs->isLoaded() || maskF >= tabs->getFieldCount() || nameF >= tabs->getFieldCount())
+        return luaReturnNil(L);
+    for (uint32_t r = 0; r < tabs->getRecordCount(); ++r) {
+        const uint32_t mask = tabs->getUInt32(r, maskF);
+        if (mask != 0 && (mask & (1u << type)) != 0) {
+            lua_pushstring(L, tabs->getString(r, nameF).c_str());
+            return 1;
+        }
+    }
+    return luaReturnNil(L);
+}
+
+/// GetPetFoodTypes() (0x005d3bd0) → one ItemPetFood name per bit of the
+/// hunter pet's family's PetFoodMask, in the file's order (bit id - 1).
+static int lua_GetPetFoodTypes(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    std::shared_ptr<pipeline::DBCFile> families;
+    const pipeline::DBCFieldMap* layout = nullptr;
+    const int32_t row = hunterPetFamilyRow(gh, families, layout);
+    const uint32_t maskF = layout ? layout->tryField("PetFoodMask") : 0xFFFFFFFFu;
+    if (row < 0 || maskF >= families->getFieldCount()) return 0;
+    const uint32_t mask = families->getUInt32(static_cast<uint32_t>(row), maskF);
+    auto foods = gh->services().assetManager->loadDBCOptional("ItemPetFood.dbc");
+    if (!foods || !foods->isLoaded() || foods->getFieldCount() < 2) return 0;
+    int pushed = 0;
+    for (uint32_t r = 0; r < foods->getRecordCount(); ++r) {
+        const uint32_t id = foods->getUInt32(r, 0);
+        if (id == 0 || id > 32 || (mask & (1u << (id - 1))) == 0) continue;
+        if (!lua_checkstack(L, 1)) break;
+        lua_pushstring(L, foods->getString(r, 1).c_str());
+        ++pushed;
+    }
+    return pushed;
+}
 
 /// SetPetStablePaperdoll(model) - put the selected pet in the preview frame.
 ///
@@ -1621,14 +2089,17 @@ static int lua_SetPetStablePaperdoll(lua_State* L) {
     return 0;
 }
 
-/// PickupStablePet(slot) - start dragging a pet between stable slots.
-///
-/// Also a deliberate no-op. Moving a pet by dragging needs a cursor that can
-/// hold one, and this client's cursor holds items and spells; the buttons the
-/// stable frame offers for the same moves go through stablePet and
-/// unstablePet, which do work. So the frame loses the drag and keeps the
-/// operation.
-static int lua_PickupStablePet(lua_State* L) { (void)L; return 0; }
+/// PickupStablePet(index) (0x005a0fe0) - start dragging a pet: 0 the one that
+/// is out, 1 on the stable slots. An empty index picks nothing up; a pet goes
+/// onto the cursor (0x00520c60), to be put down by ClickStablePet.
+static int lua_PickupStablePet(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: PickupStablePet(index)");
+    const int index = static_cast<int>(std::lround(lua_tonumber(L, 1))) - 1;
+    if (const auto* pet = stablePetAt(getGameHandler(L), index); pet && pet->petNumber != 0) {
+        pickupStablePetCursor(L, index, "Interface\\Icons\\Ability_Hunter_BeastTaming");
+    }
+    return 0;
+}
 
 /// GetStablePetFoodTypes(slot) - and the one that cannot answer nil.
 ///
@@ -3978,7 +4449,6 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"SortQuestWatches",        lua_SortQuestWatches},
                 {"ShiftQuestWatches",       lua_ShiftQuestWatches},
                 {"GetQuestSortIndex",       lua_GetQuestSortIndex},
-                {"IsQuestLogSpecialItemInRange", lua_IsQuestLogSpecialItemInRange},
                 {"UseQuestLogSpecialItem",  lua_UseQuestLogSpecialItem},
                 {"GetQuestLogSpecialItemCooldown", lua_GetQuestLogSpecialItemCooldown},
                 {"GetQuestTimers",          lua_GetQuestTimers},
@@ -5077,25 +5547,33 @@ void registerQuestLuaAPI(lua_State* L) {
             lua_pushstring(L, game::buildItemLink(made, info->quality, info->name, gh->getPlayerLevel()).c_str());
             return 1;
         }},
-                // A recipe link is not an |Htrade: link; that one is the *list*
-                // link, two rows below. What 0x005db920 writes for a recipe is
-                // "|cffffd000|Henchant:%d|h[%s]|h|r" - the spell id, because the
-                // thing an enchanting recipe makes has no item entry - and when a
-                // formula item exists, "[%s: %s]" puts its name first. The gate is
-                // a flag byte on the trade skill record: 0x20, and only recipes
-                // carrying it get a link at all.
-                //
-                // Two things stand between that and answering here, and they are
-                // why this stays nil rather than guessing at a format. The recipe
-                // list this client keeps is GameHandler::CraftRecipe - spellId,
-                // name, difficulty band, how many the bags allow - and the flag
-                // byte never reaches it, so the set of rows that should be links
-                // is not knowable from here. And an enchant link is drawn as text
-                // here: the chat markup parser knows item, spell, quest and
-                // achievement, so the tooltip the original pops up off that link
-                // is the half that would be missing. Both are reachable, and
-                // neither is a one-line change.
-                {"GetTradeSkillRecipeLink",   [](lua_State* L) -> int { return luaReturnNil(L); }},
+                // GetTradeSkillRecipeLink(index) (0x005db920): a recipe whose
+                // spell is a trade spell (Attributes 0x20) links as
+                // "|cffffd000|Henchant:<spell>|h[<skill>: <name>]|h|r", the
+                // recipe's skill line named first where the player's race and
+                // class have one for it (0x005da5f0), "[<name>]" where not;
+                // any other row, nothing. A recipe link is not the |Htrade:
+                // list link two rows below.
+                {"GetTradeSkillRecipeLink", [](lua_State* L) -> int {
+            if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetTradeSkillRecipeLink(index)");
+            auto* gh = getGameHandler(L);
+            const int i = static_cast<int>(lua_tonumber(L, 1));
+            const auto* rec = gh ? tradeSkillRecipeAt(tradeSkillRows(gh), i) : nullptr;
+            if (!rec) return 0;
+            const auto it = gh->spellNameCacheRef().find(rec->spellId);
+            if (it == gh->spellNameCacheRef().end() || (it->second.attr & 0x20u) == 0) return 0;
+            const std::string& name = it->second.name;
+            const uint32_t skillLine = gh->spellSkillLine(rec->spellId);
+            const std::string skill = skillLine != 0 ? gh->getSkillLineName(skillLine) : std::string();
+            char link[1024];
+            if (skill.empty())
+                std::snprintf(link, sizeof(link), "|cffffd000|Henchant:%u|h[%s]|h|r", rec->spellId, name.c_str());
+            else
+                std::snprintf(link, sizeof(link), "|cffffd000|Henchant:%u|h[%s: %s]|h|r", rec->spellId,
+                              skill.c_str(), name.c_str());
+            lua_pushstring(L, link);
+            return 1;
+        }},
                 {"GetTradeSkillReagentItemLink", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const int i = static_cast<int>(luaL_optnumber(L, 1, 0));
@@ -5118,15 +5596,8 @@ void registerQuestLuaAPI(lua_State* L) {
             }
             return luaReturnNil(L);
         }},
-                // The list link is the |Htrade: one, and it takes no argument:
-                // 0x005dc0b0 hands 0x005db060 the skill line of the open window.
-                // The header it writes is "|cffffd000|Htrade:%d:%d:%d:%I64X:" -
-                // the line, two values taken off the record, and the local
-                // player's guid as hex - and after it a base64 block, six
-                // recipes to a byte over the "ABC…+/" alphabet, each bit saying
-                // whether whoever reads the link could learn that recipe: the
-                // reader's race and class come off the unit blob's bytes at
-                // +0x44 and +0x45. Then "|h[%s]|h|r" closes it.
+                // The list link (GetTradeSkillListLink, below) is the sending
+                // half of the |Htrade: link.
                 //
                 // IsTradeSkillLinked (0x005da310) is the other half of the same
                 // feature, and it takes no argument either. It answers **two**
@@ -5142,18 +5613,17 @@ void registerQuestLuaAPI(lua_State* L) {
                 // the header above carrying a player guid as %I64X; the state and
                 // the pair it reads are.
                 //
-                // With no linked window it pushes two nils. This row pushes one
-                // false, which is falsy the same way and leaves FrameXML's second
-                // local nil: the value count only matters to a caller using
-                // select("#", …). It stays a stub because this client never opens a
-                // linked window - the consume side is parsing the |Htrade: link,
-                // decoding its six-recipes-to-a-byte block and showing somebody
-                // else's profession, and that is what would set the state. Neither
-                // dbc folder on this machine holds a Trade table of any name; the
-                // WotLK recipe list is filled by the realm, so whose list a window
-                // shows is the realm's to say.
-                {"GetTradeSkillListLink",     [](lua_State* L) -> int { return luaReturnNil(L); }},
-                {"IsTradeSkillLinked",        [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                // With no linked window it pushes two nils, which is all this
+                // row answers: this client never opens a linked window - the
+                // consume side is parsing the |Htrade: link, decoding its
+                // six-recipes-to-a-byte block and showing somebody else's
+                // profession, and that is what would set the state.
+                {"GetTradeSkillListLink",     lua_GetTradeSkillListLink},
+                {"IsTradeSkillLinked",        [](lua_State* L) -> int {
+            lua_pushnil(L);
+            lua_pushnil(L);
+            return 2;
+        }},
                 // The play-time limits, which are the realm's, not this
                 // client's to decide: 0x0051cb30 PartialPlayTime answers
                 // PLAYER_FLAGS 0x1000 and 0x0051cba0 NoPlayTime answers 0x2000,

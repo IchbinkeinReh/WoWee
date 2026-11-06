@@ -64,7 +64,7 @@ namespace wowee::addons {
 /// AMMO is the ammunition lifted off the paperdoll's ammo slot (the client's
 /// cursor type 9): an item to the interface, holding an entry rather than an
 /// item, since the ammunition never left the bags.
-enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET, AMMO, PET_ACTION };
+enum class CursorType { NONE, SPELL, ITEM, MACRO, MERCHANT, MONEY, GUILDBANK, EQUIPMENT_SET, AMMO, PET_ACTION, STABLE_PET };
 static CursorType s_cursorType = CursorType::NONE;
 static uint32_t   s_cursorId   = 0;    // spellId, itemId, or action slot
 static int        s_cursorSlot = 0;    // source slot for placement
@@ -78,6 +78,7 @@ static uint64_t   s_cursorMoney = 0;   // copper, when the cursor carries money
 /// has to wait on the cursor until the drop says where it is going.
 static uint32_t   s_cursorSplit = 0;
 static void setCursorType(lua_State* L, CursorType type);
+static void clearCursorItem(lua_State* L);
 /// Where the cursor's item came from, in wire bag/slot space. Declared here
 /// because the guild bank pickup above needs it and it is defined further down
 /// with the other cursor helpers.
@@ -92,6 +93,30 @@ static void soldHeldItem(lua_State* L);
 
 uint64_t cursorMoney() {
     return s_cursorType == CursorType::MONEY ? s_cursorMoney : 0;
+}
+
+void pickupStablePetCursor(lua_State* L, int slot, const std::string& icon) {
+    clearCursorItem(L);
+    s_cursorSlot = slot;
+    setCursorType(L, CursorType::STABLE_PET);
+    wowee::ui::frameXmlSetCursorItem(icon);
+}
+
+std::optional<int> cursorStablePet() {
+    if (s_cursorType != CursorType::STABLE_PET) return std::nullopt;
+    return s_cursorSlot;
+}
+
+void clearCursor(lua_State* L) { clearCursorItem(L); }
+
+void dropCursorMoneyOnTrade(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    const uint64_t held = cursorMoney();
+    if (!gh || held == 0) return;
+    const uint64_t total = gh->getMyTradeGold() + held;
+    if (total > gh->getMoneyCopper()) return;
+    gh->setTradeGold(total);
+    setCursorMoney(L, 0);
 }
 
 void setCursorMoney(lua_State* L, uint64_t copper) {
@@ -2460,6 +2485,60 @@ static int lua_AutoEquipCursorItem(lua_State* L) {
     return 0;
 }
 
+// DropItemOnUnit(unit) (0x0051bdd0): the held item dropped on a unit frame.
+// On the player it is worn (AutoEquipCursorItem, 0x006dfc40). On another
+// player of the player's side and peaceable (0x00729b30): while trading with
+// them it goes into the trade (0x00586b50) - the first free of the six traded
+// slots, or the slot that is not traded for a bound item, and nowhere when it
+// is already on the table or that slot is taken - and with no trade open one
+// is asked for (0x00703cf0). On the player's pet it is fed to it with the
+// Feed Pet spell (0x0080dcf0) and the cursor put down.
+static void dropCursorItemOnUnit(lua_State* L, game::GameHandler* gh, uint64_t guid,
+                                 const std::shared_ptr<game::Entity>& entity) {
+    uint8_t bag = 0, slot = 0;
+    const bool fromBags = cursorWireSlot(bag, slot);
+    auto* inv = gh->getInventoryHandler();
+    const uint64_t itemGuid = fromBags && inv ? inv->itemGuidAtWire(bag, slot) : 0;
+    const uint64_t me = gh->getPlayerGuid();
+    if (entity->getType() == game::ObjectType::PLAYER && guid == me) {
+        lua_AutoEquipCursorItem(L);
+        return;
+    }
+    if (entity->getType() == game::ObjectType::PLAYER && gh->unitsCooperate(me, guid)) {
+        if (gh->getTradePeerGuid() == 0) {
+            gh->initiateTrade(guid);
+        } else if (gh->getTradePeerGuid() == guid && itemGuid != 0 && !inv->itemInTrade(itemGuid)) {
+            const auto& mine = gh->getMyTradeSlots();
+            const bool bound = (gh->getItemFieldFlags(itemGuid) & 0x1u) != 0;
+            int target = -1;
+            if (bound) {
+                if (mine[6].itemId == 0) target = 6;
+            } else {
+                for (int i = 0; i < 6 && target < 0; ++i)
+                    if (mine[static_cast<size_t>(i)].itemId == 0) target = i;
+            }
+            if (target >= 0) {
+                gh->setTradeItem(static_cast<uint8_t>(target), bag, slot);
+                clearCursorItem(L);
+            }
+        }
+    }
+    if (guid == gh->getPetGuid() && gh->feedPetWithItem(itemGuid)) clearCursorItem(L);
+}
+
+static int lua_DropItemOnUnit(lua_State* L) {
+    if (!lua_isstring(L, 1)) return luaL_error(L, "Usage: DropItemOnUnit(\"unit\")");
+    auto* gh = getGameHandler(L);
+    if (gh && s_cursorType == CursorType::ITEM && s_cursorId != 0) {
+        std::string uid(lua_tostring(L, 1));
+        toLowerInPlace(uid);
+        const uint64_t guid = resolveUnitGuid(gh, uid);
+        auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
+        if (entity && entity->isUnit()) dropCursorItemOnUnit(L, gh, guid, entity);
+    }
+    return 0;
+}
+
 // EquipCursorItem(slot) (0x0051a3d0): the held item into that equipment slot.
 // Dropped back where it came from when the slot already holds it, or when it
 // came off the paperdoll and does not fit there; otherwise, not fitting, worn
@@ -2903,8 +2982,20 @@ static int lua_ClickTradeButton(lua_State* L) {
     return 0;
 }
 
-// The other side's slots belong to the other player.
-static int lua_ClickTargetTradeButton(lua_State* L) { (void)L; return 0; }
+// ClickTargetTradeButton(index) (0x00586c80) - a click on the partner's half.
+// Money on the cursor is added to this player's own offer, the same drop as
+// AddTradeMoney. Otherwise only the seventh slot answers, the one the partner
+// puts an item to be enchanted in: a spell waiting for an item goes on it.
+static int lua_ClickTargetTradeButton(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: ClickTargetTradeButton(index)");
+    if (cursorMoney() != 0) {
+        dropCursorMoneyOnTrade(L);
+    } else if (std::lround(lua_tonumber(L, 1)) == 7) {
+        auto* gh = getGameHandler(L);
+        if (auto* inv = gh ? gh->getInventoryHandler() : nullptr) inv->clickPartnerNonTradedSlot();
+    }
+    return 0;
+}
 
 static int lua_SetTradeMoney(lua_State* L) {
     auto* gh = getGameHandler(L);
@@ -3606,6 +3697,7 @@ void registerActionLuaAPI(lua_State* L) {
                 {"CursorHasMoney",      lua_CursorHasMoney},
                 {"CursorHasMacro",      lua_CursorHasMacro},
                 {"DeleteCursorItem",    lua_DeleteCursorItem},
+                {"DropItemOnUnit",     lua_DropItemOnUnit},
                 {"AutoEquipCursorItem", lua_AutoEquipCursorItem},
                 {"EquipCursorItem",     lua_EquipCursorItem},
                 {"IsModifiedClick",     lua_IsModifiedClick},

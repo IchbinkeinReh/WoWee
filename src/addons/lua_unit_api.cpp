@@ -17,6 +17,8 @@
 #include <cmath>
 #include <bit>
 #include "game/interface_text.hpp"
+#include "pipeline/asset_manager.hpp"
+#include "pipeline/dbc_layout.hpp"
 
 namespace wowee::addons {
 
@@ -289,6 +291,49 @@ static int lua_UnitIsDead(lua_State* L) {
     return 1;
 }
 
+/// A ChrRaces or ChrClasses name as the client answers it (0x00715970,
+/// 0x007159e0): the localized name in the unit's gender - Name_female or
+/// Name_male, seventeen and thirty-four after Name - the other where that
+/// one is empty, and the plain Name where both are. Empty where the file or
+/// its layout is not to hand.
+static std::string chrRowName(game::GameHandler* gh, const char* file, const char* layoutName,
+                              uint32_t id, int gender) {
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* layout = layouts ? layouts->getLayout(layoutName) : nullptr;
+    const uint32_t nameF = layout ? layout->tryField("Name") : 0xFFFFFFFFu;
+    auto dbc = am && am->isInitialized() ? am->loadDBCOptional(file) : nullptr;
+    if (!dbc || !dbc->isLoaded() || nameF == 0xFFFFFFFFu || nameF + 34 >= dbc->getFieldCount()) return {};
+    const int32_t row = dbc->findRecordById(id);
+    if (row < 0) return {};
+    const auto r = static_cast<uint32_t>(row);
+    std::string fem = dbc->getString(r, nameF + 17);
+    std::string male = dbc->getString(r, nameF + 34);
+    std::string name = gender == 1 ? (!fem.empty() ? fem : male)
+                     : gender == 0 ? (!male.empty() ? male : fem) : std::string();
+    return !name.empty() ? name : dbc->getString(r, nameF);
+}
+
+std::string localizedRaceName(game::GameHandler* gh, uint32_t raceId, int gender) {
+    std::string name = chrRowName(gh, "ChrRaces.dbc", "ChrRaces", raceId, gender);
+    if (name.empty() && raceId > 0 && raceId < 12) name = kLuaRaces[raceId];
+    return name;
+}
+
+std::string localizedClassName(game::GameHandler* gh, uint32_t classId, int gender) {
+    std::string name = chrRowName(gh, "ChrClasses.dbc", "ChrClasses", classId, gender);
+    if (name.empty() && classId < 12) name = kLuaClasses[classId];
+    return name;
+}
+
+/// UNIT_FIELD_BYTES_0's gender byte for a unit token: true for female.
+static bool unitIsFemale(game::GameHandler* gh, const std::string& lowerUid) {
+    const uint64_t guid = gh ? resolveUnitGuid(gh, lowerUid) : 0;
+    auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
+    if (!entity) return false;
+    return ((entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) >> 16) & 0xFFu) == 1;
+}
+
 static int lua_UnitClass(lua_State* L) {
     const char* uid = luaL_optstring(L, 1, "player");
     auto* gh = getGameHandler(L);
@@ -337,7 +382,10 @@ static int lua_UnitClass(lua_State* L) {
         // where "MAGE" was meant looked up nothing: SetPortraitTexture found no
         // CLASS_ICON_TCOORDS entry and fell back to the placeholder portrait,
         // which is the blue question mark on the character sheet.
-        lua_pushstring(L, kLuaClasses[classId]);
+        // The localized name in the unit's gender (0x007159e0).
+        const std::string localized = chrRowName(gh, "ChrClasses.dbc", "ChrClasses", classId,
+                                                 unitIsFemale(gh, uidStr) ? 1 : 0);
+        lua_pushstring(L, !localized.empty() ? localized.c_str() : kLuaClasses[classId]);
         lua_pushstring(L, token);
         lua_pushnumber(L, classId);
         return 3;
@@ -810,20 +858,33 @@ static int lua_UnitCanCooperate(lua_State* L) {
 }
 
 // UnitCreatureFamily(unit) → familyName or nil
+// UnitCreatureFamily(unit) (0x00611820) → CreatureFamily.dbc's localized
+// Name for a creature's template family (0x007153e0), nil without one - a
+// player has no template, and a creature of no family has none to name.
 static int lua_UnitCreatureFamily(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { return luaReturnNil(L); }
-    const char* uid = luaL_optstring(L, 1, "target");
-    std::string uidStr(uid);
+    std::string uidStr(luaL_checkstring(L, 1));
     toLowerInPlace(uidStr);
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
-    if (guid == 0) { return luaReturnNil(L); }
-    auto entity = gh->getEntityManager().getEntity(guid);
-    if (!entity || entity->getType() == game::ObjectType::PLAYER) { return luaReturnNil(L); }
+    const uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
+    auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
+    if (!entity || entity->getType() == game::ObjectType::PLAYER) return luaReturnNil(L);
     auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
-    if (!unit) { return luaReturnNil(L); }
-    uint32_t family = gh->getCreatureFamily(unit->getEntry());
-    if (family == 0) { return luaReturnNil(L); }
+    if (!unit) return luaReturnNil(L);
+    const uint32_t family = gh->getCreatureFamily(unit->getEntry());
+    if (family == 0) return luaReturnNil(L);
+    auto* am = gh->services().assetManager;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* layout = layouts ? layouts->getLayout("CreatureFamily") : nullptr;
+    const uint32_t nameF = layout ? layout->tryField("Name") : 0xFFFFFFFFu;
+    auto dbc = am && am->isInitialized() ? am->loadDBCOptional("CreatureFamily.dbc") : nullptr;
+    if (dbc && dbc->isLoaded() && nameF < dbc->getFieldCount()) {
+        const int32_t r = dbc->findRecordById(family);
+        if (r < 0) return luaReturnNil(L);
+        const std::string name = dbc->getString(static_cast<uint32_t>(r), nameF);
+        lua_pushstring(L, name.c_str());
+        return 1;
+    }
+    // Without the file, the English names.
     static constexpr const char* kFamilies[] = {
         "", "Wolf", "Cat", "Spider", "Bear", "Boar", "Crocolisk", "Carrion Bird",
         "Crab", "Gorilla", "Raptor", "", "Tallstrider", "", "", "Felhunter",
@@ -833,8 +894,8 @@ static int lua_UnitCreatureFamily(lua_State* L) {
         "Chimaera", "Devilsaur", "Ghoul", "Silithid", "Worm", "Rhino", "Wasp",
         "Core Hound", "Spirit Beast"
     };
-    lua_pushstring(L, (family < sizeof(kFamilies)/sizeof(kFamilies[0]) && kFamilies[family][0])
-        ? kFamilies[family] : "Beast");
+    if (family >= std::size(kFamilies) || !kFamilies[family][0]) return luaReturnNil(L);
+    lua_pushstring(L, kFamilies[family]);
     return 1;
 }
 
@@ -1290,7 +1351,9 @@ static int lua_UnitRace(lua_State* L) {
 
     const uint8_t raceId = unitRaceOf(gh, uid);
     const bool known = (raceId > 0 && raceId < 12);
-    const char* name = known ? kLuaRaces[raceId] : "Unknown";
+    // The localized name in the unit's gender (0x0060fd40 -> 0x00715970).
+    std::string localized = known ? chrRowName(gh, "ChrRaces.dbc", "ChrRaces", raceId, unitIsFemale(gh, uid) ? 1 : 0) : "";
+    const char* name = known ? (!localized.empty() ? localized.c_str() : kLuaRaces[raceId]) : "Unknown";
     const char* file = known ? kLuaRaceFileNames[raceId] : "Unknown";
     lua_pushstring(L, name);      // 1: localized race
     lua_pushstring(L, file);      // 2: race file name, spliced into asset paths
@@ -2891,7 +2954,8 @@ static int lua_GetRaidRosterInfo(lua_State* L) {
     if (entity) {
         uint32_t bytes0 = entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
         uint8_t classId = static_cast<uint8_t>((bytes0 >> 8) & 0xFF);
-        if (classId > 0 && classId < 12) className = kLuaClasses[classId];
+        if (classId > 0 && classId < 12)
+            className = localizedClassName(gh, classId, ((bytes0 >> 16) & 0xFFu) == 1 ? 1 : 0);
     }
     lua_pushstring(L, className.c_str());    // class (localized)
     lua_pushstring(L, className.c_str());    // fileName
@@ -2996,75 +3060,95 @@ static int lua_UnitIsEnemy(lua_State* L) {
     return 1;
 }
 
+// UnitCreatureType(unit) (0x00611780) → CreatureType.dbc's localized name for
+// the unit's type, nil without one. The type (0x0071f300): the shapeshift
+// form's CreatureType when it sets one, else a creature's template type, else
+// the race's (ChrRaces CreatureType) for a player.
 static int lua_UnitCreatureType(lua_State* L) {
     auto* gh = getGameHandler(L);
-    if (!gh) { lua_pushstring(L, "Unknown"); return 1; }
-    const char* uid = luaL_optstring(L, 1, "target");
+    const char* uid = luaL_checkstring(L, 1);
     std::string uidStr(uid);
     toLowerInPlace(uidStr);
-    uint64_t guid = resolveUnitGuid(gh, uidStr);
-    if (guid == 0) { lua_pushstring(L, "Unknown"); return 1; }
-    auto entity = gh->getEntityManager().getEntity(guid);
-    if (!entity) { lua_pushstring(L, "Unknown"); return 1; }
-    // Player units are always "Humanoid"
-    if (entity->getType() == game::ObjectType::PLAYER) {
-        lua_pushstring(L, "Humanoid");
-        return 1;
-    }
+    const uint64_t guid = gh ? resolveUnitGuid(gh, uidStr) : 0;
+    auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr;
     auto unit = std::dynamic_pointer_cast<game::Unit>(entity);
-    if (!unit) { lua_pushstring(L, "Unknown"); return 1; }
-    uint32_t ct = gh->getCreatureType(unit->getEntry());
+    if (!unit) return luaReturnNil(L);
+    uint32_t type = 0;
+    const uint32_t bytes2 = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_2));
+    if (const auto* row = gh->shapeshiftFormRow(static_cast<uint8_t>(bytes2 >> 24)); row && row->creatureType > 0)
+        type = row->creatureType;
+    auto* am = gh->services().assetManager;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    if (type == 0 && entity->getType() != game::ObjectType::PLAYER) {
+        type = gh->getCreatureType(unit->getEntry());
+    } else if (type == 0) {
+        const uint32_t race = unit->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0)) & 0xFFu;
+        const auto* layout = layouts ? layouts->getLayout("ChrRaces") : nullptr;
+        const uint32_t typeF = layout ? layout->tryField("CreatureType") : 0xFFFFFFFFu;
+        auto races = am && am->isInitialized() ? am->loadDBCOptional("ChrRaces.dbc") : nullptr;
+        if (races && races->isLoaded() && typeF < races->getFieldCount())
+            if (const int32_t r = races->findRecordById(race); r >= 0)
+                type = races->getUInt32(static_cast<uint32_t>(r), typeF);
+    }
+    if (type == 0) return luaReturnNil(L);
+    auto types = am && am->isInitialized() ? am->loadDBCOptional("CreatureType.dbc") : nullptr;
+    if (types && types->isLoaded() && types->getFieldCount() > 1) {
+        if (const int32_t r = types->findRecordById(type); r >= 0) {
+            const std::string name = types->getString(static_cast<uint32_t>(r), 1);
+            lua_pushstring(L, name.c_str());
+            return 1;
+        }
+        return luaReturnNil(L);
+    }
+    // Without the file, the English names.
     static constexpr const char* kTypes[] = {
-        "Unknown", "Beast", "Dragonkin", "Demon", "Elemental",
-        "Giant", "Undead", "Humanoid", "Critter", "Mechanical",
-        "Not specified", "Totem", "Non-combat Pet", "Gas Cloud"
+        "", "Beast", "Dragonkin", "Demon", "Elemental", "Giant", "Undead", "Humanoid",
+        "Critter", "Mechanical", "Not specified", "Totem", "Non-combat Pet", "Gas Cloud"
     };
-    lua_pushstring(L, (ct < 14) ? kTypes[ct] : "Unknown");
+    if (type >= std::size(kTypes)) return luaReturnNil(L);
+    lua_pushstring(L, kTypes[type]);
     return 1;
 }
 
-// GetPlayerInfoByGUID(guid) → localizedClass, englishClass, localizedRace, englishRace, sex, name, realm
+// GetPlayerInfoByGUID(guid) → localizedClass, englishClass, localizedRace,
+// englishRace, sex, name, realm (0x00613f90). Only a player's guid, and only
+// once the name cache has it (0x0067d770 asks the server meanwhile): nothing
+// at all before. The class and race names are the cached player's, in its
+// gender (0x0072aab0, 0x0072aa70); the English ones are the class token and
+// the race's file string; sex is 2 for male, 3 for female.
 static int lua_GetPlayerInfoByGUID(lua_State* L) {
     auto* gh = getGameHandler(L);
     const char* guidStr = luaL_checkstring(L, 1);
-    if (!gh || !guidStr) {
-        for (int i = 0; i < 7; i++) lua_pushnil(L);
-        return 7;
-    }
-    // Parse hex GUID string "0x0000000000000001"
+    if (!gh || !guidStr) return 0;
     uint64_t guid = 0;
     if (guidStr[0] == '0' && (guidStr[1] == 'x' || guidStr[1] == 'X'))
         guid = strtoull(guidStr + 2, nullptr, 16);
     else
         guid = strtoull(guidStr, nullptr, 16);
+    if (guid == 0) return luaL_error(L, "Usage: GetPlayerInfoByGUID(\"playerGUID\")");
+    if ((guid >> 60) != 0) return 0;   // not a player
 
-    if (guid == 0) { for (int i = 0; i < 7; i++) lua_pushnil(L); return 7; }
-
-    // Look up entity name
     std::string name = gh->lookupName(guid);
-    if (name.empty() && guid == gh->getPlayerGuid()) {
-        const auto& chars = gh->getCharacters();
-        for (const auto& c : chars)
-            if (c.guid == guid) { name = c.name; break; }
-    }
-
-    // For player GUID, return class/race if it's the local player
-    const char* className = "Unknown";
-    const char* raceName = "Unknown";
+    uint8_t classId = gh->lookupPlayerClass(guid);
+    uint8_t raceId = gh->lookupPlayerRace(guid);
+    uint8_t gender = gh->lookupPlayerGender(guid);
     if (guid == gh->getPlayerGuid()) {
-        uint8_t cid = gh->getPlayerClass();
-        uint8_t rid = gh->getPlayerRace();
-        if (cid < 12) className = kLuaClasses[cid];
-        if (rid < 12) raceName = kLuaRaces[rid];
+        for (const auto& c : gh->getCharacters())
+            if (c.guid == guid && name.empty()) name = c.name;
+        classId = gh->getPlayerClass();
+        raceId = gh->getPlayerRace();
     }
-
-    lua_pushstring(L, className);  // 1: localizedClass
-    lua_pushstring(L, className);  // 2: englishClass
-    lua_pushstring(L, raceName);   // 3: localizedRace
-    lua_pushstring(L, raceName);   // 4: englishRace
-    lua_pushnumber(L, 0);          // 5: sex (0=unknown)
-    lua_pushstring(L, name.c_str()); // 6: name
-    lua_pushstring(L, "");         // 7: realm
+    if (name.empty()) return 0;
+    const int g = gender == 1 ? 1 : 0;
+    lua_pushstring(L, localizedClassName(gh, classId, g).c_str());              // 1
+    if (const char* token = luaClassToken(classId)) lua_pushstring(L, token);  // 2
+    else lua_pushnil(L);
+    lua_pushstring(L, localizedRaceName(gh, raceId, g).c_str());                // 3
+    if (raceId > 0 && raceId < 12) lua_pushstring(L, kLuaRaceFileNames[raceId]); // 4
+    else lua_pushnil(L);
+    lua_pushnumber(L, gender == 1 ? 3 : 2);                                    // 5
+    lua_pushstring(L, name.c_str());                                           // 6
+    lua_pushstring(L, "");                                                     // 7: same realm
     return 7;
 }
 

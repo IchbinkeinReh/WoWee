@@ -2585,6 +2585,51 @@ void InventoryHandler::replaceEnchant() {
     completeItemUseOnItem(pending.targetItemGuid, true);
 }
 
+void InventoryHandler::clickPartnerNonTradedSlot() {
+    if (!isAwaitingItemTarget()) return;
+    const PendingItemTarget& pending = *pendingItemTarget_;
+    const auto& cache = owner_.spellNameCacheRef();
+    if (auto it = cache.find(pending.spellId); it != cache.end()) {
+        const uint32_t existing = peerTradeSlots_[TRADE_SLOT_NONTRADED].inst.enchantId;
+        for (int i = 0; i < 3; ++i) {
+            if (it->second.effectIds[i] != 53 || existing == 0) continue;
+            // Both enchants have to be rows of SpellItemEnchantment for the
+            // question to be asked; without either the spell just goes.
+            const std::string oldName = owner_.getEnchantName(existing);
+            const std::string newName = owner_.getEnchantName(it->second.effectMiscValues[i]);
+            if (oldName.empty() || newName.empty()) continue;
+            owner_.fireAddonEvent("TRADE_REPLACE_ENCHANT", {oldName, newName});
+            return;
+        }
+    }
+    castPendingAtTradeSlot();
+}
+
+bool InventoryHandler::castPendingAtTradeSlot() {
+    if (!isAwaitingItemTarget() || !owner_.getSocket()) return false;
+    const PendingItemTarget pending = *pendingItemTarget_;
+    pendingItemTarget_.reset();
+    // The targets 0x009ab8b0 writes for it: the mask, then a packed guid that
+    // is the trade slot rather than an item - TrinityCore and its kin look the
+    // item up in the partner's half by that number.
+    constexpr uint32_t kTargetFlagTradeItem = 0x1000;
+    if (pending.fromSpell) {
+        owner_.getSocket()->send(CastSpellPacket::buildTradeItemTarget(pending.spellId, 0));
+    } else {
+        // An item's use carries the same targets after its own header; the
+        // builder writes the mask alone when nothing else is named, and the
+        // slot follows it.
+        network::Packet packet = UseItemPacket::build(pending.bag, pending.slot, pending.itemGuid,
+                                                      pending.spellId, 0, 0, 0, 0,
+                                                      kTargetFlagTradeItem);
+        packet.writePackedGuid(static_cast<uint64_t>(TRADE_SLOT_NONTRADED));
+        owner_.getSocket()->send(packet);
+    }
+    LOG_INFO("Casting ", pending.itemName, " (spell ", pending.spellId,
+             ") at the trade window's untraded slot");
+    return true;
+}
+
 void InventoryHandler::completeItemUseOnItem(uint64_t targetItemGuid, bool confirmed) {
     if (!isAwaitingItemTarget()) return;
     const PendingItemTarget pending = *pendingItemTarget_;
@@ -5152,6 +5197,28 @@ void InventoryHandler::setTradeItem(uint8_t tradeSlot, uint8_t srcBag, uint8_t s
     auto packet = SetTradeItemPacket::build(tradeSlot, srcBag, srcSlot);
     owner_.getSocket()->send(packet);
     if (tradeSlot < TRADE_SLOT_COUNT) myTradeItemGuids_[tradeSlot] = itemGuidAtWire(srcBag, srcSlot);
+    // The slot that is not traded (0x005869a0, slot 7): TRADE_POTENTIAL_BIND_ENCHANT
+    // says whether enchanting what is put there would bind it for good.
+    if (tradeSlot == TRADE_SLOT_NONTRADED)
+        owner_.fireAddonEvent("TRADE_POTENTIAL_BIND_ENCHANT",
+                              {eventBool(enchantWouldBind(myTradeItemGuids_[tradeSlot]))});
+}
+
+bool InventoryHandler::enchantWouldBind(uint64_t itemGuid) const {
+    // 0x00708520 and not 0x00709550: soulbound (ITEM_FIELD_FLAGS 0x1) but
+    // still tradeable - flagged 0x100, and fewer than two hours of the
+    // player's played time since it was made (0x00708b40, 0x006cf440, which
+    // reads as 0 before any played time has come) - and carrying no enchant
+    // that binds of its own (0x007073e0, SpellItemEnchantment Flags 1).
+    const auto& online = owner_.onlineItemsRef();
+    const auto it = online.find(itemGuid);
+    if (itemGuid == 0 || it == online.end()) return false;
+    const auto& item = it->second;
+    if ((item.flags & 0x1u) == 0 || (item.flags & 0x100u) == 0) return false;
+    for (uint32_t enchant : item.enchantIds)
+        if (owner_.enchantSoulbinds(enchant)) return false;
+    const int64_t played = std::max<int64_t>(owner_.playedTimeNow(), 0);
+    return static_cast<int64_t>(item.createPlayedTime) - played > -7200;
 }
 
 bool InventoryHandler::itemInTrade(uint64_t itemGuid) const {
@@ -5165,6 +5232,9 @@ void InventoryHandler::clearTradeItem(uint8_t tradeSlot) {
     auto packet = ClearTradeItemPacket::build(tradeSlot);
     owner_.getSocket()->send(packet);
     if (tradeSlot < TRADE_SLOT_COUNT) myTradeItemGuids_[tradeSlot] = 0;
+    // Emptied, the slot that is not traded says no (0x00586aa0).
+    if (tradeSlot == TRADE_SLOT_NONTRADED)
+        owner_.fireAddonEvent("TRADE_POTENTIAL_BIND_ENCHANT", {eventBool(false)});
 }
 
 void InventoryHandler::setTradeGold(uint64_t amount) {

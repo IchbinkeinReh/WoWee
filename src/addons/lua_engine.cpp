@@ -53,6 +53,12 @@ extern "C" {
 
 namespace wowee::addons {
 
+std::string& lastClickButton() {
+    static std::string button;
+    return button;
+}
+
+
 bool LuaEngine::uiSoundsSuppressed_ = false;
 
 
@@ -918,6 +924,7 @@ static int lua_Frame_Click(lua_State* L) {
     if (!hasScripts) return 0;
     if (auto* w = widgetOf(L, 1); w && w->enabled && w->objectType == "CheckButton")
         w->checked = !w->checked;
+    lastClickButton() = button;
     for (const char* script : {"PreClick", "OnClick", "PostClick"}) {
         lua_getfield(L, 1, "__scripts");
         lua_getfield(L, -1, script);
@@ -3618,7 +3625,8 @@ int lua_Tooltip_SetUnit(lua_State* L) {
                 if (const char* cls = wowee::addons::luaClassToken(classId)) {
                     (void)cls;
                     levelLine += " ";
-                    levelLine += wowee::addons::kLuaClasses[classId];
+                    levelLine += wowee::addons::localizedClassName(
+                        gh, classId, ((bytes0 >> 16) & 0xFFu) == 1 ? 1 : 0);
                 }
             }
             addLine(levelLine, 1.0f, 0.82f, 0.0f);
@@ -13022,6 +13030,7 @@ void LuaEngine::dispatchMouse(float x, float y, float screenH, MouseButtons butt
                     // of that sort may be taken by insecure code.
                     {
                         taint::HardwareEvent hardware;
+                        lastClickButton() = b.name;
                         callFrameScript(pressedWid_[i], "PreClick", b.name);
                         callFrameScript(pressedWid_[i], "OnClick", b.name);
                         callFrameScript(pressedWid_[i], "PostClick", b.name);

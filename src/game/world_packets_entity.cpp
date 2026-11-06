@@ -1359,6 +1359,16 @@ network::Packet CastSpellPacket::buildItemTarget(uint32_t spellId, uint64_t item
     return packet;
 }
 
+network::Packet CastSpellPacket::buildTradeItemTarget(uint32_t spellId, uint8_t castCount) {
+    network::Packet packet(wireOpcode(Opcode::CMSG_CAST_SPELL));
+    packet.writeUInt8(castCount);
+    packet.writeUInt32(spellId);
+    packet.writeUInt8(0x00);    // castFlags
+    packet.writeUInt32(0x1000); // TARGET_FLAG_TRADE_ITEM
+    packet.writePackedGuid(6);  // TRADE_SLOT_NONTRADED
+    return packet;
+}
+
 network::Packet CastSpellPacket::buildDestination(uint32_t spellId, float x, float y, float z,
                                                   uint8_t castCount, uint64_t transportGuid) {
     // 0x0080ac90: castCount, spell, cast flags (0: no trajectory), then the

@@ -2594,6 +2594,10 @@ public:
     static network::Packet buildGameObjectTarget(uint32_t spellId, uint64_t targetGuid, uint8_t castCount);
     /// Cast at an item - Disenchant, Prospecting, Milling, enchant formulas.
     static network::Packet buildItemTarget(uint32_t spellId, uint64_t itemGuid, uint8_t castCount);
+    /// A cast at the trade window's untraded slot (0x0080c5f0):
+    /// TARGET_FLAG_TRADE_ITEM (0x1000) and the slot number, 6, packed where an
+    /// item's guid would be.
+    static network::Packet buildTradeItemTarget(uint32_t spellId, uint8_t castCount);
     /// Cast at a place on the ground: SpellCastTargets with only
     /// TARGET_FLAG_DEST_LOCATION, written as 0x009ab8b0 writes it.
     /// x, y, z in the transport's frame when transportGuid is set (0x009ab8b0).
@@ -3394,6 +3398,10 @@ struct QuestQueryRewardsData {
     std::array<uint32_t, 5> factionId{};
     std::array<int32_t, 5>  factionValueId{};
     std::array<int32_t, 5>  factionValueOverride{};
+    /// RewardReputationMask, the word after the arena points (the client's
+    /// quest record +0x28e0): bit i set keeps reward i's reputation off the
+    /// factions it would spill over to. WotLK only.
+    uint32_t reputationMask = 0;
     bool valid = false;
 };
 
@@ -4144,6 +4152,13 @@ public:
 class UnstablePetPacket {
 public:
     /** CMSG_UNSTABLE_PET: retrieve a stabled pet by its server-side petNumber */
+    static network::Packet build(uint64_t stableMasterGuid, uint32_t petNumber);
+};
+
+class StableSwapPetPacket {
+public:
+    /** CMSG_STABLE_SWAP_PET (0x005a1ca0): the stable master and the number of
+     *  the stabled pet that changes places with the one that is out. */
     static network::Packet build(uint64_t stableMasterGuid, uint32_t petNumber);
 };
 

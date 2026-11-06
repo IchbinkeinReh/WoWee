@@ -1316,7 +1316,7 @@ void registerLfgLuaAPI(lua_State* L) {
         // class name it has, as UnitClass does.
         const uint8_t classId = nameKnown ? gh->lookupPlayerClass(listing->guid) : 0;
         const char* token = luaClassToken(classId);
-        if (token) lua_pushstring(L, kLuaClasses[classId]);
+        if (token) lua_pushstring(L, localizedClassName(gh, classId, 2).c_str());
         else       lua_pushstring(L, "UNKNOWN");                     // className
         lua_pushstring(L, (group ? group->comment : listing->comment).c_str());
         lua_pushinteger(L, static_cast<lua_Integer>(pair->members.size()));  // partyMembers
@@ -1368,7 +1368,7 @@ void registerLfgLuaAPI(lua_State* L) {
         // keeps six values and reads the name, the level, the relationship and the
         // comment.
         const uint8_t memberClass = gh->lookupPlayerClass(member->guid);
-        if (luaClassToken(memberClass)) lua_pushstring(L, kLuaClasses[memberClass]);
+        if (luaClassToken(memberClass)) lua_pushstring(L, localizedClassName(gh, memberClass, 2).c_str());
         else                            lua_pushstring(L, "");       // className
         lua_pushstring(L, "UNKNOWN");                                // areaName
         lua_pushstring(L, member->comment.c_str());

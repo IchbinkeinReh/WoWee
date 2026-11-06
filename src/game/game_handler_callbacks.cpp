@@ -1450,6 +1450,25 @@ bool GameHandler::hasPendingTradeRequest() const {
 bool GameHandler::isTradeOpen() const {
     return inventoryHandler_ ? inventoryHandler_->isTradeOpen() : false;
 }
+uint64_t GameHandler::getTradePeerGuid() const {
+    return inventoryHandler_ ? inventoryHandler_->getTradePeerGuid() : 0;
+}
+
+bool GameHandler::feedPetWithItem(uint64_t itemGuid) {
+    if (!spellHandler_ || itemGuid == 0) return false;
+    for (uint32_t spellId : spellHandler_->getKnownSpells()) {
+        const auto it = spellNameCache_.find(spellId);
+        if (it == spellNameCache_.end()) continue;
+        for (uint32_t effect : it->second.effectIds) {
+            if (effect == 101) {
+                spellHandler_->castSpellAtItem(spellId, itemGuid);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 const std::string& GameHandler::getTradePeerName() const {
     if (inventoryHandler_) return inventoryHandler_->getTradePeerName();
     return tradePeerName_;
@@ -3403,6 +3422,10 @@ void GameHandler::unstablePet(uint32_t petNumber) {
     if (spellHandler_) spellHandler_->unstablePet(petNumber);
 }
 
+void GameHandler::swapStablePet(uint32_t petNumber) {
+    if (spellHandler_) spellHandler_->swapStablePet(petNumber);
+}
+
 void GameHandler::handleListStabledPets(network::Packet& packet) {
     if (spellHandler_) spellHandler_->handleListStabledPets(packet);
 }
@@ -5324,6 +5347,10 @@ const std::string& GameHandler::getSpellFocusName(uint32_t focusId) const {
 const std::string& GameHandler::getTotemCategoryName(uint32_t categoryId) const {
     if (spellHandler_) return spellHandler_->getTotemCategoryName(categoryId);
     return EMPTY_STRING;
+}
+
+bool GameHandler::enchantSoulbinds(uint32_t enchantId) const {
+    return spellHandler_ && spellHandler_->enchantSoulbinds(enchantId);
 }
 
 std::string GameHandler::getEnchantName(uint32_t enchantId) const {

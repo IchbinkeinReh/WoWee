@@ -798,6 +798,9 @@ void SpellHandler::registerOpcodes(DispatchTable& table) {
     };
     table[Opcode::SMSG_SPELL_COOLDOWN] = [this](network::Packet& packet) { handleSpellCooldown(packet); };
     table[Opcode::SMSG_COOLDOWN_EVENT] = [this](network::Packet& packet) { handleCooldownEvent(packet); };
+    table[Opcode::SMSG_RESET_RANGED_COMBAT_TIMER] = [this](network::Packet& packet) {
+        handleResetRangedCombatTimer(packet);
+    };
     table[Opcode::SMSG_AURA_UPDATE] = [this](network::Packet& packet) {
         handleAuraUpdate(packet, false);
     };
@@ -1850,7 +1853,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         // of the four things happened.
         LOG_WARNING("Profession: spell ", spellId, " (", owner_.getSpellName(spellId),
                     ") opens the trade skill window for skill line ", craftSkillLine);
-        openCraftingWindow(craftSkillLine);
+        openCraftingWindow(craftSkillLine, spellId);
         return;
     }
 
@@ -3198,9 +3201,10 @@ void SpellHandler::learnPreviewTalents(const std::vector<std::pair<uint32_t, uin
     owner_.getSocket()->send(LearnPreviewTalentsPacket::build(talentRanks));
 }
 
-void SpellHandler::openCraftingWindow(uint32_t skillLine) {
+void SpellHandler::openCraftingWindow(uint32_t skillLine, uint32_t spellId) {
     craftingWindowOpen_ = true;
     craftingSkillLine_ = skillLine;
+    craftingSpellId_ = spellId;
     owner_.fireAddonEvent("TRADE_SKILL_SHOW", {});
 }
 
@@ -4481,6 +4485,31 @@ void SpellHandler::handleSpellCooldown(network::Packet& packet) {
     // set off every cooldown frame the character has.
     if (cooldownGuid != 0 && (forPlayer || cooldownGuid == owner_.getPetGuid()))
         cooldownHistoryChanged(!forPlayer);
+}
+
+void SpellHandler::handleResetRangedCombatTimer(network::Packet& packet) {
+    // 0x008071c0: a duration in milliseconds, and every known spell that is
+    // a ranged attack (Attributes 0x2) - not AttributesEx2 0x20000 nor
+    // AttributesEx4 0x10000000 - goes into the player's history as begun now
+    // for that long, with no category; then the cooldown displays look again.
+    if (!packet.hasRemaining(4)) return;
+    const int32_t duration = static_cast<int32_t>(packet.readUInt32());
+    packet.skipAll();
+    loadSpellNameCache();
+    const int64_t now = historyNowMs();
+    for (uint32_t spellId : knownSpells_) {
+        const auto it = owner_.spellNameCacheRef().find(spellId);
+        if (it == owner_.spellNameCacheRef().end()) continue;
+        const auto& e = it->second;
+        if ((e.attr & 0x2u) == 0 || (e.attrEx2 & 0x20000u) != 0 || (e.attrEx4 & 0x10000000u) != 0) continue;
+        if (duration == 0) continue;
+        spell_history::Entry h;
+        h.spellId = spellId;
+        h.start = now;
+        h.duration = duration;
+        playerHistory_.add(h);
+    }
+    cooldownHistoryChanged(false);
 }
 
 void SpellHandler::handleCooldownEvent(network::Packet& packet) {
@@ -6340,6 +6369,21 @@ std::string SpellHandler::getEnchantName(uint32_t enchantId) const {
     return {};
 }
 
+bool SpellHandler::enchantSoulbinds(uint32_t enchantId) const {
+    if (enchantId == 0) return false;
+    auto* am = owner_.services().assetManager;
+    if (!am || !am->isInitialized()) return false;
+    auto dbc = am->loadDBC("SpellItemEnchantment.dbc");
+    if (!dbc || !dbc->isLoaded()) return false;
+    const auto* sieL = pipeline::getActiveDBCLayout()
+        ? pipeline::getActiveDBCLayout()->getLayout("SpellItemEnchantment") : nullptr;
+    // Flags straight after ItemVisual (the client's +0x40 after +0x3c).
+    const uint32_t visualField = pipeline::detectEnchantmentItemVisualField(dbc.get(), sieL);
+    if (visualField == 0 || visualField + 1 >= dbc->getFieldCount()) return false;
+    const int32_t row = dbc->findRecordById(enchantId);
+    return row >= 0 && (dbc->getUInt32(static_cast<uint32_t>(row), visualField + 1) & 1u) != 0;
+}
+
 uint32_t SpellHandler::getEnchantGemItem(uint32_t enchantId) const {
     if (enchantId == 0) return 0;
     auto* am = owner_.services().assetManager;
@@ -8053,6 +8097,12 @@ void SpellHandler::abandonPet() {
     pkt.writeUInt64(owner_.petGuidRef());
     owner_.getSocket()->send(pkt);
     LOG_INFO("Sent CMSG_PET_ABANDON for pet=0x", std::hex, owner_.petGuidRef(), std::dec);
+}
+
+void SpellHandler::swapStablePet(uint32_t petNumber) {
+    if (owner_.getState() != WorldState::IN_WORLD || !owner_.getSocket() || owner_.stableMasterGuidRef() == 0 || petNumber == 0) return;
+    owner_.getSocket()->send(StableSwapPetPacket::build(owner_.stableMasterGuidRef(), petNumber));
+    LOG_INFO("Sent CMSG_STABLE_SWAP_PET: petNumber=", petNumber);
 }
 
 void SpellHandler::unstablePet(uint32_t petNumber) {
