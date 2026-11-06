@@ -7833,7 +7833,6 @@ void registerSystemLuaAPI(lua_State* L) {
             lua_pushboolean(L, gh && !gh->getEarnedAchievements().empty() ? 1 : 0);
             return 1;
         }},
-                {"TurnInGuildCharter",       lua_ReturnNothing},
                 // GetMovieResolution() (0x004dd610): the width read out of
                 // gxResolution's "WxH" - which here is the window's.
                 {"GetMovieResolution", [](lua_State* L) -> int {

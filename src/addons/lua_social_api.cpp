@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <initializer_list>
 #include <iterator>
 #include <vector>
 #include "game/opcode_table.hpp"
@@ -95,6 +96,22 @@ static void collectKnownLanguages(uint8_t raceId, std::vector<LanguageEntry>& ou
                                         : LanguageEntry{"Common", 7};
     // Skipped when it is the racial one, so Human does not list Common twice.
     if (out.empty() || out[0].id != faction.id) out.push_back(faction);
+}
+
+/// The first carried item of these entries - the backpack, then the worn bags
+/// in order, as 0x006dd3a0 and 0x006dd680 walk them - by its guid, or zero.
+static uint64_t carriedCharterGuid(game::GameHandler* gh, std::initializer_list<uint32_t> ids) {
+    const auto& inv = gh->getInventory();
+    auto wanted = [&](uint32_t id) { return std::find(ids.begin(), ids.end(), id) != ids.end(); };
+    for (int i = 0; i < inv.getBackpackSize(); ++i) {
+        if (wanted(inv.getBackpackSlot(i).item.itemId)) return gh->getBackpackItemGuid(i);
+    }
+    for (int b = 0; b < game::Inventory::NUM_BAG_SLOTS; ++b) {
+        for (int sl = 0; sl < inv.getBagSize(b); ++sl) {
+            if (wanted(inv.getBagSlot(b, sl).item.itemId)) return gh->getBagItemGuid(b, sl);
+        }
+    }
+    return 0;
 }
 
 /// Whether the player's guild rank holds one right. Shared by the nine Can*
@@ -2016,35 +2033,37 @@ void registerSocialLuaAPI(lua_State* L) {
             if (auto* gh = getGameHandler(L)) gh->closePetitionVendor();
             return 0;
         }},
-                // HasFilledPetition() gates the arena registrar's turn-in
-                // buttons. Whether a charter has *enough* signatures is not
-                // something this client is told - SMSG_PETITION_SHOW_SIGNATURES
-                // carries a count, but only for the charter whose window is
-                // open, and the required number lives in the server's own
-                // config. What can be answered is whether the player is
-                // carrying a charter at all, which is the question that
-                // decides whether those buttons could ever do anything: an
-                // unfilled one is refused by the server with its own error,
-                // where hiding the button leaves no way to find out.
+                // HasFilledPetition() (0x005a2820 -> 0x006dd680 with no team
+                // size): whether the player carries an arena charter, the
+                // backpack walked first and then the worn bags - and, when
+                // none is there, ERR_NO_ARENA_CHARTER. A guild charter does
+                // not count. The client tells charters apart by the petition
+                // query's type; here they are told apart by their fixed item
+                // ids, the 2v2, 3v3 and 5v5 charters.
                 {"HasFilledPetition", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
-            // Guild Charter, then the 2v2, 3v3 and 5v5 arena charters. Fixed
-            // ids in every expansion that has them.
-            static const uint32_t kCharters[] = {5863, 23560, 23561, 23562};
-            bool carrying = false;
-            if (gh) {
-                const auto& inv = gh->getInventory();
-                for (uint32_t id : kCharters) {
-                    for (int i = 0; i < inv.getBackpackSize() && !carrying; ++i)
-                        carrying = inv.getBackpackSlot(i).item.itemId == id;
-                    for (int b = 0; b < game::Inventory::NUM_BAG_SLOTS && !carrying; ++b)
-                        for (int sl = 0; sl < inv.getBagSize(b) && !carrying; ++sl)
-                            carrying = inv.getBagSlot(b, sl).item.itemId == id;
-                    if (carrying) break;
-                }
+            const bool carrying = gh && carriedCharterGuid(gh, {23560, 23561, 23562}) != 0;
+            if (gh && !carrying) {
+                gh->playGameErrorSound("ERR_NO_ARENA_CHARTER");
+                gh->addUIError(game::interfaceString("ERR_NO_ARENA_CHARTER", "You don't have an arena charter."));
             }
             lua_pushboolean(L, carrying ? 1 : 0);
             return 1;
+        }},
+                // TurnInGuildCharter() (0x0059a1c0 -> 0x006dd3a0): the first
+                // guild charter carried - backpack, then bags - is turned in
+                // (CMSG_TURN_IN_PETITION with its guid); with none,
+                // ERR_NO_GUILD_CHARTER.
+                {"TurnInGuildCharter", [](lua_State* L) -> int {
+            auto* gh = getGameHandler(L);
+            if (!gh) return 0;
+            if (const uint64_t guid = carriedCharterGuid(gh, {5863}); guid != 0) {
+                gh->turnInPetition(guid);
+            } else {
+                gh->playGameErrorSound("ERR_NO_GUILD_CHARTER");
+                gh->addUIError(game::interfaceString("ERR_NO_GUILD_CHARTER", "You don't have a guild charter."));
+            }
+            return 0;
         }},
                 // The guild bank tab dialog picks from the same icons under a
                 // name of its own.
