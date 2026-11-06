@@ -4285,9 +4285,16 @@ void SocialHandler::handleFriendStatus(network::Packet& packet) {
     // list's ERR_IGNORE_*, which share this packet and said nothing here.
     // The lines that name a player wait for the name, as the original's do.
     // These were English.
+    // A line that names a player and has no name yet asks for it, and the
+    // answer prints it (0x006b6760 / 0x006b68b0 / 0x006b6630): with the
+    // realm as "Name-Realm" when there is one, and the name written into the
+    // list's row. An answer that found nobody prints ERR_FRIEND_ERROR and
+    // takes the row off the list instead.
+    const uint8_t status = data.status;
+    const auto emit = [this, status](const std::string& playerName) {
     const std::vector<std::string> who = {playerName};
     const bool named = !playerName.empty();
-    switch (data.status) {
+    switch (status) {
         case kDbError:
         case kNotFound:     gameError(owner_, ErrTo::Chat, "ERR_FRIEND_NOT_FOUND", "Player not found."); break;
         case kListFull:     gameError(owner_, ErrTo::Chat, "ERR_FRIEND_LIST_FULL", "Your friends list is full."); break;
@@ -4310,6 +4317,31 @@ void SocialHandler::handleFriendStatus(network::Packet& packet) {
         case 0x10:          if (named) gameError(owner_, ErrTo::Chat, "ERR_IGNORE_REMOVED_S", "%s is no longer being ignored.", who); break;
         case 0x11:          gameError(owner_, ErrTo::Chat, "ERR_IGNORE_AMBIGUOUS", "That name is ambiguous, type more of the player's server name."); break;
         default: break;
+    }
+    };
+    const bool namesPlayer = status == kOnline || status == kOffline || status == kRemoved ||
+                             status == kAddedOnline || status == kAddedOffline || status == kAlready ||
+                             status == 0x0E || status == 0x0F || status == 0x10;
+    if (!namesPlayer || !playerName.empty()) {
+        emit(playerName);
+    } else {
+        const uint64_t guid = data.guid;
+        owner_.askNameThen(guid, "friend status " + std::to_string(status),
+                           [this, guid, emit](bool found, const std::string& name) {
+            auto& contacts = owner_.contactsRef();
+            const auto row = std::find_if(contacts.begin(), contacts.end(),
+                                          [guid](const ContactEntry& e) { return e.guid == guid; });
+            if (!found || name.empty()) {
+                gameError(owner_, ErrTo::Chat, "ERR_FRIEND_ERROR", "Unknown friend response from server.");
+                if (row != contacts.end()) contacts.erase(row);
+            } else {
+                const std::string& realm = owner_.getCachedPlayerRealm(guid);
+                const std::string full = realm.empty() ? name : name + "-" + realm;
+                if (row != contacts.end()) row->name = full;
+                emit(full);
+            }
+            if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
+        });
     }
     if (owner_.addonEventCallbackRef()) owner_.addonEventCallbackRef()("FRIENDLIST_UPDATE", {});
 }
