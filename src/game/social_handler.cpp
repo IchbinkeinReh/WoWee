@@ -4503,10 +4503,14 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
     // counting down from the clock's own reading.
     //
     // One pair for the whole client, with the slot that owns it remembered the
-    // way 0x00acd16c does: a status of another kind for that slot leaves the
-    // pair alone - only an empty record, the zero the server sends when the
-    // player leaves a queue, takes the pair with it (00540000.c:8510-8517).
+    // way 0x00acd16c does. Any status that is not a running battle zeroes the
+    // pair whichever slot it is for, and lets go of the slot when it is the
+    // owner's; an empty record, the zero the server sends when the player
+    // leaves a queue, takes the battle's map with it as well, but only for the
+    // owning slot. The map is the running status' own, kept at 0x00bea564 for
+    // GetBattlefieldMapIconScale.
     if (statusId == 3) {
+        battlefieldMapId_ = status.mapId;
         const auto now = std::chrono::steady_clock::now();
         battlefieldInstanceExpiry_ = status.instanceRemainingMs
             ? now + std::chrono::milliseconds(status.instanceRemainingMs)
@@ -4515,10 +4519,17 @@ void SocialHandler::handleBattlefieldStatus(network::Packet& packet) {
             ? now - std::chrono::milliseconds(status.elapsedMs)
             : std::chrono::steady_clock::time_point{};
         battlefieldInstanceSlot_ = static_cast<int32_t>(queueSlot);
-    } else if (statusId == 0 && battlefieldInstanceSlot_ == static_cast<int32_t>(queueSlot)) {
+    } else if (statusId == 0) {
+        if (battlefieldInstanceSlot_ == static_cast<int32_t>(queueSlot)) {
+            battlefieldInstanceExpiry_ = {};
+            battlefieldInstanceStart_  = {};
+            battlefieldMapId_          = 0;
+            battlefieldInstanceSlot_   = -1;
+        }
+    } else {
         battlefieldInstanceExpiry_ = {};
         battlefieldInstanceStart_  = {};
-        battlefieldInstanceSlot_   = -1;
+        if (battlefieldInstanceSlot_ == static_cast<int32_t>(queueSlot)) battlefieldInstanceSlot_ = -1;
     }
 
     // Said in the log only. The original answers a status with

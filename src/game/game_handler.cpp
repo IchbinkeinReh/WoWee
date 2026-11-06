@@ -1426,7 +1426,7 @@ void GameHandler::saveCharacterConfig() {
     // Save tracked quest IDs so the quest tracker restores on login
     if (!trackedQuestIds_.empty()) {
         std::string ids;
-        for (uint32_t qid : trackedQuestIds_) {
+        for (uint32_t qid : questWatchOrder_) {
             if (!ids.empty()) ids += ',';
             ids += std::to_string(qid);
         }
@@ -1462,6 +1462,7 @@ void GameHandler::loadCharacterConfig() {
     // These selections are per-character. Clear the previous character's
     // values even when the new character has no saved config yet.
     trackedQuestIds_.clear();
+    questWatchOrder_.clear();
     // The watch stamps are wall-clock and are deliberately not saved (see
     // questWatchExpiry_), so a new character starts with none at all.
     questWatchExpiry_.clear();
@@ -1529,6 +1530,7 @@ void GameHandler::loadCharacterConfig() {
                                               : collapsedSkillCategories_;
             if (key == "collapsed_factions") reputationRowsDirty_ = true;
             destination.clear();
+            if (&destination == &trackedQuestIds_) questWatchOrder_.clear();
             size_t tqPos = 0;
             while (tqPos <= val.size()) {
                 size_t comma = val.find(',', tqPos);
@@ -1536,7 +1538,10 @@ void GameHandler::loadCharacterConfig() {
                     ? val.substr(tqPos, comma - tqPos) : val.substr(tqPos);
                 try {
                     uint32_t qid = static_cast<uint32_t>(std::stoul(idStr));
-                    if (qid != 0) destination.insert(qid);
+                    if (qid != 0 && destination.insert(qid).second &&
+                        &destination == &trackedQuestIds_) {
+                        questWatchOrder_.push_back(qid);
+                    }
                 } catch (...) {}
                 if (comma == std::string::npos) break;
                 tqPos = comma + 1;
@@ -4934,6 +4939,10 @@ void GameHandler::noteArenaUnitDestroyed(uint64_t guid) {
 
 uint8_t GameHandler::battlefieldArenaFaction() const {
     return socialHandler_ ? socialHandler_->battlefieldArenaFaction() : 0;
+}
+
+uint32_t GameHandler::battlefieldMapId() const {
+    return socialHandler_ ? socialHandler_->battlefieldMapId() : 0;
 }
 
 void GameHandler::setArenaRosterShowOffline(bool show) {

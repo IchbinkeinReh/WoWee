@@ -299,6 +299,21 @@ int isItemInRange(lua_State* L) {
     return pushReach(L, gh, itemUseSpell(gh, itemId), gh->getPlayerGuid(), *unit);
 }
 
+/// IsQuestLogSpecialItemInRange(index [,target]) (0x005e54c0): the reach of
+/// the quest item's use spell, to the named unit or, where none is named,
+/// to the target.
+int isQuestLogSpecialItemInRange(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: IsQuestLogSpecialItemInRange(index [,target])");
+    auto* gh = getGameHandler(L);
+    const auto item = questSpecialItemAt(gh, static_cast<int>(lua_tonumber(L, 1)));
+    const char* named = gh ? lua_tostring(L, 2) : nullptr;
+    std::optional<uint64_t> unit;
+    if (named && *named) unit = unitArg(L, gh, 2);
+    else if (gh) unit = gh->getTargetGuid();
+    if (!unit) return luaReturnNil(L);
+    return pushReach(L, gh, itemUseSpell(gh, item.itemId), gh->getPlayerGuid(), *unit);
+}
+
 /// IsSpellInRange(index, "bookType", unit) or (name, unit) (0x00541c60):
 /// the reach from the book's caster to the unit.
 int isSpellInRange(lua_State* L) {
@@ -760,6 +775,7 @@ void registerItemQueryLuaAPI(lua_State* L) {
         {"IsEquippedItemType",      isEquippedItemType},
         {"ItemHasRange",            itemHasRange},
         {"IsItemInRange",           isItemInRange},
+        {"IsQuestLogSpecialItemInRange", isQuestLogSpecialItemInRange},
         {"IsSpellInRange",          isSpellInRange},
         {"SpellHasRange",           spellHasRange},
         {"IsHarmfulItem",           itemAimedAt<2>},

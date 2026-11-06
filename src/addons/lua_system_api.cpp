@@ -6577,10 +6577,25 @@ static int lua_CombatLogClearEntries(lua_State* L) {
 // not change, so this is recorded by the caller and nothing is needed here.
 static int lua_CombatTextSetActiveUnit(lua_State* L) { (void)L; return 0; }
 
-// GetBattlefieldMapIconScale() → what to multiply the map's icon sizes by.
-// One is the client's own default; the icons are sized in the frame itself,
-// and every use here is a multiply, so a nil would take the arithmetic down.
-static int lua_GetBattlefieldMapIconScale(lua_State* L) { lua_pushnumber(L, 1.0); return 1; }
+// GetBattlefieldMapIconScale() (0x0054c740) → what to multiply the map's icon
+// sizes by: the minimap icon scale of the running battle's Map.dbc row (1.25
+// for Arathi Basin, 1 for the rest), and 1 with no row.
+static int lua_GetBattlefieldMapIconScale(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    double scale = 1.0;
+    if (am && am->isInitialized()) {
+        if (auto dbc = am->loadDBC("Map.dbc"); dbc && dbc->isLoaded()) {
+            const auto* layout = pipeline::getActiveDBCLayout()
+                ? pipeline::getActiveDBCLayout()->getLayout("Map") : nullptr;
+            const uint32_t field = layout ? layout->tryField("MinimapIconScale") : 0xFFFFFFFFu;
+            const int32_t row = dbc->findRecordById(gh->battlefieldMapId());
+            if (row >= 0 && field != 0xFFFFFFFFu) scale = dbc->getFloat(static_cast<uint32_t>(row), field);
+        }
+    }
+    lua_pushnumber(L, scale);
+    return 1;
+}
 
 // PlayerIsPVPInactive(unit) (0x00612e20) → whether the unit carries the
 // battleground's Inactive aura (43681): read off the player's own auras, the

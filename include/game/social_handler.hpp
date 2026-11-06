@@ -760,6 +760,7 @@ public:
     [[nodiscard]] bool arenaRosterShowOffline() const { return arenaRosterShowOffline_; }
     /// The arena side byte of the last in-progress SMSG_BATTLEFIELD_STATUS.
     [[nodiscard]] uint8_t battlefieldArenaFaction() const { return battlefieldArenaFaction_; }
+    [[nodiscard]] uint32_t battlefieldMapId() const { return battlefieldMapId_; }
     /// SetArenaTeamRosterShowOffline (0x005a2e10): on a change every roster is
     /// sorted again and ARENA_TEAM_ROSTER_UPDATE raised for each that has
     /// members.
@@ -1033,11 +1034,13 @@ private:
     /// dwords of its tail: the client turns them into `clock + remaining` at
     /// 0x00bea574 and `clock - elapsed` at 0x00bea578, and records the slot that
     /// owns the pair at 0x00acd16c. Both are rewritten on every status tick of
-    /// that kind - not only on the way in - and the pair goes with an empty
-    /// record (00540000.c:8510-8517).
+    /// that kind - not only on the way in - and any other status zeroes them.
     std::chrono::steady_clock::time_point battlefieldInstanceExpiry_{};
     std::chrono::steady_clock::time_point battlefieldInstanceStart_{};
     int32_t battlefieldInstanceSlot_ = -1;
+    /// The running battle's map (0x00bea564): written by each status 3, gone
+    /// only with the owning slot's empty record.
+    uint32_t battlefieldMapId_ = 0;
     std::vector<AvailableBgInfo> availableBgs_;
     BgScoreboardData bgScoreboard_;
     std::vector<BgPlayerPosition> bgPlayerPositions_;

@@ -2895,6 +2895,8 @@ public:
     /// The arena side the last in-progress battlefield status gave
     /// (GetBattlefieldArenaFaction, 0x0054a280), 0 before one has come.
     uint8_t battlefieldArenaFaction() const;
+    /// The map of the battle the last in-progress status named (0x00bea564).
+    uint32_t battlefieldMapId() const;
 
     // ---- Loot ----
     void lootTarget(uint64_t guid);
@@ -3070,8 +3072,10 @@ public:
         if (tracked) {
             changed = trackedQuestIds_.size() < kMaxQuestWatches
                    && trackedQuestIds_.insert(questId).second;
+            if (changed) questWatchOrder_.push_back(questId);
         } else if (trackedQuestIds_.erase(questId)) {
             questWatchExpiry_.erase(questId);
+            std::erase(questWatchOrder_, questId);
             changed = true;
         }
         if (changed) {
@@ -3102,6 +3106,24 @@ public:
     /// dropped quest rather than one for the sweep. Returns how many came off.
     size_t expireQuestWatches();
     const std::unordered_set<uint32_t>& getTrackedQuestIds() const;
+    /// The watch list in its own order (0x00c23680, 0xc bytes an entry): a
+    /// new watch goes on the end (0x005e64d0), ShiftQuestWatches moves one,
+    /// and SortQuestWatches reorders the lot. GetQuestIndexForWatch and the
+    /// tracker read it in this order, not the log's.
+    const std::vector<uint32_t>& getQuestWatchOrder() const { return questWatchOrder_; }
+    /// 0x005def60: the watch at `from` taken out and put back at `to`, the
+    /// ones between moving up or down one; nothing when either is off the
+    /// end or they are the same.
+    void shiftQuestWatch(size_t from, size_t to) {
+        if (from == to || from >= questWatchOrder_.size() || to >= questWatchOrder_.size()) return;
+        const auto first = questWatchOrder_.begin();
+        if (from < to) std::rotate(first + from, first + from + 1, first + to + 1);
+        else std::rotate(first + to, first + from, first + from + 1);
+    }
+    /// SortQuestWatches' result: the same watches in a new order.
+    void reorderQuestWatches(std::vector<uint32_t> order) {
+        if (order.size() == questWatchOrder_.size()) questWatchOrder_ = std::move(order);
+    }
     /// The quests whose objective areas the world map shades.
     ///
     /// Set by WorldMapBlobFrame:DrawQuestBlob, which FrameXML calls with false
@@ -6405,6 +6427,7 @@ private:
     // to the QuestHandler - and has been removed.
     std::unordered_set<uint32_t> pendingQuestQueryIds_;
     std::unordered_set<uint32_t> trackedQuestIds_;
+    std::vector<uint32_t> questWatchOrder_;  ///< trackedQuestIds_ in watch order
     /// When each tracked quest stops being tracked, as unix seconds; 0 for
     /// never. This is the third column of the client's watch list (0xc23680
     /// holds quest id, stamp, and a sort key). A watch this client added by

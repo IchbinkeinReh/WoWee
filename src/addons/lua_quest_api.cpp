@@ -34,6 +34,8 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <unordered_map>
+#include <optional>
 
 namespace wowee::addons {
 
@@ -411,31 +413,58 @@ static int lua_GetQuestWatchIndex(lua_State* L) {
     return luaReturnNil(L);   // not watched
 }
 
-// SortQuestWatches() → whether the order changed.
-//
-// False, and that is the truthful answer rather than a shrug: the watch order
-// follows the quest log, so there is never a separate order to sort. The
-// caller reads it as "did anything move" and rebuilds the tracker when it did.
-static int lua_SortQuestWatches(lua_State* L) { lua_pushboolean(L, 0); return 1; }
+// Defined with the POI list further down: the proximity order weighs each
+// watch by its areas there.
+static bool sortQuestWatches(lua_State* L);
 
-// ShiftQuestWatches(from, to) - reorder the list by hand. Nothing is stored to
-// reorder, so dragging a tracker entry leaves it where the log puts it.
-static int lua_ShiftQuestWatches(lua_State* L) { (void)L; return 0; }
+// SortQuestWatches() (0x005e64b0) → whether the order was sorted.
+static int lua_SortQuestWatches(lua_State* L) {
+    lua_pushboolean(L, sortQuestWatches(L) ? 1 : 0);
+    return 1;
+}
 
-// GetQuestSortIndex(questLogIndex) → the header the quest sits under.
+// ShiftQuestWatches(indexFrom, indexTo) (0x005dfba0) - the tracker dragging
+// one watch to another place; the ones between close up behind it.
+static int lua_ShiftQuestWatches(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) {
+        return luaL_error(L, "Usage: ShiftQuestWatches(indexFrom, indexTo)");
+    }
+    const auto from = static_cast<long long>(lua_tonumber(L, 1)) - 1;
+    const auto to = static_cast<long long>(lua_tonumber(L, 2)) - 1;
+    auto* gh = getGameHandler(L);
+    if (gh && from >= 0 && to >= 0) {
+        gh->shiftQuestWatch(static_cast<size_t>(from), static_cast<size_t>(to));
+    }
+    return 0;
+}
+
+// GetQuestSortIndex(questIndex) (0x005dfa10) → which header the row sits
+// under, counted among the headers from one.
 //
-// Nil: this quest log has no headers - GetQuestLogTitle answers false for
-// isHeader on every row - so there is no header index to give and nothing for
-// the caller to expand.
-static int lua_GetQuestSortIndex(lua_State* L) { (void)L; return luaReturnNil(L); }
+// The row's group key (a header's own, a quest's zoneOrSort from the quest
+// cache) is looked up in the list of the log's group keys (0x005deae0); a row
+// past the end or a quest the cache does not hold yet finds none and answers
+// 0. A quest still waiting on its query is grouped under key 0 here, and that
+// is the "not cached" case, so it answers 0 as well.
+static int lua_GetQuestSortIndex(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetQuestSortIndex(questIndex)");
+    const auto rows = questRows(getGameHandler(L));
+    const auto index = static_cast<long long>(lua_tonumber(L, 1)) - 1;
+    int sortIndex = 0;
+    if (index >= 0 && index < static_cast<long long>(rows.size()) &&
+        (rows[index].isHeader || rows[index].group != 0)) {
+        int headers = 0;
+        for (const auto& row : rows) {
+            if (!row.isHeader) continue;
+            ++headers;
+            if (row.group == rows[index].group) { sortIndex = headers; break; }
+        }
+    }
+    lua_pushnumber(L, sortIndex);
+    return 1;
+}
 
 // ---- Quest log special items ----
-//
-// Whether the quest item's target is close enough to use it on. Nothing here
-// knows an item's range, and nil is the answer that hides the range indicator
-// rather than colouring it wrongly - WatchFrameItem_OnUpdate takes the third
-// branch and hides the count text.
-static int lua_IsQuestLogSpecialItemInRange(lua_State* L) { (void)L; return luaReturnNil(L); }
 
 // UseQuestLogSpecialItem(questLogIndex) - clicking that button.
 //
@@ -774,32 +803,26 @@ static int lua_GetNumQuestWatches(lua_State* L) {
     return 1;
 }
 
-// GetQuestIndexForWatch(watchIndex) → questLogIndex
-// Maps the Nth watched quest to its quest log index (1-based)
+// GetQuestIndexForWatch(index) (0x005df780) → the quest log row of the
+// index-th watch, counted in the watch list's own order: that watch's quest is
+// looked for among the display rows, and one under a collapsed header has no
+// row and answers nothing.
 static int lua_GetQuestIndexForWatch(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetQuestIndexForWatch(index)");
     auto* gh = getGameHandler(L);
-    int watchIdx = static_cast<int>(luaL_checknumber(L, 1));
-    if (!gh || watchIdx < 1) { return luaReturnNil(L); }
-    // The index this answers is a quest log index, and a quest log index now
-    // counts header rows - so it has to be found in the display list rather
-    // than by counting through getQuestLog(). Answering the raw log position
-    // pointed the watch frame at whatever row happened to hold that number,
-    // which after grouping is usually a different quest or a header.
-    const auto rows = questRows(gh);
-    const auto& tracked = gh->getTrackedQuestIds();
-    int found = 0;
-    for (size_t i = 0; i < rows.size(); ++i) {
-        if (!rows[i].quest) continue;
-        if (tracked.count(rows[i].quest->questId)) {
-            found++;
-            if (found == watchIdx) {
-                lua_pushnumber(L, static_cast<int>(i) + 1); // 1-based
+    const auto watchIdx = static_cast<long long>(lua_tonumber(L, 1));
+    const auto* order = gh ? &gh->getQuestWatchOrder() : nullptr;
+    if (order && watchIdx >= 1 && watchIdx <= static_cast<long long>(order->size())) {
+        const uint32_t questId = (*order)[static_cast<size_t>(watchIdx - 1)];
+        const auto rows = questRows(gh);
+        for (size_t i = 0; i < rows.size(); ++i) {
+            if (rows[i].quest && rows[i].quest->questId == questId) {
+                lua_pushnumber(L, static_cast<double>(i + 1));
                 return 1;
             }
         }
     }
-    lua_pushnil(L);
-    return 1;
+    return 0;
 }
 
 // AddQuestWatch(questLogIndex, durationSeconds) - add a quest to the watch
@@ -815,7 +838,10 @@ static int lua_AddQuestWatch(lua_State* L) {
     int duration = 0;
     if (lua_isnumber(L, 2)) duration = static_cast<int>(lua_tonumber(L, 2));
     if (const auto* q = questAtRow(gh, index)) {
+        const bool added = !gh->isQuestTracked(q->questId);
         gh->addQuestWatch(q->questId, duration);
+        // 0x005e64d0 sorts after appending, and only then.
+        if (added && gh->isQuestTracked(q->questId)) sortQuestWatches(L);
     }
     return 0;
 }
@@ -1022,6 +1048,127 @@ static game::QuestPoiIconList::QuestState questPoiStateFn(game::GameHandler* gh)
     return [gh, rows](int32_t questId) { return questPoiState(gh, *rows, questId); };
 }
 
+/// The map a WorldMapArea row is drawn over (its second column), or none.
+static std::optional<uint32_t> worldMapAreaMapId(game::GameHandler* gh, uint32_t areaId) {
+    static std::unordered_map<uint32_t, uint32_t> maps;
+    static bool loaded = false;
+    if (!loaded) {
+        auto* am = gh ? gh->services().assetManager : nullptr;
+        if (!am || !am->isInitialized()) return std::nullopt;
+        loaded = true;
+        if (auto dbc = am->loadDBC("WorldMapArea.dbc"); dbc && dbc->isLoaded()) {
+            const auto* layout = pipeline::getActiveDBCLayout()
+                ? pipeline::getActiveDBCLayout()->getLayout("WorldMapArea") : nullptr;
+            const uint32_t idField = layout ? (*layout)["ID"] : 0;
+            const uint32_t mapField = layout ? (*layout)["MapID"] : 1;
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                maps[dbc->getUInt32(i, idField)] = dbc->getUInt32(i, mapField);
+            }
+        }
+    }
+    const auto it = maps.find(areaId);
+    if (it == maps.end()) return std::nullopt;
+    return it->second;
+}
+
+/// 0x005e3b90: how near the player is to a watched quest, as the square of
+/// the distance to the nearest of its areas still worth going to - the hand-in
+/// area once the quest is complete, else those of objectives still open - on
+/// the map the player is on. The area on the floor nearest the one the world
+/// map has selected wins first, the distance only between equal floors. A
+/// quest with no areas listed is as far as a float goes.
+static float questWatchDistance(game::GameHandler* gh, const game::QuestPoiIconList& list,
+                                const std::vector<QuestRow>& rows,
+                                const game::QuestPoiMapView& view, uint32_t questId) {
+    constexpr float kFar = 3.4028235e+38f;
+    const auto* icon = list.iconFor(static_cast<int32_t>(questId));
+    if (!icon) return kFar;
+    const uint32_t mask = questPoiState(gh, rows, static_cast<int32_t>(questId)).objectiveMask;
+    const int32_t floor = view.dungeon ? static_cast<int32_t>(view.dungeonFloor) : 0;
+    const auto& mi = gh->getMovementInfo();
+    // Server coordinates, the axes the area centres use.
+    const float px = mi.y, py = mi.x;
+    float best = kFar;
+    int32_t bestFloorGap = 0x7fffffff;
+    for (const auto& area : icon->areas) {
+        const bool wanted = mask == 0xffffffffu
+            ? area.objectiveIndex == -1
+            : area.objectiveIndex != -1 && (mask & (1u << (area.objectiveIndex & 31))) != 0;
+        if (!wanted) continue;
+        const auto map = worldMapAreaMapId(gh, area.worldMapAreaId);
+        if (!map || *map != gh->getCurrentMapId()) continue;
+        const float dx = px - static_cast<float>(area.centerX);
+        const float dy = py - static_cast<float>(area.centerY);
+        const float d = dy * dy + dx * dx;
+        const int32_t gap = std::abs(floor - static_cast<int32_t>(area.floor));
+        if (gap < bestFloorGap || (gap == bestFloorGap && d < best)) {
+            bestFloorGap = gap;
+            best = d;
+        }
+    }
+    return best;
+}
+
+/// 0x005e5c10, which SortQuestWatches answers and every new watch runs
+/// (0x005e64d0). The order is the CVar trackerSorting's: 0 leaves the watches
+/// where the player put them; 1 is nearest first, and sorts only when the
+/// list is not already in that order; 2 is highest quest level first and 3
+/// lowest first (a quest that scales takes the player's level, one not yet
+/// queried counts as 0). Ties go by quest id. True when it sorted.
+static bool sortQuestWatches(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    if (!gh || gh->getQuestWatchOrder().size() < 2) return false;
+    lua_getglobal(L, "GetCVar");
+    int mode = 0;
+    if (lua_isfunction(L, -1)) {
+        lua_pushstring(L, "trackerSorting");
+        lua_call(L, 1, 1);
+        if (const char* v = lua_tostring(L, -1)) mode = std::atoi(v);
+    }
+    lua_pop(L, 1);
+    if (mode == 0) return false;
+
+    struct Watch { uint32_t questId; float distance; int32_t level; };
+    std::vector<Watch> watches;
+    for (uint32_t questId : gh->getQuestWatchOrder()) watches.push_back({questId, 0.0f, 0});
+
+    if (mode == 1) {
+        auto* list = questPoiList(gh);
+        if (!list) return false;
+        const auto rows = questRows(gh);
+        const auto view = questPoiMapView(L);
+        bool ascending = true;
+        float last = 0.0f;
+        for (auto& w : watches) {
+            w.distance = questWatchDistance(gh, *list, rows, view, w.questId);
+            if (ascending) {
+                if (w.distance < last) ascending = false;
+                else last = w.distance;
+            }
+        }
+        if (ascending) return false;
+    } else {
+        for (auto& w : watches) {
+            for (const auto& q : gh->getQuestLog()) {
+                if (q.questId != w.questId) continue;
+                w.level = q.level == -1 ? static_cast<int32_t>(gh->getPlayerLevel()) : q.level;
+                break;
+            }
+        }
+    }
+    std::sort(watches.begin(), watches.end(), [mode](const Watch& a, const Watch& b) {
+        if (mode == 1) return a.distance < b.distance;
+        if ((mode == 2 || mode == 3) && a.level != b.level) {
+            return mode == 3 ? a.level < b.level : a.level > b.level;
+        }
+        return a.questId < b.questId;
+    });
+    std::vector<uint32_t> order;
+    for (const auto& w : watches) order.push_back(w.questId);
+    gh->reorderQuestWatches(std::move(order));
+    return true;
+}
+
 // Which map a quest wants shown, and on which floor. Declared in
 // lua_api_helpers.hpp because the reader is the world map's own binding, while
 // the answer comes off this list and the map this is laid out on.
@@ -1077,13 +1224,9 @@ static int lua_QuestPOIGetQuestIDByVisibleIndex(lua_State* L) {
     if (!list) return 0;
     const int index = static_cast<int>(lua_tonumber(L, 1));
     const auto rows = questRows(gh);
-    // The watch list in its own order, which is the log's here.
+    // The watch list in its own order.
     std::vector<int32_t> watched;
-    for (const auto& row : rows) {
-        if (row.quest && gh->isQuestTracked(row.quest->questId)) {
-            watched.push_back(static_cast<int32_t>(row.quest->questId));
-        }
-    }
+    for (uint32_t questId : gh->getQuestWatchOrder()) watched.push_back(static_cast<int32_t>(questId));
     const int32_t questId = list->questIdByVisibleIndex(index - 1, questPoiStateFn(gh), watched);
     if (questId < 0) return 0;
     lua_pushnumber(L, questId);
@@ -4057,7 +4200,6 @@ void registerQuestLuaAPI(lua_State* L) {
                 {"SortQuestWatches",        lua_SortQuestWatches},
                 {"ShiftQuestWatches",       lua_ShiftQuestWatches},
                 {"GetQuestSortIndex",       lua_GetQuestSortIndex},
-                {"IsQuestLogSpecialItemInRange", lua_IsQuestLogSpecialItemInRange},
                 {"UseQuestLogSpecialItem",  lua_UseQuestLogSpecialItem},
                 {"GetQuestLogSpecialItemCooldown", lua_GetQuestLogSpecialItemCooldown},
                 {"GetQuestTimers",          lua_GetQuestTimers},
