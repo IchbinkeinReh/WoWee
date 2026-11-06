@@ -6512,27 +6512,29 @@ void SocialHandler::handleGroupSetLeader(network::Packet& packet) {
     for (const auto& m : pd.members) {
         if (m.name == leaderName) { pd.leaderGuid = m.guid; break; }
     }
-    // ERR_NEW_LEADER_YOU for the player and ERR_NEW_LEADER_S for anyone
-    // else, system lines (0x006cbd70). This was English.
-    if (!leaderName.empty()) {
-        if (leaderName == ownName(owner_))
-            gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_YOU", "You are now the group leader.");
-        else
-            gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_S", "%s is now the group leader.", {leaderName});
-    }
-    // Neither event this used to fire. 0x006cbd70 shows its system line and
-    // stops - it stores nothing, so nothing is fired; the new leader arrives on
-    // the roster the server sends straight after, and that is where
-    // PARTY_LEADER_CHANGED comes from (0x0052bc80, through 006d0000.c:6992). The
-    // other name it fired is not this client's at all.
+    // 0x006cbd70: the name against the player's own (0x0076ea40, without
+    // case) picks ERR_NEW_LEADER_YOU or ERR_NEW_LEADER_S naming them, system
+    // lines - and in a dungeon-finder group (the restriction flag at
+    // 0xbd19a8, the roster's lfgRestricted) the guide lines ERR_NEW_GUIDE_YOU
+    // and ERR_NEW_GUIDE_S instead.
     //
-    // What is still not matched: the client resolves the name (0x0076ea40) and
-    // picks between four message ids on the *restriction* flag and on whether the
-    // name found anyone - 0x45 and 0x47 for a leader that was found, 0x46 and 0x48
-    // for a name nobody in the group answers to (`006c0000.c:10120-10145`), always
-    // with the name as an argument. There is no you/other pair there. Settling
-    // which lines those four are needs the client's message-id table, which is a
-    // thread of its own.
+    // It stores nothing and fires nothing: the new leader arrives on the
+    // roster the server sends straight after, and that is where
+    // PARTY_LEADER_CHANGED comes from (0x0052bc80).
+    if (!leaderName.empty()) {
+        auto lower = [](std::string v) {
+            for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return v;
+        };
+        const bool you = lower(leaderName) == lower(ownName(owner_));
+        if (pd.lfgRestricted) {
+            if (you) gameError(owner_, ErrTo::Chat, "ERR_NEW_GUIDE_YOU", "You are now the group guide.");
+            else gameError(owner_, ErrTo::Chat, "ERR_NEW_GUIDE_S", "%s is now the group guide.", {leaderName});
+        } else {
+            if (you) gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_YOU", "You are now the group leader.");
+            else gameError(owner_, ErrTo::Chat, "ERR_NEW_LEADER_S", "%s is now the group leader.", {leaderName});
+        }
+    }
 }
 
 // ============================================================
