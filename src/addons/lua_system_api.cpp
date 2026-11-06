@@ -4988,23 +4988,57 @@ static int lua_ReturnNoCooldown(lua_State* L) {
     return 3;
 }
 
-/// Alliance or Horde for the player, and the same for anyone else until this
-/// client tracks other units' factions. Returns the English tag and the
-/// localised name, which is the pair FrameXML expects.
+/// UnitFactionGroup(unit) (0x0060d0a0) → the internal and the localized name of
+/// the first FactionGroup.dbc row, in file order, whose mask bit the unit's
+/// faction template carries and whose name is not empty - "Alliance" and its
+/// name for a Stormwind guard as much as for a human - and nil, nil without
+/// one. The template is the unit's own; a player out of sight is taken from
+/// the name cache's race (ChrRaces FactionID).
 static int lua_UnitFactionGroup(lua_State* L) {
-    // Whose faction. This answered the player's for every unit, and the target
-    // frame asks it about the *target* to pick the PvP badge - so an Alliance
-    // player saw an Alliance badge over a Horde target, and the party frames
-    // did the same for anyone in the group.
-    std::string uid(luaL_optstring(L, 1, "player"));
+    auto* gh = getGameHandler(L);
+    std::string uid(luaL_checkstring(L, 1));
     toLowerInPlace(uid);
-    // Orc, Undead, Tauren, Troll, Blood Elf.
+    auto nothing = [L]() { lua_pushnil(L); lua_pushnil(L); return 2; };
+    if (!gh) return nothing();
+    auto* am = gh->services().assetManager;
+    const bool assets = am && am->isInitialized();
+    const uint64_t guid = resolveUnitGuid(gh, uid);
+    uint32_t templateId = 0;
+    if (auto entity = guid != 0 ? gh->getEntityManager().getEntity(guid) : nullptr; entity && entity->isUnit()) {
+        templateId = entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_FACTIONTEMPLATE));
+    } else if (const uint8_t race = unitRaceOf(gh, uid); race != 0 && assets) {
+        // ChrRaces' FactionID, the third column.
+        if (auto races = am->loadDBCOptional("ChrRaces.dbc"); races && races->isLoaded() && races->getFieldCount() > 2)
+            if (const int32_t r = races->findRecordById(race); r >= 0)
+                templateId = races->getUInt32(static_cast<uint32_t>(r), 2);
+    }
+    auto templates = assets && templateId != 0 ? am->loadDBCOptional("FactionTemplate.dbc") : nullptr;
+    auto groups = assets ? am->loadDBCOptional("FactionGroup.dbc") : nullptr;
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* ftL = layouts ? layouts->getLayout("FactionTemplate") : nullptr;
+    const uint32_t groupF = ftL ? ftL->tryField("FactionGroup") : 0xFFFFFFFFu;
+    if (templates && templates->isLoaded() && groups && groups->isLoaded() &&
+        groupF < templates->getFieldCount() && groups->getFieldCount() > 3) {
+        const int32_t t = templates->findRecordById(templateId);
+        if (t < 0) return nothing();
+        const uint32_t mask = templates->getUInt32(static_cast<uint32_t>(t), groupF);
+        // FactionGroup: ID, MaskID, InternalName, Name.
+        for (uint32_t r = 0; r < groups->getRecordCount(); ++r) {
+            const uint32_t bit = groups->getUInt32(r, 1);
+            const std::string name = groups->getString(r, 3);
+            if (bit < 32 && (mask & (1u << bit)) != 0 && !name.empty()) {
+                lua_pushstring(L, groups->getString(r, 2).c_str());
+                lua_pushstring(L, name.c_str());
+                return 2;
+            }
+        }
+        return nothing();
+    }
+    // Without the files: by race, Orc, Undead, Tauren, Troll and Blood Elf
+    // the Horde.
     static const std::set<uint8_t> kHordeRaces = {2, 5, 6, 8, 10};
-    const uint8_t race = unitRaceOf(getGameHandler(L), uid);
-    // Nothing rather than a guess when the race is unknown: FrameXML compares
-    // the answer against the player's and hides the badge when it has neither,
-    // which is better than a badge of the wrong side.
-    if (race == 0) return 0;
+    const uint8_t race = unitRaceOf(gh, uid);
+    if (race == 0) return nothing();
     const bool horde = kHordeRaces.count(race) > 0;
     lua_pushstring(L, horde ? "Horde" : "Alliance");
     lua_pushstring(L, horde ? "Horde" : "Alliance");
