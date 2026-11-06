@@ -1870,6 +1870,12 @@ void Renderer::beginFrame() {
     }
     rpInfo.pClearValues = clearValues;
 
+    // The water reads this frame's scene, so a scene that cannot hand over to a
+    // pass of the water's own is closed under it (cutSceneForWater).
+    sceneCutPending_ = msaaOn && !waterDrawsInContinuePass() && waterRenderer && waterRenderer->isRefractionEnabled() &&
+                       vkCtx->getSceneCutOpenRenderPass() != VK_NULL_HANDLE;
+    if (sceneCutPending_) rpInfo.renderPass = vkCtx->getSceneCutOpenRenderPass();
+
     // Cache render pass state for secondary command buffer inheritance
     activeRenderPass_ = rpInfo.renderPass;
     activeFramebuffer_ = rpInfo.framebuffer;
@@ -1962,39 +1968,6 @@ void Renderer::endFrame() {
     // The scene's own store and resolve, when no post-processing took the
     // pass over and marked its end itself.
     if (vkCtx && !postProcessed) vkCtx->gpuMark(currentCmd, "scene pass end (store / resolve)");
-
-    // Only when water could not be moved out of the scene pass (MSAA). Otherwise
-    // renderWorld already took the copy at the one point in the frame where the
-    // scene is finished but the water is not yet over it; copying again here
-    // would replace that with an image containing the water.
-    if (!waterDrawsInContinuePass()
-        && waterRenderer && waterRenderer->isRefractionEnabled() && waterRenderer->hasSurfaces()
-        && currentImageIndex < vkCtx->getSwapchainImages().size()) {
-        // The depth is the scene's, wherever the scene went. With MSAA and FXAA
-        // or FSR the scene renders into the post-processing target and nothing
-        // in the frame touches the context's own depth: this copied that image,
-        // never written, into the water's depth - which is what its absorption
-        // and its shoreline foam are measured against - and validation caught
-        // the first frame reading it from UNDEFINED.
-        VkImage depthSrc = vkCtx->getDepthCopySourceImage();
-        bool depthIsMsaa = vkCtx->isDepthCopySourceMsaa();
-        VkExtent2D depthExtent = vkCtx->getSwapchainExtent();
-        if (postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE) {
-            depthSrc = postProcessPipeline_->getSceneDepthImage();
-            depthIsMsaa = postProcessPipeline_->sceneDepthIsMsaa();
-            depthExtent = postProcessPipeline_->getSceneRenderExtent();
-        }
-        waterRenderer->setSceneHistoryHasWater(true);
-        waterRenderer->captureSceneHistory(
-            currentCmd,
-            vkCtx->getSwapchainImages()[currentImageIndex],
-            depthSrc,
-            vkCtx->getSwapchainExtent(),
-            depthIsMsaa,
-            vkCtx->getCurrentFrame(),
-            depthExtent);
-        vkCtx->gpuMark(currentCmd, "water refraction copy");
-    }
 
     // After the scene's passes, before the overlay pass that shows them.
     recordPreviewComposites();
@@ -4602,12 +4575,17 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
         postFuture = core::ThreadPool::frameWorkers().submit([&]() -> double {
             WOWEE_PROFILE_SCOPE("worker: water + effects", Worker);
             auto t0 = std::chrono::steady_clock::now();
+            // On the ground the world has drawn, under the liquid (the
+            // client draws them with its units, 0x00793980): in their own
+            // buffer, for they go ahead of the water's copy of the scene.
+            VkCommandBuffer groundCmd = beginSecondary(SEC_GROUND);
+            setSecondaryViewportScissor(groundCmd);
+            if (blobShadowRenderer && camera) blobShadowRenderer->render(groundCmd, perFrameSet);
+            sceneMark(groundCmd, kMarkBlobShadows, "blob shadows");
+            vkEndCommandBuffer(groundCmd);
+
             VkCommandBuffer cmd = beginSecondary(SEC_POST);
             setSecondaryViewportScissor(cmd);
-            // On the ground the world has drawn, under the liquid (the
-            // client draws them with its units, 0x00793980).
-            if (blobShadowRenderer && camera) blobShadowRenderer->render(cmd, perFrameSet);
-            sceneMark(cmd, kMarkBlobShadows, "blob shadows");
             if (waterRenderer && camera && !waterDrawsInContinuePass()) {
                 waterRenderer->setRenderExtent(activeRenderExtent_);
                 waterRenderer->render(cmd, perFrameSet, *camera, globalTime, false, frameIdx);
@@ -4782,6 +4760,7 @@ void Renderer::renderWorld(game::World* world, game::GameHandler* gameHandler) {
 
         if (blobShadowRenderer && camera) blobShadowRenderer->render(currentCmd, perFrameSet);
         sceneMark(currentCmd, kMarkBlobShadows, "blob shadows");
+        cutSceneForWater();
         if (waterRenderer && camera && !waterDrawsInContinuePass()) {
             waterRenderer->setRenderExtent(activeRenderExtent_);
             waterRenderer->render(currentCmd, perFrameSet, *camera, globalTime, false, frameIdx);
@@ -4953,6 +4932,12 @@ void Renderer::finishRenderWorld() {
             if (pw.queueM2)
                 queue(secondaryCmds_[SEC_M2][frameIdx], "m2");
         }
+        queue(secondaryCmds_[SEC_GROUND][frameIdx], "blob shadows");
+        if (sceneCutPending_) {
+            vkCmdExecuteCommands(currentCmd, numCmds, validCmds);
+            numCmds = 0;
+            cutSceneForWater();
+        }
         queue(secondaryCmds_[SEC_POST][frameIdx], "water/effects");
         // The client draws the target's circle once the world is down
         // (0x004f6f90 from CGWorldFrame::Render).
@@ -4993,27 +4978,7 @@ void Renderer::finishRenderWorld() {
         vkCmdEndRenderPass(currentCmd);
         if (vkCtx) vkCtx->gpuMark(currentCmd, "scene pass end (store / resolve)");
 
-        VkImage sceneColor = VK_NULL_HANDLE;
-        VkImage sceneDepth = VK_NULL_HANDLE;
-        VkExtent2D sceneExtent = vkCtx->getSwapchainExtent();
-        bool depthIsMsaa = vkCtx->isDepthCopySourceMsaa();
-        if (postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE) {
-            sceneColor = postProcessPipeline_->getSceneColorImage();
-            sceneDepth = postProcessPipeline_->getSceneDepthImage();
-            sceneExtent = postProcessPipeline_->getSceneRenderExtent();
-            depthIsMsaa = postProcessPipeline_->sceneDepthIsMsaa();
-        } else if (currentImageIndex < vkCtx->getSwapchainImages().size()) {
-            sceneColor = vkCtx->getSwapchainImages()[currentImageIndex];
-            sceneDepth = vkCtx->getDepthCopySourceImage();
-        }
-
-        if (sceneColor != VK_NULL_HANDLE && waterRenderer->isRefractionEnabled()) {
-            waterRenderer->setSceneHistoryHasWater(false);
-            waterRenderer->captureSceneHistory(currentCmd, sceneColor, sceneDepth,
-                                               sceneExtent, depthIsMsaa,
-                                               vkCtx->getCurrentFrame());
-            vkCtx->gpuMark(currentCmd, "water refraction copy");
-        }
+        captureSceneForWater();
 
         // Without MSAA the water continues into the scene's own framebuffer. With
         // MSAA it draws single-sampled into the resolved image instead, which is
@@ -5069,7 +5034,8 @@ void Renderer::finishRenderWorld() {
 }
 
 // Water can leave the scene pass only when there is a continuation pass to draw
-// it in, which excludes MSAA. Everything else in the frame is unaffected.
+// it in; a scene closed under it (cutSceneForWater) keeps it in the scene's own.
+// Everything else in the frame is unaffected.
 void Renderer::syncSwimEffectsTargetPass() {
     if (!vkCtx) return;
 
@@ -6028,7 +5994,7 @@ bool Renderer::createSecondaryCommandResources() {
     }
 
     // The blended halves, recorded by the same workers as their opaque ones.
-    const std::pair<uint32_t, uint32_t> blendedSecondaries[] = {{SEC_WMO_BLEND, 1}, {SEC_M2_BLEND, 3}};
+    const std::pair<uint32_t, uint32_t> blendedSecondaries[] = {{SEC_WMO_BLEND, 1}, {SEC_M2_BLEND, 3}, {SEC_GROUND, 4}};
     for (const auto& [idx, worker] : blendedSecondaries) {
         allocInfo.commandPool = workerCmdPools_[worker];
         for (uint32_t f = 0; f < MAX_FRAMES; ++f) {
@@ -6573,6 +6539,63 @@ VkExtent2D Renderer::sceneRenderExtent() const {
     return vkCtx->getSwapchainExtent();
 }
 
+// What the water reads of the scene, taken with the scene finished and the
+// water not yet over it, between two passes: a copy is illegal inside one.
+void Renderer::captureSceneForWater() {
+    if (!waterRenderer || !waterRenderer->isRefractionEnabled()) return;
+    VkImage sceneColor = VK_NULL_HANDLE;
+    VkImage sceneDepth = VK_NULL_HANDLE;
+    VkExtent2D sceneExtent = vkCtx->getSwapchainExtent();
+    bool depthIsMsaa = vkCtx->isDepthCopySourceMsaa();
+    if (postProcessPipeline_ && postProcessPipeline_->getSceneFramebuffer() != VK_NULL_HANDLE) {
+        sceneColor = postProcessPipeline_->getSceneColorImage();
+        sceneDepth = postProcessPipeline_->getSceneDepthImage();
+        sceneExtent = postProcessPipeline_->getSceneRenderExtent();
+        depthIsMsaa = postProcessPipeline_->sceneDepthIsMsaa();
+    } else if (currentImageIndex < vkCtx->getSwapchainImages().size()) {
+        sceneColor = vkCtx->getSwapchainImages()[currentImageIndex];
+        sceneDepth = vkCtx->getDepthCopySourceImage();
+    }
+    if (sceneColor == VK_NULL_HANDLE) return;
+    waterRenderer->captureSceneHistory(currentCmd, sceneColor, sceneDepth, sceneExtent, depthIsMsaa,
+                                       vkCtx->getCurrentFrame());
+    vkCtx->gpuMark(currentCmd, "water refraction copy");
+}
+
+// The multisampled scene, closed under the water and carried on: drawn into a
+// post-processing target, the water had no pass of its own to go to, and took
+// its copy from the finished frame instead, the frame before last with the water
+// in it, so what moved or turned was read from where it had been. Here the pass
+// ends, which resolves the scene as it stands; the copy is taken; and the next
+// pass loads the samples and goes on, so the water and all that follows it are
+// drawn as they were, multisampled and in the same order.
+void Renderer::cutSceneForWater() {
+    if (!sceneCutPending_ || currentCmd == VK_NULL_HANDLE) return;
+    sceneCutPending_ = false;
+    vkCmdEndRenderPass(currentCmd);
+    vkCtx->gpuMark(currentCmd, "scene pass under the water");
+    captureSceneForWater();
+
+    VkRenderPassBeginInfo rp{};
+    rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp.renderPass = vkCtx->getSceneCutCloseRenderPass();
+    rp.framebuffer = activeFramebuffer_;
+    rp.renderArea.extent = activeRenderExtent_;
+    vkCmdBeginRenderPass(currentCmd, &rp,
+                         parallelRecordingEnabled_ ? VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS
+                                                   : VK_SUBPASS_CONTENTS_INLINE);
+    if (!parallelRecordingEnabled_) {
+        VkViewport viewport{};
+        viewport.width = static_cast<float>(activeRenderExtent_.width);
+        viewport.height = static_cast<float>(activeRenderExtent_.height);
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(currentCmd, 0, 1, &viewport);
+        VkRect2D scissor{};
+        scissor.extent = activeRenderExtent_;
+        vkCmdSetScissor(currentCmd, 0, 1, &scissor);
+    }
+}
+
 void Renderer::leaveGbufferPhase() {
     if (!gbufferPhaseOpen_ || currentCmd == VK_NULL_HANDLE) return;
     gbufferPhaseOpen_ = false;
@@ -6586,7 +6609,7 @@ void Renderer::leaveGbufferPhase() {
     // under MSAA it resolves at its end as the scene pass would have.
     VkRenderPassBeginInfo rp{};
     rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rp.renderPass = vkCtx->getSceneResumeRenderPass();
+    rp.renderPass = sceneCutPending_ ? vkCtx->getSceneCutResumeRenderPass() : vkCtx->getSceneResumeRenderPass();
     rp.framebuffer = activeFramebuffer_;
     rp.renderArea.extent = activeRenderExtent_;
     vkCmdBeginRenderPass(currentCmd, &rp,

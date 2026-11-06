@@ -1193,16 +1193,6 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
     frameUBO_.rtSkyTop = glm::vec4(rtFrame_.skyTop, 1.0f);
     frameUBO_.rtSkyHorizon = glm::vec4(rtFrame_.skyHorizon, 1.0f);
     frameUBO_.rtSunRay = glm::vec4(rtFrame_.sunDir, 0.0f);
-    {
-        const glm::mat4 viewProj = camera.getProjectionMatrix() * camera.getViewMatrix();
-        // A finished-frame capture is taken at the end of the frame into the
-        // slot that frame read: read again two frames on, by the camera of then.
-        // By last frame's, everything read off it slipped a frame's turn.
-        const uint32_t slot = frameIndex % SCENE_HISTORY_FRAMES;
-        frameUBO_.captureViewProj = sceneHistoryHasWater_ && slotHasView_[slot] ? slotViewProj_[slot] : viewProj;
-        slotViewProj_[slot] = viewProj;
-        slotHasView_[slot] = true;
-    }
     // The wake as it stands, into this frame's slot - safe now, the frame has
     // waited for the GPU to finish with it.
     uploadFrameUBO();
@@ -1303,8 +1293,7 @@ void WaterRenderer::render(VkCommandBuffer cmd, VkDescriptorSet perFrameSet,
         // how the two came to disagree: the shader linearised the depth buffer
         // against a near plane of 0.05 while the camera's is 0.5.
         push.depthRange = glm::vec2(camera.getNearPlane(), camera.getFarPlane());
-        // 2: a capture with the water in it (setSceneHistoryHasWater).
-        push.sceneValid = !sceneHistoryReady ? 0.0f : sceneHistoryHasWater_ ? 2.0f : 1.0f;
+        push.sceneValid = sceneHistoryReady ? 1.0f : 0.0f;
         push.interiorFog = surface.wmoId != 0 && surface.wmoInterior ? 1.0f : 0.0f;
         // A building's interior water, traced: one colour, the client's liquid
         // averaged - the MOMT colour its vertices have and the mean of its

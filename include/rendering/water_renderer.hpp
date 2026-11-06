@@ -136,9 +136,6 @@ struct WaterFrameUBOData {
     glm::vec4 rtSkyTop{0.0f};      // the sky a reflection leaving the scene meets, overhead
     glm::vec4 rtSkyHorizon{0.0f};  // and at the horizon
     glm::vec4 rtSunRay{0.0f, 0.0f, 1.0f, 0.0f};  // xyz toward the sun the traced shadows follow
-    // The camera the scene capture was taken with: this frame's, or the last
-    // one's where the capture is the finished frame before (MSAA).
-    glm::mat4 captureViewProj{1.0f};
     glm::vec4 swimWaveInfo{0.0f};                       // x = how many
     glm::vec4 swimWaves[swim_wave::kMaxWaves]{};        // xy = where, z = age, w = strength
     glm::vec4 waterLampAt[kMaxWaterLamps]{};            // xyz = where, w = reach
@@ -253,12 +250,6 @@ public:
 
     void setRefractionEnabled(bool enabled);
     bool isRefractionEnabled() const { return refractionEnabled; }
-    /// Whether the refraction capture is the finished frame - water and all -
-    /// rather than the scene taken just before the water: the MSAA path into
-    /// an off-screen target, which cannot leave the scene pass for the copy
-    /// (Renderer::waterDrawsInContinuePass). The traced water then reads no
-    /// bed off it (water_rt.glsli, rtwHistoryHasWater).
-    void setSceneHistoryHasWater(bool hasWater) { sceneHistoryHasWater_ = hasWater; }
     // Display brightness (1.0 = neutral). The scene-history capture used for
     // refraction bakes this in, so the shader divides it back out.
     // Size of the target the water is drawn into. Screen-space lookups derive
@@ -458,10 +449,6 @@ private:
     PerFrameSceneHistory sceneHistory[SCENE_HISTORY_FRAMES];
     VkExtent2D sceneHistoryExtent = {.width = 0, .height = 0};
     bool sceneHistoryReady = false;
-    bool sceneHistoryHasWater_ = false;
-    /// The camera of the frame before, which took a capture with the water in it.
-    glm::mat4 slotViewProj_[SCENE_HISTORY_FRAMES]{};  ///< the camera each capture slot was taken with
-    bool slotHasView_[SCENE_HISTORY_FRAMES]{};
     mutable uint32_t renderDiagCounter_ = 0;
 
     // Surface disturbance trail. Points age out, spreading as they go; the

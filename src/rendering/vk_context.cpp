@@ -2041,8 +2041,10 @@ void VkContext::setMsaaSamples(VkSampleCountFlagBits samples) {
 // resolve target, and with depth resolve the resolved depth. loadScene makes
 // the compatible pass that carries on drawing into the same framebuffer after
 // the pass was closed (the ray traced lighting's, between its opaque and its
-// blended halves), loading what the first one stored.
-bool VkContext::createMsaaScenePass(VkRenderPass& out, bool loadScene) {
+// blended halves), loading what the first one stored. keepColour stores the
+// multisampled colour for a pass to load after it: the scene is closed once
+// more under the water, for the copy the water reads (Renderer::cutSceneForWater).
+bool VkContext::createMsaaScenePass(VkRenderPass& out, bool loadScene, bool keepColour) {
     const bool useDepthResolve = (depthResolveImageView != VK_NULL_HANDLE);
     // MSAA render pass: 3 or 4 attachments
     VkAttachmentDescription attachments[4] = {};
@@ -2051,7 +2053,7 @@ bool VkContext::createMsaaScenePass(VkRenderPass& out, bool loadScene) {
     attachments[0].format = swapchainFormat;
     attachments[0].samples = msaaSamples_;
     attachments[0].loadOp = loadScene ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[0].storeOp = keepColour ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachments[0].initialLayout = loadScene ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
@@ -2215,6 +2217,13 @@ bool VkContext::createSwapchainRenderTargets(const char* verb) {
         const bool useDepthResolve = (depthResolveImageView != VK_NULL_HANDLE);
         if (!createMsaaScenePass(imguiRenderPass, false)) {
             LOG_ERROR("Failed to ", verb, " MSAA render pass");
+            return false;
+        }
+        destroySceneCutPasses();
+        if (!createMsaaScenePass(sceneCutOpenRenderPass_, false, true) ||
+            !createMsaaScenePass(sceneCutResumeRenderPass_, true, true) ||
+            !createMsaaScenePass(sceneCutCloseRenderPass_, true)) {
+            LOG_ERROR("Failed to ", verb, " the passes the scene closes in under the water");
             return false;
         }
 
@@ -2595,6 +2604,13 @@ void VkContext::createDeferredScenePasses() {
     }
 }
 
+void VkContext::destroySceneCutPasses() {
+    for (VkRenderPass* pass : {&sceneCutOpenRenderPass_, &sceneCutResumeRenderPass_, &sceneCutCloseRenderPass_}) {
+        if (*pass) vkDestroyRenderPass(device, *pass, nullptr);
+        *pass = VK_NULL_HANDLE;
+    }
+}
+
 void VkContext::destroyOverlayRenderPass() {
     for (VkFramebuffer fb : overlayFramebuffers) {
         if (fb) vkDestroyFramebuffer(device, fb, nullptr);
@@ -2648,6 +2664,7 @@ void VkContext::destroyImGuiResources() {
     destroyDepthBuffer();
     // Framebuffers are destroyed in destroySwapchain()
     destroyOverlayRenderPass();
+    destroySceneCutPasses();
     if (imguiRenderPass) {
         vkDestroyRenderPass(device, imguiRenderPass, nullptr);
         imguiRenderPass = VK_NULL_HANDLE;
@@ -3057,6 +3074,7 @@ bool VkContext::recreateSwapchain(int width, int height) {
     destroyDepthResolveImage();
     destroyDepthBuffer();
     destroyOverlayRenderPass();
+    destroySceneCutPasses();
     if (imguiRenderPass) {
         vkDestroyRenderPass(device, imguiRenderPass, nullptr);
         imguiRenderPass = VK_NULL_HANDLE;
@@ -3187,6 +3205,7 @@ bool VkContext::recreateSwapchain(int width, int height) {
 
     // Destroy old render pass (needs recreation if MSAA changed)
     destroyOverlayRenderPass();
+    destroySceneCutPasses();
     if (imguiRenderPass) {
         vkDestroyRenderPass(device, imguiRenderPass, nullptr);
         imguiRenderPass = VK_NULL_HANDLE;

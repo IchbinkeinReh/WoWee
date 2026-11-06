@@ -62,24 +62,11 @@ bool rtwScreenReuse = true;  // off for the traced-only debug view and interior 
 // (Interior water's mirror reads the capture by its own rules: rtwMirrorSeen.)
 const float RTW_MIRROR_EDGE = 0.12;   // of the screen, the fade at its edge
 const float RTW_MIRROR_REACH = 0.02;  // of its height, how far round a point the depth is asked
-// The capture is a finished frame with the water already in it (the MSAA
-// path into an off-screen target; WaterRenderer::setSceneHistoryHasWater):
-// what lies under the surface there is last frame's water over the bed, so
-// a bed read off it took the water's own picture back in, frame after
-// frame - a moving unit left a trail through the lake, and an idle mount
-// a ghost. The bed is traced instead; what stands above the water may
-// still be read off it.
-bool rtwHistoryHasWater() { return push.sceneValid > 1.5; }
 float rtwOnScreen(vec3 hit, vec3 hitNormal, out vec3 color) {
     color = vec3(0.0);
     if (!rtwScreenReuse || push.sceneValid < 0.5) return 0.0;
     if (dot(hitNormal, viewPos.xyz - hit) <= 0.0) return 0.0;
-    // Where the capture has it, by the camera it was taken with. By this
-    // frame's, a capture a frame old was read a frame's turn out of place:
-    // whatever the water reflected slid off itself while the view turned,
-    // and with the water in the capture the slip fed on itself, a trail of
-    // the frames before.
-    vec4 clip = captureViewProj * vec4(hit, 1.0);
+    vec4 clip = projection * view * vec4(hit, 1.0);
     if (clip.w < 0.1) return 0.0;
     vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
     vec2 edge = min(uv, 1.0 - uv);
@@ -92,15 +79,11 @@ float rtwOnScreen(vec3 hit, vec3 hitNormal, out vec3 color) {
 }
 
 // The capture's colour for a mirror over a building's interior water, and how
-// far it can be trusted. That capture is the finished frame under MSAA, water
-// and last frame's reflection in it, so a mirror reading it unchecked feeds on
-// itself. A camera above the water sees a point above the water with no water
-// in front of it, so the point's own pixel is free of it: this takes only a
-// point standing clear of `surfaceZ` whose depth agrees with the capture's.
-// Every test is a fade, and the depth's is taken over the taps round the point,
-// so what is rejected goes to the water's body over a distance and not at a
-// line: the edge of something in front of the point, the screen's, the point's
-// face turning away.
+// far it can be trusted: only a point standing clear of `surfaceZ` whose depth
+// agrees with the capture's. Every test is a fade, and the depth's is taken over
+// the taps round the point, so what is rejected goes to the water's body over a
+// distance and not at a line: the edge of something in front of the point, the
+// screen's, the point's face turning away.
 float rtwMirrorDepthAgrees(vec2 uv, float depth, float tolerance) {
     float scene = linearizeDepth(texture(SceneDepth, uv).r, push.depthRange.x, push.depthRange.y);
     return 1.0 - smoothstep(tolerance, 2.0 * tolerance, abs(scene - depth));
@@ -108,7 +91,7 @@ float rtwMirrorDepthAgrees(vec2 uv, float depth, float tolerance) {
 float rtwMirrorSeen(vec3 hit, vec3 hitNormal, float surfaceZ, out vec3 color) {
     color = vec3(0.0);
     if (!(rtWater.y < 2.5) || push.sceneValid < 0.5) return 0.0;
-    vec4 clip = captureViewProj * vec4(hit, 1.0);
+    vec4 clip = projection * view * vec4(hit, 1.0);
     if (clip.w < 0.1) return 0.0;
     vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
     vec2 edge = min(uv, 1.0 - uv);
@@ -214,10 +197,8 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
         // The frame under the water has the bed as drawn - textured, lit,
         // shadowed - wherever the hit is on screen there and is what that
         // pixel shows; the hit's own colour only where it is not.
-        // Written only when rtwOnScreen runs: left undefined with a capture that
-        // holds the water, it could take the whole bed with it (the mix below).
-        vec3 shown = vec3(0.0);
-        float onScreen = rtwHistoryHasWater() ? 0.0 : rtwOnScreen(hit, hn, shown);
+        vec3 shown;
+        float onScreen = rtwOnScreen(hit, hn, shown);
         bed = shown;
         if (onScreen < 1.0) {
             // Not on screen as itself: off the edge, or behind something
@@ -230,14 +211,12 @@ vec4 rtwRefraction(vec3 origin, vec3 dir, vec3 toSun, vec3 sigma, vec3 scatterCo
             // the traced colour only where that is not the bed either.
             vec3 under;
             hs.rgb = rtHitColor(origin, dir, t, rtwFootprint(origin, t), hs.rgb);
-            // The ground lit as level. Its triangles' own normals, each a
-            // flat face, lit the bed facet by facet: under a capture with
-            // the water in it (MSAA), where the bed is always the traced
-            // one, a shallow pond showed the terrain's triangles as bands
-            // of light and shade with straight edges between them.
+            // The ground lit as level: its triangles' own normals, each a
+            // flat face, lit the bed facet by facet, bands of light and shade
+            // with straight edges between them.
             bool ground = (rtInstances[rtHitInstance].flags & RT_MESH_TERRAIN) != 0u;
             vec3 traced = rtwLitHit(hs, ground ? vec3(0.0, 0.0, 1.0) : hn, toSun, 0.8);
-            bed = mix(!rtwHistoryHasWater() && rtwBehindSurface(origin, under) ? under : traced, shown, onScreen);
+            bed = mix(rtwBehindSurface(origin, under) ? under : traced, shown, onScreen);
         }
         bedFromScreen = onScreen >= 1.0;
     }

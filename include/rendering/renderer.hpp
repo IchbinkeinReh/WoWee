@@ -366,6 +366,10 @@ private:
     // True when water is drawn in the scene continuation pass rather than in
     // the scene pass itself (see renderWorld).
     bool waterDrawsInContinuePass() const;
+    void captureSceneForWater();
+    void cutSceneForWater();
+    /// The scene's pass this frame keeps its colour for cutSceneForWater.
+    bool sceneCutPending_ = false;
 
     /// Brightness and the minimap, in that order, at the end of
     /// the scene pass. The threaded and single-threaded paths both finish this
@@ -1055,7 +1059,8 @@ private:
     // same worker as its opaque half (renderWorld).
     static constexpr uint32_t SEC_WMO_BLEND = 8;  // WMO blended batches (worker 1)
     static constexpr uint32_t SEC_M2_BLEND  = 9;  // M2 blended + particles + ribbons (worker 3)
-    static constexpr uint32_t NUM_SECONDARIES = 10;
+    static constexpr uint32_t SEC_GROUND    = 10; // blob shadows, under the water's copy of the scene
+    static constexpr uint32_t NUM_SECONDARIES = 11;
     static constexpr uint32_t NUM_WORKERS = 5;
 
     /// The doodads' blended batches and, among them, the characters' own, by

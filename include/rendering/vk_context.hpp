@@ -366,6 +366,14 @@ public:
     [[nodiscard]] VkRenderPass getSceneResumeRenderPass() const {
         return msaaSamples_ > VK_SAMPLE_COUNT_1_BIT ? sceneResumeMsaaRenderPass_ : sceneContinueRenderPass;
     }
+    /// The multisampled scene closed under the water and carried on, all three
+    /// compatible with getImGuiRenderPass() on its framebuffers (Renderer::
+    /// cutSceneForWater). Open begins a frame's scene and Resume takes it up after
+    /// the G-buffer pass, both keeping the colour for Close, which loads it, draws
+    /// the water and all that follows it, and resolves. Null without MSAA.
+    [[nodiscard]] VkRenderPass getSceneCutOpenRenderPass() const { return sceneCutOpenRenderPass_; }
+    [[nodiscard]] VkRenderPass getSceneCutResumeRenderPass() const { return sceneCutResumeRenderPass_; }
+    [[nodiscard]] VkRenderPass getSceneCutCloseRenderPass() const { return sceneCutCloseRenderPass_; }
     static constexpr VkFormat kGbufferFormat = VK_FORMAT_R16G16B16A16_UNORM;
     [[nodiscard]] bool isSampleRateShadingSupported() const { return sampleRateShadingSupported_; }
     [[nodiscard]] VkDescriptorPool getImGuiDescriptorPool() const { return imguiDescriptorPool; }
@@ -768,9 +776,13 @@ private:
     bool createOverlayRenderPass();
     bool createSceneContinueRenderPass();
     void createDeferredScenePasses();
-    bool createMsaaScenePass(VkRenderPass& out, bool loadScene);
+    bool createMsaaScenePass(VkRenderPass& out, bool loadScene, bool keepColour = false);
     VkRenderPass gbufferRenderPass_ = VK_NULL_HANDLE;
     VkRenderPass sceneResumeMsaaRenderPass_ = VK_NULL_HANDLE;
+    void destroySceneCutPasses();
+    VkRenderPass sceneCutOpenRenderPass_ = VK_NULL_HANDLE;
+    VkRenderPass sceneCutResumeRenderPass_ = VK_NULL_HANDLE;
+    VkRenderPass sceneCutCloseRenderPass_ = VK_NULL_HANDLE;
     void destroyOverlayRenderPass();
     VkDescriptorPool imguiDescriptorPool = VK_NULL_HANDLE;
 

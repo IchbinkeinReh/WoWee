@@ -40,8 +40,7 @@ layout(push_constant) uniform Push {
     float liquidBasicType;
     vec2 screenSize;  // size of the target being drawn into
     vec2 depthRange;  // the camera's own near and far, for linearising SceneDepth
-    float sceneValid; // 1 once the refraction capture holds a frame, 0 before it;
-                      // 2 when that frame is the finished one, water and all
+    float sceneValid; // 1 once the refraction capture holds a frame, 0 before it
     float lightColors; // 1: closeColor and farColor hold the light's ramp
     float interiorFog; // 1: a building's interior liquid, fogged as its rooms are
     float pad2;
@@ -83,7 +82,6 @@ layout(set = 2, binding = 3) uniform WaterFrameData {
     vec4 rtSkyTop;      // the sky a reflection that leaves the scene meets: overhead
     vec4 rtSkyHorizon;  // and at the horizon
     vec4 rtSunRay;      // xyz toward the sun the traced lighting's shadows follow
-    mat4 captureViewProj;  // the camera the scene capture was taken with
     vec4 swimWaveInfo;                 // x = how many
     vec4 swimWaves[MAX_SWIM_WAVES];    // xy = where, z = age in seconds, w = strength
     // The lamps nearest the camera: xyz where, w reach; rgb colour, a where it
@@ -871,7 +869,7 @@ void main() {
     // in the mirror and in the slope's shade. The mirror goes over the two by
     // Fresnel, written so that one blend gives each its share.
     if (rtOn && push.interiorFog > 0.5) {
-        vec4 at = captureViewProj * vec4(FragPos, 1.0);
+        vec4 at = projection * view * vec4(FragPos, 1.0);
         vec2 atUV = at.xy / max(at.w, 0.1) * 0.5 + 0.5;
         float path = max(linearizeDepth(texture(SceneDepth, atUV).r, near, far) - at.w, 0.0);
         float share = 1.0 - exp(-path * RT_INTERIOR_ABSORB);
