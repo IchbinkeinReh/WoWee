@@ -7,7 +7,6 @@
 #include "rendering/m2_blend_mode.hpp"
 #include "core/thread_pool.hpp"
 #include "rendering/m2_model_classifier.hpp"
-#include "rendering/hiz_system.hpp"
 #include "rendering/vk_context.hpp"
 #include "rendering/vk_buffer.hpp"
 #include "rendering/vk_texture.hpp"
@@ -880,182 +879,6 @@ void M2Renderer::prepareRender(uint32_t frameIndex) {
 // Dispatch GPU frustum culling compute shader into the primary frame command
 // buffer. render() consumes the completed output left in this frame slot from
 // its previous use; this dispatch produces results for the slot's next reuse.
-void M2Renderer::dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, const Camera& camera) {
-    if (!cullPipeline_ || instances.empty()) return;
-
-    const uint32_t numInstances = std::min(static_cast<uint32_t>(instances.size()), MAX_CULL_INSTANCES);
-
-    // The shader rejects on this bound before it reads the per-instance
-    // distance: nothing is drawn past the view distance.
-    const float maxPossibleDistSq = cappedViewDistance() * cappedViewDistance();
-
-    // --- Upload frustum planes + camera (UBO, binding 0) ---
-    const glm::mat4 vp = camera.getProjectionMatrix() * camera.getViewMatrix();
-    Frustum frustum;
-    frustum.extractFromMatrix(vp);
-    const glm::vec3 camPos = camera.getPosition();
-    cullViewPos_ = camPos;
-    cullViewDir_ = camera.getForward();
-
-    if (cullUniformMapped_[frameIndex]) {
-        auto* ubo = static_cast<CullUniformsGPU*>(cullUniformMapped_[frameIndex]);
-        for (int i = 0; i < 6; i++) {
-            const auto& p = frustum.getPlane(static_cast<Frustum::Side>(i));
-            ubo->frustumPlanes[i] = glm::vec4(p.normal, p.distance);
-        }
-        ubo->cameraPos = glm::vec4(camPos, maxPossibleDistSq);
-        ubo->instanceCount = numInstances;
-
-        // HiZ occlusion culling fields
-        const bool hizReady = hizSystem_ && hizSystem_->isReady();
-
-        // Auto-disable HiZ when the camera has moved/rotated significantly.
-        // Large VP changes make the depth pyramid unreliable because the
-        // reprojected screen positions diverge from the actual pyramid data.
-        bool hizSafe = hizReady;
-        if (hizReady) {
-            // Compare current VP against previous VP - Frobenius-style max diff.
-            float maxDiff = 0.0f;
-            const float* curM  = &vp[0][0];
-            const float* prevM = &prevVP_[0][0];
-            for (int k = 0; k < 16; ++k)
-                maxDiff = std::max(maxDiff, std::abs(curM[k] - prevM[k]));
-            // Threshold: typical tracking-camera motion (following a walking
-            // character) produces diffs of 0.05–0.25.  A fast rotation or
-            // zoom easily exceeds 0.5.  The previous threshold (0.15) caused
-            // the HiZ pass to toggle on/off every other frame during normal
-            // gameplay, which produced global M2 doodad flicker.
-            if (maxDiff > rendering::HIZ_VP_DIFF_THRESHOLD) hizSafe = false;
-        }
-
-        ubo->hizEnabled = hizSafe ? 1u : 0u;
-        ubo->hizMipLevels = hizReady ? hizSystem_->getMipLevels() : 0u;
-        ubo->_pad2 = 0;
-        if (hizReady) {
-            ubo->hizParams = glm::vec4(
-                static_cast<float>(hizSystem_->getPyramidWidth()),
-                static_cast<float>(hizSystem_->getPyramidHeight()),
-                camera.getNearPlane(),
-                camera.getFarPlane()
-            );
-            ubo->viewProj = vp;
-            // Use previous frame's VP for HiZ reprojection - the HiZ pyramid
-            // was built from the previous frame's depth, so we must project
-            // into the same screen space to sample the correct depths.
-            ubo->prevViewProj = prevVP_;
-        } else {
-            ubo->hizParams = glm::vec4(0.0f);
-            ubo->viewProj = glm::mat4(1.0f);
-            ubo->prevViewProj = glm::mat4(1.0f);
-        }
-
-        // Save current VP for next frame's temporal reprojection
-        prevVP_ = vp;
-    }
-
-    // Rotate this slot's ID log: the dispatch recorded below replaces the one
-    // whose results render() is about to consume, so the IDs it was built from
-    // become the readable set.  Done before the upload loop overwrites them, and
-    // after the early-out above, so "readable" always describes the last dispatch
-    // actually recorded on this slot.
-    uint32_t* submittedIds = nullptr;
-    if (frameIndex < 2) {
-        cullReadableIds_[frameIndex].swap(cullSubmittedIds_[frameIndex]);
-        cullSubmittedIds_[frameIndex].resize(numInstances);
-        submittedIds = cullSubmittedIds_[frameIndex].data();
-    }
-
-    // --- Upload per-instance cull data (SSBO, binding 1) ---
-    // The per-instance radius math used to be recomputed here every frame; it's
-    // now precomputed once by recomputeCachedCullFactors() since it depends only
-    // on static instance state (scale, bound radius, animation/ground flags).
-    //
-    // Split across the frame workers: 120 000 instances in a city were 2.5 ms
-    // of the main thread's frame, one after another, and no instance's entry
-    // depends on another's. Each range writes only its own slots.
-    auto* input = cullInputMapped_[frameIndex]
-        ? static_cast<CullInstanceGPU*>(cullInputMapped_[frameIndex]) : nullptr;
-    auto writeRange = [&, input, submittedIds](uint32_t begin, uint32_t end) {
-        for (uint32_t i = begin; i < end; i++) {
-            if (submittedIds) submittedIds[i] = instances[i].id;
-            if (!input) continue;
-            const auto& inst = instances[i];
-            const float effectiveMaxDistSq = instanceMaxDistSq(inst);
-
-            uint32_t flags = 0;
-            if (inst.cachedIsValid)          flags |= 1u;
-            if (inst.cachedIsInvisibleTrap)   flags |= 4u;
-            // Bit 3: previouslyVisible - the shader runs the HiZ occlusion test
-            // ONLY when this bit is set (an object with no depth in last frame's
-            // pyramid can't be tested reliably). Hysteresis: keep it set unless
-            // culled for 2+ consecutive frames, preventing single-frame false-cull
-            // flicker. The counter lives on the instance, so streaming churn can
-            // never pair it with a different object's history.
-            //
-            // Server game objects (mailboxes, chests, ...) opt out of HiZ entirely
-            // by never setting this bit: they are small gameplay props that sit
-            // flush against walls and doorframes, exactly where the coarse depth
-            // pyramid reports false occlusions. Such a false-cull would persist
-            // (the prop is then not rendered, so it never regains depth to clear
-            // itself) - the "mailbox went invisible in place" report. Frustum +
-            // distance culling still bound them; only the unreliable occlusion
-            // test is waived.
-            if (inst.hizPrevCulledFrames < 2 && !inst.isGameObject)
-                flags |= 8u;
-
-            input[i].sphere = glm::vec4(inst.cachedCullCenter, inst.cachedPaddedRadius);
-            input[i].effectiveMaxDistSq = effectiveMaxDistSq;
-            input[i].flags = flags;
-        }
-    };
-    {
-        const uint32_t parts = numInstances >= 16384 ? 4u : 1u;
-        const uint32_t per = (numInstances + parts - 1) / parts;
-        std::vector<std::future<void>> pending;
-        pending.reserve(parts);
-        for (uint32_t p = 1; p < parts; ++p) {
-            const uint32_t b = std::min(numInstances, p * per);
-            const uint32_t e = std::min(numInstances, b + per);
-            pending.push_back(core::ThreadPool::frameWorkers().submit([&writeRange, b, e]() { writeRange(b, e); }));
-        }
-        writeRange(0, std::min(numInstances, per));
-        for (auto& f : pending) f.get();
-    }
-
-    // --- Dispatch compute shader ---
-    const bool useHiZ = (cullHiZPipeline_ != VK_NULL_HANDLE)
-                     && hizSystem_ && hizSystem_->isReady();
-    if (useHiZ) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cullHiZPipeline_);
-        // Set 0: cull UBO + input/output SSBOs
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                cullHiZPipelineLayout_, 0, 1, &cullSet_[frameIndex], 0, nullptr);
-        // Set 1: HiZ pyramid sampler
-        VkDescriptorSet hizSet = hizSystem_->getDescriptorSet(frameIndex);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                cullHiZPipelineLayout_, 1, 1, &hizSet, 0, nullptr);
-    } else {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cullPipeline_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                cullPipelineLayout_, 0, 1, &cullSet_[frameIndex], 0, nullptr);
-    }
-
-    const uint32_t groupCount = (numInstances + 63) / 64;
-    vkCmdDispatch(cmd, groupCount, 1, 1);
-
-    // Make writes available to the host after this frame's fence signals. The
-    // CPU invalidates and reads them when this frame slot is reused.
-    VkMemoryBarrier2 barrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    barrier.srcStageMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-    barrier.dstStageMask = VK_PIPELINE_STAGE_HOST_BIT;
-    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-    VkDependencyInfo dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dep.memoryBarrierCount = 1;
-    dep.pMemoryBarriers = &barrier;
-    cmdPipelineBarrier2(cmd, dep);
-}
-
 void M2Renderer::writeInstanceLight(M2InstanceGPU& e, const M2Instance& inst) const {
     // Every field, every time: the entry is in write-combined memory and is
     // never read back, so whatever the slot held last frame must not show.
@@ -1122,61 +945,8 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
 
     lastDrawCallCount = 0;
 
-    // GPU cull results from dispatchCullCompute(), or the CPU fallback below.
     const uint32_t frameIndex = vkCtx_->getCurrentFrame();
-    const uint32_t numInstances = std::min(static_cast<uint32_t>(instances.size()), MAX_CULL_INSTANCES);
-    const uint32_t* visibility = static_cast<const uint32_t*>(cullOutputMapped_[frameIndex]);
-    const bool gpuCullAvailable = (cullPipeline_ != VK_NULL_HANDLE && visibility != nullptr);
-
-    // Scatter the GPU visibility results back onto the instances they were
-    // computed for.  The results belong to the dispatch recorded on this slot
-    // ~2 frames ago, so they are keyed by that dispatch's instance IDs, never by
-    // the current array index: createInstance() appends and removeInstance()
-    // swap-removes, so a respawned game object lands at the volatile tail of the
-    // array and would otherwise inherit the verdict of whatever transient object
-    // (spell visual, streamed doodad, creature) held that index two frames back
-    // - leaving it culled for as long as the churn continued.
-    //
-    // Instances with no entry in the readable set were created after that
-    // dispatch and keep their defaults: visible, and exempt from the HiZ test.
-    //
-    // hizPrevCulledFrames is a hysteresis counter rather than a binary flag: an
-    // object must be culled for 2 consecutive frames before it stops counting as
-    // "previously visible", which prevents the 1-frame-on / 1-frame-off
-    // oscillation that showed up as doodad flicker near moving characters.
     std::optional<core::ProfileScope> phaseScope;
-    phaseScope.emplace("m2: scatter cull verdicts", core::FrameProfiler::isMainThread() ? core::ProfileKind::Cpu : core::ProfileKind::Worker);
-    if (gpuCullAvailable) {
-        const auto& ids = cullReadableIds_[frameIndex < 2 ? frameIndex : 0];
-        for (size_t k = 0; k < ids.size(); ++k) {
-            // Fast path: with no churn since that dispatch the ordering still
-            // matches, so skip the hash lookup.
-            M2Instance* inst = nullptr;
-            if (k < instances.size() && instances[k].id == ids[k]) {
-                inst = &instances[k];
-            } else {
-                auto idxIt = instanceIndexById.find(ids[k]);
-                if (idxIt == instanceIndexById.end() || idxIt->second >= instances.size())
-                    continue;  // instance was removed since the dispatch
-                inst = &instances[idxIt->second];
-            }
-            inst->cullVerdictKnown = 1;
-            if (visibility[k]) {
-                inst->lastCullVisible = 1;
-                inst->hizPrevCulledFrames = 0;
-            } else {
-                inst->lastCullVisible = 0;
-                inst->hizPrevCulledFrames =
-                    std::min<uint8_t>(inst->hizPrevCulledFrames + 1, 3);
-            }
-        }
-    } else {
-        // No GPU cull data - conservatively treat everything as visible.
-        for (auto& inst : instances) {
-            inst.lastCullVisible = 1;
-            inst.hizPrevCulledFrames = 0;
-        }
-    }
 
     const glm::vec3 camPos = camera.getPosition();
     cullViewPos_ = camPos;
@@ -1203,13 +973,14 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
     if (transparentVisible_.capacity() < expectedVisible / 4)
         transparentVisible_.reserve(expectedVisible / 4);
 
-    // GPU frustum culling - build frustum for CPU fallback path and overflow instances
+    // What is drawn is decided here, by this frame's camera. A verdict recorded on
+    // the GPU comes back two frames old, by the camera of then, and left what came
+    // in at the screen's edge on a fast turn out of the frame.
     Frustum frustum;
     {
         const glm::mat4 vp = camera.getProjectionMatrix() * camera.getViewMatrix();
         frustum.extractFromMatrix(vp);
     }
-    // Matches the bound uploaded to the cull shader (see dispatchCullCompute).
     const float maxPossibleDistSq = cappedViewDistance() * cappedViewDistance();
 
     const uint32_t totalInstances = static_cast<uint32_t>(instances.size());
@@ -1242,14 +1013,6 @@ void M2Renderer::renderOpaque(VkCommandBuffer cmd, VkDescriptorSet perFrameSet, 
 
             if (forceNoCull_) {
                 if (!instance.cachedIsValid) continue;
-                glm::vec3 toCam = instance.cachedCullCenter - camPos;
-                distSq = glm::dot(toCam, toCam);
-                effectiveMaxDistSq = instanceMaxDistSq;
-            } else if (gpuCullAvailable && i < numInstances && instance.cullVerdictKnown) {
-                // Per-instance verdict scattered above - indexing visibility[]
-                // directly here would read the slot of whichever instance held
-                // this array position when the dispatch was recorded.
-                if (!instance.lastCullVisible) continue;
                 glm::vec3 toCam = instance.cachedCullCenter - camPos;
                 distSq = glm::dot(toCam, toCam);
                 effectiveMaxDistSq = instanceMaxDistSq;

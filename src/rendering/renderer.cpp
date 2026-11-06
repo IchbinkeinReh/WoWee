@@ -1482,7 +1482,6 @@ void Renderer::applyMsaaChange() {
         auto ext = vkCtx->getSwapchainExtent();
         if (!hizSystem_->resize(ext.width, ext.height)) {
             LOG_WARNING("HiZ resize failed after MSAA change");
-            if (m2Renderer) m2Renderer->setHiZSystem(nullptr);
             hizSystem_->shutdown();
             hizSystem_.reset();
         }
@@ -1535,7 +1534,6 @@ void Renderer::rebuildSwapchainSizedResources() {
         auto ext = vkCtx->getSwapchainExtent();
         if (!hizSystem_->resize(ext.width, ext.height)) {
             LOG_WARNING("HiZ resize failed - disabling occlusion culling");
-            if (m2Renderer) m2Renderer->setHiZSystem(nullptr);
             hizSystem_->shutdown();
             hizSystem_.reset();
         }
@@ -1804,22 +1802,6 @@ void Renderer::beginFrame() {
     // and the prologue executes ahead of everything this buffer records.
     { WOWEE_PROFILE_SCOPE("beginFrame: plan shadows", Cpu);
     planShadowPass();
-    }
-
-    // ── Early compute: M2 frustum culling ──
-    // beginFrame() has already waited for this frame slot's previous fence, so
-    // its mapped visibility output is complete and safe for the CPU to reuse.
-    // Read/invalidate that completed output, then record the next cull dispatch
-    // directly into the normal frame command buffer. The old path submitted a
-    // separate command buffer and synchronously waited on a fence every frame,
-    // serializing CPU and GPU work solely to obtain same-frame cull results.
-    if (m2Renderer && camera && vkCtx) {
-        uint32_t frame = vkCtx->getCurrentFrame();
-        m2Renderer->invalidateCullOutput(frame);
-        { WOWEE_PROFILE_SCOPE("beginFrame: m2 cull dispatch", Cpu);
-        m2Renderer->dispatchCullCompute(currentCmd, frame, *camera);
-        }
-        vkCtx->gpuMark(currentCmd, "m2 cull (compute)");
     }
 
     // Grass culls here too, for the same reason: a dispatch has to be recorded

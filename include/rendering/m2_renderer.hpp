@@ -44,7 +44,6 @@ namespace rendering {
 class Camera;
 class VkContext;
 class VkTexture;
-class HiZSystem;
 class RtScene;
 namespace rt_lights { struct PointLight; }
 
@@ -417,23 +416,6 @@ struct M2Instance {
     float cachedPaddedRadius = 0.0f;              // sphere radius used by the cull compute
     const M2ModelGPU* cachedModel = nullptr;  // Avoid per-frame hash lookups
 
-    // Result of the most recent GPU cull dispatch that actually covered this
-    // instance, matched back by instance ID (never by array index - see
-    // cullSubmittedIds_).  Defaults to visible so an instance created after the
-    // in-flight dispatch draws immediately instead of waiting ~2 frames for its
-    // first cull result.
-    uint8_t lastCullVisible = 1;
-    // Whether lastCullVisible has been set by a dispatch yet. Until it has,
-    // the instance is culled on the CPU like an instance past the GPU's
-    // capacity - "draws immediately" must not mean "drawn without a test":
-    // entering the world, every one of Dalaran's 60,000 instances is new, and
-    // all of them went to the GPU for the first two frames.
-    uint8_t cullVerdictKnown = 0;
-    // Consecutive frames this instance has been culled (capped at 3), used for
-    // the HiZ `previouslyVisible` hysteresis.  Defaults to 2 ("not recently
-    // visible") so a freshly spawned instance skips the HiZ test rather than
-    // being judged against depth data that never contained it.
-    uint8_t hizPrevCulledFrames = 2;
     // Server game object (mailbox, chest, node, door): not a doodad, so not
     // held to a doodad's size-class distance; drawn as far as the world is.
     // Set by the spawner.
@@ -547,8 +529,6 @@ public:
      */
     /** Pre-allocate GPU resources (bone SSBOs, descriptors) on main thread before parallel render. */
     void prepareRender(uint32_t frameIndex);
-    /** Dispatch GPU frustum culling compute shader on primary cmd before render pass. */
-    void dispatchCullCompute(VkCommandBuffer cmd, uint32_t frameIndex, const Camera& camera);
     /// Lets another renderer draw its own blended models among this one's.
     /// The client sorts every model of the scene by its distance and draws the
     /// blended ones far to near, units and doodads together; here the units
@@ -578,8 +558,6 @@ public:
     /// thread starts.
     void setGpuOpaqueMark(uint32_t index) { gpuOpaqueMark_ = index; }
 
-    /** Set the HiZ system for occlusion culling (Phase 6.3). nullptr disables HiZ. */
-    void setHiZSystem(HiZSystem* hiz) { hizSystem_ = hiz; }
 
     /// Where loaded models register their geometry for the ray traced
     /// lighting. Static doodads only - animated models would cast their
@@ -607,10 +585,6 @@ public:
     /// How many pieces of animated models the last sync placed.
     [[nodiscard]] uint32_t rtAnimatedPieces() const { return rtAnimatedPieces_; }
     void setForceNoCull(bool v) { forceNoCull_ = v; }
-
-    /** Ensure GPU→CPU cull output is visible to the host after a fence wait.
-     *  Call after the early compute submission finishes (endSingleTimeCommands). */
-    void invalidateCullOutput(uint32_t frameIndex);
 
     /**
      * Initialize shadow pipeline (Phase 7)
@@ -1225,8 +1199,8 @@ private:
     // of groundEffectDensity x 64 doodads, at most 4096, filled a batch at a
     // time (CDetailDoodad_vtx, 0x007b2a80). Here every visible M2 of the
     // frame shares this one buffer. Played it holds a few thousand; what ran
-    // it out was the first frames in the world, which drew every instance
-    // untested (see M2Instance::cullVerdictKnown) - and then a dense Elwynn
+    // it out was the first frames in the world, while instances
+    // were drawn untested, which they no longer are - and then a dense Elwynn
     // verge looked down a road, which reached 65536 with clutter alone; so
     // twice that, and the clutter is what gives way should even that fill.
     static constexpr uint32_t MAX_INSTANCE_DATA = 131072;
@@ -1238,49 +1212,6 @@ private:
     VkDescriptorSet instanceSet_[2] = {};
     uint32_t instanceDataCount_ = 0; // reset each frame in render()
 
-    // GPU Frustum Culling via Compute Shader
-    // Compute shader tests each M2 instance against frustum planes + distance, writes visibility[].
-    // CPU reads back visibility to build sortedVisible_ without per-instance frustum/distance tests.
-    struct CullInstanceGPU {        // matches CullInstance in m2_cull.comp.glsl (32 bytes, std430)
-        glm::vec4 sphere;           // xyz = world position, w = padded radius
-        float effectiveMaxDistSq;   // the instance's distance cull threshold
-        uint32_t flags;             // bit 0 = valid, bit 1 unused, bit 2 = invisibleTrap
-        float _pad[2] = {};
-    };
-    struct CullUniformsGPU {        // matches CullUniforms in m2_cull_hiz.comp.glsl (std140)
-        glm::vec4 frustumPlanes[6]; // xyz = normal, w = distance         (96 bytes)
-        glm::vec4 cameraPos;        // xyz = camera position, w = maxPossibleDistSq (16 bytes)
-        uint32_t instanceCount;     //                                    (4 bytes)
-        uint32_t hizEnabled;        // 1 = HiZ occlusion active           (4 bytes)
-        uint32_t hizMipLevels;      // mip levels in HiZ pyramid          (4 bytes)
-        uint32_t _pad2 = {};        //                                    (4 bytes)
-        glm::vec4 hizParams;        // x=pyramidW, y=pyramidH, z=nearPlane, w=farPlane (16 bytes)
-        glm::mat4 viewProj;         // current frame view-projection                 (64 bytes)
-        glm::mat4 prevViewProj;     // previous frame VP for HiZ reprojection        (64 bytes)
-    };                              // Total: 272 bytes
-    /// Every instance resident, not every one drawn: those past it are culled
-    /// on the CPU instead. Dalaran holds over 60,000 with its ground cover;
-    /// 36 bytes a slot, 4.7 MB a frame.
-    static constexpr uint32_t MAX_CULL_INSTANCES = 131072;
-    VkPipeline cullPipeline_ = VK_NULL_HANDLE;           // frustum-only (fallback)
-    VkPipeline cullHiZPipeline_ = VK_NULL_HANDLE;        // frustum + HiZ occlusion
-    VkPipelineLayout cullPipelineLayout_ = VK_NULL_HANDLE;  // frustum-only layout (set 0)
-    VkPipelineLayout cullHiZPipelineLayout_ = VK_NULL_HANDLE; // HiZ layout (set 0 + set 1)
-    VkDescriptorSetLayout cullSetLayout_ = VK_NULL_HANDLE;
-    VkDescriptorPool cullDescPool_ = VK_NULL_HANDLE;
-    VkDescriptorSet cullSet_[2] = {};               // double-buffered
-    ::VkBuffer cullUniformBuffer_[2] = {};           // frustum planes + camera + HiZ params (UBO)
-    VmaAllocation cullUniformAlloc_[2] = {};
-    void* cullUniformMapped_[2] = {};
-    ::VkBuffer cullInputBuffer_[2] = {};             // per-instance bounding sphere + flags (SSBO)
-    VmaAllocation cullInputAlloc_[2] = {};
-    void* cullInputMapped_[2] = {};
-    ::VkBuffer cullOutputBuffer_[2] = {};            // uint visibility[] (SSBO, host-readable)
-    VmaAllocation cullOutputAlloc_[2] = {};
-    void* cullOutputMapped_[2] = {};
-
-    // HiZ occlusion culling (Phase 6.3) - optional, driven by Renderer
-    HiZSystem* hizSystem_ = nullptr;
 
     RtScene* rtScene_ = nullptr;
     // RtScene instances this renderer owns, and per RtScene instance id the
@@ -1321,25 +1252,6 @@ private:
     uint32_t rtAnimatedPieces_ = 0;
     void registerRtModel(M2ModelGPU& gpuModel, const pipeline::M2Model& model);
     void releaseRtModel(M2ModelGPU& gpuModel);
-
-    // Previous frame's view-projection for temporal reprojection in HiZ culling.
-    // Stored each frame so the cull shader can project into the same screen space
-    // as the depth buffer the HiZ pyramid was built from.
-    glm::mat4 prevVP_{1.0f};
-
-    // Instance IDs, in dispatch order, for the cull results a frame slot holds.
-    //
-    // The visibility SSBO is read back one full slot cycle after it is written:
-    // dispatchCullCompute() records a dispatch into this frame's command buffer,
-    // and render() reads the mapped output of the dispatch recorded on the SAME
-    // slot ~2 frames earlier.  Array indices are not stable across that gap -
-    // createInstance() appends and removeInstance() swap-removes, so slot i can
-    // easily describe a different object by the time it is read.  Recording the
-    // IDs lets render() match each result back to the instance it was computed
-    // for.  cullSubmittedIds_ is the dispatch just recorded (results not ready);
-    // cullReadableIds_ is the previous one, matching the mapped data now.
-    std::vector<uint32_t> cullSubmittedIds_[2];
-    std::vector<uint32_t> cullReadableIds_[2];
 
     // Dynamic ribbon vertex buffer (CPU-written triangle strip)
     static constexpr size_t MAX_RIBBON_VERTS = 8192;  // 9 floats each
