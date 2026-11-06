@@ -1385,6 +1385,278 @@ static bool sortQuestWatches(lua_State* L) {
 // The questPOI switch is not consulted: 0x005e2b60 does not consult it either,
 // and with the switch off the areas were never asked for, so the list answers
 // zeroes on its own.
+// ---- The world map's quest blobs, as the hover test sees them ----
+//
+// WorldMapBlobFrame is a QuestPOIFrame. DrawQuestBlob gives a quest one of four
+// slots (0x00590560), and each of its POI areas becomes a blob (0x005900f0 ->
+// 0x0058f1a0): the area's points, run through a closed Catmull-Rom spline when
+// smoothing is on (0x0058ed80 - the last point, the points, the first two, as
+// control points; numSplinePoints samples from t = 0.01, each placed by
+// arc length and rounded to whole units), then put on the shown map
+// (0x00544140). A point off the map, or within a thousandth of its top or left
+// edge, leaves the blob unshown. With merging on, two shown blobs of a quest
+// still in progress whose objectives are both open and whose bounding boxes
+// overlap are weighed (0x0058e310): when more than the merge threshold of the
+// smaller one's points fall inside the larger, the smaller is hidden and its
+// objectives join the larger's, up to four.
+//
+// UpdateMouseOverTooltip(x, y) (0x0058e9c0 -> 0x0058e0d0) then asks which blob
+// is under the cursor - 0..1 across the map both ways - among a quest's shown
+// blobs whose objective is open and whose area is on the map, the last of a
+// slot that has one and the first slot that does, and answers the quest's log
+// index and how many objectives that blob carries. GetNumTooltips and
+// GetTooltipIndex read that answer back. The map is the same affine frame for
+// cursor and points, so the test is made in map space.
+namespace {
+struct BlobSettings {
+    bool smoothing = true;     // +0x2ac
+    bool merging = true;       // +0x2ad
+    float mergeThreshold = 0.25f;  // +0x2b0, 0.1..0.5
+    int splinePoints = 20;     // +0x2b4, 8..30
+};
+BlobSettings& blobSettings() { static BlobSettings s; return s; }
+
+struct BlobHover { uint32_t questId = 0; std::vector<int32_t> objectives; };
+BlobHover& blobHover() { static BlobHover h; return h; }
+
+struct Blob {
+    const game::QuestPoiArea* area = nullptr;
+    std::vector<std::pair<float, float>> pts;   // map space, no centroid
+    float minU = 0, minV = 0, maxU = 0, maxV = 0;
+    bool shown = false;
+    std::vector<int32_t> objectives;
+};
+
+/// 0x0058ed80's smoothing: Catmull-Rom (0x00ac37b8) through the closed ring,
+/// sampled by arc length as the Tempest spline does it (0x004c4230), each
+/// segment's length the sum of twenty chords (0x004c3b10).
+std::vector<std::pair<int32_t, int32_t>> smoothArea(const std::vector<std::pair<int32_t, int32_t>>& in,
+                                                    int samples) {
+    const size_t n = in.size();
+    std::vector<std::array<float, 2>> cp;
+    cp.reserve(n + 3);
+    cp.push_back({static_cast<float>(in[n - 1].first), static_cast<float>(in[n - 1].second)});
+    for (const auto& p : in) cp.push_back({static_cast<float>(p.first), static_cast<float>(p.second)});
+    cp.push_back({static_cast<float>(in[0].first), static_cast<float>(in[0].second)});
+    cp.push_back({static_cast<float>(in[1].first), static_cast<float>(in[1].second)});
+    const size_t segments = cp.size() - 3;
+    const auto eval = [&cp](size_t seg, float t) {
+        static constexpr float m[16] = {-0.5f, 1.0f, -0.5f, 0.0f, 1.5f, -2.5f, 0.0f, 1.0f,
+                                        -1.5f, 2.0f, 0.5f, 0.0f, 0.5f, -0.5f, 0.0f, 0.0f};
+        std::array<float, 2> out{0.0f, 0.0f};
+        for (size_t k = 0; k < 4; ++k) {
+            const float w = ((m[k * 4] * t + m[k * 4 + 1]) * t + m[k * 4 + 2]) * t + m[k * 4 + 3];
+            out[0] += w * cp[seg + k][0];
+            out[1] += w * cp[seg + k][1];
+        }
+        return out;
+    };
+    std::vector<float> lengths(segments, 0.0f);
+    float total = 0.0f;
+    for (size_t s = 0; s < segments; ++s) {
+        auto prev = eval(s, 0.0f);
+        float t = 0.05f;
+        for (int i = 0; i < 20; ++i) {
+            const auto cur = eval(s, t);
+            lengths[s] += std::sqrt((cur[0] - prev[0]) * (cur[0] - prev[0]) +
+                                    (cur[1] - prev[1]) * (cur[1] - prev[1]));
+            prev = cur;
+            t += 0.05f;
+        }
+        total += lengths[s];
+    }
+    std::vector<std::pair<int32_t, int32_t>> out;
+    float t = 0.01f;
+    for (int k = 0; k < samples; ++k) {
+        std::array<float, 2> p{};
+        if (t <= 0.0f) {
+            p = cp.front();
+        } else if (t >= 1.0f) {
+            p = cp.back();
+        } else {
+            const float at = total * t;
+            size_t seg = 0;
+            float before = 0.0f;
+            while (seg + 1 < segments && before + lengths[seg] <= at) before += lengths[seg++];
+            p = eval(seg, lengths[seg] != 0.0f ? (at - before) / lengths[seg] : 0.0f);
+        }
+        out.emplace_back(static_cast<int32_t>(std::nearbyint(p[0])),
+                         static_cast<int32_t>(std::nearbyint(p[1])));
+        t = 1.0f / static_cast<float>(samples) + t;
+    }
+    return out;
+}
+
+/// 0x009830d0 with two axes: Haines' crossings test.
+bool pointInBlob(float x, float y, const std::vector<std::pair<float, float>>& pts) {
+    bool inside = false;
+    const size_t n = pts.size();
+    if (n < 3) return false;
+    auto v0 = pts[n - 1];
+    bool yflag0 = v0.second >= y;
+    for (const auto& v1 : pts) {
+        const bool yflag1 = v1.second >= y;
+        if (yflag0 != yflag1 &&
+            (((v1.second - y) * (v0.first - v1.first) >= (v1.first - x) * (v0.second - v1.second)) ==
+             yflag1)) {
+            inside = !inside;
+        }
+        yflag0 = yflag1;
+        v0 = v1;
+    }
+    return inside;
+}
+
+std::vector<Blob> buildQuestBlobs(const game::QuestPoiIcon& icon, const game::QuestPoiMapView& view,
+                                  uint32_t mask) {
+    const BlobSettings& set = blobSettings();
+    std::vector<Blob> blobs;
+    for (const auto& area : icon.areas) {
+        Blob b;
+        b.area = &area;
+        b.objectives.push_back(area.objectiveIndex);
+        if (area.points.size() >= 3 && view.valid && view.project) {
+            const auto ring = set.smoothing ? smoothArea(area.points, set.splinePoints) : area.points;
+            bool off = false;
+            for (const auto& p : ring) {
+                float u = 0.0f, v = 0.0f;
+                if (!view.project(static_cast<float>(p.first), static_cast<float>(p.second), u, v) ||
+                    std::fabs(u * v) < 0.001f) {
+                    off = true;
+                    break;
+                }
+                b.pts.emplace_back(u, v);
+            }
+            b.shown = !off && !b.pts.empty();
+            if (b.shown) {
+                b.minU = b.maxU = b.pts[0].first;
+                b.minV = b.maxV = b.pts[0].second;
+                for (const auto& p : b.pts) {
+                    b.minU = std::min(b.minU, p.first);
+                    b.maxU = std::max(b.maxU, p.first);
+                    b.minV = std::min(b.minV, p.second);
+                    b.maxV = std::max(b.maxV, p.second);
+                }
+            }
+        }
+        blobs.push_back(std::move(b));
+    }
+    const auto open = [mask](const Blob& b) {
+        return (mask & (1u << (b.area->objectiveIndex & 31))) != 0;
+    };
+    if (set.merging && mask != 0xffffffffu) {
+        for (size_t i = 0; i < blobs.size(); ++i) {
+            if (!blobs[i].shown || !open(blobs[i])) continue;
+            for (size_t j = i + 1; j < blobs.size(); ++j) {
+                if (!blobs[j].shown || !open(blobs[j])) continue;
+                Blob& a = blobs[i];
+                Blob& c = blobs[j];
+                if (!(std::max(a.minU, c.minU) < std::min(a.maxU, c.maxU) &&
+                      std::max(a.minV, c.minV) < std::min(a.maxV, c.maxV))) {
+                    continue;
+                }
+                const float areaA = (a.maxV - a.minV) * (a.maxU - a.minU);
+                const float areaC = (c.maxV - c.minV) * (c.maxU - c.minU);
+                Blob& larger = areaA < areaC ? c : a;
+                Blob& smaller = areaA < areaC ? a : c;
+                size_t inside = 0;
+                for (const auto& p : smaller.pts) {
+                    if (pointInBlob(p.first, p.second, larger.pts)) ++inside;
+                }
+                if (smaller.pts.empty() ||
+                    static_cast<float>(inside) / static_cast<float>(smaller.pts.size()) <=
+                        set.mergeThreshold) {
+                    continue;
+                }
+                smaller.shown = false;
+                for (int32_t o : smaller.objectives) {
+                    if (larger.objectives.size() >= 4) break;
+                    if (std::find(larger.objectives.begin(), larger.objectives.end(), o) ==
+                        larger.objectives.end()) {
+                        larger.objectives.push_back(o);
+                    }
+                }
+            }
+        }
+    }
+    return blobs;
+}
+}  // namespace
+
+int lua_QuestBlob_EnableSmoothing(lua_State* L) {
+    blobSettings().smoothing = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_QuestBlob_EnableMerging(lua_State* L) {
+    blobSettings().merging = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+int lua_QuestBlob_SetMergeThreshold(lua_State* L) {
+    const float v = static_cast<float>(luaL_optnumber(L, 2, 0.25));
+    blobSettings().mergeThreshold = std::clamp(v, 0.1f, 0.5f);
+    return 0;
+}
+int lua_QuestBlob_SetNumSplinePoints(lua_State* L) {
+    const int n = static_cast<int>(luaL_optnumber(L, 2, 20));
+    blobSettings().splinePoints = std::clamp(n, 8, 30);
+    return 0;
+}
+int lua_QuestBlob_UpdateMouseOverTooltip(lua_State* L) {
+    BlobHover& hover = blobHover();
+    hover = {};
+    auto* gh = getGameHandler(L);
+    auto* list = questPoiList(gh);
+    const float x = static_cast<float>(luaL_optnumber(L, 2, -1.0));
+    const float y = static_cast<float>(luaL_optnumber(L, 3, -1.0));
+    if (!list || x < 0.0f || y < 0.0f || x > 1.0f || y > 1.0f) return 0;
+    const auto view = questPoiMapView(L);
+    if (!view.valid) return 0;
+    const auto rows = questRows(gh);
+    int slots = 0;
+    for (const auto& icon : list->icons()) {
+        if (icon.questId <= 0 || !gh->isQuestBlobShown(static_cast<uint32_t>(icon.questId))) continue;
+        if (++slots > 4) break;
+        const uint32_t mask = questPoiState(gh, rows, icon.questId).objectiveMask;
+        if (mask == 0xffffffffu) continue;
+        const auto blobs = buildQuestBlobs(icon, view, mask);
+        const std::vector<int32_t>* found = nullptr;
+        for (const auto& b : blobs) {
+            if (!b.shown || b.pts.size() < 2 ||
+                (mask & (1u << (b.area->objectiveIndex & 31))) == 0) {
+                continue;
+            }
+            // 0x005e0110: the area's map is the one shown and its centre is on it.
+            float u = 0.0f, v = 0.0f;
+            if (b.area->mapId != view.mapId ||
+                !view.project(static_cast<float>(b.area->centerX), static_cast<float>(b.area->centerY), u, v) ||
+                std::fabs(u * v) < 0.001f) {
+                continue;
+            }
+            if (pointInBlob(x, y, b.pts)) found = &b.objectives;
+        }
+        if (found) {
+            hover.questId = static_cast<uint32_t>(icon.questId);
+            hover.objectives = *found;
+            break;
+        }
+    }
+    if (hover.questId == 0) return 0;
+    lua_pushnumber(L, questPoiState(gh, rows, static_cast<int32_t>(hover.questId)).logIndex);
+    lua_pushnumber(L, static_cast<double>(hover.objectives.size()));
+    return 2;
+}
+int lua_QuestBlob_GetNumTooltips(lua_State* L) {
+    lua_pushnumber(L, static_cast<double>(blobHover().objectives.size()));
+    return 1;
+}
+int lua_QuestBlob_GetTooltipIndex(lua_State* L) {
+    const auto i = static_cast<long long>(luaL_optnumber(L, 2, 0)) - 1;
+    const auto& objectives = blobHover().objectives;
+    lua_pushnumber(L, i >= 0 && i < static_cast<long long>(objectives.size())
+                          ? objectives[static_cast<size_t>(i)] : 0);
+    return 1;
+}
+
 std::pair<uint32_t, uint32_t> questPoiOpenTarget(lua_State* L, int32_t questId) {
     auto* gh = getGameHandler(L);
     auto* list = questPoiList(gh);

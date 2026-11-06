@@ -7854,6 +7854,13 @@ void LuaEngine::registerCoreAPI() {
         {"PingLocation",    lua_Minimap_PingLocation},
         {"GetPingPosition", lua_Minimap_GetPingPosition},
         {"DrawQuestBlob",   lua_QuestBlobFrame_DrawQuestBlob},
+        {"EnableSmoothing",        wowee::addons::lua_QuestBlob_EnableSmoothing},
+        {"EnableMerging",          wowee::addons::lua_QuestBlob_EnableMerging},
+        {"SetMergeThreshold",      wowee::addons::lua_QuestBlob_SetMergeThreshold},
+        {"SetNumSplinePoints",     wowee::addons::lua_QuestBlob_SetNumSplinePoints},
+        {"UpdateMouseOverTooltip", wowee::addons::lua_QuestBlob_UpdateMouseOverTooltip},
+        {"GetNumTooltips",         wowee::addons::lua_QuestBlob_GetNumTooltips},
+        {"GetTooltipIndex",        wowee::addons::lua_QuestBlob_GetTooltipIndex},
         {"GetCenter",       lua_Region_GetCenter},
         {"SetAlpha",        lua_Region_SetAlpha},
         {"GetAlpha",        lua_Region_GetAlpha},
@@ -9212,12 +9219,8 @@ void LuaEngine::registerCoreAPI() {
         // from the widget metatable.
         "function WorldMapBlobFrame:SetFillAlpha() end\n"
         "function WorldMapBlobFrame:SetBorderAlpha() end\n"
-        // Nil rather than zero: the caller reads it as "are there blob
-        // tooltips to use instead of the quest log's own objectives", and
-        // takes the quest log path when there are none. Zero is true in Lua
-        // and would send it down the blob path with nothing in it.
-        "function WorldMapBlobFrame:GetNumTooltips() return nil end\n"
-        "function WorldMapBlobFrame:GetTooltipIndex(i) return i end\n"
+        // GetNumTooltips, GetTooltipIndex and UpdateMouseOverTooltip are the
+        // widget's own now (lua_QuestBlob_*), reading the hover test.
         // GameTooltip: global tooltip frame used by virtually all addons
         // Created as a GameTooltip, not a Frame, so it is one as far as the
         // widget tree is concerned and its lines are drawn.

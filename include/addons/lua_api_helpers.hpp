@@ -1325,6 +1325,16 @@ const game::GameHandler::QuestLogEntry* questAtLogRow(game::GameHandler* gh, int
 /// is", which is also what the caller tests: nil is not what it asks for, and
 /// `nil ~= 0` is true in Lua.
 std::pair<uint32_t, uint32_t> questPoiOpenTarget(lua_State* L, int32_t questId);
+/// WorldMapBlobFrame's own methods (QuestPOIFrame, 0x0058e6f0 onwards):
+/// the blob settings, the hover test and its answers. Defined with the quest
+/// POI list they are built from, registered with the widget methods.
+int lua_QuestBlob_EnableSmoothing(lua_State* L);
+int lua_QuestBlob_EnableMerging(lua_State* L);
+int lua_QuestBlob_SetMergeThreshold(lua_State* L);
+int lua_QuestBlob_SetNumSplinePoints(lua_State* L);
+int lua_QuestBlob_UpdateMouseOverTooltip(lua_State* L);
+int lua_QuestBlob_GetNumTooltips(lua_State* L);
+int lua_QuestBlob_GetTooltipIndex(lua_State* L);
 
 /// The recipe a drawn trade skill row stands for, or null for a heading, an
 /// index past the end, or no open profession.
