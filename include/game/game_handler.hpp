@@ -2833,6 +2833,10 @@ public:
     /// raised when the answer comes - only for an answer that found the name
     /// when `onlyFound`. One wait per guid and event.
     const std::string& nameOrAsk(uint64_t guid, const char* event, bool onlyFound);
+    /// The same ask with any callback, which the answer runs with whether it
+    /// found the name and the name; one wait per guid and key.
+    void askNameThen(uint64_t guid, const std::string& key,
+                     std::function<void(bool found, const std::string& name)> then);
     /// The answer for those waits (from the name query response).
     void onNameAnsweredForWaits(uint64_t guid, bool found);
     uint32_t getLfgProposalId() const;
@@ -6450,7 +6454,11 @@ private:
     std::unordered_set<uint32_t> blobQuestIds_;
     /// Events waiting on a player name, by guid: the event and whether only a
     /// found name raises it.
-    std::unordered_map<uint64_t, std::vector<std::pair<std::string, bool>>> nameWaits_;
+    struct NameWait {
+        std::string key;
+        std::function<void(bool, const std::string&)> then;
+    };
+    std::unordered_map<uint64_t, std::vector<NameWait>> nameWaits_;
     bool pendingLoginQuestResync_ = false;
     float pendingLoginQuestResyncTimeout_ = 0.0f;
 

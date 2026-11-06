@@ -1405,9 +1405,34 @@ void GameHandler::registerCoreOpcodes() {
         resurrectIsSpiritHealer_ = false;
         resurrectHasSickness_ = sickness;
         resurrectHasTimer_ = hasTimer;
-        resurrectCasterName_ = casterName.empty() ? lookupName(casterGuid) : casterName;
         resurrectRequestPending_ = true;
-        fireAddonEvent("RESURRECT_REQUEST", {resurrectCasterName_});
+        // 0x006dbd00: the packet's name when it has one; otherwise the name
+        // cache's, asked for when it has none (0x006dbc60 drops the offer on
+        // an answer that found nothing). Either way the dialog is raised only
+        // while the player is dead or a ghost (vtable +0x128, 0x006cde20).
+        const auto offer = [this](const std::string& name) {
+            resurrectCasterName_ = name;
+            if (!name.empty() && (playerDead_ || releasedSpirit_))
+                fireAddonEvent("RESURRECT_REQUEST", {name});
+        };
+        if (!casterName.empty()) {
+            offer(casterName);
+        } else if (!lookupName(casterGuid).empty()) {
+            offer(lookupName(casterGuid));
+        } else {
+            resurrectCasterName_.clear();
+            askNameThen(casterGuid, "resurrect offer", [this, casterGuid, offer](bool found, const std::string& name) {
+                if (resurrectCasterGuid_ != casterGuid) return;
+                if (!found) {
+                    resurrectCasterGuid_ = 0;
+                    resurrectRequestPending_ = false;
+                    resurrectHasSickness_ = false;
+                    resurrectHasTimer_ = false;
+                    return;
+                }
+                offer(name);
+            });
+        }
     };
 
     // Time sync
@@ -3363,14 +3388,19 @@ void GameHandler::registerRemainingOpcodes() {
         if (packet.hasRemaining(1) && levelGrantMentorGuid_ == 0) {
             uint64_t mentorGuid = packet.readPackedGuid();
             levelGrantMentorGuid_ = mentorGuid;
-            std::string mentorName;
-            auto ent = entityController_->getEntityManager().getEntity(mentorGuid);
-            if (auto* unit = dynamic_cast<Unit*>(ent.get())) mentorName = unit->getName();
-            if (mentorName.empty()) mentorName = lookupName(mentorGuid);
             // LEVEL_GRANT_PROPOSED with the name, whose popup asks
             // (0x00526530 case 0x41f -> 0x00513fd0); no chat line. This
-            // printed English "X is offering to grant you a level."
-            if (!mentorName.empty()) fireAddonEvent("LEVEL_GRANT_PROPOSED", {mentorName});
+            // printed English "X is offering to grant you a level." The name
+            // is the name cache's, and one it does not hold yet is asked for:
+            // the answer raises the event when it found it (0x00513f70).
+            const std::string& mentorName = lookupName(mentorGuid);
+            if (!mentorName.empty()) {
+                fireAddonEvent("LEVEL_GRANT_PROPOSED", {mentorName});
+            } else {
+                askNameThen(mentorGuid, "LEVEL_GRANT_PROPOSED", [this](bool found, const std::string& name) {
+                    if (found && !name.empty()) fireAddonEvent("LEVEL_GRANT_PROPOSED", {name});
+                });
+            }
         }
         packet.skipAll();
     };

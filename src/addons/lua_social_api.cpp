@@ -4757,6 +4757,11 @@ void registerSocialLuaAPI(lua_State* L) {
             if (caster != 0 && gh->resurrectRequestPendingRef() && !gh->resurrectIsSpiritHealerRef()) {
                 const std::string& name = gh->lookupName(caster);
                 if (!name.empty()) { lua_pushstring(L, name.c_str()); return 1; }
+                // Asked for, and the answer raises RESURRECT_REQUEST with the
+                // name it found (0x00515900).
+                gh->askNameThen(caster, "ResurrectGetOfferer", [gh](bool, const std::string& found) {
+                    if (!found.empty()) gh->fireAddonEvent("RESURRECT_REQUEST", {found});
+                });
             }
             lua_pushnil(L);
             return 1;

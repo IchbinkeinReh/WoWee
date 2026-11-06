@@ -5307,12 +5307,21 @@ void GameHandler::sortLfgBrowser(std::string_view word) {
 const std::string& GameHandler::nameOrAsk(uint64_t guid, const char* event, bool onlyFound) {
     const std::string& name = lookupName(guid);
     if (!name.empty() || guid == 0) return name;
+    const std::string ev = event;
+    askNameThen(guid, ev, [this, ev, onlyFound](bool found, const std::string&) {
+        if (found || !onlyFound) fireAddonEvent(ev, {});
+    });
+    return name;
+}
+
+void GameHandler::askNameThen(uint64_t guid, const std::string& key,
+                              std::function<void(bool, const std::string&)> then) {
+    if (guid == 0) return;
     auto& waits = nameWaits_[guid];
     const bool waiting = std::any_of(waits.begin(), waits.end(),
-                                     [event](const auto& w) { return w.first == event; });
-    if (!waiting) waits.emplace_back(event, onlyFound);
+                                     [&key](const NameWait& w) { return w.key == key; });
+    if (!waiting) waits.push_back({key, std::move(then)});
     queryPlayerName(guid);
-    return name;
 }
 
 void GameHandler::onNameAnsweredForWaits(uint64_t guid, bool found) {
@@ -5320,9 +5329,8 @@ void GameHandler::onNameAnsweredForWaits(uint64_t guid, bool found) {
     if (it == nameWaits_.end()) return;
     const auto waits = std::move(it->second);
     nameWaits_.erase(it);
-    for (const auto& [event, onlyFound] : waits) {
-        if (found || !onlyFound) fireAddonEvent(event, {});
-    }
+    const std::string name = lookupName(guid);
+    for (const auto& w : waits) w.then(found, name);
 }
 
 void GameHandler::onLfgNameAnswered(uint64_t guid) {
