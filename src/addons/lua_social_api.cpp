@@ -114,6 +114,64 @@ static uint64_t carriedCharterGuid(game::GameHandler* gh, std::initializer_list<
     return 0;
 }
 
+/// BuyGuildCharter's own refusals (0x0059a050): not for a player already in a
+/// guild, nor one who cannot pay for the charter. True when it may be bought.
+static bool guildCharterPurchaseAllowed(game::GameHandler* gh) {
+    if (gh->isInGuild()) {
+        gh->playGameErrorSound("ERR_ALREADY_IN_GUILD");
+        gh->addSystemChatMessage(game::interfaceString("ERR_ALREADY_IN_GUILD", "You are already in a guild."));
+        return false;
+    }
+    if (gh->getMoneyCopper() < gh->getPetitionCost()) {
+        gh->playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
+        gh->addUIError(game::interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        return false;
+    }
+    return true;
+}
+
+/// BuyPetition's (0x005a2350), in its order, for the charter a registrar
+/// offers at `row`: a guild charter is not for a player in a guild; an arena
+/// one not for a player already in a team of that size; below level 60, 70
+/// or 80 exactly the next of 70 and 80 is named - said, and the charter
+/// bought all the same; and none for a player who cannot pay. A row the
+/// registrar did not offer is refused by the lookup itself, as the client's
+/// index bound refuses it.
+static bool petitionPurchaseAllowed(game::GameHandler* gh, int row) {
+    uint32_t itemId = 0, displayId = 0, cost = 0;
+    const bool offered = gh->getPetitionCharter(row, itemId, displayId, cost);
+    const int teamSize = itemId == 23560 ? 2 : itemId == 23561 ? 3 : itemId == 23562 ? 5 : 0;
+    if (offered && teamSize == 0 && gh->isInGuild()) {
+        gh->playGameErrorSound("ERR_ALREADY_IN_GUILD");
+        gh->addSystemChatMessage(game::interfaceString("ERR_ALREADY_IN_GUILD", "You are already in a guild."));
+        return false;
+    }
+    if (offered && teamSize != 0) {
+        for (const auto& team : gh->getArenaTeamStats()) {
+            if (team.teamType == static_cast<uint32_t>(teamSize)) {
+                gh->playGameErrorSound("ERR_ALREADY_IN_ARENA_TEAM");
+                gh->addSystemChatMessage(game::interfaceString(
+                    "ERR_ALREADY_IN_ARENA_TEAM", "You are already in an arena team of that size."));
+                return false;
+            }
+        }
+        const uint32_t level = gh->getPlayerLevel();
+        if (level != 60 && level != 70 && level != 80) {
+            const int needed = (level > 70 && level < 80) ? 80 : 70;
+            gh->playGameErrorSound("ERR_ARENA_TEAM_LEVEL_TOO_LOW_I");
+            gh->addSystemChatMessage(game::interfaceFormat(
+                "ERR_ARENA_TEAM_LEVEL_TOO_LOW_I", "You must be level %d to form an arena team.",
+                {std::to_string(needed)}));
+        }
+    }
+    if (offered && gh->getMoneyCopper() < cost) {
+        gh->playGameErrorSound("ERR_NOT_ENOUGH_MONEY");
+        gh->addUIError(game::interfaceString("ERR_NOT_ENOUGH_MONEY", "You don't have enough money."));
+        return false;
+    }
+    return offered;
+}
+
 /// Whether the player's guild rank holds one right. Shared by the nine Can*
 /// queries, which differ only in which bit they ask about.
 static int luaGuildRight(lua_State* L, uint32_t bit) {
@@ -1940,7 +1998,8 @@ void registerSocialLuaAPI(lua_State* L) {
                 {"BuyGuildCharter", [](lua_State* L) -> int {
             auto* gh = getGameHandler(L);
             const char* name = luaL_optstring(L, 1, "");
-            if (gh && name && *name) gh->buyPetition(gh->getPetitionNpcGuid(), name);
+            if (gh && name && *name && gh->getPetitionNpcGuid() != 0 && guildCharterPurchaseAllowed(gh))
+                gh->buyPetition(gh->getPetitionNpcGuid(), name);
             return 0;
         }},
                 // BuyPetition(index, name) - the arena registrar's Purchase.
@@ -1951,7 +2010,8 @@ void registerSocialLuaAPI(lua_State* L) {
             auto* gh = getGameHandler(L);
             const int index = static_cast<int>(luaL_optnumber(L, 1, 1));
             const char* name = luaL_optstring(L, 2, "");
-            if (gh && name && *name && index >= 1)
+            if (gh && name && *name && index >= 1 && gh->getPetitionNpcGuid() != 0 &&
+                petitionPurchaseAllowed(gh, index - 1))
                 gh->buyPetition(gh->getPetitionNpcGuid(), name,
                                 static_cast<uint32_t>(index));
             return 0;
