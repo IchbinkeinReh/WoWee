@@ -5276,6 +5276,10 @@ void GameHandler::lfgSearchLeave() {
     if (socialHandler_) socialHandler_->lfgSearchLeave();
 }
 
+void GameHandler::refreshLfgList() {
+    if (socialHandler_) socialHandler_->refreshLfgList();
+}
+
 uint32_t GameHandler::getLfgListRowCount() const {
     return socialHandler_ ? socialHandler_->getLfgListRowCount() : 0;
 }

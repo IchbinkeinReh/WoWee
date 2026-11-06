@@ -5917,8 +5917,13 @@ static int pushPlayerAuraExpiration(lua_State* L, uint32_t spellId) {
 static int lua_GetLFGDeserterExpiration(lua_State* L) { return pushPlayerAuraExpiration(L, 71041); }
 static int lua_GetLFGRandomCooldownExpiration(lua_State* L) { return pushPlayerAuraExpiration(L, 71328); }
 
-// RefreshLFGList() - the raid browser's refresh button.
-static int lua_RefreshLFGList(lua_State* L) { (void)L; return 0; }
+// RefreshLFGList() (0x0055d280) - the raid browser's refresh button: the rows
+// received since the panel last took them become the ones it shows, and
+// UPDATE_LFG_LIST is raised.
+static int lua_RefreshLFGList(lua_State* L) {
+    if (auto* gh = getGameHandler(L)) gh->refreshLfgList();
+    return 0;
+}
 
 // GetTrackedAchievements() → the achievement ids being watched, as separate
 // values. The watch frame counts them by return count.

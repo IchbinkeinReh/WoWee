@@ -5410,17 +5410,23 @@ void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
         lfgNamesAsked_.clear();
         lfgPendingNames_ = 0;
     }
-    // The rows the packet brought are not yet the rows the panel shows: a row is a
-    // player record plus the listing attached to it, and the pairing is what
-    // 0x00553530 does when the interface asks for an index.
-    rebuildLfgBrowserRows();
     // Then the names the new rows are missing, which the client asks for row by row
     // as it allocates them (0x0055b770:9931-9937). Nothing is answered from them yet,
     // but the answers are what put a name — and a class — on a row the panel has
     // already drawn.
     requestLfgRowNames();
     lfgListWindowId_ = lfgJoinedListId_;
+    // The panel keeps what it was showing until the list is a different one
+    // (0x0055b770:9978-9981) or RefreshLFGList asks for what has come since.
     if (previousWindow != 0 && previousWindow == lfgListWindowId_) return;
+    refreshLfgList();
+}
+
+void SocialHandler::refreshLfgList() {
+    lfgShownRows_ = lfgListRows_;
+    // A row is a player record plus the listing attached to it, and the
+    // pairing is what 0x00553530 does when the interface asks for an index.
+    rebuildLfgBrowserRows();
     fireLfgListChanged();
 }
 
@@ -5429,8 +5435,8 @@ void SocialHandler::handleUpdateLfgList(network::Packet& packet) {
 // guid through its name cache (0x0067d770 feeding the strncmp at 0x0076e760), and an
 // empty answer is what makes that key say nothing and the walk move on.
 void SocialHandler::rebuildLfgBrowserRows() {
-    lfgBrowserRows_ = buildLfgBrowserRows(lfgListRows_, lfgListingsFirst_);
-    sortLfgBrowserRows(lfgBrowserRows_, lfgListRows_, lfgSortKeys_,
+    lfgBrowserRows_ = buildLfgBrowserRows(lfgShownRows_, lfgListingsFirst_);
+    sortLfgBrowserRows(lfgBrowserRows_, lfgShownRows_, lfgSortKeys_,
                        [this](const LfgListRow& r) { return owner_.lookupName(r.guid); });
 }
 
@@ -5491,6 +5497,7 @@ void SocialHandler::onLfgNameAnswered(uint64_t guid) {
 // the list would never be re-announced again while that list is held.
 void SocialHandler::clearLfgListWindow() {
     lfgListRows_.clear();
+    lfgShownRows_.clear();
     lfgBrowserRows_.clear();
     lfgNamesAsked_.clear();
     lfgPendingNames_ = 0;

@@ -648,17 +648,20 @@ public:
     /// Ask to be listed in the raid browser for one raid, or stop being listed
     /// (SearchLFGJoin / SearchLFGLeave, 0x00559400 and 0x00558f90).
     void lfgSearchJoin(uint32_t typeId, uint32_t lfgId);
+    /// RefreshLFGList (0x0055d280): the rows received since the panel last
+    /// took them are what it shows now, and UPDATE_LFG_LIST says so.
+    void refreshLfgList();
     void lfgSearchLeave();
     /// How many rows the raid browser's browse panel has, which is
     /// SearchLFGGetNumResults' first number (0x00553ba0) and answers zero while no
     /// list is held - the client's own guard on its held list id.
     [[nodiscard]] uint32_t getLfgListRowCount() const {
-        return lfgListWindowId_ == 0 ? 0 : static_cast<uint32_t>(lfgListRows_.size());
+        return lfgListWindowId_ == 0 ? 0 : static_cast<uint32_t>(lfgShownRows_.size());
     }
     /// One of those rows by index from zero, or null past the end.
     [[nodiscard]] const LfgListRow* getLfgListRow(uint32_t index) const {
-        if (lfgListWindowId_ == 0 || index >= lfgListRows_.size()) return nullptr;
-        return &lfgListRows_[index];
+        if (lfgListWindowId_ == 0 || index >= lfgShownRows_.size()) return nullptr;
+        return &lfgShownRows_[index];
     }
     /// How many rows the browse panel can actually show, which is what
     /// SearchLFGGetNumResults answers: the parsed rows paired up the way the
@@ -1059,6 +1062,11 @@ private:
     /// walks the array of listings that belong to no one before the player array
     /// unless the swap byte says otherwise (0x00553530:2831-2864).
     std::vector<LfgListRow> lfgListRows_;
+    /// The rows the panel shows (0x00beab20), a copy of the received ones
+    /// (0x00beaa98) taken when a packet names a new list and when
+    /// RefreshLFGList asks (0x0055b1a0). Every packet in between updates the
+    /// received rows only.
+    std::vector<LfgListRow> lfgShownRows_;
     /// Those rows paired into the rows the browse panel can show, rebuilt whenever
     /// the rows are (buildLfgBrowserRows, then sortLfgBrowserRows). Held beside them
     /// rather than derived at query time so that the index fields of one never

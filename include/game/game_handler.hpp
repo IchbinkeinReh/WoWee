@@ -2792,6 +2792,7 @@ public:
     uint32_t getLfgJoinedListId() const;
     void lfgSearchJoin(uint32_t typeId, uint32_t lfgId);
     void lfgSearchLeave();
+    void refreshLfgList();
     /// The rows of the raid browser's list, for SearchLFGGetNumResults and
     /// SearchLFGGetResults; the row pointer is null past the end.
     uint32_t getLfgListRowCount() const;
