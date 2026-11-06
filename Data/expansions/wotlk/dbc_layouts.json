@@ -368,6 +368,7 @@
     "ZoneMusicID": 9
   },
   "SkillLine": {
+    "CanLink": 55,
     "Category": 1,
     "Description": 20,
     "ID": 0,
@@ -375,6 +376,8 @@
     "SpellIcon": 37
   },
   "SkillLineAbility": {
+    "ClassMask": 4,
+    "RaceMask": 3,
     "SkillLineID": 1,
     "SpellID": 2
   },

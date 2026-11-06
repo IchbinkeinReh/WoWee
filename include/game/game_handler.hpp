@@ -1702,6 +1702,7 @@ public:
     // Crafting window (opened client-side by casting a profession spell)
     bool isCraftingWindowOpen() const { return spellHandler_ ? spellHandler_->isCraftingWindowOpen() : false; }
     uint32_t getCraftingSkillLine() const { return spellHandler_ ? spellHandler_->getCraftingSkillLine() : 0; }
+    uint32_t getCraftingSpellId() const { return spellHandler_ ? spellHandler_->getCraftingSpellId() : 0; }
     void closeCraftingWindow() { if (spellHandler_) spellHandler_->closeCraftingWindow(); }
 
     // Unit cast state (aliased from handler_types.hpp)

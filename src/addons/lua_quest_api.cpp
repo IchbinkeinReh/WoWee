@@ -446,6 +446,88 @@ static int lua_ShiftQuestWatches(lua_State* L) {
 // past the end or a quest the cache does not hold yet finds none and answers
 // 0. A quest still waiting on its query is grouped under key 0 here, and that
 // is the "not cached" case, so it answers 0 as well.
+// GetTradeSkillListLink() (0x005dc0b0 -> 0x005db060) → the open profession
+// as a chat link, or nil.
+//
+// "|cffffd000|Htrade:<spell>:<rank>:<max>:<guid>:" - the spell that opened the
+// window, the player's rank and maximum in its skill line (each with the
+// permanent bonus added, 0x0051a250 / 0x00594710), and the player's guid in
+// hex - then one character of "A..Z a..z 0..9 + /" per six recipes, a bit per
+// recipe of the line in SkillLineAbility order: set when the player knows it
+// and it is open to the player's race and class. "|h[<spell name>]|h|r" closes
+// it. The recipes are the line's first run of rows in the file (0x00812030
+// lists a run per line), and only a line SkillLine marks linkable has one.
+// Nil when the window's spell is not a trade skill's, or its line cannot be
+// linked.
+static int lua_GetTradeSkillListLink(lua_State* L) {
+    auto* gh = getGameHandler(L);
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    const uint32_t spellId = gh ? gh->getCraftingSpellId() : 0;
+    if (!am || !am->isInitialized() || spellId == 0) return luaReturnNil(L);
+    const auto abilities = am->loadDBC("SkillLineAbility.dbc");
+    const auto lines = am->loadDBC("SkillLine.dbc");
+    const auto* layouts = pipeline::getActiveDBCLayout();
+    const auto* slaLayout = layouts ? layouts->getLayout("SkillLineAbility") : nullptr;
+    const auto* lineLayout = layouts ? layouts->getLayout("SkillLine") : nullptr;
+    std::string link;
+    if (abilities && abilities->isLoaded() && lines && lines->isLoaded() && slaLayout && lineLayout) {
+        const uint32_t lineCol = (*slaLayout)["SkillLineID"];
+        const uint32_t spellCol = (*slaLayout)["SpellID"];
+        const uint32_t raceCol = slaLayout->tryField("RaceMask");
+        const uint32_t classCol = slaLayout->tryField("ClassMask");
+        const uint32_t linkCol = lineLayout->tryField("CanLink");
+        const uint32_t race = gh->getPlayerRace(), cls = gh->getPlayerClass();
+        // The window's skill line, off the spell's own row.
+        uint32_t line = 0;
+        for (uint32_t i = 0; i < abilities->getRecordCount() && line == 0; ++i) {
+            if (abilities->getUInt32(i, spellCol) == spellId) line = abilities->getUInt32(i, lineCol);
+        }
+        const int32_t lineRow = line ? lines->findRecordById(line) : -1;
+        if (lineRow >= 0 && linkCol != 0xFFFFFFFFu && raceCol != 0xFFFFFFFFu &&
+            classCol != 0xFFFFFFFFu && lines->getUInt32(static_cast<uint32_t>(lineRow), linkCol) != 0) {
+            uint32_t rank = 0, maxRank = 0;
+            if (auto it = gh->getPlayerSkills().find(line); it != gh->getPlayerSkills().end()) {
+                const auto& sk = it->second;
+                rank = sk.value ? sk.value + sk.bonusPerm : 0;
+                maxRank = sk.maxValue ? sk.maxValue + sk.bonusPerm : 0;
+            }
+            char head[96];
+            std::snprintf(head, sizeof(head), "|cffffd000|Htrade:%u:%u:%u:%llX:", spellId, rank,
+                          maxRank, static_cast<unsigned long long>(gh->getPlayerGuid()));
+            link = head;
+            static const char* kAlphabet =
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            const auto& known = gh->getKnownSpells();
+            const auto allowed = [](uint32_t mask, uint32_t which) {
+                return mask == 0 || (which >= 1 && (mask & (1u << ((which - 1) & 31))) != 0);
+            };
+            uint32_t bits = 0, count = 0;
+            bool inRun = false;
+            for (uint32_t i = 0; i < abilities->getRecordCount(); ++i) {
+                if (abilities->getUInt32(i, lineCol) != line) {
+                    if (inRun) break;
+                    continue;
+                }
+                inRun = true;
+                const uint32_t spell = abilities->getUInt32(i, spellCol);
+                if (known.count(spell) && allowed(abilities->getUInt32(i, raceCol), race) &&
+                    allowed(abilities->getUInt32(i, classCol), cls)) {
+                    bits |= 1u << count;
+                }
+                if (++count == 6) {
+                    link += kAlphabet[bits];
+                    bits = count = 0;
+                }
+            }
+            if (count != 0) link += kAlphabet[bits];
+            link += "|h[" + gh->getSpellName(spellId) + "]|h|r";
+        }
+    }
+    if (link.empty()) return luaReturnNil(L);
+    lua_pushstring(L, link.c_str());
+    return 1;
+}
+
 static int lua_GetQuestSortIndex(lua_State* L) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Usage: GetQuestSortIndex(questIndex)");
     const auto rows = questRows(getGameHandler(L));
@@ -5347,15 +5429,8 @@ void registerQuestLuaAPI(lua_State* L) {
             }
             return luaReturnNil(L);
         }},
-                // The list link is the |Htrade: one, and it takes no argument:
-                // 0x005dc0b0 hands 0x005db060 the skill line of the open window.
-                // The header it writes is "|cffffd000|Htrade:%d:%d:%d:%I64X:" -
-                // the line, two values taken off the record, and the local
-                // player's guid as hex - and after it a base64 block, six
-                // recipes to a byte over the "ABC…+/" alphabet, each bit saying
-                // whether whoever reads the link could learn that recipe: the
-                // reader's race and class come off the unit blob's bytes at
-                // +0x44 and +0x45. Then "|h[%s]|h|r" closes it.
+                // The list link (GetTradeSkillListLink, below) is the sending
+                // half of the |Htrade: link.
                 //
                 // IsTradeSkillLinked (0x005da310) is the other half of the same
                 // feature, and it takes no argument either. It answers **two**
@@ -5371,18 +5446,17 @@ void registerQuestLuaAPI(lua_State* L) {
                 // the header above carrying a player guid as %I64X; the state and
                 // the pair it reads are.
                 //
-                // With no linked window it pushes two nils. This row pushes one
-                // false, which is falsy the same way and leaves FrameXML's second
-                // local nil: the value count only matters to a caller using
-                // select("#", …). It stays a stub because this client never opens a
-                // linked window - the consume side is parsing the |Htrade: link,
-                // decoding its six-recipes-to-a-byte block and showing somebody
-                // else's profession, and that is what would set the state. Neither
-                // dbc folder on this machine holds a Trade table of any name; the
-                // WotLK recipe list is filled by the realm, so whose list a window
-                // shows is the realm's to say.
-                {"GetTradeSkillListLink",     [](lua_State* L) -> int { return luaReturnNil(L); }},
-                {"IsTradeSkillLinked",        [](lua_State* L) -> int { lua_pushboolean(L, 0); return 1; }},
+                // With no linked window it pushes two nils, which is all this
+                // row answers: this client never opens a linked window - the
+                // consume side is parsing the |Htrade: link, decoding its
+                // six-recipes-to-a-byte block and showing somebody else's
+                // profession, and that is what would set the state.
+                {"GetTradeSkillListLink",     lua_GetTradeSkillListLink},
+                {"IsTradeSkillLinked",        [](lua_State* L) -> int {
+            lua_pushnil(L);
+            lua_pushnil(L);
+            return 2;
+        }},
                 // The play-time limits, which are the realm's, not this
                 // client's to decide: 0x0051cb30 PartialPlayTime answers
                 // PLAYER_FLAGS 0x1000 and 0x0051cba0 NoPlayTime answers 0x2000,

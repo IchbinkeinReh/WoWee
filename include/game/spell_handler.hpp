@@ -229,11 +229,13 @@ public:
     // like Cooking or First Aid - see tradeskillOpenerSkillLine)
     [[nodiscard]] bool isCraftingWindowOpen() const { return craftingWindowOpen_; }
     [[nodiscard]] uint32_t getCraftingSkillLine() const { return craftingSkillLine_; }
+    /// The profession spell that opened the window (0x00c235a0).
+    [[nodiscard]] uint32_t getCraftingSpellId() const { return craftingSpellId_; }
     /// Opening and closing a profession announce themselves, because the
     /// interface's trade skill panel is driven entirely by these two events -
     /// it hides on TRADE_SKILL_CLOSE and fills itself on TRADE_SKILL_SHOW.
     /// Without them the panel could be complete and still never appear.
-    void openCraftingWindow(uint32_t skillLine);
+    void openCraftingWindow(uint32_t skillLine, uint32_t spellId);
     void closeCraftingWindow();
     // Returns the skill line id if spellId is a tradeskill-window opener
     // (e.g. Cooking → 185) with at least one known recipe, else 0.
@@ -829,6 +831,7 @@ private:
     // Crafting window
     bool craftingWindowOpen_ = false;
     uint32_t craftingSkillLine_ = 0;
+    uint32_t craftingSpellId_ = 0;
 
     // SpellFocusObject.dbc names, loaded lazily
     std::unordered_map<uint32_t, std::string> spellFocusNames_;

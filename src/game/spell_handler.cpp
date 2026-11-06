@@ -1853,7 +1853,7 @@ void SpellHandler::castSpell(uint32_t spellId, uint64_t targetGuid) {
         // of the four things happened.
         LOG_WARNING("Profession: spell ", spellId, " (", owner_.getSpellName(spellId),
                     ") opens the trade skill window for skill line ", craftSkillLine);
-        openCraftingWindow(craftSkillLine);
+        openCraftingWindow(craftSkillLine, spellId);
         return;
     }
 
@@ -3201,9 +3201,10 @@ void SpellHandler::learnPreviewTalents(const std::vector<std::pair<uint32_t, uin
     owner_.getSocket()->send(LearnPreviewTalentsPacket::build(talentRanks));
 }
 
-void SpellHandler::openCraftingWindow(uint32_t skillLine) {
+void SpellHandler::openCraftingWindow(uint32_t skillLine, uint32_t spellId) {
     craftingWindowOpen_ = true;
     craftingSkillLine_ = skillLine;
+    craftingSpellId_ = spellId;
     owner_.fireAddonEvent("TRADE_SKILL_SHOW", {});
 }
 
